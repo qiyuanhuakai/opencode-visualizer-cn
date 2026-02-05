@@ -1695,14 +1695,14 @@ watch(
 );
 
 watch(
-  [selectedProjectId, projects],
-  () => {
+  projects,
+  (nextProjects) => {
     if (!selectedProjectId.value) return;
-    const project = projects.value.find((item) => item.id === selectedProjectId.value);
-    if (project && !selectedProjectDirectory.value) {
-      const baseDir = projectBaseDirectory(project);
-      if (baseDir) selectedProjectDirectory.value = baseDir;
-    }
+    if (selectedProjectDirectory.value) return;
+    const project = nextProjects.find((item) => item.id === selectedProjectId.value);
+    if (!project) return;
+    const baseDir = projectBaseDirectory(project);
+    if (baseDir) selectedProjectDirectory.value = baseDir;
   },
   { immediate: true },
 );
@@ -1711,12 +1711,23 @@ watch(
   selectedProjectId,
   (value, previous) => {
     if (value === previous) return;
-    if (!previous) return;
-    selectedProjectDirectory.value = '';
-    selectedWorktreeDir.value = '';
-    selectedSessionId.value = '';
-    worktrees.value = [];
-    sessions.value = [];
+    if (previous) {
+      selectedProjectDirectory.value = '';
+      selectedWorktreeDir.value = '';
+      selectedSessionId.value = '';
+      worktrees.value = [];
+      sessions.value = [];
+    }
+    const project = projects.value.find((item) => item.id === value);
+    if (project) {
+      const baseDir = projectBaseDirectory(project);
+      if (baseDir) {
+        selectedProjectDirectory.value = baseDir;
+        void fetchWorktrees(baseDir);
+        void fetchCommands(baseDir);
+        void fetchSessions({ directory: baseDir, roots: true, limit: 200 });
+      }
+    }
   },
   { immediate: true },
 );
@@ -1794,6 +1805,13 @@ watch(selectedSessionId, () => {
     void restoreShellSessions(selectedSessionId.value);
   }
   void fetchSessionStatus();
+  if (selectedProjectId.value && selectedSessionId.value) {
+    replaceQuerySelection(
+      selectedProjectId.value,
+      selectedWorktreeDir.value,
+      selectedSessionId.value,
+    );
+  }
 },
 { immediate: true });
 
