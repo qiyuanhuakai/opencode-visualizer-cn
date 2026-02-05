@@ -191,16 +191,16 @@ defineExpose({ dockEl });
 }
 
 .message-dock .shiki-host :deep(pre),
-.message-dock .shiki-host :deep(code),
+.message-dock .shiki-host :deep(code) {
+  line-height: 0 !important;
+  color: inherit;
+  white-space: normal;
+}
+
 .message-dock .shiki-host :deep(.line),
 .message-dock .shiki-host :deep(.line)::before {
   line-height: var(--message-line-height) !important;
   color: inherit;
-}
-
-.message-dock .shiki-host :deep(pre),
-.message-dock .shiki-host :deep(code) {
-  white-space: normal;
 }
 
 .message-dock .shiki-host :deep(.line) {

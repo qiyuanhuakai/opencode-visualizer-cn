@@ -129,7 +129,8 @@ const TOOL_SCROLL_SPEED_PX_S = 2000;
 const TOOL_SCROLL_HOLD_MS = 250;
 const TOOL_SCROLL_MAX_DURATION_S = 3;
 const SUBAGENT_ACTIVE_TTL_MS = 60 * 60 * 1000;
-const MAIN_REASONING_TITLES = ['Reasoning...', 'Thinking...', 'Working...'];
+const MAIN_REASONING_TITLE = 'Reasoning';
+const REASONING_CLOSE_DELAY_MS = 3000;
 const SHELL_PTY_STORAGE_KEY = 'opencode.shellPtys';
 const SHIKI_LANGS = [
   'text',
@@ -213,6 +214,8 @@ const subagentSessionExpiry = new Map<string, number>();
 const messageSummaryTitleById = new Map<string, string>();
 const reasoningTitleBySessionId = new Map<string, string>();
 const sessionStatusById = new Map<string, 'busy' | 'idle'>();
+const reasoningCloseTimers = new Map<string, number>();
+const lastReasoningMessageIdByKey = new Map<string, string>();
 const dragState = ref<{
   entry: FileReadEntry;
   startX: number;
@@ -497,23 +500,27 @@ function getSessionTitle(sessionId?: string) {
   return session?.title || session?.slug || session?.id;
 }
 
-function mergeReasoningContent(prior: string, incoming: string) {
+function mergeReasoningContent(
+  prior: string,
+  incoming: string,
+  options?: { ensureTrailingNewline?: boolean },
+) {
   if (!incoming) return prior;
   if (!prior) return incoming;
-  if (incoming.startsWith(prior)) return incoming;
-  if (prior.includes(incoming)) return prior;
-  const maxCheck = Math.min(prior.length, incoming.length);
+  let nextPrior = prior;
+  if (options?.ensureTrailingNewline && !nextPrior.endsWith('\n')) {
+    nextPrior = `${nextPrior}\n`;
+  }
+  if (incoming.startsWith(nextPrior)) return incoming;
+  if (nextPrior.includes(incoming)) return nextPrior;
+  const maxCheck = Math.min(nextPrior.length, incoming.length);
   let overlap = 0;
   for (let size = 1; size <= maxCheck; size += 1) {
-    if (prior.endsWith(incoming.slice(0, size))) overlap = size;
+    if (nextPrior.endsWith(incoming.slice(0, size))) overlap = size;
   }
-  const needsSeparator = overlap === 0 && !prior.endsWith('\n');
+  const needsSeparator = overlap === 0 && !nextPrior.endsWith('\n');
   const separator = needsSeparator ? '\n' : '';
-  return `${prior}${separator}${incoming.slice(overlap)}`;
-}
-
-function randomMainReasoningTitle() {
-  return MAIN_REASONING_TITLES[Math.floor(Math.random() * MAIN_REASONING_TITLES.length)];
+  return `${nextPrior}${separator}${incoming.slice(overlap)}`;
 }
 
 function getBundledThemeNames() {
@@ -731,6 +738,33 @@ function handlePointerUp() {
   resizeState.value = null;
 }
 
+function getReasoningKey(sessionId?: string) {
+  return sessionId ?? selectedSessionId.value ?? 'main';
+}
+
+function clearReasoningCloseTimer(reasoningKey: string) {
+  const existing = reasoningCloseTimers.get(reasoningKey);
+  if (existing === undefined) return;
+  window.clearTimeout(existing);
+  reasoningCloseTimers.delete(reasoningKey);
+}
+
+function clearReasoningCloseTimerForSession(sessionId?: string) {
+  clearReasoningCloseTimer(getReasoningKey(sessionId));
+}
+
+function scheduleReasoningClose(sessionId?: string) {
+  const resolvedSessionId = sessionId ?? selectedSessionId.value;
+  const reasoningKey = getReasoningKey(resolvedSessionId);
+  clearReasoningCloseTimer(reasoningKey);
+  if (!resolvedSessionId) return;
+  const timer = window.setTimeout(() => {
+    reasoningCloseTimers.delete(reasoningKey);
+    updateReasoningExpiry(resolvedSessionId, 'idle');
+  }, REASONING_CLOSE_DELAY_MS);
+  reasoningCloseTimers.set(reasoningKey, timer);
+}
+
 function scheduleReasoningScroll(messageKey: string) {
   nextTick(() => {
     requestAnimationFrame(() => {
@@ -738,6 +772,7 @@ function scheduleReasoningScroll(messageKey: string) {
       if (!canvas) return;
       const entry = queue.value.find((item) => item.messageKey === messageKey);
       if (entry && entry.follow === false) return;
+      if (entry) entry.follow = true;
       const term = canvas.querySelector(
         `[data-message-key="${messageKey}"] .term-inner`,
       ) as HTMLElement | null;
@@ -751,7 +786,7 @@ function handleFloatingScroll(entry: FileReadEntry, event: Event) {
   if (!entry.isReasoning && !entry.isSubagentMessage) return;
   const target = event.target as HTMLElement | null;
   if (!target) return;
-  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+  const distanceFromBottom = Math.abs(target.scrollHeight - target.scrollTop - target.clientHeight);
   const nextFollow = distanceFromBottom <= 8;
   if (entry.follow !== nextFollow) entry.follow = nextFollow;
 }
@@ -2436,6 +2471,77 @@ function extractMessage(payload: unknown, eventType: string) {
   return { id, messageId, content: message, role: resolvedRole, partId, partType };
 }
 
+function extractStepFinish(payload: unknown, eventType: string) {
+  if (!payload || typeof payload !== 'object') return null;
+  if (!MESSAGE_EVENT_TYPES.has(eventType)) return null;
+  const record = payload as Record<string, unknown>;
+  const nestedPayload =
+    record.payload && typeof record.payload === 'object'
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  const properties =
+    (nestedPayload?.properties && typeof nestedPayload.properties === 'object'
+      ? (nestedPayload.properties as Record<string, unknown>)
+      : undefined) ??
+    (record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : undefined);
+  const part =
+    properties?.part && typeof properties.part === 'object'
+      ? (properties.part as Record<string, unknown>)
+      : undefined;
+  const partType = typeof part?.type === 'string' ? part.type : undefined;
+  if (partType !== 'step-finish') return null;
+  const reason = typeof part?.reason === 'string' ? (part.reason as string) : undefined;
+  const sessionId = typeof part?.sessionID === 'string' ? (part.sessionID as string) : undefined;
+  const messageId = typeof part?.messageID === 'string' ? (part.messageID as string) : undefined;
+  return { reason, sessionId, messageId };
+}
+
+function extractMessageFinish(payload: unknown, eventType: string) {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const nestedPayload =
+    record.payload && typeof record.payload === 'object'
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  const properties =
+    (nestedPayload?.properties && typeof nestedPayload.properties === 'object'
+      ? (nestedPayload.properties as Record<string, unknown>)
+      : undefined) ??
+    (record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : undefined);
+  const info =
+    (properties?.info && typeof properties.info === 'object'
+      ? (properties.info as Record<string, unknown>)
+      : undefined) ??
+    (record.info && typeof record.info === 'object' ? (record.info as Record<string, unknown>) : undefined);
+  const type =
+    (record.type as string | undefined) ??
+    (record.event as string | undefined) ??
+    (nestedPayload?.type as string | undefined) ??
+    eventType;
+  if (!type || !type.toLowerCase().includes('message.updated')) return null;
+  const finish =
+    (typeof info?.finish === 'string' ? (info.finish as string) : undefined) ??
+    (typeof record.finish === 'string' ? (record.finish as string) : undefined);
+  if (!finish) return null;
+  const sessionId =
+    typeof info?.sessionID === 'string'
+      ? (info.sessionID as string)
+      : typeof (record.sessionID as string | undefined) === 'string'
+        ? (record.sessionID as string)
+        : undefined;
+  const messageId =
+    typeof info?.id === 'string'
+      ? (info.id as string)
+      : typeof (info?.messageId as string | undefined) === 'string'
+        ? (info.messageId as string)
+        : undefined;
+  return { finish, sessionId, messageId };
+}
+
 function extractSessionStatus(payload: unknown, eventType: string) {
   if (!payload || typeof payload !== 'object') return null;
   const record = payload as Record<string, unknown>;
@@ -2831,6 +2937,7 @@ function connect() {
     if (sessionStatus) {
       if (sessionStatus.status === 'busy' || sessionStatus.status === 'idle') {
         const nextStatus = sessionStatus.status as 'busy' | 'idle';
+        clearReasoningCloseTimerForSession(sessionId);
         if (sessionId) sessionStatusById.set(sessionId, nextStatus);
         if (!selectedSessionId.value || sessionId === selectedSessionId.value) {
           selectedSessionStatus.value = nextStatus;
@@ -2847,6 +2954,16 @@ function connect() {
 
     registerMessageMeta(payload);
     registerMessageSummary(payload);
+
+    const stepFinish = extractStepFinish(payload, resolvedEventType);
+    if (stepFinish) {
+      scheduleReasoningClose(stepFinish.sessionId ?? sessionId);
+    }
+
+    const messageFinish = extractMessageFinish(payload, resolvedEventType);
+    if (messageFinish) {
+      scheduleReasoningClose(messageFinish.sessionId ?? sessionId);
+    }
 
     const patchEvent = extractPatch(payload);
     if (patchEvent) {
@@ -2873,6 +2990,7 @@ function connect() {
           ? messageSummaryTitleById.get(message.messageId)
           : undefined;
         const resolvedSessionId = sessionId ?? selectedSessionId.value ?? undefined;
+        clearReasoningCloseTimerForSession(resolvedSessionId);
         const sessionTitle = getSessionTitle(resolvedSessionId);
         const isMain = resolvedSessionId && resolvedSessionId === selectedSessionId.value;
         const existingTitle = resolvedSessionId
@@ -2880,8 +2998,23 @@ function connect() {
           : undefined;
         const nextTitle =
           existingTitle ??
-          (isMain ? randomMainReasoningTitle() : (summaryTitle ?? sessionTitle ?? 'Reasoning'));
+          (isMain ? MAIN_REASONING_TITLE : (summaryTitle ?? sessionTitle ?? 'Reasoning'));
         if (resolvedSessionId) reasoningTitleBySessionId.set(resolvedSessionId, nextTitle);
+      }
+      const reasoningMessageId = isReasoning
+        ? (message.messageId ?? (message.id?.startsWith('msg_') ? message.id : undefined))
+        : undefined;
+      const lastReasoningMessageId = isReasoning
+        ? lastReasoningMessageIdByKey.get(messageKey)
+        : undefined;
+      const isNewReasoningMessage =
+        Boolean(isReasoning && reasoningMessageId && lastReasoningMessageId !== reasoningMessageId);
+      if (isReasoning && reasoningMessageId && lastReasoningMessageId !== reasoningMessageId) {
+        lastReasoningMessageIdByKey.set(messageKey, reasoningMessageId);
+        messagePartsById.delete(messageKey);
+        messagePartOrderById.delete(messageKey);
+      } else if (isReasoning && reasoningMessageId && !lastReasoningMessageId) {
+        lastReasoningMessageIdByKey.set(messageKey, reasoningMessageId);
       }
       let mergedContent = message.content;
       if (message.partId && message.messageId) {
@@ -2946,7 +3079,9 @@ function connect() {
         const existing = queue.value[existingIndex];
         const priorContent = existing?.content ?? '';
         const nextContent = isReasoning
-          ? mergeReasoningContent(messageContentById.get(messageKey) ?? priorContent, mergedContent)
+          ? mergeReasoningContent(messageContentById.get(messageKey) ?? priorContent, mergedContent, {
+              ensureTrailingNewline: isNewReasoningMessage,
+            })
           : mergedContent;
         if (existing) {
           const nextText = `${header}${nextContent}`;
@@ -3255,6 +3390,7 @@ onBeforeUnmount(() => {
   font-size: 14px;
   --term-line-height: 1;
   --message-line-height: 1;
+  --term-border-color: #ccc;
   width: var(--term-width);
   height: var(--term-height);
   background: black;
@@ -3274,11 +3410,13 @@ onBeforeUnmount(() => {
 .term.is-message {
   background: #0e0e0e;
   border-color: #4a4a4a;
+  --term-border-color: #4a4a4a;
 }
 
 .term.is-shell {
   background: #050505;
   border-color: #1f2937;
+  --term-border-color: #1f2937;
 }
 
 .term-titlebar {
@@ -3340,19 +3478,29 @@ onBeforeUnmount(() => {
 
 .term-resizer {
   position: absolute;
-  right: 2px;
-  bottom: 2px;
+  right: 0;
+  bottom: 0;
   width: 14px;
   height: 14px;
   cursor: se-resize;
-  background: linear-gradient(135deg, transparent 0%, rgba(148, 163, 184, 0.6) 100%);
-  border-radius: 2px;
-  opacity: 0.65;
+  background: transparent;
   z-index: 2;
 }
 
+.term-resizer::before {
+  content: '';
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 5px 5px;
+  border-color: transparent transparent var(--term-border-color) transparent;
+}
+
 .term-resizer:hover {
-  opacity: 1;
+  filter: brightness(1.15);
 }
 
 .term :deep(pre.shiki),
