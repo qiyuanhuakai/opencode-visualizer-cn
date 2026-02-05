@@ -39,7 +39,7 @@
       </div>
       <div class="statusbar" role="status" aria-live="polite">
         <div class="statusbar-section statusbar-left">
-          <span class="statusbar-text">{{ isThinking ? 'Thinking' : 'Idle' }}</span>
+          <span class="statusbar-text">{{ isThinking ? `Thinking${thinkingSuffix}` : 'Idle' }}</span>
         </div>
         <div class="statusbar-section statusbar-right" :class="{ 'is-error': isStatusError }">
           {{ statusText }}
@@ -50,7 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { onBeforeUnmount, ref, watch } from 'vue';
 type FileReadEntry = {
   time: number;
   expiresAt: number;
@@ -73,7 +73,7 @@ type FileReadEntry = {
   callId?: string;
 };
 
-defineProps<{
+const props = defineProps<{
   queue: FileReadEntry[];
   isFollowing: boolean;
   statusText: string;
@@ -89,6 +89,37 @@ defineEmits<{
 }>();
 
 const dockEl = ref<HTMLDivElement | null>(null);
+const thinkingFrames = ['', '.', '..', '...'];
+const thinkingIndex = ref(0);
+const thinkingSuffix = ref('');
+let thinkingTimer: number | undefined;
+
+watch(
+  () => props.isThinking,
+  (active) => {
+    if (!active) {
+      if (thinkingTimer !== undefined) {
+        window.clearInterval(thinkingTimer);
+        thinkingTimer = undefined;
+      }
+      thinkingIndex.value = 0;
+      thinkingSuffix.value = '';
+      return;
+    }
+    thinkingIndex.value = 0;
+    thinkingSuffix.value = thinkingFrames[thinkingIndex.value] ?? '';
+    if (thinkingTimer !== undefined) window.clearInterval(thinkingTimer);
+    thinkingTimer = window.setInterval(() => {
+      thinkingIndex.value = (thinkingIndex.value + 1) % thinkingFrames.length;
+      thinkingSuffix.value = thinkingFrames[thinkingIndex.value] ?? '';
+    }, 350);
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  if (thinkingTimer !== undefined) window.clearInterval(thinkingTimer);
+});
 
 defineExpose({ dockEl });
 </script>

@@ -38,11 +38,15 @@
                   'is-write': q.isWrite,
                   'is-message': q.isSubagentMessage,
                   'is-apply-patch': q.toolName === 'apply_patch',
-                  'is-reasoning': q.isReasoning,
+                  'is-reasoning': q.isReasoning || q.isSubagentMessage,
+                  'is-shell': q.isShell,
                 }"
                 :style="{
                   left: `calc(${q.x} * (100% - var(--term-width)))`,
                   top: `calc(var(--tool-top-offset) + ${q.y} * (var(--tool-area-height) - var(--term-height)))`,
+                  '--term-width': q.width ? `${q.width}px` : undefined,
+                  '--term-height': q.height ? `${q.height}px` : undefined,
+                  zIndex: q.zIndex ?? undefined,
                 }"
               >
                 <div class="term-titlebar" @pointerdown="startTermDrag(q, $event)">
@@ -55,13 +59,21 @@
                     '--scroll-distance': `${q.scrollDistance}px`,
                     '--scroll-duration': `${q.scrollDuration}s`,
                   }"
+                  @scroll="handleFloatingScroll(q, $event)"
                 >
+                  <div v-if="q.isShell" class="xterm-host" :data-shell-id="q.shellId"></div>
                   <div
+                    v-else
                     class="shiki-host"
                     :class="{ 'is-message': q.isSubagentMessage }"
                     v-html="q.html"
                   ></div>
                 </div>
+                <div
+                  v-if="q.isReasoning || q.isSubagentMessage || q.isShell"
+                  class="term-resizer"
+                  @pointerdown="startTermResize(q, $event)"
+                ></div>
               </div>
             </TransitionGroup>
           </div>
@@ -99,8 +111,10 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, nextTick, onMounted, shallowRef, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { bundledLanguages, bundledThemes, createHighlighter } from 'shiki/bundle/web';
+import { FitAddon } from '@xterm/addon-fit';
+import { Terminal } from '@xterm/xterm';
 import ControlPanel from './ControlPanel.vue';
 import TopPanel from './TopPanel.vue';
 import OutputDock from './OutputDock.vue';
@@ -114,9 +128,11 @@ const TOOL_RUNNING_TTL_MS = 5_000;
 const REASONING_TTL_MS = 10_000;
 const TOOL_SCROLL_SPEED_PX_S = 2000;
 const TOOL_SCROLL_HOLD_MS = 250;
+const TOOL_SCROLL_MAX_DURATION_S = 3;
 const SUBAGENT_ACTIVE_TTL_MS = 60 * 60 * 1000;
 const SUBAGENT_IDLE_TTL_MS = 30_000;
 const MAIN_REASONING_TITLES = ['Reasoning...', 'Thinking...', 'Working...'];
+const SHELL_PTY_STORAGE_KEY = 'opencode.shellPtys';
 const SHIKI_LANGS = [
   'text',
   'diff',
@@ -154,13 +170,40 @@ type FileReadEntry = {
   isMessage: boolean;
   isSubagentMessage?: boolean;
   isReasoning?: boolean;
+  isShell?: boolean;
   sessionId?: string;
   toolKey?: string;
   role?: 'user' | 'assistant';
   toolStatus?: string;
   toolName?: string;
   messageId?: string;
+  messageKey?: string;
   callId?: string;
+  follow?: boolean;
+  zIndex?: number;
+  width?: number;
+  height?: number;
+  shellId?: string;
+  shellTitle?: string;
+};
+
+type PtyInfo = {
+  id: string;
+  title: string;
+  command: string;
+  args: string[];
+  cwd: string;
+  status: 'running' | 'exited';
+  pid: number;
+};
+
+type ShellSession = {
+  pty: PtyInfo;
+  entry: FileReadEntry;
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  socket?: WebSocket;
+  sessionId: string;
 };
 
 const queue = ref<FileReadEntry[]>([]);
@@ -182,6 +225,18 @@ const dragState = ref<{
   maxY: number;
   toolTop: number;
 } | null>(null);
+const resizeState = ref<{
+  entry: FileReadEntry;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
+  minWidth: number;
+  minHeight: number;
+  maxWidth: number;
+  maxHeight: number;
+} | null>(null);
+let nextWindowZIndex = 20;
 const selectedSessionStatus = ref<'busy' | 'idle' | ''>('');
 const messageIndexById = new Map<string, number>();
 const toolIndexByCallId = new Map<string, number>();
@@ -190,6 +245,9 @@ const messageContentById = new Map<string, string>();
 const messagePartsById = new Map<string, Map<string, string>>();
 const messagePartOrderById = new Map<string, string[]>();
 const recentUserInputs: { text: string; time: number }[] = [];
+const shellSessionsByPtyId = new Map<string, ShellSession>();
+const shellPtyIdsBySessionId = new Map<string, Set<string>>();
+const pendingShellFits = new Map<string, number>();
 
 type ProjectInfo = {
   id: string;
@@ -354,6 +412,74 @@ function clamp(value: number, min: number, max: number) {
   return value;
 }
 
+function bringToFront(entry: FileReadEntry) {
+  nextWindowZIndex += 1;
+  entry.zIndex = nextWindowZIndex;
+}
+
+function loadShellPtyStorage() {
+  if (typeof window === 'undefined') return {} as Record<string, string[]>;
+  try {
+    const raw = window.localStorage.getItem(SHELL_PTY_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, string[]>;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistShellPtyStorage() {
+  if (typeof window === 'undefined') return;
+  const data: Record<string, string[]> = {};
+  shellPtyIdsBySessionId.forEach((set, sessionId) => {
+    data[sessionId] = Array.from(set);
+  });
+  try {
+    window.localStorage.setItem(SHELL_PTY_STORAGE_KEY, JSON.stringify(data));
+  } catch {
+    return;
+  }
+}
+
+function hydrateShellPtyStorage() {
+  const stored = loadShellPtyStorage();
+  Object.entries(stored).forEach(([sessionId, list]) => {
+    if (!Array.isArray(list)) return;
+    const set = new Set<string>();
+    list.forEach((id) => {
+      if (typeof id === 'string') set.add(id);
+    });
+    if (set.size > 0) shellPtyIdsBySessionId.set(sessionId, set);
+  });
+}
+
+function addShellPtyId(sessionId: string, ptyId: string) {
+  const set = shellPtyIdsBySessionId.get(sessionId) ?? new Set<string>();
+  set.add(ptyId);
+  shellPtyIdsBySessionId.set(sessionId, set);
+  persistShellPtyStorage();
+}
+
+function removeShellPtyId(sessionId: string, ptyId: string) {
+  const set = shellPtyIdsBySessionId.get(sessionId);
+  if (!set) return;
+  set.delete(ptyId);
+  if (set.size === 0) shellPtyIdsBySessionId.delete(sessionId);
+  persistShellPtyStorage();
+}
+
+function getShellPtyIds(sessionId: string) {
+  return shellPtyIdsBySessionId.get(sessionId) ?? new Set<string>();
+}
+
+function parseShellArgs(input: string) {
+  const trimmed = input.trim();
+  if (!trimmed) return { command: undefined, args: [] as string[] };
+  const parts = trimmed.split(/\s+/g).filter(Boolean);
+  return { command: parts[0], args: parts.slice(1) };
+}
+
 function getSessionTitle(sessionId?: string) {
   if (!sessionId) return undefined;
   const session = sessions.value.find((item) => item.id === sessionId);
@@ -371,7 +497,7 @@ function mergeReasoningContent(prior: string, incoming: string) {
     if (prior.endsWith(incoming.slice(0, size))) overlap = size;
   }
   const needsSeparator = overlap === 0 && !prior.endsWith('\n');
-  const separator = needsSeparator ? '\n\n' : '';
+  const separator = needsSeparator ? '\n' : '';
   return `${prior}${separator}${incoming.slice(overlap)}`;
 }
 
@@ -426,6 +552,7 @@ function isDarkThemeName(name: string) {
 }
 
 function getEntryTitle(entry: FileReadEntry) {
+  if (entry.isShell) return entry.shellTitle ?? 'Shell';
   if (entry.isReasoning) {
     const sessionTitle = getSessionTitle(entry.sessionId);
     const reasoningTitle = entry.sessionId
@@ -450,12 +577,17 @@ function getEntryTitle(entry: FileReadEntry) {
 function getSubagentExpiry(sessionId?: string) {
   const now = Date.now();
   if (!sessionId) return now + SUBAGENT_ACTIVE_TTL_MS;
-  return subagentSessionExpiry.get(sessionId) ?? now + SUBAGENT_ACTIVE_TTL_MS;
+  const stored = subagentSessionExpiry.get(sessionId);
+  if (stored !== undefined) return stored;
+  const status = sessionStatusById.get(sessionId);
+  if (status === 'busy') return Number.MAX_SAFE_INTEGER;
+  if (status === 'idle') return now + SUBAGENT_IDLE_TTL_MS;
+  return now + SUBAGENT_ACTIVE_TTL_MS;
 }
 
 function updateSubagentExpiry(sessionId: string, status: 'busy' | 'idle') {
   const now = Date.now();
-  const expiresAt = now + (status === 'idle' ? SUBAGENT_IDLE_TTL_MS : SUBAGENT_ACTIVE_TTL_MS);
+  const expiresAt = status === 'idle' ? now + SUBAGENT_IDLE_TTL_MS : Number.MAX_SAFE_INTEGER;
   subagentSessionExpiry.set(sessionId, expiresAt);
   queue.value.forEach((entry) => {
     if (entry.sessionId === sessionId && entry.isSubagentMessage) {
@@ -469,7 +601,9 @@ function updateReasoningExpiry(sessionId: string | undefined, status: 'busy' | '
   const targetSessionId = sessionId ?? selectedSessionId.value;
   if (!targetSessionId) return;
   const now = Date.now();
-  const nextExpiresAt = status === 'busy' ? Number.MAX_SAFE_INTEGER : now + REASONING_TTL_MS;
+  const isMainSession = targetSessionId === selectedSessionId.value;
+  const idleTtl = isMainSession ? REASONING_TTL_MS : SUBAGENT_IDLE_TTL_MS;
+  const nextExpiresAt = status === 'busy' ? Number.MAX_SAFE_INTEGER : now + idleTtl;
   queue.value.forEach((entry) => {
     if (!entry.isReasoning) return;
     const matchesSession =
@@ -482,6 +616,8 @@ function updateReasoningExpiry(sessionId: string | undefined, status: 'busy' | '
 
 function startTermDrag(entry: FileReadEntry, event: PointerEvent) {
   if (event.button !== 0) return;
+  bringToFront(entry);
+  resizeState.value = null;
   const canvas = canvasEl.value;
   if (!canvas) return;
   const termEl = (event.currentTarget as HTMLElement).closest('.term') as HTMLElement | null;
@@ -499,14 +635,13 @@ function startTermDrag(entry: FileReadEntry, event: PointerEvent) {
   const heightValue = styles.getPropertyValue('--term-height');
   const parsedWidth = Number.parseFloat(widthValue);
   const parsedHeight = Number.parseFloat(heightValue);
-  const termWidth =
-    Number.isFinite(parsedWidth) && parsedWidth > 0 ? parsedWidth : (termRect?.width ?? 640);
+  const termWidth = termRect?.width ?? (Number.isFinite(parsedWidth) && parsedWidth > 0 ? parsedWidth : 640);
   const termHeight =
-    Number.isFinite(parsedHeight) && parsedHeight > 0 ? parsedHeight : (termRect?.height ?? 350);
+    termRect?.height ?? (Number.isFinite(parsedHeight) && parsedHeight > 0 ? parsedHeight : 350);
   const maxX = Math.max(1, canvasRect.width - termWidth);
   const maxY = Math.max(1, toolAreaHeight - termHeight);
-  const startLeft = entry.x * maxX;
-  const startTop = toolTop + entry.y * maxY;
+  const startLeft = termRect ? termRect.left - canvasRect.left : entry.x * maxX;
+  const startTop = termRect ? termRect.top - canvasRect.top : toolTop + entry.y * maxY;
   dragState.value = {
     entry,
     startX: event.clientX,
@@ -521,7 +656,57 @@ function startTermDrag(entry: FileReadEntry, event: PointerEvent) {
   event.preventDefault();
 }
 
+function startTermResize(entry: FileReadEntry, event: PointerEvent) {
+  if (event.button !== 0) return;
+  bringToFront(entry);
+  dragState.value = null;
+  const canvas = canvasEl.value;
+  if (!canvas) return;
+  const termEl = (event.currentTarget as HTMLElement).closest('.term') as HTMLElement | null;
+  const termRect = termEl?.getBoundingClientRect();
+  if (!termRect) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  const styles = getComputedStyle(canvas);
+  const toolTop = Number.parseFloat(styles.getPropertyValue('--tool-top-offset')) || 0;
+  const toolAreaValue = styles.getPropertyValue('--tool-area-height').trim();
+  const parsedToolArea = Number.parseFloat(toolAreaValue);
+  const toolAreaHeight =
+    toolAreaValue.endsWith('px') && Number.isFinite(parsedToolArea) && parsedToolArea > 0
+      ? parsedToolArea
+      : canvasRect.height - toolTop;
+  const offsetLeft = termRect.left - canvasRect.left;
+  const offsetTop = termRect.top - canvasRect.top;
+  const maxWidth = Math.max(200, canvasRect.width - offsetLeft);
+  const maxHeight = Math.max(200, toolTop + toolAreaHeight - offsetTop);
+  const minWidth = 320;
+  const minHeight = 220;
+  resizeState.value = {
+    entry,
+    startX: event.clientX,
+    startY: event.clientY,
+    startWidth: termRect.width,
+    startHeight: termRect.height,
+    minWidth,
+    minHeight,
+    maxWidth,
+    maxHeight,
+  };
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  event.stopPropagation();
+  event.preventDefault();
+}
+
 function handlePointerMove(event: PointerEvent) {
+  if (resizeState.value) {
+    const { entry, startX, startY, startWidth, startHeight, minWidth, minHeight, maxWidth, maxHeight } =
+      resizeState.value;
+    const dx = event.clientX - startX;
+    const dy = event.clientY - startY;
+    entry.width = clamp(startWidth + dx, minWidth, maxWidth);
+    entry.height = clamp(startHeight + dy, minHeight, maxHeight);
+    if (entry.isShell && entry.shellId) scheduleShellFit(entry.shellId);
+    return;
+  }
   if (!dragState.value) return;
   const { entry, startX, startY, startLeft, startTop, maxX, maxY, toolTop } = dragState.value;
   const dx = event.clientX - startX;
@@ -534,6 +719,7 @@ function handlePointerMove(event: PointerEvent) {
 
 function handlePointerUp() {
   dragState.value = null;
+  resizeState.value = null;
 }
 
 function scheduleReasoningScroll(messageKey: string) {
@@ -541,6 +727,8 @@ function scheduleReasoningScroll(messageKey: string) {
     requestAnimationFrame(() => {
       const canvas = canvasEl.value;
       if (!canvas) return;
+      const entry = queue.value.find((item) => item.messageKey === messageKey);
+      if (entry && entry.follow === false) return;
       const term = canvas.querySelector(
         `[data-message-key="${messageKey}"] .term-inner`,
       ) as HTMLElement | null;
@@ -548,6 +736,15 @@ function scheduleReasoningScroll(messageKey: string) {
       term.scrollTop = Math.max(0, term.scrollHeight - term.clientHeight);
     });
   });
+}
+
+function handleFloatingScroll(entry: FileReadEntry, event: Event) {
+  if (!entry.isReasoning && !entry.isSubagentMessage) return;
+  const target = event.target as HTMLElement | null;
+  if (!target) return;
+  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+  const nextFollow = distanceFromBottom <= 8;
+  if (entry.follow !== nextFollow) entry.follow = nextFollow;
 }
 
 function scheduleToolScrollAnimation(toolKey: string) {
@@ -574,7 +771,11 @@ function scheduleToolScrollAnimation(toolKey: string) {
         const index = queue.value.findIndex((entry) => entry.toolKey === toolKey);
         if (index < 0) return;
         const entry = queue.value[index];
-        const duration = distance / TOOL_SCROLL_SPEED_PX_S;
+        const baseDuration = distance / TOOL_SCROLL_SPEED_PX_S;
+        const duration =
+          entry.toolName === 'read'
+            ? Math.min(baseDuration, TOOL_SCROLL_MAX_DURATION_S)
+            : baseDuration;
         const now = Date.now();
         const baseExpiry = now + Math.ceil(duration * 1000 + TOOL_SCROLL_HOLD_MS);
         const nextExpiresAt =
@@ -618,11 +819,23 @@ async function fetchProjects(directory?: string) {
   }
 }
 
-async function fetchCurrentProject(directory: string) {
-  if (!directory) return null;
+function upsertProject(next: ProjectInfo) {
+  const index = projects.value.findIndex((project) => project.id === next.id);
+  if (index >= 0) {
+    projects.value.splice(index, 1, { ...projects.value[index], ...next });
+  } else {
+    projects.value.unshift(next);
+  }
+}
+
+async function fetchCurrentProject(directory?: string) {
   try {
-    const params = new URLSearchParams({ directory });
-    const response = await fetch(`${OPENCODE_BASE_URL}/project/current?${params.toString()}`);
+    const params = new URLSearchParams();
+    if (directory) params.set('directory', directory);
+    const query = params.toString();
+    const response = await fetch(
+      `${OPENCODE_BASE_URL}/project/current${query ? `?${query}` : ''}`,
+    );
     if (!response.ok) return null;
     const data = (await response.json()) as ProjectInfo;
     return data && typeof data.id === 'string' ? data : null;
@@ -690,16 +903,30 @@ async function handleProjectDirectorySelect(directory: string) {
   isProjectPickerOpen.value = false;
   if (!directory) return;
   selectedDirectory.value = directory;
-  await fetchProjects(directory);
-  if (projects.value.length === 0) {
-    const current = await fetchCurrentProject(directory);
-    if (current) projects.value = [current];
-  }
-  if (projects.value.length > 0) {
+  const current = await fetchCurrentProject(directory);
+  await fetchProjects();
+  if (current) {
+    upsertProject(current);
+    selectedProjectId.value = current.id;
+    if (current.worktree && selectedDirectory.value !== current.worktree) {
+      selectedDirectory.value = current.worktree;
+    }
+  } else if (projects.value.length > 0) {
     const match = projects.value.find((project) => project.worktree === directory);
-    selectedProjectId.value = match?.id ?? projects.value[0]?.id ?? '';
+    if (match) selectedProjectId.value = match.id;
   }
-  void fetchSessions({ directory, roots: true, limit: 200 });
+}
+
+async function initProjects() {
+  const current = await fetchCurrentProject();
+  await fetchProjects();
+  if (current) {
+    upsertProject(current);
+    selectedProjectId.value = current.id;
+    if (current.worktree && selectedDirectory.value !== current.worktree) {
+      selectedDirectory.value = current.worktree;
+    }
+  }
 }
 
 
@@ -864,6 +1091,8 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
         isMessage: true,
         isSubagentMessage,
         messageId: entry.id,
+        messageKey,
+        follow: isSubagentMessage ? true : undefined,
         sessionId,
       });
       messageIndexById.set(messageKey, queue.value.length - 1);
@@ -873,6 +1102,232 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
   } catch (error) {
     log('History load failed', error);
   }
+}
+
+function buildPtyUrl(path: string, directory?: string) {
+  const params = new URLSearchParams();
+  if (directory) params.set('directory', directory);
+  const query = params.toString();
+  return `${OPENCODE_BASE_URL}${path}${query ? `?${query}` : ''}`;
+}
+
+function buildPtyWsUrl(path: string, directory?: string) {
+  const base = OPENCODE_BASE_URL.replace(/^http/, 'ws');
+  const params = new URLSearchParams();
+  if (directory) params.set('directory', directory);
+  const query = params.toString();
+  return `${base}${path}${query ? `?${query}` : ''}`;
+}
+
+function parsePtyInfo(value: unknown): PtyInfo | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === 'string' ? record.id : undefined;
+  const title = typeof record.title === 'string' ? record.title : '';
+  const command = typeof record.command === 'string' ? record.command : '';
+  const args = Array.isArray(record.args) ? record.args.map((arg) => String(arg)) : [];
+  const cwd = typeof record.cwd === 'string' ? record.cwd : '';
+  const status = record.status === 'running' || record.status === 'exited' ? record.status : 'running';
+  const pid = typeof record.pid === 'number' ? record.pid : 0;
+  if (!id) return null;
+  return { id, title, command, args, cwd, status, pid };
+}
+
+async function fetchPtyList(directory?: string) {
+  const url = buildPtyUrl('/pty', directory);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`PTY list failed (${response.status})`);
+  const data = (await response.json()) as unknown;
+  if (!Array.isArray(data)) return [] as PtyInfo[];
+  return data.map(parsePtyInfo).filter((pty): pty is PtyInfo => Boolean(pty));
+}
+
+async function createPtySession(sessionId: string, command?: string, args?: string[]) {
+  const directory = activeDirectory.value || undefined;
+  const url = buildPtyUrl('/pty', directory);
+  const body = {
+    command,
+    args,
+    cwd: directory,
+    title: `Shell (${sessionId.slice(0, 6)})`,
+  };
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`PTY create failed (${response.status})`);
+  const data = (await response.json()) as unknown;
+  return parsePtyInfo(data);
+}
+
+async function updatePtySize(ptyId: string, rows: number, cols: number, directory?: string) {
+  const url = buildPtyUrl(`/pty/${ptyId}`, directory);
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ size: { rows, cols } }),
+  });
+  if (!response.ok) throw new Error(`PTY resize failed (${response.status})`);
+  const data = (await response.json()) as unknown;
+  return parsePtyInfo(data);
+}
+
+function ensureShellWindow(pty: PtyInfo, sessionId: string, options: { preserve?: boolean } = {}) {
+  if (shellSessionsByPtyId.has(pty.id)) return;
+  const time = Date.now();
+  const entry: FileReadEntry = {
+    time,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    x: Math.random(),
+    y: Math.random(),
+    header: '',
+    path: undefined,
+    content: '',
+    scroll: false,
+    scrollDistance: 0,
+    scrollDuration: 0,
+    html: '',
+    isWrite: false,
+    isMessage: false,
+    isShell: true,
+    shellId: pty.id,
+    shellTitle: pty.title || 'Shell',
+    sessionId,
+    zIndex: nextWindowZIndex + 1,
+  };
+  bringToFront(entry);
+  queue.value.push(entry);
+  if (!options.preserve) addShellPtyId(sessionId, pty.id);
+  const terminal = new Terminal({
+    fontFamily:
+      "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace",
+    fontSize: 13,
+    lineHeight: 1.1,
+    cursorBlink: true,
+    theme: {
+      background: '#050505',
+      foreground: '#e2e8f0',
+      cursor: '#e2e8f0',
+      selectionBackground: 'rgba(148, 163, 184, 0.3)',
+    },
+  });
+  const fitAddon = new FitAddon();
+  terminal.loadAddon(fitAddon);
+  shellSessionsByPtyId.set(pty.id, {
+    pty,
+    entry,
+    terminal,
+    fitAddon,
+    sessionId,
+  });
+  nextTick(() => {
+    const host = canvasEl.value?.querySelector(
+      `[data-shell-id="${pty.id}"]`,
+    ) as HTMLElement | null;
+    if (!host) return;
+    terminal.open(host);
+    scheduleShellFit(pty.id);
+    connectShellSocket(pty.id);
+  });
+}
+
+function scheduleShellFit(ptyId: string) {
+  const existing = pendingShellFits.get(ptyId);
+  if (existing) cancelAnimationFrame(existing);
+  const handle = requestAnimationFrame(() => {
+    pendingShellFits.delete(ptyId);
+    const session = shellSessionsByPtyId.get(ptyId);
+    if (!session) return;
+    session.fitAddon.fit();
+    const rows = session.terminal.rows;
+    const cols = session.terminal.cols;
+    if (rows > 0 && cols > 0) {
+      const directory = session.pty.cwd || activeDirectory.value || undefined;
+      updatePtySize(ptyId, rows, cols, directory).catch((error) => {
+        log('PTY resize failed', error);
+      });
+    }
+  });
+  pendingShellFits.set(ptyId, handle);
+}
+
+function connectShellSocket(ptyId: string) {
+  const session = shellSessionsByPtyId.get(ptyId);
+  if (!session) return;
+  const directory = session.pty.cwd || activeDirectory.value || undefined;
+  const url = buildPtyWsUrl(`/pty/${ptyId}/connect`, directory);
+  const socket = new WebSocket(url);
+  session.socket = socket;
+  socket.binaryType = 'arraybuffer';
+  socket.addEventListener('message', (event) => {
+    if (typeof event.data === 'string') {
+      session.terminal.write(event.data);
+    } else if (event.data instanceof ArrayBuffer) {
+      session.terminal.write(new Uint8Array(event.data));
+    }
+  });
+  socket.addEventListener('open', () => {
+    session.terminal.focus();
+  });
+  session.terminal.onData((data) => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(data);
+  });
+  socket.addEventListener('close', () => {
+    session.terminal.write('\r\n[disconnected]\r\n');
+  });
+}
+
+function removeShellWindow(ptyId: string, options: { preserve?: boolean } = {}) {
+  const session = shellSessionsByPtyId.get(ptyId);
+  if (!session) return;
+  const pending = pendingShellFits.get(ptyId);
+  if (pending) cancelAnimationFrame(pending);
+  pendingShellFits.delete(ptyId);
+  session.socket?.close();
+  session.terminal.dispose();
+  shellSessionsByPtyId.delete(ptyId);
+  const index = queue.value.findIndex((entry) => entry.isShell && entry.shellId === ptyId);
+  if (index >= 0) queue.value.splice(index, 1);
+  if (!options.preserve) removeShellPtyId(session.sessionId, ptyId);
+}
+
+function disposeShellWindows(options: { preserve?: boolean } = {}) {
+  const ids = Array.from(shellSessionsByPtyId.keys());
+  ids.forEach((ptyId) => removeShellWindow(ptyId, options));
+}
+
+async function restoreShellSessions(sessionId: string) {
+  if (!sessionId) return;
+  const tracked = getShellPtyIds(sessionId);
+  if (tracked.size === 0) return;
+  try {
+    const ptys = await fetchPtyList(activeDirectory.value || undefined);
+    const available = new Map<string, PtyInfo>();
+    ptys.forEach((pty) => available.set(pty.id, pty));
+    tracked.forEach((ptyId) => {
+      const pty = available.get(ptyId);
+      if (!pty) {
+        removeShellPtyId(sessionId, ptyId);
+        return;
+      }
+      if (pty.status === 'exited') {
+        removeShellPtyId(sessionId, ptyId);
+        return;
+      }
+      ensureShellWindow(pty, sessionId, { preserve: true });
+    });
+  } catch (error) {
+    log('PTY restore failed', error);
+  }
+}
+
+async function openShellFromInput(input: string) {
+  const sessionId = selectedSessionId.value;
+  if (!sessionId) return;
+  const { command, args } = parseShellArgs(input);
+  const pty = await createPtySession(sessionId, command, args);
+  if (pty) ensureShellWindow(pty, sessionId);
 }
 
 function parseSlashCommand(input: string) {
@@ -922,6 +1377,11 @@ async function sendMessage() {
   isSending.value = true;
   sendStatus.value = 'Sending...';
   try {
+    if (slash && slash.name.toLowerCase() === 'shell') {
+      await openShellFromInput(slash.arguments ?? '');
+      sendStatus.value = 'Shell ready.';
+      return;
+    }
     if (slash && commandMatch) {
       await sendCommand(sessionId, commandMatch, slash.arguments ?? '');
       sendStatus.value = 'Sent.';
@@ -982,9 +1442,11 @@ watch(
 watch(
   [selectedProjectId, projects],
   () => {
-    if (selectedDirectory.value) return;
+    if (!selectedProjectId.value) return;
     const project = projects.value.find((item) => item.id === selectedProjectId.value);
-    if (project?.worktree) selectedDirectory.value = project.worktree;
+    if (project?.worktree && selectedDirectory.value !== project.worktree) {
+      selectedDirectory.value = project.worktree;
+    }
   },
   { immediate: true },
 );
@@ -1004,6 +1466,7 @@ watch(
 );
 
 watch(selectedSessionId, () => {
+  disposeShellWindows({ preserve: true });
   queue.value = [];
   messageIndexById.clear();
   toolIndexByCallId.clear();
@@ -1016,6 +1479,7 @@ watch(selectedSessionId, () => {
   selectedSessionStatus.value = '';
   if (selectedSessionId.value) {
     void fetchHistory(selectedSessionId.value);
+    void restoreShellSessions(selectedSessionId.value);
   }
 });
 
@@ -1034,7 +1498,9 @@ watch(selectedModel, () => {
 });
 
 watch(activeDirectory, (directory) => {
-  void fetchCommands(directory || undefined);
+  const activePath = directory || undefined;
+  void fetchCommands(activePath);
+  void fetchSessions({ directory: activePath, roots: true, limit: 200 });
 });
 
 function log(...args: any) {
@@ -1981,6 +2447,71 @@ function extractSessionStatus(payload: unknown, eventType: string) {
   return statusType ? { status: statusType } : null;
 }
 
+function extractPtyEvent(payload: unknown, eventType: string) {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const nestedPayload =
+    record.payload && typeof record.payload === 'object'
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  const properties =
+    (nestedPayload?.properties && typeof nestedPayload.properties === 'object'
+      ? (nestedPayload.properties as Record<string, unknown>)
+      : undefined) ??
+    (record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : undefined);
+  const type =
+    (record.type as string | undefined) ??
+    (record.event as string | undefined) ??
+    (nestedPayload?.type as string | undefined) ??
+    eventType;
+  if (!type) return null;
+  const normalized = normalizeEventType(type);
+  if (!normalized.startsWith('pty')) return null;
+  const infoRaw = properties?.info && typeof properties.info === 'object' ? properties.info : undefined;
+  const info = parsePtyInfo(infoRaw);
+  const id =
+    (properties?.id as string | undefined) ??
+    (info?.id as string | undefined) ??
+    (record.id as string | undefined);
+  const exitCode =
+    typeof properties?.exitCode === 'number'
+      ? properties.exitCode
+      : typeof (properties as Record<string, unknown>)?.exitCode === 'string'
+        ? Number(properties?.exitCode)
+        : undefined;
+  return { type, normalized, info, id, exitCode };
+}
+
+function handlePtyEvent(event: {
+  type: string;
+  normalized: string;
+  info: PtyInfo | null;
+  id?: string;
+  exitCode?: number;
+}) {
+  const sessionId = selectedSessionId.value;
+  if (!sessionId) return;
+  const tracked = getShellPtyIds(sessionId);
+  const ptyId = event.id ?? event.info?.id;
+  if (!ptyId || !tracked.has(ptyId)) return;
+  if (event.normalized === 'ptyexited' || event.normalized === 'ptydeleted') {
+    removeShellWindow(ptyId);
+    return;
+  }
+  if (event.info) {
+    const existing = shellSessionsByPtyId.get(event.info.id);
+    if (existing) {
+      existing.pty = event.info;
+      existing.entry.shellTitle = event.info.title || existing.entry.shellTitle;
+    }
+    if (event.info.status === 'exited') {
+      removeShellWindow(event.info.id);
+    }
+  }
+}
+
 function registerMessageMeta(payload: unknown) {
   if (!payload || typeof payload !== 'object') return;
   const record = payload as Record<string, unknown>;
@@ -2292,6 +2823,9 @@ function connect() {
       }
     }
 
+    const ptyEvent = extractPtyEvent(payload, resolvedEventType);
+    if (ptyEvent) handlePtyEvent(ptyEvent);
+
     registerMessageMeta(payload);
     registerMessageSummary(payload);
 
@@ -2314,6 +2848,7 @@ function connect() {
       const isSubagentMessage =
         isReasoning ||
         Boolean(sessionId && selectedSessionId.value && sessionId !== selectedSessionId.value);
+      const isFloatingMessage = isReasoning || isSubagentMessage;
       if (isReasoning) {
         const summaryTitle = message.messageId
           ? messageSummaryTitleById.get(message.messageId)
@@ -2367,10 +2902,12 @@ function connect() {
             (sessionId === selectedSessionId.value ? selectedSessionStatus.value : undefined)
           : selectedSessionStatus.value
         : undefined;
+      const reasoningIdleTtl =
+        sessionId && sessionId !== selectedSessionId.value ? SUBAGENT_IDLE_TTL_MS : REASONING_TTL_MS;
       const expiresAt = isReasoning
         ? reasoningStatus === 'busy'
           ? Number.MAX_SAFE_INTEGER
-          : time + REASONING_TTL_MS
+          : time + reasoningIdleTtl
         : isSubagentMessage
           ? getSubagentExpiry(sessionId)
           : time + 1000 * 60 * 30;
@@ -2404,16 +2941,18 @@ function connect() {
             header,
             content: nextContent,
             role: isUserMessage ? 'user' : existing.role,
-            scroll: !isReasoning && nextOverflowLines > 0,
-            scrollDistance: isReasoning ? 0 : nextScrollDistance,
-            scrollDuration: isReasoning ? 0 : nextScrollDuration,
+            scroll: !isFloatingMessage && nextOverflowLines > 0,
+            scrollDistance: isFloatingMessage ? 0 : nextScrollDistance,
+            scrollDuration: isFloatingMessage ? 0 : nextScrollDuration,
             html: buildHtml(nextText, 'markdown'),
             isReasoning,
+            messageKey,
+            follow: existing.follow ?? (isFloatingMessage ? true : undefined),
           });
           messageIndexById.set(messageKey, existingIndex);
         }
         messageContentById.set(messageKey, nextContent);
-        if (isReasoning) scheduleReasoningScroll(messageKey);
+        if (isFloatingMessage) scheduleReasoningScroll(messageKey);
         if (!isSubagentMessage) scheduleFollowScroll();
         return;
       }
@@ -2427,19 +2966,21 @@ function connect() {
         header,
         content: mergedContent,
         role: isUserMessage ? 'user' : 'assistant',
-        scroll: !isReasoning && overflowLines > 0,
-        scrollDistance: isReasoning ? 0 : scrollDistance,
-        scrollDuration: isReasoning ? 0 : scrollDuration,
+        scroll: !isFloatingMessage && overflowLines > 0,
+        scrollDistance: isFloatingMessage ? 0 : scrollDistance,
+        scrollDuration: isFloatingMessage ? 0 : scrollDuration,
         html,
         isWrite: false,
         isMessage: true,
         isSubagentMessage,
         isReasoning,
         messageId: stableMessageId,
+        messageKey,
+        follow: isFloatingMessage ? true : undefined,
         sessionId,
       });
       messageIndexById.set(messageKey, queue.value.length - 1);
-      if (isReasoning) scheduleReasoningScroll(messageKey);
+      if (isFloatingMessage) scheduleReasoningScroll(messageKey);
       if (!isSubagentMessage) scheduleFollowScroll();
       return;
     }
@@ -2465,8 +3006,8 @@ function connect() {
 }
 
 onMounted(() => {
-  fetchProjects();
-  fetchSessions();
+  hydrateShellPtyStorage();
+  void initProjects();
   fetchProviders();
   fetchAgents();
   fetchCommands(activeDirectory.value || undefined);
@@ -2516,6 +3057,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointermove', handlePointerMove);
   window.removeEventListener('pointerup', handlePointerUp);
   src.value?.close();
+  disposeShellWindows({ preserve: true });
 });
 </script>
 
@@ -2713,6 +3255,11 @@ onBeforeUnmount(() => {
   border-color: #4a4a4a;
 }
 
+.term.is-shell {
+  background: #050505;
+  border-color: #1f2937;
+}
+
 .term-titlebar {
   height: 22px;
   display: flex;
@@ -2757,6 +3304,34 @@ onBeforeUnmount(() => {
 
 .term.is-reasoning .term-inner {
   overflow: auto;
+}
+
+.term.is-shell .term-inner {
+  padding: 0;
+  overflow: hidden;
+}
+
+.xterm-host {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.term-resizer {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  cursor: se-resize;
+  background: linear-gradient(135deg, transparent 0%, rgba(148, 163, 184, 0.6) 100%);
+  border-radius: 2px;
+  opacity: 0.65;
+  z-index: 2;
+}
+
+.term-resizer:hover {
+  opacity: 1;
 }
 
 .term :deep(pre.shiki),

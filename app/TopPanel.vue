@@ -15,7 +15,7 @@
           </option>
         </select>
         <button type="button" class="control-button" @click="$emit('new-project')">
-          New
+          Open project
         </button>
       </div>
       <div class="top-field">

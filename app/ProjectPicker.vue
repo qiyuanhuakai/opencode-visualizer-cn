@@ -1,96 +1,47 @@
 <template>
   <div v-if="open" class="modal-backdrop" @keydown.esc="$emit('close')">
-    <div class="modal" role="dialog" aria-modal="true">
+    <div class="modal" role="dialog" aria-modal="true" tabindex="0" @keydown="handleKeydown">
       <header class="modal-header">
-        <div class="modal-title">Select Project Folder</div>
+        <div class="modal-title">Select folder</div>
         <button type="button" class="control-button" @click="$emit('close')">Close</button>
       </header>
       <div class="modal-body">
         <div class="field-row">
-          <label class="field-label" for="base-select">Base</label>
-          <select id="base-select" v-model="baseId" class="control-input" :disabled="loading">
-            <option v-for="base in basePaths" :key="base.id" :value="base.id">
-              {{ base.label }}
-            </option>
-          </select>
-        </div>
-        <div class="field-row">
           <input
             v-model="searchQuery"
+            ref="searchInputRef"
             class="control-input"
             type="text"
             placeholder="Search directories"
-            @keydown.enter.prevent="runSearch"
+            @keydown="handleKeydown"
           />
-          <button type="button" class="control-button" @click="runSearch">Search</button>
-        </div>
-        <div class="path-row">
-          <span class="path-label">Current</span>
-          <span class="path-value">{{ currentDirectory || '—' }}</span>
-          <button
-            v-if="canGoUp"
-            type="button"
-            class="control-button subtle"
-            @click="goUp"
-          >
-            Up
-          </button>
         </div>
         <div v-if="error" class="error-text">{{ error }}</div>
-        <div class="lists">
-          <div class="list-block">
-            <div class="list-title">Folders</div>
-            <div class="list" :class="{ loading: loading }">
-              <button
-                v-for="dir in directories"
-                :key="dir.absolute"
-                type="button"
-                class="list-item"
-                @click="enterDirectory(dir.name)"
-              >
-                {{ dir.name }}
-              </button>
-              <div v-if="!loading && directories.length === 0" class="empty-text">
-                No folders found.
-              </div>
-            </div>
-          </div>
-          <div class="list-block">
-            <div class="list-title">Search Results</div>
-            <div class="list" :class="{ loading: searching }">
-              <button
-                v-for="result in searchResults"
-                :key="result.path"
-                type="button"
-                class="list-item"
-                @click="selectSearchResult(result.path)"
-              >
-                {{ result.label }}
-              </button>
-              <div v-if="!searching && searchResults.length === 0" class="empty-text">
-                No results.
-              </div>
+        <div class="list-block">
+          <div class="list-title">Results</div>
+          <div class="list" :class="{ loading: searching }">
+            <button
+              v-for="(result, index) in searchResults"
+              :key="result.path"
+              type="button"
+              class="list-item"
+              :class="{ 'is-active': index === activeSearchIndex }"
+              @click="activateSearchResult(index)"
+            >
+              {{ result.label }}
+            </button>
+            <div v-if="!searching && searchResults.length === 0" class="empty-text">
+              No results.
             </div>
           </div>
         </div>
       </div>
-      <footer class="modal-footer">
-        <button
-          type="button"
-          class="control-button primary"
-          :disabled="!currentDirectory"
-          @click="selectCurrent"
-        >
-          Select folder
-        </button>
-        <button type="button" class="control-button" @click="$emit('close')">Cancel</button>
-      </footer>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, customRef, nextTick, ref, watch } from 'vue';
 
 type BasePath = { id: string; label: string; path: string };
 type FileNode = {
@@ -114,22 +65,31 @@ const emit = defineEmits<{
 
 const basePaths = ref<BasePath[]>([]);
 const baseId = ref('');
-const relativePath = ref('');
-const directories = ref<FileNode[]>([]);
-const loading = ref(false);
 const searching = ref(false);
 const error = ref('');
-const searchQuery = ref('');
+const searchInputRef = ref<HTMLInputElement | null>(null);
+const activeSearchIndex = ref(-1);
+let searchTimeout: ReturnType<typeof setTimeout> | null = null;
+let searchRequestId = 0;
+let searchController: AbortController | null = null;
+const searchQuery = customRef<string>((track, trigger) => {
+  let value = '';
+  return {
+    get() {
+      track();
+      return value;
+    },
+    set(nextValue) {
+      if (nextValue === value) return;
+      value = nextValue;
+      trigger();
+      queueSearch(nextValue);
+    },
+  };
+});
 const searchResults = ref<Array<{ path: string; label: string }>>([]);
 
 const activeBasePath = computed(() => basePaths.value.find((base) => base.id === baseId.value));
-const currentDirectory = computed(() => {
-  const base = activeBasePath.value?.path ?? '';
-  if (!base) return '';
-  if (!relativePath.value) return base;
-  return `${base.replace(/\/+$/, '')}/${relativePath.value}`;
-});
-const canGoUp = computed(() => relativePath.value.length > 0);
 
 watch(
   () => props.open,
@@ -141,10 +101,10 @@ watch(
 
 watch(baseId, () => {
   if (!props.open) return;
-  relativePath.value = '';
   searchQuery.value = '';
   searchResults.value = [];
-  void loadDirectories();
+  activeSearchIndex.value = -1;
+  void loadDefaultResults();
 });
 
 async function initPicker() {
@@ -152,9 +112,10 @@ async function initPicker() {
   searchResults.value = [];
   searchQuery.value = '';
   await loadBasePaths();
-  if (props.initialDirectory) applyInitialDirectory(props.initialDirectory);
-  if (!baseId.value && basePaths.value.length > 0) baseId.value = basePaths.value[0].id;
-  await loadDirectories();
+  if (!baseId.value && props.initialDirectory) applyInitialDirectory(props.initialDirectory);
+  await nextTick();
+  searchInputRef.value?.focus();
+  void loadDefaultResults();
 }
 
 async function loadBasePaths() {
@@ -177,7 +138,10 @@ async function loadBasePaths() {
       }
     });
     basePaths.value = candidates;
-    if (!baseId.value && candidates.length > 0) baseId.value = candidates[0].id;
+    if (!baseId.value && candidates.length > 0) {
+      const home = candidates.find((base) => base.id === 'home');
+      baseId.value = home?.id ?? candidates[0]!.id;
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
   }
@@ -190,101 +154,150 @@ function applyInitialDirectory(initialDirectory: string) {
   );
   if (match) {
     baseId.value = match.id;
-    relativePath.value = initialDirectory
-      .slice(match.path.length)
-      .replace(/^\/+/, '')
-      .replace(/\/+$/, '');
   } else if (basePaths.value.length === 0) {
     basePaths.value = [{ id: 'current', label: 'current', path: initialDirectory }];
     baseId.value = 'current';
-    relativePath.value = '';
   }
 }
 
-async function loadDirectories() {
+async function loadDefaultResults() {
   const base = activeBasePath.value?.path;
-  if (!base) return;
-  loading.value = true;
+  if (!base) {
+    searchResults.value = [];
+    activeSearchIndex.value = -1;
+    return;
+  }
+  if (searchTimeout) clearTimeout(searchTimeout);
+  if (searchController) {
+    searchController.abort();
+    searchController = null;
+  }
+  const requestId = ++searchRequestId;
+  searching.value = true;
   error.value = '';
   try {
     const params = new URLSearchParams();
     params.set('directory', base);
-    if (relativePath.value) params.set('path', relativePath.value);
     const response = await fetch(`${props.baseUrl}/file?${params.toString()}`);
     if (!response.ok) throw new Error(`File request failed (${response.status})`);
     const data = (await response.json()) as FileNode[];
     const list = Array.isArray(data) ? data : [];
-    directories.value = list
+    if (requestId !== searchRequestId) return;
+    const results = list
       .filter((node) => node.type === 'directory' && !node.ignored)
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .map((node) => {
+        const absolute = node.absolute || node.path || `${base.replace(/\/+$/, '')}/${node.name}`;
+        return { path: absolute, label: node.name };
+      });
+    searchResults.value = sortResults(results);
+    activeSearchIndex.value = searchResults.value.length > 0 ? 0 : -1;
   } catch (err) {
+    if (requestId !== searchRequestId) return;
     error.value = err instanceof Error ? err.message : String(err);
-    directories.value = [];
+    searchResults.value = [];
+    activeSearchIndex.value = -1;
   } finally {
-    loading.value = false;
+    if (requestId === searchRequestId) searching.value = false;
   }
 }
 
-function enterDirectory(name: string) {
-  const next = relativePath.value ? `${relativePath.value}/${name}` : name;
-  relativePath.value = next.replace(/^\/+/, '').replace(/\/+$/, '');
-  void loadDirectories();
-}
-
-function goUp() {
-  if (!relativePath.value) return;
-  const parts = relativePath.value.split('/').filter((part) => part.length > 0);
-  parts.pop();
-  relativePath.value = parts.join('/');
-  void loadDirectories();
-}
-
-async function runSearch() {
+async function runSearch(query: string) {
   const base = activeBasePath.value?.path;
-  const query = searchQuery.value.trim();
-  if (!base || !query) {
+  const trimmed = query.trim();
+  if (!trimmed) {
     searchResults.value = [];
+    activeSearchIndex.value = -1;
     return;
   }
+  const requestId = ++searchRequestId;
+  const controller = new AbortController();
+  searchController = controller;
   searching.value = true;
   error.value = '';
+  let usedBase = false;
   try {
     const params = new URLSearchParams({
-      directory: base,
-      query,
+      query: trimmed,
       type: 'directory',
       limit: '50',
     });
-    const response = await fetch(`${props.baseUrl}/find/file?${params.toString()}`);
+    let response = await fetch(`${props.baseUrl}/find/file?${params.toString()}`, {
+      signal: controller.signal,
+    });
+    if (!response.ok && base) {
+      params.set('directory', base);
+      usedBase = true;
+      response = await fetch(`${props.baseUrl}/find/file?${params.toString()}`, {
+        signal: controller.signal,
+      });
+    }
     if (!response.ok) throw new Error(`Search request failed (${response.status})`);
     const data = (await response.json()) as string[];
     const results = Array.isArray(data) ? data : [];
-    searchResults.value = results.map((item) => {
-      const label = toRelativeFromBase(item, base) || item;
-      return { path: item, label };
-    });
+    if (requestId !== searchRequestId) return;
+    searchResults.value = sortResults(
+      results.map((item) => {
+        const label = usedBase && base ? toRelativeFromBase(item, base) || item : item;
+        return { path: item, label };
+      }),
+    );
+    activeSearchIndex.value = searchResults.value.length > 0 ? 0 : -1;
   } catch (err) {
+    if ((err as Error).name === 'AbortError') return;
+    if (requestId !== searchRequestId) return;
     error.value = err instanceof Error ? err.message : String(err);
     searchResults.value = [];
+    activeSearchIndex.value = -1;
   } finally {
-    searching.value = false;
+    if (requestId === searchRequestId) searching.value = false;
   }
+}
+
+function queueSearch(nextValue: string) {
+  if (searchTimeout) clearTimeout(searchTimeout);
+  if (searchController) {
+    searchController.abort();
+    searchController = null;
+  }
+  const trimmed = nextValue.trim();
+  if (!trimmed) {
+    void loadDefaultResults();
+    return;
+  }
+  searchTimeout = setTimeout(() => {
+    runSearch(nextValue);
+  }, 250);
 }
 
 function selectSearchResult(resultPath: string) {
-  const base = activeBasePath.value?.path;
-  if (!base) return;
-  const relative = toRelativeFromBase(resultPath, base);
-  if (relative) {
-    relativePath.value = relative;
-    void loadDirectories();
-  }
+  if (!resultPath) return;
+  emit('select', resultPath);
+  emit('close');
 }
 
-function selectCurrent() {
-  const directory = currentDirectory.value;
-  if (!directory) return;
-  emit('select', directory);
+function activateSearchResult(index: number) {
+  if (index < 0 || index >= searchResults.value.length) return;
+  activeSearchIndex.value = index;
+  selectSearchResult(searchResults.value[index]!.path);
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter') return;
+  const items = searchResults.value;
+  if (items.length === 0) return;
+  event.preventDefault();
+  if (event.key === 'ArrowDown') {
+    if (activeSearchIndex.value < 0) activeSearchIndex.value = 0;
+    else activeSearchIndex.value = (activeSearchIndex.value + 1) % items.length;
+    return;
+  }
+  if (event.key === 'ArrowUp') {
+    if (activeSearchIndex.value < 0) activeSearchIndex.value = items.length - 1;
+    else activeSearchIndex.value = (activeSearchIndex.value - 1 + items.length) % items.length;
+    return;
+  }
+  const selectedIndex = activeSearchIndex.value < 0 ? 0 : activeSearchIndex.value;
+  activateSearchResult(selectedIndex);
 }
 
 function toRelativeFromBase(resultPath: string, base: string) {
@@ -293,6 +306,12 @@ function toRelativeFromBase(resultPath: string, base: string) {
   }
   if (resultPath.startsWith('/')) return resultPath.replace(/^\/+/, '').replace(/\/+$/, '');
   return resultPath.replace(/^\/+/, '').replace(/\/+$/, '');
+}
+
+function sortResults(items: Array<{ path: string; label: string }>) {
+  return [...items].sort((a, b) =>
+    a.label.localeCompare(b.label, undefined, { numeric: true, sensitivity: 'base' }),
+  );
 }
 </script>
 
@@ -346,37 +365,6 @@ function toRelativeFromBase(resultPath: string, base: string) {
   align-items: center;
   gap: 8px;
 }
-
-.field-label {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.path-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.path-label {
-  color: #94a3b8;
-}
-
-.path-value {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.lists {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-  min-height: 0;
-}
-
 .list-block {
   display: flex;
   flex-direction: column;
@@ -424,6 +412,11 @@ function toRelativeFromBase(resultPath: string, base: string) {
   border-color: #334155;
 }
 
+.list-item.is-active {
+  border-color: #60a5fa;
+  background: rgba(37, 99, 235, 0.2);
+}
+
 .empty-text {
   font-size: 12px;
   color: #94a3b8;
@@ -432,12 +425,6 @@ function toRelativeFromBase(resultPath: string, base: string) {
 .error-text {
   font-size: 12px;
   color: #fecaca;
-}
-
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 .control-input {
@@ -461,20 +448,5 @@ function toRelativeFromBase(resultPath: string, base: string) {
   padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
-}
-
-.control-button.primary {
-  background: #2563eb;
-  border-color: #1d4ed8;
-}
-
-.control-button.subtle {
-  background: rgba(15, 23, 42, 0.6);
-}
-
-@media (max-width: 720px) {
-  .lists {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

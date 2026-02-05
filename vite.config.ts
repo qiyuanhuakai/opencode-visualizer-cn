@@ -8,7 +8,7 @@ export default defineConfig({
     vue(),
   ],
   build: {
-    outDir: './dist',
+    outDir: '../dist',
     emptyOutDir: true,
   },
 });
