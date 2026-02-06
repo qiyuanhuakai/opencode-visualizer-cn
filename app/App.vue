@@ -40,7 +40,7 @@
             <TransitionGroup appear name="fade">
               <div
                 v-for="q in queue.filter((entry) => !entry.isMessage || entry.isSubagentMessage)"
-                :key="q.permissionId ?? q.callId ?? q.messageId ?? q.time"
+                :key="q.permissionId ?? q.questionId ?? q.callId ?? q.messageId ?? q.time"
                 class="term"
                 @pointerdown.capture="focusTerm(q, $event)"
                 :data-tool-key="q.toolKey ?? q.callId ?? undefined"
@@ -55,6 +55,7 @@
                   'is-reasoning': q.isReasoning || q.isSubagentMessage,
                   'is-shell': q.isShell,
                   'is-permission': q.isPermission,
+                  'is-question': q.isQuestion,
                   'is-tasklist': q.isTaskList,
                 }"
                 :style="{
@@ -86,6 +87,14 @@
                     :error="getPermissionError(q.permissionRequest.id)"
                     @reply="handlePermissionReply"
                   />
+                  <QuestionWindow
+                    v-else-if="q.isQuestion && q.questionRequest"
+                    :request="q.questionRequest"
+                    :is-submitting="isQuestionSubmitting(q.questionRequest.id)"
+                    :error="getQuestionError(q.questionRequest.id)"
+                    @reply="handleQuestionReply"
+                    @reject="handleQuestionReject"
+                  />
                   <div
                     v-else
                     class="shiki-host"
@@ -99,6 +108,7 @@
                     q.isSubagentMessage ||
                     q.isShell ||
                     q.isPermission ||
+                    q.isQuestion ||
                     q.isTaskList
                   "
                   class="term-resizer"
@@ -158,6 +168,7 @@ import TopPanel from './TopPanel.vue';
 import OutputDock from './OutputDock.vue';
 import ProjectPicker from './ProjectPicker.vue';
 import PermissionWindow from './PermissionWindow.vue';
+import QuestionWindow from './QuestionWindow.vue';
 
 const OPENCODE_BASE_URL = 'http://localhost:4096';
 const HISTORY_LIMIT = 60;
@@ -176,6 +187,10 @@ const PERMISSION_WINDOW_WIDTH = 760;
 const PERMISSION_WINDOW_HEIGHT = 340;
 const PERMISSION_WINDOW_MIN_WIDTH = 560;
 const PERMISSION_WINDOW_MIN_HEIGHT = 220;
+const QUESTION_WINDOW_WIDTH = 760;
+const QUESTION_WINDOW_HEIGHT = 380;
+const QUESTION_WINDOW_MIN_WIDTH = 560;
+const QUESTION_WINDOW_MIN_HEIGHT = 240;
 const TASK_LIST_TOOL_KEY = 'task:list';
 const MAIN_REASONING_TITLE = 'Reasoning';
 const REASONING_CLOSE_DELAY_MS = 3000;
@@ -227,6 +242,7 @@ type FileReadEntry = {
   isReasoning?: boolean;
   isShell?: boolean;
   isPermission?: boolean;
+  isQuestion?: boolean;
   isTaskList?: boolean;
   sessionId?: string;
   toolKey?: string;
@@ -242,6 +258,7 @@ type FileReadEntry = {
   messageTime?: number;
   callId?: string;
   permissionId?: string;
+  questionId?: string;
   follow?: boolean;
   zIndex?: number;
   width?: number;
@@ -249,6 +266,7 @@ type FileReadEntry = {
   shellId?: string;
   shellTitle?: string;
   permissionRequest?: PermissionRequest;
+  questionRequest?: QuestionRequest;
 };
 
 type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
@@ -281,6 +299,31 @@ type PermissionRequest = {
 };
 
 type PermissionReply = 'once' | 'always' | 'reject';
+
+type QuestionOption = {
+  label: string;
+  description: string;
+};
+
+type QuestionInfo = {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multiple?: boolean;
+  custom?: boolean;
+};
+
+type QuestionRequest = {
+  id: string;
+  sessionID: string;
+  questions: QuestionInfo[];
+  tool?: {
+    messageID: string;
+    callID: string;
+  };
+};
+
+type QuestionAnswer = string[];
 
 type ReasoningFinish = {
   id: string;
@@ -384,6 +427,8 @@ const shellPtyIdsBySessionId = new Map<string, Set<string>>();
 const pendingShellFits = new Map<string, number>();
 const permissionSendingById = ref<Record<string, boolean>>({});
 const permissionErrorById = ref<Record<string, string>>({});
+const questionSendingById = ref<Record<string, boolean>>({});
+const questionErrorById = ref<Record<string, string>>({});
 const pendingWorktreeMetaByDir = new Map<string, VcsInfo>();
 const tasksById = new Map<string, TaskItem>();
 const taskIdByMessageKey = new Map<string, string>();
@@ -1015,6 +1060,10 @@ function getEntryTitle(entry: FileReadEntry) {
     const permission = entry.permissionRequest?.permission;
     return permission ? withPrefix(`Permission: ${permission}`) : withPrefix('Permission request');
   }
+  if (entry.isQuestion) {
+    const header = entry.questionRequest?.questions?.[0]?.header;
+    return header ? withPrefix(`Question: ${header}`) : withPrefix('Question request');
+  }
   if (entry.isShell) return withPrefix(entry.shellTitle ?? 'Shell');
   if (entry.isReasoning) {
     const sessionTitle = getSessionTitle(entry.sessionId);
@@ -1045,6 +1094,7 @@ function getEntryTitle(entry: FileReadEntry) {
 
 function getEntryPrefix(entry: FileReadEntry) {
   if (entry.isPermission) return 'PERMISSION';
+  if (entry.isQuestion) return 'QUESTION';
   if (entry.isShell) return 'SHELL';
   if (entry.isTaskList) return 'TASK';
   if (entry.isReasoning) return 'MESSAGE';
@@ -1170,8 +1220,16 @@ function startTermResize(entry: FileReadEntry, event: PointerEvent) {
   const offsetTop = termRect.top - canvasRect.top;
   const maxWidth = Math.max(200, canvasRect.width - offsetLeft);
   const maxHeight = Math.max(200, toolTop + toolAreaHeight - offsetTop);
-  const minWidth = entry.isPermission ? PERMISSION_WINDOW_MIN_WIDTH : 320;
-  const minHeight = entry.isPermission ? PERMISSION_WINDOW_MIN_HEIGHT : 220;
+  const minWidth = entry.isPermission
+    ? PERMISSION_WINDOW_MIN_WIDTH
+    : entry.isQuestion
+      ? QUESTION_WINDOW_MIN_WIDTH
+      : 320;
+  const minHeight = entry.isPermission
+    ? PERMISSION_WINDOW_MIN_HEIGHT
+    : entry.isQuestion
+      ? QUESTION_WINDOW_MIN_HEIGHT
+      : 220;
   resizeState.value = {
     entry,
     startX: event.clientX,
@@ -1984,9 +2042,12 @@ async function fetchSessionStatus(directory?: string) {
   }
 }
 
-async function fetchPendingPermissions() {
+async function fetchPendingPermissions(directory?: string) {
   try {
-    const response = await fetch(`${OPENCODE_BASE_URL}/permission`);
+    const params = new URLSearchParams();
+    if (directory) params.set('directory', directory);
+    const query = params.toString();
+    const response = await fetch(`${OPENCODE_BASE_URL}/permission${query ? `?${query}` : ''}`);
     if (!response.ok) throw new Error(`Permission list failed (${response.status})`);
     const data = (await response.json()) as unknown;
     if (!Array.isArray(data)) return;
@@ -1999,6 +2060,27 @@ async function fetchPendingPermissions() {
       });
   } catch (error) {
     log('Permission list failed', error);
+  }
+}
+
+async function fetchPendingQuestions(directory?: string) {
+  try {
+    const params = new URLSearchParams();
+    if (directory) params.set('directory', directory);
+    const query = params.toString();
+    const response = await fetch(`${OPENCODE_BASE_URL}/question${query ? `?${query}` : ''}`);
+    if (!response.ok) throw new Error(`Question list failed (${response.status})`);
+    const data = (await response.json()) as unknown;
+    if (!Array.isArray(data)) return;
+    data
+      .map((entry) => parseQuestionRequest(entry))
+      .filter((entry): entry is QuestionRequest => Boolean(entry))
+      .filter((entry) => isQuestionSessionAllowed(entry))
+      .forEach((entry) => {
+        upsertQuestionEntry(entry);
+      });
+  } catch (error) {
+    log('Question list failed', error);
   }
 }
 
@@ -2725,6 +2807,9 @@ watch(selectedSessionId, () => {
   if (selectedSessionId.value) {
     void fetchHistory(selectedSessionId.value);
     void restoreShellSessions(selectedSessionId.value);
+    const directory = activeDirectory.value || undefined;
+    void fetchPendingPermissions(directory);
+    void fetchPendingQuestions(directory);
   }
   void fetchSessionStatus(activeDirectory.value || undefined);
 },
@@ -2734,6 +2819,7 @@ watch(
   allowedSessionIds,
   () => {
     prunePermissionEntries();
+    pruneQuestionEntries();
   },
   { immediate: true },
 );
@@ -3042,6 +3128,72 @@ function parsePermissionRequest(value: unknown, fallbackSessionId?: string): Per
     patterns,
     metadata,
     always,
+    tool,
+  };
+}
+
+function parseQuestionRequest(value: unknown, fallbackSessionId?: string): QuestionRequest | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id =
+    (typeof record.id === 'string' && record.id) ||
+    (typeof record.questionID === 'string' && record.questionID) ||
+    (typeof record.requestID === 'string' && record.requestID)
+      ? String(record.id ?? record.questionID ?? record.requestID)
+      : undefined;
+  const sessionID =
+    (typeof record.sessionID === 'string' && record.sessionID) ||
+    (typeof record.sessionId === 'string' && record.sessionId) ||
+    (typeof record.session_id === 'string' && record.session_id) ||
+    fallbackSessionId;
+  const questionsRaw = Array.isArray(record.questions)
+    ? record.questions
+    : Array.isArray(record.items)
+      ? record.items
+      : [];
+  const questions: QuestionInfo[] = questionsRaw
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const info = item as Record<string, unknown>;
+      const question = typeof info.question === 'string' ? info.question.trim() : '';
+      const header = typeof info.header === 'string' ? info.header.trim() : '';
+      const optionsRaw = Array.isArray(info.options) ? info.options : [];
+      const options: QuestionOption[] = optionsRaw
+        .map((option) => {
+          if (!option || typeof option !== 'object') return null;
+          const optionInfo = option as Record<string, unknown>;
+          const label = typeof optionInfo.label === 'string' ? optionInfo.label.trim() : '';
+          const description =
+            typeof optionInfo.description === 'string' ? optionInfo.description.trim() : '';
+          if (!label || !description) return null;
+          return { label, description };
+        })
+        .filter((entry): entry is QuestionOption => Boolean(entry));
+      if (!question || !header || options.length === 0) return null;
+      return {
+        question,
+        header,
+        options,
+        multiple: info.multiple === true,
+        custom: info.custom !== false,
+      };
+    })
+    .filter((entry): entry is QuestionInfo => Boolean(entry));
+  const toolRaw =
+    record.tool && typeof record.tool === 'object' ? (record.tool as Record<string, unknown>) : null;
+  const toolMessageId =
+    (typeof record.messageID === 'string' && record.messageID) ||
+    (toolRaw && typeof toolRaw.messageID === 'string' ? toolRaw.messageID : undefined);
+  const toolCallId =
+    (typeof record.callID === 'string' && record.callID) ||
+    (typeof record.callId === 'string' && record.callId) ||
+    (toolRaw && typeof toolRaw.callID === 'string' ? toolRaw.callID : undefined);
+  if (!id || !sessionID || questions.length === 0) return null;
+  const tool = toolMessageId && toolCallId ? { messageID: toolMessageId, callID: toolCallId } : undefined;
+  return {
+    id,
+    sessionID,
+    questions,
     tool,
   };
 }
@@ -4504,6 +4656,106 @@ function extractPermissionReplied(payload: unknown, eventType: string) {
   return { requestID, reply, sessionID };
 }
 
+function extractQuestionAsked(payload: unknown, eventType: string) {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const nestedPayload =
+    record.payload && typeof record.payload === 'object'
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  const properties =
+    (nestedPayload?.properties && typeof nestedPayload.properties === 'object'
+      ? (nestedPayload.properties as Record<string, unknown>)
+      : undefined) ??
+    (record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : undefined);
+  const data =
+    (record.data && typeof record.data === 'object' ? (record.data as Record<string, unknown>) : undefined) ??
+    (record.result && typeof record.result === 'object' ? (record.result as Record<string, unknown>) : undefined);
+  const type =
+    (record.type as string | undefined) ??
+    (record.event as string | undefined) ??
+    (nestedPayload?.type as string | undefined) ??
+    eventType;
+  if (!type) return null;
+  const normalized = normalizeEventType(type);
+  if (
+    normalized !== 'questionasked' &&
+    normalized !== 'questionupdated' &&
+    normalized !== 'questionupdate'
+  )
+    return null;
+  const request = properties ?? data;
+  return parseQuestionRequest(request, extractSessionId(payload));
+}
+
+function extractQuestionReplied(payload: unknown, eventType: string) {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const nestedPayload =
+    record.payload && typeof record.payload === 'object'
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  const properties =
+    (nestedPayload?.properties && typeof nestedPayload.properties === 'object'
+      ? (nestedPayload.properties as Record<string, unknown>)
+      : undefined) ??
+    (record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : undefined);
+  const type =
+    (record.type as string | undefined) ??
+    (record.event as string | undefined) ??
+    (nestedPayload?.type as string | undefined) ??
+    eventType;
+  if (!type) return null;
+  const normalized = normalizeEventType(type);
+  if (normalized !== 'questionreplied') return null;
+  const requestID =
+    (properties?.questionID as string | undefined) ??
+    (properties?.questionId as string | undefined) ??
+    (properties?.requestID as string | undefined) ??
+    (properties?.id as string | undefined) ??
+    (record.questionID as string | undefined) ??
+    (record.id as string | undefined);
+  if (!requestID) return null;
+  return { requestID };
+}
+
+function extractQuestionRejected(payload: unknown, eventType: string) {
+  if (!payload || typeof payload !== 'object') return null;
+  const record = payload as Record<string, unknown>;
+  const nestedPayload =
+    record.payload && typeof record.payload === 'object'
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  const properties =
+    (nestedPayload?.properties && typeof nestedPayload.properties === 'object'
+      ? (nestedPayload.properties as Record<string, unknown>)
+      : undefined) ??
+    (record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : undefined);
+  const type =
+    (record.type as string | undefined) ??
+    (record.event as string | undefined) ??
+    (nestedPayload?.type as string | undefined) ??
+    eventType;
+  if (!type) return null;
+  const normalized = normalizeEventType(type);
+  if (normalized !== 'questionrejected') return null;
+  const requestID =
+    (properties?.questionID as string | undefined) ??
+    (properties?.questionId as string | undefined) ??
+    (properties?.requestID as string | undefined) ??
+    (properties?.id as string | undefined) ??
+    (record.questionID as string | undefined) ??
+    (record.id as string | undefined);
+  if (!requestID) return null;
+  return { requestID };
+}
+
 function handlePtyEvent(event: {
   type: string;
   normalized: string;
@@ -4668,6 +4920,180 @@ async function handlePermissionReply(payload: { requestId: string; reply: Permis
     setPermissionError(requestId, toErrorMessage(error));
   } finally {
     clearPermissionSending(requestId);
+  }
+}
+
+function buildQuestionEntry(request: QuestionRequest): FileReadEntry {
+  const time = Date.now();
+  const width = QUESTION_WINDOW_WIDTH;
+  const height = QUESTION_WINDOW_HEIGHT;
+  const randomPosition = getRandomWindowPosition({ width, height });
+  return {
+    time,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    x: randomPosition.x,
+    y: randomPosition.y,
+    header: '',
+    path: undefined,
+    content: '',
+    scroll: false,
+    scrollDistance: 0,
+    scrollDuration: 0,
+    html: '',
+    isWrite: false,
+    isMessage: false,
+    isQuestion: true,
+    questionId: request.id,
+    questionRequest: request,
+    sessionId: request.sessionID,
+    width,
+    height,
+    zIndex: nextWindowZ(),
+  };
+}
+
+function upsertQuestionEntry(request: QuestionRequest) {
+  const existingIndex = queue.value.findIndex((entry) => entry.isQuestion && entry.questionId === request.id);
+  if (existingIndex >= 0) {
+    const existing = queue.value[existingIndex];
+    if (!existing) return;
+    queue.value.splice(existingIndex, 1, {
+      ...existing,
+      questionId: request.id,
+      questionRequest: request,
+      sessionId: request.sessionID,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      isQuestion: true,
+    });
+    return;
+  }
+  queue.value.push(buildQuestionEntry(request));
+}
+
+function removeQuestionEntry(requestId: string) {
+  const existingIndex = queue.value.findIndex((entry) => entry.isQuestion && entry.questionId === requestId);
+  if (existingIndex < 0) return;
+  queue.value.splice(existingIndex, 1);
+  clearQuestionSending(requestId);
+  clearQuestionError(requestId);
+}
+
+function setQuestionSending(requestId: string, value: boolean) {
+  const next = { ...questionSendingById.value };
+  if (value) next[requestId] = true;
+  else delete next[requestId];
+  questionSendingById.value = next;
+}
+
+function clearQuestionSending(requestId: string) {
+  setQuestionSending(requestId, false);
+}
+
+function setQuestionError(requestId: string, message: string) {
+  const next = { ...questionErrorById.value };
+  if (message) next[requestId] = message;
+  else delete next[requestId];
+  questionErrorById.value = next;
+}
+
+function clearQuestionError(requestId: string) {
+  setQuestionError(requestId, '');
+}
+
+function isQuestionSubmitting(requestId: string) {
+  return Boolean(questionSendingById.value[requestId]);
+}
+
+function getQuestionError(requestId: string) {
+  return questionErrorById.value[requestId] ?? '';
+}
+
+function isQuestionSessionAllowed(request: QuestionRequest) {
+  const allowed = allowedSessionIds.value;
+  if (!request.sessionID) return false;
+  if (allowed.size === 0) return false;
+  return allowed.has(request.sessionID);
+}
+
+function pruneQuestionEntries() {
+  const allowed = allowedSessionIds.value;
+  const toRemove = new Set<string>();
+  queue.value.forEach((entry) => {
+    if (!entry.isQuestion || !entry.questionRequest) return;
+    if (!allowed.has(entry.questionRequest.sessionID)) {
+      toRemove.add(entry.questionRequest.id);
+    }
+  });
+  toRemove.forEach((requestId) => removeQuestionEntry(requestId));
+}
+
+function normalizeQuestionAnswers(answers: QuestionAnswer[]) {
+  return answers.map((answer) => {
+    if (!Array.isArray(answer)) return [];
+    const cleaned = answer
+      .map((value) => (typeof value === 'string' ? value.trim() : ''))
+      .filter((value) => value.length > 0);
+    return Array.from(new Set(cleaned));
+  });
+}
+
+async function sendQuestionReply(requestId: string, answers: QuestionAnswer[]) {
+  const directory = activeDirectory.value.trim();
+  const params = new URLSearchParams();
+  if (directory) params.set('directory', directory);
+  const query = params.toString();
+  const response = await fetch(
+    `${OPENCODE_BASE_URL}/question/${requestId}/reply${query ? `?${query}` : ''}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answers: normalizeQuestionAnswers(answers) }),
+    },
+  );
+  if (!response.ok) throw new Error(`Question reply failed (${response.status})`);
+}
+
+async function sendQuestionReject(requestId: string) {
+  const directory = activeDirectory.value.trim();
+  const params = new URLSearchParams();
+  if (directory) params.set('directory', directory);
+  const query = params.toString();
+  const response = await fetch(
+    `${OPENCODE_BASE_URL}/question/${requestId}/reject${query ? `?${query}` : ''}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    },
+  );
+  if (!response.ok) throw new Error(`Question reject failed (${response.status})`);
+}
+
+async function handleQuestionReply(payload: { requestId: string; answers: QuestionAnswer[] }) {
+  const { requestId, answers } = payload;
+  if (isQuestionSubmitting(requestId)) return;
+  clearQuestionError(requestId);
+  setQuestionSending(requestId, true);
+  try {
+    await sendQuestionReply(requestId, answers);
+    removeQuestionEntry(requestId);
+  } catch (error) {
+    setQuestionError(requestId, toErrorMessage(error));
+  } finally {
+    clearQuestionSending(requestId);
+  }
+}
+
+async function handleQuestionReject(requestId: string) {
+  if (isQuestionSubmitting(requestId)) return;
+  clearQuestionError(requestId);
+  setQuestionSending(requestId, true);
+  try {
+    await sendQuestionReject(requestId);
+    removeQuestionEntry(requestId);
+  } catch (error) {
+    setQuestionError(requestId, toErrorMessage(error));
+  } finally {
+    clearQuestionSending(requestId);
   }
 }
 
@@ -5071,10 +5497,27 @@ function connect() {
       removePermissionEntry(permissionReplied.requestID);
       return;
     }
+    const questionReplied = extractQuestionReplied(payload, resolvedEventType);
+    if (questionReplied) {
+      removeQuestionEntry(questionReplied.requestID);
+      return;
+    }
+    const questionRejected = extractQuestionRejected(payload, resolvedEventType);
+    if (questionRejected) {
+      removeQuestionEntry(questionRejected.requestID);
+      return;
+    }
     const permissionAsked = extractPermissionAsked(payload, resolvedEventType);
     if (permissionAsked) {
       if (isPermissionSessionAllowed(permissionAsked)) {
         upsertPermissionEntry(permissionAsked);
+      }
+      return;
+    }
+    const questionAsked = extractQuestionAsked(payload, resolvedEventType);
+    if (questionAsked) {
+      if (isQuestionSessionAllowed(questionAsked)) {
+        upsertQuestionEntry(questionAsked);
       }
       return;
     }
@@ -5497,7 +5940,9 @@ onMounted(() => {
   fetchAgents();
   fetchSessionStatus(activeDirectory.value || undefined);
   fetchCommands(activeDirectory.value || undefined);
-  fetchPendingPermissions();
+  const directory = activeDirectory.value || undefined;
+  fetchPendingPermissions(directory);
+  fetchPendingQuestions(directory);
   const availableThemes = getBundledThemeNames();
   const chosenTheme = pickShikiTheme(availableThemes);
   if (chosenTheme) shikiTheme.value = chosenTheme;
@@ -5819,6 +6264,12 @@ onBeforeUnmount(() => {
   --term-border-color: #f59e0b;
 }
 
+.term.is-question {
+  background: #07201b;
+  border-color: #34d399;
+  --term-border-color: #34d399;
+}
+
 .term.is-apply-patch,
 .term.is-write {
   background: #190a24;
@@ -5844,6 +6295,12 @@ onBeforeUnmount(() => {
   background: rgba(245, 158, 11, 0.18);
   color: #fcd34d;
   border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.term.is-question .term-titlebar {
+  background: rgba(52, 211, 153, 0.18);
+  color: #6ee7b7;
+  border-bottom: 1px solid rgba(52, 211, 153, 0.35);
 }
 
 .term-titlebar {
@@ -5898,6 +6355,11 @@ onBeforeUnmount(() => {
 }
 
 .term.is-permission .term-inner {
+  padding: 0;
+  overflow: hidden;
+}
+
+.term.is-question .term-inner {
   padding: 0;
   overflow: hidden;
 }
