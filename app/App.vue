@@ -209,6 +209,7 @@ const TASK_LIST_TOOL_KEY = 'task:list';
 const MAIN_REASONING_TITLE = 'Reasoning';
 const REASONING_CLOSE_DELAY_MS = 3000;
 const SHELL_PTY_STORAGE_KEY = 'opencode.shellPtys';
+const COMPOSER_DRAFT_STORAGE_KEY = 'opencode.composerDrafts.v1';
 const SHIKI_LANGS = [
   'text',
   'diff',
@@ -381,6 +382,16 @@ type MessageAttachment = {
   filename: string;
 };
 
+type ComposerDraft = {
+  messageInput: string;
+  attachments: Attachment[];
+  agent: string;
+  model: string;
+  variant?: string;
+  lastSentUserMessageId?: string;
+  updatedAt: number;
+};
+
 const queue = ref<FileReadEntry[]>([]);
 const appEl = ref<HTMLDivElement | null>(null);
 const outputEl = ref<HTMLElement | null>(null);
@@ -440,6 +451,10 @@ const messageContentById = new Map<string, string>();
 const messagePartsById = new Map<string, Map<string, string>>();
 const messagePartOrderById = new Map<string, string[]>();
 const recentUserInputs: { text: string; time: number }[] = [];
+const lastUserMessageIdByComposerContext = new Map<string, string>();
+const historyLoadedComposerContexts = new Set<string>();
+const pendingComposerRestoreContexts = new Set<string>();
+let isApplyingComposerDraft = false;
 const shellSessionsByPtyId = new Map<string, ShellSession>();
 const shellPtyIdsBySessionId = new Map<string, Set<string>>();
 const pendingShellFits = new Map<string, number>();
@@ -778,6 +793,192 @@ function replaceQuerySelection(projectId: string, sessionId: string) {
 
 function buildMessageKey(messageId: string, sessionId?: string) {
   return `${sessionId ?? 'root'}:${messageId}`;
+}
+
+function buildComposerContextKey(projectId: string, sessionId: string) {
+  const normalizedProjectId = projectId.trim();
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedProjectId || !normalizedSessionId) return '';
+  return `${normalizedProjectId}:${normalizedSessionId}`;
+}
+
+function normalizeStoredAttachment(value: unknown): Attachment | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === 'string' ? record.id.trim() : '';
+  const filename = typeof record.filename === 'string' ? record.filename.trim() : '';
+  const mime = typeof record.mime === 'string' ? record.mime.trim() : '';
+  const dataUrl = typeof record.dataUrl === 'string' ? record.dataUrl : '';
+  if (!id || !filename || !mime || !dataUrl) return null;
+  return { id, filename, mime, dataUrl };
+}
+
+function normalizeStoredComposerDraft(value: unknown): ComposerDraft | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const messageInput = typeof record.messageInput === 'string' ? record.messageInput : '';
+  const attachments = Array.isArray(record.attachments)
+    ? record.attachments
+        .map((item) => normalizeStoredAttachment(item))
+        .filter((item): item is Attachment => Boolean(item))
+    : [];
+  const agent = typeof record.agent === 'string' ? record.agent : '';
+  const model = typeof record.model === 'string' ? record.model : '';
+  const variant = typeof record.variant === 'string' ? record.variant : undefined;
+  const lastSentUserMessageId =
+    typeof record.lastSentUserMessageId === 'string' ? record.lastSentUserMessageId : undefined;
+  const updatedAt = typeof record.updatedAt === 'number' ? record.updatedAt : Date.now();
+  return {
+    messageInput,
+    attachments,
+    agent,
+    model,
+    variant,
+    lastSentUserMessageId,
+    updatedAt,
+  };
+}
+
+function readComposerDraftStore() {
+  if (typeof window === 'undefined') return {} as Record<string, ComposerDraft>;
+  try {
+    const raw = window.localStorage.getItem(COMPOSER_DRAFT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const normalized: Record<string, ComposerDraft> = {};
+    Object.entries(parsed).forEach(([key, value]) => {
+      const draft = normalizeStoredComposerDraft(value);
+      if (!draft) return;
+      normalized[key] = draft;
+    });
+    return normalized;
+  } catch {
+    return {};
+  }
+}
+
+function writeComposerDraftStore(store: Record<string, ComposerDraft>) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(COMPOSER_DRAFT_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    return;
+  }
+}
+
+function readComposerDraft(contextKey: string) {
+  if (!contextKey) return null;
+  const store = readComposerDraftStore();
+  return store[contextKey] ?? null;
+}
+
+function writeComposerDraft(contextKey: string, draft: ComposerDraft) {
+  if (!contextKey) return;
+  const store = readComposerDraftStore();
+  store[contextKey] = draft;
+  writeComposerDraftStore(store);
+}
+
+function removeComposerDraft(contextKey: string) {
+  if (!contextKey) return;
+  const store = readComposerDraftStore();
+  if (!(contextKey in store)) return;
+  delete store[contextKey];
+  writeComposerDraftStore(store);
+}
+
+function resolveProjectIdForSession(sessionId: string) {
+  const matched = sessions.value.find((session) => session.id === sessionId);
+  if (matched?.projectID) return matched.projectID;
+  if (selectedSessionId.value === sessionId) return selectedProjectId.value;
+  return '';
+}
+
+function readLastUserMessageIdForContext(contextKey: string) {
+  return lastUserMessageIdByComposerContext.get(contextKey) ?? '';
+}
+
+function persistLastUserMessageIdToDraft(contextKey: string, messageId: string) {
+  const draft = readComposerDraft(contextKey);
+  if (!draft) return;
+  writeComposerDraft(contextKey, {
+    ...draft,
+    lastSentUserMessageId: messageId,
+    updatedAt: Date.now(),
+  });
+}
+
+function setContextLastUserMessageId(contextKey: string, messageId?: string) {
+  if (!contextKey) return;
+  if (messageId) {
+    lastUserMessageIdByComposerContext.set(contextKey, messageId);
+    persistLastUserMessageIdToDraft(contextKey, messageId);
+    return;
+  }
+  lastUserMessageIdByComposerContext.delete(contextKey);
+}
+
+function clearComposerInputState() {
+  isApplyingComposerDraft = true;
+  try {
+    messageInput.value = '';
+    attachments.value = [];
+  } finally {
+    isApplyingComposerDraft = false;
+  }
+}
+
+function tryRestoreComposerDraftForContext(contextKey: string) {
+  if (!contextKey) return;
+  const draft = readComposerDraft(contextKey);
+  if (!draft) {
+    pendingComposerRestoreContexts.delete(contextKey);
+    return;
+  }
+  const expectedMessageId = draft.lastSentUserMessageId?.trim() ?? '';
+  const actualMessageId = readLastUserMessageIdForContext(contextKey);
+  const hasHistory = historyLoadedComposerContexts.has(contextKey);
+  if (expectedMessageId) {
+    if (!actualMessageId && !hasHistory) return;
+    if (actualMessageId !== expectedMessageId) {
+      removeComposerDraft(contextKey);
+      pendingComposerRestoreContexts.delete(contextKey);
+      return;
+    }
+  }
+  isApplyingComposerDraft = true;
+  try {
+    messageInput.value = draft.messageInput;
+    attachments.value = draft.attachments.slice();
+    if (draft.agent) selectedMode.value = draft.agent;
+    if (draft.model) selectedModel.value = draft.model;
+    selectedThinking.value = draft.variant;
+  } finally {
+    isApplyingComposerDraft = false;
+  }
+  pendingComposerRestoreContexts.delete(contextKey);
+}
+
+function persistComposerDraftForCurrentContext() {
+  if (isApplyingComposerDraft) return;
+  const contextKey = buildComposerContextKey(selectedProjectId.value, selectedSessionId.value);
+  if (!contextKey) return;
+  const draft: ComposerDraft = {
+    messageInput: messageInput.value,
+    attachments: attachments.value.map((item) => ({
+      id: item.id,
+      filename: item.filename,
+      mime: item.mime,
+      dataUrl: item.dataUrl,
+    })),
+    agent: selectedMode.value,
+    model: selectedModel.value,
+    variant: selectedThinking.value,
+    lastSentUserMessageId: readLastUserMessageIdForContext(contextKey) || undefined,
+    updatedAt: Date.now(),
+  };
+  writeComposerDraft(contextKey, draft);
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -2322,6 +2523,18 @@ function pickLastUserSelection(messages: Array<Record<string, unknown>>): UserMe
   return null;
 }
 
+function pickLastUserMessageId(messages: Array<Record<string, unknown>>) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const entry = messages[i];
+    const info = (entry?.info as Record<string, unknown> | undefined) ?? undefined;
+    const role = typeof info?.role === 'string' ? info.role : '';
+    if (role !== 'user') continue;
+    const id = typeof info?.id === 'string' ? info.id : '';
+    if (id) return id;
+  }
+  return '';
+}
+
 async function fetchHistory(sessionId: string, isSubagentMessage = false) {
   if (!sessionId) return;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
@@ -2343,6 +2556,15 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
     }
     if (!isSubagentMessage) {
+      const contextProjectId = resolveProjectIdForSession(sessionId);
+      const contextKey = buildComposerContextKey(contextProjectId, sessionId);
+      if (contextKey) {
+        historyLoadedComposerContexts.add(contextKey);
+        const lastUserMessageId = pickLastUserMessageId(data);
+        setContextLastUserMessageId(contextKey, lastUserMessageId || undefined);
+      }
+    }
+    if (!isSubagentMessage) {
       const selection = pickLastUserSelection(data);
       if (selection) {
         if (selection.agent) selectedMode.value = selection.agent;
@@ -2352,6 +2574,11 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
         } else if (selection.agent || selection.modelId) {
           selectedThinking.value = undefined;
         }
+      }
+      const contextProjectId = resolveProjectIdForSession(sessionId);
+      const contextKey = buildComposerContextKey(contextProjectId, sessionId);
+      if (contextKey && pendingComposerRestoreContexts.has(contextKey)) {
+        tryRestoreComposerDraftForContext(contextKey);
       }
     }
     const history = data
@@ -3219,6 +3446,37 @@ watch(selectedSessionId, () => {
   void fetchSessionStatus(activeDirectory.value || undefined);
 },
 { immediate: true });
+
+watch(
+  [selectedProjectId, selectedSessionId],
+  ([projectId, sessionId], previous) => {
+    const [prevProjectId, prevSessionId] = previous ?? ['', ''];
+    const contextKey = buildComposerContextKey(projectId, sessionId);
+    const prevContextKey = buildComposerContextKey(prevProjectId ?? '', prevSessionId ?? '');
+    if (contextKey === prevContextKey) return;
+    clearComposerInputState();
+    if (!contextKey) return;
+    pendingComposerRestoreContexts.add(contextKey);
+    tryRestoreComposerDraftForContext(contextKey);
+  },
+  { immediate: true },
+);
+
+watch(
+  [
+    selectedProjectId,
+    selectedSessionId,
+    messageInput,
+    attachments,
+    selectedMode,
+    selectedModel,
+    selectedThinking,
+  ],
+  () => {
+    persistComposerDraftForCurrentContext();
+  },
+  { deep: true },
+);
 
 watch(
   allowedSessionIds,
@@ -5822,11 +6080,24 @@ function registerMessageMeta(payload: unknown) {
     (info?.role as string | undefined) ??
     (properties?.role as string | undefined) ??
     (record.role as string | undefined);
+  const sessionId =
+    (typeof info?.sessionID === 'string' ? info.sessionID : undefined) ?? extractSessionId(payload);
   const meta = parseUserMessageMeta(info);
   const messageTime = extractMessageTime(info);
 
   if (id && role === 'user') {
     userMessageIds.add(id);
+    if (sessionId) {
+      const projectId = resolveProjectIdForSession(sessionId);
+      const contextKey = buildComposerContextKey(projectId, sessionId);
+      if (contextKey) {
+        historyLoadedComposerContexts.add(contextKey);
+        setContextLastUserMessageId(contextKey, id);
+        if (pendingComposerRestoreContexts.has(contextKey)) {
+          tryRestoreComposerDraftForContext(contextKey);
+        }
+      }
+    }
   }
   if (id && meta) {
     storeUserMessageMeta(id, meta);
