@@ -4,40 +4,61 @@
       <div class="permission-title">Permission request</div>
       <div class="permission-type">{{ request.permission }}</div>
     </div>
-    <div class="permission-row">
-      <div class="permission-label">Session</div>
-      <div class="permission-value">{{ request.sessionID }}</div>
-    </div>
-    <div v-if="request.tool" class="permission-row">
-      <div class="permission-label">Tool</div>
-      <div class="permission-value">
-        message {{ request.tool.messageID }}
-        <span class="divider">/</span>
-        call {{ request.tool.callID }}
+    <div class="permission-summary">
+      <div class="permission-row">
+        <div class="permission-label">Session</div>
+        <div class="permission-value">{{ request.sessionID }}</div>
+      </div>
+      <div v-if="request.tool" class="permission-row">
+        <div class="permission-label">Tool</div>
+        <div class="permission-value">
+          message {{ request.tool.messageID }}
+          <span class="divider">/</span>
+          call {{ request.tool.callID }}
+        </div>
+      </div>
+      <div class="permission-row">
+        <div class="permission-label">Items</div>
+        <div class="permission-value">
+          Patterns {{ request.patterns.length }}
+          <span class="divider">/</span>
+          Metadata {{ metadataEntries.length }}
+          <span v-if="request.always.length > 0">
+            <span class="divider">/</span>
+            Always {{ request.always.length }}
+          </span>
+        </div>
       </div>
     </div>
-    <div class="permission-section">
-      <div class="section-title">Patterns</div>
-      <ul class="pattern-list">
-        <li v-for="pattern in request.patterns" :key="pattern">{{ pattern }}</li>
-        <li v-if="request.patterns.length === 0" class="empty">None</li>
-      </ul>
-    </div>
-    <div class="permission-section">
-      <div class="section-title">Metadata</div>
-      <div v-if="metadataEntries.length === 0" class="empty">None</div>
-      <div v-for="entry in metadataEntries" :key="entry[0]" class="metadata-row">
-        <div class="metadata-key">{{ entry[0] }}</div>
-        <div class="metadata-value">{{ formatValue(entry[1]) }}</div>
+
+    <div class="permission-body">
+      <div class="permission-section">
+        <div class="section-title">Patterns ({{ request.patterns.length }})</div>
+        <ul class="pattern-list">
+          <li v-for="pattern in request.patterns" :key="pattern">{{ pattern }}</li>
+          <li v-if="request.patterns.length === 0" class="empty">None</li>
+        </ul>
       </div>
+
+      <div class="permission-section">
+        <div class="section-title">Metadata ({{ metadataEntries.length }})</div>
+        <div v-if="metadataEntries.length === 0" class="empty">None</div>
+        <div v-for="entry in metadataEntries" :key="entry[0]" class="metadata-row">
+          <div class="metadata-key">{{ entry[0] }}</div>
+          <div class="metadata-value">{{ formatInlineValue(entry[1]) }}</div>
+        </div>
+      </div>
+
+      <div v-if="request.always.length > 0" class="permission-section">
+        <div class="section-title">Always allow ({{ request.always.length }})</div>
+        <ul class="pattern-list">
+          <li v-for="pattern in request.always" :key="pattern">{{ pattern }}</li>
+        </ul>
+      </div>
+
+      <div v-if="error" class="permission-error">{{ error }}</div>
     </div>
-    <div v-if="request.always.length > 0" class="permission-section">
-      <div class="section-title">Always allow</div>
-      <ul class="pattern-list">
-        <li v-for="pattern in request.always" :key="pattern">{{ pattern }}</li>
-      </ul>
-    </div>
-    <div v-if="error" class="permission-error">{{ error }}</div>
+
     <div class="permission-actions">
       <button
         type="button"
@@ -97,13 +118,20 @@ const emit = defineEmits<{
 
 const metadataEntries = computed(() => Object.entries(props.request.metadata ?? {}));
 
-function formatValue(value: unknown) {
-  if (typeof value === 'string') return value;
+function formatInlineValue(value: unknown) {
+  if (typeof value === 'string') return trimToLength(value, 140);
   try {
-    return JSON.stringify(value, null, 2);
+    const compact = JSON.stringify(value);
+    return trimToLength(compact ?? String(value), 140);
   } catch {
-    return String(value);
+    return trimToLength(String(value), 140);
   }
+}
+
+function trimToLength(text: string, maxLength: number) {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
 function emitReply(reply: PermissionReply) {
@@ -113,9 +141,13 @@ function emitReply(reply: PermissionReply) {
 
 <style scoped>
 .permission-window {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  padding: 8px;
+  box-sizing: border-box;
   color: #e2e8f0;
   font-size: 12px;
 }
@@ -137,11 +169,22 @@ function emitReply(reply: PermissionReply) {
   color: #94a3b8;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  text-align: right;
+}
+
+.permission-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(15, 23, 42, 0.35);
 }
 
 .permission-row {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   flex-wrap: wrap;
 }
@@ -162,10 +205,23 @@ function emitReply(reply: PermissionReply) {
   color: #64748b;
 }
 
+.permission-body {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 2px;
+}
+
 .permission-section {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(2, 6, 23, 0.45);
 }
 
 .section-title {
@@ -191,7 +247,7 @@ function emitReply(reply: PermissionReply) {
 
 .metadata-row {
   display: grid;
-  grid-template-columns: minmax(80px, auto) 1fr;
+  grid-template-columns: minmax(72px, auto) 1fr;
   gap: 8px;
   align-items: start;
 }
@@ -204,8 +260,9 @@ function emitReply(reply: PermissionReply) {
 .metadata-value {
   color: #e2e8f0;
   font-size: 11px;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .empty {
@@ -221,7 +278,9 @@ function emitReply(reply: PermissionReply) {
 .permission-actions {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  justify-content: flex-end;
+  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  padding-top: 8px;
 }
 
 .permission-button {

@@ -172,6 +172,10 @@ const TOOL_SCROLL_MAX_DURATION_S = 3;
 const SUBAGENT_ACTIVE_TTL_MS = 60 * 60 * 1000;
 const TASK_WINDOW_WIDTH = 360;
 const TASK_WINDOW_HEIGHT = 240;
+const PERMISSION_WINDOW_WIDTH = 760;
+const PERMISSION_WINDOW_HEIGHT = 340;
+const PERMISSION_WINDOW_MIN_WIDTH = 560;
+const PERMISSION_WINDOW_MIN_HEIGHT = 220;
 const TASK_LIST_TOOL_KEY = 'task:list';
 const MAIN_REASONING_TITLE = 'Reasoning';
 const REASONING_CLOSE_DELAY_MS = 3000;
@@ -1166,8 +1170,8 @@ function startTermResize(entry: FileReadEntry, event: PointerEvent) {
   const offsetTop = termRect.top - canvasRect.top;
   const maxWidth = Math.max(200, canvasRect.width - offsetLeft);
   const maxHeight = Math.max(200, toolTop + toolAreaHeight - offsetTop);
-  const minWidth = 320;
-  const minHeight = 220;
+  const minWidth = entry.isPermission ? PERMISSION_WINDOW_MIN_WIDTH : 320;
+  const minHeight = entry.isPermission ? PERMISSION_WINDOW_MIN_HEIGHT : 220;
   resizeState.value = {
     entry,
     startX: event.clientX,
@@ -4485,8 +4489,8 @@ function handlePtyEvent(event: {
 
 function buildPermissionEntry(request: PermissionRequest): FileReadEntry {
   const time = Date.now();
-  const width = 420;
-  const height = 280;
+  const width = PERMISSION_WINDOW_WIDTH;
+  const height = PERMISSION_WINDOW_HEIGHT;
   const randomPosition = getRandomWindowPosition({ width, height });
   return {
     time,
@@ -5840,8 +5844,8 @@ onBeforeUnmount(() => {
 }
 
 .term.is-permission .term-inner {
-  padding: 8px;
-  overflow: auto;
+  padding: 0;
+  overflow: hidden;
 }
 
 .term.is-tasklist .term-inner {
