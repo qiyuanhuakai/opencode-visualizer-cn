@@ -63,7 +63,7 @@
         <div class="statusbar-section statusbar-left">
           <span class="statusbar-text">{{ isThinking ? `Thinking${thinkingSuffix}` : 'Idle' }}</span>
         </div>
-        <div class="statusbar-section statusbar-right" :class="{ 'is-error': isStatusError }">
+        <div class="statusbar-section statusbar-right" :class="{ 'is-error': isStatusError, 'is-retry': isRetryStatus }">
           {{ statusText }}
         </div>
       </div>
@@ -106,6 +106,7 @@ const props = defineProps<{
   statusText: string;
   isStatusError: boolean;
   isThinking: boolean;
+  isRetryStatus?: boolean;
 }>();
 
 defineEmits<{
@@ -374,7 +375,8 @@ defineExpose({ dockEl });
   white-space: nowrap;
 }
 
-.statusbar-right.is-error {
+.statusbar-right.is-error,
+.statusbar-right.is-retry {
   color: #fecaca;
 }
 

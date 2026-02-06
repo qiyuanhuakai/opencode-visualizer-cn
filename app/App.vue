@@ -28,6 +28,7 @@
             :status-text="statusText"
             :is-status-error="isStatusError"
             :is-thinking="isThinking"
+            :is-retry-status="!!retryStatus"
             @scroll="handleMessageDockScroll"
             @wheel="handleMessageDockWheel"
             @touchmove="handleMessageDockScroll"
@@ -48,6 +49,7 @@
                   'is-reasoning': q.isReasoning || q.isSubagentMessage,
                   'is-shell': q.isShell,
                   'is-permission': q.isPermission,
+                  'is-tasklist': q.isTaskList,
                 }"
                 :style="{
                   left: `${q.x ?? 0}px`,
@@ -86,7 +88,13 @@
                   ></div>
                 </div>
                 <div
-                  v-if="q.isReasoning || q.isSubagentMessage || q.isShell || q.isPermission"
+                  v-if="
+                    q.isReasoning ||
+                    q.isSubagentMessage ||
+                    q.isShell ||
+                    q.isPermission ||
+                    q.isTaskList
+                  "
                   class="term-resizer"
                   @pointerdown="startTermResize(q, $event)"
                 ></div>
@@ -156,6 +164,9 @@ const TOOL_SCROLL_SPEED_PX_S = 2000;
 const TOOL_SCROLL_HOLD_MS = 250;
 const TOOL_SCROLL_MAX_DURATION_S = 3;
 const SUBAGENT_ACTIVE_TTL_MS = 60 * 60 * 1000;
+const TASK_WINDOW_WIDTH = 360;
+const TASK_WINDOW_HEIGHT = 240;
+const TASK_LIST_TOOL_KEY = 'task:list';
 const MAIN_REASONING_TITLE = 'Reasoning';
 const REASONING_CLOSE_DELAY_MS = 3000;
 const SHELL_PTY_STORAGE_KEY = 'opencode.shellPtys';
@@ -206,6 +217,7 @@ type FileReadEntry = {
   isReasoning?: boolean;
   isShell?: boolean;
   isPermission?: boolean;
+  isTaskList?: boolean;
   sessionId?: string;
   toolKey?: string;
   role?: 'user' | 'assistant';
@@ -227,6 +239,22 @@ type FileReadEntry = {
   shellId?: string;
   shellTitle?: string;
   permissionRequest?: PermissionRequest;
+};
+
+type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'cancelled';
+
+type TaskSource = 'subtask' | 'tool';
+
+type TaskItem = {
+  id: string;
+  sessionId: string;
+  messageId?: string;
+  callId?: string;
+  content: string;
+  status: TaskStatus;
+  source: TaskSource;
+  updatedAt: number;
+  subSessionId?: string;
 };
 
 type PermissionRequest = {
@@ -345,6 +373,9 @@ const pendingShellFits = new Map<string, number>();
 const permissionSendingById = ref<Record<string, boolean>>({});
 const permissionErrorById = ref<Record<string, string>>({});
 const pendingWorktreeMetaByDir = new Map<string, VcsInfo>();
+const tasksById = new Map<string, TaskItem>();
+const taskIdByMessageKey = new Map<string, string>();
+const taskIdByCallId = new Map<string, string>();
 
 type ProjectInfo = {
   id: string;
@@ -450,12 +481,21 @@ const sendStatus = ref('Ready');
 const isSending = ref(false);
 const isAborting = ref(false);
 const isBootstrapping = ref(false);
+const retryStatus = ref<{
+  message: string;
+  next: number;
+  attempt: number;
+} | null>(null);
 
-const statusText = computed(
-  () => projectError.value || worktreeError.value || sessionError.value || sendStatus.value,
-);
+const statusText = computed(() => {
+  if (retryStatus.value) {
+    const timeStr = formatRetryTime(retryStatus.value.next);
+    return `${retryStatus.value.message} | Next: ${timeStr}`;
+  }
+  return projectError.value || worktreeError.value || sessionError.value || sendStatus.value;
+});
 const isStatusError = computed(() =>
-  Boolean(projectError.value || worktreeError.value || sessionError.value),
+  Boolean(projectError.value || worktreeError.value || sessionError.value || retryStatus.value),
 );
 
 const filteredSessions = computed(() =>
@@ -2667,6 +2707,14 @@ watch(activeDirectory, (directory) => {
   void fetchCommands(activePath);
 });
 
+watch(
+  allowedSessionIds,
+  () => {
+    pruneTasksForAllowedSessions();
+  },
+  { immediate: true },
+);
+
 function log(...args: any) {
   const formatted = args.map((value) => {
     if (typeof value === 'string') return value;
@@ -2950,6 +2998,334 @@ function escapeHtml(value: string) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+const TASK_STATUS_LABELS: Record<TaskStatus, string> = {
+  pending: 'Pending',
+  in_progress: 'Running',
+  completed: 'Done',
+  cancelled: 'Failed',
+};
+
+const TASK_STATUS_ORDER: Record<TaskStatus, number> = {
+  in_progress: 0,
+  pending: 1,
+  completed: 2,
+  cancelled: 3,
+};
+
+type TaskUpdate =
+  | {
+      kind: 'subtask';
+      sessionId: string;
+      messageId?: string;
+      taskId?: string;
+      content: string;
+    }
+  | {
+      kind: 'tool';
+      sessionId: string;
+      messageId?: string;
+      callId?: string;
+      content: string;
+      status: TaskStatus;
+      subSessionId?: string;
+    };
+
+function normalizeTaskStatus(status?: string): TaskStatus {
+  switch (status) {
+    case 'running':
+      return 'in_progress';
+    case 'completed':
+      return 'completed';
+    case 'error':
+      return 'cancelled';
+    case 'pending':
+    default:
+      return 'pending';
+  }
+}
+
+function buildTaskListHtml(tasks: TaskItem[]) {
+  const header = tasks.length === 1 ? '1 task' : `${tasks.length} tasks`;
+  const items = tasks
+    .map((task) => {
+      const displayContent = (task.content || '').trim() || 'Task';
+      const statusLabel = TASK_STATUS_LABELS[task.status] ?? task.status;
+      const statusClass = task.status === 'in_progress' ? 'is-running' : 'is-pending';
+      const subSessionLabel =
+        task.subSessionId && task.subSessionId !== task.sessionId
+          ? getSessionTitle(task.subSessionId) ?? task.subSessionId
+          : undefined;
+      const sessionLabel =
+        subSessionLabel ??
+        (task.sessionId !== selectedSessionId.value
+          ? getSessionTitle(task.sessionId) ?? task.sessionId
+          : undefined);
+      const sessionHtml = sessionLabel
+        ? `<span class="tasklist-session">${escapeHtml(sessionLabel)}</span>`
+        : '';
+      return `<li class="tasklist-item ${statusClass}"><span class="tasklist-status">${escapeHtml(
+        statusLabel,
+      )}</span><span class="tasklist-text">${escapeHtml(displayContent)}</span>${sessionHtml}</li>`;
+    })
+    .join('');
+  return `<div class="tasklist"><div class="tasklist-header">${escapeHtml(
+    header,
+  )}</div><ul class="tasklist-items">${items}</ul></div>`;
+}
+
+function updateTaskListWindow() {
+  if (!selectedSessionId.value) {
+    const existingIndex = queue.value.findIndex((entry) => entry.isTaskList);
+    if (existingIndex >= 0) queue.value.splice(existingIndex, 1);
+    return;
+  }
+  const allowed = allowedSessionIds.value;
+  const tasks = Array.from(tasksById.values()).filter((task) => allowed.has(task.sessionId));
+  if (tasks.length === 0) {
+    const existingIndex = queue.value.findIndex((entry) => entry.isTaskList);
+    if (existingIndex >= 0) queue.value.splice(existingIndex, 1);
+    return;
+  }
+  tasks.sort((a, b) => {
+    const orderDiff = TASK_STATUS_ORDER[a.status] - TASK_STATUS_ORDER[b.status];
+    if (orderDiff !== 0) return orderDiff;
+    return b.updatedAt - a.updatedAt;
+  });
+  const html = buildTaskListHtml(tasks);
+  const content = tasks
+    .map((task) => {
+      const displayContent = (task.content || '').trim() || 'Task';
+      return `${task.status}: ${displayContent}`;
+    })
+    .join('\n');
+  const time = Date.now();
+  const existingIndex = queue.value.findIndex((entry) => entry.isTaskList);
+  if (existingIndex >= 0) {
+    const existing = queue.value[existingIndex];
+    if (!existing) return;
+    queue.value.splice(existingIndex, 1, {
+      ...existing,
+      time,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+      content,
+      html,
+      toolTitle: existing.toolTitle ?? 'Tasks',
+    });
+    return;
+  }
+  const randomPosition = getRandomWindowPosition({
+    width: TASK_WINDOW_WIDTH,
+    height: TASK_WINDOW_HEIGHT,
+  });
+  queue.value.push({
+    time,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+    x: randomPosition.x,
+    y: randomPosition.y,
+    header: '',
+    content,
+    scroll: false,
+    scrollDistance: 0,
+    scrollDuration: 0,
+    html,
+    isWrite: false,
+    isMessage: false,
+    isTaskList: true,
+    toolKey: TASK_LIST_TOOL_KEY,
+    toolTitle: 'Tasks',
+    width: TASK_WINDOW_WIDTH,
+    height: TASK_WINDOW_HEIGHT,
+    zIndex: nextWindowZ(),
+  });
+}
+
+function pruneTasksForAllowedSessions() {
+  const allowed = allowedSessionIds.value;
+  if (!selectedSessionId.value || allowed.size === 0) {
+    tasksById.clear();
+    taskIdByMessageKey.clear();
+    taskIdByCallId.clear();
+    updateTaskListWindow();
+    return;
+  }
+  let didChange = false;
+  tasksById.forEach((task, id) => {
+    if (!allowed.has(task.sessionId)) {
+      removeTaskEntry(id);
+      didChange = true;
+    }
+  });
+  if (didChange || allowed.size > 0) updateTaskListWindow();
+}
+
+function removeTaskEntry(taskId: string) {
+  const existing = tasksById.get(taskId);
+  if (!existing) return;
+  tasksById.delete(taskId);
+  if (existing.messageId) {
+    const messageKey = buildMessageKey(existing.messageId, existing.sessionId);
+    if (taskIdByMessageKey.get(messageKey) === taskId) taskIdByMessageKey.delete(messageKey);
+  }
+  if (existing.callId && taskIdByCallId.get(existing.callId) === taskId) {
+    taskIdByCallId.delete(existing.callId);
+  }
+}
+
+function upsertTaskFromSubtask(update: Extract<TaskUpdate, { kind: 'subtask' }>) {
+  const messageKey = update.messageId ? buildMessageKey(update.messageId, update.sessionId) : undefined;
+  const existingId = messageKey ? taskIdByMessageKey.get(messageKey) : undefined;
+  const taskId = existingId ?? update.taskId ?? `subtask:${update.sessionId}:${Date.now()}`;
+  const existing = tasksById.get(taskId);
+  const content = update.content || existing?.content || '';
+  const next: TaskItem = {
+    id: taskId,
+    sessionId: update.sessionId,
+    messageId: update.messageId ?? existing?.messageId,
+    content,
+    status: existing?.status ?? 'pending',
+    source: existing?.source ?? 'subtask',
+    updatedAt: Date.now(),
+    subSessionId: existing?.subSessionId,
+  };
+  tasksById.set(taskId, next);
+  if (messageKey) taskIdByMessageKey.set(messageKey, taskId);
+}
+
+function upsertTaskFromTool(update: Extract<TaskUpdate, { kind: 'tool' }>) {
+  const messageKey = update.messageId ? buildMessageKey(update.messageId, update.sessionId) : undefined;
+  const existingId =
+    (messageKey ? taskIdByMessageKey.get(messageKey) : undefined) ??
+    (update.callId ? taskIdByCallId.get(update.callId) : undefined);
+  const taskId = existingId ?? update.callId ?? `task:${update.sessionId}:${Date.now()}`;
+  const existing = tasksById.get(taskId);
+  const content = update.content || existing?.content || '';
+  if (update.status === 'completed' || update.status === 'cancelled') {
+    removeTaskEntry(taskId);
+    return;
+  }
+  const next: TaskItem = {
+    id: taskId,
+    sessionId: update.sessionId,
+    messageId: update.messageId ?? existing?.messageId,
+    callId: update.callId ?? existing?.callId,
+    content,
+    status: update.status,
+    source: existing?.source ?? 'tool',
+    updatedAt: Date.now(),
+    subSessionId: update.subSessionId ?? existing?.subSessionId,
+  };
+  tasksById.set(taskId, next);
+  if (messageKey) taskIdByMessageKey.set(messageKey, taskId);
+  if (update.callId) taskIdByCallId.set(update.callId, taskId);
+}
+
+function extractMessagePart(payload: unknown, eventType: string) {
+  if (!payload || typeof payload !== 'object') return null;
+  const normalized = normalizeEventType(eventType);
+  if (normalized !== 'messagepartupdated') return null;
+  const record = payload as Record<string, unknown>;
+  const nestedPayload =
+    record.payload && typeof record.payload === 'object'
+      ? (record.payload as Record<string, unknown>)
+      : undefined;
+  const properties =
+    (nestedPayload?.properties && typeof nestedPayload.properties === 'object'
+      ? (nestedPayload.properties as Record<string, unknown>)
+      : undefined) ??
+    (record.properties && typeof record.properties === 'object'
+      ? (record.properties as Record<string, unknown>)
+      : undefined);
+  const data =
+    (record.data as Record<string, unknown> | undefined) ??
+    nestedPayload ??
+    (record.result as Record<string, unknown> | undefined);
+  const messageObject =
+    (properties?.message as Record<string, unknown> | undefined) ??
+    (data?.message as Record<string, unknown> | undefined) ??
+    (record.message as Record<string, unknown> | undefined);
+  const part =
+    (properties?.part && typeof properties.part === 'object'
+      ? (properties.part as Record<string, unknown>)
+      : undefined) ??
+    (data?.part && typeof data.part === 'object' ? (data.part as Record<string, unknown>) : undefined) ??
+    (record.part && typeof record.part === 'object'
+      ? (record.part as Record<string, unknown>)
+      : undefined) ??
+    (messageObject?.part && typeof messageObject.part === 'object'
+      ? (messageObject.part as Record<string, unknown>)
+      : undefined);
+  return part ?? null;
+}
+
+function extractTaskUpdate(payload: unknown, eventType: string, fallbackSessionId?: string): TaskUpdate | null {
+  const part = extractMessagePart(payload, eventType);
+  if (!part) return null;
+  const type = typeof part.type === 'string' ? part.type : undefined;
+  const sessionId =
+    (typeof part.sessionID === 'string' && part.sessionID) ||
+    (typeof part.sessionId === 'string' && part.sessionId) ||
+    fallbackSessionId;
+  if (!sessionId) return null;
+  const messageId =
+    (typeof part.messageID === 'string' && part.messageID) ||
+    (typeof part.messageId === 'string' && part.messageId) ||
+    undefined;
+  if (type === 'subtask') {
+    const content =
+      (typeof part.description === 'string' && part.description) ||
+      (typeof part.prompt === 'string' && part.prompt) ||
+      '';
+    const taskId = typeof part.id === 'string' ? part.id : undefined;
+    return {
+      kind: 'subtask',
+      sessionId,
+      messageId,
+      taskId,
+      content: content.trim(),
+    };
+  }
+  if (type === 'tool') {
+    const tool = typeof part.tool === 'string' ? part.tool : undefined;
+    if (tool !== 'task') return null;
+    const callId =
+      (typeof part.callID === 'string' && part.callID) ||
+      (typeof part.callId === 'string' && part.callId) ||
+      undefined;
+    const state = part.state && typeof part.state === 'object' ? (part.state as Record<string, unknown>) : null;
+    const status = normalizeTaskStatus(typeof state?.status === 'string' ? (state.status as string) : undefined);
+    const input = state?.input && typeof state.input === 'object' ? (state.input as Record<string, unknown>) : null;
+    const content =
+      (typeof input?.description === 'string' && input.description) ||
+      (typeof input?.prompt === 'string' && input.prompt) ||
+      '';
+    const metadata =
+      part.metadata && typeof part.metadata === 'object'
+        ? (part.metadata as Record<string, unknown>)
+        : null;
+    const subSessionId =
+      metadata && typeof metadata.sessionId === 'string' ? (metadata.sessionId as string) : undefined;
+    return {
+      kind: 'tool',
+      sessionId,
+      messageId,
+      callId,
+      content: content.trim(),
+      status,
+      subSessionId,
+    };
+  }
+  return null;
+}
+
+function applyTaskUpdate(update: TaskUpdate) {
+  if (update.kind === 'subtask') {
+    upsertTaskFromSubtask(update);
+  } else {
+    upsertTaskFromTool(update);
+  }
+  updateTaskListWindow();
 }
 
 function guessLanguage(path?: string, eventType?: string) {
@@ -3818,6 +4194,37 @@ function extractMessageFinish(payload: unknown, eventType: string) {
   return { finish, sessionId, messageId };
 }
 
+function formatRetryTime(timestamp: number): string {
+  const nextDate = new Date(timestamp);
+  const now = Date.now();
+  const diffMs = timestamp - now;
+
+  const absolute = nextDate.toLocaleString('en-US', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).replace(/(\d+)\/(\d+)\/(\d+),/, '$3/$1/$2');
+
+  const diffSec = Math.max(0, Math.ceil(diffMs / 1000));
+  const diffMin = Math.ceil(diffSec / 60);
+  const diffHour = Math.ceil(diffMin / 60);
+
+  let relative: string;
+  if (diffHour > 1) {
+    relative = `in ${diffHour} hours`;
+  } else if (diffMin > 1) {
+    relative = `in ${diffMin} minutes`;
+  } else {
+    relative = `in ${diffSec} seconds`;
+  }
+
+  return `${absolute} (${relative})`;
+}
+
 function extractSessionStatus(payload: unknown, eventType: string) {
   if (!payload || typeof payload !== 'object') return null;
   const record = payload as Record<string, unknown>;
@@ -3845,6 +4252,14 @@ function extractSessionStatus(payload: unknown, eventType: string) {
     (properties?.status as Record<string, unknown> | undefined) ??
     (record.status as Record<string, unknown> | undefined);
   const statusType = typeof status?.type === 'string' ? status.type : undefined;
+
+  if (statusType === 'retry') {
+    const message = typeof status?.message === 'string' ? status.message : 'Retrying...';
+    const next = typeof status?.next === 'number' ? status.next : Date.now() + 60000;
+    const attempt = typeof status?.attempt === 'number' ? status.attempt : 1;
+    return { status: statusType, message, next, attempt };
+  }
+
   return statusType ? { status: statusType } : null;
 }
 
@@ -4586,6 +5001,7 @@ function connect() {
     const sessionStatus = extractSessionStatus(payload, resolvedEventType);
     if (sessionStatus) {
       if (sessionStatus.status === 'busy' || sessionStatus.status === 'idle') {
+        retryStatus.value = null;
         const nextStatus = sessionStatus.status as 'busy' | 'idle';
         if (sessionId) sessionStatusById.set(sessionId, nextStatus);
         if (!selectedSessionId.value || sessionId === selectedSessionId.value) {
@@ -4595,11 +5011,24 @@ function connect() {
           updateSubagentExpiry(sessionId, nextStatus);
           updateReasoningExpiry(sessionId, nextStatus);
         }
+      } else if (sessionStatus.status === 'retry') {
+        if (sessionStatus.message && typeof sessionStatus.next === 'number') {
+          retryStatus.value = {
+            message: sessionStatus.message,
+            next: sessionStatus.next,
+            attempt: sessionStatus.attempt || 1,
+          };
+        }
       }
     }
 
     const canRenderSession = Boolean(selectedSessionId.value);
     if (!canRenderSession) return;
+
+    const taskUpdate = extractTaskUpdate(payload, resolvedEventType, sessionId);
+    if (taskUpdate) {
+      applyTaskUpdate(taskUpdate);
+    }
 
     const ptyEvent = extractPtyEvent(payload, resolvedEventType);
     if (ptyEvent) handlePtyEvent(ptyEvent);
@@ -5228,6 +5657,13 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid rgba(52, 211, 153, 0.35);
 }
 
+.term.is-tasklist {
+  background: #0b1120;
+  border-color: #334155;
+  --term-border-color: #334155;
+  color: #e2e8f0;
+}
+
 .term-titlebar {
   height: 22px;
   display: flex;
@@ -5282,6 +5718,75 @@ onBeforeUnmount(() => {
 .term.is-permission .term-inner {
   padding: 8px;
   overflow: auto;
+}
+
+.term.is-tasklist .term-inner {
+  padding: 8px;
+  overflow: auto;
+}
+
+.tasklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tasklist-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+}
+
+.tasklist-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tasklist-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  color: #e2e8f0;
+}
+
+.tasklist-status {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  color: #e2e8f0;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  white-space: nowrap;
+}
+
+.tasklist-item.is-running .tasklist-status {
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.5);
+}
+
+.tasklist-item.is-pending .tasklist-status {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.tasklist-text {
+  flex: 1;
+}
+
+.tasklist-session {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-left: 4px;
+  white-space: nowrap;
 }
 
 .xterm-host {
