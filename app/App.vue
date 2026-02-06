@@ -1520,9 +1520,15 @@ async function fetchWorktrees(directory?: string) {
     return;
   }
   try {
-    const project = await fetchCurrentProject(directory);
-    const baseDir = directory?.trim() ?? '';
-    const list = project ? projectSessionDirectories(project) : [];
+    const baseDir = directory.trim();
+    const params = new URLSearchParams();
+    params.set('directory', baseDir);
+    const response = await fetch(`${OPENCODE_BASE_URL}/experimental/worktree?${params.toString()}`);
+    if (!response.ok) throw new Error(`Worktree request failed (${response.status})`);
+    const data = (await response.json()) as unknown;
+    const list = Array.isArray(data)
+      ? data.filter((entry): entry is string => typeof entry === 'string')
+      : [];
     if (directory !== selectedProjectDirectory.value) return;
     if (baseDir && !list.includes(baseDir)) list.unshift(baseDir);
     const current = selectedWorktreeDir.value;
@@ -1657,11 +1663,11 @@ async function deleteWorktree(directory: string) {
       {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ directory }),
+        body: JSON.stringify({ directory: targetDir }),
       },
     );
     if (!response.ok) throw new Error(`Worktree delete failed (${response.status})`);
-    if (selectedWorktreeDir.value === directory) selectedWorktreeDir.value = '';
+    if (normalizeDirectory(selectedWorktreeDir.value) === targetDir) selectedWorktreeDir.value = '';
     void fetchWorktrees(selectedProjectDirectory.value || undefined);
   } catch (error) {
     worktreeError.value = `Worktree delete failed: ${toErrorMessage(error)}`;
@@ -1707,7 +1713,11 @@ async function deleteSession(sessionId: string) {
   sessionError.value = '';
   if (!sessionId) return;
   try {
-    const response = await fetch(`${OPENCODE_BASE_URL}/session/${sessionId}`, {
+    const params = new URLSearchParams();
+    const directory = activeDirectory.value.trim();
+    if (directory) params.set('directory', directory);
+    const query = params.toString();
+    const response = await fetch(`${OPENCODE_BASE_URL}/session/${sessionId}${query ? `?${query}` : ''}`, {
       method: 'DELETE',
     });
     if (!response.ok) throw new Error(`Session delete failed (${response.status})`);
@@ -2498,7 +2508,11 @@ function findCommandByName(name: string) {
 }
 
 async function sendCommand(sessionId: string, command: CommandInfo, commandArgs: string) {
-  const response = await fetch(`${OPENCODE_BASE_URL}/session/${sessionId}/command`, {
+  const params = new URLSearchParams();
+  const directory = activeDirectory.value.trim();
+  if (directory) params.set('directory', directory);
+  const query = params.toString();
+  const response = await fetch(`${OPENCODE_BASE_URL}/session/${sessionId}/command${query ? `?${query}` : ''}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
