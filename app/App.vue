@@ -215,6 +215,8 @@ const SHIKI_LANGS = [
   'php',
 ];
 
+const SHIKI_DYNAMIC_TOOL_LANGS = new Set(['read', 'write', 'webfetch', 'websearch']);
+
 const ATTACHMENT_MIME_ALLOWLIST = new Set([
   'image/png',
   'image/jpeg',
@@ -1521,6 +1523,94 @@ function resolveShikiLanguage(requested: string, loaded: string[]) {
   if (requested === 'bash' && loaded.includes('shellscript')) return 'shellscript';
   if (loaded.includes(requested)) return requested;
   return loaded.includes('text') ? 'text' : (loaded[0] ?? 'text');
+}
+
+function getShikiLanguageLoadCandidates(requested: string) {
+  switch (requested) {
+    case 'shellscript':
+      return ['shellscript', 'bash', 'shell', 'sh'];
+    default:
+      return [requested];
+  }
+}
+
+function rerenderShikiEntries() {
+  queue.value = queue.value.map((entry) => {
+    if (entry.isShell || entry.isPermission || entry.isQuestion) return entry;
+    const text = `${entry.header}${entry.content}`;
+    const lang =
+      entry.toolLang ??
+      (entry.isMessage
+        ? 'markdown'
+        : detectDiffLike(entry.content, entry.path)
+          ? 'diff'
+          : guessLanguage(entry.path));
+    return {
+      ...entry,
+      html: buildEntryHtml(text, lang, {
+        toolName: entry.toolName,
+        grepPattern: entry.grepPattern,
+        toolGutterMode: entry.toolGutterMode,
+        toolGutterLines: entry.toolGutterLines,
+      }),
+    };
+  });
+  fileViewerQueue.value = fileViewerQueue.value.map((entry) => {
+    if (entry.isBinary) return entry;
+    const lang = entry.toolLang ?? guessLanguage(entry.path);
+    return {
+      ...entry,
+      html: buildEntryHtml(entry.content, lang, {
+        toolName: entry.toolName,
+        grepPattern: entry.grepPattern,
+        toolGutterMode: entry.toolGutterMode,
+        toolGutterLines: entry.toolGutterLines,
+      }),
+    };
+  });
+}
+
+async function ensureShikiLanguageLoaded(lang: string, toolName?: string) {
+  if (!toolName || !SHIKI_DYNAMIC_TOOL_LANGS.has(toolName)) return;
+  if (!highlighter.value) return;
+  if (!lang || lang === 'text' || lang === 'diff') return;
+
+  const candidates = getShikiLanguageLoadCandidates(lang);
+  const key = candidates[0] ?? lang;
+  const highlighterInstance = highlighter.value;
+  const getLoadedLanguages = () =>
+    typeof highlighterInstance.getLoadedLanguages === 'function'
+      ? highlighterInstance.getLoadedLanguages()
+      : [];
+
+  if (candidates.some((candidate) => getLoadedLanguages().includes(candidate))) return;
+  if (pendingShikiLangLoads.has(key)) return;
+
+  pendingShikiLangLoads.add(key);
+  let loadedAny = false;
+  try {
+    for (const candidate of candidates) {
+      if (getLoadedLanguages().includes(candidate)) {
+        loadedAny = true;
+        break;
+      }
+      try {
+        await highlighterInstance.loadLanguage(candidate);
+        loadedAny = true;
+        break;
+      } catch (error) {
+        log('shiki language load failed', { lang: candidate, error: String(error) });
+      }
+    }
+  } finally {
+    pendingShikiLangLoads.delete(key);
+  }
+
+  if (loadedAny) rerenderShikiEntries();
+}
+
+function requestShikiLanguageLoad(lang: string, toolName?: string) {
+  void ensureShikiLanguageLoaded(lang, toolName);
 }
 
 function isDarkThemeName(name: string) {
@@ -3961,6 +4051,7 @@ function log(...args: any) {
 
 const shikiTheme = ref('github-dark');
 const highlighter = shallowRef<Awaited<ReturnType<typeof createHighlighter>> | null>(null);
+const pendingShikiLangLoads = new Set<string>();
 setInterval(() => {
   const now = Date.now();
   messageIndexById.clear();
@@ -4425,6 +4516,21 @@ function formatReadLikeToolTitle(input: Record<string, unknown> | undefined) {
   if (filePath) return filePath;
   const path = typeof input?.path === 'string' ? input.path.trim() : '';
   return path || undefined;
+}
+
+function resolveReadWritePath(
+  input: Record<string, unknown> | undefined,
+  metadata: Record<string, unknown> | undefined,
+  state: Record<string, unknown> | undefined,
+) {
+  const filePath = typeof input?.filePath === 'string' ? input.filePath.trim() : '';
+  if (filePath) return filePath;
+  const path = typeof input?.path === 'string' ? input.path.trim() : '';
+  if (path) return path;
+  const metadataPath = typeof metadata?.filepath === 'string' ? metadata.filepath.trim() : '';
+  if (metadataPath) return metadataPath;
+  const title = typeof state?.title === 'string' ? state.title.trim() : '';
+  return title || undefined;
 }
 
 function formatWebfetchToolTitle(input: Record<string, unknown> | undefined) {
@@ -5516,7 +5622,7 @@ function extractFileRead(payload: unknown, eventType: string) {
         break;
       }
       case 'read': {
-        path = typeof input?.filePath === 'string' ? input.filePath : undefined;
+        path = resolveReadWritePath(input, metadata, state);
         toolTitle = formatReadLikeToolTitle(input);
         if (outputText) content = extractFileBodyFromReadOutput(outputText) ?? outputText;
         lang = guessLanguage(path);
@@ -5584,9 +5690,9 @@ function extractFileRead(payload: unknown, eventType: string) {
         break;
       }
       case 'write': {
-        path = typeof input?.filePath === 'string' ? input.filePath : undefined;
+        path = resolveReadWritePath(input, metadata, state);
         toolTitle = formatReadLikeToolTitle(input);
-        lang = 'text';
+        lang = guessLanguage(path);
         break;
       }
       case 'edit': {
@@ -6860,6 +6966,7 @@ function upsertToolEntry(
           entry.lang ??
           existing.toolLang ??
           (detectDiffLike(nextContent, nextPath) ? 'diff' : guessLanguage(nextPath, eventType));
+        requestShikiLanguageLoad(nextLang, entry.toolName ?? existing.toolName);
         const toolKey =
           existing.toolKey ?? entry.callId ?? `${nextPath ?? entry.toolName ?? 'tool'}:${time}`;
         const nextText = `${nextHeader}${nextContent}`;
@@ -6901,6 +7008,7 @@ function upsertToolEntry(
   }
 
   const toolKey = entry.callId ?? `${entry.path ?? entry.toolName ?? 'tool'}:${time}`;
+  requestShikiLanguageLoad(lang, entry.toolName);
   const randomPosition = getRandomWindowPosition();
   queue.value.push({
     time,
@@ -7515,39 +7623,7 @@ onMounted(() => {
   })
     .then((instance) => {
       highlighter.value = instance;
-      queue.value = queue.value.map((entry) => {
-        const text = `${entry.header}${entry.content}`;
-        const path = entry.header ? entry.header.trim().replace(/^#\s*/, '') : undefined;
-        const lang =
-          entry.toolLang ??
-          (entry.isMessage
-            ? 'markdown'
-            : detectDiffLike(entry.content, path)
-              ? 'diff'
-              : guessLanguage(path));
-        return {
-          ...entry,
-          html: buildEntryHtml(text, lang, {
-            toolName: entry.toolName,
-            grepPattern: entry.grepPattern,
-            toolGutterMode: entry.toolGutterMode,
-            toolGutterLines: entry.toolGutterLines,
-          }),
-        };
-      });
-      fileViewerQueue.value = fileViewerQueue.value.map((entry) => {
-        if (entry.isBinary) return entry;
-        const lang = entry.toolLang ?? guessLanguage(entry.path);
-        return {
-          ...entry,
-          html: buildEntryHtml(entry.content, lang, {
-            toolName: entry.toolName,
-            grepPattern: entry.grepPattern,
-            toolGutterMode: entry.toolGutterMode,
-            toolGutterLines: entry.toolGutterLines,
-          }),
-        };
-      });
+      rerenderShikiEntries();
     })
     .catch((err) => {
       log('shiki init failed', err);
