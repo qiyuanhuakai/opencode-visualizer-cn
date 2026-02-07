@@ -36,17 +36,24 @@
         @reply="onQuestionReply"
         @reject="onQuestionReject"
       />
-      <div
+      <DiffViewer
+        v-else-if="entry.toolName === 'apply_patch' && entry.content"
+        :code="''"
+        :patch="entry.content"
+        :lang="entry.toolLang ?? 'diff'"
+        :theme="theme"
+      />
+      <FileViewer
         v-else
-        class="shiki-host"
-        :class="{
-          'is-message': entry.isSubagentMessage,
-          'no-gutter': entry.toolGutterMode === 'none',
-          'grep-gutter': entry.toolGutterMode === 'grep-source',
-          'wrap-soft': entry.toolWrapMode === 'soft',
+        :entry="{
+          html: entry.html,
+          content: entry.content,
+          toolLang: entry.toolLang,
+          toolGutterMode: entry.toolGutterMode,
+          isBinary: false,
         }"
-        v-html="entry.html"
-      ></div>
+        :theme="theme"
+      />
     </div>
     <div
       v-if="showResizer"
@@ -58,6 +65,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import DiffViewer from './DiffViewer.vue';
+import FileViewer from './FileViewer.vue';
 import PermissionWindow from './PermissionWindow.vue';
 import QuestionWindow from './QuestionWindow.vue';
 
@@ -72,6 +81,8 @@ type ToolWindowEntry = {
   scrollDistance: number;
   scrollDuration: number;
   html: string;
+  content?: string;
+  toolLang?: string;
   isWrite: boolean;
   isMessage: boolean;
   isSubagentMessage?: boolean;
@@ -113,6 +124,7 @@ const props = defineProps<{
   getQuestionError: (requestId: string) => string;
   onQuestionReply: (payload: { requestId: string; answers: QuestionAnswer[] }) => void;
   onQuestionReject: (requestId: string) => void;
+  theme: string;
 }>();
 
 const entry = computed(() => props.entry);

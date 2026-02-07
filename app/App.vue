@@ -80,6 +80,7 @@
                 :get-question-error="getQuestionError"
                 :on-question-reply="handleQuestionReply"
                 :on-question-reject="handleQuestionReject"
+                :theme="shikiTheme"
               />
               <FileViewerWindow
                 v-for="q in fileViewerQueue"
@@ -92,6 +93,7 @@
                 :on-floating-scroll-entry="handleFloatingScroll"
                 :on-floating-wheel-entry="handleFloatingWheel"
                 :on-close-entry="closeFileViewer"
+                :theme="shikiTheme"
               />
             </TransitionGroup>
           </div>
@@ -450,7 +452,6 @@ const messageAttachmentsById = new Map<string, MessageAttachment[]>();
 const activeReasoningMessageIdByKey = new Map<string, string>();
 const finishedReasoningByKey = new Map<string, ReasoningFinish>();
 const globalEventHooks = new Set<(payload: unknown, eventType: string) => void>();
-let unregisterTreeGlobalHook: (() => void) | null = null;
 let unregisterSessionStatusGlobalHook: (() => void) | null = null;
 const dragState = ref<{
   entry: FileReadEntry;
@@ -523,6 +524,7 @@ const sessionStatusByPath = ref<Record<string, 'added' | 'modified' | 'deleted'>
 const sessionDiffEntries = ref<SessionDiffEntry[]>([]);
 const sessionDiffByPath = ref<Record<string, SessionDiffEntry>>({});
 let treeRequestId = 0;
+let sessionDiffRequestId = 0;
 const fileViewerQueue = ref<FileReadEntry[]>([]);
 
 type ProjectInfo = {
@@ -1606,19 +1608,6 @@ function rerenderShikiEntries() {
     return {
       ...entry,
       html: buildEntryHtml(text, lang, {
-        toolName: entry.toolName,
-        grepPattern: entry.grepPattern,
-        toolGutterMode: entry.toolGutterMode,
-        toolGutterLines: entry.toolGutterLines,
-      }),
-    };
-  });
-  fileViewerQueue.value = fileViewerQueue.value.map((entry) => {
-    if (entry.isBinary) return entry;
-    const lang = entry.toolLang ?? guessLanguage(entry.path);
-    return {
-      ...entry,
-      html: buildEntryHtml(entry.content, lang, {
         toolName: entry.toolName,
         grepPattern: entry.grepPattern,
         toolGutterMode: entry.toolGutterMode,
@@ -4977,6 +4966,7 @@ function updateSessionDiffState(entries: SessionDiffEntry[]) {
 }
 
 async function refreshSessionDiff() {
+  const requestId = ++sessionDiffRequestId;
   const sessionId = selectedSessionId.value;
   if (!sessionId) {
     updateSessionDiffState([]);
@@ -4988,9 +4978,15 @@ async function refreshSessionDiff() {
       sessionID: sessionId,
       directory,
     });
+    if (requestId !== sessionDiffRequestId) return;
+    if (selectedSessionId.value !== sessionId) return;
+    if (activeDirectory.value.trim() !== directory) return;
     const entries = Array.isArray(data) ? normalizeSessionDiffEntries(data) : [];
     updateSessionDiffState(entries);
   } catch {
+    if (requestId !== sessionDiffRequestId) return;
+    if (selectedSessionId.value !== sessionId) return;
+    if (activeDirectory.value.trim() !== directory) return;
     updateSessionDiffState([]);
   }
 }
@@ -5044,7 +5040,6 @@ function openSessionDiff(path: string) {
     return;
   }
   const diffText = formatDiffEntries([entry]);
-  const gutterLines = buildDiffGutterLines(diffText);
   const metrics = getCanvasMetrics();
   const x = metrics ? clamp(metrics.canvasRect.width * 0.16, 16, Math.max(16, metrics.canvasRect.width - FILE_VIEWER_WINDOW_WIDTH - 16)) : 24;
   const y = metrics ? clamp(metrics.toolAreaHeight * 0.1, 16, Math.max(16, metrics.toolAreaHeight - FILE_VIEWER_WINDOW_HEIGHT - 16)) : 24;
@@ -5059,21 +5054,22 @@ function openSessionDiff(path: string) {
     scroll: false,
     scrollDistance: 0,
     scrollDuration: 0,
-    html: buildEntryHtml(diffText, 'diff', {
-      toolGutterMode: 'grep-source',
-      toolGutterLines: gutterLines,
-    }),
+    html: '',
     isWrite: false,
     isMessage: false,
     toolName: 'diff',
-    toolTitle: `Session diff: ${path}`,
+    toolTitle: path,
     toolLang: 'diff',
-    toolGutterMode: 'grep-source',
-    toolGutterLines: gutterLines,
+    toolGutterMode: 'none',
     toolKey: `session-diff:${path}`,
     width: FILE_VIEWER_WINDOW_WIDTH,
     height: FILE_VIEWER_WINDOW_HEIGHT,
     isBinary: false,
+    isDiff: true,
+    isLoading: true,
+    diffCode: entry.before ?? '',
+    diffAfter: entry.after,
+    diffLang: guessLanguage(path),
   };
   bringToFront(diffEntry);
   fileViewerQueue.value.push(diffEntry);
@@ -5099,7 +5095,7 @@ async function openFileViewer(path: string) {
     scroll: false,
     scrollDistance: 0,
     scrollDuration: 0,
-    html: buildEntryHtml('Loading...', 'text', { toolGutterMode: 'none' }),
+    html: '',
     isWrite: false,
     isMessage: false,
     toolName: 'read',
@@ -5110,14 +5106,18 @@ async function openFileViewer(path: string) {
     width: FILE_VIEWER_WINDOW_WIDTH,
     height: FILE_VIEWER_WINDOW_HEIGHT,
     isBinary: false,
+    isLoading: true,
   };
   bringToFront(entry);
   fileViewerQueue.value.push(entry);
+  const viewerEntry = fileViewerQueue.value[fileViewerQueue.value.length - 1];
+  if (!viewerEntry) return;
 
   const directory = activeDirectory.value.trim();
   if (!directory) {
-    entry.html = buildEntryHtml('No active directory selected.', 'text', { toolGutterMode: 'none' });
-    entry.toolGutterMode = 'none';
+    viewerEntry.html = 'No active directory selected.';
+    viewerEntry.toolGutterMode = 'none';
+    viewerEntry.isLoading = false;
     return;
   }
 
@@ -5131,35 +5131,33 @@ async function openFileViewer(path: string) {
     const content = typeof data?.content === 'string' ? data.content : '';
     if (type === 'binary') {
       if (!content) {
-        entry.html = buildEntryHtml(
-          'Binary content is not included in this API response.\nUnable to render hexdump for this file.',
-          'text',
-          { toolGutterMode: 'none' },
-        );
-        entry.toolGutterMode = 'none';
-        entry.isBinary = false;
+        viewerEntry.html =
+          'Binary content is not included in this API response.\nUnable to render hexdump for this file.';
+        viewerEntry.toolGutterMode = 'none';
+        viewerEntry.isBinary = false;
+        viewerEntry.isLoading = false;
         return;
       }
       const bytes = encoding === 'base64' ? toUint8ArrayFromBase64(content) : toUint8ArrayFromText(content);
       const dump = hexdump(bytes, { color: 'html' });
-      entry.html = `<pre class="shiki"><code>${dump}</code></pre>`;
-      entry.toolGutterMode = 'none';
-      entry.isBinary = true;
+      viewerEntry.html = `<pre class="shiki"><code>${dump}</code></pre>`;
+      viewerEntry.toolGutterMode = 'none';
+      viewerEntry.isBinary = true;
+      viewerEntry.isLoading = false;
       return;
     }
     const lang = guessLanguage(path);
     const textContent = encoding === 'base64' ? atob(content) : content;
-    entry.content = textContent;
-    entry.html = buildEntryHtml(textContent, lang, { toolGutterMode: 'default' });
-    entry.toolLang = lang;
-    entry.toolGutterMode = 'default';
-    entry.isBinary = false;
+    viewerEntry.content = textContent;
+    viewerEntry.toolLang = lang;
+    viewerEntry.toolGutterMode = 'default';
+    viewerEntry.isBinary = false;
+    viewerEntry.isLoading = false;
   } catch (error) {
-    entry.html = buildEntryHtml(`File load failed: ${toErrorMessage(error)}`, 'text', {
-      toolGutterMode: 'none',
-    });
-    entry.toolGutterMode = 'none';
-    entry.isBinary = false;
+    viewerEntry.html = `File load failed: ${toErrorMessage(error)}`;
+    viewerEntry.toolGutterMode = 'none';
+    viewerEntry.isBinary = false;
+    viewerEntry.isLoading = false;
   }
 }
 
@@ -5255,33 +5253,6 @@ function detectDiffLike(content: string, path?: string) {
   );
 }
 
-function renderDiffHtml(source: string) {
-  const lines = source.split('\n');
-  const htmlLines = lines
-    .map((line) => {
-      const isHeader =
-        line.startsWith('diff ') ||
-        line.startsWith('index ') ||
-        line.startsWith('---') ||
-        line.startsWith('+++') ||
-        line.startsWith('***');
-      const isHunk = line.startsWith('@@');
-      const isAdded = line.startsWith('+') && !line.startsWith('+++');
-      const isRemoved = line.startsWith('-') && !line.startsWith('---');
-      const className = isHeader
-        ? 'line line-header'
-        : isHunk
-          ? 'line line-hunk'
-          : isAdded
-            ? 'line line-added'
-            : isRemoved
-              ? 'line line-removed'
-              : 'line';
-      return `<span class="${className}">${escapeHtml(line)}</span>`;
-    })
-    .join('\n');
-  return `<pre class="shiki"><code>${htmlLines}</code></pre>`;
-}
 
 function decorateDiffHtml(html: string, source: string) {
   const sourceLines = source.split('\n');
@@ -5327,14 +5298,13 @@ function buildHtml(text: string, lang: string) {
       return `<pre class="shiki"><code>${escapeHtml(text)}</code></pre>`;
     }
     try {
-      if (lang === 'diff' && loadedLanguages.includes('diff')) {
-        const html = highlighterInstance.codeToHtml(text, {
-          lang: 'diff',
-          theme: shikiTheme.value,
-        });
-        return decorateDiffHtml(html, text);
-      }
-      if (lang === 'diff') return renderDiffHtml(text);
+        if (lang === 'diff' && loadedLanguages.includes('diff')) {
+          const html = highlighterInstance.codeToHtml(text, {
+            lang: 'diff',
+            theme: shikiTheme.value,
+          });
+          return decorateDiffHtml(html, text);
+        }
       const html = highlighterInstance.codeToHtml(text, {
         lang: resolvedLang,
         theme: shikiTheme.value,
@@ -5346,7 +5316,6 @@ function buildHtml(text: string, lang: string) {
     }
   }
 
-  if (lang === 'diff') return renderDiffHtml(text);
   return `<pre class="shiki"><code>${escapeHtml(text)}</code></pre>`;
 }
 
@@ -5521,50 +5490,6 @@ function formatDiffEntries(entries: unknown[]) {
   return blocks.filter((block) => typeof block === 'string').join('\n\n');
 }
 
-function buildDiffGutterLines(source: string) {
-  const lines = source.split('\n');
-  let oldLine = 0;
-  let newLine = 0;
-  const padWidth = 4;
-  const padLeft = (value: number | '') => {
-    const text = value === '' ? '' : String(value);
-    return text.padStart(padWidth, ' ');
-  };
-  return lines.map((line) => {
-    if (line.startsWith('@@')) {
-      const match = /@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
-      if (match) {
-        oldLine = Number(match[1]);
-        newLine = Number(match[2]);
-      }
-      return '';
-    }
-    if (
-      line.startsWith('diff ') ||
-      line.startsWith('index ') ||
-      line.startsWith('---') ||
-      line.startsWith('+++') ||
-      line.startsWith('***')
-    ) {
-      return '';
-    }
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      const gutter = `${padLeft('')} ${padLeft(newLine)}`;
-      newLine += 1;
-      return gutter;
-    }
-    if (line.startsWith('-') && !line.startsWith('---')) {
-      const gutter = `${padLeft(oldLine)} ${padLeft('')}`;
-      oldLine += 1;
-      return gutter;
-    }
-    if (oldLine === 0 && newLine === 0) return '';
-    const gutter = `${padLeft(oldLine)} ${padLeft(newLine)}`;
-    oldLine += 1;
-    newLine += 1;
-    return gutter;
-  });
-}
 
 function extractPatch(payload: unknown) {
   if (!payload || typeof payload !== 'object') return null;
@@ -7431,6 +7356,19 @@ function connect() {
     if (sessionId && selectedSessionId.value && !allowedSessionIds.value.has(sessionId)) return;
 
     if (resolvedEventType && resolvedEventType.startsWith('session.diff')) {
+      const selectedId = selectedSessionId.value;
+      if (!selectedId) {
+        updateSessionDiffState([]);
+        return;
+      }
+      const directory = activeDirectory.value.trim();
+      if (!directory) {
+        updateSessionDiffState([]);
+        return;
+      }
+      if (sessionId && sessionId !== selectedId) return;
+      const eventDirectory = extractEventDirectory(payload);
+      if (eventDirectory && normalizeDirectory(eventDirectory) !== normalizeDirectory(directory)) return;
       const record = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : undefined;
       const payloadObj =
         record?.payload && typeof record.payload === 'object'
@@ -7445,7 +7383,10 @@ function connect() {
       if (Array.isArray(diffEntries)) {
         const entries = normalizeSessionDiffEntries(diffEntries);
         updateSessionDiffState(entries);
+      } else {
+        void refreshSessionDiff();
       }
+      return;
     }
 
     const canRenderSession = Boolean(selectedSessionId.value);
@@ -7861,30 +7802,6 @@ onMounted(() => {
   window.addEventListener('pointerup', handlePointerUp);
   window.addEventListener('resize', handleWindowResize);
   window.addEventListener('storage', handleComposerDraftStorage);
-  unregisterTreeGlobalHook?.();
-  unregisterTreeGlobalHook = registerGlobalEventHook((payload, eventType) => {
-    const normalized = normalizeEventType(eventType);
-    if (normalized !== 'sessiondiff') return;
-    const directory = activeDirectory.value.trim();
-    if (!directory) return;
-    const eventDirectory = extractEventDirectory(payload);
-    if (eventDirectory && normalizeDirectory(eventDirectory) !== normalizeDirectory(directory)) return;
-    const record = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : undefined;
-    const payloadObj =
-      record?.payload && typeof record.payload === 'object'
-        ? (record.payload as Record<string, unknown>)
-        : undefined;
-    const properties =
-      payloadObj?.properties && typeof payloadObj.properties === 'object'
-        ? (payloadObj.properties as Record<string, unknown>)
-        : undefined;
-    const diffEntries =
-      (properties?.diff as unknown[] | undefined) ?? (payloadObj?.diff as unknown[] | undefined);
-    if (Array.isArray(diffEntries)) {
-      const entries = normalizeSessionDiffEntries(diffEntries);
-      updateSessionDiffState(entries);
-    }
-  });
   unregisterSessionStatusGlobalHook?.();
   unregisterSessionStatusGlobalHook = registerGlobalEventHook((payload, eventType) => {
     const normalized = normalizeEventType(eventType);
@@ -7905,8 +7822,6 @@ onBeforeUnmount(() => {
     cancelAnimationFrame(frame);
   });
   pendingToolScrollFrames.clear();
-  unregisterTreeGlobalHook?.();
-  unregisterTreeGlobalHook = null;
   unregisterSessionStatusGlobalHook?.();
   unregisterSessionStatusGlobalHook = null;
   src.value?.close();

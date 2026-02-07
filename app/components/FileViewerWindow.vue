@@ -13,11 +13,15 @@
       </button>
     </div>
     <div class="viewer-body" @scroll="onFloatingScroll" @wheel="onFloatingWheel">
-      <div
-        class="viewer-content"
-        :class="{ 'is-binary': entry.isBinary, 'no-gutter': entry.toolGutterMode === 'none' }"
-        v-html="entry.html"
-      ></div>
+      <DiffViewer
+        v-if="entry.isDiff"
+        :code="entry.diffCode ?? ''"
+        :after="entry.diffAfter"
+        :patch="entry.content"
+        :lang="entry.diffLang ?? 'text'"
+        :theme="theme"
+      />
+      <FileViewer v-else :entry="entry" :theme="theme" />
     </div>
     <div class="viewer-resizer" @pointerdown="onResizeStart"></div>
   </div>
@@ -25,6 +29,8 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import DiffViewer from './DiffViewer.vue';
+import FileViewer from './FileViewer.vue';
 
 type ViewerEntry = {
   x: number;
@@ -34,7 +40,13 @@ type ViewerEntry = {
   height?: number;
   path?: string;
   html: string;
+  content?: string;
   isBinary?: boolean;
+  isDiff?: boolean;
+  isLoading?: boolean;
+  diffCode?: string;
+  diffAfter?: string;
+  diffLang?: string;
   toolGutterMode?: 'default' | 'none' | 'grep-source';
 };
 
@@ -47,6 +59,7 @@ const props = defineProps<{
   onFloatingScrollEntry: (entry: ViewerEntry, event: Event) => void;
   onFloatingWheelEntry: (entry: ViewerEntry, event: WheelEvent) => void;
   onCloseEntry: (entry: ViewerEntry) => void;
+  theme: string;
 }>();
 
 const entry = computed(() => props.entry);
@@ -147,117 +160,6 @@ function onClose() {
   white-space: normal;
 }
 
-.viewer-content {
-  line-height: var(--term-line-height);
-  color: #c9d1d9;
-}
-
-.viewer-content :deep(pre),
-.viewer-content :deep(code) {
-  margin: 0;
-  padding: 0;
-  background: transparent !important;
-  background-color: transparent !important;
-  line-height: inherit !important;
-  font-family: inherit;
-  font-size: inherit;
-  white-space: normal;
-}
-
-.viewer-content :deep(pre.shiki) {
-  background: transparent !important;
-  background-color: transparent !important;
-  color: inherit;
-  display: block;
-  line-height: inherit !important;
-}
-
-.viewer-content :deep(pre) {
-  counter-reset: shiki-line;
-}
-
-.viewer-content :deep(.line),
-.viewer-content :deep(.line)::before {
-  line-height: inherit !important;
-}
-
-.viewer-content :deep(.line) {
-  display: block;
-  padding-left: 3.2em;
-  position: relative;
-  min-height: 1em;
-  white-space: pre;
-}
-
-.viewer-content.no-gutter :deep(.line) {
-  padding-left: 0;
-}
-
-.viewer-content :deep(.line)::before {
-  counter-increment: shiki-line;
-  content: counter(shiki-line);
-  position: absolute;
-  left: 0;
-  width: 2.6em;
-  text-align: right;
-  color: #8a8a8a;
-}
-
-.viewer-content.no-gutter :deep(.line)::before {
-  content: '';
-  counter-increment: none;
-  width: 0;
-}
-
-.viewer-content.is-binary :deep(pre) {
-  white-space: pre;
-}
-
-.viewer-content.is-binary :deep(.hexdump-address) {
-  color: #60a5fa;
-}
-
-.viewer-content.is-binary :deep(.hexdump-separator) {
-  color: #64748b;
-}
-
-.viewer-content.is-binary :deep(.hexdump-control) {
-  color: #f59e0b;
-}
-
-.viewer-content.is-binary :deep(.hexdump-ascii) {
-  color: #dbeafe;
-}
-
-.viewer-content.is-binary :deep(.hexdump-exascii) {
-  color: #fca5a5;
-}
-
-.viewer-content.is-binary :deep(.hexdump-null) {
-  color: #64748b;
-}
-
-.viewer-content :deep(.line.line-added) {
-  background: rgba(46, 160, 67, 0.22);
-  box-shadow: inset 3px 0 0 #2ea043;
-  color: #aff5b4;
-}
-
-.viewer-content :deep(.line.line-removed) {
-  background: rgba(248, 81, 73, 0.2);
-  box-shadow: inset 3px 0 0 #f85149;
-  color: #ffdcd7;
-}
-
-.viewer-content :deep(.line.line-hunk) {
-  background: rgba(56, 139, 253, 0.18);
-  color: #c9d1d9;
-}
-
-.viewer-content :deep(.line.line-header) {
-  background: rgba(110, 118, 129, 0.18);
-  color: #c9d1d9;
-}
 
 .viewer-resizer {
   position: absolute;

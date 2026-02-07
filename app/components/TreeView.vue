@@ -10,7 +10,7 @@
           :aria-selected="String(viewMode === 'changes')"
           @click="setViewMode('changes')"
         >
-          Session changes
+          Changes
         </button>
         <button
           type="button"
