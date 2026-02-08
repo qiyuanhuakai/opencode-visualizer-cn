@@ -560,7 +560,7 @@ Note: Due to the intertwined nature of App.vue modifications (all touching the s
 
 ---
 
-- [ ] 5. Wire DIFF/Fork/Revert to Rounds
+- [x] 5. Wire DIFF/Fork/Revert to Rounds
 
   **What to do**:
   - **DIFF for rounds**: In App.vue, ensure `handleShowMessageDiff` works with round entries:
