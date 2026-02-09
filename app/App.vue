@@ -224,6 +224,7 @@ type FileReadEntry = {
   scroll: boolean;
   scrollDistance: number;
   scrollDuration: number;
+  scrollDelay: number;
   html: string;
   attachments?: MessageAttachment[];
   isWrite: boolean;
@@ -239,7 +240,8 @@ type FileReadEntry = {
   toolStatus?: string;
   toolName?: string;
   toolTitle?: string;
-  toolLang?: string;
+  lang?: string;
+  view?: 'normal' | 'diff' | 'hex';
   grepPattern?: string;
   toolWrapMode?: 'default' | 'soft';
   toolGutterMode?: 'default' | 'none' | 'grep-source';
@@ -269,10 +271,11 @@ type FileReadEntry = {
   isDiff?: boolean;
   diffCode?: string;
   diffAfter?: string;
-  diffLang?: string;
   diffTabs?: Array<{ file: string; before: string; after: string }>;
   classification?: 'real_user' | 'system_injection' | 'unknown';
   contentKey?: string;
+  readLineOffset?: number;
+  readLineLimit?: number;
   isRound?: boolean;
   roundId?: string;
   roundMessages?: RoundMessage[];
@@ -518,6 +521,15 @@ const shellSessionsByPtyId = new Map<string, ShellSession>();
 const shellPtyIdsBySessionId = new Map<string, Set<string>>();
 const pendingShellFits = new Map<string, number>();
 const pendingToolScrollFrames = new Map<string, number>();
+const pendingReadFullCodeByCallId = new Map<string, string>();
+const pendingReadInfoByCallId = new Map<string, {
+  path: string;
+  readOffset: number;
+  readLimit?: number;
+  lang?: string;
+  toolTitle?: string;
+  eventType: string;
+}>();
 const permissionSendingById = ref<Record<string, boolean>>({});
 const permissionErrorById = ref<Record<string, string>>({});
 const questionSendingById = ref<Record<string, boolean>>({});
@@ -816,6 +828,14 @@ const commandOptions = computed(() => {
     list.push({
       name: 'shell',
       description: 'Open a local shell session.',
+      source: 'local',
+    });
+  }
+  const hasDebug = list.some((command) => command.name.toLowerCase() === 'debug');
+  if (!hasDebug) {
+    list.push({
+      name: 'debug',
+      description: 'Preview tool windows with synthetic debug events.',
       source: 'local',
     });
   }
@@ -2109,22 +2129,18 @@ function scheduleToolScrollAnimation(toolKey: string) {
         `[data-tool-key="${toolKey}"] .term-inner`,
       ) as HTMLElement | null;
       if (!term) return;
-      const host = term.querySelector('.shiki-host, .diff-viewer, .file-viewer-body') as HTMLElement | null;
+      const host = term.querySelector('.code-content, .shiki-host') as HTMLElement | null;
       if (!host) return;
 
       const distance = Math.max(0, host.scrollHeight - term.clientHeight);
-      const index = queue.value.findIndex((entry) => entry.toolKey === toolKey);
-      if (index < 0) return;
-      const entry = queue.value[index];
+      const entry = queue.value.find((e) => e.toolKey === toolKey);
+      if (!entry) return;
 
       if (distance <= 1) {
         if (!entry.scroll) return;
-        queue.value.splice(index, 1, {
-          ...entry,
-          scroll: false,
-          scrollDistance: 0,
-          scrollDuration: 0,
-        });
+        entry.scroll = false;
+        entry.scrollDistance = 0;
+        entry.scrollDuration = 0;
         return;
       }
 
@@ -2133,36 +2149,25 @@ function scheduleToolScrollAnimation(toolKey: string) {
       const sameDuration = Math.abs((entry.scrollDuration ?? 0) - duration) < 0.01;
       if (entry.scroll && sameDistance && sameDuration) return;
 
-      const applyScrollState = () => {
-        const currentIndex = queue.value.findIndex((item) => item.toolKey === toolKey);
-        if (currentIndex < 0) return;
-        const currentEntry = queue.value[currentIndex];
-        queue.value.splice(currentIndex, 1, {
-          ...currentEntry,
-          expiresAt: currentEntry.expiresAt,
-          scroll: true,
-          scrollDistance: distance,
-          scrollDuration: duration,
-        });
-      };
-
       if (entry.scroll) {
-        queue.value.splice(index, 1, {
-          ...entry,
-          expiresAt: entry.expiresAt,
-          scroll: false,
-          scrollDistance: distance,
-          scrollDuration: duration,
-        });
+        entry.scroll = false;
+        entry.scrollDistance = distance;
+        entry.scrollDuration = duration;
         nextTick(() => {
           requestAnimationFrame(() => {
-            applyScrollState();
+            const current = queue.value.find((e) => e.toolKey === toolKey);
+            if (!current) return;
+            current.scroll = true;
+            current.scrollDistance = distance;
+            current.scrollDuration = duration;
           });
         });
         return;
       }
 
-      applyScrollState();
+      entry.scroll = true;
+      entry.scrollDistance = distance;
+      entry.scrollDuration = duration;
     });
     pendingToolScrollFrames.set(toolKey, frame);
   });
@@ -3885,228 +3890,149 @@ type DebugToolEvent = {
   metadata?: Record<string, unknown>;
   error?: unknown;
   delayMs?: number;
+  toolName?: string;
+  callIdSuffix?: string;
 };
 
 function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
   const basePath = getSelectedWorktreeDirectory() || '/tmp/debug';
-  const sampleFile = `${basePath.replace(/\/+$/, '')}/src/components/App.vue`;
-  const sampleAltFile = `${basePath.replace(/\/+$/, '')}/tsconfig.json`;
+  const sampleFile = `${basePath.replace(/\/+$/, '')}/app/App.vue`;
+  const sampleAltFile = `${basePath.replace(/\/+$/, '')}/app/utils/workerRenderer.ts`;
   const debugReadLines = [
     '<template>',
-    '  <div class="dashboard-container">',
-    '    <header class="dashboard-header">',
-    '      <div class="header-left">',
-    '        <img :src="logoUrl" alt="Logo" class="logo" />',
-    '        <h1 class="app-title">{{ title }}</h1>',
-    '      </div>',
-    '      <nav class="header-nav">',
-    '        <button',
-    '          v-for="item in navItems"',
-    '          :key="item.id"',
-    '          :class="[\'nav-btn\', { active: item.id === activeNavId }]"',
-    '          @click="selectNav(item)"',
-    '        >',
-    '          <span class="nav-icon">{{ item.icon }}</span>',
-    '          <span class="nav-label">{{ item.label }}</span>',
-    '        </button>',
-    '      </nav>',
-    '      <div class="header-right">',
-    '        <input',
-    '          v-model="searchQuery"',
-    '          type="text"',
-    '          placeholder="Search..."',
-    '          class="search-input"',
-    '          @input="debouncedSearch"',
-    '        />',
-    '        <button class="icon-btn" @click="toggleTheme">',
-    '          {{ isDark ? \'☀️\' : \'🌙\' }}',
-    '        </button>',
-    '        <div class="avatar" @click="showUserMenu = !showUserMenu">',
-    '          {{ userInitials }}',
-    '        </div>',
-    '      </div>',
+    '  <div ref="appEl" class="app">',
+    '    <header class="app-header">',
+    '      <TopPanel',
+    '        :base-worktrees="baseWorktreeOptions"',
+    '        :base-worktree="selectedProjectDirectory"',
+    '        :active-directories="worktrees"',
+    '        :active-directory="selectedWorktreeDir"',
+    '        :active-directory-meta="worktreeMetaByDir"',
+    '        :sessions="filteredSessions"',
+    '        :session-status-by-id="sessionStatusByIdRecord"',
+    '        :home-path="homePath"',
+    '        v-model:base-worktree="selectedProjectDirectory"',
+    '        v-model:active-directory="selectedWorktreeDir"',
+    '        v-model:selected-session-id="selectedSessionId"',
+    '        @open-directory="openProjectPicker"',
+    '        @create-worktree="createWorktree"',
+    '        @new-session="createNewSession"',
+    '        @delete-active-directory="deleteWorktree"',
+    '        @delete-session="deleteSession"',
+    '      />',
     '    </header>',
-    '',
-    '    <aside v-if="sidebarOpen" class="sidebar">',
-    '      <ul class="sidebar-menu">',
-    '        <li v-for="section in sidebarSections" :key="section.id">',
-    '          <h3 class="section-title">{{ section.title }}</h3>',
-    '          <ul>',
-    '            <li',
-    '              v-for="link in section.links"',
-    '              :key="link.href"',
-    '              :class="{ active: currentPath === link.href }"',
-    '            >',
-    '              <a :href="link.href">{{ link.label }}</a>',
-    '            </li>',
-    '          </ul>',
-    '        </li>',
-    '      </ul>',
-    '    </aside>',
-    '',
-    '    <main class="dashboard-content">',
-    '      <div class="stats-grid">',
-    '        <div v-for="stat in stats" :key="stat.label" class="stat-card">',
-    '          <span class="stat-value">{{ formatNumber(stat.value) }}</span>',
-    '          <span class="stat-label">{{ stat.label }}</span>',
-    '          <span :class="[\'stat-change\', stat.change > 0 ? \'up\' : \'down\']">',
-    '            {{ stat.change > 0 ? \'+\' : \'\' }}{{ stat.change }}%',
-    '          </span>',
+    '    <main ref="outputEl" class="app-output">',
+    '      <div class="output-workspace">',
+    '        <div class="tool-window-layer" :class="{ \'todo-collapsed\': sidePanelCollapsed }">',
+    '          <div class="output-split" :class="{ \'todo-collapsed\': sidePanelCollapsed }">',
+    '            <OutputPanel',
+    '              ref="outputPanelRef"',
+    '              class="output-panel"',
+    '              :queue="queue"',
+    '              :is-following="isFollowing"',
+    '              :status-text="statusText"',
+    '              :is-status-error="isStatusError"',
+    '              :is-thinking="isThinking"',
+    '              :is-retry-status="!!retryStatus"',
+    '              :busy-descendant-count="busyDescendantSessionIds.length"',
+    '              :theme="shikiTheme"',
+    '              :resolve-agent-color="resolveAgentColorForName"',
+    '              :message-diffs="messageDiffsByKey"',
+    '              @scroll="handleOutputPanelScroll"',
+    '              @wheel="handleOutputPanelWheel"',
+    '              @touchmove="handleOutputPanelScroll"',
+    '              @resume-follow="resumeFollow"',
+    '              @fork-message="handleForkMessage"',
+    '              @revert-message="handleRevertMessage"',
+    '              @show-message-diff="handleShowMessageDiff"',
+    '              @show-message-history="handleShowMessageHistory"',
+    '            />',
+    '            <SidePanel',
+    '              class="todo-panel"',
+    '              :collapsed="sidePanelCollapsed"',
+    '              :active-tab="sidePanelActiveTab"',
+    '              :todo-sessions="todoPanelSessions"',
+    '              :tree-nodes="treeNodes"',
+    '              :expanded-tree-paths="expandedTreePaths"',
+    '              :selected-tree-path="selectedTreePath"',
+    '              :tree-loading="treeLoading"',
+    '              :tree-error="treeError"',
+    '              :tree-status-by-path="sessionStatusByPath"',
+    '              @toggle-collapse="toggleSidePanelCollapsed"',
+    '              @change-tab="setSidePanelTab"',
+    '              @toggle-dir="toggleTreeDirectory"',
+    '              @select-file="selectTreeFile"',
+    '              @open-diff="openSessionDiff"',
+    '              @open-file="openFileViewer"',
+    '            />',
+    '          </div>',
+    '          <div ref="toolWindowCanvasEl" class="tool-window-canvas">',
+    '            <TransitionGroup appear name="fade">',
+    '              <ToolWindow',
+    '                v-for="q in queue.filter((entry) => !entry.isMessage || entry.isSubagentMessage)"',
+    '                :key="q.permissionId ?? q.questionId ?? q.callId ?? q.messageId ?? q.time"',
+    '                :entry="q"',
+    '                :get-entry-title="getEntryTitle"',
+    '                :resolve-agent-tone="resolveAgentTone"',
+    '                :build-message-key="buildMessageKey"',
+    '                :on-focus-entry="focusTerm"',
+    '                :on-drag-entry="startTermDrag"',
+    '                :on-resize-entry="startTermResize"',
+    '                :on-floating-scroll-entry="handleFloatingScroll"',
+    '                :on-floating-wheel-entry="handleFloatingWheel"',
+    '                :on-rendered-entry="handleToolWindowRendered"',
+    '                :is-permission-submitting="isPermissionSubmitting"',
+    '                :get-permission-error="getPermissionError"',
+    '                :on-permission-reply="handlePermissionReply"',
+    '                :is-question-submitting="isQuestionSubmitting"',
+    '                :get-question-error="getQuestionError"',
+    '                :on-question-reply="handleQuestionReply"',
+    '                :on-question-reject="handleQuestionReject"',
+    '                :theme="shikiTheme"',
+    '              />',
+    '              <FileViewerWindow',
+    '                v-for="q in fileViewerQueue"',
+    '                :key="q.toolKey ?? q.path ?? q.time"',
+    '                :entry="q"',
+    '                :title="getEntryTitle(q)"',
+    '                :on-focus-entry="focusTerm"',
+    '                :on-drag-entry="startTermDrag"',
+    '                :on-resize-entry="startTermResize"',
+    '                :on-floating-scroll-entry="handleFloatingScroll"',
+    '                :on-floating-wheel-entry="handleFloatingWheel"',
+    '                :on-close-entry="closeFileViewer"',
+    '                :theme="shikiTheme"',
+    '              />',
+    '            </TransitionGroup>',
+    '          </div>',
     '        </div>',
-    '      </div>',
-    '      <div class="table-container">',
-    '        <table class="data-table">',
-    '          <thead>',
-    '            <tr>',
-    '              <th v-for="col in columns" :key="col.key" @click="sortBy(col.key)">',
-    '                {{ col.label }}',
-    '                <span v-if="sortKey === col.key">{{ sortDir === \'asc\' ? \'▲\' : \'▼\' }}</span>',
-    '              </th>',
-    '            </tr>',
-    '          </thead>',
-    '          <tbody>',
-    '            <tr v-for="row in sortedRows" :key="row.id" @click="selectRow(row)">',
-    '              <td v-for="col in columns" :key="col.key">{{ row[col.key] }}</td>',
-    '            </tr>',
-    '          </tbody>',
-    '        </table>',
-    '      </div>',
-    '      <div class="pagination">',
-    '        <button :disabled="page <= 1" @click="page--">Prev</button>',
-    '        <span>Page {{ page }} of {{ totalPages }}</span>',
-    '        <button :disabled="page >= totalPages" @click="page++">Next</button>',
     '      </div>',
     '    </main>',
+    '    <footer',
+    '      ref="inputEl"',
+    '      class="app-input"',
+    '      :style="inputHeight !== null ? { height: \`${inputHeight}px\` } : undefined"',
+    '    >',
+    '      <div class="input-resizer" @pointerdown="startInputResize"></div>',
+    '      <InputPanel',
+    '        :can-send="canSend"',
+    '        :agent-options="agentOptions"',
+    '        :has-agent-options="hasAgentOptions"',
+    '        :agent-color="currentAgentColor"',
+    '        :model-options="modelOptions"',
+    '        :thinking-options="thinkingOptions"',
+    '        :has-model-options="hasModelOptions"',
+    '        :has-thinking-options="hasThinkingOptions"',
+    '        :can-attach="canAttach"',
+    '        :is-thinking="isThinking"',
+    '        :can-abort="canAbort"',
+    '        :commands="commandOptions"',
+    '        :attachments="attachments"',
+    '        :message-input="messageInput"',
+    '      />',
+    '    </footer>',
     '  </div>',
     '</template>',
-    '',
-    '<script setup lang="ts">',
-    "import { ref, computed, watch, onMounted, onUnmounted } from 'vue';",
-    "import { useDebounceFn } from '@vueuse/core';",
-    "import { useRouter } from 'vue-router';",
-    '',
-    'interface NavItem {',
-    '  id: string;',
-    '  label: string;',
-    '  icon: string;',
-    '  active?: boolean;',
-    '}',
-    '',
-    'interface SidebarLink {',
-    '  href: string;',
-    '  label: string;',
-    '}',
-    '',
-    'interface SidebarSection {',
-    '  id: string;',
-    '  title: string;',
-    '  links: SidebarLink[];',
-    '}',
-    '',
-    'interface StatItem {',
-    '  label: string;',
-    '  value: number;',
-    '  change: number;',
-    '}',
-    '',
-    'interface Column {',
-    '  key: string;',
-    '  label: string;',
-    '}',
-    '',
-    'type SortDirection = \'asc\' | \'desc\';',
-    '',
-    'const props = defineProps<{',
-    '  title: string;',
-    '  logoUrl: string;',
-    '  navItems: NavItem[];',
-    '  sidebarSections: SidebarSection[];',
-    '  stats: StatItem[];',
-    '  columns: Column[];',
-    '  rows: Record<string, unknown>[];',
-    '  pageSize?: number;',
-    '}>();',
-    '',
-    'const emit = defineEmits<{',
-    "  (event: 'select-nav', item: NavItem): void;",
-    "  (event: 'select-row', row: Record<string, unknown>): void;",
-    "  (event: 'search', query: string): void;",
-    '}>();',
-    '',
-    'const router = useRouter();',
-    "const activeNavId = ref<string>('');",
-    "const searchQuery = ref('');",
-    'const isDark = ref(false);',
-    'const showUserMenu = ref(false);',
-    'const sidebarOpen = ref(true);',
-    'const page = ref(1);',
-    "const sortKey = ref('');",
-    "const sortDir = ref<SortDirection>('asc');",
-    "const currentPath = ref(window.location.pathname);",
-    '',
-    'const effectivePageSize = computed(() => props.pageSize ?? 20);',
-    'const totalPages = computed(() => Math.ceil(props.rows.length / effectivePageSize.value));',
-    '',
-    'const userInitials = computed(() => {',
-    "  const name = 'Admin User';",
-    "  return name.split(' ').map((n) => n[0]).join('');",
-    '});',
-    '',
-    'const sortedRows = computed(() => {',
-    '  const data = [...props.rows];',
-    '  if (sortKey.value) {',
-    '    data.sort((a, b) => {',
-    '      const va = a[sortKey.value] as string;',
-    '      const vb = b[sortKey.value] as string;',
-    '      const cmp = va < vb ? -1 : va > vb ? 1 : 0;',
-    "      return sortDir.value === 'asc' ? cmp : -cmp;",
-    '    });',
-    '  }',
-    '  const start = (page.value - 1) * effectivePageSize.value;',
-    '  return data.slice(start, start + effectivePageSize.value);',
-    '});',
-    '',
-    'function selectNav(item: NavItem) {',
-    '  activeNavId.value = item.id;',
-    "  emit('select-nav', item);",
-    '}',
-    '',
-    'function selectRow(row: Record<string, unknown>) {',
-    "  emit('select-row', row);",
-    '}',
-    '',
-    'function sortBy(key: string) {',
-    '  if (sortKey.value === key) {',
-    "    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc';",
-    '  } else {',
-    '    sortKey.value = key;',
-    "    sortDir.value = 'asc';",
-    '  }',
-    '}',
-    '',
-    'function toggleTheme() {',
-    '  isDark.value = !isDark.value;',
-    "  document.documentElement.classList.toggle('dark', isDark.value);",
-    '}',
-    '',
-    'function formatNumber(n: number): string {',
-    '  return n.toLocaleString();',
-    '}',
-    '',
-    "const debouncedSearch = useDebounceFn(() => emit('search', searchQuery.value), 300);",
-    '',
-    'function handleKeydown(e: KeyboardEvent) {',
-    "  if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {",
-    '    e.preventDefault();',
-    "    (document.querySelector('.search-input') as HTMLInputElement)?.focus();",
-    '  }',
-    '}',
-    '',
-    "onMounted(() => window.addEventListener('keydown', handleKeydown));",
-    "onUnmounted(() => window.removeEventListener('keydown', handleKeydown));",
-    '',
-    "watch(() => router.currentRoute.value.path, (p) => { currentPath.value = p; });",
-    '<\/script>',
   ];
   const debugReadBody = debugReadLines
     .map((line, index) => `${String(index + 1).padStart(5, '0')}| ${line}`)
@@ -4117,272 +4043,180 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
       const patchInput = {
         patchText: [
           '*** Begin Patch',
-          '*** Update File: app/components/ToolWindow.vue',
+          '*** Update File: app/components/CodeContent.vue',
           '@@',
-          '-  padding: 0 8px;',
-          '+  padding: 0 4px;',
-          '-  margin: 4px 0;',
-          '+  margin: 2px 0;',
-          '-  border-radius: 4px;',
-          '+  border-radius: 6px;',
+          '-  min-height: 1.2em;',
+          '+  min-height: 1em;',
+          '-  column-gap: 0;',
+          '+  column-gap: 0.5ch;',
+          '@@',
+          '-  padding: 0 1ch 0 1ch;',
+          '+  padding: 0 0.75ch 0 1ch;',
+          '@@',
+          '-  padding-left: 1ch;',
+          '+  padding-left: 0.75ch;',
           '*** End Patch',
         ].join('\n'),
       };
       const patchDiff = [
-        'diff --git a/app/components/ToolWindow.vue b/app/components/ToolWindow.vue',
-        '--- a/app/components/ToolWindow.vue',
-        '+++ b/app/components/ToolWindow.vue',
-        '@@ -12,6 +12,8 @@',
-        ' <template>',
-        '   <div',
-        '-    class="tool-window"',
-        '+    class="tool-window elevated"',
-        '     :style="{',
-        '-      top: `${y}px`,',
-        '-      left: `${x}px`,',
-        '+      top: `${position.y}px`,',
-        '+      left: `${position.x}px`,',
-        '+      width: `${size.width}px`,',
-        '+      height: `${size.height}px`,',
-        '     }"',
-        '   >',
-        '     <header class="tool-header">',
-        '-      <span class="tool-title">{{ title }}</span>',
-        '+      <span class="tool-title" :title="fullTitle">',
-        '+        <span class="tool-icon">{{ icon }}</span>',
-        '+        {{ displayTitle }}',
-        '+      </span>',
-        '+      <div class="tool-actions">',
-        '+        <button class="action-btn" @click="toggleCollapse">',
-        '+          {{ collapsed ? "▼" : "▲" }}',
-        '+        </button>',
-        '+        <button class="action-btn" @click="$emit(\'close\')">×</button>',
-        '+      </div>',
-        '     </header>',
-        '-    <div class="tool-body">',
-        '+    <div v-show="!collapsed" class="tool-body">',
-        '       <div class="term-inner" ref="termRef">',
-        '         <slot />',
-        '       </div>',
-        '     </div>',
-        '+    <footer v-if="statusText" class="tool-footer">',
-        '+      <span class="status-indicator" :class="statusClass" />',
-        '+      <span class="status-text">{{ statusText }}</span>',
-        '+    </footer>',
-        '   </div>',
-        ' </template>',
-        ' ',
+        'diff --git a/app/components/CodeContent.vue b/app/components/CodeContent.vue',
+        '--- a/app/components/CodeContent.vue',
+        '+++ b/app/components/CodeContent.vue',
+        '@@ -9,7 +9,8 @@',
         ' <script setup lang="ts">',
-        "-import { ref, computed } from 'vue';",
-        "+import { ref, computed, watch, onMounted } from 'vue';",
+        " import { computed } from 'vue';",
         ' ',
         ' const props = defineProps<{',
-        '-  title: string;',
-        '-  x: number;',
-        '-  y: number;',
-        '+  title: string;',
-        '+  fullTitle?: string;',
-        '+  icon?: string;',
-        '+  position: { x: number; y: number };',
-        '+  size: { width: number; height: number };',
-        '+  status?: "running" | "completed" | "error";',
+        '   html: string;',
+        "-  variant?: 'code' | 'diff' | 'message' | 'binary';",
+        "+  variant?: 'code' | 'diff' | 'message' | 'binary' | 'log';",
+        "+  maxHeight?: string;",
+        "   wrapMode?: 'default' | 'soft';",
+        "   gutterMode?: 'none' | 'single' | 'double';",
         ' }>();',
         ' ',
-        "-const emit = defineEmits<{ (e: 'close'): void }>();",
-        "+const emit = defineEmits<{",
-        "+  (e: 'close'): void;",
-        "+  (e: 'resize', size: { width: number; height: number }): void;",
-        "+  (e: 'move', pos: { x: number; y: number }): void;",
-        "+}>();",
-        ' ',
-        '+const collapsed = ref(false);',
-        ' const termRef = ref<HTMLElement>();',
-        ' ',
-        "+const displayTitle = computed(() => {",
-        "+  if (props.title.length > 40) return props.title.slice(0, 37) + '...';",
-        "+  return props.title;",
-        "+});",
-        "+",
-        "+const statusText = computed(() => {",
-        "+  switch (props.status) {",
-        "+    case 'running': return 'Running...';",
-        "+    case 'completed': return 'Completed';",
-        "+    case 'error': return 'Failed';",
-        "+    default: return '';",
-        "+  }",
-        "+});",
-        "+",
-        "+const statusClass = computed(() => ({",
-        "+  'status-running': props.status === 'running',",
-        "+  'status-completed': props.status === 'completed',",
-        "+  'status-error': props.status === 'error',",
-        "+}));",
-        "+",
-        "+function toggleCollapse() {",
-        "+  collapsed.value = !collapsed.value;",
-        "+}",
-        '+',
-        '+onMounted(() => {',
-        '+  if (termRef.value) {',
-        '+    termRef.value.scrollTop = 0;',
-        '+  }',
-        '+});',
+        ' const rootClass = computed(() => ({',
+        "   'is-diff': props.variant === 'diff',",
+        "   'is-message': props.variant === 'message',",
+        "   'is-binary': props.variant === 'binary',",
+        "+  'is-log': props.variant === 'log',",
+        "   'wrap-soft': props.wrapMode === 'soft',",
+        "   'no-gutter': props.gutterMode === 'none',",
+        ' }));',
         ' <\/script>',
         ' ',
         ' <style scoped>',
-        ' .tool-window {',
-        '   position: absolute;',
-        '-  background: var(--bg-primary);',
-        '-  border: 1px solid var(--border-color);',
-        '-  border-radius: 4px;',
-        '+  background: var(--surface-elevated);',
-        '+  border: 1px solid var(--border-subtle);',
-        '+  border-radius: 8px;',
-        '+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);',
-        '+  overflow: hidden;',
-        '+  display: flex;',
-        '+  flex-direction: column;',
+        ' .code-content {',
+        '   line-height: inherit;',
+        '   color: inherit;',
+        '-  min-height: 1.2em;',
+        '+  min-height: 1em;',
         ' }',
         ' ',
-        '+.tool-window.elevated {',
-        '+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);',
-        '+}',
-        '+',
-        ' .tool-header {',
-        '   display: flex;',
-        '+  align-items: center;',
-        '+  justify-content: space-between;',
-        '   padding: 4px 8px;',
-        '-  background: var(--bg-secondary);',
-        '+  background: var(--surface-header);',
-        '+  border-bottom: 1px solid var(--border-subtle);',
-        '+  user-select: none;',
-        '+  cursor: grab;',
-        '+}',
-        '+',
-        '+.tool-footer {',
-        '+  display: flex;',
-        '+  align-items: center;',
-        '+  gap: 6px;',
-        '+  padding: 2px 8px;',
-        '+  font-size: 11px;',
-        '+  color: var(--text-secondary);',
-        '+  border-top: 1px solid var(--border-subtle);',
+        ' .code-content :deep(pre),',
+        ' .code-content :deep(code) {',
+        '   margin: 0;',
+        '   padding: 0;',
+        '   background: transparent !important;',
+        '   background-color: transparent !important;',
+        '   line-height: inherit !important;',
+        '   font-family: inherit;',
+        '   font-size: inherit;',
+        '   white-space: normal;',
         ' }',
-        ' </style>',
+        ' ',
+        ' .code-content :deep(pre.shiki) {',
+        '   background: transparent !important;',
+        '   background-color: transparent !important;',
+        '   color: inherit;',
+        '   display: block;',
+        '   line-height: inherit !important;',
+        ' }',
+        ' ',
+        ' .code-content :deep(code) {',
+        '   display: grid;',
+        '   grid-template-columns: max-content max-content 1fr;',
+        '-  column-gap: 0;',
+        '+  column-gap: 0.5ch;',
+        ' }',
+        ' ',
+        ' .code-content :deep(.code-row) {',
+        '   display: grid;',
+        '   grid-template-columns: subgrid;',
+        '   grid-column: 1 / -1;',
+        '   align-items: start;',
+        ' }',
+        ' ',
+        ' .code-content :deep(.code-gutter) {',
+        '   text-align: right;',
+        '   color: #8a8a8a;',
+        '   white-space: pre;',
+        '   font-variant-numeric: tabular-nums;',
+        '-  padding: 0 1ch 0 1ch;',
+        '+  padding: 0 0.75ch 0 1ch;',
+        ' }',
+        ' ',
+        ' .code-content :deep(.code-gutter.span-2) {',
+        '   grid-column: 1 / 3;',
+        ' }',
+        ' ',
+        ' .code-content :deep(.line) {',
+        '   display: block;',
+        '   min-height: 1em;',
+        '   white-space: pre;',
+        '   box-sizing: border-box;',
+        '-  padding-left: 1ch;',
+        '+  padding-left: 0.75ch;',
+        ' }',
+        ' ',
+        ' .code-content :deep(.line:empty)::after {',
+        "   content: ' ';",
+        ' }',
+        ' ',
+        ' /* no-gutter */',
+        ' ',
+        ' .code-content.no-gutter :deep(code) {',
+        '   grid-template-columns: 1fr;',
+        ' }',
+        ' ',
+        ' .code-content.no-gutter :deep(.code-gutter) {',
+        '   display: none;',
+        ' }',
+        ' ',
+        ' .code-content.no-gutter :deep(.line) {',
+        '   padding-left: 0;',
+        ' }',
       ].join('\n');
       const patchMeta = {
-        files: [{ relativePath: 'app/components/ToolWindow.vue', diff: patchDiff }],
+        files: [{ relativePath: 'app/components/CodeContent.vue', diff: patchDiff }],
       };
       return [
         { status: 'running', input: patchInput, metadata: patchMeta, output: patchDiff },
-        { status: 'completed', delayMs: 550, input: patchInput, metadata: patchMeta, output: 'Success. Updated the following files:\nM app/components/ToolWindow.vue' },
+        { status: 'completed', delayMs: 550, input: patchInput, metadata: patchMeta, output: 'Success. Updated the following files:\nM app/components/CodeContent.vue' },
       ];
     }
     case 'bash': {
       const bashInput = {
         command: 'git diff --stat',
         workdir: basePath,
-        description: 'Show unstaged and staged differences',
+        description: 'Show file change statistics',
       };
       const bashOutput = [
-        ' app/App.vue                                        | 142 +++++++++++++++++++++++++++++++++--',
-        ' app/components/ToolWindow.vue                      |  87 ++++++++++++---------',
-        ' app/components/MessageViewer.vue                   |  63 ++++++++++------',
-        ' app/components/FileViewerWindow.vue                |  41 ++++++++---',
-        ' app/components/PermissionWindow.vue                |  29 ++++---',
-        ' app/components/QuestionWindow.vue                  |  35 ++++++---',
-        ' app/components/ShellWindow.vue                     |  18 ++---',
-        ' app/components/SessionPanel.vue                    |  52 ++++++++++---',
-        ' app/components/ComposerPanel.vue                   |  73 ++++++++++++------',
-        ' app/components/StatusBar.vue                       |  24 ++++--',
-        ' app/components/ThemeSelector.vue                   |  31 ++++++--',
-        ' app/components/ModelSelector.vue                   |  19 +++--',
-        ' app/components/AttachmentViewer.vue                |  44 ++++++++---',
-        ' app/components/CodeBlock.vue                       |  56 ++++++++++----',
-        ' app/components/DiffViewer.vue                      |  38 +++++----',
-        ' app/components/MarkdownRenderer.vue                |  67 ++++++++++++-----',
-        ' app/components/SearchPanel.vue                     |  33 ++++++--',
-        ' app/components/TreeView.vue                        |  27 +++++--',
-        ' app/components/TabBar.vue                          |  15 ++--',
-        ' app/components/Breadcrumb.vue                      |  22 +++---',
-        ' app/components/ContextMenu.vue                     |  48 ++++++++----',
-        ' app/components/Modal.vue                           |  36 ++++++---',
-        ' app/components/Tooltip.vue                         |  14 ++--',
-        ' app/components/Badge.vue                           |  11 ++-',
-        ' app/components/Avatar.vue                          |   9 ++-',
-        ' app/components/Spinner.vue                         |   7 +-',
-        ' app/components/ProgressBar.vue                     |  21 +++---',
-        ' app/components/Accordion.vue                       |  32 ++++++--',
-        ' app/components/Dropdown.vue                        |  45 ++++++++---',
-        ' app/components/Toast.vue                           |  28 ++++---',
-        ' app/components/Sidebar.vue                         |  39 +++++----',
-        ' app/components/ResizeHandle.vue                    |  16 ++--',
-        ' app/components/VirtualScroller.vue                 |  53 ++++++++++---',
-        ' app/components/LazyImage.vue                       |  12 ++-',
-        ' app/components/ErrorBoundary.vue                   |  20 +++--',
-        ' app/utils/opencode.ts                              |  34 ++++++--',
-        ' app/utils/theme.ts                                 |  18 +++--',
-        ' app/utils/workerRenderer.ts                        |  25 +++---',
-        ' app/utils/markdown.ts                              |  47 ++++++++----',
-        ' app/utils/clipboard.ts                             |   8 +-',
-        ' app/utils/debounce.ts                              |  11 ++-',
-        ' app/utils/storage.ts                               |  22 +++---',
-        ' app/utils/keybindings.ts                           |  30 ++++++--',
-        ' app/utils/router.ts                                |  15 ++--',
-        ' app/utils/logger.ts                                |  19 +++--',
-        ' app/utils/api.ts                                   |  41 ++++++++---',
-        ' app/utils/websocket.ts                             |  37 ++++++---',
-        ' app/utils/eventBus.ts                              |  13 ++-',
-        ' app/utils/i18n.ts                                  |  26 +++---',
-        ' app/utils/validation.ts                            |  33 ++++++--',
-        ' app/styles/variables.css                           |  58 ++++++++------',
-        ' app/styles/reset.css                               |  14 ++--',
-        ' app/styles/layout.css                              |  42 ++++++++---',
-        ' app/styles/components.css                          |  76 ++++++++++++------',
-        ' app/styles/animations.css                          |  23 +++---',
-        ' app/styles/typography.css                          |  31 ++++++--',
-        ' app/styles/dark-mode.css                           |  47 ++++++++----',
-        ' server/main.ts                                     |  28 ++++---',
-        ' server/index.ts                                    |  16 ++--',
-        ' server/routes/api.ts                               |  39 +++++----',
-        ' server/routes/auth.ts                              |  45 ++++++++---',
-        ' server/routes/sessions.ts                          |  52 ++++++++++---',
-        ' server/middleware/cors.ts                           |  11 ++-',
-        ' server/middleware/rateLimit.ts                      |  18 +++--',
-        ' server/middleware/auth.ts                           |  24 ++++--',
-        ' server/db/schema.ts                                |  36 ++++++---',
-        ' server/db/migrations/001_init.sql                  |  42 ++++++++---',
-        ' server/db/migrations/002_sessions.sql              |  28 ++++---',
-        ' server/db/seeds/dev.ts                             |  19 +++--',
-        ' tests/unit/ToolWindow.spec.ts                      |  53 ++++++++++---',
-        ' tests/unit/MessageViewer.spec.ts                   |  47 ++++++++----',
-        ' tests/unit/FileViewerWindow.spec.ts                |  38 +++++----',
-        ' tests/unit/ComposerPanel.spec.ts                   |  61 +++++++++++----',
-        ' tests/unit/utils/opencode.spec.ts                  |  29 ++++---',
-        ' tests/unit/utils/markdown.spec.ts                  |  34 ++++++--',
-        ' tests/e2e/session-flow.spec.ts                     |  72 ++++++++++++------',
-        ' tests/e2e/tool-execution.spec.ts                   |  58 ++++++++------',
-        ' tests/e2e/theme-switching.spec.ts                  |  31 ++++++--',
-        ' vite.config.ts                                     |  12 ++-',
-        ' tsconfig.json                                      |   6 +-',
-        ' package.json                                       |   4 +-',
-        ' .eslintrc.cjs                                      |   8 +-',
-        ' .prettierrc                                        |   3 +-',
-        ' tailwind.config.ts                                 |  15 ++--',
-        ' postcss.config.cjs                                 |   5 +-',
-        ' vitest.config.ts                                   |   9 ++-',
-        ' playwright.config.ts                               |  14 ++--',
-        ' docker-compose.yml                                 |  22 +++---',
-        ' Dockerfile                                         |  18 +++--',
-        ' .github/workflows/ci.yml                           |  35 ++++++---',
-        ' .github/workflows/deploy.yml                       |  27 ++++---',
-        ' README.md                                          |  43 ++++++++---',
-        ' CHANGELOG.md                                       |  31 ++++++--',
-        ' docs/api.md                                        |  56 ++++++++++----',
-        ' docs/architecture.md                               |  38 +++++----',
-        ' docs/contributing.md                               |  24 ++++--',
-        ' 95 files changed, 2847 insertions(+), 1203 deletions(-)',
+        ' app/App.vue                           | 142 +++++++++++++++++++++++++++++++++--',
+        ' app/components/ToolWindow.vue          |  87 ++++++++++++---------',
+        ' app/components/FileViewerWindow.vue    |  41 ++++++++---',
+        ' app/components/CodeContent.vue         |  38 +++++----',
+        ' app/components/OutputPanel.vue         |  29 ++++---',
+        ' app/components/InputPanel.vue          |  35 ++++++---',
+        ' app/components/SidePanel.vue           |  52 ++++++++++---',
+        ' app/components/TopPanel.vue            |  24 ++++--',
+        ' app/components/MessageViewer.vue       |  63 ++++++++++------',
+        ' app/components/PermissionWindow.vue    |  19 +++--',
+        ' app/components/QuestionWindow.vue      |  22 +++---',
+        ' app/components/TreeView.vue            |  27 +++++--',
+        ' app/components/TodoPanel.vue           |  15 ++--',
+        ' app/components/TodoList.vue            |  33 ++++++---',
+        ' app/components/ProjectPicker.vue       |  28 ++++---',
+        ' app/components/Dropdown.vue            |  11 ++-',
+        ' app/components/Dropdown/Item.vue       |   9 ++-',
+        ' app/utils/useCodeRender.ts             |  18 +++--',
+        ' app/utils/workerRenderer.ts            |  25 +++---',
+        ' app/utils/opencode.ts                  |  34 ++++++--',
+        ' app/utils/theme.ts                     |   8 +-',
+        ' app/composables/useOutputPanelFollow.ts|  13 ++-',
+        ' app/workers/render-worker.ts           |  22 +++---',
+        ' app/main.ts                            |   6 +-',
+        ' app/env.d.ts                           |   3 +-',
+        ' vite.config.ts                         |  12 ++-',
+        ' tsconfig.json                          |   4 +-',
+        ' package.json                           |   3 +-',
+        ' package-lock.json                      |  48 ++++++------',
+        ' index.html                             |   5 +-',
+        ' server/dev.ts                          |  17 +++--',
+        ' server/proxy.ts                        |  11 ++-',
+        ' .gitignore                             |   2 +-',
+        ' .eslintrc.cjs                          |   8 ++-',
+        ' 34 files changed, 782 insertions(+), 315 deletions(-)',
       ].join('\n');
       return [
         { status: 'running', input: bashInput, output: bashOutput },
@@ -4393,272 +4227,205 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
       return [
         {
           status: 'running',
-          input: { tool_calls: [{ tool: 'glob' }, { tool: 'grep' }] },
-          output: 'Running 2 calls...',
+          toolName: 'glob',
+          callIdSuffix: 'glob',
+          input: { pattern: '**/*.{vue,ts}', path: basePath },
+          output: '',
+        },
+        {
+          status: 'running',
+          toolName: 'grep',
+          callIdSuffix: 'grep',
+          delayMs: 0,
+          input: {
+            pattern: 'useCodeRender|renderWorkerHtml|CodeRenderParams',
+            path: `${basePath}/app`,
+            include: '*.{vue,ts}',
+          },
+          output: '',
         },
         {
           status: 'completed',
-          delayMs: 450,
-          input: { tool_calls: [{ tool: 'glob' }, { tool: 'grep' }] },
-          output: 'Successfully executed 2/2 calls',
+          toolName: 'glob',
+          callIdSuffix: 'glob',
+          delayMs: 420,
+          input: { pattern: '**/*.{vue,ts}', path: basePath },
+          output: [
+            `${basePath}/app/App.vue`,
+            `${basePath}/app/main.ts`,
+            `${basePath}/app/env.d.ts`,
+            `${basePath}/app/components/CodeContent.vue`,
+            `${basePath}/app/components/ToolWindow.vue`,
+            `${basePath}/app/components/FileViewerWindow.vue`,
+            `${basePath}/app/utils/useCodeRender.ts`,
+            `${basePath}/app/workers/render-worker.ts`,
+          ].join('\n'),
+        },
+        {
+          status: 'completed',
+          toolName: 'grep',
+          callIdSuffix: 'grep',
+          delayMs: 0,
+          input: {
+            pattern: 'useCodeRender|renderWorkerHtml|CodeRenderParams',
+            path: `${basePath}/app`,
+            include: '*.{vue,ts}',
+          },
+          output: [
+            'Found 8 matches in 4 files',
+            '',
+            `${basePath}/app/utils/useCodeRender.ts:`,
+            '  Line 4: export type CodeRenderParams = {',
+            '  Line 22: export function useCodeRender(',
+            '',
+            `${basePath}/app/utils/workerRenderer.ts:`,
+            '  Line 47: export function renderWorkerHtml(payload: RenderRequest) {',
+            '',
+            `${basePath}/app/components/ToolWindow.vue:`,
+            "  Line 61: import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';",
+          ].join('\n'),
         },
       ];
     case 'codesearch': {
-      const csInput = { query: 'defineProps generic vue' };
+      const csInput = { query: 'vue composable web worker rendering' };
       const csOutput = [
-        '## Results (47 matches across 23 repositories)',
+        '## Results (18 matches across 9 repositories)',
         '',
-        '### vuejs/core — packages/runtime-core/src/apiSetupHelpers.ts',
+        '### shikijs/shiki — packages/shiki/src/core.ts',
         '```typescript',
-        'export function defineProps<',
-        '  PP extends ComponentObjectPropsOptions = ComponentObjectPropsOptions,',
-        '>(): Readonly<ExtractPropTypes<PP>>',
-        'export function defineProps<PP extends string[]>(',
-        '  ...keys: PP',
-        '): Readonly<{ [K in PP[number]]?: unknown }>',
-        'export function defineProps<TypeProps>(): Readonly<TypeProps>',
-        'export function defineProps() {',
-        '  if (__DEV__) {',
-        "    warn('defineProps() is a compiler hint and must be used inside <script setup>.')",
+        'export function createHighlighterCore(options: HighlighterCoreOptions) {',
+        '  const themes = new Map<string, ThemeRegistrationResolved>()',
+        '  const langs = new Map<string, Grammar>()',
+        '  return {',
+        '    codeToHtml(code, options) { ... },',
+        '    codeToTokens(code, options) { ... },',
+        '    loadTheme(...themes) { ... },',
+        '    loadLanguage(...langs) { ... },',
         '  }',
-        '  return null as never',
         '}',
         '```',
         '',
-        '### nuxt/ui — src/runtime/components/Table.vue',
+        '### nicolo-ribaudo/shiki-worker — src/worker.ts',
         '```typescript',
-        'interface TableProps<T extends Record<string, unknown>> {',
-        '  rows: T[]',
-        '  columns?: TableColumn<T>[]',
-        '  modelValue?: T | T[]',
-        '  sortable?: boolean',
-        '  selectable?: boolean',
-        '  loading?: boolean',
-        '  emptyState?: { icon: string; label: string }',
+        "import { createHighlighter } from 'shiki';",
+        'let highlighter: Awaited<ReturnType<typeof createHighlighter>> | null = null;',
+        'self.onmessage = async (event: MessageEvent<RenderRequest>) => {',
+        '  if (!highlighter) highlighter = await createHighlighter({ ... });',
+        '  const { code, lang, theme } = event.data;',
+        '  const html = highlighter.codeToHtml(code, { lang, theme });',
+        '  self.postMessage({ id: event.data.id, ok: true, html });',
+        '};',
+        '```',
+        '',
+        '### vueuse/vueuse — packages/core/useWebWorkerFn/index.ts',
+        '```typescript',
+        'export function useWebWorkerFn<T extends (...args: unknown[]) => unknown>(',
+        '  fn: T,',
+        '  options: UseWebWorkerFnOptions = {},',
+        ') {',
+        '  const worker = ref<Worker | undefined>()',
+        '  const result = ref<ReturnType<T> | undefined>()',
+        '  const error = shallowRef<unknown>()',
+        '  const workerStatus = ref<UseWebWorkerFnReturn["workerStatus"]>("PENDING")',
+        '  ...',
         '}',
-        'const props = defineProps<TableProps<T>>()',
-        '```',
-        '',
-        '### vitepress — src/client/theme-default/components/VPNav.vue',
-        '```typescript',
-        'const props = withDefaults(defineProps<{',
-        '  title?: string',
-        '  logo?: string | { src: string; alt?: string }',
-        '  showSidebar?: boolean',
-        '  screenOpen?: boolean',
-        '}>(), {',
-        "  title: 'VitePress',",
-        '  showSidebar: true,',
-        '  screenOpen: false,',
-        '})',
-        '```',
-        '',
-        '### radix-vue/radix-vue — packages/radix-vue/src/Combobox/ComboboxRoot.vue',
-        '```typescript',
-        'export interface ComboboxRootProps<T = AcceptableValue> {',
-        '  modelValue?: T | T[]',
-        '  defaultValue?: T | T[]',
-        '  open?: boolean',
-        '  defaultOpen?: boolean',
-        '  searchTerm?: string',
-        '  multiple?: boolean',
-        '  disabled?: boolean',
-        '  dir?: Direction',
-        '  filterFunction?: (list: T[], term: string) => T[]',
-        '  displayValue?: (val: T) => string',
-        '}',
-        'const props = defineProps<ComboboxRootProps<T>>()',
-        '```',
-        '',
-        '### element-plus/element-plus — packages/components/table/src/table.vue',
-        '```typescript',
-        'const props = defineProps({',
-        '  data: { type: Array as PropType<Record<string, unknown>[]>, default: () => [] },',
-        '  size: { type: String as PropType<ComponentSize>, default: undefined },',
-        '  width: { type: [String, Number], default: undefined },',
-        '  height: { type: [String, Number], default: undefined },',
-        '  maxHeight: { type: [String, Number], default: undefined },',
-        '  fit: { type: Boolean, default: true },',
-        '  stripe: { type: Boolean, default: false },',
-        '  border: { type: Boolean, default: false },',
-        '  rowKey: { type: [String, Function] as PropType<string | ((row: unknown) => string)> },',
-        '  showHeader: { type: Boolean, default: true },',
-        '  showSummary: { type: Boolean, default: false },',
-        '  sumText: { type: String, default: undefined },',
-        '  summaryMethod: { type: Function as PropType<SummaryMethod>, default: undefined },',
-        '  rowClassName: { type: [String, Function], default: undefined },',
-        '  rowStyle: { type: [Object, Function], default: undefined },',
-        '  cellClassName: { type: [String, Function], default: undefined },',
-        '  cellStyle: { type: [Object, Function], default: undefined },',
-        '  headerRowClassName: { type: [String, Function], default: undefined },',
-        '  headerRowStyle: { type: [Object, Function], default: undefined },',
-        '  headerCellClassName: { type: [String, Function], default: undefined },',
-        '  headerCellStyle: { type: [Object, Function], default: undefined },',
-        '  highlightCurrentRow: { type: Boolean, default: false },',
-        '  currentRowKey: { type: [String, Number], default: undefined },',
-        '  emptyText: { type: String, default: undefined },',
-        '  expandRowKeys: { type: Array as PropType<string[]>, default: undefined },',
-        '  defaultExpandAll: { type: Boolean, default: false },',
-        '  defaultSort: { type: Object as PropType<Sort>, default: () => ({ prop: \'\', order: \'\' }) },',
-        '  tooltipEffect: { type: String, default: undefined },',
-        '  tooltipOptions: { type: Object, default: undefined },',
-        '  spanMethod: { type: Function as PropType<SpanMethod>, default: undefined },',
-        '  selectOnIndeterminate: { type: Boolean, default: true },',
-        '  indent: { type: Number, default: 16 },',
-        '  treeProps: { type: Object as PropType<TreeProps>, default: () => ({ hasChildren: \'hasChildren\', children: \'children\' }) },',
-        '  lazy: { type: Boolean, default: false },',
-        '  load: { type: Function as PropType<(row: unknown, treeNode: TreeNode, resolve: (data: unknown[]) => void) => void> },',
-        '  scrollbarAlwaysOn: { type: Boolean, default: false },',
-        '  flexible: { type: Boolean, default: false },',
-        '})',
-        '```',
-        '',
-        '### primevue/primevue — packages/primevue/src/datatable/DataTable.vue',
-        '```typescript',
-        'const props = defineProps<{',
-        '  value?: unknown[]',
-        '  dataKey?: string | ((item: unknown) => string)',
-        '  rows?: number',
-        '  first?: number',
-        '  totalRecords?: number',
-        '  paginator?: boolean',
-        '  paginatorPosition?: "top" | "bottom" | "both"',
-        '  alwaysShowPaginator?: boolean',
-        '  paginatorTemplate?: string',
-        '  pageLinkSize?: number',
-        '  rowsPerPageOptions?: number[]',
-        '  lazy?: boolean',
-        '  loading?: boolean',
-        '  loadingIcon?: string',
-        '  sortField?: string | ((item: unknown) => string)',
-        '  sortOrder?: number',
-        '  removableSort?: boolean',
-        '  multiSortMeta?: unknown[]',
-        '  sortMode?: "single" | "multiple"',
-        '  filters?: Record<string, unknown>',
-        '  filterDisplay?: "row" | "menu"',
-        '}>()',
         '```',
       ].join('\n');
       return [
-        { status: 'running', input: csInput, output: csOutput },
+        { status: 'running', input: csInput, output: '' },
         { status: 'completed', delayMs: 420, input: csInput, output: csOutput },
       ];
     }
     case 'edit': {
       const editInput = {
-        filePath: sampleFile,
-        oldString: "const selected = ref<string>('');",
-        newString: "const activeId = ref<string>('');",
+        filePath: `${basePath.replace(/\/+$/, '')}/app/components/ToolWindow.vue`,
+        oldString: 'const showResizer = computed(',
+        newString: 'const showResizer = computed<boolean>(',
       };
       const editDiff = [
-        'diff --git a/src/components/App.vue b/src/components/App.vue',
-        '--- a/src/components/App.vue',
-        '+++ b/src/components/App.vue',
-        '@@ -85,50 +85,65 @@',
-        " import { ref, computed, watch, onMounted, onUnmounted } from 'vue';",
-        "-import { useDebounceFn } from '@vueuse/core';",
-        "+import { useDebounceFn, useLocalStorage } from '@vueuse/core';",
-        "+import { useRouter, useRoute } from 'vue-router';",
+        'diff --git a/app/components/ToolWindow.vue b/app/components/ToolWindow.vue',
+        '--- a/app/components/ToolWindow.vue',
+        '+++ b/app/components/ToolWindow.vue',
+        '@@ -56,10 +56,12 @@',
+        ' <script setup lang="ts">',
+        " import { computed, watch } from 'vue';",
+        "+import { onMounted, ref } from 'vue';",
+        " import CodeContent from './CodeContent.vue';",
+        " import PermissionWindow from './PermissionWindow.vue';",
+        " import QuestionWindow from './QuestionWindow.vue';",
+        " import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';",
         ' ',
-        ' interface NavItem {',
-        '   id: string;',
-        '   label: string;',
-        '-  icon: string;',
-        '+  icon?: string;',
-        '   active?: boolean;',
-        '+  badge?: number;',
-        '+  disabled?: boolean;',
-        ' }',
+        " type PermissionReply = 'once' | 'always' | 'reject';",
+        ' type QuestionAnswer = string[];',
         ' ',
-        ' interface SidebarLink {',
-        '   href: string;',
-        '   label: string;',
-        '+  icon?: string;',
-        '+  external?: boolean;',
-        ' }',
+        ' type ToolWindowEntry = {',
+        '   time: number;',
+        '   x: number;',
+        '   y: number;',
+        '   header: string;',
+        '   scroll: boolean;',
+        '   scrollDistance: number;',
+        '   scrollDuration: number;',
+        '   html: string;',
+        '   content?: string;',
+        '   lang?: string;',
+        "+  view?: 'normal' | 'diff' | 'hex';",
+        '   grepPattern?: string;',
+        '-  diffLang?: string;',
+        '   grepPattern?: string;',
+        '   isWrite: boolean;',
+        '   isMessage: boolean;',
+        '   isSubagentMessage?: boolean;',
+        '   isReasoning?: boolean;',
+        '   isShell?: boolean;',
+        '   isPermission?: boolean;',
+        '   isQuestion?: boolean;',
+        "   role?: 'user' | 'assistant';",
+        '   toolStatus?: string;',
+        '   toolName?: string;',
+        '   toolKey?: string;',
+        "   toolWrapMode?: 'default' | 'soft';",
+        "   toolGutterMode?: 'default' | 'none' | 'grep-source';",
+        '   toolGutterLines?: string[];',
+        '   messageId?: string;',
+        '   sessionId?: string;',
+        '   messageAgent?: string;',
+        '   messageModel?: string;',
+        '   callId?: string;',
+        '   contentKey?: string;',
+        '   readLineOffset?: number;',
+        '   readLineLimit?: number;',
+        '   zIndex?: number;',
+        '   width?: number;',
+        '   height?: number;',
+        '   shellId?: string;',
+        '   permissionRequest?: { id: string };',
+        '   questionRequest?: { id: string };',
+        ' };',
         ' ',
-        ' interface SidebarSection {',
-        '   id: string;',
-        '   title: string;',
-        '   links: SidebarLink[];',
-        '+  collapsible?: boolean;',
-        '+  defaultOpen?: boolean;',
-        ' }',
+        '@@ -130,7 +132,7 @@',
+        '   const entry = computed(() => props.entry);',
         ' ',
-        ' interface StatItem {',
-        '   label: string;',
-        '   value: number;',
-        '   change: number;',
-        '+  unit?: string;',
-        '+  trend?: number[];',
-        ' }',
+        '-  const showResizer = computed(',
+        '+  const showResizer = computed<boolean>(',
+        '     () =>',
+        '       entry.value.isReasoning ||',
+        '       entry.value.isSubagentMessage ||',
+        '       entry.value.isShell ||',
+        '       entry.value.isPermission ||',
+        '       entry.value.isQuestion,',
+        '   );',
         ' ',
-        "-type SortDirection = 'asc' | 'desc';",
-        "+type SortDirection = 'asc' | 'desc' | 'none';",
+        '@@ -194,8 +196,12 @@',
+        '   const isDiff = computed(() => entry.value.view === \'diff\' && !!entry.value.content);',
         ' ',
-        ' const props = defineProps<{',
-        '   title: string;',
-        '-  logoUrl: string;',
-        '+  logoUrl?: string;',
-        '   navItems: NavItem[];',
-        '   sidebarSections: SidebarSection[];',
-        '   stats: StatItem[];',
-        '   columns: Column[];',
-        '   rows: Record<string, unknown>[];',
-        '   pageSize?: number;',
-        '+  searchable?: boolean;',
-        '+  exportable?: boolean;',
-        '+  theme?: "light" | "dark" | "auto";',
-        ' }>();',
-        ' ',
-        " const emit = defineEmits<{",
-        "-  (event: 'select-nav', item: NavItem): void;",
-        "-  (event: 'select-row', row: Record<string, unknown>): void;",
-        "-  (event: 'search', query: string): void;",
-        "+  (event: 'select-nav', item: NavItem): void;",
-        "+  (event: 'select-row', row: Record<string, unknown>): void;",
-        "+  (event: 'search', query: string): void;",
-        "+  (event: 'export', format: 'csv' | 'json'): void;",
-        "+  (event: 'page-change', page: number): void;",
-        "+  (event: 'sort-change', key: string, dir: SortDirection): void;",
-        ' }>();',
-        ' ',
-        '-const router = useRouter();',
-        "+const router = useRouter();",
-        "+const route = useRoute();",
-        " const activeNavId = ref<string>('');",
-        " const searchQuery = ref('');",
-        '-const isDark = ref(false);',
-        "+const isDark = useLocalStorage('theme-dark', false);",
-        ' const showUserMenu = ref(false);',
-        ' const sidebarOpen = ref(true);',
-        ' const page = ref(1);',
-        " const sortKey = ref('');",
-        " const sortDir = ref<SortDirection>('asc');",
-        "-const currentPath = ref(window.location.pathname);",
-        "+const currentPath = computed(() => route.path);",
-        '+const isLoading = ref(false);',
-        '+const selectedRows = ref<Set<string>>(new Set());',
-        ' ',
-        ' const effectivePageSize = computed(() => props.pageSize ?? 20);',
-        ' const totalPages = computed(() => Math.ceil(props.rows.length / effectivePageSize.value));',
-        '+const hasSelection = computed(() => selectedRows.value.size > 0);',
-        '+const selectionCount = computed(() => selectedRows.value.size);',
-        ' ',
-        ' const userInitials = computed(() => {',
-        "   const name = 'Admin User';",
-        "   return name.split(' ').map((n) => n[0]).join('');",
-        ' });',
-        ' ',
-        '+function exportData(format: "csv" | "json") {',
-        "+  emit('export', format);",
-        '+}',
-        '+',
-        "+watch(() => page.value, (p) => emit('page-change', p));",
-        "+watch(() => [sortKey.value, sortDir.value], () => {",
-        "+  emit('sort-change', sortKey.value, sortDir.value);",
-        '+});',
+        "-  const contentVariant = computed<'code' | 'diff' | 'message'>(() => {",
+        "+  const contentVariant = computed<'code' | 'diff' | 'message' | 'log'>(() => {",
+        '     if (isDiff.value) return \'diff\';',
+        '     if (entry.value.isMessage) return \'message\';',
+        "+    if (entry.value.toolName === 'bash') return 'log';",
+        '     return \'code\';',
+        '   });',
       ].join('\n');
       const editMeta = { diff: editDiff };
       return [
@@ -4667,246 +4434,84 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
       ];
     }
     case 'glob': {
-      const globInput = { pattern: 'app/**/*.{vue,ts}', path: basePath };
+      const globInput = { pattern: '**/*.{vue,ts}', path: basePath };
       const globOutput = [
         `${basePath}/app/App.vue`,
         `${basePath}/app/main.ts`,
-        `${basePath}/app/router.ts`,
-        `${basePath}/app/store.ts`,
         `${basePath}/app/env.d.ts`,
-        `${basePath}/app/components/ToolWindow.vue`,
-        `${basePath}/app/components/MessageViewer.vue`,
-        `${basePath}/app/components/FileViewerWindow.vue`,
-        `${basePath}/app/components/PermissionWindow.vue`,
-        `${basePath}/app/components/QuestionWindow.vue`,
-        `${basePath}/app/components/ShellWindow.vue`,
-        `${basePath}/app/components/SessionPanel.vue`,
-        `${basePath}/app/components/ComposerPanel.vue`,
-        `${basePath}/app/components/StatusBar.vue`,
-        `${basePath}/app/components/ThemeSelector.vue`,
-        `${basePath}/app/components/ModelSelector.vue`,
-        `${basePath}/app/components/AttachmentViewer.vue`,
-        `${basePath}/app/components/CodeBlock.vue`,
-        `${basePath}/app/components/DiffViewer.vue`,
-        `${basePath}/app/components/MarkdownRenderer.vue`,
-        `${basePath}/app/components/SearchPanel.vue`,
-        `${basePath}/app/components/TreeView.vue`,
-        `${basePath}/app/components/TabBar.vue`,
-        `${basePath}/app/components/Breadcrumb.vue`,
-        `${basePath}/app/components/ContextMenu.vue`,
-        `${basePath}/app/components/Modal.vue`,
-        `${basePath}/app/components/Tooltip.vue`,
-        `${basePath}/app/components/Badge.vue`,
-        `${basePath}/app/components/Avatar.vue`,
-        `${basePath}/app/components/Spinner.vue`,
-        `${basePath}/app/components/ProgressBar.vue`,
-        `${basePath}/app/components/Accordion.vue`,
+        `${basePath}/app/components/CodeContent.vue`,
         `${basePath}/app/components/Dropdown.vue`,
-        `${basePath}/app/components/Toast.vue`,
-        `${basePath}/app/components/Sidebar.vue`,
-        `${basePath}/app/components/ResizeHandle.vue`,
-        `${basePath}/app/components/VirtualScroller.vue`,
-        `${basePath}/app/components/LazyImage.vue`,
-        `${basePath}/app/components/ErrorBoundary.vue`,
-        `${basePath}/app/components/icons/IconArrow.vue`,
-        `${basePath}/app/components/icons/IconCheck.vue`,
-        `${basePath}/app/components/icons/IconClose.vue`,
-        `${basePath}/app/components/icons/IconCopy.vue`,
-        `${basePath}/app/components/icons/IconEdit.vue`,
-        `${basePath}/app/components/icons/IconFile.vue`,
-        `${basePath}/app/components/icons/IconFolder.vue`,
-        `${basePath}/app/components/icons/IconGear.vue`,
-        `${basePath}/app/components/icons/IconMenu.vue`,
-        `${basePath}/app/components/icons/IconMoon.vue`,
-        `${basePath}/app/components/icons/IconSearch.vue`,
-        `${basePath}/app/components/icons/IconSun.vue`,
-        `${basePath}/app/components/icons/IconTerminal.vue`,
-        `${basePath}/app/components/icons/IconTrash.vue`,
-        `${basePath}/app/components/icons/IconUser.vue`,
-        `${basePath}/app/composables/useTheme.ts`,
-        `${basePath}/app/composables/useSession.ts`,
-        `${basePath}/app/composables/useKeyboard.ts`,
-        `${basePath}/app/composables/useResize.ts`,
-        `${basePath}/app/composables/useClipboard.ts`,
-        `${basePath}/app/composables/useDebounce.ts`,
-        `${basePath}/app/composables/useEventBus.ts`,
-        `${basePath}/app/composables/useLocalStorage.ts`,
-        `${basePath}/app/composables/useMediaQuery.ts`,
-        `${basePath}/app/composables/useIntersectionObserver.ts`,
-        `${basePath}/app/composables/useVirtualList.ts`,
-        `${basePath}/app/composables/useToast.ts`,
-        `${basePath}/app/composables/useContextMenu.ts`,
-        `${basePath}/app/composables/useModal.ts`,
-        `${basePath}/app/composables/useBreakpoint.ts`,
-        `${basePath}/app/composables/useScrollLock.ts`,
+        `${basePath}/app/components/Dropdown/Item.vue`,
+        `${basePath}/app/components/FileViewerWindow.vue`,
+        `${basePath}/app/components/InputPanel.vue`,
+        `${basePath}/app/components/MessageViewer.vue`,
+        `${basePath}/app/components/OutputPanel.vue`,
+        `${basePath}/app/components/PermissionWindow.vue`,
+        `${basePath}/app/components/ProjectPicker.vue`,
+        `${basePath}/app/components/QuestionWindow.vue`,
+        `${basePath}/app/components/SidePanel.vue`,
+        `${basePath}/app/components/TodoList.vue`,
+        `${basePath}/app/components/TodoPanel.vue`,
+        `${basePath}/app/components/ToolWindow.vue`,
+        `${basePath}/app/components/TopPanel.vue`,
+        `${basePath}/app/components/TreeView.vue`,
+        `${basePath}/app/composables/useOutputPanelFollow.ts`,
         `${basePath}/app/utils/opencode.ts`,
         `${basePath}/app/utils/theme.ts`,
+        `${basePath}/app/utils/useCodeRender.ts`,
         `${basePath}/app/utils/workerRenderer.ts`,
-        `${basePath}/app/utils/markdown.ts`,
-        `${basePath}/app/utils/clipboard.ts`,
-        `${basePath}/app/utils/debounce.ts`,
-        `${basePath}/app/utils/storage.ts`,
-        `${basePath}/app/utils/keybindings.ts`,
-        `${basePath}/app/utils/router.ts`,
-        `${basePath}/app/utils/logger.ts`,
-        `${basePath}/app/utils/api.ts`,
-        `${basePath}/app/utils/websocket.ts`,
-        `${basePath}/app/utils/eventBus.ts`,
-        `${basePath}/app/utils/i18n.ts`,
-        `${basePath}/app/utils/validation.ts`,
-        `${basePath}/app/utils/formatter.ts`,
-        `${basePath}/app/utils/diff.ts`,
-        `${basePath}/app/utils/parser.ts`,
-        `${basePath}/app/utils/color.ts`,
-        `${basePath}/app/utils/date.ts`,
-        `${basePath}/app/utils/string.ts`,
-        `${basePath}/app/utils/array.ts`,
-        `${basePath}/app/utils/object.ts`,
-        `${basePath}/app/utils/url.ts`,
-        `${basePath}/app/utils/mime.ts`,
-        `${basePath}/app/utils/crypto.ts`,
-        `${basePath}/app/utils/platform.ts`,
-        `${basePath}/app/utils/performance.ts`,
-        `${basePath}/app/types/session.ts`,
-        `${basePath}/app/types/message.ts`,
-        `${basePath}/app/types/tool.ts`,
-        `${basePath}/app/types/theme.ts`,
-        `${basePath}/app/types/config.ts`,
+        `${basePath}/app/workers/render-worker.ts`,
+        `${basePath}/server/dev.ts`,
+        `${basePath}/server/proxy.ts`,
+        `${basePath}/vite.config.ts`,
       ].join('\n');
       return [
-        { status: 'running', input: globInput, output: globOutput },
+        { status: 'running', input: globInput, output: '' },
         { status: 'completed', delayMs: 360, input: globInput, output: globOutput },
       ];
     }
     case 'grep': {
-      const grepInput = { pattern: 'defineProps|defineEmits|withDefaults', path: `${basePath}/app`, include: '*.vue' };
+      const grepInput = { pattern: 'useCodeRender|renderWorkerHtml|CodeRenderParams', path: `${basePath}/app`, include: '*.{vue,ts}' };
       const grepOutput = [
-        `Found 94 matches in 35 files`,
+        `Found 18 matches in 7 files`,
         ``,
-        `${basePath}/app/App.vue:`,
-        `  Line 42:  const props = defineProps<{`,
-        `  Line 58:  const emit = defineEmits<{`,
+        `${basePath}/app/utils/useCodeRender.ts:`,
+        `  Line 4:   export type CodeRenderParams = {`,
+        `  Line 22:  export function useCodeRender(`,
+        `  Line 23:    params: WatchSource<CodeRenderParams | null>,`,
+        `  Line 38:    renderWorkerHtml({`,
+        ``,
+        `${basePath}/app/utils/workerRenderer.ts:`,
+        `  Line 47:  export function renderWorkerHtml(payload: RenderRequest) {`,
+        `  Line 49:    return new Promise<string>((resolve, reject) => {`,
         ``,
         `${basePath}/app/components/ToolWindow.vue:`,
-        `  Line 117: const props = defineProps<{`,
-        `  Line 135: const emit = defineEmits<{`,
-        `  Line 142: withDefaults(defineProps<ToolWindowProps>(), {`,
-        ``,
-        `${basePath}/app/components/MessageViewer.vue:`,
-        `  Line 20:  const props = defineProps<{`,
-        `  Line 31:  const emit = defineEmits<{`,
-        `  Line 38:  withDefaults(defineProps<MessageViewerProps>(), {`,
+        `  Line 61:  import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';`,
+        `  Line 213: const renderParams = computed<CodeRenderParams | null>(() => {`,
+        `  Line 247: const { html: renderedHtml } = useCodeRender(renderParams);`,
         ``,
         `${basePath}/app/components/FileViewerWindow.vue:`,
-        `  Line 53:  const props = defineProps<{`,
-        `  Line 67:  const emit = defineEmits<{`,
+        `  Line 41:  import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';`,
+        `  Line 95:  const renderParams = computed<CodeRenderParams | null>(() => {`,
+        `  Line 130: const { html: renderedHtml } = useCodeRender(renderParams);`,
         ``,
-        `${basePath}/app/components/PermissionWindow.vue:`,
-        `  Line 109: const props = defineProps<{`,
-        `  Line 118: const emit = defineEmits<{`,
+        `${basePath}/app/App.vue:`,
+        `  Line 2098: function handleToolWindowRendered(entry: FileReadEntry) {`,
+        `  Line 2107: function scheduleToolScrollAnimation(toolKey: string) {`,
+        `  Line 5011: function injectSyntheticEvent(part: Record<string, unknown>) {`,
+        `  Line 8888: function upsertToolEntry(entry: {`,
         ``,
-        `${basePath}/app/components/QuestionWindow.vue:`,
-        `  Line 112: const props = defineProps<{`,
-        `  Line 124: const emit = defineEmits<{`,
+        `${basePath}/app/workers/render-worker.ts:`,
+        `  Line 601: async function renderCodeHtml(request: RenderRequest) {`,
+        `  Line 630: function renderRequest(request: RenderRequest): Promise<string> {`,
+        `  Line 667: self.onmessage = (event: MessageEvent<RenderRequest>) => {`,
         ``,
-        `${basePath}/app/components/ShellWindow.vue:`,
-        `  Line 15:  const props = defineProps<{`,
-        `  Line 22:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/SessionPanel.vue:`,
-        `  Line 34:  const props = defineProps<{`,
-        `  Line 48:  const emit = defineEmits<{`,
-        `  Line 52:  withDefaults(defineProps<SessionPanelProps>(), {`,
-        ``,
-        `${basePath}/app/components/ComposerPanel.vue:`,
-        `  Line 28:  const props = defineProps<{`,
-        `  Line 41:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/StatusBar.vue:`,
-        `  Line 12:  const props = defineProps<{`,
-        `  Line 18:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/ThemeSelector.vue:`,
-        `  Line 8:   const props = defineProps<{`,
-        `  Line 14:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/ModelSelector.vue:`,
-        `  Line 9:   const props = defineProps<{`,
-        `  Line 16:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/AttachmentViewer.vue:`,
-        `  Line 22:  const props = defineProps<{`,
-        `  Line 30:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/CodeBlock.vue:`,
-        `  Line 18:  const props = defineProps<{`,
-        `  Line 28:  withDefaults(defineProps<CodeBlockProps>(), {`,
-        ``,
-        `${basePath}/app/components/DiffViewer.vue:`,
-        `  Line 25:  const props = defineProps<{`,
-        `  Line 36:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/MarkdownRenderer.vue:`,
-        `  Line 14:  const props = defineProps<{`,
-        `  Line 21:  withDefaults(defineProps<MarkdownProps>(), {`,
-        ``,
-        `${basePath}/app/components/SearchPanel.vue:`,
-        `  Line 19:  const props = defineProps<{`,
-        `  Line 27:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/TreeView.vue:`,
-        `  Line 11:  const props = defineProps<{`,
-        `  Line 20:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/TabBar.vue:`,
-        `  Line 8:   const props = defineProps<{`,
-        `  Line 15:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/Breadcrumb.vue:`,
-        `  Line 6:   const props = defineProps<{`,
-        `  Line 11:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/ContextMenu.vue:`,
-        `  Line 14:  const props = defineProps<{`,
-        `  Line 25:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/Modal.vue:`,
-        `  Line 10:  const props = defineProps<{`,
-        `  Line 18:  const emit = defineEmits<{`,
-        `  Line 22:  withDefaults(defineProps<ModalProps>(), {`,
-        ``,
-        `${basePath}/app/components/Tooltip.vue:`,
-        `  Line 7:   const props = defineProps<{`,
-        `  Line 13:  withDefaults(defineProps<TooltipProps>(), {`,
-        ``,
-        `${basePath}/app/components/VirtualScroller.vue:`,
-        `  Line 16:  const props = defineProps<{`,
-        `  Line 28:  const emit = defineEmits<{`,
-        `  Line 32:  withDefaults(defineProps<VirtualScrollerProps>(), {`,
-        ``,
-        `${basePath}/app/components/Dropdown.vue:`,
-        `  Line 12:  const props = defineProps<{`,
-        `  Line 22:  const emit = defineEmits<{`,
-        `  Line 26:  withDefaults(defineProps<DropdownProps>(), {`,
-        ``,
-        `${basePath}/app/components/Toast.vue:`,
-        `  Line 9:   const props = defineProps<{`,
-        `  Line 16:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/Sidebar.vue:`,
-        `  Line 11:  const props = defineProps<{`,
-        `  Line 19:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/ResizeHandle.vue:`,
-        `  Line 5:   const props = defineProps<{`,
-        `  Line 10:  const emit = defineEmits<{`,
-        ``,
-        `${basePath}/app/components/ErrorBoundary.vue:`,
-        `  Line 8:   const props = defineProps<{`,
-        `  Line 14:  withDefaults(defineProps<ErrorBoundaryProps>(), {`,
+        `${basePath}/app/main.ts:`,
+        `  Line 3:   import App from './App.vue';`,
+        `  Line 5:   createApp(App).mount('#app');`,
       ].join('\n');
       return [
-        { status: 'running', input: grepInput, output: grepOutput },
+        { status: 'running', input: grepInput, output: '' },
         { status: 'completed', delayMs: 380, input: grepInput, output: grepOutput },
       ];
     }
@@ -4914,157 +4519,44 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
       const listInput = { path: basePath };
       const listOutput = [
         '.',
-        '├── .github',
-        '│   └── workflows',
-        '│       ├── ci.yml',
-        '│       └── deploy.yml',
-        '├── .gitignore',
-        '├── .eslintrc.cjs',
-        '├── .prettierrc',
-        '├── Dockerfile',
-        '├── README.md',
-        '├── CHANGELOG.md',
-        '├── docker-compose.yml',
         '├── package.json',
-        '├── pnpm-lock.yaml',
-        '├── pnpm-workspace.yaml',
-        '├── postcss.config.cjs',
-        '├── tailwind.config.ts',
         '├── tsconfig.json',
         '├── vite.config.ts',
-        '├── vitest.config.ts',
-        '├── playwright.config.ts',
+        '├── index.html',
         '├── app',
         '│   ├── App.vue',
         '│   ├── main.ts',
-        '│   ├── router.ts',
-        '│   ├── store.ts',
-        '│   ├── env.d.ts',
         '│   ├── components',
-        '│   │   ├── ToolWindow.vue',
-        '│   │   ├── MessageViewer.vue',
-        '│   │   ├── FileViewerWindow.vue',
-        '│   │   ├── PermissionWindow.vue',
-        '│   │   ├── QuestionWindow.vue',
-        '│   │   ├── ShellWindow.vue',
-        '│   │   ├── SessionPanel.vue',
-        '│   │   ├── ComposerPanel.vue',
-        '│   │   ├── StatusBar.vue',
-        '│   │   ├── ThemeSelector.vue',
-        '│   │   ├── ModelSelector.vue',
-        '│   │   ├── AttachmentViewer.vue',
-        '│   │   ├── CodeBlock.vue',
-        '│   │   ├── DiffViewer.vue',
-        '│   │   ├── MarkdownRenderer.vue',
-        '│   │   ├── SearchPanel.vue',
-        '│   │   ├── TreeView.vue',
-        '│   │   ├── TabBar.vue',
-        '│   │   ├── Breadcrumb.vue',
-        '│   │   ├── ContextMenu.vue',
-        '│   │   ├── Modal.vue',
-        '│   │   ├── Tooltip.vue',
-        '│   │   ├── Badge.vue',
-        '│   │   ├── Avatar.vue',
-        '│   │   ├── Spinner.vue',
-        '│   │   ├── ProgressBar.vue',
-        '│   │   ├── Accordion.vue',
+        '│   │   ├── CodeContent.vue',
         '│   │   ├── Dropdown.vue',
-        '│   │   ├── Toast.vue',
-        '│   │   ├── Sidebar.vue',
-        '│   │   ├── ResizeHandle.vue',
-        '│   │   ├── VirtualScroller.vue',
-        '│   │   ├── LazyImage.vue',
-        '│   │   ├── ErrorBoundary.vue',
-        '│   │   └── icons',
-        '│   │       ├── IconArrow.vue',
-        '│   │       ├── IconCheck.vue',
-        '│   │       ├── IconClose.vue',
-        '│   │       ├── IconCopy.vue',
-        '│   │       ├── IconEdit.vue',
-        '│   │       ├── IconFile.vue',
-        '│   │       ├── IconFolder.vue',
-        '│   │       ├── IconGear.vue',
-        '│   │       ├── IconMenu.vue',
-        '│   │       ├── IconMoon.vue',
-        '│   │       ├── IconSearch.vue',
-        '│   │       ├── IconSun.vue',
-        '│   │       ├── IconTerminal.vue',
-        '│   │       ├── IconTrash.vue',
-        '│   │       └── IconUser.vue',
+        '│   │   ├── Dropdown',
+        '│   │   │   └── Item.vue',
+        '│   │   ├── FileViewerWindow.vue',
+        '│   │   ├── InputPanel.vue',
+        '│   │   ├── MessageViewer.vue',
+        '│   │   ├── OutputPanel.vue',
+        '│   │   ├── PermissionWindow.vue',
+        '│   │   ├── ProjectPicker.vue',
+        '│   │   ├── QuestionWindow.vue',
+        '│   │   ├── SidePanel.vue',
+        '│   │   ├── TodoList.vue',
+        '│   │   ├── TodoPanel.vue',
+        '│   │   ├── ToolWindow.vue',
+        '│   │   ├── TopPanel.vue',
+        '│   │   └── TreeView.vue',
         '│   ├── composables',
-        '│   │   ├── useTheme.ts',
-        '│   │   ├── useSession.ts',
-        '│   │   ├── useKeyboard.ts',
-        '│   │   ├── useResize.ts',
-        '│   │   ├── useClipboard.ts',
-        '│   │   ├── useDebounce.ts',
-        '│   │   ├── useEventBus.ts',
-        '│   │   ├── useLocalStorage.ts',
-        '│   │   ├── useMediaQuery.ts',
-        '│   │   └── useIntersectionObserver.ts',
+        '│   │   └── useOutputPanelFollow.ts',
         '│   ├── utils',
         '│   │   ├── opencode.ts',
         '│   │   ├── theme.ts',
-        '│   │   ├── workerRenderer.ts',
-        '│   │   ├── markdown.ts',
-        '│   │   ├── clipboard.ts',
-        '│   │   ├── debounce.ts',
-        '│   │   ├── storage.ts',
-        '│   │   ├── keybindings.ts',
-        '│   │   ├── router.ts',
-        '│   │   └── logger.ts',
-        '│   ├── styles',
-        '│   │   ├── variables.css',
-        '│   │   ├── reset.css',
-        '│   │   ├── layout.css',
-        '│   │   ├── components.css',
-        '│   │   ├── animations.css',
-        '│   │   ├── typography.css',
-        '│   │   └── dark-mode.css',
-        '│   └── types',
-        '│       ├── session.ts',
-        '│       ├── message.ts',
-        '│       ├── tool.ts',
-        '│       ├── theme.ts',
-        '│       └── config.ts',
+        '│   │   ├── useCodeRender.ts',
+        '│   │   └── workerRenderer.ts',
+        '│   └── workers',
+        '│       └── render-worker.ts',
         '├── server',
-        '│   ├── main.ts',
-        '│   ├── index.ts',
-        '│   ├── dev.ts',
-        '│   ├── routes',
-        '│   │   ├── api.ts',
-        '│   │   ├── auth.ts',
-        '│   │   └── sessions.ts',
-        '│   ├── middleware',
-        '│   │   ├── cors.ts',
-        '│   │   ├── rateLimit.ts',
-        '│   │   └── auth.ts',
-        '│   └── db',
-        '│       ├── schema.ts',
-        '│       ├── migrations',
-        '│       │   ├── 001_init.sql',
-        '│       │   └── 002_sessions.sql',
-        '│       └── seeds',
-        '│           └── dev.ts',
-        '├── tests',
-        '│   ├── unit',
-        '│   │   ├── ToolWindow.spec.ts',
-        '│   │   ├── MessageViewer.spec.ts',
-        '│   │   ├── FileViewerWindow.spec.ts',
-        '│   │   ├── ComposerPanel.spec.ts',
-        '│   │   └── utils',
-        '│   │       ├── opencode.spec.ts',
-        '│   │       └── markdown.spec.ts',
-        '│   └── e2e',
-        '│       ├── session-flow.spec.ts',
-        '│       ├── tool-execution.spec.ts',
-        '│       └── theme-switching.spec.ts',
-        '├── docs',
-        '│   ├── api.md',
-        '│   ├── architecture.md',
-        '│   └── contributing.md',
-        '└── logs',
-        '    └── tool.log',
+        '│   └── dev.ts',
+        '└── dist',
+        '    └── ...',
       ].join('\n');
       return [
         { status: 'running', input: listInput, output: listOutput },
@@ -5073,223 +4565,113 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
     }
     case 'multiedit': {
       const multiEditInput = {
-        filePath: sampleFile,
+        filePath: `${basePath.replace(/\/+$/, '')}/app/components/FileViewerWindow.vue`,
         edits: [
-          { oldString: "const selected = ref<string>('');", newString: "const activeId = ref<string>('');" },
-          { oldString: 'selected.value = item.id;', newString: 'activeId.value = item.id;' },
+          { oldString: "import { computed, ref } from 'vue';", newString: "import { computed, ref, watch } from 'vue';" },
+          { oldString: 'const entry = computed(() => props.entry);', newString: 'const entry = computed(() => props.entry);\nconst isActive = ref(false);' },
         ],
       };
       const multiDiff1 = [
-        'diff --git a/src/components/App.vue b/src/components/App.vue',
-        '--- a/src/components/App.vue',
-        '+++ b/src/components/App.vue',
-        '@@ -1,55 +1,70 @@',
+        'diff --git a/app/components/FileViewerWindow.vue b/app/components/FileViewerWindow.vue',
+        '--- a/app/components/FileViewerWindow.vue',
+        '+++ b/app/components/FileViewerWindow.vue',
+        '@@ -1,36 +1,36 @@',
         ' <template>',
-        '-  <div class="dashboard-container">',
-        '+  <div class="dashboard-container" :class="containerClass">',
-        '     <header class="dashboard-header">',
-        '       <div class="header-left">',
-        '-        <img :src="logoUrl" alt="Logo" class="logo" />',
-        '-        <h1 class="app-title">{{ title }}</h1>',
-        '+        <img v-if="logoUrl" :src="logoUrl" alt="Logo" class="logo" />',
-        '+        <component :is="titleTag" class="app-title">',
-        '+          {{ title }}',
-        '+          <span v-if="subtitle" class="app-subtitle">{{ subtitle }}</span>',
-        '+        </component>',
-        '       </div>',
-        '       <nav class="header-nav">',
-        '         <button',
-        '           v-for="item in navItems"',
-        '           :key="item.id"',
-        '-          :class="[\'nav-btn\', { active: item.id === activeNavId }]"',
-        '+          :class="navBtnClass(item)"',
-        '+          :disabled="item.disabled"',
-        '+          :aria-current="item.id === activeNavId ? \'page\' : undefined"',
-        '           @click="selectNav(item)"',
-        '         >',
-        '-          <span class="nav-icon">{{ item.icon }}</span>',
-        '+          <span v-if="item.icon" class="nav-icon">{{ item.icon }}</span>',
-        '           <span class="nav-label">{{ item.label }}</span>',
-        '+          <span v-if="item.badge" class="nav-badge">{{ item.badge }}</span>',
-        '         </button>',
-        '       </nav>',
-        '       <div class="header-right">',
-        '         <input',
-        '           v-model="searchQuery"',
-        '           type="text"',
-        '-          placeholder="Search..."',
-        '+          :placeholder="searchPlaceholder"',
-        '           class="search-input"',
-        '+          :aria-label="searchPlaceholder"',
-        '           @input="debouncedSearch"',
-        '+          @keydown.escape="clearSearch"',
-        '         />',
-        '-        <button class="icon-btn" @click="toggleTheme">',
-        "+        <button class=\"icon-btn\" :title=\"isDark ? 'Light mode' : 'Dark mode'\" @click=\"toggleTheme\">",
-        "          {{ isDark ? '☀️' : '🌙' }}",
-        '         </button>',
-        '-        <div class="avatar" @click="showUserMenu = !showUserMenu">',
-        '+        <button',
-        '+          class="avatar"',
-        '+          :aria-expanded="showUserMenu"',
-        '+          aria-haspopup="true"',
-        '+          @click="showUserMenu = !showUserMenu"',
-        '+        >',
-        '           {{ userInitials }}',
-        '-        </div>',
-        '+        </button>',
-        '+        <Transition name="fade">',
-        '+          <div v-if="showUserMenu" class="user-menu" role="menu">',
-        '+            <button class="menu-item" role="menuitem" @click="openSettings">Settings</button>',
-        '+            <button class="menu-item" role="menuitem" @click="openProfile">Profile</button>',
-        '+            <hr class="menu-divider" />',
-        '+            <button class="menu-item danger" role="menuitem" @click="logout">Sign out</button>',
-        '+          </div>',
-        '+        </Transition>',
-        '       </div>',
-        '     </header>',
+        '   <div class="file-viewer" :style="style" @pointerdown.capture="onFocus">',
+        '     <div class="viewer-titlebar" @pointerdown="onDragStart">',
+        '       <span class="viewer-title">{{ title }}</span>',
+        '       <button',
+        '         type="button"',
+        '         class="viewer-close"',
+        '         aria-label="Close file viewer"',
+        '         @pointerdown.stop',
+        '         @click.stop="onClose"',
+        '       >',
+        '         \u00d7',
+        '       </button>',
+        '     </div>',
+        '     <div v-if="entry.diffTabs && entry.diffTabs.length > 1" class="viewer-tabs">',
+        '       <button',
+        '         v-for="(tab, i) in entry.diffTabs"',
+        '         :key="tab.file"',
+        '         type="button"',
+        '         class="viewer-tab"',
+        '         :class="{ active: i === activeTabIndex }"',
+        '         @click="activeTabIndex = i"',
+        '       >',
+        '         {{ basename(tab.file) }}',
+        '       </button>',
+        '     </div>',
+        '     <div class="viewer-body" @scroll="onFloatingScroll" @wheel="onFloatingWheel">',
+        '-      <CodeContent',
+        '+      <div v-if="showLoading" class="viewer-loading">Loading\u2026</div>',
+        '+      <CodeContent',
+        '+        v-else',
+        '         :html="renderedHtml || entry.html"',
+        "         :variant=\"entry.isDiff ? 'diff' : entry.isBinary ? 'binary' : 'code'\"",
+        "         :gutter-mode=\"entry.isDiff ? 'double' : 'single'\"",
+        '       />',
+        '     </div>',
+        '   </div>',
+        ' </template>',
         ' ',
-        '-    <aside v-if="sidebarOpen" class="sidebar">',
-        '+    <Transition name="slide">',
-        '+    <aside v-if="sidebarOpen" class="sidebar" role="navigation" :aria-label="sidebarLabel">',
-        '+      <div class="sidebar-header">',
-        '+        <h2 class="sidebar-title">{{ sidebarLabel }}</h2>',
-        '+        <button class="sidebar-close" @click="sidebarOpen = false" aria-label="Close sidebar">×</button>',
-        '+      </div>',
-        '       <ul class="sidebar-menu">',
-        '         <li v-for="section in sidebarSections" :key="section.id">',
-        '-          <h3 class="section-title">{{ section.title }}</h3>',
-        '-          <ul>',
-        '+          <details :open="section.defaultOpen !== false" class="section-group">',
-        '+            <summary class="section-title">{{ section.title }}</summary>',
-        '+            <ul class="section-links">',
-        '             <li',
-        '               v-for="link in section.links"',
-        '               :key="link.href"',
-        '               :class="{ active: currentPath === link.href }"',
-        '             >',
-        '-              <a :href="link.href">{{ link.label }}</a>',
-        '+              <a :href="link.href" :target="link.external ? \'_blank\' : undefined">',
-        '+                <span v-if="link.icon" class="link-icon">{{ link.icon }}</span>',
-        '+                {{ link.label }}',
-        '+              </a>',
-        '             </li>',
-        '-          </ul>',
-        '+            </ul>',
-        '+          </details>',
-        '         </li>',
-        '       </ul>',
-        '     </aside>',
-        '+    </Transition>',
+        ' <script setup lang="ts">',
+        "-import { computed, ref } from 'vue';",
+        "+import { computed, ref, watch } from 'vue';",
+        " import CodeContent from './CodeContent.vue';",
+        " import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';",
+        ' ',
       ].join('\n');
       const multiDiff2 = [
-        'diff --git a/src/components/App.vue b/src/components/App.vue',
-        '--- a/src/components/App.vue',
-        '+++ b/src/components/App.vue',
-        '@@ -85,55 +100,75 @@',
-        " import { ref, computed, watch, onMounted, onUnmounted } from 'vue';",
-        "-import { useDebounceFn } from '@vueuse/core';",
-        "+import { useDebounceFn, useLocalStorage, onClickOutside } from '@vueuse/core';",
-        "+import { useRouter, useRoute } from 'vue-router';",
-        ' ',
-        ' interface NavItem {',
-        '   id: string;',
-        '   label: string;',
-        '-  icon: string;',
-        '+  icon?: string;',
-        '   active?: boolean;',
-        '+  badge?: number;',
-        '+  disabled?: boolean;',
-        ' }',
-        ' ',
-        ' interface SidebarLink {',
-        '   href: string;',
-        '   label: string;',
-        '+  icon?: string;',
-        '+  external?: boolean;',
-        ' }',
-        ' ',
-        ' interface SidebarSection {',
-        '   id: string;',
-        '   title: string;',
-        '   links: SidebarLink[];',
-        '+  collapsible?: boolean;',
-        '+  defaultOpen?: boolean;',
-        ' }',
-        ' ',
-        ' interface StatItem {',
-        '   label: string;',
-        '   value: number;',
-        '   change: number;',
-        '+  unit?: string;',
-        '+  trend?: number[];',
-        ' }',
-        ' ',
-        "-type SortDirection = 'asc' | 'desc';",
-        "+type SortDirection = 'asc' | 'desc' | 'none';",
-        ' ',
+        'diff --git a/app/components/FileViewerWindow.vue b/app/components/FileViewerWindow.vue',
+        '--- a/app/components/FileViewerWindow.vue',
+        '+++ b/app/components/FileViewerWindow.vue',
+        '@@ -62,6 +62,7 @@',
         ' const props = defineProps<{',
+        '   entry: ViewerEntry;',
         '   title: string;',
-        '-  logoUrl: string;',
-        '+  logoUrl?: string;',
-        '+  subtitle?: string;',
-        '+  titleTag?: "h1" | "h2" | "h3";',
-        '   navItems: NavItem[];',
-        '   sidebarSections: SidebarSection[];',
-        '+  sidebarLabel?: string;',
-        '   stats: StatItem[];',
-        '   columns: Column[];',
-        '   rows: Record<string, unknown>[];',
-        '   pageSize?: number;',
-        '+  searchable?: boolean;',
-        '+  searchPlaceholder?: string;',
-        '+  exportable?: boolean;',
-        '+  theme?: "light" | "dark" | "auto";',
+        '   onFocusEntry: (entry: ViewerEntry, event: PointerEvent) => void;',
+        '   onDragEntry: (entry: ViewerEntry, event: PointerEvent) => void;',
+        '   onResizeEntry: (entry: ViewerEntry, event: PointerEvent) => void;',
+        '   onFloatingScrollEntry: (entry: ViewerEntry, event: Event) => void;',
+        '   onFloatingWheelEntry: (entry: ViewerEntry, event: WheelEvent) => void;',
+        '   onCloseEntry: (entry: ViewerEntry) => void;',
+        '   theme: string;',
         ' }>();',
         ' ',
-        ' const emit = defineEmits<{',
-        "-  (event: 'select-nav', item: NavItem): void;",
-        "-  (event: 'select-row', row: Record<string, unknown>): void;",
-        "-  (event: 'search', query: string): void;",
-        "+  (event: 'select-nav', item: NavItem): void;",
-        "+  (event: 'select-row', row: Record<string, unknown>): void;",
-        "+  (event: 'search', query: string): void;",
-        "+  (event: 'export', format: 'csv' | 'json'): void;",
-        "+  (event: 'page-change', page: number): void;",
-        "+  (event: 'sort-change', key: string, dir: SortDirection): void;",
-        "+  (event: 'logout'): void;",
-        ' }>();',
+        ' const entry = computed(() => props.entry);',
+        '+const isActive = ref(false);',
         ' ',
-        '-const router = useRouter();',
-        "+const router = useRouter();",
-        "+const route = useRoute();",
-        " const activeNavId = ref<string>('');",
-        " const searchQuery = ref('');",
-        '-const isDark = ref(false);',
-        "+const isDark = useLocalStorage('theme-dark', false);",
-        ' const showUserMenu = ref(false);',
-        ' const sidebarOpen = ref(true);',
-        ' const page = ref(1);',
-        " const sortKey = ref('');",
-        " const sortDir = ref<SortDirection>('asc');",
-        "-const currentPath = ref(window.location.pathname);",
-        "+const currentPath = computed(() => route.path);",
-        '+const userMenuRef = ref<HTMLElement>();',
+        ' const activeTabIndex = ref(0);',
         ' ',
-        '+onClickOutside(userMenuRef, () => { showUserMenu.value = false; });',
-        '+',
-        "+function navBtnClass(item: NavItem) {",
-        "+  return ['nav-btn', { active: item.id === activeNavId.value, disabled: item.disabled }];",
-        '+}',
-        '+',
-        "+function clearSearch() {",
-        "+  searchQuery.value = '';",
-        "+  emit('search', '');",
-        '+}',
-        '+',
-        "+function openSettings() { showUserMenu.value = false; router.push('/settings'); }",
-        "+function openProfile() { showUserMenu.value = false; router.push('/profile'); }",
-        "+function logout() { showUserMenu.value = false; emit('logout'); }",
+        ' const activeDiffCode = computed(() => {',
+        '   const tabs = props.entry.diffTabs;',
+        "   if (!tabs || tabs.length === 0) return props.entry.diffCode ?? '';",
+        "   return tabs[activeTabIndex.value]?.before ?? '';",
+        ' });',
+        ' ',
+        ' const activeDiffAfter = computed(() => {',
+        '   const tabs = props.entry.diffTabs;',
+        '   if (!tabs || tabs.length === 0) return props.entry.diffAfter;',
+        '   return tabs[activeTabIndex.value]?.after;',
+        ' });',
+        ' ',
+        ' const activeDiffLang = computed(() => {',
+        '   const tabs = props.entry.diffTabs;',
+        "   if (!tabs || tabs.length === 0) return props.entry.lang ?? 'text';",
+        "   const file = tabs[activeTabIndex.value]?.file ?? '';",
+        "   const ext = file.split('.').pop() ?? '';",
+        '   const langMap: Record<string, string> = {',
+        "     ts: 'typescript', tsx: 'tsx', js: 'javascript', jsx: 'jsx',",
+        "     vue: 'vue', css: 'css', scss: 'scss', html: 'html',",
+        "     json: 'json', md: 'markdown', py: 'python', rs: 'rust',",
+        '   };',
+        "   return langMap[ext] ?? 'text';",
+        ' });',
+        ' ',
+        '+watch(isActive, (val) => {',
+        "+  if (val) console.log('FileViewerWindow activated');",
+        '+});',
       ].join('\n');
       const multiMeta = { results: [{ diff: multiDiff1 }, { diff: multiDiff2 }] };
       return [
@@ -5317,109 +4699,48 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
       return [
         {
           status: 'running',
-          input: { filePath: sampleFile, offset: 0, limit: 80 },
+          input: { filePath: sampleFile, offset: 0, limit: 120 },
           output: debugReadOutput,
         },
         {
           status: 'completed',
           delayMs: 380,
-          input: { filePath: sampleFile, offset: 0, limit: 80 },
+          input: { filePath: sampleFile, offset: 0, limit: 120 },
           output: debugReadOutput,
         },
       ];
     case 'task': {
-      const taskInput = { description: 'Analyze component dependencies' };
+      const taskInput = { description: 'Analyze rendering pipeline and worker usage' };
       const taskOutput = [
         'task_id: task_debug_1',
         '<task_result>',
-        '## Component Dependency Analysis',
+        '## Rendering Pipeline Analysis',
         '',
-        '### Overview',
-        'Scanned 35 Vue components across 4 directories.',
-        'Identified 12 shared render paths, 5 high-churn style hotspots, and 3 circular dependency risks.',
+        '### Architecture',
+        'The app uses a Web Worker (`render-worker.ts`) for syntax highlighting via Shiki.',
+        'The pipeline is: `useCodeRender` composable → `renderWorkerHtml` → Worker → HTML result.',
         '',
-        '### Dependency Graph Summary',
+        '### Component Usage',
         '',
-        '| Component | Direct Deps | Transitive Deps | Shared Styles | Risk Level |',
-        '|-----------|-------------|-----------------|---------------|------------|',
-        '| App.vue | 8 | 24 | 6 | Low |',
-        '| ToolWindow.vue | 5 | 14 | 4 | Medium |',
-        '| MessageViewer.vue | 6 | 18 | 5 | Medium |',
-        '| FileViewerWindow.vue | 4 | 11 | 3 | Low |',
-        '| ComposerPanel.vue | 7 | 21 | 5 | High |',
-        '| SessionPanel.vue | 4 | 12 | 3 | Low |',
-        '| CodeBlock.vue | 3 | 8 | 2 | Low |',
-        '| DiffViewer.vue | 4 | 10 | 3 | Medium |',
-        '| MarkdownRenderer.vue | 5 | 15 | 4 | Medium |',
-        '| SearchPanel.vue | 3 | 9 | 2 | Low |',
-        '| VirtualScroller.vue | 2 | 5 | 1 | Low |',
-        '| TreeView.vue | 3 | 7 | 2 | Low |',
-        '| Modal.vue | 2 | 4 | 2 | Low |',
-        '| Dropdown.vue | 3 | 6 | 2 | Low |',
-        '| ContextMenu.vue | 3 | 7 | 2 | Low |',
+        '| Component | Render Method | Worker | Notes |',
+        '|-----------|--------------|--------|-------|',
+        '| ToolWindow.vue | useCodeRender | Yes | Ephemeral, auto-expire, scroll animation |',
+        '| FileViewerWindow.vue | useCodeRender | Yes | Persistent, user-opened, Loading state |',
+        '| OutputPanel.vue | MessageViewer (v-for) | No | Static HTML from SSE events |',
+        '| CodeContent.vue | v-html (display only) | No | Pure CSS, no logic |',
         '',
-        '### High-Churn Style Hotspots',
+        '### Key Composable: `useCodeRender`',
         '',
-        '1. **variables.css** — Modified in 78% of recent PRs, shared by 28 components',
-        '2. **components.css** — Contains 340+ selectors, many unused after refactors',
-        '3. **layout.css** — Conflicting grid/flex patterns across 3 layout approaches',
-        '4. **dark-mode.css** — Duplicates 60% of variables.css with dark overrides',
-        '5. **animations.css** — 12 keyframe defs, only 4 actively used',
-        '',
-        '### Circular Dependency Risks',
-        '',
-        '1. `ComposerPanel → SessionPanel → ComposerPanel` (via event bus)',
-        '2. `Modal → ContextMenu → Modal` (via slot injection)',
-        '3. `TreeView → Accordion → TreeView` (recursive render)',
-        '',
-        '### Shared Render Paths',
-        '',
-        '- `App → MessageViewer → CodeBlock → MarkdownRenderer` (hot path, ~40% of renders)',
-        '- `App → ToolWindow → DiffViewer → CodeBlock` (tool execution path)',
-        '- `App → SessionPanel → MessageViewer` (session switch path)',
-        '- `App → ComposerPanel → AttachmentViewer` (compose path)',
-        '- `SearchPanel → TreeView → CodeBlock` (search results path)',
-        '- `Modal → Dropdown → VirtualScroller` (overlay path)',
+        '- Watches `CodeRenderParams` source reactively',
+        '- Sends render requests to Worker with unique IDs',
+        '- Cancels stale requests via incrementing `requestId`',
+        '- Returns `{ html: Ref<string>, error: Ref<string> }`',
         '',
         '### Recommendations',
         '',
-        '1. **Extract shared window-surface tokens** into a dedicated composable',
-        '   - Estimated reduction: ~180 lines of duplicated style logic',
-        '   - Affected components: ToolWindow, FileViewerWindow, PermissionWindow, QuestionWindow, ShellWindow',
-        '',
-        '2. **Consolidate CSS architecture** into CSS custom properties',
-        '   - Replace scattered `dark-mode.css` overrides with `:root` / `[data-theme="dark"]`',
-        '   - Remove unused selectors in components.css (estimated 40% dead code)',
-        '',
-        '3. **Break circular dependencies** using provide/inject pattern',
-        '   - ComposerPanel ↔ SessionPanel: Use shared store instead of direct imports',
-        '   - Modal ↔ ContextMenu: Lift coordination to parent scope',
-        '',
-        '4. **Optimize hot render path** with strategic memoization',
-        '   - Add `v-memo` to MessageViewer list items',
-        '   - Use `shallowRef` for CodeBlock highlight cache',
-        '   - Lazy-load MarkdownRenderer via `defineAsyncComponent`',
-        '',
-        '5. **Tree-shake unused composables**',
-        '   - `useScrollLock` — imported but never called',
-        '   - `useBreakpoint` — replaced by CSS container queries',
-        '   - `useEventBus` — partially replaced by Pinia store',
-        '',
-        '### File-Level Statistics',
-        '',
-        '```',
-        'Total components:     35',
-        'Total composables:    16',
-        'Total utilities:      20',
-        'Total type files:      5',
-        'Total style files:     7',
-        'Lines of Vue SFC:  4,280',
-        'Lines of TypeScript: 1,890',
-        'Lines of CSS:        920',
-        'Avg component size:  122 lines',
-        'Max component size:  487 lines (App.vue)',
-        'Min component size:   18 lines (Spinner.vue)',
-        '```',
+        '1. **Debounce rapid param changes** in `useCodeRender` to avoid Worker flooding',
+        '2. **Cache rendered HTML** by content hash to skip redundant renders',
+        '3. **Prioritize visible windows** — defer off-screen ToolWindow renders',
         '</task_result>',
       ].join('\n');
       return [
@@ -5588,7 +4909,7 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
         '```',
       ].join('\n');
       return [
-        { status: 'running', input: webfetchInput, output: webfetchOutput },
+        { status: 'running', input: webfetchInput, output: '' },
         { status: 'completed', delayMs: 420, input: webfetchInput, output: webfetchOutput },
       ];
     }
@@ -5699,97 +5020,64 @@ function buildDebugToolEvents(tool: string): DebugToolEvent[] | null {
         '- Deferred teleport — Enables composables that manage teleported content',
       ].join('\n');
       return [
-        { status: 'running', input: websearchInput, output: websearchOutput },
+        { status: 'running', input: websearchInput, output: '' },
         { status: 'completed', delayMs: 430, input: websearchInput, output: websearchOutput },
       ];
     }
     case 'write': {
       const writeContent = [
-        '{',
-        '  "compilerOptions": {',
-        '    "target": "ES2022",',
-        '    "module": "ESNext",',
-        '    "moduleResolution": "Bundler",',
-        '    "strict": true,',
-        '    "noUncheckedIndexedAccess": true,',
-        '    "noImplicitOverride": true,',
-        '    "exactOptionalPropertyTypes": false,',
-        '    "forceConsistentCasingInFileNames": true,',
-        '    "isolatedModules": true,',
-        '    "verbatimModuleSyntax": true,',
-        '    "skipLibCheck": true,',
-        '    "esModuleInterop": true,',
-        '    "allowSyntheticDefaultImports": true,',
-        '    "resolveJsonModule": true,',
-        '    "declaration": true,',
-        '    "declarationMap": true,',
-        '    "sourceMap": true,',
-        '    "outDir": "./dist",',
-        '    "rootDir": ".",',
-        '    "baseUrl": ".",',
-        '    "paths": {',
-        '      "@/*": ["./app/*"],',
-        '      "@components/*": ["./app/components/*"],',
-        '      "@composables/*": ["./app/composables/*"],',
-        '      "@utils/*": ["./app/utils/*"],',
-        '      "@types/*": ["./app/types/*"],',
-        '      "@styles/*": ["./app/styles/*"],',
-        '      "@server/*": ["./server/*"],',
-        '      "@tests/*": ["./tests/*"]',
-        '    },',
-        '    "types": [',
-        '      "vite/client",',
-        '      "vitest/globals",',
-        '      "vue-router"',
-        '    ],',
-        '    "lib": [',
-        '      "ES2022",',
-        '      "DOM",',
-        '      "DOM.Iterable",',
-        '      "DOM.AsyncIterable",',
-        '      "WebWorker"',
-        '    ],',
-        '    "jsx": "preserve",',
-        '    "jsxImportSource": "vue",',
-        '    "noEmit": true,',
-        '    "useDefineForClassFields": true,',
-        '    "allowImportingTsExtensions": true,',
-        '    "composite": false,',
-        '    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.tsbuildinfo",',
-        '    "plugins": [',
-        '      {',
-        '        "name": "@vue/typescript-plugin",',
-        '        "languages": ["vue"]',
-        '      }',
-        '    ]',
-        '  },',
-        '  "include": [',
-        '    "app/**/*.ts",',
-        '    "app/**/*.tsx",',
-        '    "app/**/*.vue",',
-        '    "app/**/*.d.ts",',
-        '    "server/**/*.ts",',
-        '    "tests/**/*.ts",',
-        '    "vite.config.ts",',
-        '    "vitest.config.ts",',
-        '    "playwright.config.ts",',
-        '    "tailwind.config.ts",',
-        '    "env.d.ts"',
-        '  ],',
-        '  "exclude": [',
-        '    "node_modules",',
-        '    "dist",',
-        '    "**/*.spec.ts",',
-        '    "coverage",',
-        '    ".nuxt",',
-        '    ".output",',
-        '    "public"',
-        '  ],',
-        '  "references": [',
-        '    { "path": "./tsconfig.node.json" },',
-        '    { "path": "./tsconfig.app.json" },',
-        '    { "path": "./tsconfig.vitest.json" }',
-        '  ]',
+        "import RenderWorker from '../workers/render-worker?worker';",
+        '',
+        'type RenderRequest = {',
+        '  id: string;',
+        '  code: string;',
+        '  patch?: string;',
+        '  after?: string;',
+        '  lang: string;',
+        '  theme: string;',
+        "  gutterMode?: 'none' | 'single' | 'double';",
+        '  gutterLines?: string[];',
+        '  grepPattern?: string;',
+        '  lineOffset?: number;',
+        '  lineLimit?: number;',
+        '};',
+        '',
+        'type RenderResponse =',
+        '  | { id: string; ok: true; html: string }',
+        '  | { id: string; ok: false; error: string };',
+        '',
+        'type PendingEntry = {',
+        '  resolve: (value: string) => void;',
+        '  reject: (reason: Error) => void;',
+        '};',
+        '',
+        'let renderWorker: Worker | null = null;',
+        'const pending = new Map<string, PendingEntry>();',
+        '',
+        'function getWorker() {',
+        '  if (renderWorker) return renderWorker;',
+        '  renderWorker = new RenderWorker();',
+        '  renderWorker.onmessage = (event: MessageEvent<RenderResponse>) => {',
+        '    const data = event.data;',
+        '    const entry = pending.get(data.id);',
+        '    if (!entry) return;',
+        '    pending.delete(data.id);',
+        '    if (data.ok) entry.resolve(data.html);',
+        "    else entry.reject(new Error(data.error || 'Render failed'));",
+        '  };',
+        '  renderWorker.onerror = (error) => {',
+        '    pending.forEach((entry) => entry.reject(new Error(String(error))));',
+        '    pending.clear();',
+        '  };',
+        '  return renderWorker;',
+        '}',
+        '',
+        'export function renderWorkerHtml(payload: RenderRequest) {',
+        '  const id = payload.id;',
+        '  return new Promise<string>((resolve, reject) => {',
+        '    pending.set(id, { resolve, reject });',
+        '    getWorker().postMessage(payload);',
+        '  });',
         '}',
       ].join('\n');
       const writeInput = { filePath: sampleAltFile, content: writeContent };
@@ -5822,30 +5110,37 @@ function injectSyntheticEvent(part: Record<string, unknown>) {
 
 function runDebugTool(tool: string) {
   const normalized = tool.trim().toLowerCase();
-  if (!normalized || normalized === 'help' || normalized === 'list') {
+  if (!normalized || normalized === 'help') {
     const tools = Array.from(TOOL_WINDOW_SUPPORTED.values()).join(', ');
-    return { ok: true, message: `Debug tools: ${tools}` };
+    return { ok: true, message: `Debug tools: ${tools}, all` };
   }
 
   const toolsToRun =
     normalized === 'all' ? Array.from(TOOL_WINDOW_SUPPORTED.values()) : [normalized];
+
+  // Accumulate offset across all tools so events are staggered sequentially.
+  const INTER_TOOL_GAP_MS = 800;
+  let offset = 0;
+  const sessionId = selectedSessionId.value || 'ses_debug';
+  const timerId = Date.now();
 
   for (const toolName of toolsToRun) {
     const events = buildDebugToolEvents(toolName);
     if (!events) {
       return { ok: false, message: `Unknown debug tool: ${toolName}` };
     }
-    const baseCallId = `debug:${toolName}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-    let offset = 0;
+    const baseCallId = `debug:${toolName}:${timerId}:${Math.random().toString(36).slice(2, 8)}`;
     events.forEach((event, index) => {
       const delay = Math.max(0, event.delayMs ?? (index === 0 ? 0 : 350));
       offset += delay;
-      const sessionId = selectedSessionId.value || 'ses_debug';
+      const scheduleAt = offset;
+      const effectiveToolName = event.toolName ?? toolName;
+      const callId = event.callIdSuffix ? `${baseCallId}:${event.callIdSuffix}` : baseCallId;
       window.setTimeout(() => {
         injectSyntheticEvent({
           type: 'tool',
-          tool: toolName,
-          callID: baseCallId,
+          tool: effectiveToolName,
+          callID: callId,
           sessionID: sessionId,
           state: {
             status: event.status,
@@ -5855,15 +5150,17 @@ function runDebugTool(tool: string) {
             error: event.error,
           },
         });
-      }, offset);
+      }, scheduleAt);
     });
+    // Add gap between tools when running multiple
+    if (toolsToRun.length > 1) offset += INTER_TOOL_GAP_MS;
   }
 
   return {
     ok: true,
     message:
       normalized === 'all'
-        ? `Queued debug events for ${TOOL_WINDOW_SUPPORTED.size} tools.`
+        ? `Queued debug events for ${TOOL_WINDOW_SUPPORTED.size} tools (total ${Math.ceil(offset / 1000)}s).`
         : `Queued debug events for ${normalized}.`,
   };
 }
@@ -6583,15 +5880,12 @@ const TOOL_WINDOW_HIDDEN = new Set(['question', 'todoread', 'todowrite', 'lsp'])
 const TOOL_WINDOW_SUPPORTED = new Set([
   'apply_patch',
   'bash',
-  'batch',
   'codesearch',
   'edit',
   'glob',
   'grep',
   'list',
   'multiedit',
-  'plan_enter',
-  'plan_exit',
   'read',
   'task',
   'webfetch',
@@ -6644,6 +5938,92 @@ function resolveReadWritePath(
   return title || undefined;
 }
 
+function resolveReadRange(input: Record<string, unknown> | undefined) {
+  const offsetValue = input?.offset;
+  const limitValue = input?.limit;
+  const offset =
+    typeof offsetValue === 'number' && Number.isFinite(offsetValue) && offsetValue >= 0
+      ? Math.floor(offsetValue)
+      : undefined;
+  const limit =
+    typeof limitValue === 'number' && Number.isFinite(limitValue) && limitValue > 0
+      ? Math.floor(limitValue)
+      : undefined;
+  return { offset, limit };
+}
+
+function isReadWithOffset(entry: { toolName?: string; readOffset?: number }) {
+  return entry.toolName === 'read' && typeof entry.readOffset === 'number' && entry.readOffset > 0;
+}
+
+async function hydrateAndPopupRead(entry: {
+  content: string;
+  path?: string;
+  isWrite: boolean;
+  callId?: string;
+  toolStatus?: string;
+  toolName?: string;
+  toolTitle?: string;
+  lang?: string;
+  grepPattern?: string;
+  wrapMode?: FileReadEntry['toolWrapMode'];
+  gutterMode?: FileReadEntry['toolGutterMode'];
+  gutterLines?: string[];
+  readOffset?: number;
+  readLimit?: number;
+}, eventType: string) {
+  if (!entry.callId || !entry.path) return;
+  if (typeof entry.readOffset !== 'number' || entry.readOffset <= 0) return;
+
+  const directory = activeDirectory.value.trim();
+  if (!directory) return;
+
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  pendingReadFullCodeByCallId.set(entry.callId, requestId);
+
+  try {
+    const pathCandidates: string[] = [];
+    if (entry.path.startsWith('/')) {
+      const normalizedDirectory = normalizeDirectory(directory);
+      if (entry.path === normalizedDirectory) {
+        pathCandidates.push('.');
+      } else if (entry.path.startsWith(`${normalizedDirectory}/`)) {
+        pathCandidates.push(entry.path.slice(normalizedDirectory.length + 1));
+      }
+    }
+    pathCandidates.push(entry.path);
+
+    let data: FileContentResponse | null = null;
+    for (const candidate of pathCandidates) {
+      try {
+        data = (await opencodeApi.readFileContent(OPENCODE_BASE_URL, {
+          directory,
+          path: candidate,
+        })) as FileContentResponse;
+        break;
+      } catch {
+        continue;
+      }
+    }
+
+    if (!data) return;
+    if (pendingReadFullCodeByCallId.get(entry.callId) !== requestId) return;
+    const type = data?.type === 'binary' ? 'binary' : 'text';
+    if (type !== 'text') return;
+    const encoding = typeof data?.encoding === 'string' ? data.encoding : 'utf-8';
+    const rawContent = typeof data?.content === 'string' ? data.content : '';
+    const fullCode = encoding === 'base64' ? atob(rawContent) : rawContent;
+
+    upsertToolEntry({
+      ...entry,
+      content: fullCode,
+      toolStatus: 'completed',
+    }, eventType);
+  } catch {
+    return;
+  }
+}
+
 function formatWebfetchToolTitle(input: Record<string, unknown> | undefined) {
   const url = typeof input?.url === 'string' ? input.url.trim() : '';
   return url || undefined;
@@ -6663,6 +6043,7 @@ function formatTaskToolOutput(output: string) {
   if (parts.length > 0) return parts.join('\n\n');
   return output;
 }
+
 
 function formatBashToolContent(
   input: Record<string, unknown> | undefined,
@@ -7108,7 +6489,7 @@ function openSessionDiff(path: string) {
     isMessage: false,
     toolName: 'diff',
     toolTitle: path,
-    toolLang: 'diff',
+    lang: guessLanguage(path),
     toolGutterMode: 'none',
     toolKey: `session-diff:${path}`,
     width: FILE_VIEWER_WINDOW_WIDTH,
@@ -7118,7 +6499,6 @@ function openSessionDiff(path: string) {
     isLoading: true,
     diffCode: entry.before ?? '',
     diffAfter: entry.after,
-    diffLang: guessLanguage(path),
   };
   bringToFront(diffEntry);
   fileViewerQueue.value.push(diffEntry);
@@ -7170,7 +6550,7 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
     isMessage: false,
     toolName: 'diff',
     toolTitle: title,
-    toolLang: 'diff',
+    lang: fileCount === 1 ? guessLanguage(firstFile) : 'text',
     toolGutterMode: hasBeforeAfter ? 'double' : 'none',
     toolKey,
     width: FILE_VIEWER_WINDOW_WIDTH,
@@ -7180,7 +6560,6 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
     isLoading: true,
     diffCode: hasBeforeAfter ? (diffs[0]?.before ?? '') : '',
     diffAfter: hasBeforeAfter ? (diffs[0]?.after ?? '') : undefined,
-    diffLang: fileCount === 1 ? guessLanguage(firstFile) : 'text',
     diffTabs,
   };
   bringToFront(diffEntry);
@@ -7215,7 +6594,7 @@ function handleShowMessageHistory(payload: { roundId: string; contents: string[]
     isMessage: true,
     toolName: 'history',
     toolTitle: `Message History (${contents.length})`,
-    toolLang: 'markdown',
+    lang: 'markdown',
     toolKey,
     toolWrapMode: 'soft',
     toolGutterMode: 'none',
@@ -7252,7 +6631,7 @@ async function openFileViewer(path: string) {
     isMessage: false,
     toolName: 'read',
     toolTitle: path,
-    toolLang: guessLanguage(path),
+    lang: guessLanguage(path),
     toolGutterMode: 'default',
     toolKey: `file-viewer:${path}`,
     width: FILE_VIEWER_WINDOW_WIDTH,
@@ -7301,7 +6680,7 @@ async function openFileViewer(path: string) {
     const lang = guessLanguage(path);
     const textContent = encoding === 'base64' ? atob(content) : content;
     viewerEntry.content = textContent;
-    viewerEntry.toolLang = lang;
+    viewerEntry.lang = lang;
     viewerEntry.toolGutterMode = 'default';
     viewerEntry.isBinary = false;
     viewerEntry.isLoading = false;
@@ -7621,7 +7000,7 @@ function extractPatch(payload: unknown) {
   if (status !== 'running') {
     if (parsedBlocks.length === 0) return null;
     const baseCallId = callId ?? 'apply_patch';
-    const entries = parsedBlocks.map((_, index) => ({
+    const entries = parsedBlocks.map((block, index) => ({
       content: '',
       path: undefined,
       isWrite: true,
@@ -7629,7 +7008,8 @@ function extractPatch(payload: unknown) {
       toolStatus: status,
       toolName: 'apply_patch',
       toolTitle: undefined,
-      lang: 'diff',
+      lang: guessLanguage(block.path),
+      view: 'diff' as const,
     }));
     return entries;
   }
@@ -7693,7 +7073,8 @@ function extractPatch(payload: unknown) {
       toolStatus: status,
       toolName: 'apply_patch',
       toolTitle: path ?? fallbackTitle,
-      lang: 'diff',
+      lang: guessLanguage(path),
+      view: 'diff' as const,
     };
   }).filter((entry) => entry.content.trim().length > 0);
 
@@ -7767,6 +7148,9 @@ function extractFileRead(payload: unknown, eventType: string) {
     let wrapMode: FileReadEntry['toolWrapMode'];
     let gutterMode: FileReadEntry['toolGutterMode'];
     let gutterLines: string[] | undefined;
+    let readOffset: number | undefined;
+    let readLimit: number | undefined;
+    let view: FileReadEntry['view'];
 
     switch (tool) {
       case 'bash': {
@@ -7779,13 +7163,18 @@ function extractFileRead(payload: unknown, eventType: string) {
         break;
       }
       case 'read': {
+        if (status === 'running') return null;
         path = resolveReadWritePath(input, metadata, state);
         toolTitle = formatReadLikeToolTitle(input);
         if (outputText) content = extractFileBodyFromReadOutput(outputText) ?? outputText;
         lang = guessLanguage(path);
+        const readRange = resolveReadRange(input);
+        readOffset = readRange.offset;
+        readLimit = readRange.limit;
         break;
       }
       case 'grep': {
+        if (status === 'running') return null;
         path = typeof input?.path === 'string' ? input.path : undefined;
         grepPattern = typeof input?.pattern === 'string' ? input.pattern : undefined;
         toolTitle = formatGlobToolTitle(input);
@@ -7805,9 +7194,11 @@ function extractFileRead(payload: unknown, eventType: string) {
         break;
       }
       case 'glob': {
+        if (status === 'running') return null;
         path = typeof input?.path === 'string' ? input.path : undefined;
         toolTitle = formatGlobToolTitle(input);
         lang = 'text';
+        gutterMode = 'none';
         break;
       }
       case 'list': {
@@ -7818,17 +7209,21 @@ function extractFileRead(payload: unknown, eventType: string) {
         break;
       }
       case 'webfetch': {
+        if (status === 'running') return null;
         path = undefined;
         toolTitle = formatWebfetchToolTitle(input);
         const format = typeof input?.format === 'string' ? input.format : 'markdown';
         lang = format === 'html' ? 'html' : format === 'text' ? 'text' : 'markdown';
+        gutterMode = 'none';
         break;
       }
       case 'websearch':
       case 'codesearch': {
+        if (status === 'running') return null;
         path = undefined;
         toolTitle = formatQueryToolTitle(input);
         lang = 'markdown';
+        gutterMode = 'none';
         break;
       }
       case 'task': {
@@ -7858,7 +7253,8 @@ function extractFileRead(payload: unknown, eventType: string) {
         const diff = typeof metadata?.diff === 'string' ? metadata.diff : '';
         if (diff.trim()) {
           content = diff;
-          lang = 'diff';
+          lang = guessLanguage(path);
+          view = 'diff';
         } else {
           lang = 'text';
         }
@@ -7886,7 +7282,8 @@ function extractFileRead(payload: unknown, eventType: string) {
             toolStatus: status,
             toolName: tool,
             toolTitle: baseTitle ? `${baseTitle} (${index + 1}/${diffs.length})` : undefined,
-            lang: 'diff',
+            lang: guessLanguage(path),
+            view: 'diff' as const,
             grepPattern: undefined,
             wrapMode: undefined as FileReadEntry['toolWrapMode'],
             gutterMode: undefined as FileReadEntry['toolGutterMode'],
@@ -7895,7 +7292,8 @@ function extractFileRead(payload: unknown, eventType: string) {
         }
         if (diffs.length === 1) {
           content = diffs[0];
-          lang = 'diff';
+          lang = guessLanguage(path);
+          view = 'diff';
         } else {
           lang = 'text';
         }
@@ -7913,7 +7311,12 @@ function extractFileRead(payload: unknown, eventType: string) {
         return null;
     }
 
-    if (!content.trim() && status === 'running') return null;
+    if (!content.trim() && status === 'running') {
+      const allowEmptyRunning =
+        tool === 'list' ||
+        tool === 'task';
+      if (!allowEmptyRunning) return null;
+    }
     if (!content.trim() && status !== 'running') content = errorText ?? outputText ?? '';
 
     return {
@@ -7925,10 +7328,13 @@ function extractFileRead(payload: unknown, eventType: string) {
       toolName: tool,
       toolTitle: toolTitle?.trim() ? toolTitle.trim() : undefined,
       lang,
+      view,
       grepPattern,
       wrapMode,
       gutterMode,
       gutterLines,
+      readOffset,
+      readLimit,
     };
   }
   const type =
@@ -9601,13 +9007,15 @@ function upsertToolEntry(
     toolName?: string;
     toolTitle?: string;
     lang?: string;
+    view?: FileReadEntry['view'];
     grepPattern?: string;
     wrapMode?: FileReadEntry['toolWrapMode'];
     gutterMode?: FileReadEntry['toolGutterMode'];
     gutterLines?: string[];
+    readOffset?: number;
+    readLimit?: number;
   },
   eventType: string,
-  langOverride?: string,
 ) {
   if (entry.toolStatus === 'pending') return;
 
@@ -9644,31 +9052,44 @@ function upsertToolEntry(
   const scrollDuration = 0;
   const defaultExpiry = time + Math.ceil((scrollDuration || 0) * 1000 + TOOL_SCROLL_HOLD_MS);
   const expiresAt = resolveExpiry(entry.toolStatus, time, defaultExpiry);
-  const lang =
-    langOverride ??
-    entry.lang ??
-    (detectDiffLike(entry.content, entry.path) ? 'diff' : guessLanguage(entry.path, eventType));
+  const autoDetectedDiff = !entry.view && detectDiffLike(entry.content, entry.path);
+  const lang = entry.lang ?? guessLanguage(entry.path, eventType);
+  const view: FileReadEntry['view'] = entry.view ?? (autoDetectedDiff ? 'diff' : undefined);
 
   if (entry.callId) {
     const existingIndex = toolIndexByCallId.get(entry.callId);
     if (existingIndex !== undefined) {
       const existing = queue.value[existingIndex];
       if (existing) {
-        if (
-          entry.toolStatus &&
-          entry.toolStatus !== 'running' &&
-          entry.toolStatus !== 'pending' &&
-          existing.content.trim().length > 0
-        ) {
+         // Lightweight status-only update: when the incoming event carries no
+         // new visual content we just patch metadata in-place to avoid a full
+         // reactive splice (which would re-trigger enter animations / scrolls).
+         // Covers:
+         //   - completed/error arriving after content was already set (e.g. edit
+         //     diff shown during running, then same diff on completed)
+         //   - running→completed where entry.content is empty (apply_patch
+         //     completed events carry content:'')
+         const incomingHasContent = entry.content.trim().length > 0;
+         const existingHasContent = existing.content.trim().length > 0;
+         const isStatusOnlyUpdate =
+           entry.toolStatus &&
+           entry.toolStatus !== 'running' &&
+           entry.toolStatus !== 'pending' &&
+           existingHasContent &&
+           (
+             // Case 1: existing is NOT running (duplicate completed/error)
+             existing.toolStatus !== 'running' ||
+             // Case 2: existing IS running but incoming has no new content
+             !incomingHasContent ||
+             // Case 3: existing IS running and incoming content is identical
+             entry.content.trim() === existing.content.trim()
+           );
+        if (isStatusOnlyUpdate) {
           const nextExpiresAt = resolveExpiry(entry.toolStatus, time, defaultExpiry);
-          queue.value.splice(existingIndex, 1, {
-            ...existing,
-            time,
-            expiresAt: nextExpiresAt,
-            toolStatus: entry.toolStatus,
-            toolTitle: entry.toolTitle ?? existing.toolTitle,
-          });
-          toolIndexByCallId.set(entry.callId, existingIndex);
+          existing.time = time;
+          existing.expiresAt = nextExpiresAt;
+          existing.toolStatus = entry.toolStatus;
+          existing.toolTitle = entry.toolTitle ?? existing.toolTitle;
           return;
         }
         const nextPath = entry.path ?? existing.path;
@@ -9680,16 +9101,19 @@ function upsertToolEntry(
             : eventType !== 'message'
               ? `# ${eventType}\n\n`
               : '';
-        const nextContent = entry.content.trim().length > 0 ? entry.content : existing.content;
+        const nextContent = entry.content.trim().length > 0
+          ? entry.content
+          : existing.content;
         const nextWrapMode = entry.wrapMode ?? existing.toolWrapMode;
         const nextGutterMode = entry.gutterMode ?? existing.toolGutterMode;
         const nextGutterLines = entry.gutterLines ?? existing.toolGutterLines;
         const nextGrepPattern = entry.grepPattern ?? existing.grepPattern;
+        const nextAutoDetectedDiff = !entry.view && !existing.view && detectDiffLike(nextContent, nextPath);
         const nextLang =
-          langOverride ??
           entry.lang ??
-          existing.toolLang ??
-          (detectDiffLike(nextContent, nextPath) ? 'diff' : guessLanguage(nextPath, eventType));
+          existing.lang ??
+          guessLanguage(nextPath, eventType);
+        const nextView: FileReadEntry['view'] = entry.view ?? existing.view ?? (nextAutoDetectedDiff ? 'diff' : undefined);
         const toolKey =
           existing.toolKey ?? entry.callId ?? `${nextPath ?? entry.toolName ?? 'tool'}:${time}`;
         const nextExpiresAt = resolveExpiry(entry.toolStatus, time, defaultExpiry);
@@ -9704,6 +9128,7 @@ function upsertToolEntry(
           scroll: false,
           scrollDistance,
           scrollDuration,
+    scrollDelay: 0.15,
           html: '',
           isWrite: entry.isWrite,
           isMessage: false,
@@ -9711,11 +9136,14 @@ function upsertToolEntry(
           toolStatus: entry.toolStatus,
           toolName: entry.toolName,
           toolTitle: entry.toolTitle ?? existing.toolTitle,
-          toolLang: nextLang,
+          lang: nextLang,
+          view: nextView,
           grepPattern: nextGrepPattern,
           toolWrapMode: nextWrapMode,
           toolGutterMode: nextGutterMode,
           toolGutterLines: nextGutterLines,
+          readLineOffset: entry.readOffset ?? existing.readLineOffset,
+          readLineLimit: entry.readLimit ?? existing.readLineLimit,
         });
         toolIndexByCallId.set(entry.callId, existingIndex);
         scheduleToolScrollAnimation(toolKey);
@@ -9738,6 +9166,7 @@ function upsertToolEntry(
     scroll: false,
     scrollDistance,
     scrollDuration,
+    scrollDelay: 0,
     html: '',
     isWrite: entry.isWrite,
     isMessage: false,
@@ -9745,11 +9174,14 @@ function upsertToolEntry(
     toolStatus: entry.toolStatus,
     toolName: entry.toolName,
     toolTitle: entry.toolTitle,
-    toolLang: lang,
+    lang,
+    view,
     grepPattern: entry.grepPattern,
     toolWrapMode: entry.wrapMode,
     toolGutterMode: entry.gutterMode,
     toolGutterLines: entry.gutterLines,
+    readLineOffset: entry.readOffset,
+    readLineLimit: entry.readLimit,
     zIndex: nextWindowZ(),
   });
   if (entry.callId) toolIndexByCallId.set(entry.callId, queue.value.length - 1);
@@ -10013,7 +9445,7 @@ function connect() {
     const patchEvents = extractPatch(payload);
     if (patchEvents) {
       patchEvents.forEach((patchEvent) => {
-        upsertToolEntry(patchEvent, e.type, 'diff');
+        upsertToolEntry(patchEvent, e.type);
       });
       return;
     }
@@ -10448,7 +9880,40 @@ function connect() {
       return;
     }
 
-    fileReads.forEach((entry) => upsertToolEntry(entry, e.type));
+    fileReads.forEach((entry) => {
+      if (isReadWithOffset(entry) && entry.callId) {
+        if (entry.toolStatus === 'running') {
+          pendingReadInfoByCallId.set(entry.callId, {
+            path: entry.path!,
+            readOffset: entry.readOffset!,
+            readLimit: entry.readLimit,
+            lang: entry.lang,
+            toolTitle: entry.toolTitle,
+            eventType: e.type,
+          });
+        } else if (entry.toolStatus === 'error') {
+          pendingReadInfoByCallId.delete(entry.callId);
+          upsertToolEntry(entry, e.type);
+        } else {
+          const saved = pendingReadInfoByCallId.get(entry.callId);
+          pendingReadInfoByCallId.delete(entry.callId);
+          if (saved) {
+            void hydrateAndPopupRead({
+              ...entry,
+              path: saved.path,
+              readOffset: saved.readOffset,
+              readLimit: saved.readLimit,
+              lang: saved.lang ?? entry.lang,
+              toolTitle: saved.toolTitle ?? entry.toolTitle,
+            }, saved.eventType);
+          } else {
+            void hydrateAndPopupRead(entry, e.type);
+          }
+        }
+      } else {
+        upsertToolEntry(entry, e.type);
+      }
+    });
   };
 
   src.value.addEventListener('message', handleEvent);

@@ -10,6 +10,8 @@ type RenderRequest = {
   gutterMode?: 'none' | 'single' | 'double';
   gutterLines?: string[];
   grepPattern?: string;
+  lineOffset?: number;
+  lineLimit?: number;
 };
 
 type RenderResponse =
@@ -107,16 +109,16 @@ function buildCodeRows(lines: string[], mode: 'none' | 'single' | 'double', gutt
   return lines
     .map((line, index) => {
       if (mode === 'none') {
-        return `<span class="code-row">${line}</span>`;
+        return `<div class="code-row">${line}</div>`;
       }
       if (mode === 'double') {
         const pair = gutterLines?.[index]?.split('\t') ?? [];
         const left = pair[0] ?? String(index + 1);
         const right = pair[1] ?? '';
-        return `<span class="code-row"><span class="code-gutter">${escapeHtml(left)}</span><span class="code-gutter">${escapeHtml(right)}</span>${line}</span>`;
+        return `<div class="code-row"><span class="code-gutter">${escapeHtml(left)}</span><span class="code-gutter">${escapeHtml(right)}</span>${line}</div>`;
       }
       const gutter = gutterLines?.[index] ?? String(index + 1);
-      return `<span class="code-row file-row"><span class="code-gutter span-2">${escapeHtml(gutter)}</span>${line}</span>`;
+      return `<div class="code-row file-row"><span class="code-gutter span-2">${escapeHtml(gutter)}</span>${line}</div>`;
     })
     .join('\n');
 }
@@ -410,16 +412,16 @@ function wrapDiffRows(
   return lines
     .map((row, index) => {
       const rowClass = row.rowClass ? ` code-row ${row.rowClass}` : ' code-row';
-      if (mode === 'none') return `<span class="${rowClass.trim()}">${row.html}</span>`;
+      if (mode === 'none') return `<div class="${rowClass.trim()}">${row.html}</div>`;
       if (mode === 'single') {
         const left = oldValues[index] ?? '';
         const right = newValues[index] ?? '';
         const gutter = right || left;
-        return `<span class="${rowClass.trim()}"><span class="code-gutter span-2">${escapeHtml(gutter)}</span>${row.html}</span>`;
+        return `<div class="${rowClass.trim()}"><span class="code-gutter span-2">${escapeHtml(gutter)}</span>${row.html}</div>`;
       }
       const oldValue = oldValues[index] ?? '';
       const newValue = newValues[index] ?? '';
-      return `<span class="${rowClass.trim()}"><span class="code-gutter">${escapeHtml(oldValue)}</span><span class="code-gutter">${escapeHtml(newValue)}</span>${row.html}</span>`;
+      return `<div class="${rowClass.trim()}"><span class="code-gutter">${escapeHtml(oldValue)}</span><span class="code-gutter">${escapeHtml(newValue)}</span>${row.html}</div>`;
     })
     .join('\n');
 }
@@ -473,15 +475,15 @@ function renderGrepRows(
   return lines
     .map((line, index) => {
       const content = `<span class="line">${highlightGrepMatches(line, matcher)}</span>`;
-      if (mode === 'none') return `<span class="code-row">${content}</span>`;
+      if (mode === 'none') return `<div class="code-row">${content}</div>`;
       if (mode === 'double') {
         const pair = gutterLines?.[index]?.split('\t') ?? [];
         const left = pair[0] ?? '';
         const right = pair[1] ?? '';
-        return `<span class="code-row"><span class="code-gutter">${escapeHtml(left)}</span><span class="code-gutter">${escapeHtml(right)}</span>${content}</span>`;
+        return `<div class="code-row"><span class="code-gutter">${escapeHtml(left)}</span><span class="code-gutter">${escapeHtml(right)}</span>${content}</div>`;
       }
       const gutter = gutterLines?.[index] ?? String(index + 1);
-      return `<span class="code-row"><span class="code-gutter span-2">${escapeHtml(gutter)}</span>${content}</span>`;
+      return `<div class="code-row"><span class="code-gutter span-2">${escapeHtml(gutter)}</span>${content}</div>`;
     })
     .join('\n');
 }
@@ -523,6 +525,53 @@ function diffMaxLines(diff: string): { maxOld: number; maxNew: number } {
   return { maxOld, maxNew };
 }
 
+function reconstructSourcesFromDiff(diff: string): { before: string; after: string } {
+  const beforeLines: Array<[number, string]> = [];
+  const afterLines: Array<[number, string]> = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('@@')) {
+      const match = /@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
+      if (match) {
+        oldLine = Number(match[1]);
+        newLine = Number(match[2]);
+      }
+      inHunk = true;
+      continue;
+    }
+    if (isDiffMetadataLine(line) || line.startsWith('\\')) {
+      inHunk = false;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      afterLines.push([newLine, line.slice(1)]);
+      newLine += 1;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      beforeLines.push([oldLine, line.slice(1)]);
+      oldLine += 1;
+    } else if (line.startsWith(' ')) {
+      const text = line.slice(1);
+      beforeLines.push([oldLine, text]);
+      afterLines.push([newLine, text]);
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+
+  const buildPadded = (entries: Array<[number, string]>) => {
+    if (entries.length === 0) return '';
+    const maxLine = entries.reduce((m, [n]) => Math.max(m, n), 0);
+    const arr = new Array<string>(maxLine).fill('');
+    entries.forEach(([n, text]) => { arr[n - 1] = text; });
+    return arr.join('\n');
+  };
+
+  return { before: buildPadded(beforeLines), after: buildPadded(afterLines) };
+}
+
 function buildDiffHtmlFromCode(
   before: string,
   after: string,
@@ -534,11 +583,19 @@ function buildDiffHtmlFromCode(
   return getHighlighter(theme).then(async (highlighter) => {
     const resolvedLang = await resolveLanguage(highlighter, lang);
 
+    let effectiveBefore = before;
+    let effectiveAfter = after;
+    if (!before.trim() && diff.trim()) {
+      const reconstructed = reconstructSourcesFromDiff(diff);
+      effectiveBefore = reconstructed.before;
+      effectiveAfter = reconstructed.after;
+    }
+
     const { maxOld, maxNew } = diffMaxLines(diff);
     const trimmedBefore =
-      maxOld > 0 ? before.split('\n').slice(0, maxOld).join('\n') : before;
+      maxOld > 0 ? effectiveBefore.split('\n').slice(0, maxOld).join('\n') : effectiveBefore;
     const trimmedAfter =
-      maxNew > 0 ? after.split('\n').slice(0, maxNew).join('\n') : after;
+      maxNew > 0 ? effectiveAfter.split('\n').slice(0, maxNew).join('\n') : effectiveAfter;
 
     const beforeHtml = highlighter.codeToHtml(trimmedBefore, { lang: resolvedLang, theme });
     const afterHtml = highlighter.codeToHtml(trimmedAfter, { lang: resolvedLang, theme });
@@ -600,9 +657,29 @@ async function renderCodeHtml(request: RenderRequest) {
   const highlighter = await getHighlighter(request.theme);
   const resolvedLang = await resolveLanguage(highlighter, request.lang);
   const html = highlighter.codeToHtml(request.code, { lang: resolvedLang, theme: request.theme });
-  const lines = extractShikiLines(html);
+  let lines = extractShikiLines(html);
   const mode = request.gutterMode ?? 'single';
-  return buildHtmlFromRows(buildCodeRows(lines, mode, request.gutterLines));
+  let gutterLines = request.gutterLines;
+
+  const hasRange =
+    typeof request.lineOffset === 'number' && request.lineOffset > 0 ||
+    typeof request.lineLimit === 'number';
+  if (hasRange) {
+    const offset = typeof request.lineOffset === 'number' ? Math.max(0, request.lineOffset) : 0;
+    const limit =
+      typeof request.lineLimit === 'number' && request.lineLimit > 0
+        ? request.lineLimit
+        : lines.length;
+    lines = lines.slice(offset, offset + limit);
+    if (gutterLines) gutterLines = gutterLines.slice(offset, offset + limit);
+
+    if (!gutterLines) {
+      const generatedGutter = lines.map((_, i) => String(offset + i + 1));
+      return buildHtmlFromRows(buildCodeRows(lines, mode, generatedGutter));
+    }
+  }
+
+  return buildHtmlFromRows(buildCodeRows(lines, mode, gutterLines));
 }
 
 function renderRequest(request: RenderRequest): Promise<string> {

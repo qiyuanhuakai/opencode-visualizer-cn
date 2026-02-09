@@ -10,6 +10,8 @@ type RenderRequest = {
   gutterMode?: 'none' | 'single' | 'double';
   gutterLines?: string[];
   grepPattern?: string;
+  lineOffset?: number;
+  lineLimit?: number;
 };
 
 type RenderResponse =

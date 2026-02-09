@@ -16,6 +16,7 @@
       :style="{
         '--scroll-distance': `${entry.scrollDistance}px`,
         '--scroll-duration': `${entry.scrollDuration}s`,
+        '--scroll-delay': `${entry.scrollDelay ?? 0.15}s`,
       }"
       @scroll="onFloatingScroll"
       @wheel="onFloatingWheel"
@@ -36,39 +37,12 @@
         @reply="onQuestionReply"
         @reject="onQuestionReject"
       />
-      <DiffViewer
-        v-else-if="entry.toolLang === 'diff' && entry.content"
-        :code="''"
-        :patch="entry.content"
-        :lang="entry.toolLang ?? 'diff'"
-        :theme="theme"
-        @rendered="onRendered"
-      />
-      <Transition v-else-if="entry.contentKey" name="tw-fade" mode="out-in">
-        <MessageViewer
-          :key="entry.contentKey"
-          :code="renderCode"
-          :lang="viewerLang"
-          :theme="theme"
-          :wrap-mode="viewerWrapMode"
-          :gutter-mode="viewerGutterMode"
-          :gutter-lines="viewerGutterLines"
-          :grep-pattern="viewerGrepPattern"
-          :is-message="entry.isMessage"
-          @rendered="onRendered"
-        />
-      </Transition>
-      <MessageViewer
+      <CodeContent
         v-else
-        :code="renderCode"
-        :lang="viewerLang"
-        :theme="theme"
+        :html="renderedHtml"
+        :variant="contentVariant"
         :wrap-mode="viewerWrapMode"
         :gutter-mode="viewerGutterMode"
-        :gutter-lines="viewerGutterLines"
-        :grep-pattern="viewerGrepPattern"
-        :is-message="entry.isMessage"
-        @rendered="onRendered"
       />
     </div>
     <div v-if="statusBarText" class="term-statusbar">{{ statusBarText }}</div>
@@ -81,11 +55,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
-import DiffViewer from './DiffViewer.vue';
-import MessageViewer from './MessageViewer.vue';
+import { computed, watch } from 'vue';
+import CodeContent from './CodeContent.vue';
 import PermissionWindow from './PermissionWindow.vue';
 import QuestionWindow from './QuestionWindow.vue';
+import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';
 
 type PermissionReply = 'once' | 'always' | 'reject';
 type QuestionAnswer = string[];
@@ -98,9 +72,11 @@ type ToolWindowEntry = {
   scroll: boolean;
   scrollDistance: number;
   scrollDuration: number;
+  scrollDelay?: number;
   html: string;
   content?: string;
-  toolLang?: string;
+  lang?: string;
+  view?: 'normal' | 'diff' | 'hex';
   grepPattern?: string;
   isWrite: boolean;
   isMessage: boolean;
@@ -122,6 +98,8 @@ type ToolWindowEntry = {
   messageModel?: string;
   callId?: string;
   contentKey?: string;
+  readLineOffset?: number;
+  readLineLimit?: number;
   zIndex?: number;
   width?: number;
   height?: number;
@@ -187,6 +165,7 @@ const termClass = computed(() => ({
   'is-write': entry.value.isWrite,
   'is-message': entry.value.isSubagentMessage,
   'is-tool-error': entry.value.toolStatus === 'error',
+  'is-running': entry.value.toolStatus === 'running',
   'is-apply-patch': entry.value.toolName === 'apply_patch',
   'is-reasoning': entry.value.isReasoning || entry.value.isSubagentMessage,
   'is-shell': entry.value.isShell,
@@ -213,13 +192,13 @@ const termStyle = computed(() => {
   return base;
 });
 
-const renderCode = computed(() => {
-  const body = entry.value.content ?? '';
-  if (entry.value.isMessage) return body;
-  return `${entry.value.header ?? ''}${body}`;
-});
+const isDiff = computed(() => entry.value.view === 'diff' && !!entry.value.content);
 
-const viewerLang = computed(() => entry.value.toolLang ?? (entry.value.isMessage ? 'markdown' : 'text'));
+const contentVariant = computed<'code' | 'diff' | 'message'>(() => {
+  if (isDiff.value) return 'diff';
+  if (entry.value.isMessage) return 'message';
+  return 'code';
+});
 
 const viewerWrapMode = computed<'default' | 'soft'>(() => {
   if (entry.value.isMessage) return 'soft';
@@ -227,23 +206,52 @@ const viewerWrapMode = computed<'default' | 'soft'>(() => {
 });
 
 const viewerGutterMode = computed<'none' | 'single' | 'double'>(() => {
+  if (isDiff.value) return 'double';
   if (entry.value.isMessage || entry.value.isReasoning || entry.value.isSubagentMessage) return 'none';
   if (entry.value.toolGutterMode === 'grep-source') return 'single';
   if (entry.value.toolGutterMode === 'none') return 'none';
   return 'single';
 });
 
-const viewerGutterLines = computed(() =>
-  entry.value.toolName === 'grep' || entry.value.toolGutterMode === 'grep-source'
-    ? entry.value.toolGutterLines
-    : undefined,
-);
+const renderParams = computed<CodeRenderParams | null>(() => {
+  const e = entry.value;
+  if (e.isShell || e.isPermission || e.isQuestion) return null;
 
-const viewerGrepPattern = computed(() =>
-  entry.value.toolName === 'grep' || entry.value.toolGutterMode === 'grep-source'
-    ? entry.value.grepPattern
-    : undefined,
-);
+  if (isDiff.value) {
+    return {
+      code: '',
+      patch: e.content!,
+      lang: e.lang ?? 'text',
+      theme: props.theme,
+      gutterMode: 'double',
+    };
+  }
+
+  const code = e.isMessage
+    ? (e.content ?? '')
+    : `${e.header ?? ''}${e.content ?? ''}`;
+  if (!code) return null;
+
+  const lang = e.lang ?? (e.isMessage ? 'markdown' : 'text');
+  const isGrep = e.toolName === 'grep' || e.toolGutterMode === 'grep-source';
+
+  return {
+    code,
+    lang,
+    theme: props.theme,
+    gutterMode: viewerGutterMode.value,
+    gutterLines: isGrep ? e.toolGutterLines : undefined,
+    grepPattern: isGrep ? e.grepPattern : undefined,
+    lineOffset: e.readLineOffset,
+    lineLimit: e.readLineLimit,
+  };
+});
+
+const { html: renderedHtml } = useCodeRender(renderParams);
+
+watch(renderedHtml, (val) => {
+  if (val) onRendered();
+});
 
 function onFocus(event: PointerEvent) {
   props.onFocusEntry(entry.value, event);
@@ -369,6 +377,10 @@ function onRendered() {
   border-bottom: 1px solid rgba(239, 68, 68, 0.35);
 }
 
+.term.is-running .term-inner {
+  color: #6b7280;
+}
+
 .term.is-permission .term-titlebar {
   background: rgba(245, 158, 11, 0.18);
   color: #fcd34d;
@@ -470,15 +482,8 @@ function onRendered() {
   filter: brightness(1.15);
 }
 
-.shiki-host {
-  line-height: var(--term-line-height);
-  color: #c9d1d9;
-  display: block;
-}
-
-.term-inner.is-scrolling .shiki-host,
-.term-inner.is-scrolling .diff-viewer {
-  animation: scroll-down var(--scroll-duration) linear forwards;
+.term-inner.is-scrolling .code-content {
+  animation: scroll-down var(--scroll-duration) linear var(--scroll-delay) forwards;
   will-change: transform;
 }
 
@@ -491,13 +496,4 @@ function onRendered() {
   }
 }
 
-.tw-fade-enter-active,
-.tw-fade-leave-active {
-  transition: opacity 0.25s ease;
-}
-
-.tw-fade-enter-from,
-.tw-fade-leave-to {
-  opacity: 0;
-}
 </style>

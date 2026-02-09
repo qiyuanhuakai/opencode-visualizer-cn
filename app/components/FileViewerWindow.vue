@@ -25,15 +25,13 @@
       </button>
     </div>
     <div class="viewer-body" @scroll="onFloatingScroll" @wheel="onFloatingWheel">
-      <DiffViewer
-        v-if="entry.isDiff"
-        :code="activeDiffCode"
-        :after="activeDiffAfter"
-        :patch="(!entry.diffTabs || entry.diffTabs.length === 0) ? entry.content : ''"
-        :lang="activeDiffLang"
-        :theme="theme"
+      <div v-if="showLoading" class="viewer-loading">Loading…</div>
+      <CodeContent
+        v-else
+        :html="renderedHtml || entry.html"
+        :variant="entry.isDiff ? 'diff' : entry.isBinary ? 'binary' : 'code'"
+        :gutter-mode="viewerGutterMode"
       />
-      <FileViewer v-else :entry="entry" :theme="theme" />
     </div>
     <div class="viewer-resizer" @pointerdown="onResizeStart"></div>
   </div>
@@ -41,8 +39,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import DiffViewer from './DiffViewer.vue';
-import FileViewer from './FileViewer.vue';
+import CodeContent from './CodeContent.vue';
+import { type CodeRenderParams, useCodeRender } from '../utils/useCodeRender';
 
 type ViewerEntry = {
   x: number;
@@ -58,7 +56,7 @@ type ViewerEntry = {
   isLoading?: boolean;
   diffCode?: string;
   diffAfter?: string;
-  diffLang?: string;
+  lang?: string;
   diffTabs?: Array<{ file: string; before: string; after: string }>;
   toolGutterMode?: 'default' | 'none' | 'grep-source';
 };
@@ -93,7 +91,7 @@ const activeDiffAfter = computed(() => {
 
 const activeDiffLang = computed(() => {
   const tabs = props.entry.diffTabs;
-  if (!tabs || tabs.length === 0) return props.entry.diffLang ?? 'text';
+  if (!tabs || tabs.length === 0) return props.entry.lang ?? 'text';
   const file = tabs[activeTabIndex.value]?.file ?? '';
   const ext = file.split('.').pop() ?? '';
   const langMap: Record<string, string> = {
@@ -104,6 +102,43 @@ const activeDiffLang = computed(() => {
     sh: 'bash', yaml: 'yaml', yml: 'yaml', toml: 'toml',
   };
   return langMap[ext] ?? 'text';
+});
+
+const viewerGutterMode = computed<'none' | 'single' | 'double'>(() => {
+  if (props.entry.isDiff) return 'double';
+  if (props.entry.toolGutterMode === 'none') return 'none';
+  return 'single';
+});
+
+const renderParams = computed<CodeRenderParams | null>(() => {
+  const e = props.entry;
+  if (e.isDiff) {
+    const hasTabs = e.diffTabs && e.diffTabs.length > 0;
+    return {
+      code: activeDiffCode.value,
+      after: activeDiffAfter.value,
+      patch: hasTabs ? undefined : (e.content || undefined),
+      lang: activeDiffLang.value,
+      theme: props.theme,
+      gutterMode: viewerGutterMode.value,
+    };
+  }
+  if (e.isBinary && e.html) return null;
+  const code = e.content ?? '';
+  if (!code && !e.html) return null;
+  if (!code) return null;
+  return {
+    code,
+    lang: e.lang ?? 'text',
+    theme: props.theme,
+    gutterMode: viewerGutterMode.value,
+  };
+});
+
+const { html: renderedHtml } = useCodeRender(renderParams);
+
+const showLoading = computed(() => {
+  return props.entry.isLoading && !renderedHtml.value && !props.entry.html;
 });
 
 function basename(filepath: string) {
@@ -240,6 +275,16 @@ function onClose() {
   padding: 2px 4px;
   overflow: auto;
   white-space: normal;
+}
+
+.viewer-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #64748b;
+  font-size: 13px;
+  user-select: none;
 }
 
 

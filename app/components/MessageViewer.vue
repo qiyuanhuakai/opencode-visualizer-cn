@@ -9,7 +9,6 @@
   >
     <div v-if="state.html" class="message-content" v-html="state.html"></div>
     <div v-else-if="state.error" class="message-loading">{{ state.error }}</div>
-    <div v-else-if="state.isLoading" class="message-loading">Loading...</div>
   </div>
 </template>
 
@@ -25,6 +24,8 @@ const props = defineProps<{
   gutterMode?: 'none' | 'single' | 'double';
   gutterLines?: string[];
   grepPattern?: string;
+  lineOffset?: number;
+  lineLimit?: number;
   isMessage?: boolean;
 }>();
 
@@ -56,6 +57,8 @@ async function startRender() {
     gutterMode: props.gutterMode ?? 'none',
     gutterLines: props.gutterLines ? toRaw(props.gutterLines) : undefined,
     grepPattern: props.grepPattern,
+    lineOffset: props.lineOffset,
+    lineLimit: props.lineLimit,
   })
     .then((html) => {
       if (current !== state.requestId) return;
@@ -82,6 +85,8 @@ watch(
     props.wrapMode,
     props.gutterMode,
     props.grepPattern,
+    props.lineOffset,
+    props.lineLimit,
     props.gutterLines?.join('\n') ?? '',
   ],
   startRender,
