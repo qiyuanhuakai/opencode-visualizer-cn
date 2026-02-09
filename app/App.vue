@@ -277,6 +277,7 @@ type FileReadEntry = {
   roundId?: string;
   roundMessages?: RoundMessage[];
   roundDiffs?: MessageDiffEntry[];
+  messageError?: { name: string; message: string } | null;
 };
 
 type RoundMessage = {
@@ -3424,7 +3425,8 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
             sourceIndex,
           };
         }
-        if (parentID && !text.trim() && attachments.length === 0) return null;
+        const hasError = info?.error && typeof info.error === 'object';
+        if (parentID && !text.trim() && attachments.length === 0 && !hasError) return null;
         return {
           id,
           role,
@@ -3596,6 +3598,9 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
         };
       });
       const roundDiffs = root.role === 'user' ? extractSummaryDiffs(root.info) : [];
+      // Extract error from the last assistant message in the round (e.g. MessageAbortedError)
+      const lastAssistantItem = [...roundItems].reverse().find((item) => item.role !== 'user');
+      const roundError = extractMessageError(lastAssistantItem?.info) ?? extractMessageError(root.info);
 
       queue.value.push({
         time,
@@ -3624,6 +3629,7 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
         roundId: root.id,
         roundMessages,
         roundDiffs,
+        messageError: roundError,
         messageId: root.id,
         messageKey,
         sessionId,
@@ -8354,7 +8360,8 @@ function extractMessageFinish(payload: unknown, eventType: string) {
   const finish =
     (typeof info?.finish === 'string' ? (info.finish as string) : undefined) ??
     (typeof record.finish === 'string' ? (record.finish as string) : undefined);
-  if (!finish) return null;
+  const error = extractMessageError(info);
+  if (!finish && !error) return null;
   const sessionId =
     typeof info?.sessionID === 'string'
       ? (info.sessionID as string)
@@ -8369,7 +8376,18 @@ function extractMessageFinish(payload: unknown, eventType: string) {
         : undefined;
   const parentID =
     typeof info?.parentID === 'string' ? (info.parentID as string) : undefined;
-  return { finish, sessionId, messageId, parentID };
+  return { finish, sessionId, messageId, parentID, error };
+}
+
+function extractMessageError(info: Record<string, unknown> | undefined): { name: string; message: string } | null {
+  const error = info?.error;
+  if (!error || typeof error !== 'object') return null;
+  const record = error as Record<string, unknown>;
+  const name = typeof record.name === 'string' ? record.name : '';
+  const data = record.data && typeof record.data === 'object' ? (record.data as Record<string, unknown>) : undefined;
+  const message = typeof data?.message === 'string' ? data.message : (typeof record.message === 'string' ? record.message : '');
+  if (!name) return null;
+  return { name, message };
 }
 
 function extractSummaryDiffs(info: Record<string, unknown> | undefined): Array<MessageDiffEntry> {
@@ -8477,6 +8495,24 @@ function upsertPrimaryAssistantIntoRound(
     messageAttachmentsById.set(assistantMessageKey, meta.attachments);
   }
   scheduleFollowScroll();
+}
+
+function applyMessageErrorToRound(
+  sessionId: string | undefined,
+  error: { name: string; message: string },
+) {
+  if (!sessionId) return;
+  // Find the last round entry for this session and set the error
+  for (let i = queue.value.length - 1; i >= 0; i--) {
+    const entry = queue.value[i];
+    if (entry?.isRound && entry.sessionId === sessionId) {
+      queue.value.splice(i, 1, {
+        ...entry,
+        messageError: error,
+      });
+      return;
+    }
+  }
 }
 
 function promoteFinalAnswerToOutputPanel(
@@ -9959,6 +9995,9 @@ function connect() {
     if (messageFinish) {
       if (markReasoningFinished(messageFinish.sessionId ?? sessionId, messageFinish.messageId)) {
         scheduleReasoningClose(messageFinish.sessionId ?? sessionId);
+      }
+      if (messageFinish.error) {
+        applyMessageErrorToRound(messageFinish.sessionId ?? sessionId, messageFinish.error);
       }
       if (messageFinish.finish === 'stop') {
         promoteFinalAnswerToOutputPanel(messageFinish, sessionId);

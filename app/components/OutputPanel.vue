@@ -83,6 +83,12 @@
 
               </div>
 
+              <!-- Error indicator (e.g. abort) -->
+              <div v-if="q.messageError" class="ib-error-bar">
+                <span class="ib-error-icon">⊘</span>
+                <span class="ib-error-text">{{ formatMessageError(q.messageError) }}</span>
+              </div>
+
               <!-- Footer: meta left, actions right -->
               <div class="ib-footer">
                 <span class="ib-footer-meta">{{ formatRoundFooterMeta(q) }}</span>
@@ -241,6 +247,7 @@ type FileReadEntry = {
   roundId?: string;
   roundMessages?: RoundMessage[];
   roundDiffs?: Array<{ file: string; diff: string; before?: string; after?: string }>;
+  messageError?: { name: string; message: string } | null;
 };
 
 type RoundMessage = {
@@ -357,6 +364,16 @@ function showGroupHistory(entry: FileReadEntry, group: MessageGroup) {
   const contents = group.messages.map((msg) => msg.content).filter(Boolean);
   if (contents.length === 0) return;
   emit('show-message-history', { roundId, contents });
+}
+
+function formatMessageError(error: { name: string; message: string }): string {
+  if (error.name === 'MessageAbortedError') {
+    return error.message || 'Aborted';
+  }
+  const parts: string[] = [];
+  if (error.name) parts.push(error.name);
+  if (error.message) parts.push(error.message);
+  return parts.join(': ') || 'Error';
 }
 
 function showRoundDiff(entry: FileReadEntry) {
@@ -1159,6 +1176,33 @@ defineExpose({ panelEl });
 .ib-action-history:hover {
   background: rgba(51, 65, 85, 0.55);
   color: #cbd5e1;
+}
+
+.ib-error-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(127, 29, 29, 0.3);
+  border: 1px solid rgba(248, 113, 113, 0.4);
+  color: #fca5a5;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.ib-error-icon {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #f87171;
+}
+
+.ib-error-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Fade transition for message changes */
