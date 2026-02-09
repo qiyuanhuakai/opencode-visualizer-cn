@@ -914,7 +914,7 @@ defineExpose({ panelEl });
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 2px 12px;
+  padding: 2px 12px 12px;
   border-top: none;
   background: transparent;
   color: #94a3b8;
