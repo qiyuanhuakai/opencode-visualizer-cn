@@ -331,7 +331,7 @@ function onRowDoubleClick(row: { node: TreeNode }) {
 }
 
 .tree-row.has-status .tree-name {
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .tree-toggle {
