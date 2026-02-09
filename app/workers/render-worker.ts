@@ -486,6 +486,43 @@ function renderGrepRows(
     .join('\n');
 }
 
+function diffMaxLines(diff: string): { maxOld: number; maxNew: number } {
+  let maxOld = 0;
+  let maxNew = 0;
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('@@')) {
+      const match = /@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(line);
+      if (match) {
+        oldLine = Number(match[1]);
+        newLine = Number(match[3]);
+      }
+      inHunk = true;
+      continue;
+    }
+    if (isDiffMetadataLine(line) || line.startsWith('\\')) {
+      inHunk = false;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      maxNew = Math.max(maxNew, newLine);
+      newLine += 1;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      maxOld = Math.max(maxOld, oldLine);
+      oldLine += 1;
+    } else if (line.startsWith(' ')) {
+      maxOld = Math.max(maxOld, oldLine);
+      maxNew = Math.max(maxNew, newLine);
+      oldLine += 1;
+      newLine += 1;
+    }
+  }
+  return { maxOld, maxNew };
+}
+
 function buildDiffHtmlFromCode(
   before: string,
   after: string,
@@ -496,8 +533,15 @@ function buildDiffHtmlFromCode(
 ) {
   return getHighlighter(theme).then(async (highlighter) => {
     const resolvedLang = await resolveLanguage(highlighter, lang);
-    const beforeHtml = highlighter.codeToHtml(before, { lang: resolvedLang, theme });
-    const afterHtml = highlighter.codeToHtml(after, { lang: resolvedLang, theme });
+
+    const { maxOld, maxNew } = diffMaxLines(diff);
+    const trimmedBefore =
+      maxOld > 0 ? before.split('\n').slice(0, maxOld).join('\n') : before;
+    const trimmedAfter =
+      maxNew > 0 ? after.split('\n').slice(0, maxNew).join('\n') : after;
+
+    const beforeHtml = highlighter.codeToHtml(trimmedBefore, { lang: resolvedLang, theme });
+    const afterHtml = highlighter.codeToHtml(trimmedAfter, { lang: resolvedLang, theme });
     const beforeLines = extractShikiLines(beforeHtml);
     const afterLines = extractShikiLines(afterHtml);
     const diffLines = diff.split('\n');
