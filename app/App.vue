@@ -499,7 +499,6 @@ let nextWindowZIndex = 20;
 let sessionStatusRequestId = 0;
 let primaryHistoryRequestId = 0;
 const messageIndexById = new Map<string, number>();
-const toolIndexByCallId = new Map<string, number>();
 const userMessageIds = new Set<string>();
 const userMessageMetaById = new Map<string, UserMessageMeta>();
 const userMessageTimeById = new Map<string, number>();
@@ -5517,7 +5516,6 @@ function reloadSelectedSessionState() {
   queue.value = [];
   fw.closeAll();
   messageIndexById.clear();
-  toolIndexByCallId.clear();
   messageContentById.clear();
   messagePartsById.clear();
   messagePartOrderById.clear();
@@ -5650,7 +5648,6 @@ const shikiTheme = ref('github-dark');
 setInterval(() => {
   const now = Date.now();
   messageIndexById.clear();
-  toolIndexByCallId.clear();
   messageContentById.clear();
   const survivingParts = new Map<string, Map<string, string>>();
   const survivingPartOrder = new Map<string, string[]>();
@@ -5681,7 +5678,6 @@ setInterval(() => {
         });
       }
     }
-    if (entry.callId) toolIndexByCallId.set(entry.callId, index);
     if (entry.isMessage && entry.messageId) {
       const messageKey = buildMessageKey(entry.messageId, entry.sessionId);
       messageContentById.set(messageKey, entry.content);
