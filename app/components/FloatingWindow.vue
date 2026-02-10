@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, provide, watch, nextTick } from 'vue';
+import { ref, computed, provide, watch, nextTick, onBeforeUnmount } from 'vue';
 import CodeContent from './CodeContent.vue';
 import { FLOATING_WINDOW_KEY, type FloatingWindowAPI } from '../composables/useFloatingWindow';
 import type { FloatingWindowEntry, useFloatingWindows } from '../composables/useFloatingWindows';
@@ -93,12 +93,28 @@ function onClose() {
   emit('close', props.entry.key);
 }
 
-// Drag handling — incremental delta, listeners on window
+// Drag handling — incremental delta with rubber-band + snap-back
 let lastPointerX = 0;
 let lastPointerY = 0;
+let snapAnimId: number | null = null;
+
+function cancelSnapAnimation() {
+  if (snapAnimId !== null) {
+    cancelAnimationFrame(snapAnimId);
+    snapAnimId = null;
+  }
+}
+
+function getDragBounds() {
+  const extent = props.manager.getExtent();
+  const w = props.entry.width || 600;
+  const h = props.entry.height || 400;
+  return { minX: 0, maxX: extent.width - w, minY: 0, maxY: extent.height - h, w, h, extent };
+}
 
 function onDragStart(e: PointerEvent) {
   e.preventDefault();
+  cancelSnapAnimation();
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
   window.addEventListener('pointermove', onDragMove);
@@ -110,17 +126,78 @@ function onDragMove(e: PointerEvent) {
   const dy = e.clientY - lastPointerY;
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
-  const extent = props.manager.getExtent();
-  const w = props.entry.width || 600;
-  const h = props.entry.height || 400;
-  props.entry.x = Math.max(0, Math.min(props.entry.x + dx, extent.width - w));
-  props.entry.y = Math.max(0, Math.min(props.entry.y + dy, extent.height - h));
+  const { minX, maxX, minY, maxY } = getDragBounds();
+  const x = props.entry.x;
+  const y = props.entry.y;
+  props.entry.x += dx * (x < minX || x > maxX ? 0.5 : 1);
+  props.entry.y += dy * (y < minY || y > maxY ? 0.5 : 1);
 }
 
 function onDragEnd() {
   window.removeEventListener('pointermove', onDragMove);
   window.removeEventListener('pointerup', onDragEnd);
+  snapBack();
 }
+
+function snapBack() {
+  const { minX, maxX, minY, maxY, w, h, extent } = getDragBounds();
+  const x = props.entry.x;
+  const y = props.entry.y;
+  if (x >= minX && x <= maxX && y >= minY && y <= maxY) return;
+
+  const cx = extent.width / 2 - w / 2;
+  const cy = extent.height / 2 - h / 2;
+  const dx = cx - x;
+  const dy = cy - y;
+  const validX = maxX >= minX;
+  const validY = maxY >= minY;
+
+  let t = 1;
+  const candidates: number[] = [];
+  if (validX && dx !== 0) {
+    if (x < minX) candidates.push((minX - x) / dx);
+    if (x > maxX) candidates.push((maxX - x) / dx);
+  }
+  if (validY && dy !== 0) {
+    if (y < minY) candidates.push((minY - y) / dy);
+    if (y > maxY) candidates.push((maxY - y) / dy);
+  }
+  if (candidates.length > 0) {
+    const tc = Math.min(Math.max(...candidates), 1);
+    const tx = x + tc * dx;
+    const ty = y + tc * dy;
+    if ((!validX || (tx >= minX && tx <= maxX)) && (!validY || (ty >= minY && ty <= maxY))) {
+      t = tc;
+    }
+  }
+
+  const finalX = x + t * dx;
+  const finalY = y + t * dy;
+  const startX = x;
+  const startY = y;
+  const startTime = performance.now();
+  const duration = 150;
+
+  function frame(now: number) {
+    const progress = Math.min((now - startTime) / duration, 1);
+    const ease = 1 - (1 - progress) * (1 - progress) * (1 - progress);
+    props.entry.x = startX + (finalX - startX) * ease;
+    props.entry.y = startY + (finalY - startY) * ease;
+    if (progress < 1) {
+      snapAnimId = requestAnimationFrame(frame);
+    } else {
+      snapAnimId = null;
+    }
+  }
+
+  snapAnimId = requestAnimationFrame(frame);
+}
+
+onBeforeUnmount(() => {
+  cancelSnapAnimation();
+  window.removeEventListener('pointermove', onDragMove);
+  window.removeEventListener('pointerup', onDragEnd);
+});
 
 // Resize handling
 let resizeStartX = 0;
