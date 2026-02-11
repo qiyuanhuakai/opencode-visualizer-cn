@@ -2191,7 +2191,13 @@ function buildSessionParentMap(list: SessionInfo[]) {
 function setSessions(list: SessionInfo[]) {
   const next = Array.isArray(list) ? list : [];
   sessions.value = next;
-  sessionParentById.value = buildSessionParentMap(next);
+  const merged = buildSessionParentMap(next);
+  sessionParentById.value.forEach((parentId, sessionId) => {
+    if (!parentId) return;
+    if (merged.has(sessionId)) return;
+    merged.set(sessionId, parentId);
+  });
+  sessionParentById.value = merged;
 }
 
 function clearSessions() {
@@ -2241,9 +2247,10 @@ async function fetchSessionChildren(rootSessionId: string, directory?: string) {
     if (changed) {
       sessionParentById.value = next;
     }
-  } catch {
+  } catch (error) {
     // Non-critical: child list unavailable. SSE events will
     // register children as they arrive.
+    log('fetchSessionChildren failed', error);
   }
 }
 
@@ -2357,7 +2364,7 @@ function refreshSessionsForDirectory(directory?: string) {
     clearSessions();
     return Promise.resolve();
   }
-  return fetchSessions({ directory });
+  return fetchSessions({ directory, roots: true });
 }
 
 async function fetchWorktrees(directory?: string) {
@@ -9188,17 +9195,25 @@ function connect() {
 
     const sessionInfo = extractSessionInfo(payload, resolvedEventType);
     if (sessionInfo) {
+      const isDelete = isSessionDeleteEvent(resolvedEventType);
+      if (isDelete) {
+        removeSessionFromGraph(sessionInfo.id);
+        if (selectedSessionId.value === sessionInfo.id) selectedSessionId.value = '';
+      } else {
+        upsertSessionGraph(sessionInfo);
+        if (sessionInfo.parentID) {
+          subagentSessionExpiry.set(sessionInfo.id, Date.now() + SUBAGENT_ACTIVE_TTL_MS);
+        }
+      }
+
       if (matchesSelectedProject(sessionInfo)) {
         const matchesWorktree = matchesSelectedWorktree(sessionInfo);
-        if (isSessionDeleteEvent(resolvedEventType)) {
-          removeSessionFromGraph(sessionInfo.id);
+        if (isDelete) {
           deleteSessionStatus(sessionInfo.id, sessionInfo.projectID);
           if (matchesWorktree) {
             sessions.value = sessions.value.filter((session) => session.id !== sessionInfo.id);
           }
-          if (selectedSessionId.value === sessionInfo.id) selectedSessionId.value = '';
         } else {
-          upsertSessionGraph(sessionInfo);
           if (matchesWorktree) {
             upsertSessionFromEvent(sessionInfo);
           }
@@ -9209,9 +9224,6 @@ function connect() {
             sessionInfo.projectID === selectedProjectId.value
           ) {
             appendWorktreeDirectory(sessionInfo.directory);
-          }
-          if (sessionInfo.parentID) {
-            subagentSessionExpiry.set(sessionInfo.id, Date.now() + SUBAGENT_ACTIVE_TTL_MS);
           }
         }
       }

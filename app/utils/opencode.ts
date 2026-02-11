@@ -104,6 +104,12 @@ export function listSessions(
   }) as Promise<unknown>;
 }
 
+export function getSessionChildren(baseUrl: string, sessionId: string, directory?: string) {
+  return getJson(baseUrl, `/session/${sessionId}/children`, {
+    directory,
+  }) as Promise<unknown>;
+}
+
 export function listWorktrees(baseUrl: string, directory: string) {
   return getJson(baseUrl, '/experimental/worktree', { directory }) as Promise<unknown>;
 }
