@@ -2715,6 +2715,8 @@ async function createNewSession() {
       }
       selectedSessionId.value = data.id;
       if (data.projectID) selectedProjectId.value = data.projectID;
+      resolveDefaultAgentModel();
+      persistComposerDraftForCurrentContext();
       if (data.directory) selectedWorktreeDir.value = data.directory;
     }
     void refreshSessionsForDirectory(activeDirectory.value || undefined);
