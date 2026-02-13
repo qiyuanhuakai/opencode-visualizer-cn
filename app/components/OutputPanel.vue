@@ -578,7 +578,6 @@ const thinkingIndex = ref(0);
 const thinkingSuffix = ref('');
 let thinkingTimer: number | undefined;
 let contentResizeObserver: ResizeObserver | undefined;
-let initialRenderTimeout: number | undefined;
 
 const thinkingDisplayText = computed(() => {
   if (!props.isThinking) return '🟢 Idle';
@@ -603,7 +602,6 @@ function getRoundAssistantRenderKey(entry: FileReadEntry, group: MessageGroup): 
 }
 
 function isEntryRendered(entry: FileReadEntry): boolean {
-  if (!initialRenderTrackingActive.value) return true;
   if (entry.isRound) {
     const groups = groupRoundMessages(entry);
     return groups.every((group) => {
@@ -645,23 +643,10 @@ function collectInitialRenderKeys(): Set<string> {
 }
 
 function beginInitialRenderTracking() {
-  if (initialRenderTimeout !== undefined) {
-    window.clearTimeout(initialRenderTimeout);
-    initialRenderTimeout = undefined;
-  }
   const keys = collectInitialRenderKeys();
   pendingInitialRenderKeys.value = keys;
   initialRenderTrackingActive.value = keys.size > 0;
-  if (keys.size === 0) {
-    emit('initial-render-complete');
-    return;
-  }
-  initialRenderTimeout = window.setTimeout(() => {
-    initialRenderTrackingActive.value = false;
-    pendingInitialRenderKeys.value.clear();
-    emit('initial-render-complete');
-    initialRenderTimeout = undefined;
-  }, 2000);
+  if (keys.size === 0) emit('initial-render-complete');
 }
 
 function handleScroll() {
@@ -676,10 +661,6 @@ function handleMessageRendered(renderKey: string) {
   const keys = pendingInitialRenderKeys.value;
   keys.delete(renderKey);
   if (keys.size > 0) return;
-  if (initialRenderTimeout !== undefined) {
-    window.clearTimeout(initialRenderTimeout);
-    initialRenderTimeout = undefined;
-  }
   initialRenderTrackingActive.value = false;
   emit('initial-render-complete');
 }
@@ -859,7 +840,6 @@ onBeforeUnmount(() => {
   contentResizeObserver?.disconnect();
   contentResizeObserver = undefined;
   if (thinkingTimer !== undefined) window.clearInterval(thinkingTimer);
-  if (initialRenderTimeout !== undefined) window.clearTimeout(initialRenderTimeout);
 });
 
 defineExpose({ panelEl });
