@@ -15,10 +15,7 @@
             :key="q.messageKey ?? q.roundId ?? q.messageId ?? q.time"
           >
             <!-- ===== Round: nested box layout ===== -->
-             <div
-               v-if="q.isRound"
-               class="info-block"
-             >
+            <div v-if="q.isRound" v-show="isEntryRendered(q)" class="info-block">
               <!-- Fork button (top-right) -->
               <button
                 v-if="q.roundId && q.sessionId"
@@ -74,16 +71,15 @@
                 {{ formatRoundTargetLabel(q) }}
               </div>
 
-               <!-- Assistant response area (no collapse, fade transition per message) -->
-               <div v-if="hasAssistantMessages(q)" class="ib-response-area">
-                 <template v-for="(group, gi) in groupRoundMessages(q)" :key="gi">
-                   <template v-if="group.role === 'assistant'">
-                     <Transition name="ib-fade" mode="out-in">
-                       <div
-                         class="ib-msg-block ib-msg-assistant"
-                         :key="getGroupTransitionKey(group)"
-                         :class="{ 'is-rendering': !isEntryRendered(q) }"
-                       >
+              <!-- Assistant response area (no collapse, fade transition per message) -->
+              <div v-if="hasAssistantMessages(q)" class="ib-response-area">
+                <template v-for="(group, gi) in groupRoundMessages(q)" :key="gi">
+                  <template v-if="group.role === 'assistant'">
+                    <Transition name="ib-fade" mode="out-in">
+                      <div
+                        class="ib-msg-block ib-msg-assistant"
+                        :key="getGroupTransitionKey(group)"
+                      >
                         <div class="ib-msg-body">
                           <MessageViewer
                             :code="group.messages[group.messages.length - 1]?.content ?? ''"
