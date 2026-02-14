@@ -364,16 +364,13 @@ export function useMessages(scope: SessionScope) {
       updatePart(packet.part);
     }),
     scope.on('message.part.delta', (packet: MessagePartDeltaPacket) => {
+      const accumulated = acc.getMessage(packet.messageID);
+      const accPart = accumulated?.parts.get(packet.partID);
+      if (!accPart) return;
       const key = partLookupKey(packet.messageID, packet.partID);
       const partRef = parts.get(key);
       if (!partRef) return;
-      const part = partRef.value;
-      const field = packet.field as keyof typeof part;
-      if (field in part && typeof part[field] === 'string') {
-        (part[field] as string) += packet.delta;
-      } else {
-        (part as Record<string, unknown>)[field] = packet.delta;
-      }
+      partRef.value = accPart;
       triggerRef(partRef);
     }),
     scope.on('message.updated', (packet: MessageUpdatedPacket) => {
