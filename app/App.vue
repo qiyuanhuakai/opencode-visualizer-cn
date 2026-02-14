@@ -252,6 +252,7 @@ import {
 } from './components/ToolWindow/utils';
 import { useAutoScroller, type ScrollMode } from './composables/useAutoScroller';
 import { useFloatingWindows } from './composables/useFloatingWindows';
+import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useMessages } from './composables/useMessages';
 import { useReasoningWindows, type ReasoningFinish } from './composables/useReasoningWindows';
@@ -5134,6 +5135,8 @@ const toolRendererHelpers = {
 };
 
 const ge = useGlobalEvents(credentials.baseUrl.value);
+const deltaAccumulator = useDeltaAccumulator();
+deltaAccumulator.listen(ge);
 const sessionScope = ge.session(selectedSessionId, sessionParentRecord);
 const mainSessionScope = ge.mainSession(selectedSessionId);
 const msg = useMessages(sessionScope);

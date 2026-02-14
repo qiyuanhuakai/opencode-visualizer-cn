@@ -17,6 +17,7 @@ const KNOWN_EVENT_TYPES = new Set<EventKey>([
   'message.updated',
   'message.removed',
   'message.part.updated',
+  'message.part.delta',
   'message.part.removed',
   'session.created',
   'session.updated',

@@ -424,6 +424,7 @@ export type MessagePart =
 export type MessageUpdatedPacket = { info: MessageInfo };
 export type MessageRemovedPacket = { sessionID: string; messageID: string };
 export type MessagePartUpdatedPacket = { part: MessagePart; delta?: string };
+export type MessagePartDeltaPacket = { sessionID: string; messageID: string; partID: string; field: string; delta: string };
 export type MessagePartRemovedPacket = { sessionID: string; messageID: string; partID: string };
 
 // session events
@@ -482,6 +483,7 @@ export type GlobalEventMap = {
   'message.updated': MessageUpdatedPacket;
   'message.removed': MessageRemovedPacket;
   'message.part.updated': MessagePartUpdatedPacket;
+  'message.part.delta': MessagePartDeltaPacket;
   'message.part.removed': MessagePartRemovedPacket;
   'session.created': SessionCreatedPacket;
   'session.updated': SessionUpdatedPacket;

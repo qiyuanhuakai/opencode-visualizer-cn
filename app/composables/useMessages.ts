@@ -9,10 +9,12 @@ import type {
 import type {
   MessageInfo,
   MessagePart,
+  MessagePartDeltaPacket,
   MessagePartUpdatedPacket,
   MessageUpdatedPacket,
 } from '../types/sse';
 import type { SessionScope } from './useGlobalEvents';
+import { useDeltaAccumulator } from './useDeltaAccumulator';
 
 type MessageEntry = {
   info?: MessageInfo;
@@ -122,6 +124,7 @@ function byTimeThenId(a: MessageInfo, b: MessageInfo): number {
 }
 
 export function useMessages(scope: SessionScope) {
+  const acc = useDeltaAccumulator();
   const messages = shallowRef(new Map<string, ShallowRef<MessageEntry>>());
   const parts = new Map<string, ShallowRef<MessagePart>>();
 
@@ -315,23 +318,35 @@ export function useMessages(scope: SessionScope) {
       const info = rec.info;
       const partsList = rec.parts;
       if (!isMessageInfo(info)) continue;
+      const accumulated = acc.getMessage(info.id);
       const hasMessage = messages.value.has(info.id);
       const messageRef = ensureMessage(info.id, false);
       if (!hasMessage) collectionChanged = true;
       if (!messageRef.value.info) {
-        messageRef.value.info = info;
+        messageRef.value.info = accumulated?.info ?? info;
         triggerRef(messageRef);
       }
       if (!Array.isArray(partsList)) continue;
       let addedPart = false;
       for (const item of partsList) {
         if (!isMessagePart(item)) continue;
-        const key = partLookupKey(item.messageID, item.id);
+        const merged = accumulated?.parts.get(item.id) ?? item;
+        const key = partLookupKey(merged.messageID, merged.id);
         if (parts.has(key)) continue;
-        const partRef = shallowRef(item);
+        const partRef = shallowRef(merged);
         parts.set(key, partRef);
         messageRef.value.parts.add(partRef);
         addedPart = true;
+      }
+      if (accumulated) {
+        for (const [partId, accPart] of accumulated.parts) {
+          const key = partLookupKey(accPart.messageID, partId);
+          if (parts.has(key)) continue;
+          const partRef = shallowRef(accPart);
+          parts.set(key, partRef);
+          messageRef.value.parts.add(partRef);
+          addedPart = true;
+        }
       }
       if (addedPart) triggerRef(messageRef);
     }
@@ -347,6 +362,19 @@ export function useMessages(scope: SessionScope) {
   const unsubscribers = [
     scope.on('message.part.updated', (packet: MessagePartUpdatedPacket) => {
       updatePart(packet.part);
+    }),
+    scope.on('message.part.delta', (packet: MessagePartDeltaPacket) => {
+      const key = partLookupKey(packet.messageID, packet.partID);
+      const partRef = parts.get(key);
+      if (!partRef) return;
+      const part = partRef.value;
+      const field = packet.field as keyof typeof part;
+      if (field in part && typeof part[field] === 'string') {
+        (part[field] as string) += packet.delta;
+      } else {
+        (part as Record<string, unknown>)[field] = packet.delta;
+      }
+      triggerRef(partRef);
     }),
     scope.on('message.updated', (packet: MessageUpdatedPacket) => {
       updateMessage(packet.info);
