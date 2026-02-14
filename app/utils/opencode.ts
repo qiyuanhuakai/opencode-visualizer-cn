@@ -57,7 +57,7 @@ async function getJson(
 async function sendJson(
   baseUrl: string,
   path: string,
-  method: 'POST' | 'PUT' | 'DELETE',
+  method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   options: { params?: Record<string, QueryValue>; body?: JsonBody; request?: RequestOptions },
 ) {
   const response = await fetch(createUrl(baseUrl, path, options.params), {
@@ -174,6 +174,18 @@ export async function deleteSession(baseUrl: string, sessionId: string, director
     method: 'DELETE',
   });
   if (!response.ok) throw new Error(`/session/${sessionId} request failed (${response.status})`);
+}
+
+export function updateSession(
+  baseUrl: string,
+  sessionId: string,
+  payload: { title?: string; time?: { archived?: number } },
+  directory?: string,
+) {
+  return sendJson(baseUrl, `/session/${sessionId}`, 'PATCH', {
+    params: { directory },
+    body: payload,
+  }) as Promise<unknown>;
 }
 
 export function forkSession(

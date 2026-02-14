@@ -13,11 +13,12 @@
         >
           <template #label>
             <span v-if="selectedDisplay" class="selected-label">
+              <span class="selected-status-icon">{{ sessionStatusIcon(selectedDisplay.status) }}</span>
+              <span class="selected-title">{{ selectedDisplay.title }}</span>
               <span class="selected-branch-badge">
                 <Icon icon="lucide:git-branch" :width="11" :height="11" />
                 {{ selectedDisplay.branch }}
               </span>
-              <span class="selected-title">{{ selectedDisplay.title }}</span>
             </span>
             <span v-else class="selected-title">Select session</span>
           </template>
@@ -96,13 +97,16 @@
                         <div class="tree-session-main">
                           <span class="session-status-icon" :title="session.status">{{ sessionStatusIcon(session.status) }}</span>
                           <span class="session-title">{{ session.title || session.slug || session.id }}</span>
+                          <span v-if="session.archivedAt" class="session-badge-archived">archived</span>
                         </div>
                         <button
                           type="button"
-                          class="tree-action-button danger session-del"
-                          @click.stop="handleSessionDelete(session.id, close)"
+                          class="tree-action-button session-del"
+                          :class="isShiftPressed ? 'danger' : 'archive'"
+                          :title="isShiftPressed ? 'Delete session (Shift)' : 'Archive session'"
+                          @click.stop="handleSessionAction(session.id, close)"
                         >
-                          <Icon icon="lucide:trash-2" :width="11" :height="11" />
+                          <Icon :icon="isShiftPressed ? 'lucide:trash-2' : 'lucide:archive'" :width="11" :height="11" />
                         </button>
                       </DropdownItem>
                     </div>
@@ -117,9 +121,8 @@
           </template>
         </Dropdown>
 
-        <button type="button" class="control-button" @click="$emit('new-session')">
-          <Icon icon="lucide:plus" :width="12" :height="12" />
-          New
+        <button type="button" class="control-button new-session-button" @click="$emit('new-session')" title="New session">
+          <Icon icon="lucide:message-circle-plus" :width="16" :height="16" />
         </button>
       </div>
       <div class="top-right">
@@ -130,7 +133,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, type Directive, nextTick } from 'vue';
+import { computed, ref, type Directive, nextTick, onBeforeUnmount, onMounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
@@ -141,6 +144,7 @@ export type TopPanelSession = {
   slug?: string;
   status: 'busy' | 'idle' | 'retry' | 'unknown';
   timeUpdated?: number;
+  archivedAt?: number;
 };
 
 export type TopPanelSandbox = {
@@ -177,6 +181,7 @@ const emit = defineEmits<{
   (event: 'new-session'): void;
   (event: 'delete-active-directory', value: string): void;
   (event: 'delete-session', value: string): void;
+  (event: 'archive-session', value: string): void;
   (event: 'open-directory'): void;
 }>();
 
@@ -185,6 +190,7 @@ const MAX_SANDBOXES = 3;
 const MAX_SESSIONS = 5;
 
 const searchQuery = ref('');
+const isShiftPressed = ref(false);
 
 const vAutoFocus: Directive<HTMLElement> = {
   mounted(el) {
@@ -202,10 +208,10 @@ const selectedDisplay = computed(() => {
       if (!session) continue;
       const branch = sandbox.branch || shortenPath(sandbox.directory);
       const title = session.title || session.slug || session.id;
-      return { branch, title };
+      return { branch, title, status: session.status };
     }
   }
-  return { branch: 'unknown', title: sid };
+  return { branch: 'unknown', title: sid, status: 'unknown' as const };
 });
 
 const dropdownLabel = computed(() => {
@@ -227,7 +233,13 @@ const displayedTree = computed(() => {
             const sessions = sandbox.sessions.filter((session) =>
               worktreeMatches ||
               sandboxMatches ||
-              matchesQuery(query, session.title, session.slug, session.id),
+              matchesQuery(
+                query,
+                session.title,
+                session.slug,
+                session.id,
+                session.archivedAt ? 'archived' : undefined,
+              ),
             );
             if (!worktreeMatches && !sandboxMatches && sessions.length === 0) return null;
             return {
@@ -238,6 +250,20 @@ const displayedTree = computed(() => {
           .filter((sandbox): sandbox is TopPanelSandbox => sandbox !== null);
 
         if (!worktreeMatches && sandboxes.length === 0) return null;
+        return { ...worktree, sandboxes };
+      })
+      .filter((worktree): worktree is TopPanelWorktree => worktree !== null);
+  } else {
+    worktrees = worktrees
+      .map((worktree) => {
+        const sandboxes = worktree.sandboxes
+          .map((sandbox) => ({
+            ...sandbox,
+            sessions: sandbox.sessions.filter((session) => !session.archivedAt),
+          }))
+          .filter((sandbox) => sandbox.sessions.length > 0);
+
+        if (sandboxes.length === 0) return null;
         return { ...worktree, sandboxes };
       })
       .filter((worktree): worktree is TopPanelWorktree => worktree !== null);
@@ -334,6 +360,38 @@ function handleSessionDelete(sessionId: string, close?: () => void) {
   emit('delete-session', sessionId);
   close?.();
 }
+
+function handleSessionAction(sessionId: string, close?: () => void) {
+  if (isShiftPressed.value) {
+    handleSessionDelete(sessionId, close);
+    return;
+  }
+  emit('archive-session', sessionId);
+}
+
+function handleGlobalKeydown(event: KeyboardEvent) {
+  isShiftPressed.value = event.shiftKey;
+}
+
+function handleGlobalKeyup(event: KeyboardEvent) {
+  isShiftPressed.value = event.shiftKey;
+}
+
+function resetShiftState() {
+  isShiftPressed.value = false;
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown);
+  window.addEventListener('keyup', handleGlobalKeyup);
+  window.addEventListener('blur', resetShiftState);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown);
+  window.removeEventListener('keyup', handleGlobalKeyup);
+  window.removeEventListener('blur', resetShiftState);
+});
 
 function handleOpenDirectory(close: () => void) {
   emit('open-directory');
@@ -517,7 +575,10 @@ function handleOpenDirectory(close: () => void) {
 .tree-actions {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 6px;
+  /* Reserve space for fork + delete buttons so layout doesn't shift when delete is hidden */
+  min-width: calc(26px + 6px + 26px);
 }
 
 .tree-action-button.fork {
@@ -546,6 +607,10 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-action-button.danger {
   color: #fca5a5;
+}
+
+.tree-action-button.archive {
+  color: #c4b5fd;
 }
 
 /* Session rows: wrapper provides indentation via :deep() since DropdownItem has inheritAttrs:false */
@@ -589,6 +654,18 @@ function handleOpenDirectory(close: () => void) {
   text-align: left;
 }
 
+.session-badge-archived {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 10px;
+  line-height: 1;
+  color: #c4b5fd;
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
 .session-del {
   flex: 0 0 auto;
   margin-left: auto;
@@ -629,6 +706,13 @@ function handleOpenDirectory(close: () => void) {
   cursor: pointer;
 }
 
+.new-session-button {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
 .tree-dropdown-root :deep(.ui-dropdown-button) {
   background: #0b1320;
   border-color: #334155;
@@ -648,11 +732,30 @@ function handleOpenDirectory(close: () => void) {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  width: 100%;
+}
+
+.selected-status-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.selected-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 
 .selected-branch-badge {
   flex: 0 0 auto;
+  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -663,13 +766,6 @@ function handleOpenDirectory(close: () => void) {
   background: #111a2c;
   font-size: 11px;
   line-height: 1;
-}
-
-.selected-title {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .control-button:disabled {

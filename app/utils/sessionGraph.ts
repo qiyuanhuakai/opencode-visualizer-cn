@@ -14,6 +14,7 @@ export type SessionGraphSession = {
   time?: {
     created?: number;
     updated?: number;
+    archived?: number;
   };
 };
 
@@ -29,6 +30,7 @@ type SessionNode = {
   directory?: string;
   timeCreated?: number;
   timeUpdated?: number;
+  timeArchived?: number;
   retention: 'persistent' | 'ephemeral';
   lastSeenAt: number;
   lastActiveAt?: number;
@@ -391,6 +393,7 @@ export function createSessionGraphStore() {
       directory: sandbox.directory,
       timeCreated: info.time?.created ?? previous?.timeCreated,
       timeUpdated: info.time?.updated ?? previous?.timeUpdated,
+      timeArchived: info.time?.archived ?? previous?.timeArchived,
       retention,
       lastSeenAt: Date.now(),
       lastActiveAt: previous?.lastActiveAt,
@@ -500,6 +503,7 @@ export function createSessionGraphStore() {
       time: {
         created: node.timeCreated,
         updated: node.timeUpdated,
+        archived: node.timeArchived,
       },
     };
   }
@@ -521,11 +525,12 @@ export function createSessionGraphStore() {
         title: node.title,
         slug: node.slug,
         directory: node.directory,
-        time: {
-          created: node.timeCreated,
-          updated: node.timeUpdated,
-        },
-      }));
+      time: {
+        created: node.timeCreated,
+        updated: node.timeUpdated,
+        archived: node.timeArchived,
+      },
+    }));
   }
 
   function getParentMap(directory?: string) {
@@ -576,6 +581,7 @@ export function createSessionGraphStore() {
         time: {
           created: node.timeCreated,
           updated: node.timeUpdated,
+          archived: node.timeArchived,
         },
       }));
   }

@@ -12,6 +12,7 @@
           @new-session="createNewSession"
           @delete-active-directory="deleteWorktree"
           @delete-session="deleteSession"
+          @archive-session="archiveSession"
           @select-session="handleTopPanelSessionSelect"
           @open-directory="openProjectPicker"
         />
@@ -613,6 +614,7 @@ type SessionInfo = {
   time?: {
     created?: number;
     updated?: number;
+    archived?: number;
   };
 };
 
@@ -888,6 +890,7 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
               status: (sessionGraphStore.getStatus(session.id, session.projectID) ??
                 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
               timeUpdated: session.time?.updated ?? session.time?.created,
+              archivedAt: session.time?.archived,
             }))
             .sort((a, b) => (b.timeUpdated ?? 0) - (a.timeUpdated ?? 0));
 
@@ -2706,8 +2709,8 @@ async function createWorktreeFromWorktree(worktree: string) {
           resolveDefaultAgentModel();
           persistComposerDraftForCurrentContext();
         }
-      } catch (sessionError) {
-        sessionError.value = `Session create failed: ${toErrorMessage(sessionError)}`;
+      } catch (sessionCreateError) {
+        sessionError.value = `Session create failed: ${toErrorMessage(sessionCreateError)}`;
       }
     }
     void fetchWorktrees(worktree || undefined);
@@ -2801,6 +2804,28 @@ async function deleteSession(sessionId: string) {
     void refreshSessionsForDirectory(activeDirectory.value || undefined);
   } catch (error) {
     sessionError.value = `Session delete failed: ${toErrorMessage(error)}`;
+  }
+}
+
+async function archiveSession(sessionId: string) {
+  if (!ensureConnectionReady('Archiving session')) return;
+  sessionError.value = '';
+  if (!sessionId) return;
+  try {
+    const directory = activeDirectory.value.trim();
+    const data = (await opencodeApi.updateSession(
+      OPENCODE_BASE_URL,
+      sessionId,
+      { time: { archived: Date.now() } },
+      directory || undefined,
+    )) as SessionInfo;
+    if (data && typeof data.id === 'string') {
+      upsertSessionGraph(data);
+    }
+    if (selectedSessionId.value === sessionId) selectedSessionId.value = '';
+    void refreshSessionsForDirectory(activeDirectory.value || undefined);
+  } catch (error) {
+    sessionError.value = `Session archive failed: ${toErrorMessage(error)}`;
   }
 }
 
