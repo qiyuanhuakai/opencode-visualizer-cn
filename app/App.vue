@@ -525,11 +525,7 @@ const inputPanelRef = ref<{ focus: () => void } | null>(null);
 const outputPanelContainerEl = computed(() => outputPanelRef.value?.panelEl ?? undefined);
 const outputPanelScrollMode = computed<ScrollMode>(() => 'follow');
 const {
-  isTrackingPaused: isOutputPanelTrackingPaused,
   isFollowing,
-  pauseTracking: pauseOutputPanelTracking,
-  resumeTracking: resumeOutputPanelTracking,
-  runWithoutTracking: runWithoutOutputPanelTracking,
   resumeFollow,
   scrollToBottom: scrollOutputPanelToBottom,
   notifyContentChange,
@@ -540,42 +536,22 @@ const {
   smoothOnInitialFollow: false,
 });
 
-const outputPanelInitialFollowPending = ref(true);
-pauseOutputPanelTracking();
-
 function handleOutputPanelInitialRenderComplete() {
-  followDebug('initialRenderComplete:start', {
-    pending: outputPanelInitialFollowPending.value,
-  });
-  if (!outputPanelInitialFollowPending.value) return;
-  outputPanelInitialFollowPending.value = false;
-  followDebug('initialRenderComplete:resumeTracking');
-  resumeOutputPanelTracking({ syncToBottom: true });
   nextTick(() => {
+    scrollOutputPanelToBottom(false);
     syncFloatingExtent();
   });
 }
 
 function handleOutputPanelResumeFollow() {
-  followDebug('resume-follow-click');
   resumeFollow();
 }
 
 function handleOutputPanelMessageRendered() {
-  const panel = outputPanelContainerEl.value;
-  followDebug('message-rendered-event', {
-    queueLength: queue.value.length,
-    isFollowing: isFollowing.value,
-    trackingPaused: isOutputPanelTrackingPaused.value,
-    scrollTop: panel?.scrollTop,
-    scrollHeight: panel?.scrollHeight,
-    clientHeight: panel?.clientHeight,
-  });
   notifyContentChange();
 }
 
 function handleOutputPanelContentResized() {
-  if (outputPanelInitialFollowPending.value) return;
   notifyContentChange();
 }
 
@@ -4032,7 +4008,7 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
     }
 
     if (!isSubagentMessage) {
-      notifyContentChange();
+      notifyContentChange(false);
     }
   } catch (error) {
     log('History load failed', error);
@@ -4664,11 +4640,9 @@ async function reloadSelectedSessionState() {
   if (selectedSessionId.value && isBootstrapping.value && !activeDirectory.value) {
     return;
   }
-  outputPanelInitialFollowPending.value = true;
-  followDebug('reloadSelectedSessionState:pause-tracking', {
+  followDebug('reloadSelectedSessionState:start', {
     selectedSessionId: selectedSessionId.value,
   });
-  pauseOutputPanelTracking();
   const selected = sessions.value.find((session) => session.id === selectedSessionId.value);
   if (selected?.projectID) {
     const directory = selected.directory || activeDirectory.value || projectDirectory.value;
@@ -4689,8 +4663,7 @@ async function reloadSelectedSessionState() {
   if (selectedSessionId.value) {
     await fetchHistory(selectedSessionId.value);
     if (msg.roots.value.length === 0) {
-      outputPanelInitialFollowPending.value = false;
-      resumeOutputPanelTracking({ syncToBottom: true });
+      scrollOutputPanelToBottom(false);
     }
     await restoreShellSessions(selectedSessionId.value);
     void reloadTodosForAllowedSessions();

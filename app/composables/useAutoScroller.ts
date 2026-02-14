@@ -349,9 +349,9 @@ export function useAutoScroller(
     scrollToBottom(smooth);
   }
 
-  function notifyContentChange() {
-    followDebug('notifyContentChange');
-    scheduleAutoScroll(false);
+  function notifyContentChange(smooth = true) {
+    followDebug('notifyContentChange', { smooth });
+    scheduleAutoScroll(smooth);
   }
 
   function setup(el: HTMLElement) {

@@ -6,7 +6,7 @@ export interface FloatingWindowAPI {
   html: Ref<string>;
   title: Ref<string>;
   status: Ref<string>;
-  notifyContentChange(): void;
+  notifyContentChange(smooth?: boolean): void;
   setContent(text: string): void;
   appendContent(text: string): void;
   setTitle(title: string): void;

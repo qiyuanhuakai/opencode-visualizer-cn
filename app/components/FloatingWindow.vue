@@ -73,8 +73,8 @@ const api: FloatingWindowAPI = {
   html: computed(() => props.entry.resolvedHtml),
   title: computed(() => props.entry.title || ''),
   status: computed(() => props.entry.status || ''),
-  notifyContentChange: () => {
-    notifyContentChange();
+  notifyContentChange: (smooth?: boolean) => {
+    notifyContentChange(smooth);
   },
   setContent: (text: string) => {
     props.manager.setContent(props.entry.key, text);
