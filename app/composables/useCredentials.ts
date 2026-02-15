@@ -1,6 +1,5 @@
 import { ref, computed } from 'vue';
-
-const STORAGE_KEY = 'opencode.credentials.v1';
+import { StorageKeys, storageGet, storageKey, storageRemove, storageSet } from '../utils/storageKeys';
 
 type Credentials = {
   url: string;
@@ -42,7 +41,7 @@ export function useCredentials() {
         username: newUsername,
         password: newPassword,
       };
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      storageSet(StorageKeys.auth.credentials, JSON.stringify(data));
     } catch {
       return;
     }
@@ -52,7 +51,7 @@ export function useCredentials() {
     if (typeof window === 'undefined') return;
 
     try {
-      const raw = window.localStorage.getItem(STORAGE_KEY);
+      const raw = storageGet(StorageKeys.auth.credentials);
       if (!raw) return;
 
       const data = JSON.parse(raw) as unknown;
@@ -79,7 +78,7 @@ export function useCredentials() {
     if (typeof window === 'undefined') return;
 
     try {
-      window.localStorage.removeItem(STORAGE_KEY);
+      storageRemove(StorageKeys.auth.credentials);
     } catch {
       return;
     }
@@ -87,7 +86,7 @@ export function useCredentials() {
 
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', (event) => {
-      if (event.key !== STORAGE_KEY) return;
+      if (event.key !== storageKey(StorageKeys.auth.credentials)) return;
       
       if (!event.newValue) {
         url.value = '';

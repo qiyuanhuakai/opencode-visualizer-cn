@@ -195,6 +195,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
+import { StorageKeys, storageGet, storageKey, storageSet } from '../utils/storageKeys';
 type ModelOption = {
   id: string;
   modelID: string;
@@ -251,12 +252,11 @@ const modelDropdownRef = ref<HTMLElement | null>(null);
 const activeCommandIndex = ref(0);
 const acceptMime = 'image/png,image/jpeg,image/gif,image/webp';
 
-const ENTER_TO_SEND_KEY = 'enterToSend';
-const enterToSend = ref(localStorage.getItem(ENTER_TO_SEND_KEY) === 'true');
-watch(enterToSend, (value) => localStorage.setItem(ENTER_TO_SEND_KEY, String(value)));
+const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true');
+watch(enterToSend, (value) => storageSet(StorageKeys.settings.enterToSend, String(value)));
 
 function onStorageChange(event: StorageEvent) {
-  if (event.key === ENTER_TO_SEND_KEY) {
+  if (event.key === storageKey(StorageKeys.settings.enterToSend)) {
     enterToSend.value = event.newValue === 'true';
   }
 }
