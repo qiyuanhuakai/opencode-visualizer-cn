@@ -234,6 +234,7 @@ import BashContent from './components/ToolWindow/Bash.vue';
 import GlobContent from './components/ToolWindow/Glob.vue';
 import GrepContent from './components/ToolWindow/Grep.vue';
 import ReasoningContent from './components/ToolWindow/Reasoning.vue';
+import SubagentContent from './components/ToolWindow/Subagent.vue';
 import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
 import Welcome from './components/Welcome.vue';
@@ -259,6 +260,7 @@ import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useMessages } from './composables/useMessages';
 import { useReasoningWindows, type ReasoningFinish } from './composables/useReasoningWindows';
+import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml } from './utils/workerRenderer';
 import type { MessageInfo, MessagePart, ToolPart } from './types/sse';
 import { extractFileRead as extractToolFileRead, extractPatch as extractToolPatch } from './utils/toolRenderers';
@@ -308,6 +310,7 @@ const TERM_FONT_FAMILY =
   "'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
 const MAIN_REASONING_TITLE = 'Reasoning';
 const REASONING_CLOSE_DELAY_MS = 3000;
+const SUBAGENT_CLOSE_DELAY_MS = 3000;
 const ATTACHMENT_MIME_ALLOWLIST = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 
@@ -714,6 +717,18 @@ const {
   updateReasoningExpiry,
 } = reasoning;
 
+const subagentWindows = useSubagentWindows({
+  selectedSessionId,
+  fw,
+  subagentComponent: SubagentContent,
+  theme: () => 'github-dark',
+  closeDelayMs: SUBAGENT_CLOSE_DELAY_MS,
+  resolveModelName: (providerID, modelID) => {
+    const key = `${providerID}/${modelID}`;
+    return modelOptions.value.find((m) => m.id === key)?.displayName;
+  },
+});
+
 const projectDirectory = ref('');
 const homePath = ref('');
 const serverWorktreePath = ref('');
@@ -804,8 +819,8 @@ const sessions = computed(() => {
 
 const sessionParentById = computed(() => {
   void sessionGraphVersion.value;
-  const projectID = selectedProjectId.value.trim();
-  return sessionGraphStore.getParentMap(projectID || undefined);
+  const directory = activeDirectory.value.trim();
+  return sessionGraphStore.getParentMap(directory || undefined);
 });
 
 const sessionParentRecord = reactive<Record<string, string | undefined>>({});
@@ -4369,6 +4384,7 @@ async function reloadSelectedSessionState() {
   msg.reset();
   resetFollow();
   reasoning.reset();
+  subagentWindows.reset();
   retryStatus.value = null;
   todosBySessionId.value = {};
   todoLoadingBySessionId.value = {};
@@ -4575,8 +4591,9 @@ deltaAccumulator.listen(ge);
 const sessionScope = ge.session(selectedSessionId, sessionParentRecord);
 const mainSessionScope = ge.mainSession(selectedSessionId);
 const msg = useMessages();
-msg.bindScope(sessionScope);
+msg.bindScope(mainSessionScope);
 reasoning.bindScope(sessionScope);
+subagentWindows.bindScope(sessionScope);
 
 watch(selectedSessionId, reloadSelectedSessionState, { immediate: true });
 
@@ -4912,6 +4929,7 @@ const TOOL_WINDOW_HIDDEN = new Set([
   'lsp',
   'plan_enter',
   'plan_exit',
+  'task',
 ]);
 const TOOL_WINDOW_SUPPORTED = new Set([
   'apply_patch',
