@@ -355,13 +355,16 @@ export function useFloatingWindows() {
     }
   }
 
-  function closeAll(): void {
-    for (const timerId of timerMap.values()) {
+  function closeAll(options?: { exclude?: (key: string) => boolean }): void {
+    const exclude = options?.exclude;
+    for (const [key, timerId] of timerMap.entries()) {
+      if (exclude?.(key)) continue;
       clearTimeout(timerId);
+      timerMap.delete(key);
     }
-    timerMap.clear();
     // eslint-disable-next-line unicorn/no-useless-spread -- spread needed: close() deletes from entriesMap during iteration
     for (const key of [...entriesMap.keys()]) {
+      if (exclude?.(key)) continue;
       close(key);
     }
   }
