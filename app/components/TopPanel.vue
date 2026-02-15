@@ -70,7 +70,7 @@
                       <Icon icon="lucide:package" class="tree-header-icon" />
                       <div class="tree-label">
                         <span class="tree-label-name" :title="worktree.directory">{{ worktree.name || worktree.label }}</span>
-                        <small class="tree-label-type" :title="worktree.directory">{{ shortenPath(worktree.directory) }}</small>
+                        <small v-if="worktree.name" class="tree-label-type" :title="worktree.directory">{{ shortenPath(worktree.directory) }}</small>
                       </div>
                     </div>
                   </div>
@@ -81,7 +81,7 @@
                         <Icon icon="lucide:git-branch" class="tree-header-icon" />
                         <div class="tree-label">
                           <span class="tree-label-name" :title="sandbox.directory">{{ sandbox.branch || shortenPath(sandbox.directory) }}</span>
-                          <small class="tree-label-type" :title="sandbox.directory">{{ shortenPath(sandbox.directory) }}</small>
+                          <small v-if="sandbox.branch" class="tree-label-type" :title="sandbox.directory">{{ shortenPath(sandbox.directory) }}</small>
                         </div>
                       </div>
                       <div class="tree-actions">

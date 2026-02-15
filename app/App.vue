@@ -793,6 +793,15 @@ const allWorktreeDirectories = computed(() => {
   return sessionGraphStore.getWorktreeList();
 });
 
+const allSandboxDirectories = computed(() => {
+  void sessionGraphVersion.value;
+  const dirs: string[] = [];
+  for (const wt of sessionGraphStore.getWorktreeList()) {
+    dirs.push(...sessionGraphStore.getSandboxList(wt));
+  }
+  return dirs;
+});
+
 const sessions = computed(() => {
   void sessionGraphVersion.value;
   const directory = activeDirectory.value.trim();
@@ -889,35 +898,59 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
   return worktreeEntries;
 });
 
+/** Resolve package.json name for a worktree directory (fire-and-forget). */
+async function resolveWorktreeName(dir: string) {
+  if (worktreeNameByDirectory.value[dir] !== undefined) return;
+  if (loadingWorktreeNameDirectories.has(dir)) return;
+  loadingWorktreeNameDirectories.add(dir);
+  try {
+    const result = (await opencodeApi.readFileContent(credentials.baseUrl.value, {
+      directory: dir,
+      path: 'package.json',
+    })) as FileContentResponse | string;
+    const content = typeof result === 'string' ? result : result?.content;
+    if (!content) {
+      worktreeNameByDirectory.value[dir] = '';
+      return;
+    }
+    const isBase64 = typeof result !== 'string' && result?.encoding === 'base64';
+    const decoded =
+      typeof content === 'string' && isBase64
+        ? decodeApiTextContent(result as FileContentResponse)
+        : content;
+    const parsed = JSON.parse(decoded);
+    worktreeNameByDirectory.value[dir] = parsed?.name ?? '';
+  } catch {
+    worktreeNameByDirectory.value[dir] = '';
+  } finally {
+    loadingWorktreeNameDirectories.delete(dir);
+  }
+}
+
+/** Resolve VCS branch for a sandbox directory via /vcs (fire-and-forget). */
+function resolveVcsBranch(dir: string) {
+  if (sessionGraphStore.getVcsInfo(dir)) return;
+  void fetchWorktreeMeta(dir);
+}
+
+/** Resolve all metadata for a worktree directory: package.json name + /vcs branch. */
+function resolveWorktreeDirectory(dir: string) {
+  void resolveWorktreeName(dir);
+  resolveVcsBranch(dir);
+}
+
 watch(
-  allWorktreeDirectories,
-  async (list) => {
-    for (const dir of list) {
-      if (worktreeNameByDirectory.value[dir] !== undefined) continue;
-      if (loadingWorktreeNameDirectories.has(dir)) continue;
-      loadingWorktreeNameDirectories.add(dir);
-      try {
-        const result = (await opencodeApi.readFileContent(credentials.baseUrl.value, {
-          directory: dir,
-          path: 'package.json',
-        })) as FileContentResponse | string;
-        const content = typeof result === 'string' ? result : result?.content;
-        if (!content) {
-          worktreeNameByDirectory.value[dir] = '';
-          continue;
-        }
-        const isBase64 = typeof result !== 'string' && result?.encoding === 'base64';
-        const decoded =
-          typeof content === 'string' && isBase64
-            ? decodeApiTextContent(result as FileContentResponse)
-            : content;
-        const parsed = JSON.parse(decoded);
-        worktreeNameByDirectory.value[dir] = parsed?.name ?? '';
-      } catch {
-        worktreeNameByDirectory.value[dir] = '';
-      } finally {
-        loadingWorktreeNameDirectories.delete(dir);
-      }
+  [allWorktreeDirectories, allSandboxDirectories],
+  ([worktreeDirs, sandboxDirs]) => {
+    const worktreeSet = new Set(worktreeDirs);
+    // Worktree directories: package.json name + /vcs branch
+    for (const dir of worktreeDirs) {
+      resolveWorktreeDirectory(dir);
+    }
+    // Sandbox directories: /vcs branch only (skip those already handled as worktrees)
+    for (const dir of sandboxDirs) {
+      if (worktreeSet.has(dir)) continue;
+      resolveVcsBranch(dir);
     }
   },
   { immediate: true },
@@ -2417,16 +2450,6 @@ async function fetchWorktreeMeta(directory: string) {
   } catch {
     return;
   }
-}
-
-function resolveWorktreeMetadata(list: string[]) {
-  sessionGraphStore.promoteVcsForWorktrees(list);
-  markSessionGraphChanged();
-  list.forEach((dir) => {
-    const normalized = normalizeDirectory(dir);
-    if (sessionGraphStore.getVcsInfo(normalized)) return;
-    void fetchWorktreeMeta(dir);
-  });
 }
 
 function hasWorktreeDirectory(directory: string) {
@@ -4228,9 +4251,6 @@ watch(
 watch(
   worktrees,
   (list) => {
-    // Resolve VCS metadata for worktree list
-    resolveWorktreeMetadata(Array.isArray(list) ? list : []);
-
     // Auto-select activeDirectory if current is not in list
     if (isBootstrapping.value) return;
     if (list.length === 0) return;
