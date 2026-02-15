@@ -21,13 +21,14 @@ type UseReasoningWindowsOptions = {
   reasoningComponent: Component;
   theme: () => string;
   reasoningCloseDelayMs: number;
+  resolveModelName?: (providerID: string, modelID: string) => string | undefined;
 };
 
 const REASONING_WINDOW_PREFIX = 'reasoning:';
 const REASONING_WINDOW_COLOR = '#8b5cf6';
 
 export function useReasoningWindows(options: UseReasoningWindowsOptions) {
-  const { selectedSessionId, fw, reasoningComponent, theme, reasoningCloseDelayMs } = options;
+  const { selectedSessionId, fw, reasoningComponent, theme, reasoningCloseDelayMs, resolveModelName } = options;
   let boundScope = options.scope;
   const acc = useDeltaAccumulator();
 
@@ -157,7 +158,17 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
       sessionEntries.push({ id: partId, text: messageText });
     }
 
-    const firstLine = messageText.split('\n')[0]?.trim() || 'Reasoning';
+    const messageInfo = acc.getMessage(messageId)?.info;
+    const isSubagent = resolvedSessionId !== selectedSessionId.value;
+    let modelLabel: string | undefined;
+    if (messageInfo?.role === 'assistant') {
+      const displayName = resolveModelName?.(messageInfo.providerID, messageInfo.modelID);
+      modelLabel = displayName || messageInfo.modelID;
+    }
+    const titleTag = modelLabel
+      ? isSubagent ? `[subagent: ${modelLabel}]` : `[${modelLabel}]`
+      : isSubagent ? '[subagent]' : undefined;
+    const title = titleTag ? `🤔 ${titleTag} Thinking...` : '🤔 Thinking...';
 
     void fw.open(windowKey, {
       component: reasoningComponent,
@@ -165,7 +176,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
         entries: [...sessionEntries],
         theme: theme(),
       },
-      title: `🤔 ${firstLine}`,
+      title,
       scroll: 'follow',
       resizable: true,
       closable: false,

@@ -716,6 +716,10 @@ const reasoning = useReasoningWindows({
   reasoningComponent: ReasoningContent,
   theme: () => 'github-dark',
   reasoningCloseDelayMs: REASONING_CLOSE_DELAY_MS,
+  resolveModelName: (providerID, modelID) => {
+    const key = `${providerID}/${modelID}`;
+    return modelOptions.value.find((m) => m.id === key)?.displayName;
+  },
 });
 const {
   updateReasoningExpiry,
