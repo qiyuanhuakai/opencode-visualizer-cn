@@ -1530,9 +1530,9 @@ function persistComposerDraftForCurrentContext() {
 }
 
 function clearComposerDraftForCurrentContext() {
-  const contextKey = draftKeyForSelectedContext();
-  if (!contextKey) return;
-  removeComposerDraft(contextKey);
+  messageInput.value = '';
+  attachments.value = [];
+  persistComposerDraftForCurrentContext();
 }
 
 function pruneOrphanedComposerDrafts() {
