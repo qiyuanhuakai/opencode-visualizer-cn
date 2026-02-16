@@ -2505,37 +2505,6 @@ async function createNewSession() {
   }
 }
 
-let globalSessionFallbackInFlight = false;
-
-async function fallbackToGlobalSession() {
-  if (globalSessionFallbackInFlight) return;
-  if (!ensureConnectionReady('Fallback session')) return;
-  globalSessionFallbackInFlight = true;
-  try {
-    const list = await listSessionsByDirectory({
-      directory: '/',
-      instanceDirectory: '/',
-      roots: true,
-      limit: ROOT_SESSION_BOOTSTRAP_LIMIT,
-    });
-    setSessions(list, '/');
-
-    const rootSessions = list.filter((s) => !s.parentID && !s.time?.archived);
-    const preferred = pickPreferredSessionId(rootSessions);
-
-    projectDirectory.value = '/';
-    activeDirectory.value = '/';
-
-    if (preferred) {
-      selectedSessionId.value = preferred;
-    } else {
-      await createNewSession();
-    }
-  } finally {
-    globalSessionFallbackInFlight = false;
-  }
-}
-
 async function handleNewSessionInSandbox(payload: { worktree: string; directory: string }) {
   projectDirectory.value = payload.worktree;
   activeDirectory.value = payload.directory;
@@ -2695,7 +2664,8 @@ async function handleProjectDirectorySelect(directory: string) {
     roots: true,
     limit: ROOT_SESSION_BOOTSTRAP_LIMIT,
   });
-  if (!list.some((s) => !s.parentID)) {
+  setSessions(list, directory);
+  if (!list.some((s) => !s.parentID && !s.time?.archived)) {
     await createNewSession();
   }
 }
@@ -4319,12 +4289,7 @@ watch(
   () => {
     if (!bootstrapReady.value && !isBootstrapping.value) return;
     if (isBootstrapping.value) return;
-    if (filteredSessions.value.length === 0) {
-      if (!selectedSessionId.value) {
-        void fallbackToGlobalSession();
-      }
-      return;
-    }
+    if (filteredSessions.value.length === 0) return;
     const preferredId = pickPreferredSessionId(filteredSessions.value);
     if (!selectedSessionId.value) {
       if (preferredId) selectedSessionId.value = preferredId;
