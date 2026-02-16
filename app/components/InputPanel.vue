@@ -93,6 +93,7 @@
             popup-class="input-dropdown-popup"
             auto-close
             title="Agent (Tab)"
+            @update:open="handleModelDropdownOpenChange"
           >
             <template #label>
               <span class="ui-dropdown-label" :style="agentButtonLabelStyle">{{
@@ -128,6 +129,7 @@
               popup-class="input-dropdown-popup"
               auto-close
               title="Model (Ctrl-M)"
+              @update:open="handleModelDropdownOpenChange"
             >
               <template #label>
                 <div class="model-button-label">
@@ -165,9 +167,10 @@
             button-class="input-control input-dropdown-button"
             :button-style="agentButtonStyle"
             popup-class="input-dropdown-popup"
-            auto-close
-            title="Variant (Ctrl-, / Ctrl-.)"
-          >
+             auto-close
+             title="Variant (Ctrl-, / Ctrl-.)"
+             @update:open="handleModelDropdownOpenChange"
+           >
             <template #default>
               <div class="dropdown-list">
                 <div v-if="!hasThinkingOptions" class="dropdown-empty">Loading...</div>
@@ -194,7 +197,7 @@
         type="button"
         class="input-button stop send-button"
         :disabled="props.disabled || !canAbort"
-        title="Stop"
+        title="Stop (ESC x2)"
         @click="$emit('abort')"
       >
         <Icon icon="lucide:circle-x" :width="16" :height="16" />
@@ -447,6 +450,14 @@ function openModelPicker() {
   return true;
 }
 
+function handleModelDropdownOpenChange(open: boolean) {
+  if (!open) {
+    nextTick(() => {
+      textareaRef.value?.focus();
+    });
+  }
+}
+
 function handleKeydown(event: KeyboardEvent) {
   if (commandPopupOpen.value) {
     const total = commandMatches.value.length;
@@ -555,6 +566,9 @@ function handleFileChange(event: Event) {
   const files = input?.files ? Array.from(input.files) : [];
   if (files.length > 0) emit('add-attachments', files);
   if (input) input.value = '';
+  nextTick(() => {
+    textareaRef.value?.focus();
+  });
 }
 
 function handlePaste(event: ClipboardEvent) {
@@ -788,6 +802,7 @@ const inputMessageStyle = computed(() => {
 
 :deep(.input-dropdown-popup) {
   max-height: 280px;
+  outline: none;
 }
 
 .dropdown-list {
