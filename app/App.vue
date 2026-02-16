@@ -6673,6 +6673,7 @@ async function startInitialization() {
     await fetchProviders();
     await fetchAgents();
   } catch (error) {
+    ge.disconnect();
     const msg = toErrorMessage(error);
     connectionState.value = 'error';
     if (/\(40[13]\)/.test(msg)) {
@@ -6682,7 +6683,7 @@ async function startInitialization() {
       uiInitState.value = 'login';
     } else {
       initErrorMessage.value = msg;
-      uiInitState.value = 'error';
+      uiInitState.value = 'login';
     }
   } finally {
     initializationInFlight = false;
@@ -6784,7 +6785,7 @@ onMounted(() => {
       if (uiInitState.value === 'loading') {
         connectionState.value = 'error';
         initErrorMessage.value = 'Failed to connect to SSE stream.';
-        uiInitState.value = 'error';
+        uiInitState.value = 'login';
         return;
       }
       connectionState.value = 'reconnecting';
