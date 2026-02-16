@@ -130,6 +130,16 @@
     </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
       <div class="app-loading-card">
+        <div class="absolute w-0 h-0 -z-10 flex items-center justify-center">
+          <div class="flex fixed flex-col items-center w-96 h-40 translate-x-1/2 -translate-y-1/2">
+            <div class="mb-4">
+              <img src="/logo.svg" />
+            </div>
+            <div class="text-text-100 rounded-xl bg-surface-900 py-2 px-4">
+              <span class="text-accent-400">V</span>is - OpenCode Visualizer
+            </div>
+          </div>
+        </div>
         <div v-if="uiInitState === 'login'" class="app-login-form">
           <p class="app-loading-title">Connect to OpenCode Server</p>
           <div class="app-login-fields">
@@ -176,7 +186,7 @@
         </div>
         <div v-else>
           <div class="app-loading-spinner" aria-hidden="true"></div>
-          <p class="app-loading-title">Loading OpenCode session data...</p>
+          <p class="app-loading-title">Loading session data...</p>
           <p class="app-loading-message">{{ uiInitState === 'error' ? initErrorMessage : initLoadingMessage }}</p>
           <div class="app-loading-actions">
             <button
@@ -6969,9 +6979,11 @@ onBeforeUnmount(() => {
   min-height: 0;
   display: grid;
   place-items: center;
+  z-index: 0;
 }
 
 .app-loading-card {
+  position: relative;
   width: min(420px, 92vw);
   border: 1px solid #334155;
   background: rgba(15, 23, 42, 0.92);
