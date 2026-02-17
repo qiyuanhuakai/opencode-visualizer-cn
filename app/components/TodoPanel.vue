@@ -12,28 +12,28 @@
     <div v-if="!collapsed" class="todo-body">
       <div class="todo-header">
         <div class="todo-title">TODO</div>
-        <div class="todo-count">{{ displayTotalCount }}</div>
+        <div class="todo-count">{{ totalCount }}</div>
       </div>
-      <div v-if="displaySessions.length === 0" class="todo-empty">No todos yet.</div>
+      <div v-if="sessions.length === 0" class="todo-empty">No todos yet.</div>
       <div v-else class="todo-groups">
-        <section v-for="session in displaySessions" :key="session.sessionId" class="todo-group">
+        <section v-for="session in sessions" :key="session.sessionId" class="todo-group">
           <header class="todo-group-header">
             <span class="todo-group-title">{{ session.title }}</span>
             <span v-if="session.isSubagent" class="todo-badge">subagent</span>
           </header>
           <div v-if="session.error" class="todo-error">{{ session.error }}</div>
-          <TransitionGroup v-else appear name="fade" tag="ul" class="todo-list">
+          <ul v-else class="todo-list">
             <li
               v-for="(todo, index) in session.todos"
               :key="index"
               class="todo-item"
-              :class="[{ 'is-leaving': todo.leaving }, `is-${todo.status}`]"
+              :class="`is-${todo.status}`"
             >
               <span class="todo-status" :title="todo.status">{{ statusIcon(todo.status) }}</span>
               <span class="todo-text">{{ todo.content }}</span>
               <span class="todo-priority" :class="`is-${todo.priority}`">{{ todo.priority }}</span>
             </li>
-          </TransitionGroup>
+          </ul>
         </section>
       </div>
     </div>
@@ -41,8 +41,6 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
-
 type TodoEntry = {
   content: string;
   status: string;
@@ -58,17 +56,7 @@ type TodoSession = {
   error: string | undefined;
 };
 
-type DisplayTodo = TodoEntry & {
-  leaving?: boolean;
-};
-
-type DisplaySession = Omit<TodoSession, 'todos'> & {
-  todos: DisplayTodo[];
-};
-
-const TODO_REMOVE_DELAY_MS = 2000;
-
-const props = defineProps<{
+defineProps<{
   collapsed: boolean;
   sessions: TodoSession[];
   totalCount: number;
@@ -77,116 +65,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (event: 'toggle-collapse'): void;
 }>();
-
-const displaySessions = ref<DisplaySession[]>([]);
-const removeTimers = new Map<string, number>();
-
-const displayTotalCount = computed(() =>
-  displaySessions.value.reduce((sum, session) => sum + session.todos.length, 0),
-);
-
-function timerKey(sessionId: string, content: string) {
-  return `${sessionId}:${content}`;
-}
-
-function clearRemoveTimer(key: string) {
-  const timer = removeTimers.get(key);
-  if (timer === undefined) return;
-  window.clearTimeout(timer);
-  removeTimers.delete(key);
-}
-
-function pruneEmptySessions() {
-  displaySessions.value = displaySessions.value.filter(
-    (session) => session.todos.length > 0 || Boolean(session.error),
-  );
-}
-
-function removeTodoAfterDelay(sessionId: string, content: string) {
-  const key = timerKey(sessionId, content);
-  if (removeTimers.has(key)) return;
-  const timer = window.setTimeout(() => {
-    removeTimers.delete(key);
-    displaySessions.value = displaySessions.value
-      .map((session) => {
-        if (session.sessionId !== sessionId) return session;
-        return {
-          ...session,
-          todos: session.todos.filter((todo) => todo.content !== content),
-        };
-      })
-      .filter((session) => session.todos.length > 0 || Boolean(session.error));
-    pruneEmptySessions();
-  }, TODO_REMOVE_DELAY_MS);
-  removeTimers.set(key, timer);
-}
-
-watch(
-  () => props.sessions,
-  (incoming) => {
-    const incomingBySessionId = new Map(incoming.map((session) => [session.sessionId, session]));
-    const nextDisplay = displaySessions.value.map((displaySession) => {
-      const nextSession = incomingBySessionId.get(displaySession.sessionId);
-      if (!nextSession) {
-        return {
-          ...displaySession,
-          loading: false,
-          error: undefined,
-          todos: displaySession.todos.map((todo) => {
-            removeTodoAfterDelay(displaySession.sessionId, todo.content);
-            return { ...todo, leaving: true };
-          }),
-        };
-      }
-      const existingByContent = new Map(displaySession.todos.map((todo) => [todo.content, todo]));
-      const nextContents = new Set(nextSession.todos.map((todo) => todo.content));
-      const mergedTodos: DisplayTodo[] = [];
-      nextSession.todos.forEach((todo) => {
-        const key = timerKey(nextSession.sessionId, todo.content);
-        clearRemoveTimer(key);
-        const existing = existingByContent.get(todo.content);
-        if (existing) {
-          mergedTodos.push({ ...existing, ...todo, leaving: false });
-          return;
-        }
-        mergedTodos.push({ ...todo, leaving: false });
-      });
-      displaySession.todos.forEach((todo) => {
-        if (nextContents.has(todo.content)) return;
-        removeTodoAfterDelay(displaySession.sessionId, todo.content);
-        mergedTodos.push({ ...todo, leaving: true });
-      });
-      return {
-        ...displaySession,
-        title: nextSession.title,
-        isSubagent: nextSession.isSubagent,
-        loading: nextSession.loading,
-        error: nextSession.error,
-        todos: mergedTodos,
-      };
-    });
-
-    incoming.forEach((session) => {
-      const exists = nextDisplay.some((item) => item.sessionId === session.sessionId);
-      if (exists) return;
-      nextDisplay.push({
-        ...session,
-        todos: session.todos.map((todo) => ({ ...todo, leaving: false })),
-      });
-    });
-
-    displaySessions.value = nextDisplay;
-    pruneEmptySessions();
-  },
-  { deep: true, immediate: true },
-);
-
-onBeforeUnmount(() => {
-  removeTimers.forEach((timer) => {
-    window.clearTimeout(timer);
-  });
-  removeTimers.clear();
-});
 
 function statusIcon(status: string) {
   if (status === 'completed') return '✓';
@@ -325,12 +203,8 @@ function statusIcon(status: string) {
   gap: 6px;
   font-size: 12px;
   color: #dbeafe;
-  transition: all 0.24s ease;
 }
 
-.todo-item.is-leaving {
-  opacity: 0.75;
-}
 
 .todo-status {
   width: 14px;
@@ -391,18 +265,4 @@ function statusIcon(status: string) {
   border-right: 0;
 }
 
-.fade-enter-active,
-.fade-leave-active {
-  transition: all 0.24s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-  transform: translateY(4px);
-}
-
-.fade-move {
-  transition: all 0.24s ease;
-}
 </style>
