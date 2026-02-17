@@ -6199,7 +6199,7 @@ function applySessionStatusEvent(
       removePendingNotification(`idle:${sessionId}`);
     }
     if (nextStatus === 'idle') {
-      if (!isSelectedSession && sessions.value.some((s) => s.id === sessionId)) {
+      if (!isSelectedSession && sessionGraphStore.value.getSession(sessionId, projectId)) {
         addPendingNotification(sessionId, `idle:${sessionId}`, 'idle');
       }
     }
