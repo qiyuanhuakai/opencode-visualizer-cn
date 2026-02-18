@@ -239,8 +239,6 @@ import {
   onMounted,
   reactive,
   ref,
-  shallowRef,
-  triggerRef,
   watch,
   watchEffect,
 } from 'vue';
@@ -252,7 +250,6 @@ import OutputPanel from './components/OutputPanel.vue';
 import ProjectPicker from './components/ProjectPicker.vue';
 import hexdump from '@kikuchan/hexdump';
 import FloatingWindow from './components/FloatingWindow.vue';
-import BashContent from './components/ToolWindow/Bash.vue';
 import GlobContent from './components/ToolWindow/Glob.vue';
 import GrepContent from './components/ToolWindow/Grep.vue';
 import ReasoningContent from './components/ToolWindow/Reasoning.vue';
@@ -286,12 +283,12 @@ import { useFloatingWindows } from './composables/useFloatingWindows';
 import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useMessages } from './composables/useMessages';
-import { useReasoningWindows, type ReasoningFinish } from './composables/useReasoningWindows';
+import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml } from './utils/workerRenderer';
-import type { MessageInfo, MessagePart, ReasoningPart, ToolPart } from './types/sse';
+import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import {
   extractFileRead as extractToolFileRead,
   extractPatch as extractToolPatch,
@@ -314,24 +311,13 @@ import {
 const credentials = useCredentials();
 const { suppressAutoWindows } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
-const TOOL_PENDING_TTL_MS = 60_000;
-const TOOL_COMPLETE_TTL_MS = 2_000;
-
-const CHILD_SESSION_PRUNE_TTL_MS = 20 * 60 * 1000;
 const ROOT_SESSION_BOOTSTRAP_LIMIT = 100_000;
-const SHELL_WINDOW_Z_BASE = 1_000_000;
 const PERMISSION_WINDOW_WIDTH = 760;
 const PERMISSION_WINDOW_HEIGHT = 340;
-const PERMISSION_WINDOW_MIN_WIDTH = 560;
-const PERMISSION_WINDOW_MIN_HEIGHT = 220;
 const QUESTION_WINDOW_WIDTH = 760;
 const QUESTION_WINDOW_HEIGHT = 560;
-const QUESTION_WINDOW_MIN_WIDTH = 560;
-const QUESTION_WINDOW_MIN_HEIGHT = 240;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
 const FILE_VIEWER_WINDOW_HEIGHT = 520;
-const FILE_VIEWER_WINDOW_MIN_WIDTH = 460;
-const FILE_VIEWER_WINDOW_MIN_HEIGHT = 260;
 const TERM_COLUMNS = 80;
 const TERM_ROWS = 25;
 const TERM_FONT_SIZE_PX = 13;
@@ -343,7 +329,6 @@ const TERM_INNER_PADDING_Y_PX = 4;
 const TERM_GUTTER_WIDTH_EM = 3.2;
 const TERM_FONT_FAMILY =
   "'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
-const MAIN_REASONING_TITLE = 'Reasoning';
 const REASONING_CLOSE_DELAY_MS = 3000;
 const SUBAGENT_CLOSE_DELAY_MS = 3000;
 const ATTACHMENT_MIME_ALLOWLIST = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -496,7 +481,6 @@ watch(suppressAutoWindows, (suppressed) => {
   }
 });
 
-const appEl = ref<HTMLDivElement | null>(null);
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
@@ -545,11 +529,9 @@ function handleOutputPanelContentResized() {
 
 const runningToolIds = reactive(new Set<string>());
 
-const messageSummaryTitleByMessageId = ref<Record<string, string>>({});
 type MessageDiffEntry = { file: string; diff: string; before?: string; after?: string };
 type SessionStatusType = 'busy' | 'idle' | 'retry';
 
-const userMessageIdsById = ref<Record<string, true>>({});
 const userMessageMetaById = ref<Record<string, UserMessageMeta>>({});
 const userMessageTimeById = ref<Record<string, number>>({});
 const globalEventUnsubscribers: Array<() => void> = [];
@@ -609,7 +591,6 @@ type ProjectInfo = {
 
 type SessionInfo = {
   id: string;
-  projectID?: string;
   parentID?: string;
   title?: string;
   slug?: string;
@@ -634,14 +615,6 @@ type TopPanelTreeSandbox = {
   directory: string;
   branch?: string;
   sessions: TopPanelTreeSession[];
-};
-
-type TopPanelTreeWorktree = {
-  directory: string;
-  label: string;
-  name?: string;
-  projectColor?: string;
-  sandboxes: TopPanelTreeSandbox[];
 };
 
 type WorktreeInfo = {
@@ -734,7 +707,7 @@ const sessionSelection = useSessionSelection(
       throw new Error('Session create failed: invalid response.');
     }
     serverState.notifySessionMutated(created);
-    return { id: created.id, projectId: created.projectID || projectId };
+    return { id: created.id, projectId: projectId };
   },
 );
 const {
@@ -744,12 +717,10 @@ const {
   projectDirectory,
   activeDirectory,
   switchSession: switchSessionSelection,
-  ensureSession: ensureSessionSelection,
   initialize: initializeSessionSelection,
 } = sessionSelection;
 
 function toSessionInfo(
-  projectID: string,
   directory: string,
   session: {
     id: string;
@@ -764,7 +735,6 @@ function toSessionInfo(
 ): SessionInfo {
   return {
     id: session.id,
-    projectID,
     parentID: session.parentID,
     title: session.title,
     slug: session.slug,
@@ -794,42 +764,12 @@ function collectAllSessionsByProject() {
 
 const sessionsByProject = computed(() => collectAllSessionsByProject());
 
-const projects = computed<ProjectInfo[]>(() =>
-  Object.values(serverState.projects).map((project) => ({
-    id: project.id,
-    worktree: project.worktree,
-    sandboxes: Object.keys(project.sandboxes),
-    color: project.color,
-    name: project.name,
-  })),
-);
-
 const worktrees = computed<string[]>(() => {
   const project = serverState.projects[selectedProjectId.value];
   if (!project) return [];
   const unique = new Set<string>([project.worktree]);
   Object.keys(project.sandboxes).forEach((directory) => {
     unique.add(directory);
-  });
-  return Array.from(unique);
-});
-
-const allWorktreeDirectories = computed(() => {
-  const unique = new Set<string>();
-  Object.values(serverState.projects).forEach((project) => {
-    const root = project.worktree?.trim();
-    if (root) unique.add(root);
-  });
-  return Array.from(unique);
-});
-
-const allSandboxDirectories = computed(() => {
-  const unique = new Set<string>();
-  Object.values(serverState.projects).forEach((project) => {
-    Object.keys(project.sandboxes).forEach((directory) => {
-      const normalized = directory.trim();
-      if (normalized) unique.add(normalized);
-    });
   });
   return Array.from(unique);
 });
@@ -951,15 +891,6 @@ const isStatusError = computed(() =>
   Boolean(projectError.value || worktreeError.value || sessionError.value || retryStatus.value),
 );
 
-const baseWorktreeOptions = computed(() => {
-  const unique = new Set<string>();
-  projects.value.forEach((project) => {
-    const value = project.worktree?.trim();
-    if (value) unique.add(value);
-  });
-  return Array.from(unique);
-});
-
 const sessionParentRecord = reactive<Record<string, string | undefined>>({});
 watch(
   sessionParentById,
@@ -1067,10 +998,6 @@ const allowedSessionIds = computed(() => {
   }
   return allowed;
 });
-
-const todoPanelCount = computed(() =>
-  Object.values(todosBySessionId.value).reduce((sum, todos) => sum + todos.length, 0),
-);
 
 const notificationSessions = computed<TopPanelNotificationSession[]>(() =>
   notificationSessionOrder.value
@@ -1199,17 +1126,6 @@ const commandOptions = computed(() => {
   return list;
 });
 
-function projectLabel(project: ProjectInfo) {
-  if (project.id === 'global') return 'global /';
-  if (project.worktree) return project.worktree;
-  return project.id;
-}
-
-function projectBaseDirectory(project: ProjectInfo) {
-  if (project.worktree && project.worktree.trim()) return project.worktree;
-  return project.id;
-}
-
 function normalizeDirectory(value: string) {
   const trimmed = value.replace(/\/+$/, '');
   return trimmed || value;
@@ -1247,7 +1163,7 @@ function resolveWorktreeRelativePath(path?: string) {
   return replaceHomePrefix(normalizedPath);
 }
 
-function requireSelectedWorktree(context: 'send') {
+function requireSelectedWorktree(_context: 'send') {
   const directory = getSelectedWorktreeDirectory();
   if (directory) return directory;
   const message = 'No worktree selected.';
@@ -1294,10 +1210,6 @@ function resolveAgentColorForName(agentName?: string) {
 }
 
 const currentAgentColor = computed(() => resolveAgentColorForName(selectedMode.value));
-
-function resolveAgentTone(agent?: string) {
-  return resolveAgentColorForName(agent);
-}
 
 function buildThinkingOptions(variants?: Record<string, unknown>) {
   const keys = Object.keys(variants ?? {}).sort();
@@ -1451,15 +1363,6 @@ function writeComposerDraft(contextKey: string, draft: ComposerDraft) {
   writeComposerDraftStore(store);
 }
 
-function removeComposerDraft(contextKey: string) {
-  if (!contextKey) return;
-  const store = readComposerDraftStore();
-  if (!(contextKey in store)) return;
-  delete store[contextKey];
-  composerDraftRevisionByContext.delete(contextKey);
-  writeComposerDraftStore(store);
-}
-
 function readSidePanelCollapsed() {
   const raw = storageGet(StorageKeys.state.sidePanelCollapsed);
   return raw === '1';
@@ -1568,10 +1471,6 @@ function applyComposerDraftToComposerState(draft: ComposerDraft, contextKey: str
   }
 }
 
-function hasRestorableComposerContent(draft: ComposerDraft) {
-  return draft.messageInput.trim().length > 0 || draft.attachments.length > 0;
-}
-
 function restoreComposerDraftForContext(contextKey: string): boolean {
   if (!contextKey) return false;
   const draft = readComposerDraft(contextKey);
@@ -1607,10 +1506,6 @@ function clearComposerDraftForCurrentContext() {
   messageInput.value = '';
   attachments.value = [];
   persistComposerDraftForCurrentContext();
-}
-
-function pruneOrphanedComposerDrafts() {
-  return;
 }
 
 function handleMessageInputUpdate(value: string) {
@@ -1792,22 +1687,6 @@ function hasAnyBusyDescendant(rootId: string, projectId?: string): boolean {
     return status === 'busy' || status === 'retry';
   });
 }
-
-const sessionStatusByIdRecord = computed<Record<string, SessionStatusType>>(() => {
-  const next: Record<string, SessionStatusType> = {};
-  sessions.value.forEach((session) => {
-    if (session.parentID) return;
-    const ownStatus = getSessionStatus(session.id, session.projectID);
-    if (ownStatus === 'busy' || ownStatus === 'retry') {
-      next[session.id] = ownStatus;
-    } else if (hasAnyBusyDescendant(session.id, session.projectID)) {
-      next[session.id] = 'busy';
-    } else if (ownStatus) {
-      next[session.id] = ownStatus;
-    }
-  });
-  return next;
-});
 
 function measureTerminalCellWidth(fontFamily: string, fontSizePx: number) {
   if (typeof document === 'undefined') return fontSizePx * 0.62;
@@ -2014,43 +1893,6 @@ function removeAttachment(id: string) {
   persistComposerDraftForCurrentContext();
 }
 
-function getSessionTitle(sessionId?: string) {
-  if (!sessionId) return undefined;
-  const session = sessions.value.find((item) => item.id === sessionId);
-  return session?.title || session?.slug || session?.id;
-}
-
-function mergeReasoningContent(
-  prior: string,
-  incoming: string,
-  options?: { ensureTrailingNewline?: boolean },
-) {
-  if (!incoming) return prior;
-  if (!prior) return incoming;
-  const ensureTrailingNewline = options?.ensureTrailingNewline ?? false;
-  if (ensureTrailingNewline && incoming.startsWith(prior)) {
-    const remainder = incoming.slice(prior.length);
-    if (!prior.endsWith('\n') && !remainder.startsWith('\n')) {
-      return `${prior}\n${remainder}`;
-    }
-    return incoming;
-  }
-  let nextPrior = prior;
-  if (ensureTrailingNewline && !nextPrior.endsWith('\n')) {
-    nextPrior = `${nextPrior}\n`;
-  }
-  if (incoming.startsWith(nextPrior)) return incoming;
-  if (nextPrior.includes(incoming)) return nextPrior;
-  const maxCheck = Math.min(nextPrior.length, incoming.length);
-  let overlap = 0;
-  for (let size = 1; size <= maxCheck; size += 1) {
-    if (nextPrior.endsWith(incoming.slice(0, size))) overlap = size;
-  }
-  const needsSeparator = overlap === 0 && !nextPrior.endsWith('\n');
-  const separator = needsSeparator ? '\n' : '';
-  return `${nextPrior}${separator}${incoming.slice(overlap)}`;
-}
-
 function getBundledThemeNames() {
   if (Array.isArray(bundledThemes)) {
     return bundledThemes
@@ -2196,11 +2038,6 @@ async function listSessionsByDirectory(
   }
 }
 
-function hasWorktreeDirectory(directory: string) {
-  const normalized = normalizeDirectory(directory);
-  return worktrees.value.some((entry) => normalizeDirectory(entry) === normalized);
-}
-
 async function createSessionInDirectory(directory: string, worktreeHint?: string) {
   const session = (await opencodeApi.createSession(directory)) as SessionInfo;
   if (!session?.id) return undefined;
@@ -2211,23 +2048,6 @@ async function createSessionInDirectory(directory: string, worktreeHint?: string
     selectedProjectId.value;
   await switchSessionSelection(projectId, session.id);
   return session;
-}
-
-async function createWorktree() {
-  if (!ensureConnectionReady('Creating worktree')) return;
-  worktreeError.value = '';
-  if (!projectDirectory.value) {
-    worktreeError.value = 'Worktree base directory not set.';
-    return;
-  }
-  try {
-    const data = (await opencodeApi.createWorktree(projectDirectory.value)) as WorktreeInfo;
-    if (data && typeof data.directory === 'string') {
-      await createSessionInDirectory(data.directory);
-    }
-  } catch (error) {
-    worktreeError.value = `Worktree create failed: ${toErrorMessage(error)}`;
-  }
 }
 
 async function createWorktreeFromWorktree(worktree: string) {
@@ -2467,14 +2287,13 @@ async function handleProjectDirectorySelect(directory: string) {
     serverState.notifySessionMutated(session);
   });
 
-  let session: SessionInfo | undefined;
   const roots = list.filter((entry) => !entry.parentID && !entry.time?.archived);
   const preferred = pickPreferredSessionId(roots);
   if (preferred) {
     const projectId = resolveProjectIdForDirectory(directory) || '';
     await switchSessionSelection(projectId, preferred);
   } else {
-    session = await createSessionInDirectory(directory);
+    await createSessionInDirectory(directory);
   }
 
   // For new projects, try to set name from package.json

@@ -10,6 +10,8 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "types": ["node", "vite/client"]
   },
   "include": ["app/**/*.ts", "app/**/*.vue", "server/**/*.ts", "vite.config.ts"]

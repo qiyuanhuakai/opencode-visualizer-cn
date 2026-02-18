@@ -90,7 +90,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import MessageViewer from '../MessageViewer.vue';
-import { StorageKeys, storageGetJSON, storageSetJSON, storageKey } from '../../utils/storageKeys';
+import { StorageKeys, storageGetJSON, storageSetJSON } from '../../utils/storageKeys';
 
 type QuestionOption = {
   label: string;

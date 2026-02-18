@@ -2,22 +2,21 @@
   <div class="ui-dropdown-search" @click.stop>
     <slot name="before" />
     <input
-      ref="inputRef"
-      autofocus
-      :value="modelValue"
-      type="text"
-      :placeholder="placeholder"
-      class="ui-dropdown-search-input"
-      @click.stop
-      @input="onInput"
-      @keydown="onKeydown"
-    />
+       autofocus
+       :value="modelValue"
+       type="text"
+       :placeholder="placeholder"
+       class="ui-dropdown-search-input"
+       @click.stop
+       @input="onInput"
+       @keydown="onKeydown"
+     />
     <slot name="after" />
   </div>
 </template>
 
 <script lang="ts" setup>
-import { inject, ref } from 'vue';
+import { inject } from 'vue';
 import type { DropdownAPI } from '../Dropdown.vue';
 
 defineProps<{
@@ -29,7 +28,6 @@ const emit = defineEmits<{
   'update:modelValue': [value: string];
 }>();
 
-const inputRef = ref<HTMLInputElement | null>(null);
 const api = inject<DropdownAPI>('x-selectable');
 
 function onInput(e: Event) {

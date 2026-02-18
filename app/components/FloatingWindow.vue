@@ -98,7 +98,7 @@ const api: FloatingWindowAPI = {
   close: () => {
     emit('close', props.entry.key);
   },
-  onResize: (callback: (w: number, h: number) => void) => {
+  onResize: (_callback: (w: number, h: number) => void) => {
     // Store callback for resize events
   },
 };

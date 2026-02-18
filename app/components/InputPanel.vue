@@ -252,7 +252,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
@@ -644,25 +644,13 @@ const modelValue = computed({
   set: (value) => emit('update:selected-model', value),
 });
 
-const thinkingValue = computed({
-  get: () => props.selectedThinking,
-  set: (value) => emit('update:selected-thinking', value),
-});
 
-const selectedAgent = computed(() =>
-  (props.agentOptions ?? []).find((option) => option.id === props.selectedMode),
-);
 
-const selectedAgentLabel = computed(() => selectedAgent.value?.label ?? '');
 
-const agentButtonStyle = computed(() => {
-  const color = selectedAgent.value?.color;
-  if (!color) return undefined;
-  if (color.startsWith('#') && color.length === 7) {
-    return { borderColor: `${color}80` };
-  }
-  return { borderColor: color };
-});
+
+
+
+
 
 function findAgent(id: unknown): AgentOption | undefined {
   if (id == null) return undefined;
@@ -703,7 +691,7 @@ const thinkingKeyValue = computed({
   },
 });
 
-const selectedThinkingLabel = computed(() => selectedThinkingChoice.value?.label ?? '');
+
 
 function findThinkingChoice(key: unknown): ThinkingChoice | undefined {
   if (key == null) return undefined;

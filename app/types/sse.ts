@@ -107,7 +107,6 @@ export type FileDiff = {
 export type SessionInfo = {
   id: string;
   slug: string;
-  projectID: string;
   directory: string;
   parentID?: string;
   summary?: {

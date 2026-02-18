@@ -201,12 +201,10 @@ import { renderWorkerHtml } from '../utils/workerRenderer';
 import { useMessages } from '../composables/useMessages';
 import type {
   MessageAttachment,
-  MessageDiffEntry,
-  MessageStatus,
   MessageTokens,
   MessageUsage,
 } from '../types/message';
-import type { MessageInfo, MessagePart, QuestionInfo, ReasoningPart, ToolPart } from '../types/sse';
+import type { MessageInfo, QuestionInfo, ReasoningPart, ToolPart } from '../types/sse';
 
 type DiffEntry = { file: string; diff: string; before?: string; after?: string };
 
@@ -289,9 +287,7 @@ function getThread(rootId: string): MessageInfo[] {
   return cachedThreads.value.get(rootId) ?? msg.getThread(rootId);
 }
 
-function getChildren(parentId: string): MessageInfo[] {
-  return msg.getChildren(parentId);
-}
+
 
 function getFinalAnswer(root: MessageInfo): MessageInfo | undefined {
   if (cachedFinalAnswers.value.has(root.id)) {
@@ -315,10 +311,7 @@ function getMessageAttachments(message?: MessageInfo): MessageAttachment[] {
   return msg.getImageAttachments(message.id) ?? [];
 }
 
-function getMessageStatus(message?: MessageInfo): MessageStatus {
-  if (!message) return 'streaming';
-  return msg.getStatus(message.id);
-}
+
 
 function getMessageError(message?: MessageInfo): { name: string; message: string } | null {
   if (!message) return null;
@@ -353,17 +346,7 @@ function getAssistantMessages(root: MessageInfo): MessageInfo[] {
   return getThread(root.id).filter((msg) => msg.role === 'assistant' && hasTextContent(msg));
 }
 
-function isThreadStreaming(root: MessageInfo): boolean {
-  const directChildren = getChildren(root.id);
-  if (
-    directChildren.some(
-      (child) => child.role === 'assistant' && getMessageStatus(child) === 'streaming',
-    )
-  ) {
-    return true;
-  }
-  return getAssistantMessages(root).some((message) => getMessageStatus(message) === 'streaming');
-}
+
 
 function hasAssistantMessages(root: MessageInfo): boolean {
   return getAssistantMessages(root).length > 0;
@@ -770,11 +753,7 @@ function getThreadTransitionKey(root: MessageInfo): string {
   return getFinalAnswer(root)?.id ?? root.id;
 }
 
-function isRootRendered(root: MessageInfo): boolean {
-  const keys = [getThreadUserRenderKey(root)];
-  if (hasAssistantMessages(root)) keys.push(getThreadAssistantRenderKey(root));
-  return keys.every((key) => renderedKeys.value.has(key));
-}
+
 
 function collectInitialRenderKeys(): Set<string> {
   const keys = new Set<string>();

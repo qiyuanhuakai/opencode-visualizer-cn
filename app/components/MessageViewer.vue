@@ -5,7 +5,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, reactive, toRaw, watch } from 'vue';
+import { nextTick, onBeforeUnmount, reactive, watch } from 'vue';
 import { renderWorkerHtml } from '../utils/workerRenderer';
 
 // { code, lang, theme } | { html } — 排他的に使う
