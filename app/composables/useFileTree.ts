@@ -46,7 +46,6 @@ const sessionDiffByPath = ref<Record<string, SessionDiffEntry>>({});
 const files = ref<string[]>([]);
 const fileCacheVersion = ref(0);
 
-let treeRequestId = 0;
 let sessionDiffRequestId = 0;
 let fileCacheBuildId = 0;
 
@@ -206,38 +205,6 @@ function toErrorMessage(error: unknown) {
   return String(error);
 }
 
-async function loadTreePath(path: string) {
-  const directory = getOptions().activeDirectory.value.trim();
-  if (!directory) {
-    treeNodes.value = [];
-    return;
-  }
-  const requestId = ++treeRequestId;
-  if (path === '.') {
-    treeLoading.value = true;
-    treeError.value = '';
-  }
-  try {
-    const data = await opencodeApi.listFiles({
-      directory,
-      path,
-    });
-    if (requestId !== treeRequestId) return;
-    const list = Array.isArray(data) ? data : [];
-    const children = buildTreeNodes(list, directory, path);
-    if (path === '.') {
-      treeNodes.value = children;
-    } else {
-      treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, children);
-    }
-  } catch (error) {
-    if (requestId !== treeRequestId) return;
-    treeError.value = `Tree load failed: ${toErrorMessage(error)}`;
-  } finally {
-    if (path === '.') treeLoading.value = false;
-  }
-}
-
 function normalizeSessionDiffEntries(entries: unknown[]) {
   return entries
     .map((entry) => {
@@ -307,12 +274,13 @@ function toggleTreeDirectory(path: string) {
     next.delete(path);
     expandedTreePathSet.value = next;
     return;
+  } else {
+    next.add(path);
   }
-  next.add(path);
   expandedTreePathSet.value = next;
   const node = findTreeNodeByPath(treeNodes.value, path);
   if (node?.loaded) return;
-  void loadTreePath(path);
+  void loadSingleDirectory(path);
 }
 
 function selectTreeFile(path: string) {
@@ -321,28 +289,37 @@ function selectTreeFile(path: string) {
 
 const expandedTreePaths = computed(() => Array.from(expandedTreePathSet.value));
 
-function toFilePaths(items: unknown[], directory: string) {
-  const nextDirs: string[] = [];
-  const nextFiles: string[] = [];
-  for (const item of items) {
-    const node = normalizeFileNode(item, directory);
-    if (!node || node.path === '.') continue;
-    if (node.type === 'directory') {
-      nextDirs.push(node.path);
-    } else {
-      nextFiles.push(node.path);
-    }
-  }
-  return { nextDirs, nextFiles };
+async function loadSingleDirectory(path: string) {
+  const options = getOptions();
+  const directory = options.activeDirectory.value.trim();
+  if (!directory) return;
+  try {
+    const data = await opencodeApi.listFiles({ directory, path });
+    if (options.activeDirectory.value.trim() !== directory) return;
+    const list = Array.isArray(data) ? data : [];
+    const children = buildTreeNodes(list, directory, path);
+    treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, children);
+
+    const foundFiles = children.filter((node) => node.type === 'file').map((node) => node.path);
+    if (foundFiles.length === 0) return;
+    const merged = new Set(files.value);
+    foundFiles.forEach((file) => merged.add(file));
+    files.value = Array.from(merged).sort((a, b) => a.localeCompare(b));
+    fileCacheVersion.value += 1;
+  } catch {}
 }
 
 async function rebuildFileCache() {
   const options = getOptions();
   const directory = options.activeDirectory.value.trim();
   const buildId = ++fileCacheBuildId;
+  treeLoading.value = true;
+  treeError.value = '';
   if (!directory) {
+    treeNodes.value = [];
     files.value = [];
     fileCacheVersion.value += 1;
+    treeLoading.value = false;
     return;
   }
 
@@ -350,31 +327,51 @@ async function rebuildFileCache() {
   const visited = new Set<string>();
   const collected: string[] = [];
 
-  while (queue.length > 0) {
-    const path = queue.shift();
-    if (!path || visited.has(path)) continue;
-    visited.add(path);
+  try {
+    while (queue.length > 0) {
+      const path = queue.shift();
+      if (!path || visited.has(path)) continue;
+      visited.add(path);
 
-    const data = await opencodeApi.listFiles({ directory, path });
+      const data = await opencodeApi.listFiles({ directory, path });
+      if (buildId !== fileCacheBuildId) return;
+      if (options.activeDirectory.value.trim() !== directory) return;
+
+      const list = Array.isArray(data) ? data : [];
+      const children = buildTreeNodes(list, directory, path);
+      if (path === '.') {
+        treeNodes.value = children;
+      } else {
+        treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, children);
+      }
+
+      for (const child of children) {
+        if (child.type === 'file') {
+          collected.push(child.path);
+          continue;
+        }
+        if (!child.ignored && !visited.has(child.path)) {
+          queue.push(child.path);
+        }
+      }
+    }
+
     if (buildId !== fileCacheBuildId) return;
     if (options.activeDirectory.value.trim() !== directory) return;
-
-    const list = Array.isArray(data) ? data : [];
-    const { nextDirs, nextFiles } = toFilePaths(list, directory);
-    for (const next of nextDirs) {
-      if (!visited.has(next)) queue.push(next);
+    files.value = Array.from(new Set(collected)).sort((a, b) => a.localeCompare(b));
+    fileCacheVersion.value += 1;
+  } catch (error) {
+    if (buildId !== fileCacheBuildId) return;
+    if (options.activeDirectory.value.trim() !== directory) return;
+    treeError.value = `Tree load failed: ${toErrorMessage(error)}`;
+  } finally {
+    if (buildId === fileCacheBuildId && options.activeDirectory.value.trim() === directory) {
+      treeLoading.value = false;
     }
-    collected.push(...nextFiles);
   }
-
-  if (buildId !== fileCacheBuildId) return;
-  if (options.activeDirectory.value.trim() !== directory) return;
-  files.value = Array.from(new Set(collected)).sort((a, b) => a.localeCompare(b));
-  fileCacheVersion.value += 1;
 }
 
 async function reloadTree() {
-  await loadTreePath('.');
   await rebuildFileCache();
 }
 
