@@ -4304,7 +4304,7 @@ function openToolPartAsWindow(
       const patchLang = patchEvent.lang ?? 'text';
       fw.open(key, {
         content: renderEditDiffHtml({
-          diff: patchEvent.content,
+          diff: '',
           code: patchEvent.code,
           after: patchEvent.after,
           lang: patchLang,

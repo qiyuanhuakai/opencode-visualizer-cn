@@ -91,7 +91,7 @@ export function extractStepFinish(
 
 export function extractPatch(
   payload: unknown,
-  helpers: Pick<ToolRenderersHelpers, 'parsePatchTextBlocks' | 'guessLanguage'>,
+  helpers: Pick<ToolRenderersHelpers, 'guessLanguage'>,
 ) {
   if (!payload || typeof payload !== 'object') return null;
   const record = payload as Record<string, unknown>;
@@ -142,52 +142,43 @@ export function extractPatch(
   const status = typeof state?.status === 'string' ? state.status : undefined;
   if (!status || status === 'pending' || status === 'running') return null;
 
-  const input =
-    state?.input && typeof state.input === 'object'
-      ? (state.input as Record<string, unknown>)
-      : undefined;
   const metadata =
     state?.metadata && typeof state.metadata === 'object'
       ? (state.metadata as Record<string, unknown>)
       : undefined;
 
-  const patchText = typeof input?.patchText === 'string' ? input.patchText : '';
-  const parsedBlocks = patchText ? helpers.parsePatchTextBlocks(patchText) : [];
-  if (parsedBlocks.length === 0) return null;
-
-  const metadataFilesRaw = Array.isArray(metadata?.files) ? metadata.files : [];
-  const metadataFileRecords = metadataFilesRaw.map((item) => {
-    if (!item || typeof item !== 'object') return null;
-    const record = item as Record<string, unknown>;
-    const relativePath =
-      (typeof record.relativePath === 'string' && record.relativePath) ||
-      (typeof record.filePath === 'string' && record.filePath) ||
-      (typeof record.file === 'string' && record.file) ||
-      undefined;
-    const diff = typeof record.diff === 'string' ? record.diff : undefined;
-    const before = typeof record.before === 'string' ? record.before : undefined;
-    const after = typeof record.after === 'string' ? record.after : undefined;
-    return { relativePath, diff, before, after, record };
-  });
+  // ToolStateCompleted guarantees metadata with files array.
+  // Each file: { relativePath, filePath, before, after, ... }
+  const files = Array.isArray(metadata?.files) ? (metadata.files as unknown[]) : [];
+  if (files.length === 0) return null;
 
   const baseCallId = callId ?? 'apply_patch';
-  const entries = parsedBlocks.map((block, index) => {
-    const mf = metadataFileRecords[index];
-    return {
-      content: block.content,
-      path: block.path,
-      code: mf?.before,
-      after: mf?.after,
-      isWrite: true,
-      callId: `${baseCallId}:${index}`,
-      toolStatus: status,
-      toolName: 'apply_patch',
-      toolTitle: block.path,
-      title: toolPrefix('apply_patch', 'PATCH', block.path),
-      lang: helpers.guessLanguage(block.path),
-      view: 'diff' as const,
-    };
-  });
+  const entries = files
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const file = item as Record<string, unknown>;
+      const relativePath =
+        (typeof file.relativePath === 'string' && file.relativePath) ||
+        (typeof file.filePath === 'string' && file.filePath) ||
+        undefined;
+      const before = typeof file.before === 'string' ? file.before : '';
+      const after = typeof file.after === 'string' ? file.after : '';
+      return {
+        path: relativePath,
+        code: before,
+        after,
+        isWrite: true,
+        callId: `${baseCallId}:${index}`,
+        toolStatus: status,
+        toolName: 'apply_patch' as const,
+        toolTitle: relativePath,
+        title: toolPrefix('apply_patch', 'PATCH', relativePath),
+        lang: helpers.guessLanguage(relativePath),
+        view: 'diff' as const,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+  if (entries.length === 0) return null;
   return entries;
 }
 
