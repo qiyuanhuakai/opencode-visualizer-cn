@@ -22,6 +22,7 @@ type SessionMutationInfo = {
   title?: string;
   slug?: string;
   directory?: string;
+  revert?: SessionInfo['revert'];
   time?: {
     created?: number;
     updated?: number;
@@ -100,6 +101,17 @@ function sanitizeDirectoryList(value: unknown): string[] {
     result.add(normalized);
   });
   return Array.from(result);
+}
+
+function isSameRevert(a: SessionInfo['revert'], b: SessionInfo['revert']) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (
+    a.messageID === b.messageID &&
+    a.partID === b.partID &&
+    a.snapshot === b.snapshot &&
+    a.diff === b.diff
+  );
 }
 
 export function createStateBuilder() {
@@ -395,6 +407,8 @@ export function createStateBuilder() {
     const incomingParentId = info.parentID?.trim() || undefined;
     const previous = existing?.session;
     const parentID = incomingParentId ?? previous?.parentID;
+    const hasRevert = Object.prototype.hasOwnProperty.call(info, 'revert');
+    const revert = hasRevert ? info.revert : previous?.revert;
 
     let targetDirectory =
       normalizeDirectory(info.directory) ||
@@ -421,6 +435,7 @@ export function createStateBuilder() {
       timeCreated: info.time?.created ?? previous?.timeCreated,
       timeUpdated: info.time?.updated ?? previous?.timeUpdated,
       timeArchived: info.time?.archived ?? previous?.timeArchived,
+      revert,
     };
 
     const hasSameProject = existing?.projectId === resolvedProjectId;
@@ -435,7 +450,8 @@ export function createStateBuilder() {
       previous?.status === next.status &&
       previous?.timeCreated === next.timeCreated &&
       previous?.timeUpdated === next.timeUpdated &&
-      previous?.timeArchived === next.timeArchived;
+      previous?.timeArchived === next.timeArchived &&
+      isSameRevert(previous?.revert, next.revert);
     if (unchanged) return null;
 
     if (existing && (!hasSameProject || !hasSameDirectory)) {
@@ -560,7 +576,10 @@ export function createStateBuilder() {
   function applySessions(sessions: SessionInfo[]) {
     const list = Array.isArray(sessions) ? sessions : [];
     list.forEach((session) => {
-      upsertSession(session);
+      upsertSession({
+        ...session,
+        revert: session.revert,
+      });
     });
   }
 
@@ -595,13 +614,19 @@ export function createStateBuilder() {
   }
 
   function processSessionCreated(info: SessionInfo): string | null {
-    const changed = upsertSession(info);
+    const changed = upsertSession({
+      ...info,
+      revert: info.revert,
+    });
     pruneEphemeralChildren();
     return changed;
   }
 
   function processSessionUpdated(info: SessionInfo): string | null {
-    const changed = upsertSession(info);
+    const changed = upsertSession({
+      ...info,
+      revert: info.revert,
+    });
     pruneEphemeralChildren();
     return changed;
   }

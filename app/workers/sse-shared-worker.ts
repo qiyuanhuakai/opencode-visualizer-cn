@@ -200,9 +200,9 @@ function isSessionInfo(value: unknown): value is SessionInfo {
   if (record.revert !== undefined) {
     const revert = asRecord(record.revert);
     if (!revert || !asString(revert.messageID)) return false;
-    if (revert.partID !== undefined && !asString(revert.partID)) return false;
-    if (revert.snapshot !== undefined && !asString(revert.snapshot)) return false;
-    if (revert.diff !== undefined && !asString(revert.diff)) return false;
+    if (revert.partID !== undefined && asString(revert.partID) === undefined) return false;
+    if (revert.snapshot !== undefined && asString(revert.snapshot) === undefined) return false;
+    if (revert.diff !== undefined && asString(revert.diff) === undefined) return false;
   }
 
   return true;

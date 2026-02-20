@@ -26,6 +26,12 @@ export type SessionState = {
   timeCreated?: number;
   timeUpdated?: number;
   timeArchived?: number;
+  revert?: {
+    messageID: string;
+    partID?: string;
+    snapshot?: string;
+    diff?: string;
+  };
 };
 
 /**

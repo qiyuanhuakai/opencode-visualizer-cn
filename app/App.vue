@@ -139,9 +139,21 @@
         <div class="absolute w-0 h-0 -z-10 flex items-center justify-center">
           <div class="flex fixed flex-col items-center w-96 h-40 translate-x-1/2 -translate-y-1/2">
             <div class="mb-4">
-              <svg width="24mm" height="12mm" version="1.1" viewBox="0 0 24 12" xmlns="http://www.w3.org/2000/svg">
-                <path d="m12.342 2.4512v3.328l1.3352 1.3352v3.9658l-0.67757 0.67756h-1.2953l-0.67757-0.67756v-8.629zm0-1.0562h-1.3153l-0.23914-0.23914v-0.91671l0.23914-0.23914h1.3153l0.23914 0.23914v0.91671zm10.602 9.6852-0.67756 0.67756h-6.6162l-0.67756-0.67756v-1.9928h1.3352v1.3352h2.6305v-2.6505h-3.2882l-0.67756-0.67756v-3.9658l0.67756-0.67757h6.6162l0.67756 0.67757v1.9729h-1.3153v-1.3153h-3.9857v2.6505h4.6234l0.67756 0.67757z" fill="#ffffff" />
-                <path d="m1 0 5.4506 6-5.4506 6h3.6337l4.851-5.34v-1.32l-4.851-5.34z" fill="#60a5fa"/>
+              <svg
+                width="24mm"
+                height="12mm"
+                version="1.1"
+                viewBox="0 0 24 12"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="m12.342 2.4512v3.328l1.3352 1.3352v3.9658l-0.67757 0.67756h-1.2953l-0.67757-0.67756v-8.629zm0-1.0562h-1.3153l-0.23914-0.23914v-0.91671l0.23914-0.23914h1.3153l0.23914 0.23914v0.91671zm10.602 9.6852-0.67756 0.67756h-6.6162l-0.67756-0.67756v-1.9928h1.3352v1.3352h2.6305v-2.6505h-3.2882l-0.67756-0.67756v-3.9658l0.67756-0.67757h6.6162l0.67756 0.67757v1.9729h-1.3153v-1.3153h-3.9857v2.6505h4.6234l0.67756 0.67757z"
+                  fill="#ffffff"
+                />
+                <path
+                  d="m1 0 5.4506 6-5.4506 6h3.6337l4.851-5.34v-1.32l-4.851-5.34z"
+                  fill="#60a5fa"
+                />
               </svg>
             </div>
             <div class="text-text-100 rounded-xl bg-surface-900 py-2 px-4">
@@ -675,34 +687,6 @@ function toSessionInfo(
   };
 }
 
-function normalizeSessionRevert(value: unknown): SessionInfo['revert'] | null {
-  if (!value || typeof value !== 'object') return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.messageID !== 'string' || !record.messageID) return null;
-  return {
-    messageID: record.messageID,
-    partID: typeof record.partID === 'string' ? record.partID : undefined,
-    snapshot: typeof record.snapshot === 'string' ? record.snapshot : undefined,
-    diff: typeof record.diff === 'string' ? record.diff : undefined,
-  };
-}
-
-async function refreshSelectedSessionRevert(sessionId: string) {
-  if (!sessionId) {
-    sessionRevert.value = null;
-    return;
-  }
-  try {
-    const directory = activeDirectory.value.trim() || undefined;
-    const session = (await opencodeApi.getSession(sessionId, directory)) as SessionInfo;
-    if (selectedSessionId.value !== sessionId) return;
-    sessionRevert.value = normalizeSessionRevert(session?.revert);
-  } catch {
-    if (selectedSessionId.value !== sessionId) return;
-    sessionRevert.value = null;
-  }
-}
-
 function collectAllSessionsByProject() {
   const byProject: Record<string, SessionInfo[]> = {};
   Object.values(serverState.projects).forEach((project) => {
@@ -994,7 +978,18 @@ const {
   normalizeSessionDiffEntries,
 } = useFileTree({ activeDirectory, selectedSessionId });
 
-const sessionRevert = ref<SessionInfo['revert'] | null>(null);
+const sessionRevert = computed<SessionInfo['revert'] | null>(() => {
+  const projectId = selectedProjectId.value.trim();
+  const sessionId = selectedSessionId.value.trim();
+  if (!projectId || !sessionId) return null;
+  const project = serverState.projects[projectId];
+  if (!project) return null;
+  for (const sandbox of Object.values(project.sandboxes)) {
+    const session = sandbox.sessions[sessionId];
+    if (session) return session.revert ?? null;
+  }
+  return null;
+});
 
 const notificationSessions = computed<TopPanelNotificationSession[]>(() =>
   notificationSessionOrder.value
@@ -1202,7 +1197,6 @@ function validateSelectedSession() {
     return;
   }
 
-  sessionRevert.value = null;
   const nextSessionId = pickPreferredSessionId(
     allSessions.filter((session) => session.id !== sessionId),
   );
@@ -2226,9 +2220,6 @@ async function handleRevertMessage(payload: { sessionId: string; messageId: stri
       projectId: selectedProjectId.value,
       directory: activeDirectory.value.trim() || undefined,
     });
-    if (selectedSessionId.value === payload.sessionId) {
-      await refreshSelectedSessionRevert(payload.sessionId);
-    }
     sendStatus.value = 'Reverted.';
     if (selectedSessionId.value === payload.sessionId) void reloadSelectedSessionState();
   } catch (error) {
@@ -2243,12 +2234,11 @@ async function handleUndoRevert() {
   sessionError.value = '';
   try {
     sendStatus.value = 'Undoing...';
-    const session = await openCodeApi.unrevertSession({
+    await openCodeApi.unrevertSession({
       sessionId,
       projectId: selectedProjectId.value,
       directory: activeDirectory.value.trim() || undefined,
     });
-    sessionRevert.value = normalizeSessionRevert(session?.revert);
     sendStatus.value = 'Undone.';
   } catch (error) {
     sessionError.value = `Session undo failed: ${toErrorMessage(error)}`;
@@ -3267,8 +3257,11 @@ function formatSessionGraphDump(): string {
         const title = session.title ? `  "${session.title}"` : '';
         const slug = session.slug ? `  slug=${session.slug}` : '';
         lines.push(`${sPrefix}${sessionConnector}${session.id}  ${status}${title}${slug}`);
+        const revertLabel = session.revert
+          ? `msg=${session.revert.messageID}${session.revert.partID ? ` part=${session.revert.partID}` : ''}`
+          : '-';
         lines.push(
-          `${sessionPrefix}dir=${session.directory || sandboxDirectory}  parent=${session.parentID || '(root)'}  archived=${fmtTime(session.timeArchived)}`,
+          `${sessionPrefix}dir=${session.directory || sandboxDirectory}  parent=${session.parentID || '(root)'}  archived=${fmtTime(session.timeArchived)}  revert=${revertLabel}`,
         );
         lines.push(
           `${sessionPrefix}created=${fmtTime(session.timeCreated)}  updated=${fmtTime(session.timeUpdated)}`,
@@ -3739,7 +3732,6 @@ async function reloadSelectedSessionState() {
   if (selectedSessionId.value) {
     const sessionId = selectedSessionId.value;
     await fetchHistory(sessionId);
-    await refreshSelectedSessionRevert(sessionId);
     if (msg.roots.value.length === 0) {
       scrollOutputPanelToBottom(false);
     }
@@ -3751,8 +3743,6 @@ async function reloadSelectedSessionState() {
     const directory = activeDirectory.value || undefined;
     void fetchPendingPermissions(directory);
     void fetchPendingQuestions(directory);
-  } else {
-    sessionRevert.value = null;
   }
   nextTick(() => inputPanelRef.value?.focus());
 }
@@ -5458,11 +5448,7 @@ onMounted(() => {
     }),
   );
   globalEventUnsubscribers.push(
-    ge.on('session.updated', ({ info }) => {
-      const sessionInfo = info as SessionInfo;
-      if (sessionInfo.id === selectedSessionId.value) {
-        sessionRevert.value = normalizeSessionRevert(sessionInfo.revert);
-      }
+    ge.on('session.updated', () => {
       validateSelectedSession();
     }),
   );
