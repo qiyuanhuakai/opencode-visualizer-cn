@@ -212,6 +212,27 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
     });
   }
 
+  async function unrevertSession(payload: {
+    sessionId: string;
+    projectId: string;
+    directory?: string;
+  }): Promise<SessionInfo> {
+    return withPending(async () => {
+      const projectId = requireProjectId(payload.projectId);
+      const before = findSession(getProjects()[projectId], payload.sessionId);
+      const beforeUpdated = before?.timeUpdated ?? 0;
+      const session = (await opencodeApi.unrevertSession(
+        payload.sessionId,
+        payload.directory,
+      )) as SessionInfo;
+      await waitWithRetry((state) => {
+        const current = findSession(state[projectId], payload.sessionId);
+        return Boolean(current && (current.timeUpdated ?? 0) > beforeUpdated);
+      });
+      return session;
+    });
+  }
+
   async function createWorktree(payload: {
     directory: string;
     projectId: string;
@@ -283,6 +304,7 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
     deleteSession,
     updateProject,
     revertSession,
+    unrevertSession,
     createWorktree,
     deleteWorktree,
     listSessions,

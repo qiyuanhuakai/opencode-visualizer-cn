@@ -2243,13 +2243,13 @@ async function handleUndoRevert() {
   sessionError.value = '';
   try {
     sendStatus.value = 'Undoing...';
-    const session = (await opencodeApi.unrevertSession(
+    const session = await openCodeApi.unrevertSession({
       sessionId,
-      activeDirectory.value.trim() || undefined,
-    )) as SessionInfo;
+      projectId: selectedProjectId.value,
+      directory: activeDirectory.value.trim() || undefined,
+    });
     sessionRevert.value = normalizeSessionRevert(session?.revert);
     sendStatus.value = 'Undone.';
-    await reloadSelectedSessionState();
   } catch (error) {
     sessionError.value = `Session undo failed: ${toErrorMessage(error)}`;
   }
