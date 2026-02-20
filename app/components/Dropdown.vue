@@ -78,21 +78,29 @@ export interface DropdownAPI {
   updateSearch: (query: string) => void;
 }
 
-const props = defineProps<{
-  menuIcon?: string;
-  modelValue?: T;
-  label?: string;
-  placeholder?: string;
-  buttonClass?: unknown;
-  buttonStyle?: StyleValue;
-  popupClass?: unknown;
-  popupStyle?: StyleValue;
-  autoClose?: boolean;
-  disabled?: boolean;
-  open?: boolean;
-  search?: (query: string, signal: AbortSignal) => Promise<unknown[]>;
-  searchDebounce?: number;
-}>();
+const props = withDefaults(
+  defineProps<{
+    menuIcon?: string;
+    modelValue?: T;
+    label?: string;
+    placeholder?: string;
+    buttonClass?: unknown;
+    buttonStyle?: StyleValue;
+    popupClass?: unknown;
+    popupStyle?: StyleValue;
+    autoClose?: boolean;
+    disabled?: boolean;
+    open?: boolean;
+    search?: (query: string, signal: AbortSignal) => Promise<unknown[]>;
+    searchDebounce?: number;
+    autoFocus?: boolean;
+    autoHighlight?: boolean;
+  }>(),
+  {
+    autoFocus: true,
+    autoHighlight: true,
+  },
+);
 
 const emit = defineEmits<{
   select: [T];
@@ -157,9 +165,11 @@ watch(isActive, (active) => {
   emit('update:open', active);
   if (active) {
     nextTick(() => {
-      const autoFocusEl = menu.value?.querySelector('[autofocus]');
-      if (autoFocusEl instanceof HTMLElement) autoFocusEl.focus();
-      else menu.value?.focus();
+      if (props.autoFocus !== false) {
+        const autoFocusEl = menu.value?.querySelector('[autofocus]');
+        if (autoFocusEl instanceof HTMLElement) autoFocusEl.focus();
+        else menu.value?.focus();
+      }
       highlightSelected();
     });
   }
@@ -199,7 +209,17 @@ function highlightItem(el: HTMLElement | undefined) {
 function highlightSelected() {
   const items = getCandidateItems();
   const activeItem = items.find((el) => el.classList.contains('is-active'));
-  highlightItem(activeItem);
+  if (activeItem) {
+    highlightItem(activeItem);
+    return;
+  }
+  // No selected item — preserve any highlight set by external caller (e.g. moveHighlight).
+  const hasHighlight = items.some((el) => el.getAttribute('aria-selected') === 'true');
+  if (hasHighlight) return;
+  // No existing highlight — fall back to first item (unless autoHighlight is disabled).
+  if (props.autoHighlight && items.length > 0) {
+    highlightItem(items[0]);
+  }
 }
 
 function moveHighlight(direction: 'up' | 'down') {
@@ -291,6 +311,10 @@ function onMenuMutation() {
     return;
   }
   const hasHighlight = items.some((el) => el.getAttribute('aria-selected') === 'true');
+  if (props.autoHighlight === false) {
+    if (!hasHighlight) clearHighlight();
+    return;
+  }
   if (!hasHighlight) {
     highlightItem(items[0]);
   }

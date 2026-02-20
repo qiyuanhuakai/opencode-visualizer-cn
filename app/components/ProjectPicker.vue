@@ -11,6 +11,8 @@
         ref="dropdownRef"
         :open="dropdownOpen"
         :auto-close="false"
+        :auto-focus="false"
+        :auto-highlight="false"
         :popup-style="popupStyle"
         :popup-class="['picker-popup', { 'is-loading': isLoading }]"
         class="picker-dropdown"
@@ -34,14 +36,15 @@
               @input="handleInput"
               @keydown="handleInputKeydown"
             />
-            <button type="button" class="open-button" :disabled="!currentDir" @click="handleOpen">
+            <button type="button" class="open-button" :disabled="!canOpen" @click="handleOpen">
               Open
             </button>
           </div>
           <div v-if="error" class="error-text">{{ error }}</div>
         </template>
 
-        <DropdownItem v-if="!isAtRoot" value="..">../</DropdownItem>
+        <DropdownItem v-if="showCurrentEntry" value=".">./</DropdownItem>
+        <DropdownItem v-if="showParentEntry" value="..">../</DropdownItem>
         <DropdownItem v-for="item in suggestions" :key="item.name" :value="item.name">
           {{ item.name }}/
         </DropdownItem>
@@ -69,6 +72,12 @@ type FileNode = {
   ignored: boolean;
 };
 
+type DropdownHandle = {
+  moveHighlight: (direction: 'up' | 'down') => void;
+  selectHighlighted: () => boolean;
+  clearHighlight: () => void;
+};
+
 const props = defineProps<{
   open: boolean;
   homePath?: string;
@@ -79,7 +88,7 @@ const emit = defineEmits<{
   (event: 'close'): void;
 }>();
 
-const dropdownRef = ref<InstanceType<typeof Dropdown> | null>(null);
+const dropdownRef = ref<DropdownHandle | null>(null);
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const inputRef = ref<HTMLInputElement | null>(null);
 const rawInput = ref('');
@@ -130,13 +139,26 @@ const isAtRoot = computed(() => {
   return !dir || dir === '/';
 });
 
-/** Include `../` in Tab completion candidates only when filter starts with `.` (bash convention). */
-const completeParent = computed(() => {
+/** Show `./` when filter is empty or starts with `.`. */
+const showCurrentEntry = computed(() => {
+  const { filter } = parsed.value;
+  if (!filter) return true;
+  return '.'.startsWith(filter.toLowerCase());
+});
+
+/** Show `../` when filter is empty or starts with `.`, except at root. */
+const showParentEntry = computed(() => {
   if (isAtRoot.value) return false;
   const { filter } = parsed.value;
-  if (!filter) return false;
+  if (!filter) return true;
   return '..'.startsWith(filter.toLowerCase());
 });
+
+const hasDirectoryEntries = computed(() =>
+  allEntries.value.some((n) => n.type === 'directory' && !n.ignored),
+);
+
+const canOpen = computed(() => Boolean(resolveOpenDirectory()));
 
 // ---------------------------------------------------------------------------
 // Watchers
@@ -176,6 +198,8 @@ function initPicker() {
 
   const initial = homePrefix.value || '/';
   rawInput.value = collapseTilde(initial);
+  const dir = currentDir.value;
+  if (dir) void fetchDirectory(dir);
 
   nextTick(() => {
     inputRef.value?.focus();
@@ -238,6 +262,7 @@ function handleInput(e: Event) {
   }
 
   rawInput.value = value;
+  dropdownRef.value?.clearHighlight();
 
   if (didNormalize) {
     nextTick(() => {
@@ -264,7 +289,8 @@ function handleInputKeydown(e: KeyboardEvent) {
   }
   if (e.key === 'Enter') {
     e.preventDefault();
-    dropdownRef.value?.selectHighlighted();
+    const selected = dropdownRef.value?.selectHighlighted() ?? false;
+    if (!selected) handleOpen();
     return;
   }
   if (e.key === 'Tab') {
@@ -279,9 +305,9 @@ function handleInputKeydown(e: KeyboardEvent) {
 // ---------------------------------------------------------------------------
 
 function handleTab(reverse = false) {
-  // Collect Tab completion candidates (../ only when filter starts with ".")
+  // Collect Tab completion candidates (`./` is intentionally excluded).
   const names: string[] = [];
-  if (completeParent.value) names.push('..');
+  if (showParentEntry.value && hasDirectoryEntries.value) names.push('..');
   for (const s of suggestions.value) names.push(s.name);
 
   if (names.length === 0) return;
@@ -331,7 +357,16 @@ function longestCommonPrefix(strings: string[]): string {
 // Selection / navigation
 // ---------------------------------------------------------------------------
 
-function handleItemSelect(value: string) {
+function handleItemSelect(value: unknown) {
+  if (typeof value !== 'string') return;
+  if (value === '.') {
+    nextTick(() => {
+      inputRef.value?.focus();
+      const len = rawInput.value.length;
+      inputRef.value?.setSelectionRange(len, len);
+    });
+    return;
+  }
   if (value === '..') {
     goUp();
   } else {
@@ -358,13 +393,10 @@ function goUp() {
 }
 
 function handleOpen() {
-  const dir = currentDir.value;
-  if (!dir) return;
-  const clean = dir.replace(/\/+$/, '');
-  if (clean) {
-    emit('select', clean);
-    handleClose();
-  }
+  const target = resolveOpenDirectory();
+  if (!target) return;
+  emit('select', target);
+  handleClose();
 }
 
 function handleClose() {
@@ -415,6 +447,39 @@ function normalizePath(p: string): string {
 
 function ensureTrailingSlash(p: string): string {
   return p.endsWith('/') ? p : p + '/';
+}
+
+function resolveOpenDirectory(): string | null {
+  const dir = currentDir.value;
+  if (!dir) return null;
+
+  const { filter } = parsed.value;
+  if (!filter) {
+    return cleanDirectoryPath(dir);
+  }
+
+  if (filter === '.') {
+    return null;
+  }
+
+  if (filter === '..') {
+    if (dir === '/') return null;
+    const parent = dir.replace(/[^/]+\/$/, '') || '/';
+    return cleanDirectoryPath(parent);
+  }
+
+  const matched = allEntries.value.find(
+    (n) => n.type === 'directory' && !n.ignored && n.name.toLowerCase() === filter.toLowerCase(),
+  );
+  if (!matched) return null;
+
+  return cleanDirectoryPath(`${dir}${matched.name}/`);
+}
+
+function cleanDirectoryPath(p: string): string {
+  const normalized = normalizePath(expandTilde(p));
+  const clean = normalized.replace(/\/+$/, '');
+  return clean || '/';
 }
 </script>
 
