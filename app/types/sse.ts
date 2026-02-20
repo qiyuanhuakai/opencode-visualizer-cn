@@ -470,6 +470,7 @@ export type ProjectUpdatedPacket = ProjectInfo;
 // other events
 export type VcsBranchUpdatedPacket = { branch?: string };
 export type FileEditedPacket = { file: string };
+export type FileWatcherUpdatedPacket = { file: string; event: 'add' | 'change' | 'unlink' };
 export type LspUpdatedPacket = Record<string, never>;
 export type LspDiagnosticsPacket = { serverID: string; path: string };
 export type CommandExecutedPacket = {
@@ -518,6 +519,7 @@ export type GlobalEventMap = {
   'project.updated': ProjectUpdatedPacket;
   'vcs.branch.updated': VcsBranchUpdatedPacket;
   'file.edited': FileEditedPacket;
+  'file.watcher.updated': FileWatcherUpdatedPacket;
   'lsp.updated': LspUpdatedPacket;
   'lsp.client.diagnostics': LspDiagnosticsPacket;
   'command.executed': CommandExecutedPacket;

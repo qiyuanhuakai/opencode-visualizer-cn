@@ -1,5 +1,6 @@
 import { computed, ref, watch } from 'vue';
 import type { Ref } from 'vue';
+import type { FileWatcherUpdatedPacket } from '../types/sse';
 import * as opencodeApi from '../utils/opencode';
 
 export type TreeNode = {
@@ -48,6 +49,8 @@ const fileCacheVersion = ref(0);
 
 let sessionDiffRequestId = 0;
 let fileCacheBuildId = 0;
+const DIRECTORY_RELOAD_DEBOUNCE_MS = 120;
+const scheduledDirectoryReloads = new Map<string, ReturnType<typeof setTimeout>>();
 
 function getOptions(): UseFileTreeOptions {
   if (!boundOptions) {
@@ -181,6 +184,80 @@ function findTreeNodeByPath(nodes: TreeNode[], targetPath: string): TreeNode | n
   return null;
 }
 
+function clearScheduledDirectoryReloads() {
+  scheduledDirectoryReloads.forEach((timer) => clearTimeout(timer));
+  scheduledDirectoryReloads.clear();
+}
+
+function isPathInsideDirectory(path: string, directory: string) {
+  const normalizedDirectory = normalizeDirectory(directory);
+  const normalizedPath = normalizeDirectory(path);
+  if (!normalizedDirectory || !normalizedPath) return false;
+  return (
+    normalizedPath === normalizedDirectory || normalizedPath.startsWith(`${normalizedDirectory}/`)
+  );
+}
+
+function parentDirectoryPath(relativePath: string) {
+  if (!relativePath.includes('/')) return '.';
+  return relativePath.slice(0, relativePath.lastIndexOf('/')) || '.';
+}
+
+function mergeTreeNodeChildren(existing: TreeNode[], incoming: TreeNode[]) {
+  if (existing.length === 0 || incoming.length === 0) return incoming;
+  const existingByPath = new Map(existing.map((node) => [node.path, node]));
+  return incoming.map((node) => {
+    const previous = existingByPath.get(node.path);
+    if (
+      node.type === 'directory' &&
+      previous?.type === 'directory' &&
+      previous.loaded &&
+      Array.isArray(previous.children)
+    ) {
+      return {
+        ...node,
+        children: previous.children,
+        loaded: true,
+      };
+    }
+    return node;
+  });
+}
+
+function replaceDirectoryFilesInCache(parentPath: string, children: TreeNode[]) {
+  const directFiles = children.filter((node) => node.type === 'file').map((node) => node.path);
+  const preserved = files.value.filter((filePath) => {
+    if (parentPath === '.') {
+      return filePath.includes('/');
+    }
+    const prefix = `${parentPath}/`;
+    if (!filePath.startsWith(prefix)) return true;
+    return filePath.slice(prefix.length).includes('/');
+  });
+  const next = Array.from(new Set([...preserved, ...directFiles])).sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const changed =
+    next.length !== files.value.length || next.some((path, index) => path !== files.value[index]);
+  if (!changed) return;
+  files.value = next;
+  fileCacheVersion.value += 1;
+}
+
+function scheduleDirectoryReload(path: string) {
+  const timer = scheduledDirectoryReloads.get(path);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+  }
+  scheduledDirectoryReloads.set(
+    path,
+    setTimeout(() => {
+      scheduledDirectoryReloads.delete(path);
+      void loadSingleDirectory(path);
+    }, DIRECTORY_RELOAD_DEBOUNCE_MS),
+  );
+}
+
 function aggregateSessionStatuses() {
   const fileStatuses = sessionStatusByPath.value;
   const next: Record<string, 'added' | 'modified' | 'deleted'> = { ...fileStatuses };
@@ -298,15 +375,42 @@ async function loadSingleDirectory(path: string) {
     if (options.activeDirectory.value.trim() !== directory) return;
     const list = Array.isArray(data) ? data : [];
     const children = buildTreeNodes(list, directory, path);
-    treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, children);
+    if (path === '.') {
+      const mergedRootNodes = mergeTreeNodeChildren(treeNodes.value, children);
+      treeNodes.value = mergedRootNodes;
+      replaceDirectoryFilesInCache(path, mergedRootNodes);
+      return;
+    }
 
-    const foundFiles = children.filter((node) => node.type === 'file').map((node) => node.path);
-    if (foundFiles.length === 0) return;
-    const merged = new Set(files.value);
-    foundFiles.forEach((file) => merged.add(file));
-    files.value = Array.from(merged).sort((a, b) => a.localeCompare(b));
-    fileCacheVersion.value += 1;
+    const parent = findTreeNodeByPath(treeNodes.value, path);
+    const mergedChildren = mergeTreeNodeChildren(parent?.children ?? [], children);
+    treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, mergedChildren);
+    replaceDirectoryFilesInCache(path, mergedChildren);
   } catch {}
+}
+
+function feed(packet: FileWatcherUpdatedPacket) {
+  if (packet.event === 'change') return;
+  const options = getOptions();
+  const directory = options.activeDirectory.value.trim();
+  if (!directory) return;
+  if (!isPathInsideDirectory(packet.file, directory)) return;
+  if (treeLoading.value) return;
+
+  const relativePath = toRelativePath(packet.file, directory);
+  if (relativePath === '.') return;
+
+  if (packet.event === 'unlink') {
+    const next = files.value.filter(
+      (path) => path !== relativePath && !path.startsWith(`${relativePath}/`),
+    );
+    if (next.length !== files.value.length) {
+      files.value = next;
+      fileCacheVersion.value += 1;
+    }
+  }
+
+  scheduleDirectoryReload(parentDirectoryPath(relativePath));
 }
 
 async function rebuildFileCache() {
@@ -384,6 +488,7 @@ function initializeFileTree(options: UseFileTreeOptions) {
   watch(
     () => options.activeDirectory.value,
     (directory) => {
+      clearScheduledDirectoryReloads();
       const activePath = directory.trim();
       if (!activePath) {
         treeNodes.value = [];
@@ -424,6 +529,7 @@ export function useFileTree(options?: UseFileTreeOptions) {
     refreshSessionDiff,
     toggleTreeDirectory,
     selectTreeFile,
+    feed,
     updateSessionDiffState,
     normalizeSessionDiffEntries,
   };

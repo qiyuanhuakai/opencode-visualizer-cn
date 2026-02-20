@@ -945,10 +945,10 @@ const {
   treeError,
   sessionStatusByPath,
   sessionDiffByPath,
-  reloadTree,
   refreshSessionDiff,
   toggleTreeDirectory,
   selectTreeFile,
+  feed,
   updateSessionDiffState,
   normalizeSessionDiffEntries,
 } = useFileTree({ activeDirectory, selectedSessionId });
@@ -5438,14 +5438,15 @@ onMounted(() => {
         return;
       }
       if (Array.isArray(diff)) {
-        const entries = normalizeSessionDiffEntries(diff);
-        const hadAdded = entries.some((entry) => entry.status === 'added');
-        updateSessionDiffState(entries);
-        if (hadAdded) void reloadTree();
+        updateSessionDiffState(normalizeSessionDiffEntries(diff));
         return;
       }
       void refreshSessionDiff();
-      void reloadTree();
+    }),
+  );
+  globalEventUnsubscribers.push(
+    ge.on('file.watcher.updated', (packet) => {
+      feed(packet);
     }),
   );
   globalEventUnsubscribers.push(

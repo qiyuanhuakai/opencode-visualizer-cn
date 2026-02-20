@@ -67,6 +67,7 @@ const KNOWN_EVENT_TYPES = new Set<EventKey>([
   'project.updated',
   'vcs.branch.updated',
   'file.edited',
+  'file.watcher.updated',
   'lsp.updated',
   'lsp.client.diagnostics',
   'command.executed',
