@@ -264,6 +264,15 @@
         </button>
       </div>
       <div class="top-right">
+        <a
+          href="https://github.com/xenodrive/vis/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="control-button github-button"
+          title="GitHub"
+        >
+          <Icon icon="lucide:github" :width="16" :height="16" />
+        </a>
         <Dropdown
           v-model:open="menuOpen"
           auto-close
@@ -1174,6 +1183,24 @@ function handleOpenDirectory(close: () => void) {
 .control-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.github-button {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  justify-content: center;
+  text-decoration: none;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #94a3b8;
+}
+
+.github-button:hover {
+  background: transparent;
+  color: #e2e8f0;
 }
 
 .menu-button {
