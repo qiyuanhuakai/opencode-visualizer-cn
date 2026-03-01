@@ -129,12 +129,27 @@
       <div v-if="isLoading" class="tree-loading">Loading...</div>
       <div v-if="error" class="tree-error">{{ error }}</div>
     </div>
+    <div class="tree-statusbar">
+      <div class="tree-statusbar-left"></div>
+      <div class="tree-statusbar-right">
+        <button
+          type="button"
+          class="tree-statusbar-btn"
+          aria-label="Reload file tree"
+          @click="emit('reload')"
+        >
+          <Icon icon="lucide:refresh-cw" :width="13" :height="13" />
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
+import Dropdown from './Dropdown.vue';
+import DropdownItem from './Dropdown/Item.vue';
 
 export type TreeNode = {
   name: string;
@@ -197,6 +212,7 @@ const emit = defineEmits<{
   (event: 'open-diff', payload: { path: string; staged: boolean }): void;
   (event: 'open-diff-all', payload: { mode: 'staged' | 'changes' | 'all' }): void;
   (event: 'open-file', path: string): void;
+  (event: 'reload'): void;
 }>();
 
 const viewMode = ref<TreeViewMode>('all');
@@ -879,5 +895,45 @@ function onRowDoubleClick(row: { node: TreeNode }) {
 
 .tree-error {
   color: #fca5a5;
+}
+.tree-statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  border-top: 1px solid rgba(100, 116, 139, 0.28);
+  flex-shrink: 0;
+}
+
+.tree-statusbar-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.tree-statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.tree-statusbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0;
+}
+
+.tree-statusbar-btn:hover {
+  background: rgba(51, 65, 85, 0.55);
+  color: #cbd5e1;
 }
 </style>

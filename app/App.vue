@@ -61,6 +61,7 @@
               (payload: { mode: WorktreeSnapshotMode }) => openAllGitDiff(payload.mode)
             "
             @open-file="openFileViewer"
+            @reload="reloadTree().then(() => refreshGitStatus())"
           />
           <div
             v-if="!sidePanelCollapsed"
@@ -1161,6 +1162,7 @@ const {
   gitStatus,
   gitStatusByPath,
   refreshGitStatus,
+  reloadTree,
   toggleTreeDirectory,
   selectTreeFile,
   feed,

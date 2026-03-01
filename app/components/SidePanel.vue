@@ -49,6 +49,7 @@
         @open-diff="(payload) => emit('open-diff', payload)"
         @open-diff-all="(payload) => emit('open-diff-all', payload)"
         @open-file="(path) => emit('open-file', path)"
+        @reload="emit('reload')"
       />
     </div>
   </aside>
@@ -103,6 +104,7 @@ const emit = defineEmits<{
   (event: 'open-diff', payload: { path: string; staged: boolean }): void;
   (event: 'open-diff-all', payload: { mode: 'staged' | 'changes' | 'all' }): void;
   (event: 'open-file', path: string): void;
+  (event: 'reload'): void;
 }>();
 
 const tabs = [
