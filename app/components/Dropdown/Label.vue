@@ -15,7 +15,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 6px 8px 2px;
+  padding: 6px 8px 2px 2px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;

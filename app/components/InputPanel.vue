@@ -189,7 +189,11 @@
                       <span class="agent-dropdown-name" :style="agentOptionNameStyle(agent)">
                         {{ agent.label }}
                       </span>
-                      <span v-if="agent.description" class="agent-dropdown-description">
+                      <span
+                        v-if="agent.description"
+                        class="agent-dropdown-description"
+                        :title="agent.description"
+                      >
                         {{ agent.description }}
                       </span>
                     </div>
@@ -198,99 +202,99 @@
               </template>
             </Dropdown>
           </div>
-          <div class="input-field compact">
-            <div ref="modelDropdownRef" class="input-dropdown-root">
-              <Dropdown
-                v-model="modelValue"
-                :placeholder="hasModelOptions ? 'Select model' : 'Loading models...'"
-                :disabled="props.disabled || !hasModelOptions"
-                button-class="input-control input-dropdown-button"
-                popup-class="input-dropdown-popup"
-                auto-close
-                title="Model (Ctrl-M)"
-                @update:open="handleModelDropdownOpenChange"
-              >
-                <template #value="{ value: id }">
-                  <div class="model-button-label">
-                    <span
-                      v-if="findModelOption(id)?.providerLabel ?? findModelOption(id)?.providerID"
-                      class="model-button-provider"
-                      >{{
-                        findModelOption(id)?.providerLabel ?? findModelOption(id)?.providerID
-                      }}</span
-                    >
-                    <span class="model-button-name">{{ findModelOption(id)?.displayName }}</span>
-                  </div>
-                </template>
-                <template #default>
-                  <div class="model-picker">
-                    <DropdownSearch
-                      v-model="modelSearchQuery"
-                      placeholder="Search..."
-                      class="model-search"
-                    />
-                    <div class="model-picker-list">
-                      <div class="dropdown-list">
-                        <div v-if="!hasModelOptions" class="dropdown-empty">Loading models...</div>
-                        <div
-                          v-else-if="filteredGroupedModelOptions.length === 0"
-                          class="dropdown-empty"
-                        >
-                          No matching models
-                        </div>
-                        <template
-                          v-for="group in filteredGroupedModelOptions"
-                          :key="group.providerID"
-                        >
-                          <div class="input-dropdown-group-label">{{ group.label }}</div>
-                          <DropdownItem
-                            v-for="model in group.models"
-                            :key="model.id"
-                            :value="model.id"
-                          >
-                            <div class="model-dropdown-item">
-                              <span class="model-dropdown-name">{{ model.displayName }}</span>
-                              <span class="model-dropdown-path"
-                                >{{ model.providerID }}/{{ model.modelID }}</span
-                              >
-                            </div>
-                          </DropdownItem>
-                        </template>
-                      </div>
-                    </div>
-                  </div>
-                </template>
-              </Dropdown>
-            </div>
-          </div>
-          <div class="input-field compact">
+        </div>
+        <div class="input-field compact">
+          <div ref="modelDropdownRef" class="input-dropdown-root">
             <Dropdown
-              v-model="thinkingKeyValue"
-              :placeholder="hasThinkingOptions ? 'Select variant' : 'Loading...'"
-              :disabled="props.disabled || !hasThinkingOptions"
+              v-model="modelValue"
+              :placeholder="hasModelOptions ? 'Select model' : 'Loading models...'"
+              :disabled="props.disabled || !hasModelOptions"
               button-class="input-control input-dropdown-button"
               popup-class="input-dropdown-popup"
               auto-close
-              title="Variant (Ctrl-, / Ctrl-.)"
+              title="Model (Ctrl-M)"
               @update:open="handleModelDropdownOpenChange"
             >
-              <template #value="{ value: key }">
-                <span :style="thinkingValueStyle(key)">{{ findThinkingChoice(key)?.label }}</span>
+              <template #value="{ value: id }">
+                <div class="model-button-label">
+                  <span
+                    v-if="findModelOption(id)?.providerLabel ?? findModelOption(id)?.providerID"
+                    class="model-button-provider"
+                    >{{
+                      findModelOption(id)?.providerLabel ?? findModelOption(id)?.providerID
+                    }}</span
+                  >
+                  <span class="model-button-name">{{ findModelOption(id)?.displayName }}</span>
+                </div>
               </template>
               <template #default>
-                <div class="dropdown-list">
-                  <div v-if="!hasThinkingOptions" class="dropdown-empty">Loading...</div>
-                  <DropdownItem
-                    v-for="option in thinkingChoices"
-                    :key="option.key"
-                    :value="option.key"
-                  >
-                    <span class="dropdown-item-label">{{ option.label }}</span>
-                  </DropdownItem>
+                <div class="model-picker">
+                  <DropdownSearch
+                    v-model="modelSearchQuery"
+                    placeholder="Search..."
+                    class="model-search"
+                  />
+                  <div class="model-picker-list">
+                    <div class="dropdown-list">
+                      <div v-if="!hasModelOptions" class="dropdown-empty">Loading models...</div>
+                      <div
+                        v-else-if="filteredGroupedModelOptions.length === 0"
+                        class="dropdown-empty"
+                      >
+                        No matching models
+                      </div>
+                      <template
+                        v-for="group in filteredGroupedModelOptions"
+                        :key="group.providerID"
+                      >
+                        <DropdownLabel>{{ group.label }}</DropdownLabel>
+                        <DropdownItem
+                          v-for="model in group.models"
+                          :key="model.id"
+                          :value="model.id"
+                        >
+                          <div class="model-dropdown-item">
+                            <span class="model-dropdown-name">{{ model.displayName }}</span>
+                            <span class="model-dropdown-path"
+                              >{{ model.providerID }}/{{ model.modelID }}</span
+                            >
+                          </div>
+                        </DropdownItem>
+                      </template>
+                    </div>
+                  </div>
                 </div>
               </template>
             </Dropdown>
           </div>
+        </div>
+        <div class="input-field compact">
+          <Dropdown
+            v-model="thinkingKeyValue"
+            :placeholder="hasThinkingOptions ? 'Select variant' : 'Loading...'"
+            :disabled="props.disabled || !hasThinkingOptions"
+            button-class="input-control input-dropdown-button"
+            popup-class="input-dropdown-popup"
+            auto-close
+            title="Variant (Ctrl-, / Ctrl-.)"
+            @update:open="handleModelDropdownOpenChange"
+          >
+            <template #value="{ value: key }">
+              <span :style="thinkingValueStyle(key)">{{ findThinkingChoice(key)?.label }}</span>
+            </template>
+            <template #default>
+              <div class="dropdown-list">
+                <div v-if="!hasThinkingOptions" class="dropdown-empty">Loading...</div>
+                <DropdownItem
+                  v-for="option in thinkingChoices"
+                  :key="option.key"
+                  :value="option.key"
+                >
+                  <span class="dropdown-item-label">{{ option.label }}</span>
+                </DropdownItem>
+              </div>
+            </template>
+          </Dropdown>
         </div>
         <div class="input-actions">
           <button
@@ -361,6 +365,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
+import DropdownLabel from './Dropdown/Label.vue';
 import DropdownSearch from './Dropdown/Search.vue';
 import { useMessages } from '../composables/useMessages';
 import { useFavoriteMessages } from '../composables/useFavoriteMessages';
@@ -1101,9 +1106,18 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.input-dropdown-popup) {
+  /* Always open upward since input toolbar is at the bottom */
+  top: auto;
+  bottom: anchor(top);
+  margin-top: 0;
+  margin-bottom: 6px;
+  position-try-fallbacks: none;
   max-height: 280px;
-  min-width: 200px;
   outline: none;
+}
+
+:deep(.input-dropdown-popup:has(.agent-dropdown-item)) {
+  min-width: 320px;
 }
 
 :deep(.input-dropdown-popup:has(.model-picker)) {
@@ -1130,14 +1144,6 @@ const inputMessageStyle = computed(() => {
   white-space: nowrap;
 }
 
-.input-dropdown-group-label {
-  font-size: 10px;
-  color: #94a3b8;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 6px 8px 2px;
-}
-
 .agent-dropdown-item {
   display: flex;
   flex-direction: column;
@@ -1156,6 +1162,9 @@ const inputMessageStyle = computed(() => {
   font-size: 10px;
   color: #94a3b8;
   line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-button-label {
