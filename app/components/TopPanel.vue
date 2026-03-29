@@ -33,7 +33,7 @@
           :label="dropdownLabel"
           placeholder="Select session"
           title="Select session (Ctrl-G)"
-          auto-close
+          :auto-close="!managementMode"
           :popup-style="{ minWidth: '420px', width: 'min(680px, 90vw)', maxWidth: '90vw' }"
           popup-class="max-lg:left-0! max-lg:w-screen! max-lg:min-w-0! max-lg:max-w-none!"
           @select="onTreeSelect"
@@ -72,6 +72,71 @@
                   </button>
                 </template>
               </DropdownSearch>
+
+              <div v-if="managementMode" class="management-toolbar">
+                <div class="management-title">
+                  <Icon icon="lucide:check-check" :width="14" :height="14" />
+                  <span>Management</span>
+                  <span class="management-count">{{ selectedCount }} selected</span>
+                </div>
+                <div class="management-actions">
+                  <button
+                    type="button"
+                    class="management-action"
+                    @click.stop="toggleManagementMode"
+                  >
+                    Done
+                  </button>
+                  <button
+                    type="button"
+                    class="management-action"
+                    :disabled="visibleSessionKeys.length === 0"
+                    @click.stop="toggleSelectAllVisible"
+                  >
+                    {{ allVisibleSelected ? 'Unselect visible' : 'Select visible' }}
+                  </button>
+                  <button
+                    type="button"
+                    class="management-action"
+                    :disabled="selectedCount === 0"
+                    @click.stop="clearManagedSessions"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    class="management-action"
+                    :disabled="batchPinTargets.length === 0"
+                    @click.stop="emitBatchSessionAction('pin')"
+                  >
+                    Pin · {{ batchPinTargets.length }}
+                  </button>
+                  <button
+                    type="button"
+                    class="management-action"
+                    :disabled="batchUnpinTargets.length === 0"
+                    @click.stop="emitBatchSessionAction('unpin')"
+                  >
+                    Unpin · {{ batchUnpinTargets.length }}
+                  </button>
+                  <button
+                    type="button"
+                    class="management-action"
+                    :disabled="batchArchiveTargets.length === 0"
+                    @click.stop="emitBatchSessionAction('archive')"
+                  >
+                    Archive · {{ batchArchiveTargets.length }}
+                  </button>
+                  <button
+                    type="button"
+                    class="management-action is-danger"
+                    :disabled="batchDeleteTargets.length === 0"
+                    @click.stop="emitBatchSessionAction('delete')"
+                  >
+                    Delete · {{ batchDeleteTargets.length }}
+                  </button>
+                </div>
+              </div>
 
               <div class="tree-content">
                 <div v-if="displayedTree.length === 0" class="tree-empty">
@@ -177,6 +242,7 @@
                       class="tree-session-row"
                     >
                       <DropdownItem
+                        v-if="!managementMode"
                         :href="sessionShareHref(worktree.projectId, session.id)"
                         :value="{
                           projectId: worktree.projectId,
@@ -241,6 +307,71 @@
                           />
                         </button>
                       </DropdownItem>
+                      <div
+                        v-else
+                        class="ui-dropdown-item ui-input-candidate-item management-session-item"
+                        :class="{
+                          'is-active': isManagedSessionSelected(
+                            worktree.projectId,
+                            sandbox.directory,
+                            session.id,
+                          ),
+                        }"
+                        :title="session.id"
+                        @click.stop="toggleManagedSession(worktree.projectId, sandbox.directory, session.id)"
+                      >
+                        <button
+                          type="button"
+                          class="management-check"
+                          :class="{
+                            'is-selected': isManagedSessionSelected(
+                              worktree.projectId,
+                              sandbox.directory,
+                              session.id,
+                            ),
+                          }"
+                          :title="
+                            isManagedSessionSelected(worktree.projectId, sandbox.directory, session.id)
+                              ? 'Unselect session'
+                              : 'Select session'
+                          "
+                          @click.stop="
+                            toggleManagedSession(worktree.projectId, sandbox.directory, session.id)
+                          "
+                        >
+                          <Icon
+                            :icon="
+                              isManagedSessionSelected(worktree.projectId, sandbox.directory, session.id)
+                                ? 'lucide:check-square'
+                                : 'lucide:square'
+                            "
+                            :width="16"
+                            :height="16"
+                          />
+                        </button>
+                        <div class="tree-session-main">
+                          <span class="session-status-icon" :title="session.status">{{
+                            sessionStatusIcon(session.status)
+                          }}</span>
+                          <div class="session-info">
+                            <div class="session-info-top">
+                              <span class="session-title">{{
+                                session.title || session.slug || session.id
+                              }}</span>
+                              <span v-if="session.pinnedAt" class="session-badge-pinned">pinned</span>
+                              <span v-if="session.archivedAt" class="session-badge-archived"
+                                >archived</span
+                              >
+                            </div>
+                            <span
+                              v-if="session.timeCreated || session.timeUpdated"
+                              class="session-time"
+                            >
+                              {{ formatSessionMetaTime(session) }}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -277,6 +408,20 @@
           title="Open shell"
         >
           <Icon icon="lucide:terminal" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
+          class="control-button management-toggle-button"
+          :class="{ 'is-active': managementMode }"
+          :title="managementMode ? 'Exit management mode' : 'Enter management mode'"
+          @pointerdown.stop.prevent
+          @click.stop="toggleManagementMode"
+        >
+          <Icon
+            :icon="managementMode ? 'lucide:check-check' : 'lucide:list-checks'"
+            :width="16"
+            :height="16"
+          />
         </button>
       </div>
       <div class="top-right">
@@ -364,6 +509,17 @@ export type TopPanelNotificationSession = {
   count: number;
 };
 
+export type TopPanelBatchSessionTarget = {
+  sessionId: string;
+  projectId?: string;
+  directory: string;
+};
+
+export type TopPanelBatchSessionActionPayload = {
+  action: 'pin' | 'unpin' | 'archive' | 'delete';
+  sessions: TopPanelBatchSessionTarget[];
+};
+
 type SessionSelectPayload = {
   projectId?: string;
   worktree: string;
@@ -388,6 +544,7 @@ const totalNotificationCount = computed(() =>
 const emit = defineEmits<{
   (event: 'select-notification'): void;
   (event: 'select-session', payload: SessionSelectPayload): void;
+  (event: 'batch-session-action', payload: TopPanelBatchSessionActionPayload): void;
   (event: 'create-worktree-from', worktree: string): void;
   (event: 'new-session'): void;
   (event: 'new-session-in', payload: { worktree: string; directory: string }): void;
@@ -411,7 +568,11 @@ watch(treeDropdownOpen, (open) => {
   if (open) {
     searchQuery.value = '';
   }
-  if (!open) emit('dropdown-closed');
+  if (!open) {
+    emit('dropdown-closed');
+    managementMode.value = false;
+    managedSessionKeys.value = [];
+  }
 });
 
 function openSessionDropdown() {
@@ -439,6 +600,103 @@ const MAX_SESSIONS = 5;
 
 const searchQuery = ref('');
 const isShiftPressed = ref(false);
+const managementMode = ref(false);
+const managedSessionKeys = ref<string[]>([]);
+
+function managedSessionKey(projectId: string | undefined, directory: string, sessionId: string) {
+  return `${projectId?.trim() ?? ''}::${directory.trim()}::${sessionId.trim()}`;
+}
+
+const sessionTargetMapByKey = computed(() => {
+  const map = new Map<
+    string,
+    {
+      target: TopPanelBatchSessionTarget;
+      session: TopPanelSession;
+    }
+  >();
+  props.treeData.forEach((worktree) => {
+    worktree.sandboxes.forEach((sandbox) => {
+      sandbox.sessions.forEach((session) => {
+        const key = managedSessionKey(worktree.projectId, sandbox.directory, session.id);
+        map.set(key, {
+          target: {
+            sessionId: session.id,
+            projectId: worktree.projectId,
+            directory: sandbox.directory,
+          },
+          session,
+        });
+      });
+    });
+  });
+  return map;
+});
+
+const selectedCount = computed(() => managedSessionKeys.value.length);
+
+const selectedEntries = computed(() =>
+  managedSessionKeys.value
+    .map((key) => sessionTargetMapByKey.value.get(key))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        target: TopPanelBatchSessionTarget;
+        session: TopPanelSession;
+      } => Boolean(entry),
+    ),
+);
+
+const visibleSessionKeys = computed(() =>
+  displayedTree.value.flatMap((worktree) =>
+    worktree.sandboxes.flatMap((sandbox) =>
+      sandbox.sessions.map((session) =>
+        managedSessionKey(worktree.projectId, sandbox.directory, session.id),
+      ),
+    ),
+  ),
+);
+
+const allVisibleSelected = computed(() => {
+  if (visibleSessionKeys.value.length === 0) return false;
+  const selected = new Set(managedSessionKeys.value);
+  return visibleSessionKeys.value.every((key) => selected.has(key));
+});
+
+const batchPinTargets = computed(() =>
+  selectedEntries.value
+    .filter((entry) => !entry.session.archivedAt && !entry.session.pinnedAt)
+    .map((entry) => entry.target),
+);
+
+const batchUnpinTargets = computed(() =>
+  selectedEntries.value
+    .filter((entry) => !entry.session.archivedAt && Boolean(entry.session.pinnedAt))
+    .map((entry) => entry.target),
+);
+
+const batchArchiveTargets = computed(() =>
+  selectedEntries.value
+    .filter((entry) => !entry.session.archivedAt)
+    .map((entry) => entry.target),
+);
+
+const batchDeleteTargets = computed(() => selectedEntries.value.map((entry) => entry.target));
+
+const batchSessionTargetsByAction = computed(() => {
+  return {
+    pin: batchPinTargets.value,
+    unpin: batchUnpinTargets.value,
+    archive: batchArchiveTargets.value,
+    delete: batchDeleteTargets.value,
+  };
+});
+
+watch(sessionTargetMapByKey, (map) => {
+  if (managedSessionKeys.value.length === 0) return;
+  managedSessionKeys.value = managedSessionKeys.value.filter((key) => map.has(key));
+});
 
 const selectedDisplay = computed(() => {
   const sid = props.selectedSessionId;
@@ -652,6 +910,77 @@ function handleSessionPinToggle(sessionId: string, pinnedAt?: number) {
   emit('pin-session', sessionId);
 }
 
+function isManagedSessionSelected(projectId: string | undefined, directory: string, sessionId: string) {
+  const key = managedSessionKey(projectId, directory, sessionId);
+  return managedSessionKeys.value.includes(key);
+}
+
+function toggleManagedSession(projectId: string | undefined, directory: string, sessionId: string) {
+  if (!sessionId) return;
+  const key = managedSessionKey(projectId, directory, sessionId);
+  const selected = new Set(managedSessionKeys.value);
+  if (selected.has(key)) {
+    selected.delete(key);
+  } else {
+    selected.add(key);
+  }
+  managedSessionKeys.value = Array.from(selected);
+}
+
+function clearManagedSessions() {
+  managedSessionKeys.value = [];
+}
+
+function toggleSelectAllVisible() {
+  if (visibleSessionKeys.value.length === 0) return;
+  if (allVisibleSelected.value) {
+    const visibleSet = new Set(visibleSessionKeys.value);
+    managedSessionKeys.value = managedSessionKeys.value.filter((key) => !visibleSet.has(key));
+    return;
+  }
+  const selected = new Set(managedSessionKeys.value);
+  visibleSessionKeys.value.forEach((key) => selected.add(key));
+  managedSessionKeys.value = Array.from(selected);
+}
+
+function toggleManagementMode() {
+  const next = !managementMode.value;
+  managementMode.value = next;
+  if (next) {
+    treeDropdownOpen.value = true;
+  }
+  if (!managementMode.value) {
+    managedSessionKeys.value = [];
+  }
+}
+
+function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload['action']) {
+  const sessions = batchSessionTargetsByAction.value[action];
+  if (sessions.length === 0) return;
+
+  if (action === 'delete' && typeof window !== 'undefined') {
+    const confirmed = window.confirm(`Delete ${sessions.length} selected session(s)?`);
+    if (!confirmed) return;
+  }
+
+  emit('batch-session-action', {
+    action,
+    sessions,
+  });
+
+  if (action === 'delete' || action === 'archive') {
+    const affected = new Set(
+      sessions.map((session) =>
+        managedSessionKey(session.projectId, session.directory, session.sessionId),
+      ),
+    );
+    managedSessionKeys.value = managedSessionKeys.value.filter((key) => !affected.has(key));
+    return;
+  }
+
+  managedSessionKeys.value = [...managedSessionKeys.value];
+}
+
 function handleGlobalKeydown(event: KeyboardEvent) {
   isShiftPressed.value = event.shiftKey;
 }
@@ -772,6 +1101,62 @@ function handleOpenDirectory(close: () => void) {
   cursor: pointer;
   display: inline-flex;
   align-items: center;
+}
+
+.management-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid #334155;
+  background: rgba(14, 24, 40, 0.95);
+}
+
+.management-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.management-count {
+  color: #93c5fd;
+  font-variant-numeric: tabular-nums;
+}
+
+.management-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.management-action {
+  border: 1px solid #334155;
+  border-radius: 999px;
+  background: #111a2c;
+  color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.management-action:hover {
+  background: #1d2a45;
+}
+
+.management-action.is-danger {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.management-action:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .tree-content {
@@ -923,6 +1308,56 @@ function handleOpenDirectory(close: () => void) {
 .tree-session-row :deep(.ui-dropdown-item.is-active) {
   background: rgba(59, 130, 246, 0.2);
   border: 1px solid rgba(59, 130, 246, 0.45);
+}
+
+.management-session-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px;
+  padding: 6px 8px 6px 40px;
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.management-session-item:hover,
+.management-session-item[aria-selected='true'] {
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.management-session-item.is-active {
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+}
+
+.management-check {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: #111a2c;
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.management-session-item .tree-session-main {
+  min-width: 0;
+}
+
+.management-check:hover {
+  background: #1d2a45;
+}
+
+.management-check.is-selected {
+  color: #60a5fa;
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(30, 64, 175, 0.2);
 }
 
 /* ===== Tree branch connectors ===== */
@@ -1147,6 +1582,25 @@ function handleOpenDirectory(close: () => void) {
   padding: 0;
   justify-content: center;
   color: #c4b5fd;
+}
+
+.management-toggle-button {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  justify-content: center;
+  color: #93c5fd;
+}
+
+.management-toggle-button.is-active {
+  border-color: rgba(59, 130, 246, 0.45);
+  background: rgba(30, 64, 175, 0.2);
+  color: #bfdbfe;
+}
+
+.management-toggle-button:hover {
+  background: #1d2a45;
 }
 
 .notification-button {

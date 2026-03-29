@@ -21,6 +21,7 @@
           @pin-session="pinSession"
           @unpin-session="unpinSession"
           @select-session="handleTopPanelSessionSelect"
+          @batch-session-action="handleTopPanelBatchSessionAction"
           @open-directory="openProjectPicker"
           @edit-project="handleEditProject"
           @open-settings="isSettingsOpen = true"
@@ -316,6 +317,8 @@ import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
 import Welcome from './components/Welcome.vue';
 import TopPanel, {
+  type TopPanelBatchSessionActionPayload,
+  type TopPanelBatchSessionTarget,
   type TopPanelNotificationSession,
   type TopPanelWorktree,
 } from './components/TopPanel.vue';
@@ -2575,15 +2578,15 @@ function handleNotificationSessionSelect() {
   void switchSessionSelection(entry.projectId.trim(), entry.sessionId.trim());
 }
 
-async function deleteSession(sessionId: string) {
+async function deleteSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
   if (!ensureConnectionReady('Deleting session')) return;
   sessionError.value = '';
   if (!sessionId) return;
   try {
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
-      selectedProjectId.value,
-      activeDirectory.value,
+      hints?.projectId,
+      hints?.directory,
     );
     clearLocalPinnedSession(projectId, sessionId);
     await openCodeApi.deleteSession({
@@ -2596,15 +2599,15 @@ async function deleteSession(sessionId: string) {
   }
 }
 
-async function archiveSession(sessionId: string) {
+async function archiveSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
   if (!ensureConnectionReady('Archiving session')) return;
   sessionError.value = '';
   if (!sessionId) return;
   try {
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
-      selectedProjectId.value,
-      activeDirectory.value,
+      hints?.projectId,
+      hints?.directory,
     );
     clearLocalPinnedSession(projectId, sessionId);
     await openCodeApi.archiveSession({
@@ -2617,12 +2620,16 @@ async function archiveSession(sessionId: string) {
   }
 }
 
-async function pinSession(sessionId: string) {
+async function pinSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
   if (!ensureConnectionReady('Pinning session')) return;
   sessionError.value = '';
   if (!sessionId) return;
   try {
-    const { projectId, directory } = resolveSessionOperationPayload(sessionId);
+    const { projectId, directory } = resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
     setLocalPinnedSession(projectId, sessionId, Date.now());
     await openCodeApi.pinSession({
       sessionId,
@@ -2655,6 +2662,93 @@ async function unpinSession(
     });
   } catch (error) {
     sessionError.value = `Session unpin failed: ${toErrorMessage(error)}`;
+  }
+}
+
+async function handleTopPanelBatchSessionAction(payload: TopPanelBatchSessionActionPayload) {
+  if (!payload || !Array.isArray(payload.sessions) || payload.sessions.length === 0) return;
+
+  if (!ensureConnectionReady('Batch session operation')) return;
+
+  const targets = payload.sessions
+    .map((entry): TopPanelBatchSessionTarget | null => {
+      if (!entry || typeof entry !== 'object') return null;
+      const sessionId = typeof entry.sessionId === 'string' ? entry.sessionId.trim() : '';
+      if (!sessionId) return null;
+      const projectId = typeof entry.projectId === 'string' ? entry.projectId.trim() : '';
+      const directory = typeof entry.directory === 'string' ? entry.directory.trim() : '';
+      if (!directory) return null;
+      return {
+        sessionId,
+        projectId: projectId || undefined,
+        directory,
+      };
+    })
+    .filter((entry): entry is TopPanelBatchSessionTarget => Boolean(entry));
+
+  if (targets.length === 0) return;
+
+  sessionError.value = '';
+  const failures: string[] = [];
+
+  for (const target of targets) {
+    const resolved = findSessionInProjects(target.sessionId);
+    const hints = {
+      projectId: target.projectId || resolved?.projectId,
+      directory: target.directory || resolved?.sandbox.directory,
+    };
+
+    try {
+      const { projectId, directory } = resolveSessionOperationPayload(
+        target.sessionId,
+        hints.projectId,
+        hints.directory,
+      );
+
+      if (payload.action === 'pin') {
+        setLocalPinnedSession(projectId, target.sessionId, Date.now());
+        await openCodeApi.pinSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+        continue;
+      }
+
+      if (payload.action === 'unpin') {
+        clearLocalPinnedSession(projectId, target.sessionId);
+        await openCodeApi.unpinSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+        continue;
+      }
+
+      if (payload.action === 'archive') {
+        clearLocalPinnedSession(projectId, target.sessionId);
+        await openCodeApi.archiveSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+        continue;
+      }
+
+      clearLocalPinnedSession(projectId, target.sessionId);
+      await openCodeApi.deleteSession({
+        sessionId: target.sessionId,
+        projectId,
+        directory,
+      });
+    } catch (error) {
+      failures.push(`${target.sessionId}: ${toErrorMessage(error)}`);
+    }
+  }
+
+  if (failures.length > 0) {
+    const firstError = failures[0];
+    sessionError.value = `Batch ${payload.action} partial failure (${failures.length}/${targets.length}). First error: ${firstError}`;
   }
 }
 
