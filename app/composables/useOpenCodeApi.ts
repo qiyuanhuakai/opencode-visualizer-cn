@@ -176,6 +176,29 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
     });
   }
 
+  async function unarchiveSession(payload: {
+    sessionId: string;
+    projectId: string;
+    directory?: string;
+  }): Promise<SessionInfo> {
+    return withPending(async () => {
+      const projectId = requireProjectId(payload.projectId);
+      const session = (await opencodeApi.updateSession(
+        payload.sessionId,
+        { time: { archived: 0, pinned: 0 } },
+        payload.directory,
+      )) as SessionInfo;
+      if (!session?.id) {
+        throw new Error('Session unarchive failed: invalid response.');
+      }
+      await waitWithRetry((state) => {
+        const current = findSession(state[projectId], payload.sessionId);
+        return Boolean(current && !current.timeArchived);
+      });
+      return session;
+    });
+  }
+
   async function pinSession(payload: {
     sessionId: string;
     projectId: string;
@@ -353,6 +376,7 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
     createSession,
     forkSession,
     archiveSession,
+    unarchiveSession,
     pinSession,
     unpinSession,
     deleteSession,

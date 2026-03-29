@@ -129,6 +129,14 @@
                   </button>
                   <button
                     type="button"
+                    class="management-action"
+                    :disabled="batchUnarchiveTargets.length === 0"
+                    @click.stop="emitBatchSessionAction('unarchive')"
+                  >
+                    Unarchive · {{ batchUnarchiveTargets.length }}
+                  </button>
+                  <button
+                    type="button"
                     class="management-action is-danger"
                     :disabled="batchDeleteTargets.length === 0"
                     @click.stop="emitBatchSessionAction('delete')"
@@ -287,6 +295,15 @@
                             :width="16"
                             :height="16"
                           />
+                        </button>
+                        <button
+                          v-else
+                          type="button"
+                          class="tree-action-button session-unarchive"
+                          title="Unarchive session"
+                          @click.stop.prevent="handleSessionUnarchive(session.id)"
+                        >
+                          <Icon icon="lucide:archive-restore" :width="16" :height="16" />
                         </button>
                         <button
                           v-if="!session.archivedAt"
@@ -516,7 +533,7 @@ export type TopPanelBatchSessionTarget = {
 };
 
 export type TopPanelBatchSessionActionPayload = {
-  action: 'pin' | 'unpin' | 'archive' | 'delete';
+  action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete';
   sessions: TopPanelBatchSessionTarget[];
 };
 
@@ -551,6 +568,7 @@ const emit = defineEmits<{
   (event: 'delete-active-directory', value: string): void;
   (event: 'delete-session', value: string): void;
   (event: 'archive-session', value: string): void;
+  (event: 'unarchive-session', value: string): void;
   (event: 'pin-session', value: string): void;
   (event: 'unpin-session', value: string): void;
   (event: 'open-directory'): void;
@@ -682,6 +700,12 @@ const batchArchiveTargets = computed(() =>
     .map((entry) => entry.target),
 );
 
+const batchUnarchiveTargets = computed(() =>
+  selectedEntries.value
+    .filter((entry) => Boolean(entry.session.archivedAt))
+    .map((entry) => entry.target),
+);
+
 const batchDeleteTargets = computed(() => selectedEntries.value.map((entry) => entry.target));
 
 const batchSessionTargetsByAction = computed(() => {
@@ -689,6 +713,7 @@ const batchSessionTargetsByAction = computed(() => {
     pin: batchPinTargets.value,
     unpin: batchUnpinTargets.value,
     archive: batchArchiveTargets.value,
+    unarchive: batchUnarchiveTargets.value,
     delete: batchDeleteTargets.value,
   };
 });
@@ -902,6 +927,10 @@ function handleSessionAction(sessionId: string, close?: () => void) {
   emit('archive-session', sessionId);
 }
 
+function handleSessionUnarchive(sessionId: string) {
+  emit('unarchive-session', sessionId);
+}
+
 function handleSessionPinToggle(sessionId: string, pinnedAt?: number) {
   if (pinnedAt) {
     emit('unpin-session', sessionId);
@@ -968,7 +997,7 @@ function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload['actio
     sessions,
   });
 
-  if (action === 'delete' || action === 'archive') {
+  if (action === 'delete' || action === 'archive' || action === 'unarchive') {
     const affected = new Set(
       sessions.map((session) =>
         managedSessionKey(session.projectId, session.directory, session.sessionId),
@@ -1520,6 +1549,11 @@ function handleOpenDirectory(close: () => void) {
 
 .session-pin {
   flex: 0 0 auto;
+}
+
+.session-unarchive {
+  flex: 0 0 auto;
+  color: #93c5fd;
 }
 
 .tree-footer {

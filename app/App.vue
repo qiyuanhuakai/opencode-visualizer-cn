@@ -18,6 +18,7 @@
           @delete-active-directory="deleteWorktree"
           @delete-session="deleteSession"
           @archive-session="archiveSession"
+          @unarchive-session="unarchiveSession"
           @pin-session="pinSession"
           @unpin-session="unpinSession"
           @select-session="handleTopPanelSessionSelect"
@@ -2620,6 +2621,27 @@ async function archiveSession(sessionId: string, hints?: { projectId?: string; d
   }
 }
 
+async function unarchiveSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
+  if (!ensureConnectionReady('Unarchiving session')) return;
+  sessionError.value = '';
+  if (!sessionId) return;
+  try {
+    const { projectId, directory } = resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
+    clearLocalPinnedSession(projectId, sessionId);
+    await openCodeApi.unarchiveSession({
+      sessionId,
+      projectId,
+      directory,
+    });
+  } catch (error) {
+    sessionError.value = `Session unarchive failed: ${toErrorMessage(error)}`;
+  }
+}
+
 async function pinSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
   if (!ensureConnectionReady('Pinning session')) return;
   sessionError.value = '';
@@ -2728,6 +2750,16 @@ async function handleTopPanelBatchSessionAction(payload: TopPanelBatchSessionAct
       if (payload.action === 'archive') {
         clearLocalPinnedSession(projectId, target.sessionId);
         await openCodeApi.archiveSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+        continue;
+      }
+
+      if (payload.action === 'unarchive') {
+        clearLocalPinnedSession(projectId, target.sessionId);
+        await openCodeApi.unarchiveSession({
           sessionId: target.sessionId,
           projectId,
           directory,
