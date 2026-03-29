@@ -5,6 +5,7 @@ import { FLOATING_WINDOW_KEY, type FloatingWindowAPI } from '../composables/useF
 import type { FloatingWindowEntry, useFloatingWindows } from '../composables/useFloatingWindows';
 import { useAutoScroller, type ScrollMode } from '../composables/useAutoScroller';
 import { useContentSearch } from '../composables/useContentSearch';
+import { useSettings } from '../composables/useSettings';
 import { Icon } from '@iconify/vue';
 
 const props = defineProps<{
@@ -15,6 +16,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   focus: [key: string];
   close: [key: string];
+  minimize: [key: string];
 }>();
 
 const windowEl = ref<HTMLElement>();
@@ -22,6 +24,7 @@ const bodyEl = ref<HTMLElement>();
 const searchInputEl = ref<HTMLInputElement>();
 
 const scrollMode = computed<ScrollMode>(() => props.entry.scroll || 'manual');
+const { showMinimizeButtons } = useSettings();
 const { showResumeButton, isFollowing, resumeFollow, notifyContentChange } = useAutoScroller(
   bodyEl,
   scrollMode,
@@ -108,6 +111,9 @@ const api: FloatingWindowAPI = {
   close: () => {
     emit('close', props.entry.key);
   },
+  minimize: () => {
+    emit('minimize', props.entry.key);
+  },
   onResize: (_callback: (w: number, h: number) => void) => {
     // Store callback for resize events
   },
@@ -117,14 +123,23 @@ provide(FLOATING_WINDOW_KEY, api);
 
 const windowStyle = computed(() => {
   const color = props.entry.color || '#3a4150';
+  const isMinimized = props.entry.minimized === true;
   return {
     '--win-x': `${props.entry.x}px`,
     '--win-y': `${props.entry.y}px`,
     width: props.entry.width ? `${props.entry.width}px` : '600px',
-    height: props.entry.height ? `${props.entry.height}px` : '400px',
+    height: isMinimized ? '22px' : (props.entry.height ? `${props.entry.height}px` : '400px'),
     zIndex: props.entry.zIndex,
     '--window-color': color,
   };
+});
+
+const canCloseWindow = computed(() => {
+  if (props.entry.closable) return true;
+  return (
+    props.entry.key.startsWith('reasoning:') ||
+    props.entry.key.startsWith('subagent:')
+  );
 });
 
 const scrollClass = computed(() => {
@@ -144,6 +159,10 @@ function onClose() {
 function onBodyClick() {
   if (bodyEl.value?.contains(document.activeElement)) return;
   bodyEl.value?.focus();
+}
+
+function onMinimize() {
+  emit('minimize', props.entry.key);
 }
 
 function openSearchMode() {
@@ -166,7 +185,8 @@ function onBodyKeydown(event: KeyboardEvent) {
     return;
   }
 
-  if (event.key === 'Escape' && props.entry.closable) {
+  if (event.key === 'Escape') {
+    if (!canCloseWindow.value) return;
     event.preventDefault();
     event.stopPropagation();
     onClose();
@@ -269,7 +289,7 @@ function getDragBounds() {
 }
 
 function onDragStart(e: PointerEvent) {
-  if ((e.target as HTMLElement).closest('.close-btn')) return;
+  if ((e.target as HTMLElement).closest('.close-btn, .minimize-btn')) return;
   e.preventDefault();
   cancelSnapAnimation();
 
@@ -400,6 +420,7 @@ let windowStartWidth = 0;
 let windowStartHeight = 0;
 
 function onResizeStart(e: PointerEvent) {
+  if (props.entry.minimized) return;
   e.stopPropagation();
   resizeStartX = e.clientX;
   resizeStartY = e.clientY;
@@ -435,15 +456,33 @@ function onResizeEnd(e: PointerEvent) {
   <div
     ref="windowEl"
     class="floating-window"
+    :class="{ minimized: entry.minimized, 'is-hidden-minimized': entry.minimized }"
     :style="windowStyle"
     @pointerdown.capture="onFocus"
     :data-floating-key="entry.key"
   >
     <div class="floating-window-titlebar" @pointerdown="onDragStart">
       <span class="title">{{ entry.title || 'Tool' }}</span>
-      <button v-if="entry.closable" class="close-btn" @click.stop="onClose">×</button>
+      <div class="window-actions">
+        <button
+          v-if="showMinimizeButtons"
+          class="minimize-btn"
+          aria-label="Minimize window"
+          @click.stop="onMinimize"
+        >
+          —
+        </button>
+        <button
+          v-if="canCloseWindow"
+          class="close-btn"
+          aria-label="Close window"
+          @click.stop="onClose"
+        >
+          ×
+        </button>
+      </div>
     </div>
-    <div class="floating-window-body-wrapper">
+    <div v-show="!entry.minimized" class="floating-window-body-wrapper">
       <div
         class="floating-window-body"
         :class="scrollClass"
@@ -471,7 +510,11 @@ function onResizeEnd(e: PointerEvent) {
         </button>
       </Transition>
     </div>
-    <div v-if="entry.resizable" class="floating-window-resizer" @pointerdown="onResizeStart" />
+    <div
+      v-show="entry.resizable && !entry.minimized"
+      class="floating-window-resizer"
+      @pointerdown="onResizeStart"
+    />
     <Transition name="search-bar">
       <div v-if="search.isSearching.value" class="fw-search-bar" @pointerdown.stop>
         <input
@@ -563,6 +606,26 @@ function onResizeEnd(e: PointerEvent) {
   text-overflow: ellipsis;
 }
 
+.window-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.minimize-btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.minimize-btn:hover {
+  opacity: 0.8;
+}
+
 .close-btn {
   background: transparent;
   border: none;
@@ -583,6 +646,15 @@ function onResizeEnd(e: PointerEvent) {
   overflow: hidden;
   min-height: 0;
   border-radius: 0 0 4px 4px;
+}
+
+.floating-window.minimized {
+  min-height: 22px;
+}
+
+.floating-window.is-hidden-minimized {
+  pointer-events: none;
+  visibility: hidden;
 }
 
 .floating-window-body {

@@ -169,11 +169,26 @@
               :entry="entry"
               :manager="fw"
               @focus="fw.bringToFront(entry.key)"
+              @minimize="handleFloatingWindowMinimize(entry.key)"
               @close="handleFloatingWindowClose(entry.key)"
             />
           </TransitionGroup>
         </div>
       </div>
+      <footer v-if="minimizedEntries.length > 0" class="app-dock-panel" role="toolbar">
+        <div class="window-dock-tray">
+          <button
+            v-for="entry in minimizedEntries"
+            :key="`dock-${entry.key}`"
+            type="button"
+            class="window-dock-chip"
+            :title="`Restore ${entry.title || 'window'}`"
+            @click="restoreFloatingWindow(entry.key)"
+          >
+            <span class="window-dock-chip-title">{{ entry.title || entry.key }}</span>
+          </button>
+        </div>
+      </footer>
     </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
       <div class="app-loading-card">
@@ -375,7 +390,7 @@ import {
 } from './utils/storageKeys';
 
 const credentials = useCredentials();
-const { suppressAutoWindows, pinnedSessionsLimit } = useSettings();
+const { suppressAutoWindows, showMinimizeButtons, pinnedSessionsLimit } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
 const FILE_VIEWER_WINDOW_HEIGHT = 520;
@@ -634,6 +649,7 @@ function isSamePinnedSessionStore(a: LocalPinnedSessionStore, b: LocalPinnedSess
 }
 
 const fw = useFloatingWindows();
+const minimizedEntries = computed(() => fw.entries.value.filter((entry) => entry.minimized));
 
 // Close auto-opened floating windows when suppress is toggled ON.
 // Tool auto windows: closable === false AND finite expiry (not Infinity).
@@ -651,6 +667,11 @@ watch(suppressAutoWindows, (suppressed) => {
       void fw.close(entry.key);
     }
   }
+});
+
+watch(showMinimizeButtons, (enabled) => {
+  if (enabled) return;
+  restoreAllMinimizedWindows();
 });
 
 const outputEl = ref<HTMLElement | null>(null);
@@ -2198,10 +2219,13 @@ function syncFloatingExtent() {
   const inputRect = input.getBoundingClientRect();
   const headerBottom = headerRect.bottom;
   const inputTop = inputRect.top;
+  const dockReserved = 0;
   const topOffset = Math.max(0, headerBottom);
   const availableHeight = Math.max(0, inputTop - headerBottom);
   canvas.style.setProperty('--canvas-top', `${topOffset}px`);
   canvas.style.setProperty('--canvas-height', `${availableHeight}px`);
+  canvas.style.setProperty('--dock-reserved', `${dockReserved}px`);
+  canvas.style.setProperty('--tool-area-height', `${Math.max(0, availableHeight - dockReserved)}px`);
   const rect = canvas.getBoundingClientRect();
   fw.setExtent(rect.width, rect.height);
 }
@@ -3579,6 +3603,33 @@ function handleFloatingWindowClose(key: string) {
   void fw.close(key);
 }
 
+function restoreAllMinimizedWindows() {
+  for (const entry of fw.entries.value) {
+    if (entry.minimized) fw.restore(entry.key);
+  }
+}
+
+function handleFloatingWindowMinimize(key: string) {
+  if (!showMinimizeButtons.value) return;
+  fw.minimize(key);
+}
+
+function restoreFloatingWindow(key: string) {
+  fw.restore(key);
+  nextTick(() => {
+    const body = document.querySelector(
+      `[data-floating-key="${key}"] .floating-window-body`,
+    ) as HTMLElement | null;
+    body?.focus();
+
+    if (key.startsWith('shell:')) {
+      const ptyId = key.slice('shell:'.length);
+      scheduleShellFit(ptyId);
+      shellSessionsByPtyId.get(ptyId)?.terminal.focus();
+    }
+  });
+}
+
 function disposeShellWindows() {
   const ids = Array.from(shellSessionsByPtyId.keys());
   ids.forEach((ptyId) => removeShellWindow(ptyId));
@@ -4316,6 +4367,16 @@ watch(
     updateFloatingExtentObserver();
   },
   { immediate: true },
+);
+
+watch(
+  () => minimizedEntries.value.length,
+  (count) => {
+    syncFloatingExtent();
+    if (!showMinimizeButtons.value && count > 0) {
+      restoreAllMinimizedWindows();
+    }
+  },
 );
 
 watch(
@@ -5228,6 +5289,7 @@ function openToolPartAsWindow(
             : undefined,
         title: patchEvent.title,
         color: toolColor(patchEvent.toolName),
+        closable: true,
         ...overrides,
       });
       openedKeys.push(key);
@@ -5257,6 +5319,7 @@ function openToolPartAsWindow(
             ? toolStatus
             : undefined,
         color: toolColor(toolName),
+        closable: true,
         ...overrides,
       });
       openedKeys.push(key);
@@ -5427,8 +5490,16 @@ async function handleEditMessage(payload: { sessionId: string; part: MessagePart
 }
 
 function toFileViewerKey(path: string, lines?: string) {
-  if (!lines) return `file-viewer:${path}`;
-  return `file-viewer:${path}:${lines}`;
+  const directory = activeDirectory.value.trim();
+  const requestPath = splitFileContentDirectoryAndPath(path, directory || null);
+  const normalizedPath =
+    requestPath.path === '.'
+      ? requestPath.directory
+      : requestPath.directory === '/'
+        ? `/${requestPath.path}`
+        : `${requestPath.directory.replace(/\/+$/, '')}/${requestPath.path}`;
+  if (!lines) return `file-viewer:${normalizedPath}`;
+  return `file-viewer:${normalizedPath}:${lines}`;
 }
 
 function toFileViewerTitle(path: string, lines?: string) {
@@ -5440,7 +5511,8 @@ function toFileViewerTitle(path: string, lines?: string) {
 async function openFileViewer(path: string, lines?: string) {
   const key = toFileViewerKey(path, lines);
   if (fw.has(key)) {
-    fw.bringToFront(key);
+    if (fw.get(key)?.minimized) fw.restore(key);
+    else fw.bringToFront(key);
     return;
   }
   const pos = getFileViewerPosition(0.18, 0.14);
@@ -6003,6 +6075,12 @@ onBeforeUnmount(() => {
   box-sizing: border-box;
 }
 
+.app-dock-panel {
+  flex: 0 0 auto;
+  width: 100%;
+  min-height: 0;
+}
+
 .app-loading-view {
   flex: 1 1 auto;
   min-height: 0;
@@ -6304,6 +6382,67 @@ onBeforeUnmount(() => {
   --term-line-height: 1.1;
   --term-width: 670px;
   --term-height: 386px;
+}
+
+.window-dock-tray {
+  position: relative;
+  width: 100%;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  pointer-events: auto;
+  z-index: 20;
+  background: color-mix(in srgb, #0b1220 92%, transparent);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(2, 6, 23, 0.32);
+  backdrop-filter: blur(3px);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+}
+
+.window-dock-tray::-webkit-scrollbar {
+  height: 5px;
+}
+
+.window-dock-tray::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.window-dock-tray::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 999px;
+}
+
+.window-dock-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  max-width: min(280px, 45vw);
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: color-mix(in srgb, #1e293b 82%, #0f172a);
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.window-dock-chip:hover {
+  background: color-mix(in srgb, #334155 84%, #0f172a);
+  border-color: rgba(226, 232, 240, 0.45);
+}
+
+.window-dock-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .output-panel {

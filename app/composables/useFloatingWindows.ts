@@ -25,6 +25,7 @@ export interface FloatingWindowEntry {
   smoothEngine?: 'raf' | 'native';
   focusOnOpen?: boolean;
   color?: string;
+  minimized?: boolean;
   time: number;
   expiry?: number;
   expiresAt: number;
@@ -47,6 +48,7 @@ const DEFAULT_OPTS: Partial<FloatingWindowEntry> = {
   scroll: 'force',
   width: 600,
   height: 400,
+  minimized: false,
 };
 
 let renderIdCounter = 0;
@@ -371,6 +373,19 @@ export function useFloatingWindows() {
     }
   }
 
+  function minimize(key: string): void {
+    const entry = entriesMap.get(key);
+    if (!entry) return;
+    entry.minimized = true;
+  }
+
+  function restore(key: string): void {
+    const entry = entriesMap.get(key);
+    if (!entry) return;
+    entry.minimized = false;
+    bringToFront(key);
+  }
+
   function extend(key: string, ms: number): void {
     const entry = entriesMap.get(key);
     if (entry) {
@@ -432,6 +447,8 @@ export function useFloatingWindows() {
     setTitle,
     setStatus,
     bringToFront,
+    minimize,
+    restore,
     extend,
     close,
     closeAll,

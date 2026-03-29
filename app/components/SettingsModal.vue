@@ -27,6 +27,20 @@
           </label>
         </div>
 
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">Show minimize button</div>
+            <div class="setting-description">
+              Toggle window minimization controls. Turning this off also restores all minimized
+              windows.
+            </div>
+          </div>
+          <label class="toggle-switch">
+            <input v-model="showMinimizeButtons" type="checkbox" class="toggle-input" />
+            <span class="toggle-track" />
+          </label>
+        </div>
+
         <div class="setting-row setting-row-stack">
           <div class="setting-info">
             <div class="setting-label">Pinned sessions limit</div>
@@ -67,6 +81,7 @@ defineEmits<{
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const {
   enterToSend,
+  showMinimizeButtons,
   pinnedSessionsLimit,
   minPinnedSessionsLimit,
   maxPinnedSessionsLimit,

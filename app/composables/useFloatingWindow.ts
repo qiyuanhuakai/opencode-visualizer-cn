@@ -13,6 +13,7 @@ export interface FloatingWindowAPI {
   setStatus(status: string): void;
   setColor(color: string): void;
   bringToFront(): void;
+  minimize(): void;
   close(): void;
   onResize(callback: (w: number, h: number) => void): void;
 }

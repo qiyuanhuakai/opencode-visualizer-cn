@@ -4,6 +4,7 @@ export const StorageKeys = {
   settings: {
     enterToSend: 'settings.enterToSend.v1',
     suppressAutoWindows: 'settings.suppressAutoWindows.v1',
+    showMinimizeButtons: 'settings.showMinimizeButtons.v1',
     pinnedSessionsLimit: 'settings.pinnedSessionsLimit.v1',
   },
   state: {
