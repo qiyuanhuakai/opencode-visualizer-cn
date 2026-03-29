@@ -124,6 +124,7 @@ export type SessionInfo = {
     updated: number;
     compacting?: number;
     archived?: number;
+    pinned?: number;
   };
   permission?: PermissionRule[];
   revert?: {

@@ -54,6 +54,16 @@ function nextRenderId(): string {
   return `fw-${++renderIdCounter}-${Date.now().toString(36)}`;
 }
 
+function resolveEntryClosable(
+  opts: Partial<FloatingWindowEntry>,
+  existing?: FloatingWindowEntry,
+): boolean {
+  if (typeof opts.closable === 'boolean') return opts.closable;
+  if (typeof existing?.closable === 'boolean') return existing.closable;
+  if (typeof DEFAULT_OPTS.closable === 'boolean') return DEFAULT_OPTS.closable;
+  return false;
+}
+
 const MANUAL_ZINDEX_OFFSET = 10000;
 
 let zIndexCounter = 100;
@@ -184,7 +194,7 @@ export function useFloatingWindows() {
       time: Date.now(),
       zIndex: existing
         ? existing.zIndex
-        : nextZIndex(isManualTier(key, opts.closable ?? existing?.closable)),
+        : nextZIndex(isManualTier(key, resolveEntryClosable(opts, existing))),
     } as FloatingWindowEntry;
 
     // When updating an existing entry, merge props instead of replacing

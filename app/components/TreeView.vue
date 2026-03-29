@@ -434,12 +434,6 @@ const pullMenuOpen = ref(false);
 const expanded = computed(() => new Set(props.expandedPaths));
 const branchIcon = computed(() => (props.branchInfo ? 'lucide:git-branch' : 'lucide:folder'));
 const branchName = computed(() => props.branchInfo?.branch ?? props.directoryName ?? 'no git');
-const upstreamRemote = computed(() => {
-  const upstream = props.branchInfo?.upstream;
-  if (!upstream) return 'origin';
-  const slashIdx = upstream.indexOf('/');
-  return slashIdx > 0 ? upstream.slice(0, slashIdx) : 'origin';
-});
 
 const branchTitle = computed(() => {
   const info = props.branchInfo;

@@ -26,6 +26,26 @@
             <span class="toggle-track" />
           </label>
         </div>
+
+        <div class="setting-row setting-row-stack">
+          <div class="setting-info">
+            <div class="setting-label">Pinned sessions limit</div>
+            <div class="setting-description">
+              Keep at most {{ maxPinnedSessionsLimit }} local pinned sessions; oldest pins are dropped
+              first.
+            </div>
+          </div>
+          <div class="number-setting-group">
+            <input
+              v-model.number="pinnedSessionsLimit"
+              type="number"
+              class="number-input"
+              :min="minPinnedSessionsLimit"
+              :max="maxPinnedSessionsLimit"
+              step="1"
+            />
+          </div>
+        </div>
       </div>
     </div>
   </dialog>
@@ -45,7 +65,12 @@ defineEmits<{
 }>();
 
 const dialogRef = ref<HTMLDialogElement | null>(null);
-const { enterToSend } = useSettings();
+const {
+  enterToSend,
+  pinnedSessionsLimit,
+  minPinnedSessionsLimit,
+  maxPinnedSessionsLimit,
+} = useSettings();
 
 watch(
   () => props.open,
@@ -148,6 +173,10 @@ watch(
   background: rgba(2, 6, 23, 0.45);
 }
 
+.setting-row-stack {
+  align-items: flex-start;
+}
+
 .setting-info {
   display: flex;
   flex-direction: column;
@@ -165,6 +194,42 @@ watch(
   font-size: 11px;
   color: #64748b;
 }
+
+.number-setting-group {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.number-input {
+  width: 84px;
+  height: 30px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: rgba(2, 6, 23, 0.6);
+  color: #e2e8f0;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: right;
+  padding: 0 8px;
+}
+
+.number-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+}
+
+.number-input::-webkit-outer-spin-button,
+.number-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.number-input {
+  -moz-appearance: textfield;
+}
+
 
 .toggle-switch {
   position: relative;

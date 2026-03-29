@@ -26,6 +26,7 @@ export type SessionState = {
   timeCreated?: number;
   timeUpdated?: number;
   timeArchived?: number;
+  timePinned?: number;
   revert?: {
     messageID: string;
     partID?: string;

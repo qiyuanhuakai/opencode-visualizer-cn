@@ -4,10 +4,12 @@ export const StorageKeys = {
   settings: {
     enterToSend: 'settings.enterToSend.v1',
     suppressAutoWindows: 'settings.suppressAutoWindows.v1',
+    pinnedSessionsLimit: 'settings.pinnedSessionsLimit.v1',
   },
   state: {
     sidePanelCollapsed: 'state.sidePanelCollapsed.v1',
     sidePanelTab: 'state.sidePanelTab.v1',
+    pinnedSessions: 'state.pinnedSessions.v1',
     lastAuthError: 'state.lastAuthError.v1',
   },
   drafts: {

@@ -166,6 +166,9 @@ function isSessionInfo(value: unknown): value is SessionInfo {
   if (time.archived !== undefined && asNumber(time.archived) === undefined) {
     return false;
   }
+  if (time.pinned !== undefined && asNumber(time.pinned) === undefined) {
+    return false;
+  }
 
   if (record.parentID !== undefined && asString(record.parentID) === undefined) {
     return false;

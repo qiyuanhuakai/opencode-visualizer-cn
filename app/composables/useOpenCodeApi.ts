@@ -17,6 +17,7 @@ type SessionInfo = {
     created?: number;
     updated?: number;
     archived?: number;
+    pinned?: number;
   };
 };
 
@@ -159,7 +160,7 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
       const archivedAt = payload.archivedAt ?? Date.now();
       const session = (await opencodeApi.updateSession(
         payload.sessionId,
-        { time: { archived: archivedAt } },
+        { time: { archived: archivedAt, pinned: 0 } },
         payload.directory,
       )) as SessionInfo;
       if (!session?.id) {
@@ -170,6 +171,54 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
         return Boolean(
           current && typeof current.timeArchived === 'number' && current.timeArchived > 0,
         );
+      });
+      return session;
+    });
+  }
+
+  async function pinSession(payload: {
+    sessionId: string;
+    projectId: string;
+    directory?: string;
+    pinnedAt?: number;
+  }): Promise<SessionInfo> {
+    return withPending(async () => {
+      const projectId = requireProjectId(payload.projectId);
+      const pinnedAt = payload.pinnedAt ?? Date.now();
+      const session = (await opencodeApi.updateSession(
+        payload.sessionId,
+        { time: { pinned: pinnedAt } },
+        payload.directory,
+      )) as SessionInfo;
+      if (!session?.id) {
+        throw new Error('Session pin failed: invalid response.');
+      }
+      await waitWithRetry((state) => {
+        const current = findSession(state[projectId], payload.sessionId);
+        return Boolean(current && typeof current.timePinned === 'number' && current.timePinned > 0);
+      });
+      return session;
+    });
+  }
+
+  async function unpinSession(payload: {
+    sessionId: string;
+    projectId: string;
+    directory?: string;
+  }): Promise<SessionInfo> {
+    return withPending(async () => {
+      const projectId = requireProjectId(payload.projectId);
+      const session = (await opencodeApi.updateSession(
+        payload.sessionId,
+        { time: { pinned: 0 } },
+        payload.directory,
+      )) as SessionInfo;
+      if (!session?.id) {
+        throw new Error('Session unpin failed: invalid response.');
+      }
+      await waitWithRetry((state) => {
+        const current = findSession(state[projectId], payload.sessionId);
+        return Boolean(current && !current.timePinned);
       });
       return session;
     });
@@ -274,8 +323,11 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
         .filter((session) => !session.parentID && !session.time?.archived)
         .slice()
         .sort(
-          (a, b) =>
-            (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0),
+          (a, b) => {
+            const pinDiff = (b.time?.pinned ?? 0) - (a.time?.pinned ?? 0);
+            if (pinDiff !== 0) return pinDiff;
+            return (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0);
+          },
         );
       const preferred = roots[0];
       if (preferred) {
@@ -301,6 +353,8 @@ export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>) {
     createSession,
     forkSession,
     archiveSession,
+    pinSession,
+    unpinSession,
     deleteSession,
     updateProject,
     revertSession,

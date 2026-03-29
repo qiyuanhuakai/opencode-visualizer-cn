@@ -27,6 +27,7 @@ type SessionMutationInfo = {
     created?: number;
     updated?: number;
     archived?: number;
+    pinned?: number;
   };
 };
 
@@ -56,6 +57,7 @@ export function resolveProjectColorHex(raw?: string): string | undefined {
 }
 
 function toSortTime(session: SessionState) {
+  if (session.timePinned) return session.timePinned;
   return session.timeUpdated ?? session.timeCreated ?? 0;
 }
 
@@ -435,6 +437,7 @@ export function createStateBuilder() {
       timeCreated: info.time?.created ?? previous?.timeCreated,
       timeUpdated: info.time?.updated ?? previous?.timeUpdated,
       timeArchived: info.time ? info.time.archived : previous?.timeArchived,
+      timePinned: info.time ? info.time.pinned : previous?.timePinned,
       revert,
     };
 
@@ -451,6 +454,7 @@ export function createStateBuilder() {
       previous?.timeCreated === next.timeCreated &&
       previous?.timeUpdated === next.timeUpdated &&
       previous?.timeArchived === next.timeArchived &&
+      previous?.timePinned === next.timePinned &&
       isSameRevert(previous?.revert, next.revert);
     if (unchanged) return null;
 

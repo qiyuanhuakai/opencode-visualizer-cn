@@ -33,6 +33,50 @@
         </button>
       </div>
       <TodoList v-if="activeTab === 'todo'" :sessions="todoSessions" />
+      <div v-else-if="activeTab === 'session'" class="session-body">
+        <div class="session-header">
+          <div class="session-title">SESSION</div>
+          <div class="session-count">{{ pinnedSessions.length }}</div>
+        </div>
+        <div v-if="pinnedSessions.length === 0" class="session-empty">No pinned sessions.</div>
+        <ul v-else class="session-list">
+          <li
+            v-for="session in pinnedSessions"
+            :key="`${session.projectId}:${session.sessionId}`"
+            class="session-item"
+            :class="{ 'is-active': selectedSessionId === session.sessionId }"
+          >
+            <button
+              type="button"
+              class="session-select"
+              :title="session.directory"
+              @click="
+                emit('select-session', {
+                  projectId: session.projectId,
+                  sessionId: session.sessionId,
+                })
+              "
+            >
+              <span class="session-name">{{ session.title }}</span>
+              <span class="session-meta">{{ session.projectName }} · {{ session.branch }}</span>
+            </button>
+            <button
+              type="button"
+              class="session-unpin"
+              title="Unpin session"
+              @click="
+                emit('unpin-session', {
+                  sessionId: session.sessionId,
+                  projectId: session.projectId,
+                  directory: session.directory,
+                })
+              "
+            >
+              <Icon icon="lucide:pin-off" width="14" height="14" />
+            </button>
+          </li>
+        </ul>
+      </div>
       <TreeView
         v-else
         :root-nodes="treeNodes"
@@ -85,10 +129,21 @@ type TodoPanelSession = {
   error: string | undefined;
 };
 
+type SessionPanelItem = {
+  sessionId: string;
+  projectId: string;
+  directory: string;
+  title: string;
+  projectName: string;
+  branch: string;
+};
+
 const props = defineProps<{
   collapsed: boolean;
-  activeTab: 'todo' | 'tree';
+  activeTab: 'todo' | 'session' | 'tree';
+  selectedSessionId: string;
   todoSessions: TodoPanelSession[];
+  pinnedSessions: SessionPanelItem[];
   treeNodes: TreeNode[];
   expandedTreePaths: string[];
   selectedTreePath?: string;
@@ -105,7 +160,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'toggle-collapse'): void;
-  (event: 'change-tab', value: 'todo' | 'tree'): void;
+  (event: 'change-tab', value: 'todo' | 'session' | 'tree'): void;
+  (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
+  (event: 'unpin-session', payload: { sessionId: string; projectId: string; directory: string }): void;
   (event: 'toggle-dir', path: string): void;
   (event: 'select-file', path: string): void;
   (event: 'open-diff', payload: { path: string; staged: boolean }): void;
@@ -116,13 +173,16 @@ const emit = defineEmits<{
 
 const tabs = [
   { id: 'todo' as const, label: 'TODO' },
+  { id: 'session' as const, label: 'SESSION' },
   { id: 'tree' as const, label: 'TREE' },
 ];
 
 const {
   collapsed,
   activeTab,
+  selectedSessionId,
   todoSessions,
+  pinnedSessions,
   treeNodes,
   expandedTreePaths,
   selectedTreePath,
@@ -210,6 +270,115 @@ const {
 
 .side-panel.is-collapsed {
   border-color: rgba(100, 116, 139, 0.45);
+}
+
+.session-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.session-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px 8px;
+  border-bottom: 1px solid rgba(100, 116, 139, 0.28);
+}
+
+.session-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #e2e8f0;
+}
+
+.session-count {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.session-empty {
+  margin: auto;
+  color: rgba(148, 163, 184, 0.9);
+  font-size: 12px;
+}
+
+.session-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: auto;
+}
+
+.session-item {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.session-select {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid rgba(71, 85, 105, 0.5);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  color: #e2e8f0;
+  text-align: left;
+  padding: 7px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.session-item.is-active .session-select {
+  border-color: rgba(96, 165, 250, 0.6);
+  background: rgba(30, 64, 175, 0.25);
+}
+
+.session-select:hover {
+  background: rgba(30, 41, 59, 0.78);
+}
+
+.session-name {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-meta {
+  min-width: 0;
+  font-size: 10px;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-unpin {
+  flex: 0 0 auto;
+  width: 30px;
+  border: 1px solid rgba(100, 116, 139, 0.4);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.7);
+  color: #fbbf24;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.session-unpin:hover {
+  background: rgba(30, 41, 59, 0.82);
 }
 
 .side-toggle-inline {

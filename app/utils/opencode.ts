@@ -232,7 +232,7 @@ export async function deleteSession(
 
 export function updateSession(
   sessionId: string,
-  payload: { title?: string; time?: { archived?: number } },
+  payload: { title?: string; time?: { archived?: number; pinned?: number } },
   directory?: string,
 ) {
   return sendJson(`/session/${sessionId}`, 'PATCH', {

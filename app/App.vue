@@ -18,6 +18,8 @@
           @delete-active-directory="deleteWorktree"
           @delete-session="deleteSession"
           @archive-session="archiveSession"
+          @pin-session="pinSession"
+          @unpin-session="unpinSession"
           @select-session="handleTopPanelSessionSelect"
           @open-directory="openProjectPicker"
           @edit-project="handleEditProject"
@@ -42,7 +44,9 @@
             :class="{ 'is-disabled': !hasSession }"
             :collapsed="sidePanelCollapsed"
             :active-tab="sidePanelActiveTab"
+            :selected-session-id="selectedSessionId"
             :todo-sessions="todoPanelSessions"
+            :pinned-sessions="pinnedSessions"
             :tree-nodes="treeNodes"
             :expanded-tree-paths="expandedTreePaths"
             :selected-tree-path="selectedTreePath"
@@ -57,6 +61,8 @@
             :run-shell-command="runTreeShellCommand"
             @toggle-collapse="toggleSidePanelCollapsed"
             @change-tab="setSidePanelTab"
+            @select-session="handleSidePanelSessionSelect"
+            @unpin-session="handleSidePanelUnpin"
             @toggle-dir="toggleTreeDirectory"
             @select-file="selectTreeFile"
             @open-diff="openGitDiff"
@@ -365,7 +371,7 @@ import {
 } from './utils/storageKeys';
 
 const credentials = useCredentials();
-const { suppressAutoWindows } = useSettings();
+const { suppressAutoWindows, pinnedSessionsLimit } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
 const FILE_VIEWER_WINDOW_HEIGHT = 520;
@@ -531,7 +537,6 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode): string {
 const REASONING_CLOSE_DELAY_MS = 3000;
 const SUBAGENT_CLOSE_DELAY_MS = 3000;
 const ATTACHMENT_MIME_ALLOWLIST = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
-
 type TodoPanelSession = {
   sessionId: string;
   title: string;
@@ -539,6 +544,16 @@ type TodoPanelSession = {
   todos: TodoItem[];
   loading: boolean;
   error: string | undefined;
+};
+
+type SidePanelPinnedSession = {
+  sessionId: string;
+  projectId: string;
+  directory: string;
+  title: string;
+  projectName: string;
+  branch: string;
+  pinnedAt: number;
 };
 
 type FileContentResponse = {
@@ -604,6 +619,8 @@ type ComposerDraft = {
   rev: number;
   writerTabId: string;
 };
+
+type LocalPinnedSessionStore = Record<string, number>;
 
 const fw = useFloatingWindows();
 
@@ -698,6 +715,7 @@ const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
 let primaryHistoryRequestId = 0;
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
+const localPinnedSessionStore = ref<LocalPinnedSessionStore>(readPinnedSessionStore());
 const composerDraftTabId =
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -727,6 +745,7 @@ type SessionInfo = {
     created?: number;
     updated?: number;
     archived?: number;
+    pinned?: number;
   };
   revert?: {
     messageID: string;
@@ -842,6 +861,7 @@ const {
 } = sessionSelection;
 
 function toSessionInfo(
+  projectId: string,
   directory: string,
   session: {
     id: string;
@@ -852,11 +872,14 @@ function toSessionInfo(
     timeCreated?: number;
     timeUpdated?: number;
     timeArchived?: number;
+    timePinned?: number;
     revert?: SessionInfo['revert'];
   },
 ): SessionInfo {
   return {
     id: session.id,
+    projectID: projectId,
+    projectId,
     parentID: session.parentID,
     title: session.title,
     slug: session.slug,
@@ -866,6 +889,7 @@ function toSessionInfo(
       created: session.timeCreated,
       updated: session.timeUpdated,
       archived: session.timeArchived,
+      pinned: session.timePinned,
     },
     revert: session.revert,
   };
@@ -877,7 +901,7 @@ function collectAllSessionsByProject() {
     const list: SessionInfo[] = [];
     Object.values(project.sandboxes).forEach((sandbox) => {
       Object.values(sandbox.sessions).forEach((session) => {
-        list.push(toSessionInfo(sandbox.directory, session));
+        list.push(toSessionInfo(project.id, sandbox.directory, session));
       });
     });
     byProject[project.id] = list;
@@ -896,7 +920,7 @@ const sessions = computed<SessionInfo[]>(() => {
   const filtered = directory
     ? roots.filter((session) => !session.directory || session.directory === directory)
     : roots;
-  return filtered.slice().sort((a, b) => (b.time?.created ?? 0) - (a.time?.created ?? 0));
+  return filtered.slice().sort(compareSessionsForSelection);
 });
 
 const sessionParentById = computed(() => {
@@ -1052,12 +1076,20 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
               timeCreated: session.timeCreated,
               timeUpdated: session.timeUpdated ?? session.timeCreated,
               archivedAt: session.timeArchived,
+              pinnedAt: getEffectivePinnedAt(project.id, session.id, session.timePinned),
             }))
-            .sort((a, b) => (b.timeCreated ?? 0) - (a.timeCreated ?? 0));
-          const latestUpdated = sessionsForSandbox[0]?.timeUpdated ?? 0;
+            .sort((a, b) => {
+              const pinDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+              if (pinDiff !== 0) return pinDiff;
+              return (b.timeUpdated ?? b.timeCreated ?? 0) - (a.timeUpdated ?? a.timeCreated ?? 0);
+            });
+          const latestUpdated = sessionsForSandbox.reduce(
+            (max, session) => Math.max(max, session.timeUpdated ?? session.timeCreated ?? 0),
+            0,
+          );
           const oldestCreated =
             sessionsForSandbox.length > 0
-              ? Math.min(...sessionsForSandbox.map((session) => session.timeUpdated ?? Infinity))
+              ? Math.min(...sessionsForSandbox.map((session) => session.timeCreated ?? Infinity))
               : 0;
           return {
             directory: sandbox.directory,
@@ -1255,6 +1287,35 @@ const todoPanelSessions = computed(() => {
   return visible;
 });
 
+const pinnedSessions = computed<SidePanelPinnedSession[]>(() => {
+  const result: SidePanelPinnedSession[] = [];
+  for (const project of Object.values(serverState.projects)) {
+    const projectName =
+      project.name?.trim() || project.worktree.replace(/\/+$/, '').split('/').pop() || project.id;
+    for (const sandbox of Object.values(project.sandboxes)) {
+      for (const session of Object.values(sandbox.sessions)) {
+        if (session.parentID || session.timeArchived) continue;
+        const pinnedAt = getEffectivePinnedAt(project.id, session.id, session.timePinned);
+        if (pinnedAt <= 0) continue;
+        result.push({
+          sessionId: session.id,
+          projectId: project.id,
+          directory: sandbox.directory,
+          title: session.title || session.slug || session.id,
+          projectName,
+          branch: sandbox.name || 'main',
+          pinnedAt,
+        });
+      }
+    }
+  }
+  result.sort((a, b) => {
+    if (b.pinnedAt !== a.pinnedAt) return b.pinnedAt - a.pinnedAt;
+    return a.title.localeCompare(b.title);
+  });
+  return result;
+});
+
 const hasSession = computed(() => Boolean(selectedSessionId.value));
 
 const canSend = computed(() =>
@@ -1388,12 +1449,18 @@ function sessionSortKey(session: SessionInfo) {
   return session.time?.updated ?? session.time?.created ?? 0;
 }
 
+function compareSessionsForSelection(a: SessionInfo, b: SessionInfo) {
+  const pinDiff = getSessionEffectivePinnedAt(b) - getSessionEffectivePinnedAt(a);
+  if (pinDiff !== 0) return pinDiff;
+  return sessionSortKey(b) - sessionSortKey(a);
+}
+
 function pickPreferredSessionId(list: SessionInfo[]) {
   if (!Array.isArray(list) || list.length === 0) return '';
   const sorted = list
     .filter((session) => !session.parentID && !session.time?.archived)
     .slice()
-    .sort((a, b) => sessionSortKey(b) - sessionSortKey(a));
+    .sort(compareSessionsForSelection);
   return sorted[0]?.id ?? '';
 }
 
@@ -1404,7 +1471,7 @@ function validateSelectedSession() {
   const projectId = selectedProjectId.value.trim();
   const allSessions = projectId ? (sessionsByProject.value[projectId] ?? []) : [];
   const current = allSessions.find((session) => session.id === sessionId);
-  if (current && !current.parentID) {
+  if (current && !current.parentID && !current.time?.archived) {
     return;
   }
 
@@ -1583,6 +1650,129 @@ function parseComposerDraftStore(raw: string | null) {
   }
 }
 
+function parsePinnedSessionStore(raw: string | null): LocalPinnedSessionStore {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {};
+    }
+    const record = parsed as Record<string, unknown>;
+    const normalized: LocalPinnedSessionStore = {};
+    Object.entries(record).forEach(([key, value]) => {
+      if (!key || typeof key !== 'string') return;
+      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return;
+      normalized[key] = value;
+    });
+    return limitPinnedSessionStore(normalized);
+  } catch {
+    return {};
+  }
+}
+
+function limitPinnedSessionStore(store: LocalPinnedSessionStore): LocalPinnedSessionStore {
+  const limit = Math.max(1, Math.floor(pinnedSessionsLimit.value));
+  const entries = Object.entries(store)
+    .filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit);
+  return Object.fromEntries(entries);
+}
+
+function readPinnedSessionStore() {
+  const raw = storageGet(StorageKeys.state.pinnedSessions);
+  return parsePinnedSessionStore(raw);
+}
+
+function writePinnedSessionStore(store: LocalPinnedSessionStore) {
+  const limitedStore = limitPinnedSessionStore(store);
+  if (Object.keys(limitedStore).length === 0) {
+    storageRemove(StorageKeys.state.pinnedSessions);
+    return;
+  }
+  const nextRaw = JSON.stringify(limitedStore);
+  const currentRaw = storageGet(StorageKeys.state.pinnedSessions);
+  if (currentRaw === nextRaw) return;
+  storageSet(StorageKeys.state.pinnedSessions, nextRaw);
+}
+
+function pinnedSessionStoreKey(projectId: string, sessionId: string) {
+  const pid = projectId.trim();
+  const sid = sessionId.trim();
+  if (!pid || !sid) return '';
+  return `${pid}:${sid}`;
+}
+
+function getEffectivePinnedAt(projectId: string, sessionId: string, serverPinnedAt?: number) {
+  if (typeof serverPinnedAt === 'number' && Number.isFinite(serverPinnedAt)) {
+    return serverPinnedAt > 0 ? serverPinnedAt : 0;
+  }
+  const key = pinnedSessionStoreKey(projectId, sessionId);
+  if (!key) return 0;
+  return localPinnedSessionStore.value[key] ?? 0;
+}
+
+function getSessionEffectivePinnedAt(session: SessionInfo) {
+  const projectId = (session.projectID || session.projectId || '').trim();
+  return getEffectivePinnedAt(projectId, session.id, session.time?.pinned);
+}
+
+function setLocalPinnedSession(projectId: string, sessionId: string, pinnedAt: number) {
+  const key = pinnedSessionStoreKey(projectId, sessionId);
+  if (!key) return;
+  localPinnedSessionStore.value = limitPinnedSessionStore({
+    ...localPinnedSessionStore.value,
+    [key]: pinnedAt,
+  });
+}
+
+function clearLocalPinnedSession(projectId: string, sessionId: string) {
+  const key = pinnedSessionStoreKey(projectId, sessionId);
+  if (!key) return;
+  if (!(key in localPinnedSessionStore.value)) return;
+  const next = { ...localPinnedSessionStore.value };
+  delete next[key];
+  localPinnedSessionStore.value = next;
+}
+
+function reconcileLocalPinnedSessionStore() {
+  if (!bootstrapReady.value) return;
+  const currentStore = localPinnedSessionStore.value;
+  const nextStore: LocalPinnedSessionStore = { ...limitPinnedSessionStore(currentStore) };
+  const activeSessionKeys = new Set<string>();
+
+  for (const project of Object.values(serverState.projects)) {
+    for (const sandbox of Object.values(project.sandboxes)) {
+      for (const session of Object.values(sandbox.sessions)) {
+        const key = pinnedSessionStoreKey(project.id, session.id);
+        if (!key) continue;
+        activeSessionKeys.add(key);
+        if (
+          (typeof session.timePinned === 'number' && Number.isFinite(session.timePinned) && session.timePinned > 0) ||
+          Boolean(session.timeArchived) ||
+          Boolean(session.parentID)
+        ) {
+          delete nextStore[key];
+        }
+      }
+    }
+  }
+
+  Object.keys(nextStore).forEach((key) => {
+    if (!activeSessionKeys.has(key)) {
+      delete nextStore[key];
+    }
+  });
+
+  const currentKeys = Object.keys(currentStore);
+  const nextKeys = Object.keys(nextStore);
+  const changed =
+    currentKeys.length !== nextKeys.length ||
+    nextKeys.some((key) => currentStore[key] !== nextStore[key]);
+  if (!changed) return;
+  localPinnedSessionStore.value = nextStore;
+}
+
 function readComposerDraftStore() {
   const raw = storageGet(StorageKeys.drafts.composer);
   return parseComposerDraftStore(raw);
@@ -1623,12 +1813,13 @@ function persistSidePanelCollapsed(value: boolean) {
   storageSet(StorageKeys.state.sidePanelCollapsed, value ? '1' : '0');
 }
 
-function readSidePanelTab(): 'todo' | 'tree' {
+function readSidePanelTab(): 'todo' | 'session' | 'tree' {
   const raw = storageGet(StorageKeys.state.sidePanelTab);
-  return raw === 'todo' ? 'todo' : 'tree';
+  if (raw === 'todo' || raw === 'session' || raw === 'tree') return raw;
+  return 'tree';
 }
 
-function persistSidePanelTab(value: 'todo' | 'tree') {
+function persistSidePanelTab(value: 'todo' | 'session' | 'tree') {
   storageSet(StorageKeys.state.sidePanelTab, value);
 }
 
@@ -1642,10 +1833,37 @@ function toggleSidePanelCollapsed() {
   });
 }
 
-function setSidePanelTab(value: 'todo' | 'tree') {
+function setSidePanelTab(value: 'todo' | 'session' | 'tree') {
   if (sidePanelActiveTab.value === value) return;
   sidePanelActiveTab.value = value;
   persistSidePanelTab(value);
+}
+
+function findSessionInProjects(sessionId: string) {
+  const target = sessionId.trim();
+  if (!target) return null;
+  for (const [projectId, project] of Object.entries(serverState.projects)) {
+    for (const sandbox of Object.values(project.sandboxes)) {
+      const session = sandbox.sessions[target];
+      if (!session) continue;
+      return {
+        projectId,
+        sandbox,
+        session,
+      };
+    }
+  }
+  return null;
+}
+
+function resolveSessionOperationPayload(sessionId: string, projectIdHint?: string, directoryHint?: string) {
+  const resolved = findSessionInProjects(sessionId);
+  const projectId = (projectIdHint || resolved?.projectId || resolveProjectIdForSession(sessionId)).trim();
+  const directory = (directoryHint || resolved?.sandbox.directory || activeDirectory.value).trim();
+  return {
+    projectId,
+    directory: directory || undefined,
+  };
 }
 
 function resolveProjectIdForSession(sessionId: string) {
@@ -1846,6 +2064,12 @@ function handleComposerDraftStorage(event: StorageEvent) {
   }
   if (draft.rev < knownRev) return;
   applyComposerDraftToComposerState(draft, contextKey);
+}
+
+function handlePinnedSessionStoreStorage(event: StorageEvent) {
+  if (event.storageArea !== window.localStorage) return;
+  if (event.key !== storageKey(StorageKeys.state.pinnedSessions)) return;
+  localPinnedSessionStore.value = limitPinnedSessionStore(parsePinnedSessionStore(event.newValue));
 }
 
 function buildComposerDraftFromUserMessage(payload: {
@@ -2356,11 +2580,16 @@ async function deleteSession(sessionId: string) {
   sessionError.value = '';
   if (!sessionId) return;
   try {
-    const directory = activeDirectory.value.trim();
+    const { projectId, directory } = resolveSessionOperationPayload(
+      sessionId,
+      selectedProjectId.value,
+      activeDirectory.value,
+    );
+    clearLocalPinnedSession(projectId, sessionId);
     await openCodeApi.deleteSession({
       sessionId,
-      projectId: selectedProjectId.value,
-      directory: directory || undefined,
+      projectId,
+      directory,
     });
   } catch (error) {
     sessionError.value = `Session delete failed: ${toErrorMessage(error)}`;
@@ -2372,15 +2601,76 @@ async function archiveSession(sessionId: string) {
   sessionError.value = '';
   if (!sessionId) return;
   try {
-    const directory = activeDirectory.value.trim();
+    const { projectId, directory } = resolveSessionOperationPayload(
+      sessionId,
+      selectedProjectId.value,
+      activeDirectory.value,
+    );
+    clearLocalPinnedSession(projectId, sessionId);
     await openCodeApi.archiveSession({
       sessionId,
-      projectId: selectedProjectId.value,
-      directory: directory || undefined,
+      projectId,
+      directory,
     });
   } catch (error) {
     sessionError.value = `Session archive failed: ${toErrorMessage(error)}`;
   }
+}
+
+async function pinSession(sessionId: string) {
+  if (!ensureConnectionReady('Pinning session')) return;
+  sessionError.value = '';
+  if (!sessionId) return;
+  try {
+    const { projectId, directory } = resolveSessionOperationPayload(sessionId);
+    setLocalPinnedSession(projectId, sessionId, Date.now());
+    await openCodeApi.pinSession({
+      sessionId,
+      projectId,
+      directory,
+    });
+  } catch (error) {
+    sessionError.value = `Session pin failed: ${toErrorMessage(error)}`;
+  }
+}
+
+async function unpinSession(
+  sessionId: string,
+  hints?: { projectId?: string; directory?: string },
+) {
+  if (!ensureConnectionReady('Unpinning session')) return;
+  sessionError.value = '';
+  if (!sessionId) return;
+  try {
+    const { projectId, directory } = resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
+    clearLocalPinnedSession(projectId, sessionId);
+    await openCodeApi.unpinSession({
+      sessionId,
+      projectId,
+      directory,
+    });
+  } catch (error) {
+    sessionError.value = `Session unpin failed: ${toErrorMessage(error)}`;
+  }
+}
+
+function handleSidePanelSessionSelect(payload: { projectId: string; sessionId: string }) {
+  if (!payload?.sessionId) return;
+  const projectId = payload.projectId?.trim() || resolveProjectIdForSession(payload.sessionId);
+  if (!projectId) return;
+  void switchSessionSelection(projectId, payload.sessionId);
+}
+
+function handleSidePanelUnpin(payload: { sessionId: string; projectId: string; directory: string }) {
+  if (!payload?.sessionId) return;
+  void unpinSession(payload.sessionId, {
+    projectId: payload.projectId,
+    directory: payload.directory,
+  });
 }
 
 async function handleForkMessage(payload: { sessionId: string; messageId: string }) {
@@ -4007,6 +4297,47 @@ watch(
   { immediate: true },
 );
 
+watch(localPinnedSessionStore, (store) => {
+  const limited = limitPinnedSessionStore(store);
+  const keys = Object.keys(store);
+  const limitedKeys = Object.keys(limited);
+  const changed =
+    keys.length !== limitedKeys.length || limitedKeys.some((key) => store[key] !== limited[key]);
+  if (changed) {
+    localPinnedSessionStore.value = limited;
+    return;
+  }
+  writePinnedSessionStore(limited);
+});
+
+watch(pinnedSessionsLimit, () => {
+  const limited = limitPinnedSessionStore(localPinnedSessionStore.value);
+  const current = localPinnedSessionStore.value;
+  const currentKeys = Object.keys(current);
+  const limitedKeys = Object.keys(limited);
+  const changed =
+    currentKeys.length !== limitedKeys.length ||
+    limitedKeys.some((key) => current[key] !== limited[key]);
+  if (!changed) return;
+  localPinnedSessionStore.value = limited;
+});
+
+watch(
+  () => [selectedProjectId.value, selectedSessionId.value, activeDirectory.value],
+  () => {
+    reconcileLocalPinnedSessionStore();
+  },
+  { immediate: true },
+);
+
+watch(
+  () => serverState.projects,
+  () => {
+    reconcileLocalPinnedSessionStore();
+  },
+  { deep: true },
+);
+
 watch(
   allowedSessionIds,
   () => {
@@ -5343,6 +5674,7 @@ onMounted(() => {
   window.addEventListener('pointerup', handlePointerUp);
   window.addEventListener('resize', handleWindowResize);
   window.addEventListener('storage', handleComposerDraftStorage);
+  window.addEventListener('storage', handlePinnedSessionStoreStorage);
   document.addEventListener('visibilitychange', handleWindowAttentionChange);
   window.addEventListener('focus', handleWindowAttentionChange);
   window.addEventListener('blur', handleWindowAttentionChange);
@@ -5508,6 +5840,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', handlePointerUp);
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('storage', handleComposerDraftStorage);
+  window.removeEventListener('storage', handlePinnedSessionStoreStorage);
   document.removeEventListener('visibilitychange', handleWindowAttentionChange);
   window.removeEventListener('focus', handleWindowAttentionChange);
   window.removeEventListener('blur', handleWindowAttentionChange);

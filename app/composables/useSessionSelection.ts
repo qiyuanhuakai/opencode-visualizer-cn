@@ -4,9 +4,13 @@ import { waitForState } from '../utils/waitForState';
 
 type CreateSessionFn = (projectId: string) => Promise<{ id: string; projectId: string }>;
 
+function listSandboxes(project: ProjectState) {
+  return Object.keys(project.sandboxes).map((key) => project.sandboxes[key]);
+}
+
 function getProjectSessionIds(project: ProjectState): string[] {
   const ids: string[] = [];
-  Object.values(project.sandboxes).forEach((sandbox) => {
+  listSandboxes(project).forEach((sandbox) => {
     ids.push(...sandbox.rootSessions);
   });
   return Array.from(new Set(ids));
@@ -15,16 +19,21 @@ function getProjectSessionIds(project: ProjectState): string[] {
 function findMostRecentSession(
   projects: Record<string, ProjectState>,
 ): { projectId: string; sessionId: string } | null {
-  let best: { projectId: string; sessionId: string; time: number } | null = null;
+  let best: { projectId: string; sessionId: string; pinnedAt: number; time: number } | null = null;
 
   for (const [projectId, project] of Object.entries(projects)) {
-    for (const sandbox of Object.values(project.sandboxes)) {
+    for (const sandbox of listSandboxes(project)) {
       for (const session of Object.values(sandbox.sessions)) {
         if (session.parentID) continue;
         if (session.timeArchived) continue;
+        const pinnedAt = session.timePinned ?? 0;
         const time = session.timeUpdated ?? session.timeCreated ?? 0;
-        if (!best || time > best.time) {
-          best = { projectId, sessionId: session.id, time };
+        if (
+          !best ||
+          pinnedAt > best.pinnedAt ||
+          (pinnedAt === best.pinnedAt && time > best.time)
+        ) {
+          best = { projectId, sessionId: session.id, pinnedAt, time };
         }
       }
     }
@@ -48,7 +57,7 @@ export function useSessionSelection(
     const currentProject = projectMap.value[selectedProjectId.value];
     const sessionId = selectedSessionId.value;
     if (!currentProject || !sessionId) return currentProject?.worktree ?? '';
-    for (const sandbox of Object.values(currentProject.sandboxes)) {
+    for (const sandbox of listSandboxes(currentProject)) {
       if (sandbox.sessions[sessionId]) return sandbox.directory;
     }
     return currentProject.worktree;
@@ -110,7 +119,7 @@ export function useSessionSelection(
       (projects) => {
         const nextProject = projects[nextProjectId];
         if (!nextProject) return false;
-        return Object.values(nextProject.sandboxes).some((sandbox) =>
+        return listSandboxes(nextProject).some((sandbox) =>
           Boolean(sandbox.sessions[nextSessionId]),
         );
       },

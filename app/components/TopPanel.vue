@@ -195,6 +195,7 @@
                               <span class="session-title">{{
                                 session.title || session.slug || session.id
                               }}</span>
+                              <span v-if="session.pinnedAt" class="session-badge-pinned">pinned</span>
                               <span v-if="session.archivedAt" class="session-badge-archived"
                                 >archived</span
                               >
@@ -207,6 +208,20 @@
                             </span>
                           </div>
                         </div>
+                        <button
+                          v-if="!session.archivedAt"
+                          type="button"
+                          class="tree-action-button session-pin"
+                          :class="session.pinnedAt ? 'pinned' : 'pin'"
+                          :title="session.pinnedAt ? 'Unpin session' : 'Pin session to side panel'"
+                          @click.stop.prevent="handleSessionPinToggle(session.id, session.pinnedAt)"
+                        >
+                          <Icon
+                            :icon="session.pinnedAt ? 'lucide:pin-off' : 'lucide:pin'"
+                            :width="16"
+                            :height="16"
+                          />
+                        </button>
                         <button
                           v-if="!session.archivedAt"
                           type="button"
@@ -325,6 +340,7 @@ export type TopPanelSession = {
   timeCreated?: number;
   timeUpdated?: number;
   archivedAt?: number;
+  pinnedAt?: number;
 };
 
 export type TopPanelSandbox = {
@@ -378,6 +394,8 @@ const emit = defineEmits<{
   (event: 'delete-active-directory', value: string): void;
   (event: 'delete-session', value: string): void;
   (event: 'archive-session', value: string): void;
+  (event: 'pin-session', value: string): void;
+  (event: 'unpin-session', value: string): void;
   (event: 'open-directory'): void;
   (event: 'open-shell'): void;
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
@@ -468,6 +486,7 @@ const displayedTree = computed(() => {
                   session.slug,
                   session.id,
                   session.archivedAt ? 'archived' : undefined,
+                  session.pinnedAt ? 'pinned' : undefined,
                   session.timeCreated ? formatSessionTime(session.timeCreated) : undefined,
                   session.timeUpdated ? formatSessionTime(session.timeUpdated) : undefined,
                 ),
@@ -623,6 +642,14 @@ function handleSessionAction(sessionId: string, close?: () => void) {
     return;
   }
   emit('archive-session', sessionId);
+}
+
+function handleSessionPinToggle(sessionId: string, pinnedAt?: number) {
+  if (pinnedAt) {
+    emit('unpin-session', sessionId);
+    return;
+  }
+  emit('pin-session', sessionId);
 }
 
 function handleGlobalKeydown(event: KeyboardEvent) {
@@ -871,6 +898,16 @@ function handleOpenDirectory(close: () => void) {
   color: #c4b5fd;
 }
 
+.tree-action-button.pin {
+  color: #fbbf24;
+}
+
+.tree-action-button.pinned {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.12);
+}
+
 /* Session rows: wrapper provides indentation via :deep() */
 .tree-session-row :deep(.ui-dropdown-item) {
   padding-left: 40px;
@@ -1029,9 +1066,25 @@ function handleOpenDirectory(close: () => void) {
   padding: 2px 6px;
 }
 
+.session-badge-pinned {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 10px;
+  line-height: 1;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
 .session-del {
   flex: 0 0 auto;
   margin-left: auto;
+}
+
+.session-pin {
+  flex: 0 0 auto;
 }
 
 .tree-footer {
