@@ -42,11 +42,25 @@ type ConnectionState = {
     projectId: string;
     sessionId: string;
   } | null;
+  sessionHydrationLevelByDirectory: Map<string, 'preview' | 'full'>;
+  sessionHydrationInFlightByDirectory: Map<
+    string,
+    {
+      mode: 'preview' | 'full';
+      promise: Promise<void>;
+    }
+  >;
+  vcsHydratedDirectories: Set<string>;
+  vcsHydrationInFlightByDirectory: Map<string, Promise<void>>;
+  isBootstrappingState: boolean;
+  bufferedStatePackets: SsePacket[];
+  pendingSelectedDirectory: string | null;
 };
 
 const connections = new Map<string, ConnectionState>();
 const portToKey = new Map<MessagePort, string>();
 let opencodeQueue: Promise<void> = Promise.resolve();
+const INITIAL_DIRECTORY_SESSION_LIMIT = 1;
 
 function toKey(baseUrl: string, authorization?: string) {
   return `${baseUrl.replace(/\/+$/, '')}\u0000${authorization ?? ''}`;
@@ -571,6 +585,164 @@ function queueOpencodeTask<T>(state: ConnectionState, task: () => Promise<T>): P
   return run;
 }
 
+function collectProjectDirectories(projects: Array<Record<string, unknown>>) {
+  const directories: string[] = [''];
+  const seen = new Set<string>(directories);
+
+  projects.forEach((project) => {
+    const worktree = normalizeDirectory(asString(project.worktree) ?? '');
+    if (worktree && !seen.has(worktree)) {
+      seen.add(worktree);
+      directories.push(worktree);
+    }
+
+    const sandboxes = asStringArray(project.sandboxes) ?? [];
+    sandboxes.forEach((sandbox) => {
+      const directory = normalizeDirectory(sandbox);
+      if (!directory || seen.has(directory)) return;
+      seen.add(directory);
+      directories.push(directory);
+    });
+  });
+
+  return directories;
+}
+
+async function loadDirectorySessions(
+  state: ConnectionState,
+  directory: string,
+  mode: 'preview' | 'full',
+) {
+  const normalizedDirectory = normalizeDirectory(directory);
+  const currentLevel = state.sessionHydrationLevelByDirectory.get(normalizedDirectory);
+  if (currentLevel === 'full' || (currentLevel === 'preview' && mode === 'preview')) {
+    return;
+  }
+
+  const inFlight = state.sessionHydrationInFlightByDirectory.get(normalizedDirectory);
+  if (inFlight) {
+    if (inFlight.mode === 'full' || inFlight.mode === mode) {
+      await inFlight.promise;
+      return;
+    }
+    await inFlight.promise;
+    return loadDirectorySessions(state, normalizedDirectory, mode);
+  }
+
+  const promise = queueOpencodeTask(state, async () => {
+    const [rawSessions, rawStatuses] = await Promise.all([
+      listSessions({
+        directory: normalizedDirectory,
+        roots: true,
+        limit: mode === 'preview' ? INITIAL_DIRECTORY_SESSION_LIMIT : undefined,
+      }),
+      getSessionStatusMap(normalizedDirectory),
+    ]);
+
+    const sessions = asObjectArray(rawSessions) as Parameters<
+      typeof state.stateBuilder.applySessions
+    >[0];
+    state.stateBuilder.applySessions(sessions);
+    state.stateBuilder.applyStatuses(asStatusMap(rawStatuses));
+
+    const projectIds = new Set<string>();
+    const resolvedProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
+    if (resolvedProjectId) {
+      projectIds.add(resolvedProjectId);
+    }
+    for (const session of sessions) {
+      const projectId = session.projectID?.trim();
+      if (projectId) projectIds.add(projectId);
+    }
+
+    for (const projectId of projectIds) {
+      emitProjectUpdated(state, projectId);
+    }
+
+    state.sessionHydrationLevelByDirectory.set(normalizedDirectory, mode);
+  }).finally(() => {
+    const active = state.sessionHydrationInFlightByDirectory.get(normalizedDirectory);
+    if (active?.promise === promise) {
+      state.sessionHydrationInFlightByDirectory.delete(normalizedDirectory);
+    }
+  });
+
+  state.sessionHydrationInFlightByDirectory.set(normalizedDirectory, { mode, promise });
+  await promise;
+}
+
+async function loadDirectoryVcs(state: ConnectionState, directory: string) {
+  const normalizedDirectory = normalizeDirectory(directory);
+  if (state.vcsHydratedDirectories.has(normalizedDirectory)) {
+    return;
+  }
+
+  const inFlight = state.vcsHydrationInFlightByDirectory.get(normalizedDirectory);
+  if (inFlight) {
+    await inFlight;
+    return;
+  }
+
+  const promise = queueOpencodeTask(state, async () => {
+    const raw = await getVcsInfo(normalizedDirectory).catch(() => null);
+    const vcsInfo = asRecord(raw);
+    if (!vcsInfo) {
+      state.vcsHydratedDirectories.add(normalizedDirectory);
+      return;
+    }
+
+    const branch = asString(vcsInfo.branch);
+    if (branch) {
+      state.stateBuilder.applyVcsInfo(normalizedDirectory, { branch });
+      emitProjectUpdated(state, state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory));
+    }
+
+    state.vcsHydratedDirectories.add(normalizedDirectory);
+  }).finally(() => {
+    const active = state.vcsHydrationInFlightByDirectory.get(normalizedDirectory);
+    if (active === promise) {
+      state.vcsHydrationInFlightByDirectory.delete(normalizedDirectory);
+    }
+  });
+
+  state.vcsHydrationInFlightByDirectory.set(normalizedDirectory, promise);
+  await promise;
+}
+
+function scheduleBackgroundHydration(state: ConnectionState, directories: string[]) {
+  void (async () => {
+    for (const directory of directories) {
+      if (!connections.has(state.key)) return;
+      if (state.pendingSelectedDirectory === normalizeDirectory(directory)) continue;
+      await loadDirectorySessions(state, directory, 'full').catch(() => {});
+      await loadDirectoryVcs(state, directory).catch(() => {});
+    }
+  })();
+}
+
+function flushBufferedStatePackets(state: ConnectionState) {
+  if (state.bufferedStatePackets.length === 0) return;
+  const buffered = [...state.bufferedStatePackets];
+  state.bufferedStatePackets = [];
+  for (const packet of buffered) {
+    handleStatePacket(state, packet);
+  }
+}
+
+function requestPriorityHydration(state: ConnectionState, directory?: string) {
+  const normalizedDirectory = normalizeDirectory(directory ?? '');
+  if (!normalizedDirectory) return;
+  state.pendingSelectedDirectory = normalizedDirectory;
+  void loadDirectorySessions(state, normalizedDirectory, 'full')
+    .catch(() => {})
+    .finally(() => {
+      if (state.pendingSelectedDirectory === normalizedDirectory) {
+        state.pendingSelectedDirectory = null;
+      }
+    });
+  void loadDirectoryVcs(state, normalizedDirectory).catch(() => {});
+}
+
 function emitProjectUpdated(state: ConnectionState, projectId: string | null) {
   if (!projectId) return;
   const project = state.stateBuilder.getProject(projectId);
@@ -654,6 +826,11 @@ async function resolveUnknownSessionDirectory(state: ConnectionState, info: Sess
 }
 
 function handleStatePacket(state: ConnectionState, packet: SsePacket) {
+  if (state.isBootstrappingState) {
+    state.bufferedStatePackets.push(packet);
+    return;
+  }
+
   const parsedPacket = parseWorkerStatePacket(packet);
   if (!parsedPacket) return;
 
@@ -797,62 +974,53 @@ async function bootstrapState(state: ConnectionState): Promise<void> {
 
   const builder = createStateBuilder();
   const run = queueOpencodeTask(state, async () => {
+    state.isBootstrappingState = true;
     const projects = asObjectArray<Record<string, unknown>>(await listProjects());
-    const directories = new Set<string>(['']);
-
-    const syncDirectoryState = async (directory: string) => {
-      const [sessions, statuses] = await Promise.all([
-        listSessions({ directory, roots: true }),
-        getSessionStatusMap(directory),
-      ]);
-      builder.applySessions(asObjectArray(sessions) as Parameters<typeof builder.applySessions>[0]);
-      builder.applyStatuses(asStatusMap(statuses));
-    };
+    const directories = collectProjectDirectories(projects);
 
     builder.applyProjects(projects as Parameters<typeof builder.applyProjects>[0]);
 
-    projects.forEach((project) => {
-      const worktree = normalizeDirectory(asString(project.worktree) ?? '');
-      if (worktree) {
-        directories.add(worktree);
-      }
-
-      const sandboxes = asStringArray(project.sandboxes) ?? [];
-      sandboxes.forEach((sandbox) => {
-        const directory = normalizeDirectory(sandbox);
-        if (!directory) return;
-        directories.add(directory);
-      });
-    });
-
     await Promise.all(
-      Array.from(directories).map(async (directory) => {
-        await syncDirectoryState(directory);
-      }),
-    );
-
-    await Promise.all(
-      Array.from(directories).map(async (directory) => {
-        const raw = await getVcsInfo(directory).catch(() => null);
-        const vcsInfo = asRecord(raw);
-        if (!vcsInfo) return;
-        const branch = asString(vcsInfo.branch);
-        if (!branch) return;
-        builder.applyVcsInfo(directory, { branch });
+      directories.map(async (directory) => {
+        const [sessions, statuses] = await Promise.all([
+          listSessions({
+            directory,
+            roots: true,
+            limit: INITIAL_DIRECTORY_SESSION_LIMIT,
+          }),
+          getSessionStatusMap(directory),
+        ]);
+        builder.applySessions(asObjectArray(sessions) as Parameters<typeof builder.applySessions>[0]);
+        builder.applyStatuses(asStatusMap(statuses));
       }),
     );
 
     builder.getDefaultProjectId();
     state.stateBuilder = builder;
+    state.sessionHydrationLevelByDirectory.clear();
+    directories.forEach((directory) => {
+      state.sessionHydrationLevelByDirectory.set(normalizeDirectory(directory), 'preview');
+    });
+    state.vcsHydratedDirectories.clear();
 
     broadcast(state, {
       type: 'state.bootstrap',
       projects: state.stateBuilder.getState().projects,
       notifications: state.notificationManager.getState(),
     });
+
+    state.isBootstrappingState = false;
+    flushBufferedStatePackets(state);
+
+    if (state.pendingSelectedDirectory) {
+      requestPriorityHydration(state, state.pendingSelectedDirectory);
+    }
+
+    scheduleBackgroundHydration(state, directories);
   });
 
   const bootstrapPromise = run.finally(() => {
+    state.isBootstrappingState = false;
     if (state.bootstrapPromise === bootstrapPromise) {
       state.bootstrapPromise = undefined;
     }
@@ -895,6 +1063,13 @@ function createConnectionState(baseUrl: string, authorization?: string, errorMes
       sessionId: state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId),
     })),
     activeSelection: null,
+    sessionHydrationLevelByDirectory: new Map(),
+    sessionHydrationInFlightByDirectory: new Map(),
+    vcsHydratedDirectories: new Set(),
+    vcsHydrationInFlightByDirectory: new Map(),
+    isBootstrappingState: false,
+    bufferedStatePackets: [],
+    pendingSelectedDirectory: null,
     client: createSseConnection({
       onPacket(packet) {
         broadcast(state, { type: 'packet', packet });
@@ -973,38 +1148,20 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
     const directory = normalizeDirectory(message.directory);
     if (!directory) return;
 
-    void queueOpencodeTask(state, async () => {
-      const [rawSessions, rawStatuses] = await Promise.all([
-        listSessions({ directory, roots: true }),
-        getSessionStatusMap(directory),
-      ]);
-
-      const sessions = asObjectArray(rawSessions) as Parameters<
-        typeof state.stateBuilder.applySessions
-      >[0];
-      state.stateBuilder.applySessions(sessions);
-
-      const projectIds = new Set<string>();
-      for (const session of sessions) {
-        const pid = session.projectID?.trim();
-        if (pid) projectIds.add(pid);
-      }
-
-      state.stateBuilder.applyStatuses(asStatusMap(rawStatuses));
-      for (const projectId of projectIds) {
-        emitProjectUpdated(state, projectId);
-      }
-    }).catch(() => {});
+    void loadDirectorySessions(state, directory, 'full').catch(() => {});
+    void loadDirectoryVcs(state, directory).catch(() => {});
     return;
   }
 
   if (message.type === 'selection.active') {
     const projectId = message.projectId.trim();
     const sessionId = message.sessionId.trim();
+    const directory = normalizeDirectory(message.directory ?? '');
     if (!projectId || !sessionId) {
       if (state.activeSelection?.port === port) {
         state.activeSelection = null;
       }
+      state.pendingSelectedDirectory = null;
       return;
     }
     state.activeSelection = {
@@ -1019,6 +1176,20 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
     if (cleared) {
       emitNotificationsUpdated(state);
     }
+
+    if (directory) {
+      requestPriorityHydration(state, directory);
+      return;
+    }
+
+     const project = state.stateBuilder.getProject(projectId);
+     if (project) {
+       for (const sandbox of Object.values(project.sandboxes)) {
+         if (!sandbox.sessions[sessionId]) continue;
+         requestPriorityHydration(state, sandbox.directory);
+         break;
+       }
+     }
   }
 }
 

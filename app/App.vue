@@ -3190,6 +3190,7 @@ function syncActiveSelectionToWorker() {
     type: 'selection.active',
     projectId: isWindowAttentive() ? selectedProjectId.value : '',
     sessionId: isWindowAttentive() ? selectedSessionId.value : '',
+    directory: isWindowAttentive() ? activeDirectory.value : '',
   });
 }
 
@@ -4753,7 +4754,9 @@ subagentWindows.bindScope(sessionScope);
 
 watch(selectedSessionId, reloadSelectedSessionState, { immediate: true });
 
-watch([selectedProjectId, selectedSessionId], syncActiveSelectionToWorker, { immediate: true });
+watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelectionToWorker, {
+  immediate: true,
+});
 
 watchEffect(() => {
   opencodeApi.setBaseUrl(credentials.baseUrl.value);

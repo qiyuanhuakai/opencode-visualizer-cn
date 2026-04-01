@@ -17,6 +17,7 @@ export type TabToWorkerMessage =
       type: 'selection.active';
       projectId: string;
       sessionId: string;
+      directory?: string;
     }
   | {
       type: 'load-sessions';

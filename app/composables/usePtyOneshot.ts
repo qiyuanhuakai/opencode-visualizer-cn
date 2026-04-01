@@ -156,7 +156,7 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
       );
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new Error(t('errors.ptyCommandTimedOut'));
+        throw new Error(translate('errors.ptyCommandTimedOut'));
       }
       throw error;
     } finally {
@@ -203,7 +203,7 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
         try {
           socket.send('\n');
         } catch {
-          settle(() => reject(new Error(t('errors.ptySocketFailed'))));
+          settle(() => reject(new Error(translate('errors.ptySocketFailed'))));
           socket.close();
         }
       });
@@ -226,12 +226,12 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
           exitCode = parsed.exitCode;
 
           if (!opened) {
-            reject(new Error(t('errors.ptySocketFailed')));
+            reject(new Error(translate('errors.ptySocketFailed')));
             return;
           }
 
           if (!sawExitMarker && !event.wasClean) {
-            reject(new Error(t('errors.ptySocketFailed')));
+            reject(new Error(translate('errors.ptySocketFailed')));
             return;
           }
 
@@ -242,7 +242,7 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
               args,
             );
             const err = new Error(
-              t('errors.ptyCommandFailed', { exitCode: String(exitCode) }),
+              translate('errors.ptyCommandFailed', { exitCode: String(exitCode) }),
             );
             (err as Error & { output?: string }).output = parsed.output;
             reject(err);
