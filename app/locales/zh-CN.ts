@@ -306,6 +306,10 @@ const messages: LocaleMessages = {
       label: '置顶会话限制',
       description: '最多保留 {limit} 个本地置顶会话；最早的置顶项会首先被删除。',
     },
+    dockAlwaysOpen: {
+      label: '保持 Dock 始终可见',
+      description: '即使没有窗口被最小化，也保持 Dock 栏可见。仅在启用最小化时可用。',
+    },
   },
   floatingWindow: {
     search: '搜索',
@@ -645,6 +649,8 @@ const messages: LocaleMessages = {
     confirmUndoRevert: '撤消撤销操作?',
     historyTitle: '{count} 条历史记录 - 点击查看历史',
     historyLabel: '历史记录',
+    fork: '分支',
+    undo: '撤销',
   },
   imageViewer: {
     failedToLoad: '图片加载失败',

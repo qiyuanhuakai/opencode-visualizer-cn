@@ -306,6 +306,10 @@ const messages: LocaleMessages = {
       label: 'Pinned sessions limit',
       description: 'Keep at most {limit} local pinned sessions; oldest pins are dropped first.',
     },
+    dockAlwaysOpen: {
+      label: 'Keep dock always visible',
+      description: 'Keep the dock bar visible even when no window is minimized. Only available when minimization is enabled.',
+    },
   },
   floatingWindow: {
     search: 'Search',
@@ -645,6 +649,8 @@ const messages: LocaleMessages = {
     confirmUndoRevert: 'Undo revert?',
     historyTitle: '{count} entries - click to view history',
     historyLabel: 'History',
+    fork: 'FORK',
+    undo: 'UNDO',
   },
   imageViewer: {
     failedToLoad: 'Failed to load image',

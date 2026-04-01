@@ -306,6 +306,10 @@ export interface LocaleMessages {
       label: string;
       description: string;
     };
+    dockAlwaysOpen: {
+      label: string;
+      description: string;
+    };
   };
   floatingWindow: {
     search: string;
@@ -583,6 +587,8 @@ export interface LocaleMessages {
     confirmUndoRevert: string;
     historyTitle: string;
     historyLabel: string;
+    fork: string;
+    undo: string;
   };
   imageViewer: {
     failedToLoad: string;

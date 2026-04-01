@@ -88,6 +88,10 @@ const activeProps = computed(() => {
       html: props.html,
       files: props.files,
       copyButton: props.copyButton,
+      copyButtonLabel: t('render.copyCode'),
+      copiedLabel: t('render.copied'),
+      copyCodeAriaLabel: t('render.copyCodeAria'),
+      copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
     };
   }
   return {

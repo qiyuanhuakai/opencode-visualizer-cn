@@ -6,7 +6,7 @@
       class="ib-action ib-action-undo ib-top-right"
       @click="confirmUndoRevert()"
     >
-      UNDO
+      {{ t('threadBlock.undo') }}
     </button>
     <button
       v-else-if="root.role === 'user' && root.sessionID"
@@ -14,7 +14,7 @@
       class="ib-action ib-top-right"
       @click="confirmFork()"
     >
-      FORK
+      {{ t('threadBlock.fork') }}
     </button>
 
     <div class="thread-user" :style="getUserBoxStyle()">

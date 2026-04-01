@@ -49,15 +49,12 @@
 
         <div class="setting-row" :class="{ 'setting-row-disabled': !showMinimizeButtons }">
           <div class="setting-info">
-            <div class="setting-label">Keep dock always visible</div>
-            <div class="setting-description">
-              Keep the dock bar visible even when no window is minimized. Only available when
-              minimization is enabled.
-            </div>
+            <div class="setting-label">{{ $t('settings.dockAlwaysOpen.label') }}</div>
+            <div class="setting-description">{{ $t('settings.dockAlwaysOpen.description') }}</div>
           </div>
           <label
             class="toggle-switch"
-            :title="showMinimizeButtons ? 'Keep dock always visible' : 'Enable minimize first'"
+            :title="showMinimizeButtons ? $t('settings.dockAlwaysOpen.label') : $t('settings.showMinimizeButtons.label')"
           >
             <input
               v-model="dockAlwaysOpen"
