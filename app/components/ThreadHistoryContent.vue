@@ -40,7 +40,11 @@
             <span class="history-time">{{ formatMessageTime(entry.time) }}</span>
           </div>
           <div class="history-question-body">
-            <div v-for="(item, qi) in entry.questions" :key="qi" class="history-question-section">
+            <div
+              v-for="(item, qi) in entry.questions"
+              :key="`${item.header}:${item.question}:${qi}`"
+              class="history-question-section"
+            >
               <div class="history-question-header">{{ item.header }}</div>
               <div class="history-question-text">{{ item.question }}</div>
               <div class="history-question-options">

@@ -167,10 +167,20 @@ const { files, fileCacheVersion } = useFileTree();
 
 const filesWithBasenames = computed(() => {
   const set = new Set<string>();
-  for (const path of files.value) {
+  // Sort by length ascending so shorter paths are processed first
+  // This allows early termination when a suffix is already in the set
+  const sortedFiles = [...files.value].sort((a, b) => a.length - b.length);
+
+  for (const path of sortedFiles) {
     const segments = path.split('/');
-    for (let i = 0; i < segments.length; i++) {
-      set.add(segments.slice(i).join('/'));
+    // Build suffixes from end to start to avoid repeated slice/join operations
+    let suffix = '';
+    for (let i = segments.length - 1; i >= 0; i--) {
+      suffix = suffix ? `${segments[i]}/${suffix}` : segments[i];
+      // If this suffix is already in set, longer suffixes from this path
+      // would also be covered (since we sorted by length), so we can break
+      if (set.has(suffix)) break;
+      set.add(suffix);
     }
   }
   return Array.from(set);

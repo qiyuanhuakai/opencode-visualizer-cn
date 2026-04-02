@@ -23,6 +23,45 @@ type MessageEntry = {
 
 type MessageError = { name: string; message: string } | null;
 
+// Batched update system
+// Instead of triggering ref updates immediately, we queue them and flush
+// in the next microtask to reduce re-renders during streaming
+const pendingMessageTriggers = new Set<ShallowRef<MessageEntry>>();
+const pendingCollectionTrigger = { value: false };
+let flushScheduled = false;
+
+function scheduleFlush() {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  
+  // Use microtask to batch updates within the same event loop iteration
+  queueMicrotask(() => {
+    flushScheduled = false;
+    
+    // Trigger all pending message refs
+    for (const ref of pendingMessageTriggers) {
+      triggerRef(ref);
+    }
+    pendingMessageTriggers.clear();
+    
+    // Trigger collection if needed
+    if (pendingCollectionTrigger.value) {
+      pendingCollectionTrigger.value = false;
+      triggerRef(messages);
+    }
+  });
+}
+
+function triggerMessageRef(ref: ShallowRef<MessageEntry>) {
+  pendingMessageTriggers.add(ref);
+  scheduleFlush();
+}
+
+function triggerCollection() {
+  pendingCollectionTrigger.value = true;
+  scheduleFlush();
+}
+
 function createMessageEntry(): MessageEntry {
   return { parts: new Set<ShallowRef<MessagePart>>() };
 }
@@ -179,7 +218,7 @@ function ensureMessage(id: string, notifyCollection = true): ShallowRef<MessageE
   if (ref) return ref;
   ref = shallowRef(createMessageEntry());
   messages.value.set(id, ref);
-  if (notifyCollection) triggerRef(messages);
+  if (notifyCollection) triggerCollection();
   return ref;
 }
 
@@ -190,7 +229,7 @@ function partLookupKey(messageId: string, partId: string): string {
 function updateMessage(info: MessageInfo, notifyCollection = true) {
   const messageRef = ensureMessage(info.id, notifyCollection);
   messageRef.value.info = info;
-  triggerRef(messageRef);
+  triggerMessageRef(messageRef);
 }
 
 function updatePart(part: MessagePart, notifyCollection = true) {
@@ -205,7 +244,7 @@ function updatePart(part: MessagePart, notifyCollection = true) {
   parts.set(key, partRef);
   const messageRef = ensureMessage(part.messageID, notifyCollection);
   messageRef.value.parts.add(partRef);
-  triggerRef(messageRef);
+  triggerMessageRef(messageRef);
 }
 
 const unsubs: Array<() => void> = [];
@@ -397,7 +436,7 @@ function loadHistory(entries: unknown[]) {
     if (!hasMessage) collectionChanged = true;
     if (!messageRef.value.info) {
       messageRef.value.info = accumulated?.info ?? info;
-      triggerRef(messageRef);
+      triggerMessageRef(messageRef);
     }
     if (!Array.isArray(partsList)) continue;
     let addedPart = false;
@@ -421,15 +460,15 @@ function loadHistory(entries: unknown[]) {
         addedPart = true;
       }
     }
-    if (addedPart) triggerRef(messageRef);
+    if (addedPart) triggerMessageRef(messageRef);
   }
-  if (collectionChanged) triggerRef(messages);
+  if (collectionChanged) triggerCollection();
 }
 
 function reset() {
   messages.value.clear();
   parts.clear();
-  triggerRef(messages);
+  triggerCollection();
 }
 
 function dispose() {

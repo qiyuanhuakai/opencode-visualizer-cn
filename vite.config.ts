@@ -17,5 +17,40 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // Vendor chunk: Vue ecosystem
+          if (id.includes('node_modules') && (
+            id.includes('vue') || 
+            id.includes('vue-i18n')
+          )) {
+            return 'vendor-vue';
+          }
+          
+          // Vendor chunk: UI components
+          if (id.includes('node_modules') && (
+            id.includes('@headlessui') ||
+            id.includes('@iconify')
+          )) {
+            return 'vendor-ui';
+          }
+          
+          // Terminal chunk (heavy)
+          if (id.includes('node_modules') && id.includes('@xterm')) {
+            return 'vendor-terminal';
+          }
+          
+          // Utilities
+          if (id.includes('node_modules') && (
+            id.includes('marked') ||
+            id.includes('date-fns') ||
+            id.includes('lodash')
+          )) {
+            return 'vendor-utils';
+          }
+        },
+      },
+    },
   },
 });

@@ -68,9 +68,7 @@
             @toggle-dir="toggleTreeDirectory"
             @select-file="selectTreeFile"
             @open-diff="openGitDiff"
-            @open-diff-all="
-              (payload: { mode: WorktreeSnapshotMode }) => openAllGitDiff(payload.mode)
-            "
+            @open-diff-all="handleOpenDiffAll"
             @open-file="openFileViewer"
             @reload="reloadTree().then(() => refreshGitStatus())"
           />
@@ -324,7 +322,6 @@ import {
 } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { bundledThemes } from 'shiki/bundle/web';
-import { Terminal } from '@xterm/xterm';
 import InputPanel from './components/InputPanel.vue';
 import OutputPanel from './components/OutputPanel.vue';
 import ProjectPicker from './components/ProjectPicker.vue';
@@ -620,7 +617,7 @@ type PtyInfo = {
 
 type ShellSession = {
   pty: PtyInfo;
-  terminal: Terminal;
+  terminal: unknown; // Terminal type from dynamic import
   socket?: WebSocket;
   exiting?: boolean;
   closeOnSuccess?: boolean;
@@ -3397,7 +3394,7 @@ async function updatePtySize(ptyId: string, rows: number, cols: number, director
   return parsePtyInfo(data);
 }
 
-function ensureShellWindow(pty: PtyInfo) {
+async function ensureShellWindow(pty: PtyInfo) {
   if (shellSessionsByPtyId.has(pty.id)) return;
   const key = `shell:${pty.id}`;
   const { width, height } = getTerminalWindowSize();
@@ -3417,6 +3414,10 @@ function ensureShellWindow(pty: PtyInfo) {
     expiry: Infinity,
     onResize: () => scheduleShellFit(pty.id),
   });
+  
+  // Dynamic import of Terminal for code splitting
+  const { Terminal } = await import('@xterm/xterm');
+  
   const terminal = new Terminal({
     cols: TERM_COLUMNS,
     rows: TERM_ROWS,
@@ -3452,7 +3453,7 @@ function ensureShellWindow(pty: PtyInfo) {
   });
 }
 
-function resizeWindowToFitTerminal(key: string, terminal: Terminal, _host: HTMLElement) {
+function resizeWindowToFitTerminal(key: string, terminal: unknown, _host: HTMLElement) {
   const cell = getTerminalCellSize(terminal);
   if (!cell) return;
 
@@ -3487,7 +3488,7 @@ function scheduleShellFitAll() {
   });
 }
 
-function getTerminalCellSize(terminal: Terminal): { width: number; height: number } | null {
+function getTerminalCellSize(terminal: unknown): { width: number; height: number } | null {
   // Prefer measuring from rendered screen (most accurate)
   const termEl = terminal.element;
   if (termEl && terminal.cols > 0 && terminal.rows > 0) {
@@ -4589,6 +4590,22 @@ watch(pinnedSessionsLimit, () => {
   localPinnedSessionStore.value = limited;
 });
 
+// Computed that extracts only the session properties needed for pinned session reconciliation
+// This avoids deep watching the entire projects object
+const pinnedSessionReconciliationDeps = computed(() => {
+  const deps: Array<[string, number | undefined, number | undefined, string | undefined]> = [];
+  for (const project of Object.values(serverState.projects)) {
+    for (const sandbox of Object.values(project.sandboxes)) {
+      for (const session of Object.values(sandbox.sessions)) {
+        const key = pinnedSessionStoreKey(project.id, session.id);
+        if (!key) continue;
+        deps.push([key, session.timePinned, session.timeArchived, session.parentID]);
+      }
+    }
+  }
+  return deps;
+});
+
 watch(
   () => [selectedProjectId.value, selectedSessionId.value, activeDirectory.value],
   () => {
@@ -4598,11 +4615,10 @@ watch(
 );
 
 watch(
-  () => serverState.projects,
+  pinnedSessionReconciliationDeps,
   () => {
     reconcileLocalPinnedSessionStore();
   },
-  { deep: true },
 );
 
 watch(
@@ -5202,6 +5218,10 @@ async function openAllGitDiff(mode: WorktreeSnapshotMode = 'all') {
       await fw.close(key);
     }
   }
+}
+
+function handleOpenDiffAll(payload: { mode: WorktreeSnapshotMode }) {
+  openAllGitDiff(payload.mode);
 }
 
 function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<MessageDiffEntry> }) {

@@ -271,59 +271,61 @@
       </div>
     </div>
     <div
-      v-if="!visibleRows.length && !isLoading"
+      v-if="!flattenedRows.length && !isLoading"
       class="tree-empty"
       @click="emit('select-file', '')"
     >
       {{ $t('treeView.noFiles') }}
     </div>
-    <div v-else class="tree-scroll" @click="onTreeScrollClick">
+    <div
+      v-else
+      ref="scrollContainerRef"
+      class="tree-scroll"
+      @scroll="onScroll"
+      @click="onTreeScrollClick"
+    >
+      <!-- Virtual scroll spacer -->
       <div
-        v-for="row in visibleRows"
-        :key="row.node.path"
-        class="tree-row"
-        :class="[
-          {
-            'is-directory': row.node.type === 'directory',
-            'is-file': row.node.type !== 'directory',
-            'is-selected': selectedPath === row.node.path,
-            'is-ignored': row.node.ignored,
-            'is-deleted':
-              row.node.type !== 'directory' && displayStatus(row.node.path)?.code === 'D',
-            'has-status': hasAnyStatus(row.node.path),
-          },
-          rowStatusClass(row.node.path),
-        ]"
-        :style="{ '--indent': String(row.depth) }"
-        @click="onRowClick(row, $event)"
-        @dblclick="onRowDoubleClick(row)"
+        class="tree-virtual-spacer"
+        :style="{ height: `${totalHeight}px` }"
       >
-        <button
-          v-if="row.node.type === 'directory'"
-          type="button"
-          class="tree-toggle"
-          :aria-label="isExpanded(row.node.path) ? $t('treeView.collapseDirectory') : $t('treeView.expandDirectory')"
-          @click.stop="emit('toggle-dir', row.node.path)"
+        <!-- Visible rows -->
+        <div
+          v-for="row in visibleRows"
+          :key="row.node.path"
+          class="tree-row"
+          :class="row.classList"
+          :style="{ transform: `translateY(${row.offsetY}px)`, '--indent': String(row.depth) }"
+          @click="onRowClick(row, $event)"
+          @dblclick="onRowDoubleClick(row)"
         >
-          <Icon
-            :icon="isExpanded(row.node.path) ? 'lucide:chevron-down' : 'lucide:chevron-right'"
-            :width="14"
-            :height="14"
-          />
-        </button>
-        <span v-else class="tree-toggle tree-toggle-spacer"></span>
-        <span class="tree-icon">{{ row.node.type === 'directory' ? '📁' : '📄' }}</span>
-        <span class="tree-name">{{ row.node.name }}</span>
-        <button
-          v-if="displayStatus(row.node.path) && row.node.type !== 'directory'"
-          type="button"
-          class="tree-status tree-status-button"
-          :class="statusClass(displayStatus(row.node.path))"
-          @click.stop="onStatusClick(row.node.path)"
-          @dblclick.stop
-        >
-          {{ statusLabel(displayStatus(row.node.path)?.code) }}
-        </button>
+          <button
+            v-if="row.node.type === 'directory'"
+            type="button"
+            class="tree-toggle"
+            :aria-label="row.isExpanded ? $t('treeView.collapseDirectory') : $t('treeView.expandDirectory')"
+            @click.stop="emit('toggle-dir', row.node.path)"
+          >
+            <Icon
+              :icon="row.isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'"
+              :width="14"
+              :height="14"
+            />
+          </button>
+          <span v-else class="tree-toggle tree-toggle-spacer"></span>
+          <span class="tree-icon">{{ row.node.type === 'directory' ? '📁' : '📄' }}</span>
+          <span class="tree-name">{{ row.node.name }}</span>
+          <button
+            v-if="row.displayStatus && row.node.type !== 'directory'"
+            type="button"
+            class="tree-status tree-status-button"
+            :class="row.statusClass"
+            @click.stop="onStatusClick(row.node.path, row.displayStatus)"
+            @dblclick.stop
+          >
+            {{ statusLabel(row.displayStatus.code) }}
+          </button>
+        </div>
       </div>
       <div v-if="isLoading" class="tree-loading">{{ $t('common.loading') }}</div>
       <div v-if="error" class="tree-error">{{ error }}</div>
@@ -345,7 +347,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch, nextTick, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 
@@ -404,6 +406,18 @@ type BranchGroup = {
   entries: BranchEntry[];
 };
 
+// Virtual scroll row type with pre-computed properties
+type VirtualRow = {
+  node: TreeNode;
+  depth: number;
+  index: number;
+  offsetY: number;
+  isExpanded: boolean;
+  classList: string[];
+  displayStatus: DisplayStatus | null;
+  statusClass: string;
+};
+
 const { t } = useI18n();
 
 const props = defineProps<{
@@ -430,14 +444,61 @@ const emit = defineEmits<{
   (event: 'reload'): void;
 }>();
 
+// Virtual scroll configuration
+const ROW_HEIGHT = 24;
+const OVERSCAN = 5; // Number of extra rows to render above/below viewport
+
 const viewMode = ref<TreeViewMode>('all');
 const branchMenuOpen = ref(false);
 const branchSearchQuery = ref('');
 const pushMenuOpen = ref(false);
 const pullMenuOpen = ref(false);
+const scrollContainerRef = ref<HTMLElement | null>(null);
+const scrollTop = ref(0);
+const containerHeight = ref(0);
+
 const expanded = computed(() => new Set(props.expandedPaths));
 const branchIcon = computed(() => (props.branchInfo ? 'lucide:git-branch' : 'lucide:folder'));
 const branchName = computed(() => props.branchInfo?.branch ?? props.directoryName ?? t('treeView.noGit'));
+
+// Scroll handling
+function onScroll() {
+  if (!scrollContainerRef.value) return;
+  scrollTop.value = scrollContainerRef.value.scrollTop;
+}
+
+function updateContainerHeight() {
+  if (!scrollContainerRef.value) return;
+  containerHeight.value = scrollContainerRef.value.clientHeight;
+}
+
+onMounted(() => {
+  updateContainerHeight();
+  window.addEventListener('resize', updateContainerHeight);
+});
+
+// Watch for data changes and scroll selected into view
+watch(() => props.selectedPath, (newPath) => {
+  if (!newPath || !scrollContainerRef.value) return;
+  nextTick(() => {
+    scrollSelectedIntoView(newPath);
+  });
+});
+
+function scrollSelectedIntoView(path: string) {
+  const rowIndex = flattenedRows.value.findIndex(r => r.node.path === path);
+  if (rowIndex === -1 || !scrollContainerRef.value) return;
+  
+  const rowOffset = rowIndex * ROW_HEIGHT;
+  const containerScrollTop = scrollContainerRef.value.scrollTop;
+  const containerHeight = scrollContainerRef.value.clientHeight;
+  
+  if (rowOffset < containerScrollTop) {
+    scrollContainerRef.value.scrollTop = rowOffset;
+  } else if (rowOffset + ROW_HEIGHT > containerScrollTop + containerHeight) {
+    scrollContainerRef.value.scrollTop = rowOffset + ROW_HEIGHT - containerHeight;
+  }
+}
 
 const branchTitle = computed(() => {
   const info = props.branchInfo;
@@ -624,25 +685,66 @@ const displayNodes = computed(() => {
   });
 });
 
-const visibleRows = computed(() => {
-  const rows: Array<{ node: TreeNode; depth: number }> = [];
+// Optimized flattened rows with pre-computed properties
+const flattenedRows = computed<VirtualRow[]>(() => {
+  const rows: VirtualRow[] = [];
+  let index = 0;
+  
   const pushRows = (nodes: TreeNode[], depth: number) => {
     nodes.forEach((node) => {
-      rows.push({ node, depth });
-      if (node.type === 'directory' && expanded.value.has(node.path) && node.children?.length) {
+      const displayStatus = getDisplayStatus(node.path);
+      const isExpanded = expanded.value.has(node.path);
+      const isSelected = props.selectedPath === node.path;
+      const hasStatus = Boolean(props.gitStatusByPath?.[node.path]);
+      
+      // Pre-compute class list
+      const classList: string[] = [];
+      if (node.type === 'directory') classList.push('is-directory');
+      else classList.push('is-file');
+      if (isSelected) classList.push('is-selected');
+      if (node.ignored) classList.push('is-ignored');
+      if (node.type !== 'directory' && displayStatus?.code === 'D') {
+        classList.push('is-deleted');
+      }
+      if (hasStatus) classList.push('has-status');
+      
+      const rowStatusClassName = getRowStatusClass(displayStatus);
+      if (rowStatusClassName) classList.push(rowStatusClassName);
+      
+      rows.push({
+        node,
+        depth,
+        index: index++,
+        offsetY: (index - 1) * ROW_HEIGHT,
+        isExpanded,
+        classList,
+        displayStatus,
+        statusClass: getStatusClass(displayStatus),
+      });
+      
+      if (node.type === 'directory' && isExpanded && node.children?.length) {
         pushRows(node.children, depth + 1);
       }
     });
   };
+  
   pushRows(displayNodes.value, 0);
   return rows;
 });
 
-function isExpanded(path: string) {
-  return expanded.value.has(path);
-}
+const totalHeight = computed(() => flattenedRows.value.length * ROW_HEIGHT);
 
-function displayStatus(path: string): DisplayStatus | null {
+// Virtual scroll visible rows
+const visibleRows = computed(() => {
+  const startIdx = Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN);
+  const endIdx = Math.min(
+    flattenedRows.value.length,
+    Math.ceil((scrollTop.value + containerHeight.value) / ROW_HEIGHT) + OVERSCAN
+  );
+  return flattenedRows.value.slice(startIdx, endIdx);
+});
+
+function getDisplayStatus(path: string): DisplayStatus | null {
   const status = props.gitStatusByPath?.[path];
   if (!status) return null;
 
@@ -689,8 +791,27 @@ function displayStatus(path: string): DisplayStatus | null {
   return null;
 }
 
-function hasAnyStatus(path: string) {
-  return Boolean(props.gitStatusByPath?.[path]);
+function getStatusClass(status: DisplayStatus | null): string {
+  if (!status) return '';
+  const classes: string[] = [status.staged ? 'is-staged' : 'is-unstaged'];
+  if (status.code === 'M') classes.push('is-modified');
+  else if (status.code === 'A') classes.push('is-added');
+  else if (status.code === 'D') classes.push('is-deleted-status');
+  else if (status.code === 'R') classes.push('is-renamed');
+  else if (status.code === '?') classes.push('is-untracked');
+  else if (status.code === 'C') classes.push('is-copied');
+  return classes.join(' ');
+}
+
+function getRowStatusClass(status: DisplayStatus | null): string {
+  if (!status) return '';
+  if (status.code === 'M') return 'row-modified';
+  if (status.code === 'A') return 'row-added';
+  if (status.code === 'D') return 'row-deleted';
+  if (status.code === 'R') return 'row-renamed';
+  if (status.code === '?') return 'row-untracked';
+  if (status.code === 'C') return 'row-copied';
+  return '';
 }
 
 function statusLabel(code?: GitStatusCode) {
@@ -703,32 +824,7 @@ function statusLabel(code?: GitStatusCode) {
   return '';
 }
 
-function statusClass(status: DisplayStatus | null) {
-  if (!status) return '';
-  const classes: string[] = [status.staged ? 'is-staged' : 'is-unstaged'];
-  if (status.code === 'M') classes.push('is-modified');
-  else if (status.code === 'A') classes.push('is-added');
-  else if (status.code === 'D') classes.push('is-deleted-status');
-  else if (status.code === 'R') classes.push('is-renamed');
-  else if (status.code === '?') classes.push('is-untracked');
-  else if (status.code === 'C') classes.push('is-copied');
-  return classes.join(' ');
-}
-
-function rowStatusClass(path: string) {
-  const status = displayStatus(path);
-  if (!status) return '';
-  if (status.code === 'M') return 'row-modified';
-  if (status.code === 'A') return 'row-added';
-  if (status.code === 'D') return 'row-deleted';
-  if (status.code === 'R') return 'row-renamed';
-  if (status.code === '?') return 'row-untracked';
-  if (status.code === 'C') return 'row-copied';
-  return '';
-}
-
-function onStatusClick(path: string) {
-  const status = displayStatus(path);
+function onStatusClick(path: string, status: DisplayStatus | null) {
   if (!status) return;
   emit('open-diff', { path, staged: status.staged });
 }
@@ -849,7 +945,7 @@ function onTreeScrollClick(event: MouseEvent) {
   emit('select-file', '');
 }
 
-function onRowClick(row: { node: TreeNode }, event: MouseEvent) {
+function onRowClick(row: VirtualRow, event: MouseEvent) {
   if (row.node.type === 'directory') {
     emit('toggle-dir', row.node.path);
     return;
@@ -862,10 +958,10 @@ function onRowClick(row: { node: TreeNode }, event: MouseEvent) {
   emit('select-file', row.node.path);
 }
 
-function onRowDoubleClick(row: { node: TreeNode }) {
+function onRowDoubleClick(row: VirtualRow) {
   if (row.node.type === 'directory') return;
   if (row.node.synthetic) {
-    const status = displayStatus(row.node.path);
+    const status = row.displayStatus;
     if (!status || status.code === 'D') return;
   }
   emit('open-file', row.node.path);
@@ -1199,17 +1295,27 @@ function onRowDoubleClick(row: { node: TreeNode }) {
   overflow: auto;
   padding: 8px;
   user-select: none;
+  position: relative;
+}
+
+/* Virtual scroll spacer */
+.tree-virtual-spacer {
+  position: relative;
 }
 
 .tree-row {
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 24px;
+  height: 24px;
   padding: 2px 6px 2px calc(4px + var(--indent) * 14px);
   border-radius: 6px;
   color: #dbeafe;
   cursor: pointer;
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  box-sizing: border-box;
 }
 
 .tree-row.is-ignored {

@@ -23,7 +23,7 @@
             <template v-else>{{ displayLabel }}</template>
             <!-- for box size adjustment -->
             <div v-if="!props.label" class="ui-dropdown-sizer">
-              <div v-for="(value, idx) in candidateValues" :key="idx">
+              <div v-for="(value, idx) in candidateValues" :key="String(value)">
                 <slot name="value" :value="value">{{ value }}</slot>
               </div>
             </div>

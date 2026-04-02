@@ -11,7 +11,11 @@
         <template #trigger><span /></template>
         <template #default>
           <div class="dropdown-list">
-            <DropdownItem v-for="(entry, i) in userHistory" :key="i" :value="entry">
+            <DropdownItem
+              v-for="(entry, i) in userHistory"
+              :key="`${entry.text}:${entry.agent}:${entry.model}:${entry.variant}:${i}`"
+              :value="entry"
+            >
               <div class="history-item" :style="historyEntryStyle(entry)" :title="entry.text">
                 <div class="history-item-text">{{ entry.text }}</div>
                 <div v-if="hasHistoryEntryTarget(entry)" class="history-item-target">
@@ -57,7 +61,11 @@
         <template #trigger><span /></template>
         <template #default>
           <div class="dropdown-list">
-            <DropdownItem v-for="(entry, i) in favorites" :key="i" :value="entry">
+            <DropdownItem
+              v-for="(entry, i) in favorites"
+              :key="`${entry.text}:${entry.agent}:${entry.model}:${entry.variant}:${i}`"
+              :value="entry"
+            >
               <div class="history-item" :style="historyEntryStyle(entry)" :title="entry.text">
                 <div class="history-item-text">{{ entry.text }}</div>
                 <div v-if="hasHistoryEntryTarget(entry)" class="history-item-target">
