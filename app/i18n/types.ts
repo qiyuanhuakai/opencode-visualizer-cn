@@ -263,11 +263,13 @@ export interface LocaleMessages {
     variant: string;
     selectAgent: string;
     selectModel: string;
-    selectVariant: string;
-    agentTitle: string;
-    modelTitle: string;
-    variantTitle: string;
-    bookmarkCurrentInput: string;
+     selectVariant: string;
+     agentTitle: string;
+     modelTitle: string;
+     variantTitle: string;
+     selectAtAgent: string;
+     atAgentTitle: string;
+     bookmarkCurrentInput: string;
     openBookmarks: string;
     removeFromFavoritesConfirm: string;
     bookmarked: string;

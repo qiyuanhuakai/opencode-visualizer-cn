@@ -173,6 +173,38 @@
           </template>
         </Dropdown>
       </div>
+      <div class="agent-dropdown-wrapper">
+        <Dropdown
+          ref="agentDropdownRef"
+          :open="agentPopupOpen"
+          :auto-close="false"
+          :auto-focus="false"
+          :auto-highlight="true"
+          popup-class="input-dropdown-popup agent-popup"
+          @select="handleAgentSelect"
+        >
+          <template #trigger><span /></template>
+          <template #default>
+            <div class="dropdown-list">
+              <DropdownItem
+                v-for="agent in agentMatches"
+                :key="agent.id"
+                :value="agent.id"
+              >
+                <div class="agent-dropdown-item">
+                  <div class="agent-popup-name">
+                    @{{ agent.label }}
+                    <span v-if="agent.isSubagent" class="agent-mode-badge">[Subagent]</span>
+                  </div>
+                  <div v-if="agent.description" class="agent-popup-description">
+                    {{ agent.description }}
+                  </div>
+                </div>
+              </DropdownItem>
+            </div>
+          </template>
+        </Dropdown>
+      </div>
       <div class="input-toolbar">
         <div class="input-selects">
           <div class="input-field compact">
@@ -388,7 +420,7 @@ type ModelOption = {
   providerLabel?: string;
 };
 type CommandOption = { name: string; description?: string; hints?: string[] };
-type AgentOption = { id: string; label: string; description?: string; color?: string };
+type AgentOption = { id: string; label: string; description?: string; color?: string; isSubagent?: boolean };
 type ThinkingChoice = { key: string; value: string | undefined; label: string };
 
 const { t } = useI18n();
@@ -398,6 +430,7 @@ const props = defineProps<{
   canSend: boolean;
   selectedMode: string;
   agentOptions: AgentOption[];
+  subagentOptions?: AgentOption[];
   hasAgentOptions: boolean;
   selectedModel: string;
   selectedThinking: string | undefined;
@@ -413,7 +446,7 @@ const props = defineProps<{
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
-}>();
+}>();;
 
 const emit = defineEmits<{
   (event: 'update:message-input', value: string): void;
@@ -463,6 +496,7 @@ type DropdownRef = {
 const historyDropdownRef = ref<DropdownRef | null>(null);
 const favoritesDropdownRef = ref<DropdownRef | null>(null);
 const commandDropdownRef = ref<DropdownRef | null>(null);
+const agentDropdownRef = ref<DropdownRef | null>(null);
 
 type HistoryEntry = {
   text: string;
@@ -645,14 +679,68 @@ const commandMatches = computed(() => {
 });
 
 const commandPopupDismissed = ref(false);
+const agentPopupDismissed = ref(false);
 
 const commandPopupOpen = computed(
   () => !commandPopupDismissed.value && commandMatches.value.length > 0,
 );
+
+// --- Agent @ invocation ---
+const atQuery = computed(() => {
+  const value = messageValue.value;
+  const textarea = textareaRef.value;
+  // Get cursor position (end of text if textarea not focused or no cursor)
+  const cursorPos = textarea?.selectionStart ?? value.length;
+  // Get text up to cursor
+  const textBeforeCursor = value.slice(0, cursorPos);
+  // Find the last @ symbol before cursor
+  const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+  if (lastAtIndex === -1) return '';
+  // Extract text after the @
+  const afterAt = textBeforeCursor.slice(lastAtIndex + 1);
+  // If @ is followed by whitespace immediately, return empty
+  if (afterAt.startsWith(' ') || afterAt.startsWith('\t') || afterAt.startsWith('\n')) return '';
+  // Return the word after @ (up to whitespace or end)
+  const match = afterAt.match(/^(\S*)/);
+  return match?.[1] ?? '';
+});
+
+const agentMatches = computed(() => {
+  // Check if we're in an @ context (atQuery is not empty OR cursor is right after @)
+  const query = atQuery.value;
+  const textarea = textareaRef.value;
+  const value = messageValue.value;
+  const cursorPos = textarea?.selectionStart ?? value.length;
+  const textBeforeCursor = value.slice(0, cursorPos);
+  const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+  
+  // We're not in @ context if no @ found
+  if (lastAtIndex === -1) return [];
+  
+  // Check if @ is followed by whitespace (invalid @ context)
+  const afterAt = textBeforeCursor.slice(lastAtIndex + 1);
+  if (afterAt.startsWith(' ') || afterAt.startsWith('\t') || afterAt.startsWith('\n')) return [];
+  
+  const primaryAgents = props.agentOptions ?? [];
+  const subagents = props.subagentOptions ?? [];
+  const allAgents = [...primaryAgents, ...subagents];
+  const matches = allAgents.filter(
+    (agent) =>
+      agent.label.toLowerCase().startsWith(query.toLowerCase()) ||
+      agent.id.toLowerCase().startsWith(query.toLowerCase()),
+  );
+  return matches;
+});
+
+const agentPopupOpen = computed(
+  () => !agentPopupDismissed.value && agentMatches.value.length > 0,
+);
+
 watch(
   () => messageValue.value,
   () => {
     commandPopupDismissed.value = false;
+    agentPopupDismissed.value = false;
   },
 );
 
@@ -663,6 +751,44 @@ function handleCommandSelect(name: unknown) {
 function applyCommandSelection(name: string) {
   messageValue.value = `/${name} `;
   nextTick(() => textareaRef.value?.focus());
+}
+
+function handleAgentSelect(id: unknown) {
+  if (typeof id === 'string') applyAgentSelection(id);
+}
+
+function applyAgentSelection(id: string) {
+  const agent = findAgent(id);
+  if (!agent) return;
+  
+  const textarea = textareaRef.value;
+  const value = messageValue.value;
+  const cursorPos = textarea?.selectionStart ?? value.length;
+  
+  // Find the last @ before cursor
+  const textBeforeCursor = value.slice(0, cursorPos);
+  const lastAtIndex = textBeforeCursor.lastIndexOf('@');
+  if (lastAtIndex === -1) return;
+  
+  // Find where the @query ends (next whitespace or cursor position)
+  const textAfterAt = value.slice(lastAtIndex + 1);
+  const whitespaceMatch = textAfterAt.match(/\s/);
+  const queryEndOffset = whitespaceMatch ? whitespaceMatch.index! : textAfterAt.length;
+  const queryEndPos = lastAtIndex + 1 + queryEndOffset;
+  
+  // Build new value: text before @ + @agentName + space + text after query
+  const beforeAt = value.slice(0, lastAtIndex);
+  const afterQuery = value.slice(queryEndPos);
+  const newValue = beforeAt + '@' + agent.label + ' ' + afterQuery;
+  
+  messageValue.value = newValue;
+  
+  // Set cursor position after the inserted agent name + space
+  nextTick(() => {
+    const newCursorPos = lastAtIndex + agent.label.length + 2; // +2 for '@' and ' '
+    textarea?.setSelectionRange(newCursorPos, newCursorPos);
+    textarea?.focus();
+  });
 }
 
 function extractSlashCommand(value: string) {
@@ -739,6 +865,47 @@ function handleModelDropdownOpenChange(open: boolean) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
+  // --- Agent @ popup: handle first (higher priority than command popup) ---
+  if (agentPopupOpen.value) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      agentPopupDismissed.value = true;
+      return;
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      agentDropdownRef.value?.moveHighlight('down');
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      agentDropdownRef.value?.moveHighlight('up');
+      return;
+    }
+    if (
+      event.key === 'Tab' &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      agentDropdownRef.value?.selectHighlighted();
+      return;
+    }
+    if (
+      event.key === 'Enter' &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      agentDropdownRef.value?.selectHighlighted();
+    }
+    return;
+  }
+  // --- Command / popup ---
   if (commandPopupOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -901,7 +1068,9 @@ const modelValue = computed({
 
 function findAgent(id: unknown): AgentOption | undefined {
   if (id == null) return undefined;
-  return (props.agentOptions ?? []).find((a) => a.id === id);
+  // Search in both primary agents and subagents
+  return (props.agentOptions ?? []).find((a) => a.id === id) ??
+         (props.subagentOptions ?? []).find((a) => a.id === id);
 }
 
 function resolveAgentStyle(name?: string, explicitColor?: string) {
@@ -1406,6 +1575,50 @@ const inputMessageStyle = computed(() => {
   line-height: 1.2;
 }
 .command-desc {
+  font-size: 10px;
+  color: #94a3b8;
+  line-height: 1.2;
+}
+
+.agent-dropdown-wrapper {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.agent-dropdown-wrapper :deep(.ui-dropdown-menu) {
+  pointer-events: auto;
+}
+
+:deep(.agent-popup) {
+  /* Open upward instead of downward */
+  top: auto;
+  bottom: anchor(top);
+  margin-top: 0;
+  margin-bottom: 8px;
+  max-height: 220px;
+}
+
+:deep(.agent-popup) .ui-dropdown-item[aria-selected='true'] {
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+}
+
+.agent-popup-name {
+  font-size: 12px;
+  color: #e2e8f0;
+  line-height: 1.2;
+}
+.agent-mode-badge {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-left: 6px;
+  font-weight: 500;
+}
+.agent-popup-description {
   font-size: 10px;
   color: #94a3b8;
   line-height: 1.2;

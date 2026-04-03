@@ -134,6 +134,7 @@
               :disabled="connectionState !== 'ready'"
               :can-send="canSend"
               :agent-options="agentOptions"
+              :subagent-options="subagentOptions"
               :has-agent-options="hasAgentOptions"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
@@ -1431,6 +1432,21 @@ const canAbort = computed(() =>
 const hasAgentOptions = computed(() => agentOptions.value.length > 0);
 const hasModelOptions = computed(() => modelOptions.value.length > 0);
 const hasThinkingOptions = computed(() => thinkingOptions.value.length > 0);
+
+// Subagent options for @ invocation (includes subagents only, no hidden agents)
+const subagentOptions = computed(() => {
+  return agents.value
+    .filter((agent) => agent.mode === 'subagent' && !agent.hidden)
+    .map((agent) => ({
+      id: agent.name,
+      label: agent.name
+        ? `${agent.name.charAt(0).toUpperCase()}${agent.name.slice(1)}`
+        : agent.name,
+      description: agent.description,
+      color: agent.color,
+      isSubagent: true,
+    }));
+});
 const canAttach = computed(() => {
   const selected = modelOptions.value.find((m) => m.id === selectedModel.value);
   return selected?.attachmentCapable !== false;
@@ -3891,6 +3907,22 @@ function findCommandByName(name: string) {
   return commands.value.find((command) => command.name.toLowerCase() === target) ?? null;
 }
 
+function findAgentByName(name: string): AgentInfo | null {
+  const target = name.toLowerCase();
+  return agents.value.find((agent) => agent.name.toLowerCase() === target) ?? null;
+}
+
+function parseAtAgent(input: string): { agent: string; text: string } | null {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith('@')) return null;
+  const match = trimmed.slice(1).match(/^(\S+)(?:\s+(.*))?$/);
+  if (!match) return null;
+  const agent = match[1]?.trim();
+  if (!agent) return null;
+  const text = match[2] ?? '';
+  return { agent, text };
+}
+
 const DEBUG_SUBCOMMANDS: Record<string, string> = {
   session: t('app.debug.session'),
   notification: t('app.debug.notification'),
@@ -4217,10 +4249,15 @@ async function sendMessage() {
       clearComposerDraftForCurrentContext();
       return;
     }
+    // Parse @agent syntax after slash command handling
+    const atAgent = hasText ? parseAtAgent(text) : null;
+    const agentMatch = atAgent ? findAgentByName(atAgent.agent) : null;
     const directory = requireSelectedWorktree('send');
     if (!directory) return;
     const parts = [] as Array<Record<string, unknown>>;
-    if (hasText) parts.push({ type: 'text', text });
+    // Use remaining text after @agent (or original text if no @agent)
+    const messageText = atAgent ? atAgent.text : text;
+    if (hasText && messageText) parts.push({ type: 'text', text: messageText });
     if (hasAttachments) {
       parts.push(
         ...attachments.value.map((item) => ({
@@ -4233,7 +4270,7 @@ async function sendMessage() {
     }
     await opencodeApi.sendPromptAsync(sessionId, {
       directory,
-      agent: selectedMode.value,
+      agent: agentMatch?.name ?? selectedMode.value,
       model: {
         providerID,
         modelID: modelID || '',
