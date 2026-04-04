@@ -709,13 +709,53 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   await promise;
 }
 
+const BACKGROUND_HYDRATION_BATCH_SIZE = 5;
+const BACKGROUND_HYDRATION_DELAY_MS = 2000;
+
 function scheduleBackgroundHydration(state: ConnectionState, directories: string[]) {
   void (async () => {
-    for (const directory of directories) {
+    // 优先加载当前激活的目录
+    const activeDirectory = state.pendingSelectedDirectory;
+    const otherDirectories = directories.filter(
+      (directory) => normalizeDirectory(directory) !== activeDirectory
+    );
+    
+    // 先立即加载当前激活目录（如果存在且不是pendingSelectedDirectory）
+    if (activeDirectory) {
+      const activeDirExists = directories.some(
+        (directory) => normalizeDirectory(directory) === activeDirectory
+      );
+      if (activeDirExists) {
+        await loadDirectorySessions(state, activeDirectory, 'full').catch(() => {});
+        await loadDirectoryVcs(state, activeDirectory).catch(() => {});
+      }
+    }
+    
+    // 其余目录分批延迟加载
+    const batches: string[][] = [];
+    for (let i = 0; i < otherDirectories.length; i += BACKGROUND_HYDRATION_BATCH_SIZE) {
+      batches.push(otherDirectories.slice(i, i + BACKGROUND_HYDRATION_BATCH_SIZE));
+    }
+    
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
       if (!connections.has(state.key)) return;
-      if (state.pendingSelectedDirectory === normalizeDirectory(directory)) continue;
-      await loadDirectorySessions(state, directory, 'full').catch(() => {});
-      await loadDirectoryVcs(state, directory).catch(() => {});
+      
+      const batch = batches[batchIndex]!;
+      const isFirstBatch = batchIndex === 0;
+      
+      // 第一批不延迟，后续批次延迟
+      if (!isFirstBatch) {
+        await new Promise((resolve) => setTimeout(resolve, BACKGROUND_HYDRATION_DELAY_MS));
+      }
+      
+      // 并行加载当前批次的所有目录
+      await Promise.all(
+        batch.map(async (directory) => {
+          if (!connections.has(state.key)) return;
+          await loadDirectorySessions(state, directory, 'full').catch(() => {});
+          await loadDirectoryVcs(state, directory).catch(() => {});
+        })
+      );
     }
   })();
 }

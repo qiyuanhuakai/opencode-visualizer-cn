@@ -318,6 +318,7 @@ import {
   onMounted,
   reactive,
   ref,
+  shallowRef,
   watch,
   watchEffect,
 } from 'vue';
@@ -1129,7 +1130,42 @@ const filteredSessions = computed(() =>
   }),
 );
 
+const treeDataCache = shallowRef<{
+  data: TopPanelWorktree[];
+  hash: string;
+  timestamp: number;
+} | null>(null);
+
+function computeProjectsHash(projects: Record<string, ProjectState>): string {
+  let hash = 0;
+  const projectEntries = Object.entries(projects);
+  for (const [id, project] of projectEntries) {
+    hash ^= id.length + Object.keys(project.sandboxes).length;
+    for (const sandbox of Object.values(project.sandboxes)) {
+      hash += sandbox.rootSessions.length;
+      for (const sessionId of sandbox.rootSessions) {
+        const session = sandbox.sessions[sessionId];
+        if (session) {
+          hash += (session.timeUpdated ?? session.timeCreated ?? 0) & 0xffff;
+        }
+      }
+    }
+  }
+  return `${hash}-${projectEntries.length}`;
+}
+
 const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
+  const currentHash = computeProjectsHash(serverState.projects);
+  const now = Date.now();
+  
+  if (
+    treeDataCache.value &&
+    treeDataCache.value.hash === currentHash &&
+    now - treeDataCache.value.timestamp < 5000
+  ) {
+    return treeDataCache.value.data;
+  }
+  
   const entries = Object.values(serverState.projects)
     .map((project) => {
       const worktreeDirectory = project.worktree;
@@ -1195,6 +1231,8 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
       if (b.directory === '/' && a.directory !== '/') return -1;
       return (a.name || a.label).localeCompare(b.name || b.label);
     });
+  
+  treeDataCache.value = { data: entries, hash: currentHash, timestamp: now };
   return entries;
 });
 
