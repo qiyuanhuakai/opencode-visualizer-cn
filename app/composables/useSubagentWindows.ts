@@ -1,4 +1,4 @@
-import { onUnmounted, reactive, type Component, type Ref } from 'vue';
+import { type Component, type Ref } from 'vue';
 import type {
   MessagePart,
   MessagePartDeltaPacket,
@@ -7,12 +7,7 @@ import type {
 } from '../types/sse';
 import type { SessionScope } from './useGlobalEvents';
 import type { useFloatingWindows } from './useFloatingWindows';
-import { useDeltaAccumulator } from './useDeltaAccumulator';
-
-type SubagentEntry = {
-  id: string;
-  text: string;
-};
+import { useStreamingWindowManager } from './useStreamingWindowManager';
 
 type UseSubagentWindowsOptions = {
   scope?: SessionScope;
@@ -39,53 +34,23 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
     suppressAutoWindows,
   } = options;
   let boundScope = options.scope;
-  const acc = useDeltaAccumulator();
 
-  const entriesBySession = reactive(new Map<string, SubagentEntry[]>());
-
-  const closeTimers = new Map<string, number>();
   const activeMessageIdBySession = new Map<string, string>();
 
-  function getWindowKey(sessionId: string) {
-    return `${SUBAGENT_WINDOW_PREFIX}${sessionId}`;
-  }
-
-  function clearCloseTimer(sessionId: string) {
-    const existing = closeTimers.get(sessionId);
-    if (existing === undefined) return;
-    window.clearTimeout(existing);
-    closeTimers.delete(sessionId);
-  }
-
-  function closeWindow(sessionId: string) {
-    const windowKey = getWindowKey(sessionId);
-    if (fw.has(windowKey)) {
-      void fw.close(windowKey);
-    }
-    entriesBySession.delete(sessionId);
-    activeMessageIdBySession.delete(sessionId);
-  }
-
-  function scheduleClose(sessionId: string) {
-    clearCloseTimer(sessionId);
-    const timer = window.setTimeout(() => {
-      closeTimers.delete(sessionId);
-      closeWindow(sessionId);
-    }, closeDelayMs);
-    closeTimers.set(sessionId, timer);
-  }
+  const manager = useStreamingWindowManager({
+    selectedSessionId,
+    fw,
+    component: subagentComponent,
+    theme,
+    closeDelayMs,
+    prefix: SUBAGENT_WINDOW_PREFIX,
+    color: SUBAGENT_WINDOW_COLOR,
+    suppressAutoWindows,
+  });
 
   function reset() {
-    closeTimers.forEach((timer) => {
-      window.clearTimeout(timer);
-    });
-    closeTimers.clear();
+    manager.reset();
     activeMessageIdBySession.clear();
-    entriesBySession.clear();
-    fw.entries.value.forEach((entry) => {
-      if (!entry.key.startsWith(SUBAGENT_WINDOW_PREFIX)) return;
-      void fw.close(entry.key);
-    });
   }
 
   function handleTextPart(part: MessagePart) {
@@ -97,24 +62,13 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
     const messageId = part.messageID;
     const partId = part.id;
     const messageText = part.text || '';
-    const windowKey = getWindowKey(resolvedSessionId);
 
-    clearCloseTimer(resolvedSessionId);
+    manager.clearCloseTimer(resolvedSessionId);
     activeMessageIdBySession.set(resolvedSessionId, messageId);
 
-    let sessionEntries = entriesBySession.get(resolvedSessionId);
-    if (!sessionEntries) {
-      sessionEntries = [];
-      entriesBySession.set(resolvedSessionId, sessionEntries);
-    }
-    const existingIndex = sessionEntries.findIndex((e) => e.id === partId);
-    if (existingIndex >= 0) {
-      sessionEntries[existingIndex] = { id: partId, text: messageText };
-    } else {
-      sessionEntries.push({ id: partId, text: messageText });
-    }
+    manager.upsertEntry(resolvedSessionId, partId, messageText);
 
-    const messageInfo = acc.getMessage(messageId)?.info;
+    const messageInfo = manager.acc.getMessage(messageId)?.info;
     let modelLabel: string | undefined;
     let agentLabel: string | undefined;
     if (messageInfo?.role === 'assistant') {
@@ -129,73 +83,40 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
       ? `🤖 [${modelLabel}] ${agentPart}Working...`
       : `🤖 ${agentPart}Working...`;
 
-    if (!suppressAutoWindows?.value) {
-      void fw.open(windowKey, {
-        component: subagentComponent,
-        props: {
-          entries: [...sessionEntries],
-          theme: theme(),
-        },
-        title,
-        scroll: 'follow',
-        resizable: true,
-        closable: false,
-        color: SUBAGENT_WINDOW_COLOR,
-        variant: 'message',
-        expiresAt: Number.MAX_SAFE_INTEGER,
-        width: 600,
-        height: 400,
-      });
+    manager.openWindow(resolvedSessionId, title);
+
+    if (part.time?.end) {
+      manager.scheduleClose(resolvedSessionId);
     }
   }
 
-  const unsubs: Array<() => void> = [];
-
   function subscribe(scope: SessionScope) {
-    unsubs.forEach((fn) => fn());
-    unsubs.length = 0;
     boundScope = scope;
-
-    unsubs.push(
-      scope.on('message.part.updated', (packet: MessagePartUpdatedPacket) => {
+    manager.subscribe(scope, {
+      onPartUpdated: (packet: MessagePartUpdatedPacket) => {
         handleTextPart(packet.part);
-      }),
-    );
-
-    unsubs.push(
-      scope.on('message.part.delta', (packet: MessagePartDeltaPacket) => {
+      },
+      onPartDelta: (packet: MessagePartDeltaPacket) => {
         if (packet.field !== 'text') return;
-        const accumulated = acc.getMessage(packet.messageID);
+        const accumulated = manager.acc.getMessage(packet.messageID);
         const part = accumulated?.parts.get(packet.partID);
         if (!part) return;
         handleTextPart(part);
-      }),
-    );
-
-    unsubs.push(
-      scope.on('message.updated', (packet: MessageUpdatedPacket) => {
+      },
+      onMessageUpdated: (packet: MessageUpdatedPacket) => {
         if (packet.info.role !== 'assistant') return;
 
         const resolvedSessionId = packet.info.sessionID || selectedSessionId.value;
         if (resolvedSessionId === selectedSessionId.value) return;
 
         if (packet.info.time.completed || packet.info.error) {
-          scheduleClose(resolvedSessionId);
+          manager.scheduleClose(resolvedSessionId);
         }
-      }),
-    );
+      },
+    });
   }
 
   if (boundScope) subscribe(boundScope);
-
-  onUnmounted(() => {
-    unsubs.forEach((fn) => fn());
-    unsubs.length = 0;
-    closeTimers.forEach((timer) => {
-      window.clearTimeout(timer);
-    });
-    closeTimers.clear();
-  });
 
   return {
     reset,

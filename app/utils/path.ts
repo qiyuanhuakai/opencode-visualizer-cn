@@ -31,14 +31,16 @@ export function normalizeAbsolutePathNoParent(value: string) {
 }
 
 /**
- * Split a target path into `{ directory, path }` suitable for the `/file` and
- * `/file/content` API endpoints.
- *
- * When `sandboxDirectory` is provided, paths inside the sandbox are returned
- * relative to it (`directory = sandbox`).  Paths outside — or when
- * `sandboxDirectory` is `null` — are split at the first `/` so that the root
- * prefix becomes `directory` (e.g. `"/"` on POSIX, `"C:/"` on Windows).
+ * Normalize directory path by removing trailing slashes.
+ * Returns empty string for empty/whitespace input, '/' if result would be empty.
  */
+export function normalizeDirectory(value?: string): string {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const normalized = trimmed.replace(/\/+$/, '');
+  return normalized || '/';
+}
 export function splitFileContentDirectoryAndPath(
   targetPath: string,
   sandboxDirectory: string | null,

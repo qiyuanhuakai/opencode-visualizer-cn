@@ -8,6 +8,7 @@ import type {
   WorkerStateEventType,
   WorkerStatePacket,
 } from '../types/sse';
+import { normalizeDirectory } from '../utils/path';
 import { createNotificationManager } from '../utils/notificationManager';
 import {
   getCurrentProject,
@@ -74,13 +75,6 @@ function broadcast(state: ConnectionState, message: WorkerToTabMessage) {
   for (const port of state.ports) {
     send(port, message);
   }
-}
-
-function normalizeDirectory(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const normalized = trimmed.replace(/\/+$/, '');
-  return normalized || '/';
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

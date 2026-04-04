@@ -1,4 +1,5 @@
 import type { LocaleMessages } from '../i18n/types';
+import { DEFAULT_OPENCODE_URL } from '../utils/constants';
 
 const messages: LocaleMessages = {
   app: {
@@ -8,7 +9,7 @@ const messages: LocaleMessages = {
       title: 'Connect to OpenCode Server',
       username: 'Username',
       password: 'Password',
-      url: 'http://localhost:4096',
+      url: DEFAULT_OPENCODE_URL,
       authRequired: 'The server requires authentication',
       connect: 'Connect',
       retry: 'Retry',

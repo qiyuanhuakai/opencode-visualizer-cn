@@ -2,7 +2,15 @@ import { computed, ref, watch } from 'vue';
 import type { Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { FileWatcherUpdatedPacket } from '../types/sse';
+import type {
+  GitStatus,
+  GitStatusCode,
+  GitFileStatus,
+  GitBranchInfo,
+  BranchEntry,
+} from '../types/git';
 import * as opencodeApi from '../utils/opencode';
+import { normalizeDirectory } from '../utils/path';
 import { usePtyOneshot } from './usePtyOneshot';
 
 const GIT_ENV_PREAMBLE = [
@@ -48,53 +56,6 @@ export type FileNode = {
   ignored?: boolean;
 };
 
-export type GitStatusCode = '' | 'M' | 'A' | 'D' | 'R' | 'C' | '?';
-
-export type GitFileStatus = {
-  path: string;
-  index: GitStatusCode;
-  worktree: GitStatusCode;
-  origPath?: string;
-};
-
-export type GitBranchInfo = {
-  branch: string;
-  upstream?: string;
-  ahead: number;
-  behind: number;
-  headShort?: string;
-};
-
-export type GitDiffStatsEntry = {
-  additions: number;
-  deletions: number;
-};
-
-export type GitDiffStats = {
-  staged: GitDiffStatsEntry;
-  unstaged: GitDiffStatsEntry;
-};
-
-export type BranchEntry = {
-  refname: string;
-  refnameShort: string;
-  displayName: string;
-  hash: string;
-  subject: string;
-  isCurrent: boolean;
-  isWorktree: boolean;
-  isLocal: boolean;
-  remote: string;
-  upstream: string;
-  hasLocalCounterpart: boolean;
-};
-
-export type GitStatus = {
-  branch: GitBranchInfo;
-  files: GitFileStatus[];
-  diffStats: GitDiffStats;
-};
-
 type FileTreeStrategy = 'filesystem' | 'git';
 
 type UseFileTreeOptions = {
@@ -134,11 +95,6 @@ function getOptions(): UseFileTreeOptions {
     throw new Error('useFileTree must be initialized with options before use');
   }
   return boundOptions;
-}
-
-function normalizeDirectory(value: string) {
-  const trimmed = value.replace(/\/+$/, '');
-  return trimmed || value;
 }
 
 function normalizeRelativePath(path: string) {

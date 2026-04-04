@@ -15,38 +15,31 @@ export default defineConfig({
     __GIT_REVISION__: JSON.stringify(gitRevision),
   },
   build: {
+    chunkSizeWarningLimit: 1000,
     outDir: '../dist',
     emptyOutDir: true,
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // Vendor chunk: Vue ecosystem
-          if (id.includes('node_modules') && (
-            id.includes('vue') || 
-            id.includes('vue-i18n')
-          )) {
+          if (!id.includes('node_modules')) return;
+
+          if (id.includes('vue-i18n')) {
+            return 'vendor-vue-i18n';
+          }
+
+          if (id.includes('vue')) {
             return 'vendor-vue';
           }
-          
-          // Vendor chunk: UI components
-          if (id.includes('node_modules') && (
-            id.includes('@headlessui') ||
-            id.includes('@iconify')
-          )) {
+
+          if (id.includes('@headlessui') || id.includes('@iconify')) {
             return 'vendor-ui';
           }
-          
-          // Terminal chunk (heavy)
-          if (id.includes('node_modules') && id.includes('@xterm')) {
+
+          if (id.includes('@xterm')) {
             return 'vendor-terminal';
           }
-          
-          // Utilities
-          if (id.includes('node_modules') && (
-            id.includes('marked') ||
-            id.includes('date-fns') ||
-            id.includes('lodash')
-          )) {
+
+          if (id.includes('marked') || id.includes('date-fns') || id.includes('lodash')) {
             return 'vendor-utils';
           }
         },

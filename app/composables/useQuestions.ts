@@ -1,9 +1,9 @@
-import { ref } from 'vue';
-import type { ComputedRef, Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import type { ComputedRef, Ref } from 'vue';
 import QuestionContent from '../components/ToolWindow/Question.vue';
 import * as opencodeApi from '../utils/opencode';
 import type { useFloatingWindows } from './useFloatingWindows';
+import { useDialogHandler } from './useDialogHandler';
 
 export type QuestionOption = {
   label: string;
@@ -41,8 +41,30 @@ export function useQuestions(options: {
   getTextContent: (messageId: string) => string;
 }) {
   const { t } = useI18n();
-  const questionSendingById = ref<Record<string, boolean>>({});
-  const questionErrorById = ref<Record<string, string>>({});
+  const dialog = useDialogHandler<QuestionRequest>({
+    fw: options.fw,
+    allowedSessionIds: options.allowedSessionIds,
+    kind: 'question',
+  });
+
+  const { handleReply } = dialog.makeReplyFlow({
+    ensureConnectionReady: options.ensureConnectionReady,
+    activeDirectory: options.activeDirectory,
+    actionKey: 'app.actions.questionReply',
+    sendReply: (requestId, answers) =>
+      opencodeApi.replyQuestion(requestId, {
+        directory: options.activeDirectory.value.trim() || undefined,
+        answers: normalizeQuestionAnswers(answers as QuestionAnswer[]),
+      }),
+  });
+
+  const { handleReject } = dialog.makeRejectFlow({
+    ensureConnectionReady: options.ensureConnectionReady,
+    activeDirectory: options.activeDirectory,
+    actionKey: 'app.actions.questionReject',
+    sendReject: (requestId) =>
+      opencodeApi.rejectQuestion(requestId, options.activeDirectory.value.trim() || undefined),
+  });
 
   function parseQuestionRequest(
     value: unknown,
@@ -119,99 +141,6 @@ export function useQuestions(options: {
     return options.getTextContent(request.tool.messageID) || '';
   }
 
-  function upsertQuestionEntry(request: QuestionRequest): void {
-    const key = `question:${request.id}`;
-    options.fw.open(key, {
-      component: QuestionContent,
-      props: {
-        request,
-        contextText: getQuestionContextText(request),
-        isSubmitting: isQuestionSubmitting(request.id),
-        error: getQuestionError(request.id),
-        onReply: handleQuestionReply,
-        onReject: handleQuestionReject,
-      },
-      closable: false,
-      resizable: true,
-      scroll: 'follow',
-      color: '#34d399',
-      title: t('app.windowTitles.question', { title: request.questions?.[0]?.header || 'request' }),
-      width: QUESTION_WINDOW_WIDTH,
-      height: QUESTION_WINDOW_HEIGHT,
-      expiry: Infinity,
-    });
-  }
-
-  function refreshQuestionWindow(requestId: string): void {
-    const key = `question:${requestId}`;
-    const entry = options.fw.get(key);
-    if (!entry) return;
-    const request = entry.props?.request as QuestionRequest | undefined;
-    options.fw.updateOptions(key, {
-      props: {
-        ...entry.props,
-        contextText: request ? getQuestionContextText(request) : '',
-        isSubmitting: isQuestionSubmitting(requestId),
-        error: getQuestionError(requestId),
-      },
-    });
-  }
-
-  function removeQuestionEntry(requestId: string): void {
-    options.fw.close(`question:${requestId}`);
-    clearQuestionSending(requestId);
-    clearQuestionError(requestId);
-  }
-
-  function setQuestionSending(requestId: string, value: boolean): void {
-    const next = { ...questionSendingById.value };
-    if (value) next[requestId] = true;
-    else delete next[requestId];
-    questionSendingById.value = next;
-  }
-
-  function clearQuestionSending(requestId: string): void {
-    setQuestionSending(requestId, false);
-  }
-
-  function setQuestionError(requestId: string, message: string): void {
-    const next = { ...questionErrorById.value };
-    if (message) next[requestId] = message;
-    else delete next[requestId];
-    questionErrorById.value = next;
-  }
-
-  function clearQuestionError(requestId: string): void {
-    setQuestionError(requestId, '');
-  }
-
-  function isQuestionSubmitting(requestId: string): boolean {
-    return Boolean(questionSendingById.value[requestId]);
-  }
-
-  function getQuestionError(requestId: string): string {
-    return questionErrorById.value[requestId] ?? '';
-  }
-
-  function isQuestionSessionAllowed(request: QuestionRequest): boolean {
-    const allowed = options.allowedSessionIds.value;
-    if (!request.sessionID) return false;
-    if (allowed.size === 0) return false;
-    return allowed.has(request.sessionID);
-  }
-
-  function pruneQuestionEntries(): void {
-    const allowed = options.allowedSessionIds.value;
-    for (const entry of options.fw.entries.value) {
-      if (!entry.key.startsWith('question:')) continue;
-      const request = entry.props?.request as QuestionRequest | undefined;
-      if (!request) continue;
-      if (!allowed.has(request.sessionID)) {
-        removeQuestionEntry(request.id);
-      }
-    }
-  }
-
   function normalizeQuestionAnswers(answers: QuestionAnswer[]): QuestionAnswer[] {
     return answers.map((answer) => {
       if (!Array.isArray(answer)) return [];
@@ -222,62 +151,44 @@ export function useQuestions(options: {
     });
   }
 
-  async function sendQuestionReply(requestId: string, answers: QuestionAnswer[]): Promise<void> {
-    if (!options.ensureConnectionReady(t('app.actions.questionReply'))) return;
-    const directory = options.activeDirectory.value.trim();
-    await opencodeApi.replyQuestion(requestId, {
-      directory: directory || undefined,
-      answers: normalizeQuestionAnswers(answers),
+  function upsertQuestionEntry(request: QuestionRequest) {
+    dialog.upsert(request, {
+      component: QuestionContent,
+      props: {
+        contextText: getQuestionContextText(request),
+        onReply: handleQuestionReply,
+        onReject: handleQuestionReject,
+      },
+      title: t('app.windowTitles.question', { title: request.questions?.[0]?.header || 'request' }),
+      width: QUESTION_WINDOW_WIDTH,
+      height: QUESTION_WINDOW_HEIGHT,
+      color: '#34d399',
+      resizable: true,
+      scroll: 'follow',
     });
   }
 
-  async function sendQuestionReject(requestId: string): Promise<void> {
-    if (!options.ensureConnectionReady(t('app.actions.questionReject'))) return;
-    const directory = options.activeDirectory.value.trim();
-    await opencodeApi.rejectQuestion(requestId, directory || undefined);
+  function removeQuestionEntry(requestId: string) {
+    dialog.remove(requestId);
   }
 
-  async function handleQuestionReply(payload: {
-    requestId: string;
-    answers: QuestionAnswer[];
-  }): Promise<void> {
-    if (!options.ensureConnectionReady(t('app.actions.questionReply'))) return;
-    const { requestId, answers } = payload;
-    if (isQuestionSubmitting(requestId)) return;
-    clearQuestionError(requestId);
-    setQuestionSending(requestId, true);
-    refreshQuestionWindow(requestId);
-    try {
-      await sendQuestionReply(requestId, answers);
-      removeQuestionEntry(requestId);
-    } catch (error) {
-      setQuestionError(requestId, toErrorMessage(error));
-      refreshQuestionWindow(requestId);
-    } finally {
-      clearQuestionSending(requestId);
-      refreshQuestionWindow(requestId);
-    }
+  function pruneQuestionEntries() {
+    dialog.prune();
   }
 
-  async function handleQuestionReject(requestId: string): Promise<void> {
-    if (!options.ensureConnectionReady(t('app.actions.questionReject'))) return;
-    if (isQuestionSubmitting(requestId)) return;
-    clearQuestionError(requestId);
-    setQuestionSending(requestId, true);
-    refreshQuestionWindow(requestId);
-    try {
-      await sendQuestionReject(requestId);
-      removeQuestionEntry(requestId);
-    } catch (error) {
-      setQuestionError(requestId, toErrorMessage(error));
-      refreshQuestionWindow(requestId);
-    } finally {
-      clearQuestionSending(requestId);
-      refreshQuestionWindow(requestId);
-    }
+  function isQuestionSessionAllowed(request: QuestionRequest): boolean {
+    return dialog.isSessionAllowed(request);
   }
 
-  async function fetchPendingQuestions(directory?: string): Promise<void> {
+  async function handleQuestionReply(payload: { requestId: string; answers: QuestionAnswer[] }) {
+    await handleReply(payload.requestId, payload.answers);
+  }
+
+  async function handleQuestionReject(requestId: string) {
+    await handleReject(requestId);
+  }
+
+  async function fetchPendingQuestions(directory?: string) {
     try {
       const data = await opencodeApi.listPendingQuestions(directory);
       if (!Array.isArray(data)) return;
@@ -303,11 +214,6 @@ export function useQuestions(options: {
     isQuestionSessionAllowed,
     fetchPendingQuestions,
   };
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
 }
 
 function log(..._args: unknown[]): void {}

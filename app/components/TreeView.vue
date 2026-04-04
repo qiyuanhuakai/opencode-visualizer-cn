@@ -351,7 +351,7 @@ import { computed, ref, watch, nextTick, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 
-import type { BranchEntry } from '../composables/useFileTree';
+import type { BranchEntry } from '../types/git';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownLabel from './Dropdown/Label.vue';

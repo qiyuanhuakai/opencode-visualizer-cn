@@ -106,7 +106,7 @@
 import { computed, toRefs } from 'vue';
 import { Icon } from '@iconify/vue';
 import TodoList from './TodoList.vue';
-import type { BranchEntry } from '../composables/useFileTree';
+import type { BranchEntry } from '../types/git';
 import TreeView, {
   type GitBranchInfo,
   type GitDiffStats,

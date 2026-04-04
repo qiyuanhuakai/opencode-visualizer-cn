@@ -1,5 +1,6 @@
 import type { ProjectInfo, SessionInfo } from '../types/sse';
 import type { ProjectState, SandboxState, ServerState, SessionState } from '../types/worker-state';
+import { normalizeDirectory } from './path';
 
 const PROJECT_COLOR_HEX: Record<string, string> = {
   pink: '#e34ba9',
@@ -41,14 +42,6 @@ type SessionEntry = {
   directory: string;
   session: SessionState;
 };
-
-function normalizeDirectory(value?: string) {
-  if (!value) return '';
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const normalized = trimmed.replace(/\/+$/, '');
-  return normalized || '/';
-}
 
 export function resolveProjectColorHex(raw?: string): string | undefined {
   if (!raw) return undefined;

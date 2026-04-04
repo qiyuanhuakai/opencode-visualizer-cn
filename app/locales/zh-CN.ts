@@ -1,4 +1,5 @@
 import type { LocaleMessages } from '../i18n/types';
+import { DEFAULT_OPENCODE_URL } from '../utils/constants';
 
 const messages: LocaleMessages = {
   app: {
@@ -8,7 +9,7 @@ const messages: LocaleMessages = {
       title: '连接到 OpenCode 服务器',
       username: '用户名',
       password: '密码',
-      url: 'http://localhost:4096',
+      url: DEFAULT_OPENCODE_URL,
       authRequired: '服务器需要身份验证',
       connect: '连接',
       retry: '重试',

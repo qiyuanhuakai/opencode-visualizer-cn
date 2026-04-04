@@ -1,9 +1,9 @@
-import { ref } from 'vue';
-import type { ComputedRef, Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import type { ComputedRef, Ref } from 'vue';
 import PermissionContent from '../components/ToolWindow/Permission.vue';
 import * as opencodeApi from '../utils/opencode';
 import type { useFloatingWindows } from './useFloatingWindows';
+import { useDialogHandler } from './useDialogHandler';
 
 export type PermissionRequest = {
   id: string;
@@ -30,8 +30,22 @@ export function usePermissions(options: {
   ensureConnectionReady: (action: string) => boolean;
 }) {
   const { t } = useI18n();
-  const permissionSendingById = ref<Record<string, boolean>>({});
-  const permissionErrorById = ref<Record<string, string>>({});
+  const dialog = useDialogHandler<PermissionRequest>({
+    fw: options.fw,
+    allowedSessionIds: options.allowedSessionIds,
+    kind: 'permission',
+  });
+
+  const { handleReply } = dialog.makeReplyFlow({
+    ensureConnectionReady: options.ensureConnectionReady,
+    activeDirectory: options.activeDirectory,
+    actionKey: 'app.actions.permissionReply',
+    sendReply: (requestId, reply) =>
+      opencodeApi.replyPermission(requestId, {
+        directory: options.activeDirectory.value.trim() || undefined,
+        reply: reply as PermissionReply,
+      }),
+  });
 
   function parsePermissionRequest(
     value: unknown,
@@ -98,122 +112,27 @@ export function usePermissions(options: {
     };
   }
 
-  function setPermissionSending(requestId: string, value: boolean) {
-    const next = { ...permissionSendingById.value };
-    if (value) next[requestId] = true;
-    else delete next[requestId];
-    permissionSendingById.value = next;
-  }
-
-  function clearPermissionSending(requestId: string) {
-    setPermissionSending(requestId, false);
-  }
-
-  function setPermissionError(requestId: string, message: string) {
-    const next = { ...permissionErrorById.value };
-    if (message) next[requestId] = message;
-    else delete next[requestId];
-    permissionErrorById.value = next;
-  }
-
-  function clearPermissionError(requestId: string) {
-    setPermissionError(requestId, '');
-  }
-
-  function isPermissionSubmitting(requestId: string): boolean {
-    return Boolean(permissionSendingById.value[requestId]);
-  }
-
-  function getPermissionError(requestId: string): string {
-    return permissionErrorById.value[requestId] ?? '';
-  }
-
-  function isPermissionSessionAllowed(request: PermissionRequest): boolean {
-    const allowed = options.allowedSessionIds.value;
-    if (!request.sessionID) return false;
-    if (allowed.size === 0) return false;
-    return allowed.has(request.sessionID);
-  }
-
   function upsertPermissionEntry(request: PermissionRequest) {
-    const key = `permission:${request.id}`;
-    options.fw.open(key, {
+    dialog.upsert(request, {
       component: PermissionContent,
-      props: {
-        request,
-        isSubmitting: isPermissionSubmitting(request.id),
-        error: getPermissionError(request.id),
-        onReply: handlePermissionReply,
-      },
-      closable: false,
-      resizable: false,
-      scroll: 'manual',
-      color: '#f59e0b',
+      props: { onReply: handlePermissionReply },
       title: t('app.windowTitles.permission', { title: request.permission || 'request' }),
       width: PERMISSION_WINDOW_WIDTH,
       height: PERMISSION_WINDOW_HEIGHT,
-      expiry: Infinity,
-    });
-  }
-
-  function refreshPermissionWindow(requestId: string) {
-    const key = `permission:${requestId}`;
-    const entry = options.fw.get(key);
-    if (!entry) return;
-    options.fw.updateOptions(key, {
-      props: {
-        ...entry.props,
-        isSubmitting: isPermissionSubmitting(requestId),
-        error: getPermissionError(requestId),
-      },
+      color: '#f59e0b',
     });
   }
 
   function removePermissionEntry(requestId: string) {
-    options.fw.close(`permission:${requestId}`);
-    clearPermissionSending(requestId);
-    clearPermissionError(requestId);
+    dialog.remove(requestId);
   }
 
   function prunePermissionEntries() {
-    const allowed = options.allowedSessionIds.value;
-    for (const entry of options.fw.entries.value) {
-      if (!entry.key.startsWith('permission:')) continue;
-      const request = entry.props?.request as PermissionRequest | undefined;
-      if (!request) continue;
-      if (!allowed.has(request.sessionID)) {
-        removePermissionEntry(request.id);
-      }
-    }
+    dialog.prune();
   }
 
-  async function sendPermissionReply(requestId: string, reply: PermissionReply) {
-    if (!options.ensureConnectionReady(t('app.actions.permissionReply'))) return;
-    const directory = options.activeDirectory.value.trim();
-    await opencodeApi.replyPermission(requestId, {
-      directory: directory || undefined,
-      reply,
-    });
-  }
-
-  async function handlePermissionReply(payload: { requestId: string; reply: PermissionReply }) {
-    if (!options.ensureConnectionReady(t('app.actions.permissionReply'))) return;
-    const { requestId, reply } = payload;
-    if (isPermissionSubmitting(requestId)) return;
-    clearPermissionError(requestId);
-    setPermissionSending(requestId, true);
-    refreshPermissionWindow(requestId);
-    try {
-      await sendPermissionReply(requestId, reply);
-      removePermissionEntry(requestId);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      setPermissionError(requestId, errorMessage);
-      refreshPermissionWindow(requestId);
-    } finally {
-      clearPermissionSending(requestId);
-      refreshPermissionWindow(requestId);
-    }
+  function isPermissionSessionAllowed(request: PermissionRequest): boolean {
+    return dialog.isSessionAllowed(request);
   }
 
   async function fetchPendingPermissions(directory?: string) {
@@ -227,9 +146,11 @@ export function usePermissions(options: {
         .forEach((entry) => {
           upsertPermissionEntry(entry);
         });
-    } catch {
-      // Empty catch block - intentionally ignore errors
-    }
+    } catch {}
+  }
+
+  async function handlePermissionReply(payload: { requestId: string; reply: PermissionReply }) {
+    await handleReply(payload.requestId, payload.reply);
   }
 
   return {
