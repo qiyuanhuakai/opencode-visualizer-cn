@@ -1,6 +1,8 @@
-## 分叉说明
+## 说明 Notice
 
 本仓库源自[上游仓库](https://github.com/xenodrive/vis)的fork，由于上游仓库不接受pr，因此我已将它作为独立项目持续维护，并进行了一些功能改进和本地化支持，包括：
+
+This repository is a fork of [the upstream repository](https://github.com/xenodrive/vis). Since the upstream does not accept pull requests, I have maintained it as an independent project and implemented several enhancements and localization features, including:
 
 - 支持i18n，添加新语言：简体中文
 - 添加session pin功能，在侧栏中增加了session栏，允许把常用session pin在侧边
@@ -15,7 +17,23 @@
   - 对超多session实现了background hydration，加快了冷启动的启动速度
 - 清理了一些冗余代码
 
+- Added i18n support with Simplified Chinese
+- Introduced session pinning functionality by adding a sessions panel in the sidebar to allow pinning frequently used sessions
+- Implemented batch management via a new "Management" button in the top bar for multi-select operations on sessions (note: multi-select pinning currently has an issue—only one session can be pinned per click)
+- Added an unarchive feature to restore previously archived sessions
+- Included comprehensive minimize and close buttons for all floating windows, enabling manual hiding and minimizing of all popups (with the option to disable auto-minimize behavior)
+- Added a bottom dock bar to store minimized floating windows
+- Adjusted the default port to reduce conflicts with Windows services when running in WSL
+- Added support for "@" shortcut commands to explicitly summon agents
+- Various performance improvements:
+  - Implemented lazy loading for extremely large session lists to reduce lag
+  - Enabled background hydration for sessions with very high counts, significantly speeding up cold starts
+- Removed redundant code
+
 由于本仓库没有在npm和其他地方发布，因此唯一的使用方法是：
+
+Since this repository is not published on npm or other platforms, the only way to use it is as follows:
+
 ```
 git clone https://github.com/qiyuanhuakai/opencode-visualizer-cn
 cd opencode-visualizer-cn
@@ -24,12 +42,16 @@ pnpm build
 node server.js
 ```
 建议使用
+
+It is recommended to use
 ```
 nohup node server.js 2>&1 &
 ```
 将服务器放在后台持久运行。
 
-## 声明
+to run the server in the background persistently.
+
+## 声明 Declaration
 
 这个项目是为opencode构建的第三方webui，因此在名称中包含了opencode。其**并非**由OpenCode团队开发，且与他们**没有**任何关联：由于我更改了仓库名，特此声明 \
 This project is a third-party web UI built for opencode, and therefore includes "opencode" in its name. It was **not** developed by the OpenCode team and has **no** affiliation with them: I am making this statement because I have changed the repository name.
