@@ -1,6 +1,6 @@
 ## 分叉说明
 
-本仓库fork自[上游仓库](https://github.com/xenodrive/vis)，由于上游仓库不接受pr，因此我在本分叉进行了一些功能改进和本地化支持，包括：
+本仓库源自[上游仓库](https://github.com/xenodrive/vis)的fork，由于上游仓库不接受pr，因此我已将它作为独立项目持续维护，并进行了一些功能改进和本地化支持，包括：
 
 - 支持i18n，添加新语言：简体中文
 - 添加session pin功能，在侧栏中增加了session栏，允许把常用session pin在侧边
@@ -13,11 +13,12 @@
 - 一些性能改进
   - 对超级庞大的session应用了lazy loading，降低卡顿
   - 对超多session实现了background hydration，加快了冷启动的启动速度
+- 清理了一些冗余代码
 
 由于本仓库没有在npm和其他地方发布，因此唯一的使用方法是：
 ```
-git clone https://github.com/qiyuanhuakai/vis_cn
-cd vis_cn
+git clone https://github.com/qiyuanhuakai/opencode-visualizer-cn
+cd opencode-visualizer-cn
 pnpm install
 pnpm build
 node server.js
