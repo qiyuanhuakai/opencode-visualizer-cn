@@ -721,6 +721,10 @@ const agentMatches = computed(() => {
   const afterAt = textBeforeCursor.slice(lastAtIndex + 1);
   if (afterAt.startsWith(' ') || afterAt.startsWith('\t') || afterAt.startsWith('\n')) return [];
   
+  // Check if there's a space after the agent name (agent already selected)
+  const textAfterCursor = value.slice(cursorPos);
+  if (textAfterCursor.startsWith(' ')) return [];
+  
   const primaryAgents = props.agentOptions ?? [];
   const subagents = props.subagentOptions ?? [];
   const allAgents = [...primaryAgents, ...subagents];
@@ -782,6 +786,13 @@ function applyAgentSelection(id: string) {
   const newValue = beforeAt + '@' + agent.label + ' ' + afterQuery;
   
   messageValue.value = newValue;
+  
+  // Dismiss popup - use double nextTick to ensure it happens after watch resets it
+  nextTick(() => {
+    nextTick(() => {
+      agentPopupDismissed.value = true;
+    });
+  });
   
   // Set cursor position after the inserted agent name + space
   nextTick(() => {
