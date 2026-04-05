@@ -14,7 +14,10 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, reactive, watch } from 'vue';
-import { renderWorkerHtml } from '../../utils/workerRenderer';
+import {
+  RenderCancelledError,
+  startRenderWorkerHtml,
+} from '../../utils/workerRenderer';
 
 const props = defineProps<{
   code?: string;
@@ -39,6 +42,7 @@ const state = reactive({
 });
 
 const copiedResetTimers = new Map<HTMLElement, number>();
+let cancelActiveRender: (() => void) | null = null;
 
 function resetCopyButtonState(codeBlock: HTMLElement) {
   codeBlock.classList.remove('copied');
@@ -88,8 +92,10 @@ async function startRender() {
   const nextId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   state.requestId += 1;
   const current = state.requestId;
+  cancelActiveRender?.();
+  cancelActiveRender = null;
   await nextTick();
-  renderWorkerHtml({
+  const task = startRenderWorkerHtml({
     id: nextId,
     code,
     lang,
@@ -100,16 +106,21 @@ async function startRender() {
     copiedLabel: props.copiedLabel,
     copyCodeAriaLabel: props.copyCodeAriaLabel,
     copyMarkdownAriaLabel: props.copyMarkdownAriaLabel,
-  })
+  });
+  cancelActiveRender = task.cancel;
+  task.promise
     .then(async (html) => {
       if (current !== state.requestId) return;
+      cancelActiveRender = null;
       state.html = html;
       await nextTick();
       if (current !== state.requestId) return;
       emit('rendered');
     })
-    .catch(async () => {
+    .catch(async (error) => {
       if (current !== state.requestId) return;
+      cancelActiveRender = null;
+      if (error instanceof RenderCancelledError) return;
       await nextTick();
       if (current !== state.requestId) return;
       emit('rendered');
@@ -121,6 +132,8 @@ watch(
   async (newHtml) => {
     if (newHtml == null) return;
     state.requestId += 1;
+    cancelActiveRender?.();
+    cancelActiveRender = null;
     state.html = newHtml;
     await nextTick();
     emit('rendered');
@@ -139,6 +152,8 @@ watch(
 
 onBeforeUnmount(() => {
   state.requestId += 1;
+  cancelActiveRender?.();
+  cancelActiveRender = null;
   copiedResetTimers.forEach((timerId) => {
     window.clearTimeout(timerId);
   });

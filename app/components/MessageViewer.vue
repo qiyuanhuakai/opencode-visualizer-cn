@@ -12,7 +12,20 @@
         {{ mode.label }}
       </button>
     </div>
-    <component :is="activeComponent" v-bind="mergedProps" @rendered="emit('rendered')" />
+    <MarkdownRenderer
+      v-if="shouldMountMarkdownRenderer"
+      v-show="showMarkdownRenderer"
+      v-bind="markdownProps"
+      v-on="attrs"
+      @rendered="handleRendered('markdown')"
+    />
+    <CodeRenderer
+      v-if="shouldMountCodeRenderer"
+      v-show="showCodeRenderer"
+      v-bind="codeProps"
+      v-on="attrs"
+      @rendered="handleRendered('code')"
+    />
   </div>
 </template>
 
@@ -74,38 +87,43 @@ const showModeTabs = computed(
   () => props.allowModeToggle === true && availableModes.value.length > 1,
 );
 
-const activeComponent = computed(() => {
-  if (activeMode.value === 'markdown') return MarkdownRenderer;
-  return CodeRenderer;
-});
-
-const activeProps = computed(() => {
-  if (activeMode.value === 'markdown') {
-    return {
-      code: props.code,
-      lang: props.lang ?? 'markdown',
-      theme: props.theme,
-      html: props.html,
-      files: props.files,
-      copyButton: props.copyButton,
-      copyButtonLabel: t('render.copyCode'),
-      copiedLabel: t('render.copied'),
-      copyCodeAriaLabel: t('render.copyCodeAria'),
-      copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
-    };
-  }
-  return {
-    fileContent: props.code,
-    lang: props.lang ?? 'text',
-    theme: props.theme,
-    gutterMode: 'none' as const,
-  };
-});
-
-const mergedProps = computed(() => ({
-  ...attrs,
-  ...activeProps.value,
+const markdownProps = computed(() => ({
+  code: props.code,
+  lang: props.lang ?? 'markdown',
+  theme: props.theme,
+  html: props.html,
+  files: props.files,
+  copyButton: props.copyButton,
+  copyButtonLabel: t('render.copyCode'),
+  copiedLabel: t('render.copied'),
+  copyCodeAriaLabel: t('render.copyCodeAria'),
+  copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
 }));
+
+const codeProps = computed(() => ({
+  fileContent: props.code,
+  lang: props.lang ?? 'text',
+  theme: props.theme,
+  gutterMode: 'none' as const,
+}));
+
+const supportsMarkdownMode = computed(() => availableModes.value.some((mode) => mode.id === 'markdown'));
+const supportsCodeMode = computed(() => availableModes.value.some((mode) => mode.id === 'code'));
+const keepBothRenderersMounted = computed(() => showModeTabs.value);
+const showMarkdownRenderer = computed(() => activeMode.value === 'markdown');
+const showCodeRenderer = computed(() => activeMode.value === 'code');
+
+const shouldMountMarkdownRenderer = computed(
+  () => supportsMarkdownMode.value && (keepBothRenderersMounted.value || showMarkdownRenderer.value),
+);
+const shouldMountCodeRenderer = computed(
+  () => supportsCodeMode.value && (keepBothRenderersMounted.value || showCodeRenderer.value),
+);
+
+function handleRendered(mode: ActiveMode) {
+  if (mode !== activeMode.value) return;
+  emit('rendered');
+}
 </script>
 
 <style scoped>

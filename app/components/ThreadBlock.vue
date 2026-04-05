@@ -17,7 +17,7 @@
       {{ t('threadBlock.fork') }}
     </button>
 
-    <div class="thread-user" :style="getUserBoxStyle()">
+    <div class="thread-user" :style="userBoxStyle">
       <div
         v-if="root.role === 'user'"
         class="ib-msg-block ib-msg-user"
@@ -34,9 +34,9 @@
             copy-button
             @rendered="emit('message-rendered', getThreadUserRenderKey(root))"
           />
-          <div v-if="getMessageAttachments(root).length > 0" class="output-entry-attachments">
+          <div v-if="userAttachments.length > 0" class="output-entry-attachments">
             <img
-              v-for="item in getMessageAttachments(root)"
+              v-for="item in userAttachments"
               :key="item.id"
               class="output-entry-attachment clickable"
               :src="item.url"
@@ -55,8 +55,8 @@
       :agent-style="threadTargetAgentStyle"
     />
 
-    <div v-if="!isRevertedPreview && hasAssistantMessages(root)" class="thread-assistant">
-      <Transition name="ib-fade" mode="out-in">
+    <div v-if="!isRevertedPreview && hasAssistantText" class="thread-assistant">
+      <Transition :name="assistantTransitionName" :mode="assistantTransitionMode">
         <div class="ib-msg-block ib-msg-assistant" :key="deferredTransitionKey">
           <div class="ib-msg-body">
             <MessageViewer
@@ -66,11 +66,11 @@
             />
           </div>
           <div
-            v-if="getMessageAttachments(getFinalAnswer(root)).length > 0"
+            v-if="assistantAttachments.length > 0"
             class="output-entry-attachments"
           >
             <img
-              v-for="item in getMessageAttachments(getFinalAnswer(root))"
+              v-for="item in assistantAttachments"
               :key="item.id"
               class="output-entry-attachment clickable"
               :src="item.url"
@@ -80,30 +80,30 @@
             />
           </div>
           <button
-            v-if="showHistoryButton(root)"
+            v-if="hasHistory"
             type="button"
             class="ib-action ib-action-history"
-            :title="t('threadBlock.historyTitle', { count: getHistoryEntries(root).length })"
-            @click="showThreadHistory(root)"
+            :title="t('threadBlock.historyTitle', { count: historyCount })"
+            @click="showThreadHistory()"
           >
-            {{ t('threadBlock.historyLabel') }} ({{ getHistoryEntries(root).length }})
+            {{ t('threadBlock.historyLabel') }} ({{ historyCount }})
           </button>
         </div>
       </Transition>
     </div>
 
-    <div v-if="!isRevertedPreview && getThreadError(root)" class="ib-error-bar">
+    <div v-if="!isRevertedPreview && threadError" class="ib-error-bar">
       <span class="ib-error-icon">⊘</span>
-      <span class="ib-error-text">{{ formatMessageError(getThreadError(root)!, (key) => t(key)) }}</span>
+      <span class="ib-error-text">{{ formatMessageError(threadError, (key) => t(key)) }}</span>
     </div>
 
     <ThreadFooter
       v-if="!isRevertedPreview"
       :timestamp="formatThreadTimestamp(root)"
       :elapsed="formatThreadElapsed(root)"
-      :context-percent="getThreadContextPercent(root)"
-      :tokens="getThreadTokens(root)"
-      :has-diffs="hasThreadDiffs(root)"
+      :context-percent="threadContextPercent"
+      :tokens="threadTokens"
+      :has-diffs="hasThreadDiffs"
       :can-revert="canRevertThread(root)"
       @show-diff="showThreadDiff(root)"
       @revert="confirmRevert(root)"
@@ -169,6 +169,34 @@ const emit = defineEmits<{
 
 const msg = useMessages();
 
+const threadMessages = computed(() => msg.getThread(props.root.id));
+const assistantMessages = computed(() =>
+  threadMessages.value.filter((item) => item.role === 'assistant' && hasTextContent(item)),
+);
+const finalAnswer = computed(() => assistantMessages.value[assistantMessages.value.length - 1]);
+const hasAssistantText = computed(() => assistantMessages.value.length > 0);
+const userAttachments = computed(() => getMessageAttachments(props.root));
+const assistantAttachments = computed(() => getMessageAttachments(finalAnswer.value));
+const historyEntries = computed(() => getHistoryEntries());
+const historyCount = computed(() => historyEntries.value.length);
+const hasHistory = computed(() => historyCount.value > 0);
+const threadError = computed(() => getThreadError());
+const userBoxStyle = computed(() => getUserBoxStyle());
+const assistantStatus = computed(() => {
+  const final = finalAnswer.value;
+  return final ? msg.getStatus(final.id) : 'complete';
+});
+const threadTokens = computed(() => getThreadTokens());
+const threadContextPercent = computed(() => getThreadContextPercent());
+const threadDiffs = computed(() => getThreadDiffs());
+const hasThreadDiffs = computed(() => threadDiffs.value.length > 0);
+const assistantTransitionName = computed(() =>
+  assistantStatus.value === 'streaming' ? undefined : 'ib-fade',
+);
+const assistantTransitionMode = computed(() =>
+  assistantStatus.value === 'streaming' ? undefined : 'out-in',
+);
+
 const threadTarget = computed<ThreadTargetType>(() => buildThreadTarget(props.root));
 const threadTargetAgentStyle = computed(() => {
   const color = props.resolveAgentColor
@@ -176,14 +204,6 @@ const threadTargetAgentStyle = computed(() => {
     : '#4ade80';
   return { color };
 });
-
-function getThread(rootId: string): MessageInfo[] {
-  return msg.getThread(rootId);
-}
-
-function getFinalAnswer(root: MessageInfo): MessageInfo | undefined {
-  return msg.getFinalAnswer(root.id);
-}
 
 function hasTextContent(message?: MessageInfo): boolean {
   if (!message) return false;
@@ -225,14 +245,6 @@ function getMessageTime(message?: MessageInfo): number | undefined {
   return msg.getTime(message.id);
 }
 
-function getAssistantMessages(root: MessageInfo): MessageInfo[] {
-  return getThread(root.id).filter((item) => item.role === 'assistant' && hasTextContent(item));
-}
-
-function hasAssistantMessages(root: MessageInfo): boolean {
-  return getAssistantMessages(root).length > 0;
-}
-
 function getToolPartTime(part: ToolPart): number {
   const state = part.state;
   if (state.status === 'running' || state.status === 'completed' || state.status === 'error') {
@@ -267,10 +279,9 @@ function extractQuestionAnswers(part: ToolPart): string[][] | undefined {
   return answers as string[][];
 }
 
-function getHistoryEntries(root: MessageInfo): HistoryEntry[] {
+function getHistoryEntries(): HistoryEntry[] {
   const entries: HistoryEntry[] = [];
-  const thread = getThread(root.id);
-  for (const msgInfo of thread) {
+  for (const msgInfo of threadMessages.value) {
     if (msgInfo.role !== 'assistant') continue;
     if (hasTextContent(msgInfo)) {
       entries.push({ kind: 'message', message: msgInfo, time: msgInfo.time.created });
@@ -303,12 +314,8 @@ function getHistoryEntryKey(entry: HistoryEntry): string {
   return `tool:${entry.part.callID}`;
 }
 
-function showHistoryButton(root: MessageInfo): boolean {
-  return getHistoryEntries(root).length > 0;
-}
-
-function showThreadHistory(root: MessageInfo) {
-  const entries = getHistoryEntries(root).map((entry) => {
+function showThreadHistory() {
+  const entries = historyEntries.value.map((entry) => {
     if (entry.kind === 'message') {
       return {
         key: getHistoryEntryKey(entry),
@@ -349,28 +356,23 @@ function showThreadHistory(root: MessageInfo) {
   emit('show-thread-history', { entries });
 }
 
-function getThreadError(root: MessageInfo): { name: string; message: string } | null {
-  const final = getFinalAnswer(root);
+function getThreadError(): { name: string; message: string } | null {
+  const final = finalAnswer.value;
   const finalError = getMessageError(final);
   if (finalError) return finalError;
-  const thread = getThread(root.id);
-  for (let index = thread.length - 1; index >= 0; index--) {
-    const error = getMessageError(thread[index]);
+  for (let index = threadMessages.value.length - 1; index >= 0; index--) {
+    const error = getMessageError(threadMessages.value[index]);
     if (error) return error;
   }
   return null;
 }
 
-function getThreadDiffs(root: MessageInfo): MessageDiffEntry[] {
-  return getMessageDiffEntries(root);
-}
-
-function hasThreadDiffs(root: MessageInfo): boolean {
-  return getThreadDiffs(root).length > 0;
+function getThreadDiffs(): MessageDiffEntry[] {
+  return getMessageDiffEntries(props.root);
 }
 
 function showThreadDiff(root: MessageInfo) {
-  const diffs = getThreadDiffs(root);
+  const diffs = threadDiffs.value;
   if (diffs.length === 0) return;
   emit('show-message-diff', { messageKey: root.id, diffs });
 }
@@ -400,7 +402,7 @@ function confirmUndoRevert() {
 }
 
 function buildThreadTarget(root: MessageInfo): ThreadTargetType {
-  const final = getFinalAnswer(root);
+  const final = finalAnswer.value;
   const agent = root.agent ?? final?.agent;
   const modelPath = getMessageModelPath(root) || getMessageModelPath(final);
   const modelMeta = props.resolveModelMeta?.(modelPath);
@@ -414,7 +416,7 @@ function buildThreadTarget(root: MessageInfo): ThreadTargetType {
 }
 
 function getUserBoxStyle() {
-  const final = getFinalAnswer(props.root);
+  const final = finalAnswer.value;
   const color = props.resolveAgentColor
     ? props.resolveAgentColor(props.root.agent ?? final?.agent)
     : '#334155';
@@ -425,7 +427,7 @@ function getUserBoxStyle() {
 }
 
 function formatThreadTimestamp(root: MessageInfo): string {
-  return formatMessageTime(getMessageTime(getFinalAnswer(root)) ?? getMessageTime(root));
+  return formatMessageTime(getMessageTime(finalAnswer.value) ?? getMessageTime(root));
 }
 
 function getCompletedTime(message?: MessageInfo): number | undefined {
@@ -434,12 +436,10 @@ function getCompletedTime(message?: MessageInfo): number | undefined {
 }
 
 function formatThreadElapsed(root: MessageInfo): string {
-  const final = getFinalAnswer(root);
-  return formatElapsedTime(getMessageTime(root), getCompletedTime(final));
+  return formatElapsedTime(getMessageTime(root), getCompletedTime(finalAnswer.value));
 }
 
-function getThreadTokens(root: MessageInfo): MessageTokens | null {
-  const thread = getThread(root.id);
+function getThreadTokens(): MessageTokens | null {
   let input = 0;
   let output = 0;
   let reasoning = 0;
@@ -448,8 +448,7 @@ function getThreadTokens(root: MessageInfo): MessageTokens | null {
   let cacheWrite = 0;
   let found = false;
 
-  for (const m of thread) {
-    if (m.role !== 'assistant') continue;
+  for (const m of assistantMessages.value) {
     const usage = getMessageUsage(m);
     if (!usage) continue;
     const t = usage.tokens;
@@ -473,13 +472,11 @@ function getThreadTokens(root: MessageInfo): MessageTokens | null {
   };
 }
 
-function getThreadContextPercent(root: MessageInfo): number | null {
+function getThreadContextPercent(): number | null {
   if (!props.computeContextPercent) return null;
-  const thread = getThread(root.id);
   let lastUsage: MessageUsage | undefined;
 
-  for (const m of thread) {
-    if (m.role !== 'assistant') continue;
+  for (const m of assistantMessages.value) {
     const usage = getMessageUsage(m);
     if (usage && (usage.tokens.input > 0 || usage.tokens.output > 0)) {
       lastUsage = usage;

@@ -3467,7 +3467,23 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       if (selectedSessionId.value !== sessionId) return;
       if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
     }
-    msg.loadHistory(data);
+    await msg.loadHistoryIncrementally(data, {
+      chunkSize: 40,
+      shouldContinue: () => {
+        if (isSubagentMessage) return true;
+        return (
+          requestId === primaryHistoryRequestId &&
+          selectedSessionId.value === sessionId &&
+          getSelectedWorktreeDirectory() === requestedDirectory
+        );
+      },
+    });
+
+    if (!isSubagentMessage) {
+      if (requestId !== primaryHistoryRequestId) return;
+      if (selectedSessionId.value !== sessionId) return;
+      if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
+    }
 
     if (!isSubagentMessage) {
       historyLoadError.value = '';
