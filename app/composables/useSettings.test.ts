@@ -1,0 +1,112 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+describe('useSettings', () => {
+  let storage: Storage;
+  let storageListeners: Array<(event: StorageEvent) => void>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    storageListeners = [];
+    const memStore = new Map<string, string>();
+
+    storage = {
+      getItem: (key) => memStore.get(key) ?? null,
+      setItem: (key, value) => memStore.set(key, value),
+      removeItem: (key) => memStore.delete(key),
+      clear: () => memStore.clear(),
+      key: (index) => Array.from(memStore.keys())[index] ?? null,
+      get length() {
+        return memStore.size;
+      },
+    } as Storage;
+
+    const addEventListener = vi.fn((type: string, handler: EventListener) => {
+      if (type === 'storage') storageListeners.push(handler as (event: StorageEvent) => void);
+    });
+
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      addEventListener,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function importFresh() {
+    const mod = await import('./useSettings');
+    return mod.useSettings();
+  }
+
+  it('has correct defaults when storage is empty', async () => {
+    const settings = await importFresh();
+    expect(settings.enterToSend.value).toBe(false);
+    expect(settings.showMinimizeButtons.value).toBe(true);
+    expect(settings.dockAlwaysOpen.value).toBe(false);
+    expect(settings.pinnedSessionsLimit.value).toBe(30);
+  });
+
+  it('reads persisted values from storage on load', async () => {
+    storage.setItem('opencode.settings.enterToSend.v1', 'true');
+    storage.setItem('opencode.settings.showMinimizeButtons.v1', 'false');
+    storage.setItem('opencode.settings.pinnedSessionsLimit.v1', '50');
+
+    const settings = await importFresh();
+    expect(settings.enterToSend.value).toBe(true);
+    expect(settings.showMinimizeButtons.value).toBe(false);
+    expect(settings.pinnedSessionsLimit.value).toBe(50);
+  });
+
+  it('writes back to localStorage when values change', async () => {
+    const settings = await importFresh();
+    settings.enterToSend.value = true;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(storage.getItem('opencode.settings.enterToSend.v1')).toBe('true');
+  });
+
+  it('clamps pinnedSessionsLimit to max 200', async () => {
+    const settings = await importFresh();
+    settings.pinnedSessionsLimit.value = 300;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.pinnedSessionsLimit.value).toBe(200);
+    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('200');
+  });
+
+  it('clamps pinnedSessionsLimit to min 1', async () => {
+    const settings = await importFresh();
+    settings.pinnedSessionsLimit.value = 0;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.pinnedSessionsLimit.value).toBe(1);
+    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('1');
+  });
+
+  it('resets dockAlwaysOpen when showMinimizeButtons is disabled', async () => {
+    const settings = await importFresh();
+    settings.dockAlwaysOpen.value = true;
+    await new Promise((r) => setTimeout(r, 10));
+    settings.showMinimizeButtons.value = false;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.dockAlwaysOpen.value).toBe(false);
+  });
+
+  it('reacts to external storage events for pinnedSessionsLimit', async () => {
+    const settings = await importFresh();
+    const event = {
+      key: 'opencode.settings.pinnedSessionsLimit.v1',
+      newValue: '80',
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(event);
+    expect(settings.pinnedSessionsLimit.value).toBe(80);
+  });
+
+  it('uses default limit when storage event clears the key', async () => {
+    const settings = await importFresh();
+    const event = {
+      key: 'opencode.settings.pinnedSessionsLimit.v1',
+      newValue: null,
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(event);
+    expect(settings.pinnedSessionsLimit.value).toBe(30);
+  });
+});

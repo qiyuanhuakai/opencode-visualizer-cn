@@ -32,7 +32,7 @@ function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, '');
 }
 
-function parsePacket(raw: string): SsePacket | null {
+export function parsePacket(raw: string): SsePacket | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -175,6 +175,7 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
     const normalized: SseConnectionOptions = {
       baseUrl: normalizeBaseUrl(options.baseUrl),
       authorization: options.authorization,
+      errorMessages: options.errorMessages,
     };
     if (!normalized.baseUrl) {
       callbacks.onError(normalized.errorMessages?.emptyBaseUrl ?? 'SSE base URL is empty.');

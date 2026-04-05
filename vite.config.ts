@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import vue from '@vitejs/plugin-vue';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 const gitRevision = execSync('git rev-parse --short HEAD').toString().trim();
 
@@ -45,5 +45,10 @@ export default defineConfig({
         },
       },
     },
+  },
+  test: {
+    environment: 'happy-dom',
+    globals: false,
+    include: ['**/*.test.ts'],
   },
 });
