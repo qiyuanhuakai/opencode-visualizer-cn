@@ -377,6 +377,20 @@ import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { ProjectState, SandboxState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
 import { DEFAULT_OPENCODE_URL } from './utils/constants';
+import {
+  getEffectivePinnedAt,
+  isSamePinnedSessionStore,
+  limitPinnedSessionStore,
+  parsePinnedSessionStore,
+  pinnedSessionStoreKey,
+  reconcilePinnedSessionStore,
+  type LocalPinnedSessionStore,
+} from './utils/pinnedSessions';
+import {
+  isBatchSessionAction,
+  normalizeBatchSessionTargets,
+} from './utils/batchSessionTargets';
+import { mapWithConcurrency } from './utils/mapWithConcurrency';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import {
   extractFileRead as extractToolFileRead,
@@ -668,14 +682,7 @@ type ComposerDraft = {
   writerTabId: string;
 };
 
-type LocalPinnedSessionStore = Record<string, number>;
-
-function isSamePinnedSessionStore(a: LocalPinnedSessionStore, b: LocalPinnedSessionStore) {
-  const keysA = Object.keys(a);
-  const keysB = Object.keys(b);
-  if (keysA.length !== keysB.length) return false;
-  return keysA.every((key) => a[key] === b[key]);
-}
+const BATCH_SESSION_ACTION_CONCURRENCY = 6;
 
 const fw = useFloatingWindows();
 const minimizedEntries = computed(() => fw.entries.value.filter((entry) => entry.minimized));
@@ -1139,7 +1146,10 @@ const treeDataCache = shallowRef<{
   timestamp: number;
 } | null>(null);
 
-function computeProjectsHash(projects: Record<string, ProjectState>): string {
+function computeProjectsHash(
+  projects: Record<string, ProjectState>,
+  pinnedStore: LocalPinnedSessionStore,
+): string {
   let hash = 0;
   const projectEntries = Object.entries(projects);
   for (const [id, project] of projectEntries) {
@@ -1150,15 +1160,22 @@ function computeProjectsHash(projects: Record<string, ProjectState>): string {
         const session = sandbox.sessions[sessionId];
         if (session) {
           hash += (session.timeUpdated ?? session.timeCreated ?? 0) & 0xffff;
+          hash += (session.timePinned ?? 0) & 0xffff;
         }
       }
     }
   }
-  return `${hash}-${projectEntries.length}`;
+
+  const pinnedEntries = Object.entries(pinnedStore).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const pinnedHash = pinnedEntries.map(([key, value]) => `${key}:${value}`).join('|');
+
+  return `${hash}-${projectEntries.length}-${pinnedHash}`;
 }
 
 const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
-  const currentHash = computeProjectsHash(serverState.projects);
+  const currentHash = computeProjectsHash(serverState.projects, localPinnedSessionStore.value);
   const now = Date.now();
   
   if (
@@ -1185,7 +1202,7 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
               timeCreated: session.timeCreated,
               timeUpdated: session.timeUpdated ?? session.timeCreated,
               archivedAt: session.timeArchived,
-              pinnedAt: getEffectivePinnedAt(project.id, session.id, session.timePinned),
+              pinnedAt: getEffectiveSessionPinnedAt(project.id, session.id, session.timePinned),
             }))
             .sort((a, b) => {
               const pinDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
@@ -1406,7 +1423,7 @@ const pinnedSessions = computed<SidePanelPinnedSession[]>(() => {
     for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
       for (const session of Object.values(sandbox.sessions)) {
         if (session.parentID || session.timeArchived) continue;
-        const pinnedAt = getEffectivePinnedAt(project.id, session.id, session.timePinned);
+        const pinnedAt = getEffectiveSessionPinnedAt(project.id, session.id, session.timePinned);
         if (pinnedAt <= 0) continue;
         result.push({
           sessionId: session.id,
@@ -1771,42 +1788,13 @@ function parseComposerDraftStore(raw: string | null) {
   }
 }
 
-function parsePinnedSessionStore(raw: string | null): LocalPinnedSessionStore {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return {};
-    }
-    const record = parsed as Record<string, unknown>;
-    const normalized: LocalPinnedSessionStore = {};
-    Object.entries(record).forEach(([key, value]) => {
-      if (!key || typeof key !== 'string') return;
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return;
-      normalized[key] = value;
-    });
-    return limitPinnedSessionStore(normalized);
-  } catch {
-    return {};
-  }
-}
-
-function limitPinnedSessionStore(store: LocalPinnedSessionStore): LocalPinnedSessionStore {
-  const limit = Math.max(1, Math.floor(pinnedSessionsLimit.value));
-  const entries = Object.entries(store)
-    .filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value > 0)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, limit);
-  return Object.fromEntries(entries);
-}
-
 function readPinnedSessionStore() {
   const raw = storageGet(StorageKeys.state.pinnedSessions);
-  return parsePinnedSessionStore(raw);
+  return parsePinnedSessionStore(raw, pinnedSessionsLimit.value);
 }
 
 function writePinnedSessionStore(store: LocalPinnedSessionStore) {
-  const limitedStore = limitPinnedSessionStore(store);
+  const limitedStore = limitPinnedSessionStore(store, pinnedSessionsLimit.value);
   if (Object.keys(limitedStore).length === 0) {
     storageRemove(StorageKeys.state.pinnedSessions);
     return;
@@ -1817,25 +1805,19 @@ function writePinnedSessionStore(store: LocalPinnedSessionStore) {
   storageSet(StorageKeys.state.pinnedSessions, nextRaw);
 }
 
-function pinnedSessionStoreKey(projectId: string, sessionId: string) {
-  const pid = projectId.trim();
-  const sid = sessionId.trim();
-  if (!pid || !sid) return '';
-  return `${pid}:${sid}`;
+function getSessionPinnedOverride(projectId: string, sessionId: string) {
+  const key = pinnedSessionStoreKey(projectId, sessionId);
+  if (!key) return undefined;
+  return localPinnedSessionStore.value[key];
 }
 
-function getEffectivePinnedAt(projectId: string, sessionId: string, serverPinnedAt?: number) {
-  if (typeof serverPinnedAt === 'number' && Number.isFinite(serverPinnedAt)) {
-    return serverPinnedAt > 0 ? serverPinnedAt : 0;
-  }
-  const key = pinnedSessionStoreKey(projectId, sessionId);
-  if (!key) return 0;
-  return localPinnedSessionStore.value[key] ?? 0;
+function getEffectiveSessionPinnedAt(projectId: string, sessionId: string, serverPinnedAt?: number) {
+  return getEffectivePinnedAt(serverPinnedAt, getSessionPinnedOverride(projectId, sessionId));
 }
 
 function getSessionEffectivePinnedAt(session: SessionInfo) {
   const projectId = (session.projectID || session.projectId || '').trim();
-  return getEffectivePinnedAt(projectId, session.id, session.time?.pinned);
+  return getEffectiveSessionPinnedAt(projectId, session.id, session.time?.pinned);
 }
 
 function setLocalPinnedSession(projectId: string, sessionId: string, pinnedAt: number) {
@@ -1844,47 +1826,52 @@ function setLocalPinnedSession(projectId: string, sessionId: string, pinnedAt: n
   localPinnedSessionStore.value = limitPinnedSessionStore({
     ...localPinnedSessionStore.value,
     [key]: pinnedAt,
-  });
+  }, pinnedSessionsLimit.value);
 }
 
-function clearLocalPinnedSession(projectId: string, sessionId: string) {
+function setLocalUnpinnedSession(projectId: string, sessionId: string) {
   const key = pinnedSessionStoreKey(projectId, sessionId);
   if (!key) return;
-  if (!(key in localPinnedSessionStore.value)) return;
+  localPinnedSessionStore.value = {
+    ...localPinnedSessionStore.value,
+    [key]: -Date.now(),
+  };
+}
+
+function clearLocalPinnedSessionOverride(projectId: string, sessionId: string) {
+  const key = pinnedSessionStoreKey(projectId, sessionId);
+  if (!key || !(key in localPinnedSessionStore.value)) return;
   const next = { ...localPinnedSessionStore.value };
   delete next[key];
   localPinnedSessionStore.value = next;
+}
+
+function restoreLocalPinnedSessionOverride(
+  projectId: string,
+  sessionId: string,
+  previousOverride?: number,
+) {
+  if (typeof previousOverride === 'number' && Number.isFinite(previousOverride) && previousOverride !== 0) {
+    const key = pinnedSessionStoreKey(projectId, sessionId);
+    if (!key) return;
+    localPinnedSessionStore.value = {
+      ...localPinnedSessionStore.value,
+      [key]: previousOverride,
+    };
+    return;
+  }
+  clearLocalPinnedSessionOverride(projectId, sessionId);
 }
 
 function reconcileLocalPinnedSessionStore() {
   if (!bootstrapReady.value) return;
   const currentStore = localPinnedSessionStore.value;
   if (Object.keys(currentStore).length === 0) return;
-  const nextStore: LocalPinnedSessionStore = { ...limitPinnedSessionStore(currentStore) };
-  const activeSessionKeys = new Set<string>();
-
-  for (const project of Object.values(serverState.projects)) {
-    for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
-      for (const session of Object.values(sandbox.sessions)) {
-        const key = pinnedSessionStoreKey(project.id, session.id);
-        if (!key) continue;
-        activeSessionKeys.add(key);
-        if (
-          (typeof session.timePinned === 'number' && Number.isFinite(session.timePinned) && session.timePinned > 0) ||
-          Boolean(session.timeArchived) ||
-          Boolean(session.parentID)
-        ) {
-          delete nextStore[key];
-        }
-      }
-    }
-  }
-
-  Object.keys(nextStore).forEach((key) => {
-    if (!activeSessionKeys.has(key)) {
-      delete nextStore[key];
-    }
-  });
+  const nextStore = reconcilePinnedSessionStore(
+    currentStore,
+    serverState.projects,
+    pinnedSessionsLimit.value,
+  );
 
   if (isSamePinnedSessionStore(currentStore, nextStore)) return;
   localPinnedSessionStore.value = nextStore;
@@ -2186,7 +2173,10 @@ function handleComposerDraftStorage(event: StorageEvent) {
 function handlePinnedSessionStoreStorage(event: StorageEvent) {
   if (event.storageArea !== window.localStorage) return;
   if (event.key !== storageKey(StorageKeys.state.pinnedSessions)) return;
-  const nextStore = limitPinnedSessionStore(parsePinnedSessionStore(event.newValue));
+  const nextStore = limitPinnedSessionStore(
+    parsePinnedSessionStore(event.newValue, pinnedSessionsLimit.value),
+    pinnedSessionsLimit.value,
+  );
   if (isSamePinnedSessionStore(localPinnedSessionStore.value, nextStore)) return;
   localPinnedSessionStore.value = nextStore;
 }
@@ -2709,19 +2699,26 @@ async function deleteSession(sessionId: string, hints?: { projectId?: string; di
   if (!ensureConnectionReady(t('app.actions.deletingSession'))) return;
   sessionError.value = '';
   if (!sessionId) return;
+  let optimisticProjectId = '';
+  let previousOverride: number | undefined;
   try {
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
       hints?.directory,
     );
-    clearLocalPinnedSession(projectId, sessionId);
+    optimisticProjectId = projectId;
+    previousOverride = getSessionPinnedOverride(projectId, sessionId);
+    clearLocalPinnedSessionOverride(projectId, sessionId);
     await openCodeApi.deleteSession({
       sessionId,
       projectId,
       directory,
     });
   } catch (error) {
+    if (optimisticProjectId) {
+      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
+    }
     sessionError.value = t('app.error.sessionDeleteFailed', { message: toErrorMessage(error) });
   }
 }
@@ -2730,19 +2727,26 @@ async function archiveSession(sessionId: string, hints?: { projectId?: string; d
   if (!ensureConnectionReady(t('app.actions.archivingSession'))) return;
   sessionError.value = '';
   if (!sessionId) return;
+  let optimisticProjectId = '';
+  let previousOverride: number | undefined;
   try {
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
       hints?.directory,
     );
-    clearLocalPinnedSession(projectId, sessionId);
+    optimisticProjectId = projectId;
+    previousOverride = getSessionPinnedOverride(projectId, sessionId);
+    clearLocalPinnedSessionOverride(projectId, sessionId);
     await openCodeApi.archiveSession({
       sessionId,
       projectId,
       directory,
     });
   } catch (error) {
+    if (optimisticProjectId) {
+      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
+    }
     sessionError.value = t('app.error.sessionArchiveFailed', { message: toErrorMessage(error) });
   }
 }
@@ -2751,19 +2755,26 @@ async function unarchiveSession(sessionId: string, hints?: { projectId?: string;
   if (!ensureConnectionReady(t('app.actions.unarchivingSession'))) return;
   sessionError.value = '';
   if (!sessionId) return;
+  let optimisticProjectId = '';
+  let previousOverride: number | undefined;
   try {
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
       hints?.directory,
     );
-    clearLocalPinnedSession(projectId, sessionId);
+    optimisticProjectId = projectId;
+    previousOverride = getSessionPinnedOverride(projectId, sessionId);
+    clearLocalPinnedSessionOverride(projectId, sessionId);
     await openCodeApi.unarchiveSession({
       sessionId,
       projectId,
       directory,
     });
   } catch (error) {
+    if (optimisticProjectId) {
+      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
+    }
     sessionError.value = t('app.error.sessionUnarchiveFailed', { message: toErrorMessage(error) });
   }
 }
@@ -2772,19 +2783,28 @@ async function pinSession(sessionId: string, hints?: { projectId?: string; direc
   if (!ensureConnectionReady(t('app.actions.pinningSession'))) return;
   sessionError.value = '';
   if (!sessionId) return;
+  let optimisticProjectId = '';
+  let previousOverride: number | undefined;
   try {
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
       hints?.directory,
     );
-    setLocalPinnedSession(projectId, sessionId, Date.now());
+    optimisticProjectId = projectId;
+    previousOverride = getSessionPinnedOverride(projectId, sessionId);
+    const pinnedAt = Date.now();
+    setLocalPinnedSession(projectId, sessionId, pinnedAt);
     await openCodeApi.pinSession({
       sessionId,
       projectId,
       directory,
+      pinnedAt,
     });
   } catch (error) {
+    if (optimisticProjectId) {
+      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
+    }
     sessionError.value = t('app.error.sessionPinFailed', { message: toErrorMessage(error) });
   }
 }
@@ -2796,20 +2816,122 @@ async function unpinSession(
   if (!ensureConnectionReady(t('app.actions.unpinningSession'))) return;
   sessionError.value = '';
   if (!sessionId) return;
+  let optimisticProjectId = '';
+  let previousOverride: number | undefined;
   try {
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
       hints?.directory,
     );
-    clearLocalPinnedSession(projectId, sessionId);
+    optimisticProjectId = projectId;
+    previousOverride = getSessionPinnedOverride(projectId, sessionId);
+    setLocalUnpinnedSession(projectId, sessionId);
     await openCodeApi.unpinSession({
       sessionId,
       projectId,
       directory,
     });
   } catch (error) {
+    if (optimisticProjectId) {
+      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
+    }
     sessionError.value = t('app.error.sessionUnpinFailed', { message: toErrorMessage(error) });
+  }
+}
+
+async function runTopPanelBatchSessionActionTarget(
+  action: TopPanelBatchSessionActionPayload['action'],
+  target: TopPanelBatchSessionTarget,
+) {
+  const resolved = findSessionInProjects(target.sessionId);
+  const hints = {
+    projectId: target.projectId || resolved?.projectId,
+    directory: target.directory || resolved?.sandbox.directory,
+  };
+
+  const { projectId, directory } = resolveSessionOperationPayload(
+    target.sessionId,
+    hints.projectId,
+    hints.directory,
+  );
+  const previousOverride = getSessionPinnedOverride(projectId, target.sessionId);
+
+  switch (action) {
+    case 'pin': {
+      const pinnedAt = Date.now();
+      setLocalPinnedSession(projectId, target.sessionId, pinnedAt);
+      try {
+        await openCodeApi.pinSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+          pinnedAt,
+        });
+      } catch (error) {
+        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
+        throw error;
+      }
+      return;
+    }
+    case 'unpin': {
+      setLocalUnpinnedSession(projectId, target.sessionId);
+      try {
+        await openCodeApi.unpinSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+      } catch (error) {
+        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
+        throw error;
+      }
+      return;
+    }
+    case 'archive': {
+      clearLocalPinnedSessionOverride(projectId, target.sessionId);
+      try {
+        await openCodeApi.archiveSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+      } catch (error) {
+        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
+        throw error;
+      }
+      return;
+    }
+    case 'unarchive': {
+      clearLocalPinnedSessionOverride(projectId, target.sessionId);
+      try {
+        await openCodeApi.unarchiveSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+      } catch (error) {
+        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
+        throw error;
+      }
+      return;
+    }
+    case 'delete': {
+      clearLocalPinnedSessionOverride(projectId, target.sessionId);
+      try {
+        await openCodeApi.deleteSession({
+          sessionId: target.sessionId,
+          projectId,
+          directory,
+        });
+      } catch (error) {
+        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
+        throw error;
+      }
+      return;
+    }
+    default:
+      throw new Error(`Unsupported batch session action: ${action}`);
   }
 }
 
@@ -2818,91 +2940,35 @@ async function handleTopPanelBatchSessionAction(payload: TopPanelBatchSessionAct
 
   if (!ensureConnectionReady(t('app.actions.batchSessionOperation'))) return;
 
-  const targets = payload.sessions
-    .map((entry): TopPanelBatchSessionTarget | null => {
-      if (!entry || typeof entry !== 'object') return null;
-      const sessionId = typeof entry.sessionId === 'string' ? entry.sessionId.trim() : '';
-      if (!sessionId) return null;
-      const projectId = typeof entry.projectId === 'string' ? entry.projectId.trim() : '';
-      const directory = typeof entry.directory === 'string' ? entry.directory.trim() : '';
-      if (!directory) return null;
-      return {
-        sessionId,
-        projectId: projectId || undefined,
-        directory,
-      };
-    })
-    .filter((entry): entry is TopPanelBatchSessionTarget => Boolean(entry));
+   if (!isBatchSessionAction(payload.action)) {
+    sessionError.value = t('app.error.batchOperationPartialFailure', {
+      action: 'unknown',
+      failures: 1,
+      total: payload.sessions.length,
+      firstError: `Unsupported batch session action: ${String(payload.action)}`,
+    });
+    return;
+  }
+
+  const targets = normalizeBatchSessionTargets(payload.sessions) as TopPanelBatchSessionTarget[];
 
   if (targets.length === 0) return;
 
   sessionError.value = '';
-  const failures: string[] = [];
+  const results = await mapWithConcurrency(
+    targets,
+    BATCH_SESSION_ACTION_CONCURRENCY,
+    async (target) => {
+      await runTopPanelBatchSessionActionTarget(payload.action, target);
+    },
+  );
 
-  for (const target of targets) {
-    const resolved = findSessionInProjects(target.sessionId);
-    const hints = {
-      projectId: target.projectId || resolved?.projectId,
-      directory: target.directory || resolved?.sandbox.directory,
-    };
-
-    try {
-      const { projectId, directory } = resolveSessionOperationPayload(
-        target.sessionId,
-        hints.projectId,
-        hints.directory,
-      );
-
-      if (payload.action === 'pin') {
-        setLocalPinnedSession(projectId, target.sessionId, Date.now());
-        await openCodeApi.pinSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-        continue;
-      }
-
-      if (payload.action === 'unpin') {
-        clearLocalPinnedSession(projectId, target.sessionId);
-        await openCodeApi.unpinSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-        continue;
-      }
-
-      if (payload.action === 'archive') {
-        clearLocalPinnedSession(projectId, target.sessionId);
-        await openCodeApi.archiveSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-        continue;
-      }
-
-      if (payload.action === 'unarchive') {
-        clearLocalPinnedSession(projectId, target.sessionId);
-        await openCodeApi.unarchiveSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-        continue;
-      }
-
-      clearLocalPinnedSession(projectId, target.sessionId);
-      await openCodeApi.deleteSession({
-        sessionId: target.sessionId,
-        projectId,
-        directory,
-      });
-    } catch (error) {
-      failures.push(`${target.sessionId}: ${toErrorMessage(error)}`);
+  const failures = results.flatMap((result, index) => {
+    if (result?.status === 'rejected') {
+      return [`${targets[index]?.sessionId}: ${toErrorMessage(result.reason)}`];
     }
-  }
+    return [];
+  });
 
   if (failures.length > 0) {
     const firstError = failures[0];
@@ -4649,7 +4715,7 @@ watch(
 );
 
 watch(localPinnedSessionStore, (store) => {
-  const limited = limitPinnedSessionStore(store);
+  const limited = limitPinnedSessionStore(store, pinnedSessionsLimit.value);
   if (!isSamePinnedSessionStore(store, limited)) {
     localPinnedSessionStore.value = limited;
     return;
@@ -4658,7 +4724,7 @@ watch(localPinnedSessionStore, (store) => {
 });
 
 watch(pinnedSessionsLimit, () => {
-  const limited = limitPinnedSessionStore(localPinnedSessionStore.value);
+  const limited = limitPinnedSessionStore(localPinnedSessionStore.value, pinnedSessionsLimit.value);
   if (isSamePinnedSessionStore(localPinnedSessionStore.value, limited)) return;
   localPinnedSessionStore.value = limited;
 });

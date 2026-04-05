@@ -211,23 +211,15 @@ export function useOpenCodeApi(
     directory?: string;
     pinnedAt?: number;
   }): Promise<SessionInfo> {
-    return withPending(async () => {
-      const projectId = requireProjectId(payload.projectId);
-      const pinnedAt = payload.pinnedAt ?? Date.now();
-      const session = (await opencodeApi.updateSession(
-        payload.sessionId,
-        { time: { pinned: pinnedAt } },
-        payload.directory,
-      )) as SessionInfo;
-      if (!session?.id) {
-        throw new Error(t('errors.sessionPinInvalidResponse'));
-      }
-      await waitWithRetry((state) => {
-        const current = findSession(state[projectId], payload.sessionId);
-        return Boolean(current && typeof current.timePinned === 'number' && current.timePinned > 0);
-      });
-      return session;
-    });
+    requireProjectId(payload.projectId);
+    const pinnedAt = payload.pinnedAt ?? Date.now();
+    const session = (await withPending(() =>
+      opencodeApi.updateSession(payload.sessionId, { time: { pinned: pinnedAt } }, payload.directory),
+    )) as SessionInfo;
+    if (!session?.id) {
+      throw new Error(t('errors.sessionPinInvalidResponse'));
+    }
+    return session;
   }
 
   async function unpinSession(payload: {
@@ -235,22 +227,14 @@ export function useOpenCodeApi(
     projectId: string;
     directory?: string;
   }): Promise<SessionInfo> {
-    return withPending(async () => {
-      const projectId = requireProjectId(payload.projectId);
-      const session = (await opencodeApi.updateSession(
-        payload.sessionId,
-        { time: { pinned: 0 } },
-        payload.directory,
-      )) as SessionInfo;
-      if (!session?.id) {
-        throw new Error(t('errors.sessionUnpinInvalidResponse'));
-      }
-      await waitWithRetry((state) => {
-        const current = findSession(state[projectId], payload.sessionId);
-        return Boolean(current && !current.timePinned);
-      });
-      return session;
-    });
+    requireProjectId(payload.projectId);
+    const session = (await withPending(() =>
+      opencodeApi.updateSession(payload.sessionId, { time: { pinned: 0 } }, payload.directory),
+    )) as SessionInfo;
+    if (!session?.id) {
+      throw new Error(t('errors.sessionUnpinInvalidResponse'));
+    }
+    return session;
   }
 
   async function deleteSession(payload: {
