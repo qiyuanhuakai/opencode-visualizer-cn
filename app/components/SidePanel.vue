@@ -32,8 +32,8 @@
           <Icon icon="lucide:chevron-left" width="14" height="14" />
         </button>
       </div>
-      <TodoList v-if="activeTab === 'todo'" :sessions="todoSessions" />
-      <div v-else-if="activeTab === 'session'" class="session-body">
+      <TodoList v-show="activeTab === 'todo'" :sessions="todoSessions" />
+      <div v-show="activeTab === 'session'" class="session-body">
         <div class="session-header">
           <div class="session-title">{{ $t('sidePanel.session.title') }}</div>
           <div class="session-count">{{ pinnedSessions.length }}</div>
@@ -78,7 +78,7 @@
         </ul>
       </div>
       <TreeView
-        v-else
+        v-show="activeTab === 'tree'"
         :root-nodes="treeNodes"
         :expanded-paths="expandedTreePaths"
         :selected-path="selectedTreePath"

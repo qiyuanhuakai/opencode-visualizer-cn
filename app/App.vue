@@ -433,11 +433,16 @@ const TERM_WINDOW_BORDER_PX = 2;
 const TERM_INNER_PADDING_X_PX = 4;
 const TERM_INNER_PADDING_Y_PX = 4;
 const TERM_GUTTER_WIDTH_EM = 3.2;
-const INITIAL_HISTORY_LIMIT = 200;
-const HISTORY_LOAD_STEP = 200;
+const INITIAL_HISTORY_LIMIT = 12;
+const MANUAL_HISTORY_LOAD_STEP = 200;
+const AUTO_VIEWPORT_HISTORY_LOAD_STEP = 160;
+const AUTO_BACKGROUND_HISTORY_LOAD_STEP = 240;
+const AUTO_BACKGROUND_HISTORY_DELAY_MS = 32;
+const HISTORY_VIEWPORT_FILL_THRESHOLD_PX = 24;
 const TERM_FONT_FAMILY =
   "'JetBrainsMono NFM', 'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
 const SHELL_LINGER_MS = 1000;
+const TREE_DATA_CACHE_TTL_MS = 15000;
 const COMMIT_SNAPSHOT_SCRIPT = [
   'stty -opost -echo 2>/dev/null',
   'export GIT_PAGER=cat',
@@ -752,11 +757,13 @@ function handleOutputPanelInitialRenderComplete() {
     scrollOutputPanelToBottom(false);
     syncFloatingExtent();
     inputPanelRef.value?.focus();
+    scheduleHistoryAutoload();
   });
 }
 
 function handleOutputPanelResumeFollow() {
   resumeFollow();
+  scheduleHistoryAutoload(0);
 }
 
 function handleOutputPanelMessageRendered() {
@@ -765,6 +772,72 @@ function handleOutputPanelMessageRendered() {
 
 function handleOutputPanelContentResized() {
   notifyContentChange();
+  scheduleHistoryAutoload();
+}
+
+function scheduleFloatingExtentSync() {
+  if (floatingExtentFrameId !== null) return;
+  floatingExtentFrameId = requestAnimationFrame(() => {
+    floatingExtentFrameId = null;
+    syncFloatingExtent();
+  });
+}
+
+function scheduleShellFitAllNextFrame() {
+  if (shellFitAllFrameId !== null) return;
+  shellFitAllFrameId = requestAnimationFrame(() => {
+    shellFitAllFrameId = null;
+    scheduleShellFitAll();
+  });
+}
+
+function flushResizeSideEffects() {
+  scheduleFloatingExtentSync();
+  scheduleShellFitAllNextFrame();
+}
+
+function clearHistoryAutoloadTimer() {
+  if (historyAutoLoadTimerId === null) return;
+  clearTimeout(historyAutoLoadTimerId);
+  historyAutoLoadTimerId = null;
+}
+
+function scheduleHistoryAutoload(delayMs = AUTO_BACKGROUND_HISTORY_DELAY_MS) {
+  clearHistoryAutoloadTimer();
+  const sessionId = selectedSessionId.value;
+  if (!sessionId) return;
+  if (!historyHasMore.value) return;
+  if (historyLoadingMore.value) return;
+  historyAutoLoadTimerId = setTimeout(() => {
+    historyAutoLoadTimerId = null;
+    void maybeAutoloadHistory();
+  }, delayMs);
+}
+
+function getOutputPanelViewportStatus() {
+  const panel = outputPanelRef.value?.panelEl;
+  if (!panel) return null;
+  const remaining = panel.scrollHeight - panel.clientHeight;
+  return {
+    remaining,
+    isViewportFilled: remaining > HISTORY_VIEWPORT_FILL_THRESHOLD_PX,
+  };
+}
+
+async function maybeAutoloadHistory() {
+  const sessionId = selectedSessionId.value;
+  if (!sessionId) return;
+  if (!historyHasMore.value) return;
+  if (historyLoadingMore.value) return;
+  if (!isFollowing.value) return;
+  const viewportStatus = getOutputPanelViewportStatus();
+  const step = viewportStatus?.isViewportFilled
+    ? AUTO_BACKGROUND_HISTORY_LOAD_STEP
+    : AUTO_VIEWPORT_HISTORY_LOAD_STEP;
+  await loadMoreHistory({ step });
+  if (!selectedSessionId.value || selectedSessionId.value !== sessionId) return;
+  if (!historyHasMore.value) return;
+  scheduleHistoryAutoload(viewportStatus?.isViewportFilled ? AUTO_BACKGROUND_HISTORY_DELAY_MS : 0);
 }
 
 function handleOutputPanelLoadMoreHistory() {
@@ -814,6 +887,12 @@ const shellExitWaiters = new Map<string, (exitCode: number) => void>();
 const ptyMetaDecoder = new TextDecoder();
 let floatingExtentResizeObserver: ResizeObserver | null = null;
 let floatingExtentObservedEl: HTMLDivElement | null = null;
+let floatingExtentFrameId: number | null = null;
+let shellFitAllFrameId: number | null = null;
+let windowResizeFrameId: number | null = null;
+let pendingPointerEvent: PointerEvent | null = null;
+let pointerMoveFrameId: number | null = null;
+let historyAutoLoadTimerId: ReturnType<typeof setTimeout> | null = null;
 const notificationSessionOrder = ref<string[]>([]);
 const notificationPermissionRequested = ref(false);
 
@@ -1200,7 +1279,7 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
   if (
     treeDataCache.value &&
     treeDataCache.value.hash === currentHash &&
-    now - treeDataCache.value.timestamp < 5000
+    now - treeDataCache.value.timestamp < TREE_DATA_CACHE_TTL_MS
   ) {
     return treeDataCache.value.data;
   }
@@ -2318,9 +2397,13 @@ function syncCanvasTermMetrics() {
 }
 
 function handleWindowResize() {
-  syncCanvasTermMetrics();
-  syncFloatingExtent();
-  scheduleShellFitAll();
+  if (windowResizeFrameId !== null) return;
+  windowResizeFrameId = requestAnimationFrame(() => {
+    windowResizeFrameId = null;
+    syncCanvasTermMetrics();
+    syncFloatingExtent();
+    scheduleShellFitAll();
+  });
 }
 
 function syncFloatingExtent() {
@@ -2518,28 +2601,45 @@ function startSidePanelResize(event: PointerEvent) {
 }
 
 function handlePointerMove(event: PointerEvent) {
+  pendingPointerEvent = event;
+  if (pointerMoveFrameId !== null) return;
+  pointerMoveFrameId = requestAnimationFrame(() => {
+    pointerMoveFrameId = null;
+    const nextEvent = pendingPointerEvent;
+    pendingPointerEvent = null;
+    if (!nextEvent) return;
+    applyPointerResize(nextEvent);
+  });
+}
+
+function applyPointerResize(event: PointerEvent) {
   if (sidePanelResizeState.value) {
     const { startX, startWidth, minWidth, maxWidth } = sidePanelResizeState.value;
     const dx = event.clientX - startX;
     sidePanelWidth.value = clamp(startWidth + dx, minWidth, maxWidth);
-    syncFloatingExtent();
-    scheduleShellFitAll();
+    flushResizeSideEffects();
     return;
   }
   if (inputResizeState.value) {
     const { startY, startHeight, minHeight, maxHeight } = inputResizeState.value;
     const dy = event.clientY - startY;
     inputHeight.value = clamp(startHeight - dy, minHeight, maxHeight);
-    syncFloatingExtent();
-    scheduleShellFitAll();
+    flushResizeSideEffects();
     return;
   }
 }
 
 function handlePointerUp() {
-  if (inputResizeState.value) scheduleShellFitAll();
+  if (pointerMoveFrameId !== null) {
+    cancelAnimationFrame(pointerMoveFrameId);
+    pointerMoveFrameId = null;
+  }
+  const nextEvent = pendingPointerEvent;
+  pendingPointerEvent = null;
+  if (nextEvent) applyPointerResize(nextEvent);
+  if (inputResizeState.value) scheduleShellFitAllNextFrame();
   inputResizeState.value = null;
-  if (sidePanelResizeState.value) scheduleShellFitAll();
+  if (sidePanelResizeState.value) scheduleShellFitAllNextFrame();
   sidePanelResizeState.value = null;
 }
 
@@ -3512,27 +3612,29 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
 }
 
 function resetHistoryLazyState() {
+  clearHistoryAutoloadTimer();
   historyLoadLimit.value = INITIAL_HISTORY_LIMIT;
   historyHasMore.value = false;
   historyLoadingMore.value = false;
   historyLoadError.value = '';
 }
 
-async function loadMoreHistory() {
+async function loadMoreHistory(options?: { step?: number }) {
   const sessionId = selectedSessionId.value;
   if (!sessionId) return;
+  const step = Math.max(1, options?.step ?? MANUAL_HISTORY_LOAD_STEP);
   if (historyLoadingMore.value) return;
   if (!historyHasMore.value) return;
   historyLoadingMore.value = true;
   historyLoadError.value = '';
-  historyLoadLimit.value += HISTORY_LOAD_STEP;
+  historyLoadLimit.value += step;
   const targetLimit = historyLoadLimit.value;
   try {
     await fetchHistory(sessionId);
   } finally {
     historyLoadingMore.value = false;
     if (historyLoadError.value) {
-      historyLoadLimit.value = Math.max(INITIAL_HISTORY_LIMIT, targetLimit - HISTORY_LOAD_STEP);
+      historyLoadLimit.value = Math.max(INITIAL_HISTORY_LIMIT, targetLimit - step);
     }
   }
 }
@@ -4743,6 +4845,7 @@ async function reloadSelectedSessionState() {
     return;
   }
   fw.closeAll({ exclude: (key) => key.startsWith('shell:') });
+  await nextTick();
   msg.reset();
   resetFollow();
   reasoning.reset();
@@ -4752,12 +4855,14 @@ async function reloadSelectedSessionState() {
   todoLoadingBySessionId.value = {};
   todoErrorBySessionId.value = {};
   resetHistoryLazyState();
-  if (selectedSessionId.value) {
-    const sessionId = selectedSessionId.value;
-    await fetchHistory(sessionId);
-    if (msg.roots.value.length === 0) {
-      scrollOutputPanelToBottom(false);
-    }
+  await nextTick();
+    if (selectedSessionId.value) {
+      const sessionId = selectedSessionId.value;
+      await fetchHistory(sessionId);
+      scheduleHistoryAutoload(0);
+      if (msg.roots.value.length === 0) {
+        scrollOutputPanelToBottom(false);
+      }
     if (uiInitState.value === 'ready') {
       await restoreShellSessions();
     }
@@ -6385,6 +6490,24 @@ onBeforeUnmount(() => {
   floatingExtentResizeObserver?.disconnect();
   floatingExtentResizeObserver = null;
   floatingExtentObservedEl = null;
+  if (floatingExtentFrameId !== null) {
+    cancelAnimationFrame(floatingExtentFrameId);
+    floatingExtentFrameId = null;
+  }
+  if (shellFitAllFrameId !== null) {
+    cancelAnimationFrame(shellFitAllFrameId);
+    shellFitAllFrameId = null;
+  }
+  if (windowResizeFrameId !== null) {
+    cancelAnimationFrame(windowResizeFrameId);
+    windowResizeFrameId = null;
+  }
+  if (pointerMoveFrameId !== null) {
+    cancelAnimationFrame(pointerMoveFrameId);
+    pointerMoveFrameId = null;
+  }
+  pendingPointerEvent = null;
+  clearHistoryAutoloadTimer();
   while (globalEventUnsubscribers.length > 0) {
     const dispose = globalEventUnsubscribers.pop();
     dispose?.();

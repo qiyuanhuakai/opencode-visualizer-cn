@@ -269,9 +269,9 @@ const fileRefPopupRef = ref<{
 } | null>(null);
 let contentResizeObserver: ResizeObserver | undefined;
 const LOAD_MORE_SCROLL_TOP_THRESHOLD = 40;
+let resizeNotifyFrameId: number | null = null;
 
 function handleScroll() {
-  emit('scroll');
   const panel = panelEl.value;
   if (!panel) return;
   if (!historyHasMore.value || historyLoadingMore.value) return;
@@ -301,7 +301,11 @@ function setupContentResizeObserver() {
   const target = contentEl.value;
   if (!target) return;
   contentResizeObserver = new ResizeObserver(() => {
-    emit('content-resized');
+    if (resizeNotifyFrameId !== null) return;
+    resizeNotifyFrameId = requestAnimationFrame(() => {
+      resizeNotifyFrameId = null;
+      emit('content-resized');
+    });
   });
   contentResizeObserver.observe(target);
 }
@@ -321,6 +325,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   contentResizeObserver?.disconnect();
   contentResizeObserver = undefined;
+  if (resizeNotifyFrameId !== null) {
+    cancelAnimationFrame(resizeNotifyFrameId);
+    resizeNotifyFrameId = null;
+  }
   fileRefPopupRef.value?.closeFilePopup();
 });
 

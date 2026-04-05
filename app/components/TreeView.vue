@@ -447,15 +447,21 @@ const emit = defineEmits<{
 // Virtual scroll configuration
 const ROW_HEIGHT = 24;
 const OVERSCAN = 5; // Number of extra rows to render above/below viewport
+const BRANCH_SEARCH_DEBOUNCE_MS = 120;
 
 const viewMode = ref<TreeViewMode>('all');
 const branchMenuOpen = ref(false);
 const branchSearchQuery = ref('');
+const debouncedBranchSearchQuery = ref('');
 const pushMenuOpen = ref(false);
 const pullMenuOpen = ref(false);
 const scrollContainerRef = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
 const containerHeight = ref(0);
+let pendingScrollTop = 0;
+let scrollFrameId: number | null = null;
+let containerHeightFrameId: number | null = null;
+let branchSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 const expanded = computed(() => new Set(props.expandedPaths));
 const branchIcon = computed(() => (props.branchInfo ? 'lucide:git-branch' : 'lucide:folder'));
@@ -464,12 +470,27 @@ const branchName = computed(() => props.branchInfo?.branch ?? props.directoryNam
 // Scroll handling
 function onScroll() {
   if (!scrollContainerRef.value) return;
-  scrollTop.value = scrollContainerRef.value.scrollTop;
+  pendingScrollTop = scrollContainerRef.value.scrollTop;
+  if (scrollFrameId !== null) return;
+  scrollFrameId = requestAnimationFrame(() => {
+    scrollFrameId = null;
+    scrollTop.value = pendingScrollTop;
+  });
 }
 
 function updateContainerHeight() {
   if (!scrollContainerRef.value) return;
-  containerHeight.value = scrollContainerRef.value.clientHeight;
+  const nextHeight = scrollContainerRef.value.clientHeight;
+  if (containerHeight.value === nextHeight) return;
+  containerHeight.value = nextHeight;
+}
+
+function scheduleContainerHeightUpdate() {
+  if (containerHeightFrameId !== null) return;
+  containerHeightFrameId = requestAnimationFrame(() => {
+    containerHeightFrameId = null;
+    updateContainerHeight();
+  });
 }
 
 let containerResizeObserver: ResizeObserver | undefined;
@@ -481,7 +502,7 @@ function setupContainerResizeObserver() {
   const target = scrollContainerRef.value;
   if (!target) return;
   containerResizeObserver = new ResizeObserver(() => {
-    updateContainerHeight();
+    scheduleContainerHeightUpdate();
   });
   containerResizeObserver.observe(target);
 }
@@ -489,14 +510,40 @@ function setupContainerResizeObserver() {
 onMounted(() => {
   updateContainerHeight();
   setupContainerResizeObserver();
-  window.addEventListener('resize', updateContainerHeight);
+  window.addEventListener('resize', scheduleContainerHeightUpdate);
 });
 
 onBeforeUnmount(() => {
   containerResizeObserver?.disconnect();
   containerResizeObserver = undefined;
-  window.removeEventListener('resize', updateContainerHeight);
+  window.removeEventListener('resize', scheduleContainerHeightUpdate);
+  if (scrollFrameId !== null) {
+    cancelAnimationFrame(scrollFrameId);
+    scrollFrameId = null;
+  }
+  if (containerHeightFrameId !== null) {
+    cancelAnimationFrame(containerHeightFrameId);
+    containerHeightFrameId = null;
+  }
+  if (branchSearchDebounceTimer !== null) {
+    clearTimeout(branchSearchDebounceTimer);
+    branchSearchDebounceTimer = null;
+  }
 });
+
+watch(
+  branchSearchQuery,
+  (value) => {
+    if (branchSearchDebounceTimer !== null) {
+      clearTimeout(branchSearchDebounceTimer);
+    }
+    branchSearchDebounceTimer = setTimeout(() => {
+      debouncedBranchSearchQuery.value = value;
+      branchSearchDebounceTimer = null;
+    }, BRANCH_SEARCH_DEBOUNCE_MS);
+  },
+  { immediate: true },
+);
 
 // Watch for data changes and scroll selected into view
 watch(() => props.selectedPath, (newPath) => {
@@ -535,14 +582,14 @@ const branchTitle = computed(() => {
 });
 
 const filteredLocalBranches = computed(() => {
-  const query = branchSearchQuery.value.trim().toLowerCase();
+  const query = debouncedBranchSearchQuery.value.trim().toLowerCase();
   const locals = (props.branchEntries ?? []).filter((entry) => entry.isLocal);
   if (!query) return locals.slice(0, 5);
   return locals.filter((entry) => branchSearchText(entry).includes(query)).slice(0, 5);
 });
 
 const filteredRemoteBranchGroups = computed<BranchGroup[]>(() => {
-  const query = branchSearchQuery.value.trim().toLowerCase();
+  const query = debouncedBranchSearchQuery.value.trim().toLowerCase();
   const groups = new Map<string, BranchEntry[]>();
   (props.branchEntries ?? []).forEach((entry) => {
     if (entry.isLocal) return;
