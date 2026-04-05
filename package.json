@@ -26,7 +26,7 @@
     "lint": "oxlint && vue-tsc --noEmit",
     "dev": "vite dev",
     "build": "vite build",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
@@ -54,6 +54,7 @@
     "tailwindcss": "^4.1.18",
     "vite": "^7.3.1",
     "vitest": "^4.1.2",
+    "happy-dom": "^17.0.0",
     "vue": "^3.5.28",
     "vue-tsc": "^3.2.4"
   },
