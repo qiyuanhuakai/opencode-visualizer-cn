@@ -409,6 +409,14 @@ import {
   storageSet,
   storageSetJSON,
 } from './utils/storageKeys';
+import {
+  isSandboxMarkedDeleted,
+  markSandboxDeleted,
+  pruneDeletedSandboxStore,
+  readDeletedSandboxStore,
+  writeDeletedSandboxStore,
+  type DeletedSandboxStore,
+} from './utils/deletedSandboxes';
 
 const { t } = useI18n();
 const credentials = useCredentials();
@@ -795,6 +803,7 @@ let primaryHistoryRequestId = 0;
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
 const localPinnedSessionStore = ref<LocalPinnedSessionStore>(readPinnedSessionStore());
+const deletedSandboxStore = ref<DeletedSandboxStore>(readDeletedSandboxStore());
 const composerDraftTabId =
   typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
@@ -1149,6 +1158,7 @@ const treeDataCache = shallowRef<{
 function computeProjectsHash(
   projects: Record<string, ProjectState>,
   pinnedStore: LocalPinnedSessionStore,
+  deletedStore: DeletedSandboxStore,
 ): string {
   let hash = 0;
   const projectEntries = Object.entries(projects);
@@ -1171,11 +1181,20 @@ function computeProjectsHash(
   );
   const pinnedHash = pinnedEntries.map(([key, value]) => `${key}:${value}`).join('|');
 
-  return `${hash}-${projectEntries.length}-${pinnedHash}`;
+  const deletedEntries = Object.entries(deletedStore)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([projectId, directories]) => `${projectId}:${directories.slice().sort().join(',')}`);
+  const deletedHash = deletedEntries.join('|');
+
+  return `${hash}-${projectEntries.length}-${pinnedHash}-${deletedHash}`;
 }
 
 const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
-  const currentHash = computeProjectsHash(serverState.projects, localPinnedSessionStore.value);
+  const currentHash = computeProjectsHash(
+    serverState.projects,
+    localPinnedSessionStore.value,
+    deletedSandboxStore.value,
+  );
   const now = Date.now();
   
   if (
@@ -1190,6 +1209,11 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
     .map((project) => {
       const worktreeDirectory = project.worktree;
       const sandboxEntries = (Object.values(project.sandboxes) as SandboxState[])
+        .filter(
+          (sandbox) =>
+            sandbox.directory === worktreeDirectory ||
+            !isSandboxMarkedDeleted(deletedSandboxStore.value, project.id, sandbox.directory),
+        )
         .map((sandbox) => {
           const sessionsForSandbox = sandbox.rootSessions
             .map((sessionId) => sandbox.sessions[sessionId])
@@ -1803,6 +1827,16 @@ function writePinnedSessionStore(store: LocalPinnedSessionStore) {
   const currentRaw = storageGet(StorageKeys.state.pinnedSessions);
   if (currentRaw === nextRaw) return;
   storageSet(StorageKeys.state.pinnedSessions, nextRaw);
+}
+
+function collectLiveSandboxDirectoriesByProject(projects: Record<string, ProjectState>) {
+  const result: Record<string, string[]> = {};
+  Object.values(projects).forEach((project) => {
+    result[project.id] = Object.keys(project.sandboxes)
+      .map((directory) => normalizeDirectory(directory))
+      .filter((directory): directory is string => Boolean(directory));
+  });
+  return result;
 }
 
 function getSessionPinnedOverride(projectId: string, sessionId: string) {
@@ -2591,28 +2625,47 @@ async function createWorktreeFromWorktree(worktree: string) {
   }
 }
 
-async function deleteWorktree(directory: string) {
+async function deleteWorktree(payload: { projectId?: string; worktree: string; directory: string }) {
   if (!ensureConnectionReady(t('app.actions.deletingWorktree'))) return;
   worktreeError.value = '';
-  if (!directory) return;
-  if (!projectDirectory.value) {
+  const targetDir = normalizeDirectory(payload.directory);
+  const baseDir = normalizeDirectory(payload.worktree);
+  const projectId =
+    payload.projectId?.trim() ||
+    resolveProjectIdForDirectory(targetDir) ||
+    resolveProjectIdForDirectory(baseDir) ||
+    selectedProjectId.value.trim();
+  if (!targetDir) return;
+  if (!baseDir) {
     worktreeError.value = t('app.error.worktreeBaseNotSet');
     return;
   }
-  const baseDir = projectDirectory.value.replace(/\/+$/, '');
-  const targetDir = directory.replace(/\/+$/, '');
   if (baseDir && targetDir === baseDir) return;
+  const previousDeletedStore = deletedSandboxStore.value;
+  deletedSandboxStore.value = markSandboxDeleted(previousDeletedStore, projectId, targetDir);
+  writeDeletedSandboxStore(deletedSandboxStore.value);
   try {
     await openCodeApi.deleteWorktree({
-      directory: projectDirectory.value,
+      directory: baseDir,
       targetDirectory: targetDir,
-      projectId: selectedProjectId.value,
+      projectId,
     });
+
+    ge.sendToWorker({
+      type: 'sandbox.deleted',
+      projectId,
+      directory: targetDir,
+    });
+
+    const affectedProject = serverState.projects[projectId];
+    if (affectedProject?.sandboxes?.[targetDir]) {
+      delete affectedProject.sandboxes[targetDir];
+    }
+
     if (normalizeDirectory(activeDirectory.value) === targetDir) {
-      const projectId = selectedProjectId.value.trim();
       const candidates = (sessionsByProject.value[projectId] ?? []).filter((session) => {
         if (session.parentID || session.time?.archived) return false;
-        const sessionDirectory = normalizeDirectory(session.directory || projectDirectory.value);
+        const sessionDirectory = normalizeDirectory(session.directory || baseDir);
         return sessionDirectory !== targetDir;
       });
       const nextSessionId = pickPreferredSessionId(candidates);
@@ -2624,6 +2677,8 @@ async function deleteWorktree(directory: string) {
       }
     }
   } catch (error) {
+    deletedSandboxStore.value = previousDeletedStore;
+    writeDeletedSandboxStore(deletedSandboxStore.value);
     worktreeError.value = t('app.error.worktreeDeleteFailed', { message: toErrorMessage(error) });
   }
 }
@@ -4722,6 +4777,21 @@ watch(localPinnedSessionStore, (store) => {
   }
   writePinnedSessionStore(limited);
 });
+
+watch(
+  () => serverState.projects,
+  (projects) => {
+    if (!bootstrapReady.value) return;
+    const next = pruneDeletedSandboxStore(
+      deletedSandboxStore.value,
+      collectLiveSandboxDirectoriesByProject(projects),
+    );
+    if (JSON.stringify(next) === JSON.stringify(deletedSandboxStore.value)) return;
+    deletedSandboxStore.value = next;
+    writeDeletedSandboxStore(next);
+  },
+  { deep: true, immediate: true },
+);
 
 watch(pinnedSessionsLimit, () => {
   const limited = limitPinnedSessionStore(localPinnedSessionStore.value, pinnedSessionsLimit.value);

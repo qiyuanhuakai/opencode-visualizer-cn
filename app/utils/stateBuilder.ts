@@ -703,6 +703,33 @@ export function createStateBuilder() {
     return normalizedProjectId;
   }
 
+  function removeSandboxDirectory(projectId: string, directory: string): string | null {
+    const normalizedProjectId = projectId.trim();
+    const normalizedDirectory = normalizeDirectory(directory);
+    if (!normalizedProjectId || !normalizedDirectory) return null;
+
+    const project = state.projects[normalizedProjectId];
+    if (!project) return null;
+
+    const worktreeDirectory = normalizeDirectory(project.worktree);
+    if (!worktreeDirectory || normalizedDirectory === worktreeDirectory) {
+      return null;
+    }
+
+    const sandbox = project.sandboxes[normalizedDirectory];
+    if (!sandbox) return null;
+
+    Object.keys(sandbox.sessions).forEach((sessionId) => {
+      sessionLocationById.delete(sessionId);
+      ephemeralLastSeenAt.delete(sessionId);
+      ephemeralLastActiveAt.delete(sessionId);
+    });
+
+    delete project.sandboxes[normalizedDirectory];
+    indexProjectDirectories(project);
+    return normalizedProjectId;
+  }
+
   function applySessionMutated(info: SessionMutationInfo): string | null {
     const changed = upsertSession(info);
     pruneEphemeralChildren();
@@ -785,6 +812,7 @@ export function createStateBuilder() {
     processProjectUpdated,
     processVcsBranchUpdated,
     registerSandboxDirectory,
+    removeSandboxDirectory,
     applySessionMutated,
     applySessionRemoved,
     resolveProjectIdForDirectory,

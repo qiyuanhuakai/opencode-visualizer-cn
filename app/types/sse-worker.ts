@@ -22,6 +22,11 @@ export type TabToWorkerMessage =
   | {
       type: 'load-sessions';
       directory: string;
+    }
+  | {
+      type: 'sandbox.deleted';
+      projectId: string;
+      directory: string;
     };
 
 export type WorkerToTabMessage =
