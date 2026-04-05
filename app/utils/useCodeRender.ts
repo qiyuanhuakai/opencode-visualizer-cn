@@ -1,5 +1,8 @@
 import { type Ref, type WatchSource, onBeforeUnmount, ref, toRaw, watch } from 'vue';
-import { renderWorkerHtml } from './workerRenderer';
+import {
+  RenderCancelledError,
+  startRenderWorkerHtml,
+} from './workerRenderer';
 import { useI18n } from '../i18n/useI18n';
 
 export type CodeRenderParams = {
@@ -24,6 +27,7 @@ export function useCodeRender(params: WatchSource<CodeRenderParams | null>): Cod
   const html = ref('');
   const error = ref('');
   let requestId = 0;
+  let cancelActiveRender: (() => void) | null = null;
   const { t } = useI18n();
 
   watch(
@@ -31,6 +35,8 @@ export function useCodeRender(params: WatchSource<CodeRenderParams | null>): Cod
     (p) => {
       requestId += 1;
       const current = requestId;
+      cancelActiveRender?.();
+      cancelActiveRender = null;
 
       if (!p) {
         html.value = '';
@@ -39,7 +45,7 @@ export function useCodeRender(params: WatchSource<CodeRenderParams | null>): Cod
       }
 
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      renderWorkerHtml({
+      const task = startRenderWorkerHtml({
         id,
         code: p.code,
         lang: p.lang,
@@ -56,14 +62,19 @@ export function useCodeRender(params: WatchSource<CodeRenderParams | null>): Cod
         copyCodeAriaLabel: t('render.copyCodeAria'),
         copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
         errorLabel: t('render.renderFailed'),
-      })
+      });
+      cancelActiveRender = task.cancel;
+      task.promise
         .then((result) => {
           if (current !== requestId) return;
+          cancelActiveRender = null;
           html.value = result;
           error.value = '';
         })
         .catch((err) => {
           if (current !== requestId) return;
+          cancelActiveRender = null;
+          if (err instanceof RenderCancelledError) return;
           error.value = err instanceof Error ? err.message : t('render.renderFailed');
         });
     },
@@ -72,6 +83,8 @@ export function useCodeRender(params: WatchSource<CodeRenderParams | null>): Cod
 
   onBeforeUnmount(() => {
     requestId += 1;
+    cancelActiveRender?.();
+    cancelActiveRender = null;
   });
 
   return { html, error };

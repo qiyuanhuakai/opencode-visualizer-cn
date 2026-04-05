@@ -163,7 +163,7 @@ const revertedPreviewRootId = computed(() => {
   return null;
 });
 
-const { files, fileCacheVersion } = useFileTree();
+const { files } = useFileTree();
 
 const filesWithBasenames = computed(() => {
   const set = new Set<string>();
@@ -231,7 +231,6 @@ const { initialRenderTrackingActive, beginInitialRenderTracking, handleMessageRe
 const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
   visibleRoots,
   theme: computed(() => props.theme),
-  fileCacheVersion,
   filesWithBasenames,
   getFinalAnswer,
   hasAssistantMessages,

@@ -29,6 +29,7 @@ type MessageError = { name: string; message: string } | null;
 const pendingMessageTriggers = new Set<ShallowRef<MessageEntry>>();
 const pendingCollectionTrigger = { value: false };
 let flushScheduled = false;
+const HISTORY_CHUNK_SIZE = 40;
 
 function scheduleFlush() {
   if (flushScheduled) return;
@@ -465,6 +466,25 @@ function loadHistory(entries: unknown[]) {
   if (collectionChanged) triggerCollection();
 }
 
+async function loadHistoryIncrementally(
+  entries: unknown[],
+  options?: {
+    chunkSize?: number;
+    shouldContinue?: () => boolean;
+  },
+) {
+  const chunkSize = Math.max(1, options?.chunkSize ?? HISTORY_CHUNK_SIZE);
+  for (let offset = 0; offset < entries.length; offset += chunkSize) {
+    if (options?.shouldContinue && !options.shouldContinue()) return;
+    loadHistory(entries.slice(offset, offset + chunkSize));
+    if (offset + chunkSize < entries.length) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
+  }
+}
+
 function reset() {
   messages.value.clear();
   parts.clear();
@@ -501,6 +521,7 @@ export function useMessages() {
     updateMessage,
     updatePart,
     loadHistory,
+    loadHistoryIncrementally,
     reset,
     dispose,
     bindScope,
