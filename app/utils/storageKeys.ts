@@ -13,6 +13,7 @@ export const StorageKeys = {
     sidePanelTab: 'state.sidePanelTab.v1',
     pinnedSessions: 'state.pinnedSessions.v1',
     lastAuthError: 'state.lastAuthError.v1',
+    deletedSandboxes: 'state.deletedSandboxes.v1',
   },
   drafts: {
     composer: 'drafts.composer.v1',

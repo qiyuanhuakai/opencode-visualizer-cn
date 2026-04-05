@@ -633,6 +633,14 @@ async function loadDirectorySessions(
       getSessionStatusMap(normalizedDirectory),
     ]);
 
+    // Guard against resurrecting a deleted worktree: if the sandbox no longer
+    // exists in the current state builder, skip applying stale session data.
+    const liveProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
+    const liveProject = liveProjectId ? state.stateBuilder.getProject(liveProjectId) : undefined;
+    if (!liveProject?.sandboxes[normalizedDirectory]) {
+      return;
+    }
+
     const sessions = asObjectArray(rawSessions) as Parameters<
       typeof state.stateBuilder.applySessions
     >[0];
@@ -681,6 +689,13 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
     const raw = await getVcsInfo(normalizedDirectory).catch(() => null);
     const vcsInfo = asRecord(raw);
     if (!vcsInfo) {
+      state.vcsHydratedDirectories.add(normalizedDirectory);
+      return;
+    }
+
+    const liveProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
+    const liveProject = liveProjectId ? state.stateBuilder.getProject(liveProjectId) : undefined;
+    if (!liveProject?.sandboxes[normalizedDirectory]) {
       state.vcsHydratedDirectories.add(normalizedDirectory);
       return;
     }
@@ -1222,8 +1237,25 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
          if (!sandbox.sessions[sessionId]) continue;
          requestPriorityHydration(state, sandbox.directory);
          break;
-       }
-     }
+      }
+    }
+    return;
+  }
+
+  if (message.type === 'sandbox.deleted') {
+    const projectId = message.projectId.trim();
+    const directory = normalizeDirectory(message.directory);
+    if (!projectId || !directory) return;
+    const project = state.stateBuilder.getProject(projectId);
+    const sandbox = project?.sandboxes[directory];
+    if (sandbox) {
+      Object.keys(sandbox.sessions).forEach((sessionId) => {
+        state.notificationManager.clearSession(projectId, sessionId);
+      });
+      emitNotificationsUpdated(state);
+    }
+    const changedProjectId = state.stateBuilder.removeSandboxDirectory(projectId, directory);
+    emitProjectUpdated(state, changedProjectId);
   }
 }
 

@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useOpenCodeApi } from './useOpenCodeApi';
 
-const { updateSessionMock, waitForStateMock } = vi.hoisted(() => ({
+const { updateSessionMock, waitForStateMock, deleteWorktreeMock } = vi.hoisted(() => ({
   updateSessionMock: vi.fn(),
   waitForStateMock: vi.fn(),
+  deleteWorktreeMock: vi.fn(),
 }));
 
 vi.mock('../utils/opencode', () => ({
   updateSession: updateSessionMock,
+  deleteWorktree: deleteWorktreeMock,
 }));
 
 vi.mock('../utils/waitForState', () => ({
@@ -42,6 +44,7 @@ describe('useOpenCodeApi pin regression', () => {
   beforeEach(() => {
     updateSessionMock.mockReset();
     waitForStateMock.mockReset();
+    deleteWorktreeMock.mockReset();
   });
 
   it('pinSession resolves after the PATCH request without waiting for SSE reconciliation', async () => {
@@ -82,5 +85,54 @@ describe('useOpenCodeApi pin regression', () => {
     expect(api.pending.value).toBe(false);
     expect(updateSessionMock).toHaveBeenCalledWith('s1', { time: { pinned: 0 } }, '/');
     expect(waitForStateMock).not.toHaveBeenCalled();
+  });
+
+  it('deleteWorktree removes the sandbox optimistically after the DELETE request', async () => {
+    deleteWorktreeMock.mockResolvedValueOnce(undefined);
+    waitForStateMock.mockRejectedValueOnce(new Error('timeout'));
+
+    const projects = {
+      p1: {
+        id: 'p1',
+        worktree: '/repo',
+        sandboxes: {
+          '/repo': {
+            directory: '/repo',
+            name: 'main',
+            rootSessions: ['s1'],
+            sessions: {
+              s1: {
+                id: 's1',
+                timeCreated: 1,
+                timeUpdated: 1,
+              },
+            },
+          },
+          '/repo/feature': {
+            directory: '/repo/feature',
+            name: 'feature',
+            rootSessions: ['s2'],
+            sessions: {
+              s2: {
+                id: 's2',
+                timeCreated: 2,
+                timeUpdated: 2,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const api = useOpenCodeApi(projects as any);
+
+    await api.deleteWorktree({
+      directory: '/repo',
+      targetDirectory: '/repo/feature',
+      projectId: 'p1',
+    });
+
+    expect(deleteWorktreeMock).toHaveBeenCalledWith('/repo', '/repo/feature');
+    expect(projects.p1.sandboxes['/repo/feature']).toBeUndefined();
   });
 });

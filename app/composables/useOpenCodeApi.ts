@@ -320,7 +320,24 @@ export function useOpenCodeApi(
       const projectId = requireProjectId(payload.projectId);
       const targetDirectory = payload.targetDirectory.trim();
       await opencodeApi.deleteWorktree(payload.directory, targetDirectory);
-      await waitWithRetry((state) => !hasSandbox(state[projectId], targetDirectory));
+
+      const projects = getProjects();
+      const project = projects[projectId];
+      if (project?.sandboxes?.[targetDirectory]) {
+        delete project.sandboxes[targetDirectory];
+      }
+
+      try {
+        await waitForState(
+          getProjects,
+          (state) => !hasSandbox(state[projectId], targetDirectory),
+          5_000,
+        );
+      } catch {
+        // Worktree deletions have no corresponding SSE event, so the sandbox
+        // may never disappear from state until the next project refresh. The
+        // optimistic delete above already keeps the UI consistent.
+      }
     });
   }
 

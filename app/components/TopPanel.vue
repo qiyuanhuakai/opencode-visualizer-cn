@@ -237,7 +237,7 @@
                           "
                           type="button"
                           class="tree-action-button danger"
-                          @click.stop="handleSandboxDelete(sandbox.directory, close)"
+                          @click.stop="handleSandboxDelete(worktree.projectId, worktree.directory, sandbox.directory, close)"
                         >
                           <Icon icon="lucide:trash-2" :width="16" :height="16" />
                         </button>
@@ -539,6 +539,12 @@ export type TopPanelBatchSessionActionPayload = {
   sessions: TopPanelBatchSessionTarget[];
 };
 
+type SandboxDeletePayload = {
+  projectId?: string;
+  worktree: string;
+  directory: string;
+};
+
 type SessionSelectPayload = {
   projectId?: string;
   worktree: string;
@@ -567,7 +573,7 @@ const emit = defineEmits<{
   (event: 'create-worktree-from', worktree: string): void;
   (event: 'new-session'): void;
   (event: 'new-session-in', payload: { worktree: string; directory: string }): void;
-  (event: 'delete-active-directory', value: string): void;
+  (event: 'delete-active-directory', payload: SandboxDeletePayload): void;
   (event: 'delete-session', value: string): void;
   (event: 'archive-session', value: string): void;
   (event: 'unarchive-session', value: string): void;
@@ -903,12 +909,21 @@ function handleCreateWorktree(worktree: string, close: () => void) {
   close();
 }
 
-function handleSandboxDelete(directory: string, close?: () => void) {
+function handleSandboxDelete(
+  projectId: string | undefined,
+  worktree: string,
+  directory: string,
+  close?: () => void,
+) {
   if (typeof window !== 'undefined') {
     const confirmed = window.confirm(t('topPanel.confirm.deleteWorktree', { directory }));
     if (!confirmed) return;
   }
-  emit('delete-active-directory', directory);
+  emit('delete-active-directory', {
+    projectId,
+    worktree,
+    directory,
+  });
   close?.();
 }
 
