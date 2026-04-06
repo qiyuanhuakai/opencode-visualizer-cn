@@ -61,6 +61,7 @@
             :tree-branch-entries="branchEntries"
             :tree-branch-list-loading="branchListLoading"
             :run-shell-command="runTreeShellCommand"
+            :ensure-branch-entries-loaded="ensureBranchEntriesLoaded"
             @toggle-collapse="toggleSidePanelCollapsed"
             @change-tab="setSidePanelTab"
             @select-session="handleSidePanelSessionSelect"
@@ -70,7 +71,7 @@
             @open-diff="openGitDiff"
             @open-diff-all="handleOpenDiffAll"
             @open-file="openFileViewer"
-            @reload="reloadTree().then(() => refreshGitStatus())"
+            @reload="handleReloadSidebar"
           />
           <div
             v-if="!sidePanelCollapsed"
@@ -1433,12 +1434,14 @@ const {
   gitStatusByPath,
   refreshGitStatus,
   reloadTree,
+  invalidateDirectorySidebarCache,
   toggleTreeDirectory,
   selectTreeFile,
   feed,
   branchEntries,
   branchListLoading,
   refreshBranchEntries,
+  ensureBranchEntriesLoaded,
 } = useFileTree({ activeDirectory });
 
 const treeDirectoryName = computed(() => {
@@ -4044,6 +4047,7 @@ async function openShellFromInput(input: string) {
 async function runTreeShellCommand(command: string) {
   const script = command.trim();
   if (!script) return;
+  const commandDirectory = activeDirectory.value.trim();
   const pty = await createPtySession('/bin/sh', ['-c', script]);
   if (!pty) return;
   ensureShellWindow(pty);
@@ -4053,9 +4057,24 @@ async function runTreeShellCommand(command: string) {
     shellExitWaiters.set(pty.id, resolve);
   });
   if (exitCode === 0) {
-    void refreshGitStatus();
-    void refreshBranchEntries();
+    invalidateDirectorySidebarCache(commandDirectory);
+    if (activeDirectory.value.trim() !== commandDirectory) {
+      return;
+    }
+    await reloadTree();
+    await Promise.all([
+      refreshGitStatus({ includeFileSnapshot: false }),
+      refreshBranchEntries({ force: true }),
+    ]);
   }
+}
+
+async function handleReloadSidebar() {
+  await reloadTree();
+  await Promise.all([
+    refreshGitStatus({ includeFileSnapshot: false }),
+    refreshBranchEntries({ force: true }),
+  ]);
 }
 
 function decodeCommitSnapshotBase64(value: string) {
