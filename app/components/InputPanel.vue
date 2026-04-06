@@ -1210,7 +1210,7 @@ const inputMessageStyle = computed(() => {
   min-height: 0;
   box-sizing: border-box;
   color: #e2e8f0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--app-monospace-font-family);
 }
 
 .input-message {

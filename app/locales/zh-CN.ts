@@ -291,6 +291,9 @@ const messages: LocaleMessages = {
   },
   settings: {
     title: '设置',
+    fontsPageTitle: '字体设置',
+    close: '关闭设置',
+    backToRoot: '返回设置',
     language: {
       label: '语言',
       description: '选择您偏好的语言',
@@ -308,6 +311,42 @@ const messages: LocaleMessages = {
     pinnedSessionsLimit: {
       label: '置顶会话限制',
       description: '最多保留 {limit} 个本地置顶会话；最早的置顶项会首先被删除。',
+    },
+    terminalFontFamily: {
+      label: '终端字体族',
+      description: '仅用于 xterm Shell 窗口的字体栈。把你优先的 Nerd Font 放在最前面。',
+    },
+    appMonospaceFontFamily: {
+      label: '应用等宽字体族',
+      description: '统一用于面板、弹窗、工具占位、内联代码和徽章等等宽文本。',
+    },
+    fontSettings: {
+      label: '字体设置',
+      description: '配置终端字体，以及应用内共享的等宽字体。',
+    },
+    systemFonts: {
+      label: '系统字体探测',
+      scan: '扫描本地字体',
+      loading: '正在扫描本地字体…',
+      unsupported: '当前浏览器不能枚举本地字体。你仍然可以粘贴字体族名称，并通过下面的状态列表判断它是否命中。',
+      error: '读取本地字体失败。请检查浏览器权限提示后重试。',
+      regular: 'Regular',
+    },
+    fontStatus: {
+      available: '可用',
+      missing: '未命中',
+      generic: '通用回退',
+    },
+    fontPresetsLabel: '预设',
+    customFontStackLabel: '自定义字体栈',
+    fontPresets: {
+      default: '默认',
+      firaCodeNerd: 'FiraCode Nerd',
+      caskaydiaNerd: 'Caskaydia Nerd',
+      iosevkaTerm: 'Iosevka Term',
+      jetbrainsMono: 'JetBrains Mono',
+      sfMono: 'SF Mono',
+      firaCode: 'Fira Code',
     },
     dockAlwaysOpen: {
       label: '保持 Dock 始终可见',

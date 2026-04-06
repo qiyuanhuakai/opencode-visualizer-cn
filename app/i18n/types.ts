@@ -290,6 +290,9 @@ export interface LocaleMessages {
   };
   settings: {
     title: string;
+    fontsPageTitle: string;
+    close: string;
+    backToRoot: string;
     language: {
       label: string;
       description: string;
@@ -307,6 +310,42 @@ export interface LocaleMessages {
     pinnedSessionsLimit: {
       label: string;
       description: string;
+    };
+    terminalFontFamily: {
+      label: string;
+      description: string;
+    };
+    appMonospaceFontFamily: {
+      label: string;
+      description: string;
+    };
+    fontSettings: {
+      label: string;
+      description: string;
+    };
+    systemFonts: {
+      label: string;
+      scan: string;
+      loading: string;
+      unsupported: string;
+      error: string;
+      regular: string;
+    };
+    fontStatus: {
+      available: string;
+      missing: string;
+      generic: string;
+    };
+    fontPresetsLabel: string;
+    customFontStackLabel: string;
+    fontPresets: {
+      default: string;
+      firaCodeNerd: string;
+      caskaydiaNerd: string;
+      iosevkaTerm: string;
+      jetbrainsMono: string;
+      sfMono: string;
+      firaCode: string;
     };
     dockAlwaysOpen: {
       label: string;

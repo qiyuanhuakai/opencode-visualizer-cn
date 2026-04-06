@@ -45,17 +45,23 @@ describe('useSettings', () => {
     expect(settings.showMinimizeButtons.value).toBe(true);
     expect(settings.dockAlwaysOpen.value).toBe(false);
     expect(settings.pinnedSessionsLimit.value).toBe(30);
+    expect(settings.terminalFontFamily.value).toBe(settings.defaultTerminalFontFamily);
+    expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
   });
 
   it('reads persisted values from storage on load', async () => {
     storage.setItem('opencode.settings.enterToSend.v1', 'true');
     storage.setItem('opencode.settings.showMinimizeButtons.v1', 'false');
     storage.setItem('opencode.settings.pinnedSessionsLimit.v1', '50');
+    storage.setItem('opencode.settings.terminalFontFamily.v1', 'Test Terminal Font, monospace');
+    storage.setItem('opencode.settings.appMonospaceFontFamily.v1', 'Test App Font, monospace');
 
     const settings = await importFresh();
     expect(settings.enterToSend.value).toBe(true);
     expect(settings.showMinimizeButtons.value).toBe(false);
     expect(settings.pinnedSessionsLimit.value).toBe(50);
+    expect(settings.terminalFontFamily.value).toBe('Test Terminal Font, monospace');
+    expect(settings.appMonospaceFontFamily.value).toBe('Test App Font, monospace');
   });
 
   it('writes back to localStorage when values change', async () => {
@@ -98,6 +104,49 @@ describe('useSettings', () => {
     } as unknown as StorageEvent;
     for (const listener of storageListeners) listener(event);
     expect(settings.pinnedSessionsLimit.value).toBe(80);
+  });
+
+  it('reacts to external storage events for font families', async () => {
+    const settings = await importFresh();
+    const terminalEvent = {
+      key: 'opencode.settings.terminalFontFamily.v1',
+      newValue: 'External Terminal Font, monospace',
+    } as unknown as StorageEvent;
+    const appEvent = {
+      key: 'opencode.settings.appMonospaceFontFamily.v1',
+      newValue: 'External App Font, monospace',
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(terminalEvent);
+    for (const listener of storageListeners) listener(appEvent);
+    expect(settings.terminalFontFamily.value).toBe('External Terminal Font, monospace');
+    expect(settings.appMonospaceFontFamily.value).toBe('External App Font, monospace');
+  });
+
+  it('normalizes blank font family edits back to defaults', async () => {
+    const settings = await importFresh();
+    settings.terminalFontFamily.value = '   ';
+    settings.appMonospaceFontFamily.value = '';
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.terminalFontFamily.value).toBe(settings.defaultTerminalFontFamily);
+    expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
+    expect(storage.getItem('opencode.settings.terminalFontFamily.v1')).toBe(settings.defaultTerminalFontFamily);
+    expect(storage.getItem('opencode.settings.appMonospaceFontFamily.v1')).toBe(settings.defaultAppMonospaceFontFamily);
+  });
+
+  it('uses default font families when storage event clears font keys', async () => {
+    const settings = await importFresh();
+    const terminalEvent = {
+      key: 'opencode.settings.terminalFontFamily.v1',
+      newValue: null,
+    } as unknown as StorageEvent;
+    const appEvent = {
+      key: 'opencode.settings.appMonospaceFontFamily.v1',
+      newValue: null,
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(terminalEvent);
+    for (const listener of storageListeners) listener(appEvent);
+    expect(settings.terminalFontFamily.value).toBe(settings.defaultTerminalFontFamily);
+    expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
   });
 
   it('uses default limit when storage event clears the key', async () => {

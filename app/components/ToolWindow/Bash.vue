@@ -20,7 +20,7 @@ defineProps<{
 
 <style scoped>
 .bash-content {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--app-monospace-font-family);
   font-size: 13px;
   line-height: 1.5;
   white-space: pre;

@@ -426,7 +426,14 @@ type LocalizedStatusState =
   | { mode: 'text'; text: string }
   | { mode: 'render'; render: () => string };
 const credentials = useCredentials();
-const { suppressAutoWindows, showMinimizeButtons, dockAlwaysOpen, pinnedSessionsLimit } = useSettings();
+const {
+  suppressAutoWindows,
+  showMinimizeButtons,
+  dockAlwaysOpen,
+  pinnedSessionsLimit,
+  terminalFontFamily,
+  appMonospaceFontFamily,
+} = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
 const FILE_VIEWER_WINDOW_HEIGHT = 520;
@@ -445,8 +452,6 @@ const AUTO_VIEWPORT_HISTORY_LOAD_STEP = 160;
 const AUTO_BACKGROUND_HISTORY_LOAD_STEP = 240;
 const AUTO_BACKGROUND_HISTORY_DELAY_MS = 32;
 const HISTORY_VIEWPORT_FILL_THRESHOLD_PX = 24;
-const TERM_FONT_FAMILY =
-  "'JetBrainsMono NFM', 'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
 const SHELL_LINGER_MS = 1000;
 const TREE_DATA_CACHE_TTL_MS = 15000;
 const COMMIT_SNAPSHOT_SCRIPT = [
@@ -734,6 +739,7 @@ watch(showMinimizeButtons, (enabled) => {
 
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
+const appEl = ref<HTMLDivElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
 const outputPanelRef = ref<{ panelEl: HTMLDivElement | null } | null>(null);
 const topPanelRef = ref<{
@@ -2403,8 +2409,15 @@ function measureTerminalCellWidth(fontFamily: string, fontSizePx: number) {
   return Number.isFinite(width) && width > 0 ? width : fontSizePx * 0.62;
 }
 
+function splitFontFamilyList(fontFamily: string) {
+  return fontFamily
+    .split(',')
+    .map((family) => family.trim())
+    .filter((family) => family.length > 0);
+}
+
 function getTerminalWindowSize() {
-  const cellWidth = measureTerminalCellWidth(TERM_FONT_FAMILY, TERM_FONT_SIZE_PX);
+  const cellWidth = measureTerminalCellWidth(terminalFontFamily.value, TERM_FONT_SIZE_PX);
   const lineHeightPx = TERM_FONT_SIZE_PX * TERM_LINE_HEIGHT;
   const gutterWidthPx = TERM_FONT_SIZE_PX * TERM_GUTTER_WIDTH_EM;
   const contentWidth = TERM_COLUMNS * cellWidth;
@@ -2422,11 +2435,46 @@ function syncCanvasTermMetrics() {
   const canvas = toolWindowCanvasEl.value;
   if (!canvas) return;
   const { width, height } = getTerminalWindowSize();
-  canvas.style.setProperty('--term-font-family', TERM_FONT_FAMILY);
+  canvas.style.setProperty('--term-font-family', terminalFontFamily.value);
   canvas.style.setProperty('--term-font-size', `${TERM_FONT_SIZE_PX}px`);
   canvas.style.setProperty('--term-line-height', String(TERM_LINE_HEIGHT));
   canvas.style.setProperty('--term-width', `${width}px`);
   canvas.style.setProperty('--term-height', `${height}px`);
+}
+
+function syncAppMonospaceMetrics() {
+  const app = appEl.value;
+  if (app) {
+    app.style.setProperty('--app-monospace-font-family', appMonospaceFontFamily.value);
+  }
+  if (typeof document !== 'undefined') {
+    document.documentElement.style.setProperty(
+      '--app-monospace-font-family',
+      appMonospaceFontFamily.value,
+    );
+  }
+}
+
+async function waitForTerminalFontsReady(fontFamily = terminalFontFamily.value) {
+  if (typeof document === 'undefined' || !('fonts' in document)) return;
+  const fontSet = document.fonts;
+  const requestedFonts = splitFontFamilyList(fontFamily).map((family) =>
+    fontSet.load(`${TERM_FONT_SIZE_PX}px ${family}`)
+  );
+  await Promise.allSettled(requestedFonts);
+  await fontSet.ready;
+}
+
+async function refreshOpenShellFonts() {
+  await waitForTerminalFontsReady();
+  shellSessionsByPtyId.forEach((session) => {
+    session.terminal.options.fontFamily = terminalFontFamily.value;
+    session.terminal.options.fontSize = TERM_FONT_SIZE_PX;
+    session.terminal.options.lineHeight = TERM_LINE_HEIGHT;
+    session.terminal.refresh(0, Math.max(0, session.terminal.rows - 1));
+  });
+  syncCanvasTermMetrics();
+  scheduleShellFitAll();
 }
 
 function handleWindowResize() {
@@ -3745,7 +3793,7 @@ async function ensureShellWindow(pty: PtyInfo) {
   const terminal = new Terminal({
     cols: TERM_COLUMNS,
     rows: TERM_ROWS,
-    fontFamily: TERM_FONT_FAMILY,
+    fontFamily: terminalFontFamily.value,
     fontSize: TERM_FONT_SIZE_PX,
     lineHeight: TERM_LINE_HEIGHT,
     cursorBlink: true,
@@ -3765,14 +3813,16 @@ async function ensureShellWindow(pty: PtyInfo) {
   // xterm.js buffers write() calls made before open(), so data is not lost.
   connectShellSocket(pty.id);
   nextTick(() => {
-    const host = toolWindowCanvasEl.value?.querySelector(
-      `[data-shell-id="${pty.id}"]`,
-    ) as HTMLElement | null;
-    if (!host) return;
-    terminal.open(host);
-    // Wait for first paint so xterm has rendered cell dimensions
-    requestAnimationFrame(() => {
-      resizeWindowToFitTerminal(key, terminal, host);
+    void waitForTerminalFontsReady().then(() => {
+      const host = toolWindowCanvasEl.value?.querySelector(
+        `[data-shell-id="${pty.id}"]`,
+      ) as HTMLElement | null;
+      if (!host) return;
+      terminal.open(host);
+      // Wait for first paint so xterm has rendered cell dimensions
+      requestAnimationFrame(() => {
+        resizeWindowToFitTerminal(key, terminal, host);
+      });
     });
   });
 }
@@ -4037,7 +4087,9 @@ function restoreFloatingWindow(key: string) {
 
 function disposeShellWindows() {
   const ids = Array.from(shellSessionsByPtyId.keys());
-  ids.forEach((ptyId) => removeShellWindow(ptyId));
+  for (const ptyId of ids) {
+    removeShellWindow(ptyId);
+  }
 }
 
 let shellDirectory = '';
@@ -4968,6 +5020,22 @@ watch(pinnedSessionsLimit, () => {
   if (isSamePinnedSessionStore(localPinnedSessionStore.value, limited)) return;
   localPinnedSessionStore.value = limited;
 });
+
+watch(
+  appMonospaceFontFamily,
+  () => {
+    syncAppMonospaceMetrics();
+  },
+  { immediate: true },
+);
+
+watch(
+  terminalFontFamily,
+  () => {
+    void refreshOpenShellFonts();
+  },
+  { immediate: true },
+);
 
 // Computed that extracts only the session properties needed for pinned session reconciliation
 // This avoids deep watching the entire projects object
@@ -6887,8 +6955,10 @@ onBeforeUnmount(() => {
   --tool-top-offset: 0px;
   --tool-area-height: var(--canvas-height, 100%);
   --term-font-family:
-    'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo,
-    Consolas, 'Liberation Mono', monospace;
+    'FiraCode Nerd Font Mono', 'FiraCode Nerd Font Mono Med', 'CaskaydiaCove Nerd Font Mono',
+    'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed',
+    'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono',
+    monospace;
   --term-font-size: 13px;
   --term-line-height: 1.1;
   --term-width: 670px;

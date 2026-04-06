@@ -291,6 +291,9 @@ const messages: LocaleMessages = {
   },
   settings: {
     title: 'Settings',
+    fontsPageTitle: 'Font settings',
+    close: 'Close settings',
+    backToRoot: 'Back to settings',
     language: {
       label: 'Language',
       description: 'Select your preferred language',
@@ -308,6 +311,42 @@ const messages: LocaleMessages = {
     pinnedSessionsLimit: {
       label: 'Pinned sessions limit',
       description: 'Keep at most {limit} local pinned sessions; oldest pins are dropped first.',
+    },
+    terminalFontFamily: {
+      label: 'Terminal font family',
+      description: 'Font stack used only by xterm shell windows. Put your preferred Nerd Font first.',
+    },
+    appMonospaceFontFamily: {
+      label: 'App monospace font family',
+      description: 'Shared monospace stack for panels, dialogs, tool placeholders, inline code, and badges.',
+    },
+    fontSettings: {
+      label: 'Font settings',
+      description: 'Configure the terminal font and the shared monospace font used across the app.',
+    },
+    systemFonts: {
+      label: 'Detected system fonts',
+      scan: 'Scan local fonts',
+      loading: 'Scanning local fonts…',
+      unsupported: 'This browser cannot enumerate local fonts. You can still paste a font family and use the status list below to see whether it resolves.',
+      error: 'Could not read local fonts. Check the browser permission prompt and try again.',
+      regular: 'Regular',
+    },
+    fontStatus: {
+      available: 'Available',
+      missing: 'No match',
+      generic: 'Generic fallback',
+    },
+    fontPresetsLabel: 'Presets',
+    customFontStackLabel: 'Custom font stack',
+    fontPresets: {
+      default: 'Default',
+      firaCodeNerd: 'FiraCode Nerd',
+      caskaydiaNerd: 'Caskaydia Nerd',
+      iosevkaTerm: 'Iosevka Term',
+      jetbrainsMono: 'JetBrains Mono',
+      sfMono: 'SF Mono',
+      firaCode: 'Fira Code',
     },
     dockAlwaysOpen: {
       label: 'Keep dock always visible',
