@@ -420,6 +420,11 @@ import {
 } from './utils/deletedSandboxes';
 
 const { t } = useI18n();
+
+type LocalizedStatusState =
+  | { mode: 'i18n'; key: string; params?: Record<string, unknown> }
+  | { mode: 'text'; text: string }
+  | { mode: 'render'; render: () => string };
 const credentials = useCredentials();
 const { suppressAutoWindows, showMinimizeButtons, dockAlwaysOpen, pinnedSessionsLimit } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
@@ -1163,7 +1168,7 @@ const worktreeError = ref('');
 const sessionError = ref('');
 const messageInput = ref('');
 const attachments = ref<Attachment[]>([]);
-const sendStatus = ref(t('app.status.ready'));
+const sendStatus = ref<LocalizedStatusState>({ mode: 'i18n', key: 'app.status.ready' });
 const isSending = ref(false);
 const isAborting = ref(false);
 const isBootstrapping = ref(false);
@@ -1186,6 +1191,25 @@ const retryStatus = ref<{
   attempt: number;
 } | null>(null);
 
+function setSendStatusKey(key: string, params?: Record<string, unknown>) {
+  sendStatus.value = params ? { mode: 'i18n', key, params } : { mode: 'i18n', key };
+}
+
+function setSendStatusText(text: string) {
+  sendStatus.value = { mode: 'text', text };
+}
+
+function setSendStatusRender(render: () => string) {
+  sendStatus.value = { mode: 'render', render };
+}
+
+const resolvedSendStatus = computed(() => {
+  const status = sendStatus.value;
+  if (status.mode === 'text') return status.text;
+  if (status.mode === 'render') return status.render();
+  return t(status.key, status.params ?? {});
+});
+
 const statusText = computed(() => {
   if (connectionState.value === 'reconnecting') {
     return reconnectingMessage.value || t('app.connection.reconnecting');
@@ -1197,7 +1221,7 @@ const statusText = computed(() => {
   if (openCodeApi.pending.value) {
     return t('app.status.synchronizing');
   }
-  return projectError.value || worktreeError.value || sessionError.value || sendStatus.value;
+  return projectError.value || worktreeError.value || sessionError.value || resolvedSendStatus.value;
 });
 const isStatusError = computed(() =>
   Boolean(projectError.value || worktreeError.value || sessionError.value || retryStatus.value),
@@ -1673,18 +1697,24 @@ function requireSelectedWorktree(_context: 'send') {
   const directory = getSelectedWorktreeDirectory();
   if (directory) return directory;
   const message = t('app.error.noWorktreeSelected');
-  sendStatus.value = message;
+  setSendStatusText(message);
   return '';
 }
 
 function ensureConnectionReady(action: string) {
   if (connectionState.value === 'ready' && uiInitState.value === 'ready') return true;
   if (connectionState.value === 'reconnecting') {
-    sendStatus.value = `${t('app.connection.reconnecting')} ${t('app.error.actionDisabled', { action })}`;
+    setSendStatusRender(
+      () => `${t('app.connection.reconnecting')} ${t('app.error.actionDisabled', { action })}`,
+    );
   } else if (uiInitState.value === 'loading') {
-    sendStatus.value = `${t('app.error.stillLoading')} ${t('app.error.actionDisabled', { action })}`;
+    setSendStatusRender(
+      () => `${t('app.error.stillLoading')} ${t('app.error.actionDisabled', { action })}`,
+    );
   } else {
-    sendStatus.value = `${t('app.error.notConnected')} ${t('app.error.unavailable', { action })}`;
+    setSendStatusRender(
+      () => `${t('app.error.notConnected')} ${t('app.error.unavailable', { action })}`,
+    );
   }
   return false;
 }
@@ -2503,7 +2533,7 @@ function readFileAsDataUrl(file: File) {
 async function handleAddAttachments(files: File[]) {
   const accepted = files.filter((file) => ATTACHMENT_MIME_ALLOWLIST.has(file.type));
   if (accepted.length === 0) {
-    sendStatus.value = t('app.error.unsupportedAttachment');
+    setSendStatusKey('app.error.unsupportedAttachment');
     return;
   }
   try {
@@ -2518,7 +2548,7 @@ async function handleAddAttachments(files: File[]) {
     attachments.value = [...attachments.value, ...next];
     persistComposerDraftForCurrentContext();
   } catch (error) {
-    sendStatus.value = t('app.error.attachmentFailed', { message: toErrorMessage(error) });
+    setSendStatusKey('app.error.attachmentFailed', { message: toErrorMessage(error) });
   }
 }
 
@@ -3158,7 +3188,7 @@ async function handleForkMessage(payload: { sessionId: string; messageId: string
   if (!ensureConnectionReady(t('app.actions.fork'))) return;
   sessionError.value = '';
   try {
-    sendStatus.value = t('app.status.forking');
+    setSendStatusKey('app.status.forking');
     const data = (await openCodeApi.forkSession({
       sessionId: payload.sessionId,
       messageId: payload.messageId,
@@ -3169,7 +3199,7 @@ async function handleForkMessage(payload: { sessionId: string; messageId: string
       seedForkedSessionComposerDraft(payload, data);
       await switchSessionSelection(selectedProjectId.value, data.id);
     }
-    sendStatus.value = t('app.status.forked');
+    setSendStatusKey('app.status.forked');
   } catch (error) {
     sessionError.value = t('app.error.sessionForkFailed', { message: toErrorMessage(error) });
   }
@@ -3179,14 +3209,14 @@ async function handleRevertMessage(payload: { sessionId: string; messageId: stri
   if (!ensureConnectionReady(t('app.actions.revert'))) return;
   sessionError.value = '';
   try {
-    sendStatus.value = t('app.status.reverting');
+    setSendStatusKey('app.status.reverting');
     await openCodeApi.revertSession({
       sessionId: payload.sessionId,
       messageId: payload.messageId,
       projectId: selectedProjectId.value,
       directory: activeDirectory.value.trim() || undefined,
     });
-    sendStatus.value = t('app.status.reverted');
+    setSendStatusKey('app.status.reverted');
     if (selectedSessionId.value === payload.sessionId) void reloadSelectedSessionState();
   } catch (error) {
     sessionError.value = t('app.error.sessionRevertFailed', { message: toErrorMessage(error) });
@@ -3199,13 +3229,13 @@ async function handleUndoRevert() {
   if (!ensureConnectionReady(t('app.actions.undo'))) return;
   sessionError.value = '';
   try {
-    sendStatus.value = t('app.status.undoing');
+    setSendStatusKey('app.status.undoing');
     await openCodeApi.unrevertSession({
       sessionId,
       projectId: selectedProjectId.value,
       directory: activeDirectory.value.trim() || undefined,
     });
-    sendStatus.value = t('app.status.undone');
+    setSendStatusKey('app.status.undone');
   } catch (error) {
     sessionError.value = t('app.error.sessionUndoFailed', { message: toErrorMessage(error) });
   }
@@ -4504,7 +4534,7 @@ async function sendMessage() {
       ? filteredSessions.value.find((session) => session.id === fallbackId)
       : filteredSessions.value[0];
     if (!fallback) {
-      sendStatus.value = t('app.error.noSessionSelected');
+      setSendStatusKey('app.error.noSessionSelected');
       return;
     }
     selectedSessionId.value = fallback.id;
@@ -4523,23 +4553,23 @@ async function sendMessage() {
   messageInput.value = '';
   enableFollow();
   isSending.value = true;
-    sendStatus.value = t('app.status.sending');
+  setSendStatusKey('app.status.sending');
   try {
     if (slash && slash.name.toLowerCase() === 'shell') {
       await openShellFromInput(slash.arguments ?? '');
-      sendStatus.value = t('app.status.shellReady');
+      setSendStatusKey('app.status.shellReady');
       clearComposerDraftForCurrentContext();
       return;
     }
     if (slash && slash.name.toLowerCase() === 'debug') {
       const debugResult = runDebugCommand(slash.arguments ?? '');
-      sendStatus.value = debugResult.message;
+      setSendStatusText(debugResult.message);
       clearComposerDraftForCurrentContext();
       return;
     }
     if (slash && commandMatch) {
       await sendCommand(sessionId, commandMatch, slash.arguments ?? '');
-      sendStatus.value = t('app.status.sent');
+      setSendStatusKey('app.status.sent');
       clearComposerDraftForCurrentContext();
       return;
     }
@@ -4572,11 +4602,11 @@ async function sendMessage() {
       variant: selectedThinking.value,
       parts,
     });
-    sendStatus.value = t('app.status.sent');
+    setSendStatusKey('app.status.sent');
     attachments.value = [];
     clearComposerDraftForCurrentContext();
   } catch (error) {
-    sendStatus.value = t('app.error.sendFailed', { message: toErrorMessage(error) });
+    setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
   } finally {
     isSending.value = false;
   }
@@ -4754,7 +4784,7 @@ async function abortSession() {
   const sessionId = selectedSessionId.value;
   if (!sessionId || isAborting.value) return;
   isAborting.value = true;
-    sendStatus.value = t('app.status.stopping');
+  setSendStatusKey('app.status.stopping');
   try {
     const directory = activeDirectory.value.trim();
     const busyDescendants = busyDescendantSessionIds.value;
@@ -4765,9 +4795,9 @@ async function abortSession() {
       ),
     ];
     await Promise.all(abortPromises);
-    sendStatus.value = t('app.status.stopped');
+    setSendStatusKey('app.status.stopped');
   } catch (error) {
-    sendStatus.value = t('app.error.stopFailed', { message: toErrorMessage(error) });
+    setSendStatusKey('app.error.stopFailed', { message: toErrorMessage(error) });
   } finally {
     isAborting.value = false;
   }
@@ -6346,7 +6376,7 @@ onMounted(() => {
       if (connectionState.value === 'reconnecting' || connectionState.value === 'error') {
         connectionState.value = 'ready';
         reconnectingMessage.value = '';
-        sendStatus.value = t('app.connection.connected');
+        setSendStatusKey('app.connection.connected');
       }
       if (bootstrapReady.value) {
         syncActiveSelectionToWorker();
@@ -6358,7 +6388,7 @@ onMounted(() => {
     ge.on('connection.reconnected', () => {
       connectionState.value = 'ready';
       reconnectingMessage.value = '';
-      sendStatus.value = t('app.connection.connected');
+      setSendStatusKey('app.connection.connected');
       syncActiveSelectionToWorker();
       void fetchProviders(true);
     }),

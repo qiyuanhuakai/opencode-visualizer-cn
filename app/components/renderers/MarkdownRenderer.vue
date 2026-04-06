@@ -142,7 +142,16 @@ watch(
 );
 
 watch(
-  () => [props.code, props.lang, props.theme, props.files],
+  () => [
+    props.code,
+    props.lang,
+    props.theme,
+    props.files,
+    props.copyButtonLabel,
+    props.copiedLabel,
+    props.copyCodeAriaLabel,
+    props.copyMarkdownAriaLabel,
+  ],
   () => {
     if (props.html != null) return;
     startRender();
@@ -424,18 +433,30 @@ onBeforeUnmount(() => {
 
 .message-content :deep(.markdown-host .md-copy-btn) {
   position: absolute;
-  top: 0.75em;
-  right: 0.75em;
-  border: 1px solid rgba(148, 163, 184, 0.36);
-  border-radius: 5px;
-  background: rgba(15, 23, 42, 0.86);
-  color: #94a3b8;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  padding: 0.18em 0.5em;
+  top: 8px;
+  right: 8px;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  height: var(--ui-chip-height);
+  border: 1px solid var(--ui-chip-border-neutral);
+  border-radius: var(--ui-chip-radius);
+  background: var(--ui-chip-bg-neutral);
+  color: var(--ui-chip-fg-neutral);
+  font-family: var(--ui-chip-font-family);
+  font-size: var(--ui-chip-font-size);
+  font-weight: 600;
+  letter-spacing: var(--ui-chip-letter-spacing);
+  line-height: 1;
+  padding: 0 var(--ui-chip-padding-x);
+  margin: 0;
+  white-space: nowrap;
   opacity: 0;
   cursor: pointer;
+  vertical-align: top;
   transition:
     opacity 0.15s ease,
     color 0.15s ease,
@@ -463,24 +484,35 @@ onBeforeUnmount(() => {
 
 .message-content :deep(.markdown-host .md-copy-btn:hover) {
   color: #e2e8f0;
-  border-color: rgba(148, 163, 184, 0.6);
-  background: rgba(30, 41, 59, 0.92);
+  border-color: rgba(148, 163, 184, 0.72);
+  background: var(--ui-chip-bg-hover);
 }
 
 .message-content :deep(.markdown-host .md-copied-indicator) {
   position: absolute;
-  top: 0.75em;
-  right: 0.75em;
+  top: 8px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  height: var(--ui-chip-height);
   border: 1px solid rgba(34, 197, 94, 0.55);
-  border-radius: 5px;
-  background: rgba(15, 23, 42, 0.86);
+  border-radius: var(--ui-chip-radius);
+  background: var(--ui-chip-bg-neutral);
   color: #22c55e;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  padding: 0.18em 0.5em;
+  font-family: var(--ui-chip-font-family);
+  font-size: var(--ui-chip-font-size);
+  font-weight: 600;
+  letter-spacing: var(--ui-chip-letter-spacing);
+  line-height: 1;
+  padding: 0 var(--ui-chip-padding-x);
+  margin: 0;
+  white-space: nowrap;
   opacity: 0;
   pointer-events: none;
+  vertical-align: top;
   transition: opacity 0.15s ease;
 }
 
@@ -494,8 +526,8 @@ onBeforeUnmount(() => {
 
 .message-content :deep(.markdown-host > .md-copy-btn),
 .message-content :deep(.markdown-host > .md-copied-indicator) {
-  top: -0.5rem;
-  right: 0;
+  top: -4px;
+  right: 7px;
   z-index: 2;
 }
 
@@ -503,8 +535,8 @@ onBeforeUnmount(() => {
 .message-viewer.message-viewer-context-user
   .message-content
   :deep(.markdown-host > .md-copied-indicator) {
-  top: -6px;
-  right: -4px;
+  top: -2px;
+  right: -2px;
 }
 
 .message-viewer.message-viewer-context-assistant

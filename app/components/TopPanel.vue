@@ -282,47 +282,51 @@
                             </span>
                           </div>
                         </div>
-                        <button
-                          v-if="!session.archivedAt"
-                          type="button"
-                          class="tree-action-button session-pin"
-                          :class="session.pinnedAt ? 'pinned' : 'pin'"
-                          :title="session.pinnedAt ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
-                          @click.stop.prevent="handleSessionPinToggle(session.id, session.pinnedAt)"
-                        >
-                          <Icon
-                            :icon="session.pinnedAt ? 'lucide:pin-off' : 'lucide:pin'"
-                            :width="16"
-                            :height="16"
-                          />
-                        </button>
-                        <button
-                          v-else
-                          type="button"
-                          class="tree-action-button session-unarchive"
-                          :title="$t('topPanel.sessionActions.unarchive')"
-                          @click.stop.prevent="handleSessionUnarchive(session.id)"
-                        >
-                          <Icon icon="lucide:archive-restore" :width="16" :height="16" />
-                        </button>
-                        <button
-                          v-if="!session.archivedAt"
-                          type="button"
-                          class="tree-action-button session-del"
-                          :class="isShiftPressed ? 'danger' : 'archive'"
-                          :title="
-                            isShiftPressed
-                              ? $t('topPanel.sessionActions.deletePermanently')
-                              : $t('topPanel.sessionActions.archive')
-                          "
-                          @click.stop.prevent="handleSessionAction(session.id, close)"
-                        >
-                          <Icon
-                            :icon="isShiftPressed ? 'lucide:trash-2' : 'lucide:archive'"
-                            :width="16"
-                            :height="16"
-                          />
-                        </button>
+                        <template #action>
+                          <div class="tree-session-actions">
+                            <button
+                              v-if="!session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-pin"
+                              :class="session.pinnedAt ? 'pinned' : 'pin'"
+                              :title="session.pinnedAt ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
+                              @click.stop.prevent="handleSessionPinToggle(session.id, session.pinnedAt)"
+                            >
+                              <Icon
+                                :icon="session.pinnedAt ? 'lucide:pin-off' : 'lucide:pin'"
+                                :width="16"
+                                :height="16"
+                              />
+                            </button>
+                            <button
+                              v-else
+                              type="button"
+                              class="tree-action-button session-unarchive"
+                              :title="$t('topPanel.sessionActions.unarchive')"
+                              @click.stop.prevent="handleSessionUnarchive(session.id)"
+                            >
+                              <Icon icon="lucide:archive-restore" :width="16" :height="16" />
+                            </button>
+                            <button
+                              v-if="!session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-del"
+                              :class="isShiftPressed ? 'danger' : 'archive'"
+                              :title="
+                                isShiftPressed
+                                  ? $t('topPanel.sessionActions.deletePermanently')
+                                  : $t('topPanel.sessionActions.archive')
+                              "
+                              @click.stop.prevent="handleSessionAction(session.id, close)"
+                            >
+                              <Icon
+                                :icon="isShiftPressed ? 'lucide:trash-2' : 'lucide:archive'"
+                                :width="16"
+                                :height="16"
+                              />
+                            </button>
+                          </div>
+                        </template>
                       </DropdownItem>
                       <div
                         v-else
@@ -1177,7 +1181,7 @@ function handleOpenDirectory(close: () => void) {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--ui-action-gap);
 }
 
 .management-action {
@@ -1284,9 +1288,9 @@ function handleOpenDirectory(close: () => void) {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: var(--ui-action-gap);
   /* Reserve space for new-session + fork + delete buttons so layout doesn't shift when delete is hidden */
-  min-width: calc(24px + 6px + 24px + 6px + 24px);
+  min-width: calc(var(--ui-icon-action-size) * 3 + var(--ui-action-gap) * 2);
 }
 
 .tree-action-button.new-session {
@@ -1298,23 +1302,24 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button {
-  border: 1px solid #334155;
-  border-radius: 6px;
-  background: #111a2c;
+  border: 1px solid var(--ui-icon-action-border);
+  border-radius: var(--ui-icon-action-radius);
+  background: var(--ui-icon-action-bg);
   color: #cbd5e1;
   font-size: 10px;
   line-height: 1;
-  width: 24px;
-  height: 24px;
+  width: var(--ui-icon-action-size);
+  height: var(--ui-icon-action-size);
   padding: 0;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
 }
 
 .tree-action-button:hover {
-  background: #1d2a45;
+  background: var(--ui-icon-action-bg-hover);
 }
 
 .tree-action-button.worktree-settings {
@@ -1497,8 +1502,15 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   justify-content: flex-start;
   column-gap: 8px;
-  row-gap: 1px;
+  row-gap: 2px;
   flex: 1 1 auto;
+}
+
+.tree-session-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-action-gap);
+  flex: 0 0 auto;
 }
 
 .session-status-icon {
@@ -1561,7 +1573,6 @@ function handleOpenDirectory(close: () => void) {
 
 .session-del {
   flex: 0 0 auto;
-  margin-left: auto;
 }
 
 .session-pin {
