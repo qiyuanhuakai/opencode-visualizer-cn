@@ -455,34 +455,22 @@
         >
           <Icon icon="lucide:github" :width="16" :height="16" />
         </a>
-        <Dropdown
-          v-model:open="menuOpen"
-          auto-close
-          :popup-style="{ width: '160px', left: 'auto', right: 'anchor(right)' }"
-          @select="onMenuSelect"
+        <button
+          type="button"
+          class="control-button settings-button"
+          :title="$t('topPanel.settings')"
+          @click="$emit('open-settings')"
         >
-          <template #trigger>
-            <button
-              type="button"
-              class="control-button menu-button"
-              @click.stop="menuOpen = !menuOpen"
-            >
-              <Icon icon="lucide:ellipsis-vertical" :width="16" :height="16" />
-            </button>
-          </template>
-          <DropdownItem value="settings">
-            <span class="menu-item-content">
-              <Icon icon="lucide:settings" :width="14" :height="14" />
-              {{ $t('topPanel.settings') }}
-            </span>
-          </DropdownItem>
-          <DropdownItem value="logout">
-            <span class="menu-item-content">
-              <Icon icon="lucide:log-out" :width="14" :height="14" />
-              {{ $t('topPanel.logout') }}
-            </span>
-          </DropdownItem>
-        </Dropdown>
+          <Icon icon="lucide:settings" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
+          class="control-button logout-button"
+          :title="$t('topPanel.logout')"
+          @click="$emit('logout')"
+        >
+          <Icon icon="lucide:log-out" :width="16" :height="16" />
+        </button>
       </div>
     </div>
   </div>
@@ -591,7 +579,6 @@ const emit = defineEmits<{
   (event: 'dropdown-closed'): void;
 }>();
 
-const menuOpen = ref(false);
 const treeDropdownOpen = ref(false);
 
 watch(treeDropdownOpen, (open) => {
@@ -618,11 +605,6 @@ function toggleSessionDropdown() {
 }
 
 defineExpose({ openSessionDropdown, closeSessionDropdown, toggleSessionDropdown });
-
-function onMenuSelect(value: unknown) {
-  if (value === 'settings') emit('open-settings');
-  else if (value === 'logout') emit('logout');
-}
 
 const MAX_WORKTREES = Infinity;
 const MAX_SANDBOXES = Infinity;
@@ -1103,6 +1085,8 @@ function handleOpenDirectory(close: () => void) {
   flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }
 
 .tree-dropdown-root {
@@ -1773,7 +1757,8 @@ function handleOpenDirectory(close: () => void) {
   color: #e2e8f0;
 }
 
-.menu-button {
+.settings-button,
+.logout-button {
   width: 32px;
   height: 32px;
   flex-shrink: 0;
@@ -1784,15 +1769,9 @@ function handleOpenDirectory(close: () => void) {
   color: #94a3b8;
 }
 
-.menu-button:hover {
+.settings-button:hover,
+.logout-button:hover {
   background: transparent;
-  color: #e2e8f0;
-}
-
-.menu-item-content {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   color: #e2e8f0;
 }
 </style>
