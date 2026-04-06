@@ -5,6 +5,11 @@
 This repository is a fork of [the upstream repository](https://github.com/xenodrive/vis). Since the upstream does not accept pull requests, I have maintained it as an independent project and implemented several enhancements and localization features, including:
 
 - 支持i18n，添加新语言：简体中文
+- 添加字体管理功能（beta）
+  - 允许设置shell字体
+  - 允许设置界面等宽字体
+  - 实现了系统字体自动发现功能（依赖于浏览器）
+  - 实现了字体命中情况确认功能
 - 添加session pin功能，在侧栏中增加了session栏，允许把常用session pin在侧边
 - 添加批量管理功能，在顶栏增加了management按钮，实现多选session操作（注：多选pin操作目前有问题，点一次只能pin一个）
 - 添加取消归档功能，允许找回已经被归档的session
@@ -18,6 +23,11 @@ This repository is a fork of [the upstream repository](https://github.com/xenodr
 - 清理了一些冗余代码
 
 - Added i18n support with Simplified Chinese
+- Add font management feature (beta)
+  - Allow setting shell font
+  - Allow setting monospace font for interface
+  - Implemented system font auto-discovery feature (browser-dependent)
+  - Implemented font hit confirmation feature
 - Introduced session pinning functionality by adding a sessions panel in the sidebar to allow pinning frequently used sessions
 - Implemented batch management via a new "Management" button in the top bar for multi-select operations on sessions (note: multi-select pinning currently has an issue—only one session can be pinned per click)
 - Added an unarchive feature to restore previously archived sessions
