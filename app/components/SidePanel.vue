@@ -91,6 +91,7 @@
         :branch-entries="treeBranchEntries"
         :branch-list-loading="treeBranchListLoading"
         :run-shell-command="runShellCommand"
+        :ensure-branch-entries-loaded="ensureBranchEntriesLoaded"
         @toggle-dir="(path) => emit('toggle-dir', path)"
         @select-file="(path) => emit('select-file', path)"
         @open-diff="(payload) => emit('open-diff', payload)"
@@ -156,6 +157,7 @@ const props = defineProps<{
   treeBranchEntries?: BranchEntry[];
   treeBranchListLoading?: boolean;
   runShellCommand?: (command: string) => Promise<void>;
+  ensureBranchEntriesLoaded?: () => Promise<void>;
 }>();
 
 const emit = defineEmits<{
@@ -199,6 +201,7 @@ const {
   treeBranchEntries,
   treeBranchListLoading,
   runShellCommand,
+  ensureBranchEntriesLoaded,
 } = toRefs(props);
 </script>
 
