@@ -11,7 +11,7 @@ This repository is a fork of [the upstream repository](https://github.com/xenodr
   - 实现了系统字体自动发现功能（依赖于浏览器）
   - 实现了字体命中情况确认功能
 - 添加session pin功能，在侧栏中增加了session栏，允许把常用session pin在侧边
-- 添加批量管理功能，在顶栏增加了management按钮，实现多选session操作（注：多选pin操作目前有问题，点一次只能pin一个）
+- 添加批量管理功能，在顶栏增加了management按钮，实现多选session操作
 - 添加取消归档功能，允许找回已经被归档的session
 - 添加全面覆盖的关闭和最小化按钮，允许手动隐藏和最小化所有悬浮窗（也允许关闭最小化功能）
 - 添加底部dock栏以存放最小化后的悬浮窗
@@ -29,7 +29,7 @@ This repository is a fork of [the upstream repository](https://github.com/xenodr
   - Implemented system font auto-discovery feature (browser-dependent)
   - Implemented font hit confirmation feature
 - Introduced session pinning functionality by adding a sessions panel in the sidebar to allow pinning frequently used sessions
-- Implemented batch management via a new "Management" button in the top bar for multi-select operations on sessions (note: multi-select pinning currently has an issue—only one session can be pinned per click)
+- Implemented batch management via a new "Management" button in the top bar for multi-select operations on sessions 
 - Added an unarchive feature to restore previously archived sessions
 - Included comprehensive minimize and close buttons for all floating windows, enabling manual hiding and minimizing of all popups (with the option to disable auto-minimize behavior)
 - Added a bottom dock bar to store minimized floating windows
