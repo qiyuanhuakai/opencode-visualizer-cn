@@ -16,6 +16,27 @@
   --color-warning-300: #fef08a;
 }
 
+:root {
+  --ui-chip-height: 22px;
+  --ui-chip-radius: 6px;
+  --ui-chip-padding-x: 8px;
+  --ui-chip-font-size: 10px;
+  --ui-chip-font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Monaco,
+    Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --ui-chip-letter-spacing: 0.02em;
+  --ui-chip-border-neutral: rgba(148, 163, 184, 0.65);
+  --ui-chip-border-subtle: rgba(148, 163, 184, 0.5);
+  --ui-chip-bg-neutral: rgba(15, 23, 42, 0.75);
+  --ui-chip-bg-hover: rgba(30, 41, 59, 0.92);
+  --ui-chip-fg-neutral: #bfdbfe;
+  --ui-action-gap: 8px;
+  --ui-icon-action-size: 24px;
+  --ui-icon-action-radius: 6px;
+  --ui-icon-action-border: #334155;
+  --ui-icon-action-bg: #111a2c;
+  --ui-icon-action-bg-hover: #1d2a45;
+}
+
 /* ── Unified scrollbar ── */
 *,
 *::before,
