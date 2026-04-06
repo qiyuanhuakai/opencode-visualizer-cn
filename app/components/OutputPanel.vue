@@ -380,7 +380,7 @@ defineExpose({ panelEl });
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
   display: flex;
   flex-direction: column;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--app-monospace-font-family);
   font-size: 13px;
 }
 

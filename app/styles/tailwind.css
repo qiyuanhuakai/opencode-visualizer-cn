@@ -3,9 +3,7 @@
 @source "../**/*.{vue,ts}";
 
 @theme {
-  --font-sans:
-    'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Monaco, Consolas,
-    'Liberation Mono', 'Courier New', monospace;
+  --font-sans: var(--app-monospace-font-family);
   --color-surface-900: #0f172a;
   --color-surface-800: #1e293b;
   --color-surface-700: #334155;
@@ -17,12 +15,14 @@
 }
 
 :root {
+  --app-monospace-font-family:
+    'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
+    Consolas, 'Liberation Mono', 'Courier New', monospace;
   --ui-chip-height: 22px;
   --ui-chip-radius: 6px;
   --ui-chip-padding-x: 8px;
   --ui-chip-font-size: 10px;
-  --ui-chip-font-family: 'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, Menlo, Monaco,
-    Consolas, 'Liberation Mono', 'Courier New', monospace;
+  --ui-chip-font-family: var(--app-monospace-font-family);
   --ui-chip-letter-spacing: 0.02em;
   --ui-chip-border-neutral: rgba(148, 163, 184, 0.65);
   --ui-chip-border-subtle: rgba(148, 163, 184, 0.5);

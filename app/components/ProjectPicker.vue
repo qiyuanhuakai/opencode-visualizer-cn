@@ -547,7 +547,7 @@ function cleanDirectoryPath(p: string): string {
   border-radius: 12px;
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
   color: #e2e8f0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--app-monospace-font-family);
 }
 
 .picker-dropdown {

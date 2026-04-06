@@ -404,7 +404,7 @@ onBeforeUnmount(() => {
 .message-content :deep(.markdown-host code:not(pre code)) {
   display: inline;
   white-space: pre-wrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  font-family: var(--app-monospace-font-family);
   font-size: 0.95em;
   color: #79b8ff;
 }
