@@ -465,6 +465,14 @@
         </button>
         <button
           type="button"
+          class="control-button provider-manager-button"
+          :title="$t('topPanel.providerManager')"
+          @click="$emit('open-provider-manager')"
+        >
+          <Icon icon="lucide:plug-zap" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
           class="control-button logout-button"
           :title="$t('topPanel.logout')"
           @click="$emit('logout')"
@@ -575,6 +583,7 @@ const emit = defineEmits<{
   (event: 'open-shell'): void;
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
+  (event: 'open-provider-manager'): void;
   (event: 'logout'): void;
   (event: 'dropdown-closed'): void;
 }>();
@@ -971,7 +980,9 @@ function toggleSelectAllVisible() {
     return;
   }
   const selected = new Set(managedSessionKeys.value);
-  visibleSessionKeys.value.forEach((key) => selected.add(key));
+  visibleSessionKeys.value.forEach((key) => {
+    selected.add(key);
+  });
   managedSessionKeys.value = Array.from(selected);
 }
 
@@ -1758,6 +1769,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .settings-button,
+.provider-manager-button,
 .logout-button {
   width: 32px;
   height: 32px;
@@ -1770,6 +1782,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .settings-button:hover,
+.provider-manager-button:hover,
 .logout-button:hover {
   background: transparent;
   color: #e2e8f0;

@@ -111,6 +111,16 @@ export function getPathInfo(options?: RequestOptions) {
   return getJson('/path', undefined, options) as Promise<Record<string, string>>;
 }
 
+export function getGlobalConfig() {
+  return getJson('/global/config') as Promise<unknown>;
+}
+
+export function updateGlobalConfig(payload: Record<string, unknown>) {
+  return sendJson('/global/config', 'PATCH', {
+    body: payload,
+  }) as Promise<unknown>;
+}
+
 export function listFiles(payload: { directory: string; path?: string }, options?: RequestOptions) {
   return getJson(
     '/file',
@@ -264,7 +274,46 @@ export function unrevertSession(sessionId: string, directory?: string) {
 }
 
 export function listProviders() {
-  return getJson('/config/providers') as Promise<unknown>;
+  return getJson('/provider') as Promise<unknown>;
+}
+
+export function listProviderAuthMethods(directory?: string) {
+  return getJson('/provider/auth', { directory }) as Promise<unknown>;
+}
+
+export function authorizeProviderOAuth(
+  providerId: string,
+  payload: { method: number; directory?: string },
+) {
+  return sendJson(`/provider/${providerId}/oauth/authorize`, 'POST', {
+    params: { directory: payload.directory },
+    body: { method: payload.method },
+  }) as Promise<unknown>;
+}
+
+export function completeProviderOAuth(
+  providerId: string,
+  payload: { method: number; code?: string; directory?: string },
+) {
+  return sendJson(`/provider/${providerId}/oauth/callback`, 'POST', {
+    params: { directory: payload.directory },
+    body: {
+      method: payload.method,
+      code: payload.code,
+    },
+  }) as Promise<unknown>;
+}
+
+export function setProviderAuth(providerId: string, payload: Record<string, unknown>) {
+  return sendJson(`/auth/${providerId}`, 'PUT', {
+    body: payload,
+  }) as Promise<unknown>;
+}
+
+export function deleteProviderAuth(providerId: string) {
+  return sendJson(`/auth/${providerId}`, 'DELETE', {
+    body: {},
+  }) as Promise<unknown>;
 }
 
 export function listAgents() {
