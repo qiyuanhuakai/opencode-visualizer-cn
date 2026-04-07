@@ -220,8 +220,59 @@ export interface LocaleMessages {
     };
     openProject: string;
     settings: string;
+    providerManager: string;
     logout: string;
     github: string;
+  };
+  providerManager: {
+    title: string;
+    close: string;
+    tabs: {
+      providers: string;
+      models: string;
+    };
+    badges: {
+      disconnected: string;
+      enabled: string;
+      disabled: string;
+      recommended: string;
+    };
+    sections: {
+      connected: string;
+      connectedDescription: string;
+      connectedEmpty: string;
+      popular: string;
+      popularDescription: string;
+      popularEmpty: string;
+      allProviders: string;
+      allProvidersDescription: string;
+    };
+    providerStats: {
+      models: string;
+      enabledModels: string;
+    };
+    authMethodsLabel: string;
+    actions: {
+      available: string;
+      connect: string;
+      disconnect: string;
+      useModel: string;
+      enabled: string;
+      disabled: string;
+    };
+    models: {
+      searchPlaceholder: string;
+      total: string;
+      disabledCount: string;
+      empty: string;
+      context: string;
+      output: string;
+      capabilities: {
+        attachment: string;
+        reasoning: string;
+        toolcall: string;
+      };
+    };
   };
   sidePanel: {
     tabs: {

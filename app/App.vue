@@ -26,6 +26,7 @@
           @open-directory="openProjectPicker"
           @edit-project="handleEditProject"
           @open-settings="isSettingsOpen = true"
+          @open-provider-manager="isProviderManagerOpen = true"
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
@@ -139,7 +140,7 @@
               :has-agent-options="hasAgentOptions"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
-              :model-options="modelOptions"
+              :model-options="availableModelOptions"
               :thinking-options="thinkingOptions"
               :has-model-options="hasModelOptions"
               :has-thinking-options="hasThinkingOptions"
@@ -297,6 +298,19 @@
       @select="handleProjectDirectorySelect"
     />
     <SettingsModal :open="isSettingsOpen" @close="isSettingsOpen = false" />
+    <ProviderManagerModal
+      :open="isProviderManagerOpen"
+      :providers="providers"
+      :connected-provider-ids="connectedProviderIds"
+      :selected-model="selectedModel"
+      :hidden-models="hiddenModels"
+      :provider-config="providerConfig"
+      @close="isProviderManagerOpen = false"
+      @select-model="handleSelectedModelUpdate"
+      @update:model-visibility="handleModelVisibilityUpdate"
+      @config-updated="handleProviderConfigUpdated"
+      @providers-changed="handleProvidersChanged"
+    />
     <ProjectSettingsDialog
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
@@ -343,6 +357,7 @@ import TopPanel, {
   type TopPanelNotificationSession,
   type TopPanelWorktree,
 } from './components/TopPanel.vue';
+import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
@@ -944,6 +959,8 @@ type ProviderModel = {
   id: string;
   name?: string;
   providerID?: string;
+  family?: string;
+  status?: string;
   variants?: Record<string, unknown>;
   limit?: {
     context?: number;
@@ -952,19 +969,44 @@ type ProviderModel = {
   };
   capabilities?: {
     attachment?: boolean;
+    reasoning?: boolean;
+    toolcall?: boolean;
   };
 };
 
 type ProviderInfo = {
   id: string;
   name?: string;
+  source?: string;
+  key?: string;
   models?: Record<string, ProviderModel>;
 };
 
 type ProviderResponse = {
-  providers?: ProviderInfo[];
+  all?: ProviderInfo[];
   default?: Record<string, string>;
+  connected?: string[];
 };
+
+type ProviderConfigState = {
+  enabled_providers?: string[];
+  disabled_providers?: string[];
+};
+
+type ModelVisibilityEntry = {
+  providerID: string;
+  modelID: string;
+  visibility: 'show' | 'hide';
+};
+
+type ModelVisibilityStore = {
+  user: ModelVisibilityEntry[];
+  recent: string[];
+  variant: Record<string, string>;
+};
+
+const MODEL_VISIBILITY_STORAGE_KEY = 'opencode.global.dat:model';
+const LEGACY_DISABLED_MODELS_STORAGE_KEY = 'opencode.settings.disabledModels.v1';
 
 type AgentInfo = {
   name: string;
@@ -990,6 +1032,7 @@ type CommandInfo = {
 };
 
 const providers = ref<ProviderInfo[]>([]);
+const connectedProviderIds = ref<string[]>([]);
 const agents = ref<AgentInfo[]>([]);
 const commands = ref<CommandInfo[]>([]);
 const modelOptions = ref<
@@ -1166,9 +1209,12 @@ const editingProjectMeta = computed(() => {
   return pid ? serverState.projects[pid] : undefined;
 });
 const isSettingsOpen = ref(false);
+const isProviderManagerOpen = ref(false);
 const selectedMode = ref('build');
 const selectedModel = ref('');
 const selectedThinking = ref<string | undefined>(undefined);
+const hiddenModels = ref<string[]>(readHiddenModelsFromStorage());
+const providerConfig = ref<ProviderConfigState | null>(null);
 const projectError = ref('');
 const worktreeError = ref('');
 const sessionError = ref('');
@@ -1624,7 +1670,23 @@ const canAbort = computed(() =>
   ),
 );
 const hasAgentOptions = computed(() => agentOptions.value.length > 0);
-const hasModelOptions = computed(() => modelOptions.value.length > 0);
+function isProviderConnected(providerId: string) {
+  return connectedProviderIds.value.includes(providerId);
+}
+
+const availableModelOptions = computed(() =>
+  modelOptions.value.filter(
+    (model) => {
+      const providerId = model.providerID?.trim() ?? '';
+      return (
+        isProviderConnected(providerId) &&
+        isProviderEnabled(providerId) &&
+        isModelAvailable(model.id)
+      );
+    },
+  ),
+);
+const hasModelOptions = computed(() => availableModelOptions.value.length > 0);
 const hasThinkingOptions = computed(() => thinkingOptions.value.length > 0);
 
 // Subagent options for @ invocation (includes subagents only, no hidden agents)
@@ -1642,7 +1704,7 @@ const subagentOptions = computed(() => {
     }));
 });
 const canAttach = computed(() => {
-  const selected = modelOptions.value.find((m) => m.id === selectedModel.value);
+  const selected = availableModelOptions.value.find((m) => m.id === selectedModel.value);
   return selected?.attachmentCapable !== false;
 });
 const commandOptions = computed(() => {
@@ -1809,6 +1871,138 @@ function parseProviderModelKey(value: string) {
   const modelID = normalized.slice(slashIndex + 1).trim();
   if (!providerID || !modelID) return { providerID: '', modelID: '' };
   return { providerID, modelID };
+}
+
+function normalizeIdList(values?: string[]) {
+  return Array.isArray(values)
+    ? values.map((value) => value.trim()).filter((value) => value.length > 0)
+    : [];
+}
+
+function createEmptyModelVisibilityStore(): ModelVisibilityStore {
+  return {
+    user: [],
+    recent: [],
+    variant: {},
+  };
+}
+
+function parseModelVisibilityStore(raw: string | null): ModelVisibilityStore {
+  if (!raw) return createEmptyModelVisibilityStore();
+  try {
+    const parsed = JSON.parse(raw) as Partial<ModelVisibilityStore>;
+    return {
+      user: Array.isArray(parsed.user)
+        ? parsed.user.filter(
+            (entry): entry is ModelVisibilityEntry =>
+              Boolean(entry?.providerID && entry?.modelID) &&
+              (entry.visibility === 'show' || entry.visibility === 'hide'),
+          )
+        : [],
+      recent: Array.isArray(parsed.recent) ? parsed.recent.filter((value): value is string => typeof value === 'string') : [],
+      variant:
+        parsed.variant && typeof parsed.variant === 'object' && !Array.isArray(parsed.variant)
+          ? Object.fromEntries(
+              Object.entries(parsed.variant).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+            )
+          : {},
+    };
+  } catch {
+    return createEmptyModelVisibilityStore();
+  }
+}
+
+function modelVisibilityKey(providerID: string, modelID: string) {
+  return `${providerID}/${modelID}`;
+}
+
+function readHiddenModelsFromStorage() {
+  if (typeof window === 'undefined') return [];
+  const currentStore = parseModelVisibilityStore(window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY));
+  const currentHidden = currentStore.user
+    .filter((entry) => entry.visibility === 'hide')
+    .map((entry) => modelVisibilityKey(entry.providerID, entry.modelID));
+  if (currentHidden.length > 0) return Array.from(new Set(currentHidden)).sort();
+  const legacyRaw = window.localStorage.getItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
+  if (!legacyRaw) return [];
+  try {
+    const legacy = JSON.parse(legacyRaw) as string[];
+    return Array.isArray(legacy) ? [...new Set(legacy.filter((value): value is string => typeof value === 'string'))].sort() : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
+  if (typeof window === 'undefined') return;
+  const store = parseModelVisibilityStore(window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY));
+  const hiddenSet = new Set(nextHiddenModels);
+  const preservedUser = store.user.filter(
+    (entry) => !hiddenSet.has(modelVisibilityKey(entry.providerID, entry.modelID)),
+  );
+  const nextUser = [
+    ...preservedUser,
+    ...Array.from(hiddenSet)
+      .sort()
+      .map((key) => {
+        const { providerID, modelID } = parseProviderModelKey(key);
+        return providerID && modelID ? { providerID, modelID, visibility: 'hide' as const } : null;
+      })
+      .filter(
+        (entry): entry is { providerID: string; modelID: string; visibility: 'hide' } => Boolean(entry),
+      ),
+  ];
+  window.localStorage.setItem(
+    MODEL_VISIBILITY_STORAGE_KEY,
+    JSON.stringify({
+      ...store,
+      user: nextUser,
+    }),
+  );
+  window.localStorage.removeItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
+}
+
+function isModelAvailable(modelId: string) {
+  return !hiddenModels.value.includes(modelId);
+}
+
+function isProviderEnabled(providerId: string) {
+  if (!providerId) return true;
+  const enabled = normalizeIdList(providerConfig.value?.enabled_providers);
+  const disabled = new Set(normalizeIdList(providerConfig.value?.disabled_providers));
+  if (enabled.length > 0) {
+    return enabled.includes(providerId) && !disabled.has(providerId);
+  }
+  return !disabled.has(providerId);
+}
+
+function getFirstAvailableModelId() {
+  return modelOptions.value.find(
+    (model) => {
+      const providerId = model.providerID?.trim() ?? '';
+      return (
+        isProviderConnected(providerId) &&
+        isProviderEnabled(providerId) &&
+        isModelAvailable(model.id)
+      );
+    },
+  )?.id;
+}
+
+function ensureSelectedModelAvailable() {
+  if (modelOptions.value.length === 0) return;
+  const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
+  const selectedProviderId =
+    selectedInfo?.providerID?.trim() ?? parseProviderModelKey(selectedModel.value).providerID;
+  if (
+    selectedInfo &&
+    isModelAvailable(selectedInfo.id) &&
+    isProviderConnected(selectedProviderId) &&
+    isProviderEnabled(selectedProviderId)
+  ) {
+    return;
+  }
+  selectedModel.value = getFirstAvailableModelId() ?? '';
 }
 
 function applyModelVariantSelection(model: string | undefined, variant: string | undefined) {
@@ -2178,7 +2372,7 @@ function applyComposerDraftToComposerState(draft: ComposerDraft, contextKey: str
   }
 
   const modelToApply =
-    draft.model && modelOptions.value.some((model) => model.id === draft.model)
+    draft.model && availableModelOptions.value.some((model) => model.id === draft.model)
       ? draft.model
       : undefined;
   applyModelVariantSelection(modelToApply, draft.variant);
@@ -2233,7 +2427,7 @@ function applyAgentDefaults(agentName: string) {
     const match = modelOptions.value.find(
       (m) => m.modelID === defaultModel.modelID && m.providerID === defaultModel.providerID,
     );
-    if (match) {
+    if (match && availableModelOptions.value.some((option) => option.id === match.id)) {
       applyModelVariantSelection(match.id, agent?.variant);
     }
   }
@@ -2255,14 +2449,14 @@ function resolveDefaultAgentModel(): { agent: string; model: string; variant: st
     const defaults = providers_data.length > 0 ? ((providers_data[0] as any)?.default ?? {}) : {};
     const preferredModelId = Object.entries(defaults)
       .map(([providerID, modelID]) => {
-        const match = modelOptions.value.find(
+        const match = availableModelOptions.value.find(
           (m) => m.providerID === providerID && m.modelID === modelID,
         );
         return match?.id;
       })
       .find((id) => Boolean(id));
 
-    selectedModel.value = preferredModelId || modelOptions.value[0]?.id || '';
+    selectedModel.value = preferredModelId || availableModelOptions.value[0]?.id || '';
   }
 
   return {
@@ -2294,10 +2488,52 @@ function handleApplyHistoryEntry(entry: {
 }
 
 function handleSelectedModelUpdate(value: string) {
+  if (value && !availableModelOptions.value.some((option) => option.id === value)) return;
   selectedModel.value = value;
   nextTick(() => {
     persistComposerDraftForCurrentContext();
   });
+}
+
+function handleModelVisibilityUpdate(next: ModelVisibilityEntry[]) {
+  hiddenModels.value = next
+    .filter((entry) => entry.visibility === 'hide')
+    .map((entry) => modelVisibilityKey(entry.providerID, entry.modelID))
+    .sort();
+  ensureSelectedModelAvailable();
+  nextTick(() => {
+    persistComposerDraftForCurrentContext();
+  });
+}
+
+function handleProviderConfigUpdated(next: ProviderConfigState) {
+  providerConfig.value = next ?? null;
+  ensureSelectedModelAvailable();
+}
+
+async function fetchGlobalProviderConfig() {
+  try {
+    const data = (await opencodeApi.getGlobalConfig()) as ProviderConfigState;
+    providerConfig.value = data ?? null;
+  } catch (error) {
+    log('Provider config load failed', error);
+  }
+}
+
+async function handleProvidersChanged() {
+  await Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
+  ensureSelectedModelAvailable();
+}
+
+function handleModelVisibilityStorage(event: StorageEvent) {
+  if (event.storageArea !== window.localStorage) return;
+  if (event.key !== MODEL_VISIBILITY_STORAGE_KEY && event.key !== LEGACY_DISABLED_MODELS_STORAGE_KEY) return;
+  try {
+    hiddenModels.value = readHiddenModelsFromStorage();
+    ensureSelectedModelAvailable();
+  } catch {
+    hiddenModels.value = [];
+  }
 }
 
 function handleSelectedThinkingUpdate(value: string | undefined) {
@@ -3363,11 +3599,13 @@ async function bootstrapSelections() {
 async function fetchProviders(force = false) {
   if (providersLoading.value || (!force && providersLoaded.value)) return;
   providersLoading.value = true;
+  if (force) providersLoaded.value = false;
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
     const data = (await opencodeApi.listProviders()) as ProviderResponse;
-    providers.value = Array.isArray(data.providers) ? data.providers : [];
+    providers.value = Array.isArray(data.all) ? data.all : [];
+    connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
       id: string;
       modelID: string;
@@ -3417,10 +3655,11 @@ async function fetchProviders(force = false) {
       const defaults = data.default ?? {};
       const preferredModelId = Object.entries(defaults)
         .map(([providerID, modelID]) => buildProviderModelKey(providerID, modelID))
-        .find((value) => Boolean(value));
-      const firstModel = modelOptions.value[0]?.id;
+        .find((value) => Boolean(value) && isModelAvailable(value) && isProviderEnabled(parseProviderModelKey(value).providerID));
+      const firstModel = getFirstAvailableModelId();
       selectedModel.value = preferredModelId || firstModel || '';
     }
+    ensureSelectedModelAvailable();
     const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
     const nextThinkingOptions = buildThinkingOptions(selectedInfo?.variants);
     const sameThinking =
@@ -4598,6 +4837,11 @@ async function sendMessage() {
   const selectedModelIDs = parseProviderModelKey(selectedModel.value);
   const providerID = selectedInfo?.providerID ?? (selectedModelIDs.providerID || undefined);
   const modelID = selectedInfo?.modelID ?? (selectedModelIDs.modelID || undefined);
+  if (!providerID || !modelID || !isProviderEnabled(providerID) || !isModelAvailable(selectedModel.value)) {
+    ensureSelectedModelAvailable();
+    setSendStatusText('Select an enabled provider/model before sending.');
+    return;
+  }
   if (hasText) {
     recentUserInputs.push({ text, time: Date.now() });
     while (recentUserInputs.length > 20) recentUserInputs.shift();
@@ -5115,6 +5359,10 @@ watch(selectedModel, () => {
   ) {
     selectedThinking.value = nextThinkingOptions[0];
   }
+});
+
+watch(hiddenModels, (value) => {
+  writeHiddenModelsToStorage(value);
 });
 
 watch(activeDirectory, (directory) => {
@@ -6357,7 +6605,7 @@ async function startInitialization() {
     }
     connectionState.value = 'ready';
     uiInitState.value = 'ready';
-    await fetchProviders();
+    await Promise.all([fetchGlobalProviderConfig(), fetchProviders()]);
     await fetchAgents();
   } catch (error) {
     if (!initializationInFlight) return;
@@ -6435,6 +6683,7 @@ onMounted(() => {
   window.addEventListener('resize', handleWindowResize);
   window.addEventListener('storage', handleComposerDraftStorage);
   window.addEventListener('storage', handlePinnedSessionStoreStorage);
+  window.addEventListener('storage', handleModelVisibilityStorage);
   document.addEventListener('visibilitychange', handleWindowAttentionChange);
   window.addEventListener('focus', handleWindowAttentionChange);
   window.addEventListener('blur', handleWindowAttentionChange);
@@ -6458,7 +6707,7 @@ onMounted(() => {
       reconnectingMessage.value = '';
       setSendStatusKey('app.connection.connected');
       syncActiveSelectionToWorker();
-      void fetchProviders(true);
+      void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
     }),
   );
   globalEventUnsubscribers.push(
@@ -6601,6 +6850,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('storage', handleComposerDraftStorage);
   window.removeEventListener('storage', handlePinnedSessionStoreStorage);
+  window.removeEventListener('storage', handleModelVisibilityStorage);
   document.removeEventListener('visibilitychange', handleWindowAttentionChange);
   window.removeEventListener('focus', handleWindowAttentionChange);
   window.removeEventListener('blur', handleWindowAttentionChange);
