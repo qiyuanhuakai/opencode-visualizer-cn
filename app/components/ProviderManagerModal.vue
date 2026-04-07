@@ -395,10 +395,6 @@ const connectedProviders = computed(() =>
   sortedProviders.value.filter((provider) => !isProviderDisconnected(provider)),
 );
 
-const disconnectedProviders = computed(() =>
-  sortedProviders.value.filter((provider) => isProviderDisconnected(provider)),
-);
-
 const allProvidersForView = computed(() =>
   [...props.providers].sort((a, b) => {
     const connectedDelta = Number(connectedProviderIdSet.value.has(b.id)) - Number(connectedProviderIdSet.value.has(a.id));
@@ -529,10 +525,6 @@ function providerAuthSummary(providerId: string) {
 
 function isProviderDisconnected(provider: ProviderInfo) {
   return !connectedProviderIdSet.value.has(provider.id);
-}
-
-function canConnectProvider(provider: ProviderInfo) {
-  return isProviderDisconnected(provider) && providerAuthSummary(provider.id).length > 0;
 }
 
 function canDisconnectProvider(provider: ProviderInfo) {

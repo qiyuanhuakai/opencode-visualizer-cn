@@ -221,8 +221,60 @@ export interface LocaleMessages {
     openProject: string;
     settings: string;
     providerManager: string;
+    statusMonitor: string;
     logout: string;
     github: string;
+  };
+  statusMonitor: {
+    title: string;
+    close: string;
+    refresh: string;
+    refreshing: string;
+    loading: string;
+    error: string;
+    retry: string;
+    empty: string;
+    tabs: {
+      server: string;
+      mcp: string;
+      lsp: string;
+      plugins: string;
+      skills: string;
+    };
+    server: {
+      status: string;
+      healthy: string;
+      unhealthy: string;
+      version: string;
+      noData: string;
+    };
+    mcp: {
+      total: string;
+      connected: string;
+      disabled: string;
+      failed: string;
+      needsAuth: string;
+      needsRegistration: string;
+      noData: string;
+      enable: string;
+      disable: string;
+      toggleFailed: string;
+    };
+    lsp: {
+      total: string;
+      connected: string;
+      error: string;
+      noData: string;
+    };
+    plugins: {
+      total: string;
+      noData: string;
+    };
+    skills: {
+      total: string;
+      noData: string;
+      unsupported: string;
+    };
   };
   providerManager: {
     title: string;

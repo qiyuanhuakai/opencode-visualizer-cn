@@ -25,8 +25,9 @@
           @batch-session-action="handleTopPanelBatchSessionAction"
           @open-directory="openProjectPicker"
           @edit-project="handleEditProject"
-          @open-settings="isSettingsOpen = true"
-          @open-provider-manager="isProviderManagerOpen = true"
+    @open-settings="isSettingsOpen = true"
+    @open-provider-manager="isProviderManagerOpen = true"
+    @open-status-monitor="isStatusMonitorOpen = true"
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
@@ -307,10 +308,10 @@
       :provider-config="providerConfig"
       @close="isProviderManagerOpen = false"
       @select-model="handleSelectedModelUpdate"
-      @update:model-visibility="handleModelVisibilityUpdate"
-      @config-updated="handleProviderConfigUpdated"
-      @providers-changed="handleProvidersChanged"
+      @update-hidden-models="handleModelVisibilityUpdate"
+      @update-provider-config="handleProviderConfigUpdated"
     />
+    <StatusMonitorModal :open="isStatusMonitorOpen" @close="isStatusMonitorOpen = false" />
     <ProjectSettingsDialog
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
@@ -359,6 +360,7 @@ import TopPanel, {
 } from './components/TopPanel.vue';
 import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
+import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
 import DiffViewer from './components/viewers/DiffViewer.vue';
@@ -1210,6 +1212,7 @@ const editingProjectMeta = computed(() => {
 });
 const isSettingsOpen = ref(false);
 const isProviderManagerOpen = ref(false);
+const isStatusMonitorOpen = ref(false);
 const selectedMode = ref('build');
 const selectedModel = ref('');
 const selectedThinking = ref<string | undefined>(undefined);
@@ -2518,11 +2521,6 @@ async function fetchGlobalProviderConfig() {
   } catch (error) {
     log('Provider config load failed', error);
   }
-}
-
-async function handleProvidersChanged() {
-  await Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
-  ensureSelectedModelAvailable();
 }
 
 function handleModelVisibilityStorage(event: StorageEvent) {
