@@ -500,3 +500,36 @@ export function updateProject(
     },
   }) as Promise<unknown>;
 }
+
+export function getGlobalHealth() {
+  return getJson('/global/health') as Promise<{ healthy: boolean; version: string }>;
+}
+
+export function getMcpStatus() {
+  return getJson('/mcp') as Promise<
+    Record<
+      string,
+      | { status: 'connected' }
+      | { status: 'disabled' }
+      | { status: 'failed'; error: string }
+      | { status: 'needs_auth' }
+      | { status: 'needs_client_registration'; error: string }
+    >
+  >;
+}
+
+export function getLspStatus() {
+  return getJson('/lsp') as Promise<
+    Array<{ id: string; name: string; root: string; status: 'connected' | 'error' }>
+  >;
+}
+
+export function updateMcp(payload: { name: string; config: Record<string, unknown> }) {
+  return sendJson('/mcp', 'POST', {
+    body: payload,
+  }) as Promise<Record<string, { status: string; error?: string }>>;
+}
+
+export function getSkillStatus() {
+  return getJson('/skill') as Promise<Array<{ name: string; version?: string }>>;
+}

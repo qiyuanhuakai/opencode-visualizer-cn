@@ -473,6 +473,14 @@
         </button>
         <button
           type="button"
+          class="control-button status-monitor-button"
+          :title="$t('topPanel.statusMonitor')"
+          @click="$emit('open-status-monitor')"
+        >
+          <Icon icon="lucide:activity" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
           class="control-button logout-button"
           :title="$t('topPanel.logout')"
           @click="$emit('logout')"
@@ -584,6 +592,7 @@ const emit = defineEmits<{
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
   (event: 'open-provider-manager'): void;
+  (event: 'open-status-monitor'): void;
   (event: 'logout'): void;
   (event: 'dropdown-closed'): void;
 }>();
@@ -1770,6 +1779,7 @@ function handleOpenDirectory(close: () => void) {
 
 .settings-button,
 .provider-manager-button,
+.status-monitor-button,
 .logout-button {
   width: 32px;
   height: 32px;
@@ -1783,6 +1793,7 @@ function handleOpenDirectory(close: () => void) {
 
 .settings-button:hover,
 .provider-manager-button:hover,
+.status-monitor-button:hover,
 .logout-button:hover {
   background: transparent;
   color: #e2e8f0;
