@@ -10,6 +10,12 @@ This repository is a fork of [the upstream repository](https://github.com/xenodr
   - 允许设置界面等宽字体
   - 实现了系统字体自动发现功能（依赖于浏览器）
   - 实现了字体命中情况确认功能
+- 添加供应商和模型管理功能（beta）
+  - 允许查看现有和全部供应商
+  - 允许查看、启用、禁用现有模型（仅限本地）
+- 添加状态查看功能
+  - 允许查看服务器、mcp、lsp、plugin、skills状态
+  - 允许关闭mcp服务器连接（beta）
 - 添加session pin功能，在侧栏中增加了session栏，允许把常用session pin在侧边
 - 添加批量管理功能，在顶栏增加了management按钮，实现多选session操作
 - 添加取消归档功能，允许找回已经被归档的session
@@ -28,6 +34,12 @@ This repository is a fork of [the upstream repository](https://github.com/xenodr
   - Allow setting monospace font for interface
   - Implemented system font auto-discovery feature (browser-dependent)
   - Implemented font hit confirmation feature
+- Add provider and model management features (beta)
+  - Allow viewing existing and all providers
+  - Allow viewing, enabling, or disabling existing models (local only)
+- Add status monitoring feature
+  - Allow viewing server, MCP, LSP, plugin, and skills statuses
+  - Allow closing MCP server connections (beta)
 - Introduced session pinning functionality by adding a sessions panel in the sidebar to allow pinning frequently used sessions
 - Implemented batch management via a new "Management" button in the top bar for multi-select operations on sessions 
 - Added an unarchive feature to restore previously archived sessions
