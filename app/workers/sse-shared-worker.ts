@@ -140,13 +140,14 @@ function isPermissionRule(value: unknown): boolean {
 function isFileDiff(value: unknown): boolean {
   const record = asRecord(value);
   if (!record) return false;
-  return (
-    Boolean(asString(record.file)) &&
-    typeof record.before === 'string' &&
-    typeof record.after === 'string' &&
-    asNumber(record.additions) !== undefined &&
-    asNumber(record.deletions) !== undefined
-  );
+  const hasFile = Boolean(asString(record.file));
+  const hasAdditions = asNumber(record.additions) !== undefined;
+  const hasDeletions = asNumber(record.deletions) !== undefined;
+  if (!hasFile || !hasAdditions || !hasDeletions) return false;
+  // Support legacy format (before + after) and new format (patch only)
+  const hasLegacyContent = typeof record.before === 'string' && typeof record.after === 'string';
+  const hasPatchContent = typeof record.patch === 'string';
+  return hasLegacyContent || hasPatchContent;
 }
 
 function isSessionInfo(value: unknown): value is SessionInfo {

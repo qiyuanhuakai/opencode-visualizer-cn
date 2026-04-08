@@ -410,6 +410,7 @@ import DropdownLabel from './Dropdown/Label.vue';
 import DropdownSearch from './Dropdown/Search.vue';
 import { useMessages } from '../composables/useMessages';
 import { useFavoriteMessages } from '../composables/useFavoriteMessages';
+import { getMessageVariant } from '../types/sse';
 import { useSettings } from '../composables/useSettings';
 type ModelOption = {
   id: string;
@@ -560,7 +561,7 @@ const userHistory = computed(() => {
     const agentOption = agent ? props.agentOptions.find((a) => a.id === agent) : undefined;
     const resolvedAgentColor = props.resolveAgentColor?.(agent);
     const model = msg.model ? `${msg.model.providerID}/${msg.model.modelID}` : undefined;
-    const variant = msg.variant;
+    const variant = getMessageVariant(msg);
     result.push({
       text,
       agent,

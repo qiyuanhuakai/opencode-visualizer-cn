@@ -377,7 +377,10 @@ export async function sendPromptAsync(
     params: { directory: payload.directory },
     body: {
       agent: payload.agent,
-      model: payload.model,
+      model: {
+        ...payload.model,
+        variant: payload.variant,
+      },
       variant: payload.variant,
       parts: payload.parts,
     },

@@ -129,6 +129,7 @@ import type {
   ThreadTarget as ThreadTargetType,
 } from '../types/message';
 import type { MessageInfo, QuestionInfo, ToolPart } from '../types/sse';
+import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
 
 const { t } = useI18n();
@@ -406,7 +407,7 @@ function buildThreadTarget(root: MessageInfo): ThreadTargetType {
   const agent = root.agent ?? final?.agent;
   const modelPath = getMessageModelPath(root) || getMessageModelPath(final);
   const modelMeta = props.resolveModelMeta?.(modelPath);
-  const variant = root.variant ?? final?.variant;
+  const variant = getMessageVariant(root) ?? (final ? getMessageVariant(final) : undefined);
   return {
     agent,
     modelDisplayName: modelMeta?.displayName,

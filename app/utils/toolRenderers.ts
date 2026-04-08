@@ -29,6 +29,7 @@ export type ToolRenderersHelpers = {
     diff: string;
     code?: string;
     after?: string;
+    patch?: string;
     lang: string;
   }) => (() => Promise<string>) | string;
   formatGlobToolTitle: (input?: Record<string, unknown>) => string;
@@ -167,10 +168,12 @@ export function extractPatch(
         undefined;
       const before = typeof file.before === 'string' ? file.before : '';
       const after = typeof file.after === 'string' ? file.after : '';
+      const patch = typeof file.patch === 'string' ? file.patch : '';
       return {
         path: relativePath,
         code: before,
         after,
+        patch,
         isWrite: true,
         callId: `${baseCallId}:${index}`,
         toolStatus: status,
@@ -563,12 +566,12 @@ export function extractFileRead(
             : undefined;
         const editCode = typeof filediff?.before === 'string' ? filediff.before : undefined;
         const editAfter = typeof filediff?.after === 'string' ? filediff.after : undefined;
+        const filediffPatch = typeof filediff?.patch === 'string' ? filediff.patch : '';
+        const metadataDiff = typeof metadata?.diff === 'string' ? metadata.diff : '';
         const diff =
           editCode !== undefined && editAfter !== undefined
             ? ''
-            : typeof metadata?.diff === 'string'
-              ? metadata.diff
-              : '';
+            : filediffPatch || metadataDiff;
         if (!diff && editAfter === undefined) return null;
         const editPath = helpers.resolveReadWritePath(input, metadata, state);
         const editLang = helpers.guessLanguageFromPath(editPath);
@@ -601,10 +604,13 @@ export function extractFileRead(
               r.filediff && typeof r.filediff === 'object'
                 ? (r.filediff as Record<string, unknown>)
                 : undefined;
+            const fdBefore = typeof fd?.before === 'string' ? fd.before : undefined;
+            const fdAfter = typeof fd?.after === 'string' ? fd.after : undefined;
+            const fdPatch = typeof fd?.patch === 'string' ? fd.patch : '';
             return {
-              diff,
-              code: typeof fd?.before === 'string' ? fd.before : undefined,
-              after: typeof fd?.after === 'string' ? fd.after : undefined,
+              diff: fdBefore !== undefined && fdAfter !== undefined ? diff : fdPatch || diff,
+              code: fdBefore,
+              after: fdAfter,
             };
           })
           .filter(

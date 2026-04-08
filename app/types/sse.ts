@@ -96,8 +96,9 @@ export type FilePartSource = FileSource | SymbolSource | ResourceSource;
 /** Snapshot.FileDiff */
 export type FileDiff = {
   file: string;
-  before: string;
-  after: string;
+  before?: string;
+  after?: string;
+  patch?: string;
   additions: number;
   deletions: number;
   status?: 'added' | 'deleted' | 'modified';
@@ -566,3 +567,14 @@ export type WorkerStateEventType = keyof WorkerStateEventMap;
 export type WorkerStatePacket = {
   [K in WorkerStateEventType]: SsePacketByType<K>;
 }[WorkerStateEventType];
+
+export function getMessageVariant(info: MessageInfo): string | undefined {
+  if (info.role === 'user') {
+    const modelVariant =
+      typeof info.model === 'object' && info.model
+        ? (info.model as Record<string, unknown>).variant
+        : undefined;
+    if (typeof modelVariant === 'string') return modelVariant;
+  }
+  return typeof info.variant === 'string' ? info.variant : undefined;
+}

@@ -3509,7 +3509,12 @@ function parseUserMessageMeta(info?: Record<string, unknown>): UserMessageMeta |
       : typeof model?.modelID === 'string'
         ? String(model.modelID).trim()
         : '';
-  const variant = typeof info.variant === 'string' ? info.variant.trim() : '';
+  const variant =
+    typeof model?.variant === 'string'
+      ? model.variant.trim()
+      : typeof info.variant === 'string'
+        ? info.variant.trim()
+        : '';
   if (!agent && !modelId && !providerId && !variant) return null;
   return {
     agent: agent || undefined,
@@ -5248,6 +5253,7 @@ function renderEditDiffHtml(params: {
   diff: string;
   code?: string;
   after?: string;
+  patch?: string;
   lang: string;
 }): () => Promise<string> {
   return () =>
@@ -5255,7 +5261,7 @@ function renderEditDiffHtml(params: {
       id: `edit-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       code: params.code ?? '',
       after: params.after,
-      patch: params.diff,
+      patch: params.patch ?? params.diff,
       lang: params.lang,
       theme: 'github-dark',
       gutterMode: 'double',
@@ -5722,6 +5728,7 @@ function openToolPartAsWindow(
           diff: '',
           code: patchEvent.code,
           after: patchEvent.after,
+          patch: patchEvent.patch,
           lang: patchLang,
         }),
         variant: 'diff',
