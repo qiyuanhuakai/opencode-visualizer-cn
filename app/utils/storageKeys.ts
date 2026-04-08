@@ -7,6 +7,8 @@ export const StorageKeys = {
     showMinimizeButtons: 'settings.showMinimizeButtons.v1',
     dockAlwaysOpen: 'settings.dockAlwaysOpen.v1',
     pinnedSessionsLimit: 'settings.pinnedSessionsLimit.v1',
+    terminalFontFamily: 'settings.terminalFontFamily.v1',
+    appMonospaceFontFamily: 'settings.appMonospaceFontFamily.v1',
   },
   state: {
     sidePanelCollapsed: 'state.sidePanelCollapsed.v1',

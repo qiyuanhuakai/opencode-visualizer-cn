@@ -25,7 +25,7 @@ const { t } = useI18n();
 
 <style scoped>
 .tool-placeholder {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: var(--app-monospace-font-family);
   font-size: 13px;
   line-height: 1.5;
   color: #94a3b8;

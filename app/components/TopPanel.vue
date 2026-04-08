@@ -282,47 +282,51 @@
                             </span>
                           </div>
                         </div>
-                        <button
-                          v-if="!session.archivedAt"
-                          type="button"
-                          class="tree-action-button session-pin"
-                          :class="session.pinnedAt ? 'pinned' : 'pin'"
-                          :title="session.pinnedAt ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
-                          @click.stop.prevent="handleSessionPinToggle(session.id, session.pinnedAt)"
-                        >
-                          <Icon
-                            :icon="session.pinnedAt ? 'lucide:pin-off' : 'lucide:pin'"
-                            :width="16"
-                            :height="16"
-                          />
-                        </button>
-                        <button
-                          v-else
-                          type="button"
-                          class="tree-action-button session-unarchive"
-                          :title="$t('topPanel.sessionActions.unarchive')"
-                          @click.stop.prevent="handleSessionUnarchive(session.id)"
-                        >
-                          <Icon icon="lucide:archive-restore" :width="16" :height="16" />
-                        </button>
-                        <button
-                          v-if="!session.archivedAt"
-                          type="button"
-                          class="tree-action-button session-del"
-                          :class="isShiftPressed ? 'danger' : 'archive'"
-                          :title="
-                            isShiftPressed
-                              ? $t('topPanel.sessionActions.deletePermanently')
-                              : $t('topPanel.sessionActions.archive')
-                          "
-                          @click.stop.prevent="handleSessionAction(session.id, close)"
-                        >
-                          <Icon
-                            :icon="isShiftPressed ? 'lucide:trash-2' : 'lucide:archive'"
-                            :width="16"
-                            :height="16"
-                          />
-                        </button>
+                        <template #action>
+                          <div class="tree-session-actions">
+                            <button
+                              v-if="!session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-pin"
+                              :class="session.pinnedAt ? 'pinned' : 'pin'"
+                              :title="session.pinnedAt ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
+                              @click.stop.prevent="handleSessionPinToggle(session.id, session.pinnedAt)"
+                            >
+                              <Icon
+                                :icon="session.pinnedAt ? 'lucide:pin-off' : 'lucide:pin'"
+                                :width="16"
+                                :height="16"
+                              />
+                            </button>
+                            <button
+                              v-else
+                              type="button"
+                              class="tree-action-button session-unarchive"
+                              :title="$t('topPanel.sessionActions.unarchive')"
+                              @click.stop.prevent="handleSessionUnarchive(session.id)"
+                            >
+                              <Icon icon="lucide:archive-restore" :width="16" :height="16" />
+                            </button>
+                            <button
+                              v-if="!session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-del"
+                              :class="isShiftPressed ? 'danger' : 'archive'"
+                              :title="
+                                isShiftPressed
+                                  ? $t('topPanel.sessionActions.deletePermanently')
+                                  : $t('topPanel.sessionActions.archive')
+                              "
+                              @click.stop.prevent="handleSessionAction(session.id, close)"
+                            >
+                              <Icon
+                                :icon="isShiftPressed ? 'lucide:trash-2' : 'lucide:archive'"
+                                :width="16"
+                                :height="16"
+                              />
+                            </button>
+                          </div>
+                        </template>
                       </DropdownItem>
                       <div
                         v-else
@@ -451,34 +455,38 @@
         >
           <Icon icon="lucide:github" :width="16" :height="16" />
         </a>
-        <Dropdown
-          v-model:open="menuOpen"
-          auto-close
-          :popup-style="{ width: '160px', left: 'auto', right: 'anchor(right)' }"
-          @select="onMenuSelect"
+        <button
+          type="button"
+          class="control-button settings-button"
+          :title="$t('topPanel.settings')"
+          @click="$emit('open-settings')"
         >
-          <template #trigger>
-            <button
-              type="button"
-              class="control-button menu-button"
-              @click.stop="menuOpen = !menuOpen"
-            >
-              <Icon icon="lucide:ellipsis-vertical" :width="16" :height="16" />
-            </button>
-          </template>
-          <DropdownItem value="settings">
-            <span class="menu-item-content">
-              <Icon icon="lucide:settings" :width="14" :height="14" />
-              {{ $t('topPanel.settings') }}
-            </span>
-          </DropdownItem>
-          <DropdownItem value="logout">
-            <span class="menu-item-content">
-              <Icon icon="lucide:log-out" :width="14" :height="14" />
-              {{ $t('topPanel.logout') }}
-            </span>
-          </DropdownItem>
-        </Dropdown>
+          <Icon icon="lucide:settings" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
+          class="control-button provider-manager-button"
+          :title="$t('topPanel.providerManager')"
+          @click="$emit('open-provider-manager')"
+        >
+          <Icon icon="lucide:plug-zap" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
+          class="control-button status-monitor-button"
+          :title="$t('topPanel.statusMonitor')"
+          @click="$emit('open-status-monitor')"
+        >
+          <Icon icon="lucide:activity" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
+          class="control-button logout-button"
+          :title="$t('topPanel.logout')"
+          @click="$emit('logout')"
+        >
+          <Icon icon="lucide:log-out" :width="16" :height="16" />
+        </button>
       </div>
     </div>
   </div>
@@ -583,11 +591,12 @@ const emit = defineEmits<{
   (event: 'open-shell'): void;
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
+  (event: 'open-provider-manager'): void;
+  (event: 'open-status-monitor'): void;
   (event: 'logout'): void;
   (event: 'dropdown-closed'): void;
 }>();
 
-const menuOpen = ref(false);
 const treeDropdownOpen = ref(false);
 
 watch(treeDropdownOpen, (open) => {
@@ -614,11 +623,6 @@ function toggleSessionDropdown() {
 }
 
 defineExpose({ openSessionDropdown, closeSessionDropdown, toggleSessionDropdown });
-
-function onMenuSelect(value: unknown) {
-  if (value === 'settings') emit('open-settings');
-  else if (value === 'logout') emit('logout');
-}
 
 const MAX_WORKTREES = Infinity;
 const MAX_SANDBOXES = Infinity;
@@ -985,7 +989,9 @@ function toggleSelectAllVisible() {
     return;
   }
   const selected = new Set(managedSessionKeys.value);
-  visibleSessionKeys.value.forEach((key) => selected.add(key));
+  visibleSessionKeys.value.forEach((key) => {
+    selected.add(key);
+  });
   managedSessionKeys.value = Array.from(selected);
 }
 
@@ -1099,6 +1105,8 @@ function handleOpenDirectory(close: () => void) {
   flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
 }
 
 .tree-dropdown-root {
@@ -1177,7 +1185,7 @@ function handleOpenDirectory(close: () => void) {
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: var(--ui-action-gap);
 }
 
 .management-action {
@@ -1284,9 +1292,9 @@ function handleOpenDirectory(close: () => void) {
   display: inline-flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 6px;
+  gap: var(--ui-action-gap);
   /* Reserve space for new-session + fork + delete buttons so layout doesn't shift when delete is hidden */
-  min-width: calc(24px + 6px + 24px + 6px + 24px);
+  min-width: calc(var(--ui-icon-action-size) * 3 + var(--ui-action-gap) * 2);
 }
 
 .tree-action-button.new-session {
@@ -1298,23 +1306,24 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button {
-  border: 1px solid #334155;
-  border-radius: 6px;
-  background: #111a2c;
+  border: 1px solid var(--ui-icon-action-border);
+  border-radius: var(--ui-icon-action-radius);
+  background: var(--ui-icon-action-bg);
   color: #cbd5e1;
   font-size: 10px;
   line-height: 1;
-  width: 24px;
-  height: 24px;
+  width: var(--ui-icon-action-size);
+  height: var(--ui-icon-action-size);
   padding: 0;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
 }
 
 .tree-action-button:hover {
-  background: #1d2a45;
+  background: var(--ui-icon-action-bg-hover);
 }
 
 .tree-action-button.worktree-settings {
@@ -1497,8 +1506,15 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   justify-content: flex-start;
   column-gap: 8px;
-  row-gap: 1px;
+  row-gap: 2px;
   flex: 1 1 auto;
+}
+
+.tree-session-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-action-gap);
+  flex: 0 0 auto;
 }
 
 .session-status-icon {
@@ -1561,7 +1577,6 @@ function handleOpenDirectory(close: () => void) {
 
 .session-del {
   flex: 0 0 auto;
-  margin-left: auto;
 }
 
 .session-pin {
@@ -1762,7 +1777,10 @@ function handleOpenDirectory(close: () => void) {
   color: #e2e8f0;
 }
 
-.menu-button {
+.settings-button,
+.provider-manager-button,
+.status-monitor-button,
+.logout-button {
   width: 32px;
   height: 32px;
   flex-shrink: 0;
@@ -1773,15 +1791,11 @@ function handleOpenDirectory(close: () => void) {
   color: #94a3b8;
 }
 
-.menu-button:hover {
+.settings-button:hover,
+.provider-manager-button:hover,
+.status-monitor-button:hover,
+.logout-button:hover {
   background: transparent;
-  color: #e2e8f0;
-}
-
-.menu-item-content {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   color: #e2e8f0;
 }
 </style>

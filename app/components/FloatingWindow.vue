@@ -127,6 +127,7 @@ provide(FLOATING_WINDOW_KEY, api);
 const windowStyle = computed(() => {
   const color = props.entry.color || '#3a4150';
   const isMinimized = props.entry.minimized === true;
+  const isShellWindow = props.entry.key.startsWith('shell:');
   return {
     '--win-x': `${props.entry.x}px`,
     '--win-y': `${props.entry.y}px`,
@@ -134,6 +135,15 @@ const windowStyle = computed(() => {
     height: isMinimized ? '22px' : (props.entry.height ? `${props.entry.height}px` : '400px'),
     zIndex: props.entry.zIndex,
     '--window-color': color,
+    '--floating-font-family': isShellWindow
+      ? 'var(--term-font-family, monospace)'
+      : 'var(--app-monospace-font-family, monospace)',
+    '--floating-font-size': isShellWindow
+      ? 'var(--term-font-size, 14px)'
+      : '13px',
+    '--floating-line-height': isShellWindow
+      ? 'var(--term-line-height, 1.5)'
+      : '1.5',
   };
 });
 
@@ -576,9 +586,9 @@ function onResizeEnd(e: PointerEvent) {
   background: color-mix(in srgb, var(--window-color, #3a4150) 12%, #1a1d24);
   border: 1px solid var(--window-color, #3a4150);
   border-radius: 5px;
-  font-family: var(--term-font-family, monospace);
-  font-size: var(--term-font-size, 14px);
-  line-height: var(--term-line-height, 1.5);
+  font-family: var(--floating-font-family, monospace);
+  font-size: var(--floating-font-size, 14px);
+  line-height: var(--floating-line-height, 1.5);
   color: #e2e8f0;
   pointer-events: auto;
 }

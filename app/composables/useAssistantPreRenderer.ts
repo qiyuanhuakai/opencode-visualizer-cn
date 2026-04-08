@@ -20,7 +20,7 @@ type UseAssistantPreRendererOptions = {
 };
 
 export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const assistantHtmlCache = reactive(new Map<string, string>());
   const deferredKeyCache = reactive(new Map<string, string>());
   const cancelRenderByRootId = new Map<string, () => void>();
@@ -29,7 +29,7 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
   const appliedSeqMap = new Map<string, number>();
   const lastSubmitted = new Map<
     string,
-    { answerId: string; content: string; theme: string }
+    { answerId: string; content: string; theme: string; locale: string }
   >();
   let lastFileFingerprint = '';
 
@@ -91,6 +91,7 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
   watchEffect(() => {
     invalidateForFileRefsIfNeeded();
     const theme = options.theme.value;
+    const localeKey = String(locale.value);
     for (const root of options.visibleRoots.value) {
       if (!options.hasAssistantMessages(root)) continue;
       const final = options.getFinalAnswer(root);
@@ -102,7 +103,8 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
         last &&
         last.answerId === answerId &&
         last.content === content &&
-        last.theme === theme
+        last.theme === theme &&
+        last.locale === localeKey
       ) {
         // Notify that cached HTML is already available so initial render
         // tracking can resolve the assistant key (prevents stuck spinner
@@ -116,6 +118,7 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
         answerId,
         content,
         theme,
+        locale: localeKey,
       });
       submitAssistantRender(root.id, answerId, content);
     }

@@ -136,32 +136,42 @@ defineEmits<{
 
 .ib-footer-actions {
   display: flex;
-  gap: 4px;
+  gap: var(--ui-action-gap);
   flex: 0 0 auto;
 }
 
 .ib-action {
-  border: 1px solid rgba(148, 163, 184, 0.65);
-  border-radius: 6px;
-  background: rgba(15, 23, 42, 0.75);
-  color: #bfdbfe;
-  font-size: 10px;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  height: var(--ui-chip-height);
+  border: 1px solid var(--ui-chip-border-neutral);
+  border-radius: var(--ui-chip-radius);
+  background: var(--ui-chip-bg-neutral);
+  color: var(--ui-chip-fg-neutral);
+  font-family: var(--ui-chip-font-family);
+  font-size: var(--ui-chip-font-size);
+  font-weight: 600;
+  letter-spacing: var(--ui-chip-letter-spacing);
   line-height: 1;
-  padding: 3px 7px;
+  padding: 0 var(--ui-chip-padding-x);
+  margin: 0;
   cursor: pointer;
   white-space: nowrap;
+  vertical-align: top;
 }
 
 .ib-action:hover {
-  background: rgba(30, 41, 59, 0.92);
+  background: var(--ui-chip-bg-hover);
 }
 
 .ib-action-diff {
   border-color: rgba(96, 165, 250, 0.7);
   background: rgba(30, 58, 138, 0.35);
   color: #bfdbfe;
-  font-weight: 600;
-  letter-spacing: 0.5px;
 }
 
 .ib-action-diff:hover {

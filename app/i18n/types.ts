@@ -220,8 +220,111 @@ export interface LocaleMessages {
     };
     openProject: string;
     settings: string;
+    providerManager: string;
+    statusMonitor: string;
     logout: string;
     github: string;
+  };
+  statusMonitor: {
+    title: string;
+    close: string;
+    refresh: string;
+    refreshing: string;
+    loading: string;
+    error: string;
+    retry: string;
+    empty: string;
+    tabs: {
+      server: string;
+      mcp: string;
+      lsp: string;
+      plugins: string;
+      skills: string;
+    };
+    server: {
+      status: string;
+      healthy: string;
+      unhealthy: string;
+      version: string;
+      noData: string;
+    };
+    mcp: {
+      total: string;
+      connected: string;
+      disabled: string;
+      failed: string;
+      needsAuth: string;
+      needsRegistration: string;
+      noData: string;
+      enable: string;
+      disable: string;
+      toggleFailed: string;
+    };
+    lsp: {
+      total: string;
+      connected: string;
+      error: string;
+      noData: string;
+    };
+    plugins: {
+      total: string;
+      noData: string;
+    };
+    skills: {
+      total: string;
+      noData: string;
+      unsupported: string;
+    };
+  };
+  providerManager: {
+    title: string;
+    close: string;
+    tabs: {
+      providers: string;
+      models: string;
+    };
+    badges: {
+      disconnected: string;
+      enabled: string;
+      disabled: string;
+      recommended: string;
+    };
+    sections: {
+      connected: string;
+      connectedDescription: string;
+      connectedEmpty: string;
+      popular: string;
+      popularDescription: string;
+      popularEmpty: string;
+      allProviders: string;
+      allProvidersDescription: string;
+    };
+    providerStats: {
+      models: string;
+      enabledModels: string;
+    };
+    authMethodsLabel: string;
+    actions: {
+      available: string;
+      connect: string;
+      disconnect: string;
+      useModel: string;
+      enabled: string;
+      disabled: string;
+    };
+    models: {
+      searchPlaceholder: string;
+      total: string;
+      disabledCount: string;
+      empty: string;
+      context: string;
+      output: string;
+      capabilities: {
+        attachment: string;
+        reasoning: string;
+        toolcall: string;
+      };
+    };
   };
   sidePanel: {
     tabs: {
@@ -290,6 +393,9 @@ export interface LocaleMessages {
   };
   settings: {
     title: string;
+    fontsPageTitle: string;
+    close: string;
+    backToRoot: string;
     language: {
       label: string;
       description: string;
@@ -307,6 +413,42 @@ export interface LocaleMessages {
     pinnedSessionsLimit: {
       label: string;
       description: string;
+    };
+    terminalFontFamily: {
+      label: string;
+      description: string;
+    };
+    appMonospaceFontFamily: {
+      label: string;
+      description: string;
+    };
+    fontSettings: {
+      label: string;
+      description: string;
+    };
+    systemFonts: {
+      label: string;
+      scan: string;
+      loading: string;
+      unsupported: string;
+      error: string;
+      regular: string;
+    };
+    fontStatus: {
+      available: string;
+      missing: string;
+      generic: string;
+    };
+    fontPresetsLabel: string;
+    customFontStackLabel: string;
+    fontPresets: {
+      default: string;
+      firaCodeNerd: string;
+      caskaydiaNerd: string;
+      iosevkaTerm: string;
+      jetbrainsMono: string;
+      sfMono: string;
+      firaCode: string;
     };
     dockAlwaysOpen: {
       label: string;

@@ -25,7 +25,9 @@
           @batch-session-action="handleTopPanelBatchSessionAction"
           @open-directory="openProjectPicker"
           @edit-project="handleEditProject"
-          @open-settings="isSettingsOpen = true"
+    @open-settings="isSettingsOpen = true"
+    @open-provider-manager="isProviderManagerOpen = true"
+    @open-status-monitor="isStatusMonitorOpen = true"
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
@@ -61,6 +63,7 @@
             :tree-branch-entries="branchEntries"
             :tree-branch-list-loading="branchListLoading"
             :run-shell-command="runTreeShellCommand"
+            :ensure-branch-entries-loaded="ensureBranchEntriesLoaded"
             @toggle-collapse="toggleSidePanelCollapsed"
             @change-tab="setSidePanelTab"
             @select-session="handleSidePanelSessionSelect"
@@ -70,7 +73,7 @@
             @open-diff="openGitDiff"
             @open-diff-all="handleOpenDiffAll"
             @open-file="openFileViewer"
-            @reload="reloadTree().then(() => refreshGitStatus())"
+            @reload="handleReloadSidebar"
           />
           <div
             v-if="!sidePanelCollapsed"
@@ -138,7 +141,7 @@
               :has-agent-options="hasAgentOptions"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
-              :model-options="modelOptions"
+              :model-options="availableModelOptions"
               :thinking-options="thinkingOptions"
               :has-model-options="hasModelOptions"
               :has-thinking-options="hasThinkingOptions"
@@ -296,6 +299,19 @@
       @select="handleProjectDirectorySelect"
     />
     <SettingsModal :open="isSettingsOpen" @close="isSettingsOpen = false" />
+    <ProviderManagerModal
+      :open="isProviderManagerOpen"
+      :providers="providers"
+      :connected-provider-ids="connectedProviderIds"
+      :selected-model="selectedModel"
+      :hidden-models="hiddenModels"
+      :provider-config="providerConfig"
+      @close="isProviderManagerOpen = false"
+      @select-model="handleSelectedModelUpdate"
+      @update-hidden-models="handleModelVisibilityUpdate"
+      @update-provider-config="handleProviderConfigUpdated"
+    />
+    <StatusMonitorModal :open="isStatusMonitorOpen" @close="isStatusMonitorOpen = false" />
     <ProjectSettingsDialog
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
@@ -342,7 +358,9 @@ import TopPanel, {
   type TopPanelNotificationSession,
   type TopPanelWorktree,
 } from './components/TopPanel.vue';
+import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
+import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
 import DiffViewer from './components/viewers/DiffViewer.vue';
@@ -419,8 +437,20 @@ import {
 } from './utils/deletedSandboxes';
 
 const { t } = useI18n();
+
+type LocalizedStatusState =
+  | { mode: 'i18n'; key: string; params?: Record<string, unknown> }
+  | { mode: 'text'; text: string }
+  | { mode: 'render'; render: () => string };
 const credentials = useCredentials();
-const { suppressAutoWindows, showMinimizeButtons, dockAlwaysOpen, pinnedSessionsLimit } = useSettings();
+const {
+  suppressAutoWindows,
+  showMinimizeButtons,
+  dockAlwaysOpen,
+  pinnedSessionsLimit,
+  terminalFontFamily,
+  appMonospaceFontFamily,
+} = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
 const FILE_VIEWER_WINDOW_HEIGHT = 520;
@@ -439,8 +469,6 @@ const AUTO_VIEWPORT_HISTORY_LOAD_STEP = 160;
 const AUTO_BACKGROUND_HISTORY_LOAD_STEP = 240;
 const AUTO_BACKGROUND_HISTORY_DELAY_MS = 32;
 const HISTORY_VIEWPORT_FILL_THRESHOLD_PX = 24;
-const TERM_FONT_FAMILY =
-  "'JetBrainsMono NFM', 'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace";
 const SHELL_LINGER_MS = 1000;
 const TREE_DATA_CACHE_TTL_MS = 15000;
 const COMMIT_SNAPSHOT_SCRIPT = [
@@ -728,6 +756,7 @@ watch(showMinimizeButtons, (enabled) => {
 
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
+const appEl = ref<HTMLDivElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
 const outputPanelRef = ref<{ panelEl: HTMLDivElement | null } | null>(null);
 const topPanelRef = ref<{
@@ -932,6 +961,8 @@ type ProviderModel = {
   id: string;
   name?: string;
   providerID?: string;
+  family?: string;
+  status?: string;
   variants?: Record<string, unknown>;
   limit?: {
     context?: number;
@@ -940,19 +971,44 @@ type ProviderModel = {
   };
   capabilities?: {
     attachment?: boolean;
+    reasoning?: boolean;
+    toolcall?: boolean;
   };
 };
 
 type ProviderInfo = {
   id: string;
   name?: string;
+  source?: string;
+  key?: string;
   models?: Record<string, ProviderModel>;
 };
 
 type ProviderResponse = {
-  providers?: ProviderInfo[];
+  all?: ProviderInfo[];
   default?: Record<string, string>;
+  connected?: string[];
 };
+
+type ProviderConfigState = {
+  enabled_providers?: string[];
+  disabled_providers?: string[];
+};
+
+type ModelVisibilityEntry = {
+  providerID: string;
+  modelID: string;
+  visibility: 'show' | 'hide';
+};
+
+type ModelVisibilityStore = {
+  user: ModelVisibilityEntry[];
+  recent: string[];
+  variant: Record<string, string>;
+};
+
+const MODEL_VISIBILITY_STORAGE_KEY = 'opencode.global.dat:model';
+const LEGACY_DISABLED_MODELS_STORAGE_KEY = 'opencode.settings.disabledModels.v1';
 
 type AgentInfo = {
   name: string;
@@ -978,6 +1034,7 @@ type CommandInfo = {
 };
 
 const providers = ref<ProviderInfo[]>([]);
+const connectedProviderIds = ref<string[]>([]);
 const agents = ref<AgentInfo[]>([]);
 const commands = ref<CommandInfo[]>([]);
 const modelOptions = ref<
@@ -1154,15 +1211,19 @@ const editingProjectMeta = computed(() => {
   return pid ? serverState.projects[pid] : undefined;
 });
 const isSettingsOpen = ref(false);
+const isProviderManagerOpen = ref(false);
+const isStatusMonitorOpen = ref(false);
 const selectedMode = ref('build');
 const selectedModel = ref('');
 const selectedThinking = ref<string | undefined>(undefined);
+const hiddenModels = ref<string[]>(readHiddenModelsFromStorage());
+const providerConfig = ref<ProviderConfigState | null>(null);
 const projectError = ref('');
 const worktreeError = ref('');
 const sessionError = ref('');
 const messageInput = ref('');
 const attachments = ref<Attachment[]>([]);
-const sendStatus = ref(t('app.status.ready'));
+const sendStatus = ref<LocalizedStatusState>({ mode: 'i18n', key: 'app.status.ready' });
 const isSending = ref(false);
 const isAborting = ref(false);
 const isBootstrapping = ref(false);
@@ -1185,6 +1246,25 @@ const retryStatus = ref<{
   attempt: number;
 } | null>(null);
 
+function setSendStatusKey(key: string, params?: Record<string, unknown>) {
+  sendStatus.value = params ? { mode: 'i18n', key, params } : { mode: 'i18n', key };
+}
+
+function setSendStatusText(text: string) {
+  sendStatus.value = { mode: 'text', text };
+}
+
+function setSendStatusRender(render: () => string) {
+  sendStatus.value = { mode: 'render', render };
+}
+
+const resolvedSendStatus = computed(() => {
+  const status = sendStatus.value;
+  if (status.mode === 'text') return status.text;
+  if (status.mode === 'render') return status.render();
+  return t(status.key, status.params ?? {});
+});
+
 const statusText = computed(() => {
   if (connectionState.value === 'reconnecting') {
     return reconnectingMessage.value || t('app.connection.reconnecting');
@@ -1196,7 +1276,7 @@ const statusText = computed(() => {
   if (openCodeApi.pending.value) {
     return t('app.status.synchronizing');
   }
-  return projectError.value || worktreeError.value || sessionError.value || sendStatus.value;
+  return projectError.value || worktreeError.value || sessionError.value || resolvedSendStatus.value;
 });
 const isStatusError = computed(() =>
   Boolean(projectError.value || worktreeError.value || sessionError.value || retryStatus.value),
@@ -1433,12 +1513,14 @@ const {
   gitStatusByPath,
   refreshGitStatus,
   reloadTree,
+  invalidateDirectorySidebarCache,
   toggleTreeDirectory,
   selectTreeFile,
   feed,
   branchEntries,
   branchListLoading,
   refreshBranchEntries,
+  ensureBranchEntriesLoaded,
 } = useFileTree({ activeDirectory });
 
 const treeDirectoryName = computed(() => {
@@ -1591,7 +1673,23 @@ const canAbort = computed(() =>
   ),
 );
 const hasAgentOptions = computed(() => agentOptions.value.length > 0);
-const hasModelOptions = computed(() => modelOptions.value.length > 0);
+function isProviderConnected(providerId: string) {
+  return connectedProviderIds.value.includes(providerId);
+}
+
+const availableModelOptions = computed(() =>
+  modelOptions.value.filter(
+    (model) => {
+      const providerId = model.providerID?.trim() ?? '';
+      return (
+        isProviderConnected(providerId) &&
+        isProviderEnabled(providerId) &&
+        isModelAvailable(model.id)
+      );
+    },
+  ),
+);
+const hasModelOptions = computed(() => availableModelOptions.value.length > 0);
 const hasThinkingOptions = computed(() => thinkingOptions.value.length > 0);
 
 // Subagent options for @ invocation (includes subagents only, no hidden agents)
@@ -1609,7 +1707,7 @@ const subagentOptions = computed(() => {
     }));
 });
 const canAttach = computed(() => {
-  const selected = modelOptions.value.find((m) => m.id === selectedModel.value);
+  const selected = availableModelOptions.value.find((m) => m.id === selectedModel.value);
   return selected?.attachmentCapable !== false;
 });
 const commandOptions = computed(() => {
@@ -1670,18 +1768,24 @@ function requireSelectedWorktree(_context: 'send') {
   const directory = getSelectedWorktreeDirectory();
   if (directory) return directory;
   const message = t('app.error.noWorktreeSelected');
-  sendStatus.value = message;
+  setSendStatusText(message);
   return '';
 }
 
 function ensureConnectionReady(action: string) {
   if (connectionState.value === 'ready' && uiInitState.value === 'ready') return true;
   if (connectionState.value === 'reconnecting') {
-    sendStatus.value = `${t('app.connection.reconnecting')} ${t('app.error.actionDisabled', { action })}`;
+    setSendStatusRender(
+      () => `${t('app.connection.reconnecting')} ${t('app.error.actionDisabled', { action })}`,
+    );
   } else if (uiInitState.value === 'loading') {
-    sendStatus.value = `${t('app.error.stillLoading')} ${t('app.error.actionDisabled', { action })}`;
+    setSendStatusRender(
+      () => `${t('app.error.stillLoading')} ${t('app.error.actionDisabled', { action })}`,
+    );
   } else {
-    sendStatus.value = `${t('app.error.notConnected')} ${t('app.error.unavailable', { action })}`;
+    setSendStatusRender(
+      () => `${t('app.error.notConnected')} ${t('app.error.unavailable', { action })}`,
+    );
   }
   return false;
 }
@@ -1770,6 +1874,138 @@ function parseProviderModelKey(value: string) {
   const modelID = normalized.slice(slashIndex + 1).trim();
   if (!providerID || !modelID) return { providerID: '', modelID: '' };
   return { providerID, modelID };
+}
+
+function normalizeIdList(values?: string[]) {
+  return Array.isArray(values)
+    ? values.map((value) => value.trim()).filter((value) => value.length > 0)
+    : [];
+}
+
+function createEmptyModelVisibilityStore(): ModelVisibilityStore {
+  return {
+    user: [],
+    recent: [],
+    variant: {},
+  };
+}
+
+function parseModelVisibilityStore(raw: string | null): ModelVisibilityStore {
+  if (!raw) return createEmptyModelVisibilityStore();
+  try {
+    const parsed = JSON.parse(raw) as Partial<ModelVisibilityStore>;
+    return {
+      user: Array.isArray(parsed.user)
+        ? parsed.user.filter(
+            (entry): entry is ModelVisibilityEntry =>
+              Boolean(entry?.providerID && entry?.modelID) &&
+              (entry.visibility === 'show' || entry.visibility === 'hide'),
+          )
+        : [],
+      recent: Array.isArray(parsed.recent) ? parsed.recent.filter((value): value is string => typeof value === 'string') : [],
+      variant:
+        parsed.variant && typeof parsed.variant === 'object' && !Array.isArray(parsed.variant)
+          ? Object.fromEntries(
+              Object.entries(parsed.variant).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+            )
+          : {},
+    };
+  } catch {
+    return createEmptyModelVisibilityStore();
+  }
+}
+
+function modelVisibilityKey(providerID: string, modelID: string) {
+  return `${providerID}/${modelID}`;
+}
+
+function readHiddenModelsFromStorage() {
+  if (typeof window === 'undefined') return [];
+  const currentStore = parseModelVisibilityStore(window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY));
+  const currentHidden = currentStore.user
+    .filter((entry) => entry.visibility === 'hide')
+    .map((entry) => modelVisibilityKey(entry.providerID, entry.modelID));
+  if (currentHidden.length > 0) return Array.from(new Set(currentHidden)).sort();
+  const legacyRaw = window.localStorage.getItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
+  if (!legacyRaw) return [];
+  try {
+    const legacy = JSON.parse(legacyRaw) as string[];
+    return Array.isArray(legacy) ? [...new Set(legacy.filter((value): value is string => typeof value === 'string'))].sort() : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
+  if (typeof window === 'undefined') return;
+  const store = parseModelVisibilityStore(window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY));
+  const hiddenSet = new Set(nextHiddenModels);
+  const preservedUser = store.user.filter(
+    (entry) => !hiddenSet.has(modelVisibilityKey(entry.providerID, entry.modelID)),
+  );
+  const nextUser = [
+    ...preservedUser,
+    ...Array.from(hiddenSet)
+      .sort()
+      .map((key) => {
+        const { providerID, modelID } = parseProviderModelKey(key);
+        return providerID && modelID ? { providerID, modelID, visibility: 'hide' as const } : null;
+      })
+      .filter(
+        (entry): entry is { providerID: string; modelID: string; visibility: 'hide' } => Boolean(entry),
+      ),
+  ];
+  window.localStorage.setItem(
+    MODEL_VISIBILITY_STORAGE_KEY,
+    JSON.stringify({
+      ...store,
+      user: nextUser,
+    }),
+  );
+  window.localStorage.removeItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
+}
+
+function isModelAvailable(modelId: string) {
+  return !hiddenModels.value.includes(modelId);
+}
+
+function isProviderEnabled(providerId: string) {
+  if (!providerId) return true;
+  const enabled = normalizeIdList(providerConfig.value?.enabled_providers);
+  const disabled = new Set(normalizeIdList(providerConfig.value?.disabled_providers));
+  if (enabled.length > 0) {
+    return enabled.includes(providerId) && !disabled.has(providerId);
+  }
+  return !disabled.has(providerId);
+}
+
+function getFirstAvailableModelId() {
+  return modelOptions.value.find(
+    (model) => {
+      const providerId = model.providerID?.trim() ?? '';
+      return (
+        isProviderConnected(providerId) &&
+        isProviderEnabled(providerId) &&
+        isModelAvailable(model.id)
+      );
+    },
+  )?.id;
+}
+
+function ensureSelectedModelAvailable() {
+  if (modelOptions.value.length === 0) return;
+  const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
+  const selectedProviderId =
+    selectedInfo?.providerID?.trim() ?? parseProviderModelKey(selectedModel.value).providerID;
+  if (
+    selectedInfo &&
+    isModelAvailable(selectedInfo.id) &&
+    isProviderConnected(selectedProviderId) &&
+    isProviderEnabled(selectedProviderId)
+  ) {
+    return;
+  }
+  selectedModel.value = getFirstAvailableModelId() ?? '';
 }
 
 function applyModelVariantSelection(model: string | undefined, variant: string | undefined) {
@@ -2139,7 +2375,7 @@ function applyComposerDraftToComposerState(draft: ComposerDraft, contextKey: str
   }
 
   const modelToApply =
-    draft.model && modelOptions.value.some((model) => model.id === draft.model)
+    draft.model && availableModelOptions.value.some((model) => model.id === draft.model)
       ? draft.model
       : undefined;
   applyModelVariantSelection(modelToApply, draft.variant);
@@ -2194,7 +2430,7 @@ function applyAgentDefaults(agentName: string) {
     const match = modelOptions.value.find(
       (m) => m.modelID === defaultModel.modelID && m.providerID === defaultModel.providerID,
     );
-    if (match) {
+    if (match && availableModelOptions.value.some((option) => option.id === match.id)) {
       applyModelVariantSelection(match.id, agent?.variant);
     }
   }
@@ -2216,14 +2452,14 @@ function resolveDefaultAgentModel(): { agent: string; model: string; variant: st
     const defaults = providers_data.length > 0 ? ((providers_data[0] as any)?.default ?? {}) : {};
     const preferredModelId = Object.entries(defaults)
       .map(([providerID, modelID]) => {
-        const match = modelOptions.value.find(
+        const match = availableModelOptions.value.find(
           (m) => m.providerID === providerID && m.modelID === modelID,
         );
         return match?.id;
       })
       .find((id) => Boolean(id));
 
-    selectedModel.value = preferredModelId || modelOptions.value[0]?.id || '';
+    selectedModel.value = preferredModelId || availableModelOptions.value[0]?.id || '';
   }
 
   return {
@@ -2255,10 +2491,47 @@ function handleApplyHistoryEntry(entry: {
 }
 
 function handleSelectedModelUpdate(value: string) {
+  if (value && !availableModelOptions.value.some((option) => option.id === value)) return;
   selectedModel.value = value;
   nextTick(() => {
     persistComposerDraftForCurrentContext();
   });
+}
+
+function handleModelVisibilityUpdate(next: ModelVisibilityEntry[]) {
+  hiddenModels.value = next
+    .filter((entry) => entry.visibility === 'hide')
+    .map((entry) => modelVisibilityKey(entry.providerID, entry.modelID))
+    .sort();
+  ensureSelectedModelAvailable();
+  nextTick(() => {
+    persistComposerDraftForCurrentContext();
+  });
+}
+
+function handleProviderConfigUpdated(next: ProviderConfigState) {
+  providerConfig.value = next ?? null;
+  ensureSelectedModelAvailable();
+}
+
+async function fetchGlobalProviderConfig() {
+  try {
+    const data = (await opencodeApi.getGlobalConfig()) as ProviderConfigState;
+    providerConfig.value = data ?? null;
+  } catch (error) {
+    log('Provider config load failed', error);
+  }
+}
+
+function handleModelVisibilityStorage(event: StorageEvent) {
+  if (event.storageArea !== window.localStorage) return;
+  if (event.key !== MODEL_VISIBILITY_STORAGE_KEY && event.key !== LEGACY_DISABLED_MODELS_STORAGE_KEY) return;
+  try {
+    hiddenModels.value = readHiddenModelsFromStorage();
+    ensureSelectedModelAvailable();
+  } catch {
+    hiddenModels.value = [];
+  }
 }
 
 function handleSelectedThinkingUpdate(value: string | undefined) {
@@ -2370,8 +2643,15 @@ function measureTerminalCellWidth(fontFamily: string, fontSizePx: number) {
   return Number.isFinite(width) && width > 0 ? width : fontSizePx * 0.62;
 }
 
+function splitFontFamilyList(fontFamily: string) {
+  return fontFamily
+    .split(',')
+    .map((family) => family.trim())
+    .filter((family) => family.length > 0);
+}
+
 function getTerminalWindowSize() {
-  const cellWidth = measureTerminalCellWidth(TERM_FONT_FAMILY, TERM_FONT_SIZE_PX);
+  const cellWidth = measureTerminalCellWidth(terminalFontFamily.value, TERM_FONT_SIZE_PX);
   const lineHeightPx = TERM_FONT_SIZE_PX * TERM_LINE_HEIGHT;
   const gutterWidthPx = TERM_FONT_SIZE_PX * TERM_GUTTER_WIDTH_EM;
   const contentWidth = TERM_COLUMNS * cellWidth;
@@ -2389,11 +2669,46 @@ function syncCanvasTermMetrics() {
   const canvas = toolWindowCanvasEl.value;
   if (!canvas) return;
   const { width, height } = getTerminalWindowSize();
-  canvas.style.setProperty('--term-font-family', TERM_FONT_FAMILY);
+  canvas.style.setProperty('--term-font-family', terminalFontFamily.value);
   canvas.style.setProperty('--term-font-size', `${TERM_FONT_SIZE_PX}px`);
   canvas.style.setProperty('--term-line-height', String(TERM_LINE_HEIGHT));
   canvas.style.setProperty('--term-width', `${width}px`);
   canvas.style.setProperty('--term-height', `${height}px`);
+}
+
+function syncAppMonospaceMetrics() {
+  const app = appEl.value;
+  if (app) {
+    app.style.setProperty('--app-monospace-font-family', appMonospaceFontFamily.value);
+  }
+  if (typeof document !== 'undefined') {
+    document.documentElement.style.setProperty(
+      '--app-monospace-font-family',
+      appMonospaceFontFamily.value,
+    );
+  }
+}
+
+async function waitForTerminalFontsReady(fontFamily = terminalFontFamily.value) {
+  if (typeof document === 'undefined' || !('fonts' in document)) return;
+  const fontSet = document.fonts;
+  const requestedFonts = splitFontFamilyList(fontFamily).map((family) =>
+    fontSet.load(`${TERM_FONT_SIZE_PX}px ${family}`)
+  );
+  await Promise.allSettled(requestedFonts);
+  await fontSet.ready;
+}
+
+async function refreshOpenShellFonts() {
+  await waitForTerminalFontsReady();
+  shellSessionsByPtyId.forEach((session) => {
+    session.terminal.options.fontFamily = terminalFontFamily.value;
+    session.terminal.options.fontSize = TERM_FONT_SIZE_PX;
+    session.terminal.options.lineHeight = TERM_LINE_HEIGHT;
+    session.terminal.refresh(0, Math.max(0, session.terminal.rows - 1));
+  });
+  syncCanvasTermMetrics();
+  scheduleShellFitAll();
 }
 
 function handleWindowResize() {
@@ -2500,7 +2815,7 @@ function readFileAsDataUrl(file: File) {
 async function handleAddAttachments(files: File[]) {
   const accepted = files.filter((file) => ATTACHMENT_MIME_ALLOWLIST.has(file.type));
   if (accepted.length === 0) {
-    sendStatus.value = t('app.error.unsupportedAttachment');
+    setSendStatusKey('app.error.unsupportedAttachment');
     return;
   }
   try {
@@ -2515,7 +2830,7 @@ async function handleAddAttachments(files: File[]) {
     attachments.value = [...attachments.value, ...next];
     persistComposerDraftForCurrentContext();
   } catch (error) {
-    sendStatus.value = t('app.error.attachmentFailed', { message: toErrorMessage(error) });
+    setSendStatusKey('app.error.attachmentFailed', { message: toErrorMessage(error) });
   }
 }
 
@@ -3155,7 +3470,7 @@ async function handleForkMessage(payload: { sessionId: string; messageId: string
   if (!ensureConnectionReady(t('app.actions.fork'))) return;
   sessionError.value = '';
   try {
-    sendStatus.value = t('app.status.forking');
+    setSendStatusKey('app.status.forking');
     const data = (await openCodeApi.forkSession({
       sessionId: payload.sessionId,
       messageId: payload.messageId,
@@ -3166,7 +3481,7 @@ async function handleForkMessage(payload: { sessionId: string; messageId: string
       seedForkedSessionComposerDraft(payload, data);
       await switchSessionSelection(selectedProjectId.value, data.id);
     }
-    sendStatus.value = t('app.status.forked');
+    setSendStatusKey('app.status.forked');
   } catch (error) {
     sessionError.value = t('app.error.sessionForkFailed', { message: toErrorMessage(error) });
   }
@@ -3176,14 +3491,14 @@ async function handleRevertMessage(payload: { sessionId: string; messageId: stri
   if (!ensureConnectionReady(t('app.actions.revert'))) return;
   sessionError.value = '';
   try {
-    sendStatus.value = t('app.status.reverting');
+    setSendStatusKey('app.status.reverting');
     await openCodeApi.revertSession({
       sessionId: payload.sessionId,
       messageId: payload.messageId,
       projectId: selectedProjectId.value,
       directory: activeDirectory.value.trim() || undefined,
     });
-    sendStatus.value = t('app.status.reverted');
+    setSendStatusKey('app.status.reverted');
     if (selectedSessionId.value === payload.sessionId) void reloadSelectedSessionState();
   } catch (error) {
     sessionError.value = t('app.error.sessionRevertFailed', { message: toErrorMessage(error) });
@@ -3196,13 +3511,13 @@ async function handleUndoRevert() {
   if (!ensureConnectionReady(t('app.actions.undo'))) return;
   sessionError.value = '';
   try {
-    sendStatus.value = t('app.status.undoing');
+    setSendStatusKey('app.status.undoing');
     await openCodeApi.unrevertSession({
       sessionId,
       projectId: selectedProjectId.value,
       directory: activeDirectory.value.trim() || undefined,
     });
-    sendStatus.value = t('app.status.undone');
+    setSendStatusKey('app.status.undone');
   } catch (error) {
     sessionError.value = t('app.error.sessionUndoFailed', { message: toErrorMessage(error) });
   }
@@ -3282,11 +3597,13 @@ async function bootstrapSelections() {
 async function fetchProviders(force = false) {
   if (providersLoading.value || (!force && providersLoaded.value)) return;
   providersLoading.value = true;
+  if (force) providersLoaded.value = false;
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
     const data = (await opencodeApi.listProviders()) as ProviderResponse;
-    providers.value = Array.isArray(data.providers) ? data.providers : [];
+    providers.value = Array.isArray(data.all) ? data.all : [];
+    connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
       id: string;
       modelID: string;
@@ -3336,10 +3653,11 @@ async function fetchProviders(force = false) {
       const defaults = data.default ?? {};
       const preferredModelId = Object.entries(defaults)
         .map(([providerID, modelID]) => buildProviderModelKey(providerID, modelID))
-        .find((value) => Boolean(value));
-      const firstModel = modelOptions.value[0]?.id;
+        .find((value) => Boolean(value) && isModelAvailable(value) && isProviderEnabled(parseProviderModelKey(value).providerID));
+      const firstModel = getFirstAvailableModelId();
       selectedModel.value = preferredModelId || firstModel || '';
     }
+    ensureSelectedModelAvailable();
     const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
     const nextThinkingOptions = buildThinkingOptions(selectedInfo?.variants);
     const sameThinking =
@@ -3717,7 +4035,7 @@ async function ensureShellWindow(pty: PtyInfo) {
   const terminal = new Terminal({
     cols: TERM_COLUMNS,
     rows: TERM_ROWS,
-    fontFamily: TERM_FONT_FAMILY,
+    fontFamily: terminalFontFamily.value,
     fontSize: TERM_FONT_SIZE_PX,
     lineHeight: TERM_LINE_HEIGHT,
     cursorBlink: true,
@@ -3737,14 +4055,16 @@ async function ensureShellWindow(pty: PtyInfo) {
   // xterm.js buffers write() calls made before open(), so data is not lost.
   connectShellSocket(pty.id);
   nextTick(() => {
-    const host = toolWindowCanvasEl.value?.querySelector(
-      `[data-shell-id="${pty.id}"]`,
-    ) as HTMLElement | null;
-    if (!host) return;
-    terminal.open(host);
-    // Wait for first paint so xterm has rendered cell dimensions
-    requestAnimationFrame(() => {
-      resizeWindowToFitTerminal(key, terminal, host);
+    void waitForTerminalFontsReady().then(() => {
+      const host = toolWindowCanvasEl.value?.querySelector(
+        `[data-shell-id="${pty.id}"]`,
+      ) as HTMLElement | null;
+      if (!host) return;
+      terminal.open(host);
+      // Wait for first paint so xterm has rendered cell dimensions
+      requestAnimationFrame(() => {
+        resizeWindowToFitTerminal(key, terminal, host);
+      });
     });
   });
 }
@@ -4009,7 +4329,9 @@ function restoreFloatingWindow(key: string) {
 
 function disposeShellWindows() {
   const ids = Array.from(shellSessionsByPtyId.keys());
-  ids.forEach((ptyId) => removeShellWindow(ptyId));
+  for (const ptyId of ids) {
+    removeShellWindow(ptyId);
+  }
 }
 
 let shellDirectory = '';
@@ -4049,6 +4371,7 @@ async function openShellFromInput(input: string) {
 async function runTreeShellCommand(command: string) {
   const script = command.trim();
   if (!script) return;
+  const commandDirectory = activeDirectory.value.trim();
   const pty = await createPtySession('/bin/sh', ['-c', script]);
   if (!pty) return;
   ensureShellWindow(pty);
@@ -4058,9 +4381,24 @@ async function runTreeShellCommand(command: string) {
     shellExitWaiters.set(pty.id, resolve);
   });
   if (exitCode === 0) {
-    void refreshGitStatus();
-    void refreshBranchEntries();
+    invalidateDirectorySidebarCache(commandDirectory);
+    if (activeDirectory.value.trim() !== commandDirectory) {
+      return;
+    }
+    await reloadTree();
+    await Promise.all([
+      refreshGitStatus({ includeFileSnapshot: false }),
+      refreshBranchEntries({ force: true }),
+    ]);
   }
+}
+
+async function handleReloadSidebar() {
+  await reloadTree();
+  await Promise.all([
+    refreshGitStatus({ includeFileSnapshot: false }),
+    refreshBranchEntries({ force: true }),
+  ]);
 }
 
 function decodeCommitSnapshotBase64(value: string) {
@@ -4490,7 +4828,7 @@ async function sendMessage() {
       ? filteredSessions.value.find((session) => session.id === fallbackId)
       : filteredSessions.value[0];
     if (!fallback) {
-      sendStatus.value = t('app.error.noSessionSelected');
+      setSendStatusKey('app.error.noSessionSelected');
       return;
     }
     selectedSessionId.value = fallback.id;
@@ -4502,6 +4840,11 @@ async function sendMessage() {
   const selectedModelIDs = parseProviderModelKey(selectedModel.value);
   const providerID = selectedInfo?.providerID ?? (selectedModelIDs.providerID || undefined);
   const modelID = selectedInfo?.modelID ?? (selectedModelIDs.modelID || undefined);
+  if (!providerID || !modelID || !isProviderEnabled(providerID) || !isModelAvailable(selectedModel.value)) {
+    ensureSelectedModelAvailable();
+    setSendStatusText('Select an enabled provider/model before sending.');
+    return;
+  }
   if (hasText) {
     recentUserInputs.push({ text, time: Date.now() });
     while (recentUserInputs.length > 20) recentUserInputs.shift();
@@ -4509,23 +4852,23 @@ async function sendMessage() {
   messageInput.value = '';
   enableFollow();
   isSending.value = true;
-    sendStatus.value = t('app.status.sending');
+  setSendStatusKey('app.status.sending');
   try {
     if (slash && slash.name.toLowerCase() === 'shell') {
       await openShellFromInput(slash.arguments ?? '');
-      sendStatus.value = t('app.status.shellReady');
+      setSendStatusKey('app.status.shellReady');
       clearComposerDraftForCurrentContext();
       return;
     }
     if (slash && slash.name.toLowerCase() === 'debug') {
       const debugResult = runDebugCommand(slash.arguments ?? '');
-      sendStatus.value = debugResult.message;
+      setSendStatusText(debugResult.message);
       clearComposerDraftForCurrentContext();
       return;
     }
     if (slash && commandMatch) {
       await sendCommand(sessionId, commandMatch, slash.arguments ?? '');
-      sendStatus.value = t('app.status.sent');
+      setSendStatusKey('app.status.sent');
       clearComposerDraftForCurrentContext();
       return;
     }
@@ -4558,11 +4901,11 @@ async function sendMessage() {
       variant: selectedThinking.value,
       parts,
     });
-    sendStatus.value = t('app.status.sent');
+    setSendStatusKey('app.status.sent');
     attachments.value = [];
     clearComposerDraftForCurrentContext();
   } catch (error) {
-    sendStatus.value = t('app.error.sendFailed', { message: toErrorMessage(error) });
+    setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
   } finally {
     isSending.value = false;
   }
@@ -4740,7 +5083,7 @@ async function abortSession() {
   const sessionId = selectedSessionId.value;
   if (!sessionId || isAborting.value) return;
   isAborting.value = true;
-    sendStatus.value = t('app.status.stopping');
+  setSendStatusKey('app.status.stopping');
   try {
     const directory = activeDirectory.value.trim();
     const busyDescendants = busyDescendantSessionIds.value;
@@ -4751,9 +5094,9 @@ async function abortSession() {
       ),
     ];
     await Promise.all(abortPromises);
-    sendStatus.value = t('app.status.stopped');
+    setSendStatusKey('app.status.stopped');
   } catch (error) {
-    sendStatus.value = t('app.error.stopFailed', { message: toErrorMessage(error) });
+    setSendStatusKey('app.error.stopFailed', { message: toErrorMessage(error) });
   } finally {
     isAborting.value = false;
   }
@@ -4925,6 +5268,22 @@ watch(pinnedSessionsLimit, () => {
   localPinnedSessionStore.value = limited;
 });
 
+watch(
+  appMonospaceFontFamily,
+  () => {
+    syncAppMonospaceMetrics();
+  },
+  { immediate: true },
+);
+
+watch(
+  terminalFontFamily,
+  () => {
+    void refreshOpenShellFonts();
+  },
+  { immediate: true },
+);
+
 // Computed that extracts only the session properties needed for pinned session reconciliation
 // This avoids deep watching the entire projects object
 const pinnedSessionReconciliationDeps = computed(() => {
@@ -5003,6 +5362,10 @@ watch(selectedModel, () => {
   ) {
     selectedThinking.value = nextThinkingOptions[0];
   }
+});
+
+watch(hiddenModels, (value) => {
+  writeHiddenModelsToStorage(value);
 });
 
 watch(activeDirectory, (directory) => {
@@ -6247,7 +6610,7 @@ async function startInitialization() {
     }
     connectionState.value = 'ready';
     uiInitState.value = 'ready';
-    await fetchProviders();
+    await Promise.all([fetchGlobalProviderConfig(), fetchProviders()]);
     await fetchAgents();
   } catch (error) {
     if (!initializationInFlight) return;
@@ -6325,6 +6688,7 @@ onMounted(() => {
   window.addEventListener('resize', handleWindowResize);
   window.addEventListener('storage', handleComposerDraftStorage);
   window.addEventListener('storage', handlePinnedSessionStoreStorage);
+  window.addEventListener('storage', handleModelVisibilityStorage);
   document.addEventListener('visibilitychange', handleWindowAttentionChange);
   window.addEventListener('focus', handleWindowAttentionChange);
   window.addEventListener('blur', handleWindowAttentionChange);
@@ -6334,7 +6698,7 @@ onMounted(() => {
       if (connectionState.value === 'reconnecting' || connectionState.value === 'error') {
         connectionState.value = 'ready';
         reconnectingMessage.value = '';
-        sendStatus.value = t('app.connection.connected');
+        setSendStatusKey('app.connection.connected');
       }
       if (bootstrapReady.value) {
         syncActiveSelectionToWorker();
@@ -6346,9 +6710,9 @@ onMounted(() => {
     ge.on('connection.reconnected', () => {
       connectionState.value = 'ready';
       reconnectingMessage.value = '';
-      sendStatus.value = t('app.connection.connected');
+      setSendStatusKey('app.connection.connected');
       syncActiveSelectionToWorker();
-      void fetchProviders(true);
+      void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
     }),
   );
   globalEventUnsubscribers.push(
@@ -6491,6 +6855,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleWindowResize);
   window.removeEventListener('storage', handleComposerDraftStorage);
   window.removeEventListener('storage', handlePinnedSessionStoreStorage);
+  window.removeEventListener('storage', handleModelVisibilityStorage);
   document.removeEventListener('visibilitychange', handleWindowAttentionChange);
   window.removeEventListener('focus', handleWindowAttentionChange);
   window.removeEventListener('blur', handleWindowAttentionChange);
@@ -6845,8 +7210,10 @@ onBeforeUnmount(() => {
   --tool-top-offset: 0px;
   --tool-area-height: var(--canvas-height, 100%);
   --term-font-family:
-    'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo,
-    Consolas, 'Liberation Mono', monospace;
+    'FiraCode Nerd Font Mono', 'FiraCode Nerd Font Mono Med', 'CaskaydiaCove Nerd Font Mono',
+    'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed',
+    'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono',
+    monospace;
   --term-font-size: 13px;
   --term-line-height: 1.1;
   --term-width: 670px;

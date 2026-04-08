@@ -7,6 +7,7 @@
           class="tree-branch-picker-dropdown"
           auto-close
           :popup-style="{ width: '360px' }"
+          @update:open="onBranchMenuOpenChange"
           @select="onBranchSelect"
         >
           <template #trigger>
@@ -433,6 +434,7 @@ const props = defineProps<{
   branchEntries?: BranchEntry[];
   branchListLoading?: boolean;
   runShellCommand?: (command: string) => Promise<void>;
+  ensureBranchEntriesLoaded?: () => Promise<void>;
 }>();
 
 const emit = defineEmits<{
@@ -952,6 +954,14 @@ function onBranchPickerToggle() {
   branchMenuOpen.value = !branchMenuOpen.value;
   if (!branchMenuOpen.value) return;
   branchSearchQuery.value = '';
+  void props.ensureBranchEntriesLoaded?.();
+}
+
+function onBranchMenuOpenChange(open: boolean) {
+  branchMenuOpen.value = open;
+  if (!open) return;
+  branchSearchQuery.value = '';
+  void props.ensureBranchEntriesLoaded?.();
 }
 
 function onBranchSelect(value: unknown) {

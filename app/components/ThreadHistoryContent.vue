@@ -524,7 +524,7 @@ function formatMessageTime(value?: number) {
 
 .history-tool-content {
   padding: 6px 10px;
-  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-family: var(--app-monospace-font-family);
   font-size: 12px;
   line-height: 1.4;
   color: #94a3b8;
