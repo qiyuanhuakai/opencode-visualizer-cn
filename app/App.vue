@@ -555,10 +555,10 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key
   } else if (mode === 'changes') {
     // Only files with worktree changes (y != ' ' and y != '?')
     filterLines = ['  [ "$y" = " " ] && continue', '  [ "$y" = "?" ] && continue'];
-  } else {
-    // All: skip untracked only
-    filterLines = ['  [ "$x" = "?" ] && [ "$y" = "?" ] && continue'];
-  }
+   } else {
+     // All: include all files (git status already filters to changed files)
+     filterLines = [];
+   }
   // Before/after source depends on mode
   let beforeLines: string[];
   let afterLines: string[];
