@@ -445,8 +445,9 @@ const currentTotalLabel = computed(() => {
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  background: rgba(15, 23, 42, 0.98);
-  border: 1px solid #334155;
+  background: var(--region-modal-bg, rgba(15, 23, 42, 0.98));
+  border: 1px solid var(--region-modal-border, #334155);
+  color: var(--region-modal-text, #e2e8f0);
   border-radius: 12px;
   box-shadow: 0 20px 48px rgba(2, 6, 23, 0.55);
   overflow: hidden;
@@ -458,7 +459,7 @@ const currentTotalLabel = computed(() => {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid var(--region-modal-border, #334155);
 }
 
 .status-monitor-header-main {
@@ -480,17 +481,17 @@ const currentTotalLabel = computed(() => {
   justify-content: center;
   width: 28px;
   height: 28px;
-  color: #94a3b8;
-  background: transparent;
-  border: none;
+  color: var(--region-modal-text, #94a3b8);
+  background: var(--region-modal-control-bg, transparent);
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
 .status-monitor-close-button:hover {
-  color: #e2e8f0;
-  background: rgba(148, 163, 184, 0.15);
+  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-active-bg, rgba(148, 163, 184, 0.15));
 }
 
 .status-monitor-body {
@@ -508,8 +509,8 @@ const currentTotalLabel = computed(() => {
   align-items: center;
   gap: 6px;
   padding: 4px;
-  background: rgba(30, 41, 59, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.15);
+  background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.55));
+  border: 1px solid var(--region-modal-border, rgba(148, 163, 184, 0.15));
   border-radius: 8px;
 }
 
@@ -530,13 +531,13 @@ const currentTotalLabel = computed(() => {
 
 .status-monitor-tab:hover {
   color: #e2e8f0;
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--region-modal-active-bg, rgba(148, 163, 184, 0.12));
 }
 
 .status-monitor-tab.is-active {
   color: #e2e8f0;
-  background: rgba(30, 64, 175, 0.45);
-  border-color: rgba(96, 165, 250, 0.5);
+  background: var(--region-modal-active-bg, rgba(30, 64, 175, 0.45));
+  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.5));
 }
 
 .status-monitor-actions {
@@ -556,8 +557,8 @@ const currentTotalLabel = computed(() => {
   font-size: 12px;
   font-weight: 500;
   color: #e2e8f0;
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid #475569;
+  background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.8));
+  border: 1px solid var(--region-modal-border, #475569);
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s ease;
@@ -593,8 +594,8 @@ const currentTotalLabel = computed(() => {
   font-size: 11px;
   font-weight: 500;
   color: #fecaca;
-  background: rgba(248, 113, 113, 0.2);
-  border: 1px solid rgba(248, 113, 113, 0.45);
+  background: var(--region-modal-active-bg, rgba(248, 113, 113, 0.2));
+  border: 1px solid var(--region-modal-accent, rgba(248, 113, 113, 0.45));
   border-radius: 5px;
   cursor: pointer;
 }
@@ -621,8 +622,8 @@ const currentTotalLabel = computed(() => {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: rgba(30, 41, 59, 0.55);
-  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.55));
+  border: 1px solid var(--region-modal-border, rgba(148, 163, 184, 0.12));
   border-radius: 8px;
 }
 
@@ -691,7 +692,7 @@ const currentTotalLabel = computed(() => {
 .toggle-track {
   width: 36px;
   height: 20px;
-  background: #334155;
+  background: var(--region-modal-border, #334155);
   border-radius: 10px;
   position: relative;
   transition: background 0.2s;
@@ -712,7 +713,7 @@ const currentTotalLabel = computed(() => {
 }
 
 .toggle-input:checked + .toggle-track {
-  background: #3b82f6;
+  background: var(--region-modal-accent, #3b82f6);
 }
 
 .toggle-input:checked + .toggle-track::after {

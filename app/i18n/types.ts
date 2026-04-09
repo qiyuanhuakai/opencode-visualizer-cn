@@ -394,6 +394,7 @@ export interface LocaleMessages {
   settings: {
     title: string;
     fontsPageTitle: string;
+    themePageTitle: string;
     close: string;
     backToRoot: string;
     language: {
@@ -453,6 +454,24 @@ export interface LocaleMessages {
     dockAlwaysOpen: {
       label: string;
       description: string;
+    };
+    theme: {
+      label: string;
+      description: string;
+      presetLabel: string;
+      customLabel: string;
+      topPanel: string;
+      sidePanel: string;
+      inputPanel: string;
+      outputPanel: string;
+      floatingWindow: string;
+      topDropdown: string;
+      modalPanel: string;
+      bg: string;
+      text: string;
+      border: string;
+      accent: string;
+      reset: string;
     };
   };
   floatingWindow: {

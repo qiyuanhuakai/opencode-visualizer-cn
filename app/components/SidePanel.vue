@@ -213,10 +213,10 @@ const {
   min-height: 0;
   display: flex;
   flex-direction: row;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-side-border, #334155);
   border-radius: 12px;
   background-clip: padding-box;
-  background: rgba(12, 18, 30, 0.95);
+  background: var(--region-side-bg, rgba(12, 18, 30, 0.95));
   box-shadow: 0 10px 24px rgba(2, 6, 23, 0.35);
   overflow: hidden;
 }
@@ -258,10 +258,10 @@ const {
 
 .side-tab {
   flex: 1;
-  border: 1px solid rgba(100, 116, 139, 0.35);
+  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.35));
   border-radius: 6px;
-  background: rgba(15, 23, 42, 0.7);
-  color: #94a3b8;
+  background: var(--region-side-bg, rgba(15, 23, 42, 0.7));
+  color: var(--region-side-text, #94a3b8);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -270,9 +270,9 @@ const {
 }
 
 .side-tab.is-active {
-  background: rgba(30, 64, 175, 0.45);
-  color: #e2e8f0;
-  border-color: rgba(96, 165, 250, 0.6);
+  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
+  color: var(--region-side-active-text, #e2e8f0);
+  border-color: var(--region-side-accent, rgba(96, 165, 250, 0.6));
 }
 
 .side-panel.is-collapsed {

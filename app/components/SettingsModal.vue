@@ -10,7 +10,7 @@
       <header class="modal-header">
         <div class="modal-header-main">
           <button
-            v-if="activePage === 'fonts'"
+            v-if="activePage !== 'root'"
             type="button"
             class="modal-back-button"
             :aria-label="$t('settings.backToRoot')"
@@ -18,7 +18,7 @@
           >
             <Icon icon="lucide:arrow-left" :width="14" :height="14" />
           </button>
-          <div class="modal-title">{{ activePage === 'root' ? $t('settings.title') : $t('settings.fontsPageTitle') }}</div>
+          <div class="modal-title">{{ activePage === 'root' ? $t('settings.title') : (activePage === 'fonts' ? $t('settings.fontsPageTitle') : $t('settings.themePageTitle')) }}</div>
         </div>
         <button
           type="button"
@@ -112,6 +112,72 @@
             </div>
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
           </button>
+
+          <button
+            type="button"
+            class="setting-row setting-link-row"
+            :aria-label="$t('settings.theme.label')"
+            @click="activePage = 'theme'"
+          >
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.theme.label') }}</div>
+              <div class="setting-description">{{ $t('settings.theme.description') }}</div>
+            </div>
+            <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
+          </button>
+        </template>
+
+        <template v-else-if="activePage === 'theme'">
+          <div class="setting-page-description">{{ $t('settings.theme.description') }}</div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.theme.presetLabel') }}</div>
+            </div>
+            <select v-model="selectedPreset" class="language-select">
+              <option value="default">Default</option>
+              <option value="ocean">Ocean</option>
+              <option value="forest">Forest</option>
+              <option value="sakura">樱粉幻梦</option>
+              <option value="custom">{{ $t('settings.theme.customLabel') }}</option>
+            </select>
+          </div>
+
+          <template v-if="selectedPreset === 'custom'">
+            <div
+              v-for="region in regionNames"
+              :key="region"
+              class="setting-row setting-row-font"
+            >
+              <div class="setting-info">
+                <div class="setting-label">{{ $t(`settings.theme.${region}`) }}</div>
+              </div>
+              <div class="theme-region-colors">
+                <div
+                  v-for="field in colorFields"
+                  :key="field"
+                  class="theme-color-field"
+                >
+                  <label class="theme-color-label">{{ $t(`settings.theme.${field}`) }}</label>
+                  <input
+                    v-model="customColors[region][field]"
+                    type="color"
+                    class="theme-color-input"
+                  />
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <div class="setting-row setting-row-font">
+            <button
+              type="button"
+              class="font-system-button"
+              @click="resetTheme(); selectedPreset = 'default'"
+            >
+              {{ $t('settings.theme.reset') }}
+            </button>
+          </div>
         </template>
 
         <template v-else>
@@ -311,7 +377,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, watchEffect } from 'vue';
+import { computed, onMounted, reactive, ref, watch, watchEffect } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useSettings } from '../composables/useSettings';
 import { useI18n } from 'vue-i18n';
@@ -325,6 +391,9 @@ import {
   type FontAvailabilityStatus,
   type LocalFontFamily,
 } from '../utils/fontDiscovery';
+import { useRegionTheme } from '../composables/useRegionTheme';
+import { DEFAULT_REGION_THEME, OCEAN_PRESET, FOREST_PRESET, SAKURA_PRESET } from '../utils/regionTheme';
+import type { RegionColors, RegionName } from '../utils/regionTheme';
 
 type FontPreset = {
   id: string;
@@ -332,7 +401,7 @@ type FontPreset = {
   value: string;
 };
 
-type SettingsPage = 'root' | 'fonts';
+type SettingsPage = 'root' | 'fonts' | 'theme';
 
 const props = defineProps<{
   open: boolean;
@@ -369,6 +438,111 @@ const {
   defaultTerminalFontFamily,
   defaultAppMonospaceFontFamily,
 } = useSettings();
+const { activeTheme, applyPreset, resetTheme } = useRegionTheme();
+const selectedPreset = ref<'default' | 'ocean' | 'forest' | 'sakura' | 'custom'>('default');
+const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel'];
+const colorFields: (keyof Pick<RegionColors, 'bg' | 'text' | 'border' | 'accent'>)[] = ['bg', 'text', 'border', 'accent'];
+
+const customColors = reactive<Record<RegionName, { bg: string; text: string; border: string; accent: string }>>({
+  topPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  sidePanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  inputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  outputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  floatingWindow: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  topDropdown: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  modalPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+});
+
+function syncCustomColorsFromActiveTheme() {
+  let source = activeTheme.value;
+  if (!source) {
+    source = DEFAULT_REGION_THEME;
+  } else if (source.name === 'ocean') {
+    source = OCEAN_PRESET;
+  } else if (source.name === 'forest') {
+    source = FOREST_PRESET;
+  } else if (source.name === 'sakura') {
+    source = SAKURA_PRESET;
+  }
+  regionNames.forEach((region) => {
+    customColors[region].bg = source.regions[region]?.bg || '#1a1a2e';
+    customColors[region].text = source.regions[region]?.text || '#eaf6ff';
+    customColors[region].border = source.regions[region]?.border || '#334155';
+    customColors[region].accent = source.regions[region]?.accent || '#4cc9f0';
+  });
+}
+
+watch(selectedPreset, (val) => {
+  if (val === 'default') {
+    resetTheme();
+  } else if (val === 'ocean' || val === 'forest' || val === 'sakura') {
+    applyPreset(val);
+  } else if (val === 'custom') {
+    syncCustomColorsFromActiveTheme();
+    activeTheme.value = {
+      name: 'custom',
+      label: 'Custom',
+      regions: {
+        topPanel: { ...customColors.topPanel },
+        sidePanel: { ...customColors.sidePanel },
+        inputPanel: { ...customColors.inputPanel },
+        outputPanel: { ...customColors.outputPanel },
+        floatingWindow: { ...customColors.floatingWindow },
+        topDropdown: { ...customColors.topDropdown },
+        modalPanel: { ...customColors.modalPanel },
+      },
+    };
+  }
+});
+
+watch(
+  customColors,
+  () => {
+    if (selectedPreset.value === 'custom') {
+      activeTheme.value = {
+        name: 'custom',
+        label: 'Custom',
+        regions: {
+          topPanel: { ...customColors.topPanel },
+          sidePanel: { ...customColors.sidePanel },
+          inputPanel: { ...customColors.inputPanel },
+          outputPanel: { ...customColors.outputPanel },
+          floatingWindow: { ...customColors.floatingWindow },
+          topDropdown: { ...customColors.topDropdown },
+          modalPanel: { ...customColors.modalPanel },
+        },
+      };
+    }
+  },
+  { deep: true },
+);
+
+watch(activePage, (page) => {
+  if (page === 'theme') {
+    syncCustomColorsFromActiveTheme();
+    if (!activeTheme.value) {
+      selectedPreset.value = 'default';
+    } else if (activeTheme.value.name === 'default' || activeTheme.value.name === 'ocean' || activeTheme.value.name === 'forest' || activeTheme.value.name === 'sakura') {
+      selectedPreset.value = activeTheme.value.name;
+    } else {
+      selectedPreset.value = 'custom';
+    }
+  }
+});
+
+onMounted(() => {
+  if (activePage.value === 'theme') {
+    syncCustomColorsFromActiveTheme();
+    if (!activeTheme.value) {
+      selectedPreset.value = 'default';
+    } else if (activeTheme.value.name === 'default' || activeTheme.value.name === 'ocean' || activeTheme.value.name === 'forest' || activeTheme.value.name === 'sakura') {
+      selectedPreset.value = activeTheme.value.name;
+    } else {
+      selectedPreset.value = 'custom';
+    }
+  }
+});
+
 const debouncedTerminalFontFamily = ref(terminalFontFamily.value);
 const debouncedAppMonospaceFontFamily = ref(appMonospaceFontFamily.value);
 
@@ -535,7 +709,7 @@ watch(
 }
 
 .modal-backdrop::backdrop {
-  background: rgba(2, 6, 23, 0.65);
+  background: var(--region-modal-active-bg, rgba(2, 6, 23, 0.65));
 }
 
 .modal {
@@ -545,11 +719,11 @@ watch(
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  background: rgba(15, 23, 42, 0.98);
-  border: 1px solid #334155;
+  background: var(--region-modal-bg, rgba(15, 23, 42, 0.98));
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 12px;
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-family: var(--app-monospace-font-family);
 }
 
@@ -579,17 +753,17 @@ watch(
   justify-content: center;
   width: 28px;
   height: 28px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 6px;
-  background: transparent;
-  color: #94a3b8;
+  background: var(--region-modal-control-bg, transparent);
+  color: var(--region-modal-text, #94a3b8);
   cursor: pointer;
 }
 
 .modal-back-button:hover,
 .modal-close-button:hover {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--region-modal-active-bg, #1e293b);
+  color: var(--region-modal-text, #e2e8f0);
 }
 
 .modal-body {
@@ -606,9 +780,9 @@ watch(
   justify-content: space-between;
   gap: 16px;
   padding: 10px 12px;
-  border: 1px solid #1e293b;
+  border: 1px solid var(--region-modal-border, #1e293b);
   border-radius: 8px;
-  background: rgba(2, 6, 23, 0.45);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.45));
 }
 
 .setting-row-stack {
@@ -633,7 +807,7 @@ watch(
 }
 
 .setting-link-row:hover {
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
   border-color: #475569;
 }
 
@@ -721,8 +895,8 @@ watch(
 }
 
 .font-preset-chip.is-active {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.45);
+  border-color: var(--region-modal-accent, rgba(59, 130, 246, 0.45));
+  background: var(--region-modal-active-bg, rgba(59, 130, 246, 0.2));
   color: #dbeafe;
 }
 
@@ -731,7 +905,7 @@ watch(
   height: 30px;
   border: 1px solid #334155;
   border-radius: 6px;
-  background: rgba(2, 6, 23, 0.6);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
   color: #e2e8f0;
   font-size: 12px;
   font-family: inherit;
@@ -762,7 +936,7 @@ watch(
   resize: vertical;
   border: 1px solid #334155;
   border-radius: 8px;
-  background: rgba(2, 6, 23, 0.6);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
   color: #e2e8f0;
   font-size: 12px;
   line-height: 1.5;
@@ -788,7 +962,7 @@ watch(
   gap: 8px;
   border: 1px solid #334155;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
   color: #cbd5e1;
   font-size: 12px;
   font-family: inherit;
@@ -860,7 +1034,7 @@ watch(
   min-height: 30px;
   border: 1px solid #334155;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
   color: #e2e8f0;
   font-size: 12px;
   font-family: inherit;
@@ -906,7 +1080,7 @@ watch(
   padding: 10px;
   border: 1px solid #334155;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
   color: #e2e8f0;
   text-align: left;
   cursor: pointer;
@@ -932,7 +1106,7 @@ watch(
   height: 30px;
   border: 1px solid #334155;
   border-radius: 6px;
-  background: rgba(2, 6, 23, 0.6);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
   color: #e2e8f0;
   font-size: 12px;
   font-family: inherit;
@@ -965,7 +1139,7 @@ watch(
 .toggle-track {
   width: 36px;
   height: 20px;
-  background: #334155;
+  background: var(--region-modal-border, #334155);
   border-radius: 10px;
   position: relative;
   transition: background 0.2s;
@@ -978,7 +1152,7 @@ watch(
   left: 2px;
   width: 16px;
   height: 16px;
-  background: #94a3b8;
+  background: var(--region-modal-text, #94a3b8);
   border-radius: 50%;
   transition:
     transform 0.2s,
@@ -986,11 +1160,41 @@ watch(
 }
 
 .toggle-input:checked + .toggle-track {
-  background: #3b82f6;
+  background: var(--region-modal-accent, #3b82f6);
 }
 
 .toggle-input:checked + .toggle-track::after {
   transform: translateX(16px);
   background: #fff;
+}
+
+.theme-region-colors {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  width: 100%;
+}
+
+.theme-color-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.theme-color-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.theme-color-input {
+  width: 100%;
+  height: 32px;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
 }
 </style>

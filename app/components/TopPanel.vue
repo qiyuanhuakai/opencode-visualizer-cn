@@ -1,5 +1,5 @@
 <template>
-  <div class="top-panel">
+  <div class="top-panel" :style="regionStyle">
     <div class="top-row">
       <div class="top-left flex items-center gap-2" :title="gitRevision">
         <img width="48px" height="24px" src="/logo.svg" class="" />
@@ -503,6 +503,8 @@ import DropdownSearch from './Dropdown/Search.vue';
 declare const __GIT_REVISION__: string;
 const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
 const { t } = useI18n();
+
+const regionStyle = computed(() => undefined);
 
 export type TopPanelSession = {
   id: string;
@@ -1072,8 +1074,8 @@ function handleOpenDirectory(close: () => void) {
   margin: -12px -12px 0;
   padding: 8px 12px;
   width: calc(100% + 24px);
-  background: rgba(15, 23, 42, 0.92);
-  border-bottom: 1px solid #334155;
+  background: var(--region-top-bg, rgba(15, 23, 42, 0.92));
+  border-bottom: 1px solid var(--region-top-border, #334155);
 }
 
 .top-row {
@@ -1089,7 +1091,7 @@ function handleOpenDirectory(close: () => void) {
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: #f1f5f9;
+  color: var(--region-top-text, #f1f5f9);
 }
 
 .top-center {
@@ -1099,6 +1101,11 @@ function handleOpenDirectory(close: () => void) {
   justify-content: center;
   align-items: center;
   gap: 8px;
+  background: var(--region-top-dropdown-bg, transparent);
+  --region-top-border: var(--region-top-dropdown-border, #334155);
+  --region-top-control-bg: var(--region-top-dropdown-control-bg, #0b1320);
+  --region-top-text: var(--region-top-dropdown-text, #e2e8f0);
+  --region-top-bg: var(--region-top-dropdown-bg, rgba(15, 23, 42, 0.92));
 }
 
 .top-right {
@@ -1118,9 +1125,13 @@ function handleOpenDirectory(close: () => void) {
 .tree-menu {
   display: flex;
   flex-direction: column;
-  background: transparent;
+  background: var(--region-top-dropdown-bg, transparent);
   flex: 1 1 auto;
   min-height: 0;
+  --region-top-border: var(--region-top-dropdown-border, #334155);
+  --region-top-control-bg: var(--region-top-dropdown-control-bg, #0b1320);
+  --region-top-text: var(--region-top-dropdown-text, #e2e8f0);
+  --region-top-bg: var(--region-top-dropdown-bg, rgba(15, 23, 42, 0.92));
 }
 
 .tree-search {
@@ -1128,8 +1139,8 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid #334155;
-  background: rgba(15, 23, 42, 0.9);
+  border-bottom: 1px solid var(--region-top-dropdown-border, var(--region-top-border, #334155));
+  background: var(--region-top-dropdown-bg, var(--region-top-bg, rgba(15, 23, 42, 0.9)));
 }
 
 .search-icon {
@@ -1164,8 +1175,8 @@ function handleOpenDirectory(close: () => void) {
   justify-content: space-between;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid #334155;
-  background: rgba(14, 24, 40, 0.95);
+  border-bottom: 1px solid var(--region-top-dropdown-border, #334155);
+  background: var(--region-top-dropdown-control-bg, rgba(14, 24, 40, 0.95));
 }
 
 .management-title {
@@ -1189,10 +1200,10 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action {
-  border: 1px solid #334155;
+  border: 1px solid var(--region-top-border, #334155);
   border-radius: 999px;
-  background: #111a2c;
-  color: #cbd5e1;
+  background: var(--region-top-control-bg, #111a2c);
+  color: var(--region-top-text, #cbd5e1);
   font-size: 11px;
   line-height: 1;
   padding: 5px 8px;
@@ -1221,7 +1232,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-worktree + .tree-worktree {
-  border-top: 1px solid #334155;
+  border-top: 1px solid var(--region-top-dropdown-border, #334155);
 }
 
 .tree-empty {
@@ -1271,7 +1282,7 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-label-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-top-dropdown-text, #e2e8f0);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1524,7 +1535,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .session-title {
-  color: #e2e8f0;
+  color: var(--region-top-dropdown-text, #e2e8f0);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1590,9 +1601,9 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-footer {
   flex: 0 0 auto;
-  border-top: 1px solid #334155;
+  border-top: 1px solid var(--region-top-dropdown-border, #334155);
   padding: 8px;
-  background: #0b1320;
+  background: var(--region-top-dropdown-control-bg, #0b1320);
 }
 
 .tree-footer-button {
@@ -1601,10 +1612,10 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-top-dropdown-border, #334155);
   border-radius: 8px;
-  background: #111a2c;
-  color: #e2e8f0;
+  background: var(--region-top-dropdown-control-bg, #111a2c);
+  color: var(--region-top-dropdown-text, #e2e8f0);
   padding: 6px 10px;
   font-size: 12px;
   cursor: pointer;
@@ -1615,10 +1626,10 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .control-button {
-  border: 1px solid #334155;
+  border: 1px solid var(--region-top-border, #334155);
   border-radius: 8px;
-  background: #0b1320;
-  color: #e2e8f0;
+  background: var(--region-top-control-bg, #0b1320);
+  color: var(--region-top-text, #e2e8f0);
   padding: 6px 12px;
   font-size: 12px;
   display: inline-flex;
@@ -1633,7 +1644,7 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: #86efac;
+  color: var(--region-top-dropdown-accent, #86efac);
 }
 
 .new-session-button:hover,
@@ -1647,7 +1658,7 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: #c4b5fd;
+  color: var(--region-top-dropdown-accent, #c4b5fd);
 }
 
 .management-toggle-button {
@@ -1656,13 +1667,13 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: #93c5fd;
+  color: var(--region-top-dropdown-accent, #93c5fd);
 }
 
 .management-toggle-button.is-active {
-  border-color: rgba(59, 130, 246, 0.45);
-  background: rgba(30, 64, 175, 0.2);
-  color: #bfdbfe;
+  border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
+  background: var(--region-top-dropdown-active-bg, rgba(30, 64, 175, 0.2));
+  color: var(--region-top-dropdown-active-text, #bfdbfe);
 }
 
 .management-toggle-button:hover {
@@ -1676,11 +1687,11 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: #64748b;
+  color: var(--region-top-dropdown-text, #64748b);
 }
 
 .notification-button.has-notifications {
-  color: #fbbf24;
+  color: var(--region-top-dropdown-accent, #fbbf24);
 }
 
 .notification-badge {
