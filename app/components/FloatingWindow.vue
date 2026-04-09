@@ -583,8 +583,9 @@ function onResizeEnd(e: PointerEvent) {
   display: flex;
   flex-direction: column;
   max-width: 100vw;
-  background: color-mix(in srgb, var(--window-color, #3a4150) 12%, #1a1d24);
+  background: color-mix(in srgb, var(--window-color, #3a4150) 12%, var(--region-float-bg, #1a1d24));
   border: 1px solid var(--window-color, #3a4150);
+  border-color: var(--region-float-border, var(--window-color, #3a4150));
   border-radius: 5px;
   font-family: var(--floating-font-family, monospace);
   font-size: var(--floating-font-size, 14px);
@@ -600,10 +601,11 @@ function onResizeEnd(e: PointerEvent) {
   justify-content: space-between;
   padding: 0 4px;
   font-size: 12px;
-  color: color-mix(in srgb, var(--window-color, #3a4150) 40%, #e2e8f0);
-  background: color-mix(in srgb, var(--window-color, #3a4150) 22%, rgba(36, 40, 50, 0.95));
+  color: color-mix(in srgb, var(--window-color, #3a4150) 40%, var(--region-float-text, #e2e8f0));
+  background: color-mix(in srgb, var(--window-color, #3a4150) 22%, var(--region-float-bg, rgba(36, 40, 50, 0.95)));
   border-bottom: 1px solid
     color-mix(in srgb, var(--window-color, #3a4150) 35%, rgba(90, 100, 120, 0.35));
+  border-bottom-color: color-mix(in srgb, var(--window-color, #3a4150) 35%, var(--region-float-border, rgba(90, 100, 120, 0.35)));
   border-radius: 4px 4px 0 0;
   cursor: grab;
   user-select: none;
@@ -623,6 +625,12 @@ function onResizeEnd(e: PointerEvent) {
   display: inline-flex;
   align-items: center;
   gap: 2px;
+}
+
+.titlebar-controls {
+  background: var(--region-float-control-bg, rgba(60, 70, 90, 0.65));
+  border-color: var(--region-float-border, rgba(100, 110, 130, 0.5));
+  color: var(--region-float-text, #e2e8f0);
 }
 
 .minimize-btn {

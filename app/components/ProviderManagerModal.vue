@@ -715,7 +715,7 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-manager-backdrop::backdrop {
-  background: rgba(2, 6, 23, 0.68);
+  background: var(--region-modal-active-bg, rgba(2, 6, 23, 0.68));
 }
 
 .provider-manager-modal {
@@ -725,11 +725,11 @@ async function disconnectProvider(providerId: string) {
   flex-direction: column;
   gap: 14px;
   padding: 16px;
-  background: rgba(15, 23, 42, 0.98);
-  border: 1px solid #334155;
+  background: var(--region-modal-bg, rgba(15, 23, 42, 0.98));
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 14px;
   box-shadow: 0 20px 44px rgba(2, 6, 23, 0.45);
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-family: var(--app-monospace-font-family);
 }
 
@@ -762,16 +762,16 @@ async function disconnectProvider(providerId: string) {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 8px;
-  background: transparent;
-  color: #94a3b8;
+  background: var(--region-modal-control-bg, transparent);
+  color: var(--region-modal-text, #94a3b8);
   cursor: pointer;
 }
 
 .provider-manager-close:hover {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--region-modal-active-bg, #1e293b);
+  color: var(--region-modal-text, #e2e8f0);
 }
 
 .provider-manager-body {
@@ -795,7 +795,7 @@ async function disconnectProvider(providerId: string) {
 .provider-manager-tab {
   border: 1px solid rgba(100, 116, 139, 0.35);
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.7);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.7));
   color: #94a3b8;
   font-size: 11px;
   font-weight: 700;
@@ -805,32 +805,32 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-manager-tab.is-active {
-  background: rgba(30, 64, 175, 0.45);
+  background: var(--region-modal-active-bg, rgba(30, 64, 175, 0.45));
   color: #e2e8f0;
-  border-color: rgba(96, 165, 250, 0.6);
+  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.6));
 }
 
 .provider-manager-feedback {
   padding: 10px 12px;
   border-radius: 10px;
   font-size: 12px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
 }
 
 .provider-manager-feedback.is-info {
-  background: rgba(30, 41, 59, 0.85);
+  background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.85));
   color: #cbd5e1;
 }
 
 .provider-manager-feedback.is-success {
-  background: rgba(20, 83, 45, 0.24);
-  border-color: rgba(34, 197, 94, 0.35);
+  background: var(--region-modal-control-bg, rgba(20, 83, 45, 0.24));
+  border-color: var(--region-modal-border, rgba(34, 197, 94, 0.35));
   color: #bbf7d0;
 }
 
 .provider-manager-feedback.is-error {
-  background: rgba(127, 29, 29, 0.22);
-  border-color: rgba(248, 113, 113, 0.35);
+  background: var(--region-modal-control-bg, rgba(127, 29, 29, 0.22));
+  border-color: var(--region-modal-border, rgba(248, 113, 113, 0.35));
   color: #fecaca;
 }
 
@@ -977,7 +977,7 @@ async function disconnectProvider(providerId: string) {
   gap: 8px;
   border: 1px solid #334155;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
   color: #cbd5e1;
   font-size: 12px;
   font-family: inherit;
@@ -1029,7 +1029,7 @@ async function disconnectProvider(providerId: string) {
   padding: 12px;
   border: 1px solid rgba(51, 65, 85, 0.8);
   border-radius: 12px;
-  background: rgba(2, 6, 23, 0.46);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.46));
   color: #e2e8f0;
   text-align: left;
   cursor: pointer;
@@ -1186,7 +1186,7 @@ async function disconnectProvider(providerId: string) {
 .ghost-action {
   border: 1px solid #334155;
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.82);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.82));
   color: #e2e8f0;
   font-size: 12px;
   font-family: inherit;
@@ -1237,8 +1237,8 @@ async function disconnectProvider(providerId: string) {
   width: 36px;
   height: 20px;
   border-radius: 999px;
-  background: rgba(51, 65, 85, 0.95);
-  border: 1px solid rgba(100, 116, 139, 0.55);
+  background: var(--region-modal-border, rgba(51, 65, 85, 0.95));
+  border: 1px solid var(--region-modal-border, rgba(100, 116, 139, 0.55));
   position: relative;
   transition: background 0.18s ease;
 }
@@ -1256,8 +1256,8 @@ async function disconnectProvider(providerId: string) {
 }
 
 .toggle-input:checked + .toggle-track {
-  background: rgba(37, 99, 235, 0.9);
-  border-color: rgba(96, 165, 250, 0.65);
+  background: var(--region-modal-accent, rgba(37, 99, 235, 0.9));
+  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.65));
 }
 
 .toggle-input:checked + .toggle-track::after {
@@ -1282,7 +1282,7 @@ async function disconnectProvider(providerId: string) {
   padding: 0 12px;
   border: 1px solid #334155;
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.82);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.82));
   color: #94a3b8;
 }
 

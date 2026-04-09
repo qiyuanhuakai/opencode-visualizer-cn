@@ -368,13 +368,13 @@ defineExpose({ panelEl });
   min-height: 0;
   overflow: hidden;
   position: relative;
-  background-color: rgba(15, 23, 42, 0.92);
+  background-color: var(--region-output-bg, rgba(15, 23, 42, 0.92));
   background-image: linear-gradient(
     color-mix(in srgb, var(--project-tint, transparent) 9%, transparent),
     color-mix(in srgb, var(--project-tint, transparent) 9%, transparent)
   );
   color: #e2e8f0;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-output-border, #334155);
   border-radius: 12px;
   background-clip: padding-box;
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
@@ -489,7 +489,7 @@ defineExpose({ panelEl });
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.03em;
-  color: color-mix(in srgb, var(--project-tint, #94a3b8) 60%, #94a3b8);
+  color: color-mix(in srgb, var(--project-tint, var(--region-output-text, #94a3b8)) 60%, var(--region-output-text, #94a3b8));
   padding: 12px 12px 0;
   user-select: none;
 }

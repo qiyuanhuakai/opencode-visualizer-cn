@@ -12,6 +12,13 @@
   --color-accent-400: #60a5fa;
   --color-success-400: #22c55e;
   --color-warning-300: #fef08a;
+  --color-region-bg: rgba(15, 23, 42, 0.92);
+  --color-region-text: #e2e8f0;
+  --color-region-border: #334155;
+  --color-region-accent: #3b82f6;
+  --color-region-control-bg: #0b1320;
+  --color-region-active-bg: rgba(30, 64, 175, 0.45);
+  --color-region-active-text: #e2e8f0;
 }
 
 :root {

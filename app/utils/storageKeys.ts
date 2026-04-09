@@ -9,6 +9,7 @@ export const StorageKeys = {
     pinnedSessionsLimit: 'settings.pinnedSessionsLimit.v1',
     terminalFontFamily: 'settings.terminalFontFamily.v1',
     appMonospaceFontFamily: 'settings.appMonospaceFontFamily.v1',
+    regionTheme: 'settings.regionTheme.v1',
   },
   state: {
     sidePanelCollapsed: 'state.sidePanelCollapsed.v1',

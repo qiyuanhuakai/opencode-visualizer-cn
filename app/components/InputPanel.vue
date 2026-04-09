@@ -1210,7 +1210,7 @@ const inputMessageStyle = computed(() => {
   height: 100%;
   min-height: 0;
   box-sizing: border-box;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   font-family: var(--app-monospace-font-family);
 }
 
@@ -1223,9 +1223,9 @@ const inputMessageStyle = computed(() => {
   flex-direction: column;
   align-items: stretch;
   overflow: visible;
-  background-color: rgba(15, 23, 42, 0.92);
+  background-color: var(--region-input-bg, rgba(15, 23, 42, 0.92));
   background-image: linear-gradient(var(--agent-tint, transparent), var(--agent-tint, transparent));
-  border: 1px solid #334155;
+  border: 1px solid var(--region-input-border, #334155);
   border-radius: 12px;
   box-sizing: border-box;
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
@@ -1659,8 +1659,8 @@ const inputMessageStyle = computed(() => {
   max-height: 50vh;
   overflow: auto;
   /* Match input panel background */
-  background: rgba(15, 23, 42, 0.92);
-  border: 1px solid #334155;
+  background: var(--region-input-bg, rgba(15, 23, 42, 0.92));
+  border: 1px solid var(--region-input-border, #334155);
   outline: none;
   box-shadow: 0 -8px 24px rgba(2, 6, 23, 0.5);
   box-sizing: border-box;
@@ -1685,7 +1685,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .history-item {
-  border-left: 3px solid #334155;
+  border-left: 3px solid var(--region-input-border, #334155);
   padding-left: 8px;
   flex: 1 1 auto;
   min-width: 0;
@@ -1714,6 +1714,7 @@ const inputMessageStyle = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--region-input-text, #94a3b8);
 }
 
 .history-target-agent,

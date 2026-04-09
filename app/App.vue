@@ -1,6 +1,7 @@
 <template>
-  <div ref="appEl" class="app">
-    <template v-if="uiInitState === 'ready'">
+   <div ref="appEl" class="app">
+     <ThemeInjector />
+     <template v-if="uiInitState === 'ready'">
       <header class="app-header">
         <TopPanel
           ref="topPanelRef"
@@ -362,6 +363,7 @@ import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
+import ThemeInjector from './components/ThemeInjector.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
 import DiffViewer from './components/viewers/DiffViewer.vue';
 import ShellContent from './components/ToolWindow/Shell.vue';

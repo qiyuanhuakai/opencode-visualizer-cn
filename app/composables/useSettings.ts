@@ -1,5 +1,6 @@
 import { ref, watch } from 'vue';
-import { StorageKeys, storageGet, storageKey, storageSet } from '../utils/storageKeys';
+import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON, storageSetJSON } from '../utils/storageKeys';
+import type { RegionThemeConfig } from '../utils/regionTheme';
 
 const DEFAULT_PINNED_SESSIONS_LIMIT = 30;
 const MIN_PINNED_SESSIONS_LIMIT = 1;
@@ -44,6 +45,7 @@ const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === '
 const pinnedSessionsLimit = ref(readPinnedSessionsLimit());
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
+const regionTheme = ref<RegionThemeConfig | null>(storageGetJSON(StorageKeys.settings.regionTheme) ?? null);
 
 watch(enterToSend, (value) => {
   storageSet(StorageKeys.settings.enterToSend, String(value));
@@ -93,6 +95,10 @@ watch(appMonospaceFontFamily, (value) => {
   storageSet(StorageKeys.settings.appMonospaceFontFamily, normalized);
 });
 
+watch(regionTheme, (value) => {
+  storageSetJSON(StorageKeys.settings.regionTheme, value);
+});
+
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
     if (event.key === storageKey(StorageKeys.settings.enterToSend)) {
@@ -117,6 +123,9 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.appMonospaceFontFamily)) {
       appMonospaceFontFamily.value = normalizeFontFamily(event.newValue ?? '', DEFAULT_APP_MONOSPACE_FONT_FAMILY);
     }
+    if (event.key === storageKey(StorageKeys.settings.regionTheme)) {
+      regionTheme.value = storageGetJSON(StorageKeys.settings.regionTheme);
+    }
   });
 }
 
@@ -129,6 +138,7 @@ export function useSettings() {
     pinnedSessionsLimit,
     terminalFontFamily,
     appMonospaceFontFamily,
+    regionTheme,
     defaultPinnedSessionsLimit: DEFAULT_PINNED_SESSIONS_LIMIT,
     minPinnedSessionsLimit: MIN_PINNED_SESSIONS_LIMIT,
     maxPinnedSessionsLimit: MAX_PINNED_SESSIONS_LIMIT,
