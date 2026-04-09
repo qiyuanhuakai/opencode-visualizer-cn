@@ -32,6 +32,8 @@ const GIT_STATUS_SCRIPT = [
   'git diff --shortstat 2>/dev/null',
   "printf '\\0##DIFFSTAT_CACHED\\0'",
   'git diff --cached --shortstat 2>/dev/null',
+  "printf '\\0##UNTRACKED_STAT\\0'",
+  'untracked=0; while IFS= read -r -d \'\' f; do untracked=$((untracked + $(wc -l < "$f"))); done < <(git ls-files --others --exclude-standard -z); printf \'%s\' "$untracked"',
 ].join('\n');
 
 const GIT_FILE_LIST_SCRIPT = [
@@ -402,7 +404,7 @@ function parseGitStatusOutput(output: string): GitStatus {
     behind: 0,
   };
   const entries: GitFileStatus[] = [];
-  let section: 'status' | 'head' | 'diffstat' | 'diffstat_cached' = 'status';
+  let section: 'status' | 'head' | 'diffstat' | 'diffstat_cached' | 'untracked_stat' = 'status';
   let headShort = '';
   let unstagedAdditions = 0;
   let unstagedDeletions = 0;
@@ -428,6 +430,10 @@ function parseGitStatusOutput(output: string): GitStatus {
       section = 'diffstat_cached';
       continue;
     }
+    if (stripped === '##UNTRACKED_STAT') {
+      section = 'untracked_stat';
+      continue;
+    }
 
     if (section === 'head') {
       const lines = rawToken.split('\n');
@@ -450,6 +456,17 @@ function parseGitStatusOutput(output: string): GitStatus {
         } else {
           stagedAdditions += stat.additions;
           stagedDeletions += stat.deletions;
+        }
+      }
+      continue;
+    }
+
+    if (section === 'untracked_stat') {
+      const lines = rawToken.split('\n');
+      for (const line of lines) {
+        const t = line.trim();
+        if (t && /^\d+$/.test(t)) {
+          unstagedAdditions += Number.parseInt(t, 10) || 0;
         }
       }
       continue;
