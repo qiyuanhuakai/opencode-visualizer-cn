@@ -473,6 +473,9 @@ export interface LocaleMessages {
       text: string;
       border: string;
       accent: string;
+      controlBg: string;
+      activeBg: string;
+      activeText: string;
       reset: string;
     };
   };

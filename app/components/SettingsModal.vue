@@ -154,7 +154,7 @@
               </div>
               <div class="theme-region-colors">
                 <div
-                  v-for="field in colorFields"
+                  v-for="field in regionVisibleFields[region]"
                   :key="field"
                   class="theme-color-field"
                 >
@@ -441,7 +441,19 @@ const {
 const { activeTheme, applyPreset, resetTheme } = useRegionTheme();
 const selectedPreset = ref<'default' | 'ocean' | 'forest' | 'sakura' | 'custom'>('default');
 const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel', 'pageBackground', 'chatCard'];
-const colorFields: (keyof Pick<RegionColors, 'bg' | 'text' | 'border' | 'accent'>)[] = ['bg', 'text', 'border', 'accent'];
+const colorFields: (keyof RegionColors)[] = ['bg', 'text', 'border', 'accent', 'controlBg', 'activeBg', 'activeText'];
+
+const regionVisibleFields: Record<RegionName, (keyof RegionColors)[]> = {
+  topPanel: colorFields,
+  sidePanel: colorFields,
+  inputPanel: colorFields,
+  outputPanel: colorFields,
+  floatingWindow: colorFields,
+  topDropdown: colorFields,
+  modalPanel: colorFields,
+  pageBackground: ['bg'],
+  chatCard: ['bg', 'border'],
+};
 
 const customColors = reactive<
   Record<RegionName, { bg: string; text: string; border: string; accent: string; controlBg: string; activeBg: string; activeText: string }>
