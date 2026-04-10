@@ -440,7 +440,7 @@ const {
 } = useSettings();
 const { activeTheme, applyPreset, resetTheme } = useRegionTheme();
 const selectedPreset = ref<'default' | 'ocean' | 'forest' | 'sakura' | 'custom'>('default');
-const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel'];
+const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel', 'pageBackground', 'chatCard'];
 const colorFields: (keyof Pick<RegionColors, 'bg' | 'text' | 'border' | 'accent'>)[] = ['bg', 'text', 'border', 'accent'];
 
 const customColors = reactive<Record<RegionName, { bg: string; text: string; border: string; accent: string }>>({
@@ -451,6 +451,8 @@ const customColors = reactive<Record<RegionName, { bg: string; text: string; bor
   floatingWindow: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
   topDropdown: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
   modalPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  pageBackground: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+  chatCard: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
 });
 
 function syncCustomColorsFromActiveTheme() {
@@ -490,6 +492,8 @@ watch(selectedPreset, (val) => {
         floatingWindow: { ...customColors.floatingWindow },
         topDropdown: { ...customColors.topDropdown },
         modalPanel: { ...customColors.modalPanel },
+        pageBackground: { ...customColors.pageBackground },
+        chatCard: { ...customColors.chatCard },
       },
     };
   }
@@ -510,6 +514,8 @@ watch(
           floatingWindow: { ...customColors.floatingWindow },
           topDropdown: { ...customColors.topDropdown },
           modalPanel: { ...customColors.modalPanel },
+          pageBackground: { ...customColors.pageBackground },
+          chatCard: { ...customColors.chatCard },
         },
       };
     }

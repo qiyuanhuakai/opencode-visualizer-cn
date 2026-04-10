@@ -467,6 +467,8 @@ export interface LocaleMessages {
       floatingWindow: string;
       topDropdown: string;
       modalPanel: string;
+      pageBackground: string;
+      chatCard: string;
       bg: string;
       text: string;
       border: string;

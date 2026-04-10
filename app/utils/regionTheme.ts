@@ -5,7 +5,9 @@ export type RegionName =
   | 'outputPanel'
   | 'floatingWindow'
   | 'topDropdown'
-  | 'modalPanel';
+  | 'modalPanel'
+  | 'pageBackground'
+  | 'chatCard';
 
 export interface RegionColors {
   bg?: string;
@@ -31,6 +33,8 @@ const REGION_NAMES: RegionName[] = [
   'floatingWindow',
   'topDropdown',
   'modalPanel',
+  'pageBackground',
+  'chatCard',
 ];
 
 const COLOR_FIELDS: (keyof RegionColors)[] = [
@@ -51,6 +55,8 @@ const REGION_SELECTORS: Record<RegionName, string> = {
   floatingWindow: '.floating-window',
   topDropdown: '.top-center, .tree-menu',
   modalPanel: '.modal, .provider-manager-modal, .status-monitor-popover',
+  pageBackground: 'html, body, #app',
+  chatCard: '.thread-block',
 };
 
 const REGION_VAR_PREFIXES: Record<RegionName, string> = {
@@ -61,6 +67,8 @@ const REGION_VAR_PREFIXES: Record<RegionName, string> = {
   floatingWindow: 'floating',
   topDropdown: 'top-dropdown',
   modalPanel: 'modal',
+  pageBackground: 'page',
+  chatCard: 'chat',
 };
 
 function createEmptyRegionColors(): RegionColors {
@@ -90,6 +98,8 @@ export const DEFAULT_REGION_THEME: RegionThemeConfig = {
     floatingWindow: createEmptyRegionColors(),
     topDropdown: createEmptyRegionColors(),
     modalPanel: createEmptyRegionColors(),
+    pageBackground: createEmptyRegionColors(),
+    chatCard: createEmptyRegionColors(),
   },
 };
 
@@ -153,6 +163,24 @@ export const OCEAN_PRESET: RegionThemeConfig = {
     },
     modalPanel: {
       bg: '#13293d',
+      text: '#e0f4ff',
+      border: '#1b5c85',
+      accent: '#76e4f7',
+      controlBg: '#1b3a4b',
+      activeBg: '#006494',
+      activeText: '#ffffff',
+    },
+    pageBackground: {
+      bg: '#08101f',
+      text: '#eaf6ff',
+      border: '#274c77',
+      accent: '#4cc9f0',
+      controlBg: '#16213e',
+      activeBg: '#0f3460',
+      activeText: '#ffffff',
+    },
+    chatCard: {
+      bg: '#0a192db8',
       text: '#e0f4ff',
       border: '#1b5c85',
       accent: '#76e4f7',
@@ -230,6 +258,24 @@ export const FOREST_PRESET: RegionThemeConfig = {
       activeBg: '#588157',
       activeText: '#ffffff',
     },
+    pageBackground: {
+      bg: '#0a1810',
+      text: '#edf7ee',
+      border: '#355e3b',
+      accent: '#7fb069',
+      controlBg: '#243b2f',
+      activeBg: '#3a5a40',
+      activeText: '#ffffff',
+    },
+    chatCard: {
+      bg: '#0c1e12b8',
+      text: '#edf8ef',
+      border: '#4c6f49',
+      accent: '#84a98c',
+      controlBg: '#2c4a36',
+      activeBg: '#588157',
+      activeText: '#ffffff',
+    },
   },
 };
 
@@ -293,6 +339,24 @@ export const SAKURA_PRESET: RegionThemeConfig = {
     },
     modalPanel: {
       bg: 'rgba(95, 70, 82, 0.92)',
+      text: '#fff8fb',
+      border: '#cca0b0',
+      accent: '#ffc2dc',
+      controlBg: '#74545e',
+      activeBg: 'rgba(195, 145, 165, 0.4)',
+      activeText: '#ffffff',
+    },
+    pageBackground: {
+      bg: 'rgba(85, 60, 72, 0.95)',
+      text: '#fff5fa',
+      border: '#c8a0b0',
+      accent: '#ffb7d5',
+      controlBg: '#785a66',
+      activeBg: 'rgba(200, 150, 170, 0.4)',
+      activeText: '#ffffff',
+    },
+    chatCard: {
+      bg: 'rgba(95, 68, 80, 0.72)',
       text: '#fff8fb',
       border: '#cca0b0',
       accent: '#ffc2dc',

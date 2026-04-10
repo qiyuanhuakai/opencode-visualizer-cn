@@ -408,6 +408,8 @@ const messages: LocaleMessages = {
       floatingWindow: 'Floating window',
       topDropdown: 'Top dropdown',
       modalPanel: 'Modal panel',
+      pageBackground: 'Page background',
+      chatCard: 'Chat card',
       bg: 'Background',
       text: 'Text',
       border: 'Border',

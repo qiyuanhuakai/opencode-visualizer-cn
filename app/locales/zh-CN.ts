@@ -408,6 +408,8 @@ const messages: LocaleMessages = {
       floatingWindow: '悬浮窗',
       topDropdown: '顶部下拉栏',
       modalPanel: '弹窗面板',
+      pageBackground: '页面背景',
+      chatCard: '对话卡片',
       bg: '背景',
       text: '文字',
       border: '边框',
