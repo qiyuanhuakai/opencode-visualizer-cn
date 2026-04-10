@@ -477,8 +477,8 @@ defineExpose({ moveHighlight, selectHighlighted, updateSearch, clearHighlight })
   max-width: calc(100vw - 16px);
   max-height: 60vh;
   position-try-fallbacks: flip-block;
-  background: rgba(2, 6, 23, 0.98);
-  border: 1px solid #334155;
+  background: var(--region-top-dropdown-bg, var(--region-top-bg, rgba(2, 6, 23, 0.98)));
+  border: 1px solid var(--region-top-dropdown-border, var(--region-top-border, #334155));
   border-radius: 10px;
   padding: 6px;
   scroll-padding: 6px;

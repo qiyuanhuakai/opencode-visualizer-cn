@@ -1156,7 +1156,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-search :deep(.ui-dropdown-search-input):focus {
-  background: rgba(30, 64, 175, 0.15);
+  background: var(--region-top-dropdown-active-bg, rgba(30, 64, 175, 0.15));
 }
 
 .clear-search {
