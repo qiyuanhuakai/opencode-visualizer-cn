@@ -17,6 +17,8 @@ const REGION_NAMES: RegionName[] = [
   'floatingWindow',
   'topDropdown',
   'modalPanel',
+  'pageBackground',
+  'chatCard',
 ];
 
 const COLOR_FIELDS: (keyof RegionColors)[] = [
@@ -29,7 +31,7 @@ const COLOR_FIELDS: (keyof RegionColors)[] = [
   'activeText',
 ];
 
-const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+const COLOR_VALUE = /^(#[0-9a-f]{6}|#[0-9a-f]{8}|rgba?\([^)]+\))$/i;
 
 describe('DEFAULT_REGION_THEME', () => {
   it('keeps every region color undefined so CSS fallbacks are used', () => {
@@ -46,7 +48,7 @@ describe('region theme presets', () => {
     for (const preset of [OCEAN_PRESET, FOREST_PRESET]) {
       for (const regionName of REGION_NAMES) {
         for (const field of COLOR_FIELDS) {
-          expect(preset.regions[regionName][field]).toMatch(HEX_COLOR);
+          expect(preset.regions[regionName][field]).toMatch(COLOR_VALUE);
         }
       }
     }
@@ -75,6 +77,13 @@ describe('generateCSS', () => {
           border: '#334155',
         },
         modalPanel: {},
+        pageBackground: {
+          bg: '#08101f',
+        },
+        chatCard: {
+          bg: 'rgba(10, 25, 45, 0.72)',
+          border: '#1b5c85',
+        },
       },
     });
 
@@ -87,6 +96,11 @@ describe('generateCSS', () => {
     expect(css).toContain('--region-output-active-text: #ffffff;');
     expect(css).toContain('.top-center, .tree-menu {');
     expect(css).toContain('--region-top-dropdown-border: #334155;');
+    expect(css).toContain('html, body, #app {');
+    expect(css).toContain('--region-page-bg: #08101f;');
+    expect(css).toContain('.thread-block {');
+    expect(css).toContain('--region-chat-bg: rgba(10, 25, 45, 0.72);');
+    expect(css).toContain('--region-chat-border: #1b5c85;');
     expect(css).not.toContain('.modal, .provider-manager-modal, .status-monitor-popover {');
     expect(css).not.toContain('--region-top-text:');
     expect(css).not.toContain('.input-panel {');

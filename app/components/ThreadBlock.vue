@@ -501,8 +501,8 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 
 <style scoped>
 .thread-block {
-  background: rgba(2, 6, 23, 0.6);
-  border: 1px solid #1e293b;
+  background: var(--region-chat-bg, rgba(2, 6, 23, 0.6));
+  border: 1px solid var(--region-chat-border, #1e293b);
   border-radius: 10px;
   padding: 10px;
   width: 100%;

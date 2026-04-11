@@ -154,7 +154,7 @@
               </div>
               <div class="theme-region-colors">
                 <div
-                  v-for="field in colorFields"
+                  v-for="field in regionVisibleFields[region]"
                   :key="field"
                   class="theme-color-field"
                 >
@@ -440,17 +440,33 @@ const {
 } = useSettings();
 const { activeTheme, applyPreset, resetTheme } = useRegionTheme();
 const selectedPreset = ref<'default' | 'ocean' | 'forest' | 'sakura' | 'custom'>('default');
-const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel'];
-const colorFields: (keyof Pick<RegionColors, 'bg' | 'text' | 'border' | 'accent'>)[] = ['bg', 'text', 'border', 'accent'];
+const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel', 'pageBackground', 'chatCard'];
+const colorFields: (keyof RegionColors)[] = ['bg', 'text', 'border', 'accent', 'controlBg', 'activeBg', 'activeText'];
 
-const customColors = reactive<Record<RegionName, { bg: string; text: string; border: string; accent: string }>>({
-  topPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
-  sidePanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
-  inputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
-  outputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
-  floatingWindow: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
-  topDropdown: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
-  modalPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0' },
+const regionVisibleFields: Record<RegionName, (keyof RegionColors)[]> = {
+  topPanel: colorFields,
+  sidePanel: colorFields,
+  inputPanel: colorFields,
+  outputPanel: colorFields,
+  floatingWindow: colorFields,
+  topDropdown: colorFields,
+  modalPanel: colorFields,
+  pageBackground: ['bg'],
+  chatCard: ['bg', 'border'],
+};
+
+const customColors = reactive<
+  Record<RegionName, { bg: string; text: string; border: string; accent: string; controlBg: string; activeBg: string; activeText: string }>
+>({
+  topPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  sidePanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  inputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  outputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  floatingWindow: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  topDropdown: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  modalPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  pageBackground: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  chatCard: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
 });
 
 function syncCustomColorsFromActiveTheme() {
@@ -469,6 +485,9 @@ function syncCustomColorsFromActiveTheme() {
     customColors[region].text = source.regions[region]?.text || '#eaf6ff';
     customColors[region].border = source.regions[region]?.border || '#334155';
     customColors[region].accent = source.regions[region]?.accent || '#4cc9f0';
+    customColors[region].controlBg = source.regions[region]?.controlBg || '#16213e';
+    customColors[region].activeBg = source.regions[region]?.activeBg || '#0f3460';
+    customColors[region].activeText = source.regions[region]?.activeText || '#ffffff';
   });
 }
 
@@ -490,6 +509,8 @@ watch(selectedPreset, (val) => {
         floatingWindow: { ...customColors.floatingWindow },
         topDropdown: { ...customColors.topDropdown },
         modalPanel: { ...customColors.modalPanel },
+        pageBackground: { ...customColors.pageBackground },
+        chatCard: { ...customColors.chatCard },
       },
     };
   }
@@ -510,6 +531,8 @@ watch(
           floatingWindow: { ...customColors.floatingWindow },
           topDropdown: { ...customColors.topDropdown },
           modalPanel: { ...customColors.modalPanel },
+          pageBackground: { ...customColors.pageBackground },
+          chatCard: { ...customColors.chatCard },
         },
       };
     }
