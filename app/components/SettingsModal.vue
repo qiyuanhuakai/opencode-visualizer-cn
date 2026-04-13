@@ -825,14 +825,14 @@ watch(
 
 .setting-link-row {
   width: 100%;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   text-align: left;
   cursor: pointer;
 }
 
 .setting-link-row:hover {
-  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  border-color: #475569;
+  background: var(--region-modal-active-bg, rgba(15, 23, 42, 0.72));
+  border-color: var(--region-modal-accent, #475569);
 }
 
 .setting-link-icon {
@@ -857,7 +857,7 @@ watch(
 .setting-label {
   font-size: 13px;
   font-weight: 500;
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
 }
 
 .setting-description {
@@ -921,16 +921,16 @@ watch(
 .font-preset-chip.is-active {
   border-color: var(--region-modal-accent, rgba(59, 130, 246, 0.45));
   background: var(--region-modal-active-bg, rgba(59, 130, 246, 0.2));
-  color: #dbeafe;
+  color: var(--region-modal-active-text, #dbeafe);
 }
 
 .number-input {
   width: 84px;
   height: 30px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 6px;
   background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-size: 12px;
   font-family: inherit;
   text-align: right;
@@ -939,8 +939,8 @@ watch(
 
 .number-input:focus {
   outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+  border-color: var(--region-modal-accent, #3b82f6);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, #3b82f6) 55%, transparent);
 }
 
 .number-input::-webkit-outer-spin-button,
@@ -958,10 +958,10 @@ watch(
   min-width: 0;
   min-height: 72px;
   resize: vertical;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-size: 12px;
   line-height: 1.5;
   font-family: inherit;
@@ -970,12 +970,12 @@ watch(
 
 .font-stack-input:focus {
   outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+  border-color: var(--region-modal-accent, #3b82f6);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, #3b82f6) 55%, transparent);
 }
 
 .font-stack-input::placeholder {
-  color: #475569;
+  color: var(--region-modal-text-muted, #475569);
 }
 
 .font-discovery-toggle {
@@ -984,10 +984,10 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  color: #cbd5e1;
+  color: var(--region-modal-text, #cbd5e1);
   font-size: 12px;
   font-family: inherit;
   padding: 9px 10px;
@@ -995,8 +995,8 @@ watch(
 }
 
 .font-discovery-toggle:hover {
-  border-color: #475569;
-  background: rgba(30, 41, 59, 0.92);
+  border-color: var(--region-modal-accent, #475569);
+  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
 }
 
 .font-discovery-panel {
@@ -1019,8 +1019,8 @@ watch(
   min-height: 24px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid #334155;
-  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid var(--region-modal-border, #334155);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.78));
   font-size: 11px;
 }
 
@@ -1056,10 +1056,10 @@ watch(
 .font-system-button {
   align-self: flex-start;
   min-height: 30px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-size: 12px;
   font-family: inherit;
   padding: 0 10px;
@@ -1067,8 +1067,8 @@ watch(
 }
 
 .font-system-button:hover:not(:disabled) {
-  border-color: #475569;
-  background: rgba(30, 41, 59, 0.92);
+  border-color: var(--region-modal-accent, #475569);
+  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
 }
 
 .font-system-button:disabled {
@@ -1102,17 +1102,17 @@ watch(
   flex-direction: column;
   gap: 4px;
   padding: 10px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   text-align: left;
   cursor: pointer;
 }
 
 .font-system-item:hover {
-  border-color: #475569;
-  background: rgba(30, 41, 59, 0.92);
+  border-color: var(--region-modal-accent, #475569);
+  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
 }
 
 .font-system-family {
@@ -1128,10 +1128,10 @@ watch(
 
 .language-select {
   height: 30px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 6px;
   background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-size: 12px;
   font-family: inherit;
   padding: 0 8px;
@@ -1140,8 +1140,8 @@ watch(
 
 .language-select:focus {
   outline: none;
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.5);
+  border-color: var(--region-modal-accent, #3b82f6);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, #3b82f6) 55%, transparent);
 }
 
 
@@ -1189,7 +1189,7 @@ watch(
 
 .toggle-input:checked + .toggle-track::after {
   transform: translateX(16px);
-  background: #fff;
+  background: var(--region-modal-active-text, #fff);
 }
 
 .theme-region-colors {
@@ -1216,7 +1216,7 @@ watch(
 .theme-color-input {
   width: 100%;
   height: 32px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 6px;
   background: transparent;
   cursor: pointer;

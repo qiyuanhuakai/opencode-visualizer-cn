@@ -787,13 +787,13 @@ async function disconnectProvider(providerId: string) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
-  border: 1px solid rgba(71, 85, 105, 0.42);
+  border: 1px solid var(--region-modal-border, rgba(71, 85, 105, 0.42));
   border-radius: 10px;
-  background: rgba(2, 6, 23, 0.45);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.45));
 }
 
 .provider-manager-tab {
-  border: 1px solid rgba(100, 116, 139, 0.35);
+  border: 1px solid var(--region-modal-border, rgba(100, 116, 139, 0.35));
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.7));
   color: var(--region-modal-text-muted, #94a3b8);
@@ -806,7 +806,7 @@ async function disconnectProvider(providerId: string) {
 
 .provider-manager-tab.is-active {
   background: var(--region-modal-active-bg, rgba(30, 64, 175, 0.45));
-  color: #e2e8f0;
+  color: var(--region-modal-active-text, #e2e8f0);
   border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.6));
 }
 
@@ -819,7 +819,7 @@ async function disconnectProvider(providerId: string) {
 
 .provider-manager-feedback.is-info {
   background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.85));
-  color: #cbd5e1;
+  color: var(--region-modal-text, #cbd5e1);
 }
 
 .provider-manager-feedback.is-success {
@@ -838,9 +838,9 @@ async function disconnectProvider(providerId: string) {
 .model-toolbar,
 .model-group,
 .model-row {
-  border: 1px solid rgba(51, 65, 85, 0.8);
+  border: 1px solid var(--region-modal-border, rgba(51, 65, 85, 0.8));
   border-radius: 12px;
-  background: rgba(2, 6, 23, 0.46);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.46));
 }
 
 .section-eyebrow {
@@ -855,7 +855,7 @@ async function disconnectProvider(providerId: string) {
   margin-top: 4px;
   font-size: 14px;
   font-weight: 700;
-  color: #f8fafc;
+  color: var(--region-modal-text, #f8fafc);
 }
 
 .section-meta {
@@ -898,9 +898,9 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-list-shell {
-  border: 1px solid rgba(51, 65, 85, 0.8);
+  border: 1px solid var(--region-modal-border, rgba(51, 65, 85, 0.8));
   border-radius: 12px;
-  background: rgba(2, 6, 23, 0.46);
+  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.46));
   overflow: hidden;
 }
 
@@ -917,7 +917,7 @@ async function disconnectProvider(providerId: string) {
   gap: 16px;
   min-height: 72px;
   padding: 14px;
-  border-bottom: 1px solid rgba(51, 65, 85, 0.8);
+  border-bottom: 1px solid var(--region-modal-border, rgba(51, 65, 85, 0.8));
 }
 
 .provider-list-row:last-child {
@@ -975,10 +975,10 @@ async function disconnectProvider(providerId: string) {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  color: #cbd5e1;
+  color: var(--region-modal-text, #cbd5e1);
   font-size: 12px;
   font-family: inherit;
   padding: 10px 12px;
@@ -986,8 +986,8 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-view-all-toggle:hover {
-  border-color: #475569;
-  background: rgba(30, 41, 59, 0.92);
+  border-color: var(--region-modal-accent, #475569);
+  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
 }
 
 .provider-view-all-toggle-text {
@@ -1001,7 +1001,7 @@ async function disconnectProvider(providerId: string) {
 .provider-view-all-toggle-title {
   font-size: 13px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
 }
 
 .provider-view-all-toggle-meta {
@@ -1027,17 +1027,17 @@ async function disconnectProvider(providerId: string) {
   align-items: flex-start;
   gap: 8px;
   padding: 12px;
-  border: 1px solid rgba(51, 65, 85, 0.8);
+  border: 1px solid var(--region-modal-border, rgba(51, 65, 85, 0.8));
   border-radius: 12px;
   background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.46));
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   text-align: left;
   cursor: pointer;
 }
 
 .provider-mini-card:hover {
-  border-color: rgba(96, 165, 250, 0.45);
-  background: rgba(15, 23, 42, 0.72);
+  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.45));
+  background: var(--region-modal-active-bg, rgba(15, 23, 42, 0.72));
 }
 
 .provider-mini-card.is-disabled {
@@ -1047,7 +1047,7 @@ async function disconnectProvider(providerId: string) {
 .provider-mini-card-name {
   font-size: 13px;
   font-weight: 700;
-  color: #f8fafc;
+  color: var(--region-modal-text, #f8fafc);
 }
 
 .provider-mini-card-meta {
@@ -1065,8 +1065,8 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-card.is-current {
-  border-color: rgba(96, 165, 250, 0.55);
-  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.18);
+  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.55));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, #3b82f6) 35%, transparent);
 }
 
 .provider-card.is-disabled,
@@ -1096,7 +1096,7 @@ async function disconnectProvider(providerId: string) {
 .model-name {
   font-size: 13px;
   font-weight: 700;
-  color: #f8fafc;
+  color: var(--region-modal-text, #f8fafc);
 }
 
 .provider-id,
@@ -1123,7 +1123,7 @@ async function disconnectProvider(providerId: string) {
   min-height: 24px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   font-size: 11px;
 }
 
@@ -1138,9 +1138,9 @@ async function disconnectProvider(providerId: string) {
 }
 
 .status-badge.is-current {
-  border-color: #334155;
-  color: #cbd5e1;
-  background: rgba(15, 23, 42, 0.78);
+  border-color: var(--region-modal-border, #334155);
+  color: var(--region-modal-text, #cbd5e1);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.78));
 }
 
 .status-badge.is-warning {
@@ -1151,8 +1151,8 @@ async function disconnectProvider(providerId: string) {
 .status-badge.is-muted,
 .auth-chip,
 .capability-chip {
-  color: #cbd5e1;
-  background: rgba(15, 23, 42, 0.78);
+  color: var(--region-modal-text, #cbd5e1);
+  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.78));
 }
 
 .provider-stats,
@@ -1184,10 +1184,10 @@ async function disconnectProvider(providerId: string) {
 }
 
 .ghost-action {
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.82));
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-size: 12px;
   font-family: inherit;
   padding: 7px 10px;
@@ -1195,8 +1195,8 @@ async function disconnectProvider(providerId: string) {
 }
 
 .ghost-action:hover {
-  border-color: #475569;
-  background: rgba(30, 41, 59, 0.92);
+  border-color: var(--region-modal-accent, #475569);
+  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
 }
 
 .ghost-action:disabled {
@@ -1209,9 +1209,9 @@ async function disconnectProvider(providerId: string) {
 }
 
 .ghost-action.secondary {
-  border-color: rgba(96, 165, 250, 0.35);
-  background: rgba(30, 64, 175, 0.16);
-  color: #dbeafe;
+  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.35));
+  background: color-mix(in srgb, var(--region-modal-accent, #3b82f6) 18%, transparent);
+  color: var(--region-modal-active-text, #dbeafe);
 }
 
 .provider-toggle {
@@ -1219,7 +1219,7 @@ async function disconnectProvider(providerId: string) {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  color: #cbd5e1;
+  color: var(--region-modal-text, #cbd5e1);
   font-size: 12px;
 }
 
@@ -1251,7 +1251,7 @@ async function disconnectProvider(providerId: string) {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #e2e8f0;
+  background: var(--region-modal-active-text, #e2e8f0);
   transition: transform 0.18s ease;
 }
 
@@ -1280,7 +1280,7 @@ async function disconnectProvider(providerId: string) {
   gap: 8px;
   min-height: 38px;
   padding: 0 12px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-modal-border, #334155);
   border-radius: 10px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.82));
   color: var(--region-modal-text-muted, #94a3b8);
@@ -1292,7 +1292,7 @@ async function disconnectProvider(providerId: string) {
   border: none;
   outline: none;
   background: transparent;
-  color: #e2e8f0;
+  color: var(--region-modal-text, #e2e8f0);
   font-size: 12px;
   font-family: inherit;
 }
@@ -1339,7 +1339,7 @@ async function disconnectProvider(providerId: string) {
 }
 
 .model-row.is-selected {
-  border-color: rgba(96, 165, 250, 0.45);
+  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.45));
 }
 
 @media (max-width: 760px) {
