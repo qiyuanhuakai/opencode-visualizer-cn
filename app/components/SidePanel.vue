@@ -304,7 +304,7 @@ const {
 
 .session-count {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
 }
 
 .session-empty {
@@ -365,7 +365,7 @@ const {
 .session-meta {
   min-width: 0;
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

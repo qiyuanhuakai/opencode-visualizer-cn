@@ -1146,7 +1146,7 @@ function handleOpenDirectory(close: () => void) {
 .search-icon {
   width: 14px;
   height: 14px;
-  color: #64748b;
+  color: var(--region-top-text-muted, #64748b);
 }
 
 .tree-search :deep(.ui-dropdown-search-input) {
@@ -1162,7 +1162,7 @@ function handleOpenDirectory(close: () => void) {
 .clear-search {
   border: none;
   background: transparent;
-  color: #64748b;
+  color: var(--region-top-text-muted, #64748b);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1238,7 +1238,7 @@ function handleOpenDirectory(close: () => void) {
 .tree-empty {
   padding: 14px;
   text-align: center;
-  color: #94a3b8;
+  color: var(--region-top-text-muted, #94a3b8);
   font-size: 12px;
 }
 
@@ -1265,7 +1265,7 @@ function handleOpenDirectory(close: () => void) {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
-  color: #64748b;
+  color: var(--region-top-text-muted, #64748b);
 }
 
 .tree-worktree-header {
@@ -1292,7 +1292,7 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-label-type {
   font-size: 10px;
-  color: #64748b;
+  color: var(--region-top-text-muted, #64748b);
   flex-basis: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1338,7 +1338,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button.worktree-settings {
-  color: #94a3b8;
+  color: var(--region-top-text-muted, #94a3b8);
 }
 
 .tree-action-button.danger {
@@ -1405,7 +1405,7 @@ function handleOpenDirectory(close: () => void) {
   border: 1px solid #334155;
   border-radius: 6px;
   background: #111a2c;
-  color: #94a3b8;
+  color: var(--region-top-text-muted, #94a3b8);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1557,7 +1557,7 @@ function handleOpenDirectory(close: () => void) {
 
 .session-time {
   font-size: 10px;
-  color: #64748b;
+  color: var(--region-top-text-muted, #64748b);
   white-space: nowrap;
   flex-basis: 100%;
 }
@@ -1780,7 +1780,7 @@ function handleOpenDirectory(close: () => void) {
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: #94a3b8;
+  color: var(--region-top-text-muted, #94a3b8);
 }
 
 .github-button:hover {
@@ -1799,7 +1799,7 @@ function handleOpenDirectory(close: () => void) {
   justify-content: center;
   border: none;
   background: transparent;
-  color: #94a3b8;
+  color: var(--region-top-text-muted, #94a3b8);
 }
 
 .settings-button:hover,

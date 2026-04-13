@@ -64,11 +64,11 @@ const hasTarget = computed(() => {
 }
 
 .ib-target-provider {
-  color: #94a3b8;
+  color: var(--region-chat-text-muted, #94a3b8);
 }
 
 .ib-target-separator {
-  color: #94a3b8;
+  color: var(--region-chat-text-muted, #94a3b8);
 }
 
 .ib-target-variant {

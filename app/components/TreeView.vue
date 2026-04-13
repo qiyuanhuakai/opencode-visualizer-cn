@@ -1067,7 +1067,7 @@ function onRowDoubleClick(row: VirtualRow) {
   align-items: center;
   gap: 5px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
   white-space: nowrap;
   overflow: hidden;
   min-height: 20px;
@@ -1097,7 +1097,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-chevron {
-  color: #64748b;
+  color: var(--region-side-text-muted, #64748b);
   flex-shrink: 0;
 }
 
@@ -1143,7 +1143,7 @@ function onRowDoubleClick(row: VirtualRow) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #64748b;
+  color: var(--region-side-text-muted, #64748b);
   font-size: 10px;
 }
 
@@ -1223,7 +1223,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-menu-error {
   padding: 8px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
 }
 
 .tree-branch-menu-error {
@@ -1344,7 +1344,7 @@ function onRowDoubleClick(row: VirtualRow) {
   flex: 1;
   border: 0;
   background: rgba(15, 23, 42, 0.7);
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1423,7 +1423,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-toggle {
   border: 0;
   background: transparent;
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
   width: 16px;
   padding: 0;
   cursor: pointer;
@@ -1614,7 +1614,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-error {
   margin-top: 8px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
 }
 
 .tree-error {
@@ -1651,7 +1651,7 @@ function onRowDoubleClick(row: VirtualRow) {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #94a3b8;
+  color: var(--region-side-text-muted, #94a3b8);
   cursor: pointer;
   padding: 0;
 }

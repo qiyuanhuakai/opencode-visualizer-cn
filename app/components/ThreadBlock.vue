@@ -614,7 +614,7 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 .ib-action-history {
   border-color: var(--ui-chip-border-subtle);
   background: rgba(30, 41, 59, 0.35);
-  color: #94a3b8;
+  color: var(--region-chat-text-muted, #94a3b8);
   margin-top: 4px;
   align-self: flex-end;
 }

@@ -417,6 +417,7 @@ const messages: LocaleMessages = {
       controlBg: '控件背景',
       activeBg: '激活背景',
       activeText: '激活文字',
+      textMuted: '小字',
       reset: '恢复默认',
     },
     close: '关闭设置',
