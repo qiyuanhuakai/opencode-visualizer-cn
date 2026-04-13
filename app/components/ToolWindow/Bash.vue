@@ -39,6 +39,6 @@ defineProps<{
 }
 
 .bash-empty {
-  color: var(--region-floating-text-muted, #64748b);
+  color: #64748b;
 }
 </style>

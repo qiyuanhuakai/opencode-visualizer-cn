@@ -391,8 +391,15 @@ import {
   type FontAvailabilityStatus,
   type LocalFontFamily,
 } from '../utils/fontDiscovery';
-import { DEFAULT_REGION_THEME, OCEAN_PRESET, FOREST_PRESET, SAKURA_PRESET } from '../utils/regionTheme';
-import type { RegionColors, RegionName, RegionThemeConfig } from '../utils/regionTheme';
+import {
+  DEFAULT_REGION_THEME,
+  REGION_COLOR_FIELDS,
+  REGION_NAMES,
+  REGION_THEME_EDITOR_FALLBACKS,
+  resolveRegionThemePresetName,
+  resolveRegionThemePreset,
+} from '../utils/regionTheme';
+import type { RegionColors, RegionName, RegionThemeConfig, RegionThemePresetName } from '../utils/regionTheme';
 
 type FontPreset = {
   id: string;
@@ -439,84 +446,85 @@ const {
   defaultAppMonospaceFontFamily,
 } = useSettings();
 const activeTheme = regionTheme;
-const selectedPreset = ref<'default' | 'ocean' | 'forest' | 'sakura' | 'custom'>('default');
-const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel', 'pageBackground', 'chatCard'];
-const colorFields: (keyof RegionColors)[] = ['bg', 'text', 'border', 'accent', 'controlBg', 'activeBg', 'activeText', 'textMuted'];
+const selectedPreset = ref<RegionThemePresetName | 'custom'>('default');
+const regionNames: RegionName[] = REGION_NAMES;
+const colorFields: (keyof RegionColors)[] = REGION_COLOR_FIELDS;
 let customThemeSyncFrame = 0;
+let isSyncingThemeEditorState = false;
+
+type EditableRegionColors = Record<keyof RegionColors, string>;
+
+function createEditableRegionColors(): EditableRegionColors {
+  return { ...REGION_THEME_EDITOR_FALLBACKS };
+}
+
+function createEditableThemeState() {
+  return Object.fromEntries(regionNames.map((region) => [region, createEditableRegionColors()])) as Record<RegionName, EditableRegionColors>;
+}
+
+function toThemeRegions() {
+  return Object.fromEntries(regionNames.map((region) => [region, { ...customColors[region] }])) as Record<RegionName, Partial<RegionColors>>;
+}
 
 const regionVisibleFields: Record<RegionName, (keyof RegionColors)[]> = {
   topPanel: colorFields,
   sidePanel: colorFields,
   inputPanel: colorFields,
   outputPanel: colorFields,
-  floatingWindow: colorFields,
   topDropdown: colorFields,
   modalPanel: colorFields,
   pageBackground: ['bg'],
   chatCard: ['bg', 'border', 'textMuted'],
 };
 
-const customColors = reactive<
-  Record<RegionName, { bg: string; text: string; border: string; accent: string; controlBg: string; activeBg: string; activeText: string; textMuted: string }>
->({
-  topPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  sidePanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  inputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  outputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  floatingWindow: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  topDropdown: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  modalPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  pageBackground: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-  chatCard: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
-});
+const customColors = reactive<Record<RegionName, EditableRegionColors>>(createEditableThemeState());
 
 function syncCustomColorsFromActiveTheme() {
-  let source = activeTheme.value;
-  if (!source) {
-    source = DEFAULT_REGION_THEME;
-  } else if (source.name === 'ocean') {
-    source = OCEAN_PRESET;
-  } else if (source.name === 'forest') {
-    source = FOREST_PRESET;
-  } else if (source.name === 'sakura') {
-    source = SAKURA_PRESET;
-  }
+  const source = resolveRegionThemePreset(activeTheme.value?.name) ?? activeTheme.value ?? DEFAULT_REGION_THEME;
+
   regionNames.forEach((region) => {
-    customColors[region].bg = source.regions[region]?.bg || '#1a1a2e';
-    customColors[region].text = source.regions[region]?.text || '#eaf6ff';
-    customColors[region].border = source.regions[region]?.border || '#334155';
-    customColors[region].accent = source.regions[region]?.accent || '#4cc9f0';
-    customColors[region].controlBg = source.regions[region]?.controlBg || '#16213e';
-    customColors[region].activeBg = source.regions[region]?.activeBg || '#0f3460';
-    customColors[region].activeText = source.regions[region]?.activeText || '#ffffff';
-    customColors[region].textMuted = source.regions[region]?.textMuted || '#94a3b8';
+    colorFields.forEach((field) => {
+      customColors[region][field] = source.regions[region]?.[field] ?? REGION_THEME_EDITOR_FALLBACKS[field];
+    });
   });
+}
+
+function syncSelectedPresetFromActiveTheme() {
+  const activePresetName = resolveRegionThemePresetName(activeTheme.value?.name);
+
+  if (!activeTheme.value || activePresetName === 'default') {
+    selectedPreset.value = 'default';
+    return;
+  }
+
+  if (activePresetName) {
+    selectedPreset.value = activePresetName;
+    return;
+  }
+
+  selectedPreset.value = 'custom';
+}
+
+function syncThemeEditorState() {
+  isSyncingThemeEditorState = true;
+  try {
+    syncCustomColorsFromActiveTheme();
+    syncSelectedPresetFromActiveTheme();
+  } finally {
+    isSyncingThemeEditorState = false;
+  }
 }
 
 function buildCustomTheme(): RegionThemeConfig {
   return {
     name: 'custom',
     label: 'Custom',
-    regions: {
-      topPanel: { ...customColors.topPanel },
-      sidePanel: { ...customColors.sidePanel },
-      inputPanel: { ...customColors.inputPanel },
-      outputPanel: { ...customColors.outputPanel },
-      floatingWindow: { ...customColors.floatingWindow },
-      topDropdown: { ...customColors.topDropdown },
-      modalPanel: { ...customColors.modalPanel },
-      pageBackground: { ...customColors.pageBackground },
-      chatCard: { ...customColors.chatCard },
-    },
+    regions: toThemeRegions(),
   };
 }
 
-function applyPreset(name: 'ocean' | 'forest' | 'sakura') {
-  activeTheme.value = name === 'ocean'
-    ? OCEAN_PRESET
-    : name === 'forest'
-      ? FOREST_PRESET
-      : SAKURA_PRESET;
+function applyPreset(name: RegionThemePresetName) {
+  activeTheme.value = name === DEFAULT_REGION_THEME.name ? null : resolveRegionThemePreset(name);
 }
 
 function resetTheme() {
@@ -541,20 +549,29 @@ function scheduleCustomThemeSync() {
 }
 
 watch(selectedPreset, (val) => {
-  if (val === 'default') {
-    resetTheme();
-  } else if (val === 'ocean' || val === 'forest' || val === 'sakura') {
-    applyPreset(val);
-  } else if (val === 'custom') {
-    syncCustomColorsFromActiveTheme();
+  if (isSyncingThemeEditorState) {
+    return;
+  }
+
+  if (val === 'custom') {
+    isSyncingThemeEditorState = true;
+    try {
+      syncCustomColorsFromActiveTheme();
+    } finally {
+      isSyncingThemeEditorState = false;
+    }
     activeTheme.value = buildCustomTheme();
+  } else if (val === DEFAULT_REGION_THEME.name) {
+    resetTheme();
+  } else {
+    applyPreset(val);
   }
 });
 
 watch(
   customColors,
   () => {
-    if (selectedPreset.value === 'custom') {
+    if (selectedPreset.value === 'custom' && !isSyncingThemeEditorState) {
       scheduleCustomThemeSync();
     }
   },
@@ -570,27 +587,13 @@ onUnmounted(() => {
 
 watch(activePage, (page) => {
   if (page === 'theme') {
-    syncCustomColorsFromActiveTheme();
-    if (!activeTheme.value) {
-      selectedPreset.value = 'default';
-    } else if (activeTheme.value.name === 'default' || activeTheme.value.name === 'ocean' || activeTheme.value.name === 'forest' || activeTheme.value.name === 'sakura') {
-      selectedPreset.value = activeTheme.value.name;
-    } else {
-      selectedPreset.value = 'custom';
-    }
+    syncThemeEditorState();
   }
 });
 
 onMounted(() => {
   if (activePage.value === 'theme') {
-    syncCustomColorsFromActiveTheme();
-    if (!activeTheme.value) {
-      selectedPreset.value = 'default';
-    } else if (activeTheme.value.name === 'default' || activeTheme.value.name === 'ocean' || activeTheme.value.name === 'forest' || activeTheme.value.name === 'sakura') {
-      selectedPreset.value = activeTheme.value.name;
-    } else {
-      selectedPreset.value = 'custom';
-    }
+    syncThemeEditorState();
   }
 });
 

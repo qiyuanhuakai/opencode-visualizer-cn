@@ -3,7 +3,6 @@ export type RegionName =
   | 'sidePanel'
   | 'inputPanel'
   | 'outputPanel'
-  | 'floatingWindow'
   | 'topDropdown'
   | 'modalPanel'
   | 'pageBackground'
@@ -26,19 +25,18 @@ export interface RegionThemeConfig {
   regions: Record<RegionName, Partial<RegionColors>>;
 }
 
-const REGION_NAMES: RegionName[] = [
+export const REGION_NAMES: RegionName[] = [
   'topPanel',
   'sidePanel',
   'inputPanel',
   'outputPanel',
-  'floatingWindow',
   'topDropdown',
   'modalPanel',
   'pageBackground',
   'chatCard',
 ];
 
-const COLOR_FIELDS: (keyof RegionColors)[] = [
+export const REGION_COLOR_FIELDS: (keyof RegionColors)[] = [
   'bg',
   'text',
   'border',
@@ -54,7 +52,6 @@ const REGION_SELECTORS: Record<RegionName, string> = {
   sidePanel: '.side-panel',
   inputPanel: '.input-panel',
   outputPanel: '.output-panel',
-  floatingWindow: '.floating-window',
   topDropdown: '.top-center, .tree-menu',
   modalPanel: '.modal, .provider-manager-modal, .status-monitor-popover',
   pageBackground: 'html, body, #app',
@@ -66,7 +63,6 @@ const REGION_VAR_PREFIXES: Record<RegionName, string> = {
   sidePanel: 'side',
   inputPanel: 'input',
   outputPanel: 'output',
-  floatingWindow: 'floating',
   topDropdown: 'top-dropdown',
   modalPanel: 'modal',
   pageBackground: 'page',
@@ -98,12 +94,22 @@ export const DEFAULT_REGION_THEME: RegionThemeConfig = {
     sidePanel: createEmptyRegionColors(),
     inputPanel: createEmptyRegionColors(),
     outputPanel: createEmptyRegionColors(),
-    floatingWindow: createEmptyRegionColors(),
     topDropdown: createEmptyRegionColors(),
     modalPanel: createEmptyRegionColors(),
     pageBackground: createEmptyRegionColors(),
     chatCard: createEmptyRegionColors(),
   },
+};
+
+export const REGION_THEME_EDITOR_FALLBACKS: Required<RegionColors> = {
+  bg: '#1a1a2e',
+  text: '#eaf6ff',
+  border: '#334155',
+  accent: '#4cc9f0',
+  controlBg: '#16213e',
+  activeBg: '#0f3460',
+  activeText: '#ffffff',
+  textMuted: '#94a3b8',
 };
 
 export const OCEAN_PRESET: RegionThemeConfig = {
@@ -147,16 +153,6 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       accent: '#76e4f7',
       controlBg: '#1b3a4b',
       activeBg: '#006494',
-      activeText: '#ffffff',
-      textMuted: '#7aa2c0',
-    },
-    floatingWindow: {
-      bg: '#1c2541',
-      text: '#f1f7ff',
-      border: '#3a506b',
-      accent: '#5bc0be',
-      controlBg: '#273469',
-      activeBg: '#0b6e99',
       activeText: '#ffffff',
       textMuted: '#7aa2c0',
     },
@@ -247,16 +243,6 @@ export const FOREST_PRESET: RegionThemeConfig = {
       activeText: '#ffffff',
       textMuted: '#7d9e7d',
     },
-    floatingWindow: {
-      bg: '#2f3e2f',
-      text: '#f4fbf4',
-      border: '#52796f',
-      accent: '#cad2c5',
-      controlBg: '#354f38',
-      activeBg: '#52734d',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
     topDropdown: {
       bg: '#1f3525',
       text: '#f0faf2',
@@ -344,16 +330,6 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       activeText: '#ffffff',
       textMuted: '#d4b8c8',
     },
-    floatingWindow: {
-      bg: 'rgba(100, 74, 86, 0.95)',
-      text: '#fffafc',
-      border: '#d4a8b8',
-      accent: '#ffcce0',
-      controlBg: '#7e5c68',
-      activeBg: 'rgba(205, 155, 175, 0.42)',
-      activeText: '#ffffff',
-      textMuted: '#d4b8c8',
-    },
     topDropdown: {
       bg: 'rgba(98, 72, 84, 0.92)',
       text: '#fff8fb',
@@ -397,13 +373,39 @@ export const SAKURA_PRESET: RegionThemeConfig = {
   },
 };
 
+export const REGION_THEME_PRESETS = {
+  default: DEFAULT_REGION_THEME,
+  ocean: OCEAN_PRESET,
+  forest: FOREST_PRESET,
+  sakura: SAKURA_PRESET,
+} as const;
+
+export type RegionThemePresetName = keyof typeof REGION_THEME_PRESETS;
+
+export function resolveRegionThemePresetName(name: string | null | undefined): RegionThemePresetName | null {
+  if (!name || !Object.prototype.hasOwnProperty.call(REGION_THEME_PRESETS, name)) {
+    return null;
+  }
+
+  return name as RegionThemePresetName;
+}
+
+export function resolveRegionThemePreset(name: string | null | undefined): RegionThemeConfig | null {
+  const presetName = resolveRegionThemePresetName(name);
+  if (!presetName) {
+    return null;
+  }
+
+  return REGION_THEME_PRESETS[presetName];
+}
+
 export function generateCSS(theme: RegionThemeConfig | null): string {
   if (!theme) {
     return '';
   }
 
   return REGION_NAMES.map((regionName) => {
-    const declarations = COLOR_FIELDS.flatMap((field) => {
+    const declarations = REGION_COLOR_FIELDS.flatMap((field) => {
       const value = theme.regions[regionName]?.[field];
 
       if (value === undefined) {

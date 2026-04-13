@@ -405,7 +405,6 @@ const messages: LocaleMessages = {
       sidePanel: 'Side panel',
       inputPanel: 'Input panel',
       outputPanel: 'Output panel',
-      floatingWindow: 'Floating window',
       topDropdown: 'Top dropdown',
       modalPanel: 'Modal panel',
       pageBackground: 'Page background',
