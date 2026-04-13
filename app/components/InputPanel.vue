@@ -1241,7 +1241,7 @@ const inputMessageStyle = computed(() => {
   align-items: center;
   gap: 4px;
   padding: 4px 8px 8px;
-  border-top: 1px solid rgba(51, 65, 85, 0.35);
+  border-top: 1px solid color-mix(in srgb, var(--region-input-border, #334155) 70%, transparent);
   flex: 0 0 auto;
 }
 
@@ -1305,6 +1305,14 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.input-dropdown-popup) {
+  --ui-dropdown-bg: var(--region-input-bg, rgba(15, 23, 42, 0.92));
+  --ui-dropdown-border: var(--region-input-border, #334155);
+  --ui-dropdown-control-bg: var(--region-input-control-bg, rgba(11, 19, 32, 0.92));
+  --ui-dropdown-text: var(--region-input-text, #e2e8f0);
+  --ui-dropdown-text-muted: var(--region-input-text-muted, #94a3b8);
+  --ui-dropdown-accent: var(--region-input-accent, rgba(59, 130, 246, 0.45));
+  --ui-dropdown-active-bg: var(--region-input-active-bg, rgba(59, 130, 246, 0.2));
+  --ui-dropdown-hover-bg: var(--region-input-control-bg, rgba(15, 23, 42, 0.9));
   /* Always open upward since input toolbar is at the bottom */
   top: auto;
   bottom: anchor(top);
@@ -1353,7 +1361,7 @@ const inputMessageStyle = computed(() => {
 
 .agent-dropdown-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   line-height: 1.2;
 }
 
@@ -1390,7 +1398,7 @@ const inputMessageStyle = computed(() => {
 
 .model-button-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1433,7 +1441,7 @@ const inputMessageStyle = computed(() => {
 
 .model-dropdown-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   line-height: 1.2;
 }
 
@@ -1479,7 +1487,7 @@ const inputMessageStyle = computed(() => {
   gap: 6px;
   width: 100%;
   padding: 6px 8px 8px;
-  border-top: 1px solid #1e293b;
+  border-top: 1px solid color-mix(in srgb, var(--region-input-border, #1e293b) 80%, transparent);
   box-sizing: border-box;
   max-height: 45%;
   overflow: auto;
@@ -1495,8 +1503,8 @@ const inputMessageStyle = computed(() => {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 8px;
-  border: 1px solid #1e293b;
-  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid var(--region-input-border, #1e293b);
+  background: var(--region-input-control-bg, rgba(2, 6, 23, 0.6));
   box-sizing: border-box;
 }
 
@@ -1504,9 +1512,9 @@ const inputMessageStyle = computed(() => {
   width: 36px;
   height: 36px;
   border-radius: 6px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-input-border, #334155);
   object-fit: cover;
-  background: #0b1320;
+  background: var(--region-input-bg, #0b1320);
 }
 
 .attachment-thumb.clickable {
@@ -1523,7 +1531,7 @@ const inputMessageStyle = computed(() => {
 
 .attachment-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1535,9 +1543,9 @@ const inputMessageStyle = computed(() => {
 }
 
 .attachment-remove {
-  background: #1e293b;
-  color: #e2e8f0;
-  border: 1px solid #334155;
+  background: var(--region-input-control-bg, #1e293b);
+  color: var(--region-input-text, #e2e8f0);
+  border: 1px solid var(--region-input-border, #334155);
   border-radius: 6px;
   padding: 4px;
   font-size: 10px;
@@ -1545,6 +1553,10 @@ const inputMessageStyle = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.attachment-remove:hover {
+  background: var(--region-input-active-bg, rgba(30, 41, 59, 0.7));
 }
 
 .command-dropdown-wrapper {
@@ -1570,8 +1582,8 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.command-popup) .ui-dropdown-item[aria-selected='true'] {
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: var(--region-input-active-bg, rgba(59, 130, 246, 0.2));
+  border: 1px solid var(--region-input-accent, rgba(59, 130, 246, 0.45));
 }
 
 .command-dropdown-item {
@@ -1583,7 +1595,7 @@ const inputMessageStyle = computed(() => {
 }
 .command-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   line-height: 1.2;
 }
 .command-desc {
@@ -1615,13 +1627,13 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.agent-popup) .ui-dropdown-item[aria-selected='true'] {
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: var(--region-input-active-bg, rgba(59, 130, 246, 0.2));
+  border: 1px solid var(--region-input-accent, rgba(59, 130, 246, 0.45));
 }
 
 .agent-popup-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   line-height: 1.2;
 }
 .agent-mode-badge {
@@ -1668,8 +1680,8 @@ const inputMessageStyle = computed(() => {
 
 :deep(.history-popup) .ui-dropdown-item {
   /* Match thread-block style */
-  background: rgba(2, 6, 23, 0.6);
-  border: 1px solid #1e293b;
+  background: var(--region-input-control-bg, rgba(2, 6, 23, 0.6));
+  border: 1px solid var(--region-input-border, #1e293b);
   border-radius: 10px;
   padding: 8px;
 }
@@ -1680,8 +1692,8 @@ const inputMessageStyle = computed(() => {
 
 :deep(.history-popup) .ui-dropdown-item[aria-selected='true'],
 :deep(.history-popup) .ui-dropdown-item:hover {
-  background: rgba(30, 41, 59, 0.7);
-  border-color: #475569;
+  background: var(--region-input-active-bg, rgba(30, 41, 59, 0.7));
+  border-color: var(--region-input-accent, #475569);
 }
 
 .history-item {
@@ -1693,7 +1705,7 @@ const inputMessageStyle = computed(() => {
 
 .history-item-text {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1728,7 +1740,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .history-target-model {
-  color: #f8fafc;
+  color: var(--region-input-text, #f8fafc);
 }
 
 .history-target-provider {

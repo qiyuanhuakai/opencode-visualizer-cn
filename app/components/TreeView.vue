@@ -1059,7 +1059,7 @@ function onRowDoubleClick(row: VirtualRow) {
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid rgba(100, 116, 139, 0.28);
+  border-bottom: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
 }
 
 .tree-branch {
@@ -1076,6 +1076,14 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-picker-dropdown {
   flex: 0 1 auto;
   min-width: 0;
+  --ui-dropdown-bg: var(--region-side-bg, rgba(15, 23, 42, 0.95));
+  --ui-dropdown-border: var(--region-side-border, #334155);
+  --ui-dropdown-control-bg: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
+  --ui-dropdown-text: var(--region-side-text, #e2e8f0);
+  --ui-dropdown-text-muted: var(--region-side-text-muted, #94a3b8);
+  --ui-dropdown-accent: var(--region-side-accent, rgba(96, 165, 250, 0.6));
+  --ui-dropdown-active-bg: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
+  --ui-dropdown-hover-bg: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
 }
 
 .tree-branch-picker-trigger {
@@ -1088,11 +1096,11 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-picker-trigger:hover {
-  color: #cbd5e1;
+  color: var(--region-side-text, #cbd5e1);
 }
 
 .tree-branch-picker-trigger:focus-visible {
-  outline: 1px solid rgba(96, 165, 250, 0.7);
+  outline: 1px solid var(--region-side-accent, rgba(96, 165, 250, 0.7));
   outline-offset: 1px;
 }
 
@@ -1161,16 +1169,16 @@ function onRowDoubleClick(row: VirtualRow) {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border: 1px solid var(--color-slate-700);
+  border: 1px solid var(--region-side-border, var(--color-slate-700));
   border-radius: 6px;
   padding: 0;
-  background: var(--color-slate-950);
-  color: var(--color-slate-400);
+  background: var(--region-side-control-bg, var(--color-slate-950));
+  color: var(--region-side-text-muted, var(--color-slate-400));
   cursor: pointer;
 }
 
 .tree-branch-action-btn:hover {
-  background: var(--color-slate-800);
+  background: var(--region-side-active-bg, var(--color-slate-800));
 }
 
 .tree-branch-merge-btn {
@@ -1190,12 +1198,12 @@ function onRowDoubleClick(row: VirtualRow) {
   height: 18px;
   border: 0;
   background: transparent;
-  color: var(--color-slate-500);
+  color: var(--region-side-text-muted, var(--color-slate-500));
 }
 
 .tree-branch-fetch-btn:hover {
-  color: var(--color-slate-300);
-  background: var(--color-slate-800);
+  color: var(--region-side-text, var(--color-slate-300));
+  background: var(--region-side-active-bg, var(--color-slate-800));
 }
 
 .tree-branch-action-spacer {
@@ -1233,6 +1241,14 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-command-dropdown {
   flex: 0 0 auto;
   min-width: auto;
+  --ui-dropdown-bg: var(--region-side-bg, rgba(15, 23, 42, 0.95));
+  --ui-dropdown-border: var(--region-side-border, #334155);
+  --ui-dropdown-control-bg: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
+  --ui-dropdown-text: var(--region-side-text, #e2e8f0);
+  --ui-dropdown-text-muted: var(--region-side-text-muted, #94a3b8);
+  --ui-dropdown-accent: var(--region-side-accent, rgba(96, 165, 250, 0.6));
+  --ui-dropdown-active-bg: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
+  --ui-dropdown-hover-bg: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
 }
 
 .tree-branch-command-trigger {
@@ -1245,7 +1261,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-command-trigger:focus-visible {
-  outline: 1px solid rgba(96, 165, 250, 0.7);
+  outline: 1px solid var(--region-side-accent, rgba(96, 165, 250, 0.7));
   outline-offset: 1px;
 }
 
@@ -1266,13 +1282,13 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-icon {
-  color: #60a5fa;
+  color: var(--region-side-accent, #60a5fa);
   flex-shrink: 0;
 }
 
 .tree-branch-name {
   font-weight: 600;
-  color: #cbd5e1;
+  color: var(--region-side-text, #cbd5e1);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1316,11 +1332,11 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-stats:hover {
-  background: rgba(51, 65, 85, 0.55);
+  background: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
 }
 
 .tree-branch-stats:focus-visible {
-  outline: 1px solid rgba(96, 165, 250, 0.7);
+  outline: 1px solid var(--region-side-accent, rgba(96, 165, 250, 0.7));
   outline-offset: 1px;
 }
 
@@ -1335,7 +1351,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-tabs {
   display: inline-flex;
   width: 100%;
-  border: 1px solid rgba(100, 116, 139, 0.35);
+  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.35));
   border-radius: 8px;
   overflow: hidden;
 }
@@ -1343,7 +1359,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-tab {
   flex: 1;
   border: 0;
-  background: rgba(15, 23, 42, 0.7);
+  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
   color: var(--region-side-text-muted, #94a3b8);
   font-size: 11px;
   font-weight: 600;
@@ -1353,17 +1369,17 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-tab + .tree-tab {
-  border-left: 1px solid rgba(100, 116, 139, 0.35);
+  border-left: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.35));
 }
 
 .tree-tab.is-active {
-  background: rgba(30, 64, 175, 0.45);
-  color: #e2e8f0;
+  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
+  color: var(--region-side-active-text, #e2e8f0);
 }
 
 .tree-empty {
   margin: auto;
-  color: rgba(148, 163, 184, 0.9);
+  color: var(--region-side-text-muted, rgba(148, 163, 184, 0.9));
   font-size: 12px;
 }
 
@@ -1388,7 +1404,7 @@ function onRowDoubleClick(row: VirtualRow) {
   height: 24px;
   padding: 2px 6px 2px calc(4px + var(--indent) * 14px);
   border-radius: 6px;
-  color: #dbeafe;
+  color: var(--region-side-text, #dbeafe);
   cursor: pointer;
   position: absolute;
   left: 8px;
@@ -1401,7 +1417,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-row:hover {
-  background: rgba(51, 65, 85, 0.55);
+  background: var(--region-side-control-bg, rgba(51, 65, 85, 0.55));
 }
 
 .tree-row.is-ignored:hover {
@@ -1409,7 +1425,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-row.is-selected {
-  background: rgba(30, 64, 175, 0.4);
+  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.4));
 }
 
 .tree-row.is-selected.is-ignored {
@@ -1457,7 +1473,7 @@ function onRowDoubleClick(row: VirtualRow) {
   font-size: 10px;
   font-weight: 700;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.45);
+  border: 1px solid var(--region-side-border, rgba(148, 163, 184, 0.45));
   line-height: 16px;
   height: 16px;
   transition:
@@ -1625,7 +1641,7 @@ function onRowDoubleClick(row: VirtualRow) {
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
-  border-top: 1px solid rgba(100, 116, 139, 0.28);
+  border-top: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
   flex-shrink: 0;
 }
 
@@ -1657,7 +1673,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-statusbar-btn:hover {
-  background: rgba(51, 65, 85, 0.55);
-  color: #cbd5e1;
+  background: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
+  color: var(--region-side-text, #cbd5e1);
 }
 </style>

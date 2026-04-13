@@ -1141,6 +1141,7 @@ function handleOpenDirectory(close: () => void) {
   padding: 8px;
   border-bottom: 1px solid var(--region-top-dropdown-border, var(--region-top-border, #334155));
   background: var(--region-top-dropdown-bg, var(--region-top-bg, rgba(15, 23, 42, 0.9)));
+  --ui-dropdown-text-muted: var(--region-top-dropdown-text-muted, #64748b);
 }
 
 .search-icon {
@@ -1183,7 +1184,7 @@ function handleOpenDirectory(close: () => void) {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #cbd5e1;
+  color: var(--region-top-dropdown-text, #cbd5e1);
   font-size: 12px;
 }
 
@@ -1200,10 +1201,10 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action {
-  border: 1px solid var(--region-top-border, #334155);
+  border: 1px solid var(--region-top-dropdown-border, #334155);
   border-radius: 999px;
-  background: var(--region-top-control-bg, #111a2c);
-  color: var(--region-top-text, #cbd5e1);
+  background: var(--region-top-dropdown-control-bg, #111a2c);
+  color: var(--region-top-dropdown-text, #cbd5e1);
   font-size: 11px;
   line-height: 1;
   padding: 5px 8px;
@@ -1211,7 +1212,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action:hover {
-  background: #1d2a45;
+  background: var(--region-top-dropdown-active-bg, #1d2a45);
 }
 
 .management-action.is-danger {
@@ -1363,17 +1364,17 @@ function handleOpenDirectory(close: () => void) {
 .tree-session-row :deep(.ui-dropdown-item) {
   padding-left: 40px;
   border-radius: 0;
-  color: #e2e8f0;
+  color: var(--region-top-dropdown-text, #e2e8f0);
 }
 
 .tree-session-row :deep(.ui-dropdown-item:hover),
 .tree-session-row :deep(.ui-dropdown-item[aria-selected='true']) {
-  background: rgba(30, 41, 59, 0.8);
+  background: var(--region-top-dropdown-active-bg, rgba(30, 41, 59, 0.8));
 }
 
 .tree-session-row :deep(.ui-dropdown-item.is-active) {
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: var(--region-top-dropdown-active-bg, rgba(59, 130, 246, 0.2));
+  border: 1px solid var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
 }
 
 .management-session-item {
@@ -1383,28 +1384,28 @@ function handleOpenDirectory(close: () => void) {
   margin: 0 8px;
   padding: 6px 8px 6px 40px;
   border-radius: 8px;
-  color: #e2e8f0;
+  color: var(--region-top-dropdown-text, #e2e8f0);
   font-size: 12px;
   cursor: pointer;
 }
 
 .management-session-item:hover,
 .management-session-item[aria-selected='true'] {
-  background: rgba(30, 41, 59, 0.8);
+  background: var(--region-top-dropdown-active-bg, rgba(30, 41, 59, 0.8));
 }
 
 .management-session-item.is-active {
-  background: rgba(59, 130, 246, 0.18);
-  border: 1px solid rgba(59, 130, 246, 0.35);
+  background: var(--region-top-dropdown-active-bg, rgba(59, 130, 246, 0.18));
+  border: 1px solid var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.35));
 }
 
 .management-check {
   flex: 0 0 auto;
   width: 24px;
   height: 24px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-top-dropdown-border, #334155);
   border-radius: 6px;
-  background: #111a2c;
+  background: var(--region-top-dropdown-control-bg, #111a2c);
   color: var(--region-top-text-muted, #94a3b8);
   display: inline-flex;
   align-items: center;
@@ -1417,13 +1418,13 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-check:hover {
-  background: #1d2a45;
+  background: var(--region-top-dropdown-active-bg, #1d2a45);
 }
 
 .management-check.is-selected {
   color: #60a5fa;
-  border-color: rgba(59, 130, 246, 0.45);
-  background: rgba(30, 64, 175, 0.2);
+  border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
+  background: var(--region-top-dropdown-active-bg, rgba(30, 64, 175, 0.2));
 }
 
 /* ===== Tree branch connectors ===== */
@@ -1440,7 +1441,7 @@ function handleOpenDirectory(close: () => void) {
   left: 15px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid rgba(71, 85, 105, 0.5);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
   pointer-events: none;
 }
 
@@ -1451,7 +1452,7 @@ function handleOpenDirectory(close: () => void) {
   top: 13px;
   width: 7px;
   height: 0;
-  border-top: 1px solid rgba(71, 85, 105, 0.5);
+  border-top: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
   pointer-events: none;
 }
 
@@ -1463,8 +1464,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 13px;
-  border-left: 1px solid rgba(71, 85, 105, 0.5);
-  border-bottom: 1px solid rgba(71, 85, 105, 0.5);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
+  border-bottom: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1481,7 +1482,7 @@ function handleOpenDirectory(close: () => void) {
   left: 31px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid rgba(71, 85, 105, 0.4);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
   pointer-events: none;
 }
 
@@ -1492,7 +1493,7 @@ function handleOpenDirectory(close: () => void) {
   top: 14px;
   width: 7px;
   height: 0;
-  border-top: 1px solid rgba(71, 85, 105, 0.4);
+  border-top: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
   pointer-events: none;
 }
 
@@ -1504,8 +1505,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 14px;
-  border-left: 1px solid rgba(71, 85, 105, 0.4);
-  border-bottom: 1px solid rgba(71, 85, 105, 0.4);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
+  border-bottom: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1602,8 +1603,8 @@ function handleOpenDirectory(close: () => void) {
 .tree-footer {
   flex: 0 0 auto;
   border-top: 1px solid var(--region-top-dropdown-border, #334155);
-  padding: 8px;
-  background: var(--region-top-dropdown-control-bg, #0b1320);
+  padding: 8px 0 0;
+  background: transparent;
 }
 
 .tree-footer-button {
@@ -1612,6 +1613,8 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid var(--region-top-dropdown-border, #334155);
   border-radius: 8px;
   background: var(--region-top-dropdown-control-bg, #111a2c);
@@ -1619,10 +1622,16 @@ function handleOpenDirectory(close: () => void) {
   padding: 6px 10px;
   font-size: 12px;
   cursor: pointer;
+  box-shadow: none;
+  outline: none;
 }
 
 .tree-footer-button:hover {
-  background: #1d2a45;
+  background: var(--region-top-dropdown-active-bg, #1d2a45);
+}
+
+.tree-footer-button:focus-visible {
+  border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
 }
 
 .control-button {
@@ -1649,7 +1658,7 @@ function handleOpenDirectory(close: () => void) {
 
 .new-session-button:hover,
 .open-shell-button:hover {
-  background: #1d2a45;
+  background: var(--region-top-dropdown-active-bg, #1d2a45);
 }
 
 .open-shell-button {
@@ -1677,7 +1686,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-toggle-button:hover {
-  background: #1d2a45;
+  background: var(--region-top-dropdown-active-bg, #1d2a45);
 }
 
 .notification-button {
@@ -1711,15 +1720,15 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-dropdown-root :deep(.ui-dropdown-button) {
-  background: #0b1320;
-  border-color: #334155;
-  color: #e2e8f0;
+  background: var(--region-top-dropdown-control-bg, #0b1320);
+  border-color: var(--region-top-dropdown-border, #334155);
+  color: var(--region-top-dropdown-text, #e2e8f0);
   box-shadow: none;
 }
 
 .tree-dropdown-root :deep(.ui-dropdown-menu) {
-  background: #0b1320;
-  border: 1px solid #334155;
+  background: var(--region-top-dropdown-bg, #0b1320);
+  border: 1px solid var(--region-top-dropdown-border, #334155);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1756,11 +1765,11 @@ function handleOpenDirectory(close: () => void) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-top-dropdown-border, #334155);
   border-radius: 999px;
   padding: 2px 6px;
-  color: #cbd5e1;
-  background: #111a2c;
+  color: var(--region-top-dropdown-text, #cbd5e1);
+  background: var(--region-top-dropdown-control-bg, #111a2c);
   font-size: 11px;
   line-height: 1;
 }

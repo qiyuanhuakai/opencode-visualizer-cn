@@ -102,13 +102,13 @@ a.ui-dropdown-item {
 }
 
 .ui-dropdown-item.is-active {
-  background: rgba(59, 130, 246, 0.2);
-  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: var(--ui-dropdown-active-bg, var(--region-top-dropdown-active-bg, rgba(59, 130, 246, 0.2)));
+  border: 1px solid var(--ui-dropdown-accent, var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45)));
 }
 
 .ui-dropdown-item:hover,
 .ui-dropdown-item[aria-selected='true'] {
-  background: rgba(15, 23, 42, 0.9);
+  background: var(--ui-dropdown-hover-bg, var(--region-top-dropdown-active-bg, rgba(15, 23, 42, 0.9)));
 }
 
 .ui-dropdown-item.is-disabled {

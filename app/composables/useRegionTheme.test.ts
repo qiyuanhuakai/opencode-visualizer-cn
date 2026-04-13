@@ -7,11 +7,14 @@ import { StorageKeys, storageKey } from '../utils/storageKeys';
 describe('useRegionTheme', () => {
   beforeEach(() => {
     vi.resetModules();
+    vi.useFakeTimers();
     window.localStorage.clear();
     document.getElementById('region-theme-overrides')?.remove();
   });
 
   afterEach(() => {
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
     document.getElementById('region-theme-overrides')?.remove();
     document.body.innerHTML = '';
   });
@@ -65,6 +68,7 @@ describe('useRegionTheme', () => {
 
     api.applyPreset('ocean');
     await nextTick();
+    vi.runAllTimers();
 
     expect(api.activeTheme.value).toEqual(OCEAN_PRESET);
     expect(window.localStorage.getItem(storageKey(StorageKeys.settings.regionTheme))).toBe(JSON.stringify(OCEAN_PRESET));

@@ -224,10 +224,10 @@ const {
 .side-toggle {
   width: 26px;
   height: 26px;
-  border: 1px solid rgba(100, 116, 139, 0.45);
+  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.45));
   border-radius: 6px;
-  background: rgba(30, 41, 59, 0.92);
-  color: #cbd5e1;
+  background: var(--region-side-control-bg, rgba(30, 41, 59, 0.92));
+  color: var(--region-side-text, #cbd5e1);
   cursor: pointer;
   font-size: 12px;
   display: inline-flex;
@@ -237,7 +237,7 @@ const {
 }
 
 .side-toggle:hover {
-  background: rgba(51, 65, 85, 0.95);
+  background: var(--region-side-active-bg, rgba(51, 65, 85, 0.95));
 }
 
 .side-body {
@@ -253,7 +253,7 @@ const {
   align-items: center;
   gap: 4px;
   padding: 8px;
-  border-bottom: 1px solid rgba(71, 85, 105, 0.42);
+  border-bottom: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.42));
 }
 
 .side-tab {
@@ -276,7 +276,7 @@ const {
 }
 
 .side-panel.is-collapsed {
-  border-color: rgba(100, 116, 139, 0.45);
+  border-color: var(--region-side-border, rgba(100, 116, 139, 0.45));
 }
 
 .session-body {
@@ -292,14 +292,14 @@ const {
   align-items: center;
   justify-content: space-between;
   padding: 10px 10px 8px;
-  border-bottom: 1px solid rgba(100, 116, 139, 0.28);
+  border-bottom: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
 }
 
 .session-title {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: #e2e8f0;
+  color: var(--region-side-text, #e2e8f0);
 }
 
 .session-count {
@@ -309,7 +309,7 @@ const {
 
 .session-empty {
   margin: auto;
-  color: rgba(148, 163, 184, 0.9);
+  color: var(--region-side-text-muted, rgba(148, 163, 184, 0.9));
   font-size: 12px;
 }
 
@@ -332,10 +332,10 @@ const {
 .session-select {
   flex: 1;
   min-width: 0;
-  border: 1px solid rgba(71, 85, 105, 0.5);
+  border: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.5));
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.6);
-  color: #e2e8f0;
+  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.6));
+  color: var(--region-side-text, #e2e8f0);
   text-align: left;
   padding: 7px 8px;
   display: flex;
@@ -345,12 +345,12 @@ const {
 }
 
 .session-item.is-active .session-select {
-  border-color: rgba(96, 165, 250, 0.6);
-  background: rgba(30, 64, 175, 0.25);
+  border-color: var(--region-side-accent, rgba(96, 165, 250, 0.6));
+  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.25));
 }
 
 .session-select:hover {
-  background: rgba(30, 41, 59, 0.78);
+  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.78));
 }
 
 .session-name {
@@ -374,9 +374,9 @@ const {
 .session-unpin {
   flex: 0 0 auto;
   width: 30px;
-  border: 1px solid rgba(100, 116, 139, 0.4);
+  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.4));
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.7);
+  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
   color: #fbbf24;
   display: inline-flex;
   align-items: center;
@@ -385,7 +385,7 @@ const {
 }
 
 .session-unpin:hover {
-  background: rgba(30, 41, 59, 0.82);
+  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.82));
 }
 
 .side-toggle-inline {
