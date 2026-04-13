@@ -476,6 +476,7 @@ export interface LocaleMessages {
       controlBg: string;
       activeBg: string;
       activeText: string;
+      textMuted: string;
       reset: string;
     };
   };

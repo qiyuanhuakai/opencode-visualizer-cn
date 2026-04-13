@@ -624,7 +624,7 @@ function cleanDirectoryPath(p: string): string {
 
 .picker-empty {
   font-size: 12px;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
   padding: 4px 8px;
 }
 
@@ -642,7 +642,7 @@ function cleanDirectoryPath(p: string): string {
   border: 1px solid #334155;
   border-radius: 6px;
   background: transparent;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
   cursor: pointer;
 }
 

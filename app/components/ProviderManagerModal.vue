@@ -753,7 +753,7 @@ async function disconnectProvider(providerId: string) {
 
 .provider-manager-subtitle {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .provider-manager-close {
@@ -796,7 +796,7 @@ async function disconnectProvider(providerId: string) {
   border: 1px solid rgba(100, 116, 139, 0.35);
   border-radius: 8px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.7));
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -848,7 +848,7 @@ async function disconnectProvider(providerId: string) {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .section-heading {
@@ -861,7 +861,7 @@ async function disconnectProvider(providerId: string) {
 .section-meta {
   margin-top: 4px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .provider-sections,
@@ -907,7 +907,7 @@ async function disconnectProvider(providerId: string) {
 .provider-empty-state {
   padding: 18px 14px;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .provider-list-row {
@@ -956,7 +956,7 @@ async function disconnectProvider(providerId: string) {
 
 .provider-note {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .provider-auth-methods.compact {
@@ -1006,7 +1006,7 @@ async function disconnectProvider(providerId: string) {
 
 .provider-view-all-toggle-meta {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .provider-view-all-panel {
@@ -1052,7 +1052,7 @@ async function disconnectProvider(providerId: string) {
 
 .provider-mini-card-meta {
   font-size: 11px;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .provider-card {
@@ -1103,7 +1103,7 @@ async function disconnectProvider(providerId: string) {
 .model-id {
   margin-top: 2px;
   font-size: 11px;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .provider-badges,
@@ -1161,7 +1161,7 @@ async function disconnectProvider(providerId: string) {
   flex-wrap: wrap;
   gap: 12px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .provider-stats.compact {
@@ -1283,7 +1283,7 @@ async function disconnectProvider(providerId: string) {
   border: 1px solid #334155;
   border-radius: 10px;
   background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.82));
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .model-search-field input {
@@ -1298,7 +1298,7 @@ async function disconnectProvider(providerId: string) {
 }
 
 .model-search-field input::placeholder {
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .model-toolbar-stats {
@@ -1306,14 +1306,14 @@ async function disconnectProvider(providerId: string) {
   flex-wrap: wrap;
   gap: 10px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .models-empty {
   padding: 30px 12px;
   text-align: center;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .model-group {

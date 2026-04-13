@@ -166,7 +166,7 @@ function emitReply(reply: PermissionReply) {
 
 .permission-type {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   text-align: right;
@@ -190,7 +190,7 @@ function emitReply(reply: PermissionReply) {
 }
 
 .permission-label {
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
   font-size: 11px;
 }
 
@@ -202,7 +202,7 @@ function emitReply(reply: PermissionReply) {
 
 .divider {
   margin: 0 4px;
-  color: #64748b;
+  color: var(--region-floating-text-muted, #64748b);
 }
 
 .permission-body {
@@ -253,7 +253,7 @@ function emitReply(reply: PermissionReply) {
 }
 
 .metadata-key {
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
   font-size: 11px;
 }
 
@@ -266,7 +266,7 @@ function emitReply(reply: PermissionReply) {
 }
 
 .empty {
-  color: #64748b;
+  color: var(--region-floating-text-muted, #64748b);
   font-size: 11px;
 }
 

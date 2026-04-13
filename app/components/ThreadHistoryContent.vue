@@ -288,7 +288,7 @@ function formatMessageTime(value?: number) {
   gap: 8px;
   align-items: center;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
 }
 
 .history-index {
@@ -363,7 +363,7 @@ function formatMessageTime(value?: number) {
 
 .history-question-status {
   font-size: 10px;
-  color: #64748b;
+  color: var(--region-floating-text-muted, #64748b);
 }
 
 .history-question-status.is-replied {
@@ -394,7 +394,7 @@ function formatMessageTime(value?: number) {
 .history-question-header {
   font-size: 11px;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
@@ -418,7 +418,7 @@ function formatMessageTime(value?: number) {
   align-items: baseline;
   font-size: 12px;
   line-height: 1.4;
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
   padding: 2px 4px;
   border-radius: 3px;
 }
@@ -438,11 +438,11 @@ function formatMessageTime(value?: number) {
 }
 
 .option-desc {
-  color: #64748b;
+  color: var(--region-floating-text-muted, #64748b);
 }
 
 .history-question-option.is-selected .option-desc {
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
 }
 
 .history-question-custom {
@@ -507,7 +507,7 @@ function formatMessageTime(value?: number) {
 
 .history-tool-status {
   font-size: 10px;
-  color: #64748b;
+  color: var(--region-floating-text-muted, #64748b);
 }
 
 .history-tool-status.is-completed {
@@ -527,7 +527,7 @@ function formatMessageTime(value?: number) {
   font-family: var(--app-monospace-font-family);
   font-size: 12px;
   line-height: 1.4;
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

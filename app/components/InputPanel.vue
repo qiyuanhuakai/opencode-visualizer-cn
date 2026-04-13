@@ -1277,7 +1277,7 @@ const inputMessageStyle = computed(() => {
 :deep(.input-control) {
   width: 100%;
   background: transparent;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   border: 1px solid transparent;
   border-radius: 8px;
   padding: 4px 8px;
@@ -1332,7 +1332,7 @@ const inputMessageStyle = computed(() => {
 .dropdown-empty {
   padding: 6px 8px;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
 }
 
 .dropdown-item-label {
@@ -1359,7 +1359,7 @@ const inputMessageStyle = computed(() => {
 
 .agent-dropdown-description {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1382,7 +1382,7 @@ const inputMessageStyle = computed(() => {
 .model-button-provider {
   position: fixed;
   font-size: 9px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   white-space: nowrap;
   text-overflow: ellipsis;
   transform: translate(-3px, -11px);
@@ -1439,7 +1439,7 @@ const inputMessageStyle = computed(() => {
 
 .model-dropdown-path {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   line-height: 1.2;
 }
 
@@ -1531,7 +1531,7 @@ const inputMessageStyle = computed(() => {
 
 .attachment-type {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
 }
 
 .attachment-remove {
@@ -1588,7 +1588,7 @@ const inputMessageStyle = computed(() => {
 }
 .command-desc {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   line-height: 1.2;
 }
 
@@ -1626,13 +1626,13 @@ const inputMessageStyle = computed(() => {
 }
 .agent-mode-badge {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   margin-left: 6px;
   font-weight: 500;
 }
 .agent-popup-description {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   line-height: 1.2;
 }
 
@@ -1732,11 +1732,11 @@ const inputMessageStyle = computed(() => {
 }
 
 .history-target-provider {
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
 }
 
 .history-target-separator {
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
 }
 
 .history-target-variant {
@@ -1751,7 +1751,7 @@ const inputMessageStyle = computed(() => {
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: #64748b;
+  color: var(--region-input-text-muted, #64748b);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1776,7 +1776,7 @@ const inputMessageStyle = computed(() => {
 
 .input-button {
   background: transparent;
-  color: #94a3b8;
+  color: var(--region-input-text-muted, #94a3b8);
   border: 1px solid transparent;
   border-radius: 8px;
   width: 28px;

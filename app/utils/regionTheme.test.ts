@@ -4,6 +4,7 @@ import {
   DEFAULT_REGION_THEME,
   FOREST_PRESET,
   OCEAN_PRESET,
+  SAKURA_PRESET,
   generateCSS,
   type RegionColors,
   type RegionName,
@@ -29,6 +30,7 @@ const COLOR_FIELDS: (keyof RegionColors)[] = [
   'controlBg',
   'activeBg',
   'activeText',
+  'textMuted',
 ];
 
 const COLOR_VALUE = /^(#[0-9a-f]{6}|#[0-9a-f]{8}|rgba?\([^)]+\))$/i;
@@ -45,7 +47,7 @@ describe('DEFAULT_REGION_THEME', () => {
 
 describe('region theme presets', () => {
   it('uses concrete hex values for every region color', () => {
-    for (const preset of [OCEAN_PRESET, FOREST_PRESET]) {
+    for (const preset of [OCEAN_PRESET, FOREST_PRESET, SAKURA_PRESET]) {
       for (const regionName of REGION_NAMES) {
         for (const field of COLOR_FIELDS) {
           expect(preset.regions[regionName][field]).toMatch(COLOR_VALUE);
@@ -105,5 +107,27 @@ describe('generateCSS', () => {
     expect(css).not.toContain('--region-top-text:');
     expect(css).not.toContain('.input-panel {');
     expect(css).not.toContain('.floating-window {');
+  });
+
+  it('includes text-muted variable when defined', () => {
+    const css = generateCSS({
+      name: 'custom',
+      label: 'Custom',
+      regions: {
+        topPanel: {
+          textMuted: '#94a3b8',
+        },
+        sidePanel: {},
+        inputPanel: {},
+        outputPanel: {},
+        floatingWindow: {},
+        topDropdown: {},
+        modalPanel: {},
+        pageBackground: {},
+        chatCard: {},
+      },
+    });
+
+    expect(css).toContain('--region-top-text-muted: #94a3b8;');
   });
 });

@@ -417,6 +417,7 @@ const messages: LocaleMessages = {
       controlBg: 'Control background',
       activeBg: 'Active background',
       activeText: 'Active text',
+      textMuted: 'Muted text',
       reset: 'Reset to default',
     },
     close: 'Close settings',

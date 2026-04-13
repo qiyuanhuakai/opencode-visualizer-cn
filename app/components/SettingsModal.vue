@@ -441,7 +441,7 @@ const {
 const { activeTheme, applyPreset, resetTheme } = useRegionTheme();
 const selectedPreset = ref<'default' | 'ocean' | 'forest' | 'sakura' | 'custom'>('default');
 const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel', 'pageBackground', 'chatCard'];
-const colorFields: (keyof RegionColors)[] = ['bg', 'text', 'border', 'accent', 'controlBg', 'activeBg', 'activeText'];
+const colorFields: (keyof RegionColors)[] = ['bg', 'text', 'border', 'accent', 'controlBg', 'activeBg', 'activeText', 'textMuted'];
 
 const regionVisibleFields: Record<RegionName, (keyof RegionColors)[]> = {
   topPanel: colorFields,
@@ -452,21 +452,21 @@ const regionVisibleFields: Record<RegionName, (keyof RegionColors)[]> = {
   topDropdown: colorFields,
   modalPanel: colorFields,
   pageBackground: ['bg'],
-  chatCard: ['bg', 'border'],
+  chatCard: ['bg', 'border', 'textMuted'],
 };
 
 const customColors = reactive<
-  Record<RegionName, { bg: string; text: string; border: string; accent: string; controlBg: string; activeBg: string; activeText: string }>
+  Record<RegionName, { bg: string; text: string; border: string; accent: string; controlBg: string; activeBg: string; activeText: string; textMuted: string }>
 >({
-  topPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  sidePanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  inputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  outputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  floatingWindow: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  topDropdown: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  modalPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  pageBackground: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
-  chatCard: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff' },
+  topPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  sidePanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  inputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  outputPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  floatingWindow: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  topDropdown: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  modalPanel: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  pageBackground: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
+  chatCard: { bg: '#1a1a2e', text: '#eaf6ff', border: '#334155', accent: '#4cc9f0', controlBg: '#16213e', activeBg: '#0f3460', activeText: '#ffffff', textMuted: '#94a3b8' },
 });
 
 function syncCustomColorsFromActiveTheme() {
@@ -488,6 +488,7 @@ function syncCustomColorsFromActiveTheme() {
     customColors[region].controlBg = source.regions[region]?.controlBg || '#16213e';
     customColors[region].activeBg = source.regions[region]?.activeBg || '#0f3460';
     customColors[region].activeText = source.regions[region]?.activeText || '#ffffff';
+    customColors[region].textMuted = source.regions[region]?.textMuted || '#94a3b8';
   });
 }
 
@@ -836,12 +837,12 @@ watch(
 
 .setting-link-icon {
   flex: 0 0 auto;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .setting-page-description {
   margin: 2px 2px 0;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
   font-size: 11px;
 }
 
@@ -861,7 +862,7 @@ watch(
 
 .setting-description {
   font-size: 11px;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .number-setting-group {
@@ -889,7 +890,7 @@ watch(
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .font-preset-row {
@@ -1043,7 +1044,7 @@ watch(
 }
 
 .font-stack-status-value {
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .font-system-actions {
@@ -1082,7 +1083,7 @@ watch(
 }
 
 .font-system-hint {
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .font-system-error {
@@ -1122,7 +1123,7 @@ watch(
 
 .font-system-meta {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .language-select {
@@ -1209,7 +1210,7 @@ watch(
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #64748b;
+  color: var(--region-modal-text-muted, #64748b);
 }
 
 .theme-color-input {

@@ -17,6 +17,7 @@ export interface RegionColors {
   controlBg?: string;
   activeBg?: string;
   activeText?: string;
+  textMuted?: string;
 }
 
 export interface RegionThemeConfig {
@@ -45,6 +46,7 @@ const COLOR_FIELDS: (keyof RegionColors)[] = [
   'controlBg',
   'activeBg',
   'activeText',
+  'textMuted',
 ];
 
 const REGION_SELECTORS: Record<RegionName, string> = {
@@ -80,6 +82,7 @@ function createEmptyRegionColors(): RegionColors {
     controlBg: undefined,
     activeBg: undefined,
     activeText: undefined,
+    textMuted: undefined,
   };
 }
 
@@ -115,6 +118,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#16213e',
       activeBg: '#0f3460',
       activeText: '#ffffff',
+      textMuted: '#7aa2c0',
     },
     sidePanel: {
       bg: '#102542',
@@ -124,6 +128,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#16324f',
       activeBg: '#1b4965',
       activeText: '#ffffff',
+      textMuted: '#7aa2c0',
     },
     inputPanel: {
       bg: '#0b1f33',
@@ -133,6 +138,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#12324a',
       activeBg: '#155e75',
       activeText: '#f7feff',
+      textMuted: '#7aa2c0',
     },
     outputPanel: {
       bg: '#13293d',
@@ -142,6 +148,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#1b3a4b',
       activeBg: '#006494',
       activeText: '#ffffff',
+      textMuted: '#7aa2c0',
     },
     floatingWindow: {
       bg: '#1c2541',
@@ -151,6 +158,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#273469',
       activeBg: '#0b6e99',
       activeText: '#ffffff',
+      textMuted: '#7aa2c0',
     },
     topDropdown: {
       bg: '#0b1f33',
@@ -160,6 +168,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#12324a',
       activeBg: '#155e75',
       activeText: '#f7feff',
+      textMuted: '#7aa2c0',
     },
     modalPanel: {
       bg: '#13293d',
@@ -169,6 +178,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#1b3a4b',
       activeBg: '#006494',
       activeText: '#ffffff',
+      textMuted: '#7aa2c0',
     },
     pageBackground: {
       bg: '#08101f',
@@ -178,6 +188,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#16213e',
       activeBg: '#0f3460',
       activeText: '#ffffff',
+      textMuted: '#7aa2c0',
     },
     chatCard: {
       bg: '#0a192db8',
@@ -187,6 +198,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       controlBg: '#1b3a4b',
       activeBg: '#006494',
       activeText: '#ffffff',
+      textMuted: '#7aa2c0',
     },
   },
 };
@@ -203,6 +215,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#243b2f',
       activeBg: '#3a5a40',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
     sidePanel: {
       bg: '#14281d',
@@ -212,6 +225,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#1d3528',
       activeBg: '#31572c',
       activeText: '#f9fff9',
+      textMuted: '#7d9e7d',
     },
     inputPanel: {
       bg: '#1f3525',
@@ -221,6 +235,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#29432f',
       activeBg: '#4f772d',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
     outputPanel: {
       bg: '#233d2b',
@@ -230,6 +245,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#2c4a36',
       activeBg: '#588157',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
     floatingWindow: {
       bg: '#2f3e2f',
@@ -239,6 +255,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#354f38',
       activeBg: '#52734d',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
     topDropdown: {
       bg: '#1f3525',
@@ -248,6 +265,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#29432f',
       activeBg: '#4f772d',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
     modalPanel: {
       bg: '#233d2b',
@@ -257,6 +275,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#2c4a36',
       activeBg: '#588157',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
     pageBackground: {
       bg: '#0a1810',
@@ -266,6 +285,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#243b2f',
       activeBg: '#3a5a40',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
     chatCard: {
       bg: '#0c1e12b8',
@@ -275,6 +295,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       controlBg: '#2c4a36',
       activeBg: '#588157',
       activeText: '#ffffff',
+      textMuted: '#7d9e7d',
     },
   },
 };
@@ -291,6 +312,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#785a66',
       activeBg: 'rgba(200, 150, 170, 0.4)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     sidePanel: {
       bg: 'rgba(88, 64, 76, 0.95)',
@@ -300,6 +322,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#70505c',
       activeBg: 'rgba(190, 140, 160, 0.45)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     inputPanel: {
       bg: 'rgba(92, 68, 80, 0.92)',
@@ -309,6 +332,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#74545e',
       activeBg: 'rgba(195, 145, 165, 0.4)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     outputPanel: {
       bg: 'rgba(92, 68, 80, 0.92)',
@@ -318,6 +342,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#74545e',
       activeBg: 'rgba(195, 145, 165, 0.4)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     floatingWindow: {
       bg: 'rgba(100, 74, 86, 0.95)',
@@ -327,6 +352,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#7e5c68',
       activeBg: 'rgba(205, 155, 175, 0.42)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     topDropdown: {
       bg: 'rgba(98, 72, 84, 0.92)',
@@ -336,6 +362,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#785a66',
       activeBg: 'rgba(200, 150, 170, 0.4)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     modalPanel: {
       bg: 'rgba(95, 70, 82, 0.92)',
@@ -345,6 +372,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#74545e',
       activeBg: 'rgba(195, 145, 165, 0.4)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     pageBackground: {
       bg: 'rgba(85, 60, 72, 0.95)',
@@ -354,6 +382,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#785a66',
       activeBg: 'rgba(200, 150, 170, 0.4)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
     chatCard: {
       bg: 'rgba(95, 68, 80, 0.72)',
@@ -363,6 +392,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       controlBg: '#74545e',
       activeBg: 'rgba(195, 145, 165, 0.4)',
       activeText: '#ffffff',
+      textMuted: '#d4b8c8',
     },
   },
 };
@@ -389,7 +419,9 @@ export function generateCSS(theme: RegionThemeConfig | null): string {
       return '';
     }
 
-    return `${REGION_SELECTORS[regionName]} {\n${declarations.join('\n')}\n}`;
+    return `${REGION_SELECTORS[regionName]} {
+${declarations.join('\n')}
+}`;
   })
     .filter(Boolean)
     .join('\n');

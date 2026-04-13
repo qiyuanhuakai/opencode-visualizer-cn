@@ -519,7 +519,7 @@ const currentTotalLabel = computed(() => {
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 500;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   background: transparent;
@@ -657,7 +657,7 @@ const currentTotalLabel = computed(() => {
 
 .status-monitor-meta {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .status-monitor-meta.is-error {
@@ -729,13 +729,13 @@ const currentTotalLabel = computed(() => {
 .status-monitor-summary {
   font-size: 12px;
   font-weight: 500;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .status-monitor-empty {
   padding: 32px 16px;
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--region-modal-text-muted, #94a3b8);
   text-align: center;
 }
 

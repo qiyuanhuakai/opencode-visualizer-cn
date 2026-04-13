@@ -697,7 +697,7 @@ function onResizeEnd(e: PointerEvent) {
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.15);
   background: rgba(30, 34, 42, 0.85);
-  color: #94a3b8;
+  color: var(--region-floating-text-muted, #94a3b8);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
