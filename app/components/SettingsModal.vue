@@ -897,6 +897,10 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: var(--ui-action-gap);
+  --ui-chip-border-neutral: var(--region-modal-border, rgba(148, 163, 184, 0.65));
+  --ui-chip-bg-neutral: var(--region-modal-control-bg, rgba(15, 23, 42, 0.75));
+  --ui-chip-bg-hover: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
+  --ui-chip-fg-neutral: var(--region-modal-text, #bfdbfe);
 }
 
 .font-preset-chip {
