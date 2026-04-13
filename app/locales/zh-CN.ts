@@ -405,7 +405,6 @@ const messages: LocaleMessages = {
       sidePanel: '侧边面板',
       inputPanel: '输入面板',
       outputPanel: '输出面板',
-      floatingWindow: '悬浮窗',
       topDropdown: '顶部下拉栏',
       modalPanel: '弹窗面板',
       pageBackground: '页面背景',

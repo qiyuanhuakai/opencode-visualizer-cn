@@ -464,7 +464,6 @@ export interface LocaleMessages {
       sidePanel: string;
       inputPanel: string;
       outputPanel: string;
-      floatingWindow: string;
       topDropdown: string;
       modalPanel: string;
       pageBackground: string;

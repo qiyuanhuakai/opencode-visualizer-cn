@@ -102,9 +102,9 @@ export function toolColor(tool: string): string {
       return '#818cf8';
     case 'plan_enter':
     case 'plan_exit':
-      return 'var(--region-floating-text-muted, #94a3b8)';
+      return '#94a3b8';
     default:
-      return 'var(--region-floating-text-muted, #64748b)';
+      return '#64748b';
   }
 }
 
