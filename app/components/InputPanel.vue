@@ -1241,7 +1241,7 @@ const inputMessageStyle = computed(() => {
   align-items: center;
   gap: 4px;
   padding: 4px 8px 8px;
-  border-top: 1px solid rgba(51, 65, 85, 0.35);
+  border-top: 1px solid color-mix(in srgb, var(--region-input-border, #334155) 70%, transparent);
   flex: 0 0 auto;
 }
 
@@ -1487,7 +1487,7 @@ const inputMessageStyle = computed(() => {
   gap: 6px;
   width: 100%;
   padding: 6px 8px 8px;
-  border-top: 1px solid #1e293b;
+  border-top: 1px solid color-mix(in srgb, var(--region-input-border, #1e293b) 80%, transparent);
   box-sizing: border-box;
   max-height: 45%;
   overflow: auto;
@@ -1503,8 +1503,8 @@ const inputMessageStyle = computed(() => {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 8px;
-  border: 1px solid #1e293b;
-  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid var(--region-input-border, #1e293b);
+  background: var(--region-input-control-bg, rgba(2, 6, 23, 0.6));
   box-sizing: border-box;
 }
 
@@ -1512,9 +1512,9 @@ const inputMessageStyle = computed(() => {
   width: 36px;
   height: 36px;
   border-radius: 6px;
-  border: 1px solid #334155;
+  border: 1px solid var(--region-input-border, #334155);
   object-fit: cover;
-  background: #0b1320;
+  background: var(--region-input-bg, #0b1320);
 }
 
 .attachment-thumb.clickable {
@@ -1531,7 +1531,7 @@ const inputMessageStyle = computed(() => {
 
 .attachment-name {
   font-size: 12px;
-  color: #e2e8f0;
+  color: var(--region-input-text, #e2e8f0);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1543,9 +1543,9 @@ const inputMessageStyle = computed(() => {
 }
 
 .attachment-remove {
-  background: #1e293b;
-  color: #e2e8f0;
-  border: 1px solid #334155;
+  background: var(--region-input-control-bg, #1e293b);
+  color: var(--region-input-text, #e2e8f0);
+  border: 1px solid var(--region-input-border, #334155);
   border-radius: 6px;
   padding: 4px;
   font-size: 10px;
@@ -1553,6 +1553,10 @@ const inputMessageStyle = computed(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.attachment-remove:hover {
+  background: var(--region-input-active-bg, rgba(30, 41, 59, 0.7));
 }
 
 .command-dropdown-wrapper {
