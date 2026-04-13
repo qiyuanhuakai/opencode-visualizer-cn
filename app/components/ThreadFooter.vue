@@ -81,6 +81,10 @@ defineEmits<{
 
 <style scoped>
 .ib-footer {
+  --ui-chip-border-neutral: var(--region-chat-border, rgba(148, 163, 184, 0.65));
+  --ui-chip-bg-neutral: var(--region-chat-control-bg, rgba(15, 23, 42, 0.75));
+  --ui-chip-bg-hover: var(--region-chat-active-bg, rgba(30, 41, 59, 0.92));
+  --ui-chip-fg-neutral: var(--region-chat-text, #bfdbfe);
   display: flex;
   justify-content: space-between;
   align-items: center;

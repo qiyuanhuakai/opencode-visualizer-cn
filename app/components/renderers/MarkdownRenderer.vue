@@ -483,8 +483,8 @@ onBeforeUnmount(() => {
 }
 
 .message-content :deep(.markdown-host .md-copy-btn:hover) {
-  color: #e2e8f0;
-  border-color: rgba(148, 163, 184, 0.72);
+  color: var(--ui-chip-fg-neutral, #e2e8f0);
+  border-color: var(--ui-chip-border-neutral, rgba(148, 163, 184, 0.72));
   background: var(--ui-chip-bg-hover);
 }
 
@@ -531,31 +531,22 @@ onBeforeUnmount(() => {
   z-index: 2;
 }
 
-.message-viewer.message-viewer-context-user .message-content :deep(.markdown-host > .md-copy-btn),
-.message-viewer.message-viewer-context-user
-  .message-content
-  :deep(.markdown-host > .md-copied-indicator) {
+:deep(.message-viewer-shell.message-viewer-context-user .markdown-host > .md-copy-btn),
+:deep(.message-viewer-shell.message-viewer-context-user .markdown-host > .md-copied-indicator) {
   top: -2px;
   right: -2px;
 }
 
-.message-viewer.message-viewer-context-assistant
-  .message-content
-  :deep(.markdown-host > .md-copy-btn),
-.message-viewer.message-viewer-context-assistant
-  .message-content
-  :deep(.markdown-host > .md-copied-indicator) {
+:deep(.message-viewer-shell.message-viewer-context-assistant .markdown-host > .md-copy-btn),
+:deep(.message-viewer-shell.message-viewer-context-assistant .markdown-host > .md-copied-indicator) {
   top: -22px;
   right: 0;
 }
 
-.message-viewer.message-viewer-context-history
-  .message-content
-  :deep(.markdown-host > .md-copy-btn),
-.message-viewer.message-viewer-context-history
-  .message-content
-  :deep(.markdown-host > .md-copied-indicator) {
+:deep(.message-viewer-shell.message-viewer-context-history .markdown-host > .md-copy-btn),
+:deep(.message-viewer-shell.message-viewer-context-history .markdown-host > .md-copied-indicator) {
   top: -34px;
   right: 20ch;
 }
+
 </style>

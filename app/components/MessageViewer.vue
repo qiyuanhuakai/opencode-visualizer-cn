@@ -133,6 +133,16 @@ function handleRendered(mode: ActiveMode) {
   min-height: 0;
 }
 
+.message-viewer-shell.message-viewer-context-user,
+.message-viewer-shell.message-viewer-context-assistant,
+.message-viewer-shell.message-viewer-context-history {
+  --ui-chip-border-neutral: var(--region-chat-border, rgba(148, 163, 184, 0.65));
+  --ui-chip-border-subtle: color-mix(in srgb, var(--region-chat-border, rgba(148, 163, 184, 0.5)) 80%, transparent);
+  --ui-chip-bg-neutral: var(--region-chat-control-bg, rgba(15, 23, 42, 0.75));
+  --ui-chip-bg-hover: var(--region-chat-active-bg, rgba(30, 41, 59, 0.92));
+  --ui-chip-fg-neutral: var(--region-chat-text, #bfdbfe);
+}
+
 .viewer-tabs {
   display: flex;
   gap: 0;

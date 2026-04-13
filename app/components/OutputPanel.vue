@@ -504,20 +504,20 @@ defineExpose({ panelEl });
   aspect-ratio: 1 / 1;
   box-sizing: border-box;
   border-radius: 999px;
-  border: 1px solid #334155;
-  background: rgba(15, 23, 42, 0.92);
-  color: #e2e8f0;
+  border: 1px solid var(--region-output-border, #334155);
+  background: var(--region-output-control-bg, rgba(15, 23, 42, 0.92));
+  color: var(--region-output-text, #e2e8f0);
   font-size: 18px;
   line-height: 1;
   display: grid;
   place-items: center;
-  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.45);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--region-output-bg, rgba(2, 6, 23, 0.45)) 55%, transparent);
   cursor: pointer;
   z-index: 3;
 }
 
 .follow-button:hover {
-  background: rgba(30, 41, 59, 0.98);
+  background: var(--region-output-active-bg, rgba(30, 41, 59, 0.98));
 }
 
 .app-loading-spinner {
