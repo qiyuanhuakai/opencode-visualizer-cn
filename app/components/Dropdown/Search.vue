@@ -83,6 +83,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .ui-dropdown-search-input::placeholder {
-  color: var(--ui-dropdown-text-muted, #64748b);
+  color: var(--ui-dropdown-text-muted, var(--region-top-dropdown-text-muted, #64748b));
+  opacity: 1;
 }
 </style>

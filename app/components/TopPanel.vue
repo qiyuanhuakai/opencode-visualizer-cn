@@ -1141,6 +1141,7 @@ function handleOpenDirectory(close: () => void) {
   padding: 8px;
   border-bottom: 1px solid var(--region-top-dropdown-border, var(--region-top-border, #334155));
   background: var(--region-top-dropdown-bg, var(--region-top-bg, rgba(15, 23, 42, 0.9)));
+  --ui-dropdown-text-muted: var(--region-top-dropdown-text-muted, #64748b);
 }
 
 .search-icon {
@@ -1440,7 +1441,7 @@ function handleOpenDirectory(close: () => void) {
   left: 15px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid rgba(71, 85, 105, 0.5);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
   pointer-events: none;
 }
 
@@ -1451,7 +1452,7 @@ function handleOpenDirectory(close: () => void) {
   top: 13px;
   width: 7px;
   height: 0;
-  border-top: 1px solid rgba(71, 85, 105, 0.5);
+  border-top: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
   pointer-events: none;
 }
 
@@ -1463,8 +1464,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 13px;
-  border-left: 1px solid rgba(71, 85, 105, 0.5);
-  border-bottom: 1px solid rgba(71, 85, 105, 0.5);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
+  border-bottom: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1481,7 +1482,7 @@ function handleOpenDirectory(close: () => void) {
   left: 31px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid rgba(71, 85, 105, 0.4);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
   pointer-events: none;
 }
 
@@ -1492,7 +1493,7 @@ function handleOpenDirectory(close: () => void) {
   top: 14px;
   width: 7px;
   height: 0;
-  border-top: 1px solid rgba(71, 85, 105, 0.4);
+  border-top: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
   pointer-events: none;
 }
 
@@ -1504,8 +1505,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 14px;
-  border-left: 1px solid rgba(71, 85, 105, 0.4);
-  border-bottom: 1px solid rgba(71, 85, 105, 0.4);
+  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
+  border-bottom: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1602,8 +1603,8 @@ function handleOpenDirectory(close: () => void) {
 .tree-footer {
   flex: 0 0 auto;
   border-top: 1px solid var(--region-top-dropdown-border, #334155);
-  padding: 8px;
-  background: var(--region-top-dropdown-control-bg, #0b1320);
+  padding: 8px 0 0;
+  background: transparent;
 }
 
 .tree-footer-button {
@@ -1612,6 +1613,8 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   justify-content: center;
   gap: 6px;
+  appearance: none;
+  -webkit-appearance: none;
   border: 1px solid var(--region-top-dropdown-border, #334155);
   border-radius: 8px;
   background: var(--region-top-dropdown-control-bg, #111a2c);
@@ -1619,10 +1622,16 @@ function handleOpenDirectory(close: () => void) {
   padding: 6px 10px;
   font-size: 12px;
   cursor: pointer;
+  box-shadow: none;
+  outline: none;
 }
 
 .tree-footer-button:hover {
   background: var(--region-top-dropdown-active-bg, #1d2a45);
+}
+
+.tree-footer-button:focus-visible {
+  border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
 }
 
 .control-button {
