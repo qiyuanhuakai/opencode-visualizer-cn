@@ -16,6 +16,9 @@ This repository is a fork of [the upstream repository](https://github.com/xenodr
 - 添加状态查看功能
   - 允许查看服务器、mcp、lsp、plugin、skills状态
   - 允许关闭mcp服务器连接（beta）
+- 添加主题设置功能（alpha）
+  - 由于项目架构问题，主题系统只能以这种非常别扭的方案实现
+  - 允许设置每一块卡片的不同组件的颜色（未完全适配）
 - 添加session pin功能，在侧栏中增加了session栏，允许把常用session pin在侧边
 - 添加批量管理功能，在顶栏增加了management按钮，实现多选session操作
 - 添加取消归档功能，允许找回已经被归档的session
@@ -40,6 +43,9 @@ This repository is a fork of [the upstream repository](https://github.com/xenodr
 - Add status monitoring feature
   - Allow viewing server, MCP, LSP, plugin, and skills statuses
   - Allow closing MCP server connections (beta)
+- Add theme settings feature (alpha)
+  - Due to project architecture issues, the theme system can only be implemented using this awkward approach
+  - Allow setting colors for different components of each card (not fully adapted yet)
 - Introduced session pinning functionality by adding a sessions panel in the sidebar to allow pinning frequently used sessions
 - Implemented batch management via a new "Management" button in the top bar for multi-select operations on sessions 
 - Added an unarchive feature to restore previously archived sessions
