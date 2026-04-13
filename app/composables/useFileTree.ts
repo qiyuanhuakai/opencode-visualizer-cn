@@ -109,6 +109,8 @@ let gitStatusGeneration = 0;
 let branchListGeneration = 0;
 let gitFileListGeneration = 0;
 let branchEntriesLoadedForDirectory = false;
+let gitStatusRefreshInFlight: Promise<void> | null = null;
+let gitStatusRefreshQueued = false;
 
 const BRANCH_LIST_FORMAT =
   '%(refname)\t%(refname:short)\t%(HEAD)\t%(worktreepath)\t%(objectname:short)\t%(subject)\t%(upstream:short)';
@@ -242,7 +244,9 @@ function findTreeNodeByPath(nodes: TreeNode[], targetPath: string): TreeNode | n
 }
 
 function clearScheduledDirectoryReloads() {
-  scheduledDirectoryReloads.forEach((timer) => clearTimeout(timer));
+  scheduledDirectoryReloads.forEach((timer) => {
+    clearTimeout(timer);
+  });
   scheduledDirectoryReloads.clear();
 }
 
@@ -327,6 +331,10 @@ function scheduleGitStatusReload() {
     scheduledGitStatusReload = null;
     void refreshGitStatus();
   }, GIT_STATUS_RELOAD_DEBOUNCE_MS);
+}
+
+function isGitInternalPath(relativePath: string) {
+  return relativePath === '.git' || relativePath.startsWith('.git/');
 }
 
 function toErrorMessage(error: unknown) {
@@ -880,20 +888,39 @@ async function refreshGitStatusOnly() {
 }
 
 async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
-  try {
-    await refreshGitStatusOnly();
-  } catch {
-    return;
+  if (gitStatusRefreshInFlight) {
+    gitStatusRefreshQueued = true;
+    return gitStatusRefreshInFlight;
   }
+
   const includeFileSnapshot = options.includeFileSnapshot ?? true;
-  if (!includeFileSnapshot || fileTreeStrategy.value !== 'git') {
-    return;
-  }
-  try {
-    await refreshGitFileSnapshot();
-  } catch {
-    return;
-  }
+  gitStatusRefreshInFlight = (async () => {
+    try {
+      try {
+        await refreshGitStatusOnly();
+      } catch {
+        return;
+      }
+      if (!includeFileSnapshot || fileTreeStrategy.value !== 'git') {
+        return;
+      }
+      try {
+        await refreshGitFileSnapshot();
+      } catch {
+        return;
+      }
+    } finally {
+      gitStatusRefreshInFlight = null;
+      if (gitStatusRefreshQueued) {
+        gitStatusRefreshQueued = false;
+        queueMicrotask(() => {
+          void refreshGitStatus();
+        });
+      }
+    }
+  })();
+
+  return gitStatusRefreshInFlight;
 }
 
 function parseBranchEntries(output: string): BranchEntry[] {
@@ -1101,6 +1128,7 @@ function feed(packet: FileWatcherUpdatedPacket) {
 
   const relativePath = toRelativePath(packet.file, directory);
   if (relativePath === '.') return;
+  if (isGitInternalPath(relativePath)) return;
 
   if (fileTreeStrategy.value !== 'git' && packet.event === 'unlink') {
     const next = files.value.filter(
