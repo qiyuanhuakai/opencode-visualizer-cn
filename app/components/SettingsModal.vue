@@ -377,7 +377,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch, watchEffect } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch, watchEffect } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useSettings } from '../composables/useSettings';
 import { useI18n } from 'vue-i18n';
@@ -391,9 +391,8 @@ import {
   type FontAvailabilityStatus,
   type LocalFontFamily,
 } from '../utils/fontDiscovery';
-import { useRegionTheme } from '../composables/useRegionTheme';
 import { DEFAULT_REGION_THEME, OCEAN_PRESET, FOREST_PRESET, SAKURA_PRESET } from '../utils/regionTheme';
-import type { RegionColors, RegionName } from '../utils/regionTheme';
+import type { RegionColors, RegionName, RegionThemeConfig } from '../utils/regionTheme';
 
 type FontPreset = {
   id: string;
@@ -433,15 +432,17 @@ const {
   pinnedSessionsLimit,
   terminalFontFamily,
   appMonospaceFontFamily,
+  regionTheme,
   minPinnedSessionsLimit,
   maxPinnedSessionsLimit,
   defaultTerminalFontFamily,
   defaultAppMonospaceFontFamily,
 } = useSettings();
-const { activeTheme, applyPreset, resetTheme } = useRegionTheme();
+const activeTheme = regionTheme;
 const selectedPreset = ref<'default' | 'ocean' | 'forest' | 'sakura' | 'custom'>('default');
 const regionNames: RegionName[] = ['topPanel', 'sidePanel', 'inputPanel', 'outputPanel', 'floatingWindow', 'topDropdown', 'modalPanel', 'pageBackground', 'chatCard'];
 const colorFields: (keyof RegionColors)[] = ['bg', 'text', 'border', 'accent', 'controlBg', 'activeBg', 'activeText', 'textMuted'];
+let customThemeSyncFrame = 0;
 
 const regionVisibleFields: Record<RegionName, (keyof RegionColors)[]> = {
   topPanel: colorFields,
@@ -492,6 +493,53 @@ function syncCustomColorsFromActiveTheme() {
   });
 }
 
+function buildCustomTheme(): RegionThemeConfig {
+  return {
+    name: 'custom',
+    label: 'Custom',
+    regions: {
+      topPanel: { ...customColors.topPanel },
+      sidePanel: { ...customColors.sidePanel },
+      inputPanel: { ...customColors.inputPanel },
+      outputPanel: { ...customColors.outputPanel },
+      floatingWindow: { ...customColors.floatingWindow },
+      topDropdown: { ...customColors.topDropdown },
+      modalPanel: { ...customColors.modalPanel },
+      pageBackground: { ...customColors.pageBackground },
+      chatCard: { ...customColors.chatCard },
+    },
+  };
+}
+
+function applyPreset(name: 'ocean' | 'forest' | 'sakura') {
+  activeTheme.value = name === 'ocean'
+    ? OCEAN_PRESET
+    : name === 'forest'
+      ? FOREST_PRESET
+      : SAKURA_PRESET;
+}
+
+function resetTheme() {
+  activeTheme.value = null;
+}
+
+function syncCustomThemeNow() {
+  customThemeSyncFrame = 0;
+  if (selectedPreset.value !== 'custom') return;
+  activeTheme.value = buildCustomTheme();
+}
+
+function scheduleCustomThemeSync() {
+  if (typeof window === 'undefined') {
+    syncCustomThemeNow();
+    return;
+  }
+  if (customThemeSyncFrame) {
+    window.cancelAnimationFrame(customThemeSyncFrame);
+  }
+  customThemeSyncFrame = window.requestAnimationFrame(syncCustomThemeNow);
+}
+
 watch(selectedPreset, (val) => {
   if (val === 'default') {
     resetTheme();
@@ -499,21 +547,7 @@ watch(selectedPreset, (val) => {
     applyPreset(val);
   } else if (val === 'custom') {
     syncCustomColorsFromActiveTheme();
-    activeTheme.value = {
-      name: 'custom',
-      label: 'Custom',
-      regions: {
-        topPanel: { ...customColors.topPanel },
-        sidePanel: { ...customColors.sidePanel },
-        inputPanel: { ...customColors.inputPanel },
-        outputPanel: { ...customColors.outputPanel },
-        floatingWindow: { ...customColors.floatingWindow },
-        topDropdown: { ...customColors.topDropdown },
-        modalPanel: { ...customColors.modalPanel },
-        pageBackground: { ...customColors.pageBackground },
-        chatCard: { ...customColors.chatCard },
-      },
-    };
+    activeTheme.value = buildCustomTheme();
   }
 });
 
@@ -521,25 +555,18 @@ watch(
   customColors,
   () => {
     if (selectedPreset.value === 'custom') {
-      activeTheme.value = {
-        name: 'custom',
-        label: 'Custom',
-        regions: {
-          topPanel: { ...customColors.topPanel },
-          sidePanel: { ...customColors.sidePanel },
-          inputPanel: { ...customColors.inputPanel },
-          outputPanel: { ...customColors.outputPanel },
-          floatingWindow: { ...customColors.floatingWindow },
-          topDropdown: { ...customColors.topDropdown },
-          modalPanel: { ...customColors.modalPanel },
-          pageBackground: { ...customColors.pageBackground },
-          chatCard: { ...customColors.chatCard },
-        },
-      };
+      scheduleCustomThemeSync();
     }
   },
   { deep: true },
 );
+
+onUnmounted(() => {
+  if (customThemeSyncFrame) {
+    window.cancelAnimationFrame(customThemeSyncFrame);
+    customThemeSyncFrame = 0;
+  }
+});
 
 watch(activePage, (page) => {
   if (page === 'theme') {

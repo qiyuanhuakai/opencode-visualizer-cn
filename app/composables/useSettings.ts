@@ -1,5 +1,5 @@
 import { ref, watch } from 'vue';
-import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON, storageSetJSON } from '../utils/storageKeys';
+import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON } from '../utils/storageKeys';
 import type { RegionThemeConfig } from '../utils/regionTheme';
 
 const DEFAULT_PINNED_SESSIONS_LIMIT = 30;
@@ -93,10 +93,6 @@ watch(appMonospaceFontFamily, (value) => {
     return;
   }
   storageSet(StorageKeys.settings.appMonospaceFontFamily, normalized);
-});
-
-watch(regionTheme, (value) => {
-  storageSetJSON(StorageKeys.settings.regionTheme, value);
 });
 
 if (typeof window !== 'undefined') {
