@@ -56,6 +56,6 @@ defineProps<{
 
 .statusbar-right.is-error,
 .statusbar-right.is-retry {
-  color: #fecaca;
+  color: var(--theme-text-danger, #fecaca);
 }
 </style>

@@ -1156,13 +1156,13 @@ function handleOpenDirectory(close: () => void) {
   padding: 8px;
   border-bottom: 1px solid var(--region-top-dropdown-border, var(--region-top-border, #334155));
   background: var(--region-top-dropdown-bg, var(--region-top-bg, rgba(15, 23, 42, 0.9)));
-  --ui-dropdown-text-muted: var(--region-top-dropdown-text-muted, #64748b);
+  --ui-dropdown-text-muted: var(--region-top-dropdown-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .search-icon {
   width: 14px;
   height: 14px;
-  color: var(--region-top-text-muted, #64748b);
+  color: var(--region-top-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .tree-search :deep(.ui-dropdown-search-input) {
@@ -1204,7 +1204,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-count {
-  color: #93c5fd;
+  color: var(--theme-status-git-attention, #93c5fd);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1231,8 +1231,8 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action.is-danger {
-  color: #fca5a5;
-  border-color: rgba(248, 113, 113, 0.45);
+  color: var(--theme-text-danger, #fca5a5);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 45%, transparent);
 }
 
 .management-action:disabled {
@@ -1325,18 +1325,18 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button.new-session {
-  color: #86efac;
+  color: var(--theme-status-git-added-strong, #86efac);
 }
 
 .tree-action-button.fork {
-  color: #93c5fd;
+  color: var(--theme-status-git-attention, #93c5fd);
 }
 
 .tree-action-button {
   border: 1px solid var(--ui-icon-action-border);
   border-radius: var(--ui-icon-action-radius);
   background: var(--ui-icon-action-bg);
-  color: #cbd5e1;
+  color: var(--theme-text-secondary, #cbd5e1);
   font-size: 10px;
   line-height: 1;
   width: var(--ui-icon-action-size);
@@ -1354,25 +1354,25 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button.worktree-settings {
-  color: var(--region-top-text-muted, #94a3b8);
+  color: var(--region-top-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .tree-action-button.danger {
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
 }
 
 .tree-action-button.archive {
-  color: #c4b5fd;
+  color: var(--theme-status-git-archived, #c4b5fd);
 }
 
 .tree-action-button.pin {
-  color: #fbbf24;
+  color: var(--theme-status-git-pinned, #fbbf24);
 }
 
 .tree-action-button.pinned {
-  color: #f59e0b;
-  border-color: rgba(245, 158, 11, 0.55);
-  background: rgba(245, 158, 11, 0.12);
+  color: var(--theme-status-git-pinned-strong, #f59e0b);
+  border-color: color-mix(in srgb, var(--theme-status-git-pinned-strong, #f59e0b) 55%, transparent);
+  background: color-mix(in srgb, var(--theme-status-git-pinned-strong, #f59e0b) 12%, transparent);
 }
 
 /* Session rows: wrapper provides indentation via :deep() */
@@ -1437,7 +1437,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-check.is-selected {
-  color: #60a5fa;
+  color: var(--theme-accent-primary, #60a5fa);
   border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
   background: var(--region-top-dropdown-active-bg, rgba(30, 64, 175, 0.2));
 }
@@ -1456,7 +1456,7 @@ function handleOpenDirectory(close: () => void) {
   left: 15px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
+  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   pointer-events: none;
 }
 
@@ -1467,7 +1467,7 @@ function handleOpenDirectory(close: () => void) {
   top: 13px;
   width: 7px;
   height: 0;
-  border-top: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
+  border-top: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   pointer-events: none;
 }
 
@@ -1479,8 +1479,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 13px;
-  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
-  border-bottom: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.5));
+  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-bottom: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1497,7 +1497,7 @@ function handleOpenDirectory(close: () => void) {
   left: 31px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
+  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   pointer-events: none;
 }
 
@@ -1508,7 +1508,7 @@ function handleOpenDirectory(close: () => void) {
   top: 14px;
   width: 7px;
   height: 0;
-  border-top: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
+  border-top: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   pointer-events: none;
 }
 
@@ -1520,8 +1520,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 14px;
-  border-left: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
-  border-bottom: 1px solid var(--region-top-dropdown-border, rgba(71, 85, 105, 0.4));
+  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-bottom: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1583,9 +1583,9 @@ function handleOpenDirectory(close: () => void) {
   margin-left: auto;
   font-size: 10px;
   line-height: 1;
-  color: #c4b5fd;
-  background: rgba(139, 92, 246, 0.15);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  color: var(--theme-status-git-archived, #c4b5fd);
+  background: color-mix(in srgb, var(--theme-status-git-archived, #c4b5fd) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-status-git-archived, #c4b5fd) 30%, transparent);
   border-radius: 999px;
   padding: 2px 6px;
 }
@@ -1595,9 +1595,9 @@ function handleOpenDirectory(close: () => void) {
   margin-left: auto;
   font-size: 10px;
   line-height: 1;
-  color: #fbbf24;
-  background: rgba(245, 158, 11, 0.15);
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  color: var(--theme-status-git-pinned, #fbbf24);
+  background: color-mix(in srgb, var(--theme-status-git-pinned, #fbbf24) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--theme-status-git-pinned, #fbbf24) 30%, transparent);
   border-radius: 999px;
   padding: 2px 6px;
 }
@@ -1612,7 +1612,7 @@ function handleOpenDirectory(close: () => void) {
 
 .session-unarchive {
   flex: 0 0 auto;
-  color: #93c5fd;
+  color: var(--theme-status-git-attention, #93c5fd);
 }
 
 .tree-footer {
@@ -1668,7 +1668,7 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-accent, #86efac);
+  color: var(--region-top-dropdown-accent, var(--theme-status-git-added-strong, #86efac));
 }
 
 .new-session-button:hover,
@@ -1682,7 +1682,7 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-accent, #c4b5fd);
+  color: var(--region-top-dropdown-accent, var(--theme-status-git-archived, #c4b5fd));
 }
 
 .management-toggle-button {
@@ -1691,7 +1691,7 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-accent, #93c5fd);
+  color: var(--region-top-dropdown-accent, var(--theme-status-git-attention, #93c5fd));
 }
 
 .management-toggle-button.is-active {
@@ -1711,11 +1711,11 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-text, #64748b);
+  color: var(--region-top-dropdown-text, var(--theme-text-muted, #64748b));
 }
 
 .notification-button.has-notifications {
-  color: var(--region-top-dropdown-accent, #fbbf24);
+  color: var(--region-top-dropdown-accent, var(--theme-status-git-pinned, #fbbf24));
 }
 
 .notification-badge {
@@ -1726,8 +1726,8 @@ function handleOpenDirectory(close: () => void) {
   height: 16px;
   padding: 0 4px;
   border-radius: 999px;
-  background: #ef4444;
-  color: #fff;
+  background: var(--theme-status-danger, #ef4444);
+  color: var(--theme-text-inverse, #fff);
   font-size: 10px;
   font-weight: 700;
   line-height: 16px;
@@ -1804,12 +1804,12 @@ function handleOpenDirectory(close: () => void) {
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--region-top-text-muted, #94a3b8);
+  color: var(--region-top-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .github-button:hover {
   background: transparent;
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
 }
 
 .settings-button,
@@ -1824,7 +1824,7 @@ function handleOpenDirectory(close: () => void) {
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--region-top-text-muted, #94a3b8);
+  color: var(--region-top-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .settings-button:hover,
@@ -1833,14 +1833,14 @@ function handleOpenDirectory(close: () => void) {
 .suppress-button:hover,
 .logout-button:hover {
   background: transparent;
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
 }
 
 .suppress-button.active {
-  color: #f87171;
+  color: var(--theme-status-danger, #f87171);
 }
 
 .suppress-button.active:hover {
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
 }
 </style>

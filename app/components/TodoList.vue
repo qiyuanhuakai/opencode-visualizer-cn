@@ -156,7 +156,7 @@ function priorityLabel(priority: string): string {
 
 .todo-error {
   padding: 8px;
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
   font-size: 11px;
 }
 
@@ -184,15 +184,15 @@ function priorityLabel(priority: string): string {
 }
 
 .todo-item.is-completed .todo-status {
-  color: #86efac;
+  color: var(--theme-status-success, #86efac);
 }
 
 .todo-item.is-in_progress .todo-status {
-  color: #fcd34d;
+  color: var(--theme-status-warning, #fcd34d);
 }
 
 .todo-item.is-cancelled .todo-status {
-  color: #fca5a5;
+  color: var(--theme-status-danger, #fca5a5);
 }
 
 .todo-text {
@@ -213,17 +213,17 @@ function priorityLabel(priority: string): string {
 }
 
 .todo-priority.is-high {
-  color: #fecaca;
-  border-color: rgba(248, 113, 113, 0.6);
+  color: var(--theme-text-danger, #fecaca);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 60%, transparent);
 }
 
 .todo-priority.is-medium {
-  color: #fde68a;
-  border-color: rgba(250, 204, 21, 0.6);
+  color: var(--theme-text-warning, #fde68a);
+  border-color: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 60%, transparent);
 }
 
 .todo-priority.is-low {
-  color: #86efac;
-  border-color: rgba(74, 222, 128, 0.6);
+  color: var(--theme-text-success, #86efac);
+  border-color: color-mix(in srgb, var(--theme-status-success, #86efac) 60%, transparent);
 }
 </style>

@@ -373,7 +373,7 @@ defineExpose({ panelEl });
     color-mix(in srgb, var(--project-tint, transparent) 9%, transparent),
     color-mix(in srgb, var(--project-tint, transparent) 9%, transparent)
   );
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
   border: 1px solid var(--region-output-border, #334155);
   border-radius: 12px;
   background-clip: padding-box;
@@ -421,16 +421,16 @@ defineExpose({ panelEl });
   align-self: center;
   font-size: 12px;
   line-height: 1;
-  color: #cbd5e1;
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid #334155;
+  color: var(--theme-text-secondary, #cbd5e1);
+  background: color-mix(in srgb, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)) 92%, transparent);
+  border: 1px solid var(--theme-border-default, #334155);
   border-radius: 999px;
   padding: 7px 12px;
   cursor: pointer;
 }
 
 .history-load-more:hover:not(:disabled) {
-  background: rgba(30, 41, 59, 0.95);
+  background: var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.95));
 }
 
 .history-load-more:disabled {
@@ -440,7 +440,7 @@ defineExpose({ panelEl });
 
 .history-load-error {
   align-self: center;
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
   font-size: 12px;
   margin: 0;
 }
@@ -454,7 +454,7 @@ defineExpose({ panelEl });
 
 .output-panel-content :deep(.markdown-host code.file-ref:hover) {
   text-decoration-color: #7dd3fc;
-  color: #7dd3fc;
+  color: var(--theme-status-info, #7dd3fc);
 }
 
 .output-panel-content :deep(.markdown-host code.commit-ref) {
@@ -468,7 +468,7 @@ defineExpose({ panelEl });
 .output-panel-content :deep(.markdown-host code.commit-ref:hover) {
   text-decoration-color: #7dd3fc;
   text-decoration-style: dotted;
-  color: #7dd3fc;
+  color: var(--theme-status-info, #7dd3fc);
 }
 
 .output-panel-content :deep(.markdown-host code.color-ref::before) {
@@ -526,7 +526,7 @@ defineExpose({ panelEl });
   margin: 0 auto 12px;
   border-radius: 50%;
   border: 3px solid rgba(148, 163, 184, 0.4);
-  border-top-color: #e2e8f0;
+  border-top-color: var(--theme-text-primary, #e2e8f0);
   animation: app-loading-spin 0.85s linear infinite;
 }
 

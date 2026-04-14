@@ -1,6 +1,11 @@
 import { ref, watch } from 'vue';
-import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON } from '../utils/storageKeys';
+import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON, storageRemove, storageSetJSON } from '../utils/storageKeys';
 import type { RegionThemeConfig } from '../utils/regionTheme';
+import {
+  migrateLegacyRegionThemeStorage,
+  storageToRegionTheme,
+  type ThemeStorageV2,
+} from '../utils/themeTokens';
 
 const DEFAULT_PINNED_SESSIONS_LIMIT = 30;
 const MIN_PINNED_SESSIONS_LIMIT = 1;
@@ -38,6 +43,20 @@ function normalizeFontFamily(value: string, fallback: string) {
   return normalized.length > 0 ? normalized : fallback;
 }
 
+function readThemeStorage(): ThemeStorageV2 | null {
+  const current = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
+  if (current) {
+    storageSetJSON(StorageKeys.settings.themeTokens, current);
+    return current;
+  }
+
+  const legacy = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.regionTheme));
+  if (!legacy) return null;
+  storageSetJSON(StorageKeys.settings.themeTokens, legacy);
+  storageRemove(StorageKeys.settings.regionTheme);
+  return legacy;
+}
+
 const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true');
 const suppressAutoWindows = ref(storageGet(StorageKeys.settings.suppressAutoWindows) === 'true');
 const showMinimizeButtons = ref(storageGet(StorageKeys.settings.showMinimizeButtons) !== 'false');
@@ -45,7 +64,8 @@ const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === '
 const pinnedSessionsLimit = ref(readPinnedSessionsLimit());
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
-const regionTheme = ref<RegionThemeConfig | null>(storageGetJSON(StorageKeys.settings.regionTheme) ?? null);
+const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
+const regionTheme = ref<RegionThemeConfig | null>(storageToRegionTheme(themeStorage.value));
 
 watch(enterToSend, (value) => {
   storageSet(StorageKeys.settings.enterToSend, String(value));
@@ -120,7 +140,21 @@ if (typeof window !== 'undefined') {
       appMonospaceFontFamily.value = normalizeFontFamily(event.newValue ?? '', DEFAULT_APP_MONOSPACE_FONT_FAMILY);
     }
     if (event.key === storageKey(StorageKeys.settings.regionTheme)) {
-      regionTheme.value = storageGetJSON(StorageKeys.settings.regionTheme);
+      const migrated = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.regionTheme));
+      if (migrated) {
+        themeStorage.value = migrated;
+        regionTheme.value = storageToRegionTheme(migrated);
+        storageSetJSON(StorageKeys.settings.themeTokens, migrated);
+        storageRemove(StorageKeys.settings.regionTheme);
+      } else {
+        themeStorage.value = null;
+        regionTheme.value = null;
+      }
+    }
+    if (event.key === storageKey(StorageKeys.settings.themeTokens)) {
+      const nextThemeStorage = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
+      themeStorage.value = nextThemeStorage;
+      regionTheme.value = storageToRegionTheme(nextThemeStorage);
     }
   });
 }
@@ -134,6 +168,7 @@ export function useSettings() {
     pinnedSessionsLimit,
     terminalFontFamily,
     appMonospaceFontFamily,
+    themeStorage,
     regionTheme,
     defaultPinnedSessionsLimit: DEFAULT_PINNED_SESSIONS_LIMIT,
     minPinnedSessionsLimit: MIN_PINNED_SESSIONS_LIMIT,

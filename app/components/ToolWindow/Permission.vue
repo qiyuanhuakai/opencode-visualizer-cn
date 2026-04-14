@@ -148,7 +148,7 @@ function emitReply(reply: PermissionReply) {
   min-height: 0;
   padding: 8px;
   box-sizing: border-box;
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
   font-size: 12px;
 }
 
@@ -166,7 +166,7 @@ function emitReply(reply: PermissionReply) {
 
 .permission-type {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--theme-text-muted, #94a3b8);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   text-align: right;
@@ -176,10 +176,10 @@ function emitReply(reply: PermissionReply) {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 58%, transparent);
   border-radius: 8px;
   padding: 6px 8px;
-  background: rgba(15, 23, 42, 0.35);
+  background: color-mix(in srgb, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)) 35%, transparent);
 }
 
 .permission-row {
@@ -190,19 +190,19 @@ function emitReply(reply: PermissionReply) {
 }
 
 .permission-label {
-  color: #94a3b8;
+  color: var(--theme-text-muted, #94a3b8);
   font-size: 11px;
 }
 
 .permission-value {
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
   font-size: 11px;
   word-break: break-all;
 }
 
 .divider {
   margin: 0 4px;
-  color: #64748b;
+  color: var(--theme-text-muted, #64748b);
 }
 
 .permission-body {
@@ -218,14 +218,14 @@ function emitReply(reply: PermissionReply) {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  border: 1px solid color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 58%, transparent);
   border-radius: 8px;
   padding: 6px 8px;
-  background: rgba(2, 6, 23, 0.45);
+  background: color-mix(in srgb, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.98)) 45%, transparent);
 }
 
 .section-title {
-  color: #cbd5f5;
+  color: var(--theme-text-secondary, #cbd5f5);
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
@@ -253,12 +253,12 @@ function emitReply(reply: PermissionReply) {
 }
 
 .metadata-key {
-  color: #94a3b8;
+  color: var(--theme-text-muted, #94a3b8);
   font-size: 11px;
 }
 
 .metadata-value {
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
@@ -266,12 +266,12 @@ function emitReply(reply: PermissionReply) {
 }
 
 .empty {
-  color: #64748b;
+  color: var(--theme-text-muted, #64748b);
   font-size: 11px;
 }
 
 .permission-error {
-  color: #fecaca;
+  color: var(--theme-text-danger, #fecaca);
   font-size: 11px;
 }
 
@@ -279,16 +279,16 @@ function emitReply(reply: PermissionReply) {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  border-top: 1px solid rgba(148, 163, 184, 0.25);
+  border-top: 1px solid color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 70%, transparent);
   padding-top: 8px;
 }
 
 .permission-button {
   border-radius: 8px;
   padding: 6px 10px;
-  border: 1px solid #334155;
-  background: #0f172a;
-  color: #e2e8f0;
+  border: 1px solid var(--theme-border-default, #334155);
+  background: var(--theme-surface-panel, #0f172a);
+  color: var(--theme-text-primary, #e2e8f0);
   font-size: 11px;
   cursor: pointer;
 }
@@ -299,17 +299,17 @@ function emitReply(reply: PermissionReply) {
 }
 
 .permission-button.is-once {
-  background: rgba(14, 116, 144, 0.25);
-  border-color: rgba(14, 116, 144, 0.7);
+  background: var(--theme-surface-info-soft, rgba(14, 116, 144, 0.25));
+  border-color: color-mix(in srgb, var(--theme-status-info, #7dd3fc) 70%, transparent);
 }
 
 .permission-button.is-always {
-  background: rgba(34, 197, 94, 0.18);
-  border-color: rgba(34, 197, 94, 0.6);
+  background: var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18));
+  border-color: color-mix(in srgb, var(--theme-status-success, #86efac) 60%, transparent);
 }
 
 .permission-button.is-reject {
-  background: rgba(239, 68, 68, 0.18);
-  border-color: rgba(239, 68, 68, 0.6);
+  background: var(--theme-surface-danger-soft, rgba(239, 68, 68, 0.18));
+  border-color: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 60%, transparent);
 }
 </style>

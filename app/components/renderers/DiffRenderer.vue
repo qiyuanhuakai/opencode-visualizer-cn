@@ -24,6 +24,7 @@ import { computed, ref, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import CodeContent from '../CodeContent.vue';
 import { type CodeRenderParams, useCodeRender } from '../../utils/useCodeRender';
+import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 
 const { t } = useI18n();
 import { guessLanguageFromPath } from '../ToolWindow/utils';
@@ -77,7 +78,7 @@ const renderParams = computed<CodeRenderParams | null>(() => {
     after: activeDiffAfter.value,
     patch: hasDiffTabs ? undefined : props.diffPatch || undefined,
     lang: activeDiffLang.value,
-    theme: props.theme ?? 'github-dark',
+    theme: props.theme ?? DEFAULT_SYNTAX_THEME,
     gutterMode: props.gutterMode ?? 'double',
   };
 });

@@ -1,3 +1,5 @@
+import { resolveToolAccentColor } from '../../utils/theme';
+
 export function formatGlobToolTitle(
   input: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -75,37 +77,7 @@ export function formatQueryToolTitle(
 }
 
 export function toolColor(tool: string): string {
-  switch (tool) {
-    case 'bash':
-      return '#a855f7';
-    case 'read':
-      return '#60a5fa';
-    case 'grep':
-      return '#facc15';
-    case 'glob':
-      return '#facc15';
-    case 'list':
-      return '#60a5fa';
-    case 'edit':
-    case 'multiedit':
-    case 'apply_patch':
-      return '#f97316';
-    case 'write':
-      return '#f97316';
-    case 'webfetch':
-    case 'websearch':
-    case 'codesearch':
-      return '#2dd4bf';
-    case 'task':
-      return '#818cf8';
-    case 'batch':
-      return '#818cf8';
-    case 'plan_enter':
-    case 'plan_exit':
-      return '#94a3b8';
-    default:
-      return '#64748b';
-  }
+  return resolveToolAccentColor(tool);
 }
 
 export function guessLanguageFromPath(path?: string): string {

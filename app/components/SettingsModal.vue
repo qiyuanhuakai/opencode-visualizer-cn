@@ -392,6 +392,14 @@ import {
   type LocalFontFamily,
 } from '../utils/fontDiscovery';
 import {
+  createThemeStorageFromEditor,
+  createEditorFallbackSemanticTokens,
+  regionThemeToSemanticOverrides,
+  resolveThemeStoragePreset,
+  storageToRegionTheme,
+  type ThemeStorageV2,
+} from '../utils/themeTokens';
+import {
   DEFAULT_REGION_THEME,
   REGION_COLOR_FIELDS,
   REGION_NAMES,
@@ -439,6 +447,7 @@ const {
   pinnedSessionsLimit,
   terminalFontFamily,
   appMonospaceFontFamily,
+  themeStorage,
   regionTheme,
   minPinnedSessionsLimit,
   maxPinnedSessionsLimit,
@@ -446,6 +455,7 @@ const {
   defaultAppMonospaceFontFamily,
 } = useSettings();
 const activeTheme = regionTheme;
+const activeThemeStorage = themeStorage;
 const selectedPreset = ref<RegionThemePresetName | 'custom'>('default');
 const regionNames: RegionName[] = REGION_NAMES;
 const colorFields: (keyof RegionColors)[] = REGION_COLOR_FIELDS;
@@ -480,7 +490,9 @@ const regionVisibleFields: Record<RegionName, (keyof RegionColors)[]> = {
 const customColors = reactive<Record<RegionName, EditableRegionColors>>(createEditableThemeState());
 
 function syncCustomColorsFromActiveTheme() {
-  const source = resolveRegionThemePreset(activeTheme.value?.name) ?? activeTheme.value ?? DEFAULT_REGION_THEME;
+  const source = activeThemeStorage.value
+    ? storageToRegionTheme(activeThemeStorage.value) ?? DEFAULT_REGION_THEME
+    : resolveRegionThemePreset(activeTheme.value?.name) ?? activeTheme.value ?? DEFAULT_REGION_THEME;
 
   regionNames.forEach((region) => {
     colorFields.forEach((field) => {
@@ -490,9 +502,11 @@ function syncCustomColorsFromActiveTheme() {
 }
 
 function syncSelectedPresetFromActiveTheme() {
-  const activePresetName = resolveRegionThemePresetName(activeTheme.value?.name);
+  const activePresetName = activeThemeStorage.value
+    ? resolveThemeStoragePreset(activeThemeStorage.value)
+    : resolveRegionThemePresetName(activeTheme.value?.name);
 
-  if (!activeTheme.value || activePresetName === 'default') {
+  if (!activeThemeStorage.value || activePresetName === 'default') {
     selectedPreset.value = 'default';
     return;
   }
@@ -523,18 +537,48 @@ function buildCustomTheme(): RegionThemeConfig {
   };
 }
 
+function buildCustomThemeStorage(): ThemeStorageV2 {
+  const nextTheme = buildCustomTheme();
+  const fallbackOverrides = createEditorFallbackSemanticTokens();
+  const regionOverrides = regionThemeToSemanticOverrides(nextTheme);
+  const storage = createThemeStorageFromEditor(
+    {
+      ...fallbackOverrides,
+      ...regionOverrides,
+    },
+    null,
+    'Custom',
+  );
+  return {
+    ...storage,
+    regions: toThemeRegions(),
+  };
+}
+
 function applyPreset(name: RegionThemePresetName) {
-  activeTheme.value = name === DEFAULT_REGION_THEME.name ? null : resolveRegionThemePreset(name);
+  const presetTheme = name === DEFAULT_REGION_THEME.name ? null : resolveRegionThemePreset(name);
+  activeTheme.value = presetTheme;
+  activeThemeStorage.value = presetTheme
+    ? {
+        ...createThemeStorageFromEditor(regionThemeToSemanticOverrides(presetTheme), presetTheme.name, presetTheme.label),
+        regions: Object.fromEntries(
+          Object.entries(presetTheme.regions).map(([regionName, colors]) => [regionName, { ...colors }]),
+        ) as ThemeStorageV2['regions'],
+      }
+    : null;
 }
 
 function resetTheme() {
   activeTheme.value = null;
+  activeThemeStorage.value = null;
 }
 
 function syncCustomThemeNow() {
   customThemeSyncFrame = 0;
   if (selectedPreset.value !== 'custom') return;
-  activeTheme.value = buildCustomTheme();
+  const nextTheme = buildCustomTheme();
+  activeTheme.value = nextTheme;
+  activeThemeStorage.value = buildCustomThemeStorage();
 }
 
 function scheduleCustomThemeSync() {
@@ -560,7 +604,9 @@ watch(selectedPreset, (val) => {
     } finally {
       isSyncingThemeEditorState = false;
     }
-    activeTheme.value = buildCustomTheme();
+    const nextTheme = buildCustomTheme();
+    activeTheme.value = nextTheme;
+    activeThemeStorage.value = buildCustomThemeStorage();
   } else if (val === DEFAULT_REGION_THEME.name) {
     resetTheme();
   } else {
@@ -763,7 +809,7 @@ watch(
 }
 
 .modal-backdrop::backdrop {
-  background: var(--region-modal-active-bg, rgba(2, 6, 23, 0.65));
+  background: var(--theme-surface-overlay, rgba(2, 6, 23, 0.65));
 }
 
 .modal {
@@ -773,11 +819,11 @@ watch(
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  background: var(--region-modal-bg, rgba(15, 23, 42, 0.98));
-  border: 1px solid var(--region-modal-border, #334155);
+  background: var(--region-modal-bg, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.98)));
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
-  color: var(--region-modal-text, #e2e8f0);
+  box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
   font-family: var(--app-monospace-font-family);
 }
 
@@ -807,17 +853,17 @@ watch(
   justify-content: center;
   width: 28px;
   height: 28px;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 6px;
   background: var(--region-modal-control-bg, transparent);
-  color: var(--region-modal-text, #94a3b8);
+  color: var(--region-modal-text, var(--theme-text-muted, #94a3b8));
   cursor: pointer;
 }
 
 .modal-back-button:hover,
 .modal-close-button:hover {
-  background: var(--region-modal-active-bg, #1e293b);
-  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .modal-body {
@@ -834,9 +880,9 @@ watch(
   justify-content: space-between;
   gap: 16px;
   padding: 10px 12px;
-  border: 1px solid var(--region-modal-border, #1e293b);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #1e293b));
   border-radius: 8px;
-  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.45));
+  background: var(--region-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.45)));
 }
 
 .setting-row-stack {
@@ -855,24 +901,24 @@ watch(
 
 .setting-link-row {
   width: 100%;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   text-align: left;
   cursor: pointer;
 }
 
 .setting-link-row:hover {
-  background: var(--region-modal-active-bg, rgba(15, 23, 42, 0.72));
-  border-color: var(--region-modal-accent, #475569);
+  background: var(--region-modal-active-bg, var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.72)));
+  border-color: var(--region-modal-accent, var(--theme-border-strong, #475569));
 }
 
 .setting-link-icon {
   flex: 0 0 auto;
-  color: var(--region-modal-text-muted, #64748b);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .setting-page-description {
   margin: 2px 2px 0;
-  color: var(--region-modal-text-muted, #64748b);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #64748b));
   font-size: 11px;
 }
 
@@ -887,12 +933,12 @@ watch(
 .setting-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--region-modal-text, #e2e8f0);
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .setting-description {
   font-size: 11px;
-  color: var(--region-modal-text-muted, #64748b);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .number-setting-group {
@@ -920,17 +966,17 @@ watch(
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--region-modal-text-muted, #64748b);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .font-preset-row {
   display: flex;
   flex-wrap: wrap;
   gap: var(--ui-action-gap);
-  --ui-chip-border-neutral: var(--region-modal-border, rgba(148, 163, 184, 0.65));
-  --ui-chip-bg-neutral: var(--region-modal-control-bg, rgba(15, 23, 42, 0.75));
-  --ui-chip-bg-hover: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
-  --ui-chip-fg-neutral: var(--region-modal-text, #bfdbfe);
+  --ui-chip-border-neutral: var(--region-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
+  --ui-chip-bg-neutral: var(--region-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75)));
+  --ui-chip-bg-hover: var(--region-modal-active-bg, var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92)));
+  --ui-chip-fg-neutral: var(--region-modal-text, var(--theme-text-primary, #bfdbfe));
 }
 
 .font-preset-chip {
@@ -953,18 +999,18 @@ watch(
 }
 
 .font-preset-chip.is-active {
-  border-color: var(--region-modal-accent, rgba(59, 130, 246, 0.45));
-  background: var(--region-modal-active-bg, rgba(59, 130, 246, 0.2));
-  color: var(--region-modal-active-text, #dbeafe);
+  border-color: var(--region-modal-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
+  background: var(--region-modal-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
+  color: var(--region-modal-active-text, var(--theme-text-primary, #dbeafe));
 }
 
 .number-input {
   width: 84px;
   height: 30px;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 6px;
-  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
-  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
   font-size: 12px;
   font-family: inherit;
   text-align: right;
@@ -973,8 +1019,8 @@ watch(
 
 .number-input:focus {
   outline: none;
-  border-color: var(--region-modal-accent, #3b82f6);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, #3b82f6) 55%, transparent);
+  border-color: var(--region-modal-accent, var(--theme-accent-primary, #3b82f6));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%, transparent);
 }
 
 .number-input::-webkit-outer-spin-button,
@@ -992,10 +1038,10 @@ watch(
   min-width: 0;
   min-height: 72px;
   resize: vertical;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 8px;
-  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
-  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
   font-size: 12px;
   line-height: 1.5;
   font-family: inherit;
@@ -1004,12 +1050,12 @@ watch(
 
 .font-stack-input:focus {
   outline: none;
-  border-color: var(--region-modal-accent, #3b82f6);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, #3b82f6) 55%, transparent);
+  border-color: var(--region-modal-accent, var(--theme-accent-primary, #3b82f6));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%, transparent);
 }
 
 .font-stack-input::placeholder {
-  color: var(--region-modal-text-muted, #475569);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #475569));
 }
 
 .font-discovery-toggle {
@@ -1018,10 +1064,10 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 8px;
-  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  color: var(--region-modal-text, #cbd5e1);
+  background: var(--region-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  color: var(--region-modal-text, var(--theme-text-secondary, #cbd5e1));
   font-size: 12px;
   font-family: inherit;
   padding: 9px 10px;
@@ -1029,8 +1075,8 @@ watch(
 }
 
 .font-discovery-toggle:hover {
-  border-color: var(--region-modal-accent, #475569);
-  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
+  border-color: var(--region-modal-accent, var(--theme-border-strong, #475569));
+  background: var(--region-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
 }
 
 .font-discovery-panel {
@@ -1053,8 +1099,8 @@ watch(
   min-height: 24px;
   padding: 0 8px;
   border-radius: 999px;
-  border: 1px solid var(--region-modal-border, #334155);
-  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.78));
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
+  background: var(--region-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.78)));
   font-size: 11px;
 }
 
@@ -1078,7 +1124,7 @@ watch(
 }
 
 .font-stack-status-value {
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .font-system-actions {
@@ -1090,10 +1136,10 @@ watch(
 .font-system-button {
   align-self: flex-start;
   min-height: 30px;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 8px;
-  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
   font-size: 12px;
   font-family: inherit;
   padding: 0 10px;
@@ -1101,8 +1147,8 @@ watch(
 }
 
 .font-system-button:hover:not(:disabled) {
-  border-color: var(--region-modal-accent, #475569);
-  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
+  border-color: var(--region-modal-accent, var(--theme-border-strong, #475569));
+  background: var(--region-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
 }
 
 .font-system-button:disabled {
@@ -1117,11 +1163,11 @@ watch(
 }
 
 .font-system-hint {
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .font-system-error {
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
 }
 
 .font-system-list {
@@ -1136,17 +1182,17 @@ watch(
   flex-direction: column;
   gap: 4px;
   padding: 10px;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 8px;
-  background: var(--region-modal-control-bg, rgba(15, 23, 42, 0.72));
-  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
   text-align: left;
   cursor: pointer;
 }
 
 .font-system-item:hover {
-  border-color: var(--region-modal-accent, #475569);
-  background: var(--region-modal-active-bg, rgba(30, 41, 59, 0.92));
+  border-color: var(--region-modal-accent, var(--theme-border-strong, #475569));
+  background: var(--region-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
 }
 
 .font-system-family {
@@ -1157,15 +1203,15 @@ watch(
 
 .font-system-meta {
   font-size: 10px;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .language-select {
   height: 30px;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 6px;
-  background: var(--region-modal-control-bg, rgba(2, 6, 23, 0.6));
-  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
+  color: var(--region-modal-text, var(--theme-text-primary, #e2e8f0));
   font-size: 12px;
   font-family: inherit;
   padding: 0 8px;
@@ -1174,8 +1220,8 @@ watch(
 
 .language-select:focus {
   outline: none;
-  border-color: var(--region-modal-accent, #3b82f6);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, #3b82f6) 55%, transparent);
+  border-color: var(--region-modal-accent, var(--theme-accent-primary, #3b82f6));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--region-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%, transparent);
 }
 
 
@@ -1197,7 +1243,7 @@ watch(
 .toggle-track {
   width: 36px;
   height: 20px;
-  background: var(--region-modal-border, #334155);
+  background: var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 10px;
   position: relative;
   transition: background 0.2s;
@@ -1210,7 +1256,7 @@ watch(
   left: 2px;
   width: 16px;
   height: 16px;
-  background: var(--region-modal-text, #94a3b8);
+  background: var(--region-modal-text, var(--theme-text-muted, #94a3b8));
   border-radius: 50%;
   transition:
     transform 0.2s,
@@ -1218,12 +1264,12 @@ watch(
 }
 
 .toggle-input:checked + .toggle-track {
-  background: var(--region-modal-accent, #3b82f6);
+  background: var(--region-modal-accent, var(--theme-accent-primary, #3b82f6));
 }
 
 .toggle-input:checked + .toggle-track::after {
   transform: translateX(16px);
-  background: var(--region-modal-active-text, #fff);
+  background: var(--region-modal-active-text, var(--theme-text-inverse, #fff));
 }
 
 .theme-region-colors {
@@ -1244,13 +1290,13 @@ watch(
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: var(--region-modal-text-muted, #64748b);
+  color: var(--region-modal-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .theme-color-input {
   width: 100%;
   height: 32px;
-  border: 1px solid var(--region-modal-border, #334155);
+  border: 1px solid var(--region-modal-border, var(--theme-border-default, #334155));
   border-radius: 6px;
   background: transparent;
   cursor: pointer;

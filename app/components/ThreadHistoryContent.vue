@@ -95,6 +95,7 @@ import { useI18n } from 'vue-i18n';
 import MessageViewer from './MessageViewer.vue';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
 import type { QuestionInfo, ReasoningPart, ToolPart } from '../types/sse';
+import { resolveToolAccentColor } from '../utils/theme';
 
 const { t } = useI18n();
 
@@ -235,18 +236,7 @@ function translatedToolStatus(status: string): string {
 }
 
 function toolHeaderColor(tool: string): string {
-  switch (tool) {
-    case 'bash':
-      return '#a855f7';
-    case 'edit':
-    case 'multiedit':
-    case 'apply_patch':
-      return '#f97316';
-    case 'write':
-      return '#f97316';
-    default:
-      return '#64748b';
-  }
+  return resolveToolAccentColor(tool);
 }
 
 function formatMessageTime(value?: number) {

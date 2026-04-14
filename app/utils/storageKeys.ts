@@ -10,6 +10,7 @@ export const StorageKeys = {
     terminalFontFamily: 'settings.terminalFontFamily.v1',
     appMonospaceFontFamily: 'settings.appMonospaceFontFamily.v1',
     regionTheme: 'settings.regionTheme.v1',
+    themeTokens: 'settings.themeTokens.v2',
   },
   state: {
     sidePanelCollapsed: 'state.sidePanelCollapsed.v1',

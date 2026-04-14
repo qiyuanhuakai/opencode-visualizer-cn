@@ -58,7 +58,7 @@ const REGION_SELECTORS: Record<RegionName, string> = {
   chatCard: '.thread-block',
 };
 
-const REGION_VAR_PREFIXES: Record<RegionName, string> = {
+export const REGION_VAR_PREFIXES: Record<RegionName, string> = {
   topPanel: 'top',
   sidePanel: 'side',
   inputPanel: 'input',
