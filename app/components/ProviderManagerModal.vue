@@ -55,7 +55,7 @@
                   <div class="section-heading provider-section-title">
                     {{ $t('providerManager.sections.connected') }}
                   </div>
-                  <span class="status-badge is-muted">{{ connectedProviders.length }}</span>
+                  <span class="section-heading-count">{{ connectedProviders.length }}</span>
                 </div>
                 <div class="section-meta">{{ $t('providerManager.sections.connectedDescription') }}</div>
               </div>
@@ -856,6 +856,12 @@ async function disconnectProvider(providerId: string) {
   font-size: 14px;
   font-weight: 700;
   color: var(--region-modal-text, #f8fafc);
+}
+
+.section-heading-count {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--region-modal-text-muted, #94a3b8);
 }
 
 .section-meta {

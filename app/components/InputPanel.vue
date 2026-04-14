@@ -339,19 +339,6 @@
         <div class="input-actions">
           <button
             type="button"
-            class="input-button suppress-button"
-            :class="{ active: suppressAutoWindows }"
-            :title="suppressAutoWindows ? $t('inputPanel.autoWindowsSuppressed') : $t('inputPanel.suppressAutoWindows')"
-            @click="suppressAutoWindows = !suppressAutoWindows"
-          >
-            <Icon
-              :icon="suppressAutoWindows ? 'lucide:eye-off' : 'lucide:eye'"
-              :width="16"
-              :height="16"
-            />
-          </button>
-          <button
-            type="button"
             class="input-button bookmark-button"
             :title="messageValue.trim() ? $t('inputPanel.bookmarkCurrentInput') : $t('inputPanel.openBookmarks')"
             @click="messageValue.trim() ? bookmarkCurrentInput() : (favoritesOpen = true)"
@@ -481,7 +468,7 @@ const modelDropdownRef = ref<HTMLElement | null>(null);
 const modelSearchQuery = ref('');
 const acceptMime = 'image/png,image/jpeg,image/gif,image/webp';
 
-const { enterToSend, suppressAutoWindows } = useSettings();
+const { enterToSend } = useSettings();
 
 // --- Input history navigation ---
 const { roots: messageRoots, getTextContent } = useMessages();
@@ -1849,19 +1836,6 @@ const inputMessageStyle = computed(() => {
   gap: 4px;
   margin-left: auto;
   flex: 0 0 auto;
-}
-
-.suppress-button {
-}
-
-.suppress-button.active {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-}
-
-.suppress-button.active:hover {
-  background: rgba(239, 68, 68, 0.35);
-  color: #fca5a5;
 }
 
 .bookmark-button {

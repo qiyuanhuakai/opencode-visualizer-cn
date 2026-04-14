@@ -481,6 +481,19 @@
         </button>
         <button
           type="button"
+          class="control-button suppress-button"
+          :class="{ active: suppressAutoWindows }"
+          :title="suppressAutoWindows ? $t('topPanel.autoWindowsSuppressed') : $t('topPanel.suppressAutoWindows')"
+          @click="suppressAutoWindows = !suppressAutoWindows"
+        >
+          <Icon
+            :icon="suppressAutoWindows ? 'lucide:eye-off' : 'lucide:eye'"
+            :width="16"
+            :height="16"
+          />
+        </button>
+        <button
+          type="button"
           class="control-button logout-button"
           :title="$t('topPanel.logout')"
           @click="$emit('logout')"
@@ -499,10 +512,12 @@ import { useI18n } from 'vue-i18n';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownSearch from './Dropdown/Search.vue';
+import { useSettings } from '../composables/useSettings';
 
 declare const __GIT_REVISION__: string;
 const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
 const { t } = useI18n();
+const { suppressAutoWindows } = useSettings();
 
 const regionStyle = computed(() => undefined);
 
@@ -1800,6 +1815,7 @@ function handleOpenDirectory(close: () => void) {
 .settings-button,
 .provider-manager-button,
 .status-monitor-button,
+.suppress-button,
 .logout-button {
   width: 32px;
   height: 32px;
@@ -1814,8 +1830,17 @@ function handleOpenDirectory(close: () => void) {
 .settings-button:hover,
 .provider-manager-button:hover,
 .status-monitor-button:hover,
+.suppress-button:hover,
 .logout-button:hover {
   background: transparent;
   color: #e2e8f0;
+}
+
+.suppress-button.active {
+  color: #f87171;
+}
+
+.suppress-button.active:hover {
+  color: #fca5a5;
 }
 </style>
