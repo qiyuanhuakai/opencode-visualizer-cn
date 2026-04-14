@@ -46,34 +46,36 @@
             class="session-item"
             :class="{ 'is-active': selectedSessionId === session.sessionId }"
           >
-            <button
-              type="button"
-              class="session-select"
-              :title="session.directory"
-              @click="
-                emit('select-session', {
-                  projectId: session.projectId,
-                  sessionId: session.sessionId,
-                })
-              "
-            >
-              <span class="session-name">{{ session.title }}</span>
-              <span class="session-meta">{{ session.projectName }} · {{ session.branch }}</span>
-            </button>
-            <button
-              type="button"
-              class="session-unpin"
-              :title="$t('sidePanel.session.unpin')"
-              @click="
-                emit('unpin-session', {
-                  sessionId: session.sessionId,
-                  projectId: session.projectId,
-                  directory: session.directory,
-                })
-              "
-            >
-              <Icon icon="lucide:pin-off" width="14" height="14" />
-            </button>
+            <div class="session-card">
+              <button
+                type="button"
+                class="session-select"
+                :title="session.directory"
+                @click="
+                  emit('select-session', {
+                    projectId: session.projectId,
+                    sessionId: session.sessionId,
+                  })
+                "
+              >
+                <span class="session-name">{{ session.title }}</span>
+                <span class="session-meta">{{ session.projectName }} · {{ session.branch }}</span>
+              </button>
+              <button
+                type="button"
+                class="session-unpin"
+                :title="$t('sidePanel.session.unpin')"
+                @click="
+                  emit('unpin-session', {
+                    sessionId: session.sessionId,
+                    projectId: session.projectId,
+                    directory: session.directory,
+                  })
+                "
+              >
+                <Icon icon="lucide:pin-off" width="14" height="14" />
+              </button>
+            </div>
           </li>
         </ul>
       </div>
@@ -326,15 +328,33 @@ const {
 .session-item {
   display: flex;
   align-items: stretch;
-  gap: 6px;
+}
+
+.session-card {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.5));
+  border-radius: 8px;
+  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.6));
+  overflow: hidden;
+}
+
+.session-item.is-active .session-card {
+  border-color: var(--region-side-accent, rgba(96, 165, 250, 0.6));
+  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.25));
+}
+
+.session-card:hover {
+  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.78));
 }
 
 .session-select {
   flex: 1;
   min-width: 0;
-  border: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.5));
-  border-radius: 8px;
-  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.6));
+  border: none;
+  background: transparent;
   color: var(--region-side-text, #e2e8f0);
   text-align: left;
   padding: 7px 8px;
@@ -342,15 +362,6 @@ const {
   flex-direction: column;
   gap: 2px;
   cursor: pointer;
-}
-
-.session-item.is-active .session-select {
-  border-color: var(--region-side-accent, rgba(96, 165, 250, 0.6));
-  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.25));
-}
-
-.session-select:hover {
-  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.78));
 }
 
 .session-name {
@@ -374,18 +385,18 @@ const {
 .session-unpin {
   flex: 0 0 auto;
   width: 30px;
-  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.4));
-  border-radius: 8px;
-  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
+  border: none;
+  background: transparent;
   color: #fbbf24;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  transition: background 0.15s ease;
 }
 
 .session-unpin:hover {
-  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.82));
+  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.5));
 }
 
 .side-toggle-inline {

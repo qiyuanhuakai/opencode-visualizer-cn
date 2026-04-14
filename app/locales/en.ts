@@ -223,6 +223,8 @@ const messages: LocaleMessages = {
     settings: 'Settings',
     providerManager: 'Providers & models',
     statusMonitor: 'Status monitor',
+    autoWindowsSuppressed: 'Auto windows suppressed',
+    suppressAutoWindows: 'Suppress auto windows',
     logout: 'Logout',
     github: 'GitHub',
   },
@@ -235,6 +237,9 @@ const messages: LocaleMessages = {
     error: 'Error',
     retry: 'Retry',
     empty: 'No data',
+    common: {
+      totalLabel: 'Total',
+    },
     tabs: {
       server: 'Server',
       mcp: 'MCP',
@@ -378,8 +383,6 @@ const messages: LocaleMessages = {
     removeFromFavoritesConfirm: 'Remove this message from favorites?',
     bookmarked: 'Bookmarked!',
     stop: 'Stop (ESC x2)',
-    autoWindowsSuppressed: 'Auto windows suppressed',
-    suppressAutoWindows: 'Suppress auto windows',
     sendTooltipEnter: 'Ctrl-Enter / Enter to send',
     sendTooltipCtrlEnter: 'Ctrl-Enter to send',
     send: {

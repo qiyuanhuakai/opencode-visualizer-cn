@@ -223,6 +223,8 @@ const messages: LocaleMessages = {
     settings: '设置',
     providerManager: '提供商与模型',
     statusMonitor: '状态监控',
+    autoWindowsSuppressed: '自动窗口已抑制',
+    suppressAutoWindows: '抑制自动窗口',
     logout: '退出',
     github: 'GitHub',
   },
@@ -235,6 +237,9 @@ const messages: LocaleMessages = {
     error: '加载失败',
     retry: '重试',
     empty: '无数据',
+    common: {
+      totalLabel: '总数',
+    },
     tabs: {
       server: '服务器',
       mcp: 'MCP',
@@ -378,8 +383,6 @@ const messages: LocaleMessages = {
     removeFromFavoritesConfirm: '从收藏中移除此消息?',
     bookmarked: '已收藏!',
     stop: '停止 (ESC x2)',
-    autoWindowsSuppressed: '自动窗口已抑制',
-    suppressAutoWindows: '抑制自动窗口',
     sendTooltipEnter: 'Ctrl-Enter / Enter 发送',
     sendTooltipCtrlEnter: 'Ctrl-Enter 发送',
     send: {

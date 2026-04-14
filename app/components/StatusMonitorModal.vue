@@ -206,28 +206,28 @@ const tabs: { id: TabId; labelKey: string }[] = [
   { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
 ];
 
-const currentTotalLabel = computed(() => {
+const currentTotalInfo = computed(() => {
   switch (activeTab.value) {
     case 'server':
-      return '';
+      return null;
     case 'mcp':
       return mcpEntries.value.length > 0
-        ? t('statusMonitor.mcp.total', { count: mcpEntries.value.length })
-        : '';
+        ? { label: t('statusMonitor.common.totalLabel'), count: mcpEntries.value.length }
+        : null;
     case 'lsp':
       return (lspData.value || []).length > 0
-        ? t('statusMonitor.lsp.total', { count: (lspData.value || []).length })
-        : '';
+        ? { label: t('statusMonitor.common.totalLabel'), count: (lspData.value || []).length }
+        : null;
     case 'plugins':
       return pluginEntries.value.length > 0
-        ? t('statusMonitor.plugins.total', { count: pluginEntries.value.length })
-        : '';
+        ? { label: t('statusMonitor.common.totalLabel'), count: pluginEntries.value.length }
+        : null;
     case 'skills':
       return skillEntries.value.length > 0
-        ? t('statusMonitor.skills.total', { count: skillEntries.value.length })
-        : '';
+        ? { label: t('statusMonitor.common.totalLabel'), count: skillEntries.value.length }
+        : null;
     default:
-      return '';
+      return null;
   }
 });
 </script>
@@ -254,183 +254,188 @@ const currentTotalLabel = computed(() => {
 
     <div class="status-monitor-body">
       <div class="status-monitor-tabs" role="tablist">
-        <button
-          v-for="tab in tabs"
-          :key="tab.id"
-          type="button"
-          class="status-monitor-tab"
-          :class="{ 'is-active': activeTab === tab.id }"
-          :aria-selected="activeTab === tab.id"
-          @click="activeTab = tab.id"
-        >
-          {{ $t(tab.labelKey) }}
-        </button>
-      </div>
-
-      <div class="status-monitor-actions">
-        <span v-if="currentTotalLabel" class="status-monitor-summary">{{ currentTotalLabel }}</span>
-        <button
-          type="button"
-          class="refresh-button"
-          :disabled="loading"
-          :title="loading ? $t('statusMonitor.refreshing') : $t('statusMonitor.refresh')"
-          @click="refresh"
-        >
-          <Icon icon="lucide:refresh-cw" :width="14" :height="14" />
-        </button>
-      </div>
-
-      <div v-if="errorMessage" class="status-monitor-feedback is-error">
-        <span>{{ errorMessage }}</span>
-        <button type="button" class="retry-button" @click="refresh">
-          {{ $t('statusMonitor.retry') }}
-        </button>
-      </div>
-
-      <!-- Server Tab -->
-      <div v-if="activeTab === 'server'" class="status-monitor-content">
-        <div v-if="loading && !serverHealth" class="status-monitor-empty">
-          {{ $t('statusMonitor.loading') }}
-        </div>
-        <div v-else-if="!serverHealth" class="status-monitor-empty">
-          {{ $t('statusMonitor.server.noData') }}
-        </div>
-        <div v-else class="status-monitor-list">
-          <div class="status-monitor-row">
-            <div class="status-monitor-row-main">
-              <span class="status-dot" :class="serverHealth.healthy ? 'status-dot-success' : 'status-dot-error'" />
-              <span class="status-monitor-name">{{ $t('statusMonitor.server.status') }}</span>
-            </div>
-            <span class="status-monitor-meta">
-              {{ serverHealth.healthy ? $t('statusMonitor.server.healthy') : $t('statusMonitor.server.unhealthy') }}
-            </span>
-          </div>
-          <div class="status-monitor-row">
-            <div class="status-monitor-row-main">
-              <span class="status-monitor-name">{{ $t('statusMonitor.server.version') }}</span>
-            </div>
-            <span class="status-monitor-meta">{{ serverHealth.version }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- MCP Tab -->
-      <div v-if="activeTab === 'mcp'" class="status-monitor-content">
-        <div v-if="loading && !mcpData" class="status-monitor-empty">
-          {{ $t('statusMonitor.loading') }}
-        </div>
-        <div v-else-if="mcpEntries.length === 0" class="status-monitor-empty">
-          {{ $t('statusMonitor.mcp.noData') }}
-        </div>
-        <div v-else class="status-monitor-list">
-          <div
-            v-for="item in mcpEntries"
-            :key="item.name"
-            class="status-monitor-row"
+          <button
+            v-for="tab in tabs"
+            :key="tab.id"
+            type="button"
+            class="status-monitor-tab"
+            :class="{ 'is-active': activeTab === tab.id }"
+            :aria-selected="activeTab === tab.id"
+            @click="activeTab = tab.id"
           >
-            <div class="status-monitor-row-main">
-              <span class="status-dot" :class="mcpStatusClass(item.status)" />
-              <span class="status-monitor-name">{{ item.name }}</span>
-            </div>
-            <div class="status-monitor-row-actions">
-              <div class="status-monitor-meta-column">
-                <span class="status-monitor-meta">{{ mcpStatusText(item.status) }}</span>
-                <span v-if="'error' in item && item.error" class="status-monitor-error">
-                  {{ item.error }}
-                </span>
+            {{ $t(tab.labelKey) }}
+          </button>
+        </div>
+
+        <div v-if="currentTotalInfo" class="status-monitor-actions">
+          <span class="status-monitor-summary-label">{{ currentTotalInfo.label }}</span>
+          <span class="status-monitor-summary-value">{{ currentTotalInfo.count }}</span>
+        </div>
+
+        <div v-if="errorMessage" class="status-monitor-feedback is-error">
+          <span>{{ errorMessage }}</span>
+          <button type="button" class="retry-button" @click="refresh">
+            {{ $t('statusMonitor.retry') }}
+          </button>
+        </div>
+
+        <!-- Server Tab -->
+        <div v-if="activeTab === 'server'" class="status-monitor-content">
+          <div v-if="loading && !serverHealth" class="status-monitor-empty">
+            {{ $t('statusMonitor.loading') }}
+          </div>
+          <div v-else-if="!serverHealth" class="status-monitor-empty">
+            {{ $t('statusMonitor.server.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div class="status-monitor-row">
+              <div class="status-monitor-row-main">
+                <span class="status-dot" :class="serverHealth.healthy ? 'status-dot-success' : 'status-dot-error'" />
+                <span class="status-monitor-name">{{ $t('statusMonitor.server.status') }}</span>
               </div>
-              <label
-                class="toggle-switch"
-                :title="item.status === 'disabled' ? $t('statusMonitor.mcp.enable') : $t('statusMonitor.mcp.disable')"
-              >
-                <input
-                  type="checkbox"
-                  class="toggle-input"
-                  :checked="item.status !== 'disabled'"
-                  :disabled="togglingMcp === item.name"
-                  @change="handleMcpToggle(item.name, item.status)"
-                />
-                <span class="toggle-track" />
-              </label>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- LSP Tab -->
-      <div v-if="activeTab === 'lsp'" class="status-monitor-content">
-        <div v-if="loading && !lspData" class="status-monitor-empty">
-          {{ $t('statusMonitor.loading') }}
-        </div>
-        <div v-else-if="(lspData || []).length === 0" class="status-monitor-empty">
-          {{ $t('statusMonitor.lsp.noData') }}
-        </div>
-        <div v-else class="status-monitor-list">
-          <div
-            v-for="item in lspData"
-            :key="item.id"
-            class="status-monitor-row"
-          >
-            <div class="status-monitor-row-main">
-              <span class="status-dot" :class="lspStatusClass(item.status)" />
-              <span class="status-monitor-name">{{ item.name || item.id }}</span>
-            </div>
-            <div class="status-monitor-meta-column">
-              <span class="status-monitor-meta">{{ item.root }}</span>
-              <span class="status-monitor-meta" :class="item.status === 'error' ? 'is-error' : ''">
-                {{ item.status === 'connected' ? $t('statusMonitor.lsp.connected') : $t('statusMonitor.lsp.error') }}
+              <span class="status-monitor-meta">
+                {{ serverHealth.healthy ? $t('statusMonitor.server.healthy') : $t('statusMonitor.server.unhealthy') }}
               </span>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Plugins Tab -->
-      <div v-if="activeTab === 'plugins'" class="status-monitor-content">
-        <div v-if="loading && !configData" class="status-monitor-empty">
-          {{ $t('statusMonitor.loading') }}
-        </div>
-        <div v-else-if="pluginEntries.length === 0" class="status-monitor-empty">
-          {{ $t('statusMonitor.plugins.noData') }}
-        </div>
-        <div v-else class="status-monitor-list">
-          <div
-            v-for="name in pluginEntries"
-            :key="name"
-            class="status-monitor-row"
-          >
-            <div class="status-monitor-row-main">
-              <span class="status-dot status-dot-success" />
-              <span class="status-monitor-name">{{ name }}</span>
+            <div class="status-monitor-row">
+              <div class="status-monitor-row-main">
+                <span class="status-monitor-name">{{ $t('statusMonitor.server.version') }}</span>
+              </div>
+              <span class="status-monitor-meta">{{ serverHealth.version }}</span>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- Skills Tab -->
-      <div v-if="activeTab === 'skills'" class="status-monitor-content">
-        <div v-if="loading && skillEntries.length === 0" class="status-monitor-empty">
-          {{ $t('statusMonitor.loading') }}
-        </div>
-        <div v-else-if="skillUnsupported && skillEntries.length === 0" class="status-monitor-empty">
-          {{ $t('statusMonitor.skills.unsupported') }}
-        </div>
-        <div v-else-if="skillEntries.length === 0" class="status-monitor-empty">
-          {{ $t('statusMonitor.skills.noData') }}
-        </div>
-        <div v-else class="status-monitor-list">
-          <div
-            v-for="name in skillEntries"
-            :key="name"
-            class="status-monitor-row"
-          >
-            <div class="status-monitor-row-main">
-              <span class="status-dot status-dot-success" />
-              <span class="status-monitor-name">{{ name }}</span>
+        <!-- MCP Tab -->
+        <div v-if="activeTab === 'mcp'" class="status-monitor-content">
+          <div v-if="loading && !mcpData" class="status-monitor-empty">
+            {{ $t('statusMonitor.loading') }}
+          </div>
+          <div v-else-if="mcpEntries.length === 0" class="status-monitor-empty">
+            {{ $t('statusMonitor.mcp.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div
+              v-for="item in mcpEntries"
+              :key="item.name"
+              class="status-monitor-row"
+            >
+              <div class="status-monitor-row-main">
+                <span class="status-dot" :class="mcpStatusClass(item.status)" />
+                <span class="status-monitor-name">{{ item.name }}</span>
+              </div>
+              <div class="status-monitor-row-actions">
+                <div class="status-monitor-meta-column">
+                  <span class="status-monitor-meta">{{ mcpStatusText(item.status) }}</span>
+                  <span v-if="'error' in item && item.error" class="status-monitor-error">
+                    {{ item.error }}
+                  </span>
+                </div>
+                <label
+                  class="toggle-switch"
+                  :title="item.status === 'disabled' ? $t('statusMonitor.mcp.enable') : $t('statusMonitor.mcp.disable')"
+                >
+                  <input
+                    type="checkbox"
+                    class="toggle-input"
+                    :checked="item.status !== 'disabled'"
+                    :disabled="togglingMcp === item.name"
+                    @change="handleMcpToggle(item.name, item.status)"
+                  />
+                  <span class="toggle-track" />
+                </label>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+
+        <!-- LSP Tab -->
+        <div v-if="activeTab === 'lsp'" class="status-monitor-content">
+          <div v-if="loading && !lspData" class="status-monitor-empty">
+            {{ $t('statusMonitor.loading') }}
+          </div>
+          <div v-else-if="(lspData || []).length === 0" class="status-monitor-empty">
+            {{ $t('statusMonitor.lsp.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div
+              v-for="item in lspData"
+              :key="item.id"
+              class="status-monitor-row"
+            >
+              <div class="status-monitor-row-main">
+                <span class="status-dot" :class="lspStatusClass(item.status)" />
+                <span class="status-monitor-name">{{ item.name || item.id }}</span>
+              </div>
+              <div class="status-monitor-meta-column">
+                <span class="status-monitor-meta">{{ item.root }}</span>
+                <span class="status-monitor-meta" :class="item.status === 'error' ? 'is-error' : ''">
+                  {{ item.status === 'connected' ? $t('statusMonitor.lsp.connected') : $t('statusMonitor.lsp.error') }}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Plugins Tab -->
+        <div v-if="activeTab === 'plugins'" class="status-monitor-content">
+          <div v-if="loading && !configData" class="status-monitor-empty">
+            {{ $t('statusMonitor.loading') }}
+          </div>
+          <div v-else-if="pluginEntries.length === 0" class="status-monitor-empty">
+            {{ $t('statusMonitor.plugins.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div
+              v-for="name in pluginEntries"
+              :key="name"
+              class="status-monitor-row"
+            >
+              <div class="status-monitor-row-main">
+                <span class="status-dot status-dot-success" />
+                <span class="status-monitor-name">{{ name }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Skills Tab -->
+        <div v-if="activeTab === 'skills'" class="status-monitor-content">
+          <div v-if="loading && skillEntries.length === 0" class="status-monitor-empty">
+            {{ $t('statusMonitor.loading') }}
+          </div>
+          <div v-else-if="skillUnsupported && skillEntries.length === 0" class="status-monitor-empty">
+            {{ $t('statusMonitor.skills.unsupported') }}
+          </div>
+          <div v-else-if="skillEntries.length === 0" class="status-monitor-empty">
+            {{ $t('statusMonitor.skills.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div
+              v-for="name in skillEntries"
+              :key="name"
+              class="status-monitor-row"
+            >
+              <div class="status-monitor-row-main">
+                <span class="status-dot status-dot-success" />
+                <span class="status-monitor-name">{{ name }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+    </div>
+
+    <div class="status-monitor-footer">
+      <button
+        type="button"
+        class="refresh-button"
+        :disabled="loading"
+        :title="loading ? $t('statusMonitor.refreshing') : $t('statusMonitor.refresh')"
+        @click="refresh"
+      >
+        <Icon icon="lucide:refresh-cw" :width="14" :height="14" />
+      </button>
     </div>
   </div>
 </template>
@@ -502,6 +507,7 @@ const currentTotalLabel = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  scrollbar-gutter: stable both-edges;
 }
 
 .status-monitor-tabs {
@@ -543,29 +549,50 @@ const currentTotalLabel = computed(() => {
 .status-monitor-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 10px;
+}
+
+.status-monitor-summary-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--region-modal-text, #e2e8f0);
+}
+
+.status-monitor-summary-value {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--region-modal-text-muted, #94a3b8);
+}
+
+.status-monitor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 10px 16px;
+  border-top: 1px solid var(--region-modal-border, rgba(148, 163, 184, 0.15));
+  background: var(--region-modal-bg, rgba(15, 23, 42, 0.98));
 }
 
 .refresh-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   font-size: 12px;
-  font-weight: 500;
-  color: #e2e8f0;
-  background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.8));
-  border: 1px solid var(--region-modal-border, #475569);
-  border-radius: 6px;
+  color: var(--region-modal-text-muted, #94a3b8);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
 .refresh-button:hover:not(:disabled) {
-  background: rgba(51, 65, 85, 0.9);
+  color: var(--region-modal-text, #e2e8f0);
+  background: var(--region-modal-active-bg, rgba(148, 163, 184, 0.12));
 }
 
 .refresh-button:disabled {
