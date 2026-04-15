@@ -77,6 +77,19 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#1a1a2e');
     expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
     expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('#0f2033');
+    expect(document.documentElement.style.getPropertyValue('--theme-dropdown-bg')).toBe(snapshot['dropdown-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-chip-bg-neutral')).toBe(snapshot['chip-bg-neutral']);
+    expect(document.documentElement.style.getPropertyValue('--theme-icon-action-bg')).toBe(snapshot['icon-action-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-dock-tray-bg')).toBe(snapshot['dock-tray-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-form-control-bg')).toBe(snapshot['form-control-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-tab-bg')).toBe(snapshot['tab-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-badge-bg')).toBe(snapshot['badge-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-card-bg')).toBe(snapshot['card-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-toggle-track')).toBe(snapshot['toggle-track']);
+    expect(document.documentElement.style.getPropertyValue('--theme-list-row-bg')).toBe(snapshot['list-row-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-empty-state-text')).toBe(snapshot['empty-state-text']);
+    expect(document.documentElement.style.getPropertyValue('--theme-action-button-bg')).toBe(snapshot['action-button-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-search-bg')).toBe(snapshot['search-bg']);
 
     unmount();
   });
@@ -111,6 +124,11 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('rgba(15, 23, 42, 0.92)');
     expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('rgba(15, 23, 42, 0.92)');
     expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('rgba(15, 23, 42, 0.98)');
+    expect(document.documentElement.style.getPropertyValue('--theme-dropdown-bg')).toBe('rgba(2, 6, 23, 0.98)');
+    expect(document.documentElement.style.getPropertyValue('--theme-form-button-primary-bg')).toBe('#1e40af');
+    expect(document.documentElement.style.getPropertyValue('--theme-tab-bg')).toBe('rgba(11, 19, 32, 0.92)');
+    expect(document.documentElement.style.getPropertyValue('--theme-badge-bg')).toBe('rgba(15, 23, 42, 0.75)');
+    expect(document.documentElement.style.getPropertyValue('--theme-card-bg')).toBe('rgba(11, 19, 32, 0.92)');
 
     unmount();
   });

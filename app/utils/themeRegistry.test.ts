@@ -16,6 +16,13 @@ const externalThemeFixture = {
   badge: 'External',
   description: 'Northern-light inspired surfaces.',
   swatches: ['#08111f', '#11243b', '#67e8f9', '#eefbff'],
+  components: {
+    dropdown: { bg: '#08111f', border: '#29506f', text: '#eefbff', textMuted: '#8fb8d0', controlBg: '#102033', hoverBg: '#16324f', activeBg: '#1d4f73', accent: '#67e8f9', shadow: '0 10px 22px rgba(2, 6, 23, 0.45)' },
+    chip: { borderNeutral: '#29506f', borderSubtle: 'color-mix(in srgb, #29506f 80%, transparent)', bgNeutral: '#13283f', bgHover: '#1d4f73', fgNeutral: '#eefbff' },
+    iconAction: { border: '#29506f', bg: '#102033', bgHover: '#1d4f73' },
+    dock: { trayBg: 'rgba(8, 17, 31, 0.92)', trayBorder: '#29506f', chipBg: '#102033', chipText: '#eefbff', handle: '#8fb8d0' },
+    formControl: { bg: '#13283f', border: '#29506f', text: '#eefbff', placeholder: '#8fb8d0', focusBorder: '#67e8f9', buttonBg: '#102033', buttonBorder: '#29506f', buttonText: '#eefbff', buttonPrimaryBg: '#1d4f73', buttonPrimaryBorder: '#67e8f9', buttonPrimaryText: '#ffffff' },
+  },
   regions: {
     topPanel: { bg: '#11243b', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#0d1b2a', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
     sidePanel: { bg: '#0b1727', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#102033', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
@@ -34,6 +41,9 @@ describe('themeRegistry', () => {
     const theme = parseExternalThemeFile(externalThemeFixture);
     expect(theme.id).toBe('aurora');
     expect(theme.regions.pageBackground.bg).toBe('#08111f');
+    expect(theme.components?.dropdown?.accent).toBe('#67e8f9');
+    expect(theme.components?.dock?.handle).toBe('#8fb8d0');
+    expect(theme.components?.formControl?.buttonPrimaryBg).toBe('#1d4f73');
   });
 
   it('parses a single theme text payload', () => {
@@ -75,6 +85,19 @@ describe('themeRegistry', () => {
     expect(template.regions.topPanel).toEqual({});
     expect(template.regions.loginScreen).toEqual({});
     expect(template.regions.chatCard).toEqual({});
+    expect(template.components?.dropdown).toEqual({});
+    expect(template.components?.chip).toEqual({});
+    expect(template.components?.iconAction).toEqual({});
+    expect(template.components?.dock).toEqual({});
+    expect(template.components?.formControl).toEqual({});
+    expect(template.components?.tab).toEqual({});
+    expect(template.components?.badge).toEqual({});
+    expect(template.components?.card).toEqual({});
+    expect(template.components?.toggle).toEqual({});
+    expect(template.components?.listRow).toEqual({});
+    expect(template.components?.emptyState).toEqual({});
+    expect(template.components?.actionButton).toEqual({});
+    expect(template.components?.search).toEqual({});
   });
 
   it('creates exportable external definitions from runtime themes', () => {
@@ -89,5 +112,6 @@ describe('themeRegistry', () => {
     expect(external.id).toBe('ocean');
     expect(external.swatches).toHaveLength(4);
     expect(external.regions.pageBackground.bg).toBe('#b8c9d8');
+    expect(external.components).toBeUndefined();
   });
 });

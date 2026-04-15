@@ -7154,12 +7154,12 @@ body {
   width: 44px;
   height: 3px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.6);
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6);
+  background: var(--theme-dock-handle, rgba(148, 163, 184, 0.6));
+  box-shadow: var(--theme-dock-handle-shadow, 0 0 0 1px rgba(15, 23, 42, 0.6));
 }
 
 .input-resizer:hover::before {
-  background: rgba(226, 232, 240, 0.7);
+  background: var(--theme-dock-handle-hover, rgba(226, 232, 240, 0.7));
 }
 
 .output-workspace {
@@ -7246,12 +7246,12 @@ body {
   width: 3px;
   height: 44px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.6);
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6);
+  background: var(--theme-dock-handle, rgba(148, 163, 184, 0.6));
+  box-shadow: var(--theme-dock-handle-shadow, 0 0 0 1px rgba(15, 23, 42, 0.6));
 }
 
 .side-resizer:hover::before {
-  background: rgba(226, 232, 240, 0.7);
+  background: var(--theme-dock-handle-hover, rgba(226, 232, 240, 0.7));
 }
 
 .is-disabled {
@@ -7292,15 +7292,15 @@ body {
   padding: 0 8px;
   pointer-events: auto;
   z-index: 20;
-  background: color-mix(in srgb, #0b1220 92%, transparent);
-  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: var(--theme-dock-tray-bg, color-mix(in srgb, #0b1220 92%, transparent));
+  border: 1px solid var(--theme-dock-tray-border, rgba(148, 163, 184, 0.25));
   border-radius: 10px;
-  box-shadow: 0 6px 18px rgba(2, 6, 23, 0.32);
+  box-shadow: var(--theme-dock-tray-shadow, 0 6px 18px rgba(2, 6, 23, 0.32));
   backdrop-filter: blur(3px);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+  scrollbar-color: var(--theme-dock-thumb, rgba(148, 163, 184, 0.55)) transparent;
 }
 
 .window-dock-tray::-webkit-scrollbar {
@@ -7312,7 +7312,7 @@ body {
 }
 
 .window-dock-tray::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.5);
+  background: var(--theme-dock-thumb, rgba(148, 163, 184, 0.5));
   border-radius: 999px;
 }
 
@@ -7324,17 +7324,17 @@ body {
   height: 24px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: color-mix(in srgb, #1e293b 82%, #0f172a);
-  color: #e2e8f0;
+  border: 1px solid var(--theme-dock-chip-border, rgba(148, 163, 184, 0.35));
+  background: var(--theme-dock-chip-bg, color-mix(in srgb, #1e293b 82%, #0f172a));
+  color: var(--theme-dock-chip-text, #e2e8f0);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
 
 .window-dock-chip:hover {
-  background: color-mix(in srgb, #334155 84%, #0f172a);
-  border-color: rgba(226, 232, 240, 0.45);
+  background: var(--theme-dock-chip-hover-bg, color-mix(in srgb, #334155 84%, #0f172a));
+  border-color: var(--theme-dock-handle-hover, rgba(226, 232, 240, 0.45));
 }
 
 .window-dock-chip-title {

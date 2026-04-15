@@ -121,9 +121,9 @@ function priorityLabel(priority: string): string {
 }
 
 .todo-group {
-  border: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.55));
+  border: 1px solid var(--theme-card-border, var(--theme-side-border, rgba(71, 85, 105, 0.55)));
   border-radius: 8px;
-  background: var(--theme-side-control-bg, rgba(15, 23, 42, 0.6));
+  background: var(--theme-card-bg, var(--theme-side-control-bg, rgba(15, 23, 42, 0.6)));
 }
 
 .todo-group-header {
@@ -148,9 +148,9 @@ function priorityLabel(priority: string): string {
   margin-left: auto;
   padding: 1px 5px;
   border-radius: 999px;
-  border: 1px solid var(--theme-side-accent, rgba(59, 130, 246, 0.5));
-  color: var(--theme-side-active-text, #93c5fd);
-  background: var(--theme-side-active-bg, rgba(30, 64, 175, 0.25));
+  border: 1px solid var(--theme-badge-accent-border, var(--theme-side-accent, rgba(59, 130, 246, 0.5)));
+  color: var(--theme-badge-accent-text, var(--theme-side-active-text, #93c5fd));
+  background: var(--theme-badge-accent-bg, var(--theme-side-active-bg, rgba(30, 64, 175, 0.25)));
   font-size: 10px;
 }
 
@@ -174,7 +174,7 @@ function priorityLabel(priority: string): string {
   align-items: flex-start;
   gap: 6px;
   font-size: 12px;
-  color: var(--theme-side-text, #dbeafe);
+  color: var(--theme-list-row-text, var(--theme-side-text, #dbeafe));
 }
 
 .todo-status {
@@ -206,8 +206,8 @@ function priorityLabel(priority: string): string {
   text-transform: uppercase;
   font-size: 9px;
   letter-spacing: 0.07em;
-  color: var(--theme-side-text-muted, #cbd5e1);
-  border: 1px solid var(--theme-side-border, rgba(148, 163, 184, 0.45));
+  color: var(--theme-badge-text, var(--theme-side-text-muted, #cbd5e1));
+  border: 1px solid var(--theme-badge-border, var(--theme-side-border, rgba(148, 163, 184, 0.45)));
   border-radius: 999px;
   padding: 2px 5px;
 }

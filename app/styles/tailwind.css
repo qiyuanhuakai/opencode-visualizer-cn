@@ -31,17 +31,31 @@
   --ui-chip-font-size: 10px;
   --ui-chip-font-family: var(--app-monospace-font-family);
   --ui-chip-letter-spacing: 0.02em;
-  --ui-chip-border-neutral: var(--theme-border-muted, rgba(148, 163, 184, 0.65));
-  --ui-chip-border-subtle: color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.5)) 80%, transparent);
-  --ui-chip-bg-neutral: var(--theme-surface-chip, rgba(15, 23, 42, 0.75));
-  --ui-chip-bg-hover: var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92));
-  --ui-chip-fg-neutral: var(--theme-text-primary, #bfdbfe);
+  --ui-chip-border-neutral: var(--theme-chip-border-neutral, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
+  --ui-chip-border-subtle: var(--theme-chip-border-subtle, color-mix(in srgb, var(--theme-chip-border-neutral, var(--theme-border-muted, rgba(148, 163, 184, 0.5))) 80%, transparent));
+  --ui-chip-bg-neutral: var(--theme-chip-bg-neutral, var(--theme-surface-chip, rgba(15, 23, 42, 0.75)));
+  --ui-chip-bg-hover: var(--theme-chip-bg-hover, var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92)));
+  --ui-chip-fg-neutral: var(--theme-chip-fg-neutral, var(--theme-text-primary, #bfdbfe));
   --ui-action-gap: 8px;
   --ui-icon-action-size: 24px;
   --ui-icon-action-radius: 6px;
-  --ui-icon-action-border: var(--theme-border-default, #334155);
-  --ui-icon-action-bg: var(--theme-surface-panel-muted, #111a2c);
-  --ui-icon-action-bg-hover: var(--theme-surface-panel-hover, #1d2a45);
+  --ui-icon-action-border: var(--theme-icon-action-border, var(--theme-border-default, #334155));
+  --ui-icon-action-bg: var(--theme-icon-action-bg, var(--theme-surface-panel-muted, #111a2c));
+  --ui-icon-action-bg-hover: var(--theme-icon-action-bg-hover, var(--theme-surface-panel-hover, #1d2a45));
+  --ui-form-control-bg: var(--theme-form-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
+  --ui-form-control-border: var(--theme-form-control-border, var(--theme-border-default, #334155));
+  --ui-form-control-text: var(--theme-form-control-text, var(--theme-text-primary, #e2e8f0));
+  --ui-form-control-placeholder: var(--theme-form-control-placeholder, var(--theme-text-muted, #475569));
+  --ui-form-control-focus-border: var(--theme-form-control-focus-border, var(--theme-border-strong, #475569));
+  --ui-form-control-focus-ring: var(--theme-form-control-focus-ring, color-mix(in srgb, var(--theme-accent-primary, #3b82f6) 35%, transparent));
+  --ui-form-button-bg: var(--theme-form-button-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  --ui-form-button-border: var(--theme-form-button-border, var(--theme-border-default, #334155));
+  --ui-form-button-text: var(--theme-form-button-text, var(--theme-text-primary, #e2e8f0));
+  --ui-form-button-hover-bg: var(--theme-form-button-hover-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
+  --ui-form-button-primary-bg: var(--theme-form-button-primary-bg, #1e40af);
+  --ui-form-button-primary-border: var(--theme-form-button-primary-border, #2563eb);
+  --ui-form-button-primary-text: var(--theme-form-button-primary-text, var(--theme-text-inverse, #e2e8f0));
+  --ui-form-button-primary-hover-bg: var(--theme-form-button-primary-hover-bg, #2563eb);
 }
 
 /* ── Unified scrollbar ── */

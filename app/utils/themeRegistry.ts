@@ -5,6 +5,9 @@ import {
   REGION_COLOR_FIELDS,
   REGION_NAMES,
   SAKURA_PRESET,
+  THEME_COMPONENT_FIELDS,
+  type ThemeComponentConfig,
+  type ThemeComponentName,
   type RegionColors,
   type RegionName,
   type RegionThemeConfig,
@@ -27,12 +30,14 @@ export type ThemeRegistryEntry = {
 };
 
 export type ExternalThemeDefinition = {
+  $schema?: string;
   id: string;
   label: string;
   badge?: string;
   description?: string;
   swatches?: string[];
   regions: Record<RegionName, Partial<RegionColors>>;
+  components?: ThemeComponentConfig;
 };
 
 type StoredExternalThemeRegistry = {
@@ -106,6 +111,48 @@ function normalizeThemeRegions(input: unknown): Record<RegionName, Partial<Regio
       return [regionName, region];
     }),
   ) as Record<RegionName, Partial<RegionColors>>;
+}
+
+function cloneThemeComponents(components: ThemeComponentConfig | undefined): ThemeComponentConfig | undefined {
+  if (!components) return undefined;
+  return {
+    dropdown: components.dropdown ? { ...components.dropdown } : undefined,
+    chip: components.chip ? { ...components.chip } : undefined,
+    iconAction: components.iconAction ? { ...components.iconAction } : undefined,
+    dock: components.dock ? { ...components.dock } : undefined,
+    formControl: components.formControl ? { ...components.formControl } : undefined,
+    tab: components.tab ? { ...components.tab } : undefined,
+    badge: components.badge ? { ...components.badge } : undefined,
+    card: components.card ? { ...components.card } : undefined,
+    toggle: components.toggle ? { ...components.toggle } : undefined,
+    listRow: components.listRow ? { ...components.listRow } : undefined,
+    emptyState: components.emptyState ? { ...components.emptyState } : undefined,
+    actionButton: components.actionButton ? { ...components.actionButton } : undefined,
+    search: components.search ? { ...components.search } : undefined,
+  };
+}
+
+function normalizeThemeComponents(input: unknown): ThemeComponentConfig | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const record = input as Record<string, unknown>;
+  return Object.fromEntries(
+    (Object.keys(THEME_COMPONENT_FIELDS) as ThemeComponentName[]).map((componentName) => {
+      const componentValue = record[componentName];
+      const componentRecord =
+        componentValue && typeof componentValue === 'object' && !Array.isArray(componentValue)
+          ? (componentValue as Record<string, unknown>)
+          : {};
+      const fields = THEME_COMPONENT_FIELDS[componentName] as readonly string[];
+      const component = Object.fromEntries(
+        fields.flatMap((field) => {
+          const value = normalizeColorValue(componentRecord[field]);
+          if (!value) return [];
+          return [[field, value]];
+        }),
+      );
+      return [componentName, component];
+    }),
+  ) as ThemeComponentConfig;
 }
 
 function deriveThemeSwatches(theme: RegionThemeConfig): string[] {
@@ -195,6 +242,7 @@ function normalizeExternalThemeDefinition(input: unknown): ExternalThemeDefiniti
   const id = normalizeThemeRegistryId(record.id);
   const label = normalizeThemeLabel(record.label);
   const regions = normalizeThemeRegions(record.regions);
+  const components = normalizeThemeComponents(record.components);
 
   if (!id || !label || !regions) {
     return null;
@@ -204,6 +252,7 @@ function normalizeExternalThemeDefinition(input: unknown): ExternalThemeDefiniti
     name: id,
     label,
     regions,
+    components,
   };
 
   return {
@@ -213,6 +262,7 @@ function normalizeExternalThemeDefinition(input: unknown): ExternalThemeDefiniti
     description: normalizeThemeLabel(record.description) ?? undefined,
     swatches: normalizeSwatches(record.swatches, theme),
     regions: cloneRegionMap(regions),
+    components: cloneThemeComponents(components),
   };
 }
 
@@ -304,11 +354,13 @@ export function createExternalThemeRegistryEntry(theme: ExternalThemeDefinition)
       name: theme.id,
       label: theme.label,
       regions: theme.regions,
+      components: theme.components,
     }),
     theme: {
       name: theme.id,
       label: theme.label,
       regions: cloneRegionMap(theme.regions),
+      components: cloneThemeComponents(theme.components),
     },
   };
 }
@@ -322,6 +374,7 @@ export function createExternalThemeDefinition(theme: RegionThemeConfig, meta?: P
     description: meta?.description,
     swatches: meta?.swatches ? [...meta.swatches] : deriveThemeSwatches(theme),
     regions: cloneRegionMap(theme.regions),
+    components: cloneThemeComponents(theme.components),
   };
 }
 
@@ -333,6 +386,21 @@ export function createThemeTemplate(themeId = 'my-theme', label = 'My Theme'): E
         name: themeId,
         label,
         regions: Object.fromEntries(REGION_NAMES.map((regionName) => [regionName, {}])) as Record<RegionName, Partial<RegionColors>>,
+        components: {
+          dropdown: {},
+          chip: {},
+          iconAction: {},
+          dock: {},
+          formControl: {},
+          tab: {},
+          badge: {},
+          card: {},
+          toggle: {},
+          listRow: {},
+          emptyState: {},
+          actionButton: {},
+          search: {},
+        },
       },
       {
         badge: 'External',

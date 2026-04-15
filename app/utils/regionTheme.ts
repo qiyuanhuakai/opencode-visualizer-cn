@@ -20,10 +20,172 @@ export interface RegionColors {
   textMuted?: string;
 }
 
+export interface DropdownThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  textMuted?: string;
+  controlBg?: string;
+  hoverBg?: string;
+  activeBg?: string;
+  accent?: string;
+  shadow?: string;
+}
+
+export interface ChipThemeColors {
+  borderNeutral?: string;
+  borderSubtle?: string;
+  bgNeutral?: string;
+  bgHover?: string;
+  fgNeutral?: string;
+}
+
+export interface IconActionThemeColors {
+  border?: string;
+  bg?: string;
+  bgHover?: string;
+}
+
+export interface DockThemeColors {
+  trayBg?: string;
+  trayBorder?: string;
+  trayShadow?: string;
+  thumb?: string;
+  chipBg?: string;
+  chipHoverBg?: string;
+  chipBorder?: string;
+  chipText?: string;
+  handle?: string;
+  handleHover?: string;
+  handleShadow?: string;
+}
+
+export interface FormControlThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  placeholder?: string;
+  focusBorder?: string;
+  focusRing?: string;
+  buttonBg?: string;
+  buttonBorder?: string;
+  buttonText?: string;
+  buttonHoverBg?: string;
+  buttonPrimaryBg?: string;
+  buttonPrimaryBorder?: string;
+  buttonPrimaryText?: string;
+  buttonPrimaryHoverBg?: string;
+}
+
+export interface TabThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  hoverBg?: string;
+  activeBg?: string;
+  activeBorder?: string;
+  activeText?: string;
+}
+
+export interface BadgeThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  accentBg?: string;
+  accentBorder?: string;
+  accentText?: string;
+}
+
+export interface CardThemeColors {
+  bg?: string;
+  border?: string;
+  shadow?: string;
+  hoverBg?: string;
+  activeBg?: string;
+}
+
+export interface ToggleThemeColors {
+  track?: string;
+  trackBorder?: string;
+  thumb?: string;
+  activeTrack?: string;
+  activeThumb?: string;
+}
+
+export interface ListRowThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  textMuted?: string;
+  hoverBg?: string;
+  activeBg?: string;
+}
+
+export interface EmptyStateThemeColors {
+  bg?: string;
+  text?: string;
+  textMuted?: string;
+  icon?: string;
+}
+
+export interface ActionButtonThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  hoverBg?: string;
+  accentBg?: string;
+  accentBorder?: string;
+  accentText?: string;
+}
+
+export interface SearchThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  placeholder?: string;
+  icon?: string;
+  focusBg?: string;
+}
+
+export interface ThemeComponentConfig {
+  dropdown?: Partial<DropdownThemeColors>;
+  chip?: Partial<ChipThemeColors>;
+  iconAction?: Partial<IconActionThemeColors>;
+  dock?: Partial<DockThemeColors>;
+  formControl?: Partial<FormControlThemeColors>;
+  tab?: Partial<TabThemeColors>;
+  badge?: Partial<BadgeThemeColors>;
+  card?: Partial<CardThemeColors>;
+  toggle?: Partial<ToggleThemeColors>;
+  listRow?: Partial<ListRowThemeColors>;
+  emptyState?: Partial<EmptyStateThemeColors>;
+  actionButton?: Partial<ActionButtonThemeColors>;
+  search?: Partial<SearchThemeColors>;
+}
+
+export type ThemeComponentName = keyof ThemeComponentConfig;
+
+export const THEME_COMPONENT_FIELDS = {
+  dropdown: ['bg', 'border', 'text', 'textMuted', 'controlBg', 'hoverBg', 'activeBg', 'accent', 'shadow'],
+  chip: ['borderNeutral', 'borderSubtle', 'bgNeutral', 'bgHover', 'fgNeutral'],
+  iconAction: ['border', 'bg', 'bgHover'],
+  dock: ['trayBg', 'trayBorder', 'trayShadow', 'thumb', 'chipBg', 'chipHoverBg', 'chipBorder', 'chipText', 'handle', 'handleHover', 'handleShadow'],
+  formControl: ['bg', 'border', 'text', 'placeholder', 'focusBorder', 'focusRing', 'buttonBg', 'buttonBorder', 'buttonText', 'buttonHoverBg', 'buttonPrimaryBg', 'buttonPrimaryBorder', 'buttonPrimaryText', 'buttonPrimaryHoverBg'],
+  tab: ['bg', 'border', 'text', 'hoverBg', 'activeBg', 'activeBorder', 'activeText'],
+  badge: ['bg', 'border', 'text', 'accentBg', 'accentBorder', 'accentText'],
+  card: ['bg', 'border', 'shadow', 'hoverBg', 'activeBg'],
+  toggle: ['track', 'trackBorder', 'thumb', 'activeTrack', 'activeThumb'],
+  listRow: ['bg', 'border', 'text', 'textMuted', 'hoverBg', 'activeBg'],
+  emptyState: ['bg', 'text', 'textMuted', 'icon'],
+  actionButton: ['bg', 'border', 'text', 'hoverBg', 'accentBg', 'accentBorder', 'accentText'],
+  search: ['bg', 'border', 'text', 'placeholder', 'icon', 'focusBg'],
+} as const;
+
 export interface RegionThemeConfig {
   name: string;
   label: string;
   regions: Record<RegionName, Partial<RegionColors>>;
+  components?: ThemeComponentConfig;
 }
 
 export const REGION_NAMES: RegionName[] = [

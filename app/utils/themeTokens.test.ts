@@ -20,6 +20,19 @@ describe('theme token bridge', () => {
     expect(overrides['text-primary']).toBe('#eaf6ff');
     expect(overrides['accent-primary']).toBe('#4cc9f0');
     expect(overrides['surface-overlay']).toBe('color-mix(in srgb, #006494 55%, transparent)');
+    expect(overrides['dropdown-bg']).toBe('#0b1f33');
+    expect(overrides['chip-bg-neutral']).toBe('#1b3a4b');
+    expect(overrides['icon-action-bg']).toBe('#12324a');
+    expect(overrides['dock-tray-bg']).toBe('#97b1c8');
+    expect(overrides['form-control-bg']).toBe('#12324a');
+    expect(overrides['tab-bg']).toBe('#1b3a4b');
+    expect(overrides['badge-bg']).toBe('#1b3a4b');
+    expect(overrides['card-bg']).toBe('#1b3a4b');
+    expect(overrides['toggle-active-track']).toBe('#76e4f7');
+    expect(overrides['list-row-bg']).toBe('#1b3a4b');
+    expect(overrides['empty-state-text']).toBe('#7aa2c0');
+    expect(overrides['action-button-bg']).toBe('#1b3a4b');
+    expect(overrides['search-bg']).toBe('#0b1f33');
   });
 
   it('migrates legacy region theme storage into versioned token storage', () => {
@@ -57,6 +70,19 @@ describe('theme token bridge', () => {
     expect(snapshot['surface-page']).toBe('#818182');
     expect(snapshot['surface-page-elevated']).toBe('#909092');
     expect(snapshot['text-primary']).toBe('#e2e8f0');
+    expect(snapshot['dropdown-bg']).toBe('rgba(2, 6, 23, 0.98)');
+    expect(snapshot['chip-bg-neutral']).toBe('rgba(15, 23, 42, 0.75)');
+    expect(snapshot['icon-action-bg']).toBe('#111a2c');
+    expect(snapshot['dock-chip-text']).toBe('#e2e8f0');
+    expect(snapshot['form-button-primary-bg']).toBe('#1e40af');
+    expect(snapshot['tab-bg']).toBe('rgba(11, 19, 32, 0.92)');
+    expect(snapshot['badge-bg']).toBe('rgba(15, 23, 42, 0.75)');
+    expect(snapshot['card-bg']).toBe('rgba(11, 19, 32, 0.92)');
+    expect(snapshot['toggle-track']).toBe('#334155');
+    expect(snapshot['list-row-bg']).toBe('rgba(11, 19, 32, 0.92)');
+    expect(snapshot['empty-state-text']).toBe('#94a3b8');
+    expect(snapshot['action-button-bg']).toBe('rgba(11, 19, 32, 0.92)');
+    expect(snapshot['search-bg']).toBe('rgba(11, 19, 32, 0.92)');
   });
 
   it('includes git and tree semantic tokens in the default snapshot', () => {
