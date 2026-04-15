@@ -18,6 +18,7 @@ import {
   RenderCancelledError,
   startRenderWorkerHtml,
 } from '../../utils/workerRenderer';
+import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 
 const props = defineProps<{
   code?: string;
@@ -88,7 +89,7 @@ async function handleContentClick(event: MouseEvent) {
 async function startRender() {
   const code = props.code ?? '';
   const lang = props.lang ?? 'text';
-  const theme = props.theme ?? 'github-dark';
+  const theme = props.theme ?? DEFAULT_SYNTAX_THEME;
   const nextId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   state.requestId += 1;
   const current = state.requestId;

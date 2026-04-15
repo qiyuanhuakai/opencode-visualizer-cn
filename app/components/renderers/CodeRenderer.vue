@@ -12,6 +12,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import CodeContent from '../CodeContent.vue';
 import { type CodeRenderParams, useCodeRender } from '../../utils/useCodeRender';
+import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 
 const { t } = useI18n();
 
@@ -50,7 +51,7 @@ const renderParams = computed<CodeRenderParams | null>(() => {
   return {
     code,
     lang: props.lang ?? 'text',
-    theme: props.theme ?? 'github-dark',
+    theme: props.theme ?? DEFAULT_SYNTAX_THEME,
     gutterMode: viewerGutterMode.value,
   };
 });

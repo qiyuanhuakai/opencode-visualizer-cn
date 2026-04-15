@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "/schema/theme.schema.json",
+  "title": "VIS External Theme",
+  "description": "Single external theme definition for VIS theme registry import/export.",
+  "type": "object",
+  "required": ["id", "label", "regions"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1
+    },
+    "badge": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "swatches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4
+    },
+    "regions": {
+      "$ref": "#/$defs/themeRegions"
+    }
+  },
+  "$defs": {
+    "regionColors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "text": { "type": "string" },
+        "border": { "type": "string" },
+        "accent": { "type": "string" },
+        "controlBg": { "type": "string" },
+        "activeBg": { "type": "string" },
+        "activeText": { "type": "string" },
+        "textMuted": { "type": "string" }
+      }
+    },
+    "themeRegions": {
+      "type": "object",
+      "required": [
+        "topPanel",
+        "sidePanel",
+        "inputPanel",
+        "outputPanel",
+        "topDropdown",
+        "modalPanel",
+        "pageBackground",
+        "chatCard"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "topPanel": { "$ref": "#/$defs/regionColors" },
+        "sidePanel": { "$ref": "#/$defs/regionColors" },
+        "inputPanel": { "$ref": "#/$defs/regionColors" },
+        "outputPanel": { "$ref": "#/$defs/regionColors" },
+        "topDropdown": { "$ref": "#/$defs/regionColors" },
+        "modalPanel": { "$ref": "#/$defs/regionColors" },
+        "pageBackground": { "$ref": "#/$defs/regionColors" },
+        "chatCard": { "$ref": "#/$defs/regionColors" }
+      }
+    }
+  }
+}

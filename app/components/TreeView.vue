@@ -1059,7 +1059,7 @@ function onRowDoubleClick(row: VirtualRow) {
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
+   border-bottom: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.28));
 }
 
 .tree-branch {
@@ -1067,7 +1067,7 @@ function onRowDoubleClick(row: VirtualRow) {
   align-items: center;
   gap: 5px;
   font-size: 11px;
-  color: var(--region-side-text-muted, #94a3b8);
+   color: var(--theme-side-text-muted, #94a3b8);
   white-space: nowrap;
   overflow: hidden;
   min-height: 20px;
@@ -1076,14 +1076,14 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-picker-dropdown {
   flex: 0 1 auto;
   min-width: 0;
-  --ui-dropdown-bg: var(--region-side-bg, rgba(15, 23, 42, 0.95));
-  --ui-dropdown-border: var(--region-side-border, #334155);
-  --ui-dropdown-control-bg: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
-  --ui-dropdown-text: var(--region-side-text, #e2e8f0);
-  --ui-dropdown-text-muted: var(--region-side-text-muted, #94a3b8);
-  --ui-dropdown-accent: var(--region-side-accent, rgba(96, 165, 250, 0.6));
-  --ui-dropdown-active-bg: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
-  --ui-dropdown-hover-bg: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
+   --ui-dropdown-bg: var(--theme-side-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.95)));
+   --ui-dropdown-border: var(--theme-side-border, var(--theme-border-default, #334155));
+   --ui-dropdown-control-bg: var(--theme-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
+   --ui-dropdown-text: var(--theme-side-text, var(--theme-text-primary, #e2e8f0));
+   --ui-dropdown-text-muted: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
+   --ui-dropdown-accent: var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.6)));
+   --ui-dropdown-active-bg: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
+   --ui-dropdown-hover-bg: var(--theme-side-hover-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-branch-picker-trigger {
@@ -1096,16 +1096,16 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-picker-trigger:hover {
-  color: var(--region-side-text, #cbd5e1);
+   color: var(--theme-side-text, var(--theme-text-secondary, #cbd5e1));
 }
 
 .tree-branch-picker-trigger:focus-visible {
-  outline: 1px solid var(--region-side-accent, rgba(96, 165, 250, 0.7));
+   outline: 1px solid var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
   outline-offset: 1px;
 }
 
 .tree-branch-chevron {
-  color: var(--region-side-text-muted, #64748b);
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #64748b));
   flex-shrink: 0;
 }
 
@@ -1129,7 +1129,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-current-icon {
-  color: #86efac;
+  color: var(--theme-status-git-added-strong, #86efac);
   flex-shrink: 0;
 }
 
@@ -1151,7 +1151,7 @@ function onRowDoubleClick(row: VirtualRow) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--region-side-text-muted, #64748b);
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #64748b));
   font-size: 10px;
 }
 
@@ -1169,28 +1169,28 @@ function onRowDoubleClick(row: VirtualRow) {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border: 1px solid var(--region-side-border, var(--color-slate-700));
+   border: 1px solid var(--theme-side-border, var(--theme-border-default, var(--color-slate-700)));
   border-radius: 6px;
   padding: 0;
-  background: var(--region-side-control-bg, var(--color-slate-950));
-  color: var(--region-side-text-muted, var(--color-slate-400));
+   background: var(--theme-side-control-bg, var(--theme-surface-panel-muted, var(--color-slate-950)));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-400)));
   cursor: pointer;
 }
 
 .tree-branch-action-btn:hover {
-  background: var(--region-side-active-bg, var(--color-slate-800));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
 }
 
 .tree-branch-merge-btn {
-  color: var(--color-purple-300);
+  color: var(--theme-status-git-archived, var(--color-purple-300));
 }
 
 .tree-branch-fork-btn {
-  color: var(--color-blue-300);
+  color: var(--theme-status-git-attention, var(--color-blue-300));
 }
 
 .tree-branch-delete-btn {
-  color: var(--color-red-300);
+  color: var(--theme-status-danger, var(--color-red-300));
 }
 
 .tree-branch-fetch-btn {
@@ -1198,12 +1198,12 @@ function onRowDoubleClick(row: VirtualRow) {
   height: 18px;
   border: 0;
   background: transparent;
-  color: var(--region-side-text-muted, var(--color-slate-500));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-500)));
 }
 
 .tree-branch-fetch-btn:hover {
-  color: var(--region-side-text, var(--color-slate-300));
-  background: var(--region-side-active-bg, var(--color-slate-800));
+   color: var(--theme-side-text, var(--theme-text-secondary, var(--color-slate-300)));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
 }
 
 .tree-branch-action-spacer {
@@ -1213,42 +1213,42 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 :deep(.tree-branch-cmd-danger .ui-dropdown-item-content) {
-  color: var(--color-red-300);
+  color: var(--theme-status-danger, var(--color-red-300));
 }
 
 :deep(.tree-branch-cmd-merge .ui-dropdown-item-content) {
-  color: var(--color-purple-300);
+  color: var(--theme-status-git-archived, var(--color-purple-300));
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
 :deep(.tree-branch-cmd-rebase .ui-dropdown-item-content) {
-  color: var(--color-amber-300);
+  color: var(--theme-status-warning, var(--color-amber-300));
 }
 
 .tree-branch-menu-empty,
 .tree-branch-menu-error {
   padding: 8px;
   font-size: 11px;
-  color: var(--region-side-text-muted, #94a3b8);
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .tree-branch-menu-error {
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
 }
 
 .tree-branch-command-dropdown {
   flex: 0 0 auto;
   min-width: auto;
-  --ui-dropdown-bg: var(--region-side-bg, rgba(15, 23, 42, 0.95));
-  --ui-dropdown-border: var(--region-side-border, #334155);
-  --ui-dropdown-control-bg: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
-  --ui-dropdown-text: var(--region-side-text, #e2e8f0);
-  --ui-dropdown-text-muted: var(--region-side-text-muted, #94a3b8);
-  --ui-dropdown-accent: var(--region-side-accent, rgba(96, 165, 250, 0.6));
-  --ui-dropdown-active-bg: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
-  --ui-dropdown-hover-bg: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
+   --ui-dropdown-bg: var(--theme-side-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.95)));
+   --ui-dropdown-border: var(--theme-side-border, var(--theme-border-default, #334155));
+   --ui-dropdown-control-bg: var(--theme-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
+   --ui-dropdown-text: var(--theme-side-text, var(--theme-text-primary, #e2e8f0));
+   --ui-dropdown-text-muted: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
+   --ui-dropdown-accent: var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.6)));
+   --ui-dropdown-active-bg: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
+   --ui-dropdown-hover-bg: var(--theme-side-hover-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-branch-command-trigger {
@@ -1261,16 +1261,16 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-command-trigger:focus-visible {
-  outline: 1px solid var(--region-side-accent, rgba(96, 165, 250, 0.7));
+   outline: 1px solid var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
   outline-offset: 1px;
 }
 
 .tree-branch-command-trigger:hover .tree-branch-ahead {
-  background: rgba(74, 222, 128, 0.2);
+  background: color-mix(in srgb, var(--theme-status-git-added, #73c991) 20%, transparent);
 }
 
 .tree-branch-command-trigger:hover .tree-branch-behind {
-  background: rgba(248, 113, 113, 0.2);
+  background: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 20%, transparent);
 }
 
 .tree-branch-label {
@@ -1282,13 +1282,13 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-icon {
-  color: var(--region-side-accent, #60a5fa);
+   color: var(--theme-side-accent, var(--theme-accent-primary, #60a5fa));
   flex-shrink: 0;
 }
 
 .tree-branch-name {
   font-weight: 600;
-  color: var(--region-side-text, #cbd5e1);
+   color: var(--theme-side-text, var(--theme-text-secondary, #cbd5e1));
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1307,13 +1307,13 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-ahead {
-  color: #86efac;
-  background: rgba(74, 222, 128, 0.12);
+  color: var(--theme-status-git-added-strong, #86efac);
+  background: color-mix(in srgb, var(--theme-status-git-added, #73c991) 12%, transparent);
 }
 
 .tree-branch-behind {
-  color: #fca5a5;
-  background: rgba(248, 113, 113, 0.12);
+  color: var(--theme-text-danger, #fca5a5);
+  background: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 12%, transparent);
 }
 
 .tree-branch-stats {
@@ -1332,26 +1332,26 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-stats:hover {
-  background: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-branch-stats:focus-visible {
-  outline: 1px solid var(--region-side-accent, rgba(96, 165, 250, 0.7));
+   outline: 1px solid var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
   outline-offset: 1px;
 }
 
 .tree-stat-add {
-  color: #73c991;
+  color: var(--theme-status-git-added, #73c991);
 }
 
 .tree-stat-del {
-  color: #c74e39;
+  color: var(--theme-status-git-deleted, #c74e39);
 }
 
 .tree-tabs {
   display: inline-flex;
   width: 100%;
-  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.35));
+   border: 1px solid var(--theme-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.35)));
   border-radius: 8px;
   overflow: hidden;
 }
@@ -1359,8 +1359,8 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-tab {
   flex: 1;
   border: 0;
-  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.7));
-  color: var(--region-side-text-muted, #94a3b8);
+   background: var(--theme-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1369,17 +1369,17 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-tab + .tree-tab {
-  border-left: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.35));
+   border-left: 1px solid var(--theme-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.35)));
 }
 
 .tree-tab.is-active {
-  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
-  color: var(--region-side-active-text, #e2e8f0);
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
+   color: var(--theme-side-active-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .tree-empty {
   margin: auto;
-  color: var(--region-side-text-muted, rgba(148, 163, 184, 0.9));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, rgba(148, 163, 184, 0.9)));
   font-size: 12px;
 }
 
@@ -1404,7 +1404,7 @@ function onRowDoubleClick(row: VirtualRow) {
   height: 24px;
   padding: 2px 6px 2px calc(4px + var(--indent) * 14px);
   border-radius: 6px;
-  color: var(--region-side-text, #dbeafe);
+   color: var(--theme-side-text, var(--theme-text-primary, #dbeafe));
   cursor: pointer;
   position: absolute;
   left: 8px;
@@ -1417,7 +1417,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-row:hover {
-  background: var(--region-side-control-bg, rgba(51, 65, 85, 0.55));
+   background: var(--theme-side-control-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-row.is-ignored:hover {
@@ -1425,7 +1425,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-row.is-selected {
-  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.4));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.4)));
 }
 
 .tree-row.is-selected.is-ignored {
@@ -1439,7 +1439,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-toggle {
   border: 0;
   background: transparent;
-  color: var(--region-side-text-muted, #94a3b8);
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
   width: 16px;
   padding: 0;
   cursor: pointer;
@@ -1473,7 +1473,7 @@ function onRowDoubleClick(row: VirtualRow) {
   font-size: 10px;
   font-weight: 700;
   border-radius: 999px;
-  border: 1px solid var(--region-side-border, rgba(148, 163, 184, 0.45));
+   border: 1px solid var(--theme-side-border, color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.45)) 100%, transparent));
   line-height: 16px;
   height: 16px;
   transition:
@@ -1492,156 +1492,156 @@ function onRowDoubleClick(row: VirtualRow) {
 
 /* Modified (yellow/amber) */
 .tree-status.is-modified {
-  color: #e2c08d;
-  border-color: rgba(226, 192, 141, 0.55);
+  color: var(--theme-status-git-modified, #e2c08d);
+  border-color: color-mix(in srgb, var(--theme-status-git-modified, #e2c08d) 55%, transparent);
 }
 
 /* Added (green) */
 .tree-status.is-added {
-  color: #73c991;
-  border-color: rgba(115, 201, 145, 0.55);
+  color: var(--theme-status-git-added, #73c991);
+  border-color: color-mix(in srgb, var(--theme-status-git-added, #73c991) 55%, transparent);
 }
 
 /* Deleted (red) */
 .tree-status.is-deleted-status {
-  color: #c74e39;
-  border-color: rgba(199, 78, 57, 0.55);
+  color: var(--theme-status-git-deleted, #c74e39);
+  border-color: color-mix(in srgb, var(--theme-status-git-deleted, #c74e39) 55%, transparent);
 }
 
 /* Renamed (cyan) */
 .tree-status.is-renamed {
-  color: #4ec9b0;
-  border-color: rgba(78, 201, 176, 0.55);
+  color: var(--theme-status-git-renamed, #4ec9b0);
+  border-color: color-mix(in srgb, var(--theme-status-git-renamed, #4ec9b0) 55%, transparent);
 }
 
 /* Untracked (green, same as added) */
 .tree-status.is-untracked {
-  color: #73c991;
-  border-color: rgba(115, 201, 145, 0.55);
+  color: var(--theme-status-git-added, #73c991);
+  border-color: color-mix(in srgb, var(--theme-status-git-added, #73c991) 55%, transparent);
 }
 
 /* Copied (cyan, same as renamed) */
 .tree-status.is-copied {
-  color: #4ec9b0;
-  border-color: rgba(78, 201, 176, 0.55);
+  color: var(--theme-status-git-renamed, #4ec9b0);
+  border-color: color-mix(in srgb, var(--theme-status-git-renamed, #4ec9b0) 55%, transparent);
 }
 
 /* Staged: slightly brighter/higher saturation */
 .tree-status.is-staged.is-modified {
-  color: #f0d6a0;
-  border-color: rgba(240, 214, 160, 0.65);
+  color: var(--theme-status-git-modified-strong, #f0d6a0);
+  border-color: color-mix(in srgb, var(--theme-status-git-modified-strong, #f0d6a0) 65%, transparent);
 }
 
 .tree-status.is-staged.is-added {
-  color: #86efac;
-  border-color: rgba(134, 239, 172, 0.65);
+  color: var(--theme-status-git-added-strong, #86efac);
+  border-color: color-mix(in srgb, var(--theme-status-git-added-strong, #86efac) 65%, transparent);
 }
 
 .tree-status.is-staged.is-deleted-status {
-  color: #e06050;
-  border-color: rgba(224, 96, 80, 0.65);
+  color: var(--theme-status-git-deleted-strong, #e06050);
+  border-color: color-mix(in srgb, var(--theme-status-git-deleted-strong, #e06050) 65%, transparent);
 }
 
 .tree-status.is-staged.is-renamed {
-  color: #5ee0c8;
-  border-color: rgba(94, 224, 200, 0.65);
+  color: var(--theme-status-git-renamed-strong, #5ee0c8);
+  border-color: color-mix(in srgb, var(--theme-status-git-renamed-strong, #5ee0c8) 65%, transparent);
 }
 
 .tree-status.is-staged.is-copied {
-  color: #5ee0c8;
-  border-color: rgba(94, 224, 200, 0.65);
+  color: var(--theme-status-git-renamed-strong, #5ee0c8);
+  border-color: color-mix(in srgb, var(--theme-status-git-renamed-strong, #5ee0c8) 65%, transparent);
 }
 
 /* --- Hover: fill background, invert text (knockout effect) --- */
 .tree-status-button.is-modified:hover {
-  background: #e2c08d;
+  background: var(--theme-status-git-modified, #e2c08d);
   color: #1e1e1e;
-  border-color: #e2c08d;
+  border-color: var(--theme-status-git-modified, #e2c08d);
 }
 
 .tree-status-button.is-added:hover,
 .tree-status-button.is-untracked:hover {
-  background: #73c991;
+  background: var(--theme-status-git-added, #73c991);
   color: #1e1e1e;
-  border-color: #73c991;
+  border-color: var(--theme-status-git-added, #73c991);
 }
 
 .tree-status-button.is-deleted-status:hover {
-  background: #c74e39;
+  background: var(--theme-status-git-deleted, #c74e39);
   color: #fff;
-  border-color: #c74e39;
+  border-color: var(--theme-status-git-deleted, #c74e39);
 }
 
 .tree-status-button.is-renamed:hover,
 .tree-status-button.is-copied:hover {
-  background: #4ec9b0;
+  background: var(--theme-status-git-renamed, #4ec9b0);
   color: #1e1e1e;
-  border-color: #4ec9b0;
+  border-color: var(--theme-status-git-renamed, #4ec9b0);
 }
 
 .tree-status-button.is-staged.is-modified:hover {
-  background: #f0d6a0;
+  background: var(--theme-status-git-modified-strong, #f0d6a0);
   color: #1e1e1e;
-  border-color: #f0d6a0;
+  border-color: var(--theme-status-git-modified-strong, #f0d6a0);
 }
 
 .tree-status-button.is-staged.is-added:hover {
-  background: #86efac;
+  background: var(--theme-status-git-added-strong, #86efac);
   color: #1e1e1e;
-  border-color: #86efac;
+  border-color: var(--theme-status-git-added-strong, #86efac);
 }
 
 .tree-status-button.is-staged.is-deleted-status:hover {
-  background: #e06050;
+  background: var(--theme-status-git-deleted-strong, #e06050);
   color: #fff;
-  border-color: #e06050;
+  border-color: var(--theme-status-git-deleted-strong, #e06050);
 }
 
 .tree-status-button.is-staged.is-renamed:hover,
 .tree-status-button.is-staged.is-copied:hover {
-  background: #5ee0c8;
+  background: var(--theme-status-git-renamed-strong, #5ee0c8);
   color: #1e1e1e;
-  border-color: #5ee0c8;
+  border-color: var(--theme-status-git-renamed-strong, #5ee0c8);
 }
 
 /* --- File name color by status (row-level classes) --- */
 .tree-row.row-modified .tree-name {
-  color: #e2c08d;
+  color: var(--theme-status-git-modified, #e2c08d);
 }
 
 .tree-row.row-added .tree-name,
 .tree-row.row-untracked .tree-name {
-  color: #73c991;
+  color: var(--theme-status-git-added, #73c991);
 }
 
 .tree-row.row-deleted .tree-name {
-  color: #c74e39;
+  color: var(--theme-status-git-deleted, #c74e39);
 }
 
 .tree-row.row-renamed .tree-name {
-  color: #4ec9b0;
+  color: var(--theme-status-git-renamed, #4ec9b0);
 }
 
 .tree-row.row-copied .tree-name {
-  color: #4ec9b0;
+  color: var(--theme-status-git-renamed, #4ec9b0);
 }
 
 .tree-loading,
 .tree-error {
   margin-top: 8px;
   font-size: 11px;
-  color: var(--region-side-text-muted, #94a3b8);
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .tree-error {
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
 }
 .tree-statusbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
-  border-top: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
+   border-top: 1px solid var(--theme-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.28)));
   flex-shrink: 0;
 }
 
@@ -1667,13 +1667,13 @@ function onRowDoubleClick(row: VirtualRow) {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--region-side-text-muted, #94a3b8);
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
   cursor: pointer;
   padding: 0;
 }
 
 .tree-statusbar-btn:hover {
-  background: var(--region-side-active-bg, rgba(51, 65, 85, 0.55));
-  color: var(--region-side-text, #cbd5e1);
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
+   color: var(--theme-side-text, var(--theme-text-secondary, #cbd5e1));
 }
 </style>

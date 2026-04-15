@@ -60,18 +60,18 @@ const hasTarget = computed(() => {
 }
 
 .ib-target-model {
-  color: #f8fafc;
+  color: var(--theme-chat-text, var(--theme-text-primary, #f8fafc));
 }
 
 .ib-target-provider {
-  color: var(--region-chat-text-muted, #94a3b8);
+  color: var(--theme-chat-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .ib-target-separator {
-  color: var(--region-chat-text-muted, #94a3b8);
+  color: var(--theme-chat-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .ib-target-variant {
-  color: #f59e0b;
+  color: var(--theme-status-git-pinned-strong, #f59e0b);
 }
 </style>

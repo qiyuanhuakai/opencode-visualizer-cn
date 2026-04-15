@@ -51,6 +51,6 @@ opencode serve
   text-align: left;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
 }
 </style>

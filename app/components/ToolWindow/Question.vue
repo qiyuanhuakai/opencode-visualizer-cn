@@ -22,7 +22,7 @@
 
     <div class="question-body">
       <div v-if="contextText" class="context-text-area">
-        <MessageViewer :code="contextText" lang="markdown" theme="github-dark" />
+        <MessageViewer :code="contextText" lang="markdown" :theme="DEFAULT_SYNTAX_THEME" />
       </div>
 
       <div
@@ -91,6 +91,7 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import MessageViewer from '../MessageViewer.vue';
 import { StorageKeys, storageGetJSON, storageSetJSON } from '../../utils/storageKeys';
+import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 
 type QuestionOption = {
   label: string;
@@ -279,7 +280,7 @@ function emitReject() {
   min-height: 0;
   padding: 8px;
   box-sizing: border-box;
-  color: #d1fae5;
+  color: var(--theme-text-primary, #d1fae5);
   font-size: 12px;
 }
 
@@ -297,7 +298,7 @@ function emitReject() {
 
 .question-type {
   font-size: 11px;
-  color: #86efac;
+  color: var(--theme-status-success, #86efac);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -306,10 +307,10 @@ function emitReject() {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border: 1px solid rgba(52, 211, 153, 0.25);
+  border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 30%, transparent);
   border-radius: 8px;
   padding: 6px 8px;
-  background: rgba(2, 44, 34, 0.35);
+  background: var(--theme-surface-success-soft, rgba(2, 44, 34, 0.35));
 }
 
 .question-row {
@@ -320,19 +321,19 @@ function emitReject() {
 }
 
 .question-label {
-  color: #6ee7b7;
+  color: var(--theme-text-success, #6ee7b7);
   font-size: 11px;
 }
 
 .question-value {
-  color: #d1fae5;
+  color: var(--theme-text-primary, #d1fae5);
   font-size: 11px;
   word-break: break-all;
 }
 
 .divider {
   margin: 0 4px;
-  color: #34d399;
+  color: var(--theme-status-success, #34d399);
 }
 
 .question-body {
@@ -345,10 +346,10 @@ function emitReject() {
 }
 
 .context-text-area {
-  border: 1px solid rgba(52, 211, 153, 0.2);
+  border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 24%, transparent);
   border-radius: 8px;
   padding: 8px;
-  background: rgba(6, 24, 18, 0.4);
+  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 55%, transparent);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -357,10 +358,10 @@ function emitReject() {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border: 1px solid rgba(52, 211, 153, 0.25);
+  border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 30%, transparent);
   border-radius: 8px;
   padding: 8px;
-  background: rgba(6, 24, 18, 0.55);
+  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 70%, transparent);
 }
 
 .section-head {
@@ -371,20 +372,20 @@ function emitReject() {
 }
 
 .section-title {
-  color: #a7f3d0;
+  color: var(--theme-text-primary, #a7f3d0);
   font-size: 12px;
   font-weight: 700;
 }
 
 .section-mode {
-  color: #6ee7b7;
+  color: var(--theme-text-success, #6ee7b7);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .section-question {
-  color: #d1fae5;
+  color: var(--theme-text-primary, #d1fae5);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -397,9 +398,9 @@ function emitReject() {
 
 .option-item {
   border-radius: 8px;
-  border: 1px solid rgba(52, 211, 153, 0.28);
-  background: rgba(2, 44, 34, 0.3);
-  color: #d1fae5;
+  border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 34%, transparent);
+  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 60%, transparent);
+  color: var(--theme-text-primary, #d1fae5);
   padding: 6px 8px;
   text-align: left;
   display: flex;
@@ -409,8 +410,8 @@ function emitReject() {
 }
 
 .option-item.selected {
-  border-color: rgba(16, 185, 129, 0.8);
-  background: rgba(16, 185, 129, 0.22);
+  border-color: color-mix(in srgb, var(--theme-status-success, #86efac) 80%, transparent);
+  background: color-mix(in srgb, var(--theme-status-success, #86efac) 22%, transparent);
 }
 
 .option-item:disabled {
@@ -425,7 +426,7 @@ function emitReject() {
 
 .option-description {
   font-size: 10px;
-  color: #86efac;
+  color: var(--theme-text-success, #86efac);
 }
 
 .custom-answer {
@@ -435,9 +436,9 @@ function emitReject() {
 .custom-input {
   width: 100%;
   border-radius: 8px;
-  border: 1px solid rgba(52, 211, 153, 0.35);
-  background: rgba(2, 44, 34, 0.55);
-  color: #d1fae5;
+  border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 40%, transparent);
+  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 78%, transparent);
+  color: var(--theme-text-primary, #d1fae5);
   font-size: 11px;
   padding: 6px 8px;
   min-height: 3em;
@@ -449,11 +450,11 @@ function emitReject() {
 }
 
 .custom-input:focus {
-  border-color: rgba(52, 211, 153, 0.6);
+  border-color: color-mix(in srgb, var(--theme-status-success, #86efac) 60%, transparent);
 }
 
 .question-error {
-  color: #fecaca;
+  color: var(--theme-text-danger, #fecaca);
   font-size: 11px;
 }
 
@@ -461,16 +462,16 @@ function emitReject() {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  border-top: 1px solid rgba(52, 211, 153, 0.3);
+  border-top: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 34%, transparent);
   padding-top: 8px;
 }
 
 .question-button {
   border-radius: 8px;
   padding: 6px 10px;
-  border: 1px solid rgba(52, 211, 153, 0.45);
-  background: #042f2e;
-  color: #d1fae5;
+  border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 45%, transparent);
+  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 90%, #042f2e);
+  color: var(--theme-text-primary, #d1fae5);
   font-size: 11px;
   cursor: pointer;
 }
@@ -481,12 +482,12 @@ function emitReject() {
 }
 
 .question-button.is-reject {
-  border-color: rgba(248, 113, 113, 0.6);
-  background: rgba(127, 29, 29, 0.35);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 60%, transparent);
+  background: var(--theme-surface-danger, rgba(127, 29, 29, 0.35));
 }
 
 .question-button.is-reply {
-  border-color: rgba(52, 211, 153, 0.7);
-  background: rgba(16, 185, 129, 0.26);
+  border-color: color-mix(in srgb, var(--theme-status-success, #86efac) 70%, transparent);
+  background: color-mix(in srgb, var(--theme-status-success, #86efac) 26%, transparent);
 }
 </style>

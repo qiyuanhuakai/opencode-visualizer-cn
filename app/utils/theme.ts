@@ -12,6 +12,27 @@ export type ThemeJson = {
   };
 };
 
+export const TOOL_ACCENT_COLORS = {
+  bash: '#a855f7',
+  read: '#60a5fa',
+  grep: '#facc15',
+  glob: '#facc15',
+  list: '#60a5fa',
+  edit: '#f97316',
+  multiedit: '#f97316',
+  apply_patch: '#f97316',
+  write: '#f97316',
+  webfetch: '#2dd4bf',
+  websearch: '#2dd4bf',
+  codesearch: '#2dd4bf',
+  task: '#818cf8',
+  batch: '#818cf8',
+  plan_enter: '#94a3b8',
+  plan_exit: '#94a3b8',
+} as const;
+
+const DEFAULT_TOOL_ACCENT_COLOR = '#64748b';
+
 export const opencodeTheme: ThemeJson = {
   $schema: 'https://opencode.ai/theme.json',
   defs: {
@@ -300,4 +321,8 @@ export function resolveAgentColor(
 
   const colorKey = cycleColors[(index === -1 ? 0 : index) % cycleColors.length];
   return theme[colorKey] || '#fab283';
+}
+
+export function resolveToolAccentColor(tool: string): string {
+  return TOOL_ACCENT_COLORS[tool as keyof typeof TOOL_ACCENT_COLORS] ?? DEFAULT_TOOL_ACCENT_COLOR;
 }

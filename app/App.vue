@@ -418,6 +418,7 @@ import {
 } from './utils/toolRenderers';
 import * as opencodeApi from './utils/opencode';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
+import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { splitFileContentDirectoryAndPath, normalizeDirectory } from './utils/path';
 import { useCredentials } from './composables/useCredentials';
 import { useSettings } from './composables/useSettings';
@@ -1178,7 +1179,7 @@ const reasoning = useReasoningWindows({
   selectedSessionId,
   fw,
   reasoningComponent: ReasoningContent,
-  theme: () => 'github-dark',
+  theme: () => DEFAULT_SYNTAX_THEME,
   reasoningCloseDelayMs: REASONING_CLOSE_DELAY_MS,
   resolveModelName: (providerID, modelID) => {
     const key = `${providerID}/${modelID}`;
@@ -1193,7 +1194,7 @@ const subagentWindows = useSubagentWindows({
   selectedSessionId,
   fw,
   subagentComponent: SubagentContent,
-  theme: () => 'github-dark',
+  theme: () => DEFAULT_SYNTAX_THEME,
   closeDelayMs: SUBAGENT_CLOSE_DELAY_MS,
   resolveModelName: (providerID, modelID) => {
     const key = `${providerID}/${modelID}`;
@@ -5402,7 +5403,7 @@ watch(
 
 function log(..._args: unknown[]) {}
 
-const shikiTheme = ref('github-dark');
+const shikiTheme = ref(DEFAULT_SYNTAX_THEME);
 
 const TOOL_RENDERER_READ_EVENT_TYPES = new Set(['session.diff', 'file.edited']);
 
@@ -5545,7 +5546,7 @@ async function renderReadHtmlFromApi(params: {
       id: `read-${params.callId ?? 'unknown'}-${Date.now().toString(36)}`,
       code: text,
       lang: 'text',
-      theme: 'github-dark',
+      theme: DEFAULT_SYNTAX_THEME,
       gutterMode,
     });
 
@@ -5593,7 +5594,7 @@ async function renderReadHtmlFromApi(params: {
       id: `read-${params.callId ?? 'unknown'}-${Date.now().toString(36)}`,
       code,
       lang: params.lang,
-      theme: 'github-dark',
+      theme: DEFAULT_SYNTAX_THEME,
       gutterMode: 'single',
       lineOffset: params.lineOffset,
       lineLimit: params.lineLimit,
@@ -5604,7 +5605,7 @@ async function renderReadHtmlFromApi(params: {
         id: `read-${params.callId ?? 'unknown'}-${Date.now().toString(36)}`,
         code: params.fallbackText,
         lang: params.lang,
-        theme: 'github-dark',
+        theme: DEFAULT_SYNTAX_THEME,
         gutterMode: 'single',
         lineOffset: params.lineOffset,
         lineLimit: params.lineLimit,
@@ -5628,7 +5629,7 @@ function renderEditDiffHtml(params: {
       after: params.after,
       patch: params.patch ?? params.diff,
       lang: params.lang,
-      theme: 'github-dark',
+      theme: DEFAULT_SYNTAX_THEME,
       gutterMode: 'double',
     });
 }
@@ -6188,10 +6189,10 @@ function handleOpenHistoryReasoning(payload: { part: ReasoningPart }) {
   historyToolWindowKeys.add(key);
   fw.open(key, {
     component: ReasoningContent,
-    props: {
-      entries: [{ id: payload.part.id, text: payload.part.text }],
-      theme: 'github-dark',
-    },
+      props: {
+        entries: [{ id: payload.part.id, text: payload.part.text }],
+        theme: DEFAULT_SYNTAX_THEME,
+      },
     title: t('app.windowTitles.thought'),
     scroll: 'manual',
     closable: true,
@@ -6955,7 +6956,7 @@ onBeforeUnmount(() => {
 
 .app-loading-message {
   margin: 8px 0 0;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 12px;
 }
 
@@ -6983,7 +6984,7 @@ onBeforeUnmount(() => {
 .app-loading-abort {
   background: transparent;
   border-color: #475569;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .app-loading-abort:hover {
@@ -7016,7 +7017,7 @@ onBeforeUnmount(() => {
 }
 
 .app-login-input::placeholder {
-  color: var(--region-page-text-muted, #64748b);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .app-login-input:focus {
@@ -7034,7 +7035,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 12px;
   cursor: pointer;
   user-select: none;

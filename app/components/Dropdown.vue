@@ -431,9 +431,9 @@ defineExpose({ moveHighlight, selectHighlighted, updateSearch, clearHighlight })
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  background: var(--ui-dropdown-control-bg, var(--region-top-dropdown-control-bg, #0b1320));
-  color: var(--ui-dropdown-text, var(--region-top-dropdown-text, #e2e8f0));
-  border: 1px solid var(--ui-dropdown-border, var(--region-top-dropdown-border, #334155));
+  background: var(--ui-dropdown-control-bg, var(--theme-surface-panel-muted, #0b1320));
+  color: var(--ui-dropdown-text, var(--theme-text-primary, #e2e8f0));
+  border: 1px solid var(--ui-dropdown-border, var(--theme-border-default, #334155));
   border-radius: 8px;
   padding: 6px 8px;
   font-size: 12px;
@@ -477,8 +477,8 @@ defineExpose({ moveHighlight, selectHighlighted, updateSearch, clearHighlight })
   max-width: calc(100vw - 16px);
   max-height: 60vh;
   position-try-fallbacks: flip-block;
-  background: var(--ui-dropdown-bg, var(--region-top-dropdown-bg, var(--region-top-bg, rgba(2, 6, 23, 0.98))));
-  border: 1px solid var(--ui-dropdown-border, var(--region-top-dropdown-border, var(--region-top-border, #334155)));
+  background: var(--ui-dropdown-bg, var(--theme-surface-panel-elevated, rgba(2, 6, 23, 0.98)));
+  border: 1px solid var(--ui-dropdown-border, var(--theme-border-default, #334155));
   border-radius: 10px;
   padding: 6px;
   scroll-padding: 6px;

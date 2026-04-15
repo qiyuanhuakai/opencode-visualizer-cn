@@ -141,7 +141,7 @@ function priorityLabel(priority: string): string {
 
 .todo-count {
   font-size: 11px;
-  color: var(--region-side-text-muted, #94a3b8);
+  color: var(--theme-side-text-muted, #94a3b8);
 }
 
 .todo-empty {

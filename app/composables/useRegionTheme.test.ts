@@ -1,21 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, nextTick } from 'vue';
 
-import { OCEAN_PRESET, generateCSS } from '../utils/regionTheme';
+import { OCEAN_PRESET } from '../utils/regionTheme';
 import { StorageKeys, storageKey } from '../utils/storageKeys';
+import {
+  DEFAULT_SYNTAX_THEME,
+  SEMANTIC_THEME_TOKENS,
+  createSemanticTokenSnapshot,
+  regionThemeToStorage,
+  semanticTokenCssVariable,
+} from '../utils/themeTokens';
 
 describe('useRegionTheme', () => {
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();
     window.localStorage.clear();
-    document.getElementById('region-theme-overrides')?.remove();
+    document.documentElement.removeAttribute('data-region-theme');
+    document.documentElement.style.removeProperty('--syntax-theme-name');
+    for (const token of SEMANTIC_THEME_TOKENS) {
+      document.documentElement.style.removeProperty(semanticTokenCssVariable(token));
+    }
   });
 
   afterEach(() => {
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
-    document.getElementById('region-theme-overrides')?.remove();
+    document.documentElement.removeAttribute('data-region-theme');
+    document.documentElement.style.removeProperty('--syntax-theme-name');
+    for (const token of SEMANTIC_THEME_TOKENS) {
+      document.documentElement.style.removeProperty(semanticTokenCssVariable(token));
+    }
     document.body.innerHTML = '';
   });
 
@@ -47,18 +62,20 @@ describe('useRegionTheme', () => {
     };
   }
 
-  it('creates and updates the style tag when activeTheme changes', async () => {
+  it('syncs semantic tokens from theme storage', async () => {
     const { api, unmount } = await mountComposable();
 
-    const initialTag = document.getElementById('region-theme-overrides');
-    expect(initialTag).toBeInstanceOf(HTMLStyleElement);
-    expect(initialTag?.textContent).toBe('');
+    expect(document.documentElement.style.getPropertyValue('--syntax-theme-name')).toBe(DEFAULT_SYNTAX_THEME);
 
-    api.activeTheme.value = OCEAN_PRESET;
+    api.themeStorage.value = regionThemeToStorage(OCEAN_PRESET);
     await nextTick();
 
-    const updatedTag = document.getElementById('region-theme-overrides');
-    expect(updatedTag?.textContent).toBe(generateCSS(OCEAN_PRESET));
+    const snapshot = createSemanticTokenSnapshot(api.themeStorage.value?.overrides);
+    expect(document.documentElement.getAttribute('data-region-theme')).toBe('ocean');
+    expect(document.documentElement.style.getPropertyValue('--theme-surface-panel')).toBe(snapshot['surface-panel']);
+    expect(document.documentElement.style.getPropertyValue('--theme-text-primary')).toBe(snapshot['text-primary']);
+    expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#1a1a2e');
+    expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
 
     unmount();
   });
@@ -70,13 +87,16 @@ describe('useRegionTheme', () => {
     await nextTick();
     vi.runAllTimers();
 
-    expect(api.activeTheme.value).toEqual(OCEAN_PRESET);
-    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.regionTheme))).toBe(JSON.stringify(OCEAN_PRESET));
+    expect(document.documentElement.getAttribute('data-region-theme')).toBe('ocean');
+    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toContain('"version":2');
+    expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#1a1a2e');
+    expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
+    expect(document.documentElement.style.getPropertyValue('--theme-output-bg')).toBe('#13293d');
 
     unmount();
   });
 
-  it('resetTheme clears the style tag content', async () => {
+  it('resetTheme clears theme attributes and overrides', async () => {
     const { api, unmount } = await mountComposable();
 
     api.applyPreset('ocean');
@@ -84,8 +104,10 @@ describe('useRegionTheme', () => {
     api.resetTheme();
     await nextTick();
 
-    expect(api.activeTheme.value).toBeNull();
-    expect(document.getElementById('region-theme-overrides')?.textContent).toBe('');
+    expect(api.themeStorage.value).toBeNull();
+    expect(document.documentElement.getAttribute('data-region-theme')).toBeNull();
+    expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('rgba(15, 23, 42, 0.92)');
+    expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('rgba(15, 23, 42, 0.92)');
 
     unmount();
   });

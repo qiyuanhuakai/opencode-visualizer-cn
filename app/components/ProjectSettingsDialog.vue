@@ -332,7 +332,7 @@ async function handleSubmit() {
   border: 1px solid #334155;
   border-radius: 6px;
   background: transparent;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
   cursor: pointer;
 }
 
@@ -356,7 +356,7 @@ async function handleSubmit() {
 .field-label {
   font-size: 12px;
   font-weight: 500;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .name-row {
@@ -379,7 +379,7 @@ async function handleSubmit() {
   border: 1px solid #334155;
   border-radius: 8px;
   background: #111a2c;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
   cursor: pointer;
 }
 
@@ -418,7 +418,7 @@ async function handleSubmit() {
 
 .field-description {
   font-size: 11px;
-  color: var(--region-modal-text-muted, #64748b);
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
 }
 
 /* Icon preview */
@@ -487,7 +487,7 @@ async function handleSubmit() {
   flex-direction: column;
   gap: 2px;
   font-size: 12px;
-  color: var(--region-modal-text-muted, #64748b);
+  color: var(--theme-modal-text-muted, #64748b);
 }
 
 .hidden-input {

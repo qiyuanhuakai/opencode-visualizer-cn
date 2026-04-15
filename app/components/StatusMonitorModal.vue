@@ -450,9 +450,9 @@ const currentTotalInfo = computed(() => {
   z-index: 1000;
   display: flex;
   flex-direction: column;
-  background: var(--region-modal-bg, rgba(15, 23, 42, 0.98));
-  border: 1px solid var(--region-modal-border, #334155);
-  color: var(--region-modal-text, #e2e8f0);
+  background: var(--theme-modal-bg, rgba(15, 23, 42, 0.98));
+  border: 1px solid var(--theme-modal-border, #334155);
+  color: var(--theme-modal-text, #e2e8f0);
   border-radius: 12px;
   box-shadow: 0 20px 48px rgba(2, 6, 23, 0.55);
   overflow: hidden;
@@ -464,7 +464,7 @@ const currentTotalInfo = computed(() => {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--region-modal-border, #334155);
+  border-bottom: 1px solid var(--theme-modal-border, #334155);
 }
 
 .status-monitor-header-main {
@@ -476,7 +476,7 @@ const currentTotalInfo = computed(() => {
 .status-monitor-title {
   font-size: 14px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
   letter-spacing: 0.02em;
 }
 
@@ -486,17 +486,17 @@ const currentTotalInfo = computed(() => {
   justify-content: center;
   width: 28px;
   height: 28px;
-  color: var(--region-modal-text, #94a3b8);
-  background: var(--region-modal-control-bg, transparent);
-  border: 1px solid var(--region-modal-border, #334155);
+  color: var(--theme-modal-text, #94a3b8);
+  background: var(--theme-modal-control-bg, transparent);
+  border: 1px solid var(--theme-modal-border, #334155);
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
 }
 
 .status-monitor-close-button:hover {
-  color: var(--region-modal-text, #e2e8f0);
-  background: var(--region-modal-active-bg, rgba(148, 163, 184, 0.15));
+  color: var(--theme-modal-text, #e2e8f0);
+  background: var(--theme-modal-active-bg, rgba(148, 163, 184, 0.15));
 }
 
 .status-monitor-body {
@@ -515,8 +515,8 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   gap: 6px;
   padding: 4px;
-  background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.55));
-  border: 1px solid var(--region-modal-border, rgba(148, 163, 184, 0.15));
+  background: var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55));
+  border: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.15));
   border-radius: 8px;
 }
 
@@ -525,7 +525,7 @@ const currentTotalInfo = computed(() => {
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, #94a3b8);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   background: transparent;
@@ -536,14 +536,14 @@ const currentTotalInfo = computed(() => {
 }
 
 .status-monitor-tab:hover {
-  color: #e2e8f0;
-  background: var(--region-modal-active-bg, rgba(148, 163, 184, 0.12));
+  color: var(--theme-text-primary, #e2e8f0);
+  background: var(--theme-modal-active-bg, rgba(148, 163, 184, 0.12));
 }
 
 .status-monitor-tab.is-active {
-  color: #e2e8f0;
-  background: var(--region-modal-active-bg, rgba(30, 64, 175, 0.45));
-  border-color: var(--region-modal-accent, rgba(96, 165, 250, 0.5));
+  color: var(--theme-text-primary, #e2e8f0);
+  background: var(--theme-modal-active-bg, rgba(30, 64, 175, 0.45));
+  border-color: var(--theme-modal-accent, rgba(96, 165, 250, 0.5));
 }
 
 .status-monitor-actions {
@@ -556,13 +556,13 @@ const currentTotalInfo = computed(() => {
 .status-monitor-summary-label {
   font-size: 13px;
   font-weight: 500;
-  color: var(--region-modal-text, #e2e8f0);
+  color: var(--theme-modal-text, #e2e8f0);
 }
 
 .status-monitor-summary-value {
   font-size: 13px;
   font-weight: 500;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, #94a3b8);
 }
 
 .status-monitor-footer {
@@ -570,8 +570,8 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   justify-content: flex-end;
   padding: 10px 16px;
-  border-top: 1px solid var(--region-modal-border, rgba(148, 163, 184, 0.15));
-  background: var(--region-modal-bg, rgba(15, 23, 42, 0.98));
+  border-top: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.15));
+  background: var(--theme-modal-bg, rgba(15, 23, 42, 0.98));
 }
 
 .refresh-button {
@@ -582,7 +582,7 @@ const currentTotalInfo = computed(() => {
   height: 20px;
   padding: 0;
   font-size: 12px;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, #94a3b8);
   background: transparent;
   border: none;
   border-radius: 4px;
@@ -591,8 +591,8 @@ const currentTotalInfo = computed(() => {
 }
 
 .refresh-button:hover:not(:disabled) {
-  color: var(--region-modal-text, #e2e8f0);
-  background: var(--region-modal-active-bg, rgba(148, 163, 184, 0.12));
+  color: var(--theme-modal-text, #e2e8f0);
+  background: var(--theme-modal-active-bg, rgba(148, 163, 184, 0.12));
 }
 
 .refresh-button:disabled {
@@ -611,24 +611,24 @@ const currentTotalInfo = computed(() => {
 }
 
 .status-monitor-feedback.is-error {
-  color: #fecaca;
-  background: rgba(127, 29, 29, 0.35);
-  border: 1px solid rgba(248, 113, 113, 0.35);
+  color: var(--theme-text-danger, #fecaca);
+  background: var(--theme-surface-danger, rgba(127, 29, 29, 0.35));
+  border: 1px solid color-mix(in srgb, var(--theme-status-danger, #fca5a5) 35%, transparent);
 }
 
 .retry-button {
   padding: 4px 8px;
   font-size: 11px;
   font-weight: 500;
-  color: #fecaca;
-  background: var(--region-modal-active-bg, rgba(248, 113, 113, 0.2));
-  border: 1px solid var(--region-modal-accent, rgba(248, 113, 113, 0.45));
+  color: var(--theme-text-danger, #fecaca);
+  background: var(--theme-surface-danger-soft, rgba(248, 113, 113, 0.2));
+  border: 1px solid color-mix(in srgb, var(--theme-status-danger, #fca5a5) 45%, transparent);
   border-radius: 5px;
   cursor: pointer;
 }
 
 .retry-button:hover {
-  background: rgba(248, 113, 113, 0.3);
+  background: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 30%, transparent);
 }
 
 .status-monitor-content {
@@ -649,8 +649,8 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: var(--region-modal-control-bg, rgba(30, 41, 59, 0.55));
-  border: 1px solid var(--region-modal-border, rgba(148, 163, 184, 0.12));
+  background: var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55));
+  border: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12));
   border-radius: 8px;
 }
 
@@ -670,7 +670,7 @@ const currentTotalInfo = computed(() => {
 .status-monitor-name {
   font-size: 13px;
   font-weight: 500;
-  color: #e2e8f0;
+  color: var(--theme-text-primary, #e2e8f0);
   word-break: break-all;
   overflow-wrap: anywhere;
 }
@@ -684,16 +684,16 @@ const currentTotalInfo = computed(() => {
 
 .status-monitor-meta {
   font-size: 12px;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, #94a3b8);
 }
 
 .status-monitor-meta.is-error {
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
 }
 
 .status-monitor-error {
   font-size: 11px;
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
   max-width: 280px;
   text-align: right;
   overflow: hidden;
@@ -719,7 +719,7 @@ const currentTotalInfo = computed(() => {
 .toggle-track {
   width: 36px;
   height: 20px;
-  background: var(--region-modal-border, #334155);
+  background: var(--theme-modal-border, #334155);
   border-radius: 10px;
   position: relative;
   transition: background 0.2s;
@@ -732,7 +732,7 @@ const currentTotalInfo = computed(() => {
   left: 2px;
   width: 16px;
   height: 16px;
-  background: #94a3b8;
+  background: var(--theme-status-neutral, #94a3b8);
   border-radius: 50%;
   transition:
     transform 0.2s,
@@ -740,11 +740,11 @@ const currentTotalInfo = computed(() => {
 }
 
 .toggle-input:checked + .toggle-track {
-  background: var(--region-modal-accent, #3b82f6);
+  background: var(--theme-modal-accent, #3b82f6);
 }
 
 .toggle-input:checked + .toggle-track::after {
-  background: #ffffff;
+  background: var(--theme-text-inverse, #ffffff);
   transform: translateX(16px);
 }
 
@@ -756,13 +756,13 @@ const currentTotalInfo = computed(() => {
 .status-monitor-summary {
   font-size: 12px;
   font-weight: 500;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, #94a3b8);
 }
 
 .status-monitor-empty {
   padding: 32px 16px;
   font-size: 13px;
-  color: var(--region-modal-text-muted, #94a3b8);
+  color: var(--theme-modal-text-muted, #94a3b8);
   text-align: center;
 }
 
@@ -776,18 +776,18 @@ const currentTotalInfo = computed(() => {
 }
 
 .status-dot-success {
-  background: #86efac;
+  background: var(--theme-status-success, #86efac);
 }
 
 .status-dot-error {
-  background: #fca5a5;
+  background: var(--theme-status-danger, #fca5a5);
 }
 
 .status-dot-warning {
-  background: #fcd34d;
+  background: var(--theme-status-warning, #fcd34d);
 }
 
 .status-dot-muted {
-  background: #94a3b8;
+  background: var(--theme-status-neutral, #94a3b8);
 }
 </style>

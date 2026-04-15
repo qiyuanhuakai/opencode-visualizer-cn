@@ -89,24 +89,24 @@ function priorityLabel(priority: string): string {
   align-items: center;
   justify-content: space-between;
   padding: 10px 10px 8px;
-  border-bottom: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
+  border-bottom: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.28));
 }
 
 .todo-title {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: var(--region-side-text, #e2e8f0);
+  color: var(--theme-side-text, #e2e8f0);
 }
 
 .todo-count {
   font-size: 11px;
-  color: var(--region-side-text-muted, #94a3b8);
+  color: var(--theme-side-text-muted, #94a3b8);
 }
 
 .todo-empty {
   margin: auto;
-  color: var(--region-side-text-muted, rgba(148, 163, 184, 0.9));
+  color: var(--theme-side-text-muted, rgba(148, 163, 184, 0.9));
   font-size: 12px;
 }
 
@@ -121,9 +121,9 @@ function priorityLabel(priority: string): string {
 }
 
 .todo-group {
-  border: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.55));
+  border: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.55));
   border-radius: 8px;
-  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.6));
+  background: var(--theme-side-control-bg, rgba(15, 23, 42, 0.6));
 }
 
 .todo-group-header {
@@ -131,7 +131,7 @@ function priorityLabel(priority: string): string {
   align-items: center;
   gap: 6px;
   padding: 7px 8px;
-  border-bottom: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.42));
+  border-bottom: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.42));
 }
 
 .todo-group-title {
@@ -141,22 +141,22 @@ function priorityLabel(priority: string): string {
   white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
-  color: var(--region-side-text, #e2e8f0);
+  color: var(--theme-side-text, #e2e8f0);
 }
 
 .todo-badge {
   margin-left: auto;
   padding: 1px 5px;
   border-radius: 999px;
-  border: 1px solid var(--region-side-accent, rgba(59, 130, 246, 0.5));
-  color: var(--region-side-active-text, #93c5fd);
-  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.25));
+  border: 1px solid var(--theme-side-accent, rgba(59, 130, 246, 0.5));
+  color: var(--theme-side-active-text, #93c5fd);
+  background: var(--theme-side-active-bg, rgba(30, 64, 175, 0.25));
   font-size: 10px;
 }
 
 .todo-error {
   padding: 8px;
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
   font-size: 11px;
 }
 
@@ -174,25 +174,25 @@ function priorityLabel(priority: string): string {
   align-items: flex-start;
   gap: 6px;
   font-size: 12px;
-  color: var(--region-side-text, #dbeafe);
+  color: var(--theme-side-text, #dbeafe);
 }
 
 .todo-status {
   width: 14px;
   text-align: center;
-  color: var(--region-side-text, #e2e8f0);
+  color: var(--theme-side-text, #e2e8f0);
 }
 
 .todo-item.is-completed .todo-status {
-  color: #86efac;
+  color: var(--theme-status-success, #86efac);
 }
 
 .todo-item.is-in_progress .todo-status {
-  color: #fcd34d;
+  color: var(--theme-status-warning, #fcd34d);
 }
 
 .todo-item.is-cancelled .todo-status {
-  color: #fca5a5;
+  color: var(--theme-status-danger, #fca5a5);
 }
 
 .todo-text {
@@ -206,24 +206,24 @@ function priorityLabel(priority: string): string {
   text-transform: uppercase;
   font-size: 9px;
   letter-spacing: 0.07em;
-  color: var(--region-side-text-muted, #cbd5e1);
-  border: 1px solid var(--region-side-border, rgba(148, 163, 184, 0.45));
+  color: var(--theme-side-text-muted, #cbd5e1);
+  border: 1px solid var(--theme-side-border, rgba(148, 163, 184, 0.45));
   border-radius: 999px;
   padding: 2px 5px;
 }
 
 .todo-priority.is-high {
-  color: #fecaca;
-  border-color: rgba(248, 113, 113, 0.6);
+  color: var(--theme-text-danger, #fecaca);
+  border-color: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 60%, transparent);
 }
 
 .todo-priority.is-medium {
-  color: #fde68a;
-  border-color: rgba(250, 204, 21, 0.6);
+  color: var(--theme-text-warning, #fde68a);
+  border-color: color-mix(in srgb, var(--theme-status-warning, #fcd34d) 60%, transparent);
 }
 
 .todo-priority.is-low {
-  color: #86efac;
-  border-color: rgba(74, 222, 128, 0.6);
+  color: var(--theme-text-success, #86efac);
+  border-color: color-mix(in srgb, var(--theme-status-success, #86efac) 60%, transparent);
 }
 </style>

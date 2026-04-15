@@ -1,5 +1,6 @@
 import { reactive, computed, markRaw, onUnmounted, type Component } from 'vue';
 import { renderWorkerHtml } from '../utils/workerRenderer';
+import { DEFAULT_SYNTAX_THEME } from '../utils/themeTokens';
 import { useI18n } from '../i18n/useI18n';
 
 export interface FloatingWindowEntry {
@@ -240,7 +241,7 @@ export function useFloatingWindows() {
           id: nextRenderId(),
           code: merged.content,
           lang: merged.lang,
-          theme: 'github-dark',
+          theme: DEFAULT_SYNTAX_THEME,
           gutterMode: variantToGutterMode(merged.variant),
           lineOffset: merged.lineOffset,
           lineLimit: merged.lineLimit,
@@ -328,7 +329,7 @@ export function useFloatingWindows() {
         id: nextRenderId(),
         code: text,
         lang,
-        theme: 'github-dark',
+        theme: DEFAULT_SYNTAX_THEME,
         gutterMode: variantToGutterMode(entry.variant),
         copyButtonLabel: t('render.copyCode'),
         copiedLabel: t('render.copied'),
@@ -352,7 +353,7 @@ export function useFloatingWindows() {
         id: nextRenderId(),
         code: newContent,
         lang: lang || entry.lang!,
-        theme: 'github-dark',
+        theme: DEFAULT_SYNTAX_THEME,
         gutterMode: variantToGutterMode(entry.variant),
         copyButtonLabel: t('render.copyCode'),
         copiedLabel: t('render.copied'),

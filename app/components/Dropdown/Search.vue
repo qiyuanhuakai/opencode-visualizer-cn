@@ -68,22 +68,22 @@ function onKeydown(e: KeyboardEvent) {
 .ui-dropdown-search-input {
   flex: 1;
   min-width: 0;
-  border: 1px solid var(--ui-dropdown-border, var(--region-top-dropdown-border, #334155));
+  border: 1px solid var(--ui-dropdown-border, var(--theme-border-default, #334155));
   border-radius: 5px;
   padding: 4px 10px;
-  background: var(--ui-dropdown-control-bg, var(--region-top-dropdown-control-bg, rgba(30, 41, 59, 0.55)));
-  color: var(--ui-dropdown-text, var(--region-top-dropdown-text, #e2e8f0));
+  background: var(--ui-dropdown-control-bg, var(--theme-surface-panel-muted, rgba(30, 41, 59, 0.55)));
+  color: var(--ui-dropdown-text, var(--theme-text-primary, #e2e8f0));
   outline: none;
   box-sizing: border-box;
   font-size: 12px;
 }
 
 .ui-dropdown-search-input:focus {
-  border-color: var(--ui-dropdown-accent, var(--region-top-dropdown-accent, #60a5fa));
+  border-color: var(--ui-dropdown-accent, var(--theme-border-accent, #60a5fa));
 }
 
 .ui-dropdown-search-input::placeholder {
-  color: var(--ui-dropdown-text-muted, var(--region-top-dropdown-text-muted, #64748b));
+  color: var(--ui-dropdown-text-muted, var(--theme-text-muted, #64748b));
   opacity: 1;
 }
 </style>
