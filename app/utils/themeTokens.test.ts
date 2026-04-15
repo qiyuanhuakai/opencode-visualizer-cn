@@ -16,7 +16,7 @@ describe('theme token bridge', () => {
   it('maps legacy region theme presets into semantic token overrides', () => {
     const overrides = regionThemeToSemanticOverrides(OCEAN_PRESET);
     expect(overrides['surface-panel']).toBe('#1a1a2e');
-    expect(overrides['surface-page']).toBe('#08101f');
+    expect(overrides['surface-page']).toBe('#b8c9d8');
     expect(overrides['text-primary']).toBe('#eaf6ff');
     expect(overrides['accent-primary']).toBe('#4cc9f0');
     expect(overrides['surface-overlay']).toBe('color-mix(in srgb, #006494 55%, transparent)');
@@ -38,7 +38,7 @@ describe('theme token bridge', () => {
     expect(regionTheme?.regions.topPanel.bg).toBe('#1a1a2e');
     expect(regionTheme?.regions.sidePanel.bg).toBe('#102542');
     expect(regionTheme?.regions.outputPanel.bg).toBe('#13293d');
-    expect(regionTheme?.regions.pageBackground.bg).toBe('#08101f');
+    expect(regionTheme?.regions.pageBackground.bg).toBe('#b8c9d8');
     expect(regionTheme?.regions.modalPanel.accent).toBe('#76e4f7');
   });
 
@@ -54,6 +54,8 @@ describe('theme token bridge', () => {
       'surface-panel': '#123456',
     });
     expect(snapshot['surface-panel']).toBe('#123456');
+    expect(snapshot['surface-page']).toBe('#818182');
+    expect(snapshot['surface-page-elevated']).toBe('#909092');
     expect(snapshot['text-primary']).toBe('#e2e8f0');
   });
 

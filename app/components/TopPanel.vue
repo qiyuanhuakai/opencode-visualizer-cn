@@ -1140,11 +1140,13 @@ function handleOpenDirectory(close: () => void) {
 .tree-menu {
   display: flex;
   flex-direction: column;
-   background: var(--theme-top-dropdown-bg, transparent);
-   --theme-top-border: var(--theme-top-dropdown-border, #334155);
-   --theme-top-control-bg: var(--theme-top-dropdown-control-bg, #0b1320);
-   --theme-top-text: var(--theme-top-dropdown-text, #e2e8f0);
-   --theme-top-bg: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.92));
+  min-height: 0;
+  flex: 1 1 auto;
+  background: var(--theme-top-dropdown-bg, transparent);
+  --theme-top-border: var(--theme-top-dropdown-border, #334155);
+  --theme-top-control-bg: var(--theme-top-dropdown-control-bg, #0b1320);
+  --theme-top-text: var(--theme-top-dropdown-text, #e2e8f0);
+  --theme-top-bg: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.92));
 }
 
 .tree-search {
@@ -1751,6 +1753,7 @@ function handleOpenDirectory(close: () => void) {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .selected-label {

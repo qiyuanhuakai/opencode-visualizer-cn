@@ -422,6 +422,8 @@ const messages: LocaleMessages = {
       schemaLink: 'Open theme JSON schema',
       presetNames: {
         default: 'Default',
+        ocean: 'Ocean',
+        forest: 'Forest',
       },
       presetBadges: {
         balanced: 'Balanced',

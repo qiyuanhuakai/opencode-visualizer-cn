@@ -6898,6 +6898,20 @@ onBeforeUnmount(() => {
 });
 </script>
 
+<style>
+html,
+body,
+#app {
+  min-height: 100%;
+  background: var(--theme-page-bg, var(--theme-surface-page));
+  color: var(--theme-page-text, var(--theme-text-primary, #e2e8f0));
+}
+
+body {
+  margin: 0;
+}
+</style>
+
 <style scoped>
 .app {
   position: relative;
@@ -6910,6 +6924,8 @@ onBeforeUnmount(() => {
   gap: 10px;
   padding: 12px 12px;
   box-sizing: border-box;
+  background: var(--theme-page-bg, var(--theme-surface-page));
+  color: var(--theme-page-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .app-dock-panel {
