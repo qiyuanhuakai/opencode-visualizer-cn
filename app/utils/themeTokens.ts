@@ -166,8 +166,8 @@ export type ThemeStorageV2 = {
 };
 
 const DEFAULT_BASE_SEMANTIC_TOKENS: Record<BaseSemanticThemeToken, string> = {
-  'surface-page': '#07111f',
-  'surface-page-elevated': 'rgba(15, 23, 42, 0.92)',
+  'surface-page': '#818182',
+  'surface-page-elevated': '#909092',
   'surface-panel': 'rgba(15, 23, 42, 0.92)',
   'surface-panel-muted': 'rgba(11, 19, 32, 0.92)',
   'surface-panel-elevated': 'rgba(15, 23, 42, 0.98)',

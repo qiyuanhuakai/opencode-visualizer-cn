@@ -86,6 +86,6 @@ describe('themeRegistry', () => {
     });
     expect(external.id).toBe('ocean');
     expect(external.swatches).toHaveLength(4);
-    expect(external.regions.pageBackground.bg).toBe('#08101f');
+    expect(external.regions.pageBackground.bg).toBe('#b8c9d8');
   });
 });

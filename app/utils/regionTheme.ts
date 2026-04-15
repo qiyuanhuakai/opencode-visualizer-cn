@@ -114,7 +114,7 @@ export const REGION_THEME_EDITOR_FALLBACKS: Required<RegionColors> = {
 
 export const OCEAN_PRESET: RegionThemeConfig = {
   name: 'ocean',
-  label: 'Ocean',
+  label: '深海',
   regions: {
     topPanel: {
       bg: '#1a1a2e',
@@ -177,12 +177,12 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       textMuted: '#7aa2c0',
     },
     pageBackground: {
-      bg: '#08101f',
+      bg: '#b8c9d8',
       text: '#eaf6ff',
       border: '#274c77',
       accent: '#4cc9f0',
-      controlBg: '#16213e',
-      activeBg: '#0f3460',
+      controlBg: '#97b1c8',
+      activeBg: '#6f94b9',
       activeText: '#ffffff',
       textMuted: '#7aa2c0',
     },
@@ -201,7 +201,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
 
 export const FOREST_PRESET: RegionThemeConfig = {
   name: 'forest',
-  label: 'Forest',
+  label: '林境',
   regions: {
     topPanel: {
       bg: '#1b2f24',
@@ -264,12 +264,12 @@ export const FOREST_PRESET: RegionThemeConfig = {
       textMuted: '#7d9e7d',
     },
     pageBackground: {
-      bg: '#0a1810',
+      bg: '#bcc8b8',
       text: '#edf7ee',
       border: '#355e3b',
       accent: '#7fb069',
-      controlBg: '#243b2f',
-      activeBg: '#3a5a40',
+      controlBg: '#a1b19d',
+      activeBg: '#7d9179',
       activeText: '#ffffff',
       textMuted: '#7d9e7d',
     },

@@ -422,6 +422,8 @@ const messages: LocaleMessages = {
       schemaLink: '打开主题 JSON Schema',
       presetNames: {
         default: '默认',
+        ocean: '深海',
+        forest: '林境',
       },
       presetBadges: {
         balanced: '均衡',

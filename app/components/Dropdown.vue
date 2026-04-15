@@ -483,8 +483,35 @@ defineExpose({ moveHighlight, selectHighlighted, updateSearch, clearHighlight })
   padding: 6px;
   scroll-padding: 6px;
   box-shadow: 0 12px 24px rgba(2, 6, 23, 0.45);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--ui-dropdown-border, var(--theme-border-default, #334155)) 88%, transparent)
+    color-mix(in srgb, var(--ui-dropdown-bg, var(--theme-surface-panel-elevated, rgba(2, 6, 23, 0.98))) 92%, transparent);
   z-index: 120;
+}
+
+.ui-dropdown-menu::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.ui-dropdown-menu::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--ui-dropdown-bg, var(--theme-surface-panel-elevated, rgba(2, 6, 23, 0.98))) 94%, transparent);
+  border-radius: 999px;
+}
+
+.ui-dropdown-menu::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--ui-dropdown-border, var(--theme-border-default, #334155)) 88%, transparent);
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--ui-dropdown-bg, var(--theme-surface-panel-elevated, rgba(2, 6, 23, 0.98))) 94%, transparent);
+}
+
+.ui-dropdown-menu::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--ui-dropdown-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.45))) 78%, transparent);
 }
 
 .ui-dropdown-menu:not(.is-open) {
