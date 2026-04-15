@@ -636,9 +636,9 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   margin-top: 6px;
   padding: 4px 8px;
   border-radius: 6px;
-  background: rgba(127, 29, 29, 0.3);
-  border: 1px solid rgba(248, 113, 113, 0.4);
-  color: #fca5a5;
+  background: var(--theme-surface-danger, rgba(127, 29, 29, 0.3));
+  border: 1px solid color-mix(in srgb, var(--theme-status-danger, #fca5a5) 40%, transparent);
+  color: var(--theme-text-danger, #fca5a5);
   font-size: 11px;
   line-height: 1.3;
 }
@@ -646,7 +646,7 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 .ib-error-icon {
   flex-shrink: 0;
   font-size: 13px;
-  color: #f87171;
+  color: var(--theme-status-danger, #f87171);
 }
 
 .ib-error-text {
@@ -677,9 +677,9 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   width: 100%;
   max-height: 180px;
   border-radius: 8px;
-  border: 1px solid #1e293b;
+  border: 1px solid var(--theme-chat-border, var(--theme-border-default, #1e293b));
   object-fit: cover;
-  background: #0b1320;
+  background: var(--theme-chat-control-bg, var(--theme-surface-panel-muted, #0b1320));
 }
 
 .output-entry-attachment.clickable {

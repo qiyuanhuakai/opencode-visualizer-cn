@@ -533,7 +533,7 @@ function cleanDirectoryPath(p: string): string {
 }
 
 .modal-backdrop::backdrop {
-  background: rgba(2, 6, 23, 0.65);
+  background: var(--theme-surface-overlay, rgba(2, 6, 23, 0.65));
 }
 
 .modal {
@@ -542,11 +542,11 @@ function cleanDirectoryPath(p: string): string {
   display: flex;
   flex-direction: column;
   padding: 12px;
-  background: rgba(15, 23, 42, 0.98);
-  border: 1px solid #334155;
+  background: var(--theme-modal-bg, rgba(15, 23, 42, 0.98));
+  border: 1px solid var(--theme-modal-border, #334155);
   border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
-  color: #e2e8f0;
+  box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
+  color: var(--theme-modal-text, #e2e8f0);
   font-family: var(--app-monospace-font-family);
 }
 
@@ -555,6 +555,14 @@ function cleanDirectoryPath(p: string): string {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  --ui-dropdown-bg: var(--theme-modal-bg, rgba(15, 23, 42, 0.98));
+  --ui-dropdown-border: var(--theme-modal-border, #334155);
+  --ui-dropdown-text: var(--theme-modal-text, #e2e8f0);
+  --ui-dropdown-text-muted: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  --ui-dropdown-control-bg: var(--theme-modal-control-bg, #0b1320);
+  --ui-dropdown-hover-bg: var(--theme-modal-active-bg, rgba(30, 41, 59, 0.8));
+  --ui-dropdown-active-bg: var(--theme-modal-active-bg, rgba(30, 64, 175, 0.2));
+  --ui-dropdown-accent: var(--theme-modal-accent, rgba(96, 165, 250, 0.45));
 }
 
 .modal-header {
@@ -578,9 +586,9 @@ function cleanDirectoryPath(p: string): string {
 .path-input {
   flex: 1;
   min-width: 0;
-  background: #0b1320;
-  color: #e2e8f0;
-  border: 1px solid #334155;
+  background: var(--theme-modal-control-bg, #0b1320);
+  color: var(--theme-modal-text, #e2e8f0);
+  border: 1px solid var(--theme-modal-border, #334155);
   border-radius: 8px;
   padding: 6px 8px;
   font-size: 12px;
@@ -590,14 +598,14 @@ function cleanDirectoryPath(p: string): string {
 }
 
 .path-input:focus {
-  border-color: #60a5fa;
+  border-color: var(--theme-modal-accent, #60a5fa);
 }
 
 .open-button {
   flex-shrink: 0;
-  background: #1e40af;
-  color: #e2e8f0;
-  border: 1px solid #2563eb;
+  background: color-mix(in srgb, var(--theme-modal-accent, #60a5fa) 72%, transparent);
+  color: var(--theme-modal-active-text, var(--theme-text-inverse, #e2e8f0));
+  border: 1px solid color-mix(in srgb, var(--theme-modal-accent, #60a5fa) 82%, transparent);
   border-radius: 8px;
   padding: 6px 16px;
   font-size: 12px;
@@ -606,7 +614,7 @@ function cleanDirectoryPath(p: string): string {
 }
 
 .open-button:hover:not(:disabled) {
-  background: #2563eb;
+  background: color-mix(in srgb, var(--theme-modal-accent, #60a5fa) 88%, transparent);
 }
 
 .open-button:disabled {
@@ -630,7 +638,7 @@ function cleanDirectoryPath(p: string): string {
 
 .error-text {
   font-size: 12px;
-  color: #fecaca;
+  color: var(--theme-text-danger, #fecaca);
 }
 
 .modal-close-button {
@@ -639,7 +647,7 @@ function cleanDirectoryPath(p: string): string {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border: 1px solid #334155;
+  border: 1px solid var(--theme-modal-border, #334155);
   border-radius: 6px;
   background: transparent;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
@@ -647,7 +655,7 @@ function cleanDirectoryPath(p: string): string {
 }
 
 .modal-close-button:hover {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--theme-modal-active-bg, #1e293b);
+  color: var(--theme-modal-text, #e2e8f0);
 }
 </style>

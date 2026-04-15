@@ -27,7 +27,7 @@ const { t } = useI18n();
   font-family: var(--app-monospace-font-family);
   font-size: 13px;
   line-height: 1.5;
-  color: #94a3b8;
+  color: var(--theme-text-muted, #94a3b8);
   padding: 4px;
   white-space: pre-wrap;
 }

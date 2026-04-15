@@ -1169,16 +1169,25 @@ function onRowDoubleClick(row: VirtualRow) {
   justify-content: center;
   width: 22px;
   height: 22px;
-   border: 1px solid var(--theme-side-border, var(--theme-border-default, var(--color-slate-700)));
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--theme-side-border, var(--theme-border-default, var(--color-slate-700)));
   border-radius: 6px;
   padding: 0;
-   background: var(--theme-side-control-bg, var(--theme-surface-panel-muted, var(--color-slate-950)));
-   color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-400)));
+  background: var(--theme-side-control-bg, var(--theme-surface-panel-muted, var(--color-slate-950)));
+  color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-400)));
   cursor: pointer;
+  box-shadow: none;
+  outline: none;
 }
 
 .tree-branch-action-btn:hover {
-   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
+  background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
+}
+
+.tree-branch-action-btn:focus-visible,
+.tree-branch-fetch-btn:focus-visible {
+  border-color: var(--theme-side-accent, var(--theme-accent-primary, var(--color-blue-400)));
 }
 
 .tree-branch-merge-btn {
@@ -1198,12 +1207,15 @@ function onRowDoubleClick(row: VirtualRow) {
   height: 18px;
   border: 0;
   background: transparent;
-   color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-500)));
+  color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-500)));
+  border-radius: 4px;
+  box-shadow: none;
+  outline: none;
 }
 
 .tree-branch-fetch-btn:hover {
-   color: var(--theme-side-text, var(--theme-text-secondary, var(--color-slate-300)));
-   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
+  color: var(--theme-side-text, var(--theme-text-secondary, var(--color-slate-300)));
+  background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
 }
 
 .tree-branch-action-spacer {

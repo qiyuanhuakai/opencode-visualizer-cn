@@ -264,26 +264,26 @@ function formatMessageTime(value?: number) {
 }
 
 .history-item {
-  border: 1px solid #334155;
+  border: 1px solid color-mix(in srgb, var(--window-color, #3a4150) 35%, var(--floating-border-muted, rgba(90, 100, 120, 0.35)));
   border-radius: 8px;
-  background: #020617;
+  background: color-mix(in srgb, var(--floating-surface-base, #1a1d24) 82%, black);
 }
 
 .history-meta {
   padding: 6px 10px;
-  background: color-mix(in srgb, #60a5fa 12%, #0f172a);
-  border-bottom: 1px solid #1e293b;
+  background: color-mix(in srgb, var(--window-color, #3a4150) 14%, var(--floating-surface-muted, #242832));
+  border-bottom: 1px solid color-mix(in srgb, var(--window-color, #3a4150) 25%, var(--floating-border-muted, #1e293b));
   border-radius: 7px 7px 0 0;
   display: flex;
   gap: 8px;
   align-items: center;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--floating-text-muted, #94a3b8);
 }
 
 .history-index {
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--floating-text, #e2e8f0);
 }
 
 .history-time {
@@ -292,9 +292,9 @@ function formatMessageTime(value?: number) {
 
 .history-agent {
   padding: 2px 6px;
-  background: #1e293b;
+  background: color-mix(in srgb, var(--floating-surface-strong, #323a48) 78%, transparent);
   border-radius: 4px;
-  color: #cbd5e1;
+  color: var(--floating-text-secondary, #cbd5e1);
 }
 
 .history-content-wrapper {
@@ -384,7 +384,7 @@ function formatMessageTime(value?: number) {
 .history-question-header {
   font-size: 11px;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--floating-text-muted, #94a3b8);
   text-transform: uppercase;
   letter-spacing: 0.3px;
 }
@@ -392,7 +392,7 @@ function formatMessageTime(value?: number) {
 .history-question-text {
   font-size: 13px;
   line-height: 1.4;
-  color: #e2e8f0;
+  color: var(--floating-text, #e2e8f0);
 }
 
 .history-question-options {
@@ -408,13 +408,13 @@ function formatMessageTime(value?: number) {
   align-items: baseline;
   font-size: 12px;
   line-height: 1.4;
-  color: #94a3b8;
+  color: var(--floating-text-muted, #94a3b8);
   padding: 2px 4px;
   border-radius: 3px;
 }
 
 .history-question-option.is-selected {
-  color: #e2e8f0;
+  color: var(--floating-text, #e2e8f0);
   background: rgba(52, 211, 153, 0.1);
 }
 
@@ -428,11 +428,11 @@ function formatMessageTime(value?: number) {
 }
 
 .option-desc {
-  color: #64748b;
+  color: var(--floating-text-soft, #64748b);
 }
 
 .history-question-option.is-selected .option-desc {
-  color: #94a3b8;
+  color: var(--floating-text-muted, #94a3b8);
 }
 
 .history-question-custom {
@@ -443,25 +443,25 @@ function formatMessageTime(value?: number) {
   border-radius: 2px;
   font-size: 12px;
   line-height: 1.4;
-  color: #e2e8f0;
+  color: var(--floating-text, #e2e8f0);
 }
 
 .history-item-tool {
   cursor: pointer;
-  border-color: color-mix(in srgb, var(--tool-color, #64748b) 40%, #1e293b);
+  border-color: color-mix(in srgb, var(--tool-color, #64748b) 40%, var(--floating-border-muted, #1e293b));
   transition:
     border-color 0.15s,
     background 0.15s;
 }
 
 .history-item-tool:hover {
-  border-color: color-mix(in srgb, var(--tool-color, #64748b) 60%, #1e293b);
-  background: color-mix(in srgb, var(--tool-color, #64748b) 6%, #020617);
+  border-color: color-mix(in srgb, var(--tool-color, #64748b) 60%, var(--floating-border-muted, #1e293b));
+  background: color-mix(in srgb, var(--tool-color, #64748b) 6%, var(--floating-surface-base, #020617));
 }
 
 .history-item-tool .history-meta {
-  background: color-mix(in srgb, var(--tool-color, #64748b) 18%, rgba(15, 23, 42, 0.95));
-  border-bottom-color: color-mix(in srgb, var(--tool-color, #64748b) 25%, #1e293b);
+  background: color-mix(in srgb, var(--tool-color, #64748b) 18%, var(--floating-surface-muted, rgba(15, 23, 42, 0.95)));
+  border-bottom-color: color-mix(in srgb, var(--tool-color, #64748b) 25%, var(--floating-border-muted, #1e293b));
 }
 
 .history-tool-badge {
@@ -470,8 +470,8 @@ function formatMessageTime(value?: number) {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  color: #e2e8f0;
-  background: #334155;
+  color: var(--floating-text, #e2e8f0);
+  background: color-mix(in srgb, var(--floating-surface-strong, #334155) 82%, transparent);
 }
 
 .history-tool-badge.history-tool-bash {
@@ -517,7 +517,7 @@ function formatMessageTime(value?: number) {
   font-family: var(--app-monospace-font-family);
   font-size: 12px;
   line-height: 1.4;
-  color: #94a3b8;
+  color: var(--floating-text-muted, #94a3b8);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

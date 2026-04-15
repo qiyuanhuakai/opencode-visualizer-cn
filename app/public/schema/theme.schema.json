@@ -59,6 +59,7 @@
         "outputPanel",
         "topDropdown",
         "modalPanel",
+        "loginScreen",
         "pageBackground",
         "chatCard"
       ],
@@ -70,6 +71,7 @@
         "outputPanel": { "$ref": "#/$defs/regionColors" },
         "topDropdown": { "$ref": "#/$defs/regionColors" },
         "modalPanel": { "$ref": "#/$defs/regionColors" },
+        "loginScreen": { "$ref": "#/$defs/regionColors" },
         "pageBackground": { "$ref": "#/$defs/regionColors" },
         "chatCard": { "$ref": "#/$defs/regionColors" }
       }

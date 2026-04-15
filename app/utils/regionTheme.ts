@@ -5,6 +5,7 @@ export type RegionName =
   | 'outputPanel'
   | 'topDropdown'
   | 'modalPanel'
+  | 'loginScreen'
   | 'pageBackground'
   | 'chatCard';
 
@@ -32,6 +33,7 @@ export const REGION_NAMES: RegionName[] = [
   'outputPanel',
   'topDropdown',
   'modalPanel',
+  'loginScreen',
   'pageBackground',
   'chatCard',
 ];
@@ -54,6 +56,7 @@ const REGION_SELECTORS: Record<RegionName, string> = {
   outputPanel: '.output-panel',
   topDropdown: '.top-center, .tree-menu',
   modalPanel: '.modal, .provider-manager-modal, .status-monitor-popover',
+  loginScreen: '.app-loading-view',
   pageBackground: 'html, body, #app',
   chatCard: '.thread-block',
 };
@@ -65,6 +68,7 @@ export const REGION_VAR_PREFIXES: Record<RegionName, string> = {
   outputPanel: 'output',
   topDropdown: 'top-dropdown',
   modalPanel: 'modal',
+  loginScreen: 'login',
   pageBackground: 'page',
   chatCard: 'chat',
 };
@@ -96,6 +100,7 @@ export const DEFAULT_REGION_THEME: RegionThemeConfig = {
     outputPanel: createEmptyRegionColors(),
     topDropdown: createEmptyRegionColors(),
     modalPanel: createEmptyRegionColors(),
+    loginScreen: createEmptyRegionColors(),
     pageBackground: createEmptyRegionColors(),
     chatCard: createEmptyRegionColors(),
   },
@@ -175,6 +180,16 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       activeBg: '#006494',
       activeText: '#ffffff',
       textMuted: '#7aa2c0',
+    },
+    loginScreen: {
+      bg: '#0f2033',
+      text: '#eaf6ff',
+      border: '#29506f',
+      accent: '#4cc9f0',
+      controlBg: '#13283f',
+      activeBg: '#1d4f73',
+      activeText: '#ffffff',
+      textMuted: '#8fb8d0',
     },
     pageBackground: {
       bg: '#b8c9d8',
@@ -263,6 +278,16 @@ export const FOREST_PRESET: RegionThemeConfig = {
       activeText: '#ffffff',
       textMuted: '#7d9e7d',
     },
+    loginScreen: {
+      bg: '#29432f',
+      text: '#edf7ee',
+      border: '#4c6f49',
+      accent: '#a7c957',
+      controlBg: '#35523d',
+      activeBg: '#4f772d',
+      activeText: '#ffffff',
+      textMuted: '#9cb49c',
+    },
     pageBackground: {
       bg: '#bcc8b8',
       text: '#edf7ee',
@@ -347,6 +372,16 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       accent: '#ffc2dc',
       controlBg: '#74545e',
       activeBg: 'rgba(195, 145, 165, 0.4)',
+      activeText: '#ffffff',
+      textMuted: '#d4b8c8',
+    },
+    loginScreen: {
+      bg: 'rgba(104, 78, 90, 0.92)',
+      text: '#fff8fb',
+      border: '#cca0b0',
+      accent: '#ffb7d5',
+      controlBg: '#7f6070',
+      activeBg: 'rgba(205, 155, 175, 0.42)',
       activeText: '#ffffff',
       textMuted: '#d4b8c8',
     },

@@ -94,26 +94,26 @@ function priorityLabel(priority: string): string {
   min-height: 0;
   display: flex;
   flex-direction: row;
-  border: 1px solid #334155;
+  border: 1px solid var(--theme-side-border, #334155);
   border-radius: 12px;
   background-clip: padding-box;
-  background: rgba(12, 18, 30, 0.95);
-  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.35);
+  background: var(--theme-side-bg, rgba(12, 18, 30, 0.95));
+  box-shadow: var(--theme-shadow-panel, 0 10px 24px rgba(2, 6, 23, 0.35));
   overflow: hidden;
 }
 
 .todo-toggle {
   width: 30px;
   border: 0;
-  border-right: 1px solid rgba(100, 116, 139, 0.45);
-  background: rgba(30, 41, 59, 0.92);
-  color: #cbd5e1;
+  border-right: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.45));
+  background: var(--theme-side-control-bg, rgba(30, 41, 59, 0.92));
+  color: var(--theme-side-text, #cbd5e1);
   cursor: pointer;
   font-size: 14px;
 }
 
 .todo-toggle:hover {
-  background: rgba(51, 65, 85, 0.95);
+  background: var(--theme-side-active-bg, rgba(51, 65, 85, 0.95));
 }
 
 .todo-body {
@@ -129,14 +129,14 @@ function priorityLabel(priority: string): string {
   align-items: center;
   justify-content: space-between;
   padding: 10px 10px 8px;
-  border-bottom: 1px solid rgba(100, 116, 139, 0.28);
+  border-bottom: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.28));
 }
 
 .todo-title {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: #e2e8f0;
+  color: var(--theme-side-text, #e2e8f0);
 }
 
 .todo-count {
@@ -146,7 +146,7 @@ function priorityLabel(priority: string): string {
 
 .todo-empty {
   margin: auto;
-  color: rgba(148, 163, 184, 0.9);
+  color: var(--theme-side-text-muted, rgba(148, 163, 184, 0.9));
   font-size: 12px;
 }
 
@@ -161,9 +161,9 @@ function priorityLabel(priority: string): string {
 }
 
 .todo-group {
-  border: 1px solid rgba(71, 85, 105, 0.55);
+  border: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.55));
   border-radius: 8px;
-  background: rgba(15, 23, 42, 0.6);
+  background: color-mix(in srgb, var(--theme-side-control-bg, rgba(15, 23, 42, 0.6)) 84%, transparent);
 }
 
 .todo-group-header {
@@ -171,7 +171,7 @@ function priorityLabel(priority: string): string {
   align-items: center;
   gap: 6px;
   padding: 7px 8px;
-  border-bottom: 1px solid rgba(71, 85, 105, 0.42);
+  border-bottom: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.42));
 }
 
 .todo-group-title {
@@ -181,22 +181,22 @@ function priorityLabel(priority: string): string {
   white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--theme-side-text, #e2e8f0);
 }
 
 .todo-badge {
   margin-left: auto;
   padding: 1px 5px;
   border-radius: 999px;
-  border: 1px solid rgba(59, 130, 246, 0.5);
-  color: #93c5fd;
-  background: rgba(30, 64, 175, 0.25);
+  border: 1px solid color-mix(in srgb, var(--theme-side-accent, var(--theme-accent-primary, #60a5fa)) 55%, transparent);
+  color: var(--theme-side-active-text, var(--theme-text-info, #93c5fd));
+  background: color-mix(in srgb, var(--theme-side-active-bg, rgba(30, 64, 175, 0.25)) 70%, transparent);
   font-size: 10px;
 }
 
 .todo-error {
   padding: 8px;
-  color: #fca5a5;
+  color: var(--theme-text-danger, #fca5a5);
   font-size: 11px;
 }
 
@@ -214,13 +214,13 @@ function priorityLabel(priority: string): string {
   align-items: flex-start;
   gap: 6px;
   font-size: 12px;
-  color: #dbeafe;
+  color: var(--theme-side-text, #dbeafe);
 }
 
 .todo-status {
   width: 14px;
   text-align: center;
-  color: #e2e8f0;
+  color: var(--theme-side-text, #e2e8f0);
 }
 
 .todo-item.is-completed .todo-status {
@@ -246,8 +246,8 @@ function priorityLabel(priority: string): string {
   text-transform: uppercase;
   font-size: 9px;
   letter-spacing: 0.07em;
-  color: #cbd5e1;
-  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: var(--theme-side-text-muted, #cbd5e1);
+  border: 1px solid var(--theme-side-border, rgba(148, 163, 184, 0.45));
   border-radius: 999px;
   padding: 2px 5px;
 }
@@ -268,7 +268,7 @@ function priorityLabel(priority: string): string {
 }
 
 .todo-panel.is-collapsed {
-  border-color: rgba(100, 116, 139, 0.45);
+  border-color: var(--theme-side-border, rgba(100, 116, 139, 0.45));
 }
 
 .todo-panel.is-collapsed .todo-toggle {

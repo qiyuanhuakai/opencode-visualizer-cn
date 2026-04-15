@@ -1333,10 +1333,10 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button {
-  border: 1px solid var(--ui-icon-action-border);
+  border: 1px solid var(--theme-top-dropdown-border, var(--ui-icon-action-border));
   border-radius: var(--ui-icon-action-radius);
-  background: var(--ui-icon-action-bg);
-  color: var(--theme-text-secondary, #cbd5e1);
+  background: var(--theme-top-dropdown-control-bg, var(--ui-icon-action-bg));
+  color: var(--theme-top-dropdown-text, var(--theme-text-secondary, #cbd5e1));
   font-size: 10px;
   line-height: 1;
   width: var(--ui-icon-action-size);
@@ -1350,7 +1350,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button:hover {
-  background: var(--ui-icon-action-bg-hover);
+  background: var(--theme-top-dropdown-active-bg, var(--ui-icon-action-bg-hover));
 }
 
 .tree-action-button.worktree-settings {

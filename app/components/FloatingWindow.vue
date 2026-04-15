@@ -573,6 +573,19 @@ function onResizeEnd(e: PointerEvent) {
   --win-y: 0px;
   --win-scale-x: 1;
   --win-scale-y: 1;
+  --floating-surface-base: #1a1d24;
+  --floating-surface-muted: rgba(36, 40, 50, 0.95);
+  --floating-surface-subtle: rgba(30, 34, 42, 0.85);
+  --floating-surface-strong: rgba(50, 58, 72, 0.95);
+  --floating-border-muted: rgba(90, 100, 120, 0.35);
+  --floating-border-subtle: rgba(100, 110, 130, 0.5);
+  --floating-border-faint: rgba(255, 255, 255, 0.15);
+  --floating-border-faint-strong: rgba(255, 255, 255, 0.18);
+  --floating-fill-faint: rgba(255, 255, 255, 0.08);
+  --floating-text: #e2e8f0;
+  --floating-text-muted: #94a3b8;
+  --floating-text-soft: #9ca3af;
+  --floating-text-secondary: #cbd5e1;
   position: absolute;
   left: 0;
   top: 0;
@@ -583,14 +596,14 @@ function onResizeEnd(e: PointerEvent) {
   display: flex;
   flex-direction: column;
   max-width: 100vw;
-  background: color-mix(in srgb, var(--window-color, #3a4150) 12%, #1a1d24);
+  background: color-mix(in srgb, var(--window-color, #3a4150) 12%, var(--floating-surface-base));
   border: 1px solid var(--window-color, #3a4150);
   border-color: var(--window-color, #3a4150);
   border-radius: 5px;
   font-family: var(--floating-font-family, monospace);
   font-size: var(--floating-font-size, 14px);
   line-height: var(--floating-line-height, 1.5);
-  color: #e2e8f0;
+  color: var(--floating-text);
   pointer-events: auto;
 }
 
@@ -601,11 +614,11 @@ function onResizeEnd(e: PointerEvent) {
   justify-content: space-between;
   padding: 0 4px;
   font-size: 12px;
-  color: color-mix(in srgb, var(--window-color, #3a4150) 40%, #e2e8f0);
-  background: color-mix(in srgb, var(--window-color, #3a4150) 22%, rgba(36, 40, 50, 0.95));
+  color: color-mix(in srgb, var(--window-color, #3a4150) 40%, var(--floating-text));
+  background: color-mix(in srgb, var(--window-color, #3a4150) 22%, var(--floating-surface-muted));
   border-bottom: 1px solid
-    color-mix(in srgb, var(--window-color, #3a4150) 35%, rgba(90, 100, 120, 0.35));
-  border-bottom-color: color-mix(in srgb, var(--window-color, #3a4150) 35%, rgba(90, 100, 120, 0.35));
+    color-mix(in srgb, var(--window-color, #3a4150) 35%, var(--floating-border-muted));
+  border-bottom-color: color-mix(in srgb, var(--window-color, #3a4150) 35%, var(--floating-border-muted));
   border-radius: 4px 4px 0 0;
   cursor: grab;
   user-select: none;
@@ -628,9 +641,9 @@ function onResizeEnd(e: PointerEvent) {
 }
 
 .titlebar-controls {
-  background: rgba(60, 70, 90, 0.65);
-  border-color: rgba(100, 110, 130, 0.5);
-  color: #e2e8f0;
+  background: color-mix(in srgb, var(--floating-surface-strong) 78%, transparent);
+  border-color: var(--floating-border-subtle);
+  color: var(--floating-text);
 }
 
 .minimize-btn {
@@ -695,9 +708,9 @@ function onResizeEnd(e: PointerEvent) {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(30, 34, 42, 0.85);
-  color: #94a3b8;
+  border: 1px solid var(--floating-border-faint);
+  background: var(--floating-surface-subtle);
+  color: var(--floating-text-muted);
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
@@ -711,8 +724,8 @@ function onResizeEnd(e: PointerEvent) {
 }
 
 .follow-resume-btn:hover {
-  background: rgba(50, 58, 72, 0.95);
-  color: #e2e8f0;
+  background: var(--floating-surface-strong);
+  color: var(--floating-text);
 }
 
 .fade-enter-active,
@@ -752,16 +765,16 @@ function onResizeEnd(e: PointerEvent) {
   border: 1px solid var(--window-color, #3a4150);
   border-top: none;
   border-radius: 0 0 4px 4px;
-  background: rgba(20, 23, 30, 0.96);
+  background: color-mix(in srgb, var(--floating-surface-base) 88%, black);
 }
 
 .fw-search-input {
   flex: 1;
   min-width: 0;
   height: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid var(--floating-border-faint-strong);
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--floating-fill-faint);
   color: inherit;
   font: inherit;
   font-size: 12px;
@@ -778,7 +791,7 @@ function onResizeEnd(e: PointerEvent) {
   min-width: 48px;
   text-align: right;
   font-size: 11px;
-  color: #9ca3af;
+  color: var(--floating-text-soft);
 }
 
 .fw-search-btn {
@@ -790,15 +803,15 @@ function onResizeEnd(e: PointerEvent) {
   border: 1px solid transparent;
   border-radius: 3px;
   background: transparent;
-  color: #cbd5e1;
+  color: var(--floating-text-secondary);
   font-size: 11px;
   cursor: pointer;
   line-height: 1;
 }
 
 .fw-search-btn:hover {
-  border-color: rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--floating-border-faint-strong);
+  background: var(--floating-fill-faint);
 }
 
 .floating-window-resizer {

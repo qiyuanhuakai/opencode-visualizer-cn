@@ -31,17 +31,17 @@
   --ui-chip-font-size: 10px;
   --ui-chip-font-family: var(--app-monospace-font-family);
   --ui-chip-letter-spacing: 0.02em;
-  --ui-chip-border-neutral: rgba(148, 163, 184, 0.65);
-  --ui-chip-border-subtle: rgba(148, 163, 184, 0.5);
-  --ui-chip-bg-neutral: rgba(15, 23, 42, 0.75);
-  --ui-chip-bg-hover: rgba(30, 41, 59, 0.92);
-  --ui-chip-fg-neutral: #bfdbfe;
+  --ui-chip-border-neutral: var(--theme-border-muted, rgba(148, 163, 184, 0.65));
+  --ui-chip-border-subtle: color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.5)) 80%, transparent);
+  --ui-chip-bg-neutral: var(--theme-surface-chip, rgba(15, 23, 42, 0.75));
+  --ui-chip-bg-hover: var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92));
+  --ui-chip-fg-neutral: var(--theme-text-primary, #bfdbfe);
   --ui-action-gap: 8px;
   --ui-icon-action-size: 24px;
   --ui-icon-action-radius: 6px;
-  --ui-icon-action-border: #334155;
-  --ui-icon-action-bg: #111a2c;
-  --ui-icon-action-bg-hover: #1d2a45;
+  --ui-icon-action-border: var(--theme-border-default, #334155);
+  --ui-icon-action-bg: var(--theme-surface-panel-muted, #111a2c);
+  --ui-icon-action-bg-hover: var(--theme-surface-panel-hover, #1d2a45);
 }
 
 /* ── Unified scrollbar ── */

@@ -301,6 +301,16 @@ function createDefaultRegionSemanticTokens(
     activeText: 'text-inverse',
     textMuted: 'text-muted',
   });
+  assignRegion('loginScreen', {
+    bg: 'surface-panel-elevated',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'accent-primary',
+    controlBg: 'surface-panel-muted',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
   assignRegion('pageBackground', {
     bg: 'surface-page',
     text: 'text-primary',

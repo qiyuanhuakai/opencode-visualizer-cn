@@ -23,6 +23,7 @@ const externalThemeFixture = {
     outputPanel: { bg: '#0f2033', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#13283f', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
     topDropdown: { bg: '#0a1a2a', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#102033', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
     modalPanel: { bg: '#11243b', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#13283f', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
+    loginScreen: { bg: '#102033', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#13283f', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
     pageBackground: { bg: '#08111f', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#11243b', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
     chatCard: { bg: '#11243bb8', text: '#eefbff', border: '#29506f', accent: '#67e8f9', controlBg: '#13283f', activeBg: '#1d4f73', activeText: '#ffffff', textMuted: '#8fb8d0' },
   },
@@ -72,6 +73,7 @@ describe('themeRegistry', () => {
     expect(template.$schema).toBe(THEME_SCHEMA_URL);
     expect(template.id).toBe('my-theme');
     expect(template.regions.topPanel).toEqual({});
+    expect(template.regions.loginScreen).toEqual({});
     expect(template.regions.chatCard).toEqual({});
   });
 

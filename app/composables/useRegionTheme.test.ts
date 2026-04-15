@@ -76,6 +76,7 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-text-primary')).toBe(snapshot['text-primary']);
     expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#1a1a2e');
     expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
+    expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('#0f2033');
 
     unmount();
   });
@@ -92,6 +93,7 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#1a1a2e');
     expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
     expect(document.documentElement.style.getPropertyValue('--theme-output-bg')).toBe('#13293d');
+    expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('#0f2033');
 
     unmount();
   });
@@ -108,6 +110,7 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.getAttribute('data-region-theme')).toBeNull();
     expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('rgba(15, 23, 42, 0.92)');
     expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('rgba(15, 23, 42, 0.92)');
+    expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('rgba(15, 23, 42, 0.98)');
 
     unmount();
   });
