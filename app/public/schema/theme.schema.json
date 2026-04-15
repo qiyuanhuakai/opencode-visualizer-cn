@@ -31,6 +31,9 @@
       },
       "maxItems": 4
     },
+    "components": {
+      "$ref": "#/$defs/themeComponents"
+    },
     "regions": {
       "$ref": "#/$defs/themeRegions"
     }
@@ -59,6 +62,7 @@
         "outputPanel",
         "topDropdown",
         "modalPanel",
+        "loginScreen",
         "pageBackground",
         "chatCard"
       ],
@@ -70,8 +74,194 @@
         "outputPanel": { "$ref": "#/$defs/regionColors" },
         "topDropdown": { "$ref": "#/$defs/regionColors" },
         "modalPanel": { "$ref": "#/$defs/regionColors" },
+        "loginScreen": { "$ref": "#/$defs/regionColors" },
         "pageBackground": { "$ref": "#/$defs/regionColors" },
         "chatCard": { "$ref": "#/$defs/regionColors" }
+      }
+    },
+    "dropdownTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "textMuted": { "type": "string" },
+        "controlBg": { "type": "string" },
+        "hoverBg": { "type": "string" },
+        "activeBg": { "type": "string" },
+        "accent": { "type": "string" },
+        "shadow": { "type": "string" }
+      }
+    },
+    "chipTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "borderNeutral": { "type": "string" },
+        "borderSubtle": { "type": "string" },
+        "bgNeutral": { "type": "string" },
+        "bgHover": { "type": "string" },
+        "fgNeutral": { "type": "string" }
+      }
+    },
+    "iconActionTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "border": { "type": "string" },
+        "bg": { "type": "string" },
+        "bgHover": { "type": "string" }
+      }
+    },
+    "dockTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "trayBg": { "type": "string" },
+        "trayBorder": { "type": "string" },
+        "trayShadow": { "type": "string" },
+        "thumb": { "type": "string" },
+        "chipBg": { "type": "string" },
+        "chipHoverBg": { "type": "string" },
+        "chipBorder": { "type": "string" },
+        "chipText": { "type": "string" },
+        "handle": { "type": "string" },
+        "handleHover": { "type": "string" },
+        "handleShadow": { "type": "string" }
+      }
+    },
+    "formControlTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "focusBorder": { "type": "string" },
+        "focusRing": { "type": "string" },
+        "buttonBg": { "type": "string" },
+        "buttonBorder": { "type": "string" },
+        "buttonText": { "type": "string" },
+        "buttonHoverBg": { "type": "string" },
+        "buttonPrimaryBg": { "type": "string" },
+        "buttonPrimaryBorder": { "type": "string" },
+        "buttonPrimaryText": { "type": "string" },
+        "buttonPrimaryHoverBg": { "type": "string" }
+      }
+    },
+    "tabTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "hoverBg": { "type": "string" },
+        "activeBg": { "type": "string" },
+        "activeBorder": { "type": "string" },
+        "activeText": { "type": "string" }
+      }
+    },
+    "badgeTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "accentBg": { "type": "string" },
+        "accentBorder": { "type": "string" },
+        "accentText": { "type": "string" }
+      }
+    },
+    "cardTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "shadow": { "type": "string" },
+        "hoverBg": { "type": "string" },
+        "activeBg": { "type": "string" }
+      }
+    },
+    "toggleTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "track": { "type": "string" },
+        "trackBorder": { "type": "string" },
+        "thumb": { "type": "string" },
+        "activeTrack": { "type": "string" },
+        "activeThumb": { "type": "string" }
+      }
+    },
+    "listRowTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "textMuted": { "type": "string" },
+        "hoverBg": { "type": "string" },
+        "activeBg": { "type": "string" }
+      }
+    },
+    "emptyStateTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "text": { "type": "string" },
+        "textMuted": { "type": "string" },
+        "icon": { "type": "string" }
+      }
+    },
+    "actionButtonTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "hoverBg": { "type": "string" },
+        "accentBg": { "type": "string" },
+        "accentBorder": { "type": "string" },
+        "accentText": { "type": "string" }
+      }
+    },
+    "searchTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg": { "type": "string" },
+        "border": { "type": "string" },
+        "text": { "type": "string" },
+        "placeholder": { "type": "string" },
+        "icon": { "type": "string" },
+        "focusBg": { "type": "string" }
+      }
+    },
+    "themeComponents": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dropdown": { "$ref": "#/$defs/dropdownTheme" },
+        "chip": { "$ref": "#/$defs/chipTheme" },
+        "iconAction": { "$ref": "#/$defs/iconActionTheme" },
+        "dock": { "$ref": "#/$defs/dockTheme" },
+        "formControl": { "$ref": "#/$defs/formControlTheme" },
+        "tab": { "$ref": "#/$defs/tabTheme" },
+        "badge": { "$ref": "#/$defs/badgeTheme" },
+        "card": { "$ref": "#/$defs/cardTheme" },
+        "toggle": { "$ref": "#/$defs/toggleTheme" },
+        "listRow": { "$ref": "#/$defs/listRowTheme" },
+        "emptyState": { "$ref": "#/$defs/emptyStateTheme" },
+        "actionButton": { "$ref": "#/$defs/actionButtonTheme" },
+        "search": { "$ref": "#/$defs/searchTheme" }
       }
     }
   }

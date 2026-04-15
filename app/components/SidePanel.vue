@@ -260,10 +260,10 @@ const {
 
 .side-tab {
   flex: 1;
-  border: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.35));
+  border: 1px solid var(--theme-tab-border, var(--theme-side-border, rgba(100, 116, 139, 0.35)));
   border-radius: 6px;
-  background: var(--theme-side-bg, rgba(15, 23, 42, 0.7));
-  color: var(--theme-side-text, #94a3b8);
+  background: var(--theme-tab-bg, var(--theme-side-bg, rgba(15, 23, 42, 0.7)));
+  color: var(--theme-tab-text, var(--theme-side-text, #94a3b8));
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -272,9 +272,9 @@ const {
 }
 
 .side-tab.is-active {
-  background: var(--theme-side-active-bg, rgba(30, 64, 175, 0.45));
-  color: var(--theme-side-active-text, #e2e8f0);
-  border-color: var(--theme-side-accent, rgba(96, 165, 250, 0.6));
+  background: var(--theme-tab-active-bg, var(--theme-side-active-bg, rgba(30, 64, 175, 0.45)));
+  color: var(--theme-tab-active-text, var(--theme-side-active-text, #e2e8f0));
+  border-color: var(--theme-tab-active-border, var(--theme-side-accent, rgba(96, 165, 250, 0.6)));
 }
 
 .side-panel.is-collapsed {
@@ -311,7 +311,7 @@ const {
 
 .session-empty {
   margin: auto;
-  color: var(--theme-side-text-muted, rgba(148, 163, 184, 0.9));
+  color: var(--theme-empty-state-text, var(--theme-side-text-muted, rgba(148, 163, 184, 0.9)));
   font-size: 12px;
 }
 
@@ -335,19 +335,19 @@ const {
   min-width: 0;
   display: flex;
   align-items: stretch;
-  border: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.5));
+  border: 1px solid var(--theme-card-border, var(--theme-side-border, rgba(71, 85, 105, 0.5)));
   border-radius: 8px;
-  background: var(--theme-side-control-bg, rgba(15, 23, 42, 0.6));
+  background: var(--theme-card-bg, var(--theme-side-control-bg, rgba(15, 23, 42, 0.6)));
   overflow: hidden;
 }
 
 .session-item.is-active .session-card {
-  border-color: var(--theme-side-accent, rgba(96, 165, 250, 0.6));
-  background: var(--theme-side-active-bg, rgba(30, 64, 175, 0.25));
+  border-color: var(--theme-card-border, var(--theme-side-accent, rgba(96, 165, 250, 0.6)));
+  background: var(--theme-card-active-bg, var(--theme-side-active-bg, rgba(30, 64, 175, 0.25)));
 }
 
 .session-card:hover {
-  background: var(--theme-side-active-bg, rgba(30, 41, 59, 0.78));
+  background: var(--theme-card-hover-bg, var(--theme-side-active-bg, rgba(30, 41, 59, 0.78)));
 }
 
 .session-select {

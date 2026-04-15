@@ -58,6 +58,10 @@ describe('generateCSS', () => {
           border: '#334155',
         },
         modalPanel: {},
+        loginScreen: {
+          bg: '#102033',
+          border: '#29506f',
+        },
         pageBackground: {
           bg: '#08101f',
         },
@@ -77,6 +81,9 @@ describe('generateCSS', () => {
     expect(css).toContain('--region-output-active-text: #ffffff;');
     expect(css).toContain('.top-center, .tree-menu {');
     expect(css).toContain('--region-top-dropdown-border: #334155;');
+    expect(css).toContain('.app-loading-view {');
+    expect(css).toContain('--region-login-bg: #102033;');
+    expect(css).toContain('--region-login-border: #29506f;');
     expect(css).toContain('html, body, #app {');
     expect(css).toContain('--region-page-bg: #08101f;');
     expect(css).toContain('.thread-block {');
@@ -100,6 +107,7 @@ describe('generateCSS', () => {
         outputPanel: {},
         topDropdown: {},
         modalPanel: {},
+        loginScreen: {},
         pageBackground: {},
         chatCard: {},
       },

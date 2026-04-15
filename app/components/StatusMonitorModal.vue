@@ -515,8 +515,8 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   gap: 6px;
   padding: 4px;
-  background: var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55));
-  border: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.15));
+  background: var(--theme-card-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
+  border: 1px solid var(--theme-card-border, var(--theme-modal-border, rgba(148, 163, 184, 0.15)));
   border-radius: 8px;
 }
 
@@ -525,25 +525,25 @@ const currentTotalInfo = computed(() => {
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 500;
-  color: var(--theme-modal-text-muted, #94a3b8);
+  color: var(--theme-tab-text, var(--theme-modal-text-muted, #94a3b8));
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  background: transparent;
-  border: 1px solid transparent;
+  background: var(--theme-tab-bg, transparent);
+  border: 1px solid var(--theme-tab-border, transparent);
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .status-monitor-tab:hover {
-  color: var(--theme-text-primary, #e2e8f0);
-  background: var(--theme-modal-active-bg, rgba(148, 163, 184, 0.12));
+  color: var(--theme-tab-active-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--theme-tab-hover-bg, var(--theme-modal-active-bg, rgba(148, 163, 184, 0.12)));
 }
 
 .status-monitor-tab.is-active {
-  color: var(--theme-text-primary, #e2e8f0);
-  background: var(--theme-modal-active-bg, rgba(30, 64, 175, 0.45));
-  border-color: var(--theme-modal-accent, rgba(96, 165, 250, 0.5));
+  color: var(--theme-tab-active-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--theme-tab-active-bg, var(--theme-modal-active-bg, rgba(30, 64, 175, 0.45)));
+  border-color: var(--theme-tab-active-border, var(--theme-modal-accent, rgba(96, 165, 250, 0.5)));
 }
 
 .status-monitor-actions {
@@ -649,8 +649,8 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55));
-  border: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12));
+  background: var(--theme-list-row-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
+  border: 1px solid var(--theme-list-row-border, var(--theme-modal-border, rgba(148, 163, 184, 0.12)));
   border-radius: 8px;
 }
 
@@ -670,7 +670,7 @@ const currentTotalInfo = computed(() => {
 .status-monitor-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--theme-text-primary, #e2e8f0);
+  color: var(--theme-list-row-text, var(--theme-text-primary, #e2e8f0));
   word-break: break-all;
   overflow-wrap: anywhere;
 }
@@ -684,7 +684,7 @@ const currentTotalInfo = computed(() => {
 
 .status-monitor-meta {
   font-size: 12px;
-  color: var(--theme-modal-text-muted, #94a3b8);
+  color: var(--theme-list-row-text-muted, var(--theme-modal-text-muted, #94a3b8));
 }
 
 .status-monitor-meta.is-error {
@@ -719,7 +719,7 @@ const currentTotalInfo = computed(() => {
 .toggle-track {
   width: 36px;
   height: 20px;
-  background: var(--theme-modal-border, #334155);
+  background: var(--theme-toggle-track, var(--theme-modal-border, #334155));
   border-radius: 10px;
   position: relative;
   transition: background 0.2s;
@@ -732,7 +732,7 @@ const currentTotalInfo = computed(() => {
   left: 2px;
   width: 16px;
   height: 16px;
-  background: var(--theme-status-neutral, #94a3b8);
+  background: var(--theme-toggle-thumb, var(--theme-status-neutral, #94a3b8));
   border-radius: 50%;
   transition:
     transform 0.2s,
@@ -740,11 +740,11 @@ const currentTotalInfo = computed(() => {
 }
 
 .toggle-input:checked + .toggle-track {
-  background: var(--theme-modal-accent, #3b82f6);
+  background: var(--theme-toggle-active-track, var(--theme-modal-accent, #3b82f6));
 }
 
 .toggle-input:checked + .toggle-track::after {
-  background: var(--theme-text-inverse, #ffffff);
+  background: var(--theme-toggle-active-thumb, var(--theme-text-inverse, #ffffff));
   transform: translateX(16px);
 }
 
@@ -762,7 +762,7 @@ const currentTotalInfo = computed(() => {
 .status-monitor-empty {
   padding: 32px 16px;
   font-size: 13px;
-  color: var(--theme-modal-text-muted, #94a3b8);
+  color: var(--theme-empty-state-text, var(--theme-modal-text-muted, #94a3b8));
   text-align: center;
 }
 

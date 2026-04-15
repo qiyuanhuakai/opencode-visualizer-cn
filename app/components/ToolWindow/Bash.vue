@@ -27,7 +27,7 @@ defineProps<{
 }
 
 .bash-command {
-  color: #a5b4fc;
+  color: var(--theme-accent-primary, #a5b4fc);
 }
 
 .bash-output {
@@ -39,6 +39,6 @@ defineProps<{
 }
 
 .bash-empty {
-  color: #64748b;
+  color: var(--theme-text-muted, #64748b);
 }
 </style>

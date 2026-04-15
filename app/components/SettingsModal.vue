@@ -625,8 +625,8 @@ onMounted(() => {
   }
 });
 
-const themePresetCards = computed<ThemePresetCard[]>(() => [
-  ...themeRegistryEntries.value.map((entry) => ({
+const themePresetCards = computed<ThemePresetCard[]>(() =>
+  themeRegistryEntries.value.map((entry) => ({
     id: entry.id,
     label: entry.labelKey ? t(entry.labelKey) : entry.theme.label,
     badge: entry.badgeKey ? t(entry.badgeKey) : (entry.badge ?? t('settings.theme.externalBadge')),
@@ -635,7 +635,7 @@ const themePresetCards = computed<ThemePresetCard[]>(() => [
     source: entry.source,
     removable: entry.removable,
   })),
-]);
+);
 
 const activeThemeSummary = computed(() => {
   const presetName = resolveThemeStoragePreset(activeThemeStorage.value);
@@ -1213,10 +1213,10 @@ watch(
 .number-input {
   width: 84px;
   height: 30px;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--ui-form-control-border);
   border-radius: 6px;
-  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
-  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--ui-form-control-bg);
+  color: var(--ui-form-control-text);
   font-size: 12px;
   font-family: inherit;
   text-align: right;
@@ -1225,8 +1225,8 @@ watch(
 
 .number-input:focus {
   outline: none;
-  border-color: var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%, transparent);
+  border-color: var(--ui-form-control-focus-border);
+  box-shadow: var(--ui-form-control-focus-ring);
 }
 
 .number-input::-webkit-outer-spin-button,
@@ -1244,10 +1244,10 @@ watch(
   min-width: 0;
   min-height: 72px;
   resize: vertical;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--ui-form-control-border);
   border-radius: 8px;
-  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
-  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--ui-form-control-bg);
+  color: var(--ui-form-control-text);
   font-size: 12px;
   line-height: 1.5;
   font-family: inherit;
@@ -1256,12 +1256,12 @@ watch(
 
 .font-stack-input:focus {
   outline: none;
-  border-color: var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%, transparent);
+  border-color: var(--ui-form-control-focus-border);
+  box-shadow: var(--ui-form-control-focus-ring);
 }
 
 .font-stack-input::placeholder {
-  color: var(--theme-modal-text-muted, var(--theme-text-muted, #475569));
+  color: var(--ui-form-control-placeholder);
 }
 
 .font-discovery-toggle {
@@ -1270,10 +1270,10 @@ watch(
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--ui-form-button-border);
   border-radius: 8px;
-  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
-  color: var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1));
+  background: var(--ui-form-button-bg);
+  color: var(--ui-form-button-text);
   font-size: 12px;
   font-family: inherit;
   padding: 9px 10px;
@@ -1281,8 +1281,8 @@ watch(
 }
 
 .font-discovery-toggle:hover {
-  border-color: var(--theme-modal-accent, var(--theme-border-strong, #475569));
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
+  border-color: var(--ui-form-control-focus-border);
+  background: var(--ui-form-button-hover-bg);
 }
 
 .font-discovery-panel {
@@ -1342,10 +1342,10 @@ watch(
 .font-system-button {
   align-self: flex-start;
   min-height: 30px;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--ui-form-button-border);
   border-radius: 8px;
-  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
-  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  background: var(--ui-form-button-bg);
+  color: var(--ui-form-button-text);
   font-size: 12px;
   font-family: inherit;
   padding: 0 10px;
@@ -1353,8 +1353,8 @@ watch(
 }
 
 .font-system-button:hover:not(:disabled) {
-  border-color: var(--theme-modal-accent, var(--theme-border-strong, #475569));
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
+  border-color: var(--ui-form-control-focus-border);
+  background: var(--ui-form-button-hover-bg);
 }
 
 .font-system-button:disabled {

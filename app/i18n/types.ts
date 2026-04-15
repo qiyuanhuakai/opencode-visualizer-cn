@@ -222,6 +222,8 @@ export interface LocaleMessages {
     settings: string;
     providerManager: string;
     statusMonitor: string;
+    autoWindowsSuppressed: string;
+    suppressAutoWindows: string;
     logout: string;
     github: string;
   };
@@ -234,6 +236,9 @@ export interface LocaleMessages {
     error: string;
     retry: string;
     empty: string;
+    common: {
+      totalLabel: string;
+    };
     tabs: {
       server: string;
       mcp: string;
@@ -377,8 +382,6 @@ export interface LocaleMessages {
     removeFromFavoritesConfirm: string;
     bookmarked: string;
     stop: string;
-    autoWindowsSuppressed: string;
-    suppressAutoWindows: string;
     sendTooltipEnter: string;
     sendTooltipCtrlEnter: string;
     send: {
@@ -459,6 +462,40 @@ export interface LocaleMessages {
       label: string;
       description: string;
       presetLabel: string;
+      presetDescription: string;
+      managementLabel: string;
+      managementDescription: string;
+      currentProfileLabel: string;
+      currentProfileDefault: string;
+      currentProfilePreset: string;
+      importAction: string;
+      importing: string;
+      importHint: string;
+      importError: string;
+      exportCurrentAction: string;
+      exportTemplateAction: string;
+      exportCurrentFallbackName: string;
+      removeExternal: string;
+      externalBadge: string;
+      externalDescription: string;
+      schemaLink: string;
+      presetNames: {
+        default: string;
+        ocean: string;
+        forest: string;
+      };
+      presetBadges: {
+        balanced: string;
+        cool: string;
+        natural: string;
+        expressive: string;
+      };
+      presetDescriptions: {
+        default: string;
+        ocean: string;
+        forest: string;
+        sakura: string;
+      };
       customLabel: string;
       topPanel: string;
       sidePanel: string;

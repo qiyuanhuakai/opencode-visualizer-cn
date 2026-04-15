@@ -1155,14 +1155,14 @@ function handleOpenDirectory(close: () => void) {
   gap: 8px;
   padding: 8px;
   border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-top-border, #334155));
-  background: var(--theme-top-dropdown-bg, var(--theme-top-bg, rgba(15, 23, 42, 0.9)));
+  background: var(--theme-search-bg, var(--theme-top-dropdown-bg, var(--theme-top-bg, rgba(15, 23, 42, 0.9))));
   --ui-dropdown-text-muted: var(--theme-top-dropdown-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .search-icon {
   width: 14px;
   height: 14px;
-  color: var(--theme-top-text-muted, var(--theme-text-muted, #64748b));
+  color: var(--theme-search-icon, var(--theme-top-text-muted, var(--theme-text-muted, #64748b)));
 }
 
 .tree-search :deep(.ui-dropdown-search-input) {
@@ -1172,7 +1172,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-search :deep(.ui-dropdown-search-input):focus {
-  background: var(--theme-top-dropdown-active-bg, rgba(30, 64, 175, 0.15));
+  background: var(--theme-search-focus-bg, var(--theme-top-dropdown-active-bg, rgba(30, 64, 175, 0.15)));
 }
 
 .clear-search {
@@ -1216,10 +1216,10 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action {
-  border: 1px solid var(--theme-top-dropdown-border, #334155);
+  border: 1px solid var(--theme-action-button-border, var(--theme-top-dropdown-border, #334155));
   border-radius: 999px;
-  background: var(--theme-top-dropdown-control-bg, #111a2c);
-  color: var(--theme-top-dropdown-text, #cbd5e1);
+  background: var(--theme-action-button-bg, var(--theme-top-dropdown-control-bg, #111a2c));
+  color: var(--theme-action-button-text, var(--theme-top-dropdown-text, #cbd5e1));
   font-size: 11px;
   line-height: 1;
   padding: 5px 8px;
@@ -1227,12 +1227,12 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action:hover {
-  background: var(--theme-top-dropdown-active-bg, #1d2a45);
+  background: var(--theme-action-button-hover-bg, var(--theme-top-dropdown-active-bg, #1d2a45));
 }
 
 .management-action.is-danger {
   color: var(--theme-text-danger, #fca5a5);
-  border-color: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 45%, transparent);
+  border-color: color-mix(in srgb, var(--theme-action-button-accent-border, var(--theme-status-danger, #fca5a5)) 45%, transparent);
 }
 
 .management-action:disabled {
@@ -1254,7 +1254,7 @@ function handleOpenDirectory(close: () => void) {
 .tree-empty {
   padding: 14px;
   text-align: center;
-  color: var(--theme-top-text-muted, #94a3b8);
+  color: var(--theme-empty-state-text, var(--theme-top-text-muted, #94a3b8));
   font-size: 12px;
 }
 
@@ -1333,10 +1333,10 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button {
-  border: 1px solid var(--ui-icon-action-border);
+  border: 1px solid var(--theme-top-dropdown-border, var(--ui-icon-action-border, var(--theme-icon-action-border, #334155)));
   border-radius: var(--ui-icon-action-radius);
-  background: var(--ui-icon-action-bg);
-  color: var(--theme-text-secondary, #cbd5e1);
+  background: var(--theme-top-dropdown-control-bg, var(--ui-icon-action-bg, var(--theme-icon-action-bg, #111a2c)));
+  color: var(--theme-top-dropdown-text, var(--theme-text-secondary, #cbd5e1));
   font-size: 10px;
   line-height: 1;
   width: var(--ui-icon-action-size);
@@ -1350,7 +1350,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button:hover {
-  background: var(--ui-icon-action-bg-hover);
+  background: var(--theme-top-dropdown-active-bg, var(--ui-icon-action-bg-hover, var(--theme-icon-action-bg-hover, #1d2a45)));
 }
 
 .tree-action-button.worktree-settings {

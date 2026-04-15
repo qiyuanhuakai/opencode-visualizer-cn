@@ -81,10 +81,10 @@ defineEmits<{
 
 <style scoped>
 .ib-footer {
-  --ui-chip-border-neutral: var(--theme-chat-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
-  --ui-chip-bg-neutral: var(--theme-chat-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75)));
-  --ui-chip-bg-hover: var(--theme-chat-active-bg, var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92)));
-  --ui-chip-fg-neutral: var(--theme-chat-text, var(--theme-text-primary, #bfdbfe));
+  --ui-chip-border-neutral: var(--theme-chip-border-neutral, var(--theme-chat-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65))));
+  --ui-chip-bg-neutral: var(--theme-chip-bg-neutral, var(--theme-chat-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75))));
+  --ui-chip-bg-hover: var(--theme-chip-bg-hover, var(--theme-chat-active-bg, var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92))));
+  --ui-chip-fg-neutral: var(--theme-chip-fg-neutral, var(--theme-chat-text, var(--theme-text-primary, #bfdbfe)));
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -173,13 +173,13 @@ defineEmits<{
 }
 
 .ib-action-diff {
-  border-color: rgba(96, 165, 250, 0.7);
-  background: rgba(30, 58, 138, 0.35);
-  color: #bfdbfe;
+  border-color: var(--theme-dropdown-accent, rgba(96, 165, 250, 0.7));
+  background: var(--theme-dropdown-active-bg, rgba(30, 58, 138, 0.35));
+  color: var(--theme-chip-fg-neutral, #bfdbfe);
 }
 
 .ib-action-diff:hover {
-  background: rgba(30, 64, 175, 0.55);
+  background: var(--theme-chip-bg-hover, rgba(30, 64, 175, 0.55));
 }
 
 .ib-action-danger {

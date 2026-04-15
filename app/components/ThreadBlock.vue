@@ -501,11 +501,11 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 
 <style scoped>
 .thread-block {
-  --ui-chip-border-neutral: var(--theme-chat-border, rgba(148, 163, 184, 0.65));
-  --ui-chip-border-subtle: color-mix(in srgb, var(--theme-chat-border, rgba(148, 163, 184, 0.5)) 80%, transparent);
-  --ui-chip-bg-neutral: var(--theme-chat-control-bg, rgba(15, 23, 42, 0.75));
-  --ui-chip-bg-hover: var(--theme-chat-active-bg, rgba(30, 41, 59, 0.92));
-  --ui-chip-fg-neutral: var(--theme-chat-text, #bfdbfe);
+  --ui-chip-border-neutral: var(--theme-chip-border-neutral, var(--theme-chat-border, rgba(148, 163, 184, 0.65)));
+  --ui-chip-border-subtle: var(--theme-chip-border-subtle, color-mix(in srgb, var(--theme-chip-border-neutral, var(--theme-chat-border, rgba(148, 163, 184, 0.5))) 80%, transparent));
+  --ui-chip-bg-neutral: var(--theme-chip-bg-neutral, var(--theme-chat-control-bg, rgba(15, 23, 42, 0.75)));
+  --ui-chip-bg-hover: var(--theme-chip-bg-hover, var(--theme-chat-active-bg, rgba(30, 41, 59, 0.92)));
+  --ui-chip-fg-neutral: var(--theme-chip-fg-neutral, var(--theme-chat-text, #bfdbfe));
   background: var(--theme-chat-bg, rgba(2, 6, 23, 0.6));
   border: 1px solid var(--theme-chat-border, #1e293b);
   border-radius: 10px;
@@ -607,13 +607,13 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 }
 
 .ib-action-undo {
-  border-color: rgba(96, 165, 250, 0.7);
-  background: rgba(30, 58, 138, 0.35);
-  color: #bfdbfe;
+  border-color: var(--theme-dropdown-accent, rgba(96, 165, 250, 0.7));
+  background: var(--theme-dropdown-active-bg, rgba(30, 58, 138, 0.35));
+  color: var(--theme-chip-fg-neutral, #bfdbfe);
 }
 
 .ib-action-undo:hover {
-  background: rgba(30, 64, 175, 0.55);
+  background: var(--theme-chip-bg-hover, rgba(30, 64, 175, 0.55));
 }
 
 .ib-action-history {
@@ -636,9 +636,9 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   margin-top: 6px;
   padding: 4px 8px;
   border-radius: 6px;
-  background: rgba(127, 29, 29, 0.3);
-  border: 1px solid rgba(248, 113, 113, 0.4);
-  color: #fca5a5;
+  background: var(--theme-surface-danger, rgba(127, 29, 29, 0.3));
+  border: 1px solid color-mix(in srgb, var(--theme-status-danger, #fca5a5) 40%, transparent);
+  color: var(--theme-text-danger, #fca5a5);
   font-size: 11px;
   line-height: 1.3;
 }
@@ -646,7 +646,7 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 .ib-error-icon {
   flex-shrink: 0;
   font-size: 13px;
-  color: #f87171;
+  color: var(--theme-status-danger, #f87171);
 }
 
 .ib-error-text {
@@ -677,9 +677,9 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   width: 100%;
   max-height: 180px;
   border-radius: 8px;
-  border: 1px solid #1e293b;
+  border: 1px solid var(--theme-chat-border, var(--theme-border-default, #1e293b));
   object-fit: cover;
-  background: #0b1320;
+  background: var(--theme-chat-control-bg, var(--theme-surface-panel-muted, #0b1320));
 }
 
 .output-entry-attachment.clickable {

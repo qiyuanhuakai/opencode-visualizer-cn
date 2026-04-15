@@ -294,7 +294,7 @@ async function handleSubmit() {
 }
 
 .modal-backdrop::backdrop {
-  background: rgba(2, 6, 23, 0.65);
+  background: var(--theme-surface-overlay, rgba(2, 6, 23, 0.65));
 }
 
 .modal {
@@ -303,11 +303,11 @@ async function handleSubmit() {
   flex-direction: column;
   gap: 12px;
   padding: 16px;
-  background: rgba(15, 23, 42, 0.98);
-  border: 1px solid #334155;
+  background: var(--theme-modal-bg, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.98)));
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
   border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
-  color: #e2e8f0;
+  box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
   font-family: var(--app-monospace-font-family);
 }
 
@@ -329,16 +329,18 @@ async function handleSubmit() {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border: 1px solid #334155;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
   border-radius: 6px;
-  background: transparent;
+  background: var(--theme-modal-control-bg, transparent);
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
   cursor: pointer;
 }
 
 .modal-close-button:hover {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .modal-body {
@@ -376,16 +378,18 @@ async function handleSubmit() {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid #334155;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--ui-form-button-border);
   border-radius: 8px;
-  background: #111a2c;
-  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  background: var(--ui-form-button-bg);
+  color: var(--ui-form-button-text);
   cursor: pointer;
 }
 
 .sync-button:hover:not(:disabled) {
-  background: #1d2a45;
-  color: #e2e8f0;
+  background: var(--ui-form-button-hover-bg);
+  color: var(--ui-form-button-text);
 }
 
 .sync-button:disabled {
@@ -395,20 +399,29 @@ async function handleSubmit() {
 
 .field-input,
 .field-textarea {
-  background: rgba(2, 6, 23, 0.45);
-  border: 1px solid #334155;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--ui-form-control-bg);
+  border: 1px solid var(--ui-form-control-border);
   border-radius: 8px;
-  color: #e2e8f0;
+  color: var(--ui-form-control-text);
   font-family: inherit;
   font-size: 13px;
   padding: 8px 10px;
   outline: none;
 }
 
+.field-input::placeholder,
+.field-textarea::placeholder {
+  color: var(--ui-form-control-placeholder);
+  opacity: 1;
+}
+
 .field-input:focus,
 .field-textarea:focus {
-  border-color: #475569;
-  background: rgba(2, 6, 23, 0.6);
+  border-color: var(--ui-form-control-focus-border);
+  background: var(--ui-form-control-bg);
+  box-shadow: var(--ui-form-control-focus-ring);
 }
 
 .field-textarea {
@@ -432,7 +445,9 @@ async function handleSubmit() {
   width: 56px;
   height: 56px;
   border-radius: 8px;
-  border: 1px solid #334155;
+  border: 1px solid var(--theme-card-border, var(--theme-modal-border, #334155));
+  background: var(--theme-card-bg, var(--theme-modal-control-bg, rgba(15, 23, 42, 0.72)));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--theme-card-border, var(--theme-border-default, #334155)) 25%, transparent);
   cursor: pointer;
   position: relative;
   overflow: hidden;
@@ -443,8 +458,12 @@ async function handleSubmit() {
 }
 
 .icon-preview.drag-over {
-  border-color: #3b82f6;
-  background: rgba(59, 130, 246, 0.1);
+  border-color: var(--theme-action-button-accent-border, var(--theme-modal-accent, #3b82f6));
+  background: color-mix(
+    in srgb,
+    var(--theme-action-button-accent-bg, var(--theme-modal-accent, #3b82f6)) 45%,
+    var(--theme-card-bg, var(--theme-modal-control-bg, rgba(15, 23, 42, 0.72)))
+  );
 }
 
 .icon-image {
@@ -471,10 +490,10 @@ async function handleSubmit() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(15, 23, 42, 0.85);
+  background: color-mix(in srgb, var(--theme-modal-control-bg, rgba(15, 23, 42, 0.85)) 88%, transparent);
   opacity: 0;
   transition: opacity 0.15s;
-  color: #e2e8f0;
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
   border-radius: 7px;
 }
 
@@ -504,6 +523,8 @@ async function handleSubmit() {
   width: 40px;
   height: 40px;
   padding: 3px;
+  appearance: none;
+  -webkit-appearance: none;
   border-radius: 10px;
   border: 2px solid transparent;
   background: transparent;
@@ -513,11 +534,12 @@ async function handleSubmit() {
 }
 
 .color-swatch:hover {
-  border-color: #475569;
+  border-color: var(--theme-badge-border, var(--theme-border-strong, #475569));
 }
 
 .color-swatch.selected {
-  border-color: #475569;
+  border-color: var(--theme-badge-accent-border, var(--theme-modal-accent, #475569));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme-badge-accent-bg, var(--theme-modal-active-bg, rgba(30, 64, 175, 0.2))) 75%, transparent);
 }
 
 .swatch-letter {
@@ -541,23 +563,39 @@ async function handleSubmit() {
 }
 
 .action-button {
-  border: 1px solid #334155;
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  border: 1px solid var(--ui-form-button-border);
   border-radius: 8px;
   padding: 6px 16px;
   font-size: 13px;
+  line-height: 1.2;
   font-family: inherit;
   cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .action-button.save {
-  background: #1e40af;
-  color: #e2e8f0;
-  border-color: #2563eb;
+  background: var(--theme-action-button-accent-bg, color-mix(in srgb, var(--theme-modal-accent, #60a5fa) 18%, transparent));
+  color: var(--theme-action-button-accent-text, var(--theme-modal-active-text, var(--theme-text-primary, #dbeafe)));
+  border-color: var(--theme-action-button-accent-border, var(--theme-modal-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.35))));
   font-weight: 600;
 }
 
-.action-button.save:hover {
-  background: #2563eb;
+.action-button.save:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--theme-action-button-accent-bg, var(--theme-modal-active-bg, rgba(30, 64, 175, 0.45))) 82%,
+    var(--theme-modal-accent, #60a5fa)
+  );
 }
 
 .action-button.save:disabled {

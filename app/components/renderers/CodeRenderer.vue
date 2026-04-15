@@ -142,7 +142,7 @@ const showLoading = computed(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #64748b;
+  color: var(--theme-text-muted, #64748b);
   font-size: 13px;
   user-select: none;
 }

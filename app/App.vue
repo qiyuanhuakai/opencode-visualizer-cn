@@ -219,8 +219,8 @@
                 />
               </svg>
             </div>
-            <div class="text-text-100 rounded-xl bg-surface-900 py-2 px-4">
-              <span class="text-accent-400">V</span>{{ $t('app.brand.title').slice(1) }}
+            <div class="app-loading-brand">
+              <span class="app-loading-brand-accent">V</span>{{ $t('app.brand.title').slice(1) }}
             </div>
           </div>
         </div>
@@ -260,7 +260,7 @@
           <p v-if="initErrorMessage" class="app-loading-message app-error-message">
             {{ initErrorMessage }}
           </p>
-          <button type="button" class="app-loading-retry bg-indigo-500!" @click="handleLogin">
+          <button type="button" class="app-loading-retry app-loading-connect" @click="handleLogin">
             {{ t('app.login.connect') }}
           </button>
 
@@ -6945,12 +6945,29 @@ body {
 .app-loading-card {
   position: relative;
   width: min(420px, 92vw);
-  border: 1px solid #334155;
-  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
+  background: var(--theme-login-bg, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.92)));
   border-radius: 14px;
   padding: 20px;
-  box-shadow: 0 14px 34px rgba(2, 6, 23, 0.5);
+  box-shadow: var(--theme-shadow-panel, 0 14px 34px rgba(2, 6, 23, 0.5));
   text-align: center;
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.app-loading-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid color-mix(in srgb, var(--theme-login-border, var(--theme-border-default, #334155)) 88%, transparent);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--theme-login-control-bg, var(--theme-surface-panel-muted, #0b1320)) 96%, transparent);
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
+  padding: 8px 16px;
+  box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
+}
+
+.app-loading-brand-accent {
+  color: var(--theme-login-accent, var(--theme-accent-primary, #60a5fa));
 }
 
 .app-loading-spinner {
@@ -6958,37 +6975,55 @@ body {
   height: 26px;
   margin: 0 auto 12px;
   border-radius: 50%;
-  border: 3px solid rgba(148, 163, 184, 0.4);
-  border-top-color: #e2e8f0;
+  border: 3px solid color-mix(in srgb, var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8)) 45%, transparent);
+  border-top-color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
   animation: app-loading-spin 0.85s linear infinite;
 }
 
 .app-loading-title {
   margin: 0;
-  color: #e2e8f0;
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
   font-size: 14px;
   font-weight: 600;
 }
 
 .app-loading-message {
   margin: 8px 0 0;
-  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 12px;
 }
 
 .app-loading-retry {
   margin-top: 14px;
-  border: 1px solid #334155;
-  background: #1e293b;
-  color: #e2e8f0;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
+  background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
   border-radius: 8px;
   padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
+  box-shadow: none;
+  outline: none;
 }
 
 .app-loading-retry:hover {
-  background: #334155;
+  background: var(--theme-login-active-bg, var(--theme-surface-panel-active, #334155));
+}
+
+.app-loading-retry:focus-visible {
+  border-color: var(--theme-login-accent, var(--theme-accent-primary, #60a5fa));
+}
+
+.app-loading-connect {
+  border-color: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 42%, transparent);
+  background: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 76%, transparent);
+  color: var(--theme-login-active-text, var(--theme-text-inverse, #ffffff));
+}
+
+.app-loading-connect:hover {
+  background: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 86%, transparent);
 }
 
 .app-loading-actions {
@@ -6999,13 +7034,13 @@ body {
 
 .app-loading-abort {
   background: transparent;
-  border-color: #475569;
-  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
+  border-color: var(--theme-login-border, var(--theme-border-strong, #475569));
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .app-loading-abort:hover {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .app-login-form {
@@ -7024,22 +7059,26 @@ body {
 .app-login-input {
   width: 100%;
   padding: 8px 12px;
-  background: #1e293b;
-  border: 1px solid #334155;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
   border-radius: 6px;
-  color: #e2e8f0;
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
   font-size: 13px;
   box-sizing: border-box;
+  box-shadow: none;
+  outline: none;
 }
 
 .app-login-input::placeholder {
-  color: var(--theme-page-text-muted, var(--theme-text-muted, #64748b));
+  opacity: 1;
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .app-login-input:focus {
-  outline: none;
-  border-color: #475569;
-  background: #0f172a;
+  border-color: var(--theme-login-accent, var(--theme-accent-primary, #475569));
+  background: var(--theme-login-active-bg, var(--theme-surface-panel-active, #0f172a));
 }
 
 .app-login-input:disabled {
@@ -7051,14 +7090,18 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 12px;
   cursor: pointer;
   user-select: none;
 }
 
+.app-login-checkbox input {
+  accent-color: var(--theme-login-accent, var(--theme-accent-primary, #60a5fa));
+}
+
 .app-error-message {
-  color: #f87171;
+  color: var(--theme-status-danger, #f87171);
 }
 
 @keyframes app-loading-spin {
@@ -7111,12 +7154,12 @@ body {
   width: 44px;
   height: 3px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.6);
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6);
+  background: var(--theme-dock-handle, rgba(148, 163, 184, 0.6));
+  box-shadow: var(--theme-dock-handle-shadow, 0 0 0 1px rgba(15, 23, 42, 0.6));
 }
 
 .input-resizer:hover::before {
-  background: rgba(226, 232, 240, 0.7);
+  background: var(--theme-dock-handle-hover, rgba(226, 232, 240, 0.7));
 }
 
 .output-workspace {
@@ -7203,12 +7246,12 @@ body {
   width: 3px;
   height: 44px;
   border-radius: 999px;
-  background: rgba(148, 163, 184, 0.6);
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.6);
+  background: var(--theme-dock-handle, rgba(148, 163, 184, 0.6));
+  box-shadow: var(--theme-dock-handle-shadow, 0 0 0 1px rgba(15, 23, 42, 0.6));
 }
 
 .side-resizer:hover::before {
-  background: rgba(226, 232, 240, 0.7);
+  background: var(--theme-dock-handle-hover, rgba(226, 232, 240, 0.7));
 }
 
 .is-disabled {
@@ -7249,15 +7292,15 @@ body {
   padding: 0 8px;
   pointer-events: auto;
   z-index: 20;
-  background: color-mix(in srgb, #0b1220 92%, transparent);
-  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: var(--theme-dock-tray-bg, color-mix(in srgb, #0b1220 92%, transparent));
+  border: 1px solid var(--theme-dock-tray-border, rgba(148, 163, 184, 0.25));
   border-radius: 10px;
-  box-shadow: 0 6px 18px rgba(2, 6, 23, 0.32);
+  box-shadow: var(--theme-dock-tray-shadow, 0 6px 18px rgba(2, 6, 23, 0.32));
   backdrop-filter: blur(3px);
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+  scrollbar-color: var(--theme-dock-thumb, rgba(148, 163, 184, 0.55)) transparent;
 }
 
 .window-dock-tray::-webkit-scrollbar {
@@ -7269,7 +7312,7 @@ body {
 }
 
 .window-dock-tray::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.5);
+  background: var(--theme-dock-thumb, rgba(148, 163, 184, 0.5));
   border-radius: 999px;
 }
 
@@ -7281,17 +7324,17 @@ body {
   height: 24px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  background: color-mix(in srgb, #1e293b 82%, #0f172a);
-  color: #e2e8f0;
+  border: 1px solid var(--theme-dock-chip-border, rgba(148, 163, 184, 0.35));
+  background: var(--theme-dock-chip-bg, color-mix(in srgb, #1e293b 82%, #0f172a));
+  color: var(--theme-dock-chip-text, #e2e8f0);
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
 }
 
 .window-dock-chip:hover {
-  background: color-mix(in srgb, #334155 84%, #0f172a);
-  border-color: rgba(226, 232, 240, 0.45);
+  background: var(--theme-dock-chip-hover-bg, color-mix(in srgb, #334155 84%, #0f172a));
+  border-color: var(--theme-dock-handle-hover, rgba(226, 232, 240, 0.45));
 }
 
 .window-dock-chip-title {

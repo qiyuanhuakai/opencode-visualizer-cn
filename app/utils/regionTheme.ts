@@ -5,6 +5,7 @@ export type RegionName =
   | 'outputPanel'
   | 'topDropdown'
   | 'modalPanel'
+  | 'loginScreen'
   | 'pageBackground'
   | 'chatCard';
 
@@ -19,10 +20,172 @@ export interface RegionColors {
   textMuted?: string;
 }
 
+export interface DropdownThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  textMuted?: string;
+  controlBg?: string;
+  hoverBg?: string;
+  activeBg?: string;
+  accent?: string;
+  shadow?: string;
+}
+
+export interface ChipThemeColors {
+  borderNeutral?: string;
+  borderSubtle?: string;
+  bgNeutral?: string;
+  bgHover?: string;
+  fgNeutral?: string;
+}
+
+export interface IconActionThemeColors {
+  border?: string;
+  bg?: string;
+  bgHover?: string;
+}
+
+export interface DockThemeColors {
+  trayBg?: string;
+  trayBorder?: string;
+  trayShadow?: string;
+  thumb?: string;
+  chipBg?: string;
+  chipHoverBg?: string;
+  chipBorder?: string;
+  chipText?: string;
+  handle?: string;
+  handleHover?: string;
+  handleShadow?: string;
+}
+
+export interface FormControlThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  placeholder?: string;
+  focusBorder?: string;
+  focusRing?: string;
+  buttonBg?: string;
+  buttonBorder?: string;
+  buttonText?: string;
+  buttonHoverBg?: string;
+  buttonPrimaryBg?: string;
+  buttonPrimaryBorder?: string;
+  buttonPrimaryText?: string;
+  buttonPrimaryHoverBg?: string;
+}
+
+export interface TabThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  hoverBg?: string;
+  activeBg?: string;
+  activeBorder?: string;
+  activeText?: string;
+}
+
+export interface BadgeThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  accentBg?: string;
+  accentBorder?: string;
+  accentText?: string;
+}
+
+export interface CardThemeColors {
+  bg?: string;
+  border?: string;
+  shadow?: string;
+  hoverBg?: string;
+  activeBg?: string;
+}
+
+export interface ToggleThemeColors {
+  track?: string;
+  trackBorder?: string;
+  thumb?: string;
+  activeTrack?: string;
+  activeThumb?: string;
+}
+
+export interface ListRowThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  textMuted?: string;
+  hoverBg?: string;
+  activeBg?: string;
+}
+
+export interface EmptyStateThemeColors {
+  bg?: string;
+  text?: string;
+  textMuted?: string;
+  icon?: string;
+}
+
+export interface ActionButtonThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  hoverBg?: string;
+  accentBg?: string;
+  accentBorder?: string;
+  accentText?: string;
+}
+
+export interface SearchThemeColors {
+  bg?: string;
+  border?: string;
+  text?: string;
+  placeholder?: string;
+  icon?: string;
+  focusBg?: string;
+}
+
+export interface ThemeComponentConfig {
+  dropdown?: Partial<DropdownThemeColors>;
+  chip?: Partial<ChipThemeColors>;
+  iconAction?: Partial<IconActionThemeColors>;
+  dock?: Partial<DockThemeColors>;
+  formControl?: Partial<FormControlThemeColors>;
+  tab?: Partial<TabThemeColors>;
+  badge?: Partial<BadgeThemeColors>;
+  card?: Partial<CardThemeColors>;
+  toggle?: Partial<ToggleThemeColors>;
+  listRow?: Partial<ListRowThemeColors>;
+  emptyState?: Partial<EmptyStateThemeColors>;
+  actionButton?: Partial<ActionButtonThemeColors>;
+  search?: Partial<SearchThemeColors>;
+}
+
+export type ThemeComponentName = keyof ThemeComponentConfig;
+
+export const THEME_COMPONENT_FIELDS = {
+  dropdown: ['bg', 'border', 'text', 'textMuted', 'controlBg', 'hoverBg', 'activeBg', 'accent', 'shadow'],
+  chip: ['borderNeutral', 'borderSubtle', 'bgNeutral', 'bgHover', 'fgNeutral'],
+  iconAction: ['border', 'bg', 'bgHover'],
+  dock: ['trayBg', 'trayBorder', 'trayShadow', 'thumb', 'chipBg', 'chipHoverBg', 'chipBorder', 'chipText', 'handle', 'handleHover', 'handleShadow'],
+  formControl: ['bg', 'border', 'text', 'placeholder', 'focusBorder', 'focusRing', 'buttonBg', 'buttonBorder', 'buttonText', 'buttonHoverBg', 'buttonPrimaryBg', 'buttonPrimaryBorder', 'buttonPrimaryText', 'buttonPrimaryHoverBg'],
+  tab: ['bg', 'border', 'text', 'hoverBg', 'activeBg', 'activeBorder', 'activeText'],
+  badge: ['bg', 'border', 'text', 'accentBg', 'accentBorder', 'accentText'],
+  card: ['bg', 'border', 'shadow', 'hoverBg', 'activeBg'],
+  toggle: ['track', 'trackBorder', 'thumb', 'activeTrack', 'activeThumb'],
+  listRow: ['bg', 'border', 'text', 'textMuted', 'hoverBg', 'activeBg'],
+  emptyState: ['bg', 'text', 'textMuted', 'icon'],
+  actionButton: ['bg', 'border', 'text', 'hoverBg', 'accentBg', 'accentBorder', 'accentText'],
+  search: ['bg', 'border', 'text', 'placeholder', 'icon', 'focusBg'],
+} as const;
+
 export interface RegionThemeConfig {
   name: string;
   label: string;
   regions: Record<RegionName, Partial<RegionColors>>;
+  components?: ThemeComponentConfig;
 }
 
 export const REGION_NAMES: RegionName[] = [
@@ -32,6 +195,7 @@ export const REGION_NAMES: RegionName[] = [
   'outputPanel',
   'topDropdown',
   'modalPanel',
+  'loginScreen',
   'pageBackground',
   'chatCard',
 ];
@@ -54,6 +218,7 @@ const REGION_SELECTORS: Record<RegionName, string> = {
   outputPanel: '.output-panel',
   topDropdown: '.top-center, .tree-menu',
   modalPanel: '.modal, .provider-manager-modal, .status-monitor-popover',
+  loginScreen: '.app-loading-view',
   pageBackground: 'html, body, #app',
   chatCard: '.thread-block',
 };
@@ -65,6 +230,7 @@ export const REGION_VAR_PREFIXES: Record<RegionName, string> = {
   outputPanel: 'output',
   topDropdown: 'top-dropdown',
   modalPanel: 'modal',
+  loginScreen: 'login',
   pageBackground: 'page',
   chatCard: 'chat',
 };
@@ -96,6 +262,7 @@ export const DEFAULT_REGION_THEME: RegionThemeConfig = {
     outputPanel: createEmptyRegionColors(),
     topDropdown: createEmptyRegionColors(),
     modalPanel: createEmptyRegionColors(),
+    loginScreen: createEmptyRegionColors(),
     pageBackground: createEmptyRegionColors(),
     chatCard: createEmptyRegionColors(),
   },
@@ -175,6 +342,16 @@ export const OCEAN_PRESET: RegionThemeConfig = {
       activeBg: '#006494',
       activeText: '#ffffff',
       textMuted: '#7aa2c0',
+    },
+    loginScreen: {
+      bg: '#0f2033',
+      text: '#eaf6ff',
+      border: '#29506f',
+      accent: '#4cc9f0',
+      controlBg: '#13283f',
+      activeBg: '#1d4f73',
+      activeText: '#ffffff',
+      textMuted: '#8fb8d0',
     },
     pageBackground: {
       bg: '#b8c9d8',
@@ -263,6 +440,16 @@ export const FOREST_PRESET: RegionThemeConfig = {
       activeText: '#ffffff',
       textMuted: '#7d9e7d',
     },
+    loginScreen: {
+      bg: '#29432f',
+      text: '#edf7ee',
+      border: '#4c6f49',
+      accent: '#a7c957',
+      controlBg: '#35523d',
+      activeBg: '#4f772d',
+      activeText: '#ffffff',
+      textMuted: '#9cb49c',
+    },
     pageBackground: {
       bg: '#bcc8b8',
       text: '#edf7ee',
@@ -347,6 +534,16 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       accent: '#ffc2dc',
       controlBg: '#74545e',
       activeBg: 'rgba(195, 145, 165, 0.4)',
+      activeText: '#ffffff',
+      textMuted: '#d4b8c8',
+    },
+    loginScreen: {
+      bg: 'rgba(104, 78, 90, 0.92)',
+      text: '#fff8fb',
+      border: '#cca0b0',
+      accent: '#ffb7d5',
+      controlBg: '#7f6070',
+      activeBg: 'rgba(205, 155, 175, 0.42)',
       activeText: '#ffffff',
       textMuted: '#d4b8c8',
     },
