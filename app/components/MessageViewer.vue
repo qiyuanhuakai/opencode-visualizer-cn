@@ -136,11 +136,11 @@ function handleRendered(mode: ActiveMode) {
 .message-viewer-shell.message-viewer-context-user,
 .message-viewer-shell.message-viewer-context-assistant,
 .message-viewer-shell.message-viewer-context-history {
-  --ui-chip-border-neutral: var(--region-chat-border, rgba(148, 163, 184, 0.65));
-  --ui-chip-border-subtle: color-mix(in srgb, var(--region-chat-border, rgba(148, 163, 184, 0.5)) 80%, transparent);
-  --ui-chip-bg-neutral: var(--region-chat-control-bg, rgba(15, 23, 42, 0.75));
-  --ui-chip-bg-hover: var(--region-chat-active-bg, rgba(30, 41, 59, 0.92));
-  --ui-chip-fg-neutral: var(--region-chat-text, #bfdbfe);
+  --ui-chip-border-neutral: var(--theme-chat-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
+  --ui-chip-border-subtle: color-mix(in srgb, var(--theme-chat-border, var(--theme-border-muted, rgba(148, 163, 184, 0.5))) 80%, transparent);
+  --ui-chip-bg-neutral: var(--theme-chat-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75)));
+  --ui-chip-bg-hover: var(--theme-chat-active-bg, var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92)));
+  --ui-chip-fg-neutral: var(--theme-chat-text, var(--theme-text-primary, #bfdbfe));
 }
 
 .viewer-tabs {

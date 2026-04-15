@@ -1089,8 +1089,8 @@ function handleOpenDirectory(close: () => void) {
   margin: -12px -12px 0;
   padding: 8px 12px;
   width: calc(100% + 24px);
-  background: var(--region-top-bg, rgba(15, 23, 42, 0.92));
-  border-bottom: 1px solid var(--region-top-border, #334155);
+  background: var(--theme-top-bg, rgba(15, 23, 42, 0.92));
+  border-bottom: 1px solid var(--theme-top-border, #334155);
 }
 
 .top-row {
@@ -1106,7 +1106,7 @@ function handleOpenDirectory(close: () => void) {
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.02em;
-  color: var(--region-top-text, #f1f5f9);
+  color: var(--theme-top-text, #f1f5f9);
 }
 
 .top-center {
@@ -1116,11 +1116,11 @@ function handleOpenDirectory(close: () => void) {
   justify-content: center;
   align-items: center;
   gap: 8px;
-  background: var(--region-top-dropdown-bg, transparent);
-  --region-top-border: var(--region-top-dropdown-border, #334155);
-  --region-top-control-bg: var(--region-top-dropdown-control-bg, #0b1320);
-  --region-top-text: var(--region-top-dropdown-text, #e2e8f0);
-  --region-top-bg: var(--region-top-dropdown-bg, rgba(15, 23, 42, 0.92));
+  background: var(--theme-top-dropdown-bg, transparent);
+  --theme-top-border: var(--theme-top-dropdown-border, #334155);
+  --theme-top-control-bg: var(--theme-top-dropdown-control-bg, #0b1320);
+  --theme-top-text: var(--theme-top-dropdown-text, #e2e8f0);
+  --theme-top-bg: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.92));
 }
 
 .top-right {
@@ -1140,13 +1140,11 @@ function handleOpenDirectory(close: () => void) {
 .tree-menu {
   display: flex;
   flex-direction: column;
-  background: var(--region-top-dropdown-bg, transparent);
-  flex: 1 1 auto;
-  min-height: 0;
-  --region-top-border: var(--region-top-dropdown-border, #334155);
-  --region-top-control-bg: var(--region-top-dropdown-control-bg, #0b1320);
-  --region-top-text: var(--region-top-dropdown-text, #e2e8f0);
-  --region-top-bg: var(--region-top-dropdown-bg, rgba(15, 23, 42, 0.92));
+   background: var(--theme-top-dropdown-bg, transparent);
+   --theme-top-border: var(--theme-top-dropdown-border, #334155);
+   --theme-top-control-bg: var(--theme-top-dropdown-control-bg, #0b1320);
+   --theme-top-text: var(--theme-top-dropdown-text, #e2e8f0);
+   --theme-top-bg: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.92));
 }
 
 .tree-search {
@@ -1154,15 +1152,15 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid var(--region-top-dropdown-border, var(--region-top-border, #334155));
-  background: var(--region-top-dropdown-bg, var(--region-top-bg, rgba(15, 23, 42, 0.9)));
-  --ui-dropdown-text-muted: var(--region-top-dropdown-text-muted, var(--theme-text-muted, #64748b));
+  border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-top-border, #334155));
+  background: var(--theme-top-dropdown-bg, var(--theme-top-bg, rgba(15, 23, 42, 0.9)));
+  --ui-dropdown-text-muted: var(--theme-top-dropdown-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .search-icon {
   width: 14px;
   height: 14px;
-  color: var(--region-top-text-muted, var(--theme-text-muted, #64748b));
+  color: var(--theme-top-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .tree-search :deep(.ui-dropdown-search-input) {
@@ -1172,13 +1170,13 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-search :deep(.ui-dropdown-search-input):focus {
-  background: var(--region-top-dropdown-active-bg, rgba(30, 64, 175, 0.15));
+  background: var(--theme-top-dropdown-active-bg, rgba(30, 64, 175, 0.15));
 }
 
 .clear-search {
   border: none;
   background: transparent;
-  color: var(--region-top-text-muted, #64748b);
+  color: var(--theme-top-text-muted, #64748b);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1191,15 +1189,15 @@ function handleOpenDirectory(close: () => void) {
   justify-content: space-between;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid var(--region-top-dropdown-border, #334155);
-  background: var(--region-top-dropdown-control-bg, rgba(14, 24, 40, 0.95));
+  border-bottom: 1px solid var(--theme-top-dropdown-border, #334155);
+  background: var(--theme-top-dropdown-control-bg, rgba(14, 24, 40, 0.95));
 }
 
 .management-title {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--region-top-dropdown-text, #cbd5e1);
+  color: var(--theme-top-dropdown-text, #cbd5e1);
   font-size: 12px;
 }
 
@@ -1216,10 +1214,10 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action {
-  border: 1px solid var(--region-top-dropdown-border, #334155);
+  border: 1px solid var(--theme-top-dropdown-border, #334155);
   border-radius: 999px;
-  background: var(--region-top-dropdown-control-bg, #111a2c);
-  color: var(--region-top-dropdown-text, #cbd5e1);
+  background: var(--theme-top-dropdown-control-bg, #111a2c);
+  color: var(--theme-top-dropdown-text, #cbd5e1);
   font-size: 11px;
   line-height: 1;
   padding: 5px 8px;
@@ -1227,7 +1225,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-action:hover {
-  background: var(--region-top-dropdown-active-bg, #1d2a45);
+  background: var(--theme-top-dropdown-active-bg, #1d2a45);
 }
 
 .management-action.is-danger {
@@ -1248,13 +1246,13 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-worktree + .tree-worktree {
-  border-top: 1px solid var(--region-top-dropdown-border, #334155);
+  border-top: 1px solid var(--theme-top-dropdown-border, #334155);
 }
 
 .tree-empty {
   padding: 14px;
   text-align: center;
-  color: var(--region-top-text-muted, #94a3b8);
+  color: var(--theme-top-text-muted, #94a3b8);
   font-size: 12px;
 }
 
@@ -1281,7 +1279,7 @@ function handleOpenDirectory(close: () => void) {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
-  color: var(--region-top-text-muted, #64748b);
+  color: var(--theme-top-text-muted, #64748b);
 }
 
 .tree-worktree-header {
@@ -1298,7 +1296,7 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-label-name {
   font-size: 12px;
-  color: var(--region-top-dropdown-text, #e2e8f0);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1308,7 +1306,7 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-label-type {
   font-size: 10px;
-  color: var(--region-top-text-muted, #64748b);
+  color: var(--theme-top-text-muted, #64748b);
   flex-basis: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1354,7 +1352,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-action-button.worktree-settings {
-  color: var(--region-top-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-top-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .tree-action-button.danger {
@@ -1379,17 +1377,17 @@ function handleOpenDirectory(close: () => void) {
 .tree-session-row :deep(.ui-dropdown-item) {
   padding-left: 40px;
   border-radius: 0;
-  color: var(--region-top-dropdown-text, #e2e8f0);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
 }
 
 .tree-session-row :deep(.ui-dropdown-item:hover),
 .tree-session-row :deep(.ui-dropdown-item[aria-selected='true']) {
-  background: var(--region-top-dropdown-active-bg, rgba(30, 41, 59, 0.8));
+  background: var(--theme-top-dropdown-active-bg, rgba(30, 41, 59, 0.8));
 }
 
 .tree-session-row :deep(.ui-dropdown-item.is-active) {
-  background: var(--region-top-dropdown-active-bg, rgba(59, 130, 246, 0.2));
-  border: 1px solid var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
+  background: var(--theme-top-dropdown-active-bg, rgba(59, 130, 246, 0.2));
+  border: 1px solid var(--theme-top-dropdown-accent, rgba(59, 130, 246, 0.45));
 }
 
 .management-session-item {
@@ -1399,29 +1397,29 @@ function handleOpenDirectory(close: () => void) {
   margin: 0 8px;
   padding: 6px 8px 6px 40px;
   border-radius: 8px;
-  color: var(--region-top-dropdown-text, #e2e8f0);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
   font-size: 12px;
   cursor: pointer;
 }
 
 .management-session-item:hover,
 .management-session-item[aria-selected='true'] {
-  background: var(--region-top-dropdown-active-bg, rgba(30, 41, 59, 0.8));
+  background: var(--theme-top-dropdown-active-bg, rgba(30, 41, 59, 0.8));
 }
 
 .management-session-item.is-active {
-  background: var(--region-top-dropdown-active-bg, rgba(59, 130, 246, 0.18));
-  border: 1px solid var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.35));
+  background: var(--theme-top-dropdown-active-bg, rgba(59, 130, 246, 0.18));
+  border: 1px solid var(--theme-top-dropdown-accent, rgba(59, 130, 246, 0.35));
 }
 
 .management-check {
   flex: 0 0 auto;
   width: 24px;
   height: 24px;
-  border: 1px solid var(--region-top-dropdown-border, #334155);
+  border: 1px solid var(--theme-top-dropdown-border, #334155);
   border-radius: 6px;
-  background: var(--region-top-dropdown-control-bg, #111a2c);
-  color: var(--region-top-text-muted, #94a3b8);
+  background: var(--theme-top-dropdown-control-bg, #111a2c);
+  color: var(--theme-top-text-muted, #94a3b8);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1433,13 +1431,13 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .management-check:hover {
-  background: var(--region-top-dropdown-active-bg, #1d2a45);
+  background: var(--theme-top-dropdown-active-bg, #1d2a45);
 }
 
 .management-check.is-selected {
   color: var(--theme-accent-primary, #60a5fa);
-  border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
-  background: var(--region-top-dropdown-active-bg, rgba(30, 64, 175, 0.2));
+  border-color: var(--theme-top-dropdown-accent, rgba(59, 130, 246, 0.45));
+  background: var(--theme-top-dropdown-active-bg, rgba(30, 64, 175, 0.2));
 }
 
 /* ===== Tree branch connectors ===== */
@@ -1456,7 +1454,7 @@ function handleOpenDirectory(close: () => void) {
   left: 15px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   pointer-events: none;
 }
 
@@ -1467,7 +1465,7 @@ function handleOpenDirectory(close: () => void) {
   top: 13px;
   width: 7px;
   height: 0;
-  border-top: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-top: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   pointer-events: none;
 }
 
@@ -1479,8 +1477,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 13px;
-  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
-  border-bottom: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1497,7 +1495,7 @@ function handleOpenDirectory(close: () => void) {
   left: 31px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   pointer-events: none;
 }
 
@@ -1508,7 +1506,7 @@ function handleOpenDirectory(close: () => void) {
   top: 14px;
   width: 7px;
   height: 0;
-  border-top: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-top: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   pointer-events: none;
 }
 
@@ -1520,8 +1518,8 @@ function handleOpenDirectory(close: () => void) {
   top: 0;
   width: 7px;
   height: 14px;
-  border-left: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
-  border-bottom: 1px solid var(--region-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1551,7 +1549,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .session-title {
-  color: var(--region-top-dropdown-text, #e2e8f0);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1573,7 +1571,7 @@ function handleOpenDirectory(close: () => void) {
 
 .session-time {
   font-size: 10px;
-  color: var(--region-top-text-muted, #64748b);
+  color: var(--theme-top-text-muted, #64748b);
   white-space: nowrap;
   flex-basis: 100%;
 }
@@ -1617,7 +1615,7 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-footer {
   flex: 0 0 auto;
-  border-top: 1px solid var(--region-top-dropdown-border, #334155);
+  border-top: 1px solid var(--theme-top-dropdown-border, #334155);
   padding: 8px 0 0;
   background: transparent;
 }
@@ -1630,10 +1628,10 @@ function handleOpenDirectory(close: () => void) {
   gap: 6px;
   appearance: none;
   -webkit-appearance: none;
-  border: 1px solid var(--region-top-dropdown-border, #334155);
+  border: 1px solid var(--theme-top-dropdown-border, #334155);
   border-radius: 8px;
-  background: var(--region-top-dropdown-control-bg, #111a2c);
-  color: var(--region-top-dropdown-text, #e2e8f0);
+  background: var(--theme-top-dropdown-control-bg, #111a2c);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
   padding: 6px 10px;
   font-size: 12px;
   cursor: pointer;
@@ -1642,24 +1640,30 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-footer-button:hover {
-  background: var(--region-top-dropdown-active-bg, #1d2a45);
+  background: var(--theme-top-dropdown-active-bg, #1d2a45);
 }
 
 .tree-footer-button:focus-visible {
-  border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
+  border-color: var(--theme-top-dropdown-accent, rgba(59, 130, 246, 0.45));
 }
 
 .control-button {
-  border: 1px solid var(--region-top-border, #334155);
-  border-radius: 8px;
-  background: var(--region-top-control-bg, #0b1320);
-  color: var(--region-top-text, #e2e8f0);
-  padding: 6px 12px;
-  font-size: 12px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
+  box-sizing: border-box;
+  min-width: 32px;
+  height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--theme-top-dropdown-border, #334155);
+  border-radius: 8px;
+  background: var(--theme-top-dropdown-control-bg, #0b1320);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
+  font-size: 12px;
+  line-height: 1;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .new-session-button {
@@ -1668,12 +1672,12 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-accent, var(--theme-status-git-added-strong, #86efac));
+  color: var(--theme-status-git-added-strong, #86efac);
 }
 
 .new-session-button:hover,
 .open-shell-button:hover {
-  background: var(--region-top-dropdown-active-bg, #1d2a45);
+  background: var(--theme-top-dropdown-active-bg, #1d2a45);
 }
 
 .open-shell-button {
@@ -1682,7 +1686,7 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-accent, var(--theme-status-git-archived, #c4b5fd));
+  color: var(--theme-status-git-archived, #c4b5fd);
 }
 
 .management-toggle-button {
@@ -1691,17 +1695,17 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-accent, var(--theme-status-git-attention, #93c5fd));
+  color: var(--theme-status-git-attention, #93c5fd);
 }
 
 .management-toggle-button.is-active {
-  border-color: var(--region-top-dropdown-accent, rgba(59, 130, 246, 0.45));
-  background: var(--region-top-dropdown-active-bg, rgba(30, 64, 175, 0.2));
-  color: var(--region-top-dropdown-active-text, #bfdbfe);
+  border-color: color-mix(in srgb, var(--theme-status-git-attention, #93c5fd) 45%, transparent);
+  background: color-mix(in srgb, var(--theme-status-git-attention, #93c5fd) 16%, transparent);
+  color: var(--theme-status-git-attention, #93c5fd);
 }
 
 .management-toggle-button:hover {
-  background: var(--region-top-dropdown-active-bg, #1d2a45);
+  background: var(--theme-top-dropdown-active-bg, #1d2a45);
 }
 
 .notification-button {
@@ -1711,11 +1715,11 @@ function handleOpenDirectory(close: () => void) {
   flex-shrink: 0;
   padding: 0;
   justify-content: center;
-  color: var(--region-top-dropdown-text, var(--theme-text-muted, #64748b));
+  color: var(--theme-top-dropdown-text, var(--theme-text-muted, #64748b));
 }
 
 .notification-button.has-notifications {
-  color: var(--region-top-dropdown-accent, var(--theme-status-git-pinned, #fbbf24));
+  color: var(--theme-top-dropdown-accent, var(--theme-status-git-pinned, #fbbf24));
 }
 
 .notification-badge {
@@ -1735,15 +1739,15 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-dropdown-root :deep(.ui-dropdown-button) {
-  background: var(--region-top-dropdown-control-bg, #0b1320);
-  border-color: var(--region-top-dropdown-border, #334155);
-  color: var(--region-top-dropdown-text, #e2e8f0);
+  background: var(--theme-top-dropdown-control-bg, #0b1320);
+  border-color: var(--theme-top-dropdown-border, #334155);
+  color: var(--theme-top-dropdown-text, #e2e8f0);
   box-shadow: none;
 }
 
 .tree-dropdown-root :deep(.ui-dropdown-menu) {
-  background: var(--region-top-dropdown-bg, #0b1320);
-  border: 1px solid var(--region-top-dropdown-border, #334155);
+  background: var(--theme-top-dropdown-bg, #0b1320);
+  border: 1px solid var(--theme-top-dropdown-border, #334155);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1780,11 +1784,11 @@ function handleOpenDirectory(close: () => void) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  border: 1px solid var(--region-top-dropdown-border, #334155);
+  border: 1px solid var(--theme-top-dropdown-border, #334155);
   border-radius: 999px;
   padding: 2px 6px;
-  color: var(--region-top-dropdown-text, #cbd5e1);
-  background: var(--region-top-dropdown-control-bg, #111a2c);
+  color: var(--theme-top-dropdown-text, #cbd5e1);
+  background: var(--theme-top-dropdown-control-bg, #111a2c);
   font-size: 11px;
   line-height: 1;
 }
@@ -1804,7 +1808,7 @@ function handleOpenDirectory(close: () => void) {
   border: none;
   border-radius: 50%;
   background: transparent;
-  color: var(--region-top-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-top-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .github-button:hover {
@@ -1824,7 +1828,7 @@ function handleOpenDirectory(close: () => void) {
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--region-top-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-top-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .settings-button:hover,

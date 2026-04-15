@@ -1,11 +1,13 @@
 import { ref, watch } from 'vue';
 import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON, storageRemove, storageSetJSON } from '../utils/storageKeys';
-import type { RegionThemeConfig } from '../utils/regionTheme';
 import {
-  migrateLegacyRegionThemeStorage,
-  storageToRegionTheme,
+  normalizeThemeStorage,
   type ThemeStorageV2,
 } from '../utils/themeTokens';
+import {
+  normalizeStoredExternalThemes,
+  type ExternalThemeDefinition,
+} from '../utils/themeRegistry';
 
 const DEFAULT_PINNED_SESSIONS_LIMIT = 30;
 const MIN_PINNED_SESSIONS_LIMIT = 1;
@@ -44,17 +46,22 @@ function normalizeFontFamily(value: string, fallback: string) {
 }
 
 function readThemeStorage(): ThemeStorageV2 | null {
-  const current = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
+  const current = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
   if (current) {
     storageSetJSON(StorageKeys.settings.themeTokens, current);
-    return current;
   }
+  return current;
+}
 
-  const legacy = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.regionTheme));
-  if (!legacy) return null;
-  storageSetJSON(StorageKeys.settings.themeTokens, legacy);
-  storageRemove(StorageKeys.settings.regionTheme);
-  return legacy;
+function readExternalThemes(): ExternalThemeDefinition[] {
+  const current = normalizeStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
+  if (current.length > 0) {
+    storageSetJSON(StorageKeys.settings.themeRegistry, {
+      version: 1,
+      themes: current,
+    });
+  }
+  return current;
 }
 
 const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true');
@@ -65,7 +72,7 @@ const pinnedSessionsLimit = ref(readPinnedSessionsLimit());
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
-const regionTheme = ref<RegionThemeConfig | null>(storageToRegionTheme(themeStorage.value));
+const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
 
 watch(enterToSend, (value) => {
   storageSet(StorageKeys.settings.enterToSend, String(value));
@@ -115,6 +122,17 @@ watch(appMonospaceFontFamily, (value) => {
   storageSet(StorageKeys.settings.appMonospaceFontFamily, normalized);
 });
 
+watch(externalThemes, (value) => {
+  if (value.length === 0) {
+    storageRemove(StorageKeys.settings.themeRegistry);
+    return;
+  }
+  storageSetJSON(StorageKeys.settings.themeRegistry, {
+    version: 1,
+    themes: value,
+  });
+}, { deep: true });
+
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
     if (event.key === storageKey(StorageKeys.settings.enterToSend)) {
@@ -139,22 +157,12 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.appMonospaceFontFamily)) {
       appMonospaceFontFamily.value = normalizeFontFamily(event.newValue ?? '', DEFAULT_APP_MONOSPACE_FONT_FAMILY);
     }
-    if (event.key === storageKey(StorageKeys.settings.regionTheme)) {
-      const migrated = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.regionTheme));
-      if (migrated) {
-        themeStorage.value = migrated;
-        regionTheme.value = storageToRegionTheme(migrated);
-        storageSetJSON(StorageKeys.settings.themeTokens, migrated);
-        storageRemove(StorageKeys.settings.regionTheme);
-      } else {
-        themeStorage.value = null;
-        regionTheme.value = null;
-      }
-    }
     if (event.key === storageKey(StorageKeys.settings.themeTokens)) {
-      const nextThemeStorage = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
+      const nextThemeStorage = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
       themeStorage.value = nextThemeStorage;
-      regionTheme.value = storageToRegionTheme(nextThemeStorage);
+    }
+    if (event.key === storageKey(StorageKeys.settings.themeRegistry)) {
+      externalThemes.value = normalizeStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
     }
   });
 }
@@ -169,7 +177,7 @@ export function useSettings() {
     terminalFontFamily,
     appMonospaceFontFamily,
     themeStorage,
-    regionTheme,
+    externalThemes,
     defaultPinnedSessionsLimit: DEFAULT_PINNED_SESSIONS_LIMIT,
     minPinnedSessionsLimit: MIN_PINNED_SESSIONS_LIMIT,
     maxPinnedSessionsLimit: MAX_PINNED_SESSIONS_LIMIT,

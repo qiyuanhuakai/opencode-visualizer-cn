@@ -215,10 +215,10 @@ const {
   min-height: 0;
   display: flex;
   flex-direction: row;
-  border: 1px solid var(--region-side-border, #334155);
+  border: 1px solid var(--theme-side-border, #334155);
   border-radius: 12px;
   background-clip: padding-box;
-  background: var(--region-side-bg, rgba(12, 18, 30, 0.95));
+  background: var(--theme-side-bg, rgba(12, 18, 30, 0.95));
   box-shadow: 0 10px 24px rgba(2, 6, 23, 0.35);
   overflow: hidden;
 }
@@ -226,10 +226,10 @@ const {
 .side-toggle {
   width: 26px;
   height: 26px;
-  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.45));
+  border: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.45));
   border-radius: 6px;
-  background: var(--region-side-control-bg, rgba(30, 41, 59, 0.92));
-  color: var(--region-side-text, #cbd5e1);
+  background: var(--theme-side-control-bg, rgba(30, 41, 59, 0.92));
+  color: var(--theme-side-text, #cbd5e1);
   cursor: pointer;
   font-size: 12px;
   display: inline-flex;
@@ -239,7 +239,7 @@ const {
 }
 
 .side-toggle:hover {
-  background: var(--region-side-active-bg, rgba(51, 65, 85, 0.95));
+  background: var(--theme-side-active-bg, rgba(51, 65, 85, 0.95));
 }
 
 .side-body {
@@ -255,15 +255,15 @@ const {
   align-items: center;
   gap: 4px;
   padding: 8px;
-  border-bottom: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.42));
+  border-bottom: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.42));
 }
 
 .side-tab {
   flex: 1;
-  border: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.35));
+  border: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.35));
   border-radius: 6px;
-  background: var(--region-side-bg, rgba(15, 23, 42, 0.7));
-  color: var(--region-side-text, #94a3b8);
+  background: var(--theme-side-bg, rgba(15, 23, 42, 0.7));
+  color: var(--theme-side-text, #94a3b8);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -272,13 +272,13 @@ const {
 }
 
 .side-tab.is-active {
-  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.45));
-  color: var(--region-side-active-text, #e2e8f0);
-  border-color: var(--region-side-accent, rgba(96, 165, 250, 0.6));
+  background: var(--theme-side-active-bg, rgba(30, 64, 175, 0.45));
+  color: var(--theme-side-active-text, #e2e8f0);
+  border-color: var(--theme-side-accent, rgba(96, 165, 250, 0.6));
 }
 
 .side-panel.is-collapsed {
-  border-color: var(--region-side-border, rgba(100, 116, 139, 0.45));
+  border-color: var(--theme-side-border, rgba(100, 116, 139, 0.45));
 }
 
 .session-body {
@@ -294,24 +294,24 @@ const {
   align-items: center;
   justify-content: space-between;
   padding: 10px 10px 8px;
-  border-bottom: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
+  border-bottom: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.28));
 }
 
 .session-title {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: var(--region-side-text, #e2e8f0);
+  color: var(--theme-side-text, #e2e8f0);
 }
 
 .session-count {
   font-size: 11px;
-  color: var(--region-side-text-muted, #94a3b8);
+  color: var(--theme-side-text-muted, #94a3b8);
 }
 
 .session-empty {
   margin: auto;
-  color: var(--region-side-text-muted, rgba(148, 163, 184, 0.9));
+  color: var(--theme-side-text-muted, rgba(148, 163, 184, 0.9));
   font-size: 12px;
 }
 
@@ -335,19 +335,19 @@ const {
   min-width: 0;
   display: flex;
   align-items: stretch;
-  border: 1px solid var(--region-side-border, rgba(71, 85, 105, 0.5));
+  border: 1px solid var(--theme-side-border, rgba(71, 85, 105, 0.5));
   border-radius: 8px;
-  background: var(--region-side-control-bg, rgba(15, 23, 42, 0.6));
+  background: var(--theme-side-control-bg, rgba(15, 23, 42, 0.6));
   overflow: hidden;
 }
 
 .session-item.is-active .session-card {
-  border-color: var(--region-side-accent, rgba(96, 165, 250, 0.6));
-  background: var(--region-side-active-bg, rgba(30, 64, 175, 0.25));
+  border-color: var(--theme-side-accent, rgba(96, 165, 250, 0.6));
+  background: var(--theme-side-active-bg, rgba(30, 64, 175, 0.25));
 }
 
 .session-card:hover {
-  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.78));
+  background: var(--theme-side-active-bg, rgba(30, 41, 59, 0.78));
 }
 
 .session-select {
@@ -355,7 +355,7 @@ const {
   min-width: 0;
   border: none;
   background: transparent;
-  color: var(--region-side-text, #e2e8f0);
+  color: var(--theme-side-text, #e2e8f0);
   text-align: left;
   padding: 7px 8px;
   display: flex;
@@ -376,7 +376,7 @@ const {
 .session-meta {
   min-width: 0;
   font-size: 10px;
-  color: var(--region-side-text-muted, #94a3b8);
+  color: var(--theme-side-text-muted, #94a3b8);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -396,7 +396,7 @@ const {
 }
 
 .session-unpin:hover {
-  background: var(--region-side-active-bg, rgba(30, 41, 59, 0.5));
+  background: var(--theme-side-active-bg, rgba(30, 41, 59, 0.5));
 }
 
 .side-toggle-inline {

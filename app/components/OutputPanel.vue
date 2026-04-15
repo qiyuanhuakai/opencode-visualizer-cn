@@ -368,13 +368,13 @@ defineExpose({ panelEl });
   min-height: 0;
   overflow: hidden;
   position: relative;
-  background-color: var(--region-output-bg, rgba(15, 23, 42, 0.92));
+  background-color: var(--theme-output-bg, rgba(15, 23, 42, 0.92));
   background-image: linear-gradient(
     color-mix(in srgb, var(--project-tint, transparent) 9%, transparent),
     color-mix(in srgb, var(--project-tint, transparent) 9%, transparent)
   );
   color: var(--theme-text-primary, #e2e8f0);
-  border: 1px solid var(--region-output-border, #334155);
+  border: 1px solid var(--theme-output-border, #334155);
   border-radius: 12px;
   background-clip: padding-box;
   box-shadow: 0 12px 32px rgba(2, 6, 23, 0.45);
@@ -489,7 +489,7 @@ defineExpose({ panelEl });
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.03em;
-  color: color-mix(in srgb, var(--project-tint, var(--region-output-text, #94a3b8)) 60%, var(--region-output-text, #94a3b8));
+  color: color-mix(in srgb, var(--project-tint, var(--theme-output-text, #94a3b8)) 60%, var(--theme-output-text, #94a3b8));
   padding: 12px 12px 0;
   user-select: none;
 }
@@ -504,20 +504,20 @@ defineExpose({ panelEl });
   aspect-ratio: 1 / 1;
   box-sizing: border-box;
   border-radius: 999px;
-  border: 1px solid var(--region-output-border, #334155);
-  background: var(--region-output-control-bg, rgba(15, 23, 42, 0.92));
-  color: var(--region-output-text, #e2e8f0);
+  border: 1px solid var(--theme-output-border, #334155);
+  background: var(--theme-output-control-bg, rgba(15, 23, 42, 0.92));
+  color: var(--theme-output-text, #e2e8f0);
   font-size: 18px;
   line-height: 1;
   display: grid;
   place-items: center;
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--region-output-bg, rgba(2, 6, 23, 0.45)) 55%, transparent);
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--theme-output-bg, rgba(2, 6, 23, 0.45)) 55%, transparent);
   cursor: pointer;
   z-index: 3;
 }
 
 .follow-button:hover {
-  background: var(--region-output-active-bg, rgba(30, 41, 59, 0.98));
+  background: var(--theme-output-active-bg, rgba(30, 41, 59, 0.98));
 }
 
 .app-loading-spinner {

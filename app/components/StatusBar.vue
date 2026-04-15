@@ -31,7 +31,7 @@ defineProps<{
   padding: 0 12px 12px;
   border-top: none;
   background: transparent;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 8pt;
   line-height: 1.2;
   margin: 0;

@@ -1059,7 +1059,7 @@ function onRowDoubleClick(row: VirtualRow) {
   flex-direction: column;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid var(--region-side-border, rgba(100, 116, 139, 0.28));
+   border-bottom: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.28));
 }
 
 .tree-branch {
@@ -1067,7 +1067,7 @@ function onRowDoubleClick(row: VirtualRow) {
   align-items: center;
   gap: 5px;
   font-size: 11px;
-  color: var(--region-side-text-muted, #94a3b8);
+   color: var(--theme-side-text-muted, #94a3b8);
   white-space: nowrap;
   overflow: hidden;
   min-height: 20px;
@@ -1076,14 +1076,14 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-picker-dropdown {
   flex: 0 1 auto;
   min-width: 0;
-  --ui-dropdown-bg: var(--region-side-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.95)));
-  --ui-dropdown-border: var(--region-side-border, var(--theme-border-default, #334155));
-  --ui-dropdown-control-bg: var(--region-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
-  --ui-dropdown-text: var(--region-side-text, var(--theme-text-primary, #e2e8f0));
-  --ui-dropdown-text-muted: var(--region-side-text-muted, var(--theme-text-muted, #94a3b8));
-  --ui-dropdown-accent: var(--region-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.6)));
-  --ui-dropdown-active-bg: var(--region-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
-  --ui-dropdown-hover-bg: var(--region-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
+   --ui-dropdown-bg: var(--theme-side-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.95)));
+   --ui-dropdown-border: var(--theme-side-border, var(--theme-border-default, #334155));
+   --ui-dropdown-control-bg: var(--theme-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
+   --ui-dropdown-text: var(--theme-side-text, var(--theme-text-primary, #e2e8f0));
+   --ui-dropdown-text-muted: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
+   --ui-dropdown-accent: var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.6)));
+   --ui-dropdown-active-bg: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
+   --ui-dropdown-hover-bg: var(--theme-side-hover-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-branch-picker-trigger {
@@ -1096,16 +1096,16 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-picker-trigger:hover {
-  color: var(--region-side-text, var(--theme-text-secondary, #cbd5e1));
+   color: var(--theme-side-text, var(--theme-text-secondary, #cbd5e1));
 }
 
 .tree-branch-picker-trigger:focus-visible {
-  outline: 1px solid var(--region-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
+   outline: 1px solid var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
   outline-offset: 1px;
 }
 
 .tree-branch-chevron {
-  color: var(--region-side-text-muted, var(--theme-text-muted, #64748b));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #64748b));
   flex-shrink: 0;
 }
 
@@ -1151,7 +1151,7 @@ function onRowDoubleClick(row: VirtualRow) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--region-side-text-muted, var(--theme-text-muted, #64748b));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #64748b));
   font-size: 10px;
 }
 
@@ -1169,16 +1169,16 @@ function onRowDoubleClick(row: VirtualRow) {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border: 1px solid var(--region-side-border, var(--theme-border-default, var(--color-slate-700)));
+   border: 1px solid var(--theme-side-border, var(--theme-border-default, var(--color-slate-700)));
   border-radius: 6px;
   padding: 0;
-  background: var(--region-side-control-bg, var(--theme-surface-panel-muted, var(--color-slate-950)));
-  color: var(--region-side-text-muted, var(--theme-text-muted, var(--color-slate-400)));
+   background: var(--theme-side-control-bg, var(--theme-surface-panel-muted, var(--color-slate-950)));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-400)));
   cursor: pointer;
 }
 
 .tree-branch-action-btn:hover {
-  background: var(--region-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
 }
 
 .tree-branch-merge-btn {
@@ -1198,12 +1198,12 @@ function onRowDoubleClick(row: VirtualRow) {
   height: 18px;
   border: 0;
   background: transparent;
-  color: var(--region-side-text-muted, var(--theme-text-muted, var(--color-slate-500)));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, var(--color-slate-500)));
 }
 
 .tree-branch-fetch-btn:hover {
-  color: var(--region-side-text, var(--theme-text-secondary, var(--color-slate-300)));
-  background: var(--region-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
+   color: var(--theme-side-text, var(--theme-text-secondary, var(--color-slate-300)));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, var(--color-slate-800)));
 }
 
 .tree-branch-action-spacer {
@@ -1231,7 +1231,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-menu-error {
   padding: 8px;
   font-size: 11px;
-  color: var(--region-side-text-muted, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .tree-branch-menu-error {
@@ -1241,14 +1241,14 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-command-dropdown {
   flex: 0 0 auto;
   min-width: auto;
-  --ui-dropdown-bg: var(--region-side-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.95)));
-  --ui-dropdown-border: var(--region-side-border, var(--theme-border-default, #334155));
-  --ui-dropdown-control-bg: var(--region-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
-  --ui-dropdown-text: var(--region-side-text, var(--theme-text-primary, #e2e8f0));
-  --ui-dropdown-text-muted: var(--region-side-text-muted, var(--theme-text-muted, #94a3b8));
-  --ui-dropdown-accent: var(--region-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.6)));
-  --ui-dropdown-active-bg: var(--region-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
-  --ui-dropdown-hover-bg: var(--region-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
+   --ui-dropdown-bg: var(--theme-side-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.95)));
+   --ui-dropdown-border: var(--theme-side-border, var(--theme-border-default, #334155));
+   --ui-dropdown-control-bg: var(--theme-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
+   --ui-dropdown-text: var(--theme-side-text, var(--theme-text-primary, #e2e8f0));
+   --ui-dropdown-text-muted: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
+   --ui-dropdown-accent: var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.6)));
+   --ui-dropdown-active-bg: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
+   --ui-dropdown-hover-bg: var(--theme-side-hover-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-branch-command-trigger {
@@ -1261,7 +1261,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-command-trigger:focus-visible {
-  outline: 1px solid var(--region-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
+   outline: 1px solid var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
   outline-offset: 1px;
 }
 
@@ -1282,13 +1282,13 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-icon {
-  color: var(--region-side-accent, var(--theme-accent-primary, #60a5fa));
+   color: var(--theme-side-accent, var(--theme-accent-primary, #60a5fa));
   flex-shrink: 0;
 }
 
 .tree-branch-name {
   font-weight: 600;
-  color: var(--region-side-text, var(--theme-text-secondary, #cbd5e1));
+   color: var(--theme-side-text, var(--theme-text-secondary, #cbd5e1));
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1332,11 +1332,11 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-branch-stats:hover {
-  background: var(--region-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-branch-stats:focus-visible {
-  outline: 1px solid var(--region-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
+   outline: 1px solid var(--theme-side-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.7)));
   outline-offset: 1px;
 }
 
@@ -1351,7 +1351,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-tabs {
   display: inline-flex;
   width: 100%;
-  border: 1px solid var(--region-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.35)));
+   border: 1px solid var(--theme-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.35)));
   border-radius: 8px;
   overflow: hidden;
 }
@@ -1359,8 +1359,8 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-tab {
   flex: 1;
   border: 0;
-  background: var(--region-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
-  color: var(--region-side-text-muted, var(--theme-text-muted, #94a3b8));
+   background: var(--theme-side-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -1369,17 +1369,17 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-tab + .tree-tab {
-  border-left: 1px solid var(--region-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.35)));
+   border-left: 1px solid var(--theme-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.35)));
 }
 
 .tree-tab.is-active {
-  background: var(--region-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
-  color: var(--region-side-active-text, var(--theme-text-primary, #e2e8f0));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)));
+   color: var(--theme-side-active-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .tree-empty {
   margin: auto;
-  color: var(--region-side-text-muted, var(--theme-text-muted, rgba(148, 163, 184, 0.9)));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, rgba(148, 163, 184, 0.9)));
   font-size: 12px;
 }
 
@@ -1404,7 +1404,7 @@ function onRowDoubleClick(row: VirtualRow) {
   height: 24px;
   padding: 2px 6px 2px calc(4px + var(--indent) * 14px);
   border-radius: 6px;
-  color: var(--region-side-text, var(--theme-text-primary, #dbeafe));
+   color: var(--theme-side-text, var(--theme-text-primary, #dbeafe));
   cursor: pointer;
   position: absolute;
   left: 8px;
@@ -1417,7 +1417,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-row:hover {
-  background: var(--region-side-control-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
+   background: var(--theme-side-control-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
 }
 
 .tree-row.is-ignored:hover {
@@ -1425,7 +1425,7 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-row.is-selected {
-  background: var(--region-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.4)));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.4)));
 }
 
 .tree-row.is-selected.is-ignored {
@@ -1439,7 +1439,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-toggle {
   border: 0;
   background: transparent;
-  color: var(--region-side-text-muted, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
   width: 16px;
   padding: 0;
   cursor: pointer;
@@ -1473,7 +1473,7 @@ function onRowDoubleClick(row: VirtualRow) {
   font-size: 10px;
   font-weight: 700;
   border-radius: 999px;
-  border: 1px solid var(--region-side-border, color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.45)) 100%, transparent));
+   border: 1px solid var(--theme-side-border, color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.45)) 100%, transparent));
   line-height: 16px;
   height: 16px;
   transition:
@@ -1630,7 +1630,7 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-error {
   margin-top: 8px;
   font-size: 11px;
-  color: var(--region-side-text-muted, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .tree-error {
@@ -1641,7 +1641,7 @@ function onRowDoubleClick(row: VirtualRow) {
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
-  border-top: 1px solid var(--region-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.28)));
+   border-top: 1px solid var(--theme-side-border, var(--theme-border-muted, rgba(100, 116, 139, 0.28)));
   flex-shrink: 0;
 }
 
@@ -1667,13 +1667,13 @@ function onRowDoubleClick(row: VirtualRow) {
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: var(--region-side-text-muted, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-side-text-muted, var(--theme-text-muted, #94a3b8));
   cursor: pointer;
   padding: 0;
 }
 
 .tree-statusbar-btn:hover {
-  background: var(--region-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
-  color: var(--region-side-text, var(--theme-text-secondary, #cbd5e1));
+   background: var(--theme-side-active-bg, var(--theme-surface-panel-hover, rgba(51, 65, 85, 0.55)));
+   color: var(--theme-side-text, var(--theme-text-secondary, #cbd5e1));
 }
 </style>

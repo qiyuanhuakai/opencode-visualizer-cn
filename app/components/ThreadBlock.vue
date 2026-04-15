@@ -501,13 +501,13 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 
 <style scoped>
 .thread-block {
-  --ui-chip-border-neutral: var(--region-chat-border, rgba(148, 163, 184, 0.65));
-  --ui-chip-border-subtle: color-mix(in srgb, var(--region-chat-border, rgba(148, 163, 184, 0.5)) 80%, transparent);
-  --ui-chip-bg-neutral: var(--region-chat-control-bg, rgba(15, 23, 42, 0.75));
-  --ui-chip-bg-hover: var(--region-chat-active-bg, rgba(30, 41, 59, 0.92));
-  --ui-chip-fg-neutral: var(--region-chat-text, #bfdbfe);
-  background: var(--region-chat-bg, rgba(2, 6, 23, 0.6));
-  border: 1px solid var(--region-chat-border, #1e293b);
+  --ui-chip-border-neutral: var(--theme-chat-border, rgba(148, 163, 184, 0.65));
+  --ui-chip-border-subtle: color-mix(in srgb, var(--theme-chat-border, rgba(148, 163, 184, 0.5)) 80%, transparent);
+  --ui-chip-bg-neutral: var(--theme-chat-control-bg, rgba(15, 23, 42, 0.75));
+  --ui-chip-bg-hover: var(--theme-chat-active-bg, rgba(30, 41, 59, 0.92));
+  --ui-chip-fg-neutral: var(--theme-chat-text, #bfdbfe);
+  background: var(--theme-chat-bg, rgba(2, 6, 23, 0.6));
+  border: 1px solid var(--theme-chat-border, #1e293b);
   border-radius: 10px;
   padding: 10px;
   width: 100%;
@@ -618,15 +618,15 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 
 .ib-action-history {
   border-color: var(--ui-chip-border-subtle);
-  background: var(--region-chat-control-bg, rgba(30, 41, 59, 0.35));
-  color: var(--region-chat-text-muted, #94a3b8);
+  background: var(--theme-chat-control-bg, rgba(30, 41, 59, 0.35));
+  color: var(--theme-chat-text-muted, #94a3b8);
   margin-top: 4px;
   align-self: flex-end;
 }
 
 .ib-action-history:hover {
-  background: var(--region-chat-active-bg, rgba(51, 65, 85, 0.55));
-  color: var(--region-chat-text, #cbd5e1);
+  background: var(--theme-chat-active-bg, rgba(51, 65, 85, 0.55));
+  color: var(--theme-chat-text, #cbd5e1);
 }
 
 .ib-error-bar {

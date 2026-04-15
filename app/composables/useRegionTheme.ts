@@ -3,53 +3,27 @@ import { onUnmounted, watch } from 'vue';
 import { useSettings } from './useSettings';
 import {
   DEFAULT_REGION_THEME,
-  REGION_COLOR_FIELDS,
-  REGION_VAR_PREFIXES,
-  REGION_NAMES,
-  resolveRegionThemePreset,
-  type RegionColors,
 } from '../utils/regionTheme';
 import { StorageKeys, storageSetJSON } from '../utils/storageKeys';
 import {
   DEFAULT_SYNTAX_THEME,
   SEMANTIC_THEME_TOKENS,
   THEME_ROOT_ATTRIBUTE,
-  buildRegionCompatibilityCss,
-  createThemeStorageFromEditor,
   createSemanticTokenSnapshot,
   extractSemanticTokenOverrides,
-  extractRegionVariableOverrides,
-  isCustomThemeStorage,
-  regionThemeToSemanticOverrides,
+  regionThemeToStorage,
   resolveThemeStoragePreset,
   semanticTokenCssVariable,
   type ThemeStorageV2,
 } from '../utils/themeTokens';
+import { resolveThemeRegistryTheme } from '../utils/themeRegistry';
 
-const THEME_COMPAT_STYLE_TAG_ID = 'region-theme-compat';
 const REGION_THEME_PERSIST_DEBOUNCE_MS = 140;
 
 let sharedConsumerCount = 0;
 let sharedStopWatching: (() => void) | null = null;
 let persistTimer: number | null = null;
 let pendingPersistValue: ThemeStorageV2 | null | undefined;
-
-function ensureCompatibilityStyleTag() {
-  if (typeof document === 'undefined') {
-    return null;
-  }
-
-  const existing = document.getElementById(THEME_COMPAT_STYLE_TAG_ID);
-  if (existing instanceof HTMLStyleElement) {
-    return existing;
-  }
-
-  const styleTag = document.createElement('style');
-  styleTag.id = THEME_COMPAT_STYLE_TAG_ID;
-  styleTag.textContent = buildRegionCompatibilityCss();
-  document.head.appendChild(styleTag);
-  return styleTag;
-}
 
 function clearPersistTimer() {
   if (persistTimer == null || typeof window === 'undefined') return;
@@ -81,49 +55,23 @@ function schedulePersist(value: ThemeStorageV2 | null) {
 }
 
 export function useRegionTheme() {
-  const { themeStorage, regionTheme: activeTheme } = useSettings();
+  const { themeStorage, externalThemes } = useSettings();
 
-  function syncRegionVariables(root: HTMLElement) {
-    const regionOverrides = extractRegionVariableOverrides(activeTheme.value);
-
-    function fieldToCssSegment(field: keyof RegionColors): string {
-      switch (field) {
-        case 'controlBg':
-          return 'control-bg';
-        case 'activeBg':
-          return 'active-bg';
-        case 'activeText':
-          return 'active-text';
-        case 'textMuted':
-          return 'text-muted';
-        default:
-          return field;
-      }
-    }
-
+  function syncThemeVariables(root: HTMLElement) {
     for (const token of SEMANTIC_THEME_TOKENS) {
       root.style.removeProperty(semanticTokenCssVariable(token));
     }
 
-    for (const regionName of REGION_NAMES) {
-      const prefix = REGION_VAR_PREFIXES[regionName];
-      for (const field of REGION_COLOR_FIELDS) {
-        root.style.removeProperty(`--region-${prefix}-${fieldToCssSegment(field)}`);
-      }
-    }
-
-    Object.entries(regionOverrides).forEach(([cssVar, value]) => {
-      root.style.setProperty(cssVar, value);
-    });
-
     const semanticSnapshot = createSemanticTokenSnapshot(extractSemanticTokenOverrides(themeStorage.value));
     for (const token of SEMANTIC_THEME_TOKENS) {
-      root.style.setProperty(semanticTokenCssVariable(token), semanticSnapshot[token]);
+      const value = semanticSnapshot[token];
+      if (value) {
+        root.style.setProperty(semanticTokenCssVariable(token), value);
+      }
     }
   }
 
   function updateStyleTag() {
-    ensureCompatibilityStyleTag();
     const root = typeof document === 'undefined' ? null : document.documentElement;
     if (!root) {
       return;
@@ -136,33 +84,17 @@ export function useRegionTheme() {
       root.removeAttribute(THEME_ROOT_ATTRIBUTE);
     }
 
-    syncRegionVariables(root);
-
-    if (isCustomThemeStorage(themeStorage.value)) {
-      root.setAttribute('data-theme-custom', 'true');
-    } else {
-      root.removeAttribute('data-theme-custom');
-    }
+    syncThemeVariables(root);
 
     root.style.setProperty('--syntax-theme-name', DEFAULT_SYNTAX_THEME);
   }
 
   function applyPreset(name: string) {
-    const presetTheme = name === DEFAULT_REGION_THEME.name ? null : resolveRegionThemePreset(name);
-    activeTheme.value = presetTheme;
-    themeStorage.value = presetTheme ? createThemeStorageFromEditor(regionThemeToSemanticOverrides(presetTheme), presetTheme.name, presetTheme.label) : null;
-    if (themeStorage.value && presetTheme) {
-      themeStorage.value = {
-        ...themeStorage.value,
-        regions: Object.fromEntries(
-          Object.entries(presetTheme.regions).map(([regionName, colors]) => [regionName, { ...colors }]),
-        ) as ThemeStorageV2['regions'],
-      };
-    }
+    const presetTheme = name === DEFAULT_REGION_THEME.name ? null : resolveThemeRegistryTheme(name, externalThemes.value);
+    themeStorage.value = presetTheme ? regionThemeToStorage(presetTheme) : null;
   }
 
   function resetTheme() {
-    activeTheme.value = null;
     themeStorage.value = null;
   }
 
@@ -193,9 +125,7 @@ export function useRegionTheme() {
       sharedStopWatching = null;
 
       if (typeof document !== 'undefined') {
-        document.getElementById(THEME_COMPAT_STYLE_TAG_ID)?.remove();
         document.documentElement.removeAttribute(THEME_ROOT_ATTRIBUTE);
-        document.documentElement.removeAttribute('data-theme-custom');
         document.documentElement.style.removeProperty('--syntax-theme-name');
         for (const token of SEMANTIC_THEME_TOKENS) {
           document.documentElement.style.removeProperty(semanticTokenCssVariable(token));
@@ -205,7 +135,6 @@ export function useRegionTheme() {
   });
 
   return {
-    activeTheme,
     themeStorage,
     applyPreset,
     resetTheme,

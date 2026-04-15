@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VIS Theme Schema Entry Points",
+  "description": "Reference document for externally loaded VIS theme files.",
+  "schemas": {
+    "theme": "/schema/theme.schema.json"
+  },
+  "examples": {
+    "singleTheme": "Use /schema/theme.schema.json for a single external theme file."
+  }
+}

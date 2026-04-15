@@ -1197,7 +1197,7 @@ const inputMessageStyle = computed(() => {
   height: 100%;
   min-height: 0;
   box-sizing: border-box;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   font-family: var(--app-monospace-font-family);
 }
 
@@ -1210,9 +1210,9 @@ const inputMessageStyle = computed(() => {
   flex-direction: column;
   align-items: stretch;
   overflow: visible;
-  background-color: var(--region-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
+  background-color: var(--theme-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
   background-image: linear-gradient(var(--agent-tint, transparent), var(--agent-tint, transparent));
-  border: 1px solid var(--region-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
   border-radius: 12px;
   box-sizing: border-box;
   box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
@@ -1228,7 +1228,7 @@ const inputMessageStyle = computed(() => {
   align-items: center;
   gap: 4px;
   padding: 4px 8px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--region-input-border, var(--theme-border-default, #334155)) 70%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--theme-input-border, var(--theme-border-default, #334155)) 70%, transparent);
   flex: 0 0 auto;
 }
 
@@ -1264,7 +1264,7 @@ const inputMessageStyle = computed(() => {
 :deep(.input-control) {
   width: 100%;
   background: transparent;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   border: 1px solid transparent;
   border-radius: 8px;
   padding: 4px 8px;
@@ -1292,14 +1292,14 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.input-dropdown-popup) {
-  --ui-dropdown-bg: var(--region-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
-  --ui-dropdown-border: var(--region-input-border, var(--theme-border-default, #334155));
-  --ui-dropdown-control-bg: var(--region-input-control-bg, var(--theme-surface-panel-muted, rgba(11, 19, 32, 0.92)));
-  --ui-dropdown-text: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
-  --ui-dropdown-text-muted: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
-  --ui-dropdown-accent: var(--region-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
-  --ui-dropdown-active-bg: var(--region-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
-  --ui-dropdown-hover-bg: var(--region-input-control-bg, var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.9)));
+  --ui-dropdown-bg: var(--theme-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
+  --ui-dropdown-border: var(--theme-input-border, var(--theme-border-default, #334155));
+  --ui-dropdown-control-bg: var(--theme-input-control-bg, var(--theme-surface-panel-muted, rgba(11, 19, 32, 0.92)));
+  --ui-dropdown-text: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  --ui-dropdown-text-muted: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  --ui-dropdown-accent: var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
+  --ui-dropdown-active-bg: var(--theme-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
+  --ui-dropdown-hover-bg: var(--theme-input-control-bg, var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.9)));
   /* Always open upward since input toolbar is at the bottom */
   top: auto;
   bottom: anchor(top);
@@ -1327,7 +1327,7 @@ const inputMessageStyle = computed(() => {
 .dropdown-empty {
   padding: 6px 8px;
   font-size: 12px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .dropdown-item-label {
@@ -1348,13 +1348,13 @@ const inputMessageStyle = computed(() => {
 
 .agent-dropdown-name {
   font-size: 12px;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
 
 .agent-dropdown-description {
   font-size: 10px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1377,7 +1377,7 @@ const inputMessageStyle = computed(() => {
 .model-button-provider {
   position: fixed;
   font-size: 9px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   white-space: nowrap;
   text-overflow: ellipsis;
   transform: translate(-3px, -11px);
@@ -1385,7 +1385,7 @@ const inputMessageStyle = computed(() => {
 
 .model-button-name {
   font-size: 12px;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1428,13 +1428,13 @@ const inputMessageStyle = computed(() => {
 
 .model-dropdown-name {
   font-size: 12px;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
 
 .model-dropdown-path {
   font-size: 10px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   line-height: 1.2;
 }
 
@@ -1474,7 +1474,7 @@ const inputMessageStyle = computed(() => {
   gap: 6px;
   width: 100%;
   padding: 6px 8px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--region-input-border, var(--theme-border-default, #1e293b)) 80%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--theme-input-border, var(--theme-border-default, #1e293b)) 80%, transparent);
   box-sizing: border-box;
   max-height: 45%;
   overflow: auto;
@@ -1490,8 +1490,8 @@ const inputMessageStyle = computed(() => {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 8px;
-  border: 1px solid var(--region-input-border, var(--theme-border-default, #1e293b));
-  background: var(--region-input-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
+  border: 1px solid var(--theme-input-border, var(--theme-border-default, #1e293b));
+  background: var(--theme-input-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
   box-sizing: border-box;
 }
 
@@ -1499,9 +1499,9 @@ const inputMessageStyle = computed(() => {
   width: 36px;
   height: 36px;
   border-radius: 6px;
-  border: 1px solid var(--region-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
   object-fit: cover;
-  background: var(--region-input-bg, var(--theme-surface-panel, #0b1320));
+  background: var(--theme-input-bg, var(--theme-surface-panel, #0b1320));
 }
 
 .attachment-thumb.clickable {
@@ -1518,7 +1518,7 @@ const inputMessageStyle = computed(() => {
 
 .attachment-name {
   font-size: 12px;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1526,13 +1526,13 @@ const inputMessageStyle = computed(() => {
 
 .attachment-type {
   font-size: 10px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .attachment-remove {
-  background: var(--region-input-control-bg, var(--theme-surface-panel-muted, #1e293b));
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
-  border: 1px solid var(--region-input-border, var(--theme-border-default, #334155));
+  background: var(--theme-input-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
   border-radius: 6px;
   padding: 4px;
   font-size: 10px;
@@ -1543,7 +1543,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .attachment-remove:hover {
-  background: var(--region-input-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.7)));
+  background: var(--theme-input-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.7)));
 }
 
 .command-dropdown-wrapper {
@@ -1569,8 +1569,8 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.command-popup) .ui-dropdown-item[aria-selected='true'] {
-  background: var(--region-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
-  border: 1px solid var(--region-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
+  background: var(--theme-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
+  border: 1px solid var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
 }
 
 .command-dropdown-item {
@@ -1582,12 +1582,12 @@ const inputMessageStyle = computed(() => {
 }
 .command-name {
   font-size: 12px;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
 .command-desc {
   font-size: 10px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   line-height: 1.2;
 }
 
@@ -1614,24 +1614,24 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.agent-popup) .ui-dropdown-item[aria-selected='true'] {
-  background: var(--region-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
-  border: 1px solid var(--region-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
+  background: var(--theme-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
+  border: 1px solid var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
 }
 
 .agent-popup-name {
   font-size: 12px;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
 .agent-mode-badge {
   font-size: 10px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   margin-left: 6px;
   font-weight: 500;
 }
 .agent-popup-description {
   font-size: 10px;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   line-height: 1.2;
 }
 
@@ -1658,8 +1658,8 @@ const inputMessageStyle = computed(() => {
   max-height: 50vh;
   overflow: auto;
   /* Match input panel background */
-  background: var(--region-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
-  border: 1px solid var(--region-input-border, var(--theme-border-default, #334155));
+  background: var(--theme-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
+   border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
   outline: none;
   box-shadow: var(--theme-shadow-floating, 0 -8px 24px rgba(2, 6, 23, 0.5));
   box-sizing: border-box;
@@ -1667,8 +1667,8 @@ const inputMessageStyle = computed(() => {
 
 :deep(.history-popup) .ui-dropdown-item {
   /* Match thread-block style */
-  background: var(--region-input-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
-  border: 1px solid var(--region-input-border, var(--theme-border-default, #1e293b));
+   background: var(--theme-input-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
+   border: 1px solid var(--theme-input-border, var(--theme-border-default, #1e293b));
   border-radius: 10px;
   padding: 8px;
 }
@@ -1679,12 +1679,12 @@ const inputMessageStyle = computed(() => {
 
 :deep(.history-popup) .ui-dropdown-item[aria-selected='true'],
 :deep(.history-popup) .ui-dropdown-item:hover {
-  background: var(--region-input-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.7)));
-  border-color: var(--region-input-accent, var(--theme-border-strong, #475569));
+   background: var(--theme-input-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.7)));
+   border-color: var(--theme-input-accent, var(--theme-border-strong, #475569));
 }
 
 .history-item {
-  border-left: 3px solid var(--region-input-border, var(--theme-border-default, #334155));
+   border-left: 3px solid var(--theme-input-border, var(--theme-border-default, #334155));
   padding-left: 8px;
   flex: 1 1 auto;
   min-width: 0;
@@ -1692,7 +1692,7 @@ const inputMessageStyle = computed(() => {
 
 .history-item-text {
   font-size: 12px;
-  color: var(--region-input-text, var(--theme-text-primary, #e2e8f0));
+   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1713,7 +1713,7 @@ const inputMessageStyle = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--region-input-text, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-input-text, var(--theme-text-muted, #94a3b8));
 }
 
 .history-target-agent,
@@ -1727,15 +1727,15 @@ const inputMessageStyle = computed(() => {
 }
 
 .history-target-model {
-  color: var(--region-input-text, var(--theme-text-primary, #f8fafc));
+   color: var(--theme-input-text, var(--theme-text-primary, #f8fafc));
 }
 
 .history-target-provider {
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .history-target-separator {
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .history-target-variant {
@@ -1750,7 +1750,7 @@ const inputMessageStyle = computed(() => {
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #64748b));
+   color: var(--theme-input-text-muted, var(--theme-text-muted, #64748b));
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1775,7 +1775,7 @@ const inputMessageStyle = computed(() => {
 
 .input-button {
   background: transparent;
-  color: var(--region-input-text-muted, var(--theme-text-muted, #94a3b8));
+   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   border: 1px solid transparent;
   border-radius: 8px;
   width: 28px;

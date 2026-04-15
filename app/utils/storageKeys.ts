@@ -11,6 +11,7 @@ export const StorageKeys = {
     appMonospaceFontFamily: 'settings.appMonospaceFontFamily.v1',
     regionTheme: 'settings.regionTheme.v1',
     themeTokens: 'settings.themeTokens.v2',
+    themeRegistry: 'settings.themeRegistry.v1',
   },
   state: {
     sidePanelCollapsed: 'state.sidePanelCollapsed.v1',

@@ -4,16 +4,19 @@ import {
   REGION_NAMES,
   REGION_VAR_PREFIXES,
   REGION_THEME_EDITOR_FALLBACKS,
-  resolveRegionThemePreset,
-  resolveRegionThemePresetName,
   type RegionColors,
   type RegionName,
   type RegionThemeConfig,
 } from './regionTheme';
+import {
+  listThemeRegistryEntries,
+  normalizeThemeRegistryId,
+  resolveThemeRegistryTheme,
+} from './themeRegistry';
 
 export const DEFAULT_SYNTAX_THEME = 'github-dark';
 export const THEME_ROOT_ATTRIBUTE = 'data-region-theme';
-export type SemanticThemeToken =
+export type BaseSemanticThemeToken =
   | 'surface-page'
   | 'surface-page-elevated'
   | 'surface-panel'
@@ -68,7 +71,23 @@ export type SemanticThemeToken =
   | 'shadow-floating'
   | 'shadow-glow';
 
-export const SEMANTIC_THEME_TOKENS = [
+const REGION_THEME_TOKEN_FIELDS = [
+  'bg',
+  'text',
+  'border',
+  'accent',
+  'control-bg',
+  'active-bg',
+  'active-text',
+  'text-muted',
+] as const;
+
+type RegionThemeTokenField = (typeof REGION_THEME_TOKEN_FIELDS)[number];
+type RegionThemeTokenPrefix = (typeof REGION_VAR_PREFIXES)[keyof typeof REGION_VAR_PREFIXES];
+export type RegionThemeToken = `${RegionThemeTokenPrefix}-${RegionThemeTokenField}`;
+export type SemanticThemeToken = BaseSemanticThemeToken | RegionThemeToken;
+
+const BASE_SEMANTIC_THEME_TOKENS = [
   'surface-page',
   'surface-page-elevated',
   'surface-panel',
@@ -122,7 +141,18 @@ export const SEMANTIC_THEME_TOKENS = [
   'shadow-panel',
   'shadow-floating',
   'shadow-glow',
-] as const satisfies readonly SemanticThemeToken[];
+] as const satisfies readonly BaseSemanticThemeToken[];
+
+export const REGION_THEME_TOKENS = REGION_NAMES.flatMap((regionName) =>
+  REGION_THEME_TOKEN_FIELDS.map(
+    (field) => `${REGION_VAR_PREFIXES[regionName]}-${field}` as RegionThemeToken,
+  ),
+) as readonly RegionThemeToken[];
+
+export const SEMANTIC_THEME_TOKENS = [
+  ...BASE_SEMANTIC_THEME_TOKENS,
+  ...REGION_THEME_TOKENS,
+] as readonly SemanticThemeToken[];
 
 export type SemanticTokenMap = Record<SemanticThemeToken, string>;
 export type SemanticTokenOverrides = Partial<SemanticTokenMap>;
@@ -135,7 +165,7 @@ export type ThemeStorageV2 = {
   overrides: SemanticTokenOverrides;
 };
 
-const DEFAULT_SEMANTIC_TOKENS: SemanticTokenMap = {
+const DEFAULT_BASE_SEMANTIC_TOKENS: Record<BaseSemanticThemeToken, string> = {
   'surface-page': '#07111f',
   'surface-page-elevated': 'rgba(15, 23, 42, 0.92)',
   'surface-panel': 'rgba(15, 23, 42, 0.92)',
@@ -189,6 +219,117 @@ const DEFAULT_SEMANTIC_TOKENS: SemanticTokenMap = {
   'shadow-panel': '0 12px 32px rgba(2, 6, 23, 0.45)',
   'shadow-floating': '0 20px 48px rgba(2, 6, 23, 0.55)',
   'shadow-glow': '0 0 0 1px rgba(15, 23, 42, 0.6)',
+};
+
+function regionThemeToken(regionName: RegionName, field: keyof RegionColors): RegionThemeToken {
+  return `${REGION_VAR_PREFIXES[regionName]}-${fieldToCssSegment(field)}` as RegionThemeToken;
+}
+
+function createDefaultRegionSemanticTokens(
+  base: Record<BaseSemanticThemeToken, string>,
+): Record<RegionThemeToken, string> {
+  const defaults = {} as Record<RegionThemeToken, string>;
+
+  function assignRegion(
+    regionName: RegionName,
+    values: Partial<Record<keyof RegionColors, BaseSemanticThemeToken>>,
+  ) {
+    for (const field of REGION_COLOR_FIELDS) {
+      const token = values[field];
+      if (!token) continue;
+      defaults[regionThemeToken(regionName, field)] = base[token];
+    }
+  }
+
+  assignRegion('topPanel', {
+    bg: 'surface-panel',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'accent-primary',
+    controlBg: 'surface-panel-muted',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+  assignRegion('sidePanel', {
+    bg: 'surface-panel',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'accent-primary',
+    controlBg: 'surface-panel-muted',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+  assignRegion('inputPanel', {
+    bg: 'surface-panel',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'accent-primary',
+    controlBg: 'surface-panel-muted',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+  assignRegion('outputPanel', {
+    bg: 'surface-panel',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'accent-primary',
+    controlBg: 'surface-panel-muted',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+  assignRegion('topDropdown', {
+    bg: 'surface-panel-elevated',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'border-accent',
+    controlBg: 'surface-panel-muted',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+  assignRegion('modalPanel', {
+    bg: 'surface-panel-elevated',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'border-accent',
+    controlBg: 'surface-panel-muted',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+  assignRegion('pageBackground', {
+    bg: 'surface-page',
+    text: 'text-primary',
+    border: 'border-default',
+    accent: 'accent-primary',
+    controlBg: 'surface-page-elevated',
+    activeBg: 'surface-panel-active',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+  assignRegion('chatCard', {
+    bg: 'surface-panel-elevated',
+    text: 'text-primary',
+    border: 'border-muted',
+    accent: 'border-accent',
+    controlBg: 'surface-chip',
+    activeBg: 'surface-chip-hover',
+    activeText: 'text-inverse',
+    textMuted: 'text-muted',
+  });
+
+  return defaults;
+}
+
+const DEFAULT_REGION_SEMANTIC_TOKENS = createDefaultRegionSemanticTokens(DEFAULT_BASE_SEMANTIC_TOKENS);
+
+const DEFAULT_SEMANTIC_TOKENS: SemanticTokenMap = {
+  ...DEFAULT_BASE_SEMANTIC_TOKENS,
+  ...DEFAULT_REGION_SEMANTIC_TOKENS,
 };
 
 function regionColorValue(region: Partial<RegionColors> | undefined, field: keyof RegionColors) {
@@ -261,6 +402,10 @@ export function createDefaultSemanticThemeTokens(): SemanticTokenMap {
 
 export function semanticTokenCssVariable(token: SemanticThemeToken): string {
   return `--theme-${token}`;
+}
+
+export function regionThemeCssVariable(regionName: RegionName, field: keyof RegionColors): string {
+  return semanticTokenCssVariable(regionThemeToken(regionName, field));
 }
 
 export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null | undefined): SemanticTokenOverrides {
@@ -341,7 +486,7 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
 }
 
 export function resolveThemeStoragePreset(storage: ThemeStorageV2 | null | undefined) {
-  return resolveRegionThemePresetName(storage?.preset ?? null);
+  return normalizeThemeRegistryId(storage?.preset ?? null);
 }
 
 export function isThemeStorageV2(value: unknown): value is ThemeStorageV2 {
@@ -375,29 +520,72 @@ export function normalizeThemeStorage(input: unknown): ThemeStorageV2 | null {
 
 export function regionThemeToStorage(theme: RegionThemeConfig | null | undefined): ThemeStorageV2 | null {
   if (!theme) return null;
+  const semanticOverrides = regionThemeToSemanticOverrides(theme);
+  const regionOverrides = Object.fromEntries(
+    REGION_NAMES.flatMap((regionName) => {
+      const region = theme.regions[regionName] ?? {};
+      return REGION_COLOR_FIELDS.flatMap((field) => {
+        const value = normalizeColorValue(region[field]);
+        if (!value) return [];
+        return [[regionThemeToken(regionName, field), value]];
+      });
+    }),
+  ) as SemanticTokenOverrides;
+
   return {
     version: 2,
-    preset: resolveRegionThemePresetName(theme.name),
+    preset: normalizeThemeRegistryId(theme.name),
     label: theme.label,
     regions: cloneRegionThemeRegions(theme.regions),
-    overrides: regionThemeToSemanticOverrides(theme),
+    overrides: {
+      ...semanticOverrides,
+      ...regionOverrides,
+    },
   };
 }
 
 export function storageToRegionTheme(storage: ThemeStorageV2 | null | undefined): RegionThemeConfig | null {
   if (!storage) return null;
 
-  const preset = resolveRegionThemePreset(storage.preset ?? null);
+  const preset = resolveThemeRegistryTheme(storage.preset ?? null);
   const normalizedRegions = storage.regions ? cloneRegionThemeRegions(storage.regions) : undefined;
+
+  if (!normalizedRegions) {
+    const tokenRegions = Object.fromEntries(
+      REGION_NAMES.map((regionName) => {
+        const region = Object.fromEntries(
+          REGION_COLOR_FIELDS.flatMap((field) => {
+            const value = normalizeColorValue(storage.overrides[regionThemeToken(regionName, field)]);
+            if (!value) return [];
+            return [[field, value]];
+          }),
+        ) as Partial<RegionColors>;
+
+        return [regionName, region];
+      }),
+    ) as Record<RegionName, Partial<RegionColors>>;
+
+    const hasAnyTokenRegion = REGION_NAMES.some((regionName) => Object.keys(tokenRegions[regionName] ?? {}).length > 0);
+    if (hasAnyTokenRegion) {
+      return {
+        name: storage.preset ?? 'custom',
+        label:
+          storage.label ??
+          (storage.preset ? resolveThemeRegistryTheme(storage.preset)?.label : undefined) ??
+          'Custom',
+        regions: tokenRegions,
+      };
+    }
+  }
 
   if (normalizedRegions) {
     return {
-      name: storage.preset ?? 'custom',
-      label:
-        storage.label ??
-        (storage.preset ? resolveRegionThemePreset(storage.preset)?.label : undefined) ??
-        'Custom',
-      regions: normalizedRegions,
+        name: storage.preset ?? 'custom',
+        label:
+          storage.label ??
+          (storage.preset ? resolveThemeRegistryTheme(storage.preset)?.label : undefined) ??
+          'Custom',
+        regions: normalizedRegions,
     };
   }
 
@@ -432,7 +620,7 @@ export function migrateLegacyRegionThemeStorage(input: unknown): ThemeStorageV2 
 export function resolveThemeStorageLabel(storage: ThemeStorageV2 | null | undefined): string {
   if (!storage) return DEFAULT_REGION_THEME.label;
   if (storage.label) return storage.label;
-  const preset = resolveRegionThemePreset(storage.preset ?? null);
+  const preset = resolveThemeRegistryTheme(storage.preset ?? null);
   return preset?.label ?? 'Custom';
 }
 
@@ -499,10 +687,8 @@ export function buildRegionCompatibilityCss(): string {
 
 export function buildPresetTokenOverrides(): Record<string, SemanticTokenOverrides> {
   const result: Record<string, SemanticTokenOverrides> = {};
-  for (const presetName of ['default', 'ocean', 'forest', 'sakura'] as const) {
-    const preset = resolveRegionThemePreset(presetName);
-    if (!preset) continue;
-    result[presetName] = regionThemeToSemanticOverrides(preset);
+  for (const entry of listThemeRegistryEntries([])) {
+    result[entry.id] = regionThemeToStorage(entry.theme)?.overrides ?? {};
   }
   return result;
 }
@@ -523,21 +709,22 @@ export function extractSemanticTokenOverrides(storage: ThemeStorageV2 | null | u
   return storage?.overrides ?? {};
 }
 
-export function extractRegionVariableOverrides(
-  theme: RegionThemeConfig | null | undefined,
+export function extractRegionTokenOverrides(
+  theme: Record<RegionName, Partial<RegionColors>> | RegionThemeConfig | null | undefined,
 ): Record<string, string> {
   if (!theme) {
     return {};
   }
 
+  const regions = 'regions' in theme ? theme.regions : theme;
+
   return Object.fromEntries(
     REGION_NAMES.flatMap((regionName) => {
-      const prefix = REGION_VAR_PREFIXES[regionName];
-      const region = theme.regions[regionName] ?? {};
+      const region = regions[regionName] ?? {};
       return REGION_COLOR_FIELDS.flatMap((field) => {
         const value = normalizeColorValue(region[field]);
         if (!value) return [];
-        return [[`--region-${prefix}-${fieldToCssSegment(field)}`, value]];
+        return [[regionThemeCssVariable(regionName, field), value]];
       });
     }),
   );

@@ -158,4 +158,60 @@ describe('useSettings', () => {
     for (const listener of storageListeners) listener(event);
     expect(settings.pinnedSessionsLimit.value).toBe(30);
   });
+
+  it('persists and syncs external themes', async () => {
+    const settings = await importFresh();
+    settings.externalThemes.value = [
+      {
+        id: 'aurora',
+        label: 'Aurora',
+        badge: 'External',
+        description: 'Northern-light inspired surfaces.',
+        swatches: ['#08111f', '#11243b', '#67e8f9', '#eefbff'],
+        regions: {
+          topPanel: { bg: '#11243b' },
+          sidePanel: { bg: '#0b1727' },
+          inputPanel: { bg: '#0a1a2a' },
+          outputPanel: { bg: '#0f2033' },
+          topDropdown: { bg: '#0a1a2a' },
+          modalPanel: { bg: '#11243b' },
+          pageBackground: { bg: '#08111f' },
+          chatCard: { bg: '#11243bb8' },
+        },
+      },
+    ];
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(storage.getItem('opencode.settings.themeRegistry.v1')).toContain('aurora');
+
+    const registryPayload = JSON.stringify({
+      version: 1,
+      themes: [
+        {
+          id: 'aurora-night',
+          label: 'Aurora Night',
+          regions: {
+            topPanel: { bg: '#10192d' },
+            sidePanel: { bg: '#0d1527' },
+            inputPanel: { bg: '#0d1527' },
+            outputPanel: { bg: '#122036' },
+            topDropdown: { bg: '#0d1527' },
+            modalPanel: { bg: '#122036' },
+            pageBackground: { bg: '#070d18' },
+            chatCard: { bg: '#122036b8' },
+          },
+        },
+      ],
+    });
+    storage.setItem('opencode.settings.themeRegistry.v1', registryPayload);
+
+    const event = {
+      key: 'opencode.settings.themeRegistry.v1',
+      newValue: registryPayload,
+    } as unknown as StorageEvent;
+
+    for (const listener of storageListeners) listener(event);
+    expect(settings.externalThemes.value).toHaveLength(1);
+    expect(settings.externalThemes.value[0]?.id).toBe('aurora-night');
+  });
 });

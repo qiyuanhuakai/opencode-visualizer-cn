@@ -6956,7 +6956,7 @@ onBeforeUnmount(() => {
 
 .app-loading-message {
   margin: 8px 0 0;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 12px;
 }
 
@@ -6984,7 +6984,7 @@ onBeforeUnmount(() => {
 .app-loading-abort {
   background: transparent;
   border-color: #475569;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .app-loading-abort:hover {
@@ -7017,7 +7017,7 @@ onBeforeUnmount(() => {
 }
 
 .app-login-input::placeholder {
-  color: var(--region-page-text-muted, #64748b);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #64748b));
 }
 
 .app-login-input:focus {
@@ -7035,7 +7035,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--region-page-text-muted, #94a3b8);
+  color: var(--theme-page-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 12px;
   cursor: pointer;
   user-select: none;
