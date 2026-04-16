@@ -458,6 +458,14 @@ export interface LocaleMessages {
       label: string;
       description: string;
     };
+    showOpenInEditorButton: {
+      label: string;
+      description: string;
+    };
+    openInEditorMaxSizeMb: {
+      label: string;
+      description: string;
+    };
     theme: {
       label: string;
       description: string;
@@ -528,6 +536,7 @@ export interface LocaleMessages {
     tool: string;
     minimizeWindow: string;
     closeWindow: string;
+    openInEditor: string;
     previousMatch: string;
     nextMatch: string;
     closeSearch: string;

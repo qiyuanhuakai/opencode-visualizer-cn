@@ -516,6 +516,14 @@ const messages: LocaleMessages = {
       label: '保持 Dock 始终可见',
       description: '即使没有窗口被最小化，也保持 Dock 栏可见。仅在启用最小化时可用。',
     },
+    showOpenInEditorButton: {
+      label: '显示"用编辑器打开"按钮',
+      description: '在文件预览窗口上显示"用编辑器打开"按钮。',
+    },
+    openInEditorMaxSizeMb: {
+      label: '"用编辑器打开"文件大小限制',
+      description: '超过此大小（MB）的文件不显示该按钮。',
+    },
   },
   floatingWindow: {
     search: '搜索',
@@ -529,6 +537,7 @@ const messages: LocaleMessages = {
     tool: '工具',
     minimizeWindow: '最小化窗口',
     closeWindow: '关闭窗口',
+    openInEditor: '用编辑器打开',
     previousMatch: '上一个匹配',
     nextMatch: '下一个匹配',
     closeSearch: '关闭搜索',

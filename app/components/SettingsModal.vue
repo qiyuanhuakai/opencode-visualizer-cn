@@ -83,6 +83,34 @@
             </label>
           </div>
 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.showOpenInEditorButton.label') }}</div>
+              <div class="setting-description">{{ $t('settings.showOpenInEditorButton.description') }}</div>
+            </div>
+            <label class="toggle-switch">
+              <input v-model="showOpenInEditorButton" type="checkbox" class="toggle-input" />
+              <span class="toggle-track" />
+            </label>
+          </div>
+
+          <div class="setting-row setting-row-stack">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.openInEditorMaxSizeMb.label') }}</div>
+              <div class="setting-description">{{ $t('settings.openInEditorMaxSizeMb.description') }}</div>
+            </div>
+            <div class="number-setting-group">
+              <input
+                v-model.number="openInEditorMaxSizeMb"
+                type="number"
+                class="number-input"
+                :min="minOpenInEditorMaxSizeMb"
+                :max="maxOpenInEditorMaxSizeMb"
+                step="1"
+              />
+            </div>
+          </div>
+
           <div class="setting-row setting-row-stack">
             <div class="setting-info">
               <div class="setting-label">{{ $t('settings.pinnedSessionsLimit.label') }}</div>
@@ -510,6 +538,10 @@ const {
   maxPinnedSessionsLimit,
   defaultTerminalFontFamily,
   defaultAppMonospaceFontFamily,
+  showOpenInEditorButton,
+  openInEditorMaxSizeMb,
+  minOpenInEditorMaxSizeMb,
+  maxOpenInEditorMaxSizeMb,
 } = useSettings();
 const activeThemeStorage = themeStorage;
 const selectedPreset = ref<string>('default');

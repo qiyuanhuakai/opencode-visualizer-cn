@@ -9,6 +9,8 @@ export const StorageKeys = {
     pinnedSessionsLimit: 'settings.pinnedSessionsLimit.v1',
     terminalFontFamily: 'settings.terminalFontFamily.v1',
     appMonospaceFontFamily: 'settings.appMonospaceFontFamily.v1',
+    showOpenInEditorButton: 'settings.showOpenInEditorButton.v1',
+    openInEditorMaxSizeMb: 'settings.openInEditorMaxSizeMb.v1',
     regionTheme: 'settings.regionTheme.v1',
     themeTokens: 'settings.themeTokens.v2',
     themeRegistry: 'settings.themeRegistry.v1',

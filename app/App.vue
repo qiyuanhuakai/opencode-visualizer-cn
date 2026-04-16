@@ -178,6 +178,7 @@
               @focus="fw.bringToFront(entry.key)"
               @minimize="handleFloatingWindowMinimize(entry.key)"
               @close="handleFloatingWindowClose(entry.key)"
+              @open="handleFloatingWindowOpen(entry.key)"
             />
           </TransitionGroup>
         </div>
@@ -4314,6 +4315,23 @@ function handleFloatingWindowMinimize(key: string) {
   fw.minimize(key);
 }
 
+async function handleFloatingWindowOpen(key: string) {
+  if (!key.startsWith('file-viewer:')) return;
+  const entry = fw.get(key);
+  const absolutePath = entry?.props?.absolutePath;
+  if (!absolutePath || typeof absolutePath !== 'string') return;
+
+  const directory = activeDirectory.value.trim();
+  if (!directory) return;
+
+  // Escape path safely for shell: use single-quote wrapping with internal single-quote handling
+  const escapedPath = absolutePath.replace(/'/g, "'\"'\"'");
+  const pty = await createPtySession('/bin/sh', ['-c', `$EDITOR '${escapedPath}'`]);
+  if (pty) {
+    await ensureShellWindow(pty);
+  }
+}
+
 function restoreFloatingWindow(key: string) {
   fw.restore(key);
   nextTick(() => {
@@ -6295,15 +6313,18 @@ async function handleEditMessage(payload: { sessionId: string; part: MessagePart
   }
 }
 
-function toFileViewerKey(path: string, lines?: string) {
+function resolveFileViewerAbsolutePath(path: string) {
   const directory = activeDirectory.value.trim();
   const requestPath = splitFileContentDirectoryAndPath(path, directory || null);
-  const normalizedPath =
-    requestPath.path === '.'
-      ? requestPath.directory
-      : requestPath.directory === '/'
-        ? `/${requestPath.path}`
-        : `${requestPath.directory.replace(/\/+$/, '')}/${requestPath.path}`;
+  return requestPath.path === '.'
+    ? requestPath.directory
+    : requestPath.directory === '/'
+      ? `/${requestPath.path}`
+      : `${requestPath.directory.replace(/\/+$/, '')}/${requestPath.path}`;
+}
+
+function toFileViewerKey(path: string, lines?: string) {
+  const normalizedPath = resolveFileViewerAbsolutePath(path);
   if (!lines) return `file-viewer:${normalizedPath}`;
   return `file-viewer:${normalizedPath}:${lines}`;
 }
@@ -6323,10 +6344,12 @@ async function openFileViewer(path: string, lines?: string) {
   }
   const pos = getFileViewerPosition(0.18, 0.14);
   const lang = guessLanguage(path);
+  const absolutePath = resolveFileViewerAbsolutePath(path);
   fw.open(key, {
     component: ContentViewer,
     props: {
       path,
+      absolutePath,
       lang,
       lines,
       gutterMode: 'default',
@@ -6348,6 +6371,7 @@ async function openFileViewer(path: string, lines?: string) {
     fw.updateOptions(key, {
       props: {
         path,
+        absolutePath,
         rawHtml: t('app.read.noActiveDirectorySelected'),
         lines,
         gutterMode: 'none',
@@ -6369,51 +6393,58 @@ async function openFileViewer(path: string, lines?: string) {
     const isBase64Payload = encoding === 'base64';
     if (type === 'binary' || isBase64Payload) {
       if (!content) {
-        fw.updateOptions(key, {
-          props: {
-            path,
-            rawHtml: t('app.read.binaryContentNotIncluded'),
-            lines,
-            gutterMode: 'none',
-            theme: shikiTheme.value,
-          },
-        });
-        return;
-      }
       fw.updateOptions(key, {
         props: {
           path,
-          binaryBase64: content,
-          lang: guessLanguage(path),
+          absolutePath,
+          rawHtml: t('app.read.binaryContentNotIncluded'),
           lines,
-          gutterMode: 'default',
+          gutterMode: 'none',
           theme: shikiTheme.value,
         },
       });
       return;
     }
-    const resolvedLang = guessLanguage(path);
-    const textContent = content;
     fw.updateOptions(key, {
       props: {
         path,
-        fileContent: textContent,
-        lang: resolvedLang,
+        absolutePath,
+        binaryBase64: content,
+        fileSizeBytes: content.length,
+        lang: guessLanguage(path),
         lines,
         gutterMode: 'default',
         theme: shikiTheme.value,
       },
     });
-  } catch (error) {
-    fw.updateOptions(key, {
-      props: {
-        path,
-        rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
-        lines,
-        gutterMode: 'none',
-        theme: shikiTheme.value,
-      },
-    });
+    return;
+  }
+  const resolvedLang = guessLanguage(path);
+  const textContent = content;
+  const fileSizeBytes = new TextEncoder().encode(textContent).length;
+  fw.updateOptions(key, {
+    props: {
+      path,
+      absolutePath,
+      fileSizeBytes,
+      fileContent: textContent,
+      lang: resolvedLang,
+      lines,
+      gutterMode: 'default',
+      theme: shikiTheme.value,
+    },
+  });
+} catch (error) {
+  fw.updateOptions(key, {
+    props: {
+      path,
+      absolutePath,
+      rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
+      lines,
+      gutterMode: 'none',
+      theme: shikiTheme.value,
+    },
+  });
   }
 }
 

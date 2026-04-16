@@ -516,6 +516,14 @@ const messages: LocaleMessages = {
       label: 'Keep dock always visible',
       description: 'Keep the dock bar visible even when no window is minimized. Only available when minimization is enabled.',
     },
+    showOpenInEditorButton: {
+      label: 'Show "Open in Editor" button',
+      description: 'Display an "Open in Editor" button on file preview windows.',
+    },
+    openInEditorMaxSizeMb: {
+      label: 'Max file size for "Open in Editor"',
+      description: 'Do not show the button for files larger than this size (MB).',
+    },
   },
   floatingWindow: {
     search: 'Search',
@@ -529,6 +537,7 @@ const messages: LocaleMessages = {
     tool: 'Tool',
     minimizeWindow: 'Minimize window',
     closeWindow: 'Close window',
+    openInEditor: 'Open in editor',
     previousMatch: 'Previous match',
     nextMatch: 'Next match',
     closeSearch: 'Close search',
