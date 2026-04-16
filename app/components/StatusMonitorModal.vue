@@ -502,7 +502,7 @@ const currentTotalInfo = computed(() => {
 .status-monitor-body {
   flex: 1;
   min-height: 0;
-  padding: 16px;
+  padding: 16px 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -529,10 +529,10 @@ const currentTotalInfo = computed(() => {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   background: var(--theme-tab-bg, transparent);
-  border: 1px solid var(--theme-tab-border, transparent);
+  border: none;
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .status-monitor-tab:hover {
@@ -543,7 +543,6 @@ const currentTotalInfo = computed(() => {
 .status-monitor-tab.is-active {
   color: var(--theme-tab-active-text, var(--theme-text-primary, #e2e8f0));
   background: var(--theme-tab-active-bg, var(--theme-modal-active-bg, rgba(30, 64, 175, 0.45)));
-  border-color: var(--theme-tab-active-border, var(--theme-modal-accent, rgba(96, 165, 250, 0.5)));
 }
 
 .status-monitor-actions {
