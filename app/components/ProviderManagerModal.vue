@@ -793,7 +793,7 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-manager-tab {
-  border: 1px solid var(--theme-tab-border, var(--theme-modal-border, var(--theme-border-muted, rgba(100, 116, 139, 0.35))));
+  border: none;
   border-radius: 8px;
   background: var(--theme-tab-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7))));
   color: var(--theme-tab-text, var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8)));
@@ -807,7 +807,6 @@ async function disconnectProvider(providerId: string) {
 .provider-manager-tab.is-active {
   background: var(--theme-tab-active-bg, var(--theme-modal-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45))));
   color: var(--theme-tab-active-text, var(--theme-modal-active-text, var(--theme-text-primary, #e2e8f0)));
-  border-color: var(--theme-tab-active-border, var(--theme-modal-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.6))));
 }
 
 .provider-manager-feedback {
