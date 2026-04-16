@@ -3,6 +3,7 @@ import { fromHighlighter, type MarkdownItShikiSetupOptions } from '@shikijs/mark
 import { bundledLanguages, createHighlighter } from 'shiki/bundle/web';
 import { bundledLanguages as allBundledLanguages } from 'shiki/langs';
 import { transformerNotationDiff } from '@shikijs/transformers';
+import { compactUnifiedDiffPatch } from '../utils/diffCompression';
 
 type RenderRequest = {
   id: string;
@@ -109,7 +110,7 @@ function languageCandidates(lang: string) {
 async function resolveLanguage(highlighter: Highlighter, lang: string) {
   const loaded =
     typeof highlighter.getLoadedLanguages === 'function' ? highlighter.getLoadedLanguages() : [];
-  loaded.forEach((item) => loadedLanguageCache.add(item));
+  for (const item of loaded) loadedLanguageCache.add(item);
   for (const candidate of languageCandidates(lang)) {
     if (loadedLanguageCache.has(candidate)) return candidate;
     if (candidate === 'text') return 'text';
@@ -986,11 +987,12 @@ async function renderMarkdownHtml(request: RenderRequest): Promise<string> {
 
 function renderRequest(request: RenderRequest): Promise<string> {
   if (request.patch) {
-    const after = request.after ?? applyPatchToCode(request.code, request.patch);
+    const compactPatch = request.after === undefined ? compactUnifiedDiffPatch(request.patch) : request.patch;
+    const after = request.after ?? applyPatchToCode(request.code, compactPatch);
     return buildDiffHtmlFromCode(
       request.code,
       after,
-      request.patch,
+      compactPatch,
       request.lang,
       request.theme,
       request.gutterMode ?? 'double',

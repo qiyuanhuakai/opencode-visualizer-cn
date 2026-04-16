@@ -361,7 +361,7 @@ function getDiffs(id: string): MessageDiffEntry[] | undefined {
     if (!diff.file) continue;
     result.push({
       file: diff.file,
-      diff: '',
+      diff: diff.patch ?? '',
       before: diff.before,
       after: diff.after,
     });
