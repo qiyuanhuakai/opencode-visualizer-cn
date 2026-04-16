@@ -71,8 +71,9 @@ const props = defineProps<{
   diffPatch?: string;
   diffTabs?: Array<{
     file: string;
-    before: string;
-    after: string;
+    before?: string;
+    after?: string;
+    patch?: string;
     beforeBase64?: string;
     afterBase64?: string;
   }>;
@@ -89,23 +90,25 @@ const activeFileIndex = ref(0);
 const primaryMode = ref<PrimaryMode>('diff');
 
 const hasFileTabs = computed(() => !!props.diffTabs && props.diffTabs.length > 1);
-const hasBeforeAfter = computed(() => {
-  if (props.diffTabs && props.diffTabs.length > 0) return true;
-  return props.diffAfter != null;
-});
 
 const activeEntry = computed(() => {
   const tabs = props.diffTabs;
   if (!tabs || tabs.length === 0) {
     return {
       file: props.path ?? '',
-      before: props.diffCode ?? '',
-      after: props.diffAfter ?? '',
+      before: props.diffCode,
+      after: props.diffAfter,
+      patch: props.diffPatch,
       beforeBase64: props.diffCodeBase64,
       afterBase64: props.diffAfterBase64,
     };
   }
   return tabs[activeFileIndex.value] ?? tabs[0];
+});
+
+const hasBeforeAfter = computed(() => {
+  const { before, after } = activeEntry.value;
+  return typeof before === 'string' || typeof after === 'string';
 });
 
 const BITMAP_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp']);
@@ -143,10 +146,8 @@ watch(
 
 const activeFilePath = computed(() => activeEntry.value.file || props.path || '');
 const activeBefore = computed(() => activeEntry.value.before ?? '');
-const activeAfter = computed(() => activeEntry.value.after ?? '');
-const activeDiffPatch = computed(() =>
-  props.diffTabs && props.diffTabs.length > 0 ? undefined : props.diffPatch,
-);
+const activeAfter = computed(() => activeEntry.value.after);
+const activeDiffPatch = computed(() => activeEntry.value.patch);
 
 const activeText = computed(() => {
   if (primaryMode.value === 'original') return activeBefore.value;

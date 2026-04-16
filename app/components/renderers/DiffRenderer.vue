@@ -14,6 +14,7 @@
     </div>
     <div class="viewer-body">
       <div v-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
+      <div v-else-if="renderError" class="viewer-error">{{ renderError }}</div>
       <CodeContent v-else :html="renderedHtml || ''" variant="diff" />
     </div>
   </div>
@@ -34,7 +35,7 @@ const props = defineProps<{
   diffCode?: string;
   diffAfter?: string;
   diffPatch?: string;
-  diffTabs?: Array<{ file: string; before: string; after: string }>;
+  diffTabs?: Array<{ file: string; before?: string; after?: string; patch?: string }>;
   gutterMode?: 'none' | 'double';
   lang?: string;
   theme?: string;
@@ -65,25 +66,30 @@ const activeDiffAfter = computed(() => {
   return tabs[activeTabIndex.value]?.after;
 });
 
+const activeDiffPatch = computed(() => {
+  const tabs = props.diffTabs;
+  if (!tabs || tabs.length === 0) return props.diffPatch;
+  return tabs[activeTabIndex.value]?.patch;
+});
+
 const activeDiffLang = computed(() => {
   if (props.lang && props.lang !== 'text') return props.lang;
   return guessLanguageFromPath(activePath.value);
 });
 
 const renderParams = computed<CodeRenderParams | null>(() => {
-  const hasDiffTabs = !!props.diffTabs && props.diffTabs.length > 0;
-  if (!activeDiffCode.value && !activeDiffAfter.value && !props.diffPatch) return null;
+  if (!activeDiffCode.value && !activeDiffAfter.value && !activeDiffPatch.value) return null;
   return {
     code: activeDiffCode.value,
     after: activeDiffAfter.value,
-    patch: hasDiffTabs ? undefined : props.diffPatch || undefined,
+    patch: activeDiffPatch.value || undefined,
     lang: activeDiffLang.value,
     theme: props.theme ?? DEFAULT_SYNTAX_THEME,
     gutterMode: props.gutterMode ?? 'double',
   };
 });
 
-const { html: renderedHtml } = useCodeRender(renderParams);
+const { html: renderedHtml, error: renderError } = useCodeRender(renderParams);
 
 watch(
   [() => renderedHtml.value, () => activeTabIndex.value],
@@ -95,6 +101,7 @@ watch(
 
 const showLoading = computed(() => {
   if (renderedHtml.value) return false;
+  if (renderError.value) return false;
   return !!renderParams.value;
 });
 
@@ -163,5 +170,18 @@ function basename(filepath: string) {
   color: var(--theme-text-muted, #64748b);
   font-size: 13px;
   user-select: none;
+}
+
+.viewer-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 16px;
+  color: var(--theme-danger-text, #fca5a5);
+  font-size: 13px;
+  text-align: center;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>

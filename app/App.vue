@@ -393,6 +393,7 @@ import { useServerState } from './composables/useServerState';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml, type RenderRequest } from './utils/workerRenderer';
+import type { MessageDiffEntry } from './types/message';
 import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { ProjectState, SandboxState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
@@ -416,6 +417,7 @@ import {
   extractFileRead as extractToolFileRead,
   extractPatch as extractToolPatch,
 } from './utils/toolRenderers';
+import { toMessageDiffViewerEntry } from './utils/messageDiff';
 import * as opencodeApi from './utils/opencode';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
@@ -877,8 +879,6 @@ function handleOutputPanelLoadMoreHistory() {
 }
 
 const runningToolIds = reactive(new Set<string>());
-
-type MessageDiffEntry = { file: string; diff: string; before?: string; after?: string };
 
 const userMessageMetaById = ref<Record<string, UserMessageMeta>>({});
 const userMessageTimeById = ref<Record<string, number>>({});
@@ -5934,24 +5934,12 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
     fw.bringToFront(key);
     return;
   }
-  const hasBeforeAfter = diffs.some(
-    (d) => typeof d.before === 'string' && typeof d.after === 'string',
-  );
-  const combinedDiff = hasBeforeAfter ? '' : diffs.map((d) => d.diff).join('\n');
   const fileCount = diffs.length;
   const title = fileCount === 1 ? diffs[0].file : t('app.git.filesChanged', { count: fileCount });
-  const firstFile = diffs[0]?.file ?? '';
-
-  let diffTabs: Array<{ file: string; before: string; after: string }> | undefined;
-  if (hasBeforeAfter && fileCount > 1) {
-    diffTabs = diffs
-      .filter((d) => typeof d.before === 'string' && typeof d.after === 'string')
-      .map((d) => ({
-        file: d.file,
-        before: d.before!,
-        after: d.after!,
-      }));
-  }
+  const viewerEntries = diffs.map(toMessageDiffViewerEntry);
+  const firstDiff = viewerEntries[0];
+  const firstFile = firstDiff?.file ?? '';
+  const diffTabs = fileCount > 1 ? viewerEntries : undefined;
 
   const pos = getFileViewerPosition();
   fw.open(key, {
@@ -5959,11 +5947,11 @@ function handleShowMessageDiff(payload: { messageKey: string; diffs: Array<Messa
     props: {
       path: firstFile,
       isDiff: true,
-      diffCode: hasBeforeAfter ? (diffs[0]?.before ?? '') : '',
-      diffAfter: hasBeforeAfter ? (diffs[0]?.after ?? '') : undefined,
-      diffPatch: hasBeforeAfter ? undefined : combinedDiff,
+      diffCode: firstDiff?.before ?? '',
+      diffAfter: firstDiff?.after,
+      diffPatch: firstDiff?.patch,
       diffTabs,
-      gutterMode: hasBeforeAfter ? 'double' : 'none',
+      gutterMode: 'double',
       lang: fileCount === 1 ? guessLanguage(firstFile) : 'text',
       theme: shikiTheme.value,
     },
