@@ -205,13 +205,13 @@
                 {{ $t('settings.theme.managementDescription') }}
               </div>
             </div>
-            <div class="theme-management-grid">
-              <div class="theme-management-note">
-                <div class="theme-management-note-title">{{ $t('settings.theme.currentProfileLabel') }}</div>
-                <div class="theme-management-note-value">{{ activeThemeSummary }}</div>
-              </div>
-              <div class="theme-import-actions">
-                <div class="theme-action-row">
+            <div class="theme-management-area">
+              <div class="theme-management-top">
+                <div class="theme-current-profile">
+                  <span class="theme-current-label">{{ $t('settings.theme.currentProfileLabel') }}</span>
+                  <span class="theme-current-value">{{ activeThemeSummary }}</span>
+                </div>
+                <div class="theme-action-bar">
                   <label class="font-system-button theme-import-button" :class="{ 'is-disabled': isImportingTheme }">
                     <input
                       class="theme-import-input"
@@ -222,33 +222,24 @@
                     >
                     {{ isImportingTheme ? $t('settings.theme.importing') : $t('settings.theme.importAction') }}
                   </label>
-                <button type="button" class="font-system-button" @click="exportCurrentTheme">
+                  <button type="button" class="font-system-button" @click="exportCurrentTheme">
                     {{ $t('settings.theme.exportCurrentAction') }}
                   </button>
                   <button type="button" class="font-system-button" @click="exportThemeTemplate">
                     {{ $t('settings.theme.exportTemplateAction') }}
                   </button>
                 </div>
-                <div class="theme-import-hint">{{ $t('settings.theme.importHint') }}</div>
-                <div class="theme-import-schema-links">
-                  <a class="theme-schema-link" :href="themeSchemaUrl" target="_blank" rel="noreferrer">
-                    {{ $t('settings.theme.schemaLink') }}
-                  </a>
-                </div>
-                <div v-if="themeImportError" class="theme-import-error">{{ themeImportError }}</div>
               </div>
+              <div class="theme-action-meta">
+                <span class="theme-import-hint">{{ $t('settings.theme.importHint') }}</span>
+                <a class="theme-schema-link" :href="themeSchemaUrl" target="_blank" rel="noreferrer">
+                  {{ $t('settings.theme.schemaLink') }}
+                </a>
+              </div>
+              <div v-if="themeImportError" class="theme-import-error">{{ themeImportError }}</div>
             </div>
           </div>
 
-          <div class="setting-row setting-row-font">
-            <button
-              type="button"
-              class="font-system-button"
-              @click="resetTheme(); selectedPreset = 'default'"
-            >
-              {{ $t('settings.theme.reset') }}
-            </button>
-          </div>
         </template>
 
         <template v-else>
@@ -927,9 +918,13 @@ watch(
   align-items: flex-start;
 }
 
-.theme-settings-section {
+.setting-row.theme-settings-section {
   flex-direction: column;
   align-items: stretch;
+  border: none;
+  background: transparent;
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .setting-row-font {
@@ -1058,57 +1053,58 @@ watch(
   text-decoration: underline;
 }
 
-.theme-management-note {
+.theme-management-area {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 12px;
   width: 100%;
-  min-width: 0;
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
-  background: color-mix(in srgb, var(--theme-modal-control-bg, rgba(2, 6, 23, 0.45)) 92%, transparent);
 }
 
-.theme-management-note-title {
+.theme-management-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.theme-current-profile {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.theme-current-label {
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
+  white-space: nowrap;
 }
 
-.theme-management-note-value {
-  font-size: 12px;
+.theme-current-value {
+  font-size: 13px;
   font-weight: 600;
   color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
 }
 
-.theme-management-grid {
-  display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-  gap: 14px;
-  width: 100%;
-  align-items: stretch;
-}
-
-.theme-import-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  padding: 12px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
-  background: color-mix(in srgb, var(--theme-modal-control-bg, rgba(2, 6, 23, 0.45)) 92%, transparent);
-}
-
-.theme-action-row {
+.theme-action-bar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
+  flex-shrink: 0;
+}
+
+.theme-action-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+  border-top: 1px solid var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.4)));
 }
 
 .theme-import-button {
@@ -1154,11 +1150,7 @@ watch(
   color: var(--theme-text-danger, #fca5a5);
 }
 
-@media (max-width: 860px) {
-  .theme-management-grid {
-    grid-template-columns: 1fr;
-  }
-}
+
 
 .setting-info {
   display: flex;
@@ -1372,6 +1364,9 @@ watch(
 }
 
 .font-system-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   align-self: flex-start;
   min-height: 30px;
   border: 1px solid var(--ui-form-button-border);

@@ -669,6 +669,7 @@ const messages: LocaleMessages = {
     delete: 'Delete',
     noBranches: 'No branches found.',
     searchBranches: 'Search branches',
+    searchFiles: 'Search files',
     loadingBranches: 'Loading branches...',
     mergeTooltip: 'Merge this ref into current branch',
     createBranchTooltip: 'Create branch from this ref',
