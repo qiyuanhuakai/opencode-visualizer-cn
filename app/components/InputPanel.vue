@@ -131,9 +131,26 @@
             :alt="item.filename"
             @click="$emit('open-image', { url: item.dataUrl, filename: item.filename })"
           />
-          <div class="attachment-meta">
+          <div
+            v-else-if="item.lineComment"
+            class="attachment-thumb line-comment-thumb"
+            :title="item.lineComment.path + ':' + item.lineComment.startLine + (item.lineComment.startLine === item.lineComment.endLine ? '' : '-' + item.lineComment.endLine)"
+          >
+            <Icon icon="lucide:message-square" :width="16" :height="16" />
+          </div>
+          <div
+            class="attachment-meta"
+            :title="
+              item.lineComment
+                ? item.lineComment.path + ':' + item.lineComment.startLine + (item.lineComment.startLine === item.lineComment.endLine ? '' : '-' + item.lineComment.endLine) + ' — ' + item.lineComment.text
+                : item.filename
+            "
+          >
             <div class="attachment-name">{{ item.filename }}</div>
-            <div class="attachment-type">{{ item.mime }}</div>
+            <div class="attachment-type">
+              <template v-if="item.lineComment">{{ item.lineComment.text }}</template>
+              <template v-else>{{ item.mime }}</template>
+            </div>
           </div>
           <button
             type="button"
@@ -430,7 +447,13 @@ const props = defineProps<{
   isThinking: boolean;
   canAbort: boolean;
   commands: CommandOption[];
-  attachments: Array<{ id: string; filename: string; mime: string; dataUrl: string }>;
+  attachments: Array<{
+    id: string;
+    filename: string;
+    mime: string;
+    dataUrl: string;
+    lineComment?: { path: string; startLine: number; endLine: number; text: string };
+  }>;
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
@@ -1508,6 +1531,13 @@ const inputMessageStyle = computed(() => {
   cursor: pointer;
 }
 
+.line-comment-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+}
+
 .attachment-meta {
   display: flex;
   flex-direction: column;
@@ -1527,6 +1557,9 @@ const inputMessageStyle = computed(() => {
 .attachment-type {
   font-size: 10px;
   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .attachment-remove {

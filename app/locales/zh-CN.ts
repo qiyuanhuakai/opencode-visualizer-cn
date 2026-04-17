@@ -919,6 +919,10 @@ const messages: LocaleMessages = {
     completed: '已完成',
     error: '错误',
   },
+  lineCommentOverlay: {
+    placeholder: '添加评论...',
+    comment: '评论',
+  },
 };
 
 export default messages;
