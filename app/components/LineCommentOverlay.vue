@@ -98,11 +98,27 @@ const editCardStyle = computed(() => {
   const rect = editRect.value;
   if (!rect) return {};
   const fitsRight = rect.right + POPUP_MAX_WIDTH + POPUP_MARGIN <= props.containerWidth;
+  const nearTop = rect.top < 100;
   if (fitsRight) {
+    if (nearTop) {
+      return {
+        top: `${rect.top + rect.height + 8}px`,
+        left: `${rect.right}px`,
+        transform: 'translate(-100%, 0)',
+      };
+    }
     return {
       top: `${rect.top + rect.height / 2}px`,
       left: `${rect.right}px`,
       transform: 'translate(-100%, -50%)',
+    };
+  }
+  if (nearTop) {
+    return {
+      top: `${rect.top + rect.height + 8}px`,
+      right: '8px',
+      left: 'auto',
+      transform: 'translate(0, 0)',
     };
   }
   return {
