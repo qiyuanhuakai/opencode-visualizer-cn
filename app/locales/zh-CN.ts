@@ -669,6 +669,7 @@ const messages: LocaleMessages = {
     delete: '删除',
     noBranches: '未找到分支。',
     searchBranches: '搜索分支',
+    searchFiles: '搜索文件',
     loadingBranches: '加载分支中...',
     mergeTooltip: '将此引用合并到当前分支',
     createBranchTooltip: '从此引用创建分支',

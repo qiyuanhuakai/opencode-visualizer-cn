@@ -668,6 +668,7 @@ export interface LocaleMessages {
     delete: string;
     noBranches: string;
     searchBranches: string;
+    searchFiles: string;
     loadingBranches: string;
     mergeTooltip: string;
     createBranchTooltip: string;

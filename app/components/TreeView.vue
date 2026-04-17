@@ -220,6 +220,15 @@
           </DropdownItem>
           <DropdownItem value="git pull" class="tree-branch-cmd-danger">git pull</DropdownItem>
         </Dropdown>
+        <div class="tree-file-search">
+          <Icon icon="lucide:search" :width="11" :height="11" class="tree-file-search-icon" />
+          <input
+            v-model.trim="fileSearchQuery"
+            type="search"
+            class="tree-file-search-input"
+            :placeholder="$t('treeView.searchFiles')"
+          />
+        </div>
         <span
           v-if="activeDiffStats && (activeDiffStats.additions > 0 || activeDiffStats.deletions > 0)"
           class="tree-branch-stats"
@@ -455,6 +464,7 @@ const viewMode = ref<TreeViewMode>('all');
 const branchMenuOpen = ref(false);
 const branchSearchQuery = ref('');
 const debouncedBranchSearchQuery = ref('');
+const fileSearchQuery = ref('');
 const pushMenuOpen = ref(false);
 const pullMenuOpen = ref(false);
 const scrollContainerRef = ref<HTMLElement | null>(null);
@@ -742,17 +752,27 @@ const normalizedNodes = computed(() =>
 );
 
 const displayNodes = computed(() => {
-  if (viewMode.value === 'all') return normalizedNodes.value;
+  let nodes = normalizedNodes.value;
   if (viewMode.value === 'staged') {
-    return filterByPredicate(normalizedNodes.value, (path) => {
+    nodes = filterByPredicate(nodes, (path) => {
       const status = props.gitStatusByPath?.[path];
       return Boolean(status && hasStaged(status));
     });
+  } else if (viewMode.value === 'changes') {
+    nodes = filterByPredicate(nodes, (path) => {
+      const status = props.gitStatusByPath?.[path];
+      return Boolean(status && hasChanges(status));
+    });
   }
-  return filterByPredicate(normalizedNodes.value, (path) => {
-    const status = props.gitStatusByPath?.[path];
-    return Boolean(status && hasChanges(status));
-  });
+  // File name search filter
+  const query = fileSearchQuery.value.trim().toLowerCase();
+  if (query) {
+    nodes = filterByPredicate(nodes, (path) => {
+      const segments = path.toLowerCase().split('/');
+      return segments.some((segment) => segment.includes(query));
+    });
+  }
+  return nodes;
 });
 
 // Optimized flattened rows with pre-computed properties
@@ -1326,6 +1346,40 @@ function onRowDoubleClick(row: VirtualRow) {
 .tree-branch-behind {
   color: var(--theme-text-danger, #fca5a5);
   background: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 12%, transparent);
+}
+
+.tree-file-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  margin-left: 4px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.28));
+  background: var(--theme-side-control-bg, rgba(15, 23, 42, 0.5));
+}
+
+.tree-file-search-icon {
+  flex-shrink: 0;
+  color: var(--theme-side-text-muted, #94a3b8);
+}
+
+.tree-file-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--theme-side-text, #cbd5e1);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 0;
+}
+
+.tree-file-search-input::placeholder {
+  color: var(--theme-side-text-muted, #64748b);
 }
 
 .tree-branch-stats {

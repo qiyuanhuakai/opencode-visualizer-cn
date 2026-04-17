@@ -568,7 +568,7 @@ const currentTotalInfo = computed(() => {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  padding: 10px 16px;
+  padding: 5px 16px;
   border-top: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.15));
   background: var(--theme-modal-bg, rgba(15, 23, 42, 0.98));
 }
@@ -580,6 +580,7 @@ const currentTotalInfo = computed(() => {
   width: 20px;
   height: 20px;
   padding: 0;
+  margin-right: -4px;
   font-size: 12px;
   color: var(--theme-modal-text-muted, #94a3b8);
   background: transparent;

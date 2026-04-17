@@ -793,6 +793,9 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-manager-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   border-radius: 8px;
   background: var(--theme-tab-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7))));
@@ -834,7 +837,6 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-card,
-.model-toolbar,
 .model-group,
 .model-row {
   border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8))));
@@ -1189,6 +1191,9 @@ async function disconnectProvider(providerId: string) {
 }
 
 .ghost-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--theme-action-button-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
   border-radius: 8px;
   background: var(--theme-action-button-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82))));
@@ -1277,7 +1282,7 @@ async function disconnectProvider(providerId: string) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px;
+  padding: 0;
 }
 
 .model-search-field {
@@ -1311,6 +1316,7 @@ async function disconnectProvider(providerId: string) {
 .model-toolbar-stats {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
   font-size: 11px;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
