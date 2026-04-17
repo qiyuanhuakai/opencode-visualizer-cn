@@ -1,0 +1,234 @@
+{
+  "id": "2026-04-10-145443",
+  "generated_at": "2026-04-10T06:54:43.002286486Z",
+  "language": "zh",
+  "pages": [
+    {
+      "slug": "1-xiang-mu-gai-shu",
+      "title": "项目概述",
+      "file": "1-xiang-mu-gai-shu.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "2-kuai-su-kai-shi",
+      "title": "快速开始",
+      "file": "2-kuai-su-kai-shi.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "3-an-zhuang-yu-pei-zhi",
+      "title": "安装与配置",
+      "file": "3-an-zhuang-yu-pei-zhi.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "4-ji-ben-shi-yong",
+      "title": "基本使用",
+      "file": "4-ji-ben-shi-yong.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "5-xi-tong-jia-gou-gai-lan",
+      "title": "系统架构概览",
+      "file": "5-xi-tong-jia-gou-gai-lan.md",
+      "section": "深度解析",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "6-fu-dong-chuang-kou-guan-li-xi-tong",
+      "title": "浮动窗口管理系统",
+      "file": "6-fu-dong-chuang-kou-guan-li-xi-tong.md",
+      "section": "深度解析",
+      "group": "核心架构",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "7-xuan-ran-qi-yu-cha-kan-qi-jia-gou",
+      "title": "渲染器与查看器架构",
+      "file": "7-xuan-ran-qi-yu-cha-kan-qi-jia-gou.md",
+      "section": "深度解析",
+      "group": "核心架构",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "8-nei-rong-xuan-ran-guan-xian",
+      "title": "内容渲染管线",
+      "file": "8-nei-rong-xuan-ran-guan-xian.md",
+      "section": "深度解析",
+      "group": "核心架构",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "9-sse-shi-shi-tong-xin-ji-zhi",
+      "title": "SSE 实时通信机制",
+      "file": "9-sse-shi-shi-tong-xin-ji-zhi.md",
+      "section": "深度解析",
+      "group": "通信与集成",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "10-opencode-rest-api-ji-cheng",
+      "title": "OpenCode REST API 集成",
+      "file": "10-opencode-rest-api-ji-cheng.md",
+      "section": "深度解析",
+      "group": "通信与集成",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "11-gong-ju-chuang-kou-tong-xin-xie-yi",
+      "title": "工具窗口通信协议",
+      "file": "11-gong-ju-chuang-kou-tong-xin-xie-yi.md",
+      "section": "深度解析",
+      "group": "通信与集成",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "12-quan-ju-zhuang-tai-guan-li-yu-xiang-ying-shi-she-ji",
+      "title": "全局状态管理与响应式设计",
+      "file": "12-quan-ju-zhuang-tai-guan-li-yu-xiang-ying-shi-she-ji.md",
+      "section": "深度解析",
+      "group": "状态与数据",
+      "level": "Advanced"
+    },
+    {
+      "slug": "13-zu-he-shi-api-composables-xiang-jie",
+      "title": "组合式 API (Composables) 详解",
+      "file": "13-zu-he-shi-api-composables-xiang-jie.md",
+      "section": "深度解析",
+      "group": "状态与数据",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "14-hui-hua-yu-hui-hua-shu-guan-li",
+      "title": "会话与会话树管理",
+      "file": "14-hui-hua-yu-hui-hua-shu-guan-li.md",
+      "section": "深度解析",
+      "group": "状态与数据",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "15-gong-ju-chuang-kou-zu-jian-xi-tong",
+      "title": "工具窗口组件系统",
+      "file": "15-gong-ju-chuang-kou-zu-jian-xi-tong.md",
+      "section": "深度解析",
+      "group": "功能模块",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "16-wen-jian-shu-yu-git-ji-cheng",
+      "title": "文件树与 Git 集成",
+      "file": "16-wen-jian-shu-yu-git-ji-cheng.md",
+      "section": "深度解析",
+      "group": "功能模块",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "17-zhong-duan-yu-pty-ji-cheng",
+      "title": "终端与 PTY 集成",
+      "file": "17-zhong-duan-yu-pty-ji-cheng.md",
+      "section": "深度解析",
+      "group": "功能模块",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "18-quan-xian-yu-wen-da-xi-tong",
+      "title": "权限与问答系统",
+      "file": "18-quan-xian-yu-wen-da-xi-tong.md",
+      "section": "深度解析",
+      "group": "功能模块",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "19-guo-ji-hua-i18n-yu-ben-di-hua",
+      "title": "国际化 (i18n) 与本地化",
+      "file": "19-guo-ji-hua-i18n-yu-ben-di-hua.md",
+      "section": "深度解析",
+      "group": "扩展性与配置",
+      "level": "Beginner"
+    },
+    {
+      "slug": "20-zi-ti-yu-zhu-ti-guan-li",
+      "title": "字体与主题管理",
+      "file": "20-zi-ti-yu-zhu-ti-guan-li.md",
+      "section": "深度解析",
+      "group": "扩展性与配置",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "21-gong-ying-shang-yu-mo-xing-guan-li",
+      "title": "供应商与模型管理",
+      "file": "21-gong-ying-shang-yu-mo-xing-guan-li.md",
+      "section": "深度解析",
+      "group": "扩展性与配置",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "22-xing-neng-you-hua-yu-lan-jia-zai-ce-lue",
+      "title": "性能优化与懒加载策略",
+      "file": "22-xing-neng-you-hua-yu-lan-jia-zai-ce-lue.md",
+      "section": "深度解析",
+      "group": "扩展性与配置",
+      "level": "Advanced"
+    },
+    {
+      "slug": "23-kai-fa-huan-jing-da-jian",
+      "title": "开发环境搭建",
+      "file": "23-kai-fa-huan-jing-da-jian.md",
+      "section": "深度解析",
+      "group": "开发与部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "24-ce-shi-ce-lue-yu-gong-ju",
+      "title": "测试策略与工具",
+      "file": "24-ce-shi-ce-lue-yu-gong-ju.md",
+      "section": "深度解析",
+      "group": "开发与部署",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "25-gou-jian-yu-bu-shu-pei-zhi",
+      "title": "构建与部署配置",
+      "file": "25-gou-jian-yu-bu-shu-pei-zhi.md",
+      "section": "深度解析",
+      "group": "开发与部署",
+      "level": "Advanced"
+    },
+    {
+      "slug": "26-rest-api-wan-zheng-can-kao",
+      "title": "REST API 完整参考",
+      "file": "26-rest-api-wan-zheng-can-kao.md",
+      "section": "深度解析",
+      "group": "参考文档",
+      "level": "Advanced"
+    },
+    {
+      "slug": "27-sse-shi-jian-liu-gui-fan",
+      "title": "SSE 事件流规范",
+      "file": "27-sse-shi-jian-liu-gui-fan.md",
+      "section": "深度解析",
+      "group": "参考文档",
+      "level": "Advanced"
+    },
+    {
+      "slug": "28-gong-ju-ding-yi-wen-dang",
+      "title": "工具定义文档",
+      "file": "28-gong-ju-ding-yi-wen-dang.md",
+      "section": "深度解析",
+      "group": "参考文档",
+      "level": "Reference"
+    },
+    {
+      "slug": "29-chuang-kou-jia-gou-she-ji-wen-dang",
+      "title": "窗口架构设计文档",
+      "file": "29-chuang-kou-jia-gou-she-ji-wen-dang.md",
+      "section": "深度解析",
+      "group": "参考文档",
+      "level": "Reference"
+    }
+  ]
+}
