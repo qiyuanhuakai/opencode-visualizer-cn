@@ -178,6 +178,7 @@
               @focus="fw.bringToFront(entry.key)"
               @minimize="handleFloatingWindowMinimize(entry.key)"
               @close="handleFloatingWindowClose(entry.key)"
+              @open="handleFloatingWindowOpen(entry.key)"
             />
           </TransitionGroup>
         </div>
@@ -418,6 +419,7 @@ import {
   extractPatch as extractToolPatch,
 } from './utils/toolRenderers';
 import { toMessageDiffViewerEntry } from './utils/messageDiff';
+import { buildLineCommentFileUrl, formatCommentNote } from './utils/lineComment';
 import * as opencodeApi from './utils/opencode';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
@@ -710,11 +712,14 @@ type FileSnapshotResult = {
   afterBase64: string;
 };
 
+type LineCommentData = { path: string; startLine: number; endLine: number; text: string };
+
 type Attachment = {
   id: string;
   filename: string;
   mime: string;
   dataUrl: string;
+  lineComment?: LineCommentData;
 };
 
 type ComposerDraft = {
@@ -2082,8 +2087,24 @@ function normalizeStoredAttachment(value: unknown): Attachment | null {
   const filename = typeof record.filename === 'string' ? record.filename.trim() : '';
   const mime = typeof record.mime === 'string' ? record.mime.trim() : '';
   const dataUrl = typeof record.dataUrl === 'string' ? record.dataUrl : '';
-  if (!id || !filename || !mime || !dataUrl) return null;
-  return { id, filename, mime, dataUrl };
+  const rawLineComment = record.lineComment;
+  let lineComment: LineCommentData | undefined;
+  if (rawLineComment !== undefined) {
+    if (!rawLineComment || typeof rawLineComment !== 'object') return null;
+    const lineCommentRecord = rawLineComment as Record<string, unknown>;
+    const path = typeof lineCommentRecord.path === 'string' ? lineCommentRecord.path : '';
+    const startLine = typeof lineCommentRecord.startLine === 'number' ? lineCommentRecord.startLine : Number.NaN;
+    const endLine = typeof lineCommentRecord.endLine === 'number' ? lineCommentRecord.endLine : Number.NaN;
+    const line = typeof lineCommentRecord.line === 'number' ? lineCommentRecord.line : Number.NaN;
+    // Support both old (line) and new (startLine/endLine) formats
+    const resolvedStartLine = Number.isFinite(startLine) ? startLine : line;
+    const resolvedEndLine = Number.isFinite(endLine) ? endLine : line;
+    const text = typeof lineCommentRecord.text === 'string' ? lineCommentRecord.text : '';
+    if (!path || !Number.isFinite(resolvedStartLine) || !Number.isFinite(resolvedEndLine) || typeof lineCommentRecord.text !== 'string') return null;
+    lineComment = { path, startLine: resolvedStartLine, endLine: resolvedEndLine, text };
+  }
+  if (!id || !filename || !mime || (!dataUrl && !lineComment)) return null;
+  return { id, filename, mime, dataUrl, lineComment };
 }
 
 function normalizeStoredComposerDraft(value: unknown): ComposerDraft | null {
@@ -2835,6 +2856,27 @@ async function handleAddAttachments(files: File[]) {
   } catch (error) {
     setSendStatusKey('app.error.attachmentFailed', { message: toErrorMessage(error) });
   }
+}
+
+function addLineComment(payload: { path: string; startLine: number; endLine: number; text: string }) {
+  const basename = payload.path.split(/[\\/]/).pop() || payload.path;
+  const lineLabel = payload.startLine === payload.endLine
+    ? `${payload.startLine}`
+    : `${payload.startLine}-${payload.endLine}`;
+  const attachment: Attachment = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    filename: `${basename}:${lineLabel}`,
+    mime: 'text/x-line-comment',
+    dataUrl: '',
+    lineComment: {
+      path: payload.path,
+      startLine: payload.startLine,
+      endLine: payload.endLine,
+      text: payload.text,
+    },
+  };
+  attachments.value.push(attachment);
+  persistComposerDraftForCurrentContext();
 }
 
 function removeAttachment(id: string) {
@@ -4314,6 +4356,23 @@ function handleFloatingWindowMinimize(key: string) {
   fw.minimize(key);
 }
 
+async function handleFloatingWindowOpen(key: string) {
+  if (!key.startsWith('file-viewer:')) return;
+  const entry = fw.get(key);
+  const absolutePath = entry?.props?.absolutePath;
+  if (!absolutePath || typeof absolutePath !== 'string') return;
+
+  const directory = activeDirectory.value.trim();
+  if (!directory) return;
+
+  // Escape path safely for shell: use single-quote wrapping with internal single-quote handling
+  const escapedPath = absolutePath.replace(/'/g, "'\"'\"'");
+  const pty = await createPtySession('/bin/sh', ['-c', `$EDITOR '${escapedPath}'`]);
+  if (pty) {
+    await ensureShellWindow(pty);
+  }
+}
+
 function restoreFloatingWindow(key: string) {
   fw.restore(key);
   nextTick(() => {
@@ -4885,14 +4944,36 @@ async function sendMessage() {
     const messageText = atAgent ? atAgent.text : text;
     if (hasText && messageText) parts.push({ type: 'text', text: messageText });
     if (hasAttachments) {
-      parts.push(
-        ...attachments.value.map((item) => ({
-          type: 'file',
-          mime: item.mime,
-          url: item.dataUrl,
-          filename: item.filename,
-        })),
-      );
+      for (const item of attachments.value) {
+        if (item.lineComment) {
+          parts.push({
+            type: 'text',
+            text: formatCommentNote(
+              item.lineComment.path,
+              item.lineComment.startLine,
+              item.lineComment.endLine,
+              item.lineComment.text,
+            ),
+          });
+          parts.push({
+            type: 'file',
+            mime: 'text/plain',
+            url: buildLineCommentFileUrl(
+              item.lineComment.path,
+              item.lineComment.startLine,
+              item.lineComment.endLine,
+            ),
+            filename: item.filename.split(':')[0] || item.filename,
+          });
+        } else {
+          parts.push({
+            type: 'file',
+            mime: item.mime,
+            url: item.dataUrl,
+            filename: item.filename,
+          });
+        }
+      }
     }
     await opencodeApi.sendPromptAsync(sessionId, {
       directory,
@@ -6295,15 +6376,18 @@ async function handleEditMessage(payload: { sessionId: string; part: MessagePart
   }
 }
 
-function toFileViewerKey(path: string, lines?: string) {
+function resolveFileViewerAbsolutePath(path: string) {
   const directory = activeDirectory.value.trim();
   const requestPath = splitFileContentDirectoryAndPath(path, directory || null);
-  const normalizedPath =
-    requestPath.path === '.'
-      ? requestPath.directory
-      : requestPath.directory === '/'
-        ? `/${requestPath.path}`
-        : `${requestPath.directory.replace(/\/+$/, '')}/${requestPath.path}`;
+  return requestPath.path === '.'
+    ? requestPath.directory
+    : requestPath.directory === '/'
+      ? `/${requestPath.path}`
+      : `${requestPath.directory.replace(/\/+$/, '')}/${requestPath.path}`;
+}
+
+function toFileViewerKey(path: string, lines?: string) {
+  const normalizedPath = resolveFileViewerAbsolutePath(path);
   if (!lines) return `file-viewer:${normalizedPath}`;
   return `file-viewer:${normalizedPath}:${lines}`;
 }
@@ -6323,13 +6407,18 @@ async function openFileViewer(path: string, lines?: string) {
   }
   const pos = getFileViewerPosition(0.18, 0.14);
   const lang = guessLanguage(path);
+  const absolutePath = resolveFileViewerAbsolutePath(path);
   fw.open(key, {
     component: ContentViewer,
     props: {
       path,
+      absolutePath,
       lang,
       lines,
       gutterMode: 'default',
+      onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
+        addLineComment(payload);
+      },
       theme: shikiTheme.value,
     },
     closable: true,
@@ -6348,9 +6437,13 @@ async function openFileViewer(path: string, lines?: string) {
     fw.updateOptions(key, {
       props: {
         path,
+        absolutePath,
         rawHtml: t('app.read.noActiveDirectorySelected'),
         lines,
         gutterMode: 'none',
+        onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
+          addLineComment(payload);
+        },
         theme: shikiTheme.value,
       },
     });
@@ -6369,51 +6462,70 @@ async function openFileViewer(path: string, lines?: string) {
     const isBase64Payload = encoding === 'base64';
     if (type === 'binary' || isBase64Payload) {
       if (!content) {
-        fw.updateOptions(key, {
-          props: {
-            path,
-            rawHtml: t('app.read.binaryContentNotIncluded'),
-            lines,
-            gutterMode: 'none',
-            theme: shikiTheme.value,
-          },
-        });
-        return;
-      }
       fw.updateOptions(key, {
         props: {
           path,
-          binaryBase64: content,
-          lang: guessLanguage(path),
+          absolutePath,
+          rawHtml: t('app.read.binaryContentNotIncluded'),
           lines,
-          gutterMode: 'default',
+          gutterMode: 'none',
+          onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
+            addLineComment(payload);
+          },
           theme: shikiTheme.value,
         },
       });
       return;
     }
-    const resolvedLang = guessLanguage(path);
-    const textContent = content;
     fw.updateOptions(key, {
       props: {
         path,
-        fileContent: textContent,
-        lang: resolvedLang,
+        absolutePath,
+        binaryBase64: content,
+        fileSizeBytes: content.length,
+        lang: guessLanguage(path),
         lines,
         gutterMode: 'default',
+        onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
+          addLineComment(payload);
+        },
         theme: shikiTheme.value,
       },
     });
-  } catch (error) {
-    fw.updateOptions(key, {
-      props: {
-        path,
-        rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
-        lines,
-        gutterMode: 'none',
-        theme: shikiTheme.value,
+    return;
+  }
+  const resolvedLang = guessLanguage(path);
+  const textContent = content;
+  const fileSizeBytes = new TextEncoder().encode(textContent).length;
+  fw.updateOptions(key, {
+    props: {
+      path,
+      absolutePath,
+      fileSizeBytes,
+      fileContent: textContent,
+      lang: resolvedLang,
+      lines,
+      gutterMode: 'default',
+      onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
+        addLineComment(payload);
       },
-    });
+      theme: shikiTheme.value,
+    },
+  });
+} catch (error) {
+  fw.updateOptions(key, {
+    props: {
+      path,
+      absolutePath,
+      rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
+      lines,
+      gutterMode: 'none',
+      onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
+        addLineComment(payload);
+      },
+      theme: shikiTheme.value,
+    },
+  });
   }
 }
 

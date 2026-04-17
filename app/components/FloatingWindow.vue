@@ -9,6 +9,8 @@ import { useContentSearch } from '../composables/useContentSearch';
 import { useSettings } from '../composables/useSettings';
 import { Icon } from '@iconify/vue';
 
+const { showMinimizeButtons, showOpenInEditorButton, openInEditorMaxSizeMb } = useSettings();
+
 const { t } = useI18n();
 
 const props = defineProps<{
@@ -20,6 +22,7 @@ const emit = defineEmits<{
   focus: [key: string];
   close: [key: string];
   minimize: [key: string];
+  open: [key: string];
 }>();
 
 const windowEl = ref<HTMLElement>();
@@ -27,7 +30,6 @@ const bodyEl = ref<HTMLElement>();
 const searchInputEl = ref<HTMLInputElement>();
 
 const scrollMode = computed<ScrollMode>(() => props.entry.scroll || 'manual');
-const { showMinimizeButtons } = useSettings();
 const { showResumeButton, isFollowing, resumeFollow, notifyContentChange } = useAutoScroller(
   bodyEl,
   scrollMode,
@@ -153,6 +155,13 @@ const canCloseWindow = computed(() => {
     props.entry.key.startsWith('reasoning:') ||
     props.entry.key.startsWith('subagent:')
   );
+});
+
+const canOpenInEditor = computed(() => {
+  if (!showOpenInEditorButton.value) return false;
+  if (!props.entry.key.startsWith('file-viewer:')) return false;
+  const size = typeof props.entry.props?.fileSizeBytes === 'number' ? props.entry.props.fileSizeBytes : 0;
+  return size <= openInEditorMaxSizeMb.value * 1024 * 1024;
 });
 
 const scrollClass = computed(() => {
@@ -302,7 +311,7 @@ function getDragBounds() {
 }
 
 function onDragStart(e: PointerEvent) {
-  if ((e.target as HTMLElement).closest('.close-btn, .minimize-btn')) return;
+  if ((e.target as HTMLElement).closest('.close-btn, .minimize-btn, .open-btn')) return;
   e.preventDefault();
   cancelSnapAnimation();
 
@@ -478,6 +487,14 @@ function onResizeEnd(e: PointerEvent) {
       <span class="title">{{ entry.title || t('floatingWindow.tool') }}</span>
       <div class="window-actions">
         <button
+          v-if="canOpenInEditor"
+          class="open-btn"
+          :aria-label="t('floatingWindow.openInEditor')"
+          @click.stop="emit('open', entry.key)"
+        >
+          <Icon icon="lucide:external-link" :width="14" :height="14" />
+        </button>
+        <button
           v-if="showMinimizeButtons"
           class="minimize-btn"
           :aria-label="t('floatingWindow.minimizeWindow')"
@@ -644,6 +661,23 @@ function onResizeEnd(e: PointerEvent) {
   background: color-mix(in srgb, var(--floating-surface-strong) 78%, transparent);
   border-color: var(--floating-border-subtle);
   color: var(--floating-text);
+}
+
+.open-btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.open-btn:hover {
+  opacity: 0.8;
 }
 
 .minimize-btn {

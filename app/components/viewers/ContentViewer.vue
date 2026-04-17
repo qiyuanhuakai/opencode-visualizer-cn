@@ -30,12 +30,14 @@
       <CodeRenderer
         v-else
         :path="path"
+        :absolute-path="absolutePath"
         :raw-html="effectiveRawHtml"
         :file-content="effectiveFileContent ?? ''"
         :lang="lang"
         :gutter-mode="gutterMode"
         :theme="theme"
         :lines="lines"
+        :on-request-add-line-comment="onRequestAddLineComment"
         @rendered="emit('rendered')"
       />
     </div>
@@ -57,6 +59,7 @@ type ModeId = 'rendered' | 'source' | 'image' | 'hex';
 
 const props = defineProps<{
   path?: string;
+  absolutePath?: string;
   rawHtml?: string;
   fileContent?: string;
   binaryBase64?: string;
@@ -65,6 +68,7 @@ const props = defineProps<{
   theme?: string;
   lines?: string;
   imageSrc?: string;
+  onRequestAddLineComment?: (payload: { path: string; startLine: number; endLine: number; text: string }) => void;
 }>();
 
 const emit = defineEmits<{
@@ -164,11 +168,7 @@ const availableModes = computed<Array<{ id: ModeId; label: string }>>(() => {
   return modes;
 });
 
-const preferredDefaultMode = computed<ModeId>(() => {
-  if (canShowAsImage.value) return 'image';
-  if (isMarkdown.value) return 'rendered';
-  return 'source';
-});
+const preferredDefaultMode = computed<ModeId>(() => 'source');
 
 // Explicit user tab selection (null = use type-based default)
 const userSelectedMode = ref<ModeId | null>(null);

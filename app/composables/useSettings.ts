@@ -12,6 +12,9 @@ import {
 const DEFAULT_PINNED_SESSIONS_LIMIT = 30;
 const MIN_PINNED_SESSIONS_LIMIT = 1;
 const MAX_PINNED_SESSIONS_LIMIT = 200;
+const DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB = 10;
+const MIN_OPEN_IN_EDITOR_MAX_SIZE_MB = 1;
+const MAX_OPEN_IN_EDITOR_MAX_SIZE_MB = 100;
 const DEFAULT_TERMINAL_FONT_FAMILY =
   "'FiraCode Nerd Font Mono', 'FiraCode Nerd Font Mono Med', 'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', 'Menlo', 'Consolas', 'Liberation Mono', monospace";
 const DEFAULT_APP_MONOSPACE_FONT_FAMILY =
@@ -23,6 +26,21 @@ function normalizePinnedSessionsLimit(value: unknown) {
   if (rounded < MIN_PINNED_SESSIONS_LIMIT) return MIN_PINNED_SESSIONS_LIMIT;
   if (rounded > MAX_PINNED_SESSIONS_LIMIT) return MAX_PINNED_SESSIONS_LIMIT;
   return rounded;
+}
+
+function normalizeOpenInEditorMaxSizeMb(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB;
+  const rounded = Math.round(value);
+  if (rounded < MIN_OPEN_IN_EDITOR_MAX_SIZE_MB) return MIN_OPEN_IN_EDITOR_MAX_SIZE_MB;
+  if (rounded > MAX_OPEN_IN_EDITOR_MAX_SIZE_MB) return MAX_OPEN_IN_EDITOR_MAX_SIZE_MB;
+  return rounded;
+}
+
+function readOpenInEditorMaxSizeMb() {
+  const raw = storageGet(StorageKeys.settings.openInEditorMaxSizeMb);
+  if (!raw) return DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB;
+  const parsed = Number(raw);
+  return normalizeOpenInEditorMaxSizeMb(parsed);
 }
 
 function readPinnedSessionsLimit() {
@@ -71,6 +89,8 @@ const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === '
 const pinnedSessionsLimit = ref(readPinnedSessionsLimit());
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
+const showOpenInEditorButton = ref(storageGet(StorageKeys.settings.showOpenInEditorButton) !== 'false');
+const openInEditorMaxSizeMb = ref(readOpenInEditorMaxSizeMb());
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
 
@@ -122,6 +142,19 @@ watch(appMonospaceFontFamily, (value) => {
   storageSet(StorageKeys.settings.appMonospaceFontFamily, normalized);
 });
 
+watch(showOpenInEditorButton, (value) => {
+  storageSet(StorageKeys.settings.showOpenInEditorButton, String(value));
+});
+
+watch(openInEditorMaxSizeMb, (value) => {
+  const normalized = normalizeOpenInEditorMaxSizeMb(value);
+  if (normalized !== value) {
+    openInEditorMaxSizeMb.value = normalized;
+    return;
+  }
+  storageSet(StorageKeys.settings.openInEditorMaxSizeMb, String(normalized));
+});
+
 watch(externalThemes, (value) => {
   if (value.length === 0) {
     storageRemove(StorageKeys.settings.themeRegistry);
@@ -157,6 +190,13 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.appMonospaceFontFamily)) {
       appMonospaceFontFamily.value = normalizeFontFamily(event.newValue ?? '', DEFAULT_APP_MONOSPACE_FONT_FAMILY);
     }
+    if (event.key === storageKey(StorageKeys.settings.showOpenInEditorButton)) {
+      showOpenInEditorButton.value = event.newValue !== 'false';
+    }
+    if (event.key === storageKey(StorageKeys.settings.openInEditorMaxSizeMb)) {
+      const parsed = event.newValue === null ? DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB : Number(event.newValue);
+      openInEditorMaxSizeMb.value = normalizeOpenInEditorMaxSizeMb(parsed);
+    }
     if (event.key === storageKey(StorageKeys.settings.themeTokens)) {
       const nextThemeStorage = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
       themeStorage.value = nextThemeStorage;
@@ -178,9 +218,14 @@ export function useSettings() {
     appMonospaceFontFamily,
     themeStorage,
     externalThemes,
+    showOpenInEditorButton,
+    openInEditorMaxSizeMb,
     defaultPinnedSessionsLimit: DEFAULT_PINNED_SESSIONS_LIMIT,
     minPinnedSessionsLimit: MIN_PINNED_SESSIONS_LIMIT,
     maxPinnedSessionsLimit: MAX_PINNED_SESSIONS_LIMIT,
+    defaultOpenInEditorMaxSizeMb: DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB,
+    minOpenInEditorMaxSizeMb: MIN_OPEN_IN_EDITOR_MAX_SIZE_MB,
+    maxOpenInEditorMaxSizeMb: MAX_OPEN_IN_EDITOR_MAX_SIZE_MB,
     defaultTerminalFontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
     defaultAppMonospaceFontFamily: DEFAULT_APP_MONOSPACE_FONT_FAMILY,
   };
