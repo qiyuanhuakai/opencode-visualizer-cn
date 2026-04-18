@@ -1,16 +1,16 @@
 {
-  "name": "@xenodrive/vis",
-  "version": "0.0.1",
+  "name": "opencode_visualizer_cn",
+  "version": "0.1.0",
   "description": "Vis - OpenCode Visualizer",
   "keywords": [
     "opencode",
     "webui"
   ],
-  "homepage": "https://xenodrive.github.io/vis",
+  "homepage": "https://github.com/qiyuanhuakai/opencode-visualizer-cn",
   "license": "MIT",
-  "author": "Xenodrive, Inc.",
+  "author": "Xenodrive, Inc.","qiyuanhuakai"
   "repository": {
-    "url": "https://github.com/xenodrive/vis"
+    "url": "https://github.com/qiyuanhuakai/opencode-visualizer-cn"
   },
   "main": "electron/main.js",
   "bin": {
