@@ -71,38 +71,38 @@ node server.js
 
 ### 1. 主界面与简体中文支持
 
-<-- [主界面](docs/screenshots/main-interface.png) -->
+<-- ![主界面](docs/screenshots/main-interface.png) -->
 
 ### 2. 字体管理
 
-<-- [字体管理](docs/screenshots/font-management.png) -->
+<-- ![字体管理](docs/screenshots/font-management.png) -->
 
 ### 3. 供应商与模型管理
 
-<-- [模型管理](docs/screenshots/model-management.png) -->
+<-- ![模型管理](docs/screenshots/model-management.png) -->
 
 ### 4. 状态监控
 
-<-- [状态监控](docs/screenshots/status-monitor.png) -->
+<-- ![状态监控](docs/screenshots/status-monitor.png) -->
 
 ### 5. 主题设置
 
-<-- [主题设置](docs/screenshots/theme-settings.png) -->
+<-- ![主题设置](docs/screenshots/theme-settings.png) -->
 
 ### 6. 代码行评论
 
-<-- [代码行评论](docs/screenshots/code-comment.png) -->
+<-- ![代码行评论](docs/screenshots/code-comment.png) -->
 
 ### 7. Session Pin
 
-<-- [Session Pin](docs/screenshots/session-pin.png) -->
+<-- ![Session Pin](docs/screenshots/session-pin.png) -->
 
 ### 8. 批量管理
-<-- [Session Pin](docs/screenshots/multi-manager.png) -->
+<-- ![Session Pin](docs/screenshots/multi-manager.png) -->
 
 ### 9. 悬浮窗与 Dock 栏
 
-<-- [Dock 栏](docs/screenshots/dock-bar.png) -->
+<-- ![Dock 栏](docs/screenshots/dock-bar.png) -->
 
 ---
 
