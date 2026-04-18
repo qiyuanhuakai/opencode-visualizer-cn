@@ -38,7 +38,7 @@ node server.js
 
 建议使用 `nohup node server.js 2>&1 &` 将服务器放在后台持久运行。
 
-然后打开 `http://localhost:3001`（本项目将默认端口从 3000 修改为 3001，以减少在 WSL 上与 Windows 服务的端口冲突）。
+然后打开 `http://localhost:23003`（本项目将默认端口从 3000 修改为 23003，以减少在 WSL 上与 Windows 服务的端口冲突）。
 
 ---
 
@@ -66,40 +66,42 @@ node server.js
 
 ---
 
-## 截图展示
+## 功能展示
 
-<!-- TODO: 请补充以下截图，建议存放在 docs/screenshots/ 目录 -->
 
 ### 1. 主界面与简体中文支持
-> **需要截图**：应用主界面，展示汉化后的整体布局、侧边栏、会话列表等
+
 <!-- ![主界面](docs/screenshots/main-interface.png) -->
 
 ### 2. 字体管理
-> **需要截图**：字体设置面板，展示系统字体自动发现、字体选择、字体命中确认等功能
+
 <!-- ![字体管理](docs/screenshots/font-management.png) -->
 
 ### 3. 供应商与模型管理
-> **需要截图**：模型管理面板，展示供应商列表、模型启用/禁用状态
+
 <!-- ![模型管理](docs/screenshots/model-management.png) -->
 
 ### 4. 状态监控
-> **需要截图**：状态查看页面，展示服务器、MCP、LSP、Plugin、Skills 的运行状态
+
 <!-- ![状态监控](docs/screenshots/status-monitor.png) -->
 
 ### 5. 主题设置
-> **需要截图**：主题设置面板，展示卡片颜色自定义功能
+
 <!-- ![主题设置](docs/screenshots/theme-settings.png) -->
 
 ### 6. 代码行评论
-> **需要截图**：在代码区域拖拽选择范围后，弹出评论输入框的交互过程
+
 <!-- ![代码行评论](docs/screenshots/code-comment.png) -->
 
-### 7. Session Pin 与批量管理
-> **需要截图**：侧栏 Pinned Sessions 区域，以及顶栏 Management 模式下的多选操作界面
+### 7. Session Pin
+
 <!-- ![Session Pin](docs/screenshots/session-pin.png) -->
 
-### 8. 悬浮窗与 Dock 栏
-> **需要截图**：多个悬浮窗最小化后，收拢到底部 Dock 栏的效果
+### 8. 批量管理
+<!-- ![Session Pin](docs/screenshots/multi-manager.png) -->
+
+### 9. 悬浮窗与 Dock 栏
+
 <!-- ![Dock 栏](docs/screenshots/dock-bar.png) -->
 
 ---
