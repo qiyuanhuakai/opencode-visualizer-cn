@@ -1,0 +1,105 @@
+appId: com.xenodrive.vis
+productName: Vis
+copyright: "Copyright © 2025 ${author}"
+
+# 输出目录
+directories:
+  output: dist-electron
+  buildResources: build
+
+# 包含的文件
+files:
+  - "dist/**/*"
+  - "electron/**/*"
+  - "package.json"
+  - "!node_modules"
+  - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
+  - "!.editorconfig"
+  - "!.gitattributes"
+  - "!.gitignore"
+  - "!.travis.yml"
+  - "!**/.DS_Store"
+  - "!**/.github"
+  - "!**/.git"
+  - "!**/.vscode"
+  - "!**/docs"
+
+# asar 压缩
+asar: true
+asarUnpack:
+  - "**/*.node"
+
+# macOS 配置
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  artifactName: "Vis-${version}-${arch}.${ext}"
+
+# Windows 配置
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+  verifyUpdateCodeSignature: false
+  artifactName: "Vis-${version}-${arch}.${ext}"
+
+# Linux 配置
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  executableName: vis
+  category: Development
+  maintainer: "Xenodrive, Inc."
+  vendor: "Xenodrive, Inc."
+  synopsis: "Vis - OpenCode Visualizer"
+  description: "An alternative web UI for OpenCode, designed for daily use."
+  artifactName: "Vis-${version}-${arch}.${ext}"
+
+# NSIS 安装器配置（Windows）
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: "Vis"
+  uninstallDisplayName: "Vis - OpenCode Visualizer"
+  deleteAppDataOnUninstall: false
+
+# DMG 配置（macOS）
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+  window:
+    width: 540
+    height: 380
+
+# 发布配置（可选）
+publish:
+  provider: github
+  owner: qiyuanhuakai
+  repo: opencode-visualizer-cn
+  releaseType: draft
