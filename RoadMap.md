@@ -6,10 +6,10 @@
 
 - [ ] **更多语言支持** — 在简体中文基础上，增加繁体中文、日语等更多语言
 - [ ] **外部工具支持** — 集成外部开发工具，扩展与第三方工具的联动能力。正在考虑：
-	- opencode-magic-content
-	- gnhf
-	- tokscale
-	- coding_agent_usage_tracker
+	- [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
+	- [gnhf](https://github.com/kunchenguid/gnhf)
+	- [tokscale](https://github.com/junhoyeo/tokscale)
+	- [coding_agent_usage_tracker](https://github.com/Dicklesworthstone/coding_agent_usage_tracker)
 - [ ] **完善“提供商与模型”** — 由于未知原因，目前无法从opencode server获取足够信息
 - [ ] **加入webui编辑器** — 考虑替换掉$EDITOR打开的方式
 
