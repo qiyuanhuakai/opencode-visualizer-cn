@@ -1,160 +1,179 @@
-## 说明 Notice
+# OpenCode Visualizer CN
 
-本仓库源自[上游仓库](https://github.com/xenodrive/vis)的fork，由于上游仓库不接受pr，因此我已将它作为独立项目持续维护，并进行了一些功能改进和本地化支持，包括：
+[English](#english) | [中文](#中文)
 
-This repository is a fork of [the upstream repository](https://github.com/xenodrive/vis). Since the upstream does not accept pull requests, I have maintained it as an independent project and implemented several enhancements and localization features, including:
+---
 
-- 支持i18n，添加新语言：简体中文
-- 添加字体管理功能（beta）
-  - 允许设置shell字体
-  - 允许设置界面等宽字体
-  - 实现了系统字体自动发现功能（依赖于浏览器）
-  - 实现了字体命中情况确认功能
-- 添加供应商和模型管理功能（beta）
-  - 允许查看现有和全部供应商
-  - 允许查看、启用、禁用现有模型（仅限本地）
-- 添加状态查看功能
-  - 允许查看服务器、mcp、lsp、plugin、skills状态
-  - 允许关闭mcp服务器连接（beta）
-- 添加主题设置功能（beta）
-  - 由于项目架构问题，主题系统只能以这种非常别扭的方案实现
-  - 允许设置每一块卡片的不同组件的颜色（未完全适配）
-- 添加“用编辑器打开”功能，允许使用系统的$EDITOR打开文本文件
-- 添加“代码行评论”功能，允许使用鼠标拖拽选择范围，评价并附加到输入框
-- 添加session pin功能，在侧栏中增加了session栏，允许把常用session pin在侧边
-- 添加批量管理功能，在顶栏增加了management按钮，实现多选session操作
-- 添加取消归档功能，允许找回已经被归档的session
-- 添加全面覆盖的关闭和最小化按钮，允许手动隐藏和最小化所有悬浮窗（也允许关闭最小化功能）
-- 添加底部dock栏以存放最小化后的悬浮窗
-- 修改默认端口以减少在wsl上使用时与windows服务的端口冲突
-- 添加对"@"快捷命令的支持，用于显式召唤代理
-- 一些性能改进
-  - 对超级庞大的session应用了lazy loading，降低卡顿
-  - 对超多session实现了background hydration，加快了冷启动的启动速度
-- 清理了一些冗余代码
+<a name="中文"></a>
+## 简介
 
-- Added i18n support with Simplified Chinese
-- Add font management feature (beta)
-  - Allow setting shell font
-  - Allow setting monospace font for interface
-  - Implemented system font auto-discovery feature (browser-dependent)
-  - Implemented font hit confirmation feature
-- Add provider and model management features (beta)
-  - Allow viewing existing and all providers
-  - Allow viewing, enabling, or disabling existing models (local only)
-- Add status monitoring feature
-  - Allow viewing server, MCP, LSP, plugin, and skills statuses
-  - Allow closing MCP server connections (beta)
-- Add theme settings feature (beta)
-  - Due to project architecture issues, the theme system can only be implemented using this awkward approach
-  - Allow setting colors for different components of each card (not fully adapted yet)
-- Add "Open with Editor" feature, allowing text files to be opened using the system's $EDITOR.
-- Add "Code Line Comment" feature, enabling users to select a range by dragging the mouse and insert comments into the input field.
-- Introduced session pinning functionality by adding a sessions panel in the sidebar to allow pinning frequently used sessions
-- Implemented batch management via a new "Management" button in the top bar for multi-select operations on sessions 
-- Added an unarchive feature to restore previously archived sessions
-- Included comprehensive minimize and close buttons for all floating windows, enabling manual hiding and minimizing of all popups (with the option to disable auto-minimize behavior)
-- Added a bottom dock bar to store minimized floating windows
-- Adjusted the default port to reduce conflicts with Windows services when running in WSL
-- Added support for "@" shortcut commands to explicitly summon agents
-- Various performance improvements:
-  - Implemented lazy loading for extremely large session lists to reduce lag
-  - Enabled background hydration for sessions with very high counts, significantly speeding up cold starts
-- Removed redundant code
+本项目是 [OpenCode](https://github.com/sst/opencode) 的一个第三方 Web UI，fork 自 [vis](https://github.com/xenodrive/vis)。由于上游仓库不接受 PR，我们将其作为独立项目持续维护，并进行了大量功能改进、性能优化和本地化支持。
 
-由于本仓库没有在npm和其他地方发布，因此唯一的使用方法是：
+> **核心改进方向**：界面汉化与 i18n 支持、字体与主题管理、会话批量操作与 Pin 功能、悬浮窗与 Dock 栏管理、性能优化。
 
-Since this repository is not published on npm or other platforms, the only way to use it is as follows:
+---
 
-```
+## 致谢
+
+本项目基于 [xenodrive/vis](https://github.com/xenodrive/vis) 构建，感谢原作者的出色工作。
+
+原仓库特性包括：
+- 以审阅为核心的悬浮窗口，保持工具输出和智能体推理的上下文
+- 支持多项目和工作树的会话管理
+- 内置语法高亮的代码和 diff 查看器
+- 交互式智能体工作流的权限和问题提示
+- 基于 xterm.js 的嵌入式终端
+
+---
+
+## 快速开始
+
+```bash
 git clone https://github.com/qiyuanhuakai/opencode-visualizer-cn
 cd opencode-visualizer-cn
 pnpm install
 pnpm build
 node server.js
 ```
-建议使用
 
-It is recommended to use
+建议使用 `nohup node server.js 2>&1 &` 将服务器放在后台持久运行。
+
+然后打开 `http://localhost:3001`（本项目将默认端口从 3000 修改为 3001，以减少在 WSL 上与 Windows 服务的端口冲突）。
+
+---
+
+## 主要功能改进
+
+与上游 [vis](https://github.com/xenodrive/vis) 相比，本项目增加了以下功能：
+
+| 功能类别 | 改进内容 | 状态 |
+|---|---|---|
+| **国际化** | 完整 i18n 支持，添加简体中文 | ✅ 已上线 |
+| **字体管理** | 支持设置 Shell 字体、界面等宽字体，系统字体自动发现 | 🅱️ Beta |
+| **供应商与模型管理** | 查看/启用/禁用本地模型和供应商 | 🅱️ Beta |
+| **状态监控** | 查看服务器、MCP、LSP、Plugin、Skills 状态，支持关闭 MCP 连接 | 🅱️ Beta |
+| **主题设置** | 自定义各卡片不同组件颜色 | 🅱️ Beta |
+| **编辑器集成** | 使用系统 `$EDITOR` 打开文本文件 | ✅ 已上线 |
+| **代码行评论** | 鼠标拖拽选择范围，评价并附加到输入框 | ✅ 已上线 |
+| **会话 Pin** | 侧栏增加 Sessions 栏，Pin 常用会话 | ✅ 已上线 |
+| **批量管理** | 顶栏 Management 按钮，多选 Session 操作 | ✅ 已上线 |
+| **取消归档** | 找回已归档的 Session | ✅ 已上线 |
+| **悬浮窗管理** | 全面覆盖的关闭/最小化按钮，底部 Dock 栏存放最小化窗口 | ✅ 已上线 |
+| **快捷命令** | 支持 `@` 显式召唤代理 | ✅ 已上线 |
+| **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速 | ✅ 已上线 |
+
+> 📋 **详细变更日志**请参阅 [CHANGELOG.md](./CHANGELOG.md)
+
+---
+
+## 截图展示
+
+<!-- TODO: 请补充以下截图，建议存放在 docs/screenshots/ 目录 -->
+
+### 1. 主界面与简体中文支持
+> **需要截图**：应用主界面，展示汉化后的整体布局、侧边栏、会话列表等
+<!-- ![主界面](docs/screenshots/main-interface.png) -->
+
+### 2. 字体管理
+> **需要截图**：字体设置面板，展示系统字体自动发现、字体选择、字体命中确认等功能
+<!-- ![字体管理](docs/screenshots/font-management.png) -->
+
+### 3. 供应商与模型管理
+> **需要截图**：模型管理面板，展示供应商列表、模型启用/禁用状态
+<!-- ![模型管理](docs/screenshots/model-management.png) -->
+
+### 4. 状态监控
+> **需要截图**：状态查看页面，展示服务器、MCP、LSP、Plugin、Skills 的运行状态
+<!-- ![状态监控](docs/screenshots/status-monitor.png) -->
+
+### 5. 主题设置
+> **需要截图**：主题设置面板，展示卡片颜色自定义功能
+<!-- ![主题设置](docs/screenshots/theme-settings.png) -->
+
+### 6. 代码行评论
+> **需要截图**：在代码区域拖拽选择范围后，弹出评论输入框的交互过程
+<!-- ![代码行评论](docs/screenshots/code-comment.png) -->
+
+### 7. Session Pin 与批量管理
+> **需要截图**：侧栏 Pinned Sessions 区域，以及顶栏 Management 模式下的多选操作界面
+<!-- ![Session Pin](docs/screenshots/session-pin.png) -->
+
+### 8. 悬浮窗与 Dock 栏
+> **需要截图**：多个悬浮窗最小化后，收拢到底部 Dock 栏的效果
+<!-- ![Dock 栏](docs/screenshots/dock-bar.png) -->
+
+---
+
+## 开发
+
+```sh
+pnpm install
+pnpm dev
 ```
-nohup node server.js 2>&1 &
-```
-将服务器放在后台持久运行。
 
-to run the server in the background persistently.
+## 声明
 
-## 声明 Declaration
+本项目是为 OpenCode 构建的第三方 Web UI，**并非**由 OpenCode 团队开发，且与他们**没有任何关联**。
 
-这个项目是为opencode构建的第三方webui，因此在名称中包含了opencode。其**并非**由OpenCode团队开发，且与他们**没有**任何关联：由于我更改了仓库名，特此声明 \
-This project is a third-party web UI built for opencode, and therefore includes "opencode" in its name. It was **not** developed by the OpenCode team and has **no** affiliation with them: I am making this statement because I have changed the repository name.
+## License
 
-以下为源仓库README文件：
+MIT
 
-# Vis
+---
 
-An alternative web UI for [OpenCode](https://github.com/sst/opencode), designed for daily use. It connects to a running OpenCode instance and provides a browser-based, window-style interface for managing sessions, viewing tool output, and interacting with AI agents in real time.
+<a name="english"></a>
+## Introduction
 
-![Demo](docs/demo.gif)
+This project is a third-party Web UI for [OpenCode](https://github.com/sst/opencode), forked from [vis](https://github.com/xenodrive/vis). Since the upstream repository does not accept PRs, we maintain it as an independent project with significant feature improvements, performance optimizations, and localization support.
 
-## Features
+> **Core Improvement Areas**: UI internationalization (i18n), font & theme management, session batch operations & Pin functionality, floating window & Dock bar management, performance optimization.
 
-- **Review-first floating windows** that keep tool output and agent reasoning in context
-- Session management with **multi-project and worktree** support
-- Syntax-highlighted **code and diff viewers** built for fast, confident review
+## Acknowledgements
+
+This project is built on top of [xenodrive/vis](https://github.com/xenodrive/vis). We thank the original authors for their excellent work.
+
+Original features include:
+- Review-first floating windows that keep tool output and agent reasoning in context
+- Session management with multi-project and worktree support
+- Syntax-highlighted code and diff viewers
 - Permission and question prompts for interactive agent workflows
 - Embedded terminal powered by xterm.js
 
-## How to Use
-
-### Cloud
-
-**No installation required** — just open the hosted version in your browser:
-
-**<https://xenodrive.github.io/vis/>**
-
-All you need is a running OpenCode server with CORS enabled. Start it with:
+## Quick Start
 
 ```bash
-opencode serve --cors https://xenodrive.github.io
+git clone https://github.com/qiyuanhuakai/opencode-visualizer-cn
+cd opencode-visualizer-cn
+pnpm install
+pnpm build
+node server.js
 ```
 
-Or add this to your `.config/opencode/opencode.json`:
+We recommend using `nohup node server.js 2>&1 &` to run the server persistently in the background.
 
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "server": {
-    "cors": ["https://xenodrive.github.io"]
-  }
-}
-```
+Then open `http://localhost:3001` (default port changed from 3000 to 3001 to reduce conflicts with Windows services when using WSL).
 
-and then:
+## Key Improvements
 
-```bash
-opencode serve
-```
+Compared to upstream [vis](https://github.com/xenodrive/vis), this project adds:
 
-### Local
+| Category | Feature | Status |
+|---|---|---|
+| **Internationalization** | Full i18n support with Simplified Chinese | ✅ Available |
+| **Font Management** | Shell font, UI monospace font, system font auto-discovery | 🅱️ Beta |
+| **Provider & Model Mgmt** | View/enable/disable local models and providers | 🅱️ Beta |
+| **Status Monitor** | View server, MCP, LSP, Plugin, Skills status; close MCP connections | 🅱️ Beta |
+| **Theme Settings** | Customize colors for different card components | 🅱️ Beta |
+| **Editor Integration** | Open text files with system `$EDITOR` | ✅ Available |
+| **Code Line Comment** | Drag to select range and append comment to input | ✅ Available |
+| **Session Pin** | Pinned Sessions panel in sidebar | ✅ Available |
+| **Batch Management** | Multi-select session operations via Management button | ✅ Available |
+| **Unarchive** | Restore previously archived sessions | ✅ Available |
+| **Floating Window Mgmt** | Close/minimize buttons for all popups, bottom Dock bar | ✅ Available |
+| **Quick Commands** | `@` shortcut to explicitly summon agents | ✅ Available |
+| **Performance** | Lazy loading for large sessions, background hydration, faster cold start | ✅ Available |
 
-The hosted version connects to your local OpenCode server, which some browsers may block due to security restrictions.
-If this happens, you can serve the UI locally instead:
-
-Start the UI server:
-
-```bash
-npx @xenodrive/vis
-```
-
-Start the OpenCode API server:
-
-```bash
-opencode serve
-```
-
-Then open `http://localhost:3000` in your browser.
-
----
+> 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)
 
 ## Development
 
@@ -162,6 +181,10 @@ Then open `http://localhost:3000` in your browser.
 pnpm install
 pnpm dev
 ```
+
+## Disclaimer
+
+This is a third-party Web UI for OpenCode. It was **not** developed by the OpenCode team and has **no affiliation** with them.
 
 ## License
 
