@@ -12,12 +12,14 @@
   "repository": {
     "url": "https://github.com/xenodrive/vis"
   },
+  "main": "electron/main.js",
   "bin": {
     "vis": "server.js"
   },
   "files": [
     "server.js",
-    "dist"
+    "dist",
+    "electron"
   ],
   "type": "module",
   "scripts": {
@@ -26,7 +28,11 @@
     "lint": "oxlint && vue-tsc --noEmit",
     "dev": "vite dev",
     "build": "vite build",
-    "test": "vitest run"
+    "test": "vitest run",
+    "electron:start": "electron .",
+    "electron:build": "vite build && electron-builder",
+    "electron:preview": "vite build && electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
@@ -45,6 +51,8 @@
     "@vitejs/plugin-vue": "^6.0.4",
     "@xterm/xterm": "^6.0.0",
     "autoprefixer": "^10.4.24",
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0",
     "markdown-it": "^14.1.1",
     "oxfmt": "^0.32.0",
     "oxlint": "^1.47.0",

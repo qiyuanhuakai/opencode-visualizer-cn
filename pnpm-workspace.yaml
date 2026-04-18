@@ -1,2 +1,6 @@
+ignoredBuiltDependencies:
+  - electron-winstaller
+
 onlyBuiltDependencies:
   - esbuild
+  - electron

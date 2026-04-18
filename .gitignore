@@ -1,6 +1,7 @@
 /node_modules/
 /app/node_modules/
 /dist
+/dist-electron
 /logs
 /.sisyphus
 /?
@@ -9,6 +10,6 @@
 PERFORMANCE*
 .gitnexus
 .claude
-.github
+.github/copilot*
 AGENTS.md
 CLAUDE.md
