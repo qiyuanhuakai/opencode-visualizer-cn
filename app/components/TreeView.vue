@@ -324,7 +324,12 @@
           </button>
           <span v-else class="tree-toggle tree-toggle-spacer"></span>
           <span class="tree-icon">{{ row.node.type === 'directory' ? '📁' : '📄' }}</span>
-          <span class="tree-name">{{ row.node.name }}</span>
+          <span class="tree-name">
+            <template v-for="(part, idx) in row.highlightParts" :key="idx">
+              <mark v-if="part.match" class="tree-name-highlight">{{ part.text }}</mark>
+              <template v-else>{{ part.text }}</template>
+            </template>
+          </span>
           <button
             v-if="row.displayStatus && row.node.type !== 'directory'"
             type="button"
@@ -416,6 +421,11 @@ type BranchGroup = {
   entries: BranchEntry[];
 };
 
+type HighlightPart = {
+  text: string;
+  match: boolean;
+};
+
 // Virtual scroll row type with pre-computed properties
 type VirtualRow = {
   node: TreeNode;
@@ -426,6 +436,7 @@ type VirtualRow = {
   classList: string[];
   displayStatus: DisplayStatus | null;
   statusClass: string;
+  highlightParts: HighlightPart[];
 };
 
 const { t } = useI18n();
@@ -564,6 +575,9 @@ watch(() => props.selectedPath, (newPath) => {
     scrollSelectedIntoView(newPath);
   });
 });
+
+// Search expansion is handled virtually inside flattenedRows so that clearing
+// the query restores the previous expanded state automatically.
 
 function scrollSelectedIntoView(path: string) {
   const rowIndex = flattenedRows.value.findIndex(r => r.node.path === path);
@@ -775,49 +789,137 @@ const displayNodes = computed(() => {
   return nodes;
 });
 
-// Optimized flattened rows with pre-computed properties
+function getHighlightParts(name: string, query: string): HighlightPart[] {
+  if (!query) return [{ text: name, match: false }];
+  const lowerName = name.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const parts: HighlightPart[] = [];
+  let lastIndex = 0;
+  let index = lowerName.indexOf(lowerQuery, lastIndex);
+
+  while (index !== -1) {
+    if (index > lastIndex) {
+      parts.push({ text: name.slice(lastIndex, index), match: false });
+    }
+    parts.push({ text: name.slice(index, index + query.length), match: true });
+    lastIndex = index + query.length;
+    index = lowerName.indexOf(lowerQuery, lastIndex);
+  }
+
+  if (lastIndex < name.length) {
+    parts.push({ text: name.slice(lastIndex), match: false });
+  }
+
+  return parts;
+}
+
+// Optimized flattened rows with pre-computed properties.
+// In search mode directories are expanded ONLY when they contain a matched file
+// descendant (not when only the directory name itself matches).  This keeps the
+// tree compact while still revealing matched files, and because we never touch
+// expandedPaths the previous expansion state is restored automatically when the
+// query is cleared.
 const flattenedRows = computed<VirtualRow[]>(() => {
   const rows: VirtualRow[] = [];
   let index = 0;
-  
+  const query = fileSearchQuery.value.trim().toLowerCase();
+  const isSearching = query.length > 0;
+
+  // Pass 1: bottom-up computation — for every directory record whether its
+  // subtree contains at least one file whose name matches the query.
+  const dirHasMatchedFile = new Map<string, boolean>();
+  function calcSubtree(nodes: TreeNode[]): boolean {
+    let hasMatch = false;
+    nodes.forEach((node) => {
+      if (node.type === 'directory' && node.children?.length) {
+        const childHasMatch = calcSubtree(node.children);
+        dirHasMatchedFile.set(node.path, childHasMatch);
+        if (childHasMatch || node.name.toLowerCase().includes(query)) {
+          hasMatch = true;
+        }
+      } else if (node.type === 'file') {
+        if (node.name.toLowerCase().includes(query)) hasMatch = true;
+      }
+    });
+    return hasMatch;
+  }
+  if (isSearching) calcSubtree(displayNodes.value);
+
+  // Pass 2: top-down row generation.
   const pushRows = (nodes: TreeNode[], depth: number) => {
     nodes.forEach((node) => {
       const displayStatus = getDisplayStatus(node.path);
-      const isExpanded = expanded.value.has(node.path);
-      const isSelected = props.selectedPath === node.path;
-      const hasStatus = Boolean(props.gitStatusByPath?.[node.path]);
-      
-      // Pre-compute class list
-      const classList: string[] = [];
-      if (node.type === 'directory') classList.push('is-directory');
-      else classList.push('is-file');
-      if (isSelected) classList.push('is-selected');
-      if (node.ignored) classList.push('is-ignored');
-      if (node.type !== 'directory' && displayStatus?.code === 'D') {
-        classList.push('is-deleted');
-      }
-      if (hasStatus) classList.push('has-status');
-      
-      const rowStatusClassName = getRowStatusClass(displayStatus);
-      if (rowStatusClassName) classList.push(rowStatusClassName);
-      
-      rows.push({
-        node,
-        depth,
-        index: index++,
-        offsetY: (index - 1) * ROW_HEIGHT,
-        isExpanded,
-        classList,
-        displayStatus,
-        statusClass: getStatusClass(displayStatus),
-      });
-      
-      if (node.type === 'directory' && isExpanded && node.children?.length) {
-        pushRows(node.children, depth + 1);
+      const isDirectory = node.type === 'directory';
+      const nameMatches = isSearching && node.name.toLowerCase().includes(query);
+
+      if (isDirectory) {
+        const childHasMatchedFile = dirHasMatchedFile.get(node.path) ?? false;
+
+        // In search mode keep the directory row only when its own name matches
+        // or it has a matched-file descendant.
+        if (!isSearching || nameMatches || childHasMatchedFile) {
+          // Expand the directory only because it contains a matched file, not
+          // merely because its own name matches the query.
+          const isExpanded = isSearching
+            ? childHasMatchedFile
+            : expanded.value.has(node.path);
+
+          const isSelected = props.selectedPath === node.path;
+
+          const classList: string[] = ['is-directory'];
+          if (isSelected) classList.push('is-selected');
+          if (node.ignored) classList.push('is-ignored');
+
+          const rowStatusClassName = getRowStatusClass(displayStatus);
+          if (rowStatusClassName) classList.push(rowStatusClassName);
+
+          rows.push({
+            node,
+            depth,
+            index: index++,
+            offsetY: (index - 1) * ROW_HEIGHT,
+            isExpanded,
+            classList,
+            displayStatus,
+            statusClass: getStatusClass(displayStatus),
+            highlightParts: getHighlightParts(node.name, query),
+          });
+
+          if (isExpanded && node.children?.length) {
+            pushRows(node.children, depth + 1);
+          }
+        }
+      } else {
+        // File node
+        if (!isSearching || nameMatches) {
+          const isSelected = props.selectedPath === node.path;
+          const hasStatus = Boolean(props.gitStatusByPath?.[node.path]);
+
+          const classList: string[] = ['is-file'];
+          if (isSelected) classList.push('is-selected');
+          if (node.ignored) classList.push('is-ignored');
+          if (displayStatus?.code === 'D') classList.push('is-deleted');
+          if (hasStatus) classList.push('has-status');
+
+          const rowStatusClassName = getRowStatusClass(displayStatus);
+          if (rowStatusClassName) classList.push(rowStatusClassName);
+
+          rows.push({
+            node,
+            depth,
+            index: index++,
+            offsetY: (index - 1) * ROW_HEIGHT,
+            isExpanded: false,
+            classList,
+            displayStatus,
+            statusClass: getStatusClass(displayStatus),
+            highlightParts: getHighlightParts(node.name, query),
+          });
+        }
       }
     });
   };
-  
+
   pushRows(displayNodes.value, 0);
   return rows;
 });
@@ -1530,6 +1632,14 @@ function onRowDoubleClick(row: VirtualRow) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.tree-name-highlight {
+  background: var(--theme-side-accent, rgba(96, 165, 250, 0.45));
+  color: var(--theme-side-active-text, #e2e8f0);
+  border-radius: 2px;
+  padding: 0 1px;
+  font-weight: 600;
 }
 
 /* --- Git status badge (base) --- */
