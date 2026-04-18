@@ -2,10 +2,9 @@ name: Build Electron App
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     tags:
       - 'v*'
-  workflow_dispatch:
 
 jobs:
   build:
@@ -27,8 +26,6 @@ jobs:
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Get pnpm store directory
         shell: bash
