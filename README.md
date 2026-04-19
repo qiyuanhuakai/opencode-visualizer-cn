@@ -31,7 +31,7 @@
 
 | 功能类别 | 改进内容 | 状态 |
 |---|---|---|
-| **国际化 (i18n)** | 完整 i18n 框架支持，添加简体中文翻译 | ✅ 已上线 |
+| **国际化 (i18n)** | 完整 i18n 框架支持，支持简体中文、繁体中文、日语、世界语 | ✅ 已上线 |
 | **字体管理** | 支持设置 Shell 字体、界面等宽字体，支持设置终端/代码/消息/UI 字体大小，系统字体自动发现 | 🅱️ Beta |
 | **供应商与模型管理** | 查看/启用/禁用本地模型和供应商 | 🅱️ Beta |
 | **状态监控** | 查看服务器、MCP、LSP、Plugin、Skills 状态，支持关闭 MCP 连接 | ✅ 已上线 |
@@ -219,7 +219,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 
 | Category | Feature | Status |
 |---|---|---|
-| **Internationalization (i18n)** | Full i18n framework with Simplified Chinese | ✅ Available |
+| **Internationalization (i18n)** | Full i18n framework supporting English, Simplified Chinese, Traditional Chinese, Japanese, and Esperanto | ✅ Available |
 | **Font Management** | Shell font, UI monospace font, system font auto-discovery | 🅱️ Beta |
 | **Provider & Model Management** | View/enable/disable local models and providers | 🅱️ Beta |
 | **Status Monitor** | View server, MCP, LSP, Plugin, Skills status; close MCP connections | ✅ Available |
