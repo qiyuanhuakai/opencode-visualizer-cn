@@ -3,12 +3,13 @@ import en from '../locales/en';
 import zhCN from '../locales/zh-CN';
 import zhTW from '../locales/zh-TW';
 import ja from '../locales/ja';
+import eo from '../locales/eo';
 import { storageGet, storageSet, storageKey } from '../utils/storageKeys';
 import type { Locale } from './types';
 
 const LOCALE_STORAGE_KEY = 'settings.locale.v1';
 const DEFAULT_LOCALE: Locale = 'en';
-const VALID_LOCALES: Locale[] = ['en', 'zh-CN', 'zh-TW', 'ja'];
+const VALID_LOCALES: Locale[] = ['en', 'zh-CN', 'zh-TW', 'ja', 'eo'];
 
 export function getStoredLocale(): Locale {
   const stored = storageGet(LOCALE_STORAGE_KEY);
@@ -32,6 +33,7 @@ export const i18n = createI18n<any>({
     'zh-CN': zhCN,
     'zh-TW': zhTW,
     ja,
+    eo,
   },
 });
 

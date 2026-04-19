@@ -41,6 +41,7 @@
               <option value="zh-CN">{{ $t('settings.language.zhCN') }}</option>
               <option value="zh-TW">{{ $t('settings.language.zhTW') }}</option>
               <option value="ja">{{ $t('settings.language.ja') }}</option>
+              <option value="eo">{{ $t('settings.language.eo') }}</option>
             </select>
           </div>
 

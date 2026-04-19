@@ -1,4 +1,4 @@
-export type Locale = 'en' | 'zh-CN' | 'zh-TW' | 'ja';
+export type Locale = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'eo';
 
 export interface LocaleMessages {
   app: {

@@ -463,9 +463,10 @@ const messages: LocaleMessages = {
       label: '言語',
       description: '希望の言語を選択してください',
       en: 'English',
-      zhCN: '簡体中文',
+      zhCN: '简体中文',
       zhTW: '繁體中文',
       ja: '日本語',
+      eo: 'Esperanto',
     },
     enterToSend: {
       label: 'Enterで送信',
