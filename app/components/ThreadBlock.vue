@@ -584,7 +584,7 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 }
 
 .ib-msg-user {
-  font-size: 13px;
+  font-size: var(--message-font-size, 13px);
   padding: 4px 0;
 }
 
@@ -604,14 +604,14 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 }
 
 .ib-msg-body {
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 13px;
-  --message-line-height: 1.2;
-  line-height: var(--message-line-height);
-  padding-top: 3px;
-  padding-left: 6px;
-}
+   white-space: pre-wrap;
+   word-break: break-word;
+   font-size: var(--message-font-size, 13px);
+   --message-line-height: 1.2;
+   line-height: var(--message-line-height);
+   padding-top: 3px;
+   padding-left: 6px;
+ }
 
 .ib-top-right {
   float: right;

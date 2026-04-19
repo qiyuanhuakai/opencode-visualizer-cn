@@ -460,13 +460,17 @@ const {
   pinnedSessionsLimit,
   terminalFontFamily,
   appMonospaceFontFamily,
+  terminalFontSizePx,
+  appFontSizePx,
+  messageFontSizePx,
+  uiFontSizePx,
 } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
 const FILE_VIEWER_WINDOW_HEIGHT = 520;
 const TERM_COLUMNS = 80;
 const TERM_ROWS = 25;
-const TERM_FONT_SIZE_PX = 13;
+const TERM_FONT_SIZE_PX = computed(() => terminalFontSizePx.value);
 const TERM_LINE_HEIGHT = 1.1;
 const TERM_TITLEBAR_HEIGHT_PX = 22;
 const TERM_WINDOW_BORDER_PX = 2;
@@ -2684,9 +2688,9 @@ function splitFontFamilyList(fontFamily: string) {
 }
 
 function getTerminalWindowSize() {
-  const cellWidth = measureTerminalCellWidth(terminalFontFamily.value, TERM_FONT_SIZE_PX);
-  const lineHeightPx = TERM_FONT_SIZE_PX * TERM_LINE_HEIGHT;
-  const gutterWidthPx = TERM_FONT_SIZE_PX * TERM_GUTTER_WIDTH_EM;
+  const cellWidth = measureTerminalCellWidth(terminalFontFamily.value, TERM_FONT_SIZE_PX.value);
+  const lineHeightPx = TERM_FONT_SIZE_PX.value * TERM_LINE_HEIGHT;
+  const gutterWidthPx = TERM_FONT_SIZE_PX.value * TERM_GUTTER_WIDTH_EM;
   const contentWidth = TERM_COLUMNS * cellWidth;
   const contentHeight = TERM_ROWS * lineHeightPx;
   const width = Math.ceil(
@@ -2703,7 +2707,7 @@ function syncCanvasTermMetrics() {
   if (!canvas) return;
   const { width, height } = getTerminalWindowSize();
   canvas.style.setProperty('--term-font-family', terminalFontFamily.value);
-  canvas.style.setProperty('--term-font-size', `${TERM_FONT_SIZE_PX}px`);
+  canvas.style.setProperty('--term-font-size', `${terminalFontSizePx.value}px`);
   canvas.style.setProperty('--term-line-height', String(TERM_LINE_HEIGHT));
   canvas.style.setProperty('--term-width', `${width}px`);
   canvas.style.setProperty('--term-height', `${height}px`);
@@ -2713,11 +2717,26 @@ function syncAppMonospaceMetrics() {
   const app = appEl.value;
   if (app) {
     app.style.setProperty('--app-monospace-font-family', appMonospaceFontFamily.value);
+    app.style.setProperty('--app-monospace-font-size', `${appFontSizePx.value}px`);
+    app.style.setProperty('--message-font-size', `${messageFontSizePx.value}px`);
+    app.style.setProperty('--ui-font-size', `${uiFontSizePx.value}px`);
   }
   if (typeof document !== 'undefined') {
     document.documentElement.style.setProperty(
       '--app-monospace-font-family',
       appMonospaceFontFamily.value,
+    );
+    document.documentElement.style.setProperty(
+      '--app-monospace-font-size',
+      `${appFontSizePx.value}px`,
+    );
+    document.documentElement.style.setProperty(
+      '--message-font-size',
+      `${messageFontSizePx.value}px`,
+    );
+    document.documentElement.style.setProperty(
+      '--ui-font-size',
+      `${uiFontSizePx.value}px`,
     );
   }
 }
@@ -2726,7 +2745,7 @@ async function waitForTerminalFontsReady(fontFamily = terminalFontFamily.value) 
   if (typeof document === 'undefined' || !('fonts' in document)) return;
   const fontSet = document.fonts;
   const requestedFonts = splitFontFamilyList(fontFamily).map((family) =>
-    fontSet.load(`${TERM_FONT_SIZE_PX}px ${family}`)
+    fontSet.load(`${TERM_FONT_SIZE_PX.value}px ${family}`)
   );
   await Promise.allSettled(requestedFonts);
   await fontSet.ready;
@@ -2736,7 +2755,7 @@ async function refreshOpenShellFonts() {
   await waitForTerminalFontsReady();
   shellSessionsByPtyId.forEach((session) => {
     session.terminal.options.fontFamily = terminalFontFamily.value;
-    session.terminal.options.fontSize = TERM_FONT_SIZE_PX;
+    session.terminal.options.fontSize = TERM_FONT_SIZE_PX.value;
     session.terminal.options.lineHeight = TERM_LINE_HEIGHT;
     session.terminal.refresh(0, Math.max(0, session.terminal.rows - 1));
   });
@@ -4105,7 +4124,7 @@ async function ensureShellWindow(pty: PtyInfo) {
     cols: TERM_COLUMNS,
     rows: TERM_ROWS,
     fontFamily: terminalFontFamily.value,
-    fontSize: TERM_FONT_SIZE_PX,
+    fontSize: TERM_FONT_SIZE_PX.value,
     lineHeight: TERM_LINE_HEIGHT,
     cursorBlink: true,
     theme: {
@@ -5388,6 +5407,39 @@ watch(
   terminalFontFamily,
   () => {
     void refreshOpenShellFonts();
+  },
+  { immediate: true },
+);
+
+watch(
+  terminalFontSizePx,
+  () => {
+    syncCanvasTermMetrics();
+    void refreshOpenShellFonts();
+  },
+  { immediate: true },
+);
+
+watch(
+  appFontSizePx,
+  () => {
+    syncAppMonospaceMetrics();
+  },
+  { immediate: true },
+);
+
+watch(
+  messageFontSizePx,
+  () => {
+    syncAppMonospaceMetrics();
+  },
+  { immediate: true },
+);
+
+watch(
+  uiFontSizePx,
+  () => {
+    syncAppMonospaceMetrics();
   },
   { immediate: true },
 );

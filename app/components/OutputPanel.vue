@@ -389,7 +389,7 @@ defineExpose({ panelEl });
   display: flex;
   flex-direction: column;
   font-family: var(--app-monospace-font-family);
-  font-size: 13px;
+  font-size: var(--app-monospace-font-size, 13px);
 }
 
 .output-panel-scroll {

@@ -485,6 +485,22 @@ const messages: LocaleMessages = {
       label: '应用等宽字体族',
       description: '统一用于面板、弹窗、工具占位、内联代码和徽章等等宽文本。',
     },
+    terminalFontSizePx: {
+      label: '终端字体大小',
+      description: 'xterm Shell 窗口的字体大小（像素）。',
+    },
+    appFontSizePx: {
+      label: '代码视图字体大小',
+      description: '代码视图、差异查看器和输出面板中使用的字体大小（像素）。',
+    },
+    messageFontSizePx: {
+      label: '消息字体大小',
+      description: '聊天消息和线程历史中使用的字体大小（像素）。',
+    },
+    uiFontSizePx: {
+      label: '界面字体大小',
+      description: '侧边栏、顶部面板、弹窗和下拉菜单中使用的字体大小（像素）。',
+    },
     fontSettings: {
       label: '字体设置',
       description: '配置终端字体，以及应用内共享的等宽字体。',

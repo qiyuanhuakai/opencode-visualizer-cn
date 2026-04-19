@@ -1167,7 +1167,7 @@ function handleOpenDirectory(close: () => void) {
 
 .tree-search :deep(.ui-dropdown-search-input) {
   border-radius: 8px;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   padding: 6px 8px;
 }
 
@@ -1200,7 +1200,7 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   gap: 6px;
   color: var(--theme-top-dropdown-text, #cbd5e1);
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
 }
 
 .management-count {
@@ -1255,7 +1255,7 @@ function handleOpenDirectory(close: () => void) {
   padding: 14px;
   text-align: center;
   color: var(--theme-empty-state-text, var(--theme-top-text-muted, #94a3b8));
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
 }
 
 .tree-worktree-header,
@@ -1297,7 +1297,7 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .tree-label-name {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-top-dropdown-text, #e2e8f0);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1400,7 +1400,7 @@ function handleOpenDirectory(close: () => void) {
   padding: 6px 8px 6px 40px;
   border-radius: 8px;
   color: var(--theme-top-dropdown-text, #e2e8f0);
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   cursor: pointer;
 }
 
@@ -1635,7 +1635,7 @@ function handleOpenDirectory(close: () => void) {
   background: var(--theme-top-dropdown-control-bg, #111a2c);
   color: var(--theme-top-dropdown-text, #e2e8f0);
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   cursor: pointer;
   box-shadow: none;
   outline: none;
@@ -1662,7 +1662,7 @@ function handleOpenDirectory(close: () => void) {
   border-radius: 8px;
   background: var(--theme-top-dropdown-control-bg, #0b1320);
   color: var(--theme-top-dropdown-text, #e2e8f0);
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
@@ -1768,7 +1768,7 @@ function handleOpenDirectory(close: () => void) {
   flex: 0 0 auto;
   width: 14px;
   text-align: center;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   line-height: 1;
 }
 

@@ -47,6 +47,8 @@ describe('useSettings', () => {
     expect(settings.pinnedSessionsLimit.value).toBe(30);
     expect(settings.terminalFontFamily.value).toBe(settings.defaultTerminalFontFamily);
     expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
+    expect(settings.terminalFontSizePx.value).toBe(13);
+    expect(settings.appFontSizePx.value).toBe(13);
   });
 
   it('reads persisted values from storage on load', async () => {
@@ -55,6 +57,8 @@ describe('useSettings', () => {
     storage.setItem('opencode.settings.pinnedSessionsLimit.v1', '50');
     storage.setItem('opencode.settings.terminalFontFamily.v1', 'Test Terminal Font, monospace');
     storage.setItem('opencode.settings.appMonospaceFontFamily.v1', 'Test App Font, monospace');
+    storage.setItem('opencode.settings.terminalFontSizePx.v1', '16');
+    storage.setItem('opencode.settings.appFontSizePx.v1', '14');
 
     const settings = await importFresh();
     expect(settings.enterToSend.value).toBe(true);
@@ -62,6 +66,8 @@ describe('useSettings', () => {
     expect(settings.pinnedSessionsLimit.value).toBe(50);
     expect(settings.terminalFontFamily.value).toBe('Test Terminal Font, monospace');
     expect(settings.appMonospaceFontFamily.value).toBe('Test App Font, monospace');
+    expect(settings.terminalFontSizePx.value).toBe(16);
+    expect(settings.appFontSizePx.value).toBe(14);
   });
 
   it('writes back to localStorage when values change', async () => {
@@ -71,20 +77,17 @@ describe('useSettings', () => {
     expect(storage.getItem('opencode.settings.enterToSend.v1')).toBe('true');
   });
 
-  it('clamps pinnedSessionsLimit to max 200', async () => {
+  it('does not auto-clamp pinnedSessionsLimit during editing', async () => {
     const settings = await importFresh();
     settings.pinnedSessionsLimit.value = 300;
     await new Promise((r) => setTimeout(r, 10));
-    expect(settings.pinnedSessionsLimit.value).toBe(200);
-    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('200');
-  });
+    expect(settings.pinnedSessionsLimit.value).toBe(300);
+    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('300');
 
-  it('clamps pinnedSessionsLimit to min 1', async () => {
-    const settings = await importFresh();
     settings.pinnedSessionsLimit.value = 0;
     await new Promise((r) => setTimeout(r, 10));
-    expect(settings.pinnedSessionsLimit.value).toBe(1);
-    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('1');
+    expect(settings.pinnedSessionsLimit.value).toBe(0);
+    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('0');
   });
 
   it('resets dockAlwaysOpen when showMinimizeButtons is disabled', async () => {
@@ -157,6 +160,91 @@ describe('useSettings', () => {
     } as unknown as StorageEvent;
     for (const listener of storageListeners) listener(event);
     expect(settings.pinnedSessionsLimit.value).toBe(30);
+  });
+
+  it('does not auto-clamp pinnedSessionsLimit or openInEditorMaxSizeMb during editing', async () => {
+    const settings = await importFresh();
+    settings.pinnedSessionsLimit.value = 300;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.pinnedSessionsLimit.value).toBe(300);
+    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('300');
+
+    settings.openInEditorMaxSizeMb.value = 0;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.openInEditorMaxSizeMb.value).toBe(0);
+    expect(storage.getItem('opencode.settings.openInEditorMaxSizeMb.v1')).toBe('0');
+  });
+
+  it('does not auto-clamp font size values during editing', async () => {
+    const settings = await importFresh();
+    settings.terminalFontSizePx.value = 5;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.terminalFontSizePx.value).toBe(5);
+    expect(storage.getItem('opencode.settings.terminalFontSizePx.v1')).toBe('5');
+
+    settings.appFontSizePx.value = 25;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.appFontSizePx.value).toBe(25);
+    expect(storage.getItem('opencode.settings.appFontSizePx.v1')).toBe('25');
+  });
+
+  it('normalizes out-of-bounds font sizes from external storage events', async () => {
+    const settings = await importFresh();
+    const terminalEvent = {
+      key: 'opencode.settings.terminalFontSizePx.v1',
+      newValue: '5',
+    } as unknown as StorageEvent;
+    const appEvent = {
+      key: 'opencode.settings.appFontSizePx.v1',
+      newValue: '25',
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(terminalEvent);
+    for (const listener of storageListeners) listener(appEvent);
+    expect(settings.terminalFontSizePx.value).toBe(8);
+    expect(settings.appFontSizePx.value).toBe(20);
+  });
+
+  it('writes back to localStorage when font size values change', async () => {
+    const settings = await importFresh();
+    settings.terminalFontSizePx.value = 16;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(storage.getItem('opencode.settings.terminalFontSizePx.v1')).toBe('16');
+
+    settings.appFontSizePx.value = 15;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(storage.getItem('opencode.settings.appFontSizePx.v1')).toBe('15');
+  });
+
+  it('reacts to external storage events for font sizes', async () => {
+    const settings = await importFresh();
+    const terminalEvent = {
+      key: 'opencode.settings.terminalFontSizePx.v1',
+      newValue: '18',
+    } as unknown as StorageEvent;
+    const appEvent = {
+      key: 'opencode.settings.appFontSizePx.v1',
+      newValue: '12',
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(terminalEvent);
+    for (const listener of storageListeners) listener(appEvent);
+    expect(settings.terminalFontSizePx.value).toBe(18);
+    expect(settings.appFontSizePx.value).toBe(12);
+  });
+
+  it('uses default font sizes when storage event clears the keys', async () => {
+    const settings = await importFresh();
+    const terminalEvent = {
+      key: 'opencode.settings.terminalFontSizePx.v1',
+      newValue: null,
+    } as unknown as StorageEvent;
+    const appEvent = {
+      key: 'opencode.settings.appFontSizePx.v1',
+      newValue: null,
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(terminalEvent);
+    for (const listener of storageListeners) listener(appEvent);
+    expect(settings.terminalFontSizePx.value).toBe(13);
+    expect(settings.appFontSizePx.value).toBe(13);
   });
 
   it('persists and syncs external themes', async () => {

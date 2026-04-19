@@ -333,7 +333,7 @@ function formatMessageTime(value?: number) {
 
 .history-content-wrapper {
   padding: 10px;
-  font-size: 13px;
+  font-size: var(--message-font-size, 13px);
   line-height: 1.4;
 }
 
@@ -447,7 +447,7 @@ function formatMessageTime(value?: number) {
 }
 
 .history-question-text {
-  font-size: 13px;
+  font-size: var(--message-font-size, 13px);
   line-height: 1.4;
   color: var(--floating-text, #e2e8f0);
 }

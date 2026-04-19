@@ -427,6 +427,22 @@ export interface LocaleMessages {
       label: string;
       description: string;
     };
+    terminalFontSizePx: {
+      label: string;
+      description: string;
+    };
+    appFontSizePx: {
+      label: string;
+      description: string;
+    };
+    messageFontSizePx: {
+      label: string;
+      description: string;
+    };
+    uiFontSizePx: {
+      label: string;
+      description: string;
+    };
     fontSettings: {
       label: string;
       description: string;
