@@ -39,6 +39,17 @@ async function waitForDevServer() {
 }
 
 function spawnChild(command, args, options = {}) {
+  if (process.platform === 'win32') {
+    const shell = process.env.ComSpec || 'cmd.exe';
+    const commandLine = [command, ...args].map(quoteWindowsCommandArg).join(' ');
+
+    return spawn(shell, ['/d', '/s', '/c', commandLine], {
+      stdio: 'inherit',
+      shell: false,
+      ...options,
+    });
+  }
+
   return spawn(command, args, {
     stdio: 'inherit',
     shell: false,
@@ -47,7 +58,15 @@ function spawnChild(command, args, options = {}) {
 }
 
 function pnpmCommand() {
-  return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  return 'pnpm';
+}
+
+function quoteWindowsCommandArg(arg) {
+  if (!/[\s"&|<>^()]/.test(arg)) {
+    return arg;
+  }
+
+  return `"${arg.replace(/"/g, '""')}"`;
 }
 
 async function main() {
