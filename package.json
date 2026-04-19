@@ -29,7 +29,7 @@
     "dev": "vite dev",
     "build": "vite build",
     "test": "vitest run",
-    "electron:start": "electron .",
+    "electron:start": "node scripts/electron-start.mjs",
     "electron:build": "vite build && electron-builder",
     "electron:preview": "vite build && electron-builder --dir",
     "postinstall": "electron-builder install-app-deps"

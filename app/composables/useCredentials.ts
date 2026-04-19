@@ -13,9 +13,54 @@ type Credentials = {
   password: string;
 };
 
+const LEGACY_CREDENTIALS_STORAGE_KEY = 'credentials.v1';
+
 const url = ref('');
 const username = ref('');
 const password = ref('');
+
+function applyCredentials(next: Credentials) {
+  url.value = next.url;
+  username.value = next.username;
+  password.value = next.password;
+}
+
+function parseStoredCredentials(raw: string | null): Credentials | null {
+  if (!raw) return null;
+
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (!data || typeof data !== 'object') return null;
+
+    const record = data as Record<string, unknown>;
+    return {
+      url: typeof record.url === 'string' ? record.url : '',
+      username: typeof record.username === 'string' ? record.username : '',
+      password: typeof record.password === 'string' ? record.password : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function migrateLegacyCredentials() {
+  const legacy = parseStoredCredentials(storageGet(LEGACY_CREDENTIALS_STORAGE_KEY));
+  if (!legacy) return null;
+
+  const normalizedUrl = legacy.url.trim();
+  const next: Credentials = {
+    url: normalizedUrl,
+    username: legacy.username,
+    password: legacy.password,
+  };
+
+  if (normalizedUrl) {
+    storageSet(StorageKeys.auth.serverUrl, normalizedUrl);
+  }
+  storageSet(StorageKeys.auth.credentials, JSON.stringify(next));
+  storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY);
+  return next;
+}
 
 export function useCredentials() {
   const authHeader = computed(() => {
@@ -35,9 +80,11 @@ export function useCredentials() {
   });
 
   function save(newUrl: string, newUsername: string, newPassword: string) {
-    url.value = newUrl;
-    username.value = newUsername;
-    password.value = newPassword;
+    applyCredentials({
+      url: newUrl,
+      username: newUsername,
+      password: newPassword,
+    });
 
     if (typeof window === 'undefined') return;
 
@@ -47,6 +94,7 @@ export function useCredentials() {
         username: newUsername,
         password: newPassword,
       };
+      storageSet(StorageKeys.auth.serverUrl, newUrl);
       storageSet(StorageKeys.auth.credentials, JSON.stringify(data));
     } catch {
       return;
@@ -57,33 +105,38 @@ export function useCredentials() {
     if (typeof window === 'undefined') return;
 
     try {
-      const raw = storageGet(StorageKeys.auth.credentials);
-      if (!raw) return;
+      const storedCredentials =
+        parseStoredCredentials(storageGet(StorageKeys.auth.credentials)) ?? migrateLegacyCredentials();
+      const storedUrl = storageGet(StorageKeys.auth.serverUrl) ?? storedCredentials?.url ?? '';
 
-      const data = JSON.parse(raw) as unknown;
-      if (!data || typeof data !== 'object') return;
+      if (!storageGet(StorageKeys.auth.serverUrl) && storedUrl) {
+        storageSet(StorageKeys.auth.serverUrl, storedUrl);
+      }
 
-      const record = data as Record<string, unknown>;
-      const loadedUrl = typeof record.url === 'string' ? record.url : '';
-      const loadedUsername = typeof record.username === 'string' ? record.username : '';
-      const loadedPassword = typeof record.password === 'string' ? record.password : '';
-
-      url.value = loadedUrl;
-      username.value = loadedUsername;
-      password.value = loadedPassword;
+      applyCredentials({
+        url: storedUrl,
+        username: storedCredentials?.username ?? '',
+        password: storedCredentials?.password ?? '',
+      });
     } catch {
       return;
     }
   }
 
   function clear() {
-    url.value = '';
+    const preservedUrl = url.value;
+    url.value = preservedUrl;
     username.value = '';
     password.value = '';
 
     if (typeof window === 'undefined') return;
 
     try {
+      if (preservedUrl.trim()) {
+        storageSet(StorageKeys.auth.serverUrl, preservedUrl);
+      } else {
+        storageRemove(StorageKeys.auth.serverUrl);
+      }
       storageRemove(StorageKeys.auth.credentials);
     } catch {
       return;
@@ -92,30 +145,24 @@ export function useCredentials() {
 
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', (event) => {
+      if (event.key === storageKey(StorageKeys.auth.serverUrl)) {
+        url.value = event.newValue ?? '';
+        return;
+      }
+
       if (event.key !== storageKey(StorageKeys.auth.credentials)) return;
 
       if (!event.newValue) {
-        url.value = '';
         username.value = '';
         password.value = '';
+        const storedUrl = storageGet(StorageKeys.auth.serverUrl);
+        url.value = storedUrl ?? '';
         return;
       }
 
-      try {
-        const data = JSON.parse(event.newValue) as unknown;
-        if (!data || typeof data !== 'object') return;
-
-        const record = data as Record<string, unknown>;
-        const loadedUrl = typeof record.url === 'string' ? record.url : '';
-        const loadedUsername = typeof record.username === 'string' ? record.username : '';
-        const loadedPassword = typeof record.password === 'string' ? record.password : '';
-
-        url.value = loadedUrl;
-        username.value = loadedUsername;
-        password.value = loadedPassword;
-      } catch {
-        return;
-      }
+      const next = parseStoredCredentials(event.newValue);
+      if (!next) return;
+      applyCredentials(next);
     });
   }
 

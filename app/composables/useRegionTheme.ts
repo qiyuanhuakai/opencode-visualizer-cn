@@ -4,7 +4,7 @@ import { useSettings } from './useSettings';
 import {
   DEFAULT_REGION_THEME,
 } from '../utils/regionTheme';
-import { StorageKeys, storageSetJSON } from '../utils/storageKeys';
+import { StorageKeys, storageGetJSON, storageSetJSON } from '../utils/storageKeys';
 import {
   DEFAULT_SYNTAX_THEME,
   SEMANTIC_THEME_TOKENS,
@@ -26,6 +26,10 @@ let persistTimer: number | null = null;
 let pendingPersistValue: ThemeStorageV2 | null | undefined;
 let removeWindowPersistListeners: (() => void) | null = null;
 
+function isSameThemeStorage(left: ThemeStorageV2 | null | undefined, right: ThemeStorageV2 | null | undefined) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 function clearPersistTimer() {
   if (persistTimer == null || typeof window === 'undefined') return;
   window.clearTimeout(persistTimer);
@@ -34,12 +38,25 @@ function clearPersistTimer() {
 
 function flushPendingPersist() {
   if (pendingPersistValue === undefined) return;
+  const current = extractComparableStoredTheme();
+  if (isSameThemeStorage(current, pendingPersistValue)) {
+    pendingPersistValue = undefined;
+    return;
+  }
   if (pendingPersistValue === null) {
     storageSetJSON(StorageKeys.settings.themeTokens, null);
   } else {
     storageSetJSON(StorageKeys.settings.themeTokens, pendingPersistValue);
   }
   pendingPersistValue = undefined;
+}
+
+function extractComparableStoredTheme() {
+  return normalizeStoredTheme(storageGetJSON(StorageKeys.settings.themeTokens));
+}
+
+function normalizeStoredTheme(value: unknown) {
+  return value === null ? null : (value as ThemeStorageV2 | null);
 }
 
 function schedulePersist(value: ThemeStorageV2 | null) {

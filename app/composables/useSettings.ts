@@ -10,6 +10,10 @@ import {
   type ExternalThemeDefinition,
 } from '../utils/themeRegistry';
 
+function isSerializedEqual(left: unknown, right: unknown) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+}
+
 const DEFAULT_PINNED_SESSIONS_LIMIT = 30;
 const MIN_PINNED_SESSIONS_LIMIT = 1;
 const MAX_PINNED_SESSIONS_LIMIT = 200;
@@ -171,13 +175,17 @@ watch(openInEditorMaxSizeMb, (value) => {
 
 watch(externalThemes, (value) => {
   if (value.length === 0) {
+    if (storageGet(StorageKeys.settings.themeRegistry) === null) return;
     storageRemove(StorageKeys.settings.themeRegistry);
     return;
   }
-  storageSetJSON(StorageKeys.settings.themeRegistry, {
+  const payload = {
     version: 1,
     themes: value,
-  });
+  };
+  const current = storageGetJSON(StorageKeys.settings.themeRegistry);
+  if (isSerializedEqual(current, payload)) return;
+  storageSetJSON(StorageKeys.settings.themeRegistry, payload);
 }, { deep: true, flush: 'sync' });
 
 if (typeof window !== 'undefined') {
@@ -213,10 +221,15 @@ if (typeof window !== 'undefined') {
     }
     if (event.key === storageKey(StorageKeys.settings.themeTokens)) {
       const nextThemeStorage = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
-      themeStorage.value = nextThemeStorage;
+      if (!isSerializedEqual(themeStorage.value, nextThemeStorage)) {
+        themeStorage.value = nextThemeStorage;
+      }
     }
     if (event.key === storageKey(StorageKeys.settings.themeRegistry)) {
-      externalThemes.value = normalizeStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
+      const nextExternalThemes = normalizeStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
+      if (!isSerializedEqual(externalThemes.value, nextExternalThemes)) {
+        externalThemes.value = nextExternalThemes;
+      }
     }
   });
 }

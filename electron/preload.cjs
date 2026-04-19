@@ -1,5 +1,18 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+ipcRenderer.on('persistent-storage-changed', (_event, change) => {
+  if (!change || typeof change.key !== 'string') {
+    return;
+  }
+
+  window.dispatchEvent(new StorageEvent('storage', {
+    key: change.key,
+    oldValue: typeof change.oldValue === 'string' ? change.oldValue : null,
+    newValue: typeof change.newValue === 'string' ? change.newValue : null,
+    url: window.location.href,
+  }));
+});
+
 /**
  * 通过 contextBridge 安全地向渲染进程暴露 API
  * 遵循 Electron 安全最佳实践：
@@ -23,6 +36,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 平台查询
   getPlatform: () => ipcRenderer.invoke('get-platform'),
+
+  persistentStorage: {
+    getItem: (key) => ipcRenderer.sendSync('persistent-storage-get', key),
+    setItem: (key, value) => ipcRenderer.sendSync('persistent-storage-set', { key, value }),
+    removeItem: (key) => ipcRenderer.sendSync('persistent-storage-remove', key),
+  },
 });
 
 // 开发模式下输出日志
