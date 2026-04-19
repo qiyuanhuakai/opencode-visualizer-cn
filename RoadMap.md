@@ -19,6 +19,6 @@
 	- [coding_agent_usage_tracker](https://github.com/Dicklesworthstone/coding_agent_usage_tracker)
 - [ ] **完善“提供商与模型”** — 由于未知原因，目前无法从opencode server获取足够信息
 - [ ] **加入webui编辑器** — 考虑替换掉$EDITOR打开的方式
-
+- [ ] **允许设置字体大小** 
 
 > 如需查看详细的版本变更记录，请参阅 [CHANGELOG.md](./CHANGELOG.md)。
