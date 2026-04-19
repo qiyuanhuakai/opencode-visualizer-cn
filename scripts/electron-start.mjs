@@ -46,12 +46,16 @@ function spawnChild(command, args, options = {}) {
   });
 }
 
+function pnpmCommand() {
+  return process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+}
+
 async function main() {
   let devServerProcess = null;
 
   if (!(await canConnect(DEV_SERVER_URL))) {
     console.log(`[electron:start] Vite dev server not detected at ${DEV_SERVER_URL}, starting pnpm dev...`);
-    devServerProcess = spawnChild('pnpm', ['dev']);
+    devServerProcess = spawnChild(pnpmCommand(), ['dev']);
 
     const ready = await waitForDevServer();
     if (!ready) {
@@ -63,7 +67,7 @@ async function main() {
   }
 
   console.log('[electron:start] Launching Electron window...');
-  const electronProcess = spawnChild('pnpm', ['exec', 'electron', '.']);
+  const electronProcess = spawnChild(pnpmCommand(), ['exec', 'electron', '.']);
 
   const shutdown = (signal) => {
     if (electronProcess.exitCode === null) {
