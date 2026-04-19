@@ -79,7 +79,7 @@ a.ui-dropdown-item {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
 }
 
 .ui-dropdown-item-content {

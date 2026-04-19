@@ -360,7 +360,7 @@ const showLoading = computed(() => {
   justify-content: center;
   height: 100%;
   color: var(--theme-text-muted, #64748b);
-  font-size: 13px;
+  font-size: var(--app-monospace-font-size, 13px);
   user-select: none;
 }
 </style>

@@ -107,6 +107,8 @@
                 :min="minOpenInEditorMaxSizeMb"
                 :max="maxOpenInEditorMaxSizeMb"
                 step="1"
+                @blur="clampOpenInEditorMaxSizeMb"
+                @keydown.enter="clampOpenInEditorMaxSizeMb"
               />
             </div>
           </div>
@@ -124,6 +126,8 @@
                 :min="minPinnedSessionsLimit"
                 :max="maxPinnedSessionsLimit"
                 step="1"
+                @blur="clampPinnedSessionsLimit"
+                @keydown.enter="clampPinnedSessionsLimit"
               />
             </div>
           </div>
@@ -252,6 +256,23 @@
             </div>
             <div class="font-setting-controls">
               <div class="font-setting-section">
+                <label :for="terminalSizeInputId" class="font-setting-section-label">{{ $t('settings.terminalFontSizePx.label') }}</label>
+                <div class="number-setting-group">
+                  <input
+                    :id="terminalSizeInputId"
+                    v-model.number="terminalFontSizePx"
+                    type="number"
+                    class="number-input"
+                    :min="minTerminalFontSizePx"
+                    :max="maxTerminalFontSizePx"
+                    step="1"
+                    @blur="clampTerminalFontSize"
+                    @keydown.enter="clampTerminalFontSize"
+                  />
+                </div>
+                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.terminalFontSizePx.description') }}</div>
+              </div>
+              <div class="font-setting-section">
                 <div :id="terminalPresetLabelId" class="font-setting-section-label">{{ $t('settings.fontPresetsLabel') }}</div>
                 <div class="font-preset-row" role="group" :aria-labelledby="terminalPresetLabelId">
                   <button
@@ -346,6 +367,57 @@
             </div>
             <div class="font-setting-controls">
               <div class="font-setting-section">
+                <label :for="appSizeInputId" class="font-setting-section-label">{{ $t('settings.appFontSizePx.label') }}</label>
+                <div class="number-setting-group">
+                  <input
+                    :id="appSizeInputId"
+                    v-model.number="appFontSizePx"
+                    type="number"
+                    class="number-input"
+                    :min="minAppFontSizePx"
+                    :max="maxAppFontSizePx"
+                    step="1"
+                    @blur="clampAppFontSize"
+                    @keydown.enter="clampAppFontSize"
+                  />
+                </div>
+                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.appFontSizePx.description') }}</div>
+              </div>
+              <div class="font-setting-section">
+                <label :for="messageSizeInputId" class="font-setting-section-label">{{ $t('settings.messageFontSizePx.label') }}</label>
+                <div class="number-setting-group">
+                  <input
+                    :id="messageSizeInputId"
+                    v-model.number="messageFontSizePx"
+                    type="number"
+                    class="number-input"
+                    :min="minMessageFontSizePx"
+                    :max="maxMessageFontSizePx"
+                    step="1"
+                    @blur="clampMessageFontSize"
+                    @keydown.enter="clampMessageFontSize"
+                  />
+                </div>
+                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.messageFontSizePx.description') }}</div>
+              </div>
+              <div class="font-setting-section">
+                <label :for="uiSizeInputId" class="font-setting-section-label">{{ $t('settings.uiFontSizePx.label') }}</label>
+                <div class="number-setting-group">
+                  <input
+                    :id="uiSizeInputId"
+                    v-model.number="uiFontSizePx"
+                    type="number"
+                    class="number-input"
+                    :min="minUiFontSizePx"
+                    :max="maxUiFontSizePx"
+                    step="1"
+                    @blur="clampUiFontSize"
+                    @keydown.enter="clampUiFontSize"
+                  />
+                </div>
+                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.uiFontSizePx.description') }}</div>
+              </div>
+              <div class="font-setting-section">
                 <div :id="appPresetLabelId" class="font-setting-section-label">{{ $t('settings.fontPresetsLabel') }}</div>
                 <div class="font-preset-row" role="group" :aria-labelledby="appPresetLabelId">
                   <button
@@ -432,6 +504,7 @@
               </div>
             </div>
           </div>
+
         </template>
       </div>
     </div>
@@ -505,9 +578,13 @@ const activePage = ref<SettingsPage>('root');
 const terminalPresetLabelId = 'settings-terminal-font-presets';
 const terminalInputLabelId = 'settings-terminal-font-input-label';
 const terminalTextareaId = 'settings-terminal-font-input';
+const terminalSizeInputId = 'settings-terminal-font-size';
 const appPresetLabelId = 'settings-app-font-presets';
 const appInputLabelId = 'settings-app-font-input-label';
 const appTextareaId = 'settings-app-font-input';
+const appSizeInputId = 'settings-app-font-size';
+const messageSizeInputId = 'settings-message-font-size';
+const uiSizeInputId = 'settings-ui-font-size';
 const supportsLocalFontsApi = supportsLocalFontAccess();
 const isLoadingLocalFonts = ref(false);
 const localFontsError = ref('');
@@ -523,12 +600,24 @@ const {
   pinnedSessionsLimit,
   terminalFontFamily,
   appMonospaceFontFamily,
+  terminalFontSizePx,
+  appFontSizePx,
+  messageFontSizePx,
+  uiFontSizePx,
   themeStorage,
   externalThemes,
   minPinnedSessionsLimit,
   maxPinnedSessionsLimit,
   defaultTerminalFontFamily,
   defaultAppMonospaceFontFamily,
+  minTerminalFontSizePx,
+  maxTerminalFontSizePx,
+  minAppFontSizePx,
+  maxAppFontSizePx,
+  minMessageFontSizePx,
+  maxMessageFontSizePx,
+  minUiFontSizePx,
+  maxUiFontSizePx,
   showOpenInEditorButton,
   openInEditorMaxSizeMb,
   minOpenInEditorMaxSizeMb,
@@ -762,6 +851,48 @@ function toggleFontDiscovery(target: 'terminal' | 'app') {
     return;
   }
   isAppFontDiscoveryOpen.value = !isAppFontDiscoveryOpen.value;
+}
+
+function clampTerminalFontSize() {
+  terminalFontSizePx.value = Math.max(
+    minTerminalFontSizePx,
+    Math.min(maxTerminalFontSizePx, terminalFontSizePx.value),
+  );
+}
+
+function clampAppFontSize() {
+  appFontSizePx.value = Math.max(
+    minAppFontSizePx,
+    Math.min(maxAppFontSizePx, appFontSizePx.value),
+  );
+}
+
+function clampMessageFontSize() {
+  messageFontSizePx.value = Math.max(
+    minMessageFontSizePx,
+    Math.min(maxMessageFontSizePx, messageFontSizePx.value),
+  );
+}
+
+function clampUiFontSize() {
+  uiFontSizePx.value = Math.max(
+    minUiFontSizePx,
+    Math.min(maxUiFontSizePx, uiFontSizePx.value),
+  );
+}
+
+function clampOpenInEditorMaxSizeMb() {
+  openInEditorMaxSizeMb.value = Math.max(
+    minOpenInEditorMaxSizeMb,
+    Math.min(maxOpenInEditorMaxSizeMb, openInEditorMaxSizeMb.value),
+  );
+}
+
+function clampPinnedSessionsLimit() {
+  pinnedSessionsLimit.value = Math.max(
+    minPinnedSessionsLimit,
+    Math.min(maxPinnedSessionsLimit, pinnedSessionsLimit.value),
+  );
 }
 
 async function loadLocalFonts() {

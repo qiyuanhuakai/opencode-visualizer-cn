@@ -142,7 +142,7 @@ const windowStyle = computed(() => {
       : 'var(--app-monospace-font-family, monospace)',
     '--floating-font-size': isShellWindow
       ? 'var(--term-font-size, 14px)'
-      : '13px',
+      : 'var(--app-monospace-font-size, 13px)',
     '--floating-line-height': isShellWindow
       ? 'var(--term-line-height, 1.5)'
       : '1.5',

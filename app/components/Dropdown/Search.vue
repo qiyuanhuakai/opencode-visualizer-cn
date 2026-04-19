@@ -75,7 +75,7 @@ function onKeydown(e: KeyboardEvent) {
   color: var(--ui-dropdown-text, var(--theme-dropdown-text, var(--theme-text-primary, #e2e8f0)));
   outline: none;
   box-sizing: border-box;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
 }
 
 .ui-dropdown-search-input:focus {

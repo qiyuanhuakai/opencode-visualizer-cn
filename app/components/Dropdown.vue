@@ -436,7 +436,7 @@ defineExpose({ moveHighlight, selectHighlighted, updateSearch, clearHighlight })
   border: 1px solid var(--ui-dropdown-border, var(--theme-dropdown-border, var(--theme-border-default, #334155)));
   border-radius: 8px;
   padding: 6px 8px;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   font-family: inherit;
   outline: none;
   cursor: pointer;

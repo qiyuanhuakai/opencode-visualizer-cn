@@ -485,6 +485,22 @@ const messages: LocaleMessages = {
       label: 'App monospace font family',
       description: 'Shared monospace stack for panels, dialogs, tool placeholders, inline code, and badges.',
     },
+    terminalFontSizePx: {
+      label: 'Terminal font size',
+      description: 'Font size in pixels for xterm shell windows.',
+    },
+    appFontSizePx: {
+      label: 'Code view font size',
+      description: 'Font size in pixels for code views, diff viewers, and output panels.',
+    },
+    messageFontSizePx: {
+      label: 'Message font size',
+      description: 'Font size in pixels for chat messages and thread history.',
+    },
+    uiFontSizePx: {
+      label: 'UI font size',
+      description: 'Font size in pixels for sidebar, top panel, modals, and dropdowns.',
+    },
     fontSettings: {
       label: 'Font settings',
       description: 'Configure the terminal font and the shared monospace font used across the app.',

@@ -1359,7 +1359,7 @@ const inputMessageStyle = computed(() => {
 
 .dropdown-empty {
   padding: 6px 8px;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
@@ -1380,7 +1380,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .agent-dropdown-name {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
@@ -1417,7 +1417,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .model-button-name {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   white-space: nowrap;
   overflow: hidden;
@@ -1460,7 +1460,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .model-dropdown-name {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
@@ -1557,7 +1557,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .attachment-name {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   white-space: nowrap;
   overflow: hidden;
@@ -1624,7 +1624,7 @@ const inputMessageStyle = computed(() => {
   min-width: 0;
 }
 .command-name {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
@@ -1662,7 +1662,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .agent-popup-name {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.2;
 }
@@ -1734,7 +1734,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .history-item-text {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
    color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.4;
   display: -webkit-box;
@@ -1829,7 +1829,7 @@ const inputMessageStyle = computed(() => {
   width: 28px;
   height: 28px;
   padding: 0;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   cursor: pointer;
   display: inline-flex;
   align-items: center;

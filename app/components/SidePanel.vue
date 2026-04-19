@@ -231,7 +231,7 @@ const {
   background: var(--theme-side-control-bg, rgba(30, 41, 59, 0.92));
   color: var(--theme-side-text, #cbd5e1);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -298,7 +298,7 @@ const {
 }
 
 .session-title {
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--theme-side-text, #e2e8f0);
@@ -312,7 +312,7 @@ const {
 .session-empty {
   margin: auto;
   color: var(--theme-empty-state-text, var(--theme-side-text-muted, rgba(148, 163, 184, 0.9)));
-  font-size: 12px;
+  font-size: var(--ui-font-size, 12px);
 }
 
 .session-list {

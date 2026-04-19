@@ -168,7 +168,7 @@ function basename(filepath: string) {
   justify-content: center;
   height: 100%;
   color: var(--theme-text-muted, #64748b);
-  font-size: 13px;
+  font-size: var(--app-monospace-font-size, 13px);
   user-select: none;
 }
 
@@ -179,7 +179,7 @@ function basename(filepath: string) {
   height: 100%;
   padding: 16px;
   color: var(--theme-danger-text, #fca5a5);
-  font-size: 13px;
+  font-size: var(--app-monospace-font-size, 13px);
   text-align: center;
   white-space: pre-wrap;
   word-break: break-word;
