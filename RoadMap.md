@@ -16,8 +16,11 @@
 	- 通过“在编辑器中打开”修改文件后，已打开的悬浮窗中文件内容不会自动更新
 	- [x] 悬浮窗的最小化和关闭按钮的样式似乎与字体有关，导致使用某些字体时很怪异
 	- [x] "grep"工具的"模式"信息的字符的样式会受到主题影响
+	- [x] 对话级别的“差异”只显示diff，不显示before/after 
 - [ ] **会话树支持** — 将现有的单会话级会话侧边栏改为基于项目-沙盒-会话的三层级会话树侧边栏	
 - [ ] **更多语言支持** — 在简体中文基础上，增加繁体中文、日语等更多语言
+- [ ] **会话级别token消耗** — opencode server自带的功能。它的上位是opencode-magic-context的侧边栏面板，但后者似乎不好集成
+- [ ] **悬浮窗预览自动换行** — 防止过长的行影响阅读
 - [ ] **外部工具支持** — 集成外部开发工具，扩展与第三方工具的联动能力。正在考虑：
 	- [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
 	- [gnhf](https://github.com/kunchenguid/gnhf)
