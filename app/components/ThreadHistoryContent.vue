@@ -5,6 +5,9 @@
         <div v-if="entry.kind === 'message'" class="history-item">
           <div class="history-meta">
             <span class="history-index">💬</span>
+            <span v-if="entry.isSubagent" class="history-session-badge">
+              {{ entry.sessionLabel || entry.sessionId || t('threadHistory.subagent') }}
+            </span>
             <span v-if="entry.agent" class="history-agent">{{ entry.agent }}</span>
             <span class="history-time">{{ formatMessageTime(entry.time) }}</span>
           </div>
@@ -67,6 +70,18 @@
             </div>
           </div>
         </div>
+        <div v-else-if="entry.kind === 'subtask'" class="history-item history-item-subtask">
+          <div class="history-meta">
+            <span class="history-index">🤖</span>
+            <span class="history-subtask-badge">{{ t('threadHistory.delegation') }}</span>
+            <span class="history-time">{{ formatMessageTime(entry.time) }}</span>
+          </div>
+          <div class="history-tool-content">
+            <strong>@{{ entry.part.agent }}</strong>
+            <span v-if="entry.part.description"> — {{ entry.part.description }}</span>
+            <div v-if="entry.part.prompt" class="history-subtask-prompt">{{ entry.part.prompt }}</div>
+          </div>
+        </div>
         <div
           v-else
           class="history-item history-item-tool"
@@ -94,7 +109,7 @@
 import { useI18n } from 'vue-i18n';
 import MessageViewer from './MessageViewer.vue';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
-import type { QuestionInfo, ReasoningPart, ToolPart } from '../types/sse';
+import type { QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from '../types/sse';
 import { resolveToolAccentColor } from '../utils/theme';
 
 const { t } = useI18n();
@@ -109,9 +124,19 @@ type QuestionHistoryEntry = {
 };
 
 type HistoryEntry =
-  | { key: string; kind: 'message'; content: string; time: number; agent?: string }
+  | {
+      key: string;
+      kind: 'message';
+      content: string;
+      time: number;
+      agent?: string;
+      sessionId?: string;
+      sessionLabel?: string;
+      isSubagent?: boolean;
+    }
   | { key: string; kind: 'tool'; part: ToolPart; time: number }
   | { key: string; kind: 'reasoning'; part: ReasoningPart; time: number }
+  | { key: string; kind: 'subtask'; part: SubtaskPart; time: number }
   | QuestionHistoryEntry;
 
 const props = withDefaults(
@@ -297,6 +322,15 @@ function formatMessageTime(value?: number) {
   color: var(--floating-text-secondary, #cbd5e1);
 }
 
+.history-session-badge {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, #0ea5e9 18%, var(--floating-surface-strong, #323a48));
+  color: #7dd3fc;
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .history-content-wrapper {
   padding: 10px;
   font-size: 13px;
@@ -314,6 +348,29 @@ function formatMessageTime(value?: number) {
 .history-item-reasoning:hover {
   border-color: color-mix(in srgb, #8b5cf6 60%, #1e293b);
   background: color-mix(in srgb, #8b5cf6 6%, #020617);
+}
+
+.history-item-subtask {
+  border-color: color-mix(in srgb, #0ea5e9 36%, #1e293b);
+  background: color-mix(in srgb, #0ea5e9 6%, #020617);
+}
+
+.history-subtask-badge {
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  background: rgba(8, 145, 178, 0.28);
+  color: #67e8f9;
+}
+
+.history-subtask-prompt {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--floating-text-soft, #94a3b8);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .history-item-reasoning .history-meta {

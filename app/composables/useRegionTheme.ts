@@ -24,6 +24,7 @@ let sharedConsumerCount = 0;
 let sharedStopWatching: (() => void) | null = null;
 let persistTimer: number | null = null;
 let pendingPersistValue: ThemeStorageV2 | null | undefined;
+let removeWindowPersistListeners: (() => void) | null = null;
 
 function clearPersistTimer() {
   if (persistTimer == null || typeof window === 'undefined') return;
@@ -52,6 +53,21 @@ function schedulePersist(value: ThemeStorageV2 | null) {
     persistTimer = null;
     flushPendingPersist();
   }, REGION_THEME_PERSIST_DEBOUNCE_MS);
+}
+
+function installWindowPersistListeners() {
+  if (typeof window === 'undefined' || removeWindowPersistListeners) return;
+  const flush = () => {
+    clearPersistTimer();
+    flushPendingPersist();
+  };
+  window.addEventListener('beforeunload', flush);
+  window.addEventListener('pagehide', flush);
+  removeWindowPersistListeners = () => {
+    window.removeEventListener('beforeunload', flush);
+    window.removeEventListener('pagehide', flush);
+    removeWindowPersistListeners = null;
+  };
 }
 
 export function useRegionTheme() {
@@ -99,6 +115,7 @@ export function useRegionTheme() {
   }
 
   if (!sharedStopWatching) {
+    installWindowPersistListeners();
     let isInitialSync = true;
     sharedStopWatching = watch(
       themeStorage,
@@ -121,6 +138,7 @@ export function useRegionTheme() {
     if (sharedConsumerCount === 0) {
       clearPersistTimer();
       flushPendingPersist();
+      removeWindowPersistListeners?.();
       sharedStopWatching?.();
       sharedStopWatching = null;
 

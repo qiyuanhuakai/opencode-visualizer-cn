@@ -93,6 +93,8 @@
                     class="output-panel"
                     :project-name="currentProjectName"
                     :project-color="currentProjectColor"
+                    :current-session-id="selectedSessionId"
+                    :session-history-meta-by-id="sessionHistoryMetaById"
                     :is-following="isFollowing"
                     :status-text="statusText"
                     :is-status-error="isStatusError"
@@ -136,6 +138,7 @@
             <InputPanel
               ref="inputPanelRef"
               :disabled="connectionState !== 'ready'"
+              :current-session-id="selectedSessionId"
               :can-send="canSend"
               :agent-options="agentOptions"
               :subagent-options="subagentOptions"
@@ -383,7 +386,7 @@ import { useFileTree, type FileNode } from './composables/useFileTree';
 import { usePtyOneshot } from './composables/usePtyOneshot';
 import { useFloatingWindows } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionRequest } from './composables/usePermissions';
-import { useQuestions, type QuestionRequest, type QuestionInfo } from './composables/useQuestions';
+import { useQuestions, type QuestionRequest } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
 import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
@@ -394,7 +397,7 @@ import { useServerState } from './composables/useServerState';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml, type RenderRequest } from './utils/workerRenderer';
-import type { MessageDiffEntry } from './types/message';
+import type { HistoryWindowEntry, MessageDiffEntry } from './types/message';
 import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { ProjectState, SandboxState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
@@ -646,7 +649,6 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key
 }
 const REASONING_CLOSE_DELAY_MS = 3000;
 const SUBAGENT_CLOSE_DELAY_MS = 3000;
-const ATTACHMENT_MIME_ALLOWLIST = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 type TodoPanelSession = {
   sessionId: string;
   title: string;
@@ -1143,6 +1145,19 @@ function collectAllSessionsByProject() {
 }
 
 const sessionsByProject = computed(() => collectAllSessionsByProject());
+
+const sessionHistoryMetaById = computed(() => {
+  const meta: Record<string, { parentID?: string; label: string }> = {};
+  Object.values(sessionsByProject.value)
+    .flat()
+    .forEach((session) => {
+      meta[session.id] = {
+        parentID: session.parentID,
+        label: sessionLabel(session),
+      };
+    });
+  return meta;
+});
 
 const sessions = computed<SessionInfo[]>(() => {
   const projectId = selectedProjectId.value.trim();
@@ -1714,10 +1729,7 @@ const subagentOptions = computed(() => {
       isSubagent: true,
     }));
 });
-const canAttach = computed(() => {
-  const selected = availableModelOptions.value.find((m) => m.id === selectedModel.value);
-  return selected?.attachmentCapable !== false;
-});
+const canAttach = computed(() => availableModelOptions.value.length > 0);
 const commandOptions = computed(() => {
   const list = commands.value.slice();
   const hasShell = list.some((command) => command.name.toLowerCase() === 'shell');
@@ -2836,20 +2848,28 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+function normalizeAttachmentMime(mime: string) {
+  const normalized = mime.trim().toLowerCase();
+  if (!normalized) return 'text/plain';
+  if (normalized.startsWith('image/')) return normalized;
+  if (normalized === 'application/pdf') return normalized;
+  return 'text/plain';
+}
+
 async function handleAddAttachments(files: File[]) {
-  const accepted = files.filter((file) => ATTACHMENT_MIME_ALLOWLIST.has(file.type));
+  const accepted = files.filter((file) => file.size > 0 || file.type.length > 0 || file.name.length > 0);
   if (accepted.length === 0) {
     setSendStatusKey('app.error.unsupportedAttachment');
     return;
   }
   try {
     const next = await Promise.all(
-      accepted.map(async (file) => ({
-        id: generateAttachmentId(),
-        filename: file.name || 'image',
-        mime: file.type || 'application/octet-stream',
-        dataUrl: await readFileAsDataUrl(file),
-      })),
+        accepted.map(async (file) => ({
+          id: generateAttachmentId(),
+          filename: file.name || 'image',
+          mime: normalizeAttachmentMime(file.type || 'text/plain'),
+          dataUrl: await readFileAsDataUrl(file),
+        })),
     );
     attachments.value = [...attachments.value, ...next];
     persistComposerDraftForCurrentContext();
@@ -3675,7 +3695,7 @@ async function fetchProviders(force = false) {
           providerID,
           providerLabel: providerLabel,
           variants: model.variants,
-          attachmentCapable: model.capabilities?.attachment !== false,
+          attachmentCapable: true,
         });
       });
     });
@@ -3977,6 +3997,13 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
     }
     log('History load failed', error);
   }
+}
+
+async function fetchAllowedSessionHistories(rootSessionId: string) {
+  await fetchHistory(rootSessionId);
+  const descendantSessionIds = Array.from(allowedSessionIds.value).filter((id) => id !== rootSessionId);
+  if (descendantSessionIds.length === 0) return;
+  await Promise.all(descendantSessionIds.map((id) => fetchHistory(id, true)));
 }
 
 function resetHistoryLazyState() {
@@ -5288,13 +5315,13 @@ async function reloadSelectedSessionState() {
   todoErrorBySessionId.value = {};
   resetHistoryLazyState();
   await nextTick();
-    if (selectedSessionId.value) {
-      const sessionId = selectedSessionId.value;
-      await fetchHistory(sessionId);
-      scheduleHistoryAutoload(0);
-      if (msg.roots.value.length === 0) {
-        scrollOutputPanelToBottom(false);
-      }
+  if (selectedSessionId.value) {
+    const sessionId = selectedSessionId.value;
+    await fetchAllowedSessionHistories(sessionId);
+    scheduleHistoryAutoload(0);
+    if (!msg.roots.value.some((root) => root.sessionID === sessionId)) {
+      scrollOutputPanelToBottom(false);
+    }
     if (uiInitState.value === 'ready') {
       await restoreShellSessions();
     }
@@ -5544,9 +5571,8 @@ serverState.setNotificationShowHandler((message) => {
 const deltaAccumulator = useDeltaAccumulator();
 deltaAccumulator.listen(ge);
 const sessionScope = ge.session(selectedSessionId, sessionParentRecord);
-const mainSessionScope = ge.mainSession(selectedSessionId);
 const msg = useMessages();
-msg.bindScope(mainSessionScope);
+msg.bindScope(sessionScope);
 reasoning.bindScope(sessionScope);
 subagentWindows.bindScope(sessionScope);
 
@@ -6277,21 +6303,14 @@ function handleOpenHistoryReasoning(payload: { part: ReasoningPart }) {
   });
 }
 
-type ThreadHistoryEntry =
-  | { key: string; kind: 'message'; content: string; time: number; agent?: string }
-  | { key: string; kind: 'tool'; part: ToolPart; time: number }
-  | { key: string; kind: 'reasoning'; part: ReasoningPart; time: number }
-  | {
-      key: string;
-      kind: 'question';
-      questions: QuestionInfo[];
-      status: 'pending' | 'replied' | 'rejected';
-      answers?: string[][];
-      time: number;
+function handleShowThreadHistory(payload: { entries: HistoryWindowEntry[] }) {
+  const entries = payload.entries.map((entry) => {
+    if (entry.kind !== 'message' || !entry.sessionId) return entry;
+    return {
+      ...entry,
+      sessionLabel: entry.sessionLabel || resolveSessionLabelById(entry.sessionId),
     };
-
-function handleShowThreadHistory(payload: { entries: ThreadHistoryEntry[] }) {
-  const entries = payload.entries;
+  });
   const key = 'thread-history';
   if (fw.has(key)) {
     fw.updateOptions(key, { props: { entries } });
@@ -6386,6 +6405,16 @@ function resolveFileViewerAbsolutePath(path: string) {
       : `${requestPath.directory.replace(/\/+$/, '')}/${requestPath.path}`;
 }
 
+function resolveSessionLabelById(sessionId: string) {
+  const target = sessionId.trim();
+  if (!target) return '';
+  for (const projectSessions of Object.values(sessionsByProject.value)) {
+    const session = projectSessions.find((entry) => entry.id === target);
+    if (session) return sessionLabel(session);
+  }
+  return target;
+}
+
 function toFileViewerKey(path: string, lines?: string) {
   const normalizedPath = resolveFileViewerAbsolutePath(path);
   if (!lines) return `file-viewer:${normalizedPath}`;
@@ -6398,21 +6427,156 @@ function toFileViewerTitle(path: string, lines?: string) {
   return `${base}:${lines}`;
 }
 
+async function refreshFileViewerWindow(key: string, options?: { bringToFront?: boolean }) {
+  const entry = fw.get(key);
+  if (!entry) return;
+
+  const path = typeof entry.props?.path === 'string' ? entry.props.path : '';
+  if (!path) return;
+  const lines = typeof entry.props?.lines === 'string' ? entry.props.lines : undefined;
+  const storedDirectory = typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
+  const storedFilePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
+  const fallbackDirectory = activeDirectory.value.trim();
+  const fallbackRequestPath = fallbackDirectory ? splitFileContentDirectoryAndPath(path, fallbackDirectory) : null;
+  const directory = storedDirectory || fallbackRequestPath?.directory || '';
+  const filePath = storedFilePath || fallbackRequestPath?.path || '';
+
+  if (!directory) {
+    fw.updateOptions(key, {
+      props: {
+        ...entry.props,
+        path,
+        rawHtml: t('app.read.noActiveDirectorySelected'),
+        lines,
+        gutterMode: 'none',
+        theme: shikiTheme.value,
+      },
+    });
+    return;
+  }
+
+  try {
+    const data = (await opencodeApi.readFileContent({
+      directory,
+      path: filePath,
+    })) as FileContentResponse;
+    const type = data?.type === 'binary' ? 'binary' : 'text';
+    const encoding = typeof data?.encoding === 'string' ? data.encoding : 'utf-8';
+    const content = typeof data?.content === 'string' ? data.content : '';
+    const isBase64Payload = encoding === 'base64';
+
+    if (type === 'binary' || isBase64Payload) {
+      if (!content) {
+        fw.updateOptions(key, {
+          props: {
+            ...entry.props,
+            path,
+            fileDirectory: directory,
+            filePath,
+            rawHtml: t('app.read.binaryContentNotIncluded'),
+            fileContent: undefined,
+            binaryBase64: undefined,
+            fileSizeBytes: 0,
+            lines,
+            gutterMode: 'none',
+            theme: shikiTheme.value,
+          },
+        });
+        return;
+      }
+
+      fw.updateOptions(key, {
+        props: {
+          ...entry.props,
+          path,
+          fileDirectory: directory,
+          filePath,
+          rawHtml: undefined,
+          fileContent: undefined,
+          binaryBase64: content,
+          fileSizeBytes: content.length,
+          lang: guessLanguage(path),
+          lines,
+          gutterMode: 'default',
+          theme: shikiTheme.value,
+        },
+      });
+      return;
+    }
+
+    const textContent = content;
+    const fileSizeBytes = new TextEncoder().encode(textContent).length;
+    fw.updateOptions(key, {
+      props: {
+        ...entry.props,
+        path,
+        fileDirectory: directory,
+        filePath,
+        rawHtml: undefined,
+        binaryBase64: undefined,
+        fileSizeBytes,
+        fileContent: textContent,
+        lang: guessLanguage(path),
+        lines,
+        gutterMode: 'default',
+        theme: shikiTheme.value,
+      },
+    });
+  } catch (error) {
+    fw.updateOptions(key, {
+      props: {
+        ...entry.props,
+        path,
+        fileDirectory: directory,
+        filePath,
+        rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
+        fileContent: undefined,
+        binaryBase64: undefined,
+        lines,
+        gutterMode: 'none',
+        theme: shikiTheme.value,
+      },
+    });
+  }
+
+  if (options?.bringToFront) {
+    fw.bringToFront(key);
+  }
+}
+
+async function refreshOpenFileViewersForPath(filePath: string) {
+  const normalizedTarget = resolveFileViewerAbsolutePath(filePath);
+  const tasks = fw.entries.value
+    .filter((entry) => entry.key.startsWith('file-viewer:'))
+    .filter((entry) => {
+      const entryAbsolutePath = typeof entry.props?.absolutePath === 'string'
+        ? entry.props.absolutePath
+        : resolveFileViewerAbsolutePath(typeof entry.props?.path === 'string' ? entry.props.path : '');
+      return entryAbsolutePath === normalizedTarget;
+    })
+    .map((entry) => refreshFileViewerWindow(entry.key));
+  await Promise.all(tasks);
+}
+
 async function openFileViewer(path: string, lines?: string) {
   const key = toFileViewerKey(path, lines);
   if (fw.has(key)) {
     if (fw.get(key)?.minimized) fw.restore(key);
     else fw.bringToFront(key);
+    await refreshFileViewerWindow(key, { bringToFront: false });
     return;
   }
   const pos = getFileViewerPosition(0.18, 0.14);
   const lang = guessLanguage(path);
   const absolutePath = resolveFileViewerAbsolutePath(path);
+  const requestPath = splitFileContentDirectoryAndPath(path, activeDirectory.value.trim() || null);
   fw.open(key, {
     component: ContentViewer,
     props: {
       path,
       absolutePath,
+      fileDirectory: requestPath.directory,
+      filePath: requestPath.path,
       lang,
       lines,
       gutterMode: 'default',
@@ -6432,101 +6596,7 @@ async function openFileViewer(path: string, lines?: string) {
     height: FILE_VIEWER_WINDOW_HEIGHT,
     expiry: Infinity,
   });
-  const directory = activeDirectory.value.trim();
-  if (!directory) {
-    fw.updateOptions(key, {
-      props: {
-        path,
-        absolutePath,
-        rawHtml: t('app.read.noActiveDirectorySelected'),
-        lines,
-        gutterMode: 'none',
-        onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
-          addLineComment(payload);
-        },
-        theme: shikiTheme.value,
-      },
-    });
-    return;
-  }
-
-  try {
-    const requestPath = splitFileContentDirectoryAndPath(path, directory);
-    const data = (await opencodeApi.readFileContent({
-      directory: requestPath.directory,
-      path: requestPath.path,
-    })) as FileContentResponse;
-    const type = data?.type === 'binary' ? 'binary' : 'text';
-    const encoding = typeof data?.encoding === 'string' ? data.encoding : 'utf-8';
-    const content = typeof data?.content === 'string' ? data.content : '';
-    const isBase64Payload = encoding === 'base64';
-    if (type === 'binary' || isBase64Payload) {
-      if (!content) {
-      fw.updateOptions(key, {
-        props: {
-          path,
-          absolutePath,
-          rawHtml: t('app.read.binaryContentNotIncluded'),
-          lines,
-          gutterMode: 'none',
-          onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
-            addLineComment(payload);
-          },
-          theme: shikiTheme.value,
-        },
-      });
-      return;
-    }
-    fw.updateOptions(key, {
-      props: {
-        path,
-        absolutePath,
-        binaryBase64: content,
-        fileSizeBytes: content.length,
-        lang: guessLanguage(path),
-        lines,
-        gutterMode: 'default',
-        onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
-          addLineComment(payload);
-        },
-        theme: shikiTheme.value,
-      },
-    });
-    return;
-  }
-  const resolvedLang = guessLanguage(path);
-  const textContent = content;
-  const fileSizeBytes = new TextEncoder().encode(textContent).length;
-  fw.updateOptions(key, {
-    props: {
-      path,
-      absolutePath,
-      fileSizeBytes,
-      fileContent: textContent,
-      lang: resolvedLang,
-      lines,
-      gutterMode: 'default',
-      onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
-        addLineComment(payload);
-      },
-      theme: shikiTheme.value,
-    },
-  });
-} catch (error) {
-  fw.updateOptions(key, {
-    props: {
-      path,
-      absolutePath,
-      rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
-      lines,
-      gutterMode: 'none',
-      onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
-        addLineComment(payload);
-      },
-      theme: shikiTheme.value,
-    },
-  });
-  }
+  await refreshFileViewerWindow(key);
 }
 
 function guessLanguage(path?: string, eventType?: string) {
@@ -6903,6 +6973,7 @@ onMounted(() => {
   globalEventUnsubscribers.push(
     ge.on('file.watcher.updated', (packet) => {
       feed(packet);
+      void refreshOpenFileViewersForPath(packet.file);
     }),
   );
   globalEventUnsubscribers.push(
@@ -6991,7 +7062,6 @@ onBeforeUnmount(() => {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  mainSessionScope.dispose();
   sessionScope.dispose();
   ge.disconnect();
   disposeShellWindows();
@@ -7227,12 +7297,16 @@ body {
 .app-input {
   flex: 0 0 auto;
   position: relative;
-  z-index: 30;
+  z-index: 5;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   min-height: 0;
   min-height: 200px;
+}
+
+.app-input:focus-within {
+  z-index: 30;
 }
 
 .input-resizer {

@@ -1,4 +1,4 @@
-import type { MessageInfo, QuestionInfo, ReasoningPart, ToolPart } from './sse';
+import type { MessageInfo, QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from './sse';
 
 export type MessageTokens = {
   input: number;
@@ -61,12 +61,23 @@ export type HistoryEntry =
   | { kind: 'message'; message: MessageInfo; time: number }
   | { kind: 'tool'; part: ToolPart; time: number }
   | { kind: 'reasoning'; part: ReasoningPart; time: number }
-  | { kind: 'question'; part: ToolPart; time: number };
+  | { kind: 'question'; part: ToolPart; time: number }
+  | { kind: 'subtask'; part: SubtaskPart; time: number };
 
 export type HistoryWindowEntry =
-  | { key: string; kind: 'message'; content: string; time: number; agent?: string }
+  | {
+      key: string;
+      kind: 'message';
+      content: string;
+      time: number;
+      agent?: string;
+      sessionId?: string;
+      sessionLabel?: string;
+      isSubagent?: boolean;
+    }
   | { key: string; kind: 'tool'; part: ToolPart; time: number }
   | { key: string; kind: 'reasoning'; part: ReasoningPart; time: number }
+  | { key: string; kind: 'subtask'; part: SubtaskPart; time: number }
   | {
       key: string;
       kind: 'question';

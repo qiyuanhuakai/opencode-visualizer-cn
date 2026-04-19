@@ -500,7 +500,7 @@ function onResizeEnd(e: PointerEvent) {
           :aria-label="t('floatingWindow.minimizeWindow')"
           @click.stop="onMinimize"
         >
-          —
+          <Icon icon="lucide:minus" :width="14" :height="14" />
         </button>
         <button
           v-if="canCloseWindow"
@@ -508,7 +508,7 @@ function onResizeEnd(e: PointerEvent) {
           :aria-label="t('floatingWindow.closeWindow')"
           @click.stop="onClose"
         >
-          ×
+          <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </div>
     </div>
@@ -684,10 +684,12 @@ function onResizeEnd(e: PointerEvent) {
   background: transparent;
   border: none;
   color: inherit;
-  font-size: 16px;
   cursor: pointer;
   padding: 0 4px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .minimize-btn:hover {
@@ -698,10 +700,12 @@ function onResizeEnd(e: PointerEvent) {
   background: transparent;
   border: none;
   color: inherit;
-  font-size: 16px;
   cursor: pointer;
   padding: 0 4px;
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .close-btn:hover {

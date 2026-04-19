@@ -7,6 +7,7 @@ export type FavoriteMessageEntry = {
   agentColor?: string;
   model?: string;
   variant?: string;
+  isSubagent?: boolean;
 };
 
 function toFavoriteMessageEntry(value: unknown): FavoriteMessageEntry | null {
@@ -20,6 +21,7 @@ function toFavoriteMessageEntry(value: unknown): FavoriteMessageEntry | null {
   if (typeof record.agentColor === 'string') entry.agentColor = record.agentColor;
   if (typeof record.model === 'string') entry.model = record.model;
   if (typeof record.variant === 'string') entry.variant = record.variant;
+  if (record.isSubagent === true) entry.isSubagent = true;
   return entry;
 }
 
@@ -43,10 +45,11 @@ function isSameFavoriteMessages(a: FavoriteMessageEntry[], b: FavoriteMessageEnt
     return (
       next &&
       item.text === next.text &&
-      (item.agent ?? '') === (next.agent ?? '') &&
-      (item.agentColor ?? '') === (next.agentColor ?? '') &&
-      (item.model ?? '') === (next.model ?? '') &&
-      (item.variant ?? '') === (next.variant ?? '')
+        (item.agent ?? '') === (next.agent ?? '') &&
+        (item.agentColor ?? '') === (next.agentColor ?? '') &&
+        (item.model ?? '') === (next.model ?? '') &&
+        (item.variant ?? '') === (next.variant ?? '') &&
+        Boolean(item.isSubagent) === Boolean(next.isSubagent)
     );
   });
 }
@@ -76,7 +79,7 @@ function normalizeText(text: string) {
 }
 
 export function useFavoriteMessages() {
-  function isFavorite(entry: { text: string; agent?: string; model?: string; variant?: string }) {
+  function isFavorite(entry: { text: string; agent?: string; model?: string; variant?: string; isSubagent?: boolean }) {
     const normalized = normalizeText(entry.text);
     if (!normalized) return false;
     return favorites.value.some(
@@ -84,7 +87,8 @@ export function useFavoriteMessages() {
         normalizeText(fav.text) === normalized &&
         (fav.agent ?? '') === (entry.agent ?? '') &&
         (fav.model ?? '') === (entry.model ?? '') &&
-        (fav.variant ?? '') === (entry.variant ?? ''),
+        (fav.variant ?? '') === (entry.variant ?? '') &&
+        Boolean(fav.isSubagent) === Boolean(entry.isSubagent),
     );
   }
 

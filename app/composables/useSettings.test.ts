@@ -216,4 +216,32 @@ describe('useSettings', () => {
     expect(settings.externalThemes.value).toHaveLength(1);
     expect(settings.externalThemes.value[0]?.id).toBe('aurora-night');
   });
+
+  it('migrates legacy region theme storage into current theme tokens', async () => {
+    storage.setItem(
+      'opencode.settings.regionTheme.v1',
+      JSON.stringify({
+        name: 'aurora-legacy',
+        label: 'Aurora Legacy',
+        regions: {
+          topPanel: { bg: '#11243b' },
+          sidePanel: { bg: '#0b1727' },
+          inputPanel: { bg: '#0a1a2a' },
+          outputPanel: { bg: '#0f2033' },
+          topDropdown: { bg: '#0a1a2a' },
+          modalPanel: { bg: '#11243b' },
+          loginScreen: { bg: '#102033' },
+          pageBackground: { bg: '#08111f' },
+          chatCard: { bg: '#11243bb8' },
+        },
+      }),
+    );
+
+    const settings = await importFresh();
+
+    expect(settings.themeStorage.value?.version).toBe(2);
+    expect(settings.themeStorage.value?.label).toBe('Aurora Legacy');
+    expect(storage.getItem('opencode.settings.themeTokens.v2')).toContain('Aurora Legacy');
+    expect(storage.getItem('opencode.settings.regionTheme.v1')).toBeNull();
+  });
 });

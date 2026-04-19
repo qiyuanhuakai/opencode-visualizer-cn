@@ -40,6 +40,8 @@
                 :theme="theme"
                 :files-with-basenames="filesWithBasenames"
                 :is-reverted-preview="isRevertedPreview(root)"
+                :current-session-id="currentSessionId"
+                :session-history-meta-by-id="sessionHistoryMetaById"
                 :resolve-agent-color="resolveAgentColor"
                 :resolve-model-meta="resolveModelMeta"
                 :compute-context-percent="computeContextPercent"
@@ -121,6 +123,8 @@ const props = defineProps<{
   ) => number | null;
   projectName?: string;
   projectColor?: string;
+  currentSessionId?: string;
+  sessionHistoryMetaById?: Record<string, { parentID?: string; label: string }>;
   historyHasMore?: boolean;
   historyLoadingMore?: boolean;
   historyLoadError?: string;
@@ -151,7 +155,11 @@ const emit = defineEmits<{
   (event: 'load-more-history'): void;
 }>();
 
-const visibleRoots = computed(() => msg.roots.value);
+const visibleRoots = computed(() => {
+  const currentSessionId = props.currentSessionId?.trim();
+  if (!currentSessionId) return msg.roots.value;
+  return msg.roots.value.filter((root) => root.sessionID === currentSessionId);
+});
 
 const revertedPreviewRootId = computed(() => {
   const revert = props.sessionRevert;
