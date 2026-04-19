@@ -464,6 +464,9 @@ const messages: LocaleMessages = {
       description: '选择您偏好的语言',
       en: 'English',
       zhCN: '简体中文',
+      zhTW: '繁體中文',
+      ja: '日本語',
+      eo: 'Esperanto',
     },
     enterToSend: {
       label: 'Enter 发送',
