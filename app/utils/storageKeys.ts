@@ -1,5 +1,49 @@
 const STORAGE_PREFIX = 'opencode.';
 
+type StorageBackend = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+
+let hasMigratedElectronStorage = false;
+
+function migrateLocalStorageToElectronStorage(electronStorage: StorageBackend) {
+  if (hasMigratedElectronStorage || typeof window === 'undefined') return;
+  hasMigratedElectronStorage = true;
+
+  const localStorage = window.localStorage;
+  if (!localStorage) return;
+
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.startsWith(STORAGE_PREFIX)) {
+        continue;
+      }
+
+      if (electronStorage.getItem(key) !== null) {
+        continue;
+      }
+
+      const value = localStorage.getItem(key);
+      if (value !== null) {
+        electronStorage.setItem(key, value);
+      }
+    }
+  } catch {
+    return;
+  }
+}
+
+function resolveStorageBackend(): StorageBackend | null {
+  if (typeof window === 'undefined') return null;
+
+  const electronStorage = window.electronAPI?.persistentStorage;
+  if (electronStorage) {
+    migrateLocalStorageToElectronStorage(electronStorage);
+    return electronStorage;
+  }
+
+  return window.localStorage;
+}
+
 export const StorageKeys = {
   settings: {
     enterToSend: 'settings.enterToSend.v1',
@@ -31,6 +75,7 @@ export const StorageKeys = {
   },
   auth: {
     credentials: 'auth.credentials.v1',
+    serverUrl: 'auth.serverUrl.v1',
   },
 } as const;
 
@@ -39,27 +84,30 @@ export function storageKey(key: string) {
 }
 
 export function storageGet(key: string) {
-  if (typeof window === 'undefined') return null;
+  const storage = resolveStorageBackend();
+  if (!storage) return null;
   try {
-    return window.localStorage.getItem(storageKey(key));
+    return storage.getItem(storageKey(key));
   } catch {
     return null;
   }
 }
 
 export function storageSet(key: string, value: string) {
-  if (typeof window === 'undefined') return;
+  const storage = resolveStorageBackend();
+  if (!storage) return;
   try {
-    window.localStorage.setItem(storageKey(key), value);
+    storage.setItem(storageKey(key), value);
   } catch {
     return;
   }
 }
 
 export function storageRemove(key: string) {
-  if (typeof window === 'undefined') return;
+  const storage = resolveStorageBackend();
+  if (!storage) return;
   try {
-    window.localStorage.removeItem(storageKey(key));
+    storage.removeItem(storageKey(key));
   } catch {
     return;
   }

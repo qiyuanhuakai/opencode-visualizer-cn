@@ -159,7 +159,7 @@ pnpm dev
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
 
 ```bash
-# 桌面端开发模式（热重载）
+# 启动 Electron 开发模式（会自动复用或拉起 5173 上的 Vite）
 pnpm electron:start
 
 # 打包预览（不生成安装器）
@@ -168,6 +168,10 @@ pnpm electron:preview
 # 完整构建（生成各平台安装包）
 pnpm electron:build
 ```
+
+说明：
+- `pnpm electron:start` 会先检查 `127.0.0.1:5173` 上是否已有 Vite；如果没有，会自动启动 `pnpm dev` 并等待就绪后再拉起 Electron。
+- `pnpm dev` 仍固定使用 `127.0.0.1:5173`，如果端口已被其它进程占用会直接报错，避免 Electron 连错端口。
 
 构建产物输出到 `dist-electron/`，包含：
 - **Windows**：`.exe` (NSIS)

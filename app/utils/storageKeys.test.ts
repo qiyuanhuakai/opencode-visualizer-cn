@@ -66,4 +66,31 @@ describe('storageKeys', () => {
   it('returns null from storageGetJSON when key is missing', () => {
     expect(storageGetJSON('none')).toBeNull();
   });
+
+  it('prefers Electron persistent storage when available', () => {
+    const electronStore: Record<string, string | null> = {};
+
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn(() => 'local-value'),
+        setItem: vi.fn(),
+        removeItem: vi.fn(),
+      },
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn((key: string) => electronStore[key] ?? null),
+          setItem: vi.fn((key: string, value: string) => {
+            electronStore[key] = value;
+          }),
+          removeItem: vi.fn((key: string) => {
+            delete electronStore[key];
+          }),
+        },
+      },
+    });
+
+    storageSet(StorageKeys.settings.enterToSend, 'true');
+    expect(storageGet(StorageKeys.settings.enterToSend)).toBe('true');
+    expect(electronStore['opencode.settings.enterToSend.v1']).toBe('true');
+  });
 });

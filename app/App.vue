@@ -2560,7 +2560,6 @@ async function fetchGlobalProviderConfig() {
 }
 
 function handleModelVisibilityStorage(event: StorageEvent) {
-  if (event.storageArea !== window.localStorage) return;
   if (event.key !== MODEL_VISIBILITY_STORAGE_KEY && event.key !== LEGACY_DISABLED_MODELS_STORAGE_KEY) return;
   try {
     hiddenModels.value = readHiddenModelsFromStorage();
@@ -2576,7 +2575,6 @@ function handleSelectedThinkingUpdate(value: string | undefined) {
 }
 
 function handleComposerDraftStorage(event: StorageEvent) {
-  if (event.storageArea !== window.localStorage) return;
   if (event.key !== storageKey(StorageKeys.drafts.composer)) return;
   const contextKey = draftKeyForSelectedContext();
   if (!contextKey) return;
@@ -2593,7 +2591,6 @@ function handleComposerDraftStorage(event: StorageEvent) {
 }
 
 function handlePinnedSessionStoreStorage(event: StorageEvent) {
-  if (event.storageArea !== window.localStorage) return;
   if (event.key !== storageKey(StorageKeys.state.pinnedSessions)) return;
   const nextStore = limitPinnedSessionStore(
     parsePinnedSessionStore(event.newValue, pinnedSessionsLimit.value),
