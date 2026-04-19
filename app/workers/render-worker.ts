@@ -708,17 +708,9 @@ function buildDiffHtmlFromCode(
       }
       if (isDiffMetadataLine(line) || line.startsWith('\\')) {
         inHunk = false;
-        output.push({
-          html: `<span class="line">${escapeHtml(line)}</span>`,
-          rowClass: 'line-header',
-        });
         return;
       }
       if (!inHunk) {
-        output.push({
-          html: `<span class="line">${escapeHtml(line)}</span>`,
-          rowClass: 'line-header',
-        });
         return;
       }
       if (line.startsWith('+') && !line.startsWith('+++')) {
