@@ -502,12 +502,13 @@ const currentTotalInfo = computed(() => {
 .status-monitor-body {
   flex: 1;
   min-height: 0;
-  padding: 16px 0;
+  padding: 16px 12px 16px 16px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   scrollbar-gutter: stable both-edges;
+  box-sizing: border-box;
 }
 
 .status-monitor-tabs {
@@ -518,6 +519,7 @@ const currentTotalInfo = computed(() => {
   background: var(--theme-card-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
   border: 1px solid var(--theme-card-border, var(--theme-modal-border, rgba(148, 163, 184, 0.15)));
   border-radius: 8px;
+  min-width: 0;
 }
 
 .status-monitor-tab {
@@ -550,6 +552,7 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  padding-right: 4px;
 }
 
 .status-monitor-summary-label {
@@ -608,6 +611,7 @@ const currentTotalInfo = computed(() => {
   padding: 10px 12px;
   font-size: 12px;
   border-radius: 8px;
+  min-width: 0;
 }
 
 .status-monitor-feedback.is-error {
@@ -636,12 +640,14 @@ const currentTotalInfo = computed(() => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .status-monitor-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
 }
 
 .status-monitor-row {
@@ -652,12 +658,14 @@ const currentTotalInfo = computed(() => {
   background: var(--theme-list-row-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
   border: 1px solid var(--theme-list-row-border, var(--theme-modal-border, rgba(148, 163, 184, 0.12)));
   border-radius: 8px;
+  min-width: 0;
 }
 
 .status-monitor-row-main {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
 .status-monitor-row-actions {
@@ -665,6 +673,7 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   gap: 10px;
   margin-left: auto;
+  min-width: 0;
 }
 
 .status-monitor-name {
@@ -673,6 +682,7 @@ const currentTotalInfo = computed(() => {
   color: var(--theme-list-row-text, var(--theme-text-primary, #e2e8f0));
   word-break: break-all;
   overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .status-monitor-meta-column {
@@ -680,6 +690,7 @@ const currentTotalInfo = computed(() => {
   flex-direction: column;
   align-items: flex-end;
   gap: 2px;
+  min-width: 0;
 }
 
 .status-monitor-meta {
