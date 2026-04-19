@@ -1,6 +1,7 @@
 import { ref, watch } from 'vue';
 import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON, storageRemove, storageSetJSON } from '../utils/storageKeys';
 import {
+  migrateLegacyRegionThemeStorage,
   normalizeThemeStorage,
   type ThemeStorageV2,
 } from '../utils/themeTokens';
@@ -67,8 +68,19 @@ function readThemeStorage(): ThemeStorageV2 | null {
   const current = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
   if (current) {
     storageSetJSON(StorageKeys.settings.themeTokens, current);
+    }
+  if (current) {
+    return current;
   }
-  return current;
+
+  const legacy = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.regionTheme));
+  if (legacy) {
+    storageSetJSON(StorageKeys.settings.themeTokens, legacy);
+    storageRemove(StorageKeys.settings.regionTheme);
+    return legacy;
+  }
+
+  return null;
 }
 
 function readExternalThemes(): ExternalThemeDefinition[] {
@@ -94,26 +106,28 @@ const openInEditorMaxSizeMb = ref(readOpenInEditorMaxSizeMb());
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
 
+const syncWatchOptions = { flush: 'sync' as const };
+
 watch(enterToSend, (value) => {
   storageSet(StorageKeys.settings.enterToSend, String(value));
-});
+}, syncWatchOptions);
 
 watch(suppressAutoWindows, (value) => {
   storageSet(StorageKeys.settings.suppressAutoWindows, String(value));
-});
+}, syncWatchOptions);
 
 watch(showMinimizeButtons, (value) => {
   storageSet(StorageKeys.settings.showMinimizeButtons, String(value));
-});
+}, syncWatchOptions);
 
 watch(dockAlwaysOpen, (value) => {
   storageSet(StorageKeys.settings.dockAlwaysOpen, String(value));
-});
+}, syncWatchOptions);
 
 watch(showMinimizeButtons, (value) => {
   if (value) return;
   dockAlwaysOpen.value = false;
-});
+}, syncWatchOptions);
 
 watch(pinnedSessionsLimit, (value) => {
   const normalized = normalizePinnedSessionsLimit(value);
@@ -122,7 +136,7 @@ watch(pinnedSessionsLimit, (value) => {
     return;
   }
   storageSet(StorageKeys.settings.pinnedSessionsLimit, String(normalized));
-});
+}, syncWatchOptions);
 
 watch(terminalFontFamily, (value) => {
   const normalized = normalizeFontFamily(value, DEFAULT_TERMINAL_FONT_FAMILY);
@@ -131,7 +145,7 @@ watch(terminalFontFamily, (value) => {
     return;
   }
   storageSet(StorageKeys.settings.terminalFontFamily, normalized);
-});
+}, syncWatchOptions);
 
 watch(appMonospaceFontFamily, (value) => {
   const normalized = normalizeFontFamily(value, DEFAULT_APP_MONOSPACE_FONT_FAMILY);
@@ -140,11 +154,11 @@ watch(appMonospaceFontFamily, (value) => {
     return;
   }
   storageSet(StorageKeys.settings.appMonospaceFontFamily, normalized);
-});
+}, syncWatchOptions);
 
 watch(showOpenInEditorButton, (value) => {
   storageSet(StorageKeys.settings.showOpenInEditorButton, String(value));
-});
+}, syncWatchOptions);
 
 watch(openInEditorMaxSizeMb, (value) => {
   const normalized = normalizeOpenInEditorMaxSizeMb(value);
@@ -153,7 +167,7 @@ watch(openInEditorMaxSizeMb, (value) => {
     return;
   }
   storageSet(StorageKeys.settings.openInEditorMaxSizeMb, String(normalized));
-});
+}, syncWatchOptions);
 
 watch(externalThemes, (value) => {
   if (value.length === 0) {
@@ -164,7 +178,7 @@ watch(externalThemes, (value) => {
     version: 1,
     themes: value,
   });
-}, { deep: true });
+}, { deep: true, flush: 'sync' });
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {

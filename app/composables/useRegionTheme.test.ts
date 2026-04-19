@@ -132,4 +132,19 @@ describe('useRegionTheme', () => {
 
     unmount();
   });
+
+  it('flushes pending theme persistence on pagehide', async () => {
+    const { api, unmount } = await mountComposable();
+
+    api.applyPreset('ocean');
+    await nextTick();
+
+    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toBeNull();
+
+    window.dispatchEvent(new Event('pagehide'));
+
+    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toContain('"preset":"ocean"');
+
+    unmount();
+  });
 });

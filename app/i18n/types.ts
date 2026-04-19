@@ -379,6 +379,7 @@ export interface LocaleMessages {
      atAgentTitle: string;
      bookmarkCurrentInput: string;
     openBookmarks: string;
+    historySubagent: string;
     removeFromFavoritesConfirm: string;
     bookmarked: string;
     stop: string;
@@ -788,6 +789,8 @@ export interface LocaleMessages {
   threadHistory: {
     thinking: string;
     question: string;
+    subagent: string;
+    delegation: string;
   };
   threadFooter: {
     inputTokens: string;

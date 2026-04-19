@@ -380,6 +380,7 @@ const messages: LocaleMessages = {
      atAgentTitle: '通过@指定代理',
     bookmarkCurrentInput: '收藏当前输入',
     openBookmarks: '打开收藏 (↓)',
+    historySubagent: '子代理',
     removeFromFavoritesConfirm: '从收藏中移除此消息?',
     bookmarked: '已收藏!',
     stop: '停止 (ESC x2)',
@@ -851,6 +852,8 @@ const messages: LocaleMessages = {
   threadHistory: {
     thinking: '思考',
     question: '问题',
+    subagent: '子代理',
+    delegation: '委派',
   },
   threadFooter: {
     inputTokens: '输入令牌数',

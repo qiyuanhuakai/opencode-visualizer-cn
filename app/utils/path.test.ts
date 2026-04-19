@@ -8,9 +8,10 @@ import {
 } from './path';
 
 describe('normalizeRelativePathNoParent', () => {
-  it('normalizes mixed separators and removes dot segments', () => {
+  it('normalizes mixed separators and resolves dot segments', () => {
     expect(normalizeRelativePathNoParent('a\\b/c')).toBe('a/b/c');
-    expect(normalizeRelativePathNoParent('./foo/../bar/./baz')).toBe('foo/bar/baz');
+    expect(normalizeRelativePathNoParent('./foo/../bar/./baz')).toBe('bar/baz');
+    expect(normalizeRelativePathNoParent('a/b/../../c')).toBe('c');
   });
 
   it('returns empty string for empty or all-dot input', () => {
@@ -57,7 +58,7 @@ describe('splitFileContentDirectoryAndPath', () => {
   it('normalizes relative targetPath inside sandbox', () => {
     expect(splitFileContentDirectoryAndPath('foo/../bar', '/sandbox')).toEqual({
       directory: '/sandbox',
-      path: 'foo/bar',
+      path: 'bar',
     });
   });
 

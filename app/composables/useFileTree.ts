@@ -125,12 +125,17 @@ function getOptions(): UseFileTreeOptions {
 function normalizeRelativePath(path: string) {
   const trimmed = path.trim();
   if (!trimmed || trimmed === '.') return '.';
-  const withoutPrefix = trimmed
-    .replace(/^\.\//, '')
-    .replace(/^\//, '')
-    .replace(/^(\.\.\/)+/, '');
-  const normalized = withoutPrefix.replace(/\/+/g, '/').replace(/\/$/, '');
-  return normalized || '.';
+  const segments = trimmed.replace(/\\/g, '/').split('/');
+  const cleaned: string[] = [];
+  for (const segment of segments) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (cleaned.length > 0) cleaned.pop();
+      continue;
+    }
+    cleaned.push(segment);
+  }
+  return cleaned.join('/') || '.';
 }
 
 function toRelativePath(path: string, directory: string) {

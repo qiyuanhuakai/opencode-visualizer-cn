@@ -26,6 +26,9 @@
                   >
                     {{ entry.agent }}
                   </span>
+                  <span v-if="entry.isSubagent" class="history-target-subagent">
+                    {{ $t('inputPanel.historySubagent') }}
+                  </span>
                   <span v-if="historyEntryModelDisplayName(entry)" class="history-target-model">
                     {{ historyEntryModelDisplayName(entry) }}
                   </span>
@@ -75,6 +78,9 @@
                     :style="historyEntryAgentStyle(entry)"
                   >
                     {{ entry.agent }}
+                  </span>
+                  <span v-if="entry.isSubagent" class="history-target-subagent">
+                    {{ $t('inputPanel.historySubagent') }}
                   </span>
                   <span v-if="historyEntryModelDisplayName(entry)" class="history-target-model">
                     {{ historyEntryModelDisplayName(entry) }}
@@ -454,6 +460,7 @@ const props = defineProps<{
     dataUrl: string;
     lineComment?: { path: string; startLine: number; endLine: number; text: string };
   }>;
+  currentSessionId?: string;
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
@@ -489,7 +496,7 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const modelDropdownRef = ref<HTMLElement | null>(null);
 const modelSearchQuery = ref('');
-const acceptMime = 'image/png,image/jpeg,image/gif,image/webp';
+const acceptMime = '*/*';
 
 const { enterToSend } = useSettings();
 
@@ -515,6 +522,7 @@ type HistoryEntry = {
   agentColor?: string;
   model?: string;
   variant?: string;
+  isSubagent?: boolean;
 };
 
 function findAgentOption(id: string | undefined) {
@@ -578,6 +586,7 @@ const userHistory = computed(() => {
       agentColor: agentOption?.color || resolvedAgentColor,
       model,
       variant,
+      isSubagent: Boolean(props.currentSessionId && msg.sessionID !== props.currentSessionId),
     });
   }
   return result;
@@ -628,6 +637,7 @@ function toHistoryEntry(value: unknown): HistoryEntry | null {
   if (typeof candidate.agentColor === 'string') entry.agentColor = candidate.agentColor;
   if (typeof candidate.model === 'string') entry.model = candidate.model;
   if (typeof candidate.variant === 'string') entry.variant = candidate.variant;
+  if (candidate.isSubagent === true) entry.isSubagent = true;
   return entry;
 }
 
@@ -1750,6 +1760,7 @@ const inputMessageStyle = computed(() => {
 }
 
 .history-target-agent,
+.history-target-subagent,
 .history-target-model,
 .history-target-provider,
 .history-target-separator,
@@ -1765,6 +1776,10 @@ const inputMessageStyle = computed(() => {
 
 .history-target-provider {
    color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+}
+
+.history-target-subagent {
+   color: #7dd3fc;
 }
 
 .history-target-separator {

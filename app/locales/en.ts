@@ -380,6 +380,7 @@ const messages: LocaleMessages = {
      atAgentTitle: 'Agent via @',
     bookmarkCurrentInput: 'Bookmark current input',
     openBookmarks: 'Open bookmarks (↓)',
+    historySubagent: 'Subagent',
     removeFromFavoritesConfirm: 'Remove this message from favorites?',
     bookmarked: 'Bookmarked!',
     stop: 'Stop (ESC x2)',
@@ -851,6 +852,8 @@ const messages: LocaleMessages = {
   threadHistory: {
     thinking: 'THOUGHT',
     question: 'QUESTION',
+    subagent: 'Subagent',
+    delegation: 'Delegation',
   },
   threadFooter: {
     inputTokens: 'Input tokens',

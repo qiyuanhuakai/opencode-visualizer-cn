@@ -128,7 +128,7 @@ import type {
   ModelMeta,
   ThreadTarget as ThreadTargetType,
 } from '../types/message';
-import type { MessageInfo, QuestionInfo, ToolPart } from '../types/sse';
+import type { MessageInfo, QuestionInfo, SubtaskPart, ToolPart } from '../types/sse';
 import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
 
@@ -141,6 +141,8 @@ const props = defineProps<{
   theme: string;
   filesWithBasenames: string[];
   isRevertedPreview: boolean;
+  currentSessionId?: string;
+  sessionHistoryMetaById?: Record<string, { parentID?: string; label: string }>;
   resolveAgentColor?: (agent?: string) => string;
   resolveModelMeta?: (modelPath?: string) => ModelMeta | undefined;
   computeContextPercent?: (
@@ -206,6 +208,24 @@ const threadTargetAgentStyle = computed(() => {
   return { color };
 });
 
+const subagentThreadMessages = computed(() => {
+  const currentSessionId = props.currentSessionId?.trim();
+  if (!currentSessionId) return [] as MessageInfo[];
+
+  const rootCreatedAt = props.root.time.created;
+
+  return msg.roots.value
+    .filter((root) => root.role === 'user')
+    .filter((root) => root.sessionID !== currentSessionId)
+    .filter((root) => props.sessionHistoryMetaById?.[root.sessionID]?.parentID === currentSessionId)
+    .filter((root) => {
+      const createdAt = root.time.created;
+      return createdAt >= rootCreatedAt;
+    })
+    .flatMap((root) => msg.getThread(root.id))
+    .filter((item) => item.role === 'assistant');
+});
+
 function hasTextContent(message?: MessageInfo): boolean {
   if (!message) return false;
   return msg.hasTextContent(message.id);
@@ -254,6 +274,11 @@ function getToolPartTime(part: ToolPart): number {
   return 0;
 }
 
+function getSubtaskPartTime(part: SubtaskPart, fallbackTime: number): number {
+  void part;
+  return fallbackTime;
+}
+
 function extractQuestionInfos(part: ToolPart): QuestionInfo[] {
   const raw = part.state.input?.questions;
   if (!Array.isArray(raw)) return [];
@@ -282,9 +307,9 @@ function extractQuestionAnswers(part: ToolPart): string[][] | undefined {
 
 function getHistoryEntries(): HistoryEntry[] {
   const entries: HistoryEntry[] = [];
-  for (const msgInfo of threadMessages.value) {
-    if (msgInfo.role !== 'assistant') continue;
-    if (hasTextContent(msgInfo)) {
+  const allHistoryMessages = [...threadMessages.value, ...subagentThreadMessages.value];
+  for (const msgInfo of allHistoryMessages) {
+    if (msgInfo.role === 'assistant' && hasTextContent(msgInfo)) {
       entries.push({ kind: 'message', message: msgInfo, time: msgInfo.time.created });
     }
     const parts = msg.getParts(msgInfo.id);
@@ -293,6 +318,10 @@ function getHistoryEntries(): HistoryEntry[] {
         if (part.text) {
           entries.push({ kind: 'reasoning', part, time: part.time.start });
         }
+        continue;
+      }
+      if (part.type === 'subtask') {
+        entries.push({ kind: 'subtask', part, time: getSubtaskPartTime(part, msgInfo.time.created) });
         continue;
       }
       if (part.type !== 'tool') continue;
@@ -312,6 +341,7 @@ function getHistoryEntryKey(entry: HistoryEntry): string {
   if (entry.kind === 'message') return `msg:${entry.message.id}`;
   if (entry.kind === 'reasoning') return `reasoning:${entry.part.id}`;
   if (entry.kind === 'question') return `question:${entry.part.callID}`;
+  if (entry.kind === 'subtask') return `subtask:${entry.part.id}`;
   return `tool:${entry.part.callID}`;
 }
 
@@ -323,6 +353,8 @@ function showThreadHistory() {
         kind: 'message',
         content: getMessageContent(entry.message),
         time: entry.time,
+        sessionId: entry.message.sessionID,
+        isSubagent: Boolean(props.currentSessionId && entry.message.sessionID !== props.currentSessionId),
         agent:
           entry.message.role === 'assistant' && 'agent' in entry.message && entry.message.agent
             ? entry.message.agent
@@ -344,6 +376,14 @@ function showThreadHistory() {
         questions: extractQuestionInfos(entry.part),
         status: resolveQuestionStatus(entry.part),
         answers: extractQuestionAnswers(entry.part),
+        time: entry.time,
+      } satisfies HistoryWindowEntry;
+    }
+    if (entry.kind === 'subtask') {
+      return {
+        key: getHistoryEntryKey(entry),
+        kind: 'subtask',
+        part: entry.part,
         time: entry.time,
       } satisfies HistoryWindowEntry;
     }
