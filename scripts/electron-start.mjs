@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import http from 'node:http';
+import net from 'node:net';
 
 const DEV_SERVER_HOST = '127.0.0.1';
 const DEV_SERVER_PORT = 5173;
@@ -38,6 +39,25 @@ async function waitForDevServer() {
   return false;
 }
 
+function isPortInUse(port, host) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ port, host });
+
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+
+    socket.once('error', (error) => {
+      if (error.code === 'ECONNREFUSED') {
+        resolve(false);
+        return;
+      }
+      reject(error);
+    });
+  });
+}
+
 function spawnChild(command, args, options = {}) {
   if (process.platform === 'win32') {
     const shell = process.env.ComSpec || 'cmd.exe';
@@ -72,7 +92,17 @@ function quoteWindowsCommandArg(arg) {
 async function main() {
   let devServerProcess = null;
 
-  if (!(await canConnect(DEV_SERVER_URL))) {
+  const serverReachable = await canConnect(DEV_SERVER_URL);
+
+  if (!serverReachable) {
+    const portInUse = await isPortInUse(DEV_SERVER_PORT, DEV_SERVER_HOST);
+
+    if (portInUse) {
+      throw new Error(
+        `Port ${DEV_SERVER_PORT} is already in use on ${DEV_SERVER_HOST}, but ${DEV_SERVER_URL} is not serving the Vite app. Please stop the conflicting process or free the port before running pnpm electron:start.`,
+      );
+    }
+
     console.log(`[electron:start] Vite dev server not detected at ${DEV_SERVER_URL}, starting pnpm dev...`);
     devServerProcess = spawnChild(pnpmCommand(), ['dev']);
 
