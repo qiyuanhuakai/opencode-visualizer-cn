@@ -39,6 +39,8 @@
             <select v-model="locale" class="language-select">
               <option value="en">{{ $t('settings.language.en') }}</option>
               <option value="zh-CN">{{ $t('settings.language.zhCN') }}</option>
+              <option value="zh-TW">{{ $t('settings.language.zhTW') }}</option>
+              <option value="ja">{{ $t('settings.language.ja') }}</option>
             </select>
           </div>
 
