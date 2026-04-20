@@ -127,25 +127,6 @@
             </label>
           </div>
 
-          <div class="setting-row setting-row-stack">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.pinnedSessionsLimit.label') }}</div>
-              <div class="setting-description">{{ $t('settings.pinnedSessionsLimit.description', { limit: maxPinnedSessionsLimit }) }}</div>
-            </div>
-            <div class="number-setting-group">
-              <input
-                v-model.number="pinnedSessionsLimit"
-                type="number"
-                class="number-input"
-                :min="minPinnedSessionsLimit"
-                :max="maxPinnedSessionsLimit"
-                step="1"
-                @blur="clampPinnedSessionsLimit"
-                @keydown.enter="clampPinnedSessionsLimit"
-              />
-            </div>
-          </div>
-
           <button
             type="button"
             class="setting-row setting-link-row"
@@ -611,7 +592,6 @@ const {
   enterToSend,
   showMinimizeButtons,
   dockAlwaysOpen,
-  pinnedSessionsLimit,
   terminalFontFamily,
   appMonospaceFontFamily,
   terminalFontSizePx,
@@ -620,8 +600,6 @@ const {
   uiFontSizePx,
   themeStorage,
   externalThemes,
-  minPinnedSessionsLimit,
-  maxPinnedSessionsLimit,
   defaultTerminalFontFamily,
   defaultAppMonospaceFontFamily,
   minTerminalFontSizePx,
@@ -903,12 +881,7 @@ function clampOpenInEditorMaxSizeMb() {
   );
 }
 
-function clampPinnedSessionsLimit() {
-  pinnedSessionsLimit.value = Math.max(
-    minPinnedSessionsLimit,
-    Math.min(maxPinnedSessionsLimit, pinnedSessionsLimit.value),
-  );
-}
+
 
 async function loadLocalFonts() {
   if (!supportsLocalFontsApi || isLoadingLocalFonts.value) return;

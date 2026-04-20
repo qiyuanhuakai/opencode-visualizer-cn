@@ -175,6 +175,24 @@
                     <button
                       v-if="worktree.projectId && worktree.projectId !== 'global'"
                       type="button"
+                      class="tree-action-button"
+                      :class="worktree.isPinned ? 'pinned' : 'pin'"
+                      :title="worktree.isPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
+                      @click.stop="
+                        worktree.isPinned
+                          ? handleUnpinProject(worktree.projectId)
+                          : handlePinProject(worktree.projectId)
+                      "
+                    >
+                      <Icon
+                        :icon="worktree.isPinned ? 'lucide:pin-off' : 'lucide:pin'"
+                        :width="14"
+                        :height="14"
+                      />
+                    </button>
+                    <button
+                      v-if="worktree.projectId && worktree.projectId !== 'global'"
+                      type="button"
                       class="tree-action-button worktree-settings"
                       :title="$t('topPanel.projectSettings')"
                       @click.stop="
@@ -229,6 +247,24 @@
                           @click.stop="handleCreateWorktree(sandbox.directory, close)"
                         >
                           <Icon icon="lucide:git-branch-plus" :width="16" :height="16" />
+                        </button>
+                        <button
+                          v-if="worktree.projectId !== 'global'"
+                          type="button"
+                          class="tree-action-button"
+                          :class="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'pinned' : 'pin'"
+                          :title="sandbox.isPinned || sandbox.isImplicitlyPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
+                          @click.stop="
+                            sandbox.isPinned || sandbox.isImplicitlyPinned
+                              ? handleUnpinSandbox(worktree.projectId, sandbox.directory)
+                              : handlePinSandbox(worktree.projectId, sandbox.directory)
+                          "
+                        >
+                          <Icon
+                            :icon="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'lucide:pin-off' : 'lucide:pin'"
+                            :width="14"
+                            :height="14"
+                          />
                         </button>
                         <button
                           v-if="
@@ -287,13 +323,22 @@
                             <button
                               v-if="!session.archivedAt"
                               type="button"
+                              class="tree-action-button session-rename"
+                              :title="$t('topPanel.sessionActions.rename')"
+                              @click.stop.prevent="handleSessionRename(session.id)"
+                            >
+                              <Icon icon="lucide:pencil" :width="16" :height="16" />
+                            </button>
+                            <button
+                              v-if="!session.archivedAt"
+                              type="button"
                               class="tree-action-button session-pin"
-                              :class="session.pinnedAt ? 'pinned' : 'pin'"
-                              :title="session.pinnedAt ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
-                              @click.stop.prevent="handleSessionPinToggle(session.id, session.pinnedAt)"
+                              :class="session.isPinned || session.isImplicitlyPinned ? 'pinned' : 'pin'"
+                              :title="session.isPinned || session.isImplicitlyPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
+                              @click.stop.prevent="handleSessionPinToggle(session.id, session.isPinned || session.isImplicitlyPinned)"
                             >
                               <Icon
-                                :icon="session.pinnedAt ? 'lucide:pin-off' : 'lucide:pin'"
+                                :icon="session.isPinned || session.isImplicitlyPinned ? 'lucide:pin-off' : 'lucide:pin'"
                                 :width="16"
                                 :height="16"
                               />
@@ -530,12 +575,17 @@ export type TopPanelSession = {
   timeUpdated?: number;
   archivedAt?: number;
   pinnedAt?: number;
+  isPinned?: boolean;
+  isImplicitlyPinned?: boolean;
 };
 
 export type TopPanelSandbox = {
   directory: string;
   branch?: string;
   sessions: TopPanelSession[];
+  pinnedAt?: number;
+  isPinned?: boolean;
+  isImplicitlyPinned?: boolean;
 };
 
 export type TopPanelWorktree = {
@@ -545,6 +595,8 @@ export type TopPanelWorktree = {
   projectId?: string;
   projectColor?: string;
   sandboxes: TopPanelSandbox[];
+  pinnedAt?: number;
+  isPinned?: boolean;
 };
 
 export type TopPanelNotificationSession = {
@@ -602,8 +654,13 @@ const emit = defineEmits<{
   (event: 'delete-session', value: string): void;
   (event: 'archive-session', value: string): void;
   (event: 'unarchive-session', value: string): void;
+  (event: 'rename-session', value: string): void;
   (event: 'pin-session', value: string): void;
   (event: 'unpin-session', value: string): void;
+  (event: 'pin-project', projectId: string): void;
+  (event: 'unpin-project', projectId: string): void;
+  (event: 'pin-sandbox', payload: { projectId: string; directory: string }): void;
+  (event: 'unpin-sandbox', payload: { projectId: string; directory: string }): void;
   (event: 'open-directory'): void;
   (event: 'open-shell'): void;
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
@@ -643,7 +700,7 @@ defineExpose({ openSessionDropdown, closeSessionDropdown, toggleSessionDropdown 
 
 const MAX_WORKTREES = Infinity;
 const MAX_SANDBOXES = Infinity;
-const MAX_SESSIONS = 5;
+const MAX_SESSIONS = Infinity;
 
 const searchQuery = ref('');
 const isShiftPressed = ref(false);
@@ -713,13 +770,22 @@ const allVisibleSelected = computed(() => {
 
 const batchPinTargets = computed(() =>
   selectedEntries.value
-    .filter((entry) => !entry.session.archivedAt && !entry.session.pinnedAt)
+    .filter(
+      (entry) =>
+        !entry.session.archivedAt &&
+        !entry.session.isPinned &&
+        !entry.session.isImplicitlyPinned,
+    )
     .map((entry) => entry.target),
 );
 
 const batchUnpinTargets = computed(() =>
   selectedEntries.value
-    .filter((entry) => !entry.session.archivedAt && Boolean(entry.session.pinnedAt))
+    .filter(
+      (entry) =>
+        !entry.session.archivedAt &&
+        Boolean(entry.session.isPinned || entry.session.isImplicitlyPinned),
+    )
     .map((entry) => entry.target),
 );
 
@@ -930,6 +996,26 @@ function handleCreateWorktree(worktree: string, close: () => void) {
   close();
 }
 
+function handlePinProject(projectId: string | undefined) {
+  if (!projectId) return;
+  emit('pin-project', projectId);
+}
+
+function handleUnpinProject(projectId: string | undefined) {
+  if (!projectId) return;
+  emit('unpin-project', projectId);
+}
+
+function handlePinSandbox(projectId: string | undefined, directory: string) {
+  if (!projectId) return;
+  emit('pin-sandbox', { projectId, directory });
+}
+
+function handleUnpinSandbox(projectId: string | undefined, directory: string) {
+  if (!projectId) return;
+  emit('unpin-sandbox', { projectId, directory });
+}
+
 function handleSandboxDelete(
   projectId: string | undefined,
   worktree: string,
@@ -969,8 +1055,12 @@ function handleSessionUnarchive(sessionId: string) {
   emit('unarchive-session', sessionId);
 }
 
-function handleSessionPinToggle(sessionId: string, pinnedAt?: number) {
-  if (pinnedAt) {
+function handleSessionRename(sessionId: string) {
+  emit('rename-session', sessionId);
+}
+
+function handleSessionPinToggle(sessionId: string, isPinned = false) {
+  if (isPinned) {
     emit('unpin-session', sessionId);
     return;
   }
@@ -1377,8 +1467,11 @@ function handleOpenDirectory(close: () => void) {
 
 /* Session rows: wrapper provides indentation via :deep() */
 .tree-session-row :deep(.ui-dropdown-item) {
-  padding-left: 40px;
-  border-radius: 0;
+  margin: 0 8px;
+  padding: 6px 0 6px 40px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  box-sizing: border-box;
   color: var(--theme-top-dropdown-text, #e2e8f0);
 }
 
@@ -1529,8 +1622,8 @@ function handleOpenDirectory(close: () => void) {
 .tree-session-main {
   min-width: 0;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-wrap: nowrap;
+  align-items: flex-start;
   justify-content: flex-start;
   column-gap: 8px;
   row-gap: 2px;
@@ -1553,6 +1646,7 @@ function handleOpenDirectory(close: () => void) {
 .session-title {
   color: var(--theme-top-dropdown-text, #e2e8f0);
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1560,7 +1654,12 @@ function handleOpenDirectory(close: () => void) {
 }
 
 .session-info {
-  display: contents;
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
 }
 
 .session-info-top {
@@ -1568,19 +1667,20 @@ function handleOpenDirectory(close: () => void) {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex: 1 1 auto;
+  width: 100%;
 }
 
 .session-time {
   font-size: 10px;
   color: var(--theme-top-text-muted, #64748b);
   white-space: nowrap;
-  flex-basis: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .session-badge-archived {
   flex: 0 0 auto;
-  margin-left: auto;
   font-size: 10px;
   line-height: 1;
   color: var(--theme-status-git-archived, #c4b5fd);
@@ -1592,7 +1692,6 @@ function handleOpenDirectory(close: () => void) {
 
 .session-badge-pinned {
   flex: 0 0 auto;
-  margin-left: auto;
   font-size: 10px;
   line-height: 1;
   color: var(--theme-status-git-pinned, #fbbf24);

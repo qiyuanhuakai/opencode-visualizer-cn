@@ -62,6 +62,7 @@ const messages: LocaleMessages = {
       sessionDeleteFailed: 'Session delete failed: {message}',
       sessionArchiveFailed: 'Session archive failed: {message}',
       sessionUnarchiveFailed: 'Session unarchive failed: {message}',
+      sessionRenameFailed: 'Session rename failed: {message}',
       sessionPinFailed: 'Session pin failed: {message}',
       sessionUnpinFailed: 'Session unpin failed: {message}',
       sessionForkFailed: 'Session fork failed: {message}',
@@ -102,6 +103,7 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: 'Failed to connect to SSE stream.',
+      sessionRenameInvalidResponse: 'Session rename returned an invalid response.',
     },
     descriptions: {
       openLocalShell: 'Open a local shell session.',
@@ -116,6 +118,7 @@ const messages: LocaleMessages = {
       deletingSession: 'Deleting session',
       archivingSession: 'Archiving session',
       unarchivingSession: 'Unarchiving session',
+      renamingSession: 'Renaming session',
       pinningSession: 'Pinning session',
       unpinningSession: 'Unpinning session',
       batchSessionOperation: 'Batch session operation',
@@ -207,6 +210,7 @@ const messages: LocaleMessages = {
       unarchive: 'Unarchive session',
       archive: 'Archive session (with Shift key to delete permanently)',
       deletePermanently: 'Delete session permanently',
+      rename: 'Rename session',
       select: 'Select session',
       unselect: 'Unselect session',
     },
@@ -353,7 +357,7 @@ const messages: LocaleMessages = {
   sidePanel: {
     tabs: {
       todo: 'TODO',
-      session: 'SESSION',
+      session: 'SESSION TREE',
       tree: 'TREE',
     },
     expandPanel: 'Expand side panel',
@@ -362,6 +366,14 @@ const messages: LocaleMessages = {
       title: 'SESSION',
       noPinned: 'No pinned sessions.',
       unpin: 'Unpin session',
+      sessionTree: {
+        pinProject: 'Pin project',
+        unpinProject: 'Unpin project',
+        pinSandbox: 'Pin sandbox',
+        unpinSandbox: 'Unpin sandbox',
+        pinSession: 'Pin session',
+        unpinSession: 'Unpin session',
+      },
     },
     todo: {
       title: 'TODO',
@@ -493,10 +505,6 @@ const messages: LocaleMessages = {
     showMinimizeButtons: {
       label: 'Show minimize button',
       description: 'Toggle window minimization controls. Turning this off also restores all minimized windows.',
-    },
-    pinnedSessionsLimit: {
-      label: 'Pinned sessions limit',
-      description: 'Keep at most {limit} local pinned sessions; oldest pins are dropped first.',
     },
     terminalFontFamily: {
       label: 'Terminal font family',

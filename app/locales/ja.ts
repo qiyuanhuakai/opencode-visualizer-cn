@@ -62,6 +62,7 @@ const messages: LocaleMessages = {
       sessionDeleteFailed: 'セッションの削除に失敗しました: {message}',
       sessionArchiveFailed: 'セッションのアーカイブに失敗しました: {message}',
       sessionUnarchiveFailed: 'セッションのアーカイブ解除に失敗しました: {message}',
+      sessionRenameFailed: 'セッション名の変更に失敗しました: {message}',
       sessionPinFailed: 'セッションのピン留めに失敗しました: {message}',
       sessionUnpinFailed: 'セッションのピン留め解除に失敗しました: {message}',
       sessionForkFailed: 'セッションのフォークに失敗しました: {message}',
@@ -102,6 +103,7 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: 'SSEストリームへの接続に失敗しました。',
+      sessionRenameInvalidResponse: 'セッション名変更の応答が無効です。',
     },
     descriptions: {
       openLocalShell: 'ローカルシェルセッションを開く。',
@@ -116,6 +118,7 @@ const messages: LocaleMessages = {
       deletingSession: 'セッションを削除',
       archivingSession: 'セッションをアーカイブ',
       unarchivingSession: 'セッションをアーカイブ解除',
+      renamingSession: 'セッション名を変更',
       pinningSession: 'セッションをピン留め',
       unpinningSession: 'セッションのピン留めを解除',
       batchSessionOperation: 'バッチセッション操作',
@@ -207,6 +210,7 @@ const messages: LocaleMessages = {
       unarchive: 'セッションをアーカイブ解除',
       archive: 'セッションをアーカイブ（Shiftキーで完全削除）',
       deletePermanently: 'セッションを完全削除',
+      rename: 'セッション名を変更',
       select: 'セッションを選択',
       unselect: 'セッションの選択を解除',
     },
@@ -353,7 +357,7 @@ const messages: LocaleMessages = {
   sidePanel: {
     tabs: {
       todo: 'TODO',
-      session: 'セッション',
+      session: 'セッションツリー',
       tree: 'ツリー',
     },
     expandPanel: 'サイドパネルを展開',
@@ -362,6 +366,14 @@ const messages: LocaleMessages = {
       title: 'セッション',
       noPinned: 'ピン留めされたセッションはありません。',
       unpin: 'セッションのピンを解除',
+      sessionTree: {
+        pinProject: 'プロジェクトをピン留め',
+        unpinProject: 'プロジェクトのピンを解除',
+        pinSandbox: 'サンドボックスをピン留め',
+        unpinSandbox: 'サンドボックスのピンを解除',
+        pinSession: 'セッションをピン留め',
+        unpinSession: 'セッションのピンを解除',
+      },
     },
     todo: {
       title: 'TODO',
@@ -493,10 +505,6 @@ const messages: LocaleMessages = {
     showMinimizeButtons: {
       label: '最小化ボタンを表示',
       description: 'ウィンドウの最小化コントロールを切り替えます。オフにすると、最小化されたすべてのウィンドウが復元されます。',
-    },
-    pinnedSessionsLimit: {
-      label: 'ピン留めセッションの上限',
-      description: 'ローカルのピン留めセッションを最大{limit}件まで保持します。古いピンから順に削除されます。',
     },
     terminalFontFamily: {
       label: 'ターミナルフォントファミリー',

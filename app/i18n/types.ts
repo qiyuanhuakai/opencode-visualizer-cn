@@ -61,6 +61,7 @@ export interface LocaleMessages {
       sessionDeleteFailed: string;
       sessionArchiveFailed: string;
       sessionUnarchiveFailed: string;
+      sessionRenameFailed: string;
       sessionPinFailed: string;
       sessionUnpinFailed: string;
       sessionForkFailed: string;
@@ -101,6 +102,7 @@ export interface LocaleMessages {
     };
     errors: {
       sseConnectFailed: string;
+      sessionRenameInvalidResponse: string;
     };
     descriptions: {
       openLocalShell: string;
@@ -115,6 +117,7 @@ export interface LocaleMessages {
       deletingSession: string;
       archivingSession: string;
       unarchivingSession: string;
+      renamingSession: string;
       pinningSession: string;
       unpinningSession: string;
       batchSessionOperation: string;
@@ -206,6 +209,7 @@ export interface LocaleMessages {
       unarchive: string;
       archive: string;
       deletePermanently: string;
+      rename: string;
       select: string;
       unselect: string;
     };
@@ -361,6 +365,14 @@ export interface LocaleMessages {
       title: string;
       noPinned: string;
       unpin: string;
+      sessionTree: {
+        pinProject: string;
+        unpinProject: string;
+        pinSandbox: string;
+        unpinSandbox: string;
+        pinSession: string;
+        unpinSession: string;
+      };
     };
     todo: {
       title: string;
@@ -433,10 +445,6 @@ export interface LocaleMessages {
       description: string;
     };
     showMinimizeButtons: {
-      label: string;
-      description: string;
-    };
-    pinnedSessionsLimit: {
       label: string;
       description: string;
     };

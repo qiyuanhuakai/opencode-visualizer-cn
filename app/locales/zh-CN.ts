@@ -62,6 +62,7 @@ const messages: LocaleMessages = {
       sessionDeleteFailed: '删除会话失败: {message}',
       sessionArchiveFailed: '归档会话失败: {message}',
       sessionUnarchiveFailed: '取消归档会话失败: {message}',
+      sessionRenameFailed: '会话重命名失败: {message}',
       sessionPinFailed: '置顶会话失败: {message}',
       sessionUnpinFailed: '取消置顶会话失败: {message}',
       sessionForkFailed: '分支会话失败: {message}',
@@ -102,6 +103,7 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: '无法连接到 SSE 流。',
+      sessionRenameInvalidResponse: '会话重命名返回了无效响应。',
     },
     descriptions: {
       openLocalShell: '打开本地 Shell 会话。',
@@ -116,6 +118,7 @@ const messages: LocaleMessages = {
       deletingSession: '删除会话',
       archivingSession: '归档会话',
       unarchivingSession: '取消归档会话',
+      renamingSession: '重命名会话',
       pinningSession: '置顶会话',
       unpinningSession: '取消置顶会话',
       batchSessionOperation: '批量会话操作',
@@ -207,6 +210,7 @@ const messages: LocaleMessages = {
       unarchive: '取消归档会话',
       archive: '归档会话 (按住 Shift 键可永久删除)',
       deletePermanently: '永久删除会话',
+      rename: '重命名会话',
       select: '选择会话',
       unselect: '取消选择会话',
     },
@@ -353,7 +357,7 @@ const messages: LocaleMessages = {
   sidePanel: {
     tabs: {
       todo: '待办',
-      session: '会话',
+      session: '会话树',
       tree: '文件树',
     },
     expandPanel: '展开侧边栏',
@@ -362,6 +366,14 @@ const messages: LocaleMessages = {
       title: '会话',
       noPinned: '暂无置顶会话',
       unpin: '取消置顶会话',
+      sessionTree: {
+        pinProject: '置顶项目',
+        unpinProject: '取消置顶项目',
+        pinSandbox: '置顶沙盒',
+        unpinSandbox: '取消置顶沙盒',
+        pinSession: '置顶会话',
+        unpinSession: '取消置顶会话',
+      },
     },
     todo: {
       title: '待办',
@@ -493,10 +505,6 @@ const messages: LocaleMessages = {
     showMinimizeButtons: {
       label: '显示最小化按钮',
       description: '切换窗口最小化控制。关闭此选项也会恢复所有最小化的窗口。',
-    },
-    pinnedSessionsLimit: {
-      label: '置顶会话限制',
-      description: '最多保留 {limit} 个本地置顶会话；最早的置顶项会首先被删除。',
     },
     terminalFontFamily: {
       label: '终端字体族',

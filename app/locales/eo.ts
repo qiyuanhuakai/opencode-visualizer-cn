@@ -62,6 +62,7 @@ const messages: LocaleMessages = {
       sessionDeleteFailed: 'Forigo de seanco malsukcesis: {message}',
       sessionArchiveFailed: 'Arkivado de seanco malsukcesis: {message}',
       sessionUnarchiveFailed: 'Malarkivado de seanco malsukcesis: {message}',
+      sessionRenameFailed: 'Renomado de seanco malsukcesis: {message}',
       sessionPinFailed: 'Alpinglo de seanco malsukcesis: {message}',
       sessionUnpinFailed: 'Malpinglo de seanco malsukcesis: {message}',
       sessionForkFailed: 'Forko de seanco malsukcesis: {message}',
@@ -102,6 +103,7 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: 'Konekto al SSE-fluo malsukcesis.',
+      sessionRenameInvalidResponse: 'Renomado de seanco redonis nevalidan respondon.',
     },
     descriptions: {
       openLocalShell: 'Malfermi lokan ŝeloseancon.',
@@ -116,6 +118,7 @@ const messages: LocaleMessages = {
       deletingSession: 'Forigas seancon',
       archivingSession: 'Arkivas seancon',
       unarchivingSession: 'Malarkivas seancon',
+      renamingSession: 'Renomas seancon',
       pinningSession: 'Alpinglas seancon',
       unpinningSession: 'Malpinglas seancon',
       batchSessionOperation: 'Ara seancoperacio',
@@ -207,6 +210,7 @@ const messages: LocaleMessages = {
       unarchive: 'Malarkivi seancon',
       archive: 'Arkivi seancon (kun Shift-klavo por forigi definitive)',
       deletePermanently: 'Forigi seancon definitive',
+      rename: 'Renomi seancon',
       select: 'Elekti seancon',
       unselect: 'Malelekti seancon',
     },
@@ -352,8 +356,8 @@ const messages: LocaleMessages = {
   },
   sidePanel: {
     tabs: {
-      todo: 'FARINDAĴOJ',
-      session: 'SEANCO',
+      todo: 'TODO',
+      session: 'SEANC-ARBO',
       tree: 'ARBO',
     },
     expandPanel: 'Etendi flankan panelon',
@@ -362,6 +366,14 @@ const messages: LocaleMessages = {
       title: 'SEANCO',
       noPinned: 'Neniu alpinglita seanco.',
       unpin: 'Malpingli seancon',
+      sessionTree: {
+        pinProject: 'Alpingli projekton',
+        unpinProject: 'Malpingli projekton',
+        pinSandbox: 'Alpingli sablujon',
+        unpinSandbox: 'Malpingli sablujon',
+        pinSession: 'Alpingli seancon',
+        unpinSession: 'Malpingli seancon',
+      },
     },
     todo: {
       title: 'FARINDAĴOJ',
@@ -493,10 +505,6 @@ const messages: LocaleMessages = {
     showMinimizeButtons: {
       label: 'Montri minimumigan butonon',
       description: 'Ŝalti fenestrajn minimumigajn regilojn. Malŝalti ĉi tion ankaŭ restarigas ĉiujn minimumigitajn fenestrojn.',
-    },
-    pinnedSessionsLimit: {
-      label: 'Limo de alpinglitaj seancoj',
-      description: 'Konservi maksimume {limit} lokajn alpinglitajn seancojn; plej malnovaj pingloj estas forĵetitaj unue.',
     },
     terminalFontFamily: {
       label: 'Terminala tiparfamilio',

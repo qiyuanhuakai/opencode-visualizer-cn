@@ -14,9 +14,6 @@ function isSerializedEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
-const DEFAULT_PINNED_SESSIONS_LIMIT = 30;
-const MIN_PINNED_SESSIONS_LIMIT = 1;
-const MAX_PINNED_SESSIONS_LIMIT = 200;
 const DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB = 10;
 const MIN_OPEN_IN_EDITOR_MAX_SIZE_MB = 1;
 const MAX_OPEN_IN_EDITOR_MAX_SIZE_MB = 100;
@@ -37,14 +34,6 @@ const DEFAULT_TERMINAL_FONT_FAMILY =
 const DEFAULT_APP_MONOSPACE_FONT_FAMILY =
   "'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace";
 
-function normalizePinnedSessionsLimit(value: unknown) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_PINNED_SESSIONS_LIMIT;
-  const rounded = Math.round(value);
-  if (rounded < MIN_PINNED_SESSIONS_LIMIT) return MIN_PINNED_SESSIONS_LIMIT;
-  if (rounded > MAX_PINNED_SESSIONS_LIMIT) return MAX_PINNED_SESSIONS_LIMIT;
-  return rounded;
-}
-
 function normalizeOpenInEditorMaxSizeMb(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB;
   const rounded = Math.round(value);
@@ -58,13 +47,6 @@ function readOpenInEditorMaxSizeMb() {
   if (!raw) return DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB;
   const parsed = Number(raw);
   return normalizeOpenInEditorMaxSizeMb(parsed);
-}
-
-function readPinnedSessionsLimit() {
-  const raw = storageGet(StorageKeys.settings.pinnedSessionsLimit);
-  if (!raw) return DEFAULT_PINNED_SESSIONS_LIMIT;
-  const parsed = Number(raw);
-  return normalizePinnedSessionsLimit(parsed);
 }
 
 function readTerminalFontFamily() {
@@ -174,7 +156,6 @@ const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true')
 const suppressAutoWindows = ref(storageGet(StorageKeys.settings.suppressAutoWindows) === 'true');
 const showMinimizeButtons = ref(storageGet(StorageKeys.settings.showMinimizeButtons) !== 'false');
 const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === 'true');
-const pinnedSessionsLimit = ref(readPinnedSessionsLimit());
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
 const terminalFontSizePx = ref(readTerminalFontSizePx());
@@ -208,10 +189,6 @@ watch(dockAlwaysOpen, (value) => {
 watch(showMinimizeButtons, (value) => {
   if (value) return;
   dockAlwaysOpen.value = false;
-}, syncWatchOptions);
-
-watch(pinnedSessionsLimit, (value) => {
-  storageSet(StorageKeys.settings.pinnedSessionsLimit, String(value));
 }, syncWatchOptions);
 
 watch(terminalFontFamily, (value) => {
@@ -289,10 +266,6 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.dockAlwaysOpen)) {
       dockAlwaysOpen.value = event.newValue === 'true';
     }
-    if (event.key === storageKey(StorageKeys.settings.pinnedSessionsLimit)) {
-      const parsed = event.newValue === null ? DEFAULT_PINNED_SESSIONS_LIMIT : Number(event.newValue);
-      pinnedSessionsLimit.value = normalizePinnedSessionsLimit(parsed);
-    }
     if (event.key === storageKey(StorageKeys.settings.terminalFontFamily)) {
       terminalFontFamily.value = normalizeFontFamily(event.newValue ?? '', DEFAULT_TERMINAL_FONT_FAMILY);
     }
@@ -346,7 +319,6 @@ export function useSettings() {
     suppressAutoWindows,
     showMinimizeButtons,
     dockAlwaysOpen,
-    pinnedSessionsLimit,
     terminalFontFamily,
     appMonospaceFontFamily,
     themeStorage,
@@ -354,9 +326,6 @@ export function useSettings() {
     showOpenInEditorButton,
     openInEditorMaxSizeMb,
     floatingPreviewWordWrap,
-    defaultPinnedSessionsLimit: DEFAULT_PINNED_SESSIONS_LIMIT,
-    minPinnedSessionsLimit: MIN_PINNED_SESSIONS_LIMIT,
-    maxPinnedSessionsLimit: MAX_PINNED_SESSIONS_LIMIT,
     defaultOpenInEditorMaxSizeMb: DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB,
     minOpenInEditorMaxSizeMb: MIN_OPEN_IN_EDITOR_MAX_SIZE_MB,
     maxOpenInEditorMaxSizeMb: MAX_OPEN_IN_EDITOR_MAX_SIZE_MB,
