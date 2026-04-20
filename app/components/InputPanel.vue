@@ -411,7 +411,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch, inject } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
@@ -435,6 +435,7 @@ type AgentOption = { id: string; label: string; description?: string; color?: st
 type ThinkingChoice = { key: string; value: string | undefined; label: string };
 
 const { t } = useI18n();
+const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const props = defineProps<{
   messageInput: string;
@@ -653,8 +654,9 @@ function handleFavoriteSelect(entry: unknown) {
   applyHistoryEntry(value);
 }
 
-function confirmRemoveFavorite(index: number) {
-  if (!window.confirm(t('inputPanel.removeFromFavoritesConfirm'))) return;
+async function confirmRemoveFavorite(index: number) {
+  const confirmed = showConfirm ? await showConfirm(t('inputPanel.removeFromFavoritesConfirm')) : true;
+  if (!confirmed) return;
   removeFavorite(index);
 }
 

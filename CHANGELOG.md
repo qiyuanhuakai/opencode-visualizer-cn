@@ -34,6 +34,11 @@
 
 - [x] 为electron应用打包提供icon
 
+### 主题设置（Beta）
+
+- [x] 全面弃用window.prompt和window.confirm，改用自定义控件以适配主题
+
+
 ### Bug 修复
 
 - [x] 修复 `grep` 工具"模式"信息的字符样式被主题错误覆盖的问题

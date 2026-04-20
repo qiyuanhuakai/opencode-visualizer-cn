@@ -362,7 +362,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount, inject } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 
@@ -440,6 +440,8 @@ type VirtualRow = {
 };
 
 const { t } = useI18n();
+const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
+const showPrompt = inject('showPrompt') as ((title: string, defaultValue?: string) => Promise<string | null>) | undefined;
 
 const props = defineProps<{
   rootNodes: TreeNode[];
@@ -1092,9 +1094,8 @@ function onBranchSelect(value: unknown) {
   void props.runShellCommand?.(value);
 }
 
-function onBranchFork(entry: BranchEntry) {
-  if (typeof window === 'undefined') return;
-  const promptValue = window.prompt(t('treeView.confirm.createBranchFrom', { ref: entry.refnameShort }));
+async function onBranchFork(entry: BranchEntry) {
+  const promptValue = showPrompt ? await showPrompt(t('treeView.confirm.createBranchFrom', { ref: entry.refnameShort })) : null;
   const nextName = promptValue?.trim() ?? '';
   if (!nextName) return;
   branchMenuOpen.value = false;
@@ -1103,23 +1104,19 @@ function onBranchFork(entry: BranchEntry) {
   );
 }
 
-function onBranchMerge(entry: BranchEntry) {
+async function onBranchMerge(entry: BranchEntry) {
   if (!canMergeBranch(entry)) return;
   const target = branchMergeTarget(entry);
-  if (typeof window !== 'undefined') {
-    const confirmed = window.confirm(t('treeView.confirm.mergeIntoCurrent', { branch: target }));
-    if (!confirmed) return;
-  }
+  const confirmed = showConfirm ? await showConfirm(t('treeView.confirm.mergeIntoCurrent', { branch: target })) : true;
+  if (!confirmed) return;
   branchMenuOpen.value = false;
   void props.runShellCommand?.(`git merge ${shellQuote(target)}`);
 }
 
-function onBranchDelete(entry: BranchEntry) {
+async function onBranchDelete(entry: BranchEntry) {
   if (!canDeleteLocalBranch(entry)) return;
-  if (typeof window !== 'undefined') {
-    const confirmed = window.confirm(t('treeView.confirm.deleteBranch', { name: entry.displayName }));
-    if (!confirmed) return;
-  }
+  const confirmed = showConfirm ? await showConfirm(t('treeView.confirm.deleteBranch', { name: entry.displayName })) : true;
+  if (!confirmed) return;
   branchMenuOpen.value = false;
   void props.runShellCommand?.(`git branch -d ${shellQuote(entry.displayName)}`);
 }
@@ -1129,12 +1126,10 @@ function onRemoteFetch(remote: string) {
   void props.runShellCommand?.(`git fetch ${shellQuote(remote)}`);
 }
 
-function onBranchCommandSelect(value: unknown) {
+async function onBranchCommandSelect(value: unknown) {
   if (typeof value !== 'string') return;
-  if (typeof window !== 'undefined') {
-    const confirmed = window.confirm(t('treeView.confirm.runCommand', { command: value }));
-    if (!confirmed) return;
-  }
+  const confirmed = showConfirm ? await showConfirm(t('treeView.confirm.runCommand', { command: value })) : true;
+  if (!confirmed) return;
   void props.runShellCommand?.(value);
 }
 

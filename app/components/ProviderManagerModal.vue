@@ -285,7 +285,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, inject, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import * as opencodeApi from '../utils/opencode';
 
@@ -374,6 +374,9 @@ const emit = defineEmits<{
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const activeTab = ref<ProviderManagerTab>('providers');
 const modelSearch = ref('');
+const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
+const showPrompt = inject('showPrompt') as ((title: string, defaultValue?: string) => Promise<string | null>) | undefined;
+
 const busyProviderId = ref('');
 const feedbackMessage = ref('');
 const feedbackTone = ref<'info' | 'success' | 'error'>('info');
@@ -549,12 +552,12 @@ function formatCount(value?: number) {
   return Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
-function pickAuthMethod(providerId: string) {
+async function pickAuthMethod(providerId: string) {
   const methods = providerAuthSummary(providerId);
   if (methods.length === 0) return null;
   if (methods.length === 1) return { method: methods[0], index: 0 };
   const options = methods.map((method, index) => `${index + 1}. ${method.label}`).join('\n');
-  const raw = window.prompt(`Select auth method for ${providerId}:\n${options}`, '1');
+  const raw = showPrompt ? await showPrompt(`Select auth method for ${providerId}:\n${options}`, '1') : null;
   if (!raw) return null;
   const index = Number(raw) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= methods.length) return null;
@@ -631,14 +634,15 @@ function selectProvider(providerId: string) {
 }
 
 async function connectProvider(provider: ProviderInfo) {
-  const picked = pickAuthMethod(provider.id);
+  const picked = await pickAuthMethod(provider.id);
   if (!picked) return;
   busyProviderId.value = provider.id;
   try {
     if (picked.method.type === 'api') {
-      const key = window.prompt(`Enter API key for ${provider.name?.trim() || provider.id}`)?.trim();
+      const key = showPrompt ? await showPrompt(`Enter API key for ${provider.name?.trim() || provider.id}`) : null;
       if (!key) return;
-      await opencodeApi.setProviderAuth(provider.id, { type: 'api', key });
+      const trimmedKey = key.trim();
+      await opencodeApi.setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
       emit('providers-changed');
       setFeedback(`Connected ${provider.id}.`, 'success');
       return;
@@ -651,16 +655,16 @@ async function connectProvider(provider: ProviderInfo) {
       window.open(authorization.url, '_blank', 'noopener,noreferrer');
     }
     if (authorization?.method === 'code') {
-      const code = window.prompt(authorization.instructions || `Paste the authorization code for ${provider.id}`)?.trim();
+      const code = showPrompt ? await showPrompt(authorization.instructions || `Paste the authorization code for ${provider.id}`) : null;
       if (!code) return;
       await opencodeApi.completeProviderOAuth(provider.id, {
         method: picked.index,
-        code,
+        code: code.trim(),
       });
     } else {
-      const confirmed = window.confirm(
+      const confirmed = showConfirm ? await showConfirm(
         authorization?.instructions || `Complete the OAuth flow for ${provider.id}, then confirm.`,
-      );
+      ) : true;
       if (!confirmed) return;
       await opencodeApi.completeProviderOAuth(provider.id, {
         method: picked.index,
@@ -677,7 +681,7 @@ async function connectProvider(provider: ProviderInfo) {
 
 async function disconnectProvider(providerId: string) {
   if (!providerId) return;
-  const confirmed = window.confirm(`Disconnect provider ${providerId}?`);
+  const confirmed = showConfirm ? await showConfirm(`Disconnect provider ${providerId}?`) : true;
   if (!confirmed) return;
   busyProviderId.value = providerId;
   try {

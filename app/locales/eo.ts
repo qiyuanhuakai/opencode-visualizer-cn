@@ -166,6 +166,8 @@ const messages: LocaleMessages = {
     },
     prompt: {
       editMessage: 'Redakti mesaĝon',
+      cancel: 'Nuligi',
+      confirm: 'Konfirmi',
     },
   },
   topPanel: {
