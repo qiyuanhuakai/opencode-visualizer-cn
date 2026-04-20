@@ -544,6 +544,10 @@ const messages: LocaleMessages = {
       label: 'Maksimuma dosiergrando por "Malfermi en Redaktilo"',
       description: 'Ne montri la butonon por dosieroj pli grandaj ol ĉi tiu grando (MB).',
     },
+    floatingPreviewWordWrap: {
+      label: 'Aŭtomata vorto-rompo en flosanta antaŭrigardo',
+      description: 'Ŝalti aŭtomatan liniorompigon en flosantaj fenestroj kun lininumeroj (dosiera antaŭrigardo, redakto/skribo/ fliko).',
+    },
   },
   floatingWindow: {
     search: 'Serĉi',

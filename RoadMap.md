@@ -10,7 +10,6 @@
 	- 通过"在编辑器中打开"修改文件后，已打开的悬浮窗中文件内容不会自动更新
 - [ ] **会话树支持** — 将现有的单会话级会话侧边栏改为基于项目-沙盒-会话的三层级会话树侧边栏	
 - [ ] **会话级别token消耗** — opencode server自带的功能。它的上位是opencode-magic-context的侧边栏面板，但后者似乎不好集成
-- [ ] **悬浮窗预览自动换行** — 防止过长的行影响阅读
 - [ ] **外部工具支持** — 集成外部开发工具，扩展与第三方工具的联动能力。正在考虑：
 	- [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
 	- [gnhf](https://github.com/kunchenguid/gnhf)

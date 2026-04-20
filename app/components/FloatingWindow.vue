@@ -9,7 +9,7 @@ import { useContentSearch } from '../composables/useContentSearch';
 import { useSettings } from '../composables/useSettings';
 import { Icon } from '@iconify/vue';
 
-const { showMinimizeButtons, showOpenInEditorButton, openInEditorMaxSizeMb } = useSettings();
+const { showMinimizeButtons, showOpenInEditorButton, openInEditorMaxSizeMb, floatingPreviewWordWrap } = useSettings();
 
 const { t } = useI18n();
 
@@ -168,6 +168,12 @@ const scrollClass = computed(() => {
   return {
     'scroll-none': props.entry.scroll === 'none' || props.entry.scroll === 'force',
   };
+});
+
+const shouldWordWrap = computed(() => {
+  if (!floatingPreviewWordWrap.value) return false;
+  const v = props.entry.variant;
+  return v === 'code' || v === 'diff';
 });
 
 function onFocus() {
@@ -528,6 +534,7 @@ function onResizeEnd(e: PointerEvent) {
           v-else
           :html="entry.resolvedHtml || (typeof entry.content === 'string' ? entry.content : '')"
           :variant="entry.variant"
+          :word-wrap="shouldWordWrap"
         />
       </div>
       <Transition name="fade">

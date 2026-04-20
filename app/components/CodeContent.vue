@@ -4,14 +4,23 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { useSettings } from '../composables/useSettings';
 
 const props = defineProps<{
   html: string;
   variant?: 'code' | 'diff' | 'message' | 'binary' | 'term' | 'plain';
+  wordWrap?: boolean;
 }>();
+
+const { floatingPreviewWordWrap } = useSettings();
 
 const rootClass = computed(() => {
   const v = props.variant ?? 'code';
+  const shouldWrapSoft =
+    v === 'message' ||
+    v === 'term' ||
+    props.wordWrap ||
+    (floatingPreviewWordWrap.value && (v === 'code' || v === 'diff'));
   return {
     'is-diff': v === 'diff',
     'is-message': v === 'message',
@@ -19,7 +28,7 @@ const rootClass = computed(() => {
     'is-term': v === 'term',
     'is-plain': v === 'plain',
     'no-gutter': v === 'message' || v === 'binary' || v === 'term' || v === 'plain',
-    'wrap-soft': v === 'message' || v === 'term',
+    'wrap-soft': shouldWrapSoft,
   };
 });
 </script>

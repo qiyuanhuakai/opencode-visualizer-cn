@@ -116,6 +116,17 @@
             </div>
           </div>
 
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.floatingPreviewWordWrap.label') }}</div>
+              <div class="setting-description">{{ $t('settings.floatingPreviewWordWrap.description') }}</div>
+            </div>
+            <label class="toggle-switch">
+              <input v-model="floatingPreviewWordWrap" type="checkbox" class="toggle-input" />
+              <span class="toggle-track" />
+            </label>
+          </div>
+
           <div class="setting-row setting-row-stack">
             <div class="setting-info">
               <div class="setting-label">{{ $t('settings.pinnedSessionsLimit.label') }}</div>
@@ -625,6 +636,7 @@ const {
   openInEditorMaxSizeMb,
   minOpenInEditorMaxSizeMb,
   maxOpenInEditorMaxSizeMb,
+  floatingPreviewWordWrap,
 } = useSettings();
 const activeThemeStorage = themeStorage;
 const selectedPreset = ref<string>('default');

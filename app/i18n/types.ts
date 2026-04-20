@@ -406,6 +406,9 @@ export interface LocaleMessages {
       description: string;
       en: string;
       zhCN: string;
+      zhTW: string;
+      ja: string;
+      eo: string;
     };
     enterToSend: {
       label: string;
@@ -480,6 +483,10 @@ export interface LocaleMessages {
       description: string;
     };
     openInEditorMaxSizeMb: {
+      label: string;
+      description: string;
+    };
+    floatingPreviewWordWrap: {
       label: string;
       description: string;
     };

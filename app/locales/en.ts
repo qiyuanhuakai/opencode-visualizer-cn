@@ -544,6 +544,10 @@ const messages: LocaleMessages = {
       label: 'Max file size for "Open in Editor"',
       description: 'Do not show the button for files larger than this size (MB).',
     },
+    floatingPreviewWordWrap: {
+      label: 'Floating preview word wrap',
+      description: 'Enable automatic line wrapping in floating windows with line numbers (file preview, edit/write/patch).',
+    },
   },
   floatingWindow: {
     search: 'Search',

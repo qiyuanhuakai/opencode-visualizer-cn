@@ -544,6 +544,10 @@ const messages: LocaleMessages = {
       label: '「エディターで開く」の最大ファイルサイズ',
       description: 'このサイズ（MB）より大きなファイルにはボタンを表示しません。',
     },
+    floatingPreviewWordWrap: {
+      label: 'フローティングプレビューの自動折り返し',
+      description: '行番号付きフローティングウィンドウ（ファイルプレビュー、編集/書き込み/パッチ）で自動改行を有効にします。',
+    },
   },
   floatingWindow: {
     search: '検索',
