@@ -544,6 +544,10 @@ const messages: LocaleMessages = {
       label: '「用編輯器開啟」檔案大小限制',
       description: '超過此大小（MB）的檔案不顯示該按鈕。',
     },
+    floatingPreviewWordWrap: {
+      label: '懸浮窗預覽自動換行',
+      description: '在有行號的懸浮窗（檔案預覽、編輯/寫入/修補）中啟用自動換行。',
+    },
   },
   floatingWindow: {
     search: '搜尋',

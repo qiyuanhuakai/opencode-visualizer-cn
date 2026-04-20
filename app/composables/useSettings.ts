@@ -183,6 +183,7 @@ const messageFontSizePx = ref(readMessageFontSizePx());
 const uiFontSizePx = ref(readUiFontSizePx());
 const showOpenInEditorButton = ref(storageGet(StorageKeys.settings.showOpenInEditorButton) !== 'false');
 const openInEditorMaxSizeMb = ref(readOpenInEditorMaxSizeMb());
+const floatingPreviewWordWrap = ref(storageGet(StorageKeys.settings.floatingPreviewWordWrap) === 'true');
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
 
@@ -255,6 +256,10 @@ watch(openInEditorMaxSizeMb, (value) => {
   storageSet(StorageKeys.settings.openInEditorMaxSizeMb, String(value));
 }, syncWatchOptions);
 
+watch(floatingPreviewWordWrap, (value) => {
+  storageSet(StorageKeys.settings.floatingPreviewWordWrap, String(value));
+}, syncWatchOptions);
+
 watch(externalThemes, (value) => {
   if (value.length === 0) {
     if (storageGet(StorageKeys.settings.themeRegistry) === null) return;
@@ -317,6 +322,9 @@ if (typeof window !== 'undefined') {
       const parsed = event.newValue === null ? DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB : Number(event.newValue);
       openInEditorMaxSizeMb.value = normalizeOpenInEditorMaxSizeMb(parsed);
     }
+    if (event.key === storageKey(StorageKeys.settings.floatingPreviewWordWrap)) {
+      floatingPreviewWordWrap.value = event.newValue === 'true';
+    }
     if (event.key === storageKey(StorageKeys.settings.themeTokens)) {
       const nextThemeStorage = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
       if (!isSerializedEqual(themeStorage.value, nextThemeStorage)) {
@@ -345,6 +353,7 @@ export function useSettings() {
     externalThemes,
     showOpenInEditorButton,
     openInEditorMaxSizeMb,
+    floatingPreviewWordWrap,
     defaultPinnedSessionsLimit: DEFAULT_PINNED_SESSIONS_LIMIT,
     minPinnedSessionsLimit: MIN_PINNED_SESSIONS_LIMIT,
     maxPinnedSessionsLimit: MAX_PINNED_SESSIONS_LIMIT,
