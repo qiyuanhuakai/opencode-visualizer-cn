@@ -2,15 +2,19 @@
 import { ref, watch, computed, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
-import { getGlobalHealth, getMcpStatus, getLspStatus, getSkillStatus, getGlobalConfig, updateMcp } from '../utils/opencode';
+import { getGlobalHealth, getMcpStatus, getLspStatus, getSkillStatus, getGlobalConfig, updateMcp, listSessionMessages, listProviders } from '../utils/opencode';
+import { useMessages } from '../composables/useMessages';
+import type { MessageUsage } from '../types/message';
+import type { MessageInfo } from '../types/sse';
 
-const props = defineProps<{ open: boolean }>();
+const props = defineProps<{ open: boolean; sessionId?: string }>();
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
 const popoverRef = ref<HTMLDivElement | null>(null);
+const msg = useMessages();
 
-type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills';
+type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token';
 const activeTab = ref<TabId>('server');
 
 const serverHealth = ref<{ healthy: boolean; version: string } | null>(null);
@@ -29,6 +33,11 @@ const lspData = ref<Array<{ id: string; name: string; root: string; status: 'con
 const skillData = ref<Array<{ name: string; version?: string }> | null>(null);
 const skillUnsupported = ref(false);
 const configData = ref<Record<string, unknown> | null>(null);
+const tokenUsage = ref<MessageUsage | null>(null);
+const tokenModelName = ref<string>('');
+const tokenContextLimit = ref<number>(0);
+const tokenUserMessages = ref<number>(0);
+const tokenAssistantMessages = ref<number>(0);
 
 const loading = ref(false);
 const errorMessage = ref('');
@@ -96,6 +105,12 @@ async function refresh() {
     lspData.value = lsp.status === 'fulfilled' ? lsp.value : null;
     skillData.value = skills.status === 'fulfilled' ? skills.value : null;
     configData.value = cfg.status === 'fulfilled' ? cfg.value : null;
+
+    // Fetch token data for current session separately
+    if (props.sessionId) {
+      await fetchTokenData();
+    }
+
     if (
       health.status === 'rejected' &&
       mcp.status === 'rejected' &&
@@ -108,6 +123,90 @@ async function refresh() {
     errorMessage.value = t('statusMonitor.error');
   } finally {
     loading.value = false;
+  }
+}
+
+async function fetchContextLimit(providerId: string, modelId: string) {
+  try {
+    const response = await listProviders() as { all?: Array<{ id: string; models?: Record<string, { limit?: { context?: number } }> }> };
+    const providers = Array.isArray(response?.all) ? response.all : [];
+    const provider = providers.find((p) => p.id === providerId);
+    if (provider?.models) {
+      const model = provider.models[modelId];
+      if (model?.limit?.context) {
+        tokenContextLimit.value = model.limit.context;
+      }
+    }
+  } catch {
+    // Provider list may fail, ignore
+  }
+}
+
+async function fetchTokenData() {
+  if (!props.sessionId) return;
+
+  // Try to get messages from useMessages store first
+  let sessionMessages: MessageInfo[] = [];
+  const sessionRoots = msg.roots.value.filter((root) => root.sessionID === props.sessionId);
+  for (const root of sessionRoots) {
+    sessionMessages.push(...msg.getThread(root.id));
+  }
+
+  // If store doesn't have this session's messages, load via API
+  if (sessionMessages.length === 0) {
+    try {
+      const messages = await listSessionMessages(props.sessionId, { limit: 100 });
+      if (Array.isArray(messages) && messages.length > 0) {
+        msg.loadHistory(messages);
+        // Re-fetch from store after loading
+        const newRoots = msg.roots.value.filter((root) => root.sessionID === props.sessionId);
+        for (const root of newRoots) {
+          sessionMessages.push(...msg.getThread(root.id));
+        }
+      }
+    } catch {
+      tokenUsage.value = null;
+      return;
+    }
+  }
+
+  if (sessionMessages.length === 0) {
+    tokenUsage.value = null;
+    return;
+  }
+
+  // Sort by created time
+  sessionMessages.sort((a, b) => (a.time.created ?? 0) - (b.time.created ?? 0));
+
+  // Extract token data using normalized usage from store
+  let userCount = 0;
+  let assistantCount = 0;
+  let latestUsage: MessageUsage | null = null;
+  let latestModelName = '';
+
+  for (const info of sessionMessages) {
+    if (info.role === 'user') {
+      userCount++;
+    } else if (info.role === 'assistant') {
+      assistantCount++;
+      const usage = msg.getUsage(info.id);
+      // Use the last assistant message with valid token data
+      // (skip streaming messages that haven't received tokens yet)
+      if (usage && (usage.tokens.input > 0 || usage.tokens.output > 0)) {
+        latestUsage = usage;
+        latestModelName = usage.modelId || '';
+      }
+    }
+  }
+
+  tokenUsage.value = latestUsage;
+  tokenModelName.value = latestModelName;
+  tokenUserMessages.value = userCount;
+  tokenAssistantMessages.value = assistantCount;
+
+  // Fetch model context limit
+  if (latestUsage?.providerId && latestUsage?.modelId) {
+    await fetchContextLimit(latestUsage.providerId, latestUsage.modelId);
   }
 }
 
@@ -204,6 +303,7 @@ const tabs: { id: TabId; labelKey: string }[] = [
   { id: 'lsp', labelKey: 'statusMonitor.tabs.lsp' },
   { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
   { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
+  { id: 'token', labelKey: 'statusMonitor.tabs.token' },
 ];
 
 const currentTotalInfo = computed(() => {
@@ -226,10 +326,24 @@ const currentTotalInfo = computed(() => {
       return skillEntries.value.length > 0
         ? { label: t('statusMonitor.common.totalLabel'), count: skillEntries.value.length }
         : null;
+    case 'token':
+      return tokenUsage.value
+        ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
+        : null;
     default:
       return null;
   }
 });
+
+function formatTokenCount(count: number): string {
+  return count.toLocaleString();
+}
+
+function formatPercent(value: number, total: number): string {
+  if (total <= 0) return '0%';
+  return `${Math.round((value / total) * 100)}%`;
+}
+
 </script>
 
 <template>
@@ -252,22 +366,22 @@ const currentTotalInfo = computed(() => {
       </button>
     </header>
 
-    <div class="status-monitor-body">
-      <div class="status-monitor-tabs" role="tablist">
-          <button
-            v-for="tab in tabs"
-            :key="tab.id"
-            type="button"
-            class="status-monitor-tab"
-            :class="{ 'is-active': activeTab === tab.id }"
-            :aria-selected="activeTab === tab.id"
-            @click="activeTab = tab.id"
-          >
-            {{ $t(tab.labelKey) }}
-          </button>
-        </div>
+    <div class="status-monitor-tabs" role="tablist">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        type="button"
+        class="status-monitor-tab"
+        :class="{ 'is-active': activeTab === tab.id }"
+        :aria-selected="activeTab === tab.id"
+        @click="activeTab = tab.id"
+      >
+        {{ $t(tab.labelKey) }}
+      </button>
+    </div>
 
-        <div v-if="currentTotalInfo" class="status-monitor-actions">
+    <div class="status-monitor-body">
+      <div v-if="currentTotalInfo" class="status-monitor-actions">
           <span class="status-monitor-summary-label">{{ currentTotalInfo.label }}</span>
           <span class="status-monitor-summary-value">{{ currentTotalInfo.count }}</span>
         </div>
@@ -424,6 +538,65 @@ const currentTotalInfo = computed(() => {
           </div>
         </div>
 
+        <!-- Token Tab -->
+        <div v-if="activeTab === 'token'" class="status-monitor-content">
+          <div v-if="!sessionId" class="status-monitor-empty">
+            {{ $t('statusMonitor.token.noSession') }}
+          </div>
+          <div v-else-if="loading && !tokenUsage" class="status-monitor-empty">
+            {{ $t('statusMonitor.loading') }}
+          </div>
+          <div v-else-if="!tokenUsage" class="status-monitor-empty">
+            {{ $t('statusMonitor.token.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <!-- Usage percent bar at top -->
+            <div v-if="tokenContextLimit > 0" class="token-usage-bar-row">
+              <div class="token-usage-track">
+                <div
+                  class="token-usage-fill"
+                  :style="{ width: formatPercent(tokenUsage.tokens.total ?? (tokenUsage.tokens.input + tokenUsage.tokens.output + tokenUsage.tokens.reasoning), tokenContextLimit) }"
+                />
+              </div>
+              <span class="token-usage-percent">
+                {{ formatPercent(tokenUsage.tokens.total ?? (tokenUsage.tokens.input + tokenUsage.tokens.output + tokenUsage.tokens.reasoning), tokenContextLimit) }}
+              </span>
+            </div>
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.model') }}</span>
+              <span class="token-value">{{ tokenModelName || '-' }}</span>
+            </div>
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.contextLimit') }}</span>
+              <span class="token-value">{{ tokenContextLimit > 0 ? formatTokenCount(tokenContextLimit) : '-' }}</span>
+            </div>
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.inputTokens') }}</span>
+              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.input) }}</span>
+            </div>
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.outputTokens') }}</span>
+              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.output) }}</span>
+            </div>
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.reasoningTokens') }}</span>
+              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.reasoning) }}</span>
+            </div>
+            <div v-if="tokenUsage.tokens.cache" class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.cacheTokens') }}</span>
+              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.cache.read) }} / {{ formatTokenCount(tokenUsage.tokens.cache.write) }}</span>
+            </div>
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.userMessages') }}</span>
+              <span class="token-value">{{ tokenUserMessages }}</span>
+            </div>
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.assistantMessages') }}</span>
+              <span class="token-value">{{ tokenAssistantMessages }}</span>
+            </div>
+          </div>
+        </div>
+
     </div>
 
     <div class="status-monitor-footer">
@@ -502,12 +675,11 @@ const currentTotalInfo = computed(() => {
 .status-monitor-body {
   flex: 1;
   min-height: 0;
-  padding: 16px 12px 16px 16px;
+  padding: 12px 16px 16px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  scrollbar-gutter: stable both-edges;
   box-sizing: border-box;
 }
 
@@ -516,14 +688,35 @@ const currentTotalInfo = computed(() => {
   align-items: center;
   gap: 6px;
   padding: 4px;
+  margin: 12px 16px 0;
   background: var(--theme-card-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
   border: 1px solid var(--theme-card-border, var(--theme-modal-border, rgba(148, 163, 184, 0.15)));
   border-radius: 8px;
+  width: calc(100% - 32px);
+  box-sizing: border-box;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-modal-border, rgba(148, 163, 184, 0.3)) transparent;
+  flex-shrink: 0;
+}
+
+.status-monitor-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.status-monitor-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.status-monitor-tabs::-webkit-scrollbar-thumb {
+  background: var(--theme-modal-border, rgba(148, 163, 184, 0.3));
+  border-radius: 999px;
 }
 
 .status-monitor-tab {
-  flex: 1;
+  flex: 0 0 auto;
   padding: 6px 10px;
   font-size: 12px;
   font-weight: 500;
@@ -535,6 +728,7 @@ const currentTotalInfo = computed(() => {
   border-radius: 6px;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
+  white-space: nowrap;
 }
 
 .status-monitor-tab:hover {
@@ -800,5 +994,67 @@ const currentTotalInfo = computed(() => {
 
 .status-dot-muted {
   background: var(--theme-status-neutral, #94a3b8);
+}
+
+.token-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12));
+}
+
+.token-row:last-child {
+  border-bottom: none;
+}
+
+.token-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--theme-modal-text-muted, #94a3b8);
+  flex-shrink: 0;
+}
+
+.token-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--theme-modal-text, #e2e8f0);
+  text-align: right;
+  word-break: break-all;
+}
+
+.token-usage-bar-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12));
+}
+
+.token-usage-track {
+  height: 6px;
+  background: var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55));
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.token-usage-fill {
+  height: 100%;
+  background: var(--theme-modal-accent, #3b82f6);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+  min-width: 0;
+}
+
+.token-usage-percent {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--theme-modal-text-muted, #94a3b8);
+  text-align: center;
 }
 </style>

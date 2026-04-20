@@ -245,6 +245,7 @@ export interface LocaleMessages {
       lsp: string;
       plugins: string;
       skills: string;
+      token: string;
     };
     server: {
       status: string;
@@ -279,6 +280,23 @@ export interface LocaleMessages {
       total: string;
       noData: string;
       unsupported: string;
+    };
+    token: {
+      noSession: string;
+      noData: string;
+      model: string;
+      contextLimit: string;
+      totalTokens: string;
+      usagePercent: string;
+      inputTokens: string;
+      outputTokens: string;
+      reasoningTokens: string;
+      cacheTokens: string;
+      userMessages: string;
+      assistantMessages: string;
+      totalCost: string;
+      createdTime: string;
+      lastActivity: string;
     };
   };
   providerManager: {
