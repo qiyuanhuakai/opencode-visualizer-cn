@@ -695,8 +695,7 @@ const commandMatches = computed(() => {
   const query = slashQuery.value.trim().toLowerCase();
   const list = props.commands ?? [];
   const matches = list.filter((command) => command.name.toLowerCase().startsWith(query));
-  const limit = 8;
-  return matches.slice(0, limit);
+  return matches;
 });
 
 const commandPopupDismissed = ref(false);
@@ -721,6 +720,8 @@ const atQuery = computed(() => {
   const afterAt = textBeforeCursor.slice(lastAtIndex + 1);
   // If @ is followed by whitespace immediately, return empty
   if (afterAt.startsWith(' ') || afterAt.startsWith('\t') || afterAt.startsWith('\n')) return '';
+  // If afterAt contains any whitespace, the agent name is already complete
+  if (/\s/.test(afterAt)) return '';
   // Return the word after @ (up to whitespace or end)
   const match = afterAt.match(/^(\S*)/);
   return match?.[1] ?? '';
@@ -741,11 +742,9 @@ const agentMatches = computed(() => {
   // Check if @ is followed by whitespace (invalid @ context)
   const afterAt = textBeforeCursor.slice(lastAtIndex + 1);
   if (afterAt.startsWith(' ') || afterAt.startsWith('\t') || afterAt.startsWith('\n')) return [];
-  
-  // Check if there's a space after the agent name (agent already selected)
-  const textAfterCursor = value.slice(cursorPos);
-  if (textAfterCursor.startsWith(' ')) return [];
-  
+  // If afterAt contains whitespace, the agent name is already complete
+  if (/\s/.test(afterAt)) return [];
+
   const primaryAgents = props.agentOptions ?? [];
   const subagents = props.subagentOptions ?? [];
   const allAgents = [...primaryAgents, ...subagents];
