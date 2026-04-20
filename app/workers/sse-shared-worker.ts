@@ -60,8 +60,28 @@ type ConnectionState = {
 
 const connections = new Map<string, ConnectionState>();
 const portToKey = new Map<MessagePort, string>();
-let opencodeQueue: Promise<void> = Promise.resolve();
-const INITIAL_DIRECTORY_SESSION_LIMIT = 1;
+const OPENCODE_READ_CONCURRENCY = 8;
+let activeOpencodeReadTasks = 0;
+const pendingOpencodeReadResolvers: Array<() => void> = [];
+
+async function acquireOpencodeReadSlot() {
+  if (activeOpencodeReadTasks < OPENCODE_READ_CONCURRENCY) {
+    activeOpencodeReadTasks += 1;
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    pendingOpencodeReadResolvers.push(resolve);
+  });
+}
+
+function releaseOpencodeReadSlot() {
+  activeOpencodeReadTasks = Math.max(0, activeOpencodeReadTasks - 1);
+  const next = pendingOpencodeReadResolvers.shift();
+  if (!next) return;
+  activeOpencodeReadTasks += 1;
+  next();
+}
 
 function toKey(baseUrl: string, authorization?: string) {
   return `${baseUrl.replace(/\/+$/, '')}\u0000${authorization ?? ''}`;
@@ -567,17 +587,15 @@ function parseWorkerStatePacket(packet: SsePacket): WorkerStatePacket | null {
   }
 }
 
-function queueOpencodeTask<T>(state: ConnectionState, task: () => Promise<T>): Promise<T> {
-  const run = opencodeQueue.then(async () => {
+async function runOpencodeReadTask<T>(state: ConnectionState, task: () => Promise<T>): Promise<T> {
+  await acquireOpencodeReadSlot();
+  try {
     setBaseUrl(state.baseUrl);
     setAuthorization(state.authorization);
-    return task();
-  });
-  opencodeQueue = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  return run;
+    return await task();
+  } finally {
+    releaseOpencodeReadSlot();
+  }
 }
 
 function collectProjectDirectories(projects: Array<Record<string, unknown>>) {
@@ -624,12 +642,11 @@ async function loadDirectorySessions(
     return loadDirectorySessions(state, normalizedDirectory, mode);
   }
 
-  const promise = queueOpencodeTask(state, async () => {
+  const promise = runOpencodeReadTask(state, async () => {
     const [rawSessions, rawStatuses] = await Promise.all([
       listSessions({
         directory: normalizedDirectory,
         roots: true,
-        limit: mode === 'preview' ? INITIAL_DIRECTORY_SESSION_LIMIT : undefined,
       }),
       getSessionStatusMap(normalizedDirectory),
     ]);
@@ -686,7 +703,7 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
     return;
   }
 
-  const promise = queueOpencodeTask(state, async () => {
+  const promise = runOpencodeReadTask(state, async () => {
     const raw = await getVcsInfo(normalizedDirectory).catch(() => null);
     const vcsInfo = asRecord(raw);
     if (!vcsInfo) {
@@ -719,8 +736,8 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   await promise;
 }
 
-const BACKGROUND_HYDRATION_BATCH_SIZE = 5;
-const BACKGROUND_HYDRATION_DELAY_MS = 2000;
+const BACKGROUND_HYDRATION_BATCH_SIZE = 10;
+const BACKGROUND_HYDRATION_DELAY_MS = 250;
 
 function scheduleBackgroundHydration(state: ConnectionState, directories: string[]) {
   void (async () => {
@@ -736,8 +753,10 @@ function scheduleBackgroundHydration(state: ConnectionState, directories: string
         (directory) => normalizeDirectory(directory) === activeDirectory
       );
       if (activeDirExists) {
-        await loadDirectorySessions(state, activeDirectory, 'full').catch(() => {});
-        await loadDirectoryVcs(state, activeDirectory).catch(() => {});
+        await Promise.all([
+          loadDirectorySessions(state, activeDirectory, 'full').catch(() => {}),
+          loadDirectoryVcs(state, activeDirectory).catch(() => {}),
+        ]);
       }
     }
     
@@ -762,8 +781,10 @@ function scheduleBackgroundHydration(state: ConnectionState, directories: string
       await Promise.all(
         batch.map(async (directory) => {
           if (!connections.has(state.key)) return;
-          await loadDirectorySessions(state, directory, 'full').catch(() => {});
-          await loadDirectoryVcs(state, directory).catch(() => {});
+          await Promise.all([
+            loadDirectorySessions(state, directory, 'full').catch(() => {}),
+            loadDirectoryVcs(state, directory).catch(() => {}),
+          ]);
         })
       );
     }
@@ -846,7 +867,7 @@ async function resolveUnknownSessionDirectory(state: ConnectionState, info: Sess
   const directory = normalizeDirectory(info.directory);
   if (!directory) return;
 
-  const projectInfo = await queueOpencodeTask(state, async () => {
+  const projectInfo = await runOpencodeReadTask(state, async () => {
     const raw = await getCurrentProject(directory);
     return isProjectInfo(raw) ? raw : null;
   }).catch(() => null);
@@ -1023,25 +1044,35 @@ async function bootstrapState(state: ConnectionState): Promise<void> {
   }
 
   const builder = createStateBuilder();
-  const run = queueOpencodeTask(state, async () => {
+  const run = (async () => {
     state.isBootstrappingState = true;
-    const projects = asObjectArray<Record<string, unknown>>(await listProjects());
+    const projects = asObjectArray<Record<string, unknown>>(
+      await runOpencodeReadTask(state, () => listProjects()),
+    );
     const directories = collectProjectDirectories(projects);
 
     builder.applyProjects(projects as Parameters<typeof builder.applyProjects>[0]);
 
     await Promise.all(
       directories.map(async (directory) => {
-        const [sessions, statuses] = await Promise.all([
-          listSessions({
-            directory,
-            roots: true,
-            limit: INITIAL_DIRECTORY_SESSION_LIMIT,
-          }),
-          getSessionStatusMap(directory),
-        ]);
-        builder.applySessions(asObjectArray(sessions) as Parameters<typeof builder.applySessions>[0]);
+        const [sessions, statuses, vcsInfo] = await runOpencodeReadTask(state, () =>
+          Promise.all([
+            listSessions({
+              directory,
+              roots: true,
+            }),
+            getSessionStatusMap(directory),
+            getVcsInfo(directory).catch(() => null),
+          ]),
+        );
+        builder.applySessions(
+          asObjectArray(sessions) as Parameters<typeof builder.applySessions>[0],
+        );
         builder.applyStatuses(asStatusMap(statuses));
+        const branch = asString(asRecord(vcsInfo)?.branch);
+        if (branch) {
+          builder.applyVcsInfo(directory, { branch });
+        }
       }),
     );
 
@@ -1049,9 +1080,9 @@ async function bootstrapState(state: ConnectionState): Promise<void> {
     state.stateBuilder = builder;
     state.sessionHydrationLevelByDirectory.clear();
     directories.forEach((directory) => {
-      state.sessionHydrationLevelByDirectory.set(normalizeDirectory(directory), 'preview');
+      state.sessionHydrationLevelByDirectory.set(normalizeDirectory(directory), 'full');
     });
-    state.vcsHydratedDirectories.clear();
+    state.vcsHydratedDirectories = new Set(directories.map((directory) => normalizeDirectory(directory)));
 
     broadcast(state, {
       type: 'state.bootstrap',
@@ -1067,7 +1098,7 @@ async function bootstrapState(state: ConnectionState): Promise<void> {
     }
 
     scheduleBackgroundHydration(state, directories);
-  });
+  })();
 
   const bootstrapPromise = run.finally(() => {
     state.isBootstrappingState = false;

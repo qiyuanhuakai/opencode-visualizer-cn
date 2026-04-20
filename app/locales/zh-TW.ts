@@ -62,6 +62,7 @@ const messages: LocaleMessages = {
       sessionDeleteFailed: '刪除工作階段失敗: {message}',
       sessionArchiveFailed: '封存工作階段失敗: {message}',
       sessionUnarchiveFailed: '取消封存工作階段失敗: {message}',
+      sessionRenameFailed: '工作階段重新命名失敗: {message}',
       sessionPinFailed: '置頂工作階段失敗: {message}',
       sessionUnpinFailed: '取消置頂工作階段失敗: {message}',
       sessionForkFailed: '分支工作階段失敗: {message}',
@@ -102,6 +103,7 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: '無法連線到 SSE 串流。',
+      sessionRenameInvalidResponse: '工作階段重新命名回傳了無效回應。',
     },
     descriptions: {
       openLocalShell: '開啟本機 Shell 工作階段。',
@@ -116,6 +118,7 @@ const messages: LocaleMessages = {
       deletingSession: '刪除工作階段',
       archivingSession: '封存工作階段',
       unarchivingSession: '取消封存工作階段',
+      renamingSession: '重新命名工作階段',
       pinningSession: '置頂工作階段',
       unpinningSession: '取消置頂工作階段',
       batchSessionOperation: '批次工作階段操作',
@@ -207,6 +210,7 @@ const messages: LocaleMessages = {
       unarchive: '取消封存工作階段',
       archive: '封存工作階段 (按住 Shift 鍵可永久刪除)',
       deletePermanently: '永久刪除工作階段',
+      rename: '重新命名工作階段',
       select: '選擇工作階段',
       unselect: '取消選擇工作階段',
     },
@@ -353,7 +357,7 @@ const messages: LocaleMessages = {
   sidePanel: {
     tabs: {
       todo: '待辦',
-      session: '工作階段',
+      session: '工作階段樹',
       tree: '檔案樹',
     },
     expandPanel: '展開側邊欄',
@@ -362,6 +366,14 @@ const messages: LocaleMessages = {
       title: '工作階段',
       noPinned: '暫無置頂工作階段',
       unpin: '取消置頂工作階段',
+      sessionTree: {
+        pinProject: '置頂專案',
+        unpinProject: '取消置頂專案',
+        pinSandbox: '置頂沙盒',
+        unpinSandbox: '取消置頂沙盒',
+        pinSession: '置頂工作階段',
+        unpinSession: '取消置頂工作階段',
+      },
     },
     todo: {
       title: '待辦',
@@ -493,10 +505,6 @@ const messages: LocaleMessages = {
     showMinimizeButtons: {
       label: '顯示最小化按鈕',
       description: '切換視窗最小化控制。關閉此選項也會還原所有最小化的視窗。',
-    },
-    pinnedSessionsLimit: {
-      label: '置頂工作階段限制',
-      description: '最多保留 {limit} 個本機置頂工作階段；最早的置頂項目會首先被刪除。',
     },
     terminalFontFamily: {
       label: '終端機字型族',

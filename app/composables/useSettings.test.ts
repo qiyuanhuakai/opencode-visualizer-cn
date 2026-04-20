@@ -44,7 +44,6 @@ describe('useSettings', () => {
     expect(settings.enterToSend.value).toBe(false);
     expect(settings.showMinimizeButtons.value).toBe(true);
     expect(settings.dockAlwaysOpen.value).toBe(false);
-    expect(settings.pinnedSessionsLimit.value).toBe(30);
     expect(settings.terminalFontFamily.value).toBe(settings.defaultTerminalFontFamily);
     expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
     expect(settings.terminalFontSizePx.value).toBe(13);
@@ -54,7 +53,6 @@ describe('useSettings', () => {
   it('reads persisted values from storage on load', async () => {
     storage.setItem('opencode.settings.enterToSend.v1', 'true');
     storage.setItem('opencode.settings.showMinimizeButtons.v1', 'false');
-    storage.setItem('opencode.settings.pinnedSessionsLimit.v1', '50');
     storage.setItem('opencode.settings.terminalFontFamily.v1', 'Test Terminal Font, monospace');
     storage.setItem('opencode.settings.appMonospaceFontFamily.v1', 'Test App Font, monospace');
     storage.setItem('opencode.settings.terminalFontSizePx.v1', '16');
@@ -63,7 +61,6 @@ describe('useSettings', () => {
     const settings = await importFresh();
     expect(settings.enterToSend.value).toBe(true);
     expect(settings.showMinimizeButtons.value).toBe(false);
-    expect(settings.pinnedSessionsLimit.value).toBe(50);
     expect(settings.terminalFontFamily.value).toBe('Test Terminal Font, monospace');
     expect(settings.appMonospaceFontFamily.value).toBe('Test App Font, monospace');
     expect(settings.terminalFontSizePx.value).toBe(16);
@@ -77,19 +74,6 @@ describe('useSettings', () => {
     expect(storage.getItem('opencode.settings.enterToSend.v1')).toBe('true');
   });
 
-  it('does not auto-clamp pinnedSessionsLimit during editing', async () => {
-    const settings = await importFresh();
-    settings.pinnedSessionsLimit.value = 300;
-    await new Promise((r) => setTimeout(r, 10));
-    expect(settings.pinnedSessionsLimit.value).toBe(300);
-    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('300');
-
-    settings.pinnedSessionsLimit.value = 0;
-    await new Promise((r) => setTimeout(r, 10));
-    expect(settings.pinnedSessionsLimit.value).toBe(0);
-    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('0');
-  });
-
   it('resets dockAlwaysOpen when showMinimizeButtons is disabled', async () => {
     const settings = await importFresh();
     settings.dockAlwaysOpen.value = true;
@@ -97,16 +81,6 @@ describe('useSettings', () => {
     settings.showMinimizeButtons.value = false;
     await new Promise((r) => setTimeout(r, 10));
     expect(settings.dockAlwaysOpen.value).toBe(false);
-  });
-
-  it('reacts to external storage events for pinnedSessionsLimit', async () => {
-    const settings = await importFresh();
-    const event = {
-      key: 'opencode.settings.pinnedSessionsLimit.v1',
-      newValue: '80',
-    } as unknown as StorageEvent;
-    for (const listener of storageListeners) listener(event);
-    expect(settings.pinnedSessionsLimit.value).toBe(80);
   });
 
   it('reacts to external storage events for font families', async () => {
@@ -152,23 +126,8 @@ describe('useSettings', () => {
     expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
   });
 
-  it('uses default limit when storage event clears the key', async () => {
+  it('does not auto-clamp openInEditorMaxSizeMb during editing', async () => {
     const settings = await importFresh();
-    const event = {
-      key: 'opencode.settings.pinnedSessionsLimit.v1',
-      newValue: null,
-    } as unknown as StorageEvent;
-    for (const listener of storageListeners) listener(event);
-    expect(settings.pinnedSessionsLimit.value).toBe(30);
-  });
-
-  it('does not auto-clamp pinnedSessionsLimit or openInEditorMaxSizeMb during editing', async () => {
-    const settings = await importFresh();
-    settings.pinnedSessionsLimit.value = 300;
-    await new Promise((r) => setTimeout(r, 10));
-    expect(settings.pinnedSessionsLimit.value).toBe(300);
-    expect(storage.getItem('opencode.settings.pinnedSessionsLimit.v1')).toBe('300');
-
     settings.openInEditorMaxSizeMb.value = 0;
     await new Promise((r) => setTimeout(r, 10));
     expect(settings.openInEditorMaxSizeMb.value).toBe(0);

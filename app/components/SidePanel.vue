@@ -36,48 +36,22 @@
       <div v-show="activeTab === 'session'" class="session-body">
         <div class="session-header">
           <div class="session-title">{{ $t('sidePanel.session.title') }}</div>
-          <div class="session-count">{{ pinnedSessions.length }}</div>
+          <div class="session-count">{{ sessionTreeSessionCount }}</div>
         </div>
-        <div v-if="pinnedSessions.length === 0" class="session-empty">{{ $t('sidePanel.session.noPinned') }}</div>
-        <ul v-else class="session-list">
-          <li
-            v-for="session in pinnedSessions"
-            :key="`${session.projectId}:${session.sessionId}`"
-            class="session-item"
-            :class="{ 'is-active': selectedSessionId === session.sessionId }"
-          >
-            <div class="session-card">
-              <button
-                type="button"
-                class="session-select"
-                :title="session.directory"
-                @click="
-                  emit('select-session', {
-                    projectId: session.projectId,
-                    sessionId: session.sessionId,
-                  })
-                "
-              >
-                <span class="session-name">{{ session.title }}</span>
-                <span class="session-meta">{{ session.projectName }} · {{ session.branch }}</span>
-              </button>
-              <button
-                type="button"
-                class="session-unpin"
-                :title="$t('sidePanel.session.unpin')"
-                @click="
-                  emit('unpin-session', {
-                    sessionId: session.sessionId,
-                    projectId: session.projectId,
-                    directory: session.directory,
-                  })
-                "
-              >
-                <Icon icon="lucide:pin-off" width="14" height="14" />
-              </button>
-            </div>
-          </li>
-        </ul>
+        <SessionTree
+          :projects="sessionTreeData"
+          :expanded-paths="sessionTreeExpandedPaths"
+          :selected-session-id="selectedSessionId"
+        @toggle-expand="(path) => emit('toggle-expand', path)"
+        @select-session="(payload) => emit('select-session', payload)"
+        @pin-project="(projectId) => emit('pin-project', projectId)"
+        @unpin-project="(projectId) => emit('unpin-project', projectId)"
+        @pin-sandbox="(payload) => emit('pin-sandbox', payload)"
+        @unpin-sandbox="(payload) => emit('unpin-sandbox', payload)"
+        @pin-session="(payload) => emit('pin-session', payload)"
+        @unpin-session="(payload) => emit('unpin-session', payload)"
+        @reload="emit('reload')"
+      />
       </div>
       <TreeView
         v-show="activeTab === 'tree'"
@@ -109,7 +83,9 @@
 import { computed, toRefs } from 'vue';
 import { Icon } from '@iconify/vue';
 import TodoList from './TodoList.vue';
+import SessionTree from './SessionTree.vue';
 import type { BranchEntry } from '../types/git';
+import type { SessionTreeData } from '../types/session-tree';
 import TreeView, {
   type GitBranchInfo,
   type GitDiffStats,
@@ -132,21 +108,13 @@ type TodoPanelSession = {
   error: string | undefined;
 };
 
-type SessionPanelItem = {
-  sessionId: string;
-  projectId: string;
-  directory: string;
-  title: string;
-  projectName: string;
-  branch: string;
-};
-
 const props = defineProps<{
   collapsed: boolean;
   activeTab: 'todo' | 'session' | 'tree';
   selectedSessionId: string;
   todoSessions: TodoPanelSession[];
-  pinnedSessions: SessionPanelItem[];
+  sessionTreeData: SessionTreeData;
+  sessionTreeExpandedPaths: string[];
   treeNodes: TreeNode[];
   expandedTreePaths: string[];
   selectedTreePath?: string;
@@ -166,7 +134,14 @@ const emit = defineEmits<{
   (event: 'toggle-collapse'): void;
   (event: 'change-tab', value: 'todo' | 'session' | 'tree'): void;
   (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
-  (event: 'unpin-session', payload: { sessionId: string; projectId: string; directory: string }): void;
+  (event: 'toggle-expand', path: string): void;
+  (event: 'pin-project', projectId: string): void;
+  (event: 'unpin-project', projectId: string): void;
+  (event: 'pin-sandbox', payload: { projectId: string; directory: string }): void;
+  (event: 'unpin-sandbox', payload: { projectId: string; directory: string }): void;
+  (event: 'pin-session', payload: { projectId: string; sessionId: string }): void;
+  (event: 'unpin-session', payload: { projectId: string; sessionId: string }): void;
+  (event: 'reload'): void;
   (event: 'toggle-dir', path: string): void;
   (event: 'select-file', path: string): void;
   (event: 'open-diff', payload: { path: string; staged: boolean }): void;
@@ -185,12 +160,25 @@ const tabs = computed(() => [
   { id: 'tree' as const, label: t('sidePanel.tabs.tree') },
 ]);
 
+const sessionTreeSessionCount = computed(() => {
+  return props.sessionTreeData.reduce(
+    (count, project) =>
+      count +
+      project.sandboxes.reduce(
+        (sCount, sandbox) => sCount + sandbox.sessions.length,
+        0,
+      ),
+    0,
+  );
+});
+
 const {
   collapsed,
   activeTab,
   selectedSessionId,
   todoSessions,
-  pinnedSessions,
+  sessionTreeData,
+  sessionTreeExpandedPaths,
   treeNodes,
   expandedTreePaths,
   selectedTreePath,
@@ -307,96 +295,6 @@ const {
 .session-count {
   font-size: 11px;
   color: var(--theme-side-text-muted, #94a3b8);
-}
-
-.session-empty {
-  margin: auto;
-  color: var(--theme-empty-state-text, var(--theme-side-text-muted, rgba(148, 163, 184, 0.9)));
-  font-size: var(--ui-font-size, 12px);
-}
-
-.session-list {
-  list-style: none;
-  margin: 0;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  overflow: auto;
-}
-
-.session-item {
-  display: flex;
-  align-items: stretch;
-}
-
-.session-card {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: stretch;
-  border: 1px solid var(--theme-card-border, var(--theme-side-border, rgba(71, 85, 105, 0.5)));
-  border-radius: 8px;
-  background: var(--theme-card-bg, var(--theme-side-control-bg, rgba(15, 23, 42, 0.6)));
-  overflow: hidden;
-}
-
-.session-item.is-active .session-card {
-  border-color: var(--theme-card-border, var(--theme-side-accent, rgba(96, 165, 250, 0.6)));
-  background: var(--theme-card-active-bg, var(--theme-side-active-bg, rgba(30, 64, 175, 0.25)));
-}
-
-.session-card:hover {
-  background: var(--theme-card-hover-bg, var(--theme-side-active-bg, rgba(30, 41, 59, 0.78)));
-}
-
-.session-select {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  color: var(--theme-side-text, #e2e8f0);
-  text-align: left;
-  padding: 7px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  cursor: pointer;
-}
-
-.session-name {
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-meta {
-  min-width: 0;
-  font-size: 10px;
-  color: var(--theme-side-text-muted, #94a3b8);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-unpin {
-  flex: 0 0 auto;
-  width: 30px;
-  border: none;
-  background: transparent;
-  color: #fbbf24;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: background 0.15s ease;
-}
-
-.session-unpin:hover {
-  background: var(--theme-side-active-bg, rgba(30, 41, 59, 0.5));
 }
 
 .side-toggle-inline {
