@@ -175,20 +175,6 @@
                     <button
                       v-if="worktree.projectId && worktree.projectId !== 'global'"
                       type="button"
-                      class="tree-action-button worktree-settings"
-                      :title="$t('topPanel.projectSettings')"
-                      @click.stop="
-                        $emit('edit-project', {
-                          projectId: worktree.projectId,
-                          worktree: worktree.directory,
-                        })
-                      "
-                    >
-                      <Icon icon="lucide:settings" :width="14" :height="14" />
-                    </button>
-                    <button
-                      v-if="worktree.projectId && worktree.projectId !== 'global'"
-                      type="button"
                       class="tree-action-button"
                       :class="worktree.isPinned ? 'pinned' : 'pin'"
                       :title="worktree.isPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
@@ -203,6 +189,20 @@
                         :width="14"
                         :height="14"
                       />
+                    </button>
+                    <button
+                      v-if="worktree.projectId && worktree.projectId !== 'global'"
+                      type="button"
+                      class="tree-action-button worktree-settings"
+                      :title="$t('topPanel.projectSettings')"
+                      @click.stop="
+                        $emit('edit-project', {
+                          projectId: worktree.projectId,
+                          worktree: worktree.directory,
+                        })
+                      "
+                    >
+                      <Icon icon="lucide:settings" :width="14" :height="14" />
                     </button>
                   </div>
 
@@ -249,17 +249,6 @@
                           <Icon icon="lucide:git-branch-plus" :width="16" :height="16" />
                         </button>
                         <button
-                          v-if="
-                            canDeleteSandbox(sandbox.directory, worktree.directory) &&
-                            worktree.projectId !== 'global'
-                          "
-                          type="button"
-                          class="tree-action-button danger"
-                          @click.stop="handleSandboxDelete(worktree.projectId, worktree.directory, sandbox.directory, close)"
-                        >
-                          <Icon icon="lucide:trash-2" :width="16" :height="16" />
-                        </button>
-                        <button
                           v-if="worktree.projectId !== 'global'"
                           type="button"
                           class="tree-action-button"
@@ -276,6 +265,17 @@
                             :width="14"
                             :height="14"
                           />
+                        </button>
+                        <button
+                          v-if="
+                            canDeleteSandbox(sandbox.directory, worktree.directory) &&
+                            worktree.projectId !== 'global'
+                          "
+                          type="button"
+                          class="tree-action-button danger"
+                          @click.stop="handleSandboxDelete(worktree.projectId, worktree.directory, sandbox.directory, close)"
+                        >
+                          <Icon icon="lucide:trash-2" :width="16" :height="16" />
                         </button>
                       </div>
                     </div>
@@ -1468,7 +1468,7 @@ function handleOpenDirectory(close: () => void) {
 /* Session rows: wrapper provides indentation via :deep() */
 .tree-session-row :deep(.ui-dropdown-item) {
   margin: 0 8px;
-  padding: 6px 8px 6px 40px;
+  padding: 6px 0 6px 40px;
   border: 1px solid transparent;
   border-radius: 8px;
   box-sizing: border-box;
