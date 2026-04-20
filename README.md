@@ -34,7 +34,7 @@
 | **国际化 (i18n)** | 完整 i18n 框架支持，支持简体中文、繁体中文、日语、世界语 | ✅ 已上线 |
 | **字体管理** | 支持设置 Shell 字体、界面等宽字体，支持设置终端/代码/消息/UI 字体大小，系统字体自动发现 | 🅱️ Beta |
 | **供应商与模型管理** | 查看/启用/禁用本地模型和供应商 | 🅱️ Beta |
-| **状态监控** | 查看服务器、MCP、LSP、Plugin、Skills 状态，支持关闭 MCP 连接 | ✅ 已上线 |
+| **状态监控** | 查看服务器、MCP、LSP、Plugin、Skills 状态；支持关闭 MCP 连接；实时显示当前会话 Token 消耗（上下文限制、输入/输出/推理 Token、使用率进度条） | ✅ 已上线 |
 | **主题设置** | 自定义各卡片不同组件颜色 | 🅱️ Beta |
 | **编辑器集成** | 使用系统 `$EDITOR` 打开文本文件 | ✅ 已上线 |
 | **代码行评论** | 鼠标拖拽选择范围，评价并附加到输入框 | ✅ 已上线 |
@@ -223,7 +223,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Internationalization (i18n)** | Full i18n framework supporting English, Simplified Chinese, Traditional Chinese, Japanese, and Esperanto | ✅ Available |
 | **Font Management** | Shell font, UI monospace font, system font auto-discovery | 🅱️ Beta |
 | **Provider & Model Management** | View/enable/disable local models and providers | 🅱️ Beta |
-| **Status Monitor** | View server, MCP, LSP, Plugin, Skills status; close MCP connections | ✅ Available |
+| **Status Monitor** | View server, MCP, LSP, Plugin, Skills status; close MCP connections; real-time session token usage (context limit, input/output/reasoning tokens, usage progress bar) | ✅ Available |
 | **Theme Settings** | Customize colors for different card components | 🅱️ Beta |
 | **Editor Integration** | Open text files with system `$EDITOR` | ✅ Available |
 | **Code Line Comment** | Drag to select range and append comment to input | ✅ Available |

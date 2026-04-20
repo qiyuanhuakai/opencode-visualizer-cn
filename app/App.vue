@@ -316,7 +316,7 @@
       @update-hidden-models="handleModelVisibilityUpdate"
       @update-provider-config="handleProviderConfigUpdated"
     />
-    <StatusMonitorModal :open="isStatusMonitorOpen" @close="isStatusMonitorOpen = false" />
+    <StatusMonitorModal :open="isStatusMonitorOpen" :session-id="selectedSessionId" @close="isStatusMonitorOpen = false" />
     <ProjectSettingsDialog
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
