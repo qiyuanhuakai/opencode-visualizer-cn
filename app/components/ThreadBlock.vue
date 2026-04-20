@@ -112,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, Transition } from 'vue';
+import { computed, inject, Transition } from 'vue';
 import { useI18n } from 'vue-i18n';
 import MessageViewer from './MessageViewer.vue';
 import ThreadFooter from './ThreadFooter.vue';
@@ -133,6 +133,7 @@ import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
 
 const { t } = useI18n();
+const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const HISTORY_TOOL_NAMES = new Set(['bash', 'write', 'edit', 'multiedit', 'apply_patch']);
 
@@ -423,22 +424,25 @@ function canRevertThread(root: MessageInfo): boolean {
   return root.role === 'user' && Boolean(root.sessionID);
 }
 
-function confirmFork() {
+async function confirmFork() {
   const root = props.root;
   if (root.role !== 'user' || !root.sessionID || !root.id) return;
-  if (!window.confirm(t('threadBlock.confirmFork'))) return;
+  const confirmed = showConfirm ? await showConfirm(t('threadBlock.confirmFork')) : true;
+  if (!confirmed) return;
   emit('fork-message', { sessionId: root.sessionID, messageId: root.id });
 }
 
-function confirmRevert(root: MessageInfo) {
+async function confirmRevert(root: MessageInfo) {
   if (root.role !== 'user' || !root.sessionID || !root.id) return;
-  if (!window.confirm(t('threadBlock.confirmRevert'))) return;
+  const confirmed = showConfirm ? await showConfirm(t('threadBlock.confirmRevert')) : true;
+  if (!confirmed) return;
   emit('revert-message', { sessionId: root.sessionID, messageId: root.id });
 }
 
-function confirmUndoRevert() {
+async function confirmUndoRevert() {
   if (!props.sessionRevert) return;
-  if (!window.confirm(t('threadBlock.confirmUndoRevert'))) return;
+  const confirmed = showConfirm ? await showConfirm(t('threadBlock.confirmUndoRevert')) : true;
+  if (!confirmed) return;
   emit('undo-revert');
 }
 

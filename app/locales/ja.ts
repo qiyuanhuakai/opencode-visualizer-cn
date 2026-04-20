@@ -166,6 +166,8 @@ const messages: LocaleMessages = {
     },
     prompt: {
       editMessage: 'メッセージを編集',
+      cancel: 'キャンセル',
+      confirm: '確認',
     },
   },
   topPanel: {

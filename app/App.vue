@@ -340,6 +340,52 @@
       @close="editingProject = null"
       @save="handleSaveProject"
     />
+    <dialog
+      ref="promptDialogRef"
+      class="prompt-dialog-backdrop"
+      @close="handlePromptClose"
+      @cancel.prevent
+      @click.self="promptDialogRef?.close()"
+    >
+      <div class="prompt-dialog">
+        <div class="prompt-dialog-title">{{ promptTitle }}</div>
+        <input
+          ref="promptInputRef"
+          v-model="promptValue"
+          type="text"
+          class="prompt-dialog-input"
+          @keydown.enter.prevent="handlePromptConfirm"
+          @keydown.esc.prevent="promptDialogRef?.close()"
+        />
+        <div class="prompt-dialog-actions">
+          <button type="button" class="prompt-dialog-btn prompt-dialog-btn-cancel" @click="promptDialogRef?.close()">
+            {{ t('app.prompt.cancel') }}
+          </button>
+          <button type="button" class="prompt-dialog-btn prompt-dialog-btn-confirm" @click="handlePromptConfirm">
+            {{ t('app.prompt.confirm') }}
+          </button>
+        </div>
+      </div>
+    </dialog>
+    <dialog
+      ref="confirmDialogRef"
+      class="confirm-dialog-backdrop"
+      @close="handleConfirmClose"
+      @cancel.prevent
+      @click.self="confirmDialogRef?.close()"
+    >
+      <div class="confirm-dialog">
+        <div class="confirm-dialog-message">{{ confirmMessage }}</div>
+        <div class="confirm-dialog-actions">
+          <button type="button" class="confirm-dialog-btn confirm-dialog-btn-cancel" @click="confirmDialogRef?.close()">
+            {{ t('app.prompt.cancel') }}
+          </button>
+          <button type="button" class="confirm-dialog-btn confirm-dialog-btn-confirm" @click="handleConfirmAccept">
+            {{ t('app.prompt.confirm') }}
+          </button>
+        </div>
+      </div>
+    </dialog>
   </div>
 </template>
 
@@ -1245,6 +1291,71 @@ const editingProjectMeta = computed(() => {
 const isSettingsOpen = ref(false);
 const isProviderManagerOpen = ref(false);
 const isStatusMonitorOpen = ref(false);
+
+const promptDialogRef = ref<HTMLDialogElement | null>(null);
+const promptInputRef = ref<HTMLInputElement | null>(null);
+const promptValue = ref('');
+const promptTitle = ref('');
+let promptResolve: ((value: string | null) => void) | null = null;
+
+async function showPrompt(title: string, defaultValue = ''): Promise<string | null> {
+  promptTitle.value = title;
+  promptValue.value = defaultValue;
+  promptResolve = null;
+  return new Promise((resolve) => {
+    promptResolve = resolve;
+    promptDialogRef.value?.showModal();
+    nextTick(() => {
+      promptInputRef.value?.focus();
+      promptInputRef.value?.select();
+    });
+  });
+}
+
+function handlePromptConfirm() {
+  const value = promptValue.value;
+  promptDialogRef.value?.close();
+  promptResolve?.(value);
+  promptResolve = null;
+}
+
+function handlePromptClose() {
+  if (promptResolve) {
+    promptResolve(null);
+    promptResolve = null;
+  }
+}
+
+const confirmDialogRef = ref<HTMLDialogElement | null>(null);
+const confirmMessage = ref('');
+let confirmResolve: ((value: boolean) => void) | null = null;
+
+async function showConfirm(message: string): Promise<boolean> {
+  confirmMessage.value = message;
+  confirmResolve = null;
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    confirmDialogRef.value?.showModal();
+  });
+}
+
+function handleConfirmAccept() {
+  confirmDialogRef.value?.close();
+  confirmResolve?.(true);
+  confirmResolve = null;
+}
+
+function handleConfirmClose() {
+  if (confirmResolve) {
+    confirmResolve(false);
+    confirmResolve = null;
+  }
+}
+
+import { provide } from 'vue';
+provide('showPrompt', showPrompt);
+provide('showConfirm', showConfirm);
+
 const selectedMode = ref('build');
 const selectedModel = ref('');
 const selectedThinking = ref<string | undefined>(undefined);
@@ -3649,7 +3760,7 @@ async function renameSession(sessionId: string, hints?: { projectId?: string; di
       resolved?.session.title?.trim() ||
       resolved?.session.slug?.trim() ||
       sessionId;
-    const nextTitle = window.prompt(t('topPanel.sessionActions.rename'), currentTitle);
+    const nextTitle = await showPrompt(t('topPanel.sessionActions.rename'), currentTitle);
     if (nextTitle === null) return;
     const trimmedTitle = nextTitle.trim();
     if (!trimmedTitle || trimmedTitle === currentTitle) return;
@@ -6900,8 +7011,8 @@ function handleOpenImage(payload: { url: string; filename: string }) {
 async function handleEditMessage(payload: { sessionId: string; part: MessagePart }) {
   const directory = activeDirectory.value.trim();
   if (payload.part.type !== 'text') return;
-  const nextText = window.prompt(t('app.prompt.editMessage'), payload.part.text);
-  if (nextText === null) return;
+    const nextText = await showPrompt(t('app.prompt.editMessage'), payload.part.text);
+    if (nextText === null) return;
   const trimmed = nextText.trimEnd();
   if (!trimmed) return;
   if (trimmed === payload.part.text) return;
@@ -8061,5 +8172,173 @@ body {
   opacity: 0;
   --win-scale-x: 1.5;
   --win-scale-y: 0;
+}
+
+.prompt-dialog-backdrop {
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: inherit;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.prompt-dialog-backdrop:not([open]) {
+  display: none;
+}
+
+.prompt-dialog-backdrop::backdrop {
+  background: var(--theme-surface-overlay, rgba(2, 6, 23, 0.65));
+}
+
+.prompt-dialog {
+  width: min(420px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  background: var(--theme-modal-bg, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.98)));
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border-radius: 12px;
+  box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  font-family: var(--app-monospace-font-family);
+}
+
+.prompt-dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.prompt-dialog-input {
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  background: var(--theme-modal-control-bg, var(--theme-surface-panel, #0f172a));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.prompt-dialog-input:focus {
+  border-color: var(--theme-form-control-focus-border, var(--theme-accent-primary, #60a5fa));
+}
+
+.prompt-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.prompt-dialog-btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  background: var(--theme-modal-control-bg, transparent);
+  color: var(--theme-modal-text, var(--theme-text-muted, #94a3b8));
+}
+
+.prompt-dialog-btn:hover {
+  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.prompt-dialog-btn-confirm {
+  color: var(--theme-accent-primary, #60a5fa);
+}
+
+.prompt-dialog-btn-confirm:hover {
+  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
+  color: var(--theme-accent-primary, #60a5fa);
+}
+
+.confirm-dialog-backdrop {
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  color: inherit;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.confirm-dialog-backdrop:not([open]) {
+  display: none;
+}
+
+.confirm-dialog-backdrop::backdrop {
+  background: var(--theme-surface-overlay, rgba(2, 6, 23, 0.65));
+}
+
+.confirm-dialog {
+  width: min(400px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 20px;
+  background: var(--theme-modal-bg, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.98)));
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border-radius: 12px;
+  box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  font-family: var(--app-monospace-font-family);
+}
+
+.confirm-dialog-message {
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.confirm-dialog-btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  background: var(--theme-modal-control-bg, transparent);
+  color: var(--theme-modal-text, var(--theme-text-muted, #94a3b8));
+}
+
+.confirm-dialog-btn:hover {
+  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.confirm-dialog-btn-confirm {
+  color: var(--theme-accent-primary, #60a5fa);
+}
+
+.confirm-dialog-btn-confirm:hover {
+  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
+  color: var(--theme-accent-primary, #60a5fa);
 }
 </style>

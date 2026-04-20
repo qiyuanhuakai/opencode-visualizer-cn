@@ -298,6 +298,7 @@ function handlePointerDown(event: PointerEvent) {
   if (root.value.contains(event.target as Node)) return;
   const menuEl = menu.value;
   if (menuEl && menuEl.contains(event.target as Node)) return;
+  if ((event.target as Element)?.closest('dialog[open]')) return;
   close();
 }
 

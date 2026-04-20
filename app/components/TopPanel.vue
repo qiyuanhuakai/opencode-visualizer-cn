@@ -551,7 +551,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount, onMounted } from 'vue';
+import { computed, ref, watch, onBeforeUnmount, onMounted, inject } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import Dropdown from './Dropdown.vue';
@@ -563,6 +563,7 @@ declare const __GIT_REVISION__: string;
 const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
 const { t } = useI18n();
 const { suppressAutoWindows } = useSettings();
+const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const regionStyle = computed(() => undefined);
 
@@ -1016,16 +1017,14 @@ function handleUnpinSandbox(projectId: string | undefined, directory: string) {
   emit('unpin-sandbox', { projectId, directory });
 }
 
-function handleSandboxDelete(
+async function handleSandboxDelete(
   projectId: string | undefined,
   worktree: string,
   directory: string,
   close?: () => void,
 ) {
-  if (typeof window !== 'undefined') {
-    const confirmed = window.confirm(t('topPanel.confirm.deleteWorktree', { directory }));
-    if (!confirmed) return;
-  }
+  const confirmed = showConfirm ? await showConfirm(t('topPanel.confirm.deleteWorktree', { directory })) : true;
+  if (!confirmed) return;
   emit('delete-active-directory', {
     projectId,
     worktree,
@@ -1034,18 +1033,16 @@ function handleSandboxDelete(
   close?.();
 }
 
-function handleSessionDelete(sessionId: string, close?: () => void) {
-  if (typeof window !== 'undefined') {
-    const confirmed = window.confirm(t('topPanel.confirm.deleteSession'));
-    if (!confirmed) return;
-  }
+async function handleSessionDelete(sessionId: string, close?: () => void) {
+  const confirmed = showConfirm ? await showConfirm(t('topPanel.confirm.deleteSession')) : true;
+  if (!confirmed) return;
   emit('delete-session', sessionId);
   close?.();
 }
 
-function handleSessionAction(sessionId: string, close?: () => void) {
+async function handleSessionAction(sessionId: string, close?: () => void) {
   if (isShiftPressed.value) {
-    handleSessionDelete(sessionId, close);
+    await handleSessionDelete(sessionId, close);
     return;
   }
   emit('archive-session', sessionId);
@@ -1113,12 +1110,12 @@ function toggleManagementMode() {
   }
 }
 
-function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload['action']) {
+async function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload['action']) {
   const sessions = batchSessionTargetsByAction.value[action];
   if (sessions.length === 0) return;
 
-  if (action === 'delete' && typeof window !== 'undefined') {
-    const confirmed = window.confirm(t('topPanel.confirm.deleteSessions', { count: sessions.length }));
+  if (action === 'delete') {
+    const confirmed = showConfirm ? await showConfirm(t('topPanel.confirm.deleteSessions', { count: sessions.length })) : true;
     if (!confirmed) return;
   }
 

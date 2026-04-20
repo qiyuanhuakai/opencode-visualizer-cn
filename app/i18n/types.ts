@@ -165,6 +165,8 @@ export interface LocaleMessages {
     };
     prompt: {
       editMessage: string;
+      cancel: string;
+      confirm: string;
     };
   };
   topPanel: {

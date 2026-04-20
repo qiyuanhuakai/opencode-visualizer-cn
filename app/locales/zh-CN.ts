@@ -166,6 +166,8 @@ const messages: LocaleMessages = {
     },
     prompt: {
       editMessage: '编辑消息',
+      cancel: '取消',
+      confirm: '确认',
     },
   },
   topPanel: {

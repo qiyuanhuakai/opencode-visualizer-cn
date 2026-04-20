@@ -166,6 +166,8 @@ const messages: LocaleMessages = {
     },
     prompt: {
       editMessage: 'Edit message',
+      cancel: 'Cancel',
+      confirm: 'Confirm',
     },
   },
   topPanel: {
