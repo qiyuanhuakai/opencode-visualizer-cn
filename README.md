@@ -38,9 +38,10 @@
 | **主题设置** | 自定义各卡片不同组件颜色 | 🅱️ Beta |
 | **编辑器集成** | 使用系统 `$EDITOR` 打开文本文件 | ✅ 已上线 |
 | **代码行评论** | 鼠标拖拽选择范围，评价并附加到输入框 | ✅ 已上线 |
-| **会话 Pin** | 侧栏增加 Sessions 栏，Pin 常用会话 | ✅ 已上线 |
+| **会话树管理** | 侧栏增加会话树栏，基于项目-沙盒-会话的三层级进行会话置顶 | ✅ 已上线 |
 | **批量管理** | 顶栏 Management 按钮，多选 Session 操作 | ✅ 已上线 |
 | **取消归档** | 找回已归档的 Session | ✅ 已上线 |
+| **会话重命名** | 重命名 Session | ✅ 已上线 |
 | **悬浮窗管理** | 全面覆盖的关闭/最小化按钮，底部 Dock 栏存放最小化窗口 | ✅ 已上线 |
 | **悬浮窗预览自动换行** | 在设置中开启/关闭，防止长行代码影响阅读（文件预览、diff 等） | ✅ 已上线 |
 | **快捷命令** | 支持 `@` 显式召唤代理 | ✅ 已上线 |
@@ -227,9 +228,10 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Theme Settings** | Customize colors for different card components | 🅱️ Beta |
 | **Editor Integration** | Open text files with system `$EDITOR` | ✅ Available |
 | **Code Line Comment** | Drag to select range and append comment to input | ✅ Available |
-| **Session Pin** | Pinned Sessions panel in sidebar | ✅ Available |
-| **Batch Management** | Multi-select session operations via Management button | ✅ Available |
-| **Unarchive** | Restore previously archived sessions | ✅ Available |
+| **Session Tree Management** | Added a session tree panel in the sidebar; sessions are pinned based on a three-level hierarchy of project-sandbox-session. ✅ Available |
+| **Batch Management** | Top bar "Management" button for multi-select Session operations. ✅ Available |
+| **Unarchive** | Restore archived Sessions. ✅ Available |
+| **Rename Session** | Rename Session. ✅ Available |
 | **Floating Window Management** | Close/minimize buttons for all popups, bottom Dock bar | ✅ Available |
 | **Quick Commands** | `@` shortcut to explicitly summon agents | ✅ Available |
 | **Performance** | Lazy loading for large sessions, background hydration, faster cold start | ✅ Available |
