@@ -11,9 +11,9 @@
 		- [gnhf](https://github.com/kunchenguid/gnhf)
 		- [tokscale](https://github.com/junhoyeo/tokscale)
 		- [coding_agent_usage_tracker](https://github.com/Dicklesworthstone/coding_agent_usage_tracker)
+		- [ ] **加入webui编辑器** — 考虑替换掉$EDITOR打开的方式	
 
 ## [Paused for difficulties]
-- [ ] **加入webui编辑器** — 考虑替换掉$EDITOR打开的方式
 - [ ] **修复已知问题**
 	- [ ] "历史记录"功能不保存subagents的历史（需要把subagents的历史记录以标签的形式和主agent分开）
 	- [ ] electron开发electron:start在Windows上报错
