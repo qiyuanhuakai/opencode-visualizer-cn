@@ -10,42 +10,12 @@
 
 ## 1. 目标与边界
 
-### 1.0 委派执行原则
-
-本文件未来很可能会被直接交给执行型 agent 使用，因此这里明确增加一组**强约束执行原则**。
-
-如果执行者没有额外说明，就默认遵守下面这些规则：
-
-1. **一次只推进一个 phase。**
-   - 不要在同一个任务里同时实现 Phase 1、Phase 2、Phase 3。
-   - 当前 phase 未验收前，不要跳到后续 phase。
-
-2. **先做 contract，再做 runtime。**
-   - 如果文档、类型、事件模型还没定，不允许直接写 provider 实现。
-
-3. **模块化不等于平台化。**
-   - 看到“plugin”“按需加载”时，不要擅自实现插件市场、远程下载、动态执行任意包。
-
-4. **bridge 第一阶段不是 OpenCode server 完整替代品。**
-   - 不要试图一次复刻全部 REST、SSE、PTY、权限、工作区、Provider 管理行为。
-
-5. **默认优先 Codex。**
-   - 如果没有明确指定别的 provider，第一阶段只验证 Codex provider 闭环。
-
-6. **plugin 缺失必须是可观测状态，不是致命错误。**
-   - 缺失 plugin 时显示 unavailable，而不是让 bridge 启动失败。
-
-7. **除非任务明确要求，否则不要把 `vis-bridge/` 接入现有构建。**
-   - 骨架目录是为了稳定接口，不是要求立即纳入当前前端打包链路。
-
-8. **不要在未验证 contract 之前做 UI 扩展。**
-   - 先保证 API 和事件能跑通，再讨论 Status Monitor、Provider 面板、Plugin 面板的增强。
 
 ### 1.1 目标
 
 vis-bridge 的目标是：
 
-1. 在 **WSL / 本地 Linux 环境** 中统一托管多个 agent CLI。
+1. 在 **WSL / 本地 Linux / Windows / MacOS 环境** 中统一托管多个 agent CLI。
 2. 给 Electron / WebUI 暴露一个稳定的、前端友好的 **统一 API + 统一事件流**。
 3. 在桥这一层处理 provider 差异，包括：
    - CLI 是否存在
@@ -675,46 +645,9 @@ type EventEnvelope = {
 
 ---
 
-## 10.1 委派给执行 agent 时的任务模板
 
-如果后续要把这项工作交给能力一般一些的 agent，建议直接使用下面这种任务模板，减少误解。
 
-### 模板
-
-```md
-目标：只推进 vis-bridge 的 <某一个 phase>。
-
-必须遵守：
-1. 只做当前 phase，不进入后续 phase。
-2. 不扩展为开放插件平台。
-3. 不把 vis-bridge 接入现有构建，除非任务明确要求。
-4. 不补 PTY，除非当前任务明确要求。
-5. 所有新增命名必须沿用现有文档中的 provider / plugin / providerID / sessionID 术语。
-
-本次要做：
-- ...
-- ...
-
-本次不要做：
-- ...
-- ...
-
-完成后必须输出：
-1. 做了什么
-2. 没做什么
-3. 哪些内容留给下一 phase
-4. 是否满足当前 phase 的完成标准
-```
-
-### 推荐用法
-
-- 写文档任务时，附上 `Future.md` + `docs/bridge-api.md` + `docs/bridge-events.md`
-- 写骨架任务时，再附上 `vis-bridge/README.md` 和 `vis-bridge/src/contracts/*`
-- 写实现任务时，只附当前 phase 需要的文件，避免 agent 因为看见后续 phase 而过度发挥
-
----
-
-## 10.2 常见误解与纠偏
+## 10.1 常见误解与纠偏
 
 为了让较弱的 agent 也能稳定执行，这里列出最常见的误解。
 
