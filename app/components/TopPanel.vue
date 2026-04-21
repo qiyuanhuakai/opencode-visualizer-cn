@@ -40,9 +40,12 @@
         >
           <template #label>
             <span v-if="selectedDisplay" class="selected-label">
-              <span class="selected-status-icon">{{
-                sessionStatusIcon(selectedDisplay.status)
-              }}</span>
+              <span class="selected-status-icon" :class="`is-${selectedDisplay.status}`">
+                <template v-if="selectedDisplay.status === 'unknown'">
+                  <span class="status-circle-outline"></span>
+                </template>
+                <template v-else>{{ sessionStatusIcon(selectedDisplay.status) }}</template>
+              </span>
               <span class="selected-title">{{ selectedDisplay.title }}</span>
               <span class="selected-branch-badge">
                 <Icon icon="lucide:git-branch" :width="11" :height="11" />
@@ -295,11 +298,14 @@
                           sessionId: session.id,
                         }"
                         :active="session.id === selectedSessionId"
-                      >
+                       >
                         <div class="tree-session-main">
-                          <span class="session-status-icon" :title="session.status">{{
-                            sessionStatusIcon(session.status)
-                          }}</span>
+                          <span class="session-status-icon" :class="`is-${session.status}`" :title="session.status">
+                            <template v-if="session.status === 'unknown'">
+                              <span class="status-circle-outline"></span>
+                            </template>
+                            <template v-else>{{ sessionStatusIcon(session.status) }}</template>
+                          </span>
                           <div class="session-info">
                             <div class="session-info-top">
                               <span class="session-title">{{
@@ -416,9 +422,12 @@
                           />
                         </button>
                         <div class="tree-session-main">
-                          <span class="session-status-icon" :title="session.status">{{
-                            sessionStatusIcon(session.status)
-                          }}</span>
+                          <span class="session-status-icon" :class="`is-${session.status}`" :title="session.status">
+                            <template v-if="session.status === 'unknown'">
+                              <span class="status-circle-outline"></span>
+                            </template>
+                            <template v-else>{{ sessionStatusIcon(session.status) }}</template>
+                          </span>
                           <div class="session-info">
                             <div class="session-info-top">
                               <span class="session-title">{{
@@ -442,6 +451,7 @@
                   </div>
                 </div>
               </div>
+            </div>
 
               <div class="tree-footer">
                 <button
@@ -453,7 +463,6 @@
                   {{ $t('topPanel.openProject') }}
                 </button>
               </div>
-            </div>
           </template>
         </Dropdown>
 
@@ -1636,8 +1645,36 @@ function handleOpenDirectory(close: () => void) {
 
 .session-status-icon {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 14px;
-  text-align: center;
+  height: 14px;
+}
+
+.session-status-icon.is-idle {
+  color: var(--theme-status-success, #4ade80);
+}
+
+.session-status-icon.is-retry {
+  color: var(--theme-status-danger, #f87171);
+}
+
+.session-status-icon.is-busy {
+  color: var(--theme-status-warning, #fbbf24);
+}
+
+.session-status-icon.is-unknown {
+  color: var(--theme-side-text-muted, #94a3b8);
+}
+
+.status-circle-outline {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  box-sizing: border-box;
 }
 
 .session-title {
@@ -1862,10 +1899,27 @@ function handleOpenDirectory(close: () => void) {
 
 .selected-status-icon {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 14px;
-  text-align: center;
-  font-size: var(--ui-font-size, 12px);
-  line-height: 1;
+  height: 14px;
+}
+
+.selected-status-icon.is-idle {
+  color: var(--theme-status-success, #4ade80);
+}
+
+.selected-status-icon.is-retry {
+  color: var(--theme-status-danger, #f87171);
+}
+
+.selected-status-icon.is-busy {
+  color: var(--theme-status-warning, #fbbf24);
+}
+
+.selected-status-icon.is-unknown {
+  color: var(--theme-side-text-muted, #94a3b8);
 }
 
 .selected-title {
