@@ -96,7 +96,12 @@
                   :style="{ paddingLeft: 'calc(4px + 28px)' }"
                   @click="emit('select-session', { projectId: project.projectId, sessionId: session.sessionId })"
                 >
-                  <span class="session-tree-status">{{ sessionStatusIcon(session.status) }}</span>
+                  <span class="session-tree-status" :class="`is-${session.status}`">
+                    <template v-if="session.status === 'unknown'">
+                      <span class="status-circle-outline"></span>
+                    </template>
+                    <template v-else>{{ sessionStatusIcon(session.status) }}</template>
+                  </span>
                   <span class="session-tree-label">{{ session.title }}</span>
                   <button
                     type="button"
@@ -255,9 +260,36 @@ function sessionStatusIcon(status: 'busy' | 'idle' | 'retry' | 'unknown'): strin
 
 .session-tree-status {
   flex-shrink: 0;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
-  text-align: center;
+  height: 14px;
+}
+
+.session-tree-status.is-idle {
+  color: var(--theme-status-success, #4ade80);
+}
+
+.session-tree-status.is-retry {
+  color: var(--theme-status-danger, #f87171);
+}
+
+.session-tree-status.is-busy {
+  color: var(--theme-status-warning, #fbbf24);
+}
+
+.session-tree-status.is-unknown {
+  color: var(--theme-side-text-muted, #94a3b8);
+}
+
+.status-circle-outline {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  box-sizing: border-box;
 }
 
 .session-tree-pin {
