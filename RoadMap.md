@@ -4,13 +4,16 @@
 
 ## [In Progress] 
 	
-- [ ] **外部工具支持** 
-	- [ ] 添加opencode-plugin-vis-bridge，一个读取本地plugin设置和数据的轻量级服务器
+- [ ] vis-bridge 模块化本地桥接服务器
+	- [ ] 添加vis-bridge，一个读取本地设置和数据的轻量级服务器
 	- [ ] 集成外部开发工具，扩展与第三方工具的联动能力。正在考虑：
-		- [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
-		- [gnhf](https://github.com/kunchenguid/gnhf)
-		- [tokscale](https://github.com/junhoyeo/tokscale)
-		- [coding_agent_usage_tracker](https://github.com/Dicklesworthstone/coding_agent_usage_tracker)
+		- [ ] codex
+		- [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
+		- [ ] [gnhf](https://github.com/kunchenguid/gnhf)
+		- [ ] [tokscale](https://github.com/junhoyeo/tokscale)
+		- [ ] [coding_agent_usage_tracker](https://github.com/Dicklesworthstone/coding_agent_usage_tracker)
+		- [ ] claudecode
+		- [ ] gemini cli
 		- [ ] **加入webui编辑器** — 考虑替换掉$EDITOR打开的方式	
 
 ## [Paused for difficulties]
