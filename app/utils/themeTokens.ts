@@ -1,5 +1,6 @@
 import {
   DEFAULT_REGION_THEME,
+  type FloatingWindowThemeColors,
   REGION_COLOR_FIELDS,
   REGION_NAMES,
   REGION_VAR_PREFIXES,
@@ -24,6 +25,7 @@ import {
   type ListRowThemeColors,
   type IconActionThemeColors,
 } from './regionTheme';
+import { FLOATING_WINDOW_THEME_TYPES, type FloatingWindowThemeType } from './floatingWindowTheme';
 import {
   listThemeRegistryEntries,
   normalizeThemeRegistryId,
@@ -173,7 +175,29 @@ export type BaseSemanticThemeToken =
   | 'search-text'
   | 'search-placeholder'
   | 'search-icon'
-  | 'search-focus-bg';
+  | 'search-focus-bg'
+  | 'floating-surface-base'
+  | 'floating-surface-muted'
+  | 'floating-surface-subtle'
+  | 'floating-surface-strong'
+  | 'floating-border-muted'
+  | 'floating-border-subtle'
+  | 'floating-border-faint'
+  | 'floating-border-faint-strong'
+  | 'floating-fill-faint'
+  | 'floating-text'
+  | 'floating-text-muted'
+  | 'floating-text-soft'
+  | 'floating-text-secondary'
+  | 'floating-default-accent'
+  | 'floating-opacity'
+  | 'floating-titlebar-opacity'
+  | 'floating-background-image';
+
+const FLOATING_THEME_TOKEN_FIELDS = ['accent', 'opacity', 'titlebar-opacity', 'background-image'] as const;
+
+type FloatingThemeTokenField = (typeof FLOATING_THEME_TOKEN_FIELDS)[number];
+export type FloatingThemeToken = `floating-${FloatingWindowThemeType}-${FloatingThemeTokenField}`;
 
 const COMPONENT_THEME_TOKEN_FIELDS = {
   dropdown: ['bg', 'border', 'text', 'text-muted', 'control-bg', 'hover-bg', 'active-bg', 'accent', 'shadow'],
@@ -212,7 +236,11 @@ const REGION_THEME_TOKEN_FIELDS = [
 type RegionThemeTokenField = (typeof REGION_THEME_TOKEN_FIELDS)[number];
 type RegionThemeTokenPrefix = (typeof REGION_VAR_PREFIXES)[keyof typeof REGION_VAR_PREFIXES];
 export type RegionThemeToken = `${RegionThemeTokenPrefix}-${RegionThemeTokenField}`;
-export type SemanticThemeToken = BaseSemanticThemeToken | RegionThemeToken | ComponentThemeToken;
+export type SemanticThemeToken =
+  | BaseSemanticThemeToken
+  | FloatingThemeToken
+  | RegionThemeToken
+  | ComponentThemeToken;
 
 const BASE_SEMANTIC_THEME_TOKENS = [
   'surface-page',
@@ -356,7 +384,30 @@ const BASE_SEMANTIC_THEME_TOKENS = [
   'search-placeholder',
   'search-icon',
   'search-focus-bg',
+  'floating-surface-base',
+  'floating-surface-muted',
+  'floating-surface-subtle',
+  'floating-surface-strong',
+  'floating-border-muted',
+  'floating-border-subtle',
+  'floating-border-faint',
+  'floating-border-faint-strong',
+  'floating-fill-faint',
+  'floating-text',
+  'floating-text-muted',
+  'floating-text-soft',
+  'floating-text-secondary',
+  'floating-default-accent',
+  'floating-opacity',
+  'floating-titlebar-opacity',
+  'floating-background-image',
 ] as const satisfies readonly BaseSemanticThemeToken[];
+
+export const FLOATING_THEME_TOKENS = FLOATING_WINDOW_THEME_TYPES.flatMap((type) =>
+  FLOATING_THEME_TOKEN_FIELDS.map(
+    (field) => `floating-${type}-${field}` as FloatingThemeToken,
+  ),
+) as readonly FloatingThemeToken[];
 
 export const REGION_THEME_TOKENS = REGION_NAMES.flatMap((regionName) =>
   REGION_THEME_TOKEN_FIELDS.map(
@@ -370,6 +421,7 @@ export const COMPONENT_THEME_TOKENS = Object.entries(COMPONENT_THEME_TOKEN_FIELD
 
 export const SEMANTIC_THEME_TOKENS = [
   ...BASE_SEMANTIC_THEME_TOKENS,
+  ...FLOATING_THEME_TOKENS,
   ...REGION_THEME_TOKENS,
   ...COMPONENT_THEME_TOKENS,
 ] as readonly SemanticThemeToken[];
@@ -383,6 +435,7 @@ export type ThemeStorageV2 = {
   label?: string;
   regions?: Record<RegionName, Partial<RegionColors>>;
   components?: ThemeComponentConfig;
+  floating?: Partial<FloatingWindowThemeColors>;
   overrides: SemanticTokenOverrides;
 };
 
@@ -528,7 +581,109 @@ const DEFAULT_BASE_SEMANTIC_TOKENS: Record<BaseSemanticThemeToken, string> = {
   'search-placeholder': '#64748b',
   'search-icon': '#64748b',
   'search-focus-bg': 'rgba(30, 64, 175, 0.15)',
+  'floating-surface-base': '#1a1d24',
+  'floating-surface-muted': 'rgba(36, 40, 50, 0.95)',
+  'floating-surface-subtle': 'rgba(30, 34, 42, 0.85)',
+  'floating-surface-strong': 'rgba(50, 58, 72, 0.95)',
+  'floating-border-muted': 'rgba(90, 100, 120, 0.35)',
+  'floating-border-subtle': 'rgba(100, 110, 130, 0.5)',
+  'floating-border-faint': 'rgba(255, 255, 255, 0.15)',
+  'floating-border-faint-strong': 'rgba(255, 255, 255, 0.18)',
+  'floating-fill-faint': 'rgba(255, 255, 255, 0.08)',
+  'floating-text': '#e2e8f0',
+  'floating-text-muted': '#94a3b8',
+  'floating-text-soft': '#9ca3af',
+  'floating-text-secondary': '#cbd5e1',
+  'floating-default-accent': '#3a4150',
+  'floating-opacity': '1',
+  'floating-titlebar-opacity': '1',
+  'floating-background-image': 'none',
 };
+
+function floatingTypeToken(
+  type: FloatingWindowThemeType,
+  field: FloatingThemeTokenField,
+): FloatingThemeToken {
+  return `floating-${type}-${field}`;
+}
+
+function floatingThemeValue(
+  floating: Partial<FloatingWindowThemeColors> | undefined,
+  field:
+    | 'surfaceBase'
+    | 'surfaceMuted'
+    | 'surfaceSubtle'
+    | 'surfaceStrong'
+    | 'borderMuted'
+    | 'borderSubtle'
+    | 'borderFaint'
+    | 'borderFaintStrong'
+    | 'fillFaint'
+    | 'text'
+    | 'textMuted'
+    | 'textSoft'
+    | 'textSecondary'
+    | 'opacity'
+    | 'titlebarOpacity'
+    | 'backgroundImage',
+) {
+  return floating?.[field];
+}
+
+function floatingTypeValue(
+  floating: Partial<FloatingWindowThemeColors> | undefined,
+  type: FloatingWindowThemeType,
+  field: 'accent' | 'opacity' | 'titlebarOpacity' | 'backgroundImage',
+) {
+  return floating?.[type]?.[field];
+}
+
+function createDefaultFloatingSemanticTokens(
+  base: Record<BaseSemanticThemeToken, string>,
+): Record<FloatingThemeToken, string> {
+  return {
+    'floating-shell-accent': '#a855f7',
+    'floating-shell-opacity': base['floating-opacity'],
+    'floating-shell-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-shell-background-image': base['floating-background-image'],
+    'floating-reasoning-accent': '#8b5cf6',
+    'floating-reasoning-opacity': base['floating-opacity'],
+    'floating-reasoning-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-reasoning-background-image': base['floating-background-image'],
+    'floating-subagent-accent': '#0ea5e9',
+    'floating-subagent-opacity': base['floating-opacity'],
+    'floating-subagent-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-subagent-background-image': base['floating-background-image'],
+    'floating-tool-accent': '#64748b',
+    'floating-tool-opacity': base['floating-opacity'],
+    'floating-tool-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-tool-background-image': base['floating-background-image'],
+    'floating-file-accent': '#3a4150',
+    'floating-file-opacity': base['floating-opacity'],
+    'floating-file-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-file-background-image': base['floating-background-image'],
+    'floating-diff-accent': '#3b82f6',
+    'floating-diff-opacity': base['floating-opacity'],
+    'floating-diff-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-diff-background-image': base['floating-background-image'],
+    'floating-media-accent': '#14b8a6',
+    'floating-media-opacity': base['floating-opacity'],
+    'floating-media-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-media-background-image': base['floating-background-image'],
+    'floating-dialog-accent': '#f59e0b',
+    'floating-dialog-opacity': base['floating-opacity'],
+    'floating-dialog-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-dialog-background-image': base['floating-background-image'],
+    'floating-history-accent': '#8b5cf6',
+    'floating-history-opacity': base['floating-opacity'],
+    'floating-history-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-history-background-image': base['floating-background-image'],
+    'floating-debug-accent': '#475569',
+    'floating-debug-opacity': base['floating-opacity'],
+    'floating-debug-titlebar-opacity': base['floating-titlebar-opacity'],
+    'floating-debug-background-image': base['floating-background-image'],
+  };
+}
 
 const COMPONENT_THEME_TOKEN_MAP = {
   dropdown: {
@@ -763,9 +918,13 @@ function createDefaultRegionSemanticTokens(
 
 const DEFAULT_REGION_SEMANTIC_TOKENS = createDefaultRegionSemanticTokens(DEFAULT_BASE_SEMANTIC_TOKENS);
 const DEFAULT_COMPONENT_SEMANTIC_TOKENS = createDefaultComponentSemanticTokens(DEFAULT_BASE_SEMANTIC_TOKENS);
+const DEFAULT_FLOATING_SEMANTIC_TOKENS = createDefaultFloatingSemanticTokens(
+  DEFAULT_BASE_SEMANTIC_TOKENS,
+);
 
 const DEFAULT_SEMANTIC_TOKENS: SemanticTokenMap = {
   ...DEFAULT_BASE_SEMANTIC_TOKENS,
+  ...DEFAULT_FLOATING_SEMANTIC_TOKENS,
   ...DEFAULT_REGION_SEMANTIC_TOKENS,
   ...Object.fromEntries(
     Object.entries(DEFAULT_COMPONENT_SEMANTIC_TOKENS).filter(([token]) =>
@@ -858,6 +1017,26 @@ function cloneThemeComponents(components: ThemeComponentConfig | undefined): The
   };
 }
 
+function cloneFloatingTheme(
+  floating: Partial<FloatingWindowThemeColors> | undefined,
+): Partial<FloatingWindowThemeColors> | undefined {
+  if (!floating) return undefined;
+  return {
+    ...floating,
+    default: floating.default ? { ...floating.default } : undefined,
+    shell: floating.shell ? { ...floating.shell } : undefined,
+    reasoning: floating.reasoning ? { ...floating.reasoning } : undefined,
+    subagent: floating.subagent ? { ...floating.subagent } : undefined,
+    tool: floating.tool ? { ...floating.tool } : undefined,
+    file: floating.file ? { ...floating.file } : undefined,
+    diff: floating.diff ? { ...floating.diff } : undefined,
+    media: floating.media ? { ...floating.media } : undefined,
+    dialog: floating.dialog ? { ...floating.dialog } : undefined,
+    history: floating.history ? { ...floating.history } : undefined,
+    debug: floating.debug ? { ...floating.debug } : undefined,
+  };
+}
+
 function normalizeStoredComponents(value: unknown): ThemeComponentConfig | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined;
@@ -886,6 +1065,58 @@ function normalizeStoredComponents(value: unknown): ThemeComponentConfig | undef
   ) as ThemeComponentConfig;
 
   return normalized;
+}
+
+function normalizeStoredFloatingType(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    ['accent', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
+      const normalized = normalizeColorValue(record[field]);
+      if (!normalized) return [];
+      return [[field, normalized]];
+    }),
+  );
+}
+
+function normalizeStoredFloating(value: unknown): Partial<FloatingWindowThemeColors> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  return {
+    surfaceBase: normalizeColorValue(record.surfaceBase),
+    surfaceMuted: normalizeColorValue(record.surfaceMuted),
+    surfaceSubtle: normalizeColorValue(record.surfaceSubtle),
+    surfaceStrong: normalizeColorValue(record.surfaceStrong),
+    borderMuted: normalizeColorValue(record.borderMuted),
+    borderSubtle: normalizeColorValue(record.borderSubtle),
+    borderFaint: normalizeColorValue(record.borderFaint),
+    borderFaintStrong: normalizeColorValue(record.borderFaintStrong),
+    fillFaint: normalizeColorValue(record.fillFaint),
+    text: normalizeColorValue(record.text),
+    textMuted: normalizeColorValue(record.textMuted),
+    textSoft: normalizeColorValue(record.textSoft),
+    textSecondary: normalizeColorValue(record.textSecondary),
+    opacity: normalizeColorValue(record.opacity),
+    titlebarOpacity: normalizeColorValue(record.titlebarOpacity),
+    backgroundImage: normalizeColorValue(record.backgroundImage),
+    default: normalizeStoredFloatingType(record.default),
+    shell: normalizeStoredFloatingType(record.shell),
+    reasoning: normalizeStoredFloatingType(record.reasoning),
+    subagent: normalizeStoredFloatingType(record.subagent),
+    tool: normalizeStoredFloatingType(record.tool),
+    file: normalizeStoredFloatingType(record.file),
+    diff: normalizeStoredFloatingType(record.diff),
+    media: normalizeStoredFloatingType(record.media),
+    dialog: normalizeStoredFloatingType(record.dialog),
+    history: normalizeStoredFloatingType(record.history),
+    debug: normalizeStoredFloatingType(record.debug),
+  };
 }
 
 function createDefaultComponentSemanticTokens(
@@ -1109,6 +1340,7 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
   const emptyStateComponent = theme.components?.emptyState;
   const actionButtonComponent = theme.components?.actionButton;
   const searchComponent = theme.components?.search;
+  const floating = theme.floating;
   const modalActiveBg = firstDefined(regionColorValue(modal, 'activeBg'));
   const pageBg = firstDefined(regionColorValue(page, 'bg'));
 
@@ -1252,6 +1484,98 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
     'search-placeholder': firstDefined(componentValue(searchComponent, 'placeholder'), regionColorValue(dropdown, 'textMuted'), regionColorValue(modal, 'textMuted'), regionColorValue(input, 'textMuted')),
     'search-icon': firstDefined(componentValue(searchComponent, 'icon'), regionColorValue(dropdown, 'textMuted'), regionColorValue(modal, 'textMuted'), regionColorValue(input, 'textMuted')),
     'search-focus-bg': firstDefined(componentValue(searchComponent, 'focusBg'), regionColorValue(dropdown, 'activeBg'), regionColorValue(modal, 'activeBg'), regionColorValue(input, 'activeBg')),
+    'floating-surface-base': firstDefined(
+      floatingThemeValue(floating, 'surfaceBase'),
+      regionColorValue(output, 'bg'),
+      regionColorValue(modal, 'bg'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-base'],
+    ),
+    'floating-surface-muted': firstDefined(
+      floatingThemeValue(floating, 'surfaceMuted'),
+      regionColorValue(output, 'controlBg'),
+      regionColorValue(modal, 'controlBg'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-muted'],
+    ),
+    'floating-surface-subtle': firstDefined(
+      floatingThemeValue(floating, 'surfaceSubtle'),
+      regionColorValue(chat, 'controlBg'),
+      regionColorValue(side, 'controlBg'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-subtle'],
+    ),
+    'floating-surface-strong': firstDefined(
+      floatingThemeValue(floating, 'surfaceStrong'),
+      regionColorValue(output, 'activeBg'),
+      regionColorValue(modal, 'activeBg'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-strong'],
+    ),
+    'floating-border-muted': firstDefined(
+      floatingThemeValue(floating, 'borderMuted'),
+      regionColorValue(output, 'border'),
+      regionColorValue(modal, 'border'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-border-muted'],
+    ),
+    'floating-border-subtle': firstDefined(
+      floatingThemeValue(floating, 'borderSubtle'),
+      regionColorValue(chat, 'border'),
+      regionColorValue(side, 'border'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-border-subtle'],
+    ),
+    'floating-border-faint': firstDefined(
+      floatingThemeValue(floating, 'borderFaint'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-border-faint'],
+    ),
+    'floating-border-faint-strong': firstDefined(
+      floatingThemeValue(floating, 'borderFaintStrong'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-border-faint-strong'],
+    ),
+    'floating-fill-faint': firstDefined(
+      floatingThemeValue(floating, 'fillFaint'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-fill-faint'],
+    ),
+    'floating-text': firstDefined(
+      floatingThemeValue(floating, 'text'),
+      regionColorValue(output, 'text'),
+      regionColorValue(modal, 'text'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-text'],
+    ),
+    'floating-text-muted': firstDefined(
+      floatingThemeValue(floating, 'textMuted'),
+      regionColorValue(output, 'textMuted'),
+      regionColorValue(modal, 'textMuted'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-text-muted'],
+    ),
+    'floating-text-soft': firstDefined(
+      floatingThemeValue(floating, 'textSoft'),
+      regionColorValue(chat, 'textMuted'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-text-soft'],
+    ),
+    'floating-text-secondary': firstDefined(
+      floatingThemeValue(floating, 'textSecondary'),
+      regionColorValue(modal, 'text'),
+      regionColorValue(output, 'text'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-text-secondary'],
+    ),
+    'floating-default-accent': firstDefined(
+      regionColorValue(output, 'accent'),
+      regionColorValue(modal, 'accent'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-default-accent'],
+    ),
+    'floating-opacity': firstDefined(
+      floatingThemeValue(floating, 'opacity'),
+      floating?.default?.opacity,
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-opacity'],
+    ),
+    'floating-titlebar-opacity': firstDefined(
+      floatingThemeValue(floating, 'titlebarOpacity'),
+      floating?.default?.titlebarOpacity,
+      floatingThemeValue(floating, 'opacity'),
+      floating?.default?.opacity,
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-titlebar-opacity'],
+    ),
+    'floating-background-image': firstDefined(
+      floatingThemeValue(floating, 'backgroundImage'),
+      DEFAULT_BASE_SEMANTIC_TOKENS['floating-background-image'],
+    ),
   };
 
   if (!overrides['chip-border-subtle']) {
@@ -1259,6 +1583,77 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
     if (baseBorder) {
       overrides['chip-border-subtle'] = `color-mix(in srgb, ${baseBorder} 80%, transparent)`;
     }
+  }
+
+  for (const type of FLOATING_WINDOW_THEME_TYPES) {
+    const accent = firstDefined(
+      floatingTypeValue(floating, type, 'accent'),
+      type === 'file'
+        ? overrides['floating-default-accent']
+        : undefined,
+    );
+    if (accent) {
+      overrides[floatingTypeToken(type, 'accent')] = accent;
+    }
+
+    const opacity = firstDefined(
+      floatingTypeValue(floating, type, 'opacity'),
+      overrides['floating-opacity'],
+    );
+    if (opacity) {
+      overrides[floatingTypeToken(type, 'opacity')] = opacity;
+    }
+
+    const titlebarOpacity = firstDefined(
+      floatingTypeValue(floating, type, 'titlebarOpacity'),
+      floatingTypeValue(floating, type, 'opacity'),
+      overrides['floating-titlebar-opacity'],
+    );
+    if (titlebarOpacity) {
+      overrides[floatingTypeToken(type, 'titlebar-opacity')] = titlebarOpacity;
+    }
+
+    const backgroundImage = firstDefined(
+      floatingTypeValue(floating, type, 'backgroundImage'),
+      overrides['floating-background-image'],
+    );
+    if (backgroundImage) {
+      overrides[floatingTypeToken(type, 'background-image')] = backgroundImage;
+    }
+  }
+
+  const defaultAccent = firstDefined(
+    floating?.default?.accent,
+    overrides['floating-default-accent'],
+  );
+  if (defaultAccent) {
+    overrides['floating-default-accent'] = defaultAccent;
+  }
+
+  const defaultOpacity = firstDefined(
+    floating?.default?.opacity,
+    overrides['floating-opacity'],
+  );
+  if (defaultOpacity) {
+    overrides['floating-opacity'] = defaultOpacity;
+  }
+
+  const defaultTitlebarOpacity = firstDefined(
+    floating?.default?.titlebarOpacity,
+    floating?.default?.opacity,
+    overrides['floating-titlebar-opacity'],
+  );
+  if (defaultTitlebarOpacity) {
+    overrides['floating-titlebar-opacity'] = defaultTitlebarOpacity;
+  }
+
+  const defaultBackgroundImage = firstDefined(
+    floating?.default?.backgroundImage,
+    floatingThemeValue(floating, 'backgroundImage'),
+    overrides['floating-background-image'],
+  );
+  if (defaultBackgroundImage) {
+    overrides['floating-background-image'] = defaultBackgroundImage;
   }
 
   return Object.fromEntries(
@@ -1300,6 +1695,7 @@ export function normalizeThemeStorage(input: unknown): ThemeStorageV2 | null {
     label: typeof input.label === 'string' ? input.label : undefined,
     regions: normalizeStoredRegions(input.regions),
     components: normalizeStoredComponents(input.components),
+    floating: normalizeStoredFloating(input.floating),
     overrides,
   };
 }
@@ -1328,6 +1724,34 @@ export function regionThemeToStorage(theme: RegionThemeConfig | null | undefined
       });
     }),
   ) as SemanticTokenOverrides;
+  const floatingOverrides = Object.fromEntries(
+    FLOATING_WINDOW_THEME_TYPES.flatMap((type) => {
+      const accent = normalizeColorValue(theme.floating?.[type]?.accent);
+      const opacity = normalizeColorValue(theme.floating?.[type]?.opacity);
+      const titlebarOpacity = normalizeColorValue(theme.floating?.[type]?.titlebarOpacity);
+      const backgroundImage = normalizeColorValue(theme.floating?.[type]?.backgroundImage);
+      return [
+        accent ? [floatingTypeToken(type, 'accent'), accent] : null,
+        opacity ? [floatingTypeToken(type, 'opacity'), opacity] : null,
+        titlebarOpacity ? [floatingTypeToken(type, 'titlebar-opacity'), titlebarOpacity] : null,
+        backgroundImage ? [floatingTypeToken(type, 'background-image'), backgroundImage] : null,
+      ].filter((entry): entry is [FloatingThemeToken, string] => Boolean(entry));
+    }),
+  ) as SemanticTokenOverrides;
+  const floatingBaseOverrides = Object.fromEntries(
+    [
+      ['floating-default-accent', normalizeColorValue(theme.floating?.default?.accent)],
+      ['floating-opacity', normalizeColorValue(theme.floating?.default?.opacity)],
+      [
+        'floating-titlebar-opacity',
+        normalizeColorValue(theme.floating?.default?.titlebarOpacity),
+      ],
+      [
+        'floating-background-image',
+        normalizeColorValue(theme.floating?.default?.backgroundImage),
+      ],
+    ].flatMap(([token, value]) => (value ? [[token, value]] : [])),
+  ) as SemanticTokenOverrides;
 
   return {
     version: 2,
@@ -1335,10 +1759,13 @@ export function regionThemeToStorage(theme: RegionThemeConfig | null | undefined
     label: theme.label,
     regions: cloneRegionThemeRegions(theme.regions),
     components: cloneThemeComponents(theme.components),
+    floating: cloneFloatingTheme(theme.floating),
     overrides: {
       ...semanticOverrides,
       ...regionOverrides,
       ...componentOverrides,
+      ...floatingBaseOverrides,
+      ...floatingOverrides,
     },
   };
 }
@@ -1349,6 +1776,7 @@ export function storageToRegionTheme(storage: ThemeStorageV2 | null | undefined)
   const preset = resolveThemeRegistryTheme(storage.preset ?? null);
   const normalizedRegions = storage.regions ? cloneRegionThemeRegions(storage.regions) : undefined;
   const normalizedComponents = storage.components ? cloneThemeComponents(storage.components) : undefined;
+  const normalizedFloating = storage.floating ? cloneFloatingTheme(storage.floating) : undefined;
 
   if (!normalizedRegions) {
     const tokenRegions = Object.fromEntries(
@@ -1375,6 +1803,7 @@ export function storageToRegionTheme(storage: ThemeStorageV2 | null | undefined)
           'Custom',
         regions: tokenRegions,
         components: normalizedComponents,
+        floating: normalizedFloating,
       };
     }
   }
@@ -1388,6 +1817,7 @@ export function storageToRegionTheme(storage: ThemeStorageV2 | null | undefined)
           'Custom',
         regions: normalizedRegions,
         components: normalizedComponents,
+        floating: normalizedFloating,
     };
   }
 
@@ -1397,6 +1827,7 @@ export function storageToRegionTheme(storage: ThemeStorageV2 | null | undefined)
       label: preset.label,
       regions: cloneRegionThemeRegions(preset.regions),
       components: cloneThemeComponents(preset.components),
+      floating: cloneFloatingTheme(preset.floating),
     };
   }
 
@@ -1405,6 +1836,7 @@ export function storageToRegionTheme(storage: ThemeStorageV2 | null | undefined)
     label: storage.label ?? 'Custom',
     regions: cloneRegionThemeRegions(DEFAULT_REGION_THEME.regions),
     components: normalizedComponents,
+    floating: normalizedFloating,
   };
 }
 

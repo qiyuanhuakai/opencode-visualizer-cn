@@ -6,6 +6,7 @@ import {
   createSemanticTokenSnapshot,
   isThemeStorageV2,
   migrateLegacyRegionThemeStorage,
+  regionThemeToStorage,
   regionThemeToSemanticOverrides,
   resolveThemeStoragePreset,
   semanticTokenCssVariable,
@@ -33,6 +34,11 @@ describe('theme token bridge', () => {
     expect(overrides['empty-state-text']).toBe('#7aa2c0');
     expect(overrides['action-button-bg']).toBe('#1b3a4b');
     expect(overrides['search-bg']).toBe('#0b1f33');
+    expect(overrides['floating-surface-base']).toBe('#09192a');
+    expect(overrides['floating-text']).toBe('#edf7ff');
+    expect(overrides['floating-default-accent']).toBe('#76e4f7');
+    expect(overrides['floating-shell-opacity']).toBe('0.95');
+    expect(overrides['floating-background-image']).toContain('linear-gradient');
   });
 
   it('migrates legacy region theme storage into versioned token storage', () => {
@@ -83,6 +89,11 @@ describe('theme token bridge', () => {
     expect(snapshot['empty-state-text']).toBe('#94a3b8');
     expect(snapshot['action-button-bg']).toBe('rgba(11, 19, 32, 0.92)');
     expect(snapshot['search-bg']).toBe('rgba(11, 19, 32, 0.92)');
+    expect(snapshot['floating-surface-base']).toBe('#1a1d24');
+    expect(snapshot['floating-tool-accent']).toBe('#64748b');
+    expect(snapshot['floating-dialog-accent']).toBe('#f59e0b');
+    expect(snapshot['floating-opacity']).toBe('1');
+    expect(snapshot['floating-background-image']).toBe('none');
   });
 
   it('includes git and tree semantic tokens in the default snapshot', () => {
@@ -95,5 +106,24 @@ describe('theme token bridge', () => {
     expect(snapshot['status-git-archived']).toBe('#c4b5fd');
     expect(snapshot['status-git-attention']).toBe('#93c5fd');
     expect(snapshot['status-git-connector']).toBe('rgba(71, 85, 105, 0.46)');
+  });
+
+  it('preserves floating default overrides through storage conversion', () => {
+    const storage = regionThemeToStorage({
+      ...OCEAN_PRESET,
+      floating: {
+        default: {
+          accent: '#7dd3fc',
+          opacity: '0.88',
+          titlebarOpacity: '0.92',
+          backgroundImage: 'linear-gradient(135deg, rgba(8, 17, 31, 0.2), rgba(17, 36, 59, 0.32))',
+        },
+      },
+    });
+    expect(storage?.overrides['floating-default-accent']).toBe('#7dd3fc');
+    expect(storage?.overrides['floating-opacity']).toBe('0.88');
+    expect(storage?.overrides['floating-titlebar-opacity']).toBe('0.92');
+    expect(storage?.overrides['floating-background-image']).toContain('linear-gradient');
+    expect(storage?.floating?.default?.accent).toBe('#7dd3fc');
   });
 });

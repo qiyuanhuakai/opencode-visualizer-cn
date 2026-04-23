@@ -20,7 +20,7 @@ export type StreamingWindowConfig = {
   theme: () => string;
   closeDelayMs: number;
   prefix: string;
-  color: string;
+  color?: string;
   suppressAutoWindows?: Ref<boolean>;
   width?: number;
   height?: number;

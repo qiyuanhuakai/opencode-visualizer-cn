@@ -16,6 +16,14 @@ const externalThemeFixture = {
   badge: 'External',
   description: 'Northern-light inspired surfaces.',
   swatches: ['#08111f', '#11243b', '#67e8f9', '#eefbff'],
+  floating: {
+    surfaceBase: '#0f2033',
+    opacity: '0.9',
+    backgroundImage: 'linear-gradient(135deg, rgba(8, 17, 31, 0.2), rgba(17, 36, 59, 0.32))',
+    default: { accent: '#7dd3fc', opacity: '0.88' },
+    shell: { accent: '#c084fc', backgroundImage: 'linear-gradient(135deg, rgba(7, 20, 35, 0.18), rgba(19, 52, 77, 0.28))' },
+    dialog: { accent: '#f59e0b', titlebarOpacity: '0.96' },
+  },
   components: {
     dropdown: { bg: '#08111f', border: '#29506f', text: '#eefbff', textMuted: '#8fb8d0', controlBg: '#102033', hoverBg: '#16324f', activeBg: '#1d4f73', accent: '#67e8f9', shadow: '0 10px 22px rgba(2, 6, 23, 0.45)' },
     chip: { borderNeutral: '#29506f', borderSubtle: 'color-mix(in srgb, #29506f 80%, transparent)', bgNeutral: '#13283f', bgHover: '#1d4f73', fgNeutral: '#eefbff' },
@@ -44,6 +52,11 @@ describe('themeRegistry', () => {
     expect(theme.components?.dropdown?.accent).toBe('#67e8f9');
     expect(theme.components?.dock?.handle).toBe('#8fb8d0');
     expect(theme.components?.formControl?.buttonPrimaryBg).toBe('#1d4f73');
+    expect(theme.floating?.surfaceBase).toBe('#0f2033');
+    expect(theme.floating?.backgroundImage).toContain('linear-gradient');
+    expect(theme.floating?.default?.accent).toBe('#7dd3fc');
+    expect(theme.floating?.shell?.accent).toBe('#c084fc');
+    expect(theme.floating?.shell?.backgroundImage).toContain('linear-gradient');
   });
 
   it('parses a single theme text payload', () => {
@@ -98,6 +111,7 @@ describe('themeRegistry', () => {
     expect(template.components?.emptyState).toEqual({});
     expect(template.components?.actionButton).toEqual({});
     expect(template.components?.search).toEqual({});
+    expect(template.floating).toEqual({});
   });
 
   it('creates exportable external definitions from runtime themes', () => {
@@ -113,5 +127,8 @@ describe('themeRegistry', () => {
     expect(external.swatches).toHaveLength(4);
     expect(external.regions.pageBackground.bg).toBe('#b8c9d8');
     expect(external.components).toBeUndefined();
+    expect(external.floating?.surfaceBase).toBe('#09192a');
+    expect(external.floating?.default?.accent).toBe('#76e4f7');
+    expect(external.floating?.backgroundImage).toContain('linear-gradient');
   });
 });

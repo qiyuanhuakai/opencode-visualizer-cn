@@ -162,7 +162,6 @@ export function useQuestions(options: {
       title: t('app.windowTitles.question', { title: request.questions?.[0]?.header || 'request' }),
       width: QUESTION_WINDOW_WIDTH,
       height: QUESTION_WINDOW_HEIGHT,
-      color: '#34d399',
       resizable: true,
       scroll: 'follow',
     });

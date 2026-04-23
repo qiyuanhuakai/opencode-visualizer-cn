@@ -13,7 +13,7 @@ export type DialogWindowOptions = {
   title: string;
   width: number;
   height: number;
-  color: string;
+  color?: string;
   resizable?: boolean;
   scroll?: 'manual' | 'follow';
 };

@@ -27,8 +27,6 @@ type UseReasoningWindowsOptions = {
 };
 
 const REASONING_WINDOW_PREFIX = 'reasoning:';
-const REASONING_WINDOW_COLOR = '#8b5cf6';
-
 export function useReasoningWindows(options: UseReasoningWindowsOptions) {
   const {
     selectedSessionId,
@@ -53,7 +51,6 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     theme,
     closeDelayMs: reasoningCloseDelayMs,
     prefix: REASONING_WINDOW_PREFIX,
-    color: REASONING_WINDOW_COLOR,
     suppressAutoWindows,
   });
 
