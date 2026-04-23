@@ -21,8 +21,6 @@ type UseSubagentWindowsOptions = {
 };
 
 const SUBAGENT_WINDOW_PREFIX = 'subagent:';
-const SUBAGENT_WINDOW_COLOR = '#0ea5e9';
-
 export function useSubagentWindows(options: UseSubagentWindowsOptions) {
   const {
     selectedSessionId,
@@ -44,7 +42,6 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
     theme,
     closeDelayMs,
     prefix: SUBAGENT_WINDOW_PREFIX,
-    color: SUBAGENT_WINDOW_COLOR,
     suppressAutoWindows,
   });
 

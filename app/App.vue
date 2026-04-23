@@ -537,6 +537,7 @@ const TERM_WINDOW_BORDER_PX = 2;
 const TERM_INNER_PADDING_X_PX = 4;
 const TERM_INNER_PADDING_Y_PX = 4;
 const TERM_GUTTER_WIDTH_EM = 3.2;
+const TRANSPARENT_TERMINAL_BACKGROUND = 'rgba(0, 0, 0, 0)';
 const INITIAL_HISTORY_LIMIT = 12;
 const MANUAL_HISTORY_LOAD_STEP = 200;
 const AUTO_VIEWPORT_HISTORY_LOAD_STEP = 160;
@@ -4699,7 +4700,6 @@ async function ensureShellWindow(pty: PtyInfo) {
     closable: true,
     resizable: true,
     scroll: 'none',
-    color: '#a855f7',
     title: pty.title === 'One-shot PTY' ? t('app.windowTitles.oneShotPty') : (pty.title || t('app.windowTitles.shell')),
     width,
     height,
@@ -4719,8 +4719,9 @@ async function ensureShellWindow(pty: PtyInfo) {
     fontSize: TERM_FONT_SIZE_PX.value,
     lineHeight: TERM_LINE_HEIGHT,
     cursorBlink: true,
+    allowTransparency: true,
     theme: {
-      background: '#050505',
+      background: TRANSPARENT_TERMINAL_BACKGROUND,
       foreground: '#e2e8f0',
       cursor: '#e2e8f0',
       selectionBackground: 'rgba(148, 163, 184, 0.3)',
@@ -6928,7 +6929,6 @@ function handleOpenHistoryReasoning(payload: { part: ReasoningPart }) {
     closable: true,
     resizable: true,
     focusOnOpen: true,
-    color: '#8b5cf6',
     variant: 'message',
     expiry: Infinity,
     width: winW,

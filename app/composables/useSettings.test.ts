@@ -190,6 +190,7 @@ describe('useSettings', () => {
     expect(settings.appFontSizePx.value).toBe(12);
   });
 
+
   it('uses default font sizes when storage event clears the keys', async () => {
     const settings = await importFresh();
     const terminalEvent = {

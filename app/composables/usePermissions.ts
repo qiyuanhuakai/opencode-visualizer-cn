@@ -119,7 +119,6 @@ export function usePermissions(options: {
       title: t('app.windowTitles.permission', { title: request.permission || 'request' }),
       width: PERMISSION_WINDOW_WIDTH,
       height: PERMISSION_WINDOW_HEIGHT,
-      color: '#f59e0b',
     });
   }
 

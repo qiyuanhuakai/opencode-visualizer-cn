@@ -6,6 +6,7 @@ import {
   REGION_NAMES,
   SAKURA_PRESET,
   THEME_COMPONENT_FIELDS,
+  type FloatingWindowThemeColors,
   type ThemeComponentConfig,
   type ThemeComponentName,
   type RegionColors,
@@ -38,6 +39,7 @@ export type ExternalThemeDefinition = {
   swatches?: string[];
   regions: Record<RegionName, Partial<RegionColors>>;
   components?: ThemeComponentConfig;
+  floating?: Partial<FloatingWindowThemeColors>;
 };
 
 type StoredExternalThemeRegistry = {
@@ -132,6 +134,32 @@ function cloneThemeComponents(components: ThemeComponentConfig | undefined): The
   };
 }
 
+function cloneFloatingTypeTheme(
+  value: Record<string, string | undefined> | undefined,
+): Record<string, string | undefined> | undefined {
+  return value ? { ...value } : undefined;
+}
+
+function cloneFloatingTheme(
+  floating: Partial<FloatingWindowThemeColors> | undefined,
+): Partial<FloatingWindowThemeColors> | undefined {
+  if (!floating) return undefined;
+  return {
+    ...floating,
+    default: cloneFloatingTypeTheme(floating.default),
+    shell: cloneFloatingTypeTheme(floating.shell),
+    reasoning: cloneFloatingTypeTheme(floating.reasoning),
+    subagent: cloneFloatingTypeTheme(floating.subagent),
+    tool: cloneFloatingTypeTheme(floating.tool),
+    file: cloneFloatingTypeTheme(floating.file),
+    diff: cloneFloatingTypeTheme(floating.diff),
+    media: cloneFloatingTypeTheme(floating.media),
+    dialog: cloneFloatingTypeTheme(floating.dialog),
+    history: cloneFloatingTypeTheme(floating.history),
+    debug: cloneFloatingTypeTheme(floating.debug),
+  };
+}
+
 function normalizeThemeComponents(input: unknown): ThemeComponentConfig | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const record = input as Record<string, unknown>;
@@ -153,6 +181,52 @@ function normalizeThemeComponents(input: unknown): ThemeComponentConfig | undefi
       return [componentName, component];
     }),
   ) as ThemeComponentConfig;
+}
+
+function normalizeFloatingTypeTheme(input: unknown) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const record = input as Record<string, unknown>;
+  return Object.fromEntries(
+    ['accent', 'backgroundColor', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
+      const value = normalizeColorValue(record[field]);
+      if (!value) return [];
+      return [[field, value]];
+    }),
+  );
+}
+
+function normalizeFloatingTheme(input: unknown): Partial<FloatingWindowThemeColors> | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const record = input as Record<string, unknown>;
+  return {
+    surfaceBase: normalizeColorValue(record.surfaceBase),
+    surfaceMuted: normalizeColorValue(record.surfaceMuted),
+    surfaceSubtle: normalizeColorValue(record.surfaceSubtle),
+    surfaceStrong: normalizeColorValue(record.surfaceStrong),
+    borderMuted: normalizeColorValue(record.borderMuted),
+    borderSubtle: normalizeColorValue(record.borderSubtle),
+    borderFaint: normalizeColorValue(record.borderFaint),
+    borderFaintStrong: normalizeColorValue(record.borderFaintStrong),
+    fillFaint: normalizeColorValue(record.fillFaint),
+    text: normalizeColorValue(record.text),
+    textMuted: normalizeColorValue(record.textMuted),
+    textSoft: normalizeColorValue(record.textSoft),
+    textSecondary: normalizeColorValue(record.textSecondary),
+    opacity: normalizeColorValue(record.opacity),
+    titlebarOpacity: normalizeColorValue(record.titlebarOpacity),
+    backgroundImage: normalizeColorValue(record.backgroundImage),
+    default: normalizeFloatingTypeTheme(record.default),
+    shell: normalizeFloatingTypeTheme(record.shell),
+    reasoning: normalizeFloatingTypeTheme(record.reasoning),
+    subagent: normalizeFloatingTypeTheme(record.subagent),
+    tool: normalizeFloatingTypeTheme(record.tool),
+    file: normalizeFloatingTypeTheme(record.file),
+    diff: normalizeFloatingTypeTheme(record.diff),
+    media: normalizeFloatingTypeTheme(record.media),
+    dialog: normalizeFloatingTypeTheme(record.dialog),
+    history: normalizeFloatingTypeTheme(record.history),
+    debug: normalizeFloatingTypeTheme(record.debug),
+  };
 }
 
 function deriveThemeSwatches(theme: RegionThemeConfig): string[] {
@@ -231,6 +305,8 @@ export function listBuiltinThemeRegistryEntries(): ThemeRegistryEntry[] {
       name: entry.theme.name,
       label: entry.theme.label,
       regions: cloneRegionMap(entry.theme.regions),
+      components: cloneThemeComponents(entry.theme.components),
+      floating: cloneFloatingTheme(entry.theme.floating),
     },
     swatches: [...entry.swatches],
   }));
@@ -243,6 +319,7 @@ function normalizeExternalThemeDefinition(input: unknown): ExternalThemeDefiniti
   const label = normalizeThemeLabel(record.label);
   const regions = normalizeThemeRegions(record.regions);
   const components = normalizeThemeComponents(record.components);
+  const floating = normalizeFloatingTheme(record.floating);
 
   if (!id || !label || !regions) {
     return null;
@@ -253,6 +330,7 @@ function normalizeExternalThemeDefinition(input: unknown): ExternalThemeDefiniti
     label,
     regions,
     components,
+    floating,
   };
 
   return {
@@ -263,6 +341,7 @@ function normalizeExternalThemeDefinition(input: unknown): ExternalThemeDefiniti
     swatches: normalizeSwatches(record.swatches, theme),
     regions: cloneRegionMap(regions),
     components: cloneThemeComponents(components),
+    floating: cloneFloatingTheme(floating),
   };
 }
 
@@ -355,12 +434,14 @@ export function createExternalThemeRegistryEntry(theme: ExternalThemeDefinition)
       label: theme.label,
       regions: theme.regions,
       components: theme.components,
+      floating: theme.floating,
     }),
     theme: {
       name: theme.id,
       label: theme.label,
       regions: cloneRegionMap(theme.regions),
       components: cloneThemeComponents(theme.components),
+      floating: cloneFloatingTheme(theme.floating),
     },
   };
 }
@@ -375,6 +456,7 @@ export function createExternalThemeDefinition(theme: RegionThemeConfig, meta?: P
     swatches: meta?.swatches ? [...meta.swatches] : deriveThemeSwatches(theme),
     regions: cloneRegionMap(theme.regions),
     components: cloneThemeComponents(theme.components),
+    floating: cloneFloatingTheme(theme.floating),
   };
 }
 
@@ -401,6 +483,7 @@ export function createThemeTemplate(themeId = 'my-theme', label = 'My Theme'): E
           actionButton: {},
           search: {},
         },
+        floating: {},
       },
       {
         badge: 'External',

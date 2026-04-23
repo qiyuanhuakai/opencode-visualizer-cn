@@ -34,6 +34,9 @@
     "components": {
       "$ref": "#/$defs/themeComponents"
     },
+    "floating": {
+      "$ref": "#/$defs/floatingTheme"
+    },
     "regions": {
       "$ref": "#/$defs/themeRegions"
     }
@@ -243,6 +246,50 @@
         "placeholder": { "type": "string" },
         "icon": { "type": "string" },
         "focusBg": { "type": "string" }
+      }
+    },
+    "floatingWindowTypeTheme": {
+      "type": "object",
+      "additionalProperties": false,
+        "properties": {
+          "accent": { "type": "string" },
+          "backgroundColor": { "type": "string" },
+          "opacity": { "type": "string" },
+          "titlebarOpacity": { "type": "string" },
+          "backgroundImage": { "type": "string" }
+      }
+    },
+    "floatingTheme": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "surfaceBase": { "type": "string" },
+        "surfaceMuted": { "type": "string" },
+        "surfaceSubtle": { "type": "string" },
+        "surfaceStrong": { "type": "string" },
+        "borderMuted": { "type": "string" },
+        "borderSubtle": { "type": "string" },
+        "borderFaint": { "type": "string" },
+        "borderFaintStrong": { "type": "string" },
+        "fillFaint": { "type": "string" },
+        "text": { "type": "string" },
+        "textMuted": { "type": "string" },
+        "textSoft": { "type": "string" },
+        "textSecondary": { "type": "string" },
+        "opacity": { "type": "string" },
+        "titlebarOpacity": { "type": "string" },
+        "backgroundImage": { "type": "string" },
+        "default": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "shell": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "reasoning": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "subagent": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "tool": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "file": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "diff": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "media": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "dialog": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "history": { "$ref": "#/$defs/floatingWindowTypeTheme" },
+        "debug": { "$ref": "#/$defs/floatingWindowTypeTheme" }
       }
     },
     "themeComponents": {

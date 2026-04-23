@@ -90,6 +90,10 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-empty-state-text')).toBe(snapshot['empty-state-text']);
     expect(document.documentElement.style.getPropertyValue('--theme-action-button-bg')).toBe(snapshot['action-button-bg']);
     expect(document.documentElement.style.getPropertyValue('--theme-search-bg')).toBe(snapshot['search-bg']);
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-surface-base')).toBe(snapshot['floating-surface-base']);
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-shell-accent')).toBe(snapshot['floating-shell-accent']);
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-dialog-accent')).toBe(snapshot['floating-dialog-accent']);
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-background-image')).toBe(snapshot['floating-background-image']);
 
     unmount();
   });
@@ -107,6 +111,8 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
     expect(document.documentElement.style.getPropertyValue('--theme-output-bg')).toBe('#13293d');
     expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('#0f2033');
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-surface-base')).toBe('#09192a');
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-background-image')).toContain('linear-gradient');
 
     unmount();
   });
@@ -129,6 +135,9 @@ describe('useRegionTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--theme-tab-bg')).toBe('rgba(11, 19, 32, 0.92)');
     expect(document.documentElement.style.getPropertyValue('--theme-badge-bg')).toBe('rgba(15, 23, 42, 0.75)');
     expect(document.documentElement.style.getPropertyValue('--theme-card-bg')).toBe('rgba(11, 19, 32, 0.92)');
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-surface-base')).toBe('#1a1d24');
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-shell-accent')).toBe('#a855f7');
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-background-image')).toBe('none');
 
     unmount();
   });

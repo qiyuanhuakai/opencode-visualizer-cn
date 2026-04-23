@@ -7,6 +7,7 @@ import type { FloatingWindowEntry, useFloatingWindows } from '../composables/use
 import { useAutoScroller, type ScrollMode } from '../composables/useAutoScroller';
 import { useContentSearch } from '../composables/useContentSearch';
 import { useSettings } from '../composables/useSettings';
+import { resolveFloatingWindowThemeType } from '../utils/floatingWindowTheme';
 import { Icon } from '@iconify/vue';
 
 const { showMinimizeButtons, showOpenInEditorButton, openInEditorMaxSizeMb, floatingPreviewWordWrap } = useSettings();
@@ -126,8 +127,13 @@ const api: FloatingWindowAPI = {
 
 provide(FLOATING_WINDOW_KEY, api);
 
+const floatingThemeType = computed(() => resolveFloatingWindowThemeType(props.entry));
+
 const windowStyle = computed(() => {
-  const color = props.entry.color || '#3a4150';
+  const color =
+    typeof props.entry.color === 'string' && props.entry.color.trim().length > 0
+      ? props.entry.color
+      : `var(--theme-floating-${floatingThemeType.value}-accent, var(--theme-floating-default-accent, #3a4150))`;
   const isMinimized = props.entry.minimized === true;
   const isShellWindow = props.entry.key.startsWith('shell:');
   return {
@@ -136,7 +142,20 @@ const windowStyle = computed(() => {
     width: props.entry.width ? `${props.entry.width}px` : '600px',
     height: isMinimized ? '22px' : (props.entry.height ? `${props.entry.height}px` : '400px'),
     zIndex: props.entry.zIndex,
+    '--floating-accent': color,
     '--window-color': color,
+    '--floating-window-opacity': `var(--theme-floating-${floatingThemeType.value}-opacity, var(--theme-floating-opacity, 1))`,
+    '--floating-titlebar-opacity': `var(--theme-floating-${floatingThemeType.value}-titlebar-opacity, var(--theme-floating-titlebar-opacity, 1))`,
+    '--floating-background-image': `var(--theme-floating-${floatingThemeType.value}-background-image, var(--theme-floating-background-image, none))`,
+    '--terminal-shell-background-color': isShellWindow
+      ? 'var(--theme-floating-shell-background-color, var(--floating-surface-base, #050505))'
+      : 'transparent',
+    '--terminal-shell-background-opacity': isShellWindow
+      ? 'var(--theme-floating-shell-opacity, var(--floating-window-opacity, 1))'
+      : '1',
+    '--floating-titlebar-surface-opacity': isShellWindow ? '1' : 'var(--floating-titlebar-opacity, 1)',
+    '--floating-body-opacity': isShellWindow ? '0' : 'var(--floating-window-opacity, 1)',
+    '--floating-body-background-image': isShellWindow ? 'none' : 'var(--floating-background-image, none)',
     '--floating-font-family': isShellWindow
       ? 'var(--term-font-family, monospace)'
       : 'var(--app-monospace-font-family, monospace)',
@@ -521,7 +540,7 @@ function onResizeEnd(e: PointerEvent) {
     <div v-show="!entry.minimized" class="floating-window-body-wrapper">
       <div
         class="floating-window-body"
-        :class="scrollClass"
+        :class="[scrollClass, { 'is-shell-window-body': entry.key.startsWith('shell:') }]"
         ref="bodyEl"
         tabindex="-1"
         @click="onBodyClick"
@@ -597,19 +616,19 @@ function onResizeEnd(e: PointerEvent) {
   --win-y: 0px;
   --win-scale-x: 1;
   --win-scale-y: 1;
-  --floating-surface-base: #1a1d24;
-  --floating-surface-muted: rgba(36, 40, 50, 0.95);
-  --floating-surface-subtle: rgba(30, 34, 42, 0.85);
-  --floating-surface-strong: rgba(50, 58, 72, 0.95);
-  --floating-border-muted: rgba(90, 100, 120, 0.35);
-  --floating-border-subtle: rgba(100, 110, 130, 0.5);
-  --floating-border-faint: rgba(255, 255, 255, 0.15);
-  --floating-border-faint-strong: rgba(255, 255, 255, 0.18);
-  --floating-fill-faint: rgba(255, 255, 255, 0.08);
-  --floating-text: #e2e8f0;
-  --floating-text-muted: #94a3b8;
-  --floating-text-soft: #9ca3af;
-  --floating-text-secondary: #cbd5e1;
+  --floating-surface-base: var(--theme-floating-surface-base, #1a1d24);
+  --floating-surface-muted: var(--theme-floating-surface-muted, #242832);
+  --floating-surface-subtle: var(--theme-floating-surface-subtle, #1e222a);
+  --floating-surface-strong: var(--theme-floating-surface-strong, #323a48);
+  --floating-border-muted: var(--theme-floating-border-muted, rgba(90, 100, 120, 0.35));
+  --floating-border-subtle: var(--theme-floating-border-subtle, rgba(100, 110, 130, 0.5));
+  --floating-border-faint: var(--theme-floating-border-faint, rgba(255, 255, 255, 0.15));
+  --floating-border-faint-strong: var(--theme-floating-border-faint-strong, rgba(255, 255, 255, 0.18));
+  --floating-fill-faint: var(--theme-floating-fill-faint, #ffffff);
+  --floating-text: var(--theme-floating-text, #e2e8f0);
+  --floating-text-muted: var(--theme-floating-text-muted, #94a3b8);
+  --floating-text-soft: var(--theme-floating-text-soft, #9ca3af);
+  --floating-text-secondary: var(--theme-floating-text-secondary, #cbd5e1);
   position: absolute;
   left: 0;
   top: 0;
@@ -620,9 +639,10 @@ function onResizeEnd(e: PointerEvent) {
   display: flex;
   flex-direction: column;
   max-width: 100vw;
-  background: color-mix(in srgb, var(--window-color, #3a4150) 12%, var(--floating-surface-base));
-  border: 1px solid var(--window-color, #3a4150);
-  border-color: var(--window-color, #3a4150);
+  overflow: hidden;
+  background: transparent;
+  border: 1px solid var(--floating-accent, #3a4150);
+  border-color: var(--floating-accent, #3a4150);
   border-radius: 5px;
   font-family: var(--floating-font-family, monospace);
   font-size: var(--floating-font-size, 14px);
@@ -631,21 +651,51 @@ function onResizeEnd(e: PointerEvent) {
   pointer-events: auto;
 }
 
+.floating-window::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: var(--floating-body-background-image, var(--floating-background-image, none));
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.floating-window > * {
+  position: relative;
+  z-index: 1;
+}
+
 .floating-window-titlebar {
   height: 22px;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 4px;
   font-size: 12px;
-  color: color-mix(in srgb, var(--window-color, #3a4150) 40%, var(--floating-text));
-  background: color-mix(in srgb, var(--window-color, #3a4150) 22%, var(--floating-surface-muted));
-  border-bottom: 1px solid
-    color-mix(in srgb, var(--window-color, #3a4150) 35%, var(--floating-border-muted));
-  border-bottom-color: color-mix(in srgb, var(--window-color, #3a4150) 35%, var(--floating-border-muted));
+  color: color-mix(in srgb, var(--floating-accent, #3a4150) 40%, var(--floating-text));
+  background: transparent;
   border-radius: 4px 4px 0 0;
   cursor: grab;
   user-select: none;
+}
+
+.floating-window-titlebar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--floating-accent, #3a4150) 22%, var(--floating-surface-muted));
+  box-shadow: inset 0 -1px 0
+    color-mix(in srgb, var(--floating-accent, #3a4150) 35%, var(--floating-border-muted));
+  opacity: var(--floating-titlebar-surface-opacity, var(--floating-titlebar-opacity, 1));
+  pointer-events: none;
+  z-index: -1;
 }
 
 .floating-window-titlebar:active {
@@ -727,6 +777,16 @@ function onResizeEnd(e: PointerEvent) {
   border-radius: 0 0 4px 4px;
 }
 
+.floating-window-body-wrapper::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--floating-accent, #3a4150) 12%, var(--floating-surface-base));
+  opacity: var(--floating-body-opacity, var(--floating-window-opacity, 1));
+  pointer-events: none;
+  z-index: 0;
+}
+
 .floating-window.minimized {
   min-height: 22px;
 }
@@ -737,9 +797,15 @@ function onResizeEnd(e: PointerEvent) {
 }
 
 .floating-window-body {
+  position: relative;
+  z-index: 1;
   height: 100%;
   overflow: auto;
   padding: 2px 4px;
+}
+
+.floating-window-body.is-shell-window-body {
+  padding: 0;
 }
 
 .floating-window-body.scroll-none {
@@ -807,7 +873,7 @@ function onResizeEnd(e: PointerEvent) {
   align-items: center;
   gap: 4px;
   padding: 0 6px;
-  border: 1px solid var(--window-color, #3a4150);
+  border: 1px solid var(--floating-accent, #3a4150);
   border-top: none;
   border-radius: 0 0 4px 4px;
   background: color-mix(in srgb, var(--floating-surface-base) 88%, black);
@@ -878,7 +944,7 @@ function onResizeEnd(e: PointerEvent) {
   height: 0;
   border-style: solid;
   border-width: 0 0 5px 5px;
-  border-color: transparent transparent var(--window-color, #3a4150) transparent;
+  border-color: transparent transparent var(--floating-accent, #3a4150) transparent;
 }
 
 .floating-window-resizer:hover::before {
