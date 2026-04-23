@@ -187,7 +187,7 @@ function normalizeFloatingTypeTheme(input: unknown) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const record = input as Record<string, unknown>;
   return Object.fromEntries(
-    ['accent', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
+    ['accent', 'backgroundColor', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
       const value = normalizeColorValue(record[field]);
       if (!value) return [];
       return [[field, value]];

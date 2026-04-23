@@ -149,6 +149,7 @@ export interface SearchThemeColors {
 
 export interface FloatingWindowTypeThemeColors {
   accent?: string;
+  backgroundColor?: string;
   opacity?: string;
   titlebarOpacity?: string;
   backgroundImage?: string;
@@ -433,7 +434,7 @@ export const OCEAN_PRESET: RegionThemeConfig = {
        titlebarOpacity: '1',
        backgroundImage: 'radial-gradient(circle at top right, rgba(118, 228, 247, 0.22), transparent 38%), linear-gradient(135deg, rgba(7, 18, 34, 0.18), rgba(12, 42, 68, 0.28))',
      },
-    shell: { accent: '#67d7ff', backgroundImage: 'linear-gradient(135deg, rgba(6, 20, 40, 0.18), rgba(18, 54, 84, 0.3))' },
+     shell: { accent: '#67d7ff', backgroundColor: '#0b1f33', opacity: '0.95', backgroundImage: 'linear-gradient(135deg, rgba(6, 20, 40, 0.18), rgba(18, 54, 84, 0.3))' },
     reasoning: { accent: '#a78bfa', backgroundImage: 'radial-gradient(circle at top left, rgba(167, 139, 250, 0.18), transparent 34%), linear-gradient(135deg, rgba(10, 18, 40, 0.2), rgba(22, 40, 76, 0.26))' },
     subagent: { accent: '#38bdf8', backgroundImage: 'radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 34%), linear-gradient(135deg, rgba(7, 22, 38, 0.18), rgba(12, 44, 70, 0.28))' },
     tool: { accent: '#5eead4'},
@@ -562,7 +563,7 @@ export const FOREST_PRESET: RegionThemeConfig = {
       titlebarOpacity: '0.95',
       backgroundImage: 'radial-gradient(circle at top right, rgba(167, 201, 87, 0.18), transparent 40%), linear-gradient(135deg, rgba(10, 22, 14, 0.16), rgba(25, 53, 35, 0.28))',
     },
-    shell: { accent: '#90be6d', backgroundImage: 'linear-gradient(135deg, rgba(11, 27, 16, 0.14), rgba(35, 66, 40, 0.3))' },
+    shell: { accent: '#90be6d', backgroundColor: '#1f3525', opacity: '0.95', backgroundImage: 'linear-gradient(135deg, rgba(11, 27, 16, 0.14), rgba(35, 66, 40, 0.3))' },
     reasoning: { accent: '#c4b5fd', backgroundImage: 'radial-gradient(circle at top left, rgba(196, 181, 253, 0.16), transparent 34%), linear-gradient(135deg, rgba(15, 24, 18, 0.18), rgba(30, 54, 36, 0.24))' },
     subagent: { accent: '#7dd3fc', backgroundImage: 'radial-gradient(circle at top right, rgba(125, 211, 252, 0.14), transparent 34%), linear-gradient(135deg, rgba(10, 24, 18, 0.16), rgba(26, 56, 40, 0.28))' },
     tool: { accent: '#84cc16' },
@@ -691,7 +692,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       titlebarOpacity: '0.95',
       backgroundImage: 'radial-gradient(circle at top right, rgba(255, 194, 220, 1), transparent 40%), linear-gradient(135deg, rgba(48, 26, 40, 0.16), rgba(94, 56, 78, 0.28))',
     },
-    shell: { accent: '#ff9ec8', backgroundImage: 'linear-gradient(135deg, rgba(54, 28, 42, 0.16), rgba(112, 66, 94, 0.3))' },
+    shell: { accent: '#ff9ec8', backgroundColor: '#5e4052', opacity: '0.95', backgroundImage: 'linear-gradient(135deg, rgba(54, 28, 42, 0.16), rgba(112, 66, 94, 0.3))' },
     reasoning: { accent: '#c4b5fd', backgroundImage: 'radial-gradient(circle at top left, rgba(196, 181, 253, 0.16), transparent 34%), linear-gradient(135deg, rgba(56, 26, 44, 0.18), rgba(98, 60, 84, 0.24))' },
     subagent: { accent: '#7dd3fc', backgroundImage: 'radial-gradient(circle at top right, rgba(125, 211, 252, 0.14), transparent 34%), linear-gradient(135deg, rgba(58, 28, 46, 0.16), rgba(104, 62, 88, 0.28))' },
     tool: { accent: '#f9a8d4' },

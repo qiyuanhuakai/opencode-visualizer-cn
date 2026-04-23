@@ -37,6 +37,7 @@ describe('theme token bridge', () => {
     expect(overrides['floating-surface-base']).toBe('#09192a');
     expect(overrides['floating-text']).toBe('#edf7ff');
     expect(overrides['floating-default-accent']).toBe('#76e4f7');
+    expect(overrides['floating-shell-background-color']).toBe('#0b1f33');
     expect(overrides['floating-shell-opacity']).toBe('0.95');
     expect(overrides['floating-background-image']).toContain('linear-gradient');
   });
@@ -90,9 +91,15 @@ describe('theme token bridge', () => {
     expect(snapshot['action-button-bg']).toBe('rgba(11, 19, 32, 0.92)');
     expect(snapshot['search-bg']).toBe('rgba(11, 19, 32, 0.92)');
     expect(snapshot['floating-surface-base']).toBe('#1a1d24');
+    expect(snapshot['floating-surface-muted']).toBe('#242832');
+    expect(snapshot['floating-surface-subtle']).toBe('#1e222a');
+    expect(snapshot['floating-surface-strong']).toBe('#323a48');
+    expect(snapshot['floating-fill-faint']).toBe('#ffffff');
+    expect(snapshot['floating-shell-background-color']).toBe('#1a1d24');
     expect(snapshot['floating-tool-accent']).toBe('#64748b');
     expect(snapshot['floating-dialog-accent']).toBe('#f59e0b');
     expect(snapshot['floating-opacity']).toBe('1');
+    expect(snapshot['floating-titlebar-opacity']).toBe('1');
     expect(snapshot['floating-background-image']).toBe('none');
   });
 
@@ -125,5 +132,52 @@ describe('theme token bridge', () => {
     expect(storage?.overrides['floating-titlebar-opacity']).toBe('0.92');
     expect(storage?.overrides['floating-background-image']).toContain('linear-gradient');
     expect(storage?.floating?.default?.accent).toBe('#7dd3fc');
+  });
+
+  it('strips alpha from floating layer colors and keeps titlebar opacity independent', () => {
+    const overrides = regionThemeToSemanticOverrides({
+      ...OCEAN_PRESET,
+      floating: {
+        surfaceBase: 'rgba(9, 25, 42, 0.35)',
+        surfaceMuted: 'rgba(15, 40, 66, 0.45)',
+        surfaceSubtle: '#112233cc',
+        surfaceStrong: '#445566aa',
+        fillFaint: 'rgba(118, 228, 247, 0.12)',
+        opacity: '0.46',
+        default: {
+          opacity: '0.72',
+        },
+      },
+    });
+
+    expect(overrides['floating-surface-base']).toBe('rgb(9, 25, 42)');
+    expect(overrides['floating-surface-muted']).toBe('rgb(15, 40, 66)');
+    expect(overrides['floating-surface-subtle']).toBe('#112233');
+    expect(overrides['floating-surface-strong']).toBe('#445566');
+    expect(overrides['floating-fill-faint']).toBe('rgb(118, 228, 247)');
+    expect(overrides['floating-opacity']).toBe('0.72');
+    expect(overrides['floating-titlebar-opacity']).toBe('1');
+  });
+
+  it('supports type-level floating background colors', () => {
+    const overrides = regionThemeToSemanticOverrides({
+      ...OCEAN_PRESET,
+      floating: {
+        ...OCEAN_PRESET.floating,
+        default: {
+          ...OCEAN_PRESET.floating?.default,
+          backgroundColor: '#112244',
+        },
+        shell: {
+          ...OCEAN_PRESET.floating?.shell,
+          backgroundColor: '#224466',
+          opacity: '0.95',
+        },
+      },
+    });
+
+    expect(overrides['floating-shell-background-color']).toBe('#224466');
+    expect(overrides['floating-shell-opacity']).toBe('0.95');
+    expect(overrides['floating-tool-background-color']).toBe('#112244');
   });
 });

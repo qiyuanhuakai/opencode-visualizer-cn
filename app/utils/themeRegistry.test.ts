@@ -21,7 +21,7 @@ const externalThemeFixture = {
     opacity: '0.9',
     backgroundImage: 'linear-gradient(135deg, rgba(8, 17, 31, 0.2), rgba(17, 36, 59, 0.32))',
     default: { accent: '#7dd3fc', opacity: '0.88' },
-    shell: { accent: '#c084fc', backgroundImage: 'linear-gradient(135deg, rgba(7, 20, 35, 0.18), rgba(19, 52, 77, 0.28))' },
+    shell: { accent: '#c084fc', backgroundColor: '#0d1527', opacity: '0.95', backgroundImage: 'linear-gradient(135deg, rgba(7, 20, 35, 0.18), rgba(19, 52, 77, 0.28))' },
     dialog: { accent: '#f59e0b', titlebarOpacity: '0.96' },
   },
   components: {
@@ -56,6 +56,8 @@ describe('themeRegistry', () => {
     expect(theme.floating?.backgroundImage).toContain('linear-gradient');
     expect(theme.floating?.default?.accent).toBe('#7dd3fc');
     expect(theme.floating?.shell?.accent).toBe('#c084fc');
+    expect(theme.floating?.shell?.backgroundColor).toBe('#0d1527');
+    expect(theme.floating?.shell?.opacity).toBe('0.95');
     expect(theme.floating?.shell?.backgroundImage).toContain('linear-gradient');
   });
 
@@ -129,6 +131,8 @@ describe('themeRegistry', () => {
     expect(external.components).toBeUndefined();
     expect(external.floating?.surfaceBase).toBe('#09192a');
     expect(external.floating?.default?.accent).toBe('#76e4f7');
+    expect(external.floating?.shell?.backgroundColor).toBe('#0b1f33');
+    expect(external.floating?.shell?.opacity).toBe('0.95');
     expect(external.floating?.backgroundImage).toContain('linear-gradient');
   });
 });

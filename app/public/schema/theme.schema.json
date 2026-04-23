@@ -251,11 +251,12 @@
     "floatingWindowTypeTheme": {
       "type": "object",
       "additionalProperties": false,
-      "properties": {
-        "accent": { "type": "string" },
-        "opacity": { "type": "string" },
-        "titlebarOpacity": { "type": "string" },
-        "backgroundImage": { "type": "string" }
+        "properties": {
+          "accent": { "type": "string" },
+          "backgroundColor": { "type": "string" },
+          "opacity": { "type": "string" },
+          "titlebarOpacity": { "type": "string" },
+          "backgroundImage": { "type": "string" }
       }
     },
     "floatingTheme": {

@@ -194,7 +194,7 @@ export type BaseSemanticThemeToken =
   | 'floating-titlebar-opacity'
   | 'floating-background-image';
 
-const FLOATING_THEME_TOKEN_FIELDS = ['accent', 'opacity', 'titlebar-opacity', 'background-image'] as const;
+const FLOATING_THEME_TOKEN_FIELDS = ['accent', 'background-color', 'opacity', 'titlebar-opacity', 'background-image'] as const;
 
 type FloatingThemeTokenField = (typeof FLOATING_THEME_TOKEN_FIELDS)[number];
 export type FloatingThemeToken = `floating-${FloatingWindowThemeType}-${FloatingThemeTokenField}`;
@@ -582,14 +582,14 @@ const DEFAULT_BASE_SEMANTIC_TOKENS: Record<BaseSemanticThemeToken, string> = {
   'search-icon': '#64748b',
   'search-focus-bg': 'rgba(30, 64, 175, 0.15)',
   'floating-surface-base': '#1a1d24',
-  'floating-surface-muted': 'rgba(36, 40, 50, 0.95)',
-  'floating-surface-subtle': 'rgba(30, 34, 42, 0.85)',
-  'floating-surface-strong': 'rgba(50, 58, 72, 0.95)',
+  'floating-surface-muted': '#242832',
+  'floating-surface-subtle': '#1e222a',
+  'floating-surface-strong': '#323a48',
   'floating-border-muted': 'rgba(90, 100, 120, 0.35)',
   'floating-border-subtle': 'rgba(100, 110, 130, 0.5)',
   'floating-border-faint': 'rgba(255, 255, 255, 0.15)',
   'floating-border-faint-strong': 'rgba(255, 255, 255, 0.18)',
-  'floating-fill-faint': 'rgba(255, 255, 255, 0.08)',
+  'floating-fill-faint': '#ffffff',
   'floating-text': '#e2e8f0',
   'floating-text-muted': '#94a3b8',
   'floating-text-soft': '#9ca3af',
@@ -633,7 +633,7 @@ function floatingThemeValue(
 function floatingTypeValue(
   floating: Partial<FloatingWindowThemeColors> | undefined,
   type: FloatingWindowThemeType,
-  field: 'accent' | 'opacity' | 'titlebarOpacity' | 'backgroundImage',
+  field: 'accent' | 'backgroundColor' | 'opacity' | 'titlebarOpacity' | 'backgroundImage',
 ) {
   return floating?.[type]?.[field];
 }
@@ -642,46 +642,56 @@ function createDefaultFloatingSemanticTokens(
   base: Record<BaseSemanticThemeToken, string>,
 ): Record<FloatingThemeToken, string> {
   return {
-    'floating-shell-accent': '#a855f7',
-    'floating-shell-opacity': base['floating-opacity'],
-    'floating-shell-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-shell-background-image': base['floating-background-image'],
-    'floating-reasoning-accent': '#8b5cf6',
-    'floating-reasoning-opacity': base['floating-opacity'],
-    'floating-reasoning-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-reasoning-background-image': base['floating-background-image'],
-    'floating-subagent-accent': '#0ea5e9',
-    'floating-subagent-opacity': base['floating-opacity'],
-    'floating-subagent-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-subagent-background-image': base['floating-background-image'],
-    'floating-tool-accent': '#64748b',
-    'floating-tool-opacity': base['floating-opacity'],
-    'floating-tool-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-tool-background-image': base['floating-background-image'],
-    'floating-file-accent': '#3a4150',
-    'floating-file-opacity': base['floating-opacity'],
-    'floating-file-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-file-background-image': base['floating-background-image'],
-    'floating-diff-accent': '#3b82f6',
-    'floating-diff-opacity': base['floating-opacity'],
-    'floating-diff-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-diff-background-image': base['floating-background-image'],
-    'floating-media-accent': '#14b8a6',
-    'floating-media-opacity': base['floating-opacity'],
-    'floating-media-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-media-background-image': base['floating-background-image'],
-    'floating-dialog-accent': '#f59e0b',
-    'floating-dialog-opacity': base['floating-opacity'],
-    'floating-dialog-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-dialog-background-image': base['floating-background-image'],
-    'floating-history-accent': '#8b5cf6',
-    'floating-history-opacity': base['floating-opacity'],
-    'floating-history-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-history-background-image': base['floating-background-image'],
-    'floating-debug-accent': '#475569',
-    'floating-debug-opacity': base['floating-opacity'],
-    'floating-debug-titlebar-opacity': base['floating-titlebar-opacity'],
-    'floating-debug-background-image': base['floating-background-image'],
+     'floating-shell-accent': '#a855f7',
+     'floating-shell-background-color': base['floating-surface-base'],
+     'floating-shell-opacity': base['floating-opacity'],
+     'floating-shell-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-shell-background-image': base['floating-background-image'],
+     'floating-reasoning-accent': '#8b5cf6',
+     'floating-reasoning-background-color': base['floating-surface-base'],
+     'floating-reasoning-opacity': base['floating-opacity'],
+     'floating-reasoning-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-reasoning-background-image': base['floating-background-image'],
+     'floating-subagent-accent': '#0ea5e9',
+     'floating-subagent-background-color': base['floating-surface-base'],
+     'floating-subagent-opacity': base['floating-opacity'],
+     'floating-subagent-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-subagent-background-image': base['floating-background-image'],
+     'floating-tool-accent': '#64748b',
+     'floating-tool-background-color': base['floating-surface-base'],
+     'floating-tool-opacity': base['floating-opacity'],
+     'floating-tool-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-tool-background-image': base['floating-background-image'],
+     'floating-file-accent': '#3a4150',
+     'floating-file-background-color': base['floating-surface-base'],
+     'floating-file-opacity': base['floating-opacity'],
+     'floating-file-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-file-background-image': base['floating-background-image'],
+     'floating-diff-accent': '#3b82f6',
+     'floating-diff-background-color': base['floating-surface-base'],
+     'floating-diff-opacity': base['floating-opacity'],
+     'floating-diff-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-diff-background-image': base['floating-background-image'],
+     'floating-media-accent': '#14b8a6',
+     'floating-media-background-color': base['floating-surface-base'],
+     'floating-media-opacity': base['floating-opacity'],
+     'floating-media-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-media-background-image': base['floating-background-image'],
+     'floating-dialog-accent': '#f59e0b',
+     'floating-dialog-background-color': base['floating-surface-base'],
+     'floating-dialog-opacity': base['floating-opacity'],
+     'floating-dialog-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-dialog-background-image': base['floating-background-image'],
+     'floating-history-accent': '#8b5cf6',
+     'floating-history-background-color': base['floating-surface-base'],
+     'floating-history-opacity': base['floating-opacity'],
+     'floating-history-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-history-background-image': base['floating-background-image'],
+     'floating-debug-accent': '#475569',
+     'floating-debug-background-color': base['floating-surface-base'],
+     'floating-debug-opacity': base['floating-opacity'],
+     'floating-debug-titlebar-opacity': base['floating-titlebar-opacity'],
+     'floating-debug-background-image': base['floating-background-image'],
   };
 }
 
@@ -950,6 +960,35 @@ function firstDefined(...values: Array<string | undefined>) {
   return values.find((value) => typeof value === 'string' && value.length > 0);
 }
 
+function stripColorAlpha(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+
+  const trimmed = value.trim();
+  const hexMatch = trimmed.match(/^#([0-9a-f]{4}|[0-9a-f]{8})$/i);
+  if (hexMatch) {
+    const hex = hexMatch[1];
+    return hex.length === 4 ? `#${hex.slice(0, 3)}` : `#${hex.slice(0, 6)}`;
+  }
+
+  const rgbaMatch = trimmed.match(/^rgba\((.+)\)$/i);
+  if (rgbaMatch) {
+    const parts = rgbaMatch[1].split(',').map((part) => part.trim());
+    if (parts.length === 4) {
+      return `rgb(${parts.slice(0, 3).join(', ')})`;
+    }
+  }
+
+  const hslaMatch = trimmed.match(/^hsla\((.+)\)$/i);
+  if (hslaMatch) {
+    const parts = hslaMatch[1].split(',').map((part) => part.trim());
+    if (parts.length === 4) {
+      return `hsl(${parts.slice(0, 3).join(', ')})`;
+    }
+  }
+
+  return trimmed;
+}
+
 function normalizeColorValue(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const trimmed = value.trim();
@@ -1074,7 +1113,7 @@ function normalizeStoredFloatingType(value: unknown) {
 
   const record = value as Record<string, unknown>;
   return Object.fromEntries(
-    ['accent', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
+    ['accent', 'backgroundColor', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
       const normalized = normalizeColorValue(record[field]);
       if (!normalized) return [];
       return [[field, normalized]];
@@ -1484,30 +1523,30 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
     'search-placeholder': firstDefined(componentValue(searchComponent, 'placeholder'), regionColorValue(dropdown, 'textMuted'), regionColorValue(modal, 'textMuted'), regionColorValue(input, 'textMuted')),
     'search-icon': firstDefined(componentValue(searchComponent, 'icon'), regionColorValue(dropdown, 'textMuted'), regionColorValue(modal, 'textMuted'), regionColorValue(input, 'textMuted')),
     'search-focus-bg': firstDefined(componentValue(searchComponent, 'focusBg'), regionColorValue(dropdown, 'activeBg'), regionColorValue(modal, 'activeBg'), regionColorValue(input, 'activeBg')),
-    'floating-surface-base': firstDefined(
+    'floating-surface-base': stripColorAlpha(firstDefined(
       floatingThemeValue(floating, 'surfaceBase'),
       regionColorValue(output, 'bg'),
       regionColorValue(modal, 'bg'),
       DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-base'],
-    ),
-    'floating-surface-muted': firstDefined(
+    )),
+    'floating-surface-muted': stripColorAlpha(firstDefined(
       floatingThemeValue(floating, 'surfaceMuted'),
       regionColorValue(output, 'controlBg'),
       regionColorValue(modal, 'controlBg'),
       DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-muted'],
-    ),
-    'floating-surface-subtle': firstDefined(
+    )),
+    'floating-surface-subtle': stripColorAlpha(firstDefined(
       floatingThemeValue(floating, 'surfaceSubtle'),
       regionColorValue(chat, 'controlBg'),
       regionColorValue(side, 'controlBg'),
       DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-subtle'],
-    ),
-    'floating-surface-strong': firstDefined(
+    )),
+    'floating-surface-strong': stripColorAlpha(firstDefined(
       floatingThemeValue(floating, 'surfaceStrong'),
       regionColorValue(output, 'activeBg'),
       regionColorValue(modal, 'activeBg'),
       DEFAULT_BASE_SEMANTIC_TOKENS['floating-surface-strong'],
-    ),
+    )),
     'floating-border-muted': firstDefined(
       floatingThemeValue(floating, 'borderMuted'),
       regionColorValue(output, 'border'),
@@ -1528,10 +1567,10 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
       floatingThemeValue(floating, 'borderFaintStrong'),
       DEFAULT_BASE_SEMANTIC_TOKENS['floating-border-faint-strong'],
     ),
-    'floating-fill-faint': firstDefined(
+    'floating-fill-faint': stripColorAlpha(firstDefined(
       floatingThemeValue(floating, 'fillFaint'),
       DEFAULT_BASE_SEMANTIC_TOKENS['floating-fill-faint'],
-    ),
+    )),
     'floating-text': firstDefined(
       floatingThemeValue(floating, 'text'),
       regionColorValue(output, 'text'),
@@ -1568,8 +1607,6 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
     'floating-titlebar-opacity': firstDefined(
       floatingThemeValue(floating, 'titlebarOpacity'),
       floating?.default?.titlebarOpacity,
-      floatingThemeValue(floating, 'opacity'),
-      floating?.default?.opacity,
       DEFAULT_BASE_SEMANTIC_TOKENS['floating-titlebar-opacity'],
     ),
     'floating-background-image': firstDefined(
@@ -1596,6 +1633,15 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
       overrides[floatingTypeToken(type, 'accent')] = accent;
     }
 
+    const backgroundColor = stripColorAlpha(firstDefined(
+      floatingTypeValue(floating, type, 'backgroundColor'),
+      floating?.default?.backgroundColor,
+      overrides['floating-surface-base'],
+    ));
+    if (backgroundColor) {
+      overrides[floatingTypeToken(type, 'background-color')] = backgroundColor;
+    }
+
     const opacity = firstDefined(
       floatingTypeValue(floating, type, 'opacity'),
       overrides['floating-opacity'],
@@ -1606,7 +1652,6 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
 
     const titlebarOpacity = firstDefined(
       floatingTypeValue(floating, type, 'titlebarOpacity'),
-      floatingTypeValue(floating, type, 'opacity'),
       overrides['floating-titlebar-opacity'],
     );
     if (titlebarOpacity) {
@@ -1640,7 +1685,6 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
 
   const defaultTitlebarOpacity = firstDefined(
     floating?.default?.titlebarOpacity,
-    floating?.default?.opacity,
     overrides['floating-titlebar-opacity'],
   );
   if (defaultTitlebarOpacity) {

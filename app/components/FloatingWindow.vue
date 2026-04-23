@@ -147,6 +147,15 @@ const windowStyle = computed(() => {
     '--floating-window-opacity': `var(--theme-floating-${floatingThemeType.value}-opacity, var(--theme-floating-opacity, 1))`,
     '--floating-titlebar-opacity': `var(--theme-floating-${floatingThemeType.value}-titlebar-opacity, var(--theme-floating-titlebar-opacity, 1))`,
     '--floating-background-image': `var(--theme-floating-${floatingThemeType.value}-background-image, var(--theme-floating-background-image, none))`,
+    '--terminal-shell-background-color': isShellWindow
+      ? 'var(--theme-floating-shell-background-color, var(--floating-surface-base, #050505))'
+      : 'transparent',
+    '--terminal-shell-background-opacity': isShellWindow
+      ? 'var(--theme-floating-shell-opacity, var(--floating-window-opacity, 1))'
+      : '1',
+    '--floating-titlebar-surface-opacity': isShellWindow ? '1' : 'var(--floating-titlebar-opacity, 1)',
+    '--floating-body-opacity': isShellWindow ? '0' : 'var(--floating-window-opacity, 1)',
+    '--floating-body-background-image': isShellWindow ? 'none' : 'var(--floating-background-image, none)',
     '--floating-font-family': isShellWindow
       ? 'var(--term-font-family, monospace)'
       : 'var(--app-monospace-font-family, monospace)',
@@ -531,7 +540,7 @@ function onResizeEnd(e: PointerEvent) {
     <div v-show="!entry.minimized" class="floating-window-body-wrapper">
       <div
         class="floating-window-body"
-        :class="scrollClass"
+        :class="[scrollClass, { 'is-shell-window-body': entry.key.startsWith('shell:') }]"
         ref="bodyEl"
         tabindex="-1"
         @click="onBodyClick"
@@ -608,14 +617,14 @@ function onResizeEnd(e: PointerEvent) {
   --win-scale-x: 1;
   --win-scale-y: 1;
   --floating-surface-base: var(--theme-floating-surface-base, #1a1d24);
-  --floating-surface-muted: var(--theme-floating-surface-muted, rgba(36, 40, 50, 0.95));
-  --floating-surface-subtle: var(--theme-floating-surface-subtle, rgba(30, 34, 42, 0.85));
-  --floating-surface-strong: var(--theme-floating-surface-strong, rgba(50, 58, 72, 0.95));
+  --floating-surface-muted: var(--theme-floating-surface-muted, #242832);
+  --floating-surface-subtle: var(--theme-floating-surface-subtle, #1e222a);
+  --floating-surface-strong: var(--theme-floating-surface-strong, #323a48);
   --floating-border-muted: var(--theme-floating-border-muted, rgba(90, 100, 120, 0.35));
   --floating-border-subtle: var(--theme-floating-border-subtle, rgba(100, 110, 130, 0.5));
   --floating-border-faint: var(--theme-floating-border-faint, rgba(255, 255, 255, 0.15));
   --floating-border-faint-strong: var(--theme-floating-border-faint-strong, rgba(255, 255, 255, 0.18));
-  --floating-fill-faint: var(--theme-floating-fill-faint, rgba(255, 255, 255, 0.08));
+  --floating-fill-faint: var(--theme-floating-fill-faint, #ffffff);
   --floating-text: var(--theme-floating-text, #e2e8f0);
   --floating-text-muted: var(--theme-floating-text-muted, #94a3b8);
   --floating-text-soft: var(--theme-floating-text-soft, #9ca3af);
@@ -647,7 +656,7 @@ function onResizeEnd(e: PointerEvent) {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background-image: var(--floating-background-image, none);
+  background-image: var(--floating-body-background-image, var(--floating-background-image, none));
   background-position: center;
   background-repeat: no-repeat;
   background-size: cover;
@@ -672,9 +681,6 @@ function onResizeEnd(e: PointerEvent) {
   font-size: 12px;
   color: color-mix(in srgb, var(--floating-accent, #3a4150) 40%, var(--floating-text));
   background: transparent;
-  border-bottom: 1px solid
-    color-mix(in srgb, var(--floating-accent, #3a4150) 35%, var(--floating-border-muted));
-  border-bottom-color: color-mix(in srgb, var(--floating-accent, #3a4150) 35%, var(--floating-border-muted));
   border-radius: 4px 4px 0 0;
   cursor: grab;
   user-select: none;
@@ -685,7 +691,9 @@ function onResizeEnd(e: PointerEvent) {
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--floating-accent, #3a4150) 22%, var(--floating-surface-muted));
-  opacity: var(--floating-titlebar-opacity, var(--floating-window-opacity, 1));
+  box-shadow: inset 0 -1px 0
+    color-mix(in srgb, var(--floating-accent, #3a4150) 35%, var(--floating-border-muted));
+  opacity: var(--floating-titlebar-surface-opacity, var(--floating-titlebar-opacity, 1));
   pointer-events: none;
   z-index: -1;
 }
@@ -774,7 +782,7 @@ function onResizeEnd(e: PointerEvent) {
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--floating-accent, #3a4150) 12%, var(--floating-surface-base));
-  opacity: var(--floating-window-opacity, 1);
+  opacity: var(--floating-body-opacity, var(--floating-window-opacity, 1));
   pointer-events: none;
   z-index: 0;
 }
@@ -794,6 +802,10 @@ function onResizeEnd(e: PointerEvent) {
   height: 100%;
   overflow: auto;
   padding: 2px 4px;
+}
+
+.floating-window-body.is-shell-window-body {
+  padding: 0;
 }
 
 .floating-window-body.scroll-none {
