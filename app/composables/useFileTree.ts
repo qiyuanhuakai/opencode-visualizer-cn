@@ -1335,7 +1335,6 @@ export function useFileTree(options?: UseFileTreeOptions) {
     invalidateDirectorySidebarCache,
     toggleTreeDirectory,
     selectTreeFile,
-    feed,
     branchEntries,
     branchListLoading,
     refreshBranchEntries,

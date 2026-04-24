@@ -61,19 +61,17 @@ const rootClass = computed(() => {
 }
 
 .code-content :deep(code) {
-  display: grid;
-  grid-template-columns: max-content max-content 1fr;
-  column-gap: 0;
+  display: block;
 }
 
 .code-content :deep(.code-row) {
   display: grid;
-  grid-template-columns: subgrid;
-  grid-column: 1 / -1;
+  grid-template-columns: max-content max-content 1fr;
   align-items: start;
 }
 
 .code-content :deep(.code-gutter) {
+  grid-column: auto;
   text-align: right;
   color: #8a8a8a;
   white-space: pre;
@@ -87,8 +85,10 @@ const rootClass = computed(() => {
 }
 
 .code-content :deep(.line) {
+  grid-column: 3;
   display: block;
   min-height: 1em;
+  line-height: 1.2;
   white-space: pre;
   box-sizing: border-box;
   padding-left: 1ch;
@@ -100,7 +100,7 @@ const rootClass = computed(() => {
 
 /* no-gutter */
 
-.code-content.no-gutter :deep(code) {
+.code-content.no-gutter :deep(.code-row) {
   grid-template-columns: 1fr;
 }
 
@@ -109,6 +109,7 @@ const rootClass = computed(() => {
 }
 
 .code-content.no-gutter :deep(.line) {
+  grid-column: 1;
   padding-left: 0;
 }
 
