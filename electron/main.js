@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -203,6 +203,13 @@ ipcMain.handle('get-app-version', () => {
 
 ipcMain.handle('get-platform', () => {
   return process.platform;
+});
+
+ipcMain.handle('clipboard-write-text', (_event, text) => {
+  if (typeof text !== 'string') {
+    throw new Error('Invalid text: expected string');
+  }
+  clipboard.writeText(text);
 });
 
 ipcMain.on('persistent-storage-get', (event, key) => {
