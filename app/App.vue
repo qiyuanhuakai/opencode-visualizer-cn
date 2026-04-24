@@ -1733,7 +1733,6 @@ const {
   invalidateDirectorySidebarCache,
   toggleTreeDirectory,
   selectTreeFile,
-  feed,
   branchEntries,
   branchListLoading,
   refreshBranchEntries,

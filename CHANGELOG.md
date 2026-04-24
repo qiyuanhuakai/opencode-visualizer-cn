@@ -3,6 +3,12 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [Unreleased]
+
+### Bug 修复
+
+- [x] 修复了自动换行导致的行号可能在最右边的问题
+
 ## [v0.3.0 released]
 
 ### 悬浮窗管理
