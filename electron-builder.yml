@@ -45,7 +45,7 @@ mac:
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
-  artifactName: "Vis-${version}-${arch}.${ext}"
+  artifactName: "Vis-${version}-${arch}-MacOS.${ext}"
 
 # Windows 配置
 win:
@@ -55,7 +55,7 @@ win:
         - x64
         - arm64
   verifyUpdateCodeSignature: false
-  artifactName: "Vis-${version}-${arch}.${ext}"
+  artifactName: "Vis-${version}-${arch}-Windows.${ext}"
 
 # Linux 配置
 linux:
@@ -72,7 +72,7 @@ linux:
   vendor: "Xenodrive, Inc."
   synopsis: "Vis - OpenCode Visualizer"
   description: "An alternative web UI for OpenCode, designed for daily use."
-  artifactName: "Vis-${version}-${arch}.${ext}"
+  artifactName: "Vis-${version}-${arch}-Linux.${ext}"
 
 # NSIS 安装器配置（Windows）
 nsis:
