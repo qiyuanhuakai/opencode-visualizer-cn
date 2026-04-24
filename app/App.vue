@@ -324,9 +324,8 @@
       :hidden-models="hiddenModels"
       :provider-config="providerConfig"
       @close="isProviderManagerOpen = false"
-      @select-model="handleSelectedModelUpdate"
-      @update-hidden-models="handleModelVisibilityUpdate"
-      @update-provider-config="handleProviderConfigUpdated"
+      @update:model-visibility="handleModelVisibilityUpdate"
+      @config-updated="handleProviderConfigUpdated"
     />
     <StatusMonitorModal :open="isStatusMonitorOpen" :session-id="selectedSessionId" @close="isStatusMonitorOpen = false" />
     <ProjectSettingsDialog
@@ -1733,7 +1732,6 @@ const {
   invalidateDirectorySidebarCache,
   toggleTreeDirectory,
   selectTreeFile,
-  feed,
   branchEntries,
   branchListLoading,
   refreshBranchEntries,

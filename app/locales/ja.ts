@@ -327,7 +327,7 @@ const messages: LocaleMessages = {
       popularDescription: '最初に接続する一般的なプロバイダー（デフォルトフロー4096に対応）。',
       popularEmpty: '接続待ちの人気プロバイダーはありません。',
       allProviders: 'すべて表示',
-      allProvidersDescription: 'すべての残りのプロバイダーを閲覧し、ここから接続または切り替えができます。',
+      allProvidersDescription: 'すべての残りのプロバイダーを閲覧し、状態確認や接続ができます。',
     },
     providerStats: {
       models: '{count}モデル',

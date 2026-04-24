@@ -327,7 +327,7 @@ const messages: LocaleMessages = {
       popularDescription: '优先展示 4096 默认流程里最常见的连接目标。',
       popularEmpty: '当前没有待连接的热门提供商。',
       allProviders: '查看全部',
-      allProvidersDescription: '其余提供商都在这里，可继续连接或直接切换。',
+      allProvidersDescription: '其余提供商都在这里，可查看状态或继续连接。',
     },
     providerStats: {
       models: '{count} 个模型',

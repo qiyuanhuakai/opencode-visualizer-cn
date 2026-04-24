@@ -147,26 +147,36 @@
               </button>
 
               <div v-show="viewAllExpanded" class="provider-view-all-panel">
-                <div class="provider-view-all-grid">
-                <button
-                  v-for="provider in allProvidersForView"
-                  :key="`all-${provider.id}`"
-                  type="button"
-                  class="provider-mini-card"
-                  :class="{ 'is-disabled': !isProviderEnabled(provider.id) }"
-                  :disabled="busyProviderId === provider.id"
-                  @click="isProviderDisconnected(provider) ? connectProvider(provider) : selectProvider(provider.id)"
-                >
-                  <span class="provider-mini-card-name">{{ provider.name?.trim() || provider.id }}</span>
-                  <span class="provider-mini-card-meta">{{ provider.id }}</span>
-                  <span class="status-badge" :class="isProviderDisconnected(provider) ? 'is-warning' : 'is-enabled'">
-                    {{
-                      isProviderDisconnected(provider)
-                        ? $t('providerManager.badges.disconnected')
-                        : $t('providerManager.badges.enabled')
-                    }}
-                  </span>
-                </button>
+                <div class="provider-view-all-list">
+                  <article
+                    v-for="provider in allProvidersForView"
+                    :key="`all-${provider.id}`"
+                    class="provider-mini-row"
+                    :class="{ 'is-disabled': !isProviderEnabled(provider.id) }"
+                  >
+                    <div class="provider-mini-row-title">
+                      <span class="provider-mini-row-name">{{ provider.name?.trim() || provider.id }}</span>
+                      <span class="provider-mini-row-meta">{{ provider.id }}</span>
+                    </div>
+                    <div class="provider-mini-row-status">
+                      <span class="status-badge" :class="isProviderDisconnected(provider) ? 'is-warning' : 'is-enabled'">
+                        {{
+                          isProviderDisconnected(provider)
+                            ? $t('providerManager.badges.disconnected')
+                            : $t('providerManager.badges.enabled')
+                        }}
+                      </span>
+                      <button
+                        v-if="isProviderDisconnected(provider)"
+                        type="button"
+                        class="ghost-action provider-mini-row-action"
+                        :disabled="busyProviderId === provider.id"
+                        @click="connectProvider(provider)"
+                      >
+                        {{ $t('providerManager.actions.connect') }}
+                      </button>
+                    </div>
+                  </article>
               </div>
             </div>
             </section>
@@ -288,6 +298,11 @@
 import { computed, inject, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import * as opencodeApi from '../utils/opencode';
+import {
+  buildProviderDisabledPatch,
+  normalizeProviderIds,
+  type ProviderConfigState,
+} from '../utils/providerConfig';
 
 type ProviderManagerTab = 'providers' | 'models';
 
@@ -317,11 +332,6 @@ type ProviderInfo = {
   source?: string;
   key?: string;
   models?: Record<string, ProviderModel>;
-};
-
-type ProviderConfigState = {
-  enabled_providers?: string[];
-  disabled_providers?: string[];
 };
 
 type ProviderAuthMethod = {
@@ -365,7 +375,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'close'): void;
-  (event: 'select-model', value: string): void;
   (event: 'update:model-visibility', value: ModelVisibilityEntry[]): void;
   (event: 'config-updated', value: ProviderConfigState): void;
   (event: 'providers-changed'): void;
@@ -487,15 +496,9 @@ async function fetchAuthMethods() {
   }
 }
 
-function normalizeIds(values?: string[]) {
-  return Array.isArray(values)
-    ? values.map((value) => value.trim()).filter((value) => value.length > 0)
-    : [];
-}
-
 function isProviderEnabled(providerId: string) {
-  const enabled = normalizeIds(props.providerConfig?.enabled_providers);
-  const disabled = new Set(normalizeIds(props.providerConfig?.disabled_providers));
+  const enabled = normalizeProviderIds(props.providerConfig?.enabled_providers);
+  const disabled = new Set(normalizeProviderIds(props.providerConfig?.disabled_providers));
   if (enabled.length > 0) {
     return enabled.includes(providerId) && !disabled.has(providerId);
   }
@@ -514,12 +517,6 @@ function providerEnabledModelCount(provider: ProviderInfo) {
   return Object.values(provider.models ?? {}).filter(
     (model) => !isModelDisabled(`${provider.id}/${model.id}`),
   ).length;
-}
-
-function providerPrimaryModelId(provider: ProviderInfo) {
-  return Object.values(provider.models ?? {})
-    .map((model) => `${provider.id}/${model.id}`)
-    .find((modelKey) => !isModelDisabled(modelKey));
 }
 
 function providerAuthSummary(providerId: string) {
@@ -567,25 +564,9 @@ async function pickAuthMethod(providerId: string) {
 async function toggleProvider(providerId: string, nextEnabled: boolean) {
   busyProviderId.value = providerId;
   try {
-    const currentEnabled = normalizeIds(props.providerConfig?.enabled_providers);
-    const currentDisabled = new Set(normalizeIds(props.providerConfig?.disabled_providers));
-    if (nextEnabled) {
-      currentDisabled.delete(providerId);
-      if (currentEnabled.length > 0 && !currentEnabled.includes(providerId)) {
-        currentEnabled.push(providerId);
-      }
-    } else {
-      if (currentEnabled.length > 0) {
-        const next = currentEnabled.filter((entry) => entry !== providerId);
-        currentEnabled.splice(0, currentEnabled.length, ...next);
-      } else {
-        currentDisabled.add(providerId);
-      }
-    }
-    const result = (await opencodeApi.updateGlobalConfig({
-      enabled_providers: currentEnabled.length > 0 ? currentEnabled : [],
-      disabled_providers: Array.from(currentDisabled),
-    })) as ProviderConfigState;
+    const result = (await opencodeApi.updateGlobalConfig(
+      buildProviderDisabledPatch(props.providerConfig, providerId, nextEnabled),
+    )) as ProviderConfigState;
     emit('config-updated', result ?? {});
     setFeedback(
       nextEnabled
@@ -620,17 +601,6 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
     nextEnabled ? `Model ${modelKey} enabled.` : `Model ${modelKey} disabled.`,
     'success',
   );
-}
-
-function selectProvider(providerId: string) {
-  const provider = props.providers.find((entry) => entry.id === providerId);
-  const modelId = provider ? providerPrimaryModelId(provider) : undefined;
-  if (!modelId) {
-    setFeedback(`Provider ${providerId} has no enabled models available.`, 'error');
-    return;
-  }
-  emit('select-model', modelId);
-  setFeedback(`Switched to ${modelId}.`, 'success');
 }
 
 async function connectProvider(provider: ProviderInfo) {
@@ -925,9 +895,9 @@ async function disconnectProvider(providerId: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 72px;
-  padding: 14px;
+  gap: 10px;
+  min-height: 54px;
+  padding: 8px 10px;
   border-bottom: 1px solid var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)));
 }
 
@@ -940,33 +910,37 @@ async function disconnectProvider(providerId: string) {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .provider-list-row-head {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
-  align-items: flex-start;
+  gap: 8px;
+  align-items: center;
 }
 
 .provider-list-row-title {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
+  line-height: 1.05;
 }
 
 .provider-list-row-actions {
+  flex: 0 0 178px;
   display: flex;
-  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .provider-note {
-  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
@@ -1026,44 +1000,67 @@ async function disconnectProvider(providerId: string) {
   gap: 10px;
 }
 
-.provider-view-all-grid {
+.provider-view-all-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
 }
 
-.provider-mini-card {
+.provider-mini-row {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 12px;
+  min-height: 42px;
+  padding: 6px 8px;
   border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8))));
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--theme-card-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46))));
   color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
   text-align: left;
-  cursor: pointer;
 }
 
-.provider-mini-card:hover {
-  border-color: var(--theme-card-border, var(--theme-modal-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.45))));
-  background: var(--theme-card-hover-bg, var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.72))));
-}
-
-.provider-mini-card.is-disabled {
+.provider-mini-row.is-disabled {
   opacity: 0.72;
 }
 
-.provider-mini-card-name {
+.provider-mini-row-title {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  line-height: 1.02;
+}
+
+.provider-mini-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   font-weight: 700;
   color: var(--theme-modal-text, var(--theme-text-primary, #f8fafc));
 }
 
-.provider-mini-card-meta {
+.provider-mini-row-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
+}
+
+.provider-mini-row-status {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.provider-mini-row-action {
+  min-height: 28px;
+  padding: 4px 9px;
 }
 
 .provider-card {
@@ -1112,7 +1109,6 @@ async function disconnectProvider(providerId: string) {
 
 .provider-id,
 .model-id {
-  margin-top: 2px;
   font-size: 11px;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
 }
@@ -1170,13 +1166,14 @@ async function disconnectProvider(providerId: string) {
 .model-meta-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
   font-size: 11px;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .provider-stats.compact {
-  gap: 10px;
+  gap: 7px;
+  line-height: 1.05;
 }
 
 .provider-card-actions,
@@ -1238,7 +1235,9 @@ async function disconnectProvider(providerId: string) {
 }
 
 .provider-toggle.compact {
+  flex: 0 0 auto;
   justify-content: flex-end;
+  gap: 6px;
 }
 
 .toggle-input {
@@ -1389,8 +1388,18 @@ async function disconnectProvider(providerId: string) {
     flex: 1 1 auto;
   }
 
-  .provider-view-all-grid {
+  .provider-mini-row {
+    align-items: flex-start;
+  }
+
+  .provider-view-all-list {
     grid-template-columns: 1fr;
+  }
+
+  .provider-mini-row-status {
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 6px;
   }
 }
 </style>

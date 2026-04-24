@@ -327,7 +327,7 @@ const messages: LocaleMessages = {
       popularDescription: 'Oftaj provizantoj por konekti unue, kongruaj kun la 4096 defaŭlta fluo.',
       popularEmpty: 'Neniu populara provizanto atendas konekton.',
       allProviders: 'Vidi ĉiujn',
-      allProvidersDescription: 'Foliumi ĉiun restantan provizanton kaj konekti aŭ ŝanĝi de ĉi tie.',
+      allProvidersDescription: 'Foliumi ĉiun restantan provizanton por kontroli staton aŭ konekti.',
     },
     providerStats: {
       models: '{count} modeloj',

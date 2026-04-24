@@ -327,7 +327,7 @@ const messages: LocaleMessages = {
       popularDescription: 'Common providers to connect first, matching the 4096 default flow.',
       popularEmpty: 'No popular providers are waiting for connection.',
       allProviders: 'View all',
-      allProvidersDescription: 'Browse every remaining provider and connect or switch from here.',
+      allProvidersDescription: 'Browse every remaining provider to review status or connect.',
     },
     providerStats: {
       models: '{count} models',
