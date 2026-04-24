@@ -89,57 +89,126 @@ export function guessLanguageFromPath(path?: string): string {
     case 'tsx':
       return 'tsx';
     case 'js':
+    case 'cjs':
+    case 'mjs':
       return 'javascript';
     case 'jsx':
       return 'jsx';
     case 'vue':
       return 'vue';
+    case 'svelte':
+      return 'svelte';
+    case 'astro':
+      return 'astro';
     case 'json':
+    case 'json5':
+    case 'jsonc':
       return 'json';
+    case 'yml':
+    case 'yaml':
+      return 'yaml';
+    case 'toml':
+      return 'toml';
     case 'md':
+    case 'mdc':
+    case 'mdx':
       return 'markdown';
     case 'html':
+    case 'htm':
       return 'html';
+    case 'xml':
+    case 'svg':
+      return 'xml';
     case 'css':
       return 'css';
     case 'scss':
       return 'scss';
-    case 'yml':
-    case 'yaml':
-      return 'yaml';
-    case 'diff':
-    case 'patch':
-      return 'diff';
+    case 'sass':
+      return 'sass';
+    case 'less':
+      return 'less';
     case 'sh':
+    case 'bash':
+    case 'zsh':
       return 'shellscript';
     case 'py':
+    case 'pyw':
       return 'python';
-    case 'java':
-      return 'java';
-    case 'php':
-      return 'php';
-    case 'sql':
-      return 'sql';
-    case 'rs':
-      return 'rust';
-    case 'go':
-      return 'go';
-    case 'rb':
-      return 'ruby';
-    case 'toml':
-      return 'toml';
-    case 'xml':
-      return 'xml';
     case 'c':
       return 'c';
     case 'cpp':
     case 'cc':
     case 'cxx':
-      return 'cpp';
     case 'h':
     case 'hpp':
+    case 'hh':
       return 'cpp';
+    case 'java':
+      return 'java';
+    case 'cs':
+      return 'csharp';
+    case 'go':
+      return 'go';
+    case 'rs':
+      return 'rust';
+    case 'rb':
+    case 'erb':
+      return 'ruby';
+    case 'php':
+      return 'php';
+    case 'pl':
+    case 'pm':
+      return 'perl';
+    case 'lua':
+      return 'lua';
+    case 'sql':
+      return 'sql';
+    case 'dockerfile':
+      return 'dockerfile';
+    case 'mk':
+    case 'mak':
+      return 'makefile';
+    case 'diff':
+    case 'patch':
+      return 'diff';
+    case 'gql':
+    case 'graphql':
+      return 'graphql';
+    case 'regex':
+    case 'regexp':
+      return 'regex';
+    case 'coffee':
+    case 'coffeescript':
+      return 'coffee';
+    case 'r':
+      return 'r';
+    case 'jl':
+      return 'julia';
+    case 'wasm':
+      return 'wasm';
+    case 'wgsl':
+      return 'wgsl';
+    case 'fasta':
+    case 'fa':
+    case 'fna':
+    case 'faa':
+      return 'fasta';
+    case 'fastq':
+    case 'fq':
+      return 'fastq';
+    case 'sam':
+      return 'sam';
+    case 'vcf':
+      return 'vcf';
+    case 'bed':
+      return 'bed';
+    case 'gtf':
+    case 'gff':
+    case 'gff3':
+      return 'gtf';
     default:
+      if (path.toLowerCase().endsWith('makefile')) return 'makefile';
+      if (path.toLowerCase().endsWith('dockerfile')) return 'dockerfile';
       return 'text';
   }
 }

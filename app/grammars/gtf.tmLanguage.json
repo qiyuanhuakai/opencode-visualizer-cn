@@ -1,0 +1,29 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "GTF",
+  "scopeName": "source.gtf",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#feature-line" }
+  ],
+  "repository": {
+    "comment": {
+      "match": "^#.*$",
+      "name": "comment.line.gtf"
+    },
+    "feature-line": {
+      "match": "^([^\\t]+)\\t([^\\t]+)\\t([^\\t]+)\\t([0-9]+)\\t([0-9]+)\\t([^\\t]+)\\t([+\\-\\.])\\t([012\\.])\\t(.+)$",
+      "captures": {
+        "1": { "name": "string.unquoted.seqname.gtf" },
+        "2": { "name": "entity.name.source.gtf" },
+        "3": { "name": "keyword.other.feature.gtf" },
+        "4": { "name": "constant.numeric.start.gtf" },
+        "5": { "name": "constant.numeric.end.gtf" },
+        "6": { "name": "constant.numeric.score.gtf" },
+        "7": { "name": "keyword.operator.strand.gtf" },
+        "8": { "name": "constant.numeric.frame.gtf" },
+        "9": { "name": "meta.attributes.gtf" }
+      }
+    }
+  }
+}

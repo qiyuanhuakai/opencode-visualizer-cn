@@ -92,6 +92,7 @@ import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import MessageViewer from '../MessageViewer.vue';
 import { StorageKeys, storageGetJSON, storageSetJSON } from '../../utils/storageKeys';
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
+import { uniqueBy } from '../../utils/array';
 
 type QuestionOption = {
   label: string;
@@ -250,7 +251,7 @@ function buildAnswers() {
     const selected = selectedAnswers.value[index] ?? [];
     const custom = item.custom === false ? '' : (customAnswers.value[index] ?? '').trim();
     const values = custom ? [...selected, custom] : [...selected];
-    return Array.from(new Set(values));
+    return uniqueBy(values, x => x);
   });
 }
 

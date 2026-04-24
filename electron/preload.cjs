@@ -37,6 +37,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 平台查询
   getPlatform: () => ipcRenderer.invoke('get-platform'),
 
+  // 剪贴板
+  clipboard: {
+    writeText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
+  },
+
   persistentStorage: {
     getItem: (key) => ipcRenderer.sendSync('persistent-storage-get', key),
     setItem: (key, value) => ipcRenderer.sendSync('persistent-storage-set', { key, value }),
@@ -44,7 +49,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 });
 
-// 开发模式下输出日志
-if (process.env.NODE_ENV === 'development') {
-  console.log('[Preload] Electron API exposed to renderer');
-}

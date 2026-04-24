@@ -55,6 +55,7 @@
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { guessLanguageFromPath } from '../ToolWindow/utils';
+import { basename } from '../../utils/path';
 import DiffRenderer from '../renderers/DiffRenderer.vue';
 import ContentViewer from './ContentViewer.vue';
 
@@ -164,10 +165,6 @@ const activeBase64 = computed(() => {
 const activeLanguage = computed(() => guessLanguageFromPath(activeFilePath.value));
 
 const diffGutterMode = computed<'none' | 'double'>(() => props.gutterMode ?? 'double');
-
-function basename(filepath: string) {
-  return filepath.split('/').pop() ?? filepath;
-}
 </script>
 
 <style scoped>

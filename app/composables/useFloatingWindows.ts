@@ -293,29 +293,34 @@ export function useFloatingWindows() {
     }
   }
 
-  function updateOptions(key: string, partialOpts: Partial<FloatingWindowEntry>): void {
-    const existing = entriesMap.get(key);
-    if (!existing) return;
+   function updateOptions(key: string, partialOpts: Partial<FloatingWindowEntry>): void {
+     const existing = entriesMap.get(key);
+     if (!existing) return;
 
-    const merged = {
-      ...existing,
-      ...partialOpts,
-      key,
-    } as FloatingWindowEntry;
+     const merged = {
+       ...existing,
+       ...partialOpts,
+       key,
+     } as FloatingWindowEntry;
 
-    // Status-based expiry
-    if (partialOpts.status && !partialOpts.expiresAt) {
-      if (partialOpts.status === 'completed' || partialOpts.status === 'error') {
-        merged.expiresAt = Date.now() + TOOL_COMPLETED_TTL_MS;
-      }
-    }
+     // When updating an existing entry, merge props instead of replacing
+     if (existing.props && partialOpts.props) {
+       merged.props = { ...existing.props, ...partialOpts.props };
+     }
 
-    entriesMap.set(key, sanitizeEntry(merged));
+     // Status-based expiry
+     if (partialOpts.status && !partialOpts.expiresAt) {
+       if (partialOpts.status === 'completed' || partialOpts.status === 'error') {
+         merged.expiresAt = Date.now() + TOOL_COMPLETED_TTL_MS;
+       }
+     }
 
-    if (partialOpts.status === 'completed' || partialOpts.status === 'error') {
-      scheduleExpiry(key, merged.expiresAt);
-    }
-  }
+     entriesMap.set(key, sanitizeEntry(merged));
+
+     if (partialOpts.status === 'completed' || partialOpts.status === 'error') {
+       scheduleExpiry(key, merged.expiresAt);
+     }
+   }
 
   async function setContent(key: string, text: string, lang?: string): Promise<void> {
     const entry = entriesMap.get(key);

@@ -8,6 +8,11 @@ export default defineConfig({
   base: './',
   root: 'app',
   plugins: [vue()],
+  resolve: {
+    alias: {
+      buffer: 'buffer/',
+    },
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,

@@ -26,6 +26,7 @@ import { useI18n } from 'vue-i18n';
 import CodeContent from '../CodeContent.vue';
 import { type CodeRenderParams, useCodeRender } from '../../utils/useCodeRender';
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
+import { basename } from '../../utils/path';
 
 const { t } = useI18n();
 import { guessLanguageFromPath } from '../ToolWindow/utils';
@@ -104,10 +105,6 @@ const showLoading = computed(() => {
   if (renderError.value) return false;
   return !!renderParams.value;
 });
-
-function basename(filepath: string) {
-  return filepath.split('/').pop() ?? filepath;
-}
 </script>
 
 <style scoped>

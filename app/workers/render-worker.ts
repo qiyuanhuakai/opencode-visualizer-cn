@@ -4,6 +4,12 @@ import { bundledLanguages, createHighlighter } from 'shiki/bundle/web';
 import { bundledLanguages as allBundledLanguages } from 'shiki/langs';
 import { transformerNotationDiff } from '@shikijs/transformers';
 import { compactUnifiedDiffPatch } from '../utils/diffCompression';
+import fastaGrammarRaw from '../grammars/fasta.tmLanguage.json?raw';
+import fastqGrammarRaw from '../grammars/fastq.tmLanguage.json?raw';
+import samGrammarRaw from '../grammars/sam.tmLanguage.json?raw';
+import vcfGrammarRaw from '../grammars/vcf.tmLanguage.json?raw';
+import bedGrammarRaw from '../grammars/bed.tmLanguage.json?raw';
+import gtfGrammarRaw from '../grammars/gtf.tmLanguage.json?raw';
 
 type RenderRequest = {
   id: string;
@@ -71,6 +77,15 @@ let cachedTheme = '';
 let loadedLanguageCache = new Set<string>(['text']);
 let failedLanguageCache = new Set<string>();
 
+const customGrammars: Record<string, object> = {
+  fasta: { ...JSON.parse(fastaGrammarRaw), name: 'fasta' },
+  fastq: { ...JSON.parse(fastqGrammarRaw), name: 'fastq' },
+  sam: { ...JSON.parse(samGrammarRaw), name: 'sam' },
+  vcf: { ...JSON.parse(vcfGrammarRaw), name: 'vcf' },
+  bed: { ...JSON.parse(bedGrammarRaw), name: 'bed' },
+  gtf: { ...JSON.parse(gtfGrammarRaw), name: 'gtf' },
+};
+
 const HIGHLIGHT_CACHE_MAX = 512;
 let codeHtmlCache = new Map<string, string>();
 let mdHighlightCache = new Map<string, string>();
@@ -125,6 +140,20 @@ type LanguageLoader = () => Promise<{ default: unknown }>;
 async function tryLoadLanguage(highlighter: Highlighter, candidate: string) {
   if (failedLanguageCache.has(candidate)) return false;
   if (typeof highlighter.loadLanguage !== 'function') return false;
+
+  const customGrammar = customGrammars[candidate];
+  if (customGrammar) {
+    try {
+      await highlighter.loadLanguage(customGrammar as never);
+      loadedLanguageCache.add(candidate);
+      failedLanguageCache.delete(candidate);
+      return true;
+    } catch (error) {
+      console.warn('[render-worker] custom grammar load failed', candidate, error);
+      failedLanguageCache.add(candidate);
+      return false;
+    }
+  }
 
   const loader =
     (bundledLanguages as Record<string, unknown>)[candidate] ??

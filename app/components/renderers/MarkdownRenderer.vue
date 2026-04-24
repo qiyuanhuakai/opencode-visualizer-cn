@@ -61,6 +61,17 @@ function scheduleCopyButtonReset(codeBlock: HTMLElement) {
   copiedResetTimers.set(codeBlock, nextTimerId);
 }
 
+async function writeClipboard(text: string): Promise<void> {
+  const electronAPI = (window as unknown as Record<string, unknown>).electronAPI as
+    | { clipboard?: { writeText: (text: string) => Promise<void> } }
+    | undefined;
+  if (electronAPI?.clipboard?.writeText) {
+    await electronAPI.clipboard.writeText(text);
+  } else {
+    await navigator.clipboard.writeText(text);
+  }
+}
+
 async function handleContentClick(event: MouseEvent) {
   const target = event.target;
   if (!(target instanceof Element)) return;
@@ -71,7 +82,7 @@ async function handleContentClick(event: MouseEvent) {
   if (codeBlock instanceof HTMLElement) {
     const pre = codeBlock.querySelector('pre');
     if (!pre) return;
-    await navigator.clipboard.writeText(pre.textContent ?? '');
+    await writeClipboard(pre.textContent ?? '');
     codeBlock.classList.add('copied');
     scheduleCopyButtonReset(codeBlock);
     return;
@@ -81,7 +92,7 @@ async function handleContentClick(event: MouseEvent) {
   if (!(markdownHost instanceof HTMLElement)) return;
   const rawSource = markdownHost.querySelector('template.md-raw-source');
   if (!(rawSource instanceof HTMLTemplateElement)) return;
-  await navigator.clipboard.writeText(rawSource.content.textContent ?? '');
+  await writeClipboard(rawSource.content.textContent ?? '');
   markdownHost.classList.add('copied');
   scheduleCopyButtonReset(markdownHost);
 }

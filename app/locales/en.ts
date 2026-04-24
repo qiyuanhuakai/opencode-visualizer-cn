@@ -925,6 +925,10 @@ const messages: LocaleMessages = {
   imageViewer: {
     failedToLoad: 'Failed to load image',
   },
+  pdfViewer: {
+    failedToLoad: 'Failed to load PDF',
+    loading: 'Loading PDF...',
+  },
   outputPanel: {
     scrollToLatest: 'Scroll to latest',
     loadOlder: 'Load older history',
@@ -943,11 +947,22 @@ const messages: LocaleMessages = {
       rendered: 'Rendered',
       source: 'Source',
       hex: 'Hex',
+      info: 'Info',
+      archive: 'Archive',
+      pdf: 'PDF',
     },
     diff: {
       diff: 'Diff',
       modified: 'Modified',
       original: 'Original',
+    },
+    archive: {
+      name: 'Name',
+      size: 'Size',
+      date: 'Date',
+      fileCount: '{count} files',
+      unsupported: 'Compressed archive preview is not supported yet.',
+      empty: 'Archive is empty.',
     },
   },
   dropdown: {

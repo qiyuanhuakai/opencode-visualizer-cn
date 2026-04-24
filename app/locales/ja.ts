@@ -925,6 +925,10 @@ const messages: LocaleMessages = {
   imageViewer: {
     failedToLoad: '画像の読み込みに失敗しました',
   },
+  pdfViewer: {
+    failedToLoad: 'PDFの読み込みに失敗しました',
+    loading: 'PDFを読み込み中...',
+  },
   outputPanel: {
     scrollToLatest: '最新へスクロール',
     loadOlder: '古い履歴を読み込む',
@@ -943,11 +947,22 @@ const messages: LocaleMessages = {
       rendered: 'レンダリング済み',
       source: 'ソース',
       hex: '16進数',
+      info: 'ファイル情報',
+      archive: 'アーカイブ',
+      pdf: 'PDF',
     },
     diff: {
       diff: '差分',
       modified: '変更',
       original: 'オリジナル',
+    },
+    archive: {
+      name: '名前',
+      size: 'サイズ',
+      date: '日付',
+      fileCount: '{count} ファイル',
+      unsupported: 'この圧縮形式のプレビューはまだサポートされていません。',
+      empty: 'アーカイブは空です。',
     },
   },
   dropdown: {

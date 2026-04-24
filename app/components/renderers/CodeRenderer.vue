@@ -1,9 +1,20 @@
 <template>
   <div ref="rootEl" class="code-renderer-content">
-    <div ref="viewerBodyEl" class="viewer-body" @mousedown="onMouseDown">
+    <div ref="viewerBodyEl" class="viewer-body" @mousedown="onMouseDown" @scroll="onScroll">
       <div v-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
+      <div v-else-if="useVirtualScroll" class="code-scroll-content virtual-scroll">
+        <div :style="{ height: topPadding + 'px' }" />
+        <CodeContent
+          v-for="row in visibleRows"
+          :key="`${startRow}-${row.key}`"
+          :html="row.html"
+          :variant="viewerVariant"
+          class="virtual-row"
+        />
+        <div :style="{ height: bottomPadding + 'px' }" />
+      </div>
       <div v-else class="code-scroll-content">
-        <CodeContent :html="renderedHtml || rawHtml || ''" :variant="viewerVariant" />
+        <CodeContent :html="nonVirtualHtml" :variant="viewerVariant" />
       </div>
     </div>
     <LineCommentOverlay
@@ -95,6 +106,57 @@ const renderParams = computed<CodeRenderParams | null>(() => {
 
 const { html: renderedHtml } = useCodeRender(renderParams);
 
+// Virtual scroll state
+const VIRTUAL_SCROLL_THRESHOLD = 500;
+const ROW_HEIGHT = 20;
+const OVERSCAN_ROWS = 10;
+const scrollTop = ref(0);
+const containerHeight = ref(600);
+
+function extractCodeRows(html: string) {
+  const matches = html.match(/<div class="code-row[^"]*">[\s\S]*?<\/div>/g);
+  if (!matches) return [];
+  return matches.map((rowHtml, index) => ({
+    key: `rendered-${index}`,
+    html: rowHtml,
+  }));
+}
+
+const allRows = computed(() => {
+  const html = renderedHtml.value || props.rawHtml || '';
+  if (!html) return [];
+  return extractCodeRows(html);
+});
+
+const nonVirtualHtml = computed(() => renderedHtml.value || props.rawHtml || '');
+
+const useVirtualScroll = computed(() => allRows.value.length > VIRTUAL_SCROLL_THRESHOLD);
+
+const totalRows = computed(() => allRows.value.length);
+
+const startRow = computed(() => {
+  if (!useVirtualScroll.value) return 0;
+  return Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN_ROWS);
+});
+
+const endRow = computed(() => {
+  if (!useVirtualScroll.value) return totalRows.value;
+  const visibleCount = Math.ceil(containerHeight.value / ROW_HEIGHT);
+  return Math.min(totalRows.value, startRow.value + visibleCount + OVERSCAN_ROWS * 2);
+});
+
+const visibleRows = computed(() => {
+  if (!useVirtualScroll.value) return allRows.value;
+  return allRows.value.slice(startRow.value, endRow.value);
+});
+
+const topPadding = computed(() => startRow.value * ROW_HEIGHT);
+
+const bottomPadding = computed(() => {
+  const remainingRows = totalRows.value - endRow.value;
+  return Math.max(0, remainingRows * ROW_HEIGHT);
+});
+
 function getScrollContentEl(): HTMLElement | null {
   return viewerBodyEl.value?.querySelector('.code-scroll-content') ?? null;
 }
@@ -126,7 +188,7 @@ function getLineFromMouse(e: MouseEvent): number | null {
   for (let i = 0; i < rowRects.value.length; i++) {
     const rect = rowRects.value[i];
     if (y >= rect.top && y < rect.top + rect.height) {
-      return i;
+      return useVirtualScroll.value ? startRow.value + i : i;
     }
   }
   return null;
@@ -257,16 +319,24 @@ function applyLineSelection() {
   if (specs.length === 0) return;
   const rows = Array.from(scrollContent.querySelectorAll<HTMLElement>('.code-row'));
   if (rows.length === 0) return;
+  const visibleStart = useVirtualScroll.value ? startRow.value + 1 : 1;
+  const visibleEnd = visibleStart + rows.length - 1;
   for (const { start, end } of specs) {
-    const clampedStart = Math.min(start, rows.length);
-    const clampedEnd = Math.min(end, rows.length);
-    for (let index = clampedStart - 1; index < clampedEnd; index += 1) {
+    const clampedStart = Math.max(start, visibleStart);
+    const clampedEnd = Math.min(end, visibleEnd);
+    if (clampedStart > clampedEnd) continue;
+    for (let index = clampedStart - visibleStart; index <= clampedEnd - visibleStart; index += 1) {
       rows[index]?.classList.add('line-highlight');
     }
   }
 
-  const firstStart = Math.min(specs[0].start, rows.length);
-  rows[firstStart - 1]?.scrollIntoView({ block: 'center', inline: 'nearest' });
+  const firstStart = specs[0]?.start;
+  if (!firstStart) return;
+  if (useVirtualScroll.value && viewerBodyEl.value) {
+    viewerBodyEl.value.scrollTop = Math.max(0, (firstStart - 1) * ROW_HEIGHT - viewerBodyEl.value.clientHeight / 2);
+    return;
+  }
+  rows[Math.min(firstStart, rows.length) - 1]?.scrollIntoView({ block: 'center', inline: 'nearest' });
 }
 
 watch(
@@ -289,6 +359,9 @@ function onWindowResize() {
 }
 
 function onScroll() {
+  if (useVirtualScroll.value && viewerBodyEl.value) {
+    scrollTop.value = viewerBodyEl.value.scrollTop;
+  }
   updateRowRects();
 }
 
@@ -301,8 +374,14 @@ onMounted(() => {
     root.addEventListener('scroll', onScroll, { passive: true });
     resizeObserver = new ResizeObserver(() => {
       updateRowRects();
+      if (useVirtualScroll.value) {
+        containerHeight.value = root.clientHeight;
+      }
     });
     resizeObserver.observe(root);
+    if (useVirtualScroll.value) {
+      containerHeight.value = root.clientHeight;
+    }
   }
   updateRowRects();
   setTimeout(() => updateRowRects(), 50);
@@ -348,6 +427,15 @@ const showLoading = computed(() => {
 
 .code-scroll-content {
   min-height: 100%;
+}
+
+.code-scroll-content.virtual-scroll {
+  min-height: 0;
+}
+
+.virtual-row {
+  min-height: v-bind('ROW_HEIGHT + "px"');
+  overflow: hidden;
 }
 
 .code-renderer-content :deep(.code-row.line-highlight) {

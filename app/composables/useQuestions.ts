@@ -2,6 +2,7 @@ import { useI18n } from 'vue-i18n';
 import type { ComputedRef, Ref } from 'vue';
 import QuestionContent from '../components/ToolWindow/Question.vue';
 import * as opencodeApi from '../utils/opencode';
+import { uniqueBy } from '../utils/array';
 import type { useFloatingWindows } from './useFloatingWindows';
 import { useDialogHandler } from './useDialogHandler';
 
@@ -147,7 +148,7 @@ export function useQuestions(options: {
       const cleaned = answer
         .map((value) => (typeof value === 'string' ? value.trim() : ''))
         .filter((value) => value.length > 0);
-      return Array.from(new Set(cleaned));
+      return uniqueBy(cleaned, x => x);
     });
   }
 

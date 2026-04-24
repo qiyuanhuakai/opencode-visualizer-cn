@@ -144,10 +144,10 @@ function createDirectTransport(
   let openResolver: ((value: void) => void) | null = null;
   let openRejector: ((reason: Error) => void) | null = null;
 
-  const connection = createSseConnection({
-    onPacket(packet) {
-      callbacks.onPacket(packet);
-    },
+    const connection = createSseConnection({
+      onPacket(packet) {
+        callbacks.onPacket(packet);
+      },
     onOpen(isReconnect) {
       connected = true;
       callbacks.onOpen();
@@ -227,21 +227,21 @@ function createSharedWorkerTransport(
   let openResolver: ((value: void) => void) | null = null;
   let openRejector: ((reason: Error) => void) | null = null;
 
-  function ensureWorker() {
-    if (worker) return worker;
-    const instance = new SseSharedWorker();
-    instance.port.onmessage = (event: MessageEvent<WorkerToTabMessage>) => {
-      const message = event.data;
-      if (!message || typeof message !== 'object') return;
+   function ensureWorker() {
+     if (worker) return worker;
+      const instance = new SseSharedWorker();
+      instance.port.onmessage = (event: MessageEvent<WorkerToTabMessage>) => {
+        const message = event.data;
+        if (!message || typeof message !== 'object') return;
 
-      if (callbacks.onWorkerMessage?.(message)) {
-        return;
-      }
+        if (callbacks.onWorkerMessage?.(message)) {
+          return;
+        }
 
-      if (message.type === 'packet') {
-        callbacks.onPacket(message.packet);
-        return;
-      }
+        if (message.type === 'packet') {
+          callbacks.onPacket(message.packet);
+          return;
+        }
       if (message.type === 'connection.open') {
         connected = true;
         callbacks.onOpen();
@@ -338,11 +338,13 @@ export function useGlobalEvents(credentials: CredentialsBinding) {
   const emitter = new TypedEmitter<GlobalEventMap>();
   let workerMessageHandler: ((message: WorkerToTabMessage) => boolean) | undefined;
 
-  function routePacket(packet: SsePacket) {
-    const type = packet.payload.type;
-    if (!isKnownEventType(type)) return;
-    emitter.emit(type, packet.payload.properties as GlobalEventMap[typeof type]);
-  }
+    function routePacket(packet: SsePacket) {
+      const type = packet.payload.type;
+      if (!isKnownEventType(type)) {
+        return;
+      }
+      emitter.emit(type, packet.payload.properties as GlobalEventMap[typeof type]);
+    }
 
   const transport =
     typeof SharedWorker !== 'undefined'

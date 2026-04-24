@@ -7,6 +7,7 @@ import {
   getSession,
   listProjects,
   listSessions,
+  readFileContentBytes,
   sendCommand,
   setAuthorization,
   setBaseUrl,
@@ -207,6 +208,32 @@ describe('opencode utilities', () => {
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ directory: '/dir', command: 'test', arguments: 'arg1' }),
+        }),
+      );
+    });
+
+    it('readFileContentBytes preserves auth and directory headers', async () => {
+      const bytes = new Uint8Array([0x69, 0x63, 0x6e, 0x73]);
+      const mockFetch = vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        arrayBuffer: async () => bytes.buffer,
+      } as Response);
+
+      const result = await readFileContentBytes(
+        { directory: '/dir', path: 'icon.icns' },
+        { instanceDirectory: '/instance' },
+      );
+
+      expect(result).toEqual(bytes);
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/file/content?directory=%2Fdir&path=icon.icns',
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: 'Bearer token',
+            'x-opencode-directory': '/instance',
+          }),
         }),
       );
     });

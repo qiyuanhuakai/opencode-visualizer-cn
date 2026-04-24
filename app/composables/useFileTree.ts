@@ -11,6 +11,7 @@ import type {
 } from '../types/git';
 import * as opencodeApi from '../utils/opencode';
 import { normalizeDirectory } from '../utils/path';
+import { uniqueBy } from '../utils/array';
 import { usePtyOneshot } from './usePtyOneshot';
 
 const GIT_ENV_PREAMBLE = [
@@ -111,6 +112,7 @@ let gitFileListGeneration = 0;
 let branchEntriesLoadedForDirectory = false;
 let gitStatusRefreshInFlight: Promise<void> | null = null;
 let gitStatusRefreshQueued = false;
+const pendingFileWatcherEvents: FileWatcherUpdatedPacket[] = [];
 
 const BRANCH_LIST_FORMAT =
   '%(refname)\t%(refname:short)\t%(HEAD)\t%(worktreepath)\t%(objectname:short)\t%(subject)\t%(upstream:short)';
@@ -306,7 +308,7 @@ function replaceDirectoryFilesInCache(parentPath: string, children: TreeNode[]) 
     if (!filePath.startsWith(prefix)) return true;
     return filePath.slice(prefix.length).includes('/');
   });
-  const next = Array.from(new Set([...preserved, ...directFiles])).sort((a, b) =>
+  const next = uniqueBy([...preserved, ...directFiles], x => x).sort((a, b) =>
     a.localeCompare(b),
   );
   const changed =
@@ -829,9 +831,11 @@ async function refreshGitFileSnapshot() {
       if (activeDirectory.value.trim() !== directory) return;
 
       const mergedRoot = ignoredRoot.length > 0 ? deepMergeGitTree(ignoredRoot, gitTree) : gitTree;
-      treeNodes.value = deepMergeGitTree(treeNodes.value, mergedRoot);
+      // On manual refresh, replace the tree entirely rather than merging with old state.
+      // This ensures deleted files are removed from the sidebar.
+      treeNodes.value = mergedRoot;
 
-      const sorted = Array.from(new Set(allPaths)).sort((a, b) => a.localeCompare(b));
+      const sorted = uniqueBy(allPaths, x => x).sort((a, b) => a.localeCompare(b));
       if (
         sorted.length !== files.value.length ||
         sorted.some((path, index) => path !== files.value[index])
@@ -1090,12 +1094,13 @@ async function loadSingleDirectory(path: string) {
       const apiChildren = buildTreeNodes(list, directory, path);
       const parent = findTreeNodeByPath(treeNodes.value, path);
       const gitChildren = parent?.children ?? [];
-      const merged = mergeApiWithGitChildren(apiChildren, gitChildren);
-      treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, merged);
-      cacheCurrentDirectoryState(directory);
-    } catch {
-      return;
-    }
+       const merged = mergeApiWithGitChildren(apiChildren, gitChildren);
+       treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, merged);
+       cacheCurrentDirectoryState(directory);
+     } catch (error) {
+       console.error('[useFileTree] loadSingleDirectory (git) failed:', error);
+       return;
+     }
     return;
   }
 
@@ -1114,14 +1119,14 @@ async function loadSingleDirectory(path: string) {
       return;
     }
 
-    const parent = findTreeNodeByPath(treeNodes.value, path);
-    const mergedChildren = mergeTreeNodeChildren(parent?.children ?? [], children);
-    treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, mergedChildren);
-    replaceDirectoryFilesInCache(path, mergedChildren);
-    cacheCurrentDirectoryState(directory);
-  } catch (error) {
-    void error;
-  }
+     const parent = findTreeNodeByPath(treeNodes.value, path);
+     const mergedChildren = mergeTreeNodeChildren(parent?.children ?? [], children);
+     treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, mergedChildren);
+     replaceDirectoryFilesInCache(path, mergedChildren);
+     cacheCurrentDirectoryState(directory);
+   } catch (error) {
+     console.error('[useFileTree] loadSingleDirectory (fs) failed:', error);
+   }
 }
 
 function feed(packet: FileWatcherUpdatedPacket) {
@@ -1129,7 +1134,10 @@ function feed(packet: FileWatcherUpdatedPacket) {
   const directory = options.activeDirectory.value.trim();
   if (!directory) return;
   if (!isPathInsideDirectory(packet.file, directory)) return;
-  if (treeLoading.value) return;
+  if (treeLoading.value) {
+    pendingFileWatcherEvents.push(packet);
+    return;
+  }
 
   const relativePath = toRelativePath(packet.file, directory);
   if (relativePath === '.') return;
@@ -1145,9 +1153,7 @@ function feed(packet: FileWatcherUpdatedPacket) {
     }
   }
 
-  if (packet.event !== 'change') {
-    scheduleDirectoryReload(parentDirectoryPath(relativePath));
-  }
+  scheduleDirectoryReload(parentDirectoryPath(relativePath));
   scheduleGitStatusReload();
 }
 
@@ -1182,6 +1188,11 @@ async function rebuildFileCache() {
     } finally {
       if (buildId === fileCacheBuildId && options.activeDirectory.value.trim() === directory) {
         treeLoading.value = false;
+        // Drain queued file watcher events
+        while (pendingFileWatcherEvents.length > 0) {
+          const queued = pendingFileWatcherEvents.shift()!;
+          feed(queued);
+        }
       }
     }
     return;
@@ -1224,7 +1235,7 @@ async function rebuildFileCache() {
 
     if (buildId !== fileCacheBuildId) return;
     if (options.activeDirectory.value.trim() !== directory) return;
-    files.value = Array.from(new Set(collected)).sort((a, b) => a.localeCompare(b));
+    files.value = uniqueBy(collected, x => x).sort((a, b) => a.localeCompare(b));
     fileCacheVersion.value += 1;
     cacheCurrentDirectoryState(directory);
   } catch (error) {
@@ -1234,6 +1245,11 @@ async function rebuildFileCache() {
   } finally {
     if (buildId === fileCacheBuildId && options.activeDirectory.value.trim() === directory) {
       treeLoading.value = false;
+      // Drain queued file watcher events
+      while (pendingFileWatcherEvents.length > 0) {
+        const queued = pendingFileWatcherEvents.shift()!;
+        feed(queued);
+      }
     }
   }
 }

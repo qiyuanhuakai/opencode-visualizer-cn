@@ -488,6 +488,10 @@ let scrollFrameId: number | null = null;
 let containerHeightFrameId: number | null = null;
 let branchSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Memoization cache for flattenedRows
+let cachedFlattenedRows: VirtualRow[] | null = null;
+let cachedFlattenedRowsKey = '';
+
 const expanded = computed(() => new Set(props.expandedPaths));
 const branchIcon = computed(() => (props.branchInfo ? 'lucide:git-branch' : 'lucide:folder'));
 const branchName = computed(() => props.branchInfo?.branch ?? props.directoryName ?? t('treeView.noGit'));
@@ -702,10 +706,17 @@ function needsPseudoNode(status: GitFileStatus) {
   return false;
 }
 
+function hasPseudoNodePaths(statusByPath: Record<string, GitFileStatus>): boolean {
+  return Object.values(statusByPath).some(status => needsPseudoNode(status));
+}
+
 function withPseudoNodes(
   nodes: TreeNode[],
   statusByPath: Record<string, GitFileStatus>,
 ): TreeNode[] {
+  if (!nodes.length || !hasPseudoNodePaths(statusByPath)) {
+    return nodes;
+  }
   const result = cloneNodes(nodes);
   const missingPaths = Object.values(statusByPath)
     .filter((status) => needsPseudoNode(status))
@@ -821,7 +832,19 @@ function getHighlightParts(name: string, query: string): HighlightPart[] {
 // tree compact while still revealing matched files, and because we never touch
 // expandedPaths the previous expansion state is restored automatically when the
 // query is cleared.
+
+// Cache key to avoid unnecessary recalculations
+const flattenedRowsKey = computed(() => {
+  return `${expanded.value.size}:${fileSearchQuery.value}:${viewMode.value}:${props.selectedPath || ''}:${displayNodes.value.length}`;
+});
+
 const flattenedRows = computed<VirtualRow[]>(() => {
+  // Check cache first
+  const key = flattenedRowsKey.value;
+  if (cachedFlattenedRowsKey === key && cachedFlattenedRows !== null) {
+    return cachedFlattenedRows;
+  }
+
   const rows: VirtualRow[] = [];
   let index = 0;
   const query = fileSearchQuery.value.trim().toLowerCase();
@@ -923,6 +946,11 @@ const flattenedRows = computed<VirtualRow[]>(() => {
   };
 
   pushRows(displayNodes.value, 0);
+
+  // Update cache
+  cachedFlattenedRows = rows;
+  cachedFlattenedRowsKey = key;
+
   return rows;
 });
 

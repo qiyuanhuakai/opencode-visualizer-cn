@@ -1,0 +1,322 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "VCF",
+  "scopeName": "source.vcf",
+  "patterns": [
+    { "include": "#fileformat" },
+    { "include": "#meta-info" },
+    { "include": "#column-header" },
+    { "include": "#data-line" }
+  ],
+  "repository": {
+    "fileformat": {
+      "match": "^(##fileformat)=(VCF[v0-9.]+)$",
+      "captures": {
+        "1": { "name": "keyword.control.fileformat.vcf" },
+        "2": { "name": "constant.numeric.version.vcf" }
+      }
+    },
+    "meta-info": {
+      "patterns": [
+        { "include": "#meta-info-structured" },
+        { "include": "#meta-info-simple" }
+      ]
+    },
+    "meta-info-structured": {
+      "begin": "^(##)(INFO|FORMAT|FILTER|ALT|contig|SAMPLE|PEDIGREE|META)(=<)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.comment.vcf" },
+        "2": { "name": "keyword.other.meta-type.vcf" },
+        "3": { "name": "punctuation.definition.tag.begin.vcf" }
+      },
+      "end": "(>)$",
+      "endCaptures": {
+        "1": { "name": "punctuation.definition.tag.end.vcf" }
+      },
+      "patterns": [
+        { "include": "#meta-key-value" }
+      ]
+    },
+    "meta-key-value": {
+      "patterns": [
+        {
+          "comment": "ID field with reserved FORMAT key coloring",
+          "match": "(ID)(=)([^,>]+)",
+          "captures": {
+            "1": { "name": "entity.name.tag.vcf" },
+            "2": { "name": "punctuation.separator.key-value.vcf" },
+            "3": { "patterns": [{ "include": "#format-field-names" }] }
+          }
+        },
+        {
+          "match": "(Number)(=)([^,>]+)",
+          "captures": {
+            "1": { "name": "entity.name.tag.vcf" },
+            "2": { "name": "punctuation.separator.key-value.vcf" },
+            "3": { "name": "constant.numeric.vcf" }
+          }
+        },
+        {
+          "match": "(Type)(=)(Integer|Float|Flag|Character|String)",
+          "captures": {
+            "1": { "name": "entity.name.tag.vcf" },
+            "2": { "name": "punctuation.separator.key-value.vcf" },
+            "3": { "name": "storage.type.vcf" }
+          }
+        },
+        {
+          "match": "(Description)(=)(\"[^\"]*\")",
+          "captures": {
+            "1": { "name": "entity.name.tag.vcf" },
+            "2": { "name": "punctuation.separator.key-value.vcf" },
+            "3": { "name": "string.quoted.double.vcf" }
+          }
+        },
+        {
+          "match": "(Source|Version|length|assembly|URL)(=)([^,>]+)",
+          "captures": {
+            "1": { "name": "entity.name.tag.vcf" },
+            "2": { "name": "punctuation.separator.key-value.vcf" },
+            "3": { "name": "string.unquoted.vcf" }
+          }
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.comma.vcf"
+        }
+      ]
+    },
+    "meta-info-simple": {
+      "match": "^(##)([^=]+)(=)(.*)$",
+      "captures": {
+        "1": { "name": "punctuation.definition.comment.vcf" },
+        "2": { "name": "keyword.other.meta-key.vcf" },
+        "3": { "name": "punctuation.separator.key-value.vcf" },
+        "4": { "name": "string.unquoted.meta-value.vcf" }
+      }
+    },
+    "column-header": {
+      "match": "^(#CHROM)\\t(POS)\\t(ID)\\t(REF)\\t(ALT)\\t(QUAL)\\t(FILTER)\\t(INFO)(\\t(FORMAT)(\\t.+)?)?$",
+      "captures": {
+        "1": { "name": "variable.language.column.chrom.vcf" },
+        "2": { "name": "variable.language.column.pos.vcf" },
+        "3": { "name": "variable.language.column.id.vcf" },
+        "4": { "name": "variable.language.column.ref.vcf" },
+        "5": { "name": "variable.language.column.alt.vcf" },
+        "6": { "name": "variable.language.column.qual.vcf" },
+        "7": { "name": "variable.language.column.filter.vcf" },
+        "8": { "name": "variable.language.column.info.vcf" },
+        "10": { "name": "variable.language.column.format.vcf" },
+        "11": { "name": "meta.samples.header.vcf" }
+      }
+    },
+    "data-line": {
+      "begin": "^([^\\t#][^\\t]*)\\t([0-9]+)\\t([^\\t]+)\\t([ACGTNacgtn]+)\\t([^\\t]+)\\t([^\\t]+)\\t([^\\t]+)\\t([^\\t]+)\\t",
+      "beginCaptures": {
+        "1": { "name": "string.unquoted.chrom.vcf" },
+        "2": { "name": "constant.numeric.pos.vcf" },
+        "3": { "name": "variable.other.id.vcf" },
+        "4": { "name": "constant.character.ref.vcf" },
+        "5": { "name": "constant.character.alt.vcf" },
+        "6": { "name": "constant.numeric.qual.vcf" },
+        "7": { "name": "keyword.other.filter.vcf" },
+        "8": {
+          "patterns": [
+            { "include": "#info-field-content" }
+          ]
+        }
+      },
+      "end": "$",
+      "patterns": [
+        { "include": "#format-column" },
+        { "include": "#sample-column" }
+      ]
+    },
+    "info-field-content": {
+      "comment": "Parse INFO field key=value pairs with two colors",
+      "patterns": [
+        {
+          "comment": "Key=Value pair - key= in teal, value in orange",
+          "match": "([A-Za-z_][A-Za-z0-9_]*)(=)([^;]+)",
+          "captures": {
+            "1": { "name": "entity.name.tag.info-key.vcf" },
+            "2": { "name": "entity.name.tag.info-key.vcf" },
+            "3": { "name": "string.unquoted.info-value.vcf" }
+          }
+        },
+        {
+          "comment": "Flag field (no value) - teal",
+          "match": "([A-Za-z_][A-Za-z0-9_]*)(?=;|$)",
+          "captures": {
+            "1": { "name": "entity.name.tag.info-key.vcf" }
+          }
+        },
+        {
+          "comment": "Semicolon separator",
+          "match": ";",
+          "name": "punctuation.separator.info.vcf"
+        }
+      ]
+    },
+    "format-column": {
+      "comment": "FORMAT column - VCF v4.5 reserved keys with colorblind-friendly colors",
+      "match": "([A-Za-z_][A-Za-z0-9_]*)((:[A-Za-z_][A-Za-z0-9_]*)*)(?=\\t|$)",
+      "captures": {
+        "0": {
+          "patterns": [
+            { "include": "#format-field-names" },
+            {
+              "match": ":",
+              "name": "punctuation.separator.format.vcf"
+            }
+          ]
+        }
+      }
+    },
+    "format-field-names": {
+      "comment": "VCF v4.5 reserved FORMAT field names with colorblind-friendly palette",
+      "patterns": [
+        {
+          "comment": "===== GROUP 1: GENOTYPE (Purple/Magenta) =====",
+          "match": "\\bGT\\b",
+          "name": "keyword.control.format.genotype.vcf"
+        },
+        {
+          "comment": "===== GROUP 2: ALLELIC DEPTH (Orange) =====",
+          "match": "\\b(AD|ADF|ADR|LAD|LADF|LADR)\\b",
+          "name": "variable.parameter.format.depth-allelic.vcf"
+        },
+        {
+          "comment": "===== GROUP 3: READ DEPTH (Cyan) =====",
+          "match": "\\b(DP|MIN_DP)\\b",
+          "name": "support.function.format.depth-read.vcf"
+        },
+        {
+          "comment": "===== GROUP 4: QUALITY METRICS (Teal/Green) =====",
+          "match": "\\b(GQ|MQ|PQ|CNQ|NQ)\\b",
+          "name": "entity.name.type.format.quality.vcf"
+        },
+        {
+          "comment": "===== GROUP 5: LIKELIHOODS (Blue) =====",
+          "match": "\\b(GL|PL|LGL|LPL|CNL)\\b",
+          "name": "constant.language.format.likelihood.vcf"
+        },
+        {
+          "comment": "===== GROUP 6: POSTERIORS (Purple-Blue) =====",
+          "match": "\\b(GP|PP|LGP|LPP|CNP)\\b",
+          "name": "storage.type.format.posterior.vcf"
+        },
+        {
+          "comment": "===== GROUP 7: FILTER (Pink) =====",
+          "match": "\\bFT\\b",
+          "name": "keyword.other.format.filter.vcf"
+        },
+        {
+          "comment": "===== GROUP 8: PHASING (Yellow/Gold) =====",
+          "match": "\\b(PS|PSL|PSO|PSQ|PGT|PID)\\b",
+          "name": "string.other.format.phasing.vcf"
+        },
+        {
+          "comment": "===== GROUP 9: EXPECTED COUNTS (Light Cyan) =====",
+          "match": "\\b(EC|LEC)\\b",
+          "name": "support.constant.format.expected.vcf"
+        },
+        {
+          "comment": "===== GROUP 10: LOCAL ALLELE (Muted) =====",
+          "match": "\\b(LA|LAA)\\b",
+          "name": "constant.other.format.local-allele.vcf"
+        },
+        {
+          "comment": "===== GROUP 11: LEGACY/MISC =====",
+          "match": "\\b(HQ|LEN)\\b",
+          "name": "variable.other.format.legacy.vcf"
+        },
+        {
+          "comment": "===== GROUP 12: STRUCTURAL VARIANTS (Italic/Special) =====",
+          "match": "\\b(CN|CICN|HAP|AHAP)\\b",
+          "name": "markup.italic.format.sv.vcf"
+        },
+        {
+          "comment": "===== GROUP 13: BASE MODIFICATION - M patterns =====",
+          "match": "\\b(M5mC|M5hmC|M5fC|M5caC|M5hmU|M5fU|M5caU|M6mA|M8oxoG|MXaoN)\\b",
+          "name": "entity.other.format.basemod.vcf"
+        },
+        {
+          "comment": "===== GROUP 14: BASE MODIFICATION DEPTH - DPM/ADM patterns =====",
+          "match": "\\b(DPM5mC|DPM5hmC|DPM5fC|DPM5caC|DPM6mA|DPM8oxoG|ADM5mC|ADM5hmC|ADM5fC|ADM5caC|ADM6mA|ADM8oxoG)\\b",
+          "name": "entity.other.format.basemod-depth.vcf"
+        },
+        {
+          "comment": "===== GROUP 15: BASE MODIFICATION GENERIC PATTERNS =====",
+          "match": "\\b(M[0-9]+[ACGTUN]|DPM[0-9]+[ACGTUN]|ADM[0-9]+[ACGTUN])\\b",
+          "name": "entity.other.format.basemod-generic.vcf"
+        }
+      ]
+    },
+    "sample-column": {
+      "comment": "Sample genotype values - parse colon-separated values",
+      "match": "\\t([^\\t]+)",
+      "captures": {
+        "1": {
+          "patterns": [
+            { "include": "#sample-values" }
+          ]
+        }
+      }
+    },
+    "sample-values": {
+      "comment": "Parse individual sample values by position",
+      "patterns": [
+        {
+          "comment": "Genotype pattern (0/0, 0/1, 1/1, 0|1, ./., etc) - Purple",
+          "match": "^([0-9.])[/|]([0-9.])(?::[^:]*)*$|^([0-9.])[/|]([0-9.])",
+          "captures": {
+            "0": { "name": "keyword.control.sample.genotype.vcf" }
+          }
+        },
+        {
+          "comment": "Match entire sample field and color by position",
+          "match": "([^:]+)(?::([^:]+))?(?::([^:]+))?(?::([^:]+))?(?::([^:]+))?(?::([^:]+))?(?::([^:]+))?(?::([^:]+))?(?::(.+))?",
+          "captures": {
+            "1": {
+              "comment": "1st value (typically GT) - Purple",
+              "name": "keyword.control.sample.v1.vcf"
+            },
+            "2": {
+              "comment": "2nd value (typically AD) - Orange",
+              "name": "variable.parameter.sample.v2.vcf"
+            },
+            "3": {
+              "comment": "3rd value (typically DP) - Cyan",
+              "name": "support.function.sample.v3.vcf"
+            },
+            "4": {
+              "comment": "4th value (typically GQ) - Teal",
+              "name": "entity.name.type.sample.v4.vcf"
+            },
+            "5": {
+              "comment": "5th value (typically PL) - Blue",
+              "name": "constant.language.sample.v5.vcf"
+            },
+            "6": {
+              "comment": "6th value - Purple-Blue",
+              "name": "storage.type.sample.v6.vcf"
+            },
+            "7": {
+              "comment": "7th value - Pink",
+              "name": "keyword.other.sample.v7.vcf"
+            },
+            "8": {
+              "comment": "8th value - Yellow",
+              "name": "string.other.sample.v8.vcf"
+            },
+            "9": {
+              "comment": "9th+ values - default",
+              "name": "meta.sample.overflow.vcf"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

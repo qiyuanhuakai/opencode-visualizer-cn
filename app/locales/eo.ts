@@ -925,6 +925,10 @@ const messages: LocaleMessages = {
   imageViewer: {
     failedToLoad: 'Ŝargo de bildo malsukcesis',
   },
+  pdfViewer: {
+    failedToLoad: 'Ŝargo de PDF malsukcesis',
+    loading: 'Ŝargas PDF...',
+  },
   outputPanel: {
     scrollToLatest: 'Rulumi al plej nova',
     loadOlder: 'Ŝargi pli malnovan historion',
@@ -943,11 +947,22 @@ const messages: LocaleMessages = {
       rendered: 'Bildigita',
       source: 'Fonto',
       hex: 'Heks',
+      info: 'Informo',
+      archive: 'Arkivo',
+      pdf: 'PDF',
     },
     diff: {
       diff: 'Diferenco',
       modified: 'Modifita',
       original: 'Originala',
+    },
+    archive: {
+      name: 'Nomo',
+      size: 'Grando',
+      date: 'Dato',
+      fileCount: '{count} dosieroj',
+      unsupported: 'Antaŭrigardo de ĉi tiu densigita formato ankoraŭ ne subtenata.',
+      empty: 'La arkivo estas malplena.',
     },
   },
   dropdown: {

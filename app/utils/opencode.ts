@@ -13,8 +13,16 @@ export function setBaseUrl(baseUrl: string) {
   configuredBaseUrl = baseUrl.replace(/\/+$/, '');
 }
 
+export function getBaseUrl() {
+  return configuredBaseUrl;
+}
+
 export function setAuthorization(authorization: string | undefined) {
   configuredAuthorization = authorization;
+}
+
+export function getAuthorization() {
+  return configuredAuthorization;
 }
 
 function getBaseUrlOrThrow(errorMessage?: string) {
@@ -144,6 +152,24 @@ export function readFileContent(
     },
     options,
   ) as Promise<unknown>;
+}
+
+export async function readFileContentBytes(
+  payload: { directory: string; path: string },
+  options?: RequestOptions,
+) {
+  const response = await fetch(
+    createUrl('/file/content', {
+      directory: payload.directory,
+      path: payload.path,
+    }),
+    {
+      headers: buildHeaders(options),
+      signal: options?.signal,
+    },
+  );
+  if (!response.ok) throw new Error(`/file/content request failed (${response.status})`);
+  return new Uint8Array(await response.arrayBuffer());
 }
 
 export function getSessionDiff(payload: { sessionID: string; directory?: string }) {

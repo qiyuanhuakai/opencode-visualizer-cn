@@ -501,7 +501,7 @@
       </div>
       <div class="top-right">
         <a
-          href="https://github.com/xenodrive/vis/"
+          href="https://github.com/qiyuanhuakai/opencode-visualizer-cn"
           target="_blank"
           rel="noopener noreferrer"
           class="control-button github-button"

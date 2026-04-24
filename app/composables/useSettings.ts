@@ -182,13 +182,13 @@ watch(showMinimizeButtons, (value) => {
   storageSet(StorageKeys.settings.showMinimizeButtons, String(value));
 }, syncWatchOptions);
 
-watch(dockAlwaysOpen, (value) => {
-  storageSet(StorageKeys.settings.dockAlwaysOpen, String(value));
-}, syncWatchOptions);
-
 watch(showMinimizeButtons, (value) => {
   if (value) return;
   dockAlwaysOpen.value = false;
+}, syncWatchOptions);
+
+watch(dockAlwaysOpen, (value) => {
+  storageSet(StorageKeys.settings.dockAlwaysOpen, String(value));
 }, syncWatchOptions);
 
 watch(terminalFontFamily, (value) => {
