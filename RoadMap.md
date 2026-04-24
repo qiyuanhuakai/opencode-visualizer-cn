@@ -5,9 +5,6 @@
 ## [In Progress] 
 
 - [ ] 修改开屏页面的使用方法
-- [ ] 修改github链接指向的仓库为https://github.com/qiyuanhuakai/opencode-visualizer-cn	
-- [ ] 修改预览系统，以支持icon/icns预览
-- [ ] 修改预览系统，以支持二进制文件预览（不再显示乱码，而是显示二进制文件信息）
 - [ ] **修复已知问题**
 	- [ ] "历史记录"功能不保存subagents的历史（需要把subagents的历史记录以标签的形式和主agent分开）
 	- [ ] electron开发electron:start在Windows上报错

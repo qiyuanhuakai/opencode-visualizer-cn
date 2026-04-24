@@ -925,6 +925,10 @@ const messages: LocaleMessages = {
   imageViewer: {
     failedToLoad: '图片加载失败',
   },
+  pdfViewer: {
+    failedToLoad: 'PDF 加载失败',
+    loading: '正在加载 PDF...',
+  },
   outputPanel: {
     scrollToLatest: '滚动到最新',
     loadOlder: '加载更早历史',
@@ -943,11 +947,22 @@ const messages: LocaleMessages = {
       rendered: '渲染视图',
       source: '源代码',
       hex: '十六进制',
+      info: '文件信息',
+      archive: '压缩包',
+      pdf: 'PDF',
     },
     diff: {
       diff: '差异',
       modified: '修改后',
       original: '原始',
+    },
+    archive: {
+      name: '名称',
+      size: '大小',
+      date: '日期',
+      fileCount: '{count} 个文件',
+      unsupported: '暂不支持此压缩格式预览。',
+      empty: '压缩包为空。',
     },
   },
   dropdown: {

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "FASTQ",
+  "scopeName": "source.fastq",
+  "patterns": [
+    { "include": "#record" }
+  ],
+  "repository": {
+    "record": {
+      "patterns": [
+        {
+          "match": "^(@)(\\S+)(\\s+.*)?$",
+          "captures": {
+            "1": { "name": "punctuation.definition.header.fastq" },
+            "2": { "name": "entity.name.read.fastq" },
+            "3": { "name": "comment.line.description.fastq" }
+          }
+        },
+        {
+          "match": "^[ACGTUNRYSWKMBDHVacgtunryswkmbdhv.]+$",
+          "name": "string.unquoted.sequence.fastq"
+        },
+        {
+          "match": "^\\+.*$",
+          "name": "punctuation.separator.fastq"
+        },
+        {
+          "match": "^[!-~]+$",
+          "name": "string.unquoted.quality.fastq"
+        }
+      ]
+    }
+  }
+}

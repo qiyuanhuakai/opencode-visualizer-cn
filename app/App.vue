@@ -5125,11 +5125,19 @@ function parseCommitSnapshotOutput(rawOutput: string): CommitSnapshotResult {
     }
     const beforeBase64 = current.before.join('');
     const afterBase64 = current.after.join('');
+    const before = decodeCommitSnapshotBase64(beforeBase64);
+    const after = decodeCommitSnapshotBase64(afterBase64);
+    // Skip entries that represent empty directories (no content before or after)
+    if (!before && !after && current.status !== 'D') {
+      current = undefined;
+      section = 'none';
+      return;
+    }
     files.push({
       status: current.status,
       file: current.file,
-      before: decodeCommitSnapshotBase64(beforeBase64),
-      after: decodeCommitSnapshotBase64(afterBase64),
+      before,
+      after,
       beforeBase64,
       afterBase64,
     });
@@ -7062,6 +7070,21 @@ function toFileViewerTitle(path: string, lines?: string) {
   return `${base}:${lines}`;
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let base64 = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b1 = bytes[i] ?? 0;
+    const b2 = bytes[i + 1] ?? 0;
+    const b3 = bytes[i + 2] ?? 0;
+    base64 += chars[b1 >> 2];
+    base64 += chars[((b1 & 3) << 4) | (b2 >> 4)];
+    base64 += i + 1 < bytes.length ? chars[((b2 & 15) << 2) | (b3 >> 6)] : '=';
+    base64 += i + 2 < bytes.length ? chars[b3 & 63] : '=';
+  }
+  return base64;
+}
+
 async function refreshFileViewerWindow(key: string, options?: { bringToFront?: boolean }) {
   const entry = fw.get(key);
   if (!entry) return;
@@ -7099,9 +7122,15 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
     const encoding = typeof data?.encoding === 'string' ? data.encoding : 'utf-8';
     const content = typeof data?.content === 'string' ? data.content : '';
     const isBase64Payload = encoding === 'base64';
+    
+    console.log('[App] File response:', { path, type, encoding, contentLength: content.length, isBase64Payload });
+    
+    // Force binary treatment for PDF files
+    const ext = path.split('.').pop()?.toLowerCase() || '';
+    const forceBinary = ext === 'pdf';
 
-    if (type === 'binary' || isBase64Payload) {
-      if (!content) {
+    if (type === 'binary' || isBase64Payload || forceBinary) {
+      if (!content && !forceBinary) {
         fw.updateOptions(key, {
           props: {
             ...entry.props,
@@ -7120,6 +7149,26 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         return;
       }
 
+      // For forced binary files (PDF), fetch the raw bytes directly if the
+      // backend responded with text so the payload is not corrupted.
+      let binaryContent: string;
+      if (isBase64Payload) {
+        binaryContent = content;
+      } else if (forceBinary) {
+        try {
+          const bytes = await opencodeApi.readFileContentBytes({ directory, path: filePath });
+          binaryContent = bytesToBase64(bytes);
+          console.log('[App] Fetched raw binary data, size:', bytes.length);
+        } catch (fetchError) {
+          console.error('[App] Failed to fetch binary content:', fetchError);
+          const encoder = new TextEncoder();
+          binaryContent = bytesToBase64(encoder.encode(content));
+        }
+      } else {
+        const encoder = new TextEncoder();
+        binaryContent = bytesToBase64(encoder.encode(content));
+      }
+
       fw.updateOptions(key, {
         props: {
           ...entry.props,
@@ -7128,7 +7177,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
           filePath,
           rawHtml: undefined,
           fileContent: undefined,
-          binaryBase64: content,
+          binaryBase64: binaryContent,
           fileSizeBytes: content.length,
           lang: guessLanguage(path),
           lines,
@@ -7239,51 +7288,7 @@ function guessLanguage(path?: string, eventType?: string) {
     if (eventType && eventType.startsWith('session.diff')) return 'text';
     return 'text';
   }
-
-  const ext = path.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'ts':
-      return 'typescript';
-    case 'tsx':
-      return 'tsx';
-    case 'js':
-      return 'javascript';
-    case 'jsx':
-      return 'jsx';
-    case 'vue':
-      return 'vue';
-    case 'json':
-      return 'json';
-    case 'md':
-      return 'markdown';
-    case 'html':
-      return 'html';
-    case 'css':
-      return 'css';
-    case 'scss':
-      return 'scss';
-    case 'yml':
-    case 'yaml':
-      return 'yaml';
-    case 'diff':
-    case 'patch':
-      return 'diff';
-    case 'sh':
-      return 'shellscript';
-    case 'py':
-      return 'python';
-    case 'java':
-      return 'java';
-    case 'php':
-      return 'php';
-    case 'sql':
-      return 'sql';
-    case 'svg':
-    case 'xml':
-      return 'xml';
-    default:
-      return 'text';
-  }
+  return guessLanguageFromPath(path);
 }
 
 function formatRetryTime(timestamp: number): string {

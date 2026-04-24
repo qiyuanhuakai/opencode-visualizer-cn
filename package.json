@@ -35,9 +35,16 @@
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
+    "@fiahfy/icns": "^0.0.7",
     "@hono/node-server": "^1.19.9",
+    "buffer": "^6.0.3",
+    "fflate": "^0.8.2",
     "hono": "^4.12.3",
-    "vue-i18n": "^11.3.0"
+    "jszip": "^3.10.1",
+    "libarchive-wasm": "^1.2.0",
+    "nanotar": "^0.3.0",
+    "vue-i18n": "^11.3.0",
+    "vue-pdf-embed": "^2.1.4"
   },
   "devDependencies": {
     "@iconify/vue": "^5.0.0",
@@ -53,6 +60,7 @@
     "autoprefixer": "^10.4.24",
     "electron": "^35.0.0",
     "electron-builder": "^26.0.0",
+    "happy-dom": "^17.0.0",
     "markdown-it": "^14.1.1",
     "oxfmt": "^0.32.0",
     "oxlint": "^1.47.0",
@@ -62,7 +70,6 @@
     "tailwindcss": "^4.1.18",
     "vite": "^7.3.1",
     "vitest": "^4.1.2",
-    "happy-dom": "^17.0.0",
     "vue": "^3.5.28",
     "vue-tsc": "^3.2.4"
   },

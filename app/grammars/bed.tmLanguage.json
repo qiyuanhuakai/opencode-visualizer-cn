@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "BED",
+  "scopeName": "source.bed",
+  "patterns": [
+    { "include": "#track-line" },
+    { "include": "#browser-line" },
+    { "include": "#data-line" }
+  ],
+  "repository": {
+    "track-line": {
+      "match": "^(track)(.*)$",
+      "captures": {
+        "1": { "name": "keyword.control.track.bed" },
+        "2": { "name": "meta.track.attributes.bed" }
+      }
+    },
+    "browser-line": {
+      "match": "^(browser)(.*)$",
+      "captures": {
+        "1": { "name": "keyword.control.browser.bed" },
+        "2": { "name": "meta.browser.attributes.bed" }
+      }
+    },
+    "data-line": {
+      "match": "^([^\\t]+)\\t([0-9]+)\\t([0-9]+)(\\t[^\\t]+)?(\\t[^\\t]+)?(\\t[^\\t]+)?(\\t[^\\t]+)?(\\t[^\\t]+)?(\\t[^\\t]+)?(\\t[^\\t]+)?(\\t[^\\t]+)?(\\t[^\\t]+)?$",
+      "captures": {
+        "1": { "name": "string.unquoted.chrom.bed" },
+        "2": { "name": "constant.numeric.start.bed" },
+        "3": { "name": "constant.numeric.end.bed" },
+        "4": { "name": "entity.name.bed" },
+        "5": { "name": "constant.numeric.score.bed" },
+        "6": { "name": "keyword.operator.strand.bed" },
+        "7": { "name": "constant.numeric.thickStart.bed" },
+        "8": { "name": "constant.numeric.thickEnd.bed" },
+        "9": { "name": "constant.other.itemRgb.bed" },
+        "10": { "name": "constant.numeric.blockCount.bed" },
+        "11": { "name": "meta.blockSizes.bed" },
+        "12": { "name": "meta.blockStarts.bed" }
+      }
+    }
+  }
+}

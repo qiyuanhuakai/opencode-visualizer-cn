@@ -925,6 +925,10 @@ const messages: LocaleMessages = {
   imageViewer: {
     failedToLoad: '圖片載入失敗',
   },
+  pdfViewer: {
+    failedToLoad: 'PDF 載入失敗',
+    loading: '正在載入 PDF...',
+  },
   outputPanel: {
     scrollToLatest: '捲動到最新',
     loadOlder: '載入更早歷史',
@@ -943,11 +947,22 @@ const messages: LocaleMessages = {
       rendered: '算繪檢視',
       source: '原始碼',
       hex: '十六進位',
+      info: '檔案資訊',
+      archive: '壓縮檔',
+      pdf: 'PDF',
     },
     diff: {
       diff: '差異',
       modified: '修改後',
       original: '原始',
+    },
+    archive: {
+      name: '名稱',
+      size: '大小',
+      date: '日期',
+      fileCount: '{count} 個檔案',
+      unsupported: '暫不支援此壓縮格式預覽。',
+      empty: '壓縮檔為空。',
     },
   },
   dropdown: {

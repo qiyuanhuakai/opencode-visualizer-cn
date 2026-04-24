@@ -5,6 +5,51 @@
 ---
 ## [Unreleased]
 
+### 悬浮窗管理
+
+- [x] 悬浮窗支持预览.ico文件的图片
+- [x] 悬浮窗支持预览可执行二进制文件和损坏的二进制文件的信息和hexdump
+- [x] 悬浮窗支持高亮生物信息学相关文件：
+	- FASTA (.fasta, .fa, .fna, .faa)
+	- FASTQ (.fastq, .fq)
+	- SAM (.sam)
+	- VCF (.vcf)
+	- BED (.bed)
+	- GTF/GFF (.gtf, .gff, .gtf3)
+- [x] 为悬浮窗hexdump预览增加虚拟滚动功能，降低性能开销
+- [x] 为Shiki语法高亮补全了大量可高亮的语言
+
+**新增语言映射**:
+| 扩展名 | Shiki语言ID |
+|--------|-------------|
+| `.cjs`, `.mjs` | `javascript` |
+| `.svelte` | `svelte` |
+| `.astro` | `astro` |
+| `.json5`, `.jsonc` | `json` |
+| `.mdc`, `.mdx` | `markdown` |
+| `.htm` | `html` |
+| `.sass` | `sass` |
+| `.less` | `less` |
+| `.bash`, `.zsh` | `shellscript` |
+| `.pyw` | `python` |
+| `.h`, `.hpp`, `.hh` | `cpp` |
+| `.cs` | `csharp` |
+| `.erb` | `ruby` |
+| `.pl`, `.pm` | `perl` |
+| `.lua` | `lua` |
+| `.dockerfile` | `dockerfile` |
+| `.mk`, `.mak` | `makefile` |
+| `.gql`, `.graphql` | `graphql` |
+| `.regex`, `.regexp` | `regex` |
+| `.coffee`, `.coffeescript` | `coffee` |
+| `.r` | `r` |
+| `.jl` | `julia` |
+| `.wasm` | `wasm` |
+| `.wgsl` | `wgsl` |
+| `Makefile`（无扩展名） | `makefile` |
+| `Dockerfile`（无扩展名） | `dockerfile` |
+
+
 ### 主题设置（Beta）
 
 - [x] 支持自定义不同功能的悬浮窗颜色和透明度
@@ -14,7 +59,14 @@
 ### Bug 修复
 
 - [x] 修复了空心圆点在linux平台上和其他平台渲染效果不一致的问题
+- [x] 修复了diff界面可能存在信息为全空的项的问题
 
+### 上游问题
+
+- [x] 已经验证数项上游问题，这些预览在Vis前端已经支持，但无法实际使用
+	- [x] OpenCode serve 的/file/content api对pdf文件返回空的二进制，导致无法预览
+	- [x] OpenCode serve 的/file/content api对压缩文件返回空的二进制，导致无法预览
+	- [x] OpenCode serve 的/file/content api会将icns文件以plain text形式返回，损坏原始信息，导致无法预览
 
 ## [v0.2.0 released]
 

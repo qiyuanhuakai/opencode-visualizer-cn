@@ -1,0 +1,67 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "SAM",
+  "scopeName": "source.sam",
+  "patterns": [
+    { "include": "#header" },
+    { "include": "#alignment" }
+  ],
+  "repository": {
+    "header": {
+      "patterns": [
+        {
+          "match": "^(@HD)(\\t.+)?$",
+          "captures": {
+            "1": { "name": "keyword.control.header.hd.sam" },
+            "2": { "name": "meta.header.attributes.sam" }
+          }
+        },
+        {
+          "match": "^(@SQ)(\\t.+)?$",
+          "captures": {
+            "1": { "name": "keyword.control.header.sq.sam" },
+            "2": { "name": "meta.header.attributes.sam" }
+          }
+        },
+        {
+          "match": "^(@RG)(\\t.+)?$",
+          "captures": {
+            "1": { "name": "keyword.control.header.rg.sam" },
+            "2": { "name": "meta.header.attributes.sam" }
+          }
+        },
+        {
+          "match": "^(@PG)(\\t.+)?$",
+          "captures": {
+            "1": { "name": "keyword.control.header.pg.sam" },
+            "2": { "name": "meta.header.attributes.sam" }
+          }
+        },
+        {
+          "match": "^(@CO)(\\t.+)?$",
+          "captures": {
+            "1": { "name": "comment.line.sam" },
+            "2": { "name": "comment.line.sam" }
+          }
+        }
+      ]
+    },
+    "alignment": {
+      "match": "^([^@\\t][^\\t]*)\\t([0-9]+)\\t([^\\t]+)\\t([0-9]+)\\t([0-9]+)\\t([^\\t]+)\\t([^\\t]+)\\t([0-9]+)\\t(-?[0-9]+)\\t([^\\t]+)\\t([^\\t]+)(\\t.+)?$",
+      "captures": {
+        "1": { "name": "entity.name.qname.sam" },
+        "2": { "name": "constant.numeric.flag.sam" },
+        "3": { "name": "string.unquoted.rname.sam" },
+        "4": { "name": "constant.numeric.pos.sam" },
+        "5": { "name": "constant.numeric.mapq.sam" },
+        "6": { "name": "keyword.operator.cigar.sam" },
+        "7": { "name": "string.unquoted.rnext.sam" },
+        "8": { "name": "constant.numeric.pnext.sam" },
+        "9": { "name": "constant.numeric.tlen.sam" },
+        "10": { "name": "string.unquoted.seq.sam" },
+        "11": { "name": "string.unquoted.qual.sam" },
+        "12": { "name": "meta.tags.sam" }
+      }
+    }
+  }
+}
