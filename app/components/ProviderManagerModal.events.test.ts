@@ -18,6 +18,42 @@ describe('ProviderManagerModal events', () => {
     expect(modalSource).toContain("(event: 'config-updated', value: ProviderConfigState): void;");
     expect(modalSource).toContain("emit('config-updated'");
     expect(appSource).toContain('@config-updated="handleProviderConfigUpdated"');
+
+    expect(modalSource).toContain("(event: 'providers-changed'): void;");
+    expect(modalSource).toContain("emit('providers-changed'");
+    expect(appSource).toContain('@providers-changed="handleProvidersChanged"');
+    expect(appSource).toContain('async function handleProvidersChanged()');
+    expect(appSource).toContain('await fetchProviders(true);');
+  });
+
+  it('keeps provider connect buttons active when auth metadata is absent', () => {
+    const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
+
+    expect(modalSource).toContain('const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod');
+    expect(modalSource).toContain('return methods && methods.length > 0 ? methods : [DEFAULT_API_AUTH_METHOD];');
+    expect(modalSource).not.toContain('if (methods.length === 0) return null;');
+  });
+
+  it('matches OpenCode auth prompt conditions', () => {
+    const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
+
+    expect(modalSource).toContain("op: 'eq' | 'neq';");
+    expect(modalSource).toContain("return prompt.when.op === 'eq' ? actual === prompt.when.value : actual !== prompt.when.value;");
+  });
+
+  it('adds an OpenCode-compatible custom provider flow', () => {
+    const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
+    const providerConfigSource = readSource(resolve(__dirname, '../utils/providerConfig.ts'));
+    const i18nTypesSource = readSource(resolve(__dirname, '../i18n/types.ts'));
+
+    expect(modalSource).toContain('showCustomProviderForm');
+    expect(modalSource).toContain('CUSTOM_PROVIDER_NPM = \'@ai-sdk/openai-compatible\'');
+    expect(modalSource).toContain('provider: {');
+    expect(modalSource).toContain('[result.providerID]: result.config');
+    expect(modalSource).toContain("await opencodeApi.setProviderAuth(result.providerID, { type: 'api', key: result.key });");
+    expect(modalSource).toContain('disabled_providers: disabledProviders');
+    expect(providerConfigSource).toContain('provider?: Record<string, unknown>;');
+    expect(i18nTypesSource).toContain('custom: {');
   });
 
   it('does not switch models by clicking provider cards', () => {

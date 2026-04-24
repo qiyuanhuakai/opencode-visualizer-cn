@@ -1,6 +1,7 @@
 export type ProviderConfigState = {
   enabled_providers?: string[];
   disabled_providers?: string[];
+  provider?: Record<string, unknown>;
 };
 
 export function normalizeProviderIds(values?: string[]) {

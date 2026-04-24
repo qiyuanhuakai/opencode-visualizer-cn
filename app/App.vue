@@ -326,6 +326,7 @@
       @close="isProviderManagerOpen = false"
       @update:model-visibility="handleModelVisibilityUpdate"
       @config-updated="handleProviderConfigUpdated"
+      @providers-changed="handleProvidersChanged"
     />
     <StatusMonitorModal :open="isStatusMonitorOpen" :session-id="selectedSessionId" @close="isStatusMonitorOpen = false" />
     <ProjectSettingsDialog
@@ -1059,6 +1060,7 @@ type ProviderResponse = {
 type ProviderConfigState = {
   enabled_providers?: string[];
   disabled_providers?: string[];
+  provider?: Record<string, unknown>;
 };
 
 type ModelVisibilityEntry = {
@@ -2967,6 +2969,10 @@ function handleModelVisibilityUpdate(next: ModelVisibilityEntry[]) {
 function handleProviderConfigUpdated(next: ProviderConfigState) {
   providerConfig.value = next ?? null;
   ensureSelectedModelAvailable();
+}
+
+async function handleProvidersChanged() {
+  await fetchProviders(true);
 }
 
 async function fetchGlobalProviderConfig() {

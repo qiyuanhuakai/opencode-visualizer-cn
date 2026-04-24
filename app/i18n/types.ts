@@ -341,6 +341,43 @@ export interface LocaleMessages {
       enabled: string;
       disabled: string;
     };
+    custom: {
+      title: string;
+      back: string;
+      description: string;
+      entryDescription: string;
+      submit: string;
+      fields: {
+        providerId: { label: string; placeholder: string; description: string };
+        name: { label: string; placeholder: string };
+        baseUrl: { label: string; placeholder: string };
+        apiKey: { label: string; placeholder: string; description: string };
+      };
+      models: {
+        label: string;
+        id: { label: string; placeholder: string };
+        name: { label: string; placeholder: string };
+        add: string;
+        remove: string;
+      };
+      headers: {
+        label: string;
+        key: { label: string; placeholder: string };
+        value: { label: string; placeholder: string };
+        add: string;
+        remove: string;
+      };
+      errors: {
+        providerIdRequired: string;
+        providerIdFormat: string;
+        providerIdExists: string;
+        nameRequired: string;
+        baseUrlRequired: string;
+        baseUrlFormat: string;
+        required: string;
+        duplicate: string;
+      };
+    };
     models: {
       searchPlaceholder: string;
       total: string;

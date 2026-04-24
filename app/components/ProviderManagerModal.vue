@@ -47,7 +47,163 @@
           {{ feedbackMessage }}
         </div>
 
-        <template v-if="activeTab === 'providers'">
+        <template v-if="showCustomProviderForm">
+          <form class="custom-provider-form" @submit.prevent="submitCustomProvider">
+            <button type="button" class="provider-back-action" @click="closeCustomProviderForm">
+              <Icon icon="lucide:arrow-left" :width="14" :height="14" />
+              {{ $t('providerManager.custom.back') }}
+            </button>
+
+            <div class="custom-provider-heading">
+              <div class="custom-provider-icon">
+                <Icon icon="lucide:sparkles" :width="20" :height="20" />
+              </div>
+              <div>
+                <div class="section-heading custom-provider-title">{{ $t('providerManager.custom.title') }}</div>
+                <p class="custom-provider-description">
+                  {{ $t('providerManager.custom.description') }}
+                </p>
+              </div>
+            </div>
+
+            <label class="custom-provider-field">
+              <span>{{ $t('providerManager.custom.fields.providerId.label') }}</span>
+              <input
+                v-model="customProviderForm.providerID"
+                type="text"
+                :placeholder="$t('providerManager.custom.fields.providerId.placeholder')"
+                @input="customProviderErrors.providerID = ''"
+              />
+              <small :class="{ 'is-error': customProviderErrors.providerID }">
+                {{ customProviderErrors.providerID || $t('providerManager.custom.fields.providerId.description') }}
+              </small>
+            </label>
+
+            <label class="custom-provider-field">
+              <span>{{ $t('providerManager.custom.fields.name.label') }}</span>
+              <input
+                v-model="customProviderForm.name"
+                type="text"
+                :placeholder="$t('providerManager.custom.fields.name.placeholder')"
+                @input="customProviderErrors.name = ''"
+              />
+              <small v-if="customProviderErrors.name" class="is-error">{{ customProviderErrors.name }}</small>
+            </label>
+
+            <label class="custom-provider-field">
+              <span>{{ $t('providerManager.custom.fields.baseUrl.label') }}</span>
+              <input
+                v-model="customProviderForm.baseURL"
+                type="url"
+                :placeholder="$t('providerManager.custom.fields.baseUrl.placeholder')"
+                @input="customProviderErrors.baseURL = ''"
+              />
+              <small v-if="customProviderErrors.baseURL" class="is-error">{{ customProviderErrors.baseURL }}</small>
+            </label>
+
+            <label class="custom-provider-field">
+              <span>{{ $t('providerManager.custom.fields.apiKey.label') }}</span>
+              <input
+                v-model="customProviderForm.apiKey"
+                type="text"
+                :placeholder="$t('providerManager.custom.fields.apiKey.placeholder')"
+              />
+              <small>{{ $t('providerManager.custom.fields.apiKey.description') }}</small>
+            </label>
+
+            <div class="custom-provider-rows">
+              <div class="custom-provider-row-header">{{ $t('providerManager.custom.models.label') }}</div>
+              <div
+                v-for="(model, index) in customProviderForm.models"
+                :key="model.row"
+                class="custom-provider-row"
+              >
+                <label>
+                  <span class="sr-only">{{ $t('providerManager.custom.models.id.label') }}</span>
+                  <input
+                    v-model="model.id"
+                    type="text"
+                    :placeholder="$t('providerManager.custom.models.id.placeholder')"
+                    @input="model.err.id = ''"
+                  />
+                  <small v-if="model.err.id" class="is-error">{{ model.err.id }}</small>
+                </label>
+                <label>
+                  <span class="sr-only">{{ $t('providerManager.custom.models.name.label') }}</span>
+                  <input
+                    v-model="model.name"
+                    type="text"
+                    :placeholder="$t('providerManager.custom.models.name.placeholder')"
+                    @input="model.err.name = ''"
+                  />
+                  <small v-if="model.err.name" class="is-error">{{ model.err.name }}</small>
+                </label>
+                <button
+                  type="button"
+                  class="custom-provider-remove"
+                  :title="$t('providerManager.custom.models.remove')"
+                  :disabled="customProviderForm.models.length <= 1"
+                  @click="removeCustomModel(index)"
+                >
+                  <Icon icon="lucide:trash-2" :width="14" :height="14" />
+                </button>
+              </div>
+              <button type="button" class="ghost-action custom-provider-add" @click="addCustomModel">
+                <Icon icon="lucide:plus" :width="13" :height="13" />
+                {{ $t('providerManager.custom.models.add') }}
+              </button>
+            </div>
+
+            <div class="custom-provider-rows">
+              <div class="custom-provider-row-header">{{ $t('providerManager.custom.headers.label') }}</div>
+              <div
+                v-for="(header, index) in customProviderForm.headers"
+                :key="header.row"
+                class="custom-provider-row"
+              >
+                <label>
+                  <span class="sr-only">{{ $t('providerManager.custom.headers.key.label') }}</span>
+                  <input
+                    v-model="header.key"
+                    type="text"
+                    :placeholder="$t('providerManager.custom.headers.key.placeholder')"
+                    @input="header.err.key = ''"
+                  />
+                  <small v-if="header.err.key" class="is-error">{{ header.err.key }}</small>
+                </label>
+                <label>
+                  <span class="sr-only">{{ $t('providerManager.custom.headers.value.label') }}</span>
+                  <input
+                    v-model="header.value"
+                    type="text"
+                    :placeholder="$t('providerManager.custom.headers.value.placeholder')"
+                    @input="header.err.value = ''"
+                  />
+                  <small v-if="header.err.value" class="is-error">{{ header.err.value }}</small>
+                </label>
+                <button
+                  type="button"
+                  class="custom-provider-remove"
+                  :title="$t('providerManager.custom.headers.remove')"
+                  :disabled="customProviderForm.headers.length <= 1"
+                  @click="removeCustomHeader(index)"
+                >
+                  <Icon icon="lucide:trash-2" :width="14" :height="14" />
+                </button>
+              </div>
+              <button type="button" class="ghost-action custom-provider-add" @click="addCustomHeader">
+                <Icon icon="lucide:plus" :width="13" :height="13" />
+                {{ $t('providerManager.custom.headers.add') }}
+              </button>
+            </div>
+
+            <button type="submit" class="ghost-action secondary custom-provider-submit" :disabled="busyProviderId === CUSTOM_PROVIDER_BUSY_ID">
+              {{ $t('providerManager.custom.submit') }}
+            </button>
+          </form>
+        </template>
+
+        <template v-else-if="activeTab === 'providers'">
           <div class="provider-sections">
             <section class="provider-section">
               <div class="provider-section-header">
@@ -147,6 +303,18 @@
               </button>
 
               <div v-show="viewAllExpanded" class="provider-view-all-panel">
+                <div class="custom-provider-entry">
+                  <span class="custom-provider-entry-icon">
+                    <Icon icon="lucide:sparkles" :width="16" :height="16" />
+                  </span>
+                  <span class="custom-provider-entry-text">
+                    <span>{{ $t('providerManager.custom.title') }}</span>
+                    <small>{{ $t('providerManager.custom.entryDescription') }}</small>
+                  </span>
+                  <button type="button" class="ghost-action provider-mini-row-action" @click="openCustomProviderForm">
+                    {{ $t('providerManager.actions.connect') }}
+                  </button>
+                </div>
                 <div class="provider-view-all-list">
                   <article
                     v-for="provider in allProvidersForView"
@@ -296,6 +464,7 @@
 
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue';
+import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import * as opencodeApi from '../utils/opencode';
 import {
@@ -337,6 +506,28 @@ type ProviderInfo = {
 type ProviderAuthMethod = {
   type: 'oauth' | 'api';
   label: string;
+  prompts?: ProviderAuthPrompt[];
+};
+
+type ProviderAuthPromptOption = string | {
+  hint?: string;
+  label?: string;
+  value?: string;
+};
+
+type ProviderAuthPromptCondition = {
+  key: string;
+  op: 'eq' | 'neq';
+  value: string;
+};
+
+type ProviderAuthPrompt = {
+  type: 'text' | 'select';
+  key: string;
+  message?: string;
+  placeholder?: string;
+  options?: ProviderAuthPromptOption[];
+  when?: ProviderAuthPromptCondition;
 };
 
 type ProviderAuthAuthorization = {
@@ -345,7 +536,48 @@ type ProviderAuthAuthorization = {
   instructions: string;
 };
 
+type CustomProviderModelRow = {
+  row: string;
+  id: string;
+  name: string;
+  err: {
+    id?: string;
+    name?: string;
+  };
+};
+
+type CustomProviderHeaderRow = {
+  row: string;
+  key: string;
+  value: string;
+  err: {
+    key?: string;
+    value?: string;
+  };
+};
+
+type CustomProviderConfig = {
+  npm: string;
+  name: string;
+  env?: string[];
+  options: {
+    baseURL: string;
+    headers?: Record<string, string>;
+  };
+  models: Record<string, { name: string }>;
+};
+
+type CustomProviderValidationResult = {
+  providerID: string;
+  name: string;
+  key?: string;
+  config: CustomProviderConfig;
+};
+
 const POPULAR_PROVIDER_IDS = ['opencode', 'opencode-go', 'openai', 'github-copilot', 'anthropic', 'google'];
+const CUSTOM_PROVIDER_NPM = '@ai-sdk/openai-compatible';
+const CUSTOM_PROVIDER_BUSY_ID = '__custom_provider__';
+const CUSTOM_PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
 
 const PROVIDER_NOTES: Record<string, string> = {
   opencode: 'Single key access to multiple coding models.',
@@ -356,6 +588,11 @@ const PROVIDER_NOTES: Record<string, string> = {
   google: 'Connect Gemini models with Google credentials.',
   openrouter: 'Access multiple hosted models through one router.',
   vercel: 'Use Vercel AI Gateway-compatible credentials.',
+};
+
+const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod = {
+  type: 'api',
+  label: 'API key',
 };
 
 type ModelVisibilityEntry = {
@@ -380,6 +617,8 @@ const emit = defineEmits<{
   (event: 'providers-changed'): void;
 }>();
 
+const { t } = useI18n();
+
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const activeTab = ref<ProviderManagerTab>('providers');
 const modelSearch = ref('');
@@ -391,6 +630,21 @@ const feedbackMessage = ref('');
 const feedbackTone = ref<'info' | 'success' | 'error'>('info');
 const authMethods = ref<Record<string, ProviderAuthMethod[]>>({});
 const viewAllExpanded = ref(false);
+const showCustomProviderForm = ref(false);
+const customProviderRowCounter = ref(0);
+const customProviderForm = ref({
+  providerID: '',
+  name: '',
+  baseURL: '',
+  apiKey: '',
+  models: [createCustomModelRow()],
+  headers: [createCustomHeaderRow()],
+});
+const customProviderErrors = ref({
+  providerID: '',
+  name: '',
+  baseURL: '',
+});
 
 const hiddenModelSet = computed(() => new Set(props.hiddenModels));
 const connectedProviderIdSet = computed(() => new Set(props.connectedProviderIds));
@@ -474,6 +728,7 @@ watch(
       activeTab.value = 'providers';
       modelSearch.value = '';
       feedbackMessage.value = '';
+      closeCustomProviderForm();
       void fetchAuthMethods();
       if (!el.open) el.showModal();
     } else if (el.open) {
@@ -485,6 +740,59 @@ watch(
 function setFeedback(message: string, tone: 'info' | 'success' | 'error' = 'info') {
   feedbackMessage.value = message;
   feedbackTone.value = tone;
+}
+
+function nextCustomProviderRowId() {
+  customProviderRowCounter.value += 1;
+  return `custom-row-${customProviderRowCounter.value}`;
+}
+
+function createCustomModelRow(): CustomProviderModelRow {
+  return { row: nextCustomProviderRowId(), id: '', name: '', err: {} };
+}
+
+function createCustomHeaderRow(): CustomProviderHeaderRow {
+  return { row: nextCustomProviderRowId(), key: '', value: '', err: {} };
+}
+
+function resetCustomProviderForm() {
+  customProviderErrors.value = { providerID: '', name: '', baseURL: '' };
+  customProviderForm.value = {
+    providerID: '',
+    name: '',
+    baseURL: '',
+    apiKey: '',
+    models: [createCustomModelRow()],
+    headers: [createCustomHeaderRow()],
+  };
+}
+
+function openCustomProviderForm() {
+  resetCustomProviderForm();
+  feedbackMessage.value = '';
+  showCustomProviderForm.value = true;
+}
+
+function closeCustomProviderForm() {
+  showCustomProviderForm.value = false;
+}
+
+function addCustomModel() {
+  customProviderForm.value.models.push(createCustomModelRow());
+}
+
+function removeCustomModel(index: number) {
+  if (customProviderForm.value.models.length <= 1) return;
+  customProviderForm.value.models.splice(index, 1);
+}
+
+function addCustomHeader() {
+  customProviderForm.value.headers.push(createCustomHeaderRow());
+}
+
+function removeCustomHeader(index: number) {
+  if (customProviderForm.value.headers.length <= 1) return;
+  customProviderForm.value.headers.splice(index, 1);
 }
 
 async function fetchAuthMethods() {
@@ -520,7 +828,8 @@ function providerEnabledModelCount(provider: ProviderInfo) {
 }
 
 function providerAuthSummary(providerId: string) {
-  return authMethods.value[providerId] ?? [];
+  const methods = authMethods.value[providerId];
+  return methods && methods.length > 0 ? methods : [DEFAULT_API_AUTH_METHOD];
 }
 
 function isProviderDisconnected(provider: ProviderInfo) {
@@ -549,9 +858,147 @@ function formatCount(value?: number) {
   return Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
+function validationMessage(key: string) {
+  return String(key);
+}
+
+function validateCustomProvider() {
+  const providerID = customProviderForm.value.providerID.trim();
+  const name = customProviderForm.value.name.trim();
+  const baseURL = customProviderForm.value.baseURL.trim();
+  const apiKey = customProviderForm.value.apiKey.trim();
+  const env = apiKey.match(/^\{env:([^}]+)\}$/)?.[1]?.trim();
+  const disabledProviders = normalizeProviderIds(props.providerConfig?.disabled_providers);
+  const existingProviderIds = new Set(props.providers.map((provider) => provider.id));
+  const isDisabledExistingProvider = disabledProviders.includes(providerID);
+
+  customProviderErrors.value = {
+    providerID: !providerID
+      ? validationMessage('providerManager.custom.errors.providerIdRequired')
+      : !CUSTOM_PROVIDER_ID_PATTERN.test(providerID)
+        ? validationMessage('providerManager.custom.errors.providerIdFormat')
+        : existingProviderIds.has(providerID) && !isDisabledExistingProvider
+          ? validationMessage('providerManager.custom.errors.providerIdExists')
+          : '',
+    name: name ? '' : validationMessage('providerManager.custom.errors.nameRequired'),
+    baseURL: !baseURL
+      ? validationMessage('providerManager.custom.errors.baseUrlRequired')
+      : !/^https?:\/\//.test(baseURL)
+        ? validationMessage('providerManager.custom.errors.baseUrlFormat')
+        : '',
+  };
+
+  const seenModels = new Set<string>();
+  customProviderForm.value.models.forEach((model) => {
+    const modelId = model.id.trim();
+    model.err.id = !modelId
+      ? validationMessage('providerManager.custom.errors.required')
+      : seenModels.has(modelId)
+        ? validationMessage('providerManager.custom.errors.duplicate')
+        : '';
+    if (modelId) seenModels.add(modelId);
+    model.err.name = model.name.trim() ? '' : validationMessage('providerManager.custom.errors.required');
+  });
+
+  const seenHeaders = new Set<string>();
+  customProviderForm.value.headers.forEach((header) => {
+    const key = header.key.trim();
+    const value = header.value.trim();
+    if (!key && !value) {
+      header.err = {};
+      return;
+    }
+    const normalizedKey = key.toLowerCase();
+    header.err.key = !key
+      ? validationMessage('providerManager.custom.errors.required')
+      : seenHeaders.has(normalizedKey)
+        ? validationMessage('providerManager.custom.errors.duplicate')
+        : '';
+    if (key) seenHeaders.add(normalizedKey);
+    header.err.value = value ? '' : validationMessage('providerManager.custom.errors.required');
+  });
+
+  const hasFieldErrors = Boolean(
+    customProviderErrors.value.providerID ||
+    customProviderErrors.value.name ||
+    customProviderErrors.value.baseURL,
+  );
+  const hasModelErrors = customProviderForm.value.models.some((model) => model.err.id || model.err.name);
+  const hasHeaderErrors = customProviderForm.value.headers.some((header) => header.err.key || header.err.value);
+  if (hasFieldErrors || hasModelErrors || hasHeaderErrors) return null;
+
+  const headers = Object.fromEntries(
+    customProviderForm.value.headers
+      .map((header) => ({ key: header.key.trim(), value: header.value.trim() }))
+      .filter((header) => header.key && header.value)
+      .map((header) => [header.key, header.value]),
+  );
+  return {
+    providerID,
+    name,
+    key: apiKey && !env ? apiKey : undefined,
+    config: {
+      npm: CUSTOM_PROVIDER_NPM,
+      name,
+      ...(env ? { env: [env] } : {}),
+      options: {
+        baseURL,
+        ...(Object.keys(headers).length > 0 ? { headers } : {}),
+      },
+      models: Object.fromEntries(
+        customProviderForm.value.models.map((model) => [model.id.trim(), { name: model.name.trim() }]),
+      ),
+    },
+  } satisfies CustomProviderValidationResult;
+}
+
+async function submitCustomProvider() {
+  const result = validateCustomProvider();
+  if (!result) {
+    customProviderErrors.value = {
+      providerID: customProviderErrors.value.providerID ? String(t(customProviderErrors.value.providerID)) : '',
+      name: customProviderErrors.value.name ? String(t(customProviderErrors.value.name)) : '',
+      baseURL: customProviderErrors.value.baseURL ? String(t(customProviderErrors.value.baseURL)) : '',
+    };
+    customProviderForm.value.models.forEach((model) => {
+      model.err.id = model.err.id ? String(t(model.err.id)) : '';
+      model.err.name = model.err.name ? String(t(model.err.name)) : '';
+    });
+    customProviderForm.value.headers.forEach((header) => {
+      header.err.key = header.err.key ? String(t(header.err.key)) : '';
+      header.err.value = header.err.value ? String(t(header.err.value)) : '';
+    });
+    return;
+  }
+
+  busyProviderId.value = CUSTOM_PROVIDER_BUSY_ID;
+  try {
+    if (result.key) {
+      await opencodeApi.setProviderAuth(result.providerID, { type: 'api', key: result.key });
+    }
+    const disabledProviders = normalizeProviderIds(props.providerConfig?.disabled_providers)
+      .filter((providerId) => providerId !== result.providerID);
+    const nextConfig = (await opencodeApi.updateGlobalConfig({
+      provider: {
+        ...props.providerConfig?.provider,
+        [result.providerID]: result.config,
+      },
+      disabled_providers: disabledProviders,
+    })) as ProviderConfigState;
+    emit('config-updated', nextConfig ?? {});
+    emit('providers-changed');
+    setFeedback(`Connected ${result.name}.`, 'success');
+    closeCustomProviderForm();
+    resetCustomProviderForm();
+  } catch (error) {
+    setFeedback(error instanceof Error ? error.message : String(error), 'error');
+  } finally {
+    busyProviderId.value = '';
+  }
+}
+
 async function pickAuthMethod(providerId: string) {
   const methods = providerAuthSummary(providerId);
-  if (methods.length === 0) return null;
   if (methods.length === 1) return { method: methods[0], index: 0 };
   const options = methods.map((method, index) => `${index + 1}. ${method.label}`).join('\n');
   const raw = showPrompt ? await showPrompt(`Select auth method for ${providerId}:\n${options}`, '1') : null;
@@ -559,6 +1006,51 @@ async function pickAuthMethod(providerId: string) {
   const index = Number(raw) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= methods.length) return null;
   return { method: methods[index], index };
+}
+
+function promptOptionLabel(option: ProviderAuthPromptOption) {
+  return typeof option === 'string' ? option : (option.label?.trim() || option.value?.trim() || '');
+}
+
+function promptOptionValue(option: ProviderAuthPromptOption) {
+  return typeof option === 'string' ? option : (option.value?.trim() || option.label?.trim() || '');
+}
+
+function shouldShowAuthPrompt(prompt: ProviderAuthPrompt, inputs: Record<string, string>) {
+  if (!prompt.when) return true;
+  const actual = inputs[prompt.when.key];
+  if (actual === undefined) return false;
+  return prompt.when.op === 'eq' ? actual === prompt.when.value : actual !== prompt.when.value;
+}
+
+async function collectAuthPromptInputs(
+  provider: ProviderInfo,
+  method: ProviderAuthMethod,
+) {
+  const prompts = method.prompts ?? [];
+  const inputs: Record<string, string> = {};
+  for (const prompt of prompts) {
+    if (!prompt.key || !shouldShowAuthPrompt(prompt, inputs)) continue;
+    const title = prompt.message?.trim() || `Enter ${prompt.key} for ${provider.name?.trim() || provider.id}`;
+    if (prompt.type === 'select') {
+      const options = (prompt.options ?? [])
+        .map((option) => ({ label: promptOptionLabel(option), value: promptOptionValue(option) }))
+        .filter((option) => option.value.length > 0);
+      if (options.length === 0) continue;
+      const optionText = options.map((option, index) => `${index + 1}. ${option.label || option.value}`).join('\n');
+      const raw = showPrompt ? await showPrompt(`${title}:\n${optionText}`, '1') : null;
+      if (!raw) return null;
+      const index = Number(raw) - 1;
+      if (!Number.isInteger(index) || index < 0 || index >= options.length) return null;
+      inputs[prompt.key] = options[index].value;
+      continue;
+    }
+
+    const value = showPrompt ? await showPrompt(title, prompt.placeholder) : null;
+    if (!value) return null;
+    inputs[prompt.key] = value.trim();
+  }
+  return inputs;
 }
 
 async function toggleProvider(providerId: string, nextEnabled: boolean) {
@@ -618,8 +1110,11 @@ async function connectProvider(provider: ProviderInfo) {
       return;
     }
 
+    const inputs = await collectAuthPromptInputs(provider, picked.method);
+    if (!inputs) return;
     const authorization = (await opencodeApi.authorizeProviderOAuth(provider.id, {
       method: picked.index,
+      inputs,
     })) as ProviderAuthAuthorization;
     if (authorization?.url) {
       window.open(authorization.url, '_blank', 'noopener,noreferrer');
@@ -816,6 +1311,190 @@ async function disconnectProvider(providerId: string) {
   border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8))));
   border-radius: 12px;
   background: var(--theme-card-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46))));
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.provider-back-action {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.provider-back-action {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+.custom-provider-form {
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-right: 4px;
+}
+
+.custom-provider-heading,
+.custom-provider-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.custom-provider-icon,
+.custom-provider-entry-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--theme-modal-text, var(--theme-text-primary, #f8fafc));
+}
+
+.custom-provider-title {
+  margin-top: 0;
+}
+
+.custom-provider-description {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+}
+
+.custom-provider-field,
+.custom-provider-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 12px;
+}
+
+.custom-provider-field input,
+.custom-provider-row input {
+  min-height: 38px;
+  width: 100%;
+  border: 1px solid var(--theme-search-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
+  border-radius: 9px;
+  background: var(--theme-search-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82))));
+  color: var(--theme-search-text, var(--theme-modal-text, var(--theme-text-primary, #e2e8f0)));
+  font-size: 13px;
+  font-family: inherit;
+  padding: 0 12px;
+  outline: none;
+}
+
+.custom-provider-field input::placeholder,
+.custom-provider-row input::placeholder {
+  color: var(--theme-search-placeholder, var(--theme-modal-text-muted, var(--theme-text-muted, #64748b)));
+}
+
+.custom-provider-field input:focus,
+.custom-provider-row input:focus {
+  border-color: var(--theme-modal-accent, var(--theme-border-accent, #60a5fa));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--theme-modal-accent, #60a5fa) 24%, transparent);
+}
+
+.custom-provider-field small,
+.custom-provider-row small {
+  min-height: 14px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 11px;
+}
+
+.custom-provider-field small.is-error,
+.custom-provider-row small.is-error {
+  color: var(--theme-text-danger, #fecaca);
+}
+
+.custom-provider-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.custom-provider-row-header {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+}
+
+.custom-provider-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+}
+
+.custom-provider-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 38px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  cursor: pointer;
+}
+
+.custom-provider-remove:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.custom-provider-add,
+.custom-provider-submit {
+  align-self: flex-start;
+  gap: 6px;
+}
+
+.custom-provider-entry {
+  width: 100%;
+  justify-content: space-between;
+  border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8))));
+  border-radius: 10px;
+  background: var(--theme-card-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46))));
+  padding: 10px;
+  text-align: left;
+}
+
+.custom-provider-entry-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.custom-provider-entry-text > span {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--theme-modal-text, var(--theme-text-primary, #f8fafc));
+}
+
+.custom-provider-entry-text > small {
+  font-size: 11px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .section-eyebrow {
