@@ -979,6 +979,7 @@ const composerDraftTabId =
 const shellSessionsByPtyId = new Map<string, ShellSession>();
 const pendingShellFits = new Set<string>();
 const shellExitWaiters = new Map<string, (exitCode: number) => void>();
+const ptyToFileMap = new Map<string, string>();
 const ptyMetaDecoder = new TextDecoder();
 let floatingExtentResizeObserver: ResizeObserver | null = null;
 let floatingExtentObservedEl: HTMLDivElement | null = null;
@@ -4951,6 +4952,7 @@ function removeShellWindow(ptyId: string, options?: { kill?: boolean }) {
   session.terminal.dispose();
   shellSessionsByPtyId.delete(ptyId);
   shellExitWaiters.delete(ptyId);
+  ptyToFileMap.delete(ptyId);
   fw.close(`shell:${ptyId}`);
   if (options?.kill) {
     const directory = session.pty.cwd || activeDirectory.value || undefined;
@@ -5005,6 +5007,7 @@ async function handleFloatingWindowOpen(key: string) {
   const escapedPath = absolutePath.replace(/'/g, "'\"'\"'");
   const pty = await createPtySession('/bin/sh', ['-c', `$EDITOR '${escapedPath}'`]);
   if (pty) {
+    ptyToFileMap.set(pty.id, absolutePath);
     await ensureShellWindow(pty);
   }
 }
@@ -5092,6 +5095,7 @@ async function runTreeShellCommand(command: string) {
 }
 
 async function handleReloadSidebar() {
+  if (treeLoading.value) return;
   await reloadTree();
   await Promise.all([
     refreshGitStatus({ includeFileSnapshot: false }),
@@ -7087,7 +7091,9 @@ function bytesToBase64(bytes: Uint8Array): string {
 
 async function refreshFileViewerWindow(key: string, options?: { bringToFront?: boolean }) {
   const entry = fw.get(key);
-  if (!entry) return;
+  if (!entry) {
+    return;
+  }
 
   const path = typeof entry.props?.path === 'string' ? entry.props.path : '';
   if (!path) return;
@@ -7122,9 +7128,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
     const encoding = typeof data?.encoding === 'string' ? data.encoding : 'utf-8';
     const content = typeof data?.content === 'string' ? data.content : '';
     const isBase64Payload = encoding === 'base64';
-    
-    console.log('[App] File response:', { path, type, encoding, contentLength: content.length, isBase64Payload });
-    
+
     // Force binary treatment for PDF files
     const ext = path.split('.').pop()?.toLowerCase() || '';
     const forceBinary = ext === 'pdf';
@@ -7610,12 +7614,7 @@ onMounted(() => {
       validateSelectedSession();
     }),
   );
-  globalEventUnsubscribers.push(
-    ge.on('file.watcher.updated', (packet) => {
-      feed(packet);
-      void refreshOpenFileViewersForPath(packet.file);
-    }),
-  );
+
   globalEventUnsubscribers.push(
     ge.on('session.status', ({ sessionID, status }) => {
       applySessionStatusEvent(sessionID, status);
@@ -7651,7 +7650,22 @@ onMounted(() => {
   );
   globalEventUnsubscribers.push(
     ge.on('pty.deleted', ({ id }) => {
+      const filePath = ptyToFileMap.get(id);
+      if (filePath) {
+        void refreshOpenFileViewersForPath(filePath);
+        ptyToFileMap.delete(id);
+      }
       lingerAndRemoveShellWindow(id);
+    }),
+  );
+  globalEventUnsubscribers.push(
+    ge.on('file.edited', (payload) => {
+      console.log('[file.edited]', payload);
+    }),
+  );
+  globalEventUnsubscribers.push(
+    ge.on('file.watcher.updated', (payload) => {
+      console.log('[file.watcher.updated]', payload);
     }),
   );
   globalEventUnsubscribers.push(

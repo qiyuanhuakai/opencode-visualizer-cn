@@ -13,7 +13,7 @@
 	- FASTA (.fasta, .fa, .fna, .faa)
 	- FASTQ (.fastq, .fq)
 	- SAM (.sam)
-	- VCF (.vcf)
+	- VCF (.vcf) 
 	- BED (.bed)
 	- GTF/GFF (.gtf, .gff, .gtf3)
 - [x] 为悬浮窗hexdump预览增加虚拟滚动功能，降低性能开销
@@ -46,9 +46,8 @@
 | `.jl` | `julia` |
 | `.wasm` | `wasm` |
 | `.wgsl` | `wgsl` |
-| `Makefile`（无扩展名） | `makefile` |
-| `Dockerfile`（无扩展名） | `dockerfile` |
-
+| `Makefile` | `makefile` |
+| `Dockerfile` | `dockerfile` |
 
 ### 主题设置（Beta）
 
@@ -62,6 +61,7 @@
 - [x] 修复了diff界面可能存在信息为全空的项的问题
 - [x] 修复了electron开发在windows上报错的问题
 - [x] 修复了electron打包应用中“复制”按钮失效的问题
+- [x] 修复了被删除的文件在刷新后仍然显示在文件树中的问题
 
 ### 上游问题
 
