@@ -11,6 +11,7 @@ import type {
 } from '../types/git';
 import * as opencodeApi from '../utils/opencode';
 import { normalizeDirectory } from '../utils/path';
+import { uniqueBy } from '../utils/array';
 import { usePtyOneshot } from './usePtyOneshot';
 
 const GIT_ENV_PREAMBLE = [
@@ -307,7 +308,7 @@ function replaceDirectoryFilesInCache(parentPath: string, children: TreeNode[]) 
     if (!filePath.startsWith(prefix)) return true;
     return filePath.slice(prefix.length).includes('/');
   });
-  const next = Array.from(new Set([...preserved, ...directFiles])).sort((a, b) =>
+  const next = uniqueBy([...preserved, ...directFiles], x => x).sort((a, b) =>
     a.localeCompare(b),
   );
   const changed =
@@ -834,7 +835,7 @@ async function refreshGitFileSnapshot() {
       // This ensures deleted files are removed from the sidebar.
       treeNodes.value = mergedRoot;
 
-      const sorted = Array.from(new Set(allPaths)).sort((a, b) => a.localeCompare(b));
+      const sorted = uniqueBy(allPaths, x => x).sort((a, b) => a.localeCompare(b));
       if (
         sorted.length !== files.value.length ||
         sorted.some((path, index) => path !== files.value[index])
@@ -1234,7 +1235,7 @@ async function rebuildFileCache() {
 
     if (buildId !== fileCacheBuildId) return;
     if (options.activeDirectory.value.trim() !== directory) return;
-    files.value = Array.from(new Set(collected)).sort((a, b) => a.localeCompare(b));
+    files.value = uniqueBy(collected, x => x).sort((a, b) => a.localeCompare(b));
     fileCacheVersion.value += 1;
     cacheCurrentDirectoryState(directory);
   } catch (error) {

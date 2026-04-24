@@ -99,7 +99,6 @@ function createWindow() {
   });
 
   if (isDev) {
-    console.log(`[electron] Loading dev server at ${DEV_SERVER_URL}`);
     mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
@@ -127,9 +126,6 @@ function createWindow() {
     : path.join(__dirname, '../dist/index.html');
 
   if (isDev) {
-    mainWindow.webContents.on('did-finish-load', () => {
-      console.log('[electron] Renderer finished loading');
-    });
     mainWindow.webContents.on(
       'did-fail-load',
       (_event, errorCode, errorDescription, validatedURL) => {

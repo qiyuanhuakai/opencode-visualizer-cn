@@ -1,6 +1,7 @@
 import { computed, ref, type Ref } from 'vue';
 import type { ProjectState } from '../types/worker-state';
 import { waitForState } from '../utils/waitForState';
+import { uniqueBy } from '../utils/array';
 
 type CreateSessionFn = (projectId: string) => Promise<{ id: string; projectId: string }>;
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
@@ -14,7 +15,7 @@ function getProjectSessionIds(project: ProjectState): string[] {
   listSandboxes(project).forEach((sandbox) => {
     ids.push(...sandbox.rootSessions);
   });
-  return Array.from(new Set(ids));
+  return uniqueBy(ids, x => x);
 }
 
 function findMostRecentSession(

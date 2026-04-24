@@ -49,7 +49,3 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 });
 
-// 开发模式下输出日志
-if (process.env.NODE_ENV === 'development') {
-  console.log('[Preload] Electron API exposed to renderer');
-}

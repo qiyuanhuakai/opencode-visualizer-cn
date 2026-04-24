@@ -81,3 +81,10 @@ export function splitFileContentDirectoryAndPath(
   const path = absolute.slice(firstSlash + 1);
   return { directory, path: path || '.' };
 }
+
+/**
+ * Extract the last component of a file path (like `basename` in Node.js).
+ */
+export function basename(filepath: string): string {
+  return filepath.split('/').pop() ?? filepath;
+}
