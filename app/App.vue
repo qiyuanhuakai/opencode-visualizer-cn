@@ -34,6 +34,7 @@
     @open-settings="isSettingsOpen = true"
     @open-provider-manager="isProviderManagerOpen = true"
     @open-status-monitor="isStatusMonitorOpen = true"
+    @open-codex-panel="openCodexPanel"
           @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
@@ -426,6 +427,7 @@ import SettingsModal from './components/SettingsModal.vue';
 import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ThemeInjector from './components/ThemeInjector.vue';
+import CodexPanel from './components/CodexPanel.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
 import DiffViewer from './components/viewers/DiffViewer.vue';
 import ShellContent from './components/ToolWindow/Shell.vue';
@@ -793,6 +795,7 @@ type ComposerDraft = {
 const BATCH_SESSION_ACTION_CONCURRENCY = 6;
 
 const fw = useFloatingWindows();
+const CODEX_PANEL_KEY = 'codex-panel';
 const minimizedEntries = computed(() => fw.entries.value.filter((entry) => entry.minimized));
 const showDockPanel = computed(
   () => showMinimizeButtons.value && (dockAlwaysOpen.value || minimizedEntries.value.length > 0),
@@ -820,6 +823,25 @@ watch(showMinimizeButtons, (enabled) => {
   if (enabled) return;
   restoreAllMinimizedWindows();
 });
+
+function openCodexPanel() {
+  const width = 760;
+  const height = 560;
+  const extent = fw.getExtent();
+  void fw.open(CODEX_PANEL_KEY, {
+    component: CodexPanel,
+    title: 'Codex',
+    width,
+    height,
+    x: Math.max(20, extent.width - width - 24),
+    y: 84,
+    closable: true,
+    resizable: true,
+    scroll: 'none',
+    focusOnOpen: true,
+    expiry: Infinity,
+  });
+}
 
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);

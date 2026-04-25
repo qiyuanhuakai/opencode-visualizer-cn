@@ -535,6 +535,14 @@
         </button>
         <button
           type="button"
+          class="control-button codex-button"
+          title="Codex"
+          @click="$emit('open-codex-panel')"
+        >
+          <Icon icon="lucide:bot" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
           class="control-button suppress-button"
           :class="{ active: suppressAutoWindows }"
           :title="suppressAutoWindows ? $t('topPanel.autoWindowsSuppressed') : $t('topPanel.suppressAutoWindows')"
@@ -677,6 +685,7 @@ const emit = defineEmits<{
   (event: 'open-settings'): void;
   (event: 'open-provider-manager'): void;
   (event: 'open-status-monitor'): void;
+  (event: 'open-codex-panel'): void;
   (event: 'logout'): void;
   (event: 'dropdown-closed'): void;
 }>();

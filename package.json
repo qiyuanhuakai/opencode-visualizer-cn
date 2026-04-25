@@ -14,10 +14,13 @@
   },
   "main": "electron/main.js",
   "bin": {
-    "vis": "server.js"
+    "vis": "server.js",
+    "vis_bridge": "vis_bridge.js"
   },
   "files": [
     "server.js",
+    "vis_bridge.js",
+    "vis_bridge.d.ts",
     "dist",
     "electron"
   ],
