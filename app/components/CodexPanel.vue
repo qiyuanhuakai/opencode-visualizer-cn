@@ -1,8 +1,8 @@
 <template>
-  <section class="codex-panel" aria-label="Codex">
+  <section class="codex-panel" :aria-label="t('codexPanel.title')">
     <header class="codex-panel-header">
       <label class="codex-url-field">
-        <span>Codex WebSocket</span>
+        <span>{{ t('codexPanel.urlLabel') }}</span>
         <input
           v-model="api.url.value"
           class="codex-input"
@@ -13,14 +13,14 @@
         />
       </label>
       <label class="codex-token-field">
-        <span>Token</span>
+        <span>{{ t('codexPanel.tokenLabel') }}</span>
         <input
           v-model="api.bridgeToken.value"
           class="codex-input"
           type="password"
           autocomplete="off"
           :disabled="api.status.value === 'connecting' || api.connected.value"
-          placeholder="optional"
+          :placeholder="t('common.optional')"
         />
       </label>
       <button
@@ -29,7 +29,13 @@
         :disabled="api.status.value === 'connecting'"
         @click="api.connected.value ? api.disconnect() : connect()"
       >
-        {{ api.connected.value ? 'Disconnect' : api.status.value === 'connecting' ? 'Connecting…' : 'Connect' }}
+        {{
+          api.connected.value
+            ? t('codexPanel.disconnect')
+            : api.status.value === 'connecting'
+              ? t('codexPanel.connecting')
+              : t('codexPanel.connect')
+        }}
       </button>
     </header>
 
@@ -38,28 +44,38 @@
     </p>
 
     <div class="codex-panel-body">
-      <aside class="codex-thread-list" aria-label="Codex threads">
+      <aside class="codex-thread-list" :aria-label="t('codexPanel.threads')">
         <div class="codex-section-title">
-          <span>Threads</span>
+          <span>{{ t('codexPanel.threads') }}</span>
           <div class="codex-thread-tools">
             <button
               type="button"
               class="codex-small-button"
               :class="{ active: showArchived }"
-              :disabled="!api.connected.value"
-              title="Show archived threads"
+              :disabled="!api.connected.value || showHidden"
+              :title="t('codexPanel.showArchived')"
               @click="toggleArchived()"
             >
-              A
+              <Icon icon="mdi:archive" width="16" />
+            </button>
+            <button
+              type="button"
+              class="codex-small-button"
+              :class="{ active: showHidden }"
+              :disabled="!api.connected.value || showArchived"
+              :title="t('codexPanel.showHidden')"
+              @click="toggleHidden()"
+            >
+              <Icon icon="mdi:eye" width="16" />
             </button>
             <button
               type="button"
               class="codex-small-button"
               :disabled="!api.connected.value"
-              title="Refresh threads"
+              :title="t('codexPanel.refreshThreads')"
               @click="refreshThreads()"
             >
-              ↻
+              <Icon icon="mdi:refresh" width="16" />
             </button>
           </div>
         </div>
@@ -69,59 +85,123 @@
           :disabled="!api.connected.value || showArchived"
           @click="startThread()"
         >
-          New thread
+          {{ t('codexPanel.newThread') }}
         </button>
-        <div v-if="api.threads.value.length === 0" class="codex-empty">
-          {{ api.connected.value ? 'No threads yet.' : 'Connect to load threads.' }}
+        <div v-if="displayThreads.length === 0" class="codex-empty">
+          {{
+            api.connected.value
+              ? showHidden
+                ? t('codexPanel.noHiddenThreads')
+                : t('codexPanel.noThreads')
+              : t('codexPanel.connectToLoad')
+          }}
         </div>
         <div
-          v-for="thread in api.threads.value"
+          v-for="thread in displayThreads"
           :key="thread.id"
           class="codex-thread-item"
           :class="{ active: thread.id === api.activeThreadId.value }"
         >
-          <button
-            type="button"
-            class="codex-thread-select"
-            :disabled="api.loadingThread.value"
-            :title="thread.id"
-            @click="selectThread(thread.id)"
-          >
-            <span class="codex-thread-title">{{ thread.name || thread.preview || thread.id }}</span>
-            <small>{{ thread.id }}</small>
-          </button>
-          <button
-            v-if="showArchived"
-            type="button"
-            class="codex-thread-action"
-            :disabled="!api.connected.value"
-            @click="unarchiveThread(thread.id)"
-          >
-            Restore
-          </button>
+          <div class="codex-thread-row">
+            <button
+              type="button"
+              class="codex-thread-select"
+              :disabled="api.loadingThread.value"
+              :title="thread.id"
+              @click="selectThread(thread.id)"
+            >
+              <span class="codex-thread-title">
+                <Icon
+                  v-if="api.pinnedThreadIds.value.has(thread.id)"
+                  icon="mdi:pin"
+                  width="12"
+                  class="codex-pin-icon"
+                />
+                {{ thread.name || thread.preview || thread.id }}
+              </span>
+              <small>{{ thread.id }}</small>
+            </button>
+            <div class="codex-thread-actions">
+              <button
+                v-if="!showArchived && !showHidden"
+                type="button"
+                class="codex-icon-button"
+                :disabled="!api.connected.value"
+                :title="
+                  api.pinnedThreadIds.value.has(thread.id)
+                    ? t('codexPanel.unpin')
+                    : t('codexPanel.pin')
+                "
+                @click="togglePin(thread.id)"
+              >
+                <Icon
+                  :icon="api.pinnedThreadIds.value.has(thread.id) ? 'mdi:pin-off' : 'mdi:pin'"
+                  width="14"
+                />
+              </button>
+              <button
+                v-if="!showArchived && !showHidden"
+                type="button"
+                class="codex-icon-button"
+                :disabled="!api.connected.value"
+                :title="t('codexPanel.hide')"
+                @click="api.hideThread(thread.id)"
+              >
+                <Icon icon="mdi:eye-off" width="14" />
+              </button>
+              <button
+                v-if="showHidden"
+                type="button"
+                class="codex-small-text-button"
+                :disabled="!api.connected.value"
+                @click="api.unhideThread(thread.id)"
+              >
+                {{ t('codexPanel.unhide') }}
+              </button>
+              <button
+                v-if="showArchived"
+                type="button"
+                class="codex-small-text-button"
+                :disabled="!api.connected.value"
+                @click="unarchiveThread(thread.id)"
+              >
+                {{ t('codexPanel.unarchive') }}
+              </button>
+            </div>
+          </div>
         </div>
       </aside>
 
       <main class="codex-output" aria-live="polite">
         <div v-if="api.loadingThread.value" class="codex-loading-thread">
-          Loading thread…
+          {{ t('codexPanel.loadingThread') }}
         </div>
         <div v-if="api.activeThreadId.value" class="codex-active-thread-tools">
           <label class="codex-rename-field">
-            <span>Thread name</span>
+            <span>{{ t('codexPanel.threadName') }}</span>
             <input
               v-model="threadName"
               class="codex-input"
               type="text"
               :disabled="!api.connected.value"
-              placeholder="Untitled thread"
+              :placeholder="t('codexPanel.renamePlaceholder')"
             />
           </label>
-          <button type="button" class="codex-small-text-button" :disabled="!api.connected.value" @click="renameThread()">
-            Rename
+          <button
+            type="button"
+            class="codex-small-text-button"
+            :disabled="!api.connected.value"
+            @click="renameThread()"
+          >
+            {{ t('codexPanel.rename') }}
           </button>
-          <button type="button" class="codex-small-text-button" :disabled="!api.connected.value" @click="unsubscribeActiveThread()">
-            Unsubscribe
+          <button
+            type="button"
+            class="codex-small-text-button"
+            :disabled="!api.connected.value"
+            @click="unsubscribeActiveThread()"
+          >
+            {{ t('codexPanel.unsubscribe') }}
           </button>
           <button
             type="button"
@@ -129,20 +209,65 @@
             :disabled="!api.connected.value || !api.activeTurn.value"
             @click="interruptTurn()"
           >
-            Interrupt
+            {{ t('codexPanel.interrupt') }}
           </button>
-          <button type="button" class="codex-small-text-button danger" :disabled="!api.connected.value" @click="archiveActiveThread()">
-            Archive
+          <button
+            type="button"
+            class="codex-small-text-button"
+            :disabled="!api.connected.value"
+            :title="t('codexPanel.fork')"
+            @click="forkActiveThread()"
+          >
+            {{ t('codexPanel.fork') }}
+          </button>
+          <button
+            type="button"
+            class="codex-small-text-button"
+            :disabled="!api.connected.value"
+            :title="t('codexPanel.rollbackTurns')"
+            @click="rollbackActiveThread()"
+          >
+            {{ t('codexPanel.rollback') }}
+          </button>
+          <button
+            type="button"
+            class="codex-small-text-button"
+            :disabled="!api.connected.value"
+            @click="togglePin(api.activeThreadId.value)"
+          >
+            {{
+              api.pinnedThreadIds.value.has(api.activeThreadId.value)
+                ? t('codexPanel.unpin')
+                : t('codexPanel.pin')
+            }}
+          </button>
+          <button
+            type="button"
+            class="codex-small-text-button danger"
+            :disabled="!api.connected.value"
+            @click="archiveActiveThread()"
+          >
+            {{ t('codexPanel.archive') }}
           </button>
           <span v-if="api.activeTurn.value" class="codex-turn-status">
-            Turn {{ api.activeTurn.value.status || 'active' }}
+            {{ t('codexPanel.turnStatus') }}
+            {{ api.activeTurn.value.status || t('codexPanel.turnActive') }}
           </span>
         </div>
         <div v-if="api.serverRequests.value.length > 0" class="codex-approval-list">
-          <section v-for="request in api.serverRequests.value" :key="String(request.id)" class="codex-approval-card">
+          <section
+            v-for="request in api.serverRequests.value"
+            :key="String(request.id)"
+            class="codex-approval-card"
+          >
             <div class="codex-approval-title">{{ request.method }}</div>
-            <div class="codex-approval-scope">Thread {{ request.threadId }} · Turn {{ request.turnId }}</div>
-            <p v-if="approvalSummary(request.params)">{{ approvalSummary(request.params) }}</p>
+            <div class="codex-approval-scope">
+              {{ t('codexPanel.approvalScope') }} {{ request.threadId }} ·
+              {{ t('codexPanel.turnLabel') }} {{ request.turnId }}
+            </div>
+            <p v-if="approvalSummary(request.params)">
+              {{ approvalSummary(request.params) }}
+            </p>
             <div class="codex-approval-actions">
               <button
                 v-for="decision in request.availableDecisions"
@@ -156,8 +281,11 @@
             </div>
           </section>
         </div>
-        <div v-if="api.transcript.value.length === 0" class="codex-empty codex-output-empty">
-          Connect to `vis_bridge`, choose or create a thread, then send a prompt.
+        <div
+          v-if="api.transcript.value.length === 0"
+          class="codex-empty codex-output-empty"
+        >
+          {{ t('codexPanel.noTranscript') }}
         </div>
         <article
           v-for="entry in api.transcript.value"
@@ -168,8 +296,77 @@
           <div class="codex-message-role">{{ entry.role }}</div>
           <pre>{{ entry.text }}</pre>
         </article>
+
+        <div v-if="api.previewFilePath.value" class="codex-file-preview">
+          <div class="codex-file-preview-header">
+            <span>{{ api.previewFilePath.value }}</span>
+            <button
+              type="button"
+              class="codex-icon-button"
+              :title="t('codexPanel.closePreview')"
+              @click="api.clearPreview()"
+            >
+              <Icon icon="mdi:close" width="14" />
+            </button>
+          </div>
+          <pre class="codex-file-preview-body">{{ api.previewFileContent.value }}</pre>
+        </div>
+
+        <div v-if="api.activeThreadId.value" class="codex-sandbox">
+          <div class="codex-section-title">
+            <span>{{ t('codexPanel.sandbox') }}</span>
+            <button
+              type="button"
+              class="codex-small-button"
+              :disabled="!api.connected.value || !activeThread?.cwd"
+              :title="activeThread?.cwd ? t('codexPanel.sandboxBrowse') : t('codexPanel.noSandboxCwd')"
+              @click="browseCwd()"
+            >
+              <Icon icon="mdi:folder-open" width="14" />
+            </button>
+          </div>
+          <div v-if="api.fsCwd.value" class="codex-sandbox-cwd">
+            {{ t('codexPanel.sandboxCwd') }}: {{ api.fsCwd.value }}
+          </div>
+          <div v-if="api.fsLoading.value" class="codex-empty">
+            {{ t('common.loading') }}
+          </div>
+          <div v-else-if="api.fsError.value" class="codex-error">
+            {{ api.fsError.value }}
+          </div>
+          <div v-else-if="api.fsEntries.value.length === 0" class="codex-empty">
+            {{ t('codexPanel.sandboxEmpty') }}
+          </div>
+          <div v-else class="codex-sandbox-list">
+            <button
+              v-for="entry in api.fsEntries.value"
+              :key="entry.name"
+              type="button"
+              class="codex-sandbox-item"
+              @click="handleFsEntryClick(entry)"
+            >
+              <Icon
+                :icon="entry.type === 'directory' ? 'mdi:folder' : 'mdi:file'"
+                width="14"
+              />
+              <span>{{ entry.name }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="codex-todos-placeholder">
+          <div class="codex-section-title">
+            <span>{{ t('codexPanel.todo') }}</span>
+          </div>
+          <div class="codex-empty">
+            {{ t('codexPanel.noTodos') }} — {{ t('codexPanel.noTodosDescription') }}
+          </div>
+        </div>
+
         <details v-if="api.events.value.length > 0" class="codex-events">
-          <summary>Events · {{ api.events.value.length }}</summary>
+          <summary>
+            {{ t('codexPanel.events') }} · {{ api.events.value.length }}
+          </summary>
           <ol>
             <li v-for="event in recentEvents" :key="event.id">
               {{ event.method }}
@@ -185,15 +382,17 @@
         class="codex-prompt-input"
         rows="3"
         :disabled="!api.connected.value || api.pending.value"
-        placeholder="Ask Codex…"
+        :placeholder="t('codexPanel.promptPlaceholder')"
         @keydown.enter.exact.prevent="sendPrompt"
       ></textarea>
       <button
         type="submit"
         class="codex-primary-button codex-send-button"
-        :disabled="!api.connected.value || api.pending.value || promptText.trim().length === 0"
+        :disabled="
+          !api.connected.value || api.pending.value || promptText.trim().length === 0
+        "
       >
-        {{ api.pending.value ? 'Sending…' : 'Send' }}
+        {{ api.pending.value ? t('codexPanel.sending') : t('codexPanel.send') }}
       </button>
     </form>
   </section>
@@ -201,15 +400,30 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { Icon } from '@iconify/vue';
+import { useI18n } from 'vue-i18n';
 import type { CodexJsonRpcId } from '../backends/codex/jsonRpcClient';
+import type { CodexFsDirectoryEntry } from '../backends/codex/codexAdapter';
 import { useCodexApi } from '../composables/useCodexApi';
 
+const { t } = useI18n();
 const api = useCodexApi();
 const promptText = ref('');
 const threadName = ref('');
 const showArchived = ref(false);
+const showHidden = ref(false);
 const recentEvents = computed(() => api.events.value.slice(-8).reverse());
-const activeThread = computed(() => api.threads.value.find((thread) => thread.id === api.activeThreadId.value) ?? null);
+const activeThread = computed(
+  () =>
+    api.threads.value.find((thread) => thread.id === api.activeThreadId.value) ??
+    null,
+);
+
+const displayThreads = computed(() => {
+  if (showHidden.value) return api.threads.value.filter((thread) => api.hiddenThreadIds.value.has(thread.id));
+  if (showArchived.value) return api.threads.value;
+  return api.visibleThreads.value;
+});
 
 watch(activeThread, (thread) => {
   threadName.value = thread?.name ?? '';
@@ -220,7 +434,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function stringifyCommand(value: unknown) {
-  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string').join(' ');
+  if (Array.isArray(value))
+    return value.filter((item): item is string => typeof item === 'string').join(' ');
   return typeof value === 'string' ? value : '';
 }
 
@@ -242,11 +457,19 @@ async function refreshThreads() {
 
 async function toggleArchived() {
   showArchived.value = !showArchived.value;
+  if (showArchived.value) showHidden.value = false;
+  await refreshThreads();
+}
+
+async function toggleHidden() {
+  showHidden.value = !showHidden.value;
+  if (showHidden.value) showArchived.value = false;
   await refreshThreads();
 }
 
 async function startThread() {
   showArchived.value = false;
+  showHidden.value = false;
   await api.startThread();
 }
 
@@ -277,6 +500,24 @@ async function interruptTurn() {
   await api.interruptActiveTurn();
 }
 
+async function forkActiveThread() {
+  if (!api.activeThreadId.value) return;
+  await api.forkThread(api.activeThreadId.value);
+}
+
+async function rollbackActiveThread() {
+  if (!api.activeThreadId.value) return;
+  await api.rollbackThread(api.activeThreadId.value, 1);
+}
+
+function togglePin(threadId: string) {
+  if (api.pinnedThreadIds.value.has(threadId)) {
+    api.unpinThread(threadId);
+  } else {
+    api.pinThread(threadId);
+  }
+}
+
 function resolveRequest(id: CodexJsonRpcId, decision: string) {
   api.resolveServerRequest(id, decision);
 }
@@ -286,6 +527,27 @@ async function sendPrompt() {
   if (!text) return;
   promptText.value = '';
   await api.sendPrompt(text);
+}
+
+async function browseCwd() {
+  const path = activeThread.value?.cwd;
+  if (!path) return;
+  await api.readDirectory(path);
+}
+
+function joinFsPath(base: string, name: string): string {
+  if (!base || base === '/') return `/${name}`;
+  if (base.endsWith('/')) return `${base}${name}`;
+  return `${base}/${name}`;
+}
+
+async function handleFsEntryClick(entry: CodexFsDirectoryEntry) {
+  const path = joinFsPath(api.fsCwd.value, entry.name);
+  if (entry.type === 'directory') {
+    await api.readDirectory(path);
+  } else {
+    await api.readFile(path);
+  }
 }
 </script>
 
@@ -358,7 +620,8 @@ async function sendPrompt() {
 .codex-small-text-button,
 .codex-thread-new,
 .codex-thread-select,
-.codex-thread-action {
+.codex-thread-action,
+.codex-icon-button {
   border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
   border-radius: 10px;
   appearance: none;
@@ -399,7 +662,7 @@ input:disabled {
 
 .codex-panel-body {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -427,6 +690,19 @@ input:disabled {
 .codex-small-button {
   width: 28px;
   height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.codex-icon-button {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
 }
 
 .codex-small-button.active,
@@ -467,11 +743,18 @@ input:disabled {
   outline-offset: 0;
 }
 
+.codex-thread-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .codex-thread-select {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 9px;
   text-align: left;
 }
@@ -480,15 +763,29 @@ input:disabled {
   background: rgba(37, 99, 235, 0.18);
 }
 
+.codex-thread-actions {
+  display: flex;
+  gap: 2px;
+  padding-right: 4px;
+}
+
 .codex-thread-action {
   min-height: 26px;
   font-size: 11px;
 }
 
 .codex-thread-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.codex-pin-icon {
+  flex-shrink: 0;
+  color: var(--theme-accent-primary, #60a5fa);
 }
 
 .codex-thread-item small {
@@ -620,6 +917,86 @@ input:disabled {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.5;
+}
+
+.codex-file-preview {
+  border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.codex-file-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--theme-text-muted, #94a3b8);
+  background: rgba(15, 23, 42, 0.6);
+  border-bottom: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
+}
+
+.codex-file-preview-body {
+  margin: 0;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--theme-text-primary, #e2e8f0);
+  background: rgba(2, 6, 23, 0.45);
+}
+
+.codex-sandbox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.codex-sandbox-cwd {
+  font-size: 11px;
+  color: var(--theme-text-muted, #94a3b8);
+  word-break: break-word;
+}
+
+.codex-sandbox-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 4px;
+}
+
+.codex-sandbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.18));
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--theme-text-primary, #e2e8f0);
+  background: var(--theme-button-bg, rgba(30, 41, 59, 0.6));
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-sandbox-item:hover {
+  border-color: var(--theme-accent-primary, #60a5fa);
+}
+
+.codex-todos-placeholder {
+  padding: 10px;
+  border: 1px dashed var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
+  border-radius: 12px;
 }
 
 .codex-events {

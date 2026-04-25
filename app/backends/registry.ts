@@ -1,9 +1,10 @@
 import { createOpenCodeAdapter } from './openCodeAdapter';
+import { createCodexAdapter } from './codex/codexAdapter';
 import type { BackendAdapter, BackendKind } from './types';
 
 const adapters: Record<BackendKind, BackendAdapter | undefined> = {
   opencode: createOpenCodeAdapter(),
-  codex: undefined,
+  codex: createCodexAdapter({ url: 'ws://localhost:23004/codex' }),
 };
 
 let activeBackendKind: BackendKind = 'opencode';

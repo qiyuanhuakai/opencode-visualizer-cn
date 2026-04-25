@@ -5,6 +5,11 @@ import {
   type CodexJsonRpcNotification,
   type CodexJsonRpcServerRequest,
 } from './jsonRpcClient';
+import type {
+  BackendAdapter,
+  ListSessionsOptions,
+  SessionUpdatePayload,
+} from '../types';
 
 export type CodexClientInfo = {
   name: string;
@@ -35,6 +40,7 @@ export type CodexThread = {
   createdAt?: number;
   updatedAt?: number;
   status?: unknown;
+  cwd?: string;
 };
 
 export type CodexThreadListParams = {
@@ -90,6 +96,44 @@ export type CodexThreadArchiveParams = {
 
 export type CodexThreadUnarchiveResult = {
   thread: CodexThread;
+};
+
+export type CodexThreadForkParams = {
+  threadId: string;
+};
+
+export type CodexThreadForkResult = {
+  thread: CodexThread;
+};
+
+export type CodexThreadRollbackParams = {
+  threadId: string;
+  numTurns: number;
+};
+
+export type CodexThreadRollbackResult = {
+  thread: CodexThread;
+};
+
+export type CodexFsReadDirectoryParams = {
+  path: string;
+};
+
+export type CodexFsDirectoryEntry = {
+  name: string;
+  type: 'file' | 'directory' | 'symlink' | 'other';
+};
+
+export type CodexFsReadDirectoryResult = {
+  entries: CodexFsDirectoryEntry[];
+};
+
+export type CodexFsReadFileParams = {
+  path: string;
+};
+
+export type CodexFsReadFileResult = {
+  content: string;
 };
 
 export type CodexThreadUnsubscribeParams = {
@@ -180,15 +224,15 @@ function defaultClientInfo(): CodexClientInfo {
   };
 }
 
-export class CodexAdapter {
+export class CodexAdapter implements BackendAdapter {
   readonly kind = 'codex' as const;
   readonly label = 'Codex';
   readonly capabilities = {
     projects: false,
     worktrees: false,
     sessions: true,
-    sessionFork: false,
-    sessionRevert: false,
+    sessionFork: true,
+    sessionRevert: true,
   };
 
   private readonly client: CodexJsonRpcClient;
@@ -281,6 +325,26 @@ export class CodexAdapter {
     return this.client.request<{}>('thread/unsubscribe', params);
   }
 
+  async forkThread(params: CodexThreadForkParams) {
+    await this.ensureInitialized();
+    return this.client.request<CodexThreadForkResult>('thread/fork', params);
+  }
+
+  async rollbackThread(params: CodexThreadRollbackParams) {
+    await this.ensureInitialized();
+    return this.client.request<CodexThreadRollbackResult>('thread/rollback', params);
+  }
+
+  async readDirectory(params: CodexFsReadDirectoryParams) {
+    await this.ensureInitialized();
+    return this.client.request<CodexFsReadDirectoryResult>('fs/readDirectory', params);
+  }
+
+  async readFile(params: CodexFsReadFileParams) {
+    await this.ensureInitialized();
+    return this.client.request<CodexFsReadFileResult>('fs/readFile', params);
+  }
+
   async readThread(params: CodexThreadReadParams) {
     await this.ensureInitialized();
     return this.client.request<CodexThreadReadResult>('thread/read', params);
@@ -337,6 +401,54 @@ export class CodexAdapter {
       thread: startedThread?.thread,
       turn: turn.turn,
     };
+  }
+
+  createSession(directory?: string) {
+    return this.startThread({ cwd: directory });
+  }
+
+  forkSession(sessionId: string, _messageId: string, _directory?: string) {
+    return this.forkThread({ threadId: sessionId });
+  }
+
+  updateSession(sessionId: string, payload: SessionUpdatePayload, _directory?: string) {
+    return this.setThreadName({
+      threadId: sessionId,
+      name: payload.title ?? null,
+    });
+  }
+
+  deleteSession(sessionId: string, _directory?: string) {
+    void sessionId;
+    return Promise.reject(new Error('Codex does not support deleteSession; hide the thread locally or archive it instead.'));
+  }
+
+  revertSession(sessionId: string, _messageId: string, _directory?: string) {
+    return this.rollbackThread({ threadId: sessionId, numTurns: 1 });
+  }
+
+  unrevertSession() {
+    return Promise.reject(new Error('Codex does not support unrevertSession.'));
+  }
+
+  listSessions(options?: ListSessionsOptions) {
+    return this.listThreads({
+      limit: options?.limit,
+      cwd: options?.directory,
+      searchTerm: options?.search,
+    });
+  }
+
+  updateProject() {
+    return Promise.reject(new Error('Codex does not support updateProject.'));
+  }
+
+  createWorktree() {
+    return Promise.reject(new Error('Codex does not support createWorktree.'));
+  }
+
+  deleteWorktree() {
+    return Promise.reject(new Error('Codex does not support deleteWorktree.'));
   }
 }
 

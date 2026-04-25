@@ -43,7 +43,7 @@ async function readHttpBody(port: number, path: string) {
   });
 }
 
-async function sendUpgrade(port: number, path: string, authorization?: string) {
+async function sendUpgrade(port: number, path: string, authorization?: string, origin?: string) {
   const socket = createConnection({ host: '127.0.0.1', port });
   await once(socket, 'connect');
   const headers = [
@@ -55,6 +55,7 @@ async function sendUpgrade(port: number, path: string, authorization?: string) {
     'Sec-WebSocket-Version: 13',
   ];
   if (authorization) headers.push(`Authorization: ${authorization}`);
+  if (origin) headers.push(`Origin: ${origin}`);
   socket.write(`${headers.join('\r\n')}\r\n\r\n`);
   const [chunk] = await once(socket, 'data') as [Buffer];
   socket.destroy();
@@ -101,5 +102,19 @@ describe('vis_bridge', () => {
 
     const authorizedButNoUpstream = await sendUpgrade(port, '/codex', 'Bearer secret-token');
     expect(authorizedButNoUpstream).toContain('HTTP/1.1 502 Bad Gateway');
+  });
+
+  it('rejects non-loopback browser origins before contacting upstream', async () => {
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+
+    const rejected = await sendUpgrade(port, '/codex', undefined, 'https://example.com');
+    expect(rejected).toContain('HTTP/1.1 403 Forbidden');
+
+    const loopbackButNoUpstream = await sendUpgrade(port, '/codex', undefined, 'http://localhost:5173');
+    expect(loopbackButNoUpstream).toContain('HTTP/1.1 502 Bad Gateway');
   });
 });

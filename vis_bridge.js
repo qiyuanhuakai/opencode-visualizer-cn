@@ -114,6 +114,20 @@ function isAuthorized(request, bridgeToken) {
     requestUrl.searchParams.get('bridgeToken') === bridgeToken;
 }
 
+function isLoopbackHostname(hostname) {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  try {
+    const parsed = new URL(origin);
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isLoopbackHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function assertWebSocketRequest(request) {
   const upgrade = request.headers.upgrade;
   const connection = request.headers.connection;
@@ -215,6 +229,11 @@ async function proxyWebSocket(request, clientSocket, head, options) {
   const requestPath = new URL(request.url ?? '/', 'http://localhost').pathname;
   if (requestPath !== options.path) {
     writeHttpResponse(clientSocket, 404, 'Not Found', { error: `Use WebSocket path ${options.path}` });
+    return;
+  }
+
+  if (!isAllowedOrigin(request.headers.origin)) {
+    writeHttpResponse(clientSocket, 403, 'Forbidden', { error: 'Forbidden origin' });
     return;
   }
 

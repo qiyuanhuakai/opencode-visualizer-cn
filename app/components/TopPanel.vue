@@ -536,7 +536,7 @@
         <button
           type="button"
           class="control-button codex-button"
-          title="Codex"
+          :title="$t('codexPanel.title')"
           @click="$emit('open-codex-panel')"
         >
           <Icon icon="lucide:bot" :width="16" :height="16" />

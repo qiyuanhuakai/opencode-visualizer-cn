@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 import {
   CodexAdapter,
   type CodexAdapterOptions,
+  type CodexFsDirectoryEntry,
   type CodexPromptInput,
   type CodexThread,
   type CodexThreadListParams,
@@ -129,6 +130,25 @@ const APPROVAL_DECISIONS_BY_METHOD: Record<string, ReadonlySet<string>> = {
   'item/fileChange/requestApproval': new Set(['accept', 'acceptForSession', 'decline', 'cancel']),
 };
 
+const PIN_STORAGE_KEY = 'vis.codex.pins.v1';
+const HIDE_STORAGE_KEY = 'vis.codex.hidden.v1';
+
+function loadThreadIdSet(key: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === 'string'));
+  } catch {
+    return new Set();
+  }
+  return new Set();
+}
+
+function saveThreadIdSet(key: string, set: Set<string>) {
+  localStorage.setItem(key, JSON.stringify(Array.from(set)));
+}
+
 function extractScopedApprovalRequest(
   request: CodexJsonRpcServerRequest,
   activeThreadId: string,
@@ -166,6 +186,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const pending = ref(false);
   const loadingThread = ref(false);
   const initialized = ref(false);
+  const pinnedThreadIds = ref<Set<string>>(loadThreadIdSet(PIN_STORAGE_KEY));
+  const hiddenThreadIds = ref<Set<string>>(loadThreadIdSet(HIDE_STORAGE_KEY));
+  const fsEntries = ref<CodexFsDirectoryEntry[]>([]);
+  const fsCwd = ref('');
+  const fsLoading = ref(false);
+  const fsError = ref('');
+  const previewFileContent = ref('');
+  const previewFilePath = ref('');
 
   let adapter: CodexAdapter | null = null;
   let unsubscribeNotifications: (() => void) | null = null;
@@ -174,6 +202,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   let nextTranscriptId = 1;
 
   const connected = computed(() => status.value === 'connected' && initialized.value);
+
+  const visibleThreads = computed(() => {
+    const list = threads.value.filter((thread) => !hiddenThreadIds.value.has(thread.id));
+    return list.sort((a, b) => {
+      const aPinned = pinnedThreadIds.value.has(a.id) ? 1 : 0;
+      const bPinned = pinnedThreadIds.value.has(b.id) ? 1 : 0;
+      if (aPinned !== bPinned) return bPinned - aPinned;
+      const aTime = a.updatedAt ?? a.createdAt ?? 0;
+      const bTime = b.updatedAt ?? b.createdAt ?? 0;
+      return bTime - aTime;
+    });
+  });
 
   function makeAdapter() {
     const factory = initialOptions.adapterFactory ?? ((options: CodexAdapterOptions) => new CodexAdapter(options));
@@ -392,6 +432,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
   }
 
+  async function hydrateThread(threadId: string) {
+    const read = await adapter?.readThread({ threadId, includeTurns: true });
+    if (!read) return;
+    upsertThread(read.thread);
+    activeThreadId.value = read.thread.id;
+    setTranscriptFromTurns(read.thread.turns ?? []);
+  }
+
   async function startThread() {
     if (!adapter) throw new Error('Codex is not connected.');
     const result = await adapter.startThread();
@@ -452,6 +500,94 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     pending.value = false;
   }
 
+  async function forkThread(threadId: string) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    const result = await adapter.forkThread({ threadId });
+    upsertThread(result.thread);
+    activeThreadId.value = result.thread.id;
+    transcript.value = [];
+    activeTurn.value = null;
+    pruneServerRequestsForActiveContext();
+    await hydrateThread(result.thread.id);
+    await refreshThreads();
+    return result.thread;
+  }
+
+  async function rollbackThread(threadId: string, numTurns = 1) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    const result = await adapter.rollbackThread({ threadId, numTurns });
+    upsertThread(result.thread);
+    await hydrateThread(result.thread.id);
+    await refreshThreads();
+    return result.thread;
+  }
+
+  function hideThread(threadId: string) {
+    hiddenThreadIds.value = new Set([...hiddenThreadIds.value, threadId]);
+    saveThreadIdSet(HIDE_STORAGE_KEY, hiddenThreadIds.value);
+    if (activeThreadId.value === threadId) {
+      activeThreadId.value = visibleThreads.value[0]?.id ?? '';
+      transcript.value = [];
+      activeTurn.value = null;
+    }
+  }
+
+  function unhideThread(threadId: string) {
+    const next = new Set(hiddenThreadIds.value);
+    next.delete(threadId);
+    hiddenThreadIds.value = next;
+    saveThreadIdSet(HIDE_STORAGE_KEY, hiddenThreadIds.value);
+  }
+
+  function pinThread(threadId: string) {
+    pinnedThreadIds.value = new Set([...pinnedThreadIds.value, threadId]);
+    saveThreadIdSet(PIN_STORAGE_KEY, pinnedThreadIds.value);
+  }
+
+  function unpinThread(threadId: string) {
+    const next = new Set(pinnedThreadIds.value);
+    next.delete(threadId);
+    pinnedThreadIds.value = next;
+    saveThreadIdSet(PIN_STORAGE_KEY, pinnedThreadIds.value);
+  }
+
+  async function readDirectory(path: string) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    fsLoading.value = true;
+    fsError.value = '';
+    try {
+      const result = await adapter.readDirectory({ path });
+      fsEntries.value = result.entries;
+      fsCwd.value = path;
+    } catch (error) {
+      fsError.value = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      fsLoading.value = false;
+    }
+  }
+
+  async function readFile(path: string) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    fsLoading.value = true;
+    fsError.value = '';
+    try {
+      const result = await adapter.readFile({ path });
+      previewFileContent.value = result.content;
+      previewFilePath.value = path;
+    } catch (error) {
+      fsError.value = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      fsLoading.value = false;
+    }
+  }
+
+  function clearPreview() {
+    previewFileContent.value = '';
+    previewFilePath.value = '';
+  }
+
   function resolveServerRequest(id: CodexJsonRpcId, decision: string) {
     if (!adapter) throw new Error('Codex is not connected.');
     const request = serverRequests.value.find((item) => item.id === id);
@@ -506,6 +642,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     loadingThread,
     initialized,
     connected,
+    visibleThreads,
+    pinnedThreadIds,
+    hiddenThreadIds,
+    fsEntries,
+    fsCwd,
+    fsLoading,
+    fsError,
+    previewFileContent,
+    previewFilePath,
     connect,
     disconnect,
     refreshThreads,
@@ -516,6 +661,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     unarchiveThread,
     unsubscribeThread,
     interruptActiveTurn,
+    forkThread,
+    rollbackThread,
+    hideThread,
+    unhideThread,
+    pinThread,
+    unpinThread,
+    readDirectory,
+    readFile,
+    clearPreview,
     resolveServerRequest,
     sendPrompt,
   };

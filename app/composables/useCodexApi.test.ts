@@ -26,27 +26,31 @@ function createAdapterMock() {
       nextCursor: null,
     }),
     startThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } }),
-    readThread: vi.fn().mockResolvedValue({
+    readThread: vi.fn((params: { threadId: string }) => Promise.resolve({
       thread: {
-        id: 'thr_existing',
-        name: 'Existing named thread',
+        id: params.threadId,
+        name: params.threadId === 'thr_fork' ? 'Forked thread' : 'Existing named thread',
         turns: [
           {
             id: 'turn_old',
             items: [
-              { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'Old prompt' }] },
-              { type: 'agentMessage', id: 'a1', text: 'Old answer' },
+              { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: `${params.threadId} prompt` }] },
+              { type: 'agentMessage', id: 'a1', text: `${params.threadId} answer` },
             ],
           },
         ],
       },
-    }),
+    })),
     resumeThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     setThreadName: vi.fn().mockResolvedValue({}),
     archiveThread: vi.fn().mockResolvedValue({}),
     unarchiveThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     unsubscribeThread: vi.fn().mockResolvedValue({}),
     interruptTurn: vi.fn().mockResolvedValue({}),
+    forkThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_fork', preview: '' } }),
+    rollbackThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
+    readDirectory: vi.fn().mockResolvedValue({ entries: [{ name: 'file.txt', type: 'file' }] }),
+    readFile: vi.fn().mockResolvedValue({ content: 'hello' }),
     respondToServerRequest: vi.fn(),
     sendPrompt: vi.fn().mockResolvedValue({
       threadId: 'thr_existing',
@@ -68,6 +72,7 @@ function createAdapterMock() {
 describe('useCodexApi', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
   it('connects through a Codex adapter and loads threads', async () => {
@@ -144,8 +149,8 @@ describe('useCodexApi', () => {
       name: 'Existing named thread',
     }));
     expect(api.transcript.value).toEqual([
-      expect.objectContaining({ role: 'user', text: 'Old prompt' }),
-      expect.objectContaining({ role: 'assistant', text: 'Old answer' }),
+      expect.objectContaining({ role: 'user', text: 'thr_existing prompt' }),
+      expect.objectContaining({ role: 'assistant', text: 'thr_existing answer' }),
     ]);
   });
 
@@ -293,5 +298,67 @@ describe('useCodexApi', () => {
     await api.startThread();
 
     expect(api.serverRequests.value).toEqual([]);
+  });
+
+  it('forks and rolls back threads through the adapter', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.forkThread('thr_existing');
+    expect(api.activeThreadId.value).toBe('thr_fork');
+    expect(api.transcript.value).toEqual([
+      expect.objectContaining({ role: 'user', text: 'thr_fork prompt' }),
+      expect.objectContaining({ role: 'assistant', text: 'thr_fork answer' }),
+    ]);
+
+    await api.selectThread('thr_existing');
+    await api.rollbackThread('thr_existing', 1);
+
+    expect(mock.adapter.forkThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
+    expect(mock.adapter.rollbackThread).toHaveBeenCalledWith({ threadId: 'thr_existing', numTurns: 1 });
+    expect(api.transcript.value).toEqual([
+      expect.objectContaining({ role: 'user', text: 'thr_existing prompt' }),
+      expect.objectContaining({ role: 'assistant', text: 'thr_existing answer' }),
+    ]);
+  });
+
+  it('locally hides and pins threads with persisted storage', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    api.hideThread('thr_existing');
+    expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(true);
+    expect(api.visibleThreads.value.length).toBe(0);
+
+    api.pinThread('thr_existing');
+    expect(api.pinnedThreadIds.value.has('thr_existing')).toBe(true);
+
+    api.unhideThread('thr_existing');
+    expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(false);
+    expect(api.visibleThreads.value.length).toBe(1);
+
+    api.unpinThread('thr_existing');
+    expect(api.pinnedThreadIds.value.has('thr_existing')).toBe(false);
+  });
+
+  it('browses filesystem entries and reads file previews', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.readDirectory('/tmp');
+    expect(mock.adapter.readDirectory).toHaveBeenCalledWith({ path: '/tmp' });
+    expect(api.fsEntries.value).toEqual([{ name: 'file.txt', type: 'file' }]);
+    expect(api.fsCwd.value).toBe('/tmp');
+
+    await api.readFile('/tmp/file.txt');
+    expect(mock.adapter.readFile).toHaveBeenCalledWith({ path: '/tmp/file.txt' });
+    expect(api.previewFileContent.value).toBe('hello');
+    expect(api.previewFilePath.value).toBe('/tmp/file.txt');
+
+    api.clearPreview();
+    expect(api.previewFilePath.value).toBe('');
   });
 });

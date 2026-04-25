@@ -830,7 +830,7 @@ function openCodexPanel() {
   const extent = fw.getExtent();
   void fw.open(CODEX_PANEL_KEY, {
     component: CodexPanel,
-    title: 'Codex',
+    title: t('codexPanel.title'),
     width,
     height,
     x: Math.max(20, extent.width - width - 24),

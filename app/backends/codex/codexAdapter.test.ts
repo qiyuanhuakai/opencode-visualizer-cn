@@ -295,5 +295,86 @@ describe('CodexAdapter', () => {
       method: 'turn/interrupt',
       params: { threadId: 'thr_1', turnId: 'turn_1' },
     });
+
+    const fork = adapter.forkThread({ threadId: 'thr_1' });
+    await waitForSent(socket, 8);
+    socket.respond(7, { thread: { id: 'thr_2', preview: '' } });
+    await expect(fork).resolves.toEqual({ thread: { id: 'thr_2', preview: '' } });
+    expect(JSON.parse(socket.sent[7] ?? '{}')).toEqual({
+      id: 7,
+      method: 'thread/fork',
+      params: { threadId: 'thr_1' },
+    });
+
+    const rollback = adapter.rollbackThread({ threadId: 'thr_1', numTurns: 1 });
+    await waitForSent(socket, 9);
+    socket.respond(8, { thread: { id: 'thr_1', name: 'Renamed' } });
+    await expect(rollback).resolves.toEqual({ thread: { id: 'thr_1', name: 'Renamed' } });
+    expect(JSON.parse(socket.sent[8] ?? '{}')).toEqual({
+      id: 8,
+      method: 'thread/rollback',
+      params: { threadId: 'thr_1', numTurns: 1 },
+    });
+
+    const readDir = adapter.readDirectory({ path: '/tmp' });
+    await waitForSent(socket, 10);
+    socket.respond(9, { entries: [{ name: 'file.txt', type: 'file' }] });
+    await expect(readDir).resolves.toEqual({ entries: [{ name: 'file.txt', type: 'file' }] });
+    expect(JSON.parse(socket.sent[9] ?? '{}')).toEqual({
+      id: 9,
+      method: 'fs/readDirectory',
+      params: { path: '/tmp' },
+    });
+
+    const readFile = adapter.readFile({ path: '/tmp/file.txt' });
+    await waitForSent(socket, 11);
+    socket.respond(10, { content: 'hello' });
+    await expect(readFile).resolves.toEqual({ content: 'hello' });
+    expect(JSON.parse(socket.sent[10] ?? '{}')).toEqual({
+      id: 10,
+      method: 'fs/readFile',
+      params: { path: '/tmp/file.txt' },
+    });
+  });
+
+  it('exposes BackendAdapter wrapper methods', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const createSession = adapter.createSession('/repo');
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { thread: { id: 'thr_new', preview: '' } });
+    await expect(createSession).resolves.toEqual({ thread: { id: 'thr_new', preview: '' } });
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'thread/start',
+      params: { cwd: '/repo' },
+    });
+
+    const forkSession = adapter.forkSession('thr_1', 'msg_1', '/repo');
+    await waitForSent(socket, 4);
+    socket.respond(3, { thread: { id: 'thr_fork', preview: '' } });
+    await expect(forkSession).resolves.toEqual({ thread: { id: 'thr_fork', preview: '' } });
+
+    const revertSession = adapter.revertSession('thr_1', 'msg_1');
+    await waitForSent(socket, 5);
+    socket.respond(4, { thread: { id: 'thr_1' } });
+    await expect(revertSession).resolves.toEqual({ thread: { id: 'thr_1' } });
+    expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
+      id: 4,
+      method: 'thread/rollback',
+      params: { threadId: 'thr_1', numTurns: 1 },
+    });
+
+    await expect(adapter.deleteSession('thr_1')).rejects.toThrow(
+      'Codex does not support deleteSession; hide the thread locally or archive it instead.',
+    );
   });
 });
