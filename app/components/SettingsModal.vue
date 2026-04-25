@@ -4,7 +4,6 @@
     class="modal-backdrop"
     @close="$emit('close')"
     @cancel.prevent
-    @click.self="dialogRef?.close()"
   >
     <div class="modal">
       <header class="modal-header">

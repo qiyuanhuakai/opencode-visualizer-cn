@@ -4,7 +4,6 @@
     class="provider-manager-backdrop"
     @close="$emit('close')"
     @cancel.prevent
-    @click.self="dialogRef?.close()"
   >
     <div class="provider-manager-modal">
       <header class="provider-manager-header">
