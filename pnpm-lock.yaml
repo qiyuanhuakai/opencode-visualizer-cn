@@ -34,14 +34,14 @@ importers:
         version: 0.3.0
       vue-i18n:
         specifier: ^11.3.0
-        version: 11.3.0(vue@3.5.28(typescript@5.9.3))
+        version: 11.3.0(vue@3.5.28(typescript@6.0.3))
       vue-pdf-embed:
         specifier: ^2.1.4
-        version: 2.1.4(vue@3.5.28(typescript@5.9.3))
+        version: 2.1.4(vue@3.5.28(typescript@6.0.3))
     devDependencies:
       '@iconify/vue':
         specifier: ^5.0.0
-        version: 5.0.0(vue@3.5.28(typescript@5.9.3))
+        version: 5.0.0(vue@3.5.28(typescript@6.0.3))
       '@kikuchan/hexdump':
         specifier: 0.1.0-alpha.9
         version: 0.1.0-alpha.9
@@ -65,7 +65,7 @@ importers:
         version: 25.2.3
       '@vitejs/plugin-vue':
         specifier: ^6.0.4
-        version: 6.0.4(vite@7.3.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2))(vue@3.5.28(typescript@5.9.3))
+        version: 6.0.4(vite@7.3.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2))(vue@3.5.28(typescript@6.0.3))
       '@xterm/xterm':
         specifier: ^6.0.0
         version: 6.0.0
@@ -102,6 +102,9 @@ importers:
       tailwindcss:
         specifier: ^4.1.18
         version: 4.1.18
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
       vite:
         specifier: ^7.3.1
         version: 7.3.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)
@@ -110,10 +113,10 @@ importers:
         version: 4.1.2(@types/node@25.2.3)(happy-dom@17.6.3)(vite@7.3.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2))
       vue:
         specifier: ^3.5.28
-        version: 3.5.28(typescript@5.9.3)
+        version: 3.5.28(typescript@6.0.3)
       vue-tsc:
         specifier: ^3.2.4
-        version: 3.2.4(typescript@5.9.3)
+        version: 3.2.4(typescript@6.0.3)
 
 packages:
 
@@ -2623,8 +2626,8 @@ packages:
     resolution: {integrity: sha512-34R7HTnG0XIJcBSn5XhDd7nNFPRcXYRZrBB2O2jdKqYODldSzBAqzsWoZYYvduky73toYS/ESqxPvkDf/F0XMg==}
     engines: {node: '>=10'}
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
     hasBin: true
 
@@ -3081,10 +3084,10 @@ snapshots:
 
   '@iconify/types@2.0.0': {}
 
-  '@iconify/vue@5.0.0(vue@3.5.28(typescript@5.9.3))':
+  '@iconify/vue@5.0.0(vue@3.5.28(typescript@6.0.3))':
     dependencies:
       '@iconify/types': 2.0.0
-      vue: 3.5.28(typescript@5.9.3)
+      vue: 3.5.28(typescript@6.0.3)
 
   '@intlify/core-base@11.3.0':
     dependencies:
@@ -3629,11 +3632,11 @@ snapshots:
 
   '@ungap/structured-clone@1.3.0': {}
 
-  '@vitejs/plugin-vue@6.0.4(vite@7.3.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2))(vue@3.5.28(typescript@5.9.3))':
+  '@vitejs/plugin-vue@6.0.4(vite@7.3.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2))(vue@3.5.28(typescript@6.0.3))':
     dependencies:
       '@rolldown/pluginutils': 1.0.0-rc.2
       vite: 7.3.1(@types/node@25.2.3)(jiti@2.6.1)(lightningcss@1.30.2)
-      vue: 3.5.28(typescript@5.9.3)
+      vue: 3.5.28(typescript@6.0.3)
 
   '@vitest/expect@4.1.2':
     dependencies:
@@ -3759,11 +3762,11 @@ snapshots:
       '@vue/shared': 3.5.28
       csstype: 3.2.3
 
-  '@vue/server-renderer@3.5.28(vue@3.5.28(typescript@5.9.3))':
+  '@vue/server-renderer@3.5.28(vue@3.5.28(typescript@6.0.3))':
     dependencies:
       '@vue/compiler-ssr': 3.5.28
       '@vue/shared': 3.5.28
-      vue: 3.5.28(typescript@5.9.3)
+      vue: 3.5.28(typescript@6.0.3)
 
   '@vue/shared@3.5.27': {}
 
@@ -5368,7 +5371,7 @@ snapshots:
   type-fest@0.13.1:
     optional: true
 
-  typescript@5.9.3: {}
+  typescript@6.0.3: {}
 
   uc.micro@2.1.0: {}
 
@@ -5486,34 +5489,34 @@ snapshots:
 
   vscode-uri@3.1.0: {}
 
-  vue-i18n@11.3.0(vue@3.5.28(typescript@5.9.3)):
+  vue-i18n@11.3.0(vue@3.5.28(typescript@6.0.3)):
     dependencies:
       '@intlify/core-base': 11.3.0
       '@intlify/devtools-types': 11.3.0
       '@intlify/shared': 11.3.0
       '@vue/devtools-api': 6.6.4
-      vue: 3.5.28(typescript@5.9.3)
+      vue: 3.5.28(typescript@6.0.3)
 
-  vue-pdf-embed@2.1.4(vue@3.5.28(typescript@5.9.3)):
+  vue-pdf-embed@2.1.4(vue@3.5.28(typescript@6.0.3)):
     dependencies:
       pdfjs-dist: 4.10.38
-      vue: 3.5.28(typescript@5.9.3)
+      vue: 3.5.28(typescript@6.0.3)
 
-  vue-tsc@3.2.4(typescript@5.9.3):
+  vue-tsc@3.2.4(typescript@6.0.3):
     dependencies:
       '@volar/typescript': 2.4.27
       '@vue/language-core': 3.2.4
-      typescript: 5.9.3
+      typescript: 6.0.3
 
-  vue@3.5.28(typescript@5.9.3):
+  vue@3.5.28(typescript@6.0.3):
     dependencies:
       '@vue/compiler-dom': 3.5.28
       '@vue/compiler-sfc': 3.5.28
       '@vue/runtime-dom': 3.5.28
-      '@vue/server-renderer': 3.5.28(vue@3.5.28(typescript@5.9.3))
+      '@vue/server-renderer': 3.5.28(vue@3.5.28(typescript@6.0.3))
       '@vue/shared': 3.5.28
     optionalDependencies:
-      typescript: 5.9.3
+      typescript: 6.0.3
 
   wcwidth@1.0.1:
     dependencies:

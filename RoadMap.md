@@ -10,7 +10,6 @@
 
 
 ## [Paused for difficulties]
-- [ ] **完善“提供商与模型”** — 由于未知原因，目前无法从opencode server获取足够信息
 
 - [ ] vis-bridge 模块化本地桥接服务器
 	- [ ] 添加vis-bridge，一个读取本地设置和数据的轻量级服务器

@@ -303,26 +303,29 @@ export function listProviders() {
   return getJson('/provider') as Promise<unknown>;
 }
 
-export function listProviderAuthMethods(directory?: string) {
-  return getJson('/provider/auth', { directory }) as Promise<unknown>;
+export function listProviderAuthMethods(options: { directory?: string; workspace?: string } = {}) {
+  return getJson('/provider/auth', {
+    directory: options.directory,
+    workspace: options.workspace,
+  }) as Promise<unknown>;
 }
 
 export function authorizeProviderOAuth(
   providerId: string,
-  payload: { method: number; directory?: string },
+  payload: { method: number; directory?: string; workspace?: string; inputs?: Record<string, string> },
 ) {
   return sendJson(`/provider/${providerId}/oauth/authorize`, 'POST', {
-    params: { directory: payload.directory },
-    body: { method: payload.method },
+    params: { directory: payload.directory, workspace: payload.workspace },
+    body: { method: payload.method, inputs: payload.inputs },
   }) as Promise<unknown>;
 }
 
 export function completeProviderOAuth(
   providerId: string,
-  payload: { method: number; code?: string; directory?: string },
+  payload: { method: number; code?: string; directory?: string; workspace?: string },
 ) {
   return sendJson(`/provider/${providerId}/oauth/callback`, 'POST', {
-    params: { directory: payload.directory },
+    params: { directory: payload.directory, workspace: payload.workspace },
     body: {
       method: payload.method,
       code: payload.code,

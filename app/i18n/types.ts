@@ -341,6 +341,43 @@ export interface LocaleMessages {
       enabled: string;
       disabled: string;
     };
+    custom: {
+      title: string;
+      back: string;
+      description: string;
+      entryDescription: string;
+      submit: string;
+      fields: {
+        providerId: { label: string; placeholder: string; description: string };
+        name: { label: string; placeholder: string };
+        baseUrl: { label: string; placeholder: string };
+        apiKey: { label: string; placeholder: string; description: string };
+      };
+      models: {
+        label: string;
+        id: { label: string; placeholder: string };
+        name: { label: string; placeholder: string };
+        add: string;
+        remove: string;
+      };
+      headers: {
+        label: string;
+        key: { label: string; placeholder: string };
+        value: { label: string; placeholder: string };
+        add: string;
+        remove: string;
+      };
+      errors: {
+        providerIdRequired: string;
+        providerIdFormat: string;
+        providerIdExists: string;
+        nameRequired: string;
+        baseUrlRequired: string;
+        baseUrlFormat: string;
+        required: string;
+        duplicate: string;
+      };
+    };
     models: {
       searchPlaceholder: string;
       total: string;
@@ -353,6 +390,34 @@ export interface LocaleMessages {
         reasoning: string;
         toolcall: string;
       };
+    };
+    messages: {
+      connected: string;
+      disconnected: string;
+      providerEnabled: string;
+      providerDisabled: string;
+      modelEnabled: string;
+      modelDisabled: string;
+    };
+    prompts: {
+      selectAuthMethod: string;
+      enterValueForProvider: string;
+      enterApiKey: string;
+      pasteAuthCode: string;
+      completeOAuth: string;
+    };
+    confirm: {
+      disconnect: string;
+    };
+    providerNotes: {
+      opencode: string;
+      'opencode-go': string;
+      anthropic: string;
+      'github-copilot': string;
+      openai: string;
+      google: string;
+      openrouter: string;
+      vercel: string;
     };
   };
   sidePanel: {
