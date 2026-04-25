@@ -400,6 +400,34 @@ const messages: LocaleMessages = {
         toolcall: 'Tool call',
       },
     },
+    messages: {
+      connected: 'Connected {name}.',
+      disconnected: 'Disconnected {providerId}.',
+      providerEnabled: 'Provider {providerId} is now available.',
+      providerDisabled: 'Provider {providerId} has been disabled.',
+      modelEnabled: 'Model {modelKey} enabled.',
+      modelDisabled: 'Model {modelKey} disabled.',
+    },
+    prompts: {
+      selectAuthMethod: 'Select auth method for {providerId}:\n{options}',
+      enterValueForProvider: 'Enter {key} for {providerName}',
+      enterApiKey: 'Enter API key for {providerName}',
+      pasteAuthCode: 'Paste the authorization code for {providerId}',
+      completeOAuth: 'Complete the OAuth flow for {providerId}, then confirm.',
+    },
+    confirm: {
+      disconnect: 'Disconnect provider {providerId}?',
+    },
+    providerNotes: {
+      opencode: 'Single key access to multiple coding models.',
+      'opencode-go': 'Low-cost subscription access for everyday coding work.',
+      anthropic: 'Connect Claude directly with your Anthropic credentials.',
+      'github-copilot': 'Use your GitHub Copilot access or API-backed auth flow.',
+      openai: 'Bring ChatGPT or API credentials into the provider pool.',
+      google: 'Connect Gemini models with Google credentials.',
+      openrouter: 'Access multiple hosted models through one router.',
+      vercel: 'Use Vercel AI Gateway-compatible credentials.',
+    },
   },
   sidePanel: {
     tabs: {

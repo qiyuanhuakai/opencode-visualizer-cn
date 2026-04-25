@@ -389,7 +389,7 @@ const messages: LocaleMessages = {
     },
     models: {
       searchPlaceholder: '搜索模型、提供商和系列…',
-      total: '{count} 个可见项',
+      total: '{count} 个可见',
       disabledCount: '{count} 个已禁用',
       empty: '没有匹配的模型。',
       context: '{count} 上下文',
@@ -399,6 +399,34 @@ const messages: LocaleMessages = {
         reasoning: '推理',
         toolcall: '工具调用',
       },
+    },
+    messages: {
+      connected: '已连接 {name}。',
+      disconnected: '已断开 {providerId}。',
+      providerEnabled: '提供商 {providerId} 已启用。',
+      providerDisabled: '提供商 {providerId} 已禁用。',
+      modelEnabled: '模型 {modelKey} 已启用。',
+      modelDisabled: '模型 {modelKey} 已禁用。',
+    },
+    prompts: {
+      selectAuthMethod: '为 {providerId} 选择认证方式：\n{options}',
+      enterValueForProvider: '为 {providerName} 输入 {key}',
+      enterApiKey: '为 {providerName} 输入 API 密钥',
+      pasteAuthCode: '为 {providerId} 粘贴授权码',
+      completeOAuth: '完成 {providerId} 的 OAuth 流程，然后确认。',
+    },
+    confirm: {
+      disconnect: '断开提供商 {providerId}？',
+    },
+    providerNotes: {
+      opencode: '单一密钥即可访问多种编程模型。',
+      'opencode-go': '低成本的日常编程工作订阅方案。',
+      anthropic: '使用您的 Anthropic 凭证直接连接 Claude。',
+      'github-copilot': '使用您的 GitHub Copilot 访问权限或 API 认证流程。',
+      openai: '将 ChatGPT 或 API 凭证加入提供商池。',
+      google: '使用 Google 凭证连接 Gemini 模型。',
+      openrouter: '通过一个路由器访问多个托管模型。',
+      vercel: '使用兼容 Vercel AI Gateway 的凭证。',
     },
   },
   sidePanel: {

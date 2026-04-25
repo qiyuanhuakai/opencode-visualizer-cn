@@ -391,6 +391,34 @@ export interface LocaleMessages {
         toolcall: string;
       };
     };
+    messages: {
+      connected: string;
+      disconnected: string;
+      providerEnabled: string;
+      providerDisabled: string;
+      modelEnabled: string;
+      modelDisabled: string;
+    };
+    prompts: {
+      selectAuthMethod: string;
+      enterValueForProvider: string;
+      enterApiKey: string;
+      pasteAuthCode: string;
+      completeOAuth: string;
+    };
+    confirm: {
+      disconnect: string;
+    };
+    providerNotes: {
+      opencode: string;
+      'opencode-go': string;
+      anthropic: string;
+      'github-copilot': string;
+      openai: string;
+      google: string;
+      openrouter: string;
+      vercel: string;
+    };
   };
   sidePanel: {
     tabs: {

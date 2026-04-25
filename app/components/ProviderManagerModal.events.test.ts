@@ -56,6 +56,16 @@ describe('ProviderManagerModal events', () => {
     expect(i18nTypesSource).toContain('custom: {');
   });
 
+  it('persists disconnects for config-backed providers', () => {
+    const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
+
+    expect(modalSource).toContain("provider.source === 'config' || provider.source === 'custom'");
+    expect(modalSource).toContain("provider.source !== 'env'");
+    expect(modalSource).toContain('await opencodeApi.deleteProviderAuth(providerId).catch(() => undefined);');
+    expect(modalSource).toContain('buildProviderDisabledPatch(props.providerConfig, providerId, false)');
+    expect(modalSource).toContain("@click=\"disconnectProvider(provider)\"");
+  });
+
   it('does not switch models by clicking provider cards', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
     const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));

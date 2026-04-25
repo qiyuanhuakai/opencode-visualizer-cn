@@ -275,7 +275,7 @@
                       type="button"
                       class="ghost-action danger"
                       :disabled="!canDisconnectProvider(provider) || busyProviderId === provider.id"
-                      @click="disconnectProvider(provider.id)"
+                      @click="disconnectProvider(provider)"
                     >
                       {{ $t('providerManager.actions.disconnect') }}
                     </button>
@@ -579,17 +579,6 @@ const CUSTOM_PROVIDER_NPM = '@ai-sdk/openai-compatible';
 const CUSTOM_PROVIDER_BUSY_ID = '__custom_provider__';
 const CUSTOM_PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
 
-const PROVIDER_NOTES: Record<string, string> = {
-  opencode: 'Single key access to multiple coding models.',
-  'opencode-go': 'Low-cost subscription access for everyday coding work.',
-  anthropic: 'Connect Claude directly with your Anthropic credentials.',
-  'github-copilot': 'Use your GitHub Copilot access or API-backed auth flow.',
-  openai: 'Bring ChatGPT or API credentials into the provider pool.',
-  google: 'Connect Gemini models with Google credentials.',
-  openrouter: 'Access multiple hosted models through one router.',
-  vercel: 'Use Vercel AI Gateway-compatible credentials.',
-};
-
 const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod = {
   type: 'api',
   label: 'API key',
@@ -837,7 +826,11 @@ function isProviderDisconnected(provider: ProviderInfo) {
 }
 
 function canDisconnectProvider(provider: ProviderInfo) {
-  return !isProviderDisconnected(provider);
+  return !isProviderDisconnected(provider) && provider.source !== 'env';
+}
+
+function isConfigBackedProvider(provider: ProviderInfo) {
+  return provider.source === 'config' || provider.source === 'custom' || Boolean(props.providerConfig?.provider?.[provider.id]);
 }
 
 function providerTypeLabel(provider: ProviderInfo) {
@@ -850,7 +843,8 @@ function providerTypeLabel(provider: ProviderInfo) {
 }
 
 function providerNote(providerId: string) {
-  return PROVIDER_NOTES[providerId] ?? '';
+  const note = t(`providerManager.providerNotes.${providerId}`);
+  return note === `providerManager.providerNotes.${providerId}` ? '' : note;
 }
 
 function formatCount(value?: number) {
@@ -987,7 +981,7 @@ async function submitCustomProvider() {
     })) as ProviderConfigState;
     emit('config-updated', nextConfig ?? {});
     emit('providers-changed');
-    setFeedback(`Connected ${result.name}.`, 'success');
+    setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
     closeCustomProviderForm();
     resetCustomProviderForm();
   } catch (error) {
@@ -1001,7 +995,7 @@ async function pickAuthMethod(providerId: string) {
   const methods = providerAuthSummary(providerId);
   if (methods.length === 1) return { method: methods[0], index: 0 };
   const options = methods.map((method, index) => `${index + 1}. ${method.label}`).join('\n');
-  const raw = showPrompt ? await showPrompt(`Select auth method for ${providerId}:\n${options}`, '1') : null;
+  const raw = showPrompt ? await showPrompt(t('providerManager.prompts.selectAuthMethod', { providerId }) + '\n' + options, '1') : null;
   if (!raw) return null;
   const index = Number(raw) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= methods.length) return null;
@@ -1031,7 +1025,7 @@ async function collectAuthPromptInputs(
   const inputs: Record<string, string> = {};
   for (const prompt of prompts) {
     if (!prompt.key || !shouldShowAuthPrompt(prompt, inputs)) continue;
-    const title = prompt.message?.trim() || `Enter ${prompt.key} for ${provider.name?.trim() || provider.id}`;
+    const title = prompt.message?.trim() || t('providerManager.prompts.enterValueForProvider', { key: prompt.key, providerName: provider.name?.trim() || provider.id });
     if (prompt.type === 'select') {
       const options = (prompt.options ?? [])
         .map((option) => ({ label: promptOptionLabel(option), value: promptOptionValue(option) }))
@@ -1062,8 +1056,8 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
     emit('config-updated', result ?? {});
     setFeedback(
       nextEnabled
-        ? `Provider ${providerId} is now available.`
-        : `Provider ${providerId} has been disabled.`,
+        ? t('providerManager.messages.providerEnabled', { providerId })
+        : t('providerManager.messages.providerDisabled', { providerId }),
       'success',
     );
   } catch (error) {
@@ -1090,7 +1084,7 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
   }
   emit('update:model-visibility', Array.from(nextByKey.values()).sort((a, b) => `${a.providerID}/${a.modelID}`.localeCompare(`${b.providerID}/${b.modelID}`)));
   setFeedback(
-    nextEnabled ? `Model ${modelKey} enabled.` : `Model ${modelKey} disabled.`,
+    nextEnabled ? t('providerManager.messages.modelEnabled', { modelKey }) : t('providerManager.messages.modelDisabled', { modelKey }),
     'success',
   );
 }
@@ -1101,12 +1095,12 @@ async function connectProvider(provider: ProviderInfo) {
   busyProviderId.value = provider.id;
   try {
     if (picked.method.type === 'api') {
-      const key = showPrompt ? await showPrompt(`Enter API key for ${provider.name?.trim() || provider.id}`) : null;
+      const key = showPrompt ? await showPrompt(t('providerManager.prompts.enterApiKey', { providerName: provider.name?.trim() || provider.id })) : null;
       if (!key) return;
       const trimmedKey = key.trim();
       await opencodeApi.setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
       emit('providers-changed');
-      setFeedback(`Connected ${provider.id}.`, 'success');
+    setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
       return;
     }
 
@@ -1120,7 +1114,7 @@ async function connectProvider(provider: ProviderInfo) {
       window.open(authorization.url, '_blank', 'noopener,noreferrer');
     }
     if (authorization?.method === 'code') {
-      const code = showPrompt ? await showPrompt(authorization.instructions || `Paste the authorization code for ${provider.id}`) : null;
+      const code = showPrompt ? await showPrompt(authorization.instructions || t('providerManager.prompts.pasteAuthCode', { providerId: provider.id })) : null;
       if (!code) return;
       await opencodeApi.completeProviderOAuth(provider.id, {
         method: picked.index,
@@ -1128,7 +1122,7 @@ async function connectProvider(provider: ProviderInfo) {
       });
     } else {
       const confirmed = showConfirm ? await showConfirm(
-        authorization?.instructions || `Complete the OAuth flow for ${provider.id}, then confirm.`,
+        authorization?.instructions || t('providerManager.prompts.completeOAuth', { providerId: provider.id }),
       ) : true;
       if (!confirmed) return;
       await opencodeApi.completeProviderOAuth(provider.id, {
@@ -1136,7 +1130,7 @@ async function connectProvider(provider: ProviderInfo) {
       });
     }
     emit('providers-changed');
-    setFeedback(`Connected ${provider.id}.`, 'success');
+    setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
   } catch (error) {
     setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
@@ -1144,15 +1138,24 @@ async function connectProvider(provider: ProviderInfo) {
   }
 }
 
-async function disconnectProvider(providerId: string) {
+async function disconnectProvider(provider: ProviderInfo) {
+  const providerId = provider.id;
   if (!providerId) return;
-  const confirmed = showConfirm ? await showConfirm(`Disconnect provider ${providerId}?`) : true;
+    const confirmed = showConfirm ? await showConfirm(t('providerManager.confirm.disconnect', { providerId })) : true;
   if (!confirmed) return;
   busyProviderId.value = providerId;
   try {
-    await opencodeApi.deleteProviderAuth(providerId);
+    if (isConfigBackedProvider(provider)) {
+      await opencodeApi.deleteProviderAuth(providerId).catch(() => undefined);
+      const result = (await opencodeApi.updateGlobalConfig(
+        buildProviderDisabledPatch(props.providerConfig, providerId, false),
+      )) as ProviderConfigState;
+      emit('config-updated', result ?? {});
+    } else {
+      await opencodeApi.deleteProviderAuth(providerId);
+    }
     emit('providers-changed');
-    setFeedback(`Disconnected ${providerId}.`, 'success');
+    setFeedback(t('providerManager.messages.disconnected', { providerId }), 'success');
   } catch (error) {
     setFeedback(error instanceof Error ? error.message : String(error), 'error');
   } finally {
