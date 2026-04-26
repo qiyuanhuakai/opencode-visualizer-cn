@@ -646,8 +646,18 @@ const messages: LocaleMessages = {
       description: '超过此大小（MB）的文件不显示该按钮。',
     },
     floatingPreviewWordWrap: {
-      label: '悬浮窗预览自动换行',
+      label: '悬浮窗自动换行',
       description: '在有行号的悬浮窗（文件预览、编辑/写入/补丁）中启用自动换行。',
+    },
+    experimentalFeatures: {
+      label: '实验性功能',
+      description: '启用仍在开发中的实验性功能。',
+      pageTitle: '实验性功能',
+      pageDescription: '这些功能处于实验阶段，未来可能会更改或移除。',
+      showCodexButton: {
+        label: '显示 Codex 按钮',
+        description: '在右上角显示 Codex 面板按钮。',
+      },
     },
   },
   floatingWindow: {

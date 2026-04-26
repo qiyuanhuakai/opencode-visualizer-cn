@@ -640,6 +640,16 @@ export interface LocaleMessages {
       textMuted: string;
       reset: string;
     };
+    experimentalFeatures: {
+      label: string;
+      description: string;
+      pageTitle: string;
+      pageDescription: string;
+      showCodexButton: {
+        label: string;
+        description: string;
+      };
+    };
   };
   floatingWindow: {
     search: string;

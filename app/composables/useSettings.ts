@@ -155,6 +155,7 @@ function readExternalThemes(): ExternalThemeDefinition[] {
 const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true');
 const suppressAutoWindows = ref(storageGet(StorageKeys.settings.suppressAutoWindows) === 'true');
 const showMinimizeButtons = ref(storageGet(StorageKeys.settings.showMinimizeButtons) !== 'false');
+const showCodexButton = ref(storageGet(StorageKeys.settings.showCodexButton) === 'true');
 const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === 'true');
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
@@ -185,6 +186,10 @@ watch(showMinimizeButtons, (value) => {
 watch(showMinimizeButtons, (value) => {
   if (value) return;
   dockAlwaysOpen.value = false;
+}, syncWatchOptions);
+
+watch(showCodexButton, (value) => {
+  storageSet(StorageKeys.settings.showCodexButton, String(value));
 }, syncWatchOptions);
 
 watch(dockAlwaysOpen, (value) => {
@@ -263,6 +268,9 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.showMinimizeButtons)) {
       showMinimizeButtons.value = event.newValue !== 'false';
     }
+    if (event.key === storageKey(StorageKeys.settings.showCodexButton)) {
+      showCodexButton.value = event.newValue === 'true';
+    }
     if (event.key === storageKey(StorageKeys.settings.dockAlwaysOpen)) {
       dockAlwaysOpen.value = event.newValue === 'true';
     }
@@ -318,6 +326,7 @@ export function useSettings() {
     enterToSend,
     suppressAutoWindows,
     showMinimizeButtons,
+    showCodexButton,
     dockAlwaysOpen,
     terminalFontFamily,
     appMonospaceFontFamily,

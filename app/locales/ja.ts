@@ -646,8 +646,18 @@ const messages: LocaleMessages = {
       description: 'このサイズ（MB）より大きなファイルにはボタンを表示しません。',
     },
     floatingPreviewWordWrap: {
-      label: 'フローティングプレビューの自動折り返し',
+      label: 'フローティングプレビュー自動改行',
       description: '行番号付きフローティングウィンドウ（ファイルプレビュー、編集/書き込み/パッチ）で自動改行を有効にします。',
+    },
+    experimentalFeatures: {
+      label: '実験的機能',
+      description: '開発中の実験的機能を有効にします。',
+      pageTitle: '実験的機能',
+      pageDescription: 'これらの機能は実験的であり、将来変更または削除される可能性があります。',
+      showCodexButton: {
+        label: 'Codex ボタンを表示',
+        description: '右上に Codex パネルボタンを表示します。',
+      },
     },
   },
   floatingWindow: {

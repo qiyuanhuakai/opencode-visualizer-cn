@@ -827,14 +827,15 @@ export type CodexFeedbackUploadParams = {
 
 export type CodexFeedbackUploadResult = {};
 
-export type CodexFuzzyFileSearchSessionUpdatedParams = {
-  sessionId: string;
-  query: string;
-  files: Array<{ path: string; score: number }>;
+export type CodexToolRequestUserInputParams = {
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  questions: Array<{ id: string; text: string; isOther?: boolean }>;
 };
 
-export type CodexFuzzyFileSearchSessionCompletedParams = {
-  sessionId: string;
+export type CodexToolRequestUserInputResult = {
+  responses: Array<{ questionId: string; response: string }>;
 };
 
 export type CodexAdapterOptions = CodexJsonRpcClientOptions & {
@@ -1288,6 +1289,11 @@ export class CodexAdapter implements BackendAdapter {
   async uploadFeedback(params: CodexFeedbackUploadParams) {
     await this.ensureInitialized();
     return this.client.request<CodexFeedbackUploadResult>('feedback/upload', params);
+  }
+
+  async requestUserInput(params: CodexToolRequestUserInputParams) {
+    await this.ensureInitialized();
+    return this.client.request<CodexToolRequestUserInputResult>('tool/requestUserInput', params);
   }
 
   createSession(directory?: string) {

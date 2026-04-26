@@ -646,8 +646,18 @@ const messages: LocaleMessages = {
       description: 'Ne montri la butonon por dosieroj pli grandaj ol ĉi tiu grando (MB).',
     },
     floatingPreviewWordWrap: {
-      label: 'Aŭtomata vorto-rompo en flosanta antaŭrigardo',
+      label: 'Flosanta antaŭrigardo liniorompigo',
       description: 'Ŝalti aŭtomatan liniorompigon en flosantaj fenestroj kun lininumeroj (dosiera antaŭrigardo, redakto/skribo/ fliko).',
+    },
+    experimentalFeatures: {
+      label: 'Eksperimentaj trajtoj',
+      description: 'Ebligi eksperimentajn trajtojn kiuj ankoraŭ estas en evoluo.',
+      pageTitle: 'Eksperimentaj trajtoj',
+      pageDescription: 'Tiuj ĉi trajtoj estas eksperimentaj kaj povas ŝanĝiĝi aŭ esti forigitaj en estontaj ĝisdatigoj.',
+      showCodexButton: {
+        label: 'Montri Codex-butanon',
+        description: 'Montri la Codex-panelbutonon en la supra-destra angulo.',
+      },
     },
   },
   floatingWindow: {

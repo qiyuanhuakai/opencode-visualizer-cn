@@ -20,8 +20,6 @@ import {
   type CodexExternalAgentConfigItem,
   type CodexFeedbackUploadParams,
   type CodexFsDirectoryEntry,
-  type CodexFuzzyFileSearchSessionCompletedParams,
-  type CodexFuzzyFileSearchSessionUpdatedParams,
   type CodexModel,
   type CodexMcpServerInfo,
   type CodexPlugin,
@@ -31,6 +29,7 @@ import {
   type CodexThread,
   type CodexThreadListParams,
   type CodexTurn,
+  type CodexToolRequestUserInputParams,
   type CodexWindowsSandboxSetupStartResult,
 } from '../backends/codex/codexAdapter';
 import type {
@@ -828,15 +827,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       }
 
       if (notification.method === 'fuzzyFileSearch/sessionUpdated') {
-        const params = isRecord(notification.params) ? notification.params as CodexFuzzyFileSearchSessionUpdatedParams : null;
+        const params = isRecord(notification.params) ? notification.params as { files?: Array<{ path: string; score: number }>; query?: string } : null;
         fuzzySearchResults.value = Array.isArray(params?.files) ? params.files : [];
         fuzzySearchQuery.value = typeof params?.query === 'string' ? params.query : '';
         return;
       }
 
       if (notification.method === 'fuzzyFileSearch/sessionCompleted') {
-        const params = isRecord(notification.params) ? notification.params as CodexFuzzyFileSearchSessionCompletedParams : null;
-        void params;
         return;
       }
 
@@ -1732,6 +1729,26 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       loadedThreadIds.value = result.data;
     }
 
+    async function refreshThreadTurns(threadId: string) {
+      if (!adapter) throw new Error('Codex is not connected.');
+      return adapter.listThreadTurns({ threadId });
+    }
+
+    async function readPlugin(pluginName: string, marketplacePath?: string, remoteMarketplaceName?: string) {
+      if (!adapter) throw new Error('Codex is not connected.');
+      return adapter.readPlugin({ pluginName, marketplacePath, remoteMarketplaceName });
+    }
+
+    async function sendAddCreditsNudge(creditType: 'credits' | 'usage_limit' = 'credits') {
+      if (!adapter) throw new Error('Codex is not connected.');
+      return adapter.sendAddCreditsNudge({ creditType });
+    }
+
+    async function requestToolUserInput(params: CodexToolRequestUserInputParams) {
+      if (!adapter) throw new Error('Codex is not connected.');
+      return adapter.requestUserInput(params);
+    }
+
     async function fsRemove(path: string) {
       if (!adapter) throw new Error('Codex is not connected.');
       const resolved = expandPath(path);
@@ -1932,8 +1949,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
        startThreadCompaction,
        runThreadShellCommand,
        injectThreadItems,
-       refreshLoadedThreads,
-       fsRemove,
+        refreshLoadedThreads,
+        refreshThreadTurns,
+        readPlugin,
+        sendAddCreditsNudge,
+        requestToolUserInput,
+        fsRemove,
        fsWatch,
        fsUnwatch,
        fsGetMetadata,

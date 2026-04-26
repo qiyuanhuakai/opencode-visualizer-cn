@@ -649,6 +649,16 @@ const messages: LocaleMessages = {
       label: 'Floating preview word wrap',
       description: 'Enable automatic line wrapping in floating windows with line numbers (file preview, edit/write/patch).',
     },
+    experimentalFeatures: {
+      label: 'Experimental features',
+      description: 'Enable experimental features that are still in development.',
+      pageTitle: 'Experimental features',
+      pageDescription: 'These features are experimental and may change or be removed in future updates.',
+      showCodexButton: {
+        label: 'Show Codex button',
+        description: 'Display the Codex panel button in the top-right corner.',
+      },
+    },
   },
   floatingWindow: {
     search: 'Search',
