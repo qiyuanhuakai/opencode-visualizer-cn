@@ -50,7 +50,7 @@ function createAdapterMock() {
     forkThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_fork', preview: '' } }),
     rollbackThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     readDirectory: vi.fn().mockResolvedValue({ entries: [{ name: 'file.txt', type: 'file' }] }),
-    readFile: vi.fn().mockResolvedValue({ content: 'hello' }),
+    readFile: vi.fn().mockResolvedValue({ dataBase64: 'aGVsbG8=' }),
     respondToServerRequest: vi.fn(),
     sendPrompt: vi.fn().mockResolvedValue({
       threadId: 'thr_existing',

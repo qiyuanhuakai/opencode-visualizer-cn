@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { connect as connectTcp } from 'node:net';
 import { connect as connectTls } from 'node:tls';
+import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -281,16 +282,40 @@ async function proxyWebSocket(request, clientSocket, head, options) {
   }
 }
 
+function writeCorsHeaders(response, statusCode, extraHeaders = {}) {
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    ...extraHeaders,
+  };
+  response.writeHead(statusCode, headers);
+}
+
 export function createVisBridgeServer(options) {
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
+
+    if (request.method === 'OPTIONS') {
+      writeCorsHeaders(response, 204);
+      response.end();
+      return;
+    }
+
+    if (requestUrl.pathname === '/homedir') {
+      writeCorsHeaders(response, 200);
+      response.end(JSON.stringify({ home: homedir() }));
+      return;
+    }
+
     if (requestUrl.pathname === '/healthz' || requestUrl.pathname === '/readyz') {
-      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      writeCorsHeaders(response, 200);
       response.end(JSON.stringify({ ok: true, service: 'vis_bridge' }));
       return;
     }
 
-    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    writeCorsHeaders(response, 200);
     response.end(JSON.stringify({
       service: 'vis_bridge',
       websocketPath: options.path,
