@@ -5,11 +5,17 @@
 ---
 ## [Unreleased]
 
+### 新后端支持(beta)
+
+- [x] 添加了vis_bridge，用于转发codex app-server json-rpc的轻量桥接器
+- [x] 添加了codex panel，一个基于codex app-server api的最小化悬浮窗面板
+- [x] 在“设置”中添加了“实验性功能”，允许打开codex panel
+
 ### Critical Bug 修复
 
 - [x] 修复了禁用provider会导致所有提供商全部消失的bug
 
-### 提供商与模型管理（Beta）
+### 提供商与模型管理
 
 - [x] 修改了提供商与模型管理面板的ui设计
 - [x] 完善供应商与模型管理功能，支持所有提供商的web端连接，支持自定义提供商连接

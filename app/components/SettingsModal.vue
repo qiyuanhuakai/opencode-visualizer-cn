@@ -17,7 +17,7 @@
           >
             <Icon icon="lucide:arrow-left" :width="14" :height="14" />
           </button>
-          <div class="modal-title">{{ activePage === 'root' ? $t('settings.title') : (activePage === 'fonts' ? $t('settings.fontsPageTitle') : $t('settings.themePageTitle')) }}</div>
+          <div class="modal-title">{{ pageTitle }}</div>
         </div>
         <button
           type="button"
@@ -142,6 +142,19 @@
           <button
             type="button"
             class="setting-row setting-link-row"
+            :aria-label="$t('settings.experimentalFeatures.label')"
+            @click="activePage = 'experimental'"
+          >
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.experimentalFeatures.label') }}</div>
+              <div class="setting-description">{{ $t('settings.experimentalFeatures.description') }}</div>
+            </div>
+            <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
+          </button>
+
+          <button
+            type="button"
+            class="setting-row setting-link-row"
             :aria-label="$t('settings.theme.label')"
             @click="activePage = 'theme'"
           >
@@ -238,6 +251,21 @@
             </div>
           </div>
 
+        </template>
+
+        <template v-else-if="activePage === 'experimental'">
+          <div class="setting-page-description">{{ $t('settings.experimentalFeatures.pageDescription') }}</div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.experimentalFeatures.showCodexButton.label') }}</div>
+              <div class="setting-description">{{ $t('settings.experimentalFeatures.showCodexButton.description') }}</div>
+            </div>
+            <label class="toggle-switch">
+              <input v-model="showCodexButton" type="checkbox" class="toggle-input" />
+              <span class="toggle-track" />
+            </label>
+          </div>
         </template>
 
         <template v-else>
@@ -547,7 +575,7 @@ type FontPreset = {
   value: string;
 };
 
-type SettingsPage = 'root' | 'fonts' | 'theme';
+type SettingsPage = 'root' | 'fonts' | 'theme' | 'experimental';
 type ThemePresetCard = {
   id: string;
   label: string;
@@ -590,6 +618,7 @@ const isImportingTheme = ref(false);
 const {
   enterToSend,
   showMinimizeButtons,
+  showCodexButton,
   dockAlwaysOpen,
   terminalFontFamily,
   appMonospaceFontFamily,
@@ -914,6 +943,16 @@ watchEffect((onCleanup) => {
 const locale = ref<Locale>(getLocale());
 watch(locale, (newLocale) => {
   setLocale(newLocale);
+});
+
+const pageTitle = computed(() => {
+  switch (activePage.value) {
+    case 'root': return t('settings.title');
+    case 'fonts': return t('settings.fontsPageTitle');
+    case 'theme': return t('settings.themePageTitle');
+    case 'experimental': return t('settings.experimentalFeatures.pageTitle');
+    default: return t('settings.title');
+  }
 });
 
 watch(

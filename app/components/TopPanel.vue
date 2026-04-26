@@ -534,6 +534,15 @@
           <Icon icon="lucide:activity" :width="16" :height="16" />
         </button>
         <button
+          v-if="showCodexButton"
+          type="button"
+          class="control-button codex-button"
+          :title="$t('codexPanel.title')"
+          @click="$emit('open-codex-panel')"
+        >
+          <Icon icon="lucide:bot" :width="16" :height="16" />
+        </button>
+        <button
           type="button"
           class="control-button suppress-button"
           :class="{ active: suppressAutoWindows }"
@@ -571,7 +580,7 @@ import { useSettings } from '../composables/useSettings';
 declare const __GIT_REVISION__: string;
 const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
 const { t } = useI18n();
-const { suppressAutoWindows } = useSettings();
+const { suppressAutoWindows, showCodexButton } = useSettings();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const regionStyle = computed(() => undefined);
@@ -677,6 +686,7 @@ const emit = defineEmits<{
   (event: 'open-settings'): void;
   (event: 'open-provider-manager'): void;
   (event: 'open-status-monitor'): void;
+  (event: 'open-codex-panel'): void;
   (event: 'logout'): void;
   (event: 'dropdown-closed'): void;
 }>();
@@ -1972,6 +1982,7 @@ function handleOpenDirectory(close: () => void) {
 .settings-button,
 .provider-manager-button,
 .status-monitor-button,
+.codex-button,
 .suppress-button,
 .logout-button {
   width: 32px;
@@ -1987,6 +1998,7 @@ function handleOpenDirectory(close: () => void) {
 .settings-button:hover,
 .provider-manager-button:hover,
 .status-monitor-button:hover,
+.codex-button:hover,
 .suppress-button:hover,
 .logout-button:hover {
   background: transparent;

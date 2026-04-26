@@ -59,6 +59,7 @@ export const StorageKeys = {
     showOpenInEditorButton: 'settings.showOpenInEditorButton.v1',
     openInEditorMaxSizeMb: 'settings.openInEditorMaxSizeMb.v1',
     floatingPreviewWordWrap: 'settings.floatingPreviewWordWrap.v1',
+    showCodexButton: 'settings.showCodexButton.v1',
     regionTheme: 'settings.regionTheme.v1',
     themeTokens: 'settings.themeTokens.v2',
     themeRegistry: 'settings.themeRegistry.v1',
