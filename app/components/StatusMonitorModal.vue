@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick } from 'vue';
+import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getGlobalHealth, getMcpStatus, getLspStatus, getSkillStatus, getGlobalConfig, updateMcp, listSessionMessages, listProviders } from '../utils/opencode';
@@ -67,21 +67,28 @@ function unbindEvents() {
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
     activeTab.value = 'server';
-    nextTick(() => {
-      setTimeout(() => {
-        clickHandler = (e: MouseEvent) => {
-          if (popoverRef.value && !popoverRef.value.contains(e.target as Node)) {
-            emit('close');
-          }
-        };
-        document.addEventListener('click', clickHandler);
-      }, 0);
-    });
+    // Bind click handler synchronously to avoid race conditions with rapid open/close
+    clickHandler = (e: MouseEvent) => {
+      if (popoverRef.value && !popoverRef.value.contains(e.target as Node)) {
+        emit('close');
+      }
+    };
+    document.addEventListener('click', clickHandler);
     bindEvents();
     refresh();
   } else {
     unbindEvents();
   }
+});
+
+watch(() => props.sessionId, (newId, oldId) => {
+  if (props.open && newId !== oldId) {
+    fetchTokenData();
+  }
+});
+
+onBeforeUnmount(() => {
+  unbindEvents();
 });
 
 async function refresh() {

@@ -1,4 +1,4 @@
-import { reactive, shallowRef, markRaw, onUnmounted, type Component } from 'vue';
+import { reactive, shallowRef, markRaw, onUnmounted, nextTick, type Component } from 'vue';
 import { renderWorkerHtml } from '../utils/workerRenderer';
 import { DEFAULT_SYNTAX_THEME } from '../utils/themeTokens';
 import { useI18n } from '../i18n/useI18n';
@@ -170,6 +170,14 @@ export function useFloatingWindows() {
   // Per-window expiry timers
   const timerMap = new Map<string, ReturnType<typeof setTimeout>>();
 
+  const renderVersionMap = new Map<string, number>();
+
+  function bumpRenderVersion(key: string): number {
+    const next = (renderVersionMap.get(key) || 0) + 1;
+    renderVersionMap.set(key, next);
+    return next;
+  }
+
   function scheduleExpiry(key: string, expiresAt: number): void {
     // Skip scheduling for permanent windows
     if (expiresAt >= Number.MAX_SAFE_INTEGER) return;
@@ -193,6 +201,7 @@ export function useFloatingWindows() {
       clearTimeout(timerId);
     }
     timerMap.clear();
+    renderVersionMap.clear();
   });
 
   async function open(key: string, opts: Partial<FloatingWindowEntry>): Promise<void> {
@@ -234,81 +243,70 @@ export function useFloatingWindows() {
       await merged.beforeOpen();
     }
 
-    // Content resolution
-    if (typeof merged.content === 'function') {
-      try {
-        merged.resolvedHtml = await (merged.content as () => Promise<string>)();
-        merged.isReady = true;
-      } catch (e) {
-        merged.resolvedHtml = String(e);
-        merged.isReady = true;
-      }
-    } else if (merged.content && merged.lang) {
-      try {
-        merged.resolvedHtml = await renderWorkerHtml({
-          id: nextRenderId(),
-          code: merged.content,
-          lang: merged.lang,
-          theme: DEFAULT_SYNTAX_THEME,
-          gutterMode: variantToGutterMode(merged.variant),
-          lineOffset: merged.lineOffset,
-          lineLimit: merged.lineLimit,
-          copyButtonLabel: t('render.copyCode'),
-          copiedLabel: t('render.copied'),
-          copyCodeAriaLabel: t('render.copyCodeAria'),
-          copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
-        });
-        merged.isReady = true;
-      } catch {
-        merged.resolvedHtml = `<pre>${merged.content}</pre>`;
-        merged.isReady = true;
-      }
-    } else if (merged.content) {
-      merged.resolvedHtml = merged.content;
-      merged.isReady = true;
-    } else {
-      // No content — component handles display
-      merged.resolvedHtml = '';
-      merged.isReady = true;
-    }
+    merged.isReady = true;
+    const contentVersion = bumpRenderVersion(key);
 
-    // expiresAt must be computed after content resolution (not in the merge block above)
-    // so the TTL countdown starts from display-ready, not before async work.
+    const resolveContent = async () => {
+      const entry = entriesMap.get(key);
+      if (!entry) return;
+      if (renderVersionMap.get(key) !== contentVersion) return;
+
+      if (typeof merged.content === 'function') {
+        try {
+          entry.resolvedHtml = await (merged.content as () => Promise<string>)();
+        } catch (e) {
+          entry.resolvedHtml = String(e);
+        }
+      } else if (merged.content && merged.lang) {
+        try {
+          entry.resolvedHtml = await renderWorkerHtml({
+            id: nextRenderId(),
+            code: merged.content,
+            lang: merged.lang,
+            theme: DEFAULT_SYNTAX_THEME,
+            gutterMode: variantToGutterMode(merged.variant),
+            lineOffset: merged.lineOffset,
+            lineLimit: merged.lineLimit,
+            copyButtonLabel: t('render.copyCode'),
+            copiedLabel: t('render.copied'),
+            copyCodeAriaLabel: t('render.copyCodeAria'),
+            copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
+          });
+        } catch {
+          entry.resolvedHtml = `<pre>${merged.content}</pre>`;
+        }
+      } else if (merged.content) {
+        entry.resolvedHtml = merged.content;
+      } else {
+        entry.resolvedHtml = '';
+      }
+    };
+
     merged.expiresAt = resolveExpiresAt(opts, existing);
 
     const shouldFocusOnOpen = !existing && merged.focusOnOpen === true;
 
     entriesMap.set(key, sanitizeEntry(merged));
-    // Only rebuild entries array when window visibility changes (isReady toggle)
-    // or when the display type changes (content -> component or vice versa).
-    // Skip rebuild for prop-only updates on existing windows to avoid O(n) cost
-    // during high-frequency streaming updates (reasoning/subagent deltas).
-    const displayTypeChanged = existing && (
-      (opts.component && !existing.component) ||
-      (!opts.component && existing.component)
-    );
-    if (!existing || merged.isReady !== (existing.isReady ?? false) || displayTypeChanged) {
-      rebuildEntries();
-    }
+    rebuildEntries();
+    void resolveContent();
 
     scheduleExpiry(key, merged.expiresAt);
 
-    // Execute afterOpen hook
     if (merged.afterOpen) {
-      setTimeout(() => {
+      nextTick(() => {
         const el = document.querySelector(`[data-floating-key="${key}"]`);
         if (el) merged.afterOpen!(el as HTMLElement);
-      }, 0);
+      });
     }
 
     if (shouldFocusOnOpen) {
-      setTimeout(() => {
+      nextTick(() => {
         const body = document.querySelector(
           `[data-floating-key="${key}"] .floating-window-body`,
         ) as HTMLElement | null;
         if (!body) return;
         body.focus();
-      }, 0);
+      });
     }
   }
 
@@ -346,11 +344,12 @@ export function useFloatingWindows() {
     const entry = entriesMap.get(key);
     if (!entry) return;
 
+    const contentVersion = bumpRenderVersion(key);
     entry.content = text;
     entry.lang = lang;
 
     if (lang) {
-      entry.resolvedHtml = await renderWorkerHtml({
+      const resolved = await renderWorkerHtml({
         id: nextRenderId(),
         code: text,
         lang,
@@ -361,6 +360,8 @@ export function useFloatingWindows() {
         copyCodeAriaLabel: t('render.copyCodeAria'),
         copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
       });
+      if (renderVersionMap.get(key) !== contentVersion) return;
+      entry.resolvedHtml = resolved;
     } else {
       entry.resolvedHtml = text;
     }
@@ -370,11 +371,12 @@ export function useFloatingWindows() {
     const entry = entriesMap.get(key);
     if (!entry) return;
 
+    const contentVersion = bumpRenderVersion(key);
     const newContent = (entry.content || '') + text;
     entry.content = newContent;
 
     if (lang || entry.lang) {
-      entry.resolvedHtml = await renderWorkerHtml({
+      const resolved = await renderWorkerHtml({
         id: nextRenderId(),
         code: newContent,
         lang: lang || entry.lang!,
@@ -385,6 +387,8 @@ export function useFloatingWindows() {
         copyCodeAriaLabel: t('render.copyCodeAria'),
         copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
       });
+      if (renderVersionMap.get(key) !== contentVersion) return;
+      entry.resolvedHtml = resolved;
     } else {
       entry.resolvedHtml = newContent;
     }
@@ -450,6 +454,7 @@ export function useFloatingWindows() {
     }
 
     entriesMap.delete(key);
+    renderVersionMap.delete(key);
     if (!skipRebuild) rebuildEntries();
 
     if (entry.afterClose) {
