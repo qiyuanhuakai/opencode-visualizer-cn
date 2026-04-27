@@ -64,10 +64,16 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     closeTimers.forEach((timer) => window.clearTimeout(timer));
     closeTimers.clear();
     entriesBySession.clear();
-    config.fw.entries.value.forEach((entry) => {
-      if (!entry.key.startsWith(config.prefix)) return;
-      void config.fw.close(entry.key);
-    });
+    const keysToClose: string[] = [];
+    for (const entry of config.fw.entries.value) {
+      if (entry.key.startsWith(config.prefix)) {
+        keysToClose.push(entry.key);
+      }
+    }
+    if (keysToClose.length > 0) {
+      const keySet = new Set(keysToClose);
+      config.fw.closeAll({ exclude: (key) => !keySet.has(key) });
+    }
   }
 
   function upsertEntry(sessionId: string, partId: string, text: string) {

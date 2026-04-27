@@ -940,9 +940,6 @@ export interface LocaleMessages {
   };
   outputPanel: {
     scrollToLatest: string;
-    loadOlder: string;
-    loadingOlder: string;
-    loadOlderFailed: string;
   };
   errors: {
     timedOut: string;

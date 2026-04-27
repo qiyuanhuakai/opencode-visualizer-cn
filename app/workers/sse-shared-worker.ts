@@ -60,7 +60,7 @@ type ConnectionState = {
 
 const connections = new Map<string, ConnectionState>();
 const portToKey = new Map<MessagePort, string>();
-const OPENCODE_READ_CONCURRENCY = 8;
+const OPENCODE_READ_CONCURRENCY = 12;
 let activeOpencodeReadTasks = 0;
 const pendingOpencodeReadResolvers: Array<() => void> = [];
 
@@ -736,8 +736,8 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   await promise;
 }
 
-const BACKGROUND_HYDRATION_BATCH_SIZE = 10;
-const BACKGROUND_HYDRATION_DELAY_MS = 250;
+const BACKGROUND_HYDRATION_BATCH_SIZE = 20;
+const BACKGROUND_HYDRATION_DELAY_MS = 80;
 
 function scheduleBackgroundHydration(state: ConnectionState, directories: string[]) {
   void (async () => {

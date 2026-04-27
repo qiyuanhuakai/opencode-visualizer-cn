@@ -1,4 +1,5 @@
 import RenderWorker from '../workers/render-worker?worker';
+import { incrementPendingRenders, decrementPendingRenders } from '../composables/useRenderState';
 
 export type RenderRequest = {
   id: string;
@@ -13,12 +14,10 @@ export type RenderRequest = {
   lineOffset?: number;
   lineLimit?: number;
   files?: string[];
-  // Localization strings for copy buttons
   copyButtonLabel?: string;
   copiedLabel?: string;
   copyCodeAriaLabel?: string;
   copyMarkdownAriaLabel?: string;
-  // Error message localization
   errorLabel?: string;
 };
 
@@ -44,7 +43,12 @@ type RenderTask = {
   cancel: () => void;
 };
 
-let renderWorker: Worker | null = null;
+const WORKER_POOL_SIZE = typeof navigator !== 'undefined'
+  ? Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4))
+  : 4;
+
+const workers: Worker[] = [];
+let workerIndex = 0;
 const pending = new Map<string, PendingEntry>();
 const completedCache = new Map<string, string>();
 const CACHE_LIMIT = 200;
@@ -87,22 +91,36 @@ function cacheRenderedHtml(key: string, html: string) {
   if (oldestKey) completedCache.delete(oldestKey);
 }
 
-function getWorker() {
-  if (renderWorker) return renderWorker;
+function createWorker(): Worker {
   const worker = new RenderWorker();
-  renderWorker = worker;
   worker.onmessage = (event: MessageEvent<RenderResponse>) => {
     const data = event.data;
     const entry = pending.get(data.id);
     if (!entry) return;
     pending.delete(data.id);
+    decrementPendingRenders();
     if (data.ok) entry.resolve(data.html);
     else entry.reject(new Error(data.error || entry.errorLabel || 'Render failed'));
   };
   worker.onerror = (error) => {
+    const count = pending.size;
     pending.forEach((entry) => entry.reject(new Error(String(error))));
     pending.clear();
+    for (let i = 0; i < count; i++) {
+      decrementPendingRenders();
+    }
   };
+  return worker;
+}
+
+function getWorker(): Worker {
+  if (workers.length === 0) {
+    for (let i = 0; i < WORKER_POOL_SIZE; i++) {
+      workers.push(createWorker());
+    }
+  }
+  const worker = workers[workerIndex];
+  workerIndex = (workerIndex + 1) % workers.length;
   return worker;
 }
 
@@ -113,6 +131,7 @@ export function renderWorkerHtml(payload: RenderRequest) {
     return Promise.resolve(cached);
   }
   const id = payload.id;
+  incrementPendingRenders();
   return new Promise<string>((resolve, reject) => {
     pending.set(id, {
       resolve: (html) => {
@@ -138,18 +157,21 @@ export function startRenderWorkerHtml(payload: RenderRequest): RenderTask {
 
   const id = payload.id;
   let settled = false;
+  incrementPendingRenders();
 
   const promise = new Promise<string>((resolve, reject) => {
     pending.set(id, {
       resolve: (html) => {
         if (settled) return;
         settled = true;
+        decrementPendingRenders();
         cacheRenderedHtml(cacheKey, html);
         resolve(html);
       },
       reject: (error) => {
         if (settled) return;
         settled = true;
+        decrementPendingRenders();
         reject(error);
       },
       errorLabel: payload.errorLabel,
@@ -165,6 +187,7 @@ export function startRenderWorkerHtml(payload: RenderRequest): RenderTask {
       if (!entry) return;
       pending.delete(id);
       settled = true;
+      decrementPendingRenders();
       entry.reject(new RenderCancelledError());
     },
   };

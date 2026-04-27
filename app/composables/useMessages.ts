@@ -29,7 +29,15 @@ type MessageError = { name: string; message: string } | null;
 const pendingMessageTriggers = new Set<ShallowRef<MessageEntry>>();
 const pendingCollectionTrigger = { value: false };
 let flushScheduled = false;
-const HISTORY_CHUNK_SIZE = 40;
+const HISTORY_CHUNK_SIZE = 150;
+const MAX_SESSION_CACHE_ENTRIES = 5;
+
+type MessageCacheEntry = {
+  messages: Map<string, { info?: MessageInfo; parts: MessagePart[] }>;
+  parts: Map<string, MessagePart>;
+};
+
+const sessionCache = new Map<string, MessageCacheEntry>();
 
 function scheduleFlush() {
   if (flushScheduled) return;
@@ -477,11 +485,11 @@ async function loadHistoryIncrementally(
   for (let offset = 0; offset < entries.length; offset += chunkSize) {
     if (options?.shouldContinue && !options.shouldContinue()) return;
     loadHistory(entries.slice(offset, offset + chunkSize));
-    if (offset + chunkSize < entries.length) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-    }
+     if (offset + chunkSize < entries.length) {
+       await new Promise<void>((resolve) => {
+         queueMicrotask(resolve);
+       });
+     }
   }
 }
 
@@ -493,6 +501,66 @@ function reset() {
 
 function dispose() {
   for (const unsub of unsubs) unsub();
+}
+
+function saveSessionState(sessionId: string) {
+  if (!sessionId || messages.value.size === 0) return;
+
+  for (const messageRef of messages.value.values()) {
+    if (resolveStatus(messageRef.value.info) === 'streaming') return;
+  }
+
+  if (sessionCache.size >= MAX_SESSION_CACHE_ENTRIES) {
+    const oldestKey = sessionCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      sessionCache.delete(oldestKey);
+    }
+  }
+
+  const cachedMessages = new Map<string, { info?: MessageInfo; parts: MessagePart[] }>();
+  const cachedParts = new Map<string, MessagePart>();
+
+  for (const [id, messageRef] of messages.value) {
+    const entry = messageRef.value;
+    const partsList: MessagePart[] = [];
+    for (const partRef of entry.parts) {
+      const part = partRef.value;
+      partsList.push(part);
+      cachedParts.set(partLookupKey(part.messageID, part.id), part);
+    }
+    cachedMessages.set(id, { info: entry.info, parts: partsList });
+  }
+
+  sessionCache.set(sessionId, { messages: cachedMessages, parts: cachedParts });
+}
+
+function tryLoadFromCache(sessionId: string): boolean {
+  const cached = sessionCache.get(sessionId);
+  if (!cached) return false;
+
+  messages.value.clear();
+  parts.clear();
+
+  for (const [id, cachedEntry] of cached.messages) {
+    const entry = createMessageEntry();
+    entry.info = cachedEntry.info;
+    for (const part of cachedEntry.parts) {
+      const partRef = shallowRef(part);
+      const key = partLookupKey(part.messageID, part.id);
+      parts.set(key, partRef);
+      entry.parts.add(partRef);
+    }
+    messages.value.set(id, shallowRef(entry));
+  }
+
+  for (const [key, part] of cached.parts) {
+    if (!parts.has(key)) {
+      parts.set(key, shallowRef(part));
+    }
+  }
+
+  triggerCollection();
+  return true;
 }
 
 export function useMessages() {
@@ -523,6 +591,8 @@ export function useMessages() {
     loadHistory,
     loadHistoryIncrementally,
     reset,
+    saveSessionState,
+    tryLoadFromCache,
     dispose,
     bindScope,
   };

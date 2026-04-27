@@ -1014,10 +1014,7 @@ const messages: LocaleMessages = {
     loading: 'PDFを読み込み中...',
   },
   outputPanel: {
-    scrollToLatest: '最新へスクロール',
-    loadOlder: '古い履歴を読み込む',
-    loadingOlder: '古い履歴を読み込み中…',
-    loadOlderFailed: '古い履歴の読み込みに失敗しました。',
+    scrollToLatest: '最新にスクロール',
   },
   welcome: {
     title: 'OpenCode Visualizerの使い方',

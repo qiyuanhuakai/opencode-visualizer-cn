@@ -26,7 +26,7 @@ const GIT_ENV_PREAMBLE = [
 
 const GIT_STATUS_SCRIPT = [
   GIT_ENV_PREAMBLE,
-  'git -c color.status=false -c color.ui=false --no-pager status --porcelain=v1 -z -b 2>/dev/null',
+  'git -c color.status=false -c color.ui=false --no-pager status --porcelain=v1 -z -b -uall 2>/dev/null',
   "printf '\\0##HEAD\\0'",
   'git rev-parse --short HEAD 2>/dev/null',
   "printf '\\0##DIFFSTAT\\0'",
@@ -905,17 +905,15 @@ async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
   const includeFileSnapshot = options.includeFileSnapshot ?? true;
   gitStatusRefreshInFlight = (async () => {
     try {
-      try {
-        await refreshGitStatusOnly();
-      } catch {
-        return;
-      }
       if (!includeFileSnapshot || fileTreeStrategy.value !== 'git') {
+        await refreshGitStatusOnly().catch(() => {});
         return;
       }
-      try {
-        await refreshGitFileSnapshot();
-      } catch {
+      const [statusResult] = await Promise.allSettled([
+        refreshGitStatusOnly(),
+        refreshGitFileSnapshot(),
+      ]);
+      if (statusResult.status === 'rejected') {
         return;
       }
     } finally {
@@ -1198,7 +1196,7 @@ async function rebuildFileCache() {
     return;
   }
 
-  const AUTO_SCAN_FILE_LIMIT = 1000;
+  const AUTO_SCAN_FILE_LIMIT = 3000;
   const queue: string[] = ['.'];
   const visited = new Set<string>();
   const collected: string[] = [];
@@ -1338,5 +1336,6 @@ export function useFileTree(options?: UseFileTreeOptions) {
     branchEntries,
     branchListLoading,
     refreshBranchEntries,
+    feed,
   };
 }

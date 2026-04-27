@@ -1015,9 +1015,6 @@ const messages: LocaleMessages = {
   },
   outputPanel: {
     scrollToLatest: 'Scroll to latest',
-    loadOlder: 'Load older history',
-    loadingOlder: 'Loading older history...',
-    loadOlderFailed: 'Failed to load older history.',
   },
   welcome: {
     title: 'How To Use OpenCode Visualizer',

@@ -1015,9 +1015,6 @@ const messages: LocaleMessages = {
   },
   outputPanel: {
     scrollToLatest: '滚动到最新',
-    loadOlder: '加载更早历史',
-    loadingOlder: '正在加载更早历史...',
-    loadOlderFailed: '加载更早历史失败。',
   },
   welcome: {
     title: '如何使用 OpenCode Visualizer',

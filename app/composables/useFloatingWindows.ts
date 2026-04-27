@@ -1,4 +1,4 @@
-import { reactive, computed, markRaw, onUnmounted, type Component } from 'vue';
+import { reactive, shallowRef, markRaw, onUnmounted, type Component } from 'vue';
 import { renderWorkerHtml } from '../utils/workerRenderer';
 import { DEFAULT_SYNTAX_THEME } from '../utils/themeTokens';
 import { useI18n } from '../i18n/useI18n';
@@ -135,7 +135,15 @@ function resolveExpiresAt(
 export function useFloatingWindows() {
   const { t } = useI18n();
   const entriesMap = reactive(new Map<string, FloatingWindowEntry>());
-  const entries = computed(() => [...entriesMap.values()].filter((e) => e.isReady));
+  const entries = shallowRef<FloatingWindowEntry[]>([]);
+
+  function rebuildEntries(): void {
+    const result: FloatingWindowEntry[] = [];
+    for (const entry of entriesMap.values()) {
+      if (entry.isReady) result.push(entry);
+    }
+    entries.value = result;
+  }
   let extent: Extent = {
     width: typeof window !== 'undefined' ? window.innerWidth : 1920,
     height: typeof window !== 'undefined' ? window.innerHeight : 1080,
@@ -271,6 +279,17 @@ export function useFloatingWindows() {
     const shouldFocusOnOpen = !existing && merged.focusOnOpen === true;
 
     entriesMap.set(key, sanitizeEntry(merged));
+    // Only rebuild entries array when window visibility changes (isReady toggle)
+    // or when the display type changes (content -> component or vice versa).
+    // Skip rebuild for prop-only updates on existing windows to avoid O(n) cost
+    // during high-frequency streaming updates (reasoning/subagent deltas).
+    const displayTypeChanged = existing && (
+      (opts.component && !existing.component) ||
+      (!opts.component && existing.component)
+    );
+    if (!existing || merged.isReady !== (existing.isReady ?? false) || displayTypeChanged) {
+      rebuildEntries();
+    }
 
     scheduleExpiry(key, merged.expiresAt);
 
@@ -316,11 +335,12 @@ export function useFloatingWindows() {
      }
 
      entriesMap.set(key, sanitizeEntry(merged));
+     rebuildEntries();
 
      if (partialOpts.status === 'completed' || partialOpts.status === 'error') {
-       scheduleExpiry(key, merged.expiresAt);
-     }
-   }
+        scheduleExpiry(key, merged.expiresAt);
+      }
+    }
 
   async function setContent(key: string, text: string, lang?: string): Promise<void> {
     const entry = entriesMap.get(key);
@@ -414,7 +434,7 @@ export function useFloatingWindows() {
     }
   }
 
-  async function close(key: string): Promise<void> {
+  async function close(key: string, skipRebuild = false): Promise<void> {
     const entry = entriesMap.get(key);
     if (!entry) return;
 
@@ -430,6 +450,7 @@ export function useFloatingWindows() {
     }
 
     entriesMap.delete(key);
+    if (!skipRebuild) rebuildEntries();
 
     if (entry.afterClose) {
       entry.afterClose();
@@ -446,8 +467,9 @@ export function useFloatingWindows() {
     // eslint-disable-next-line unicorn/no-useless-spread -- spread needed: close() deletes from entriesMap during iteration
     for (const key of [...entriesMap.keys()]) {
       if (exclude?.(key)) continue;
-      close(key);
+      void close(key, true);
     }
+    rebuildEntries();
   }
 
   function has(key: string): boolean {

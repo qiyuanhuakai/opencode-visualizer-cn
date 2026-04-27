@@ -8,54 +8,89 @@
         <div
           ref="panelEl"
           class="output-panel-scroll"
-          @scroll="handleScroll"
+          @scroll="onPanelScroll"
           @wheel="$emit('wheel', $event)"
           @touchmove="$emit('touchmove')"
         >
           <div ref="contentEl" class="output-panel-content" @click="handleContentClick">
-            <button
-              v-if="!initialRenderTrackingActive && historyHasMore"
-              type="button"
-              class="history-load-more"
-              :disabled="historyLoadingMore"
-              @click="emit('load-more-history')"
-            >
-              {{ historyLoadingMore ? t('outputPanel.loadingOlder') : t('outputPanel.loadOlder') }}
-            </button>
-            <p v-if="!initialRenderTrackingActive && historyLoadError" class="history-load-error">
-              {{ historyLoadError }}
-            </p>
-
             <div
-              v-if="initialRenderTrackingActive"
+              v-if="isLoading"
               class="absolute w-full h-full m-auto flex justify-center items-center"
             >
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
 
-            <template v-for="root in visibleRoots" :key="root.id">
-              <ThreadBlock
-                v-show="!initialRenderTrackingActive && shouldRenderRoot(root)"
-                :root="root"
-                :theme="theme"
-                :files-with-basenames="filesWithBasenames"
-                :is-reverted-preview="isRevertedPreview(root)"
-                :current-session-id="currentSessionId"
-                :session-history-meta-by-id="sessionHistoryMetaById"
-                :resolve-agent-color="resolveAgentColor"
-                :resolve-model-meta="resolveModelMeta"
-                :compute-context-percent="computeContextPercent"
-                :session-revert="sessionRevert"
-                :assistant-html="getAssistantHtml(root.id)"
-                :deferred-transition-key="getDeferredTransitionKey(root)"
-                @fork-message="emit('fork-message', $event)"
-                @revert-message="emit('revert-message', $event)"
-                @undo-revert="emit('undo-revert')"
-                @show-message-diff="emit('show-message-diff', $event)"
-                @open-image="emit('open-image', $event)"
-                @show-thread-history="emit('show-thread-history', $event)"
-                @message-rendered="handleMessageRendered"
-              />
+            <!-- Normal rendering for small sessions (≤20 threads) -->
+            <template v-if="!shouldVirtualize">
+              <template v-for="root in visibleRoots" :key="root.id">
+                <ThreadBlock
+                  v-show="!isLoading && shouldRenderRoot(root)"
+                  :root="root"
+                  :theme="theme"
+                  :files-with-basenames="filesWithBasenames"
+                  :is-reverted-preview="isRevertedPreview(root)"
+                  :current-session-id="currentSessionId"
+                  :session-history-meta-by-id="sessionHistoryMetaById"
+                  :resolve-agent-color="resolveAgentColor"
+                  :resolve-model-meta="resolveModelMeta"
+                  :compute-context-percent="computeContextPercent"
+                  :session-revert="sessionRevert"
+                  :assistant-html="getAssistantHtml(root.id)"
+                  :deferred-transition-key="getDeferredTransitionKey(root)"
+                  @fork-message="emit('fork-message', $event)"
+                  @revert-message="emit('revert-message', $event)"
+                  @undo-revert="emit('undo-revert')"
+                  @show-message-diff="emit('show-message-diff', $event)"
+                  @open-image="emit('open-image', $event)"
+                  @show-thread-history="emit('show-thread-history', $event)"
+                  @message-rendered="handleMessageRendered"
+                />
+              </template>
+            </template>
+
+            <!-- Virtual scroll for large sessions (>20 threads) -->
+            <template v-else>
+              <div
+                class="virtual-scroll-spacer"
+                :style="{ height: `${totalContentHeight}px`, position: 'relative' }"
+              >
+                <div
+                  v-for="root in visibleThreadRoots"
+                  :key="root.id"
+                  class="virtual-scroll-item"
+                  :style="{
+                    position: 'absolute',
+                    top: '0',
+                    left: '0',
+                    right: '0',
+                    transform: `translateY(${threadOffsets.map.get(root.id) ?? 0}px)`,
+                  }"
+                  :ref="(el) => setThreadRef(el as HTMLElement | null, root.id)"
+                >
+                  <ThreadBlock
+                    v-show="!isLoading && shouldRenderRoot(root)"
+                    :root="root"
+                    :theme="theme"
+                    :files-with-basenames="filesWithBasenames"
+                    :is-reverted-preview="isRevertedPreview(root)"
+                    :current-session-id="currentSessionId"
+                    :session-history-meta-by-id="sessionHistoryMetaById"
+                    :resolve-agent-color="resolveAgentColor"
+                    :resolve-model-meta="resolveModelMeta"
+                    :compute-context-percent="computeContextPercent"
+                    :session-revert="sessionRevert"
+                    :assistant-html="getAssistantHtml(root.id)"
+                    :deferred-transition-key="getDeferredTransitionKey(root)"
+                    @fork-message="emit('fork-message', $event)"
+                    @revert-message="emit('revert-message', $event)"
+                    @undo-revert="emit('undo-revert')"
+                    @show-message-diff="emit('show-message-diff', $event)"
+                    @open-image="emit('open-image', $event)"
+                    @show-thread-history="emit('show-thread-history', $event)"
+                    @message-rendered="handleMessageRendered"
+                  />
+                </div>
+              </div>
             </template>
 
             <FileRefPopup ref="fileRefPopupRef" :files="files" @open-file="handlePopupOpenFile" />
@@ -85,13 +120,13 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import FileRefPopup from './FileRefPopup.vue';
 import StatusBar from './StatusBar.vue';
 import ThreadBlock from './ThreadBlock.vue';
 import { useFileTree } from '../composables/useFileTree';
-import { useInitialRenderTracking } from '../composables/useInitialRenderTracking';
+
 import { useMessages } from '../composables/useMessages';
 import { useAssistantPreRenderer } from '../composables/useAssistantPreRenderer';
 import { useThinkingAnimation } from '../composables/useThinkingAnimation';
@@ -125,9 +160,7 @@ const props = defineProps<{
   projectColor?: string;
   currentSessionId?: string;
   sessionHistoryMetaById?: Record<string, { parentID?: string; label: string }>;
-  historyHasMore?: boolean;
-  historyLoadingMore?: boolean;
-  historyLoadError?: string;
+  isLoading?: boolean;
   sessionRevert?: {
     messageID: string;
     partID?: string;
@@ -151,8 +184,6 @@ const emit = defineEmits<{
   (event: 'show-commit', hash: string): void;
   (event: 'message-rendered'): void;
   (event: 'content-resized'): void;
-  (event: 'initial-render-complete'): void;
-  (event: 'load-more-history'): void;
 }>();
 
 const visibleRoots = computed(() => {
@@ -209,15 +240,6 @@ function getFinalAnswerContent(root: MessageInfo): string {
   return msg.getTextContent(final.id);
 }
 
-function getThreadUserRenderKey(root: MessageInfo): string {
-  return `thread-user:${root.id}`;
-}
-
-function getThreadAssistantRenderKey(root: MessageInfo): string {
-  const final = getFinalAnswer(root);
-  return getThreadAssistantRenderKeyById(root.id, final?.id);
-}
-
 function getThreadAssistantRenderKeyById(rootId: string, answerId?: string): string {
   return `thread-assistant:${rootId}:${answerId ?? 'none'}`;
 }
@@ -226,27 +248,9 @@ function getThreadTransitionKey(root: MessageInfo): string {
   return getFinalAnswer(root)?.id ?? root.id;
 }
 
-const { initialRenderTrackingActive, beginInitialRenderTracking, handleMessageRendered } =
-  useInitialRenderTracking({
-    visibleRoots,
-    hasAssistantMessages,
-    getThreadUserRenderKey,
-    getThreadAssistantRenderKey,
-    onInitialRenderComplete: () => emit('initial-render-complete'),
-    onMessageRendered: () => emit('message-rendered'),
-  });
-
-const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
-  visibleRoots,
-  theme: computed(() => props.theme),
-  filesWithBasenames,
-  getFinalAnswer,
-  hasAssistantMessages,
-  getFinalAnswerContent,
-  getThreadTransitionKey,
-  getThreadAssistantRenderKeyById,
-  onRendered: handleMessageRendered,
-});
+function handleMessageRendered() {
+  emit('message-rendered');
+}
 
 const { thinkingDisplayText } = useThinkingAnimation(
   computed(() => props.isThinking),
@@ -276,15 +280,187 @@ const fileRefPopupRef = ref<{
   closeFilePopup: () => void;
 } | null>(null);
 let contentResizeObserver: ResizeObserver | undefined;
-const LOAD_MORE_SCROLL_TOP_THRESHOLD = 40;
 let resizeNotifyFrameId: number | null = null;
 
-function handleScroll() {
+// ── Virtual scroll ──────────────────────────────────────────────
+const THREAD_ESTIMATED_HEIGHT = 240;
+const OVERSCAN_COUNT = 2;
+
+const scrollTop = ref(0);
+const containerHeight = ref(0);
+const measuredHeights = shallowRef<Map<string, number>>(new Map());
+let pendingScrollTop = 0;
+let scrollFrameId: number | null = null;
+
+let containerHeightFrameId: number | null = null;
+let containerResizeObserver: ResizeObserver | undefined;
+
+let threadResizeObserver: ResizeObserver | undefined;
+const observedThreadElements = new Map<Element, string>();
+let heightUpdateFrameId: number | null = null;
+const pendingHeightUpdates = new Map<string, number>();
+
+const shouldVirtualize = computed(() => visibleRoots.value.length > 20);
+
+function getThreadHeight(root: MessageInfo): number {
+  if (!shouldRenderRoot(root)) return 0;
+  return measuredHeights.value.get(root.id) ?? THREAD_ESTIMATED_HEIGHT;
+}
+
+const threadOffsets = computed(() => {
+  const map = new Map<string, number>();
+  const offsets: number[] = [];
+  let offset = 0;
+  for (const root of visibleRoots.value) {
+    map.set(root.id, offset);
+    offsets.push(offset);
+    offset += getThreadHeight(root);
+  }
+  return { map, offsets, totalHeight: offset };
+});
+
+const totalContentHeight = computed(() => threadOffsets.value.totalHeight);
+
+const visibleThreadRoots = computed(() => {
+  const roots = visibleRoots.value;
+  if (roots.length <= 20) return roots;
+
+  const { offsets } = threadOffsets.value;
+
+  // Binary search for first visible item
+  let lo = 0;
+  let hi = roots.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const itemBottom = offsets[mid] + getThreadHeight(roots[mid]);
+    if (itemBottom < scrollTop.value) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const startIdx = Math.max(0, lo - OVERSCAN_COUNT);
+
+  // Find last visible item
+  let endIdx = lo;
+  while (endIdx < roots.length && offsets[endIdx] < scrollTop.value + containerHeight.value) {
+    endIdx++;
+  }
+  endIdx = Math.min(roots.length, endIdx + OVERSCAN_COUNT);
+
+  return roots.slice(startIdx, endIdx);
+});
+
+const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
+  visibleRoots,
+  theme: computed(() => props.theme),
+  filesWithBasenames,
+  getFinalAnswer,
+  hasAssistantMessages,
+  getFinalAnswerContent,
+  getThreadTransitionKey,
+  getThreadAssistantRenderKeyById,
+  onRendered: handleMessageRendered,
+});
+
+function onPanelScroll() {
   const panel = panelEl.value;
   if (!panel) return;
-  if (!historyHasMore.value || historyLoadingMore.value) return;
-  if (panel.scrollTop > LOAD_MORE_SCROLL_TOP_THRESHOLD) return;
-  emit('load-more-history');
+
+  // RAF-throttled scroll tracking for virtual scroll
+  pendingScrollTop = panel.scrollTop;
+  if (scrollFrameId !== null) return;
+  scrollFrameId = requestAnimationFrame(() => {
+    scrollFrameId = null;
+    scrollTop.value = pendingScrollTop;
+  });
+}
+
+function updateContainerHeight() {
+  if (!panelEl.value) return;
+  const nextHeight = panelEl.value.clientHeight;
+  if (containerHeight.value === nextHeight) return;
+  containerHeight.value = nextHeight;
+}
+
+function scheduleContainerHeightUpdate() {
+  if (containerHeightFrameId !== null) return;
+  containerHeightFrameId = requestAnimationFrame(() => {
+    containerHeightFrameId = null;
+    updateContainerHeight();
+  });
+}
+
+function setupContainerResizeObserver() {
+  containerResizeObserver?.disconnect();
+  containerResizeObserver = undefined;
+  if (typeof ResizeObserver === 'undefined') return;
+  const target = panelEl.value;
+  if (!target) return;
+  containerResizeObserver = new ResizeObserver(() => {
+    scheduleContainerHeightUpdate();
+  });
+  containerResizeObserver.observe(target);
+}
+
+function setupThreadResizeObserver() {
+  threadResizeObserver?.disconnect();
+  observedThreadElements.clear();
+  threadResizeObserver = undefined;
+  if (typeof ResizeObserver === 'undefined') return;
+
+  threadResizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const rootId = observedThreadElements.get(entry.target);
+      if (!rootId) continue;
+      pendingHeightUpdates.set(rootId, entry.contentRect.height);
+    }
+    if (heightUpdateFrameId !== null) return;
+    heightUpdateFrameId = requestAnimationFrame(() => {
+      heightUpdateFrameId = null;
+      if (pendingHeightUpdates.size === 0) return;
+      const newHeights = new Map(measuredHeights.value);
+      for (const [rootId, height] of pendingHeightUpdates) {
+        newHeights.set(rootId, height);
+      }
+      pendingHeightUpdates.clear();
+      measuredHeights.value = newHeights;
+      emit('content-resized');
+    });
+  });
+}
+
+function observeThreadElement(el: HTMLElement | null, rootId: string) {
+  if (!el || !threadResizeObserver) return;
+  // Clean up any previous observation for this rootId
+  for (const [observedEl, observedId] of observedThreadElements) {
+    if (observedId === rootId && observedEl !== el) {
+      threadResizeObserver.unobserve(observedEl);
+      observedThreadElements.delete(observedEl);
+    }
+  }
+  observedThreadElements.set(el, rootId);
+  threadResizeObserver.observe(el);
+}
+
+function unobserveThreadElement(el: Element | null) {
+  if (!el || !threadResizeObserver) return;
+  observedThreadElements.delete(el);
+  threadResizeObserver.unobserve(el);
+}
+
+function setThreadRef(el: unknown, rootId: string) {
+  if (el instanceof HTMLElement) {
+    observeThreadElement(el, rootId);
+  } else if (el === null) {
+    for (const [observedEl, observedId] of observedThreadElements) {
+      if (observedId === rootId) {
+        unobserveThreadElement(observedEl);
+        break;
+      }
+    }
+  }
 }
 
 function handleContentClick(event: MouseEvent) {
@@ -324,41 +500,82 @@ watch(contentEl, () => {
 
 onMounted(() => {
   setupContentResizeObserver();
+  setupContainerResizeObserver();
+  setupThreadResizeObserver();
   nextTick(() => {
-    beginInitialRenderTracking();
     emit('content-resized');
+    updateContainerHeight();
   });
 });
 
 onBeforeUnmount(() => {
   contentResizeObserver?.disconnect();
   contentResizeObserver = undefined;
+  containerResizeObserver?.disconnect();
+  containerResizeObserver = undefined;
+  threadResizeObserver?.disconnect();
+  threadResizeObserver = undefined;
+  observedThreadElements.clear();
   if (resizeNotifyFrameId !== null) {
     cancelAnimationFrame(resizeNotifyFrameId);
     resizeNotifyFrameId = null;
   }
+  if (scrollFrameId !== null) {
+    cancelAnimationFrame(scrollFrameId);
+    scrollFrameId = null;
+  }
+  if (containerHeightFrameId !== null) {
+    cancelAnimationFrame(containerHeightFrameId);
+    containerHeightFrameId = null;
+  }
+  if (heightUpdateFrameId !== null) {
+    cancelAnimationFrame(heightUpdateFrameId);
+    heightUpdateFrameId = null;
+  }
   fileRefPopupRef.value?.closeFilePopup();
 });
 
+function scrollToBottom() {
+  const panel = panelEl.value;
+  if (!panel) return;
+
+  // 对于虚拟滚动，scrollHeight 在高度测量完成前可能不准确。
+  // 使用 RAF 循环持续滚动到底部，直到位置稳定。
+  let attempts = 0;
+  const maxAttempts = 20;
+  let lastScrollTop = -1;
+
+  function tick() {
+    if (attempts >= maxAttempts) return;
+    attempts++;
+
+    const target = panel!.scrollHeight;
+    if (panel!.scrollTop !== target) {
+      panel!.scrollTop = target;
+    }
+
+    // 如果 scrollTop 不再变化，说明已经稳定
+    if (panel!.scrollTop === lastScrollTop) return;
+    lastScrollTop = panel!.scrollTop;
+
+    requestAnimationFrame(tick);
+  }
+
+  tick();
+}
+
 const shellStyle = computed(() => {
   if (!props.projectColor) return undefined;
-  return { '--project-tint': props.projectColor } as Record<string, string>;
+  return {
+    '--project-tint': props.projectColor,
+  } as Record<string, string>;
 });
 
-const theme = computed(() => props.theme);
-const resolveAgentColor = computed(() => props.resolveAgentColor);
-const resolveModelMeta = computed(() => props.resolveModelMeta);
-const computeContextPercent = computed(() => props.computeContextPercent);
-const sessionRevert = computed(() => props.sessionRevert);
 const statusText = computed(() => props.statusText);
 const isStatusError = computed(() => props.isStatusError);
 const isRetryStatus = computed(() => props.isRetryStatus);
 const isFollowing = computed(() => props.isFollowing);
-const historyHasMore = computed(() => Boolean(props.historyHasMore));
-const historyLoadingMore = computed(() => Boolean(props.historyLoadingMore));
-const historyLoadError = computed(() => props.historyLoadError?.trim() ?? '');
-
-defineExpose({ panelEl });
+defineExpose({ panelEl, scrollToBottom });
 </script>
 
 <style scoped>
@@ -423,34 +640,6 @@ defineExpose({ panelEl });
   flex-direction: column;
   gap: 6px;
   padding: 8px 12px 12px;
-}
-
-.history-load-more {
-  align-self: center;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--theme-text-secondary, #cbd5e1);
-  background: color-mix(in srgb, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)) 92%, transparent);
-  border: 1px solid var(--theme-border-default, #334155);
-  border-radius: 999px;
-  padding: 7px 12px;
-  cursor: pointer;
-}
-
-.history-load-more:hover:not(:disabled) {
-  background: var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.95));
-}
-
-.history-load-more:disabled {
-  opacity: 0.7;
-  cursor: default;
-}
-
-.history-load-error {
-  align-self: center;
-  color: var(--theme-text-danger, #fca5a5);
-  font-size: 12px;
-  margin: 0;
 }
 
 .output-panel-content :deep(.markdown-host code.file-ref) {
@@ -526,6 +715,14 @@ defineExpose({ panelEl });
 
 .follow-button:hover {
   background: var(--theme-output-active-bg, rgba(30, 41, 59, 0.98));
+}
+
+.virtual-scroll-spacer {
+  min-height: 0;
+}
+
+.virtual-scroll-item {
+  will-change: transform;
 }
 
 .app-loading-spinner {
