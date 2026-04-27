@@ -15,33 +15,11 @@ defineProps<{
   theme: string;
 }>();
 
-const origin = window.location.origin;
-const configPath = '`.config/opencode/opencode.json`';
-
 const markdown = computed(() => {
   return `\
 # ${t('welcome.title')}
 
-${t('welcome.startServer')}
-
-\`\`\`bash
-opencode serve --cors ${origin}
-\`\`\`
-
-${t('welcome.addConfig', { configPath })}
-
-\`\`\`json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "server": {
-    "cors": ["${origin}"]
-  }
-}
-\`\`\`
-${t('welcome.andThen')}
-\`\`\`bash
-opencode serve
-\`\`\`
+${t('welcome.description')}
 `;
 });
 </script>
