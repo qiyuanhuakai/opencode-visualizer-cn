@@ -3,6 +3,12 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [v0.4.2 released]
+
+### Bug 修复
+
+- [x] 修复了electron应用无法连接vis_bridge的问题
+
 ## [v0.4.1 released]
 
 ### 性能优化

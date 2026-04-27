@@ -7,7 +7,7 @@ import { connect as connectTls } from 'node:tls';
 import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
 
-const DEFAULT_HOST = '127.0.0.1';
+const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_PORT = 23004;
 const DEFAULT_PATH = '/codex';
 const DEFAULT_CODEX_WS_URL = 'ws://127.0.0.1:4500';
@@ -123,6 +123,7 @@ function isAllowedOrigin(origin) {
   if (!origin) return true;
   try {
     const parsed = new URL(origin);
+    if (parsed.protocol === 'file:') return true;
     return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isLoopbackHostname(parsed.hostname);
   } catch {
     return false;
