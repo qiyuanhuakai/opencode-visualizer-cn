@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, net, protocol, shell } from 'electron';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -7,6 +7,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 const PERSISTENT_STORAGE_FILE = 'renderer-storage.json';
 const DEV_SERVER_URL = 'http://127.0.0.1:5173';
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      secure: true,
+      standard: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
 
 let mainWindow = null;
 let persistentStorageCache = null;
@@ -102,7 +114,7 @@ function createWindow() {
     mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadURL('app://index.html');
   }
 
   mainWindow.once('ready-to-show', () => {
@@ -123,7 +135,7 @@ function createWindow() {
 
   const appUrl = isDev
     ? DEV_SERVER_URL
-    : path.join(__dirname, '../dist/index.html');
+    : 'app://index.html';
 
   if (isDev) {
     mainWindow.webContents.on(
@@ -169,6 +181,13 @@ function createWindow() {
 
 app.whenReady().then(() => {
   loadPersistentStorage();
+
+  protocol.handle('app', (request) => {
+    const { pathname } = new URL(request.url);
+    const filePath = path.join(__dirname, '..', 'dist', pathname === '/' ? 'index.html' : pathname);
+    return net.fetch(`file://${filePath}`);
+  });
+
   createWindow();
 
   app.on('activate', () => {
