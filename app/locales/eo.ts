@@ -1017,10 +1017,8 @@ const messages: LocaleMessages = {
     scrollToLatest: 'Rulumi al plej freŝa',
   },
   welcome: {
-    title: 'Kiel Uzi OpenCode Vizualigilo',
-    startServer: 'Starti la OpenCode-servilon kun CORS ŝaltita:',
-    addConfig: 'aŭ aldonu ĉi tion al via {configPath}:',
-    andThen: 'kaj poste:',
+    title: 'Bonvenon al OpenCode Vizualigilo',
+    description: 'Bonvolu enigi la servilan adreson ĉe la supro por komenci.',
   },
   viewers: {
     content: {

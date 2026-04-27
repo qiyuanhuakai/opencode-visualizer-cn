@@ -66,7 +66,7 @@ const rootClass = computed(() => {
 
 .code-content :deep(.code-row) {
   display: grid;
-  grid-template-columns: max-content max-content 1fr;
+  grid-template-columns: max-content max-content auto;
   align-items: start;
 }
 

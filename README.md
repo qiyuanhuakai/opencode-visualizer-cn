@@ -33,7 +33,7 @@
 |---|---|---|
 | **国际化 (i18n)** | 完整 i18n 框架支持，支持简体中文、繁体中文、日语、世界语 | ✅ 已上线 |
 | **字体管理** | 支持设置 Shell 字体、界面等宽字体，支持设置终端/代码/消息/UI 字体大小，系统字体自动发现 | 🅱️ Beta |
-| **供应商与模型管理** | 查看/启用/禁用本地模型和供应商 | 🅱️ Beta |
+| **供应商与模型管理** | 查看/启用/禁用本地模型和供应商；支持所有提供商的 Web 端连接、自定义提供商连接；完善的 i18n 支持 | ✅ 已上线 |
 | **状态监控** | 查看服务器、MCP、LSP、Plugin、Skills 状态；支持关闭 MCP 连接；实时显示当前会话 Token 消耗（上下文限制、输入/输出/推理 Token、使用率进度条） | ✅ 已上线 |
 | **主题设置** | 自定义各卡片不同组件颜色 | 🅱️ Beta |
 | **编辑器集成** | 使用系统 `$EDITOR` 打开文本文件 | ✅ 已上线 |
@@ -45,8 +45,9 @@
 | **悬浮窗管理** | 全面覆盖的关闭/最小化按钮，底部 Dock 栏存放最小化窗口 | ✅ 已上线 |
 | **悬浮窗预览自动换行** | 在设置中开启/关闭，防止长行代码影响阅读（文件预览、diff 等） | ✅ 已上线 |
 | **快捷命令** | 支持 `@` 显式召唤代理 | ✅ 已上线 |
-| **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速 | ✅ 已上线 |
+| **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速、输出面板虚拟滚动、悬浮窗弹出性能优化 | ✅ 已上线 |
 | **桌面应用** | Electron 桌面端打包，支持 Windows / macOS / Linux | ✅ 已上线 |
+| **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板；设置中开启实验性功能 | 🅰️ Alpha |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **路线图与计划**：请参阅 [RoadMap.md](./RoadMap.md)
@@ -98,6 +99,38 @@ node server.js
 建议使用 `nohup node server.js 2>&1 &` 将服务器放在后台持久运行。
 
 然后打开 `http://localhost:23003`。
+
+---
+
+## vis_bridge 使用说明
+
+vis_bridge 是一个轻量桥接器，用于将 Codex app-server 的 JSON-RPC 协议转发到 Vis 前端，使 Codex Panel（实验性功能）能够正常工作。
+
+### 安装 Codex CLI
+
+确保已安装 OpenAI Codex CLI，并且 `codex` 命令在 PATH 中可用：
+
+```bash
+codex --version
+```
+
+### 启动 vis_bridge
+
+
+```bash
+codex app-server --listen ws://127.0.0.1:4500
+
+node vis_bridge.js --target ws://127.0.0.1:4500
+```
+详情可以查看vis_bridge.js的help内容
+### 使用 Codex Panel
+
+1. 进入 Vis 的"设置"
+2. 在"实验性功能"区域开启"Codex Panel"
+3. 右上角会出现codex panel按钮
+4. 点击按钮并连接vis_bridge即可与codex panel交互
+
+> ⚠️ **注意**：Codex Panel 目前为 Alpha 状态，功能可能不稳定。需要有效的 OpenAI API 密钥和 Codex CLI 权限。
 
 ---
 
@@ -223,7 +256,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 |---|---|---|
 | **Internationalization (i18n)** | Full i18n framework supporting English, Simplified Chinese, Traditional Chinese, Japanese, and Esperanto | ✅ Available |
 | **Font Management** | Shell font, UI monospace font, system font auto-discovery | 🅱️ Beta |
-| **Provider & Model Management** | View/enable/disable local models and providers | 🅱️ Beta |
+| **Provider & Model Management** | View/enable/disable local models and providers; support all provider Web connections and custom provider connections; full i18n support | ✅ Available |
 | **Status Monitor** | View server, MCP, LSP, Plugin, Skills status; close MCP connections; real-time session token usage (context limit, input/output/reasoning tokens, usage progress bar) | ✅ Available |
 | **Theme Settings** | Customize colors for different card components | 🅱️ Beta |
 | **Editor Integration** | Open text files with system `$EDITOR` | ✅ Available |
@@ -234,8 +267,9 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Rename Session** | Rename Session. ✅ Available |
 | **Floating Window Management** | Close/minimize buttons for all popups, bottom Dock bar | ✅ Available |
 | **Quick Commands** | `@` shortcut to explicitly summon agents | ✅ Available |
-| **Performance** | Lazy loading for large sessions, background hydration, faster cold start | ✅ Available |
+| **Performance** | Lazy loading for large sessions, background hydration, faster cold start, output panel virtual scrolling, floating window popup optimization | ✅ Available |
 | **Desktop App** | Electron desktop packaging for Windows / macOS / Linux | ✅ Available |
+| **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel; experimental features toggle in settings | 🅰️ Alpha |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **Roadmap & Plans**: [RoadMap.md](./RoadMap.md)
@@ -287,6 +321,39 @@ node server.js
 We recommend using `nohup node server.js 2>&1 &` to run the server persistently in the background.
 
 Then open `http://localhost:23003`.
+
+---
+
+## vis_bridge Usage
+
+vis_bridge is a lightweight bridge that forwards the Codex app-server JSON-RPC protocol to the Vis frontend, enabling the Codex Panel (experimental feature) to work properly.
+
+### Install Codex CLI
+
+Ensure you have the OpenAI Codex CLI installed and the `codex` command is available in your PATH:
+
+```bash
+codex --version
+```
+
+### Start vis_bridge
+
+```bash
+codex app-server --listen ws://127.0.0.1:4500
+
+node vis_bridge.js --target ws://127.0.0.1:4500
+```
+
+For more details, check the help content of `vis_bridge.js`.
+
+### Using Codex Panel
+
+1. Go to Vis "Settings"
+2. Enable "Codex Panel" in the "Experimental Features" section
+3. A Codex Panel button will appear in the top-right corner
+4. Click the button and connect to vis_bridge to interact with Codex Panel
+
+> ⚠️ **Note**: Codex Panel is currently in Alpha and features may be unstable. Requires a valid OpenAI API key and Codex CLI permissions.
 
 ---
 

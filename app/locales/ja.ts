@@ -1017,10 +1017,8 @@ const messages: LocaleMessages = {
     scrollToLatest: '最新にスクロール',
   },
   welcome: {
-    title: 'OpenCode Visualizerの使い方',
-    startServer: 'CORSを有効にしてOpenCodeサーバーを起動:',
-    addConfig: 'または{configPath}に以下を追加:',
-    andThen: 'そして:',
+    title: 'OpenCode Visualizerへようこそ',
+    description: '上部にサーバーアドレスを入力してください。',
   },
   viewers: {
     content: {

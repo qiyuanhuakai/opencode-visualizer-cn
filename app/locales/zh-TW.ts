@@ -1017,10 +1017,8 @@ const messages: LocaleMessages = {
     scrollToLatest: '捲動至最新',
   },
   welcome: {
-    title: '如何使用 OpenCode Visualizer',
-    startServer: '啟動 OpenCode 伺服器並啟用 CORS:',
-    addConfig: '或者新增以下內容到 {configPath}:',
-    andThen: '然後執行:',
+    title: '歡迎使用 OpenCode Visualizer',
+    description: '請在頂部輸入伺服器地址以開始。',
   },
   viewers: {
     content: {
