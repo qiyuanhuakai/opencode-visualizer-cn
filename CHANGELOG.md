@@ -3,6 +3,13 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [v0.4.4 released]
+
+### Bug 修复
+
+- [x] 修复了status monitor可能导致内存泄漏的问题
+- [x] 修复了因上个修复导致status monitor打不开的问题
+
 ## [v0.4.3 released]
 
 ### Bug 修复

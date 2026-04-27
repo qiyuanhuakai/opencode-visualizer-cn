@@ -45,6 +45,7 @@ const togglingMcp = ref<string | null>(null);
 
 let clickHandler: ((e: MouseEvent) => void) | null = null;
 let escHandler: ((e: KeyboardEvent) => void) | null = null;
+let clickTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
 function bindEvents() {
   escHandler = (e: KeyboardEvent) => {
@@ -54,6 +55,10 @@ function bindEvents() {
 }
 
 function unbindEvents() {
+  if (clickTimeoutId !== null) {
+    clearTimeout(clickTimeoutId);
+    clickTimeoutId = null;
+  }
   if (clickHandler) {
     document.removeEventListener('click', clickHandler);
     clickHandler = null;
@@ -67,13 +72,16 @@ function unbindEvents() {
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
     activeTab.value = 'server';
-    // Bind click handler synchronously to avoid race conditions with rapid open/close
-    clickHandler = (e: MouseEvent) => {
-      if (popoverRef.value && !popoverRef.value.contains(e.target as Node)) {
-        emit('close');
-      }
-    };
-    document.addEventListener('click', clickHandler);
+    // Defer click binding to skip the current click event that opened the panel
+    clickTimeoutId = setTimeout(() => {
+      clickTimeoutId = null;
+      clickHandler = (e: MouseEvent) => {
+        if (popoverRef.value && !popoverRef.value.contains(e.target as Node)) {
+          emit('close');
+        }
+      };
+      document.addEventListener('click', clickHandler);
+    }, 0);
     bindEvents();
     refresh();
   } else {
