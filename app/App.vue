@@ -7612,6 +7612,7 @@ onMounted(() => {
       const filePath = ptyToFileMap.get(id);
       if (filePath) {
         void refreshOpenFileViewersForPath(filePath);
+        feed({ file: filePath, event: 'change' });
         ptyToFileMap.delete(id);
       }
       lingerAndRemoveShellWindow(id);
