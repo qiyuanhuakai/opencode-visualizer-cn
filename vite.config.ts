@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import path from 'node:path';
 import vue from '@vitejs/plugin-vue';
 import { defineConfig } from 'vitest/config';
 
@@ -11,6 +12,9 @@ export default defineConfig({
   resolve: {
     alias: {
       buffer: 'buffer/',
+      fs: path.resolve(__dirname, 'app/utils/node-polyfill.ts'),
+      path: path.resolve(__dirname, 'app/utils/node-polyfill.ts'),
+      crypto: path.resolve(__dirname, 'app/utils/node-polyfill.ts'),
     },
   },
   server: {

@@ -106,9 +106,6 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
         last.theme === theme &&
         last.locale === localeKey
       ) {
-        // Notify that cached HTML is already available so initial render
-        // tracking can resolve the assistant key (prevents stuck spinner
-        // when the same session is reloaded by FORK / REVERT / UNDO).
         if (assistantHtmlCache.has(root.id)) {
           options.onRendered(options.getThreadAssistantRenderKeyById(root.id, answerId));
         }

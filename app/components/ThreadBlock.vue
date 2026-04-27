@@ -557,6 +557,7 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   width: 100%;
   box-sizing: border-box;
   margin: 0;
+  contain: layout style paint;
 }
 
 .thread-block.is-reverted-preview > .thread-user {

@@ -450,14 +450,27 @@ onBeforeUnmount(() => {
   search.close();
 });
 
+// Only watch x/y for external drag position sync — deep watch on the entire
+// entry object is O(n) per window and causes severe lag with many windows.
 watch(
-  () => props.entry,
+  () => props.entry.x,
   () => {
     if (dragTarget) {
+      dragX = props.entry.x;
       applyTransform(dragX, dragY);
     }
   },
-  { deep: true, flush: 'post' },
+  { flush: 'post' },
+);
+watch(
+  () => props.entry.y,
+  () => {
+    if (dragTarget) {
+      dragY = props.entry.y;
+      applyTransform(dragX, dragY);
+    }
+  },
+  { flush: 'post' },
 );
 
 // Resize handling

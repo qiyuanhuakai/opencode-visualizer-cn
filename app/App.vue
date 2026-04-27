@@ -119,12 +119,9 @@
                     :resolve-model-meta="resolveModelMetaForPath"
                     :compute-context-percent="computeContextPercent"
                     :session-revert="sessionRevert"
-                    :history-has-more="historyHasMore"
-                    :history-loading-more="historyLoadingMore"
-                    :history-load-error="historyLoadError"
+                    :is-loading="isLoadingHistory"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
-                    @load-more-history="handleOutputPanelLoadMoreHistory"
                     @fork-message="handleForkMessage"
                     @revert-message="handleRevertMessage"
                     @undo-revert="handleUndoRevert"
@@ -135,7 +132,6 @@
                     @open-image="handleOpenImage"
                     @open-file="openFileViewer"
                     @content-resized="handleOutputPanelContentResized"
-                    @initial-render-complete="handleOutputPanelInitialRenderComplete"
                   />
                 </div>
               </div>
@@ -451,6 +447,7 @@ import { useTodos, type TodoItem } from './composables/useTodos';
 import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useMessages } from './composables/useMessages';
+import { pendingWorkerRenders } from './composables/useRenderState';
 import { useOpenCodeApi } from './composables/useOpenCodeApi';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
@@ -540,12 +537,7 @@ const TERM_INNER_PADDING_X_PX = 4;
 const TERM_INNER_PADDING_Y_PX = 4;
 const TERM_GUTTER_WIDTH_EM = 3.2;
 const TRANSPARENT_TERMINAL_BACKGROUND = 'rgba(0, 0, 0, 0)';
-const INITIAL_HISTORY_LIMIT = 12;
-const MANUAL_HISTORY_LOAD_STEP = 200;
-const AUTO_VIEWPORT_HISTORY_LOAD_STEP = 160;
-const AUTO_BACKGROUND_HISTORY_LOAD_STEP = 240;
-const AUTO_BACKGROUND_HISTORY_DELAY_MS = 32;
-const HISTORY_VIEWPORT_FILL_THRESHOLD_PX = 24;
+
 const SHELL_LINGER_MS = 1000;
 const TREE_DATA_CACHE_TTL_MS = 15000;
 const COMMIT_SNAPSHOT_SCRIPT = [
@@ -628,8 +620,8 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key
     // Only files with index changes (x != ' ' and x != '?')
     filterLines = ['  [ "$x" = " " ] && continue', '  [ "$x" = "?" ] && continue'];
   } else if (mode === 'changes') {
-    // Only files with worktree changes (y != ' ' and y != '?')
-    filterLines = ['  [ "$y" = " " ] && continue', '  [ "$y" = "?" ] && continue'];
+    // Only files with worktree changes (y != ' '); include untracked (y='?')
+    filterLines = ['  [ "$y" = " " ] && continue'];
    } else {
      // All: include all files (git status already filters to changed files)
      filterLines = [];
@@ -685,7 +677,7 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key
     'export GIT_PAGER=cat',
     'export GIT_TERMINAL_PROMPT=0',
     `printf "##TITLE\\t%s\\n" ${escapedTitle}`,
-    'git --no-pager status --porcelain=v1 2>/dev/null | while IFS= read -r line; do',
+    'git --no-pager status --porcelain=v1 -uall 2>/dev/null | while IFS= read -r line; do',
     '  [ -z "$line" ] && continue',
     '  x=${line%"${line#?}"}',
     '  rest=${line#?}',
@@ -694,20 +686,22 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key
     '  path=${line#???}',
     '  old=$path',
     '  new=$path',
-    '  code=M',
-    '  if [ "$x" = "D" ] || [ "$y" = "D" ]; then',
-    '    code=D',
-    '  elif [ "$x" = "A" ]; then',
-    '    code=A',
-    '  elif [ "$x" = "R" ] || [ "$y" = "R" ]; then',
-    '    code=R',
-    '    old=${path%% -> *}',
-    '    new=${path#* -> }',
-    '  elif [ "$x" = "C" ] || [ "$y" = "C" ]; then',
-    '    code=C',
-    '    old=${path%% -> *}',
-    '    new=${path#* -> }',
-    '  fi',
+  '  code=M',
+  '  if [ "$x" = "?" ] && [ "$y" = "?" ]; then',
+  '    code=A',
+  '  elif [ "$x" = "D" ] || [ "$y" = "D" ]; then',
+  '    code=D',
+  '  elif [ "$x" = "A" ]; then',
+  '    code=A',
+  '  elif [ "$x" = "R" ] || [ "$y" = "R" ]; then',
+  '    code=R',
+  '    old=${path%% -> *}',
+  '    new=${path#* -> }',
+  '  elif [ "$x" = "C" ] || [ "$y" = "C" ]; then',
+  '    code=C',
+  '    old=${path%% -> *}',
+  '    new=${path#* -> }',
+  '  fi',
     '  printf "##FILE\\t%s\\t%s\\n" "$code" "$new"',
     ...beforeLines,
     ...afterLines,
@@ -807,6 +801,7 @@ const showDockPanel = computed(
 // Permission/question (closable: false, expiry: Infinity) are excluded.
 watch(suppressAutoWindows, (suppressed) => {
   if (!suppressed) return;
+  const keysToClose = new Set<string>();
   for (const entry of fw.entries.value) {
     if (
       !entry.closable &&
@@ -814,8 +809,11 @@ watch(suppressAutoWindows, (suppressed) => {
         entry.key.startsWith('reasoning:') ||
         entry.key.startsWith('subagent:'))
     ) {
-      void fw.close(entry.key);
+      keysToClose.add(entry.key);
     }
+  }
+  if (keysToClose.size > 0) {
+    fw.closeAll({ exclude: (key) => !keysToClose.has(key) });
   }
 });
 
@@ -847,7 +845,7 @@ const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
 const appEl = ref<HTMLDivElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
-const outputPanelRef = ref<{ panelEl: HTMLDivElement | null } | null>(null);
+const outputPanelRef = ref<{ panelEl: HTMLDivElement | null; scrollToBottom: () => void } | null>(null);
 const topPanelRef = ref<{
   openSessionDropdown: () => void;
   closeSessionDropdown: () => void;
@@ -861,7 +859,6 @@ const {
   enableFollow,
   resetFollow,
   resumeFollow,
-  scrollToBottom: scrollOutputPanelToBottom,
   notifyContentChange,
 } = useAutoScroller(outputPanelContainerEl, outputPanelScrollMode, {
   bottomThresholdPx: FOLLOW_THRESHOLD_PX,
@@ -870,18 +867,8 @@ const {
   smoothOnInitialFollow: false,
 });
 
-function handleOutputPanelInitialRenderComplete() {
-  nextTick(() => {
-    scrollOutputPanelToBottom(false);
-    syncFloatingExtent();
-    inputPanelRef.value?.focus();
-    scheduleHistoryAutoload();
-  });
-}
-
 function handleOutputPanelResumeFollow() {
   resumeFollow();
-  scheduleHistoryAutoload(0);
 }
 
 function handleOutputPanelMessageRendered() {
@@ -890,7 +877,6 @@ function handleOutputPanelMessageRendered() {
 
 function handleOutputPanelContentResized() {
   notifyContentChange();
-  scheduleHistoryAutoload();
 }
 
 function scheduleFloatingExtentSync() {
@@ -914,62 +900,11 @@ function flushResizeSideEffects() {
   scheduleShellFitAllNextFrame();
 }
 
-function clearHistoryAutoloadTimer() {
-  if (historyAutoLoadTimerId === null) return;
-  clearTimeout(historyAutoLoadTimerId);
-  historyAutoLoadTimerId = null;
-}
-
-function scheduleHistoryAutoload(delayMs = AUTO_BACKGROUND_HISTORY_DELAY_MS) {
-  clearHistoryAutoloadTimer();
-  const sessionId = selectedSessionId.value;
-  if (!sessionId) return;
-  if (!historyHasMore.value) return;
-  if (historyLoadingMore.value) return;
-  historyAutoLoadTimerId = setTimeout(() => {
-    historyAutoLoadTimerId = null;
-    void maybeAutoloadHistory();
-  }, delayMs);
-}
-
-function getOutputPanelViewportStatus() {
-  const panel = outputPanelRef.value?.panelEl;
-  if (!panel) return null;
-  const remaining = panel.scrollHeight - panel.clientHeight;
-  return {
-    remaining,
-    isViewportFilled: remaining > HISTORY_VIEWPORT_FILL_THRESHOLD_PX,
-  };
-}
-
-async function maybeAutoloadHistory() {
-  const sessionId = selectedSessionId.value;
-  if (!sessionId) return;
-  if (!historyHasMore.value) return;
-  if (historyLoadingMore.value) return;
-  if (!isFollowing.value) return;
-  const viewportStatus = getOutputPanelViewportStatus();
-  const step = viewportStatus?.isViewportFilled
-    ? AUTO_BACKGROUND_HISTORY_LOAD_STEP
-    : AUTO_VIEWPORT_HISTORY_LOAD_STEP;
-  await loadMoreHistory({ step });
-  if (!selectedSessionId.value || selectedSessionId.value !== sessionId) return;
-  if (!historyHasMore.value) return;
-  scheduleHistoryAutoload(viewportStatus?.isViewportFilled ? AUTO_BACKGROUND_HISTORY_DELAY_MS : 0);
-}
-
-function handleOutputPanelLoadMoreHistory() {
-  void loadMoreHistory();
-}
-
 const runningToolIds = reactive(new Set<string>());
 
 const userMessageMetaById = ref<Record<string, UserMessageMeta>>({});
 const userMessageTimeById = ref<Record<string, number>>({});
-const historyLoadLimit = ref(INITIAL_HISTORY_LIMIT);
-const historyHasMore = ref(false);
-const historyLoadingMore = ref(false);
-const historyLoadError = ref('');
+const isLoadingHistory = ref(false);
 const globalEventUnsubscribers: Array<() => void> = [];
 
 const inputResizeState = ref<{
@@ -1010,7 +945,7 @@ let shellFitAllFrameId: number | null = null;
 let windowResizeFrameId: number | null = null;
 let pendingPointerEvent: PointerEvent | null = null;
 let pointerMoveFrameId: number | null = null;
-let historyAutoLoadTimerId: ReturnType<typeof setTimeout> | null = null;
+
 const notificationSessionOrder = ref<string[]>([]);
 const notificationPermissionRequested = ref(false);
 
@@ -1753,6 +1688,7 @@ const {
   gitStatusByPath,
   refreshGitStatus,
   reloadTree,
+  feed,
   invalidateDirectorySidebarCache,
   toggleTreeDirectory,
   selectTreeFile,
@@ -4580,10 +4516,8 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
   const requestedDirectory = !isSubagentMessage ? getSelectedWorktreeDirectory() : '';
   try {
     const directory = getSelectedWorktreeDirectory();
-    const limit = !isSubagentMessage ? historyLoadLimit.value : undefined;
     const data = (await opencodeApi.listSessionMessages(sessionId, {
       directory: directory || undefined,
-      limit,
     })) as Array<Record<string, unknown>>;
     if (!Array.isArray(data)) return;
     if (!isSubagentMessage) {
@@ -4591,27 +4525,13 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       if (selectedSessionId.value !== sessionId) return;
       if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
     }
-    await msg.loadHistoryIncrementally(data, {
-      chunkSize: 40,
-      shouldContinue: () => {
-        if (isSubagentMessage) return true;
-        return (
-          requestId === primaryHistoryRequestId &&
-          selectedSessionId.value === sessionId &&
-          getSelectedWorktreeDirectory() === requestedDirectory
-        );
-      },
-    });
+    // 全量加载，避免消息在加载过程中逐步显示导致未加载内容的卡片残留
+    msg.loadHistory(data);
 
     if (!isSubagentMessage) {
       if (requestId !== primaryHistoryRequestId) return;
       if (selectedSessionId.value !== sessionId) return;
       if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
-    }
-
-    if (!isSubagentMessage) {
-      historyLoadError.value = '';
-      historyHasMore.value = typeof limit === 'number' && data.length >= limit;
     }
 
     data.forEach((message) => {
@@ -4624,13 +4544,7 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       storeUserMessageTime(id, messageTime);
     });
 
-    if (!isSubagentMessage) {
-      notifyContentChange(false);
-    }
   } catch (error) {
-    if (!isSubagentMessage) {
-      historyLoadError.value = t('outputPanel.loadOlderFailed');
-    }
     log('History load failed', error);
   }
 }
@@ -4640,34 +4554,6 @@ async function fetchAllowedSessionHistories(rootSessionId: string) {
   const descendantSessionIds = Array.from(allowedSessionIds.value).filter((id) => id !== rootSessionId);
   if (descendantSessionIds.length === 0) return;
   await Promise.all(descendantSessionIds.map((id) => fetchHistory(id, true)));
-}
-
-function resetHistoryLazyState() {
-  clearHistoryAutoloadTimer();
-  historyLoadLimit.value = INITIAL_HISTORY_LIMIT;
-  historyHasMore.value = false;
-  historyLoadingMore.value = false;
-  historyLoadError.value = '';
-}
-
-async function loadMoreHistory(options?: { step?: number }) {
-  const sessionId = selectedSessionId.value;
-  if (!sessionId) return;
-  const step = Math.max(1, options?.step ?? MANUAL_HISTORY_LOAD_STEP);
-  if (historyLoadingMore.value) return;
-  if (!historyHasMore.value) return;
-  historyLoadingMore.value = true;
-  historyLoadError.value = '';
-  historyLoadLimit.value += step;
-  const targetLimit = historyLoadLimit.value;
-  try {
-    await fetchHistory(sessionId);
-  } finally {
-    historyLoadingMore.value = false;
-    if (historyLoadError.value) {
-      historyLoadLimit.value = Math.max(INITIAL_HISTORY_LIMIT, targetLimit - step);
-    }
-  }
 }
 
 function buildPtyWsUrl(path: string, directory?: string) {
@@ -5474,8 +5360,13 @@ function formatNotificationDump(): string {
   }
 
   // Pending permissions & questions currently shown as floating windows
-  const permissionEntries = fw.entries.value.filter((e) => e.key.startsWith('permission:'));
-  const questionEntries = fw.entries.value.filter((e) => e.key.startsWith('question:'));
+  // Single-pass iteration instead of two separate filters for better performance
+  const permissionEntries: typeof fw.entries.value = [];
+  const questionEntries: typeof fw.entries.value = [];
+  for (const entry of fw.entries.value) {
+    if (entry.key.startsWith('permission:')) permissionEntries.push(entry);
+    else if (entry.key.startsWith('question:')) questionEntries.push(entry);
+  }
   lines.push(`Active Floating Windows:`);
   lines.push(`  ${t('app.debug.permissionWindows')}: ${permissionEntries.length}`);
   for (const entry of permissionEntries) {
@@ -5946,12 +5837,42 @@ watch(
   { immediate: true },
 );
 
-async function reloadSelectedSessionState() {
-  if (selectedSessionId.value && isBootstrapping.value && !activeDirectory.value) {
+function waitForPendingRenders(timeoutMs = 30000): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unwatch();
+      reject(new Error('Render timeout'));
+    }, timeoutMs);
+    const unwatch = watch(
+      pendingWorkerRenders,
+      (count) => {
+        if (count === 0) {
+          // Extra guard: after counter hits 0, wait one more frame to
+          // ensure no new watchEffect (e.g. useAssistantPreRenderer)
+          // submits additional worker tasks before we resolve.
+          requestAnimationFrame(() => {
+            if (pendingWorkerRenders.value === 0) {
+              clearTimeout(timer);
+              unwatch();
+              resolve();
+            }
+          });
+        }
+      },
+      { immediate: true },
+    );
+  });
+}
+
+async function reloadSelectedSessionState(newId?: string, oldId?: string) {
+  if (newId && isBootstrapping.value && !activeDirectory.value) {
     return;
   }
   fw.closeAll({ exclude: (key) => key.startsWith('shell:') });
   await nextTick();
+  if (oldId) {
+    msg.saveSessionState(oldId);
+  }
   msg.reset();
   resetFollow();
   reasoning.reset();
@@ -5960,15 +5881,27 @@ async function reloadSelectedSessionState() {
   todosBySessionId.value = {};
   todoLoadingBySessionId.value = {};
   todoErrorBySessionId.value = {};
-  resetHistoryLazyState();
   await nextTick();
-  if (selectedSessionId.value) {
-    const sessionId = selectedSessionId.value;
-    await fetchAllowedSessionHistories(sessionId);
-    scheduleHistoryAutoload(0);
-    if (!msg.roots.value.some((root) => root.sessionID === sessionId)) {
-      scrollOutputPanelToBottom(false);
+  if (newId) {
+    const sessionId = newId;
+    const cacheHit = msg.tryLoadFromCache(sessionId);
+    if (!cacheHit) {
+      isLoadingHistory.value = true;
+      try {
+        await fetchAllowedSessionHistories(sessionId);
+        // Allow one paint frame so that useAssistantPreRenderer's
+        // watchEffect fires and submits worker tasks before we wait.
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await waitForPendingRenders();
+      } catch {
+        // Render timeout or error — still show what we have
+      } finally {
+        isLoadingHistory.value = false;
+      }
     }
+    await nextTick();
+    // Instant scroll to bottom — no smooth animation during session switch
+    outputPanelRef.value?.scrollToBottom();
     if (uiInitState.value === 'ready') {
       await restoreShellSessions();
     }
@@ -6250,7 +6183,7 @@ msg.bindScope(sessionScope);
 reasoning.bindScope(sessionScope);
 subagentWindows.bindScope(sessionScope);
 
-watch(selectedSessionId, reloadSelectedSessionState, { immediate: true });
+watch(selectedSessionId, (newId, oldId) => reloadSelectedSessionState(newId, oldId), { immediate: true });
 
 watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelectionToWorker, {
   immediate: true,
@@ -7691,7 +7624,7 @@ onMounted(() => {
   );
   globalEventUnsubscribers.push(
     ge.on('file.watcher.updated', (payload) => {
-      console.log('[file.watcher.updated]', payload);
+      feed(payload);
     }),
   );
   globalEventUnsubscribers.push(
@@ -7733,7 +7666,6 @@ onBeforeUnmount(() => {
     pointerMoveFrameId = null;
   }
   pendingPointerEvent = null;
-  clearHistoryAutoloadTimer();
   while (globalEventUnsubscribers.length > 0) {
     const dispose = globalEventUnsubscribers.pop();
     dispose?.();

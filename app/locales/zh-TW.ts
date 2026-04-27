@@ -1014,10 +1014,7 @@ const messages: LocaleMessages = {
     loading: '正在載入 PDF...',
   },
   outputPanel: {
-    scrollToLatest: '捲動到最新',
-    loadOlder: '載入更早歷史',
-    loadingOlder: '正在載入更早歷史...',
-    loadOlderFailed: '載入更早歷史失敗。',
+    scrollToLatest: '捲動至最新',
   },
   welcome: {
     title: '如何使用 OpenCode Visualizer',

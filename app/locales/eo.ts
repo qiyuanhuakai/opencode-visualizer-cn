@@ -1014,10 +1014,7 @@ const messages: LocaleMessages = {
     loading: 'Ŝargas PDF...',
   },
   outputPanel: {
-    scrollToLatest: 'Rulumi al plej nova',
-    loadOlder: 'Ŝargi pli malnovan historion',
-    loadingOlder: 'Ŝargas pli malnovan historion…',
-    loadOlderFailed: 'Ŝargo de pli malnova historio malsukcesis.',
+    scrollToLatest: 'Rulumi al plej freŝa',
   },
   welcome: {
     title: 'Kiel Uzi OpenCode Vizualigilo',

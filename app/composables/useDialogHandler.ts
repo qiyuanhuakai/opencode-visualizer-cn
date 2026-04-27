@@ -110,13 +110,26 @@ export function useDialogHandler<R extends DialogRequestBase>(options: {
 
   function prune() {
     const allowed = options.allowedSessionIds.value;
+    const idsToClose: string[] = [];
     for (const entry of options.fw.entries.value) {
       if (!entry.key.startsWith(`${options.kind}:`)) continue;
       const request = entry.props?.request as R | undefined;
       if (!request) continue;
       if (!allowed.has(request.sessionID)) {
-        remove(request.id);
+        idsToClose.push(request.id);
       }
+    }
+    if (idsToClose.length === 0) return;
+    if (idsToClose.length === 1) {
+      remove(idsToClose[0]);
+      return;
+    }
+    // Batch close to avoid repeated rebuildEntries calls
+    const keySet = new Set(idsToClose.map(getKey));
+    options.fw.closeAll({ exclude: (key) => !keySet.has(key) });
+    for (const requestId of idsToClose) {
+      clearSending(requestId);
+      clearError(requestId);
     }
   }
 
