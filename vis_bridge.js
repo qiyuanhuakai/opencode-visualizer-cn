@@ -123,7 +123,8 @@ function isAllowedOrigin(origin) {
   if (!origin) return true;
   try {
     const parsed = new URL(origin);
-    if (parsed.protocol === 'file:') return true;
+    // Allow local Electron protocols (file://, app://, etc.)
+    if (parsed.protocol === 'file:' || parsed.protocol === 'app:') return true;
     return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isLoopbackHostname(parsed.hostname);
   } catch {
     return false;

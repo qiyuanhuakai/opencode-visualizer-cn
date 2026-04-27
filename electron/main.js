@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, net, protocol, shell } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, protocol, shell } from 'electron';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -182,10 +182,41 @@ function createWindow() {
 app.whenReady().then(() => {
   loadPersistentStorage();
 
-  protocol.handle('app', (request) => {
+  protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
-    const filePath = path.join(__dirname, '..', 'dist', pathname === '/' ? 'index.html' : pathname);
-    return net.fetch(`file://${filePath}`);
+    const relativePath = pathname === '/' ? 'index.html' : pathname;
+    // Support both unpacked (dev/preview) and asar-packed (production) layouts
+    const candidates = [
+      path.join(__dirname, '..', 'dist', relativePath),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', relativePath),
+    ];
+    for (const filePath of candidates) {
+      try {
+        const data = await fs.promises.readFile(filePath);
+        const ext = path.extname(relativePath).toLowerCase();
+        const mimeTypes = {
+          '.html': 'text/html',
+          '.js': 'application/javascript',
+          '.css': 'text/css',
+          '.json': 'application/json',
+          '.svg': 'image/svg+xml',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.gif': 'image/gif',
+          '.woff': 'font/woff',
+          '.woff2': 'font/woff2',
+          '.ttf': 'font/ttf',
+          '.otf': 'font/otf',
+        };
+        return new Response(data, {
+          headers: { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' },
+        });
+      } catch {
+        // try next candidate
+      }
+    }
+    return new Response('Not Found', { status: 404 });
   });
 
   createWindow();
