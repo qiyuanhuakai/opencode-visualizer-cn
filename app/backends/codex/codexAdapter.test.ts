@@ -350,8 +350,13 @@ describe('CodexAdapter', () => {
     await waitForSent(socket, 1);
     socket.respond(1, {});
     await waitForSent(socket, 3);
-    socket.respond(2, { thread: { id: 'thr_new', preview: '' } });
-    await expect(createSession).resolves.toEqual({ thread: { id: 'thr_new', preview: '' } });
+    socket.respond(2, { thread: { id: 'thr_new', preview: '', cwd: '/repo' } });
+    await expect(createSession).resolves.toMatchObject({
+      id: 'thr_new',
+      projectID: 'codex:/repo',
+      directory: '/repo',
+      status: 'idle',
+    });
     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
       id: 2,
       method: 'thread/start',
@@ -360,13 +365,23 @@ describe('CodexAdapter', () => {
 
     const forkSession = adapter.forkSession('thr_1', 'msg_1', '/repo');
     await waitForSent(socket, 4);
-    socket.respond(3, { thread: { id: 'thr_fork', preview: '' } });
-    await expect(forkSession).resolves.toEqual({ thread: { id: 'thr_fork', preview: '' } });
+    socket.respond(3, { thread: { id: 'thr_fork', preview: '', cwd: '/repo' } });
+    await expect(forkSession).resolves.toMatchObject({
+      id: 'thr_fork',
+      projectID: 'codex:/repo',
+      directory: '/repo',
+      status: 'idle',
+    });
 
     const revertSession = adapter.revertSession('thr_1', 'msg_1');
     await waitForSent(socket, 5);
-    socket.respond(4, { thread: { id: 'thr_1' } });
-    await expect(revertSession).resolves.toEqual({ thread: { id: 'thr_1' } });
+    socket.respond(4, { thread: { id: 'thr_1', cwd: '/repo' } });
+    await expect(revertSession).resolves.toMatchObject({
+      id: 'thr_1',
+      projectID: 'codex:/repo',
+      directory: '/repo',
+      status: 'idle',
+    });
     expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
       id: 4,
       method: 'thread/rollback',

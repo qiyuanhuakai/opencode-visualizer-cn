@@ -80,8 +80,11 @@ export const StorageKeys = {
     messages: 'favorites.messages.v1',
   },
   auth: {
+    backendKind: 'auth.backendKind.v1',
     credentials: 'auth.credentials.v1',
     serverUrl: 'auth.serverUrl.v1',
+    codexBridgeUrl: 'auth.codexBridgeUrl.v1',
+    codexBridgeToken: 'auth.codexBridgeToken.v1',
   },
 } as const;
 

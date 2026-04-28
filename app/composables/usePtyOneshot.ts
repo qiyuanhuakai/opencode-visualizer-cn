@@ -1,5 +1,5 @@
 import type { Ref } from 'vue';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 
 type UsePtyOneshotOptions = {
   activeDirectory: Ref<string>;
@@ -128,6 +128,13 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
   async function runOneShotPtyCommand(command: string, args: string[]): Promise<string> {
     const { activeDirectory } = getOptions();
     const directory = activeDirectory.value || undefined;
+    const backend = getActiveBackendAdapter();
+    if (backend.runOneShotCommand) {
+      return await backend.runOneShotCommand({ directory, command, args });
+    }
+    if (!backend.createPty || !backend.createPtyWebSocketUrl || !backend.deletePty) {
+      throw new Error(translate('errors.ptyCreateFailed'));
+    }
     const createPtyAbort = new AbortController();
     const createPtyTimeoutId = setTimeout(() => {
       createPtyAbort.abort();
@@ -135,7 +142,7 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
 
     let data: unknown;
     try {
-      data = await opencodeApi.createPty(
+      data = await backend.createPty(
         {
           directory,
           command: 'env',
@@ -169,7 +176,11 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
     }
 
     return new Promise<string>((resolve, reject) => {
-      const url = opencodeApi.createWsUrl(`/pty/${pty.id}/connect`, { directory });
+      const url = backend.createPtyWebSocketUrl?.(`/pty/${pty.id}/connect`, { directory });
+      if (!url) {
+        reject(new Error(translate('errors.ptySocketFailed')));
+        return;
+      }
       const socket = new WebSocket(url);
       const decoder = new TextDecoder();
       let captured = '';
@@ -179,7 +190,7 @@ export function usePtyOneshot(options?: UsePtyOneshotOptions) {
       let exitCode: number | null = null;
 
       const cleanup = () => {
-        opencodeApi.deletePty(pty.id, directory).catch(() => {});
+        backend.deletePty?.(pty.id, directory).catch(() => {});
       };
 
       const settle = (handler: () => void) => {

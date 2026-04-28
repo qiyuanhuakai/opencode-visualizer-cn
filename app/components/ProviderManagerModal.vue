@@ -465,7 +465,7 @@
 import { computed, inject, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 import {
   buildProviderDisabledPatch,
   normalizeProviderIds,
@@ -544,6 +544,15 @@ type CustomProviderModelRow = {
     name?: string;
   };
 };
+
+function backend() {
+  return getActiveBackendAdapter();
+}
+
+function requireBackendMethod<T>(method: T | undefined, name: string): T {
+  if (!method) throw new Error(`Active backend does not support ${name}.`);
+  return method;
+}
 
 type CustomProviderHeaderRow = {
   row: string;
@@ -785,7 +794,8 @@ function removeCustomHeader(index: number) {
 
 async function fetchAuthMethods() {
   try {
-    const data = (await opencodeApi.listProviderAuthMethods()) as Record<string, ProviderAuthMethod[]>;
+    const listProviderAuthMethods = requireBackendMethod(backend().listProviderAuthMethods, 'provider auth methods');
+    const data = (await listProviderAuthMethods()) as Record<string, ProviderAuthMethod[]>;
     authMethods.value = data && typeof data === 'object' ? data : {};
   } catch (error) {
     setFeedback(error instanceof Error ? error.message : String(error), 'error');
@@ -966,12 +976,14 @@ async function submitCustomProvider() {
 
   busyProviderId.value = CUSTOM_PROVIDER_BUSY_ID;
   try {
+    const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
     if (result.key) {
-      await opencodeApi.setProviderAuth(result.providerID, { type: 'api', key: result.key });
+      const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
+      await setProviderAuth(result.providerID, { type: 'api', key: result.key });
     }
     const disabledProviders = normalizeProviderIds(props.providerConfig?.disabled_providers)
       .filter((providerId) => providerId !== result.providerID);
-    const nextConfig = (await opencodeApi.updateGlobalConfig({
+    const nextConfig = (await updateGlobalConfig({
       provider: {
         ...props.providerConfig?.provider,
         [result.providerID]: result.config,
@@ -1049,7 +1061,8 @@ async function collectAuthPromptInputs(
 async function toggleProvider(providerId: string, nextEnabled: boolean) {
   busyProviderId.value = providerId;
   try {
-    const result = (await opencodeApi.updateGlobalConfig(
+    const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
+    const result = (await updateGlobalConfig(
       buildProviderDisabledPatch(props.providerConfig, providerId, nextEnabled),
     )) as ProviderConfigState;
     emit('config-updated', result ?? {});
@@ -1097,7 +1110,8 @@ async function connectProvider(provider: ProviderInfo) {
       const key = showPrompt ? await showPrompt(t('providerManager.prompts.enterApiKey', { providerName: provider.name?.trim() || provider.id })) : null;
       if (!key) return;
       const trimmedKey = key.trim();
-      await opencodeApi.setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
+      const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
+      await setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
       emit('providers-changed');
     setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
       return;
@@ -1105,7 +1119,8 @@ async function connectProvider(provider: ProviderInfo) {
 
     const inputs = await collectAuthPromptInputs(provider, picked.method);
     if (!inputs) return;
-    const authorization = (await opencodeApi.authorizeProviderOAuth(provider.id, {
+    const authorizeProviderOAuth = requireBackendMethod(backend().authorizeProviderOAuth, 'provider OAuth authorization');
+    const authorization = (await authorizeProviderOAuth(provider.id, {
       method: picked.index,
       inputs,
     })) as ProviderAuthAuthorization;
@@ -1115,7 +1130,8 @@ async function connectProvider(provider: ProviderInfo) {
     if (authorization?.method === 'code') {
       const code = showPrompt ? await showPrompt(authorization.instructions || t('providerManager.prompts.pasteAuthCode', { providerId: provider.id })) : null;
       if (!code) return;
-      await opencodeApi.completeProviderOAuth(provider.id, {
+      const completeProviderOAuth = requireBackendMethod(backend().completeProviderOAuth, 'provider OAuth completion');
+      await completeProviderOAuth(provider.id, {
         method: picked.index,
         code: code.trim(),
       });
@@ -1124,7 +1140,8 @@ async function connectProvider(provider: ProviderInfo) {
         authorization?.instructions || t('providerManager.prompts.completeOAuth', { providerId: provider.id }),
       ) : true;
       if (!confirmed) return;
-      await opencodeApi.completeProviderOAuth(provider.id, {
+      const completeProviderOAuth = requireBackendMethod(backend().completeProviderOAuth, 'provider OAuth completion');
+      await completeProviderOAuth(provider.id, {
         method: picked.index,
       });
     }
@@ -1144,14 +1161,16 @@ async function disconnectProvider(provider: ProviderInfo) {
   if (!confirmed) return;
   busyProviderId.value = providerId;
   try {
+    const deleteProviderAuth = requireBackendMethod(backend().deleteProviderAuth, 'provider auth deletion');
     if (isConfigBackedProvider(provider)) {
-      await opencodeApi.deleteProviderAuth(providerId).catch(() => undefined);
-      const result = (await opencodeApi.updateGlobalConfig(
+      const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
+      await deleteProviderAuth(providerId).catch(() => undefined);
+      const result = (await updateGlobalConfig(
         buildProviderDisabledPatch(props.providerConfig, providerId, false),
       )) as ProviderConfigState;
       emit('config-updated', result ?? {});
     } else {
-      await opencodeApi.deleteProviderAuth(providerId);
+      await deleteProviderAuth(providerId);
     }
     emit('providers-changed');
     setFeedback(t('providerManager.messages.disconnected', { providerId }), 'success');

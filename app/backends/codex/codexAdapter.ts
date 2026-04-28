@@ -843,6 +843,81 @@ export type CodexAdapterOptions = CodexJsonRpcClientOptions & {
   experimentalApi?: boolean;
 };
 
+type NormalizedCodexSession = {
+  id: string;
+  projectID: string;
+  title?: string;
+  status?: 'busy' | 'idle' | 'retry';
+  directory?: string;
+  time?: {
+    created?: number;
+    updated?: number;
+    archived?: number;
+    pinned?: number;
+  };
+};
+
+function syntheticProjectId(directory?: string) {
+  const normalized = directory?.trim() || 'default';
+  return `codex:${normalized}`;
+}
+
+function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status'] {
+  if (status === 'running' || status === 'busy' || status === 'inProgress') return 'busy';
+  if (status === 'retry') return 'retry';
+  return 'idle';
+}
+
+function normalizeCodexThread(thread: CodexThread): NormalizedCodexSession {
+  const directory = thread.cwd?.trim() || undefined;
+  return {
+    id: thread.id,
+    projectID: syntheticProjectId(directory),
+    title: thread.name || thread.preview || undefined,
+    status: normalizeCodexStatus(thread.status),
+    directory,
+    time: {
+      created: thread.createdAt,
+      updated: thread.updatedAt ?? thread.createdAt,
+      archived: undefined,
+      pinned: undefined,
+    },
+  };
+}
+
+function isAbsolutePath(path: string) {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(path);
+}
+
+function normalizeRelativePath(path?: string) {
+  const trimmed = path?.trim() || '.';
+  if (trimmed === '.') return '';
+  return trimmed.replace(/^\/+|\/+$/gu, '');
+}
+
+function resolveCodexFsPath(directory: string, path?: string) {
+  const trimmedPath = path?.trim();
+  if (trimmedPath && isAbsolutePath(trimmedPath)) return trimmedPath;
+  const root = directory.trim();
+  const relative = normalizeRelativePath(trimmedPath);
+  return relative ? `${root.replace(/\/+$/u, '')}/${relative}` : root;
+}
+
+function decodeBase64Bytes(dataBase64: string) {
+  const globalWithBuffer = globalThis as typeof globalThis & {
+    Buffer?: { from(data: string, encoding: 'base64'): Uint8Array };
+  };
+  if (typeof globalWithBuffer.Buffer?.from === 'function') {
+    return new Uint8Array(globalWithBuffer.Buffer.from(dataBase64, 'base64'));
+  }
+  const binary = atob(dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 function defaultClientInfo(): CodexClientInfo {
   return {
     name: 'vis',
@@ -860,6 +935,12 @@ export class CodexAdapter implements BackendAdapter {
     sessions: true,
     sessionFork: true,
     sessionRevert: true,
+    files: true,
+    terminal: true,
+    permissions: false,
+    questions: false,
+    todos: false,
+    status: true,
   };
 
   private readonly client: CodexJsonRpcClient;
@@ -1296,19 +1377,30 @@ export class CodexAdapter implements BackendAdapter {
     return this.client.request<CodexToolRequestUserInputResult>('tool/requestUserInput', params);
   }
 
-  createSession(directory?: string) {
-    return this.startThread({ cwd: directory });
+  async createSession(directory?: string) {
+    const result = await this.startThread({ cwd: directory });
+    return normalizeCodexThread(result.thread);
   }
 
-  forkSession(sessionId: string, _messageId: string, _directory?: string) {
-    return this.forkThread({ threadId: sessionId });
+  async forkSession(sessionId: string, _messageId: string, _directory?: string) {
+    const result = await this.forkThread({ threadId: sessionId });
+    return normalizeCodexThread(result.thread);
   }
 
-  updateSession(sessionId: string, payload: SessionUpdatePayload, _directory?: string) {
-    return this.setThreadName({
+  async updateSession(sessionId: string, payload: SessionUpdatePayload, _directory?: string) {
+    if (payload.time?.archived && payload.time.archived > 0) {
+      await this.archiveThread({ threadId: sessionId });
+    }
+    if (payload.time?.archived === 0) {
+      const result = await this.unarchiveThread({ threadId: sessionId });
+      return normalizeCodexThread(result.thread);
+    }
+    if (payload.title !== undefined) await this.setThreadName({
       threadId: sessionId,
-      name: payload.title ?? null,
+      name: payload.title || null,
     });
+    const result = await this.readThread({ threadId: sessionId });
+    return normalizeCodexThread(result.thread);
   }
 
   deleteSession(sessionId: string, _directory?: string) {
@@ -1316,20 +1408,98 @@ export class CodexAdapter implements BackendAdapter {
     return Promise.reject(new Error('Codex does not support deleteSession; hide the thread locally or archive it instead.'));
   }
 
-  revertSession(sessionId: string, _messageId: string, _directory?: string) {
-    return this.rollbackThread({ threadId: sessionId, numTurns: 1 });
+  async revertSession(sessionId: string, _messageId: string, _directory?: string) {
+    const result = await this.rollbackThread({ threadId: sessionId, numTurns: 1 });
+    return normalizeCodexThread(result.thread);
   }
 
   unrevertSession() {
     return Promise.reject(new Error('Codex does not support unrevertSession.'));
   }
 
-  listSessions(options?: ListSessionsOptions) {
-    return this.listThreads({
+  async listSessions(options?: ListSessionsOptions) {
+    const result = await this.listThreads({
       limit: options?.limit,
       cwd: options?.directory,
       searchTerm: options?.search,
     });
+    return result.data.map((thread) => normalizeCodexThread(thread));
+  }
+
+  async listFiles(payload: { directory: string; path?: string }) {
+    const absolutePath = resolveCodexFsPath(payload.directory, payload.path);
+    const relativePrefix = normalizeRelativePath(payload.path);
+    const result = await this.readDirectory({ path: absolutePath });
+    return result.entries.map((entry) => ({
+      name: entry.fileName,
+      path: relativePrefix ? `${relativePrefix}/${entry.fileName}` : entry.fileName,
+      type: entry.isDirectory ? 'directory' : 'file',
+    }));
+  }
+
+  async readFileContent(payload: { directory: string; path: string }) {
+    const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
+    return new TextDecoder().decode(decodeBase64Bytes(result.dataBase64));
+  }
+
+  async readFileContentBytes(payload: { directory: string; path: string }) {
+    const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
+    return decodeBase64Bytes(result.dataBase64);
+  }
+
+  async getVcsInfo(directory: string) {
+    const result = await this.commandExec({
+      command: ['git', 'branch', '--show-current'],
+      cwd: directory,
+      timeoutMs: 10_000,
+    });
+    return { branch: result.stdout.trim() };
+  }
+
+  async runOneShotCommand(payload: { directory?: string; command: string; args: string[] }) {
+    const result = await this.commandExec({
+      command: [payload.command, ...payload.args],
+      cwd: payload.directory,
+      timeoutMs: 30_000,
+      streamStdoutStderr: false,
+    });
+    if (result.exitCode !== 0) {
+      const error = new Error(`Codex command failed (${result.exitCode})`);
+      (error as Error & { output?: string }).output = result.stdout || result.stderr;
+      throw error;
+    }
+    return result.stdout;
+  }
+
+  async listPendingPermissions() {
+    return [];
+  }
+
+  async listPendingQuestions() {
+    return [];
+  }
+
+  async getSessionTodos() {
+    return [];
+  }
+
+  async getGlobalHealth() {
+    await this.ensureInitialized();
+    return { healthy: true, version: 'codex-app-server' };
+  }
+
+  async getMcpStatus() {
+    const result = await this.listMcpServerStatus();
+    return result.data;
+  }
+
+  async getGlobalConfig() {
+    return this.readConfig();
+  }
+
+  async getSkillStatus() {
+    const result = await this.listSkills({ cwds: [] });
+    return result.data.flatMap((entry) => entry.skills);
   }
 
   updateProject() {

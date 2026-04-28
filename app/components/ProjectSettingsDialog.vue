@@ -111,7 +111,7 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue';
 import { Icon } from '@iconify/vue';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 
 const COLOR_KEYS = ['pink', 'mint', 'orange', 'purple', 'cyan', 'lime'] as const;
 
@@ -210,7 +210,9 @@ watch(
 async function fetchPackageJsonName() {
   if (!props.worktree) return;
   try {
-    const result = (await opencodeApi.readFileContent({
+    const readFileContent = getActiveBackendAdapter().readFileContent;
+    if (!readFileContent) return;
+    const result = (await readFileContent({
       directory: props.worktree,
       path: 'package.json',
     })) as { content?: string; encoding?: string } | string;

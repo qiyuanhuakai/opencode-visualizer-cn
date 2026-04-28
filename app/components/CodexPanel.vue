@@ -835,13 +835,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import type { CodexJsonRpcId } from '../backends/codex/jsonRpcClient';
 import type { CodexFsDirectoryEntry } from '../backends/codex/codexAdapter';
 import type { CodexTranscriptEntry } from '../composables/useCodexApi';
 import { useCodexApi } from '../composables/useCodexApi';
+import { configureCodexBackend } from '../backends/registry';
 import CodexModelManager from './codex/CodexModelManager.vue';
 import CodexSkillsManager from './codex/CodexSkillsManager.vue';
 import CodexPluginManager from './codex/CodexPluginManager.vue';
@@ -853,6 +854,10 @@ import CodexExperimentalFeatureManager from './codex/CodexExperimentalFeatureMan
 import CodexCollaborationModeManager from './codex/CodexCollaborationModeManager.vue';
 import CodexExternalAgentConfig from './codex/CodexExternalAgentConfig.vue';
 import CodexFeedbackUploader from './codex/CodexFeedbackUploader.vue';
+
+const props = defineProps<{
+  autoConnect?: boolean;
+}>();
 
  const { t } = useI18n();
  const api = useCodexApi();
@@ -922,8 +927,14 @@ function getDecisionLabel(decision: string): string {
 }
 
 async function connect() {
+  configureCodexBackend({ bridgeUrl: api.url.value, bridgeToken: api.bridgeToken.value });
   await api.connect(api.url.value);
 }
+
+onMounted(() => {
+  if (!props.autoConnect || api.connected.value || api.status.value === 'connecting') return;
+  void connect().catch(() => undefined);
+});
 
 async function refreshThreads() {
   await api.refreshThreads(showArchived.value ? { archived: true } : {});

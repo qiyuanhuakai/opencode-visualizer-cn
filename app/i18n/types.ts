@@ -6,9 +6,16 @@ export interface LocaleMessages {
     loading: string;
     login: {
       title: string;
+      codexTitle: string;
+      backendLabel: string;
+      openCodeBackend: string;
+      codexBackend: string;
       username: string;
       password: string;
       url: string;
+      codexBridgeUrl: string;
+      codexBridgeToken: string;
+      codexBridgeHint: string;
       authRequired: string;
       connect: string;
       retry: string;

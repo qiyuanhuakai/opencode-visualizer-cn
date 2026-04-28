@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue';
+import { ref, watch, computed, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
-import { getGlobalHealth, getMcpStatus, getLspStatus, getSkillStatus, getGlobalConfig, updateMcp, listSessionMessages, listProviders } from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
@@ -13,6 +13,15 @@ const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const popoverRef = ref<HTMLDivElement | null>(null);
 const msg = useMessages();
+
+function backend() {
+  return getActiveBackendAdapter();
+}
+
+function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T | undefined, name: string): T {
+  if (!method) throw new Error(`Active backend does not support ${name}.`);
+  return method;
+}
 
 type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token';
 const activeTab = ref<TabId>('server');
@@ -105,20 +114,26 @@ async function refresh() {
   skillUnsupported.value = false;
   try {
     const [health, mcp, lsp, skills, cfg] = await Promise.allSettled([
-      getGlobalHealth(),
-      getMcpStatus(),
-      getLspStatus(),
-      getSkillStatus().catch(async () => {
+      requireBackendMethod(backend().getGlobalHealth, 'global health')(),
+      requireBackendMethod(backend().getMcpStatus, 'MCP status')(),
+      requireBackendMethod(backend().getLspStatus, 'LSP status')(),
+      requireBackendMethod(backend().getSkillStatus, 'skill status')().catch(async () => {
         // Current OpenCode version may not expose /skill endpoint
         skillUnsupported.value = true;
         return [] as Array<{ name: string; version?: string }>;
       }),
-      getGlobalConfig() as Promise<Record<string, unknown>>,
+      requireBackendMethod(backend().getGlobalConfig, 'global config')() as Promise<Record<string, unknown>>,
     ]);
     serverHealth.value = health.status === 'fulfilled' ? health.value : null;
-    mcpData.value = mcp.status === 'fulfilled' ? mcp.value : null;
-    lspData.value = lsp.status === 'fulfilled' ? lsp.value : null;
-    skillData.value = skills.status === 'fulfilled' ? skills.value : null;
+    mcpData.value = mcp.status === 'fulfilled'
+      ? (mcp.value as typeof mcpData.value)
+      : null;
+    lspData.value = lsp.status === 'fulfilled'
+      ? (lsp.value as typeof lspData.value)
+      : null;
+    skillData.value = skills.status === 'fulfilled'
+      ? (skills.value as typeof skillData.value)
+      : null;
     configData.value = cfg.status === 'fulfilled' ? cfg.value : null;
 
     // Fetch token data for current session separately
@@ -143,6 +158,7 @@ async function refresh() {
 
 async function fetchContextLimit(providerId: string, modelId: string) {
   try {
+    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
     const response = await listProviders() as { all?: Array<{ id: string; models?: Record<string, { limit?: { context?: number } }> }> };
     const providers = Array.isArray(response?.all) ? response.all : [];
     const provider = providers.find((p) => p.id === providerId);
@@ -170,6 +186,7 @@ async function fetchTokenData() {
   // If store doesn't have this session's messages, load via API
   if (sessionMessages.length === 0) {
     try {
+      const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
       const messages = await listSessionMessages(props.sessionId, { limit: 100 });
       if (Array.isArray(messages) && messages.length > 0) {
         msg.loadHistory(messages);
@@ -259,6 +276,7 @@ async function handleMcpToggle(name: string, currentStatus: string) {
 
   togglingMcp.value = name;
   try {
+    const updateMcp = requireBackendMethod(backend().updateMcp, 'MCP updates');
     await updateMcp({
       name,
       config: { ...baseConfig, enabled: nextEnabled },

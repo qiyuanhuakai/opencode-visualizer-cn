@@ -1,7 +1,7 @@
 import { useI18n } from 'vue-i18n';
 import type { ComputedRef, Ref } from 'vue';
 import PermissionContent from '../components/ToolWindow/Permission.vue';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 import type { useFloatingWindows } from './useFloatingWindows';
 import { useDialogHandler } from './useDialogHandler';
 
@@ -40,11 +40,14 @@ export function usePermissions(options: {
     ensureConnectionReady: options.ensureConnectionReady,
     activeDirectory: options.activeDirectory,
     actionKey: 'app.actions.permissionReply',
-    sendReply: (requestId, reply) =>
-      opencodeApi.replyPermission(requestId, {
+    sendReply: async (requestId, reply) => {
+      const replyPermission = getActiveBackendAdapter().replyPermission;
+      if (!replyPermission) throw new Error('Active backend does not support permission replies.');
+      await replyPermission(requestId, {
         directory: options.activeDirectory.value.trim() || undefined,
         reply: reply as PermissionReply,
-      }),
+      });
+    },
   });
 
   function parsePermissionRequest(
@@ -136,7 +139,9 @@ export function usePermissions(options: {
 
   async function fetchPendingPermissions(directory?: string) {
     try {
-      const data = await opencodeApi.listPendingPermissions(directory);
+      const listPendingPermissions = getActiveBackendAdapter().listPendingPermissions;
+      if (!listPendingPermissions) return;
+      const data = await listPendingPermissions(directory);
       if (!Array.isArray(data)) return;
       data
         .map((entry) => parsePermissionRequest(entry))

@@ -1,8 +1,9 @@
 <template>
    <div ref="appEl" class="app">
      <ThemeInjector />
-     <template v-if="uiInitState === 'ready'">
-      <header class="app-header">
+      <template v-if="uiInitState === 'ready'">
+       <template v-if="activeBackendKind === 'opencode'">
+       <header class="app-header">
         <TopPanel
           ref="topPanelRef"
           :tree-data="topPanelTreeData"
@@ -209,7 +210,22 @@
           </button>
         </div>
       </footer>
-    </template>
+       </template>
+       <template v-else>
+         <header class="app-header app-codex-header">
+           <div class="app-codex-title">
+             <span>{{ t('app.login.codexBackend') }}</span>
+             <small>{{ loginCodexBridgeUrl }}</small>
+           </div>
+           <button type="button" class="app-loading-retry" @click="handleLogout">
+             {{ t('topPanel.logout') }}
+           </button>
+         </header>
+         <main class="app-codex-workspace">
+           <CodexPanel auto-connect />
+         </main>
+       </template>
+     </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
       <div class="app-loading-card">
         <div class="absolute w-0 h-0 -z-10 flex items-center justify-center">
@@ -238,9 +254,28 @@
           </div>
         </div>
         <div v-if="uiInitState === 'login'" class="app-login-form">
-          <p class="app-loading-title">{{ t('app.login.title') }}</p>
+          <p class="app-loading-title">{{ loginTitle }}</p>
+          <div class="app-login-backends" role="group" :aria-label="t('app.login.backendLabel')">
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'opencode' }"
+              @click="loginBackendKind = 'opencode'"
+            >
+              {{ t('app.login.openCodeBackend') }}
+            </button>
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'codex' }"
+              @click="loginBackendKind = 'codex'"
+            >
+              {{ t('app.login.codexBackend') }}
+            </button>
+          </div>
           <div class="app-login-fields">
-            <input
+            <template v-if="loginBackendKind === 'opencode'">
+              <input
               v-model="loginUsername"
               type="text"
               class="app-login-input"
@@ -249,7 +284,7 @@
               :disabled="!loginRequiresAuth"
               @keydown.enter="handleLogin"
             />
-            <input
+              <input
               v-model="loginPassword"
               type="password"
               class="app-login-input"
@@ -257,11 +292,11 @@
               :disabled="!loginRequiresAuth"
               @keydown.enter="handleLogin"
             />
-            <label class="app-login-checkbox">
+              <label class="app-login-checkbox">
               <input v-model="loginRequiresAuth" type="checkbox" />
               {{ t('app.login.authRequired') }}
-            </label>
-            <input
+              </label>
+              <input
               v-model="loginUrl"
               type="text"
               class="app-login-input"
@@ -269,6 +304,26 @@
               name="url"
               @keydown.enter="handleLogin"
             />
+            </template>
+            <template v-else>
+              <input
+                v-model="loginCodexBridgeUrl"
+                type="text"
+                class="app-login-input"
+                :placeholder="t('app.login.codexBridgeUrl')"
+                name="codexBridgeUrl"
+                @keydown.enter="handleLogin"
+              />
+              <input
+                v-model="loginCodexBridgeToken"
+                type="password"
+                class="app-login-input"
+                :placeholder="t('app.login.codexBridgeToken')"
+                name="codexBridgeToken"
+                @keydown.enter="handleLogin"
+              />
+              <p class="app-login-hint">{{ t('app.login.codexBridgeHint') }}</p>
+            </template>
           </div>
           <p v-if="initErrorMessage" class="app-loading-message app-error-message">
             {{ initErrorMessage }}
@@ -483,7 +538,13 @@ import {
 } from './utils/toolRenderers';
 import { toMessageDiffViewerEntry } from './utils/messageDiff';
 import { buildLineCommentFileUrl, formatCommentNote } from './utils/lineComment';
-import * as opencodeApi from './utils/opencode';
+import {
+  configureCodexBackend,
+  configureOpenCodeBackend,
+  getActiveBackendAdapter,
+  setActiveBackendKind,
+} from './backends/registry';
+import type { BackendKind } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { splitFileContentDirectoryAndPath, normalizeDirectory } from './utils/path';
@@ -1343,11 +1404,21 @@ const loginUrl = ref(DEFAULT_OPENCODE_URL);
 const loginUsername = ref('');
 const loginPassword = ref('');
 const loginRequiresAuth = ref(false);
+const activeBackendKind = ref<BackendKind>('opencode');
+const loginBackendKind = ref<BackendKind>('opencode');
+const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
+const loginCodexBridgeToken = ref(credentials.codexBridgeToken.value);
 const retryStatus = ref<{
   message: string;
   next: number;
   attempt: number;
 } | null>(null);
+
+const loginTitle = computed(() => (
+  loginBackendKind.value === 'codex'
+    ? t('app.login.codexTitle')
+    : t('app.login.title')
+));
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
   sendStatus.value = params ? { mode: 'i18n', key, params } : { mode: 'i18n', key };
@@ -2935,7 +3006,8 @@ async function handleProvidersChanged() {
 
 async function fetchGlobalProviderConfig() {
   try {
-    const data = (await opencodeApi.getGlobalConfig()) as ProviderConfigState;
+    const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
+    const data = (await getGlobalConfig()) as ProviderConfigState;
     providerConfig.value = data ?? null;
   } catch (error) {
     log('Provider config load failed', error);
@@ -3430,7 +3502,8 @@ function resolveProjectIdForDirectory(directory?: string) {
 
 async function fetchHomePath() {
   try {
-    const data = (await opencodeApi.getPathInfo()) as {
+    const getPathInfo = requireBackendMethod(backend().getPathInfo, 'path info');
+    const data = (await getPathInfo()) as {
       home?: string;
       worktree?: string;
     };
@@ -4163,7 +4236,8 @@ async function handleUndoRevert() {
 /** Set project name from package.json for newly created projects (fire-and-forget). */
 async function initProjectNameFromPackageJson(projectId: string, directory: string) {
   try {
-    const result = (await opencodeApi.readFileContent({
+    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    const result = (await readFileContent({
       directory,
       path: 'package.json',
     })) as FileContentResponse | string;
@@ -4238,7 +4312,8 @@ async function fetchProviders(force = false) {
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const data = (await opencodeApi.listProviders()) as ProviderResponse;
+    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
+    const data = (await listProviders()) as ProviderResponse;
     providers.value = Array.isArray(data.all) ? data.all : [];
     connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
@@ -4321,7 +4396,8 @@ async function fetchAgents() {
   if (agentsLoading.value) return;
   agentsLoading.value = true;
   try {
-    const data = (await opencodeApi.listAgents()) as AgentInfo[];
+    const listAgents = requireBackendMethod(backend().listAgents, 'agents');
+    const data = (await listAgents()) as AgentInfo[];
     agents.value = Array.isArray(data) ? data : [];
     const options = agents.value
       .filter((agent) => agent.mode === 'primary' || agent.mode === 'all')
@@ -4355,7 +4431,8 @@ async function fetchCommands(directory?: string) {
   if (commandsLoading.value) return;
   commandsLoading.value = true;
   try {
-    const data = (await opencodeApi.listCommands(directory)) as CommandInfo[];
+    const listCommands = requireBackendMethod(backend().listCommands, 'commands');
+    const data = (await listCommands(directory)) as CommandInfo[];
     const list = Array.isArray(data) ? data : [];
     list.sort((a, b) => a.name.localeCompare(b.name));
     commands.value = list;
@@ -4516,7 +4593,8 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
   const requestedDirectory = !isSubagentMessage ? getSelectedWorktreeDirectory() : '';
   try {
     const directory = getSelectedWorktreeDirectory();
-    const data = (await opencodeApi.listSessionMessages(sessionId, {
+    const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
+    const data = (await listSessionMessages(sessionId, {
       directory: directory || undefined,
     })) as Array<Record<string, unknown>>;
     if (!Array.isArray(data)) return;
@@ -4557,7 +4635,8 @@ async function fetchAllowedSessionHistories(rootSessionId: string) {
 }
 
 function buildPtyWsUrl(path: string, directory?: string) {
-  return opencodeApi.createWsUrl(path, { directory });
+  const createPtyWebSocketUrl = requireBackendMethod(backend().createPtyWebSocketUrl, 'PTY websocket URLs');
+  return createPtyWebSocketUrl(path, { directory });
 }
 
 function parsePtyInfo(value: unknown): PtyInfo | null {
@@ -4576,14 +4655,16 @@ function parsePtyInfo(value: unknown): PtyInfo | null {
 }
 
 async function fetchPtyList(directory?: string) {
-  const data = await opencodeApi.listPtys(directory);
+    const listPtys = requireBackendMethod(backend().listPtys, 'PTY listing');
+    const data = await listPtys(directory);
   if (!Array.isArray(data)) return [] as PtyInfo[];
   return data.map(parsePtyInfo).filter((pty): pty is PtyInfo => Boolean(pty));
 }
 
 async function createPtySession(command?: string, args?: string[]) {
   const directory = activeDirectory.value || undefined;
-  const data = await opencodeApi.createPty({
+    const createPty = requireBackendMethod(backend().createPty, 'PTY creation');
+    const data = await createPty({
     directory,
     command,
     args,
@@ -4594,7 +4675,8 @@ async function createPtySession(command?: string, args?: string[]) {
 }
 
 async function updatePtySize(ptyId: string, rows: number, cols: number, directory?: string) {
-  const data = await opencodeApi.updatePtySize(ptyId, {
+    const updatePtySize = requireBackendMethod(backend().updatePtySize, 'PTY resizing');
+    const data = await updatePtySize(ptyId, {
     directory,
     rows,
     cols,
@@ -4868,7 +4950,8 @@ function removeShellWindow(ptyId: string, options?: { kill?: boolean }) {
   fw.close(`shell:${ptyId}`);
   if (options?.kill) {
     const directory = session.pty.cwd || activeDirectory.value || undefined;
-    opencodeApi.deletePty(ptyId, directory).catch((error) => {
+      const deletePty = backend().deletePty;
+      deletePty?.(ptyId, directory).catch((error) => {
       log('PTY delete failed', error);
     });
   }
@@ -5431,7 +5514,8 @@ function runDebugCommand(args: string): { ok: boolean; message: string } {
 async function sendCommand(sessionId: string, command: CommandInfo, commandArgs: string) {
   if (!ensureConnectionReady(t('app.actions.sendingCommands'))) return;
   const directory = activeDirectory.value.trim();
-  await opencodeApi.sendCommand(sessionId, {
+    const sendCommand = requireBackendMethod(backend().sendCommand, 'session command sending');
+    await sendCommand(sessionId, {
     directory: directory || undefined,
     command: command.name,
     arguments: commandArgs,
@@ -5540,7 +5624,8 @@ async function sendMessage() {
         }
       }
     }
-    await opencodeApi.sendPromptAsync(sessionId, {
+    const sendPromptAsync = requireBackendMethod(backend().sendPromptAsync, 'session prompt sending');
+    await sendPromptAsync(sessionId, {
       directory,
       agent: agentMatch?.name ?? selectedMode.value,
       model: {
@@ -5737,9 +5822,9 @@ async function abortSession() {
     const directory = activeDirectory.value.trim();
     const busyDescendants = busyDescendantSessionIds.value;
     const abortPromises = [
-      opencodeApi.abortSession(sessionId, directory || undefined),
+      requireBackendMethod(backend().abortSession, 'session abort')(sessionId, directory || undefined),
       ...busyDescendants.map((sid) =>
-        opencodeApi.abortSession(sid, directory || undefined).catch(() => {}),
+      requireBackendMethod(backend().abortSession, 'session abort')(sid, directory || undefined).catch(() => {}),
       ),
     ];
     await Promise.all(abortPromises);
@@ -6190,9 +6275,27 @@ watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelecti
 });
 
 watchEffect(() => {
-  opencodeApi.setBaseUrl(credentials.baseUrl.value);
-  opencodeApi.setAuthorization(credentials.authHeader.value);
+  configureOpenCodeBackend({
+    baseUrl: credentials.baseUrl.value,
+    authorization: credentials.authHeader.value,
+  });
+  configureCodexBackend({
+    bridgeUrl: credentials.codexBridgeUrl.value,
+    bridgeToken: credentials.codexBridgeToken.value,
+  });
+  activeBackendKind.value = credentials.backendKind.value;
+  loginBackendKind.value = credentials.backendKind.value;
+  setActiveBackendKind(credentials.backendKind.value);
 });
+
+function backend() {
+  return getActiveBackendAdapter();
+}
+
+function requireBackendMethod<T>(method: T | undefined, name: string): T {
+  if (!method) throw new Error(`Active backend does not support ${name}.`);
+  return method;
+}
 
 function formatToolValue(value: unknown) {
   if (typeof value === 'string') return value;
@@ -6271,7 +6374,8 @@ async function renderReadHtmlFromApi(params: {
   const requestPath = splitFileContentDirectoryAndPath(params.path, directory);
 
   try {
-    const listData = await opencodeApi.listFiles({
+    const listFiles = requireBackendMethod(backend().listFiles, 'file listing');
+    const listData = await listFiles({
       directory: requestPath.directory,
       path: requestPath.path,
     });
@@ -6293,7 +6397,8 @@ async function renderReadHtmlFromApi(params: {
   }
 
   try {
-    const data = (await opencodeApi.readFileContent({
+    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    const data = (await readFileContent({
       directory: requestPath.directory,
       path: requestPath.path,
     })) as FileContentResponse;
@@ -6989,7 +7094,8 @@ async function handleEditMessage(payload: { sessionId: string; part: MessagePart
   if (trimmed === payload.part.text) return;
   try {
     const part = { ...payload.part, text: trimmed };
-    await opencodeApi.patchMessagePart({
+    const patchMessagePart = requireBackendMethod(backend().patchMessagePart, 'message part patching');
+    await patchMessagePart({
       sessionID: payload.sessionId,
       messageID: part.messageID,
       partID: part.id,
@@ -7079,7 +7185,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
   }
 
   try {
-    const data = (await opencodeApi.readFileContent({
+    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    const data = (await readFileContent({
       directory,
       path: filePath,
     })) as FileContentResponse;
@@ -7119,7 +7226,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         binaryContent = content;
       } else if (forceBinary) {
         try {
-          const bytes = await opencodeApi.readFileContentBytes({ directory, path: filePath });
+    const readFileContentBytes = requireBackendMethod(backend().readFileContentBytes, 'binary file reading');
+    const bytes = await readFileContentBytes({ directory, path: filePath });
           binaryContent = bytesToBase64(bytes);
           console.log('[App] Fetched raw binary data, size:', bytes.length);
         } catch (fetchError) {
@@ -7357,7 +7465,22 @@ function handlePtyEvent(event: {
 
 async function startInitialization() {
   if (initializationInFlight) return;
+  if (credentials.backendKind.value === 'codex') {
+    ge.disconnect();
+    activeBackendKind.value = 'codex';
+    setActiveBackendKind('codex');
+    configureCodexBackend({
+      bridgeUrl: credentials.codexBridgeUrl.value,
+      bridgeToken: credentials.codexBridgeToken.value,
+    });
+    connectionState.value = 'ready';
+    uiInitState.value = 'ready';
+    initErrorMessage.value = '';
+    return;
+  }
   initializationInFlight = true;
+  activeBackendKind.value = 'opencode';
+  setActiveBackendKind('opencode');
   uiInitState.value = 'loading';
   initErrorMessage.value = '';
   reconnectingMessage.value = '';
@@ -7408,6 +7531,11 @@ async function startInitialization() {
 }
 
 function handleLogin() {
+  if (loginBackendKind.value === 'codex') {
+    credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value);
+    void startInitialization();
+    return;
+  }
   const u = loginRequiresAuth.value ? loginUsername.value : '';
   const p = loginRequiresAuth.value ? loginPassword.value : '';
   credentials.save(loginUrl.value, u, p);
@@ -7425,6 +7553,10 @@ function handleAbortInit() {
 function handleLogout() {
   credentials.clear();
   ge.disconnect();
+  activeBackendKind.value = credentials.backendKind.value;
+  loginBackendKind.value = credentials.backendKind.value;
+  loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
+  loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   disposeShellWindows();
   uiInitState.value = 'login';
   initErrorMessage.value = '';
@@ -7441,6 +7573,10 @@ onMounted(() => {
     });
   }
   credentials.load();
+  activeBackendKind.value = credentials.backendKind.value;
+  loginBackendKind.value = credentials.backendKind.value;
+  loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
+  loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
 
   if (credentials.isConfigured.value) {
     loginUrl.value = credentials.url.value;
@@ -7839,6 +7975,40 @@ body {
   gap: 8px;
 }
 
+.app-login-backends {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.app-login-backend {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
+  border-radius: 8px;
+  background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8));
+  padding: 7px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: none;
+  outline: none;
+}
+
+.app-login-backend.active {
+  border-color: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 60%, transparent);
+  background: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 18%, var(--theme-login-control-bg, #1e293b));
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.app-login-hint {
+  margin: 0;
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+}
+
 .app-login-input {
   width: 100%;
   padding: 8px 12px;
@@ -7881,6 +8051,41 @@ body {
 
 .app-login-checkbox input {
   accent-color: var(--theme-login-accent, var(--theme-accent-primary, #60a5fa));
+}
+
+.app-codex-header {
+  justify-content: space-between;
+  gap: 16px;
+  padding-inline: 16px;
+}
+
+.app-codex-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--theme-text-primary, #e2e8f0);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.app-codex-title small {
+  overflow: hidden;
+  color: var(--theme-text-muted, #94a3b8);
+  font-size: 11px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-codex-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px;
+  overflow: auto;
+}
+
+.app-codex-workspace :deep(.codex-panel) {
+  min-height: 100%;
 }
 
 .app-error-message {

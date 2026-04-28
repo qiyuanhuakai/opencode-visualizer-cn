@@ -37,6 +37,12 @@ import type {
   CodexJsonRpcNotification,
   CodexJsonRpcServerRequest,
 } from '../backends/codex/jsonRpcClient';
+import {
+  normalizeCodexTurnsToHistory,
+  type CodexCanonicalHistoryEntry,
+} from '../backends/codex/normalize';
+import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
+import type { MessagePart, TextPart } from '../types/sse';
 
 export type CodexConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -124,6 +130,10 @@ function extractTextInput(value: unknown) {
   if (!isRecord(value)) return '';
   const text = value.text;
   return typeof text === 'string' ? text : '';
+}
+
+function isTextPart(part: MessagePart): part is TextPart {
+  return part.type === 'text';
 }
 
 function extractItemTranscriptEntries(
@@ -377,13 +387,14 @@ function extractScopedApprovalRequest(
 
 export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const status = ref<CodexConnectionStatus>('idle');
-  const url = ref(initialOptions.url ?? 'ws://localhost:23004/codex');
-  const bridgeToken = ref(initialOptions.bridgeToken ?? '');
+  const url = ref(initialOptions.url ?? getPersistedCodexBridgeUrl());
+  const bridgeToken = ref(initialOptions.bridgeToken ?? getPersistedCodexBridgeToken());
   const errorMessage = ref('');
   const threads = ref<CodexThread[]>([]);
   const activeThreadId = ref('');
   const activeTurn = ref<CodexTurn | null>(null);
   const transcript = ref<CodexTranscriptEntry[]>([]);
+  const canonicalHistory = ref<CodexCanonicalHistoryEntry[]>([]);
   const events = ref<CodexEventEntry[]>([]);
   const serverRequests = ref<CodexServerRequestEntry[]>([]);
   const pending = ref(false);
@@ -529,10 +540,23 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function setTranscriptFromTurns(turns: CodexTurn[] = []) {
-    transcript.value = turns.flatMap((turn) => {
-      const items = Array.isArray(turn.items) ? turn.items : [];
-      return items.flatMap((item) => extractItemTranscriptEntries(item, createTranscriptEntry));
+    canonicalHistory.value = normalizeCodexTurnsToHistory({
+      sessionId: activeThreadId.value ?? 'codex-thread',
+      turns,
     });
+    const textEntries = canonicalHistory.value.flatMap((entry) => {
+      const role = entry.info.role === 'assistant' ? 'assistant' : 'user';
+      return entry.parts
+        .filter((part): part is TextPart => isTextPart(part) && Boolean(part.text))
+        .map((part) => createTranscriptEntry(role, part.text));
+    });
+    const systemEntries = turns.flatMap((turn) => {
+      const items = Array.isArray(turn.items) ? turn.items : [];
+      return items
+        .flatMap((item) => extractItemTranscriptEntries(item, createTranscriptEntry))
+        .filter((entry) => entry.role === 'system');
+    });
+    transcript.value = [...textEntries, ...systemEntries];
   }
 
   function appendAssistantDelta(text: string) {
@@ -1801,7 +1825,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      threads,
      activeThreadId,
      activeTurn,
-     transcript,
+    transcript,
+    canonicalHistory,
      events,
      serverRequests,
      pending,

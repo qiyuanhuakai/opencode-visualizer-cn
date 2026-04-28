@@ -78,9 +78,9 @@ export function useOpenCodeApi(
   translate?: TranslateFn,
 ) {
   const t = translate ?? ((key: string) => key);
-  const backend = getActiveBackendAdapter();
   const pendingCount = ref(0);
   const pending = computed(() => pendingCount.value > 0);
+  const getBackend = () => getActiveBackendAdapter();
 
   const getProjects = (): ProjectsMap => (isRef(projects) ? projects.value : projects);
 
@@ -118,7 +118,7 @@ export function useOpenCodeApi(
 
   async function createSession(directory: string): Promise<SessionInfo> {
     return withPending(async () => {
-      const session = (await backend.createSession(directory)) as SessionInfo;
+      const session = (await getBackend().createSession(directory)) as SessionInfo;
       if (!session?.id) {
         throw new Error(t('errors.sessionCreateInvalidResponse'));
       }
@@ -139,7 +139,7 @@ export function useOpenCodeApi(
     projectId: string;
   }): Promise<SessionInfo> {
     return withPending(async () => {
-      const session = (await backend.forkSession(
+      const session = (await getBackend().forkSession(
         payload.sessionId,
         payload.messageId,
         payload.directory,
@@ -165,7 +165,7 @@ export function useOpenCodeApi(
     return withPending(async () => {
       const projectId = requireProjectId(payload.projectId);
       const archivedAt = payload.archivedAt ?? Date.now();
-      const session = (await backend.updateSession(
+      const session = (await getBackend().updateSession(
         payload.sessionId,
         { time: { archived: archivedAt, pinned: 0 } },
         payload.directory,
@@ -190,7 +190,7 @@ export function useOpenCodeApi(
   }): Promise<SessionInfo> {
     return withPending(async () => {
       const projectId = requireProjectId(payload.projectId);
-      const session = (await backend.updateSession(
+      const session = (await getBackend().updateSession(
         payload.sessionId,
         { time: { archived: 0, pinned: 0 } },
         payload.directory,
@@ -215,7 +215,7 @@ export function useOpenCodeApi(
     requireProjectId(payload.projectId);
     const pinnedAt = payload.pinnedAt ?? Date.now();
     const session = (await withPending(() =>
-      backend.updateSession(payload.sessionId, { time: { pinned: pinnedAt } }, payload.directory),
+      getBackend().updateSession(payload.sessionId, { time: { pinned: pinnedAt } }, payload.directory),
     )) as SessionInfo;
     if (!session?.id) {
       throw new Error(t('errors.sessionPinInvalidResponse'));
@@ -230,7 +230,7 @@ export function useOpenCodeApi(
   }): Promise<SessionInfo> {
     requireProjectId(payload.projectId);
     const session = (await withPending(() =>
-      backend.updateSession(payload.sessionId, { time: { pinned: 0 } }, payload.directory),
+      getBackend().updateSession(payload.sessionId, { time: { pinned: 0 } }, payload.directory),
     )) as SessionInfo;
     if (!session?.id) {
       throw new Error(t('errors.sessionUnpinInvalidResponse'));
@@ -250,7 +250,7 @@ export function useOpenCodeApi(
       if (!title) {
         throw new Error(t('errors.sessionRenameInvalidResponse'));
       }
-      const session = (await backend.updateSession(
+      const session = (await getBackend().updateSession(
         payload.sessionId,
         { title },
         payload.directory,
@@ -273,7 +273,7 @@ export function useOpenCodeApi(
   }): Promise<void> {
     return withPending(async () => {
       const projectId = requireProjectId(payload.projectId);
-      await backend.deleteSession(payload.sessionId, payload.directory);
+      await getBackend().deleteSession(payload.sessionId, payload.directory);
       await waitWithRetry((state) => !findSession(state[projectId], payload.sessionId));
     });
   }
@@ -281,7 +281,7 @@ export function useOpenCodeApi(
   async function updateProject(projectId: string, patch: ProjectUpdatePayload): Promise<unknown> {
     return withPending(async () => {
       const normalizedProjectId = requireProjectId(projectId);
-      return await backend.updateProject(normalizedProjectId, patch);
+      return await getBackend().updateProject(normalizedProjectId, patch);
     });
   }
 
@@ -295,7 +295,7 @@ export function useOpenCodeApi(
       const projectId = requireProjectId(payload.projectId);
       const before = findSession(getProjects()[projectId], payload.sessionId);
       const beforeUpdated = before?.timeUpdated ?? 0;
-      await backend.revertSession(payload.sessionId, payload.messageId, payload.directory);
+      await getBackend().revertSession(payload.sessionId, payload.messageId, payload.directory);
       await waitWithRetry((state) => {
         const current = findSession(state[projectId], payload.sessionId);
         return Boolean(current && (current.timeUpdated ?? 0) > beforeUpdated);
@@ -312,7 +312,7 @@ export function useOpenCodeApi(
       const projectId = requireProjectId(payload.projectId);
       const before = findSession(getProjects()[projectId], payload.sessionId);
       const beforeUpdated = before?.timeUpdated ?? 0;
-      const session = (await backend.unrevertSession(
+      const session = (await getBackend().unrevertSession(
         payload.sessionId,
         payload.directory,
       )) as SessionInfo;
@@ -330,7 +330,7 @@ export function useOpenCodeApi(
   }): Promise<CreateWorktreeInfo> {
     return withPending(async () => {
       const projectId = requireProjectId(payload.projectId);
-      const data = (await backend.createWorktree(payload.directory)) as CreateWorktreeInfo;
+      const data = (await getBackend().createWorktree(payload.directory)) as CreateWorktreeInfo;
       const createdDir = data?.directory?.trim();
       if (!createdDir) {
         throw new Error(t('errors.worktreeCreateInvalidResponse'));
@@ -348,7 +348,7 @@ export function useOpenCodeApi(
     return withPending(async () => {
       const projectId = requireProjectId(payload.projectId);
       const targetDirectory = payload.targetDirectory.trim();
-      await backend.deleteWorktree(payload.directory, targetDirectory);
+      await getBackend().deleteWorktree(payload.directory, targetDirectory);
 
       const projects = getProjects();
       const project = projects[projectId];
@@ -371,7 +371,7 @@ export function useOpenCodeApi(
   }
 
   async function listSessions(options: ListSessionsOptions = {}): Promise<SessionInfo[]> {
-    const data = (await backend.listSessions(options)) as SessionInfo[];
+    const data = (await getBackend().listSessions(options)) as SessionInfo[];
     return Array.isArray(data) ? data : [];
   }
 
@@ -396,7 +396,7 @@ export function useOpenCodeApi(
         };
       }
 
-      const created = (await backend.createSession(directory)) as SessionInfo;
+      const created = (await getBackend().createSession(directory)) as SessionInfo;
       if (!created?.id) {
         throw new Error(t('errors.sessionCreateInvalidResponse'));
       }

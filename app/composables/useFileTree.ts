@@ -9,7 +9,7 @@ import type {
   GitBranchInfo,
   BranchEntry,
 } from '../types/git';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 import { normalizeDirectory } from '../utils/path';
 import { uniqueBy } from '../utils/array';
 import { usePtyOneshot } from './usePtyOneshot';
@@ -645,7 +645,11 @@ async function retryOnce<T>(runner: (attempt: number) => Promise<T>, shouldRetry
 
 async function listFilesWithRetry(directory: string, path: string) {
   const data = await retryOnce(
-    async () => await opencodeApi.listFiles({ directory, path }),
+    async () => {
+      const listFiles = getActiveBackendAdapter().listFiles;
+      if (!listFiles) throw new Error('Active backend does not support file listing.');
+      return await listFiles({ directory, path });
+    },
     () => getOptions().activeDirectory.value.trim() === directory,
   );
   return Array.isArray(data) ? data : [];
@@ -708,7 +712,11 @@ function buildFullTreeFromPaths(allPaths: string[]): TreeNode[] {
 async function detectFileTreeStrategy(directory: string): Promise<FileTreeStrategy> {
   try {
     const raw = await retryOnce(
-      async () => await opencodeApi.getVcsInfo(directory),
+      async () => {
+        const getVcsInfo = getActiveBackendAdapter().getVcsInfo;
+        if (!getVcsInfo) throw new Error('Active backend does not support VCS info.');
+        return await getVcsInfo(directory);
+      },
       () => getOptions().activeDirectory.value.trim() === directory,
     );
     if (!raw || typeof raw !== 'object') return 'filesystem';
