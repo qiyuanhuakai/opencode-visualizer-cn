@@ -40,6 +40,8 @@ export function useQuestions(options: {
   activeDirectory: Ref<string>;
   ensureConnectionReady: (action: string) => boolean;
   getTextContent: (messageId: string) => string;
+  onReplied?: (requestId: string) => void;
+  onRejected?: (requestId: string) => void;
 }) {
   const { t } = useI18n();
   const dialog = useDialogHandler<QuestionRequest>({
@@ -59,6 +61,7 @@ export function useQuestions(options: {
         directory: options.activeDirectory.value.trim() || undefined,
         answers: normalizeQuestionAnswers(answers as QuestionAnswer[]),
       });
+      options.onReplied?.(requestId);
     },
   });
 
@@ -70,6 +73,7 @@ export function useQuestions(options: {
       const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
       if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
       await rejectQuestion(requestId, options.activeDirectory.value.trim() || undefined);
+      options.onRejected?.(requestId);
     },
   });
 

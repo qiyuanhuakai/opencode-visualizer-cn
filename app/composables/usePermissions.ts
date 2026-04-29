@@ -28,6 +28,7 @@ export function usePermissions(options: {
   allowedSessionIds: ComputedRef<Set<string>>;
   activeDirectory: Ref<string>;
   ensureConnectionReady: (action: string) => boolean;
+  onReplied?: (requestId: string) => void;
 }) {
   const { t } = useI18n();
   const dialog = useDialogHandler<PermissionRequest>({
@@ -47,6 +48,7 @@ export function usePermissions(options: {
         directory: options.activeDirectory.value.trim() || undefined,
         reply: reply as PermissionReply,
       });
+      options.onReplied?.(requestId);
     },
   });
 

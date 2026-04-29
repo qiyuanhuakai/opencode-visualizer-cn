@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { get } from 'node:http';
+import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -27,9 +27,9 @@ async function listen(server: TestServer) {
   return address.port;
 }
 
-async function readHttpBody(port: number, path: string) {
+async function readHttpBody(port: number, path: string, headers: Record<string, string> = {}) {
   return new Promise<{ status: number | undefined; body: unknown }>((resolve, reject) => {
-    const request = get(`http://127.0.0.1:${port}${path}`, (response) => {
+    const request = httpRequest({ host: '127.0.0.1', port, path, method: 'GET', headers }, (response) => {
       const chunks: Buffer[] = [];
       response.on('data', (chunk: Buffer) => chunks.push(chunk));
       response.on('end', () => {
@@ -40,6 +40,7 @@ async function readHttpBody(port: number, path: string) {
       });
     });
     request.on('error', reject);
+    request.end();
   });
 }
 
@@ -102,6 +103,45 @@ describe('vis_bridge', () => {
 
     const authorizedButNoUpstream = await sendUpgrade(port, '/codex', 'Bearer secret-token');
     expect(authorizedButNoUpstream).toContain('HTTP/1.1 502 Bad Gateway');
+  });
+
+  it('requires bridge auth for HTTP metadata endpoints when configured', async () => {
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+      bridgeToken: 'secret-token',
+    });
+    const port = await listen(server);
+
+    await expect(readHttpBody(port, '/homedir')).resolves.toEqual({
+      status: 401,
+      body: { error: 'Unauthorized' },
+    });
+    await expect(readHttpBody(port, '/healthz')).resolves.toEqual({
+      status: 401,
+      body: { error: 'Unauthorized' },
+    });
+    await expect(readHttpBody(port, '/readyz?token=secret-token')).resolves.toEqual({
+      status: 200,
+      body: { ok: true, service: 'vis_bridge' },
+    });
+
+    const homedir = await readHttpBody(port, '/homedir', { Authorization: 'Bearer secret-token' });
+    expect(homedir.status).toBe(200);
+    expect(homedir.body).toEqual({ home: expect.any(String) });
+  });
+
+  it('rejects non-loopback browser origins for HTTP metadata endpoints', async () => {
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+
+    await expect(readHttpBody(port, '/homedir', { Origin: 'https://example.com' })).resolves.toEqual({
+      status: 403,
+      body: { error: 'Forbidden origin' },
+    });
   });
 
   it('rejects non-loopback browser origins before contacting upstream', async () => {

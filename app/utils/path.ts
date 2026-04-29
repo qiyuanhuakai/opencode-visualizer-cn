@@ -47,6 +47,7 @@ export function normalizeDirectory(value?: string): string {
 export function splitFileContentDirectoryAndPath(
   targetPath: string,
   sandboxDirectory: string | null,
+  options: { strictSandbox?: boolean } = {},
 ): { directory: string; path: string } {
   const source = targetPath.replace(/\\/g, '/').trim();
 
@@ -55,6 +56,9 @@ export function splitFileContentDirectoryAndPath(
 
     if (!source) {
       return { directory: sandbox, path: '.' };
+    }
+    if (options.strictSandbox && source.split('/').some((segment) => segment === '..')) {
+      return { directory: sandbox, path: source || '.' };
     }
     if (!source.startsWith('/')) {
       return { directory: sandbox, path: normalizeRelativePathNoParent(source) || '.' };
@@ -67,6 +71,9 @@ export function splitFileContentDirectoryAndPath(
     const prefix = `${sandbox}/`;
     if (absolute.startsWith(prefix)) {
       return { directory: sandbox, path: absolute.slice(prefix.length) || '.' };
+    }
+    if (options.strictSandbox) {
+      return { directory: sandbox, path: absolute };
     }
   }
 

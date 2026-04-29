@@ -163,6 +163,40 @@ describe('CodexAdapter', () => {
     });
   });
 
+  it('translates shared permission and question replies into Codex server responses', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const initialized = adapter.initialize();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await expect(initialized).resolves.toEqual({});
+
+    await adapter.replyPermission('codex:42', { reply: 'always' });
+    await adapter.replyPermission('codex:"req-1"', { reply: 'reject' });
+    await adapter.replyQuestion(
+      'codex-tool:{"id":43,"questionIds":["question-a"]}',
+      { answers: [['Use this value']] },
+    );
+    await adapter.replyQuestion('codex-dynamic:44', { answers: [['Dynamic result']] });
+
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({ id: 42, result: 'acceptForSession' });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 'req-1', result: 'decline' });
+    expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
+      id: 43,
+      result: { responses: [{ questionId: 'question-a', response: 'Use this value' }] },
+    });
+    expect(JSON.parse(socket.sent[5] ?? '{}')).toEqual({
+      id: 44,
+      result: { contentItems: [{ type: 'text', text: 'Dynamic result' }] },
+    });
+  });
+
   it('reads and resumes existing threads', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
@@ -353,7 +387,7 @@ describe('CodexAdapter', () => {
     socket.respond(2, { thread: { id: 'thr_new', preview: '', cwd: '/repo' } });
     await expect(createSession).resolves.toMatchObject({
       id: 'thr_new',
-      projectID: 'codex:/repo',
+      projectID: 'codex',
       directory: '/repo',
       status: 'idle',
     });
@@ -368,7 +402,7 @@ describe('CodexAdapter', () => {
     socket.respond(3, { thread: { id: 'thr_fork', preview: '', cwd: '/repo' } });
     await expect(forkSession).resolves.toMatchObject({
       id: 'thr_fork',
-      projectID: 'codex:/repo',
+      projectID: 'codex',
       directory: '/repo',
       status: 'idle',
     });
@@ -378,7 +412,7 @@ describe('CodexAdapter', () => {
     socket.respond(4, { thread: { id: 'thr_1', cwd: '/repo' } });
     await expect(revertSession).resolves.toMatchObject({
       id: 'thr_1',
-      projectID: 'codex:/repo',
+      projectID: 'codex',
       directory: '/repo',
       status: 'idle',
     });
@@ -388,10 +422,82 @@ describe('CodexAdapter', () => {
       params: { threadId: 'thr_1', numTurns: 1 },
     });
 
-   await expect(adapter.deleteSession('thr_1')).rejects.toThrow(
-     'Codex does not support deleteSession; hide the thread locally or archive it instead.',
-   );
- });
+    await expect(adapter.deleteSession('thr_1')).rejects.toThrow(
+      'Codex does not support deleteSession; hide the thread locally or archive it instead.',
+    );
+
+    const listFiles = adapter.listFiles;
+    await expect(listFiles({ directory: '/repo', path: '../secret' })).rejects.toThrow(
+      'Codex file paths cannot contain parent-directory segments.',
+    );
+    await expect(adapter.readFileContent({ directory: '/repo', path: '/etc/passwd' })).rejects.toThrow(
+      'Codex file path is outside the active directory.',
+    );
+    const getLspStatus = adapter.getLspStatus;
+    await expect(getLspStatus()).resolves.toEqual([]);
+  });
+
+  it('maps Codex models to provider options for the shared UI', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const listProviders = adapter.listProviders;
+    const providers = listProviders();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, {
+      data: [
+        {
+          id: 'gpt-5.5-codex',
+          model: 'gpt-5.5-codex',
+          displayName: 'GPT-5.5 Codex',
+          isDefault: true,
+          inputModalities: ['text', 'image'],
+          supportedReasoningEfforts: [
+            { reasoningEffort: 'low', description: 'Fast' },
+            { reasoningEffort: 'high', description: 'Deep' },
+          ],
+        },
+        { id: 'hidden-model', model: 'hidden-model', displayName: 'Hidden', hidden: true },
+      ],
+      nextCursor: null,
+    });
+
+    await expect(providers).resolves.toEqual({
+      all: [
+        {
+          id: 'codex',
+          name: 'Codex',
+          source: 'codex-app-server',
+          models: {
+            'gpt-5.5-codex': {
+              id: 'gpt-5.5-codex',
+              name: 'GPT-5.5 Codex',
+              providerID: 'codex',
+              status: 'connected',
+              variants: {
+                low: { description: 'Fast' },
+                high: { description: 'Deep' },
+              },
+              capabilities: {
+                attachment: true,
+                reasoning: true,
+                toolcall: true,
+              },
+            },
+          },
+        },
+      ],
+      connected: ['codex'],
+      default: { codex: 'gpt-5.5-codex' },
+    });
+  });
 
  describe('CodexAdapter extended APIs', () => {
    it('starts a review for a thread', async () => {

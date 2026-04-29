@@ -259,6 +259,7 @@ export interface LocaleMessages {
       plugins: string;
       skills: string;
       token: string;
+      codex: string;
     };
     server: {
       status: string;
@@ -310,6 +311,18 @@ export interface LocaleMessages {
       totalCost: string;
       createdTime: string;
       lastActivity: string;
+    };
+    codex: {
+      account: string;
+      notConnected: string;
+      notLoggedIn: string;
+      loginApiKey: string;
+      loginChatgpt: string;
+      loginDeviceCode: string;
+      logout: string;
+      rateLimits: string;
+      rateLimitUsed: string;
+      refresh: string;
     };
   };
   providerManager: {

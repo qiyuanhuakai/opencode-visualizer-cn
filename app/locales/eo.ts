@@ -260,6 +260,7 @@ const messages: LocaleMessages = {
       plugins: 'Kromaĵoj',
       skills: 'Kapablecoj',
       token: 'Token',
+      codex: 'Codex',
     },
     server: {
       status: 'Servila stato',
@@ -311,6 +312,18 @@ const messages: LocaleMessages = {
       totalCost: 'Entuta kosto',
       createdTime: 'Kreita',
       lastActivity: 'Lasta aktiveco',
+    },
+    codex: {
+      account: 'Konto',
+      notConnected: 'Codex ne estas konektita.',
+      notLoggedIn: 'Ne ensalutinta',
+      loginApiKey: 'API Key ensaluto',
+      loginChatgpt: 'ChatGPT ensaluto',
+      loginDeviceCode: 'Aparata kodo',
+      logout: 'Elsaluti',
+      rateLimits: 'Limoj',
+      rateLimitUsed: 'Uzita',
+      refresh: 'Refreŝigi Codex-staton',
     },
   },
   providerManager: {

@@ -260,6 +260,7 @@ const messages: LocaleMessages = {
       plugins: '插件',
       skills: '技能',
       token: 'Token',
+      codex: 'Codex',
     },
     server: {
       status: '服务器状态',
@@ -311,6 +312,18 @@ const messages: LocaleMessages = {
       totalCost: '总成本',
       createdTime: '创建时间',
       lastActivity: '最后活动',
+    },
+    codex: {
+      account: '账号',
+      notConnected: 'Codex 未连接。',
+      notLoggedIn: '未登录',
+      loginApiKey: 'API Key 登录',
+      loginChatgpt: 'ChatGPT 登录',
+      loginDeviceCode: '设备码',
+      logout: '退出登录',
+      rateLimits: '限额',
+      rateLimitUsed: '已用',
+      refresh: '刷新 Codex 状态',
     },
   },
   providerManager: {

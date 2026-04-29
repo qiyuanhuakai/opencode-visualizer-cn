@@ -1,5 +1,6 @@
 import { createOpenCodeAdapter } from './openCodeAdapter';
 import { createCodexAdapter } from './codex/codexAdapter';
+import { appendCodexBridgeToken } from './codex/bridgeUrl';
 import type { BackendAdapter, BackendKind } from './types';
 import { StorageKeys, storageGet, storageRemove, storageSet } from '../utils/storageKeys';
 
@@ -12,14 +13,6 @@ export function getPersistedCodexBridgeUrl() {
 
 export function getPersistedCodexBridgeToken() {
   return storageGet(StorageKeys.auth.codexBridgeToken) ?? '';
-}
-
-function appendCodexBridgeToken(url: string, token?: string) {
-  const trimmedToken = token?.trim();
-  if (!trimmedToken) return url;
-  const parsed = new URL(url);
-  parsed.searchParams.set('token', trimmedToken);
-  return parsed.toString();
 }
 
 let adapters: Record<BackendKind, BackendAdapter | undefined> = {

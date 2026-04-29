@@ -32,6 +32,7 @@ import {
   type CodexToolRequestUserInputParams,
   type CodexWindowsSandboxSetupStartResult,
 } from '../backends/codex/codexAdapter';
+import { appendCodexBridgeToken, codexBridgeHttpUrl } from '../backends/codex/bridgeUrl';
 import type {
   CodexJsonRpcId,
   CodexJsonRpcNotification,
@@ -92,13 +93,6 @@ export type CodexApiOptions = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function appendBridgeToken(url: string, token?: string) {
-  if (!token) return url;
-  const parsed = new URL(url);
-  parsed.searchParams.set('token', token);
-  return parsed.toString();
 }
 
 function extractThread(value: unknown): CodexThread | null {
@@ -505,7 +499,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   function makeAdapter() {
     const factory = initialOptions.adapterFactory ?? ((options: CodexAdapterOptions) => new CodexAdapter(options));
     return factory({
-      url: appendBridgeToken(url.value.trim(), bridgeToken.value.trim() || undefined),
+      url: appendCodexBridgeToken(url.value.trim(), bridgeToken.value.trim() || undefined),
       experimentalApi: true,
     });
   }
@@ -620,7 +614,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
        const turn = extractTurn(notification.params);
        if (turn) activeTurn.value = turn;
        pruneServerRequestsForActiveContext();
-       if (notification.method === 'turn/completed') void refreshThreads();
+       if (notification.method === 'turn/completed') {
+         void refreshThreads();
+         if (activeThreadId.value) void hydrateThread(activeThreadId.value);
+       }
        return;
      }
 
@@ -957,8 +954,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
     if (!homeDir.value) {
       try {
-        const bridgeUrl = new URL(url.value);
-        const httpUrl = `http://${bridgeUrl.host}/homedir`;
+        const httpUrl = codexBridgeHttpUrl(
+          appendCodexBridgeToken(url.value.trim(), bridgeToken.value.trim() || undefined),
+          '/homedir',
+        );
         const res = await fetch(httpUrl, { method: 'GET' });
         if (res.ok) {
           const data = await res.json() as { home?: string };
@@ -1060,16 +1059,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function archiveThread(threadId: string) {
     if (!adapter) throw new Error('Codex is not connected.');
+    const removeArchivedThread = () => {
+      threads.value = threads.value.filter((thread) => thread.id !== threadId);
+      if (activeThreadId.value === threadId) {
+        activeThreadId.value = threads.value[0]?.id ?? '';
+        transcript.value = [];
+        activeTurn.value = null;
+      }
+    };
     await adapter.archiveThread({ threadId });
-    threads.value = threads.value.filter((thread) => thread.id !== threadId);
-    if (activeThreadId.value === threadId) {
-      activeThreadId.value = threads.value[0]?.id ?? '';
-      transcript.value = [];
-      activeTurn.value = null;
-    }
+    removeArchivedThread();
     await refreshThreads();
-    threads.value = threads.value.filter((thread) => thread.id !== threadId);
-    if (activeThreadId.value === threadId) activeThreadId.value = threads.value[0]?.id ?? '';
+    removeArchivedThread();
   }
 
   async function unarchiveThread(threadId: string) {
@@ -1309,7 +1310,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     serverRequests.value = serverRequests.value.filter((request) => request.id !== id);
   }
 
-   async function sendPrompt(text: string) {
+   async function sendPrompt(text: string, options: { model?: string; effort?: string } = {}) {
      const prompt = text.trim();
      if (!prompt) return null;
      if (!adapter) throw new Error('Codex is not connected.');
@@ -1319,9 +1320,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      pushTranscript('user', prompt);
 
      try {
+       const model = (options.model ?? selectedModel.value) || undefined;
        const input: CodexPromptInput = activeThreadId.value
-         ? { threadId: activeThreadId.value, text: prompt, model: selectedModel.value || undefined }
-         : { text: prompt, model: selectedModel.value || undefined };
+          ? { threadId: activeThreadId.value, text: prompt, model, effort: options.effort }
+          : { text: prompt, model, effort: options.effort };
        const result = await adapter.sendPrompt(input);
        activeThreadId.value = result.threadId;
        if (result.thread) upsertThread(result.thread);
@@ -1843,6 +1845,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       previewFileContent,
       previewFilePath,
       sandboxPath,
+      homeDir,
       fsBreadcrumbs,
       fsSuggestions,
       fsShowSuggestions,

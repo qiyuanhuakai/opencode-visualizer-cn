@@ -260,6 +260,7 @@ const messages: LocaleMessages = {
       plugins: 'Plugins',
       skills: 'Skills',
       token: 'Token',
+      codex: 'Codex',
     },
     server: {
       status: 'Server Status',
@@ -311,6 +312,18 @@ const messages: LocaleMessages = {
       totalCost: 'Total cost',
       createdTime: 'Created',
       lastActivity: 'Last activity',
+    },
+    codex: {
+      account: 'Account',
+      notConnected: 'Codex is not connected.',
+      notLoggedIn: 'Not logged in',
+      loginApiKey: 'API Key Login',
+      loginChatgpt: 'ChatGPT Login',
+      loginDeviceCode: 'Device Code',
+      logout: 'Logout',
+      rateLimits: 'Rate limits',
+      rateLimitUsed: 'Used',
+      refresh: 'Refresh Codex status',
     },
   },
   providerManager: {
