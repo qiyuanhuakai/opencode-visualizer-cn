@@ -1,6 +1,6 @@
 import { ref } from 'vue';
 import type { ComputedRef, Ref } from 'vue';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 
 export type TodoItem = {
   content: string;
@@ -56,7 +56,8 @@ export function useTodos(options: {
     await Promise.all(
       sessionIds.map(async (id) => {
         try {
-          const data = await opencodeApi.getSessionTodos(id, directory);
+          const getSessionTodos = getActiveBackendAdapter().getSessionTodos;
+          const data = getSessionTodos ? await getSessionTodos(id, directory) : [];
           nextTodos[id] = normalizeTodoItems(data);
         } catch (error) {
           nextTodos[id] = [];

@@ -152,6 +152,7 @@ describe('useCodexApi', () => {
       expect.objectContaining({ role: 'user', text: 'thr_existing prompt' }),
       expect.objectContaining({ role: 'assistant', text: 'thr_existing answer' }),
     ]);
+    expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual(['user', 'assistant']);
   });
 
   it('refreshes and updates thread names from notifications', async () => {

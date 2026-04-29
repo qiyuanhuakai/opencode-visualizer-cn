@@ -10,6 +10,8 @@ import type {
   ListSessionsOptions,
   SessionUpdatePayload,
 } from '../types';
+import { CODEX_PROJECT_ID, codexBridgeHttpUrl } from './bridgeUrl';
+import { normalizeCodexTurnsToHistory } from './normalize';
 
 export type CodexClientInfo = {
   name: string;
@@ -355,6 +357,26 @@ export type CodexModelListParams = {
 export type CodexModelListResult = {
   data: CodexModel[];
   nextCursor: string | null;
+};
+
+type CodexProviderModel = {
+  id: string;
+  name: string;
+  providerID: string;
+  status?: string;
+  variants?: Record<string, { description?: string }>;
+  capabilities?: {
+    attachment?: boolean;
+    reasoning?: boolean;
+    toolcall?: boolean;
+  };
+};
+
+type CodexProviderInfo = {
+  id: string;
+  name: string;
+  source: string;
+  models: Record<string, CodexProviderModel>;
 };
 
 // skills/* types
@@ -843,12 +865,199 @@ export type CodexAdapterOptions = CodexJsonRpcClientOptions & {
   experimentalApi?: boolean;
 };
 
+type NormalizedCodexSession = {
+  id: string;
+  projectID: string;
+  title?: string;
+  status?: 'busy' | 'idle' | 'retry';
+  directory?: string;
+  time?: {
+    created?: number;
+    updated?: number;
+    archived?: number;
+    pinned?: number;
+  };
+};
+
+function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status'] {
+  if (status === 'running' || status === 'busy' || status === 'inProgress') return 'busy';
+  if (status === 'retry') return 'retry';
+  return 'idle';
+}
+
+function normalizeCodexMcpStatus(status: string) {
+  if (status === 'connected' || status === 'disabled' || status === 'failed') return status;
+  if (status === 'needs_auth' || status === 'needs_client_registration') return status;
+  if (status === 'running' || status === 'ready') return 'connected';
+  if (status === 'auth_required') return 'needs_auth';
+  return status ? 'failed' : 'disabled';
+}
+
+function codexModelVariants(model: CodexModel) {
+  const efforts = model.supportedReasoningEfforts ?? [];
+  return Object.fromEntries(
+    efforts.map((effort) => [
+      effort.reasoningEffort,
+      { description: effort.description },
+    ]),
+  );
+}
+
+function normalizeCodexThread(thread: CodexThread): NormalizedCodexSession {
+  const directory = thread.cwd?.trim() || undefined;
+    return {
+    id: thread.id,
+    projectID: CODEX_PROJECT_ID,
+    title: thread.name || thread.preview || undefined,
+    status: normalizeCodexStatus(thread.status),
+    directory,
+    time: {
+      created: thread.createdAt,
+      updated: thread.updatedAt ?? thread.createdAt,
+      archived: undefined,
+      pinned: undefined,
+    },
+  };
+}
+
+function isAbsolutePath(path: string) {
+  return path.startsWith('/') || /^[A-Za-z]:[\\/]/u.test(path);
+}
+
+function normalizePathSeparators(path: string) {
+  return path.replace(/\\/gu, '/');
+}
+
+function hasParentSegment(path: string) {
+  return normalizePathSeparators(path).split('/').some((segment) => segment === '..');
+}
+
+function normalizeAbsoluteCodexPath(path: string) {
+  const normalized = normalizePathSeparators(path.trim()).replace(/\/+/gu, '/');
+  if (/^[A-Za-z]:\//u.test(normalized)) {
+    const [drive = '', ...rest] = normalized.split('/');
+    return `${drive}/${rest.filter((segment) => segment && segment !== '.').join('/')}`.replace(/\/+$/u, '') || `${drive}/`;
+  }
+  const segments: string[] = [];
+  for (const segment of normalized.split('/')) {
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (segments.length === 0) throw new Error('Codex file paths cannot escape the active directory.');
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return `/${segments.join('/')}`.replace(/\/+$/u, '') || '/';
+}
+
+function isWithinCodexRoot(root: string, target: string) {
+  const normalizedRoot = normalizeAbsoluteCodexPath(root);
+  const normalizedTarget = normalizeAbsoluteCodexPath(target);
+  if (normalizedRoot === '/') return normalizedTarget === '/';
+  const comparableRoot = /^[A-Za-z]:\//u.test(normalizedRoot) ? normalizedRoot.toLowerCase() : normalizedRoot;
+  const comparableTarget = /^[A-Za-z]:\//u.test(normalizedTarget) ? normalizedTarget.toLowerCase() : normalizedTarget;
+  return comparableTarget === comparableRoot || comparableTarget.startsWith(`${comparableRoot}/`);
+}
+
+function normalizeRelativePath(path?: string) {
+  const trimmed = path?.trim() || '.';
+  if (trimmed === '.') return '';
+  return trimmed.replace(/^\/+|\/+$/gu, '');
+}
+
+function resolveCodexFsPath(directory: string, path?: string) {
+  const trimmedPath = path?.trim();
+  const root = normalizeAbsoluteCodexPath(directory.trim());
+  if (!isAbsolutePath(root)) throw new Error('Codex file root must be absolute.');
+  if (trimmedPath && isAbsolutePath(trimmedPath)) {
+    const target = normalizeAbsoluteCodexPath(trimmedPath);
+    if (!isWithinCodexRoot(root, target)) {
+      throw new Error('Codex file path is outside the active directory.');
+    }
+    return target;
+  }
+  if (trimmedPath && hasParentSegment(trimmedPath)) {
+    throw new Error('Codex file paths cannot contain parent-directory segments.');
+  }
+  const relative = normalizeRelativePath(trimmedPath);
+  const target = relative ? `${root.replace(/\/+$/u, '')}/${relative}` : root;
+  if (!isWithinCodexRoot(root, target)) {
+    throw new Error('Codex file path is outside the active directory.');
+  }
+  return target;
+}
+
+function decodeBase64Bytes(dataBase64: string) {
+  const globalWithBuffer = globalThis as typeof globalThis & {
+    Buffer?: { from(data: string, encoding: 'base64'): Uint8Array };
+  };
+  if (typeof globalWithBuffer.Buffer?.from === 'function') {
+    return new Uint8Array(globalWithBuffer.Buffer.from(dataBase64, 'base64'));
+  }
+  const binary = atob(dataBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 function defaultClientInfo(): CodexClientInfo {
   return {
     name: 'vis',
     title: 'Vis',
     version: '0.3.0',
   };
+}
+
+function parseCodexDialogRequestId(requestId: string): CodexJsonRpcId {
+  const prefix = 'codex:';
+  if (!requestId.startsWith(prefix)) return requestId;
+  try {
+    const parsed: unknown = JSON.parse(requestId.slice(prefix.length));
+    if (typeof parsed === 'string' || typeof parsed === 'number') return parsed;
+  } catch {
+    return requestId;
+  }
+  return requestId;
+}
+
+function parseCodexToolQuestionRequest(requestId: string): {
+  id: CodexJsonRpcId;
+  questionIds: string[];
+  dynamic: boolean;
+} {
+  const dynamicPrefix = 'codex-dynamic:';
+  if (requestId.startsWith(dynamicPrefix)) {
+    try {
+      const parsed: unknown = JSON.parse(requestId.slice(dynamicPrefix.length));
+      if (typeof parsed === 'string' || typeof parsed === 'number') {
+        return { id: parsed, questionIds: [], dynamic: true };
+      }
+    } catch {
+      return { id: requestId, questionIds: [], dynamic: true };
+    }
+    return { id: requestId, questionIds: [], dynamic: true };
+  }
+  const prefix = 'codex-tool:';
+  if (!requestId.startsWith(prefix)) {
+    return { id: parseCodexDialogRequestId(requestId), questionIds: [], dynamic: false };
+  }
+  try {
+    const parsed: unknown = JSON.parse(requestId.slice(prefix.length));
+    if (!parsed || typeof parsed !== 'object') return { id: requestId, questionIds: [], dynamic: false };
+    const record = parsed as Record<string, unknown>;
+    const id = typeof record.id === 'string' || typeof record.id === 'number'
+      ? record.id
+      : requestId;
+    const questionIds = Array.isArray(record.questionIds)
+      ? record.questionIds.filter((value): value is string => typeof value === 'string')
+      : [];
+    return { id, questionIds, dynamic: false };
+  } catch {
+    return { id: requestId, questionIds: [], dynamic: false };
+  }
 }
 
 export class CodexAdapter implements BackendAdapter {
@@ -860,17 +1069,64 @@ export class CodexAdapter implements BackendAdapter {
     sessions: true,
     sessionFork: true,
     sessionRevert: true,
+    files: true,
+    terminal: true,
+    permissions: true,
+    questions: true,
+    todos: false,
+    status: true,
   };
 
   private readonly client: CodexJsonRpcClient;
   private readonly clientInfo: CodexClientInfo;
   private readonly experimentalApi: boolean;
+  private readonly bridgeUrl: string;
+  private readonly activeTurnByThreadId = new Map<string, string>();
   private initialized = false;
 
   constructor(options: CodexAdapterOptions) {
     this.client = new CodexJsonRpcClient(options);
     this.clientInfo = options.clientInfo ?? defaultClientInfo();
     this.experimentalApi = options.experimentalApi ?? false;
+    this.bridgeUrl = options.url;
+    this.bindBackendMethods();
+  }
+
+  private bindBackendMethods() {
+    this.createSession = this.createSession.bind(this);
+    this.forkSession = this.forkSession.bind(this);
+    this.updateSession = this.updateSession.bind(this);
+    this.deleteSession = this.deleteSession.bind(this);
+    this.revertSession = this.revertSession.bind(this);
+    this.unrevertSession = this.unrevertSession.bind(this);
+    this.listSessions = this.listSessions.bind(this);
+    this.getPathInfo = this.getPathInfo.bind(this);
+    this.getGlobalConfig = this.getGlobalConfig.bind(this);
+    this.listFiles = this.listFiles.bind(this);
+    this.readFileContent = this.readFileContent.bind(this);
+    this.readFileContentBytes = this.readFileContentBytes.bind(this);
+    this.getVcsInfo = this.getVcsInfo.bind(this);
+    this.listProviders = this.listProviders.bind(this);
+    this.listAgents = this.listAgents.bind(this);
+    this.listCommands = this.listCommands.bind(this);
+    this.getSessionStatusMap = this.getSessionStatusMap.bind(this);
+    this.listSessionMessages = this.listSessionMessages.bind(this);
+    this.getSessionTodos = this.getSessionTodos.bind(this);
+    this.sendPromptAsync = this.sendPromptAsync.bind(this);
+    this.abortSession = this.abortSession.bind(this);
+    this.listPendingPermissions = this.listPendingPermissions.bind(this);
+    this.listPendingQuestions = this.listPendingQuestions.bind(this);
+    this.replyPermission = this.replyPermission.bind(this);
+    this.replyQuestion = this.replyQuestion.bind(this);
+    this.rejectQuestion = this.rejectQuestion.bind(this);
+    this.getGlobalHealth = this.getGlobalHealth.bind(this);
+    this.getMcpStatus = this.getMcpStatus.bind(this);
+    this.getLspStatus = this.getLspStatus.bind(this);
+    this.updateMcp = this.updateMcp.bind(this);
+    this.getSkillStatus = this.getSkillStatus.bind(this);
+    this.updateProject = this.updateProject.bind(this);
+    this.createWorktree = this.createWorktree.bind(this);
+    this.deleteWorktree = this.deleteWorktree.bind(this);
   }
 
   isConnected() {
@@ -1028,6 +1284,18 @@ export class CodexAdapter implements BackendAdapter {
       thread: startedThread?.thread,
       turn: turn.turn,
     };
+  }
+
+  private async fetchBridgeHomeDir() {
+    try {
+      const httpUrl = codexBridgeHttpUrl(this.bridgeUrl, '/homedir');
+      const response = await fetch(httpUrl, { method: 'GET' });
+      if (!response.ok) return '';
+      const data = await response.json() as { home?: unknown };
+      return typeof data.home === 'string' ? data.home : '';
+    } catch {
+      return '';
+    }
   }
 
   async reviewStart(params: CodexReviewStartParams) {
@@ -1296,19 +1564,30 @@ export class CodexAdapter implements BackendAdapter {
     return this.client.request<CodexToolRequestUserInputResult>('tool/requestUserInput', params);
   }
 
-  createSession(directory?: string) {
-    return this.startThread({ cwd: directory });
+  async createSession(directory?: string) {
+    const result = await this.startThread({ cwd: directory });
+    return normalizeCodexThread(result.thread);
   }
 
-  forkSession(sessionId: string, _messageId: string, _directory?: string) {
-    return this.forkThread({ threadId: sessionId });
+  async forkSession(sessionId: string, _messageId: string, _directory?: string) {
+    const result = await this.forkThread({ threadId: sessionId });
+    return normalizeCodexThread(result.thread);
   }
 
-  updateSession(sessionId: string, payload: SessionUpdatePayload, _directory?: string) {
-    return this.setThreadName({
+  async updateSession(sessionId: string, payload: SessionUpdatePayload, _directory?: string) {
+    if (payload.time?.archived && payload.time.archived > 0) {
+      await this.archiveThread({ threadId: sessionId });
+    }
+    if (payload.time?.archived === 0) {
+      const result = await this.unarchiveThread({ threadId: sessionId });
+      return normalizeCodexThread(result.thread);
+    }
+    if (payload.title !== undefined) await this.setThreadName({
       threadId: sessionId,
-      name: payload.title ?? null,
+      name: payload.title || null,
     });
+    const result = await this.readThread({ threadId: sessionId });
+    return normalizeCodexThread(result.thread);
   }
 
   deleteSession(sessionId: string, _directory?: string) {
@@ -1316,20 +1595,250 @@ export class CodexAdapter implements BackendAdapter {
     return Promise.reject(new Error('Codex does not support deleteSession; hide the thread locally or archive it instead.'));
   }
 
-  revertSession(sessionId: string, _messageId: string, _directory?: string) {
-    return this.rollbackThread({ threadId: sessionId, numTurns: 1 });
+  async revertSession(sessionId: string, _messageId: string, _directory?: string) {
+    const result = await this.rollbackThread({ threadId: sessionId, numTurns: 1 });
+    return normalizeCodexThread(result.thread);
   }
 
   unrevertSession() {
     return Promise.reject(new Error('Codex does not support unrevertSession.'));
   }
 
-  listSessions(options?: ListSessionsOptions) {
-    return this.listThreads({
+  async listSessions(options?: ListSessionsOptions) {
+    const result = await this.listThreads({
       limit: options?.limit,
       cwd: options?.directory,
       searchTerm: options?.search,
     });
+    return result.data.map((thread) => normalizeCodexThread(thread));
+  }
+
+  async listProviders() {
+    const result = await this.listModels({ includeHidden: false });
+    const visibleModels = result.data.filter((model) => !model.hidden);
+    const models = Object.fromEntries(
+      visibleModels.map((model) => {
+        const variants = codexModelVariants(model);
+        const providerModel: CodexProviderModel = {
+          id: model.id,
+          name: model.displayName || model.model || model.id,
+          providerID: CODEX_PROJECT_ID,
+          status: model.upgrade ? 'available' : 'connected',
+          variants,
+          capabilities: {
+            attachment: model.inputModalities?.includes('image') ?? false,
+            reasoning: Object.keys(variants).length > 0,
+            toolcall: true,
+          },
+        };
+        return [model.id, providerModel];
+      }),
+    );
+    const provider: CodexProviderInfo = {
+      id: CODEX_PROJECT_ID,
+      name: 'Codex',
+      source: 'codex-app-server',
+      models,
+    };
+    const defaultModel = visibleModels.find((model) => model.isDefault) ?? visibleModels[0];
+    return {
+      all: [provider],
+      connected: [CODEX_PROJECT_ID],
+      default: defaultModel ? { [CODEX_PROJECT_ID]: defaultModel.id } : {},
+    };
+  }
+
+  async listAgents() {
+    return [
+      {
+        name: 'codex',
+        description: 'Codex app-server',
+        mode: 'primary',
+        color: 'cyan',
+      },
+    ];
+  }
+
+  async listCommands() {
+    return [];
+  }
+
+  async getPathInfo() {
+    const home = await this.fetchBridgeHomeDir();
+    return {
+      home: home || '/',
+      worktree: home || '/',
+    };
+  }
+
+  async getSessionStatusMap(directory?: string) {
+    const result = await this.listThreads({ cwd: directory, limit: 100, sortKey: 'updated_at' });
+    return Object.fromEntries(
+      result.data.map((thread) => [thread.id, normalizeCodexStatus(thread.status)]),
+    );
+  }
+
+  async listSessionMessages(sessionId: string) {
+    const read = await this.readThread({ threadId: sessionId, includeTurns: true });
+    return normalizeCodexTurnsToHistory({
+      sessionId: read.thread.id,
+      turns: read.thread.turns ?? [],
+    });
+  }
+
+  async listFiles(payload: { directory: string; path?: string }) {
+    const absolutePath = resolveCodexFsPath(payload.directory, payload.path);
+    const relativePrefix = normalizeRelativePath(payload.path);
+    const result = await this.readDirectory({ path: absolutePath });
+    return result.entries.map((entry) => ({
+      name: entry.fileName,
+      path: relativePrefix ? `${relativePrefix}/${entry.fileName}` : entry.fileName,
+      type: entry.isDirectory ? 'directory' : 'file',
+    }));
+  }
+
+  async readFileContent(payload: { directory: string; path: string }) {
+    const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
+    return new TextDecoder().decode(decodeBase64Bytes(result.dataBase64));
+  }
+
+  async readFileContentBytes(payload: { directory: string; path: string }) {
+    const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
+    return decodeBase64Bytes(result.dataBase64);
+  }
+
+  async getVcsInfo(directory: string) {
+    const result = await this.commandExec({
+      command: ['git', 'branch', '--show-current'],
+      cwd: directory,
+      timeoutMs: 10_000,
+    });
+    return { branch: result.stdout.trim() };
+  }
+
+  async runOneShotCommand(payload: { directory?: string; command: string; args: string[] }) {
+    const result = await this.commandExec({
+      command: [payload.command, ...payload.args],
+      cwd: payload.directory,
+      timeoutMs: 30_000,
+      streamStdoutStderr: false,
+    });
+    if (result.exitCode !== 0) {
+      const error = new Error(`Codex command failed (${result.exitCode})`);
+      (error as Error & { output?: string }).output = result.stdout || result.stderr;
+      throw error;
+    }
+    return result.stdout;
+  }
+
+  async sendPromptAsync(
+    sessionId: string,
+    payload: { directory: string; model: { providerID?: string; modelID: string }; parts: Array<Record<string, unknown>> },
+  ) {
+    const text = payload.parts
+      .map((part) => {
+        if (part.type === 'text' && typeof part.text === 'string') return part.text;
+        if (part.type === 'file' && typeof part.filename === 'string') return `[file: ${part.filename}]`;
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n\n');
+    if (!text.trim()) return;
+    const result = await this.sendPrompt({
+      threadId: sessionId,
+      text,
+      cwd: payload.directory,
+      model: payload.model.modelID,
+    });
+    this.activeTurnByThreadId.set(result.threadId, result.turn.id);
+  }
+
+  async abortSession(sessionId: string) {
+    const turnId = this.activeTurnByThreadId.get(sessionId);
+    if (!turnId) return;
+    await this.interruptTurn({ threadId: sessionId, turnId });
+    this.activeTurnByThreadId.delete(sessionId);
+  }
+
+  async listPendingPermissions() {
+    return [];
+  }
+
+  async listPendingQuestions() {
+    return [];
+  }
+
+  async replyPermission(requestId: string, payload: { reply: string }) {
+    const decision = payload.reply === 'always'
+      ? 'acceptForSession'
+      : payload.reply === 'reject'
+        ? 'decline'
+        : 'accept';
+    this.respondToServerRequest(parseCodexDialogRequestId(requestId), decision);
+  }
+
+  async replyQuestion(requestId: string, payload: { answers: string[][] }) {
+    const request = parseCodexToolQuestionRequest(requestId);
+    if (request.dynamic) {
+      const contentItems = payload.answers
+        .flat()
+        .map((text) => ({ type: 'text', text }));
+      this.respondToServerRequest(request.id, { contentItems });
+      return;
+    }
+    const responses = payload.answers.flatMap((answers, index) => (
+      answers.map((answer) => ({ questionId: request.questionIds[index] ?? String(index), response: answer }))
+    ));
+    this.respondToServerRequest(request.id, { responses });
+  }
+
+  async rejectQuestion(requestId: string) {
+    const request = parseCodexToolQuestionRequest(requestId);
+    this.respondToServerRequest(request.id, request.dynamic ? { contentItems: [] } : { responses: [] });
+  }
+
+  async getSessionTodos() {
+    return [];
+  }
+
+  async getGlobalHealth() {
+    await this.ensureInitialized();
+    return { healthy: true, version: 'codex-app-server' };
+  }
+
+  async getMcpStatus() {
+    const result = await this.listMcpServerStatus();
+    return Object.fromEntries(
+      result.data.map((server) => [
+        server.name,
+        {
+          status: normalizeCodexMcpStatus(server.status),
+          error: server.error,
+        },
+      ]),
+    );
+  }
+
+  async getLspStatus() {
+    return [];
+  }
+
+  async getGlobalConfig() {
+    return this.readConfig();
+  }
+
+  async updateMcp(payload: { name: string; config: Record<string, unknown> }) {
+    await this.writeConfigValue({
+      keyPath: `mcp.${payload.name}`,
+      value: payload.config,
+      mergeStrategy: 'replace',
+    });
+    return this.reloadMcpServerConfig({});
+  }
+
+  async getSkillStatus() {
+    const result = await this.listSkills({ cwds: [] });
+    return result.data.flatMap((entry) => entry.skills);
   }
 
   updateProject() {

@@ -66,7 +66,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 import { splitFileContentDirectoryAndPath } from '../utils/path';
 
 type FileNode = {
@@ -256,7 +256,9 @@ async function fetchDirectory(dir: string) {
 
 async function listDirectory(dir: string, signal: AbortSignal) {
   const { directory, path } = splitFileContentDirectoryAndPath(dir, null);
-  const data = (await opencodeApi.listFiles(
+  const listFiles = getActiveBackendAdapter().listFiles;
+  if (!listFiles) throw new Error('Active backend does not support file listing.');
+  const data = (await listFiles(
     {
       directory,
       path,

@@ -6,9 +6,16 @@ export interface LocaleMessages {
     loading: string;
     login: {
       title: string;
+      codexTitle: string;
+      backendLabel: string;
+      openCodeBackend: string;
+      codexBackend: string;
       username: string;
       password: string;
       url: string;
+      codexBridgeUrl: string;
+      codexBridgeToken: string;
+      codexBridgeHint: string;
       authRequired: string;
       connect: string;
       retry: string;
@@ -252,6 +259,7 @@ export interface LocaleMessages {
       plugins: string;
       skills: string;
       token: string;
+      codex: string;
     };
     server: {
       status: string;
@@ -303,6 +311,18 @@ export interface LocaleMessages {
       totalCost: string;
       createdTime: string;
       lastActivity: string;
+    };
+    codex: {
+      account: string;
+      notConnected: string;
+      notLoggedIn: string;
+      loginApiKey: string;
+      loginChatgpt: string;
+      loginDeviceCode: string;
+      logout: string;
+      rateLimits: string;
+      rateLimitUsed: string;
+      refresh: string;
     };
   };
   providerManager: {

@@ -6,6 +6,8 @@ import {
   storageRemove,
   storageSet,
 } from '../utils/storageKeys';
+import type { BackendKind } from '../backends/types';
+import { DEFAULT_CODEX_BRIDGE_URL } from '../backends/registry';
 
 type Credentials = {
   url: string;
@@ -18,6 +20,9 @@ const LEGACY_CREDENTIALS_STORAGE_KEY = 'credentials.v1';
 const url = ref('');
 const username = ref('');
 const password = ref('');
+const backendKind = ref<BackendKind>('opencode');
+const codexBridgeUrl = ref(DEFAULT_CODEX_BRIDGE_URL);
+const codexBridgeToken = ref('');
 
 function applyCredentials(next: Credentials) {
   url.value = next.url;
@@ -76,10 +81,17 @@ export function useCredentials() {
   });
 
   const isConfigured = computed(() => {
+    if (backendKind.value === 'codex') return codexBridgeUrl.value.trim().length > 0;
     return url.value.trim().length > 0;
   });
 
+  function saveBackendKind(kind: BackendKind) {
+    backendKind.value = kind;
+    storageSet(StorageKeys.auth.backendKind, kind);
+  }
+
   function save(newUrl: string, newUsername: string, newPassword: string) {
+    saveBackendKind('opencode');
     applyCredentials({
       url: newUrl,
       username: newUsername,
@@ -101,6 +113,19 @@ export function useCredentials() {
     }
   }
 
+  function saveCodex(newBridgeUrl: string, newBridgeToken: string) {
+    saveBackendKind('codex');
+    codexBridgeUrl.value = newBridgeUrl;
+    codexBridgeToken.value = newBridgeToken;
+
+    storageSet(StorageKeys.auth.codexBridgeUrl, newBridgeUrl);
+    if (newBridgeToken.trim()) {
+      storageSet(StorageKeys.auth.codexBridgeToken, newBridgeToken);
+    } else {
+      storageRemove(StorageKeys.auth.codexBridgeToken);
+    }
+  }
+
   function load() {
     if (typeof window === 'undefined') return;
 
@@ -108,6 +133,7 @@ export function useCredentials() {
       const storedCredentials =
         parseStoredCredentials(storageGet(StorageKeys.auth.credentials)) ?? migrateLegacyCredentials();
       const storedUrl = storageGet(StorageKeys.auth.serverUrl) ?? storedCredentials?.url ?? '';
+      const storedBackendKind = storageGet(StorageKeys.auth.backendKind);
 
       if (!storageGet(StorageKeys.auth.serverUrl) && storedUrl) {
         storageSet(StorageKeys.auth.serverUrl, storedUrl);
@@ -118,6 +144,9 @@ export function useCredentials() {
         username: storedCredentials?.username ?? '',
         password: storedCredentials?.password ?? '',
       });
+      backendKind.value = storedBackendKind === 'codex' ? 'codex' : 'opencode';
+      codexBridgeUrl.value = storageGet(StorageKeys.auth.codexBridgeUrl) ?? DEFAULT_CODEX_BRIDGE_URL;
+      codexBridgeToken.value = storageGet(StorageKeys.auth.codexBridgeToken) ?? '';
     } catch {
       return;
     }
@@ -125,6 +154,8 @@ export function useCredentials() {
 
   function clear() {
     const preservedUrl = url.value;
+    const preservedBackendKind = backendKind.value;
+    const preservedCodexUrl = codexBridgeUrl.value;
     url.value = preservedUrl;
     username.value = '';
     password.value = '';
@@ -138,6 +169,10 @@ export function useCredentials() {
         storageRemove(StorageKeys.auth.serverUrl);
       }
       storageRemove(StorageKeys.auth.credentials);
+      if (preservedBackendKind === 'codex') {
+        storageSet(StorageKeys.auth.codexBridgeUrl, preservedCodexUrl);
+        storageRemove(StorageKeys.auth.codexBridgeToken);
+      }
     } catch {
       return;
     }
@@ -145,6 +180,21 @@ export function useCredentials() {
 
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', (event) => {
+      if (event.key === storageKey(StorageKeys.auth.backendKind)) {
+        backendKind.value = event.newValue === 'codex' ? 'codex' : 'opencode';
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.codexBridgeUrl)) {
+        codexBridgeUrl.value = event.newValue ?? DEFAULT_CODEX_BRIDGE_URL;
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.codexBridgeToken)) {
+        codexBridgeToken.value = event.newValue ?? '';
+        return;
+      }
+
       if (event.key === storageKey(StorageKeys.auth.serverUrl)) {
         url.value = event.newValue ?? '';
         return;
@@ -170,10 +220,15 @@ export function useCredentials() {
     url,
     username,
     password,
+    backendKind,
+    codexBridgeUrl,
+    codexBridgeToken,
     authHeader,
     baseUrl,
     isConfigured,
     save,
+    saveBackendKind,
+    saveCodex,
     load,
     clear,
   };

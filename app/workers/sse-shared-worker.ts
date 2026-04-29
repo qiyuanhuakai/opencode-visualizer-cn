@@ -10,15 +10,7 @@ import type {
 } from '../types/sse';
 import { normalizeDirectory } from '../utils/path';
 import { createNotificationManager } from '../utils/notificationManager';
-import {
-  getCurrentProject,
-  getSessionStatusMap,
-  getVcsInfo,
-  listProjects,
-  listSessions,
-  setAuthorization,
-  setBaseUrl,
-} from '../utils/opencode';
+import { createOpenCodeAdapter } from '../backends/openCodeAdapter';
 import { createSseConnection, type SseConnection } from '../utils/sseConnection';
 import { createStateBuilder } from '../utils/stateBuilder';
 
@@ -61,6 +53,7 @@ type ConnectionState = {
 const connections = new Map<string, ConnectionState>();
 const portToKey = new Map<MessagePort, string>();
 const OPENCODE_READ_CONCURRENCY = 12;
+const opencodeBackend = createOpenCodeAdapter();
 let activeOpencodeReadTasks = 0;
 const pendingOpencodeReadResolvers: Array<() => void> = [];
 
@@ -590,8 +583,7 @@ function parseWorkerStatePacket(packet: SsePacket): WorkerStatePacket | null {
 async function runOpencodeReadTask<T>(state: ConnectionState, task: () => Promise<T>): Promise<T> {
   await acquireOpencodeReadSlot();
   try {
-    setBaseUrl(state.baseUrl);
-    setAuthorization(state.authorization);
+    opencodeBackend.configure?.({ baseUrl: state.baseUrl, authorization: state.authorization });
     return await task();
   } finally {
     releaseOpencodeReadSlot();
@@ -644,11 +636,11 @@ async function loadDirectorySessions(
 
   const promise = runOpencodeReadTask(state, async () => {
     const [rawSessions, rawStatuses] = await Promise.all([
-      listSessions({
+      opencodeBackend.listSessions({
         directory: normalizedDirectory,
         roots: true,
       }),
-      getSessionStatusMap(normalizedDirectory),
+      opencodeBackend.getSessionStatusMap?.(normalizedDirectory),
     ]);
 
     // Guard against resurrecting a deleted worktree: if the sandbox no longer
@@ -704,7 +696,7 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   }
 
   const promise = runOpencodeReadTask(state, async () => {
-    const raw = await getVcsInfo(normalizedDirectory).catch(() => null);
+    const raw = await opencodeBackend.getVcsInfo?.(normalizedDirectory).catch(() => null);
     const vcsInfo = asRecord(raw);
     if (!vcsInfo) {
       state.vcsHydratedDirectories.add(normalizedDirectory);
@@ -868,7 +860,7 @@ async function resolveUnknownSessionDirectory(state: ConnectionState, info: Sess
   if (!directory) return;
 
   const projectInfo = await runOpencodeReadTask(state, async () => {
-    const raw = await getCurrentProject(directory);
+    const raw = await opencodeBackend.getCurrentProject?.(directory);
     return isProjectInfo(raw) ? raw : null;
   }).catch(() => null);
   if (!projectInfo) return;
@@ -1047,7 +1039,7 @@ async function bootstrapState(state: ConnectionState): Promise<void> {
   const run = (async () => {
     state.isBootstrappingState = true;
     const projects = asObjectArray<Record<string, unknown>>(
-      await runOpencodeReadTask(state, () => listProjects()),
+      await runOpencodeReadTask(state, () => opencodeBackend.listProjects?.() ?? Promise.resolve([])),
     );
     const directories = collectProjectDirectories(projects);
 
@@ -1057,12 +1049,12 @@ async function bootstrapState(state: ConnectionState): Promise<void> {
       directories.map(async (directory) => {
         const [sessions, statuses, vcsInfo] = await runOpencodeReadTask(state, () =>
           Promise.all([
-            listSessions({
+            opencodeBackend.listSessions({
               directory,
               roots: true,
             }),
-            getSessionStatusMap(directory),
-            getVcsInfo(directory).catch(() => null),
+            opencodeBackend.getSessionStatusMap?.(directory),
+            opencodeBackend.getVcsInfo?.(directory).catch(() => null),
           ]),
         );
         builder.applySessions(

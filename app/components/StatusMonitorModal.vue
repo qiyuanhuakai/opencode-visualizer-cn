@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue';
+import { ref, watch, computed, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
-import { getGlobalHealth, getMcpStatus, getLspStatus, getSkillStatus, getGlobalConfig, updateMcp, listSessionMessages, listProviders } from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
+import { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 
@@ -13,8 +14,18 @@ const emit = defineEmits<{ close: [] }>();
 const { t } = useI18n();
 const popoverRef = ref<HTMLDivElement | null>(null);
 const msg = useMessages();
+const codexApi = useCodexApi();
 
-type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token';
+function backend() {
+  return getActiveBackendAdapter();
+}
+
+function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T | undefined, name: string): T {
+  if (!method) throw new Error(`Active backend does not support ${name}.`);
+  return method;
+}
+
+type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'codex';
 const activeTab = ref<TabId>('server');
 
 const serverHealth = ref<{ healthy: boolean; version: string } | null>(null);
@@ -38,6 +49,7 @@ const tokenModelName = ref<string>('');
 const tokenContextLimit = ref<number>(0);
 const tokenUserMessages = ref<number>(0);
 const tokenAssistantMessages = ref<number>(0);
+const codexApiKeyInput = ref('');
 
 const loading = ref(false);
 const errorMessage = ref('');
@@ -105,26 +117,33 @@ async function refresh() {
   skillUnsupported.value = false;
   try {
     const [health, mcp, lsp, skills, cfg] = await Promise.allSettled([
-      getGlobalHealth(),
-      getMcpStatus(),
-      getLspStatus(),
-      getSkillStatus().catch(async () => {
+      requireBackendMethod(backend().getGlobalHealth, 'global health')(),
+      requireBackendMethod(backend().getMcpStatus, 'MCP status')(),
+      requireBackendMethod(backend().getLspStatus, 'LSP status')(),
+      requireBackendMethod(backend().getSkillStatus, 'skill status')().catch(async () => {
         // Current OpenCode version may not expose /skill endpoint
         skillUnsupported.value = true;
         return [] as Array<{ name: string; version?: string }>;
       }),
-      getGlobalConfig() as Promise<Record<string, unknown>>,
+      requireBackendMethod(backend().getGlobalConfig, 'global config')() as Promise<Record<string, unknown>>,
     ]);
     serverHealth.value = health.status === 'fulfilled' ? health.value : null;
-    mcpData.value = mcp.status === 'fulfilled' ? mcp.value : null;
-    lspData.value = lsp.status === 'fulfilled' ? lsp.value : null;
-    skillData.value = skills.status === 'fulfilled' ? skills.value : null;
+    mcpData.value = mcp.status === 'fulfilled'
+      ? (mcp.value as typeof mcpData.value)
+      : null;
+    lspData.value = lsp.status === 'fulfilled'
+      ? (lsp.value as typeof lspData.value)
+      : null;
+    skillData.value = skills.status === 'fulfilled'
+      ? (skills.value as typeof skillData.value)
+      : null;
     configData.value = cfg.status === 'fulfilled' ? cfg.value : null;
 
     // Fetch token data for current session separately
     if (props.sessionId) {
       await fetchTokenData();
     }
+    await refreshCodexStatus();
 
     if (
       health.status === 'rejected' &&
@@ -141,8 +160,40 @@ async function refresh() {
   }
 }
 
+async function refreshCodexStatus() {
+  if (codexApi.status.value !== 'connected') return;
+  try {
+    await Promise.allSettled([
+      codexApi.refreshAccount(),
+      codexApi.refreshAccountRateLimits(),
+    ]);
+  } catch {
+    errorMessage.value = t('statusMonitor.error');
+  }
+}
+
+async function handleCodexApiKeyLogin() {
+  const apiKey = codexApiKeyInput.value.trim();
+  if (!apiKey) return;
+  await codexApi.loginWithApiKey(apiKey);
+  codexApiKeyInput.value = '';
+  await refreshCodexStatus();
+}
+
+async function handleCodexLogout() {
+  await codexApi.logoutAccount();
+  await refreshCodexStatus();
+}
+
+const codexRateLimitPercent = computed(() => {
+  const limits = codexApi.accountRateLimits.value;
+  if (!limits || typeof limits.primary?.usedPercent !== 'number') return 0;
+  return Math.max(0, Math.min(100, Math.round(limits.primary.usedPercent)));
+});
+
 async function fetchContextLimit(providerId: string, modelId: string) {
   try {
+    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
     const response = await listProviders() as { all?: Array<{ id: string; models?: Record<string, { limit?: { context?: number } }> }> };
     const providers = Array.isArray(response?.all) ? response.all : [];
     const provider = providers.find((p) => p.id === providerId);
@@ -170,6 +221,7 @@ async function fetchTokenData() {
   // If store doesn't have this session's messages, load via API
   if (sessionMessages.length === 0) {
     try {
+      const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
       const messages = await listSessionMessages(props.sessionId, { limit: 100 });
       if (Array.isArray(messages) && messages.length > 0) {
         msg.loadHistory(messages);
@@ -259,6 +311,7 @@ async function handleMcpToggle(name: string, currentStatus: string) {
 
   togglingMcp.value = name;
   try {
+    const updateMcp = requireBackendMethod(backend().updateMcp, 'MCP updates');
     await updateMcp({
       name,
       config: { ...baseConfig, enabled: nextEnabled },
@@ -319,6 +372,7 @@ const tabs: { id: TabId; labelKey: string }[] = [
   { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
   { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
   { id: 'token', labelKey: 'statusMonitor.tabs.token' },
+  { id: 'codex', labelKey: 'statusMonitor.tabs.codex' },
 ];
 
 const currentTotalInfo = computed(() => {
@@ -344,6 +398,10 @@ const currentTotalInfo = computed(() => {
     case 'token':
       return tokenUsage.value
         ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
+        : null;
+    case 'codex':
+      return codexApi.accountRateLimits.value
+        ? { label: t('statusMonitor.codex.rateLimitUsed'), count: codexRateLimitPercent.value }
         : null;
     default:
       return null;
@@ -612,6 +670,103 @@ function formatPercent(value: number, total: number): string {
           </div>
         </div>
 
+        <!-- Codex Tab -->
+        <div v-if="activeTab === 'codex'" class="status-monitor-content">
+          <div v-if="codexApi.status.value !== 'connected'" class="status-monitor-empty">
+            {{ $t('statusMonitor.codex.notConnected') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div class="status-monitor-row">
+              <div class="status-monitor-row-main">
+                <span class="status-dot" :class="codexApi.account.value ? 'status-dot-success' : 'status-dot-warning'" />
+                <span class="status-monitor-name">{{ $t('statusMonitor.codex.account') }}</span>
+              </div>
+              <div class="status-monitor-row-actions">
+                <div class="status-monitor-meta-column">
+                  <span class="status-monitor-meta">
+                    {{ codexApi.account.value?.type || $t('statusMonitor.codex.notLoggedIn') }}
+                  </span>
+                  <span v-if="codexApi.accountPlanType.value" class="status-monitor-meta">
+                    {{ codexApi.accountPlanType.value }}
+                  </span>
+                </div>
+                <button
+                  v-if="codexApi.account.value"
+                  type="button"
+                  class="status-monitor-action-button"
+                  :disabled="codexApi.loginPending.value"
+                  @click="handleCodexLogout"
+                >
+                  {{ $t('statusMonitor.codex.logout') }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="!codexApi.account.value" class="codex-login-card">
+              <input
+                v-model="codexApiKeyInput"
+                class="codex-login-input"
+                type="password"
+                :placeholder="$t('codexPanel.apiKeyPlaceholder')"
+                @keydown.enter="handleCodexApiKeyLogin"
+              />
+              <div class="codex-login-actions">
+                <button
+                  type="button"
+                  class="status-monitor-action-button"
+                  :disabled="codexApi.loginPending.value || !codexApiKeyInput.trim()"
+                  @click="handleCodexApiKeyLogin"
+                >
+                  {{ $t('statusMonitor.codex.loginApiKey') }}
+                </button>
+                <button
+                  type="button"
+                  class="status-monitor-action-button"
+                  :disabled="codexApi.loginPending.value"
+                  @click="codexApi.loginWithChatgpt"
+                >
+                  {{ $t('statusMonitor.codex.loginChatgpt') }}
+                </button>
+                <button
+                  type="button"
+                  class="status-monitor-action-button"
+                  :disabled="codexApi.loginPending.value"
+                  @click="codexApi.loginWithDeviceCode"
+                >
+                  {{ $t('statusMonitor.codex.loginDeviceCode') }}
+                </button>
+              </div>
+              <div v-if="codexApi.deviceCodeInfo.value" class="status-monitor-meta-column codex-device-code">
+                <span class="status-monitor-meta">{{ codexApi.deviceCodeInfo.value.verificationUrl }}</span>
+                <span class="status-monitor-name">{{ codexApi.deviceCodeInfo.value.userCode }}</span>
+              </div>
+              <div v-if="codexApi.loginError.value" class="status-monitor-error">
+                {{ codexApi.loginError.value }}
+              </div>
+            </div>
+
+            <div class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.codex.rateLimits') }}</span>
+              <span class="token-value">
+                {{ codexApi.accountRateLimits.value ? `${codexRateLimitPercent}%` : '-' }}
+              </span>
+            </div>
+            <div v-if="codexApi.accountRateLimits.value" class="token-usage-bar-row">
+              <div class="token-usage-track">
+                <div class="token-usage-fill" :style="{ width: `${codexRateLimitPercent}%` }" />
+              </div>
+              <span class="token-usage-percent">{{ codexRateLimitPercent }}%</span>
+            </div>
+            <button
+              type="button"
+              class="status-monitor-action-button"
+              @click="refreshCodexStatus"
+            >
+              {{ $t('statusMonitor.codex.refresh') }}
+            </button>
+          </div>
+        </div>
+
     </div>
 
     <div class="status-monitor-footer">
@@ -842,6 +997,58 @@ function formatPercent(value: number, total: number): string {
 
 .retry-button:hover {
   background: color-mix(in srgb, var(--theme-status-danger, #fca5a5) 30%, transparent);
+}
+
+.status-monitor-action-button {
+  padding: 5px 8px;
+  border: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.24));
+  border-radius: 6px;
+  background: var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55));
+  color: var(--theme-modal-text, #e2e8f0);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.status-monitor-action-button:hover:not(:disabled) {
+  background: var(--theme-modal-active-bg, rgba(148, 163, 184, 0.15));
+}
+
+.status-monitor-action-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.codex-login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--theme-list-row-border, var(--theme-modal-border, rgba(148, 163, 184, 0.12)));
+  border-radius: 8px;
+  background: var(--theme-list-row-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
+}
+
+.codex-login-input {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.24));
+  border-radius: 6px;
+  background: var(--theme-input-bg, rgba(15, 23, 42, 0.8));
+  color: var(--theme-modal-text, #e2e8f0);
+  font-size: 12px;
+  outline: none;
+  appearance: none;
+}
+
+.codex-login-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.codex-device-code {
+  align-items: flex-start;
 }
 
 .status-monitor-content {

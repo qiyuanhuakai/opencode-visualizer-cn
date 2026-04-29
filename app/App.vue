@@ -1,16 +1,17 @@
 <template>
    <div ref="appEl" class="app">
      <ThemeInjector />
-     <template v-if="uiInitState === 'ready'">
-      <header class="app-header">
-        <TopPanel
-          ref="topPanelRef"
-          :tree-data="topPanelTreeData"
+       <template v-if="uiInitState === 'ready'">
+       <header class="app-header">
+         <TopPanel
+           ref="topPanelRef"
+           :tree-data="topPanelTreeData"
           :notification-sessions="notificationSessions"
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
-          :selected-session-id="selectedSessionId"
-          :home-path="homePath"
+           :selected-session-id="selectedSessionId"
+           :home-path="homePath"
+           :codex-mode="activeBackendKind === 'codex'"
           @select-notification="handleNotificationSessionSelect"
           @create-worktree-from="createWorktreeFromWorktree"
           @new-session="createNewSession"
@@ -18,10 +19,15 @@
           @open-shell="openShellFromInput('')"
           @delete-active-directory="deleteWorktree"
           @delete-session="deleteSession"
-          @archive-session="archiveSession"
-          @unarchive-session="unarchiveSession"
-          @rename-session="renameSession"
-          @pin-session="pinSession"
+           @archive-session="archiveSession"
+           @unarchive-session="unarchiveSession"
+           @rename-session="renameSession"
+           @hide-session="hideCodexSession"
+           @fork-session="forkCodexSession"
+           @rollback-session="rollbackCodexSession"
+           @compact-session="compactCodexSession"
+           @unsubscribe-session="unsubscribeCodexSession"
+           @pin-session="pinSession"
           @unpin-session="unpinSession"
           @pin-project="pinProject"
           @unpin-project="unpinProject"
@@ -33,9 +39,10 @@
           @edit-project="handleEditProject"
     @open-settings="isSettingsOpen = true"
     @open-provider-manager="isProviderManagerOpen = true"
-    @open-status-monitor="isStatusMonitorOpen = true"
-    @open-codex-panel="openCodexPanel"
-          @logout="handleLogout"
+     @open-status-monitor="isStatusMonitorOpen = true"
+     @open-codex-panel="openCodexPanel"
+     @open-codex-subpanel="openCodexSubpanel"
+           @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
       </header>
@@ -208,8 +215,8 @@
             <span class="window-dock-chip-title">{{ entry.title || entry.key }}</span>
           </button>
         </div>
-      </footer>
-    </template>
+       </footer>
+      </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
       <div class="app-loading-card">
         <div class="absolute w-0 h-0 -z-10 flex items-center justify-center">
@@ -238,9 +245,28 @@
           </div>
         </div>
         <div v-if="uiInitState === 'login'" class="app-login-form">
-          <p class="app-loading-title">{{ t('app.login.title') }}</p>
+          <p class="app-loading-title">{{ loginTitle }}</p>
+          <div class="app-login-backends" role="group" :aria-label="t('app.login.backendLabel')">
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'opencode' }"
+              @click="loginBackendKind = 'opencode'"
+            >
+              {{ t('app.login.openCodeBackend') }}
+            </button>
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'codex' }"
+              @click="loginBackendKind = 'codex'"
+            >
+              {{ t('app.login.codexBackend') }}
+            </button>
+          </div>
           <div class="app-login-fields">
-            <input
+            <template v-if="loginBackendKind === 'opencode'">
+              <input
               v-model="loginUsername"
               type="text"
               class="app-login-input"
@@ -249,7 +275,7 @@
               :disabled="!loginRequiresAuth"
               @keydown.enter="handleLogin"
             />
-            <input
+              <input
               v-model="loginPassword"
               type="password"
               class="app-login-input"
@@ -257,11 +283,11 @@
               :disabled="!loginRequiresAuth"
               @keydown.enter="handleLogin"
             />
-            <label class="app-login-checkbox">
+              <label class="app-login-checkbox">
               <input v-model="loginRequiresAuth" type="checkbox" />
               {{ t('app.login.authRequired') }}
-            </label>
-            <input
+              </label>
+              <input
               v-model="loginUrl"
               type="text"
               class="app-login-input"
@@ -269,6 +295,26 @@
               name="url"
               @keydown.enter="handleLogin"
             />
+            </template>
+            <template v-else>
+              <input
+                v-model="loginCodexBridgeUrl"
+                type="text"
+                class="app-login-input"
+                :placeholder="t('app.login.codexBridgeUrl')"
+                name="codexBridgeUrl"
+                @keydown.enter="handleLogin"
+              />
+              <input
+                v-model="loginCodexBridgeToken"
+                type="password"
+                class="app-login-input"
+                :placeholder="t('app.login.codexBridgeToken')"
+                name="codexBridgeToken"
+                @keydown.enter="handleLogin"
+              />
+              <p class="app-login-hint">{{ t('app.login.codexBridgeHint') }}</p>
+            </template>
           </div>
           <p v-if="initErrorMessage" class="app-loading-message app-error-message">
             {{ initErrorMessage }}
@@ -395,6 +441,7 @@ import {
   reactive,
   ref,
   shallowRef,
+  type Component,
   watch,
   watchEffect,
 } from 'vue';
@@ -415,6 +462,7 @@ import Welcome from './components/Welcome.vue';
 import TopPanel, {
   type TopPanelBatchSessionActionPayload,
   type TopPanelBatchSessionTarget,
+  type TopPanelCodexSubpanel,
   type TopPanelNotificationSession,
   type TopPanelWorktree,
 } from './components/TopPanel.vue';
@@ -424,6 +472,15 @@ import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ThemeInjector from './components/ThemeInjector.vue';
 import CodexPanel from './components/CodexPanel.vue';
+import CodexAppManager from './components/codex/CodexAppManager.vue';
+import CodexCollaborationModeManager from './components/codex/CodexCollaborationModeManager.vue';
+import CodexConfigViewer from './components/codex/CodexConfigViewer.vue';
+import CodexExperimentalFeatureManager from './components/codex/CodexExperimentalFeatureManager.vue';
+import CodexExternalAgentConfig from './components/codex/CodexExternalAgentConfig.vue';
+import CodexFeedbackUploader from './components/codex/CodexFeedbackUploader.vue';
+import CodexMcpServerManager from './components/codex/CodexMcpServerManager.vue';
+import CodexPluginManager from './components/codex/CodexPluginManager.vue';
+import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
 import DiffViewer from './components/viewers/DiffViewer.vue';
 import ShellContent from './components/ToolWindow/Shell.vue';
@@ -449,6 +506,8 @@ import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useMessages } from './composables/useMessages';
 import { pendingWorkerRenders } from './composables/useRenderState';
 import { useOpenCodeApi } from './composables/useOpenCodeApi';
+import { useCodexApi } from './composables/useCodexApi';
+import { CODEX_PROJECT_ID, useCodexWorkspace } from './composables/useCodexWorkspace';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
 import { useSessionSelection } from './composables/useSessionSelection';
@@ -483,7 +542,13 @@ import {
 } from './utils/toolRenderers';
 import { toMessageDiffViewerEntry } from './utils/messageDiff';
 import { buildLineCommentFileUrl, formatCommentNote } from './utils/lineComment';
-import * as opencodeApi from './utils/opencode';
+import {
+  configureCodexBackend,
+  configureOpenCodeBackend,
+  getActiveBackendAdapter,
+  setActiveBackendKind,
+} from './backends/registry';
+import type { BackendKind } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { splitFileContentDirectoryAndPath, normalizeDirectory } from './utils/path';
@@ -841,6 +906,47 @@ function openCodexPanel() {
   });
 }
 
+type CodexSubpanelDefinition = {
+  component: Component;
+  titleKey: string;
+  width: number;
+  height: number;
+  scroll?: 'manual' | 'none' | 'follow' | 'force';
+};
+
+const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefinition> = {
+  mcp: { component: CodexMcpServerManager, titleKey: 'codexPanel.mcpTitle', width: 700, height: 600 },
+  skills: { component: CodexSkillsManager, titleKey: 'codexPanel.skillsTitle', width: 680, height: 560 },
+  plugins: { component: CodexPluginManager, titleKey: 'codexPanel.pluginsTitle', width: 720, height: 600 },
+  apps: { component: CodexAppManager, titleKey: 'codexPanel.appsTitle', width: 640, height: 520 },
+  config: { component: CodexConfigViewer, titleKey: 'codexPanel.configTitle', width: 720, height: 600, scroll: 'manual' },
+  experimentalFeatures: { component: CodexExperimentalFeatureManager, titleKey: 'codexPanel.experimentalFeaturesTitle', width: 640, height: 520 },
+  collaborationModes: { component: CodexCollaborationModeManager, titleKey: 'codexPanel.collaborationModesTitle', width: 600, height: 460 },
+  externalAgentConfig: { component: CodexExternalAgentConfig, titleKey: 'codexPanel.externalAgentConfigTitle', width: 640, height: 520 },
+  feedback: { component: CodexFeedbackUploader, titleKey: 'codexPanel.feedbackTitle', width: 560, height: 500 },
+};
+
+function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
+  const definition = codexSubpanelDefinitions[panel];
+  const extent = fw.getExtent();
+  const x = Math.max(20, extent.width - definition.width - 36);
+  const y = 96;
+  void fw.open(`codex-${panel}`, {
+    component: definition.component,
+    props: { api: codexApi },
+    title: t(definition.titleKey),
+    width: definition.width,
+    height: definition.height,
+    x,
+    y,
+    closable: true,
+    resizable: true,
+    scroll: definition.scroll ?? 'manual',
+    focusOnOpen: true,
+    expiry: Infinity,
+  });
+}
+
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
 const appEl = ref<HTMLDivElement | null>(null);
@@ -1085,6 +1191,8 @@ const agentsLoading = ref(false);
 const commandsLoading = ref(false);
 const serverState = useServerState();
 const openCodeApi = useOpenCodeApi(serverState.projects, t);
+const codexApi = useCodexApi();
+const codexWorkspace = useCodexWorkspace(codexApi);
 const bootstrapReady = serverState.bootstrapped;
 const sessionSelection = useSessionSelection(
   computed(() => serverState.projects),
@@ -1343,11 +1451,21 @@ const loginUrl = ref(DEFAULT_OPENCODE_URL);
 const loginUsername = ref('');
 const loginPassword = ref('');
 const loginRequiresAuth = ref(false);
+const activeBackendKind = ref<BackendKind>('opencode');
+const loginBackendKind = ref<BackendKind>('opencode');
+const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
+const loginCodexBridgeToken = ref(credentials.codexBridgeToken.value);
 const retryStatus = ref<{
   message: string;
   next: number;
   attempt: number;
 } | null>(null);
+
+const loginTitle = computed(() => (
+  loginBackendKind.value === 'codex'
+    ? t('app.login.codexTitle')
+    : t('app.login.title')
+));
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
   sendStatus.value = params ? { mode: 'i18n', key, params } : { mode: 'i18n', key };
@@ -1658,7 +1776,13 @@ const {
   removePermissionEntry,
   prunePermissionEntries,
   fetchPendingPermissions,
-} = usePermissions({ fw, allowedSessionIds, activeDirectory, ensureConnectionReady });
+} = usePermissions({
+  fw,
+  allowedSessionIds,
+  activeDirectory,
+  ensureConnectionReady,
+  onReplied: dismissCodexPermissionDialog,
+});
 
 const { upsertQuestionEntry, removeQuestionEntry, pruneQuestionEntries, fetchPendingQuestions } =
   useQuestions({
@@ -1667,7 +1791,199 @@ const { upsertQuestionEntry, removeQuestionEntry, pruneQuestionEntries, fetchPen
     activeDirectory,
     ensureConnectionReady,
     getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
+    onReplied: dismissCodexToolQuestionDialog,
+    onRejected: dismissCodexToolQuestionDialog,
   });
+
+type CodexServerDialogRequest = typeof codexApi.serverRequests.value[number];
+type CodexToolUserInputDialogRequest = typeof codexApi.toolUserInputRequests.value[number];
+type CodexDynamicToolCallDialogRequest = typeof codexApi.dynamicToolCalls.value[number];
+
+function encodeCodexDialogRequestId(id: string | number) {
+  return `codex:${JSON.stringify(id)}`;
+}
+
+function encodeCodexToolQuestionRequestId(request: CodexToolUserInputDialogRequest) {
+  return `codex-tool:${JSON.stringify({
+    id: request.requestId,
+    questionIds: request.questions.map((question) => question.id),
+  })}`;
+}
+
+function encodeCodexDynamicToolCallRequestId(request: CodexDynamicToolCallDialogRequest) {
+  return `codex-dynamic:${JSON.stringify(request.requestId)}`;
+}
+
+function decodeCodexDialogRequestId(dialogId: string) {
+  const prefix = 'codex:';
+  if (!dialogId.startsWith(prefix)) return dialogId;
+  try {
+    const parsed: unknown = JSON.parse(dialogId.slice(prefix.length));
+    if (typeof parsed === 'string' || typeof parsed === 'number') return parsed;
+  } catch {
+    return dialogId;
+  }
+  return dialogId;
+}
+
+function decodeCodexToolQuestionRequestId(dialogId: string) {
+  const dynamicPrefix = 'codex-dynamic:';
+  if (dialogId.startsWith(dynamicPrefix)) {
+    try {
+      const parsed: unknown = JSON.parse(dialogId.slice(dynamicPrefix.length));
+      if (typeof parsed === 'string' || typeof parsed === 'number') return parsed;
+    } catch {
+      return dialogId;
+    }
+    return dialogId;
+  }
+  const prefix = 'codex-tool:';
+  if (!dialogId.startsWith(prefix)) return dialogId;
+  try {
+    const parsed: unknown = JSON.parse(dialogId.slice(prefix.length));
+    if (parsed && typeof parsed === 'object') {
+      const id = (parsed as Record<string, unknown>).id;
+      if (typeof id === 'string' || typeof id === 'number') return id;
+    }
+  } catch {
+    return dialogId;
+  }
+  return dialogId;
+}
+
+function sameCodexRequestId(left: string | number, right: string | number) {
+  return String(left) === String(right) && typeof left === typeof right;
+}
+
+function dismissCodexPermissionDialog(dialogId: string) {
+  const requestId = decodeCodexDialogRequestId(dialogId);
+  codexApi.serverRequests.value = codexApi.serverRequests.value.filter(
+    (request) => !sameCodexRequestId(request.id, requestId),
+  );
+}
+
+function dismissCodexToolQuestionDialog(dialogId: string) {
+  const requestId = decodeCodexToolQuestionRequestId(dialogId);
+  codexApi.toolUserInputRequests.value = codexApi.toolUserInputRequests.value.filter(
+    (request) => !sameCodexRequestId(request.requestId, requestId),
+  );
+  codexApi.dynamicToolCalls.value = codexApi.dynamicToolCalls.value.filter(
+    (request) => !sameCodexRequestId(request.requestId, requestId),
+  );
+}
+
+function codexPermissionLabel(request: CodexServerDialogRequest) {
+  if (request.method.includes('commandExecution')) return 'Codex command approval';
+  if (request.method.includes('fileChange')) return 'Codex file change approval';
+  if (request.context.host) return 'Codex network approval';
+  return 'Codex approval';
+}
+
+function codexPermissionPatterns(request: CodexServerDialogRequest) {
+  const patterns = new Set<string>();
+  if (request.context.command) patterns.add(request.context.command);
+  if (request.context.cwd) patterns.add(`cwd: ${request.context.cwd}`);
+  if (request.context.host) patterns.add(`host: ${request.context.host}`);
+  request.context.fileChanges?.forEach((change) => patterns.add(`${change.kind}: ${change.path}`));
+  return Array.from(patterns);
+}
+
+function normalizeCodexPermissionRequest(request: CodexServerDialogRequest): PermissionRequest {
+  return {
+    id: encodeCodexDialogRequestId(request.id),
+    sessionID: request.threadId,
+    permission: codexPermissionLabel(request),
+    patterns: codexPermissionPatterns(request),
+    metadata: {
+      method: request.method,
+      turnId: request.turnId,
+      ...request.context,
+    },
+    always: request.availableDecisions.includes('acceptForSession') ? ['acceptForSession'] : [],
+  };
+}
+
+function normalizeCodexToolQuestionRequest(request: CodexToolUserInputDialogRequest): QuestionRequest {
+  return {
+    id: encodeCodexToolQuestionRequestId(request),
+    sessionID: request.threadId,
+    questions: request.questions.map((question) => ({
+      question: question.text,
+      header: question.text,
+      options: [{ label: 'Respond', description: 'Provide a text response to Codex.' }],
+      multiple: false,
+      custom: true,
+    })),
+    tool: {
+      messageID: request.turnId,
+      callID: String(request.requestId),
+    },
+  };
+}
+
+function normalizeCodexDynamicToolCallRequest(request: CodexDynamicToolCallDialogRequest): QuestionRequest {
+  return {
+    id: encodeCodexDynamicToolCallRequestId(request),
+    sessionID: request.threadId,
+    questions: [{
+      question: JSON.stringify(request.arguments, null, 2),
+      header: `Dynamic tool: ${request.toolName}`,
+      options: [{ label: 'Respond', description: 'Provide content items as plain text.' }],
+      multiple: false,
+      custom: true,
+    }],
+    tool: {
+      messageID: request.turnId,
+      callID: String(request.requestId),
+    },
+  };
+}
+
+const codexPermissionDialogIds = ref<Set<string>>(new Set());
+const codexQuestionDialogIds = ref<Set<string>>(new Set());
+const codexDynamicQuestionDialogIds = ref<Set<string>>(new Set());
+
+watch(
+  () => codexApi.serverRequests.value,
+  (requests) => {
+    if (activeBackendKind.value !== 'codex') return;
+    const nextIds = new Set(requests.map((request) => encodeCodexDialogRequestId(request.id)));
+    codexPermissionDialogIds.value.forEach((id) => {
+      if (!nextIds.has(id)) removePermissionEntry(id);
+    });
+    requests.forEach((request) => upsertPermissionEntry(normalizeCodexPermissionRequest(request)));
+    codexPermissionDialogIds.value = nextIds;
+  },
+  { deep: true },
+);
+
+watch(
+  () => codexApi.toolUserInputRequests.value,
+  (requests) => {
+    if (activeBackendKind.value !== 'codex') return;
+    const nextIds = new Set(requests.map((request) => encodeCodexToolQuestionRequestId(request)));
+    codexQuestionDialogIds.value.forEach((id) => {
+      if (!nextIds.has(id)) removeQuestionEntry(id);
+    });
+    requests.forEach((request) => upsertQuestionEntry(normalizeCodexToolQuestionRequest(request)));
+    codexQuestionDialogIds.value = nextIds;
+  },
+  { deep: true },
+);
+
+watch(
+  () => codexApi.dynamicToolCalls.value,
+  (requests) => {
+    if (activeBackendKind.value !== 'codex') return;
+    const nextIds = new Set(requests.map((request) => encodeCodexDynamicToolCallRequestId(request)));
+    codexDynamicQuestionDialogIds.value.forEach((id) => {
+      if (!nextIds.has(id)) removeQuestionEntry(id);
+    });
+    requests.forEach((request) => upsertQuestionEntry(normalizeCodexDynamicToolCallRequest(request)));
+    codexDynamicQuestionDialogIds.value = nextIds;
+  },
+  { deep: true },
+);
 
 const {
   todosBySessionId,
@@ -1921,6 +2237,10 @@ const busyDescendantSessionIds = computed(() => {
 });
 
 const isThinking = computed(() => {
+  if (activeBackendKind.value === 'codex') {
+    const status = codexApi.activeTurn.value?.status;
+    return Boolean(status && status !== 'completed' && status !== 'failed' && status !== 'interrupted');
+  }
   const selected = selectedSessionId.value;
   const ownStatus = selected ? getSessionStatus(selected) : undefined;
   return Boolean(
@@ -2935,7 +3255,8 @@ async function handleProvidersChanged() {
 
 async function fetchGlobalProviderConfig() {
   try {
-    const data = (await opencodeApi.getGlobalConfig()) as ProviderConfigState;
+    const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
+    const data = (await getGlobalConfig()) as ProviderConfigState;
     providerConfig.value = data ?? null;
   } catch (error) {
     log('Provider config load failed', error);
@@ -3430,7 +3751,8 @@ function resolveProjectIdForDirectory(directory?: string) {
 
 async function fetchHomePath() {
   try {
-    const data = (await opencodeApi.getPathInfo()) as {
+    const getPathInfo = requireBackendMethod(backend().getPathInfo, 'path info');
+    const data = (await getPathInfo()) as {
       home?: string;
       worktree?: string;
     };
@@ -3470,6 +3792,18 @@ async function handleSaveProject(payload: {
 }
 
 async function createSessionInDirectory(directory: string) {
+  if (activeBackendKind.value === 'codex') {
+    const thread = await codexApi.startThread(directory);
+    if (!thread?.id) return undefined;
+    selectedProjectId.value = CODEX_PROJECT_ID;
+    selectedSessionId.value = thread.id;
+    return {
+      id: thread.id,
+      projectID: CODEX_PROJECT_ID,
+      directory: thread.cwd || directory,
+      title: thread.name || thread.preview || thread.id,
+    } as SessionInfo;
+  }
   const session = await openCodeApi.createSession(directory);
   if (!session?.id) return undefined;
   const nextProjectId = (session.projectID || selectedProjectId.value).trim();
@@ -3571,6 +3905,9 @@ async function createNewSession(): Promise<SessionInfo | undefined> {
       throw new Error(t('errors.sessionCreateEmptyDirectory'));
 
     }
+    if (activeBackendKind.value === 'codex') {
+      return await createSessionInDirectory(directory);
+    }
     const data = await openCodeApi.createSession(directory);
     if (data && typeof data.id === 'string') {
       const nextProjectId = (data.projectID || selectedProjectId.value).trim();
@@ -3660,6 +3997,13 @@ async function archiveSession(sessionId: string, hints?: { projectId?: string; d
   let optimisticProjectId = '';
   let previousOverride: number | undefined;
   try {
+    if (activeBackendKind.value === 'codex') {
+      await codexApi.archiveThread(sessionId);
+      if (selectedSessionId.value === sessionId) {
+        selectedSessionId.value = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
+      }
+      return;
+    }
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
@@ -3688,6 +4032,11 @@ async function unarchiveSession(sessionId: string, hints?: { projectId?: string;
   let optimisticProjectId = '';
   let previousOverride: number | undefined;
   try {
+    if (activeBackendKind.value === 'codex') {
+      await codexApi.unarchiveThread(sessionId);
+      selectedSessionId.value = codexApi.activeThreadId.value || sessionId;
+      return;
+    }
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
@@ -3714,11 +4063,6 @@ async function renameSession(sessionId: string, hints?: { projectId?: string; di
   sessionError.value = '';
   if (!sessionId) return;
   try {
-    const { projectId, directory } = resolveSessionOperationPayload(
-      sessionId,
-      hints?.projectId,
-      hints?.directory,
-    );
     const resolved = findSessionInProjects(sessionId);
     const currentTitle =
       resolved?.session.title?.trim() ||
@@ -3728,6 +4072,15 @@ async function renameSession(sessionId: string, hints?: { projectId?: string; di
     if (nextTitle === null) return;
     const trimmedTitle = nextTitle.trim();
     if (!trimmedTitle || trimmedTitle === currentTitle) return;
+    if (activeBackendKind.value === 'codex') {
+      await codexApi.setThreadName(sessionId, trimmedTitle);
+      return;
+    }
+    const { projectId, directory } = resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
     await openCodeApi.renameSession({
       sessionId,
       projectId,
@@ -3746,6 +4099,10 @@ async function pinSession(sessionId: string, hints?: { projectId?: string; direc
   let optimisticProjectId = '';
   let previousOverride: number | undefined;
   try {
+    if (activeBackendKind.value === 'codex') {
+      codexApi.pinThread(sessionId);
+      return;
+    }
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
@@ -3774,6 +4131,11 @@ async function unpinSession(
   hints?: { projectId?: string; directory?: string },
 ) {
   if (!sessionId) return;
+
+  if (activeBackendKind.value === 'codex') {
+    codexApi.unpinThread(sessionId);
+    return;
+  }
 
   const { projectId, directory } = resolveSessionOperationPayload(
     sessionId,
@@ -3949,6 +4311,27 @@ async function runTopPanelBatchSessionActionTarget(
   action: TopPanelBatchSessionActionPayload['action'],
   target: TopPanelBatchSessionTarget,
 ) {
+  if (activeBackendKind.value === 'codex') {
+    switch (action) {
+      case 'pin':
+        codexApi.pinThread(target.sessionId);
+        return;
+      case 'unpin':
+        codexApi.unpinThread(target.sessionId);
+        return;
+      case 'archive':
+        await codexApi.archiveThread(target.sessionId);
+        return;
+      case 'unarchive':
+        await codexApi.unarchiveThread(target.sessionId);
+        return;
+      case 'delete':
+        codexApi.hideThread(target.sessionId);
+        return;
+      default:
+        throw new Error(`Unsupported Codex batch session action: ${action}`);
+    }
+  }
   const resolved = findSessionInProjects(target.sessionId);
   const hints = {
     projectId: target.projectId || resolved?.projectId,
@@ -4103,7 +4486,77 @@ function handleSidePanelUnpinSession(payload: { sessionId: string; projectId: st
   void unpinSession(payload.sessionId, { projectId: payload.projectId });
 }
 
+function hideCodexSession(sessionId: string) {
+  if (activeBackendKind.value !== 'codex' || !sessionId) return;
+  codexApi.hideThread(sessionId);
+  if (selectedSessionId.value === sessionId) {
+    selectedSessionId.value = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
+  }
+}
+
+async function forkCodexSession(sessionId: string) {
+  if (activeBackendKind.value !== 'codex' || !sessionId) return;
+  if (!ensureConnectionReady(t('app.actions.fork'))) return;
+  sessionError.value = '';
+  try {
+    setSendStatusKey('app.status.forking');
+    const thread = await codexApi.forkThread(sessionId);
+    if (thread?.id) {
+      selectedProjectId.value = CODEX_PROJECT_ID;
+      selectedSessionId.value = thread.id;
+    }
+    setSendStatusKey('app.status.forked');
+  } catch (error) {
+    sessionError.value = t('app.error.sessionForkFailed', { message: toErrorMessage(error) });
+  }
+}
+
+async function rollbackCodexSession(sessionId: string) {
+  if (activeBackendKind.value !== 'codex' || !sessionId) return;
+  if (!ensureConnectionReady(t('app.actions.revert'))) return;
+  sessionError.value = '';
+  try {
+    setSendStatusKey('app.status.reverting');
+    const thread = await codexApi.rollbackThread(sessionId, 1);
+    if (thread?.id) {
+      selectedProjectId.value = CODEX_PROJECT_ID;
+      selectedSessionId.value = thread.id;
+      await codexApi.selectThread(thread.id);
+      await reloadSelectedSessionState(thread.id);
+    }
+    setSendStatusKey('app.status.reverted');
+  } catch (error) {
+    sessionError.value = t('app.error.sessionRevertFailed', { message: toErrorMessage(error) });
+  }
+}
+
+async function compactCodexSession(sessionId: string) {
+  if (activeBackendKind.value !== 'codex' || !sessionId) return;
+  const confirmed = await showConfirm(t('codexPanel.compactThreadConfirm'));
+  if (!confirmed) return;
+  sessionError.value = '';
+  try {
+    await codexApi.startThreadCompaction(sessionId);
+  } catch (error) {
+    sessionError.value = toErrorMessage(error);
+  }
+}
+
+async function unsubscribeCodexSession(sessionId: string) {
+  if (activeBackendKind.value !== 'codex' || !sessionId) return;
+  sessionError.value = '';
+  try {
+    await codexApi.unsubscribeThread(sessionId);
+  } catch (error) {
+    sessionError.value = toErrorMessage(error);
+  }
+}
+
 async function handleForkMessage(payload: { sessionId: string; messageId: string }) {
+  if (activeBackendKind.value === 'codex') {
+    await forkCodexSession(payload.sessionId);
+    return;
+  }
   if (!ensureConnectionReady(t('app.actions.fork'))) return;
   sessionError.value = '';
   try {
@@ -4125,6 +4578,10 @@ async function handleForkMessage(payload: { sessionId: string; messageId: string
 }
 
 async function handleRevertMessage(payload: { sessionId: string; messageId: string }) {
+  if (activeBackendKind.value === 'codex') {
+    await rollbackCodexSession(payload.sessionId);
+    return;
+  }
   if (!ensureConnectionReady(t('app.actions.revert'))) return;
   sessionError.value = '';
   try {
@@ -4163,7 +4620,8 @@ async function handleUndoRevert() {
 /** Set project name from package.json for newly created projects (fire-and-forget). */
 async function initProjectNameFromPackageJson(projectId: string, directory: string) {
   try {
-    const result = (await opencodeApi.readFileContent({
+    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    const result = (await readFileContent({
       directory,
       path: 'package.json',
     })) as FileContentResponse | string;
@@ -4238,7 +4696,8 @@ async function fetchProviders(force = false) {
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const data = (await opencodeApi.listProviders()) as ProviderResponse;
+    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
+    const data = (await listProviders()) as ProviderResponse;
     providers.value = Array.isArray(data.all) ? data.all : [];
     connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
@@ -4321,7 +4780,8 @@ async function fetchAgents() {
   if (agentsLoading.value) return;
   agentsLoading.value = true;
   try {
-    const data = (await opencodeApi.listAgents()) as AgentInfo[];
+    const listAgents = requireBackendMethod(backend().listAgents, 'agents');
+    const data = (await listAgents()) as AgentInfo[];
     agents.value = Array.isArray(data) ? data : [];
     const options = agents.value
       .filter((agent) => agent.mode === 'primary' || agent.mode === 'all')
@@ -4355,7 +4815,8 @@ async function fetchCommands(directory?: string) {
   if (commandsLoading.value) return;
   commandsLoading.value = true;
   try {
-    const data = (await opencodeApi.listCommands(directory)) as CommandInfo[];
+    const listCommands = requireBackendMethod(backend().listCommands, 'commands');
+    const data = (await listCommands(directory)) as CommandInfo[];
     const list = Array.isArray(data) ? data : [];
     list.sort((a, b) => a.name.localeCompare(b.name));
     commands.value = list;
@@ -4516,7 +4977,8 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
   const requestedDirectory = !isSubagentMessage ? getSelectedWorktreeDirectory() : '';
   try {
     const directory = getSelectedWorktreeDirectory();
-    const data = (await opencodeApi.listSessionMessages(sessionId, {
+    const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
+    const data = (await listSessionMessages(sessionId, {
       directory: directory || undefined,
     })) as Array<Record<string, unknown>>;
     if (!Array.isArray(data)) return;
@@ -4557,7 +5019,8 @@ async function fetchAllowedSessionHistories(rootSessionId: string) {
 }
 
 function buildPtyWsUrl(path: string, directory?: string) {
-  return opencodeApi.createWsUrl(path, { directory });
+  const createPtyWebSocketUrl = requireBackendMethod(backend().createPtyWebSocketUrl, 'PTY websocket URLs');
+  return createPtyWebSocketUrl(path, { directory });
 }
 
 function parsePtyInfo(value: unknown): PtyInfo | null {
@@ -4576,14 +5039,16 @@ function parsePtyInfo(value: unknown): PtyInfo | null {
 }
 
 async function fetchPtyList(directory?: string) {
-  const data = await opencodeApi.listPtys(directory);
+    const listPtys = requireBackendMethod(backend().listPtys, 'PTY listing');
+    const data = await listPtys(directory);
   if (!Array.isArray(data)) return [] as PtyInfo[];
   return data.map(parsePtyInfo).filter((pty): pty is PtyInfo => Boolean(pty));
 }
 
 async function createPtySession(command?: string, args?: string[]) {
   const directory = activeDirectory.value || undefined;
-  const data = await opencodeApi.createPty({
+    const createPty = requireBackendMethod(backend().createPty, 'PTY creation');
+    const data = await createPty({
     directory,
     command,
     args,
@@ -4594,7 +5059,8 @@ async function createPtySession(command?: string, args?: string[]) {
 }
 
 async function updatePtySize(ptyId: string, rows: number, cols: number, directory?: string) {
-  const data = await opencodeApi.updatePtySize(ptyId, {
+    const updatePtySize = requireBackendMethod(backend().updatePtySize, 'PTY resizing');
+    const data = await updatePtySize(ptyId, {
     directory,
     rows,
     cols,
@@ -4868,7 +5334,8 @@ function removeShellWindow(ptyId: string, options?: { kill?: boolean }) {
   fw.close(`shell:${ptyId}`);
   if (options?.kill) {
     const directory = session.pty.cwd || activeDirectory.value || undefined;
-    opencodeApi.deletePty(ptyId, directory).catch((error) => {
+      const deletePty = backend().deletePty;
+      deletePty?.(ptyId, directory).catch((error) => {
       log('PTY delete failed', error);
     });
   }
@@ -5431,7 +5898,8 @@ function runDebugCommand(args: string): { ok: boolean; message: string } {
 async function sendCommand(sessionId: string, command: CommandInfo, commandArgs: string) {
   if (!ensureConnectionReady(t('app.actions.sendingCommands'))) return;
   const directory = activeDirectory.value.trim();
-  await opencodeApi.sendCommand(sessionId, {
+    const sendCommand = requireBackendMethod(backend().sendCommand, 'session command sending');
+    await sendCommand(sessionId, {
     directory: directory || undefined,
     command: command.name,
     arguments: commandArgs,
@@ -5463,6 +5931,65 @@ async function sendMessage() {
   }
   const slash = hasText ? parseSlashCommand(text) : null;
   const commandMatch = slash ? findCommandByName(slash.name) : null;
+  if (activeBackendKind.value === 'codex') {
+    if (hasText) {
+      recentUserInputs.push({ text, time: Date.now() });
+      while (recentUserInputs.length > 20) recentUserInputs.shift();
+    }
+    messageInput.value = '';
+    enableFollow();
+    isSending.value = true;
+    setSendStatusKey('app.status.sending');
+    try {
+      if (slash && slash.name.toLowerCase() === 'shell') {
+        await openShellFromInput(slash.arguments ?? '');
+        setSendStatusKey('app.status.shellReady');
+        clearComposerDraftForCurrentContext();
+        return;
+      }
+      if (slash && slash.name.toLowerCase() === 'debug') {
+        const debugResult = runDebugCommand(slash.arguments ?? '');
+        setSendStatusText(debugResult.message);
+        clearComposerDraftForCurrentContext();
+        return;
+      }
+      const atAgent = hasText ? parseAtAgent(text) : null;
+      const messageText = atAgent ? atAgent.text : text;
+      const attachmentText = attachments.value.map((item) => {
+        if (item.lineComment) {
+          return formatCommentNote(
+            item.lineComment.path,
+            item.lineComment.startLine,
+            item.lineComment.endLine,
+            item.lineComment.text,
+          );
+        }
+        return `[file: ${item.filename}]`;
+      });
+      const prompt = [messageText, ...attachmentText].filter(Boolean).join('\n\n');
+      const selectedModelIDs = parseProviderModelKey(selectedModel.value);
+      const selectedCodexModel = selectedModelIDs.providerID === CODEX_PROJECT_ID
+        ? selectedModelIDs.modelID
+        : undefined;
+      if (selectedCodexModel) codexApi.selectModel(selectedCodexModel);
+      await codexApi.sendPrompt(prompt, {
+        model: selectedCodexModel,
+        effort: selectedThinking.value,
+      });
+      await codexApi.refreshThreads();
+      if (codexApi.activeThreadId.value) {
+        selectedSessionId.value = codexApi.activeThreadId.value;
+      }
+      attachments.value = [];
+      clearComposerDraftForCurrentContext();
+      setSendStatusKey('app.status.sent');
+    } catch (error) {
+      setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
+    } finally {
+      isSending.value = false;
+    }
+    return;
+  }
   const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
   const selectedModelIDs = parseProviderModelKey(selectedModel.value);
   const providerID = selectedInfo?.providerID ?? (selectedModelIDs.providerID || undefined);
@@ -5540,7 +6067,8 @@ async function sendMessage() {
         }
       }
     }
-    await opencodeApi.sendPromptAsync(sessionId, {
+    const sendPromptAsync = requireBackendMethod(backend().sendPromptAsync, 'session prompt sending');
+    await sendPromptAsync(sessionId, {
       directory,
       agent: agentMatch?.name ?? selectedMode.value,
       model: {
@@ -5734,12 +6262,17 @@ async function abortSession() {
   isAborting.value = true;
   setSendStatusKey('app.status.stopping');
   try {
+    if (activeBackendKind.value === 'codex') {
+      await codexApi.interruptActiveTurn();
+      setSendStatusKey('app.status.stopped');
+      return;
+    }
     const directory = activeDirectory.value.trim();
     const busyDescendants = busyDescendantSessionIds.value;
     const abortPromises = [
-      opencodeApi.abortSession(sessionId, directory || undefined),
+      requireBackendMethod(backend().abortSession, 'session abort')(sessionId, directory || undefined),
       ...busyDescendants.map((sid) =>
-        opencodeApi.abortSession(sid, directory || undefined).catch(() => {}),
+      requireBackendMethod(backend().abortSession, 'session abort')(sid, directory || undefined).catch(() => {}),
       ),
     ];
     await Promise.all(abortPromises);
@@ -5884,6 +6417,23 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
   await nextTick();
   if (newId) {
     const sessionId = newId;
+    if (activeBackendKind.value === 'codex') {
+      isLoadingHistory.value = true;
+      try {
+        if (codexApi.activeThreadId.value !== sessionId) {
+          await codexApi.selectThread(sessionId);
+        } else if (codexWorkspace.history.value.length === 0) {
+          await codexApi.selectThread(sessionId);
+        }
+        msg.loadHistory(codexWorkspace.history.value);
+      } finally {
+        isLoadingHistory.value = false;
+      }
+      await nextTick();
+      outputPanelRef.value?.scrollToBottom();
+      nextTick(() => inputPanelRef.value?.focus());
+      return;
+    }
     const cacheHit = msg.tryLoadFromCache(sessionId);
     if (!cacheHit) {
       isLoadingHistory.value = true;
@@ -6190,8 +6740,64 @@ watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelecti
 });
 
 watchEffect(() => {
-  opencodeApi.setBaseUrl(credentials.baseUrl.value);
-  opencodeApi.setAuthorization(credentials.authHeader.value);
+  configureOpenCodeBackend({
+    baseUrl: credentials.baseUrl.value,
+    authorization: credentials.authHeader.value,
+  });
+  configureCodexBackend({
+    bridgeUrl: credentials.codexBridgeUrl.value,
+    bridgeToken: credentials.codexBridgeToken.value,
+  });
+  codexApi.url.value = credentials.codexBridgeUrl.value;
+  codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
+  activeBackendKind.value = credentials.backendKind.value;
+  loginBackendKind.value = credentials.backendKind.value;
+  setActiveBackendKind(credentials.backendKind.value);
+});
+
+watch(
+  () => codexWorkspace.history.value,
+  (history) => {
+    if (activeBackendKind.value !== 'codex') return;
+    if (!selectedSessionId.value) return;
+    msg.loadHistory(history);
+  },
+);
+
+function backend() {
+  return getActiveBackendAdapter();
+}
+
+function requireBackendMethod<T>(method: T | undefined, name: string): T {
+  if (!method) throw new Error(`Active backend does not support ${name}.`);
+  return method;
+}
+
+function splitFileContentPathForActiveBackend(targetPath: string, sandboxDirectory: string | null) {
+  return splitFileContentDirectoryAndPath(targetPath, sandboxDirectory, {
+    strictSandbox: activeBackendKind.value === 'codex',
+  });
+}
+
+watchEffect(() => {
+  if (activeBackendKind.value !== 'codex') return;
+  Object.keys(serverState.projects).forEach((key) => {
+    if (key !== CODEX_PROJECT_ID) delete serverState.projects[key];
+  });
+  serverState.projects[CODEX_PROJECT_ID] = codexWorkspace.project.value;
+  serverState.bootstrapped.value = true;
+  selectedProjectId.value = CODEX_PROJECT_ID;
+  const activeSessionId = codexWorkspace.activeSessionId.value;
+  const projectSandboxes = codexWorkspace.project.value.sandboxes;
+  const hasSelectedSession = Boolean(
+    selectedSessionId.value && Object.values(projectSandboxes).some((sandbox) => sandbox.sessions[selectedSessionId.value]),
+  );
+  if (!hasSelectedSession && activeSessionId) {
+    selectedSessionId.value = activeSessionId;
+  }
+  if (codexApi.homeDir.value && homePath.value !== codexApi.homeDir.value) {
+    homePath.value = codexApi.homeDir.value;
+  }
 });
 
 function formatToolValue(value: unknown) {
@@ -6268,10 +6874,11 @@ async function renderReadHtmlFromApi(params: {
   if (!directory) return renderText(t('app.read.noActiveDirectory'));
   if (!params.path) return renderText(t('app.read.pathMissing'));
 
-  const requestPath = splitFileContentDirectoryAndPath(params.path, directory);
+  const requestPath = splitFileContentPathForActiveBackend(params.path, directory);
 
   try {
-    const listData = await opencodeApi.listFiles({
+    const listFiles = requireBackendMethod(backend().listFiles, 'file listing');
+    const listData = await listFiles({
       directory: requestPath.directory,
       path: requestPath.path,
     });
@@ -6293,7 +6900,8 @@ async function renderReadHtmlFromApi(params: {
   }
 
   try {
-    const data = (await opencodeApi.readFileContent({
+    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    const data = (await readFileContent({
       directory: requestPath.directory,
       path: requestPath.path,
     })) as FileContentResponse;
@@ -6989,7 +7597,8 @@ async function handleEditMessage(payload: { sessionId: string; part: MessagePart
   if (trimmed === payload.part.text) return;
   try {
     const part = { ...payload.part, text: trimmed };
-    await opencodeApi.patchMessagePart({
+    const patchMessagePart = requireBackendMethod(backend().patchMessagePart, 'message part patching');
+    await patchMessagePart({
       sessionID: payload.sessionId,
       messageID: part.messageID,
       partID: part.id,
@@ -7003,7 +7612,7 @@ async function handleEditMessage(payload: { sessionId: string; part: MessagePart
 
 function resolveFileViewerAbsolutePath(path: string) {
   const directory = activeDirectory.value.trim();
-  const requestPath = splitFileContentDirectoryAndPath(path, directory || null);
+  const requestPath = splitFileContentPathForActiveBackend(path, directory || null);
   return requestPath.path === '.'
     ? requestPath.directory
     : requestPath.directory === '/'
@@ -7060,7 +7669,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
   const storedDirectory = typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
   const storedFilePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
   const fallbackDirectory = activeDirectory.value.trim();
-  const fallbackRequestPath = fallbackDirectory ? splitFileContentDirectoryAndPath(path, fallbackDirectory) : null;
+  const fallbackRequestPath = fallbackDirectory ? splitFileContentPathForActiveBackend(path, fallbackDirectory) : null;
   const directory = storedDirectory || fallbackRequestPath?.directory || '';
   const filePath = storedFilePath || fallbackRequestPath?.path || '';
 
@@ -7079,7 +7688,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
   }
 
   try {
-    const data = (await opencodeApi.readFileContent({
+    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    const data = (await readFileContent({
       directory,
       path: filePath,
     })) as FileContentResponse;
@@ -7119,7 +7729,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         binaryContent = content;
       } else if (forceBinary) {
         try {
-          const bytes = await opencodeApi.readFileContentBytes({ directory, path: filePath });
+    const readFileContentBytes = requireBackendMethod(backend().readFileContentBytes, 'binary file reading');
+    const bytes = await readFileContentBytes({ directory, path: filePath });
           binaryContent = bytesToBase64(bytes);
           console.log('[App] Fetched raw binary data, size:', bytes.length);
         } catch (fetchError) {
@@ -7216,7 +7827,7 @@ async function openFileViewer(path: string, lines?: string) {
   const pos = getFileViewerPosition(0.18, 0.14);
   const lang = guessLanguage(path);
   const absolutePath = resolveFileViewerAbsolutePath(path);
-  const requestPath = splitFileContentDirectoryAndPath(path, activeDirectory.value.trim() || null);
+  const requestPath = splitFileContentPathForActiveBackend(path, activeDirectory.value.trim() || null);
   fw.open(key, {
     component: ContentViewer,
     props: {
@@ -7357,7 +7968,52 @@ function handlePtyEvent(event: {
 
 async function startInitialization() {
   if (initializationInFlight) return;
+  if (credentials.backendKind.value === 'codex') {
+    initializationInFlight = true;
+    ge.disconnect();
+    activeBackendKind.value = 'codex';
+    setActiveBackendKind('codex');
+    configureCodexBackend({
+      bridgeUrl: credentials.codexBridgeUrl.value,
+      bridgeToken: credentials.codexBridgeToken.value,
+    });
+    codexApi.url.value = credentials.codexBridgeUrl.value;
+    codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
+    uiInitState.value = 'loading';
+    initErrorMessage.value = '';
+    try {
+      connectionState.value = 'connecting';
+      initLoadingMessage.value = t('app.connection.connecting');
+      await codexApi.connect(credentials.codexBridgeUrl.value);
+      const existingThreadId = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
+      const thread = existingThreadId
+        ? undefined
+        : await codexApi.startThread(codexApi.homeDir.value || '/');
+      const nextThreadId = existingThreadId || thread?.id || '';
+      if (nextThreadId) {
+        await codexApi.selectThread(nextThreadId);
+        selectedSessionId.value = nextThreadId;
+      }
+      await Promise.all([fetchGlobalProviderConfig(), fetchProviders(true), fetchAgents()]);
+      connectionState.value = 'ready';
+      uiInitState.value = 'ready';
+      await nextTick();
+      if (selectedSessionId.value) {
+        await reloadSelectedSessionState(selectedSessionId.value);
+      }
+    } catch (error) {
+      codexApi.disconnect();
+      connectionState.value = 'error';
+      initErrorMessage.value = toErrorMessage(error);
+      uiInitState.value = 'login';
+    } finally {
+      initializationInFlight = false;
+    }
+    return;
+  }
   initializationInFlight = true;
+  activeBackendKind.value = 'opencode';
+  setActiveBackendKind('opencode');
   uiInitState.value = 'loading';
   initErrorMessage.value = '';
   reconnectingMessage.value = '';
@@ -7408,6 +8064,11 @@ async function startInitialization() {
 }
 
 function handleLogin() {
+  if (loginBackendKind.value === 'codex') {
+    credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value);
+    void startInitialization();
+    return;
+  }
   const u = loginRequiresAuth.value ? loginUsername.value : '';
   const p = loginRequiresAuth.value ? loginPassword.value : '';
   credentials.save(loginUrl.value, u, p);
@@ -7425,6 +8086,10 @@ function handleAbortInit() {
 function handleLogout() {
   credentials.clear();
   ge.disconnect();
+  activeBackendKind.value = credentials.backendKind.value;
+  loginBackendKind.value = credentials.backendKind.value;
+  loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
+  loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   disposeShellWindows();
   uiInitState.value = 'login';
   initErrorMessage.value = '';
@@ -7441,6 +8106,10 @@ onMounted(() => {
     });
   }
   credentials.load();
+  activeBackendKind.value = credentials.backendKind.value;
+  loginBackendKind.value = credentials.backendKind.value;
+  loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
+  loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
 
   if (credentials.isConfigured.value) {
     loginUrl.value = credentials.url.value;
@@ -7837,6 +8506,40 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.app-login-backends {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.app-login-backend {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
+  border-radius: 8px;
+  background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8));
+  padding: 7px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: none;
+  outline: none;
+}
+
+.app-login-backend.active {
+  border-color: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 60%, transparent);
+  background: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 18%, var(--theme-login-control-bg, #1e293b));
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.app-login-hint {
+  margin: 0;
+  color: var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
 }
 
 .app-login-input {

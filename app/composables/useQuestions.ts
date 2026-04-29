@@ -1,7 +1,7 @@
 import { useI18n } from 'vue-i18n';
 import type { ComputedRef, Ref } from 'vue';
 import QuestionContent from '../components/ToolWindow/Question.vue';
-import * as opencodeApi from '../utils/opencode';
+import { getActiveBackendAdapter } from '../backends/registry';
 import { uniqueBy } from '../utils/array';
 import type { useFloatingWindows } from './useFloatingWindows';
 import { useDialogHandler } from './useDialogHandler';
@@ -40,6 +40,8 @@ export function useQuestions(options: {
   activeDirectory: Ref<string>;
   ensureConnectionReady: (action: string) => boolean;
   getTextContent: (messageId: string) => string;
+  onReplied?: (requestId: string) => void;
+  onRejected?: (requestId: string) => void;
 }) {
   const { t } = useI18n();
   const dialog = useDialogHandler<QuestionRequest>({
@@ -52,19 +54,27 @@ export function useQuestions(options: {
     ensureConnectionReady: options.ensureConnectionReady,
     activeDirectory: options.activeDirectory,
     actionKey: 'app.actions.questionReply',
-    sendReply: (requestId, answers) =>
-      opencodeApi.replyQuestion(requestId, {
+    sendReply: async (requestId, answers) => {
+      const replyQuestion = getActiveBackendAdapter().replyQuestion;
+      if (!replyQuestion) throw new Error('Active backend does not support question replies.');
+      await replyQuestion(requestId, {
         directory: options.activeDirectory.value.trim() || undefined,
         answers: normalizeQuestionAnswers(answers as QuestionAnswer[]),
-      }),
+      });
+      options.onReplied?.(requestId);
+    },
   });
 
   const { handleReject } = dialog.makeRejectFlow({
     ensureConnectionReady: options.ensureConnectionReady,
     activeDirectory: options.activeDirectory,
     actionKey: 'app.actions.questionReject',
-    sendReject: (requestId) =>
-      opencodeApi.rejectQuestion(requestId, options.activeDirectory.value.trim() || undefined),
+    sendReject: async (requestId) => {
+      const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+      if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
+      await rejectQuestion(requestId, options.activeDirectory.value.trim() || undefined);
+      options.onRejected?.(requestId);
+    },
   });
 
   function parseQuestionRequest(
@@ -190,7 +200,9 @@ export function useQuestions(options: {
 
   async function fetchPendingQuestions(directory?: string) {
     try {
-      const data = await opencodeApi.listPendingQuestions(directory);
+      const listPendingQuestions = getActiveBackendAdapter().listPendingQuestions;
+      if (!listPendingQuestions) return;
+      const data = await listPendingQuestions(directory);
       if (!Array.isArray(data)) return;
       data
         .map((entry) => parseQuestionRequest(entry))

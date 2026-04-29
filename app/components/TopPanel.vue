@@ -327,6 +327,51 @@
                         <template #action>
                           <div class="tree-session-actions">
                             <button
+                              v-if="codexMode && !session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-fork"
+                              :title="$t('codexPanel.fork')"
+                              @click.stop.prevent="handleSessionFork(session.id)"
+                            >
+                              <Icon icon="lucide:git-fork" :width="16" :height="16" />
+                            </button>
+                            <button
+                              v-if="codexMode && !session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-rollback"
+                              :title="$t('codexPanel.rollbackTurns')"
+                              @click.stop.prevent="handleSessionRollback(session.id)"
+                            >
+                              <Icon icon="lucide:rotate-ccw" :width="16" :height="16" />
+                            </button>
+                            <button
+                              v-if="codexMode && !session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-compact"
+                              :title="$t('codexPanel.compactThread')"
+                              @click.stop.prevent="handleSessionCompact(session.id)"
+                            >
+                              <Icon icon="lucide:archive-restore" :width="16" :height="16" />
+                            </button>
+                            <button
+                              v-if="codexMode && !session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-unsubscribe"
+                              :title="$t('codexPanel.unsubscribe')"
+                              @click.stop.prevent="handleSessionUnsubscribe(session.id)"
+                            >
+                              <Icon icon="lucide:bell-off" :width="16" :height="16" />
+                            </button>
+                            <button
+                              v-if="codexMode && !session.archivedAt"
+                              type="button"
+                              class="tree-action-button session-hide"
+                              :title="$t('codexPanel.hide')"
+                              @click.stop.prevent="handleSessionHide(session.id)"
+                            >
+                              <Icon icon="lucide:eye-off" :width="16" :height="16" />
+                            </button>
+                            <button
                               v-if="!session.archivedAt"
                               type="button"
                               class="tree-action-button session-rename"
@@ -533,15 +578,63 @@
         >
           <Icon icon="lucide:activity" :width="16" :height="16" />
         </button>
-        <button
+        <Dropdown
           v-if="showCodexButton"
-          type="button"
-          class="control-button codex-button"
+          class="codex-menu-root"
           :title="$t('codexPanel.title')"
-          @click="$emit('open-codex-panel')"
+          :button-class="['control-button', 'codex-button']"
+          menu-icon="lucide:chevron-down"
+          :popup-style="{ minWidth: '220px', width: '240px' }"
+          :auto-focus="false"
         >
-          <Icon icon="lucide:bot" :width="16" :height="16" />
-        </button>
+          <template #label>
+            <Icon icon="lucide:bot" :width="16" :height="16" />
+          </template>
+          <template #default="{ close }">
+            <div class="codex-menu">
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexPanel(close)">
+                <Icon icon="lucide:message-square" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.title') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('mcp', close)">
+                <Icon icon="lucide:plug" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.mcpTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('skills', close)">
+                <Icon icon="lucide:sparkles" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.skillsTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('plugins', close)">
+                <Icon icon="lucide:blocks" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.pluginsTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('apps', close)">
+                <Icon icon="lucide:app-window" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.appsTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('config', close)">
+                <Icon icon="lucide:file-json" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.configTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('experimentalFeatures', close)">
+                <Icon icon="lucide:flask-conical" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.experimentalFeaturesTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('collaborationModes', close)">
+                <Icon icon="lucide:users" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.collaborationModesTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('externalAgentConfig', close)">
+                <Icon icon="lucide:import" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.externalAgentConfigTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('feedback', close)">
+                <Icon icon="lucide:send" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.feedbackTitle') }}</span>
+              </button>
+            </div>
+          </template>
+        </Dropdown>
         <button
           type="button"
           class="control-button suppress-button"
@@ -635,6 +728,17 @@ export type TopPanelBatchSessionActionPayload = {
   sessions: TopPanelBatchSessionTarget[];
 };
 
+export type TopPanelCodexSubpanel =
+  | 'mcp'
+  | 'skills'
+  | 'plugins'
+  | 'apps'
+  | 'config'
+  | 'experimentalFeatures'
+  | 'collaborationModes'
+  | 'externalAgentConfig'
+  | 'feedback';
+
 type SandboxDeletePayload = {
   projectId?: string;
   worktree: string;
@@ -655,6 +759,7 @@ const props = defineProps<{
   activeDirectory: string;
   selectedSessionId: string;
   homePath?: string;
+  codexMode?: boolean;
 }>();
 
 const notifications = computed(() => props.notificationSessions ?? []);
@@ -674,6 +779,11 @@ const emit = defineEmits<{
   (event: 'archive-session', value: string): void;
   (event: 'unarchive-session', value: string): void;
   (event: 'rename-session', value: string): void;
+  (event: 'hide-session', value: string): void;
+  (event: 'fork-session', value: string): void;
+  (event: 'rollback-session', value: string): void;
+  (event: 'compact-session', value: string): void;
+  (event: 'unsubscribe-session', value: string): void;
   (event: 'pin-session', value: string): void;
   (event: 'unpin-session', value: string): void;
   (event: 'pin-project', projectId: string): void;
@@ -687,6 +797,7 @@ const emit = defineEmits<{
   (event: 'open-provider-manager'): void;
   (event: 'open-status-monitor'): void;
   (event: 'open-codex-panel'): void;
+  (event: 'open-codex-subpanel', panel: TopPanelCodexSubpanel): void;
   (event: 'logout'): void;
   (event: 'dropdown-closed'): void;
 }>();
@@ -1075,6 +1186,26 @@ function handleSessionRename(sessionId: string) {
   emit('rename-session', sessionId);
 }
 
+function handleSessionHide(sessionId: string) {
+  emit('hide-session', sessionId);
+}
+
+function handleSessionFork(sessionId: string) {
+  emit('fork-session', sessionId);
+}
+
+function handleSessionRollback(sessionId: string) {
+  emit('rollback-session', sessionId);
+}
+
+function handleSessionCompact(sessionId: string) {
+  emit('compact-session', sessionId);
+}
+
+function handleSessionUnsubscribe(sessionId: string) {
+  emit('unsubscribe-session', sessionId);
+}
+
 function handleSessionPinToggle(sessionId: string, isPinned = false) {
   if (isPinned) {
     emit('unpin-session', sessionId);
@@ -1184,6 +1315,16 @@ function handleOpenDirectory(close: () => void) {
   emit('open-directory');
   close();
 }
+
+function emitOpenCodexPanel(close: () => void) {
+  emit('open-codex-panel');
+  close();
+}
+
+function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) {
+  emit('open-codex-subpanel', panel);
+  close();
+}
 </script>
 
 <style scoped>
@@ -1253,6 +1394,38 @@ function handleOpenDirectory(close: () => void) {
   --theme-top-control-bg: var(--theme-top-dropdown-control-bg, #0b1320);
   --theme-top-text: var(--theme-top-dropdown-text, #e2e8f0);
   --theme-top-bg: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.92));
+}
+
+.codex-menu-root {
+  flex: 0 0 auto;
+}
+
+.codex-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  background: var(--theme-top-dropdown-bg, rgba(15, 23, 42, 0.95));
+}
+
+.codex-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--theme-top-dropdown-text, #e2e8f0);
+  font-size: var(--ui-font-size, 12px);
+  text-align: left;
+  cursor: pointer;
+}
+
+.codex-menu-item:hover,
+.codex-menu-item:focus-visible {
+  background: var(--theme-top-dropdown-active-bg, rgba(59, 130, 246, 0.2));
 }
 
 .tree-search {

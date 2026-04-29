@@ -295,6 +295,27 @@ function writeCorsHeaders(response, statusCode, extraHeaders = {}) {
   response.writeHead(statusCode, headers);
 }
 
+function writeJsonHttpResponse(response, statusCode, body, extraHeaders = {}) {
+  writeCorsHeaders(response, statusCode, extraHeaders);
+  response.end(JSON.stringify(body));
+}
+
+function authorizeHttpRequest(request, response, bridgeToken) {
+  if (!isAllowedOrigin(request.headers.origin)) {
+    writeJsonHttpResponse(response, 403, { error: 'Forbidden origin' });
+    return false;
+  }
+
+  if (!isAuthorized(request, bridgeToken)) {
+    writeJsonHttpResponse(response, 401, { error: 'Unauthorized' }, {
+      'WWW-Authenticate': 'Bearer realm="vis_bridge"',
+    });
+    return false;
+  }
+
+  return true;
+}
+
 export function createVisBridgeServer(options) {
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
@@ -306,25 +327,25 @@ export function createVisBridgeServer(options) {
     }
 
     if (requestUrl.pathname === '/homedir') {
-      writeCorsHeaders(response, 200);
-      response.end(JSON.stringify({ home: homedir() }));
+      if (!authorizeHttpRequest(request, response, options.bridgeToken)) return;
+      writeJsonHttpResponse(response, 200, { home: homedir() });
       return;
     }
 
     if (requestUrl.pathname === '/healthz' || requestUrl.pathname === '/readyz') {
-      writeCorsHeaders(response, 200);
-      response.end(JSON.stringify({ ok: true, service: 'vis_bridge' }));
+      if (!authorizeHttpRequest(request, response, options.bridgeToken)) return;
+      writeJsonHttpResponse(response, 200, { ok: true, service: 'vis_bridge' });
       return;
     }
 
-    writeCorsHeaders(response, 200);
-    response.end(JSON.stringify({
+    if (!authorizeHttpRequest(request, response, options.bridgeToken)) return;
+    writeJsonHttpResponse(response, 200, {
       service: 'vis_bridge',
       websocketPath: options.path,
       target: options.target,
       bridgeAuth: Boolean(options.bridgeToken),
       upstreamAuth: Boolean(options.upstreamAuthorization),
-    }));
+    });
   });
 
   server.on('upgrade', (request, socket, head) => {

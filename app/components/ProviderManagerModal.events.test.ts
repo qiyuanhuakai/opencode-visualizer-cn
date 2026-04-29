@@ -50,7 +50,7 @@ describe('ProviderManagerModal events', () => {
     expect(modalSource).toContain('CUSTOM_PROVIDER_NPM = \'@ai-sdk/openai-compatible\'');
     expect(modalSource).toContain('provider: {');
     expect(modalSource).toContain('[result.providerID]: result.config');
-    expect(modalSource).toContain("await opencodeApi.setProviderAuth(result.providerID, { type: 'api', key: result.key });");
+    expect(modalSource).toContain("await setProviderAuth(result.providerID, { type: 'api', key: result.key });");
     expect(modalSource).toContain('disabled_providers: disabledProviders');
     expect(providerConfigSource).toContain('provider?: Record<string, unknown>;');
     expect(i18nTypesSource).toContain('custom: {');
@@ -61,7 +61,7 @@ describe('ProviderManagerModal events', () => {
 
     expect(modalSource).toContain("provider.source === 'config' || provider.source === 'custom'");
     expect(modalSource).toContain("provider.source !== 'env'");
-    expect(modalSource).toContain('await opencodeApi.deleteProviderAuth(providerId).catch(() => undefined);');
+    expect(modalSource).toContain('await deleteProviderAuth(providerId).catch(() => undefined);');
     expect(modalSource).toContain('buildProviderDisabledPatch(props.providerConfig, providerId, false)');
     expect(modalSource).toContain("@click=\"disconnectProvider(provider)\"");
   });
