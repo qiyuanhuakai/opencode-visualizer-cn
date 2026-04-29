@@ -142,11 +142,14 @@ node vis_bridge.js --target ws://127.0.0.1:4500
 
 ### 2. 字体管理
 
-<-- ![字体管理](docs/screenshots/font-management.png) -->
+<-- ![字体管理](docs/screenshots/font.png) -->
+<-- ![字体管理](docs/screenshots/font2.png) -->
 
 ### 3. 供应商与模型管理
 
-<-- ![模型管理](docs/screenshots/model-management.png) -->
+<-- ![提供商管理](docs/screenshots/providers2.png) -->
+<-- ![提供商管理](docs/screenshots/providers.png) -->
+<-- ![模型管理](docs/screenshots/models.png) -->
 
 ### 4. 状态监控
 
@@ -162,7 +165,7 @@ node vis_bridge.js --target ws://127.0.0.1:4500
 
 ### 7. Session Pin
 
-<-- ![Session Pin](docs/screenshots/session-pin.png) -->
+<-- ![Session Pin](docs/screenshots/session-tree.png) -->
 
 ### 8. 批量管理
 
@@ -171,6 +174,10 @@ node vis_bridge.js --target ws://127.0.0.1:4500
 ### 9. 悬浮窗与 Dock 栏
 
 <-- ![Dock 栏](docs/screenshots/dock-bar.png) -->
+
+### 10. 编辑器打开
+
+<-- ![编辑器打开](docs/screenshots/editor.png) -->
 
 ---
 
