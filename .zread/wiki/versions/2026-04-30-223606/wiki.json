@@ -1,0 +1,235 @@
+{
+  "id": "2026-04-30-223606",
+  "generated_at": "2026-04-30T14:36:06.355199274Z",
+  "language": "zh",
+  "pages": [
+    {
+      "slug": "1-xiang-mu-gai-lan",
+      "title": "项目概览",
+      "file": "1-xiang-mu-gai-lan.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "2-kuai-su-kai-shi",
+      "title": "快速开始",
+      "file": "2-kuai-su-kai-shi.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "3-ji-zhu-zhan-yu-huan-jing-yao-qiu",
+      "title": "技术栈与环境要求",
+      "file": "3-ji-zhu-zhan-yu-huan-jing-yao-qiu.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "4-electron-zhuo-mian-duan-gou-jian",
+      "title": "Electron 桌面端构建",
+      "file": "4-electron-zhuo-mian-duan-gou-jian.md",
+      "section": "入门指南",
+      "level": "Beginner"
+    },
+    {
+      "slug": "5-vue-3-ying-yong-ru-kou-yu-sheng-ming-zhou-qi",
+      "title": "Vue 3 应用入口与生命周期",
+      "file": "5-vue-3-ying-yong-ru-kou-yu-sheng-ming-zhou-qi.md",
+      "section": "核心架构",
+      "group": "前端应用架构",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "6-quan-ju-zhuang-tai-yu-shi-jian-xi-tong",
+      "title": "全局状态与事件系统",
+      "file": "6-quan-ju-zhuang-tai-yu-shi-jian-xi-tong.md",
+      "section": "核心架构",
+      "group": "前端应用架构",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "7-mo-kuai-hua-hou-duan-gua-pei-qi-she-ji",
+      "title": "模块化后端适配器设计",
+      "file": "7-mo-kuai-hua-hou-duan-gua-pei-qi-she-ji.md",
+      "section": "核心架构",
+      "group": "前端应用架构",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "8-sse-lian-jie-guan-li-yu-shi-jian-xie-yi",
+      "title": "SSE 连接管理与事件协议",
+      "file": "8-sse-lian-jie-guan-li-yu-shi-jian-xie-yi.md",
+      "section": "核心架构",
+      "group": "实时通信层",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "9-shared-worker-zhuang-tai-tong-bu-ji-zhi",
+      "title": "Shared Worker 状态同步机制",
+      "file": "9-shared-worker-zhuang-tai-tong-bu-ji-zhi.md",
+      "section": "核心架构",
+      "group": "实时通信层",
+      "level": "Advanced"
+    },
+    {
+      "slug": "10-web-worker-xuan-ran-chi-yu-huan-cun-ce-lue",
+      "title": "Web Worker 渲染池与缓存策略",
+      "file": "10-web-worker-xuan-ran-chi-yu-huan-cun-ce-lue.md",
+      "section": "核心架构",
+      "group": "渲染与性能",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "11-xu-ni-gun-dong-yu-lan-jia-zai-you-hua",
+      "title": "虚拟滚动与懒加载优化",
+      "file": "11-xu-ni-gun-dong-yu-lan-jia-zai-you-hua.md",
+      "section": "核心架构",
+      "group": "渲染与性能",
+      "level": "Advanced"
+    },
+    {
+      "slug": "12-mu-lu-you-xian-de-hui-hua-shu-mo-xing",
+      "title": "目录优先的会话树模型",
+      "file": "12-mu-lu-you-xian-de-hui-hua-shu-mo-xing.md",
+      "section": "功能模块详解",
+      "group": "会话与项目管理",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "13-hui-hua-xuan-ze-zhi-ding-yu-pi-liang-cao-zuo",
+      "title": "会话选择、置顶与批量操作",
+      "file": "13-hui-hua-xuan-ze-zhi-ding-yu-pi-liang-cao-zuo.md",
+      "section": "功能模块详解",
+      "group": "会话与项目管理",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "14-xiao-xi-liu-chu-li-yu-zeng-liang-geng-xin",
+      "title": "消息流处理与增量更新",
+      "file": "14-xiao-xi-liu-chu-li-yu-zeng-liang-geng-xin.md",
+      "section": "功能模块详解",
+      "group": "会话与项目管理",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "15-xuan-fu-chuang-sheng-ming-zhou-qi-yu-dock-guan-li",
+      "title": "悬浮窗生命周期与 Dock 管理",
+      "file": "15-xuan-fu-chuang-sheng-ming-zhou-qi-yu-dock-guan-li.md",
+      "section": "功能模块详解",
+      "group": "悬浮窗与内容查看",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "16-xuan-ran-qi-yu-cha-kan-qi-fen-ceng-jia-gou",
+      "title": "渲染器与查看器分层架构",
+      "file": "16-xuan-ran-qi-yu-cha-kan-qi-fen-ceng-jia-gou.md",
+      "section": "功能模块详解",
+      "group": "悬浮窗与内容查看",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "17-dai-ma-chai-yi-ya-suo-yu-yu-fa-gao-liang",
+      "title": "代码差异压缩与语法高亮",
+      "file": "17-dai-ma-chai-yi-ya-suo-yu-yu-fa-gao-liang.md",
+      "section": "功能模块详解",
+      "group": "悬浮窗与内容查看",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "18-wen-jian-shu-gou-jian-yu-git-zhuang-tai-ji-cheng",
+      "title": "文件树构建与 Git 状态集成",
+      "file": "18-wen-jian-shu-gou-jian-yu-git-zhuang-tai-ji-cheng.md",
+      "section": "功能模块详解",
+      "group": "侧边栏与文件树",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "19-dai-ban-yu-hui-hua-shu-mian-ban",
+      "title": "待办与会话树面板",
+      "file": "19-dai-ban-yu-hui-hua-shu-mian-ban.md",
+      "section": "功能模块详解",
+      "group": "侧边栏与文件树",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "20-guo-ji-hua-yu-duo-yu-yan-zhi-chi",
+      "title": "国际化与多语言支持",
+      "file": "20-guo-ji-hua-yu-duo-yu-yan-zhi-chi.md",
+      "section": "功能模块详解",
+      "group": "设置与个性化",
+      "level": "Beginner"
+    },
+    {
+      "slug": "21-zhu-ti-ling-pai-yu-qu-yu-pei-se-xi-tong",
+      "title": "主题令牌与区域配色系统",
+      "file": "21-zhu-ti-ling-pai-yu-qu-yu-pei-se-xi-tong.md",
+      "section": "功能模块详解",
+      "group": "设置与个性化",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "22-zi-ti-guan-li-yu-xi-tong-zi-ti-fa-xian",
+      "title": "字体管理与系统字体发现",
+      "file": "22-zi-ti-guan-li-yu-xi-tong-zi-ti-fa-xian.md",
+      "section": "功能模块详解",
+      "group": "设置与个性化",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "23-opencode-api-yu-rest-jie-kou",
+      "title": "OpenCode API 与 REST 接口",
+      "file": "23-opencode-api-yu-rest-jie-kou.md",
+      "section": "扩展集成",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "24-codex-qiao-jie-qi-yu-json-rpc-zhuan-fa",
+      "title": "Codex 桥接器与 JSON-RPC 转发",
+      "file": "24-codex-qiao-jie-qi-yu-json-rpc-zhuan-fa.md",
+      "section": "扩展集成",
+      "level": "Advanced"
+    },
+    {
+      "slug": "25-ti-gong-shang-yu-mo-xing-guan-li",
+      "title": "提供商与模型管理",
+      "file": "25-ti-gong-shang-yu-mo-xing-guan-li.md",
+      "section": "扩展集成",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "26-zhuang-tai-jian-kong-yu-token-yong-liang-zhui-zong",
+      "title": "状态监控与 Token 用量追踪",
+      "file": "26-zhuang-tai-jian-kong-yu-token-yong-liang-zhui-zong.md",
+      "section": "扩展集成",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "27-xiang-mu-mu-lu-jie-gou-shuo-ming",
+      "title": "项目目录结构说明",
+      "file": "27-xiang-mu-mu-lu-jie-gou-shuo-ming.md",
+      "section": "开发参考",
+      "level": "Beginner"
+    },
+    {
+      "slug": "28-cun-chu-jian-ming-ming-yu-chi-jiu-hua-ce-lue",
+      "title": "存储键命名与持久化策略",
+      "file": "28-cun-chu-jian-ming-ming-yu-chi-jiu-hua-ce-lue.md",
+      "section": "开发参考",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "29-gong-ju-chuang-kou-zu-jian-yu-zhi-ling-chu-li",
+      "title": "工具窗口组件与指令处理",
+      "file": "29-gong-ju-chuang-kou-zu-jian-yu-zhi-ling-chu-li.md",
+      "section": "开发参考",
+      "level": "Intermediate"
+    },
+    {
+      "slug": "30-ce-shi-ce-lue-yu-dai-ma-gui-fan",
+      "title": "测试策略与代码规范",
+      "file": "30-ce-shi-ce-lue-yu-dai-ma-gui-fan.md",
+      "section": "开发参考",
+      "level": "Advanced"
+    }
+  ]
+}
