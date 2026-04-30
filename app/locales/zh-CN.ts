@@ -61,6 +61,7 @@ const messages: LocaleMessages = {
       unsupportedAttachment: '不支持的附件类型。',
       attachmentFailed: '附件失败: {message}',
       sendFailed: '发送失败: {message}',
+      shellFailed: 'Shell 失败: {message}',
       stopFailed: '停止失败: {message}',
       worktreeCreateFailed: '创建工作区失败: {message}',
       worktreeDeleteFailed: '删除工作区失败: {message}',
@@ -427,6 +428,8 @@ const messages: LocaleMessages = {
       providerDisabled: '提供商 {providerId} 已禁用。',
       modelEnabled: '模型 {modelKey} 已启用。',
       modelDisabled: '模型 {modelKey} 已禁用。',
+      unsupportedBackendFeature: '当前后端不支持{feature}。',
+      backendManagedProvider: '此提供商由当前后端管理。',
     },
     prompts: {
       selectAuthMethod: '为 {providerId} 选择认证方式：\n{options}',

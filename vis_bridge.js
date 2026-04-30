@@ -7,7 +7,7 @@ import { connect as connectTls } from 'node:tls';
 import { homedir } from 'node:os';
 import { parseArgs } from 'node:util';
 
-const DEFAULT_HOST = '0.0.0.0';
+const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 23004;
 const DEFAULT_PATH = '/codex';
 const DEFAULT_CODEX_WS_URL = 'ws://127.0.0.1:4500';
@@ -117,6 +117,10 @@ function isAuthorized(request, bridgeToken) {
 
 function isLoopbackHostname(hostname) {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+}
+
+function isWildcardHost(hostname) {
+  return hostname === '0.0.0.0' || hostname === '::' || hostname === '[::]';
 }
 
 function isAllowedOrigin(origin) {
@@ -288,11 +292,307 @@ function writeCorsHeaders(response, statusCode, extraHeaders = {}) {
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     ...extraHeaders,
   };
   response.writeHead(statusCode, headers);
+}
+
+function readJsonBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    request.on('data', (chunk) => chunks.push(chunk));
+    request.on('error', reject);
+    request.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8').trim();
+      if (!text) {
+        resolve({});
+        return;
+      }
+      try {
+        resolve(JSON.parse(text));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+async function loadNodePty(ptyModule) {
+  if (ptyModule) return ptyModule;
+  try {
+    const runtimeImport = new Function('specifier', 'return import(specifier)');
+    return await runtimeImport('node-pty');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`PTY support requires the optional node-pty package: ${message}`);
+  }
+}
+
+function defaultPtyShell() {
+  if (process.platform === 'win32') return process.env.COMSPEC || 'powershell.exe';
+  return process.env.SHELL || 'bash';
+}
+
+function normalizePtyCwd(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : homedir();
+}
+
+function encodeWebSocketFrame(data, opcode = 1) {
+  const payload = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
+  const length = payload.length;
+  if (length < 126) {
+    return Buffer.concat([Buffer.from([0x80 | opcode, length]), payload]);
+  }
+  if (length <= 0xffff) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 126;
+    header.writeUInt16BE(length, 2);
+    return Buffer.concat([header, payload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x80 | opcode;
+  header[1] = 127;
+  header.writeBigUInt64BE(BigInt(length), 2);
+  return Buffer.concat([header, payload]);
+}
+
+function decodeWebSocketFrames(buffer) {
+  const frames = [];
+  let offset = 0;
+  while (buffer.length - offset >= 2) {
+    const first = buffer[offset];
+    const second = buffer[offset + 1];
+    const opcode = first & 0x0f;
+    const masked = (second & 0x80) !== 0;
+    let length = second & 0x7f;
+    let headerLength = 2;
+    if (length === 126) {
+      if (buffer.length - offset < 4) break;
+      length = buffer.readUInt16BE(offset + 2);
+      headerLength = 4;
+    } else if (length === 127) {
+      if (buffer.length - offset < 10) break;
+      const bigLength = buffer.readBigUInt64BE(offset + 2);
+      if (bigLength > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('WebSocket frame too large.');
+      length = Number(bigLength);
+      headerLength = 10;
+    }
+    const maskLength = masked ? 4 : 0;
+    const frameLength = headerLength + maskLength + length;
+    if (buffer.length - offset < frameLength) break;
+    const mask = masked ? buffer.subarray(offset + headerLength, offset + headerLength + 4) : undefined;
+    const payloadStart = offset + headerLength + maskLength;
+    const payload = Buffer.from(buffer.subarray(payloadStart, payloadStart + length));
+    if (mask) {
+      for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
+    }
+    frames.push({ opcode, payload });
+    offset += frameLength;
+  }
+  return { frames, remaining: buffer.subarray(offset) };
+}
+
+function createPtyManager(options = {}) {
+  const sessions = new Map();
+
+  async function create(payload = {}) {
+    const nodePty = await loadNodePty(options.ptyModule);
+    const id = randomBytes(16).toString('hex');
+    const command = typeof payload.command === 'string' && payload.command.trim()
+      ? payload.command.trim()
+      : defaultPtyShell();
+    const args = Array.isArray(payload.args) ? payload.args.map(String) : [];
+    const ptyProcess = nodePty.spawn(command, args, {
+      name: 'xterm-256color',
+      cols: 80,
+      rows: 24,
+      cwd: normalizePtyCwd(payload.cwd || payload.directory),
+      env: process.env,
+    });
+    const session = {
+      id,
+      command,
+      args,
+      cwd: normalizePtyCwd(payload.cwd || payload.directory),
+      title: typeof payload.title === 'string' ? payload.title : undefined,
+      createdAt: Date.now(),
+      pty: ptyProcess,
+      sockets: new Set(),
+      disposed: false,
+    };
+    sessions.set(id, session);
+    ptyProcess.onExit?.(() => {
+      session.disposed = true;
+      for (const socket of session.sockets) {
+        try { socket.write(encodeWebSocketFrame(Buffer.alloc(0), 8)); } catch {}
+        socket.destroy();
+      }
+      sessions.delete(id);
+    });
+    return { id };
+  }
+
+  function list() {
+    return [...sessions.values()].map((session) => ({
+      id: session.id,
+      command: session.command,
+      args: session.args,
+      cwd: session.cwd,
+      title: session.title,
+      createdAt: session.createdAt,
+    }));
+  }
+
+  function resize(id, rows, cols) {
+    const session = sessions.get(id);
+    if (!session) return false;
+    session.pty.resize(Number(cols) || 80, Number(rows) || 24);
+    return true;
+  }
+
+  function remove(id) {
+    const session = sessions.get(id);
+    if (!session) return false;
+    sessions.delete(id);
+    session.disposed = true;
+    for (const socket of session.sockets) socket.destroy();
+    try { session.pty.kill(); } catch {}
+    return true;
+  }
+
+  function disposeAll() {
+    for (const id of sessions.keys()) remove(id);
+  }
+
+  function attach(id, socket, head) {
+    const session = sessions.get(id);
+    if (!session) return false;
+    let buffer = Buffer.alloc(0);
+    session.sockets.add(socket);
+    const dataDisposable = session.pty.onData((data) => {
+      if (socket.destroyed) return;
+      socket.write(encodeWebSocketFrame(data, 1));
+    });
+    const detach = () => {
+      session.sockets.delete(socket);
+      dataDisposable?.dispose?.();
+    };
+    socket.on('data', (chunk) => {
+      try {
+        buffer = Buffer.concat([buffer, chunk]);
+        const decoded = decodeWebSocketFrames(buffer);
+        buffer = decoded.remaining;
+        for (const frame of decoded.frames) {
+          if (frame.opcode === 8) {
+            socket.end(encodeWebSocketFrame(Buffer.alloc(0), 8));
+            return;
+          }
+          if (frame.opcode === 9) {
+            socket.write(encodeWebSocketFrame(frame.payload, 10));
+            continue;
+          }
+          if (frame.opcode === 1 || frame.opcode === 2) session.pty.write(frame.payload.toString('utf8'));
+        }
+      } catch {
+        socket.destroy();
+      }
+    });
+    socket.once('close', detach);
+    socket.once('error', detach);
+    if (head.length > 0) socket.emit('data', head);
+    return true;
+  }
+
+  return { create, list, resize, remove, disposeAll, attach };
+}
+
+async function handlePtyHttpRequest(request, response, requestUrl, manager) {
+  try {
+    if (requestUrl.pathname === '/pty' && request.method === 'GET') {
+      writeJsonHttpResponse(response, 200, manager.list());
+      return true;
+    }
+    if (requestUrl.pathname === '/pty' && request.method === 'POST') {
+      const payload = await readJsonBody(request);
+      const result = await manager.create(payload);
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    const match = requestUrl.pathname.match(/^\/pty\/([^/]+)$/u);
+    if (!match) return false;
+    const id = decodeURIComponent(match[1]);
+    if (request.method === 'PUT') {
+      const payload = await readJsonBody(request);
+      const ok = manager.resize(id, payload?.size?.rows ?? payload?.rows, payload?.size?.cols ?? payload?.cols);
+      writeJsonHttpResponse(response, ok ? 200 : 404, ok ? {} : { error: 'PTY not found.' });
+      return true;
+    }
+    if (request.method === 'DELETE') {
+      const ok = manager.remove(id);
+      writeJsonHttpResponse(response, ok ? 200 : 404, ok ? {} : { error: 'PTY not found.' });
+      return true;
+    }
+    return false;
+  } catch (error) {
+    writeJsonHttpResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
+}
+
+function requiresPtyToken(options) {
+  const host = String(options.host ?? DEFAULT_HOST).trim();
+  return Boolean(!options.bridgeToken && host && !isLoopbackHostname(host) && (isWildcardHost(host) || host !== 'localhost'));
+}
+
+function rejectUnprotectedPtyHttp(response) {
+  writeJsonHttpResponse(response, 403, { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
+}
+
+function rejectUnprotectedPtySocket(socket) {
+  writeHttpResponse(socket, 403, 'Forbidden', { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
+}
+
+function handlePtyUpgrade(request, clientSocket, head, options, manager) {
+  const requestUrl = new URL(request.url ?? '/', 'http://localhost');
+  const match = requestUrl.pathname.match(/^\/pty\/([^/]+)\/connect$/u);
+  if (!match) return false;
+  if (requiresPtyToken(options)) {
+    rejectUnprotectedPtySocket(clientSocket);
+    return true;
+  }
+  if (!isAllowedOrigin(request.headers.origin)) {
+    writeHttpResponse(clientSocket, 403, 'Forbidden', { error: 'Forbidden origin' });
+    return true;
+  }
+  if (!isAuthorized(request, options.bridgeToken)) {
+    writeHttpResponse(clientSocket, 401, 'Unauthorized', { error: 'Unauthorized' }, {
+      'WWW-Authenticate': 'Bearer realm="vis_bridge"',
+    });
+    return true;
+  }
+  let secWebSocketKey;
+  try {
+    secWebSocketKey = assertWebSocketRequest(request);
+  } catch (error) {
+    writeHttpResponse(clientSocket, 400, 'Bad Request', { error: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
+  const id = decodeURIComponent(match[1]);
+  clientSocket.write([
+    'HTTP/1.1 101 Switching Protocols',
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    `Sec-WebSocket-Accept: ${createWebSocketAccept(secWebSocketKey)}`,
+    '',
+    '',
+  ].join('\r\n'));
+  if (!manager.attach(id, clientSocket, head)) {
+    clientSocket.destroy();
+  }
+  return true;
 }
 
 function writeJsonHttpResponse(response, statusCode, body, extraHeaders = {}) {
@@ -317,6 +617,8 @@ function authorizeHttpRequest(request, response, bridgeToken) {
 }
 
 export function createVisBridgeServer(options) {
+  const bridgeOptions = { host: DEFAULT_HOST, ...options };
+  const ptyManager = createPtyManager(bridgeOptions);
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
@@ -338,6 +640,18 @@ export function createVisBridgeServer(options) {
       return;
     }
 
+    if (requestUrl.pathname === '/pty' || requestUrl.pathname.startsWith('/pty/')) {
+      if (requiresPtyToken(bridgeOptions)) {
+        rejectUnprotectedPtyHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      void handlePtyHttpRequest(request, response, requestUrl, ptyManager).then((handled) => {
+        if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
+      });
+      return;
+    }
+
     if (!authorizeHttpRequest(request, response, options.bridgeToken)) return;
     writeJsonHttpResponse(response, 200, {
       service: 'vis_bridge',
@@ -349,8 +663,11 @@ export function createVisBridgeServer(options) {
   });
 
   server.on('upgrade', (request, socket, head) => {
-    void proxyWebSocket(request, socket, head, options);
+    if (handlePtyUpgrade(request, socket, head, bridgeOptions, ptyManager)) return;
+    void proxyWebSocket(request, socket, head, bridgeOptions);
   });
+
+  server.on('close', () => ptyManager.disposeAll());
 
   return server;
 }

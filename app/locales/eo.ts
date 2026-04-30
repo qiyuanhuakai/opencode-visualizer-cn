@@ -61,6 +61,7 @@ const messages: LocaleMessages = {
       unsupportedAttachment: 'Nesubtenata alkroĉa tipo.',
       attachmentFailed: 'Alkroĉo malsukcesis: {message}',
       sendFailed: 'Sendo malsukcesis: {message}',
+      shellFailed: 'Ŝelo malsukcesis: {message}',
       stopFailed: 'Halto malsukcesis: {message}',
       worktreeCreateFailed: 'Kreo de worktree malsukcesis: {message}',
       worktreeDeleteFailed: 'Forigo de worktree malsukcesis: {message}',
@@ -427,6 +428,8 @@ const messages: LocaleMessages = {
       providerDisabled: 'Provizanto {providerId} estis malŝaltita.',
       modelEnabled: 'Modelo {modelKey} ŝaltita.',
       modelDisabled: 'Modelo {modelKey} malŝaltita.',
+      unsupportedBackendFeature: 'La aktiva interna sistemo ne subtenas {feature}.',
+      backendManagedProvider: 'Ĉi tiu provizanto estas administrata de la aktiva interna sistemo.',
     },
     prompts: {
       selectAuthMethod: 'Elekti aŭtentigan metodon por {providerId}:\n{options}',

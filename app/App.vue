@@ -9,9 +9,11 @@
           :notification-sessions="notificationSessions"
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
-           :selected-session-id="selectedSessionId"
-           :home-path="homePath"
-           :codex-mode="activeBackendKind === 'codex'"
+            :selected-session-id="selectedSessionId"
+             :home-path="homePath"
+             :codex-mode="activeBackendKind === 'codex'"
+             :codex-connected="codexApi.connected.value"
+             :pty-supported="ptySupported"
           @select-notification="handleNotificationSessionSelect"
           @create-worktree-from="createWorktreeFromWorktree"
           @new-session="createNewSession"
@@ -354,7 +356,7 @@
     </div>
     <ProjectPicker
       :open="isProjectPickerOpen"
-      :home-path="homePath"
+      :home-path="projectPickerHomePath"
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
     />
@@ -371,7 +373,12 @@
       @config-updated="handleProviderConfigUpdated"
       @providers-changed="handleProvidersChanged"
     />
-    <StatusMonitorModal :open="isStatusMonitorOpen" :session-id="selectedSessionId" @close="isStatusMonitorOpen = false" />
+    <StatusMonitorModal
+      :open="isStatusMonitorOpen"
+      :session-id="selectedSessionId"
+      :codex-api="codexApi"
+      @close="isStatusMonitorOpen = false"
+    />
     <ProjectSettingsDialog
       :open="!!editingProject"
       :project-id="editingProject?.projectId ?? ''"
@@ -435,6 +442,7 @@
 <script lang="ts" setup>
 import {
   computed,
+  markRaw,
   nextTick,
   onBeforeUnmount,
   onMounted,
@@ -893,6 +901,7 @@ function openCodexPanel() {
   const extent = fw.getExtent();
   void fw.open(CODEX_PANEL_KEY, {
     component: CodexPanel,
+    props: markRaw({ api: markRaw(codexApi) }),
     title: t('codexPanel.title'),
     width,
     height,
@@ -926,8 +935,45 @@ const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefin
   feedback: { component: CodexFeedbackUploader, titleKey: 'codexPanel.feedbackTitle', width: 560, height: 500 },
 };
 
+function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
+  if (!codexApi.connected.value) return;
+  switch (panel) {
+    case 'mcp':
+      void codexApi.refreshMcpServers();
+      break;
+    case 'skills':
+      void codexApi.refreshSkills();
+      break;
+    case 'plugins':
+      void codexApi.refreshPlugins();
+      break;
+    case 'apps':
+      void codexApi.refreshApps();
+      break;
+    case 'config':
+      void codexApi.refreshConfig();
+      void codexApi.refreshConfigRequirements();
+      break;
+    case 'experimentalFeatures':
+      void codexApi.refreshExperimentalFeatures();
+      break;
+    case 'collaborationModes':
+      void codexApi.refreshCollaborationModes();
+      break;
+    case 'externalAgentConfig':
+      void codexApi.detectExternalAgentConfig();
+      break;
+    case 'feedback':
+      break;
+  }
+}
+
 function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   const definition = codexSubpanelDefinitions[panel];
+  if (!codexApi.connected.value) {
+    openCodexPanel();
+    return;
+  }
   const extent = fw.getExtent();
   const x = Math.max(20, extent.width - definition.width - 36);
   const y = 96;
@@ -945,6 +991,7 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
     focusOnOpen: true,
     expiry: Infinity,
   });
+  refreshCodexSubpanel(panel);
 }
 
 const outputEl = ref<HTMLElement | null>(null);
@@ -1043,6 +1090,7 @@ const shellSessionsByPtyId = new Map<string, ShellSession>();
 const pendingShellFits = new Set<string>();
 const shellExitWaiters = new Map<string, (exitCode: number) => void>();
 const ptyToFileMap = new Map<string, string>();
+const codexSessionCreationByDirectory = new Map<string, Promise<SessionInfo | undefined>>();
 const ptyMetaDecoder = new TextDecoder();
 let floatingExtentResizeObserver: ResizeObserver | null = null;
 let floatingExtentObservedEl: HTMLDivElement | null = null;
@@ -3255,6 +3303,11 @@ async function handleProvidersChanged() {
 
 async function fetchGlobalProviderConfig() {
   try {
+    if (activeBackendKind.value === 'codex') {
+      await codexApi.refreshConfig();
+      providerConfig.value = (codexApi.config.value as ProviderConfigState | null) ?? null;
+      return;
+    }
     const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
     const data = (await getGlobalConfig()) as ProviderConfigState;
     providerConfig.value = data ?? null;
@@ -3793,16 +3846,25 @@ async function handleSaveProject(payload: {
 
 async function createSessionInDirectory(directory: string) {
   if (activeBackendKind.value === 'codex') {
-    const thread = await codexApi.startThread(directory);
-    if (!thread?.id) return undefined;
-    selectedProjectId.value = CODEX_PROJECT_ID;
-    selectedSessionId.value = thread.id;
-    return {
-      id: thread.id,
-      projectID: CODEX_PROJECT_ID,
-      directory: thread.cwd || directory,
-      title: thread.name || thread.preview || thread.id,
-    } as SessionInfo;
+    const codexDirectory = normalizeProjectDirectoryForActiveBackend(directory);
+    const existing = codexSessionCreationByDirectory.get(codexDirectory);
+    if (existing) return existing;
+    const creation = (async () => {
+      const thread = await codexApi.startThread(codexDirectory);
+      if (!thread?.id) return undefined;
+      selectedProjectId.value = CODEX_PROJECT_ID;
+      selectedSessionId.value = thread.id;
+      return {
+        id: thread.id,
+        projectID: CODEX_PROJECT_ID,
+        directory: normalizeProjectDirectoryForActiveBackend(thread.cwd || codexDirectory),
+        title: thread.name || thread.preview || thread.id,
+      } as SessionInfo;
+    })().finally(() => {
+      codexSessionCreationByDirectory.delete(codexDirectory);
+    });
+    codexSessionCreationByDirectory.set(codexDirectory, creation);
+    return creation;
   }
   const session = await openCodeApi.createSession(directory);
   if (!session?.id) return undefined;
@@ -3892,7 +3954,11 @@ async function deleteWorktree(payload: { projectId?: string; worktree: string; d
   }
 }
 
-function openProjectPicker() {
+async function openProjectPicker() {
+  if (activeBackendKind.value === 'codex') {
+    const home = await codexApi.refreshHomeDir(true);
+    if (home) homePath.value = home;
+  }
   isProjectPickerOpen.value = true;
 }
 
@@ -4644,18 +4710,38 @@ async function initProjectNameFromPackageJson(projectId: string, directory: stri
 async function handleProjectDirectorySelect(directory: string) {
   isProjectPickerOpen.value = false;
   if (!directory) return;
+  const targetDirectory = normalizeProjectDirectoryForActiveBackend(directory);
 
-  const isNewProject = !Object.values(serverState.projects).some((p) => p.worktree === directory);
+  if (activeBackendKind.value === 'codex') {
+    const existing = codexApi.visibleThreads.value.find((thread) => (
+      normalizeDirectory(thread.cwd || codexApi.homeDir.value || '/') === targetDirectory
+    ));
+    const sessionId = existing?.id || (await createSessionInDirectory(targetDirectory))?.id || '';
+    if (!sessionId) return;
+    if (existing) await codexApi.selectThread(existing.id);
+    selectedProjectId.value = CODEX_PROJECT_ID;
+    selectedSessionId.value = sessionId;
+    await nextTick();
+    try {
+      await switchSessionSelection(CODEX_PROJECT_ID, sessionId);
+    } catch {
+      selectedProjectId.value = CODEX_PROJECT_ID;
+      selectedSessionId.value = sessionId;
+    }
+    return;
+  }
 
-  const { projectId, sessionId } = await openCodeApi.openProject(directory);
+  const isNewProject = !Object.values(serverState.projects).some((p) => p.worktree === targetDirectory);
+
+  const { projectId, sessionId } = await openCodeApi.openProject(targetDirectory);
   ge.sendToWorker({
     type: 'load-sessions',
-    directory,
+    directory: targetDirectory,
   });
   await switchSessionSelection(projectId, sessionId);
 
   if (isNewProject && projectId !== 'global') {
-    void initProjectNameFromPackageJson(projectId, directory);
+    void initProjectNameFromPackageJson(projectId, targetDirectory);
   }
 }
 async function bootstrapSelections() {
@@ -4678,7 +4764,11 @@ async function bootstrapSelections() {
 
     const initialProjectId = initialQuery.projectId.trim();
     const initialSessionId = initialQuery.sessionId.trim();
-    if (initialProjectId && initialSessionId) {
+    if (activeBackendKind.value === 'codex') {
+      selectedProjectId.value = CODEX_PROJECT_ID;
+      const activeSessionId = codexWorkspace.activeSessionId.value;
+      if (!selectedSessionId.value && activeSessionId) selectedSessionId.value = activeSessionId;
+    } else if (initialProjectId && initialSessionId) {
       await switchSessionSelection(initialProjectId, initialSessionId);
     } else {
       await initializeSessionSelection();
@@ -4696,8 +4786,9 @@ async function fetchProviders(force = false) {
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
-    const data = (await listProviders()) as ProviderResponse;
+    const data = activeBackendKind.value === 'codex'
+      ? (await codexApi.listProviders()) as ProviderResponse
+      : (await requireBackendMethod(backend().listProviders, 'providers')()) as ProviderResponse;
     providers.value = Array.isArray(data.all) ? data.all : [];
     connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
@@ -5436,16 +5527,29 @@ async function restoreShellSessions() {
 }
 
 async function openShellFromInput(input: string) {
-  const script = input.trim();
-  const hasCommand = script.length > 0;
-  const pty = hasCommand
-    ? await createPtySession('/bin/sh', ['-c', script])
-    : await createPtySession();
-  if (!pty) return;
-  ensureShellWindow(pty);
-  if (!hasCommand) return;
-  const session = shellSessionsByPtyId.get(pty.id);
-  if (session) session.closeOnSuccess = true;
+  if (!ptySupported.value) {
+    setSendStatusKey('app.error.shellFailed', { message: t('app.error.unavailable', { action: t('topPanel.openShell') }) });
+    return false;
+  }
+  try {
+    const script = input.trim();
+    const hasCommand = script.length > 0;
+    const pty = hasCommand
+      ? await createPtySession('/bin/sh', ['-c', script])
+      : await createPtySession();
+    if (!pty) {
+      setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
+      return false;
+    }
+    ensureShellWindow(pty);
+    if (!hasCommand) return true;
+    const session = shellSessionsByPtyId.get(pty.id);
+    if (session) session.closeOnSuccess = true;
+    return true;
+  } catch (error) {
+    setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
+    return false;
+  }
 }
 
 async function runTreeShellCommand(command: string) {
@@ -5942,7 +6046,7 @@ async function sendMessage() {
     setSendStatusKey('app.status.sending');
     try {
       if (slash && slash.name.toLowerCase() === 'shell') {
-        await openShellFromInput(slash.arguments ?? '');
+        if (!await openShellFromInput(slash.arguments ?? '')) return;
         setSendStatusKey('app.status.shellReady');
         clearComposerDraftForCurrentContext();
         return;
@@ -6009,7 +6113,7 @@ async function sendMessage() {
   setSendStatusKey('app.status.sending');
   try {
     if (slash && slash.name.toLowerCase() === 'shell') {
-      await openShellFromInput(slash.arguments ?? '');
+      if (!await openShellFromInput(slash.arguments ?? '')) return;
       setSendStatusKey('app.status.shellReady');
       clearComposerDraftForCurrentContext();
       return;
@@ -6328,7 +6432,7 @@ watch(
       if (nextProjectId && nextSessionId) {
         selectedProjectId.value = nextProjectId;
         selectedSessionId.value = nextSessionId;
-      } else if (nextDirectory) {
+      } else if (nextDirectory && activeBackendKind.value !== 'codex') {
         void createSessionInDirectory(nextDirectory);
       }
     }
@@ -6768,9 +6872,32 @@ function backend() {
   return getActiveBackendAdapter();
 }
 
+const ptySupported = computed(() => {
+  const active = backend();
+  return Boolean(active.createPty && active.createPtyWebSocketUrl && active.deletePty);
+});
+
+const projectPickerHomePath = computed(() => (
+  activeBackendKind.value === 'codex'
+    ? (codexApi.homeDir.value || homePath.value)
+    : homePath.value
+));
+
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
   if (!method) throw new Error(`Active backend does not support ${name}.`);
   return method;
+}
+
+function normalizeProjectDirectoryForActiveBackend(directory: string) {
+  const trimmed = directory.trim();
+  if (activeBackendKind.value !== 'codex') return normalizeDirectory(trimmed);
+  const home = normalizeDirectory(codexApi.homeDir.value || homePath.value || '/');
+  if (trimmed === '~') return home || '/';
+  if (trimmed.startsWith('~/')) {
+    const suffix = trimmed.slice(2).replace(/^\/+/, '');
+    return normalizeDirectory(`${home.replace(/\/+$/u, '')}/${suffix}`);
+  }
+  return normalizeDirectory(trimmed || home || '/');
 }
 
 function splitFileContentPathForActiveBackend(targetPath: string, sandboxDirectory: string | null) {
@@ -6779,26 +6906,34 @@ function splitFileContentPathForActiveBackend(targetPath: string, sandboxDirecto
   });
 }
 
-watchEffect(() => {
-  if (activeBackendKind.value !== 'codex') return;
-  Object.keys(serverState.projects).forEach((key) => {
-    if (key !== CODEX_PROJECT_ID) delete serverState.projects[key];
-  });
-  serverState.projects[CODEX_PROJECT_ID] = codexWorkspace.project.value;
-  serverState.bootstrapped.value = true;
-  selectedProjectId.value = CODEX_PROJECT_ID;
-  const activeSessionId = codexWorkspace.activeSessionId.value;
-  const projectSandboxes = codexWorkspace.project.value.sandboxes;
-  const hasSelectedSession = Boolean(
-    selectedSessionId.value && Object.values(projectSandboxes).some((sandbox) => sandbox.sessions[selectedSessionId.value]),
-  );
-  if (!hasSelectedSession && activeSessionId) {
-    selectedSessionId.value = activeSessionId;
-  }
-  if (codexApi.homeDir.value && homePath.value !== codexApi.homeDir.value) {
-    homePath.value = codexApi.homeDir.value;
-  }
-});
+watch(
+  [
+    activeBackendKind,
+    () => codexWorkspace.project.value,
+    () => codexWorkspace.activeSessionId.value,
+    () => codexApi.homeDir.value,
+  ],
+  ([backendKind, project, activeSessionId, homeDir]) => {
+    if (backendKind !== 'codex') return;
+    Object.keys(serverState.projects).forEach((key) => {
+      if (key !== CODEX_PROJECT_ID) delete serverState.projects[key];
+    });
+    serverState.projects[CODEX_PROJECT_ID] = project;
+    serverState.bootstrapped.value = true;
+    selectedProjectId.value = CODEX_PROJECT_ID;
+    const projectSandboxes = project.sandboxes;
+    const hasSelectedSession = Boolean(
+      selectedSessionId.value && Object.values(projectSandboxes).some((sandbox) => sandbox.sessions[selectedSessionId.value]),
+    );
+    if (!hasSelectedSession && activeSessionId && selectedSessionId.value !== activeSessionId) {
+      selectedSessionId.value = activeSessionId;
+    }
+    if (homeDir && homePath.value !== homeDir) {
+      homePath.value = homeDir;
+    }
+  },
+  { immediate: true },
+);
 
 function formatToolValue(value: unknown) {
   if (typeof value === 'string') return value;

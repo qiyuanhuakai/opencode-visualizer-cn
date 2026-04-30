@@ -61,6 +61,7 @@ const messages: LocaleMessages = {
       unsupportedAttachment: 'Unsupported attachment type.',
       attachmentFailed: 'Attachment failed: {message}',
       sendFailed: 'Send failed: {message}',
+      shellFailed: 'Shell failed: {message}',
       stopFailed: 'Stop failed: {message}',
       worktreeCreateFailed: 'Worktree create failed: {message}',
       worktreeDeleteFailed: 'Worktree delete failed: {message}',
@@ -427,6 +428,8 @@ const messages: LocaleMessages = {
       providerDisabled: 'Provider {providerId} has been disabled.',
       modelEnabled: 'Model {modelKey} enabled.',
       modelDisabled: 'Model {modelKey} disabled.',
+      unsupportedBackendFeature: 'Active backend does not support {feature}.',
+      backendManagedProvider: 'This provider is managed by the active backend.',
     },
     prompts: {
       selectAuthMethod: 'Select auth method for {providerId}:\n{options}',

@@ -52,6 +52,10 @@ class MockWebSocket {
   respond(id: number, result: unknown) {
     this.emitMessage(JSON.stringify({ id, result }));
   }
+
+  reject(id: number, message: string, code = -32000) {
+    this.emitMessage(JSON.stringify({ id, error: { code, message } }));
+  }
 }
 
 async function flushPromises() {
@@ -93,6 +97,37 @@ describe('CodexAdapter', () => {
     socket.respond(1, { userAgent: 'codex-test' });
     await expect(initialized).resolves.toEqual({ userAgent: 'codex-test' });
     expect(JSON.parse(socket.sent[1] ?? '{}')).toEqual({ method: 'initialized', params: {} });
+  });
+
+  it('treats an already-initialized transport as initialized', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const initialized = adapter.initialize();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.emitMessage(JSON.stringify({
+      id: 1,
+      error: { code: -32600, message: 'Already initialized' },
+    }));
+    await expect(initialized).resolves.toEqual({});
+
+    const list = adapter.listThreads({ limit: 1 });
+    await waitForSent(socket, 2);
+    socket.respond(2, { data: [], nextCursor: null });
+    await expect(list).resolves.toEqual({ data: [], nextCursor: null });
+  });
+
+  it('advertises bridge-backed interactive PTY terminal support', () => {
+    const adapter = createCodexAdapter({ url: 'ws://localhost:4500' });
+    expect(adapter.capabilities.terminal).toBe(true);
+    expect(adapter.createPtyWebSocketUrl('/pty/abc/connect', { directory: '/repo' })).toBe(
+      'ws://localhost:4500/pty/abc/connect?directory=%2Frepo',
+    );
   });
 
   it('lists threads after initialization', async () => {
@@ -268,6 +303,52 @@ describe('CodexAdapter', () => {
     });
   });
 
+  it('replaces an empty no-rollout thread when sending a prompt', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const prompt = adapter.sendPrompt({ threadId: 'thr_empty', text: 'Start now.', cwd: '/repo', model: 'gpt-5.4' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.reject(2, 'no rollout found for thread id thr_empty');
+    await waitForSent(socket, 4);
+    socket.respond(3, { thread: { id: 'thr_recovered', cwd: '/repo', preview: '' } });
+    await waitForSent(socket, 5);
+    socket.respond(4, { turn: { id: 'turn_3', status: 'inProgress' } });
+
+    await expect(prompt).resolves.toEqual({
+      threadId: 'thr_recovered',
+      thread: { id: 'thr_recovered', cwd: '/repo', preview: '' },
+      turn: { id: 'turn_3', status: 'inProgress' },
+    });
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'thread/resume',
+      params: { threadId: 'thr_empty' },
+    });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 3,
+      method: 'thread/start',
+      params: { model: 'gpt-5.4', cwd: '/repo' },
+    });
+    expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
+      id: 4,
+      method: 'turn/start',
+      params: {
+        threadId: 'thr_recovered',
+        input: [{ type: 'text', text: 'Start now.' }],
+        cwd: '/repo',
+        model: 'gpt-5.4',
+      },
+    });
+  });
+
   it('exposes Codex thread lifecycle and turn control methods', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
@@ -433,6 +514,15 @@ describe('CodexAdapter', () => {
     await expect(adapter.readFileContent({ directory: '/repo', path: '/etc/passwd' })).rejects.toThrow(
       'Codex file path is outside the active directory.',
     );
+    const readFileContent = adapter.readFileContent({ directory: '/repo', path: 'README.md' });
+    await waitForSent(socket, 6);
+    socket.respond(5, { dataBase64: 'aGVsbG8=' });
+    await expect(readFileContent).resolves.toEqual({ content: 'hello', encoding: 'utf-8', type: 'text' });
+
+    const readPlainContent = adapter.readFileContent({ directory: '/repo', path: 'plain.txt' });
+    await waitForSent(socket, 7);
+    socket.respond(6, { content: 'plain text' });
+    await expect(readPlainContent).resolves.toEqual({ content: 'plain text', encoding: 'utf-8', type: 'text' });
     const getLspStatus = adapter.getLspStatus;
     await expect(getLspStatus()).resolves.toEqual([]);
   });
@@ -491,12 +581,25 @@ describe('CodexAdapter', () => {
                 toolcall: true,
               },
             },
+            'hidden-model': {
+              id: 'hidden-model',
+              name: 'Hidden',
+              providerID: 'codex',
+              status: 'connected',
+              variants: {},
+              capabilities: {
+                attachment: false,
+                reasoning: false,
+                toolcall: true,
+              },
+            },
           },
         },
       ],
       connected: ['codex'],
       default: { codex: 'gpt-5.5-codex' },
     });
+    await expect(adapter.listProviderAuthMethods()).resolves.toEqual({ codex: [] });
   });
 
  describe('CodexAdapter extended APIs', () => {

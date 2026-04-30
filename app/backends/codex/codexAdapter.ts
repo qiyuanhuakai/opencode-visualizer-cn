@@ -7,6 +7,8 @@ import {
 } from './jsonRpcClient';
 import type {
   BackendAdapter,
+  BackendQueryValue,
+  BackendRequestOptions,
   ListSessionsOptions,
   SessionUpdatePayload,
 } from '../types';
@@ -43,6 +45,7 @@ export type CodexThread = {
   updatedAt?: number;
   status?: unknown;
   cwd?: string;
+  gitInfo?: { branch?: string; sha?: string; originUrl?: string; root?: string } | null;
 };
 
 export type CodexThreadListParams = {
@@ -136,7 +139,10 @@ export type CodexFsReadFileParams = {
 };
 
 export type CodexFsReadFileResult = {
-  dataBase64: string;
+  dataBase64?: string;
+  content?: string;
+  encoding?: string;
+  type?: 'text' | 'binary';
 };
 
 export type CodexFsWriteFileParams = {
@@ -597,7 +603,7 @@ export type CodexTurnSteerResult = {
 // thread/* types
 export type CodexThreadMetadataUpdateParams = {
   threadId: string;
-  gitInfo?: { branch?: string; sha?: string; originUrl?: string } | null;
+  gitInfo?: { branch?: string; sha?: string; originUrl?: string; root?: string } | null;
 };
 
 export type CodexThreadMetadataUpdateResult = {
@@ -903,8 +909,17 @@ function codexModelVariants(model: CodexModel) {
   );
 }
 
-function normalizeCodexThread(thread: CodexThread): NormalizedCodexSession {
-  const directory = thread.cwd?.trim() || undefined;
+function expandCodexHomePath(path: string | undefined, homeDirectory?: string) {
+  const raw = path?.trim();
+  if (!raw) return undefined;
+  const home = homeDirectory?.trim();
+  if (raw === '~') return home || '/';
+  if (raw.startsWith('~/')) return home ? `${home.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}` : raw;
+  return raw;
+}
+
+function normalizeCodexThread(thread: CodexThread, homeDirectory?: string): NormalizedCodexSession {
+  const directory = expandCodexHomePath(thread.cwd, homeDirectory);
     return {
     id: thread.id,
     projectID: CODEX_PROJECT_ID,
@@ -1001,6 +1016,45 @@ function decodeBase64Bytes(dataBase64: string) {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;
+}
+
+function isUnmaterializedThreadError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /not materialized/i.test(message) ||
+    /includeTurns is unavailable/i.test(message) ||
+    /no rollout found/i.test(message);
+}
+
+function codexReadFileBytes(result: CodexFsReadFileResult) {
+  if (typeof result.dataBase64 === 'string') return decodeBase64Bytes(result.dataBase64);
+  if (typeof result.content === 'string') {
+    if (result.encoding === 'base64') return decodeBase64Bytes(result.content);
+    return new TextEncoder().encode(result.content);
+  }
+  return new Uint8Array();
+}
+
+function codexReadFileText(result: CodexFsReadFileResult) {
+  if (typeof result.content === 'string' && result.encoding !== 'base64') return result.content;
+  return new TextDecoder().decode(codexReadFileBytes(result));
+}
+
+function codexBridgeWebSocketUrl(bridgeUrl: string, endpoint: `/${string}`, params: Record<string, BackendQueryValue> = {}) {
+  const parsed = new URL(bridgeUrl);
+  if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
+  else if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
+  else if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+    throw new Error(`Unsupported Codex bridge URL protocol: ${parsed.protocol}`);
+  }
+
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
+  if (pathSegments.length > 0) pathSegments.pop();
+  const prefix = pathSegments.length > 0 ? `/${pathSegments.join('/')}` : '';
+  parsed.pathname = `${prefix}${endpoint}`;
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined) parsed.searchParams.set(key, String(value));
+  });
+  return parsed.toString();
 }
 
 function defaultClientInfo(): CodexClientInfo {
@@ -1105,8 +1159,14 @@ export class CodexAdapter implements BackendAdapter {
     this.listFiles = this.listFiles.bind(this);
     this.readFileContent = this.readFileContent.bind(this);
     this.readFileContentBytes = this.readFileContentBytes.bind(this);
+    this.listPtys = this.listPtys.bind(this);
+    this.createPty = this.createPty.bind(this);
+    this.updatePtySize = this.updatePtySize.bind(this);
+    this.deletePty = this.deletePty.bind(this);
+    this.createPtyWebSocketUrl = this.createPtyWebSocketUrl.bind(this);
     this.getVcsInfo = this.getVcsInfo.bind(this);
     this.listProviders = this.listProviders.bind(this);
+    this.listProviderAuthMethods = this.listProviderAuthMethods.bind(this);
     this.listAgents = this.listAgents.bind(this);
     this.listCommands = this.listCommands.bind(this);
     this.getSessionStatusMap = this.getSessionStatusMap.bind(this);
@@ -1159,11 +1219,19 @@ export class CodexAdapter implements BackendAdapter {
     const capabilities = params.capabilities ?? {
       experimentalApi: this.experimentalApi,
     };
-    const result = await this.client.request<CodexInitializeResult>('initialize', {
-      clientInfo: params.clientInfo ?? this.clientInfo,
-      capabilities,
-    });
-    this.client.notify('initialized', {});
+    let result: CodexInitializeResult;
+    try {
+      result = await this.client.request<CodexInitializeResult>('initialize', {
+        clientInfo: params.clientInfo ?? this.clientInfo,
+        capabilities,
+      });
+      this.client.notify('initialized', {});
+    } catch (error) {
+      if (!(error instanceof Error) || !/already initialized/i.test(error.message)) {
+        throw error;
+      }
+      result = {};
+    }
     this.initialized = true;
     return result;
   }
@@ -1250,7 +1318,7 @@ export class CodexAdapter implements BackendAdapter {
 
    async sendPrompt(input: CodexPromptInput): Promise<CodexPromptResult> {
     await this.ensureInitialized();
-    const startedThread = input.threadId
+    let startedThread = input.threadId
       ? undefined
       : await this.startThread({
           ...input.thread,
@@ -1258,12 +1326,23 @@ export class CodexAdapter implements BackendAdapter {
           cwd: input.thread?.cwd ?? input.cwd,
           approvalPolicy: input.thread?.approvalPolicy ?? input.approvalPolicy,
         });
-    const threadId = input.threadId ?? startedThread?.thread.id;
+    let threadId = input.threadId ?? startedThread?.thread.id;
     if (!threadId) {
       throw new Error('Codex prompt requires a threadId or a started thread.');
     }
     if (input.threadId) {
-      await this.resumeThread({ threadId: input.threadId });
+      try {
+        await this.resumeThread({ threadId: input.threadId });
+      } catch (error) {
+        if (!isUnmaterializedThreadError(error)) throw error;
+        startedThread = await this.startThread({
+          ...input.thread,
+          model: input.thread?.model ?? input.model,
+          cwd: input.thread?.cwd ?? input.cwd,
+          approvalPolicy: input.thread?.approvalPolicy ?? input.approvalPolicy,
+        });
+        threadId = startedThread.thread.id;
+      }
     }
 
     const turn = await this.startTurn({
@@ -1566,12 +1645,12 @@ export class CodexAdapter implements BackendAdapter {
 
   async createSession(directory?: string) {
     const result = await this.startThread({ cwd: directory });
-    return normalizeCodexThread(result.thread);
+    return normalizeCodexThread(result.thread, await this.fetchBridgeHomeDir());
   }
 
   async forkSession(sessionId: string, _messageId: string, _directory?: string) {
     const result = await this.forkThread({ threadId: sessionId });
-    return normalizeCodexThread(result.thread);
+    return normalizeCodexThread(result.thread, await this.fetchBridgeHomeDir());
   }
 
   async updateSession(sessionId: string, payload: SessionUpdatePayload, _directory?: string) {
@@ -1580,14 +1659,14 @@ export class CodexAdapter implements BackendAdapter {
     }
     if (payload.time?.archived === 0) {
       const result = await this.unarchiveThread({ threadId: sessionId });
-      return normalizeCodexThread(result.thread);
+      return normalizeCodexThread(result.thread, await this.fetchBridgeHomeDir());
     }
     if (payload.title !== undefined) await this.setThreadName({
       threadId: sessionId,
       name: payload.title || null,
     });
     const result = await this.readThread({ threadId: sessionId });
-    return normalizeCodexThread(result.thread);
+    return normalizeCodexThread(result.thread, await this.fetchBridgeHomeDir());
   }
 
   deleteSession(sessionId: string, _directory?: string) {
@@ -1597,7 +1676,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async revertSession(sessionId: string, _messageId: string, _directory?: string) {
     const result = await this.rollbackThread({ threadId: sessionId, numTurns: 1 });
-    return normalizeCodexThread(result.thread);
+    return normalizeCodexThread(result.thread, await this.fetchBridgeHomeDir());
   }
 
   unrevertSession() {
@@ -1610,14 +1689,15 @@ export class CodexAdapter implements BackendAdapter {
       cwd: options?.directory,
       searchTerm: options?.search,
     });
-    return result.data.map((thread) => normalizeCodexThread(thread));
+    const home = await this.fetchBridgeHomeDir();
+    return result.data.map((thread) => normalizeCodexThread(thread, home));
   }
 
   async listProviders() {
-    const result = await this.listModels({ includeHidden: false });
-    const visibleModels = result.data.filter((model) => !model.hidden);
+    const result = await this.listModels({ includeHidden: true });
+    const allModels = result.data;
     const models = Object.fromEntries(
-      visibleModels.map((model) => {
+      allModels.map((model) => {
         const variants = codexModelVariants(model);
         const providerModel: CodexProviderModel = {
           id: model.id,
@@ -1640,12 +1720,16 @@ export class CodexAdapter implements BackendAdapter {
       source: 'codex-app-server',
       models,
     };
-    const defaultModel = visibleModels.find((model) => model.isDefault) ?? visibleModels[0];
+    const defaultModel = allModels.find((model) => model.isDefault) ?? allModels.find((model) => !model.hidden) ?? allModels[0];
     return {
       all: [provider],
       connected: [CODEX_PROJECT_ID],
       default: defaultModel ? { [CODEX_PROJECT_ID]: defaultModel.id } : {},
     };
+  }
+
+  async listProviderAuthMethods() {
+    return { [CODEX_PROJECT_ID]: [] };
   }
 
   async listAgents() {
@@ -1679,7 +1763,13 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async listSessionMessages(sessionId: string) {
-    const read = await this.readThread({ threadId: sessionId, includeTurns: true });
+    let read: CodexThreadReadResult;
+    try {
+      read = await this.readThread({ threadId: sessionId, includeTurns: true });
+    } catch (error) {
+      if (!isUnmaterializedThreadError(error)) throw error;
+      read = await this.readThread({ threadId: sessionId, includeTurns: false });
+    }
     return normalizeCodexTurnsToHistory({
       sessionId: read.thread.id,
       turns: read.thread.turns ?? [],
@@ -1699,21 +1789,86 @@ export class CodexAdapter implements BackendAdapter {
 
   async readFileContent(payload: { directory: string; path: string }) {
     const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
-    return new TextDecoder().decode(decodeBase64Bytes(result.dataBase64));
+    return {
+      content: codexReadFileText(result),
+      encoding: 'utf-8',
+      type: result.type === 'binary' ? 'binary' : 'text',
+    };
   }
 
   async readFileContentBytes(payload: { directory: string; path: string }) {
     const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
-    return decodeBase64Bytes(result.dataBase64);
+    return codexReadFileBytes(result);
   }
 
   async getVcsInfo(directory: string) {
-    const result = await this.commandExec({
-      command: ['git', 'branch', '--show-current'],
-      cwd: directory,
-      timeoutMs: 10_000,
+    let root = '';
+    let branch = '';
+    try {
+      const rootResult = await this.commandExec({
+        command: ['git', 'rev-parse', '--show-toplevel'],
+        cwd: directory,
+        timeoutMs: 10_000,
+      });
+      root = rootResult.stdout.trim();
+    } catch {
+      return { root: '', branch: '' };
+    }
+    try {
+      const branchResult = await this.commandExec({
+        command: ['git', 'branch', '--show-current'],
+        cwd: directory,
+        timeoutMs: 10_000,
+      });
+      branch = branchResult.stdout.trim();
+    } catch {
+      branch = '';
+    }
+    return { root, branch };
+  }
+  private async bridgeJson(endpoint: `/${string}`, init: RequestInit = {}) {
+    const response = await fetch(codexBridgeHttpUrl(this.bridgeUrl, endpoint), init);
+    if (!response.ok) {
+      let message = `Codex bridge request failed (${response.status})`;
+      try {
+        const data = await response.json() as { error?: unknown };
+        if (typeof data.error === 'string') message = data.error;
+      } catch {}
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async listPtys(_directory?: string) {
+    return this.bridgeJson('/pty');
+  }
+
+  async createPty(
+    payload: { directory?: string; cwd?: string; command?: string; args?: string[]; title?: string },
+    options?: BackendRequestOptions,
+  ) {
+    return this.bridgeJson('/pty', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: options?.signal,
     });
-    return { branch: result.stdout.trim() };
+  }
+
+  async updatePtySize(ptyId: string, payload: { directory?: string; rows: number; cols: number }) {
+    return this.bridgeJson(`/pty/${encodeURIComponent(ptyId)}` as `/${string}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ size: { rows: payload.rows, cols: payload.cols } }),
+    });
+  }
+
+  async deletePty(ptyId: string) {
+    return this.bridgeJson(`/pty/${encodeURIComponent(ptyId)}` as `/${string}`, { method: 'DELETE' });
+  }
+
+  createPtyWebSocketUrl(path: string, params?: Record<string, BackendQueryValue>) {
+    return codexBridgeWebSocketUrl(this.bridgeUrl, path as `/${string}`, params ?? {});
   }
 
   async runOneShotCommand(payload: { directory?: string; command: string; args: string[] }) {

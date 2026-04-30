@@ -4,17 +4,19 @@ import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
-import { useCodexApi } from '../composables/useCodexApi';
+import type { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 
-const props = defineProps<{ open: boolean; sessionId?: string }>();
+type CodexApi = ReturnType<typeof useCodexApi>;
+
+const props = defineProps<{ open: boolean; sessionId?: string; codexApi: CodexApi }>();
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
 const popoverRef = ref<HTMLDivElement | null>(null);
 const msg = useMessages();
-const codexApi = useCodexApi();
+const codexApi = props.codexApi;
 
 function backend() {
   return getActiveBackendAdapter();

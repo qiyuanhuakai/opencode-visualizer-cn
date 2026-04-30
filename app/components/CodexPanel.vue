@@ -803,6 +803,32 @@
           {{ t('codexPanel.modelsTitle') }}
         </button>
       </div>
+      <div class="codex-prompt-actions">
+        <button
+          type="button"
+          class="codex-small-text-button"
+          :disabled="!api.connected.value || !api.activeThreadId.value"
+          @click="reviewUncommittedChanges"
+        >
+          {{ t('codexPanel.reviewStart') }}
+        </button>
+        <button
+          type="button"
+          class="codex-small-text-button"
+          :disabled="!api.connected.value || !api.activeThreadId.value || !promptText.trim()"
+          @click="injectPromptItems"
+        >
+          {{ t('codexPanel.injectItems') }}
+        </button>
+        <button
+          type="button"
+          class="codex-small-text-button"
+          :disabled="!api.connected.value"
+          @click="api.sendAddCreditsNudge('credits')"
+        >
+          {{ t('codexPanel.rateLimits') }}+
+        </button>
+      </div>
       <textarea
         v-model="promptText"
         class="codex-prompt-input"
@@ -857,10 +883,12 @@ import CodexFeedbackUploader from './codex/CodexFeedbackUploader.vue';
 
 const props = defineProps<{
   autoConnect?: boolean;
+  api?: ReturnType<typeof useCodexApi>;
 }>();
 
  const { t } = useI18n();
- const api = useCodexApi();
+ const fallbackApi = useCodexApi();
+ const api = props.api ?? fallbackApi;
  const promptText = ref('');
  const threadName = ref('');
  const showArchived = ref(false);
@@ -1047,6 +1075,20 @@ async function steerTurn() {
   await api.steerTurn(api.activeTurn.value.id, text);
 }
 
+async function reviewUncommittedChanges() {
+  if (!api.activeThreadId.value) return;
+  await api.reviewThread({ type: 'uncommittedChanges' }, 'inline');
+}
+
+async function injectPromptItems() {
+  const text = promptText.value.trim();
+  if (!text || !api.activeThreadId.value) return;
+  promptText.value = '';
+  await api.injectThreadItems(api.activeThreadId.value, [
+    { type: 'userMessage', content: [{ type: 'text', text }] },
+  ]);
+}
+
 async function runShellCommand() {
   const command = api.shellCommandInput.value.trim();
   if (!command || !api.activeThreadId.value) return;
@@ -1179,6 +1221,14 @@ function getEntryLabel(entry: CodexTranscriptEntry): string {
 .codex-prompt {
   border-top: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-bottom: 0;
+  flex-wrap: wrap;
+}
+
+.codex-prompt-actions {
+  display: flex;
+  flex: 1 0 100%;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .codex-url-field,

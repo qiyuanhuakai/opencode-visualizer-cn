@@ -6,6 +6,7 @@ import type { ProjectState, SessionState } from '../types/worker-state';
 
 export { CODEX_PROJECT_ID };
 export const CODEX_SANDBOX_NAME = 'Codex';
+export const CODEX_GLOBAL_SANDBOX_NAME = 'Global';
 export const CODEX_DEFAULT_DIRECTORY = '/';
 
 export type CodexWorkspaceApi = {
@@ -21,8 +22,29 @@ function threadTimestamp(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function threadDirectory(thread: CodexThread | undefined, fallbackDirectory = CODEX_DEFAULT_DIRECTORY) {
-  return thread?.cwd?.trim() || fallbackDirectory;
+function expandHomePath(path: string, homeDirectory: string) {
+  const raw = path.trim();
+  const home = homeDirectory.trim() || CODEX_DEFAULT_DIRECTORY;
+  if (raw === '~') return home;
+  if (raw.startsWith('~/')) return `${home.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}`;
+  return raw;
+}
+
+function basename(path: string) {
+  return path.replace(/\/+$/u, '').split('/').filter(Boolean).at(-1) || path || CODEX_SANDBOX_NAME;
+}
+
+function threadSandboxDirectory(thread: CodexThread | undefined, fallbackDirectory = CODEX_DEFAULT_DIRECTORY) {
+  const root = thread?.gitInfo?.root?.trim();
+  if (root) return expandHomePath(root, fallbackDirectory);
+  return CODEX_DEFAULT_DIRECTORY;
+}
+
+function threadSandboxName(thread: CodexThread | undefined, sandboxDirectory: string) {
+  if (!thread?.gitInfo?.root?.trim()) return CODEX_GLOBAL_SANDBOX_NAME;
+  const branch = thread.gitInfo.branch?.trim();
+  const projectName = basename(sandboxDirectory);
+  return branch ? `${projectName} · ${branch}` : projectName;
 }
 
 function threadTitle(thread: CodexThread) {
@@ -39,12 +61,13 @@ export function codexThreadToSession(
   thread: CodexThread,
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedThreadIds: Set<string> = new Set(),
+  sessionDirectory = threadSandboxDirectory(thread, fallbackDirectory),
 ): SessionState {
   return {
     id: thread.id,
     title: threadTitle(thread),
     status: threadStatus(thread),
-    directory: threadDirectory(thread, fallbackDirectory),
+    directory: sessionDirectory,
     timeCreated: threadTimestamp(thread.createdAt),
     timeUpdated: threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt),
     timePinned: pinnedThreadIds.has(thread.id) ? 1 : undefined,
@@ -56,19 +79,19 @@ export function createCodexProjectState(
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedThreadIds: Set<string> = new Set(),
 ): ProjectState {
-  const primaryDirectory = threadDirectory(threads[0], fallbackDirectory);
+  const primaryDirectory = CODEX_DEFAULT_DIRECTORY;
   const sandboxes: ProjectState['sandboxes'] = {};
 
   for (const thread of threads) {
-    const directory = threadDirectory(thread, fallbackDirectory);
+    const directory = threadSandboxDirectory(thread, fallbackDirectory);
     const sandbox = sandboxes[directory] ?? {
       directory,
-      name: directory === fallbackDirectory ? CODEX_SANDBOX_NAME : directory.split('/').filter(Boolean).at(-1) || CODEX_SANDBOX_NAME,
+      name: threadSandboxName(thread, directory),
       rootSessions: [],
       sessions: {},
     };
     sandbox.rootSessions.push(thread.id);
-    sandbox.sessions[thread.id] = codexThreadToSession(thread, fallbackDirectory, pinnedThreadIds);
+    sandbox.sessions[thread.id] = codexThreadToSession(thread, fallbackDirectory, pinnedThreadIds, directory);
     sandboxes[directory] = sandbox;
   }
 
@@ -103,7 +126,7 @@ export function useCodexWorkspace(api: CodexWorkspaceApi) {
     api.threads.value.find((thread) => thread.id === api.activeThreadId.value)
     ?? api.visibleThreads.value[0]
   ));
-  const activeDirectory = computed(() => threadDirectory(activeThread.value, fallbackDirectory.value));
+  const activeDirectory = computed(() => threadSandboxDirectory(activeThread.value, fallbackDirectory.value));
   const activeSessionId = computed(() => activeThread.value?.id ?? '');
   const history = computed(() => api.canonicalHistory.value);
 
