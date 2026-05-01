@@ -488,10 +488,6 @@ let scrollFrameId: number | null = null;
 let containerHeightFrameId: number | null = null;
 let branchSearchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Memoization cache for flattenedRows
-let cachedFlattenedRows: VirtualRow[] | null = null;
-let cachedFlattenedRowsKey = '';
-
 const expanded = computed(() => new Set(props.expandedPaths));
 const branchIcon = computed(() => (props.branchInfo ? 'lucide:git-branch' : 'lucide:folder'));
 const branchName = computed(() => props.branchInfo?.branch ?? props.directoryName ?? t('treeView.noGit'));
@@ -536,6 +532,13 @@ function setupContainerResizeObserver() {
   containerResizeObserver.observe(target);
 }
 
+async function syncScrollContainer() {
+  await nextTick();
+  updateContainerHeight();
+  setupContainerResizeObserver();
+  scrollTop.value = scrollContainerRef.value?.scrollTop ?? 0;
+}
+
 onMounted(() => {
   updateContainerHeight();
   setupContainerResizeObserver();
@@ -572,6 +575,14 @@ watch(
     }, BRANCH_SEARCH_DEBOUNCE_MS);
   },
   { immediate: true },
+);
+
+watch(
+  scrollContainerRef,
+  () => {
+    void syncScrollContainer();
+  },
+  { immediate: true, flush: 'post' },
 );
 
 // Watch for data changes and scroll selected into view
@@ -833,18 +844,7 @@ function getHighlightParts(name: string, query: string): HighlightPart[] {
 // expandedPaths the previous expansion state is restored automatically when the
 // query is cleared.
 
-// Cache key to avoid unnecessary recalculations
-const flattenedRowsKey = computed(() => {
-  return `${expanded.value.size}:${fileSearchQuery.value}:${viewMode.value}:${props.selectedPath || ''}:${displayNodes.value.length}`;
-});
-
 const flattenedRows = computed<VirtualRow[]>(() => {
-  // Check cache first
-  const key = flattenedRowsKey.value;
-  if (cachedFlattenedRowsKey === key && cachedFlattenedRows !== null) {
-    return cachedFlattenedRows;
-  }
-
   const rows: VirtualRow[] = [];
   let index = 0;
   const query = fileSearchQuery.value.trim().toLowerCase();
@@ -947,10 +947,6 @@ const flattenedRows = computed<VirtualRow[]>(() => {
 
   pushRows(displayNodes.value, 0);
 
-  // Update cache
-  cachedFlattenedRows = rows;
-  cachedFlattenedRowsKey = key;
-
   return rows;
 });
 
@@ -958,6 +954,9 @@ const totalHeight = computed(() => flattenedRows.value.length * ROW_HEIGHT);
 
 // Virtual scroll visible rows
 const visibleRows = computed(() => {
+  if (containerHeight.value <= 0) {
+    return flattenedRows.value;
+  }
   const startIdx = Math.max(0, Math.floor(scrollTop.value / ROW_HEIGHT) - OVERSCAN);
   const endIdx = Math.min(
     flattenedRows.value.length,
