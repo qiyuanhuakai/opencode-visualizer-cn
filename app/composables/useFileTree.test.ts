@@ -146,12 +146,14 @@ describe('useFileTree', () => {
 
     mockRunOneShotPtyCommand.mockClear();
 
-    let releaseStatusRefresh: (() => void) | null = null;
+    let releaseStatusRefresh: VoidFunction | undefined;
+    let statusRefreshWaiting = false;
     mockRunOneShotPtyCommand.mockImplementation(async (_command, args = []) => {
       const script = args.at(-1) ?? '';
       if (script.includes('status --porcelain')) {
         await new Promise<void>((resolve) => {
-          releaseStatusRefresh = resolve;
+          statusRefreshWaiting = true;
+          releaseStatusRefresh = () => resolve();
         });
         return [
           '## main',
@@ -178,11 +180,10 @@ describe('useFileTree', () => {
 
     expect(mockRunOneShotPtyCommand).toHaveBeenCalledTimes(1);
 
-    const release: (() => void) | null = releaseStatusRefresh;
-    if (!release) {
+    if (!statusRefreshWaiting || !releaseStatusRefresh) {
       throw new Error('expected in-flight status refresh to be waiting');
     }
-    release();
+    releaseStatusRefresh();
     await first;
     await second;
     await mounted.settle();

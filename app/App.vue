@@ -129,6 +129,7 @@
                     :compute-context-percent="computeContextPercent"
                     :session-revert="sessionRevert"
                     :is-loading="isLoadingHistory"
+                    :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
                     @fork-message="handleForkMessage"
@@ -998,7 +999,7 @@ const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
 const appEl = ref<HTMLDivElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
-const outputPanelRef = ref<{ panelEl: HTMLDivElement | null; scrollToBottom: () => void } | null>(null);
+const outputPanelRef = ref<{ panelEl: HTMLDivElement | null; scrollToBottom: () => Promise<void> } | null>(null);
 const topPanelRef = ref<{
   openSessionDropdown: () => void;
   closeSessionDropdown: () => void;
@@ -1032,6 +1033,19 @@ function handleOutputPanelContentResized() {
   notifyContentChange();
 }
 
+async function anchorOutputToBottom() {
+  const requestId = ++outputAnchorRequestId;
+  isOutputAnchoring.value = true;
+  try {
+    await nextTick();
+    await outputPanelRef.value?.scrollToBottom();
+  } finally {
+    if (requestId === outputAnchorRequestId) {
+      isOutputAnchoring.value = false;
+    }
+  }
+}
+
 function scheduleFloatingExtentSync() {
   if (floatingExtentFrameId !== null) return;
   floatingExtentFrameId = requestAnimationFrame(() => {
@@ -1058,6 +1072,8 @@ const runningToolIds = reactive(new Set<string>());
 const userMessageMetaById = ref<Record<string, UserMessageMeta>>({});
 const userMessageTimeById = ref<Record<string, number>>({});
 const isLoadingHistory = ref(false);
+const isOutputAnchoring = ref(false);
+const deferredSessionReloadId = ref<string | null>(null);
 const globalEventUnsubscribers: Array<() => void> = [];
 
 const inputResizeState = ref<{
@@ -1077,6 +1093,8 @@ const sidePanelWidth = ref<number | null>(null);
 const appBodyEl = ref<HTMLDivElement | null>(null);
 const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
 let primaryHistoryRequestId = 0;
+let sessionReloadRequestId = 0;
+let outputAnchorRequestId = 0;
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
 const localPinnedSessionStore = ref<LocalPinnedSessionStore>(readPinnedSessionStore());
@@ -4776,6 +4794,11 @@ async function bootstrapSelections() {
 
   } finally {
     isBootstrapping.value = false;
+    const deferredSessionId = deferredSessionReloadId.value;
+    if (deferredSessionId && deferredSessionId === selectedSessionId.value) {
+      deferredSessionReloadId.value = null;
+      void reloadSelectedSessionState(deferredSessionId);
+    }
   }
 }
 
@@ -5062,10 +5085,17 @@ function storeUserMessageTime(messageId: string | undefined, messageTime?: numbe
   userMessageTimeById.value = { ...userMessageTimeById.value, [messageId]: messageTime };
 }
 
-async function fetchHistory(sessionId: string, isSubagentMessage = false) {
+async function fetchHistory(
+  sessionId: string,
+  isSubagentMessage = false,
+  rootRequestId?: number,
+  rootSessionId?: string,
+) {
   if (!sessionId) return;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
-  const requestedDirectory = !isSubagentMessage ? getSelectedWorktreeDirectory() : '';
+  const requestedDirectory = getSelectedWorktreeDirectory();
+  const expectedRootRequestId = isSubagentMessage ? rootRequestId ?? 0 : requestId;
+  const expectedRootSessionId = rootSessionId ?? sessionId;
   try {
     const directory = getSelectedWorktreeDirectory();
     const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
@@ -5073,19 +5103,15 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       directory: directory || undefined,
     })) as Array<Record<string, unknown>>;
     if (!Array.isArray(data)) return;
-    if (!isSubagentMessage) {
-      if (requestId !== primaryHistoryRequestId) return;
-      if (selectedSessionId.value !== sessionId) return;
-      if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
-    }
+    if (expectedRootRequestId !== primaryHistoryRequestId) return;
+    if (selectedSessionId.value !== expectedRootSessionId) return;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
     // 全量加载，避免消息在加载过程中逐步显示导致未加载内容的卡片残留
     msg.loadHistory(data);
 
-    if (!isSubagentMessage) {
-      if (requestId !== primaryHistoryRequestId) return;
-      if (selectedSessionId.value !== sessionId) return;
-      if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
-    }
+    if (expectedRootRequestId !== primaryHistoryRequestId) return;
+    if (selectedSessionId.value !== expectedRootSessionId) return;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
 
     data.forEach((message) => {
       const info = message.info as Record<string, unknown> | undefined;
@@ -5104,9 +5130,12 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
 
 async function fetchAllowedSessionHistories(rootSessionId: string) {
   await fetchHistory(rootSessionId);
+  const rootRequestId = primaryHistoryRequestId;
   const descendantSessionIds = Array.from(allowedSessionIds.value).filter((id) => id !== rootSessionId);
   if (descendantSessionIds.length === 0) return;
-  await Promise.all(descendantSessionIds.map((id) => fetchHistory(id, true)));
+  await Promise.all(
+    descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId)),
+  );
 }
 
 function buildPtyWsUrl(path: string, directory?: string) {
@@ -6502,8 +6531,13 @@ function waitForPendingRenders(timeoutMs = 30000): Promise<void> {
 }
 
 async function reloadSelectedSessionState(newId?: string, oldId?: string) {
+  const reloadRequestId = ++sessionReloadRequestId;
   if (newId && isBootstrapping.value && !activeDirectory.value) {
+    deferredSessionReloadId.value = newId;
     return;
+  }
+  if (newId) {
+    deferredSessionReloadId.value = null;
   }
   fw.closeAll({ exclude: (key) => key.startsWith('shell:') });
   await nextTick();
@@ -6531,10 +6565,13 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
         }
         msg.loadHistory(codexWorkspace.history.value);
       } finally {
-        isLoadingHistory.value = false;
+        if (reloadRequestId === sessionReloadRequestId) {
+          isLoadingHistory.value = false;
+        }
       }
-      await nextTick();
-      outputPanelRef.value?.scrollToBottom();
+      if (reloadRequestId !== sessionReloadRequestId) return;
+      await anchorOutputToBottom();
+      if (reloadRequestId !== sessionReloadRequestId) return;
       nextTick(() => inputPanelRef.value?.focus());
       return;
     }
@@ -6550,12 +6587,14 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
       } catch {
         // Render timeout or error — still show what we have
       } finally {
-        isLoadingHistory.value = false;
+        if (reloadRequestId === sessionReloadRequestId) {
+          isLoadingHistory.value = false;
+        }
       }
     }
-    await nextTick();
-    // Instant scroll to bottom — no smooth animation during session switch
-    outputPanelRef.value?.scrollToBottom();
+    if (reloadRequestId !== sessionReloadRequestId) return;
+    await anchorOutputToBottom();
+    if (reloadRequestId !== sessionReloadRequestId) return;
     if (uiInitState.value === 'ready') {
       await restoreShellSessions();
     }
@@ -6564,6 +6603,7 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
     void fetchPendingPermissions(directory);
     void fetchPendingQuestions(directory);
   }
+  if (reloadRequestId !== sessionReloadRequestId) return;
   nextTick(() => inputPanelRef.value?.focus());
 }
 
@@ -8161,10 +8201,6 @@ async function startInitialization() {
     await fetchHomePath();
     initLoadingMessage.value = t('app.status.loadingProjects');
     await bootstrapSelections();
-    if (selectedSessionId.value) {
-      initLoadingMessage.value = t('app.status.loadingSessionHistory');
-      await reloadSelectedSessionState();
-    }
     if (activeDirectory.value) {
       initLoadingMessage.value = t('app.status.loadingWorktreeState');
       const directory = activeDirectory.value || undefined;
