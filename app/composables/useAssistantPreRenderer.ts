@@ -24,6 +24,7 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
   const assistantHtmlCache = reactive(new Map<string, string>());
   const deferredKeyCache = reactive(new Map<string, string>());
   const cancelRenderByRootId = new Map<string, () => void>();
+  let deferredRenderBatchId: number | null = null;
 
   const submitSeqMap = new Map<string, number>();
   const appliedSeqMap = new Map<string, number>();
@@ -88,10 +89,52 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
     return deferredKeyCache.get(root.id) ?? options.getThreadTransitionKey(root);
   }
 
+  function scheduleAssistantRenderBatch(
+    roots: Array<{ root: MessageInfo; answerId: string; content: string }>,
+    theme: string,
+    localeKey: string,
+  ) {
+    const BATCH_PRIORITY_COUNT = 4;
+    const orderedRoots = [...roots].reverse();
+    const immediate = orderedRoots.slice(0, BATCH_PRIORITY_COUNT);
+    const deferred = orderedRoots.slice(BATCH_PRIORITY_COUNT);
+
+    const submit = (entry: { root: MessageInfo; answerId: string; content: string }) => {
+      lastSubmitted.set(entry.root.id, {
+        answerId: entry.answerId,
+        content: entry.content,
+        theme,
+        locale: localeKey,
+      });
+      submitAssistantRender(entry.root.id, entry.answerId, entry.content);
+    };
+
+    for (const entry of immediate) {
+      submit(entry);
+    }
+
+    if (deferredRenderBatchId !== null) {
+      cancelAnimationFrame(deferredRenderBatchId);
+      deferredRenderBatchId = null;
+    }
+    if (deferred.length === 0) return;
+    for (const entry of deferred) {
+      assistantHtmlCache.delete(entry.root.id);
+      deferredKeyCache.delete(entry.root.id);
+    }
+    deferredRenderBatchId = requestAnimationFrame(() => {
+      deferredRenderBatchId = null;
+      for (const entry of deferred) {
+        submit(entry);
+      }
+    });
+  }
+
   watchEffect(() => {
     invalidateForFileRefsIfNeeded();
     const theme = options.theme.value;
     const localeKey = String(locale.value);
+    const pendingRoots: Array<{ root: MessageInfo; answerId: string; content: string }> = [];
     for (const root of options.visibleRoots.value) {
       if (!options.hasAssistantMessages(root)) continue;
       const final = options.getFinalAnswer(root);
@@ -111,17 +154,16 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
         }
         continue;
       }
-      lastSubmitted.set(root.id, {
-        answerId,
-        content,
-        theme,
-        locale: localeKey,
-      });
-      submitAssistantRender(root.id, answerId, content);
+      pendingRoots.push({ root, answerId, content });
     }
+    scheduleAssistantRenderBatch(pendingRoots, theme, localeKey);
   });
 
   onBeforeUnmount(() => {
+    if (deferredRenderBatchId !== null) {
+      cancelAnimationFrame(deferredRenderBatchId);
+      deferredRenderBatchId = null;
+    }
     cancelRenderByRootId.forEach((cancel) => cancel());
     cancelRenderByRootId.clear();
   });

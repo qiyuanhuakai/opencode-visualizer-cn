@@ -31,6 +31,7 @@ export function useAutoScroller(
   const isTrackingPaused = ref(options.enabled === false);
 
   let rafId: number | null = null;
+  let contentChangeRafId: number | null = null;
   let popupTimerId: ReturnType<typeof setTimeout> | null = null;
   let animating = false;
   let lastSetScrollTop = -1;
@@ -71,6 +72,13 @@ export function useAutoScroller(
   }
 
   function pauseTracking() {
+    if (contentChangeRafId !== null) {
+      cancelAnimationFrame(contentChangeRafId);
+      contentChangeRafId = null;
+    }
+    contentChangeScheduled = false;
+    clearNativeSmoothMonitor();
+    cancelAnimation();
     isTrackingPaused.value = true;
   }
 
@@ -231,8 +239,10 @@ export function useAutoScroller(
       return;
     }
     contentChangeScheduled = true;
-    requestAnimationFrame(() => {
+    contentChangeRafId = requestAnimationFrame(() => {
+      contentChangeRafId = null;
       contentChangeScheduled = false;
+      if (isTrackingPaused.value) return;
       const m = scrollMode.value;
       if (m === 'force') {
         scrollToBottom(smooth);

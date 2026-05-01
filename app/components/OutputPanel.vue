@@ -51,47 +51,37 @@
 
               <!-- Virtual scroll for large sessions (>20 threads) -->
               <template v-else>
+                <div class="virtual-scroll-spacer" :style="{ height: `${virtualTopSpacerHeight}px` }"></div>
                 <div
-                  class="virtual-scroll-spacer"
-                  :style="{ height: `${totalContentHeight}px`, position: 'relative' }"
+                  v-for="root in visibleThreadRoots"
+                  :key="root.id"
+                  class="virtual-scroll-item"
+                  :ref="(el) => setThreadRef(el as HTMLElement | null, root.id)"
                 >
-                  <div
-                    v-for="root in visibleThreadRoots"
-                    :key="root.id"
-                    class="virtual-scroll-item"
-                    :style="{
-                      position: 'absolute',
-                      top: '0',
-                      left: '0',
-                      right: '0',
-                      transform: `translateY(${threadOffsets.map.get(root.id) ?? 0}px)`,
-                    }"
-                    :ref="(el) => setThreadRef(el as HTMLElement | null, root.id)"
-                  >
-                    <ThreadBlock
-                      v-show="!isLoading && shouldRenderRoot(root)"
-                      :root="root"
-                      :theme="theme"
-                      :files-with-basenames="filesWithBasenames"
-                      :is-reverted-preview="isRevertedPreview(root)"
-                      :current-session-id="currentSessionId"
-                      :session-history-meta-by-id="sessionHistoryMetaById"
-                      :resolve-agent-color="resolveAgentColor"
-                      :resolve-model-meta="resolveModelMeta"
-                      :compute-context-percent="computeContextPercent"
-                      :session-revert="sessionRevert"
-                      :assistant-html="getAssistantHtml(root.id)"
-                      :deferred-transition-key="getDeferredTransitionKey(root)"
-                      @fork-message="emit('fork-message', $event)"
-                      @revert-message="emit('revert-message', $event)"
-                      @undo-revert="emit('undo-revert')"
-                      @show-message-diff="emit('show-message-diff', $event)"
-                      @open-image="emit('open-image', $event)"
-                      @show-thread-history="emit('show-thread-history', $event)"
-                      @message-rendered="handleMessageRendered"
-                    />
-                  </div>
+                  <ThreadBlock
+                    v-show="!isLoading && shouldRenderRoot(root)"
+                    :root="root"
+                    :theme="theme"
+                    :files-with-basenames="filesWithBasenames"
+                    :is-reverted-preview="isRevertedPreview(root)"
+                    :current-session-id="currentSessionId"
+                    :session-history-meta-by-id="sessionHistoryMetaById"
+                    :resolve-agent-color="resolveAgentColor"
+                    :resolve-model-meta="resolveModelMeta"
+                    :compute-context-percent="computeContextPercent"
+                    :session-revert="sessionRevert"
+                    :assistant-html="getAssistantHtml(root.id)"
+                    :deferred-transition-key="getDeferredTransitionKey(root)"
+                    @fork-message="emit('fork-message', $event)"
+                    @revert-message="emit('revert-message', $event)"
+                    @undo-revert="emit('undo-revert')"
+                    @show-message-diff="emit('show-message-diff', $event)"
+                    @open-image="emit('open-image', $event)"
+                    @show-thread-history="emit('show-thread-history', $event)"
+                    @message-rendered="handleMessageRendered"
+                  />
                 </div>
+                <div class="virtual-scroll-spacer" :style="{ height: `${virtualBottomSpacerHeight}px` }"></div>
               </template>
             </div>
 
@@ -328,11 +318,17 @@ const threadOffsets = computed(() => {
   return { map, offsets, totalHeight: offset };
 });
 
-const totalContentHeight = computed(() => threadOffsets.value.totalHeight);
-
-const visibleThreadRoots = computed(() => {
+const visibleThreadWindow = computed(() => {
   const roots = visibleRoots.value;
-  if (roots.length <= 20) return roots;
+  if (roots.length <= 20) {
+    return {
+      roots,
+      startIdx: 0,
+      endIdx: roots.length,
+      topSpacerHeight: 0,
+      bottomSpacerHeight: 0,
+    };
+  }
 
   const { offsets } = threadOffsets.value;
 
@@ -358,11 +354,26 @@ const visibleThreadRoots = computed(() => {
   }
   endIdx = Math.min(roots.length, endIdx + OVERSCAN_COUNT);
 
-  return roots.slice(startIdx, endIdx);
+  let visibleHeight = 0;
+  for (let idx = startIdx; idx < endIdx; idx++) {
+    visibleHeight += getThreadHeight(roots[idx]);
+  }
+
+  return {
+    roots: roots.slice(startIdx, endIdx),
+    startIdx,
+    endIdx,
+    topSpacerHeight: offsets[startIdx] ?? 0,
+    bottomSpacerHeight: Math.max(0, threadOffsets.value.totalHeight - (offsets[startIdx] ?? 0) - visibleHeight),
+  };
 });
 
+const visibleThreadRoots = computed(() => visibleThreadWindow.value.roots);
+const virtualTopSpacerHeight = computed(() => visibleThreadWindow.value.topSpacerHeight);
+const virtualBottomSpacerHeight = computed(() => visibleThreadWindow.value.bottomSpacerHeight);
+
 const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
-  visibleRoots,
+  visibleRoots: visibleThreadRoots,
   theme: computed(() => props.theme),
   filesWithBasenames,
   getFinalAnswer,
@@ -630,7 +641,8 @@ function scrollToBottom(): Promise<void> {
   return new Promise((resolve) => {
     let attempts = 0;
     let stableFrames = 0;
-    const maxAttempts = 60;
+    let lastTarget = -1;
+    const maxAttempts = 12;
 
     const finish = () => {
       if (scrollToBottomFrameId !== null) {
@@ -654,12 +666,13 @@ function scrollToBottom(): Promise<void> {
 
       attempts += 1;
       const target = Math.max(0, currentPanel.scrollHeight - currentPanel.clientHeight);
-      if (Math.abs(currentPanel.scrollTop - target) > 0.5) {
+      if (target !== lastTarget || Math.abs(currentPanel.scrollTop - target) > 0.5) {
         currentPanel.scrollTop = target;
       }
+      lastTarget = target;
 
       const gap = Math.max(0, currentPanel.scrollHeight - currentPanel.clientHeight - currentPanel.scrollTop);
-      stableFrames = gap <= 1 ? stableFrames + 1 : 0;
+      stableFrames = gap <= 0.5 ? stableFrames + 1 : 0;
       if (stableFrames >= 2 || attempts >= maxAttempts) {
         finish();
         return;

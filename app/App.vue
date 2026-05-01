@@ -1011,7 +1011,9 @@ const outputPanelScrollMode = computed<ScrollMode>(() => 'follow');
 const {
   isFollowing,
   enableFollow,
+  pauseTracking,
   resetFollow,
+  resumeTracking,
   resumeFollow,
   notifyContentChange,
 } = useAutoScroller(outputPanelContainerEl, outputPanelScrollMode, {
@@ -1026,22 +1028,26 @@ function handleOutputPanelResumeFollow() {
 }
 
 function handleOutputPanelMessageRendered() {
+  if (isOutputAnchoring.value) return;
   notifyContentChange();
 }
 
 function handleOutputPanelContentResized() {
+  if (isOutputAnchoring.value) return;
   notifyContentChange();
 }
 
 async function anchorOutputToBottom() {
   const requestId = ++outputAnchorRequestId;
   isOutputAnchoring.value = true;
+  pauseTracking();
   try {
     await nextTick();
     await outputPanelRef.value?.scrollToBottom();
   } finally {
     if (requestId === outputAnchorRequestId) {
       isOutputAnchoring.value = false;
+      resumeTracking({ syncToBottom: false });
     }
   }
 }
@@ -1095,6 +1101,7 @@ const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
 let primaryHistoryRequestId = 0;
 let sessionReloadRequestId = 0;
 let outputAnchorRequestId = 0;
+const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
 const localPinnedSessionStore = ref<LocalPinnedSessionStore>(readPinnedSessionStore());
@@ -5090,6 +5097,7 @@ async function fetchHistory(
   isSubagentMessage = false,
   rootRequestId?: number,
   rootSessionId?: string,
+  incremental = false,
 ) {
   if (!sessionId) return;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
@@ -5107,7 +5115,17 @@ async function fetchHistory(
     if (selectedSessionId.value !== expectedRootSessionId) return;
     if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
     // 全量加载，避免消息在加载过程中逐步显示导致未加载内容的卡片残留
-    msg.loadHistory(data);
+    if (incremental) {
+      await msg.loadHistoryIncrementally(data, {
+        shouldContinue: () => {
+          if (expectedRootRequestId !== primaryHistoryRequestId) return false;
+          if (selectedSessionId.value !== expectedRootSessionId) return false;
+          return getSelectedWorktreeDirectory() === requestedDirectory;
+        },
+      });
+    } else {
+      msg.loadHistory(data);
+    }
 
     if (expectedRootRequestId !== primaryHistoryRequestId) return;
     if (selectedSessionId.value !== expectedRootSessionId) return;
@@ -5128,14 +5146,39 @@ async function fetchHistory(
   }
 }
 
-async function fetchAllowedSessionHistories(rootSessionId: string) {
+async function fetchRootSessionHistory(rootSessionId: string) {
   await fetchHistory(rootSessionId);
-  const rootRequestId = primaryHistoryRequestId;
+  return primaryHistoryRequestId;
+}
+
+function reserveRootHistoryRequestId() {
+  primaryHistoryRequestId += 1;
+  return primaryHistoryRequestId;
+}
+
+async function fetchDescendantSessionHistories(rootSessionId: string, rootRequestId: number) {
   const descendantSessionIds = Array.from(allowedSessionIds.value).filter((id) => id !== rootSessionId);
   if (descendantSessionIds.length === 0) return;
   await Promise.all(
-    descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId)),
+    descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId, true)),
   );
+}
+
+function scheduleDescendantSessionHistoryHydration(
+  rootSessionId: string,
+  rootRequestId: number,
+  reloadRequestId: number,
+) {
+  requestAnimationFrame(() => {
+    if (reloadRequestId !== sessionReloadRequestId) return;
+    if (selectedSessionId.value !== rootSessionId) return;
+    void fetchDescendantSessionHistories(rootSessionId, rootRequestId).then(() => {
+      if (reloadRequestId !== sessionReloadRequestId) return;
+      if (selectedSessionId.value !== rootSessionId) return;
+      hydratedDescendantSessionIds.add(rootSessionId);
+      void reloadTodosForAllowedSessions();
+    });
+  });
 }
 
 function buildPtyWsUrl(path: string, directory?: string) {
@@ -6549,9 +6592,6 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
   reasoning.reset();
   subagentWindows.reset();
   retryStatus.value = null;
-  todosBySessionId.value = {};
-  todoLoadingBySessionId.value = {};
-  todoErrorBySessionId.value = {};
   await nextTick();
   if (newId) {
     const sessionId = newId;
@@ -6576,14 +6616,20 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
       return;
     }
     const cacheHit = msg.tryLoadFromCache(sessionId);
+    const descendantsHydrated = hydratedDescendantSessionIds.has(sessionId);
     if (!cacheHit) {
+      hydratedDescendantSessionIds.delete(sessionId);
       isLoadingHistory.value = true;
+      let rootHistoryRequestId = 0;
       try {
-        await fetchAllowedSessionHistories(sessionId);
+        rootHistoryRequestId = await fetchRootSessionHistory(sessionId);
         // Allow one paint frame so that useAssistantPreRenderer's
         // watchEffect fires and submits worker tasks before we wait.
         await new Promise((resolve) => requestAnimationFrame(resolve));
         await waitForPendingRenders();
+        if (reloadRequestId === sessionReloadRequestId) {
+          scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
+        }
       } catch {
         // Render timeout or error — still show what we have
       } finally {
@@ -6591,6 +6637,9 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
           isLoadingHistory.value = false;
         }
       }
+    } else if (!descendantsHydrated) {
+      const rootHistoryRequestId = reserveRootHistoryRequestId();
+      scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
     }
     if (reloadRequestId !== sessionReloadRequestId) return;
     await anchorOutputToBottom();
