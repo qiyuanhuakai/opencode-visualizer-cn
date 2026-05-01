@@ -376,6 +376,7 @@
     />
     <StatusMonitorModal
       :open="isStatusMonitorOpen"
+      :preload="connectionState === 'ready'"
       :session-id="selectedSessionId"
       :codex-api="codexApi"
       @close="isStatusMonitorOpen = false"

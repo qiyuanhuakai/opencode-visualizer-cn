@@ -5,6 +5,15 @@
 ---
 ## [Unreleased]
 
+### 新后端支持(alpha)
+
+- [x] 将codex app-server逐步接入vis前端，同时保留codex panel用于最小化使用/调试/与opencode并行使用
+
+### 状态监控
+
+- [x] 添加了"codex"面板，允许在已连接codex app-server时查询codex已使用额度（5小时）（beta）
+- [x] 引入了预加载，在连接opencode服务器时即进行加载
+
 ### Bug 修复
 
 - [x] 修复了“文件树”中的文件夹有概率在第一次打开时不显示文件，需要开关一次才会显示文件的问题
