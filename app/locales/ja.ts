@@ -61,6 +61,7 @@ const messages: LocaleMessages = {
       unsupportedAttachment: 'サポートされていない添付ファイルの種類です。',
       attachmentFailed: '添付に失敗しました: {message}',
       sendFailed: '送信に失敗しました: {message}',
+      shellFailed: 'シェルに失敗しました: {message}',
       stopFailed: '停止に失敗しました: {message}',
       worktreeCreateFailed: 'ワークツリーの作成に失敗しました: {message}',
       worktreeDeleteFailed: 'ワークツリーの削除に失敗しました: {message}',
@@ -427,6 +428,8 @@ const messages: LocaleMessages = {
       providerDisabled: 'プロバイダー {providerId} を無効化しました。',
       modelEnabled: 'モデル {modelKey} を有効化しました。',
       modelDisabled: 'モデル {modelKey} を無効化しました。',
+      unsupportedBackendFeature: '現在のバックエンドは {feature} をサポートしていません。',
+      backendManagedProvider: 'このプロバイダーは現在のバックエンドによって管理されています。',
     },
     prompts: {
       selectAuthMethod: '{providerId} の認証方式を選択：\n{options}',

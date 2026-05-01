@@ -265,7 +265,8 @@
                         :checked="isProviderEnabled(provider.id)"
                         type="checkbox"
                         class="toggle-input"
-                        :disabled="busyProviderId === provider.id"
+                        :disabled="busyProviderId === provider.id || isBackendManagedProvider(provider)"
+                        :title="isBackendManagedProvider(provider) ? $t('providerManager.messages.backendManagedProvider') : undefined"
                         @change="toggleProvider(provider.id, ($event.target as HTMLInputElement).checked)"
                       />
                       <span class="toggle-track" />
@@ -310,7 +311,13 @@
                     <span>{{ $t('providerManager.custom.title') }}</span>
                     <small>{{ $t('providerManager.custom.entryDescription') }}</small>
                   </span>
-                  <button type="button" class="ghost-action provider-mini-row-action" @click="openCustomProviderForm">
+                  <button
+                    type="button"
+                    class="ghost-action provider-mini-row-action"
+                    :disabled="!supportsProviderConfigUpdates()"
+                    :title="!supportsProviderConfigUpdates() ? $t('providerManager.messages.unsupportedBackendFeature', { feature: 'custom providers' }) : undefined"
+                    @click="openCustomProviderForm"
+                  >
                     {{ $t('providerManager.actions.connect') }}
                   </button>
                 </div>
@@ -550,7 +557,7 @@ function backend() {
 }
 
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
-  if (!method) throw new Error(`Active backend does not support ${name}.`);
+  if (!method) throw new Error(String(t('providerManager.messages.unsupportedBackendFeature', { feature: name })));
   return method;
 }
 
@@ -794,7 +801,11 @@ function removeCustomHeader(index: number) {
 
 async function fetchAuthMethods() {
   try {
-    const listProviderAuthMethods = requireBackendMethod(backend().listProviderAuthMethods, 'provider auth methods');
+    const listProviderAuthMethods = backend().listProviderAuthMethods;
+    if (!listProviderAuthMethods) {
+      authMethods.value = {};
+      return;
+    }
     const data = (await listProviderAuthMethods()) as Record<string, ProviderAuthMethod[]>;
     authMethods.value = data && typeof data === 'object' ? data : {};
   } catch (error) {
@@ -834,8 +845,17 @@ function isProviderDisconnected(provider: ProviderInfo) {
   return !connectedProviderIdSet.value.has(provider.id);
 }
 
+function isBackendManagedProvider(provider: ProviderInfo) {
+  return provider.source === 'codex-app-server';
+}
+
+function supportsProviderConfigUpdates() {
+  const active = backend();
+  return Boolean(active.updateGlobalConfig && active.setProviderAuth);
+}
+
 function canDisconnectProvider(provider: ProviderInfo) {
-  return !isProviderDisconnected(provider) && provider.source !== 'env';
+  return !isProviderDisconnected(provider) && provider.source !== 'env' && !isBackendManagedProvider(provider);
 }
 
 function isConfigBackedProvider(provider: ProviderInfo) {
@@ -1059,6 +1079,11 @@ async function collectAuthPromptInputs(
 }
 
 async function toggleProvider(providerId: string, nextEnabled: boolean) {
+  const provider = props.providers.find((item) => item.id === providerId);
+  if (provider && isBackendManagedProvider(provider)) {
+    setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
+    return;
+  }
   busyProviderId.value = providerId;
   try {
     const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
@@ -1102,6 +1127,10 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
 }
 
 async function connectProvider(provider: ProviderInfo) {
+  if (isBackendManagedProvider(provider)) {
+    setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
+    return;
+  }
   const picked = await pickAuthMethod(provider.id);
   if (!picked) return;
   busyProviderId.value = provider.id;
@@ -1155,6 +1184,10 @@ async function connectProvider(provider: ProviderInfo) {
 }
 
 async function disconnectProvider(provider: ProviderInfo) {
+  if (isBackendManagedProvider(provider)) {
+    setFeedback(t('providerManager.messages.backendManagedProvider'), 'info');
+    return;
+  }
   const providerId = provider.id;
   if (!providerId) return;
     const confirmed = showConfirm ? await showConfirm(t('providerManager.confirm.disconnect', { providerId })) : true;

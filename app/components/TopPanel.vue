@@ -523,7 +523,7 @@
         <button
           type="button"
           class="control-button open-shell-button"
-          :disabled="!activeDirectory"
+          :disabled="!activeDirectory || !ptySupported"
           @click="$emit('open-shell')"
           :title="$t('topPanel.openShell')"
         >
@@ -596,39 +596,39 @@
                 <Icon icon="lucide:message-square" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.title') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('mcp', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('mcp', close)">
                 <Icon icon="lucide:plug" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.mcpTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('skills', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('skills', close)">
                 <Icon icon="lucide:sparkles" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.skillsTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('plugins', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('plugins', close)">
                 <Icon icon="lucide:blocks" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.pluginsTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('apps', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('apps', close)">
                 <Icon icon="lucide:app-window" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.appsTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('config', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('config', close)">
                 <Icon icon="lucide:file-json" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.configTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('experimentalFeatures', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('experimentalFeatures', close)">
                 <Icon icon="lucide:flask-conical" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.experimentalFeaturesTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('collaborationModes', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('collaborationModes', close)">
                 <Icon icon="lucide:users" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.collaborationModesTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('externalAgentConfig', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('externalAgentConfig', close)">
                 <Icon icon="lucide:import" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.externalAgentConfigTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexSubpanel('feedback', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('feedback', close)">
                 <Icon icon="lucide:send" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.feedbackTitle') }}</span>
               </button>
@@ -760,6 +760,8 @@ const props = defineProps<{
   selectedSessionId: string;
   homePath?: string;
   codexMode?: boolean;
+  codexConnected?: boolean;
+  ptySupported?: boolean;
 }>();
 
 const notifications = computed(() => props.notificationSessions ?? []);
@@ -1322,6 +1324,7 @@ function emitOpenCodexPanel(close: () => void) {
 }
 
 function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) {
+  if (!props.codexConnected) return;
   emit('open-codex-subpanel', panel);
   close();
 }
@@ -1426,6 +1429,16 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 .codex-menu-item:hover,
 .codex-menu-item:focus-visible {
   background: var(--theme-top-dropdown-active-bg, rgba(59, 130, 246, 0.2));
+}
+
+.codex-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.codex-menu-item:disabled:hover,
+.codex-menu-item:disabled:focus-visible {
+  background: transparent;
 }
 
 .tree-search {

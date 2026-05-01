@@ -19,6 +19,24 @@
         <Icon icon="mdi:folder-plus" width="14" />
         {{ t('codexPanel.fsCreateDirectory') }}
       </button>
+      <button
+        type="button"
+        class="codex-small-text-button"
+        :disabled="!api.connected.value || api.fsLoading.value || !api.previewFilePath.value"
+        @click="openCopyModal"
+      >
+        <Icon icon="mdi:content-copy" width="14" />
+        {{ t('codexPanel.fsCopy') }}
+      </button>
+      <button
+        type="button"
+        class="codex-small-text-button danger"
+        :disabled="!api.connected.value || api.fsLoading.value || !api.previewFilePath.value"
+        @click="submitRemovePreviewFile"
+      >
+        <Icon icon="mdi:delete-outline" width="14" />
+        {{ t('codexPanel.fsRemove') }}
+      </button>
     </div>
 
     <!-- New File Modal -->
@@ -117,11 +135,46 @@
         </div>
       </div>
     </div>
+
+    <!-- Copy File Modal -->
+    <div v-if="showCopyModal" class="codex-fs-modal">
+      <div class="codex-fs-modal-content">
+        <div class="codex-fs-modal-header">
+          <span>{{ t('codexPanel.fsCopy') }}</span>
+          <button type="button" class="codex-icon-button" :title="t('common.close')" @click="closeCopyModal">
+            <Icon icon="mdi:close" width="14" />
+          </button>
+        </div>
+        <label class="codex-fs-field">
+          <span>{{ api.previewFilePath.value }}</span>
+          <input
+            v-model="copyDestination"
+            class="codex-input"
+            type="text"
+            :placeholder="copyPlaceholder"
+            @keydown.enter.prevent="submitCopyPreviewFile"
+          />
+        </label>
+        <div class="codex-fs-modal-actions">
+          <button type="button" class="codex-small-text-button" @click="closeCopyModal">
+            {{ t('common.cancel') }}
+          </button>
+          <button
+            type="button"
+            class="codex-primary-button"
+            :disabled="!copyDestination.trim() || submitting"
+            @click="submitCopyPreviewFile"
+          >
+            {{ submitting ? t('common.processing') : t('codexPanel.fsCopy') }}
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import { useCodexApi } from '../../composables/useCodexApi';
@@ -134,10 +187,16 @@ const { t } = useI18n();
 
 const showNewFileModal = ref(false);
 const showNewFolderModal = ref(false);
+const showCopyModal = ref(false);
 const newFileName = ref('');
 const newFileContent = ref('');
 const newFolderName = ref('');
+const copyDestination = ref('');
 const submitting = ref(false);
+
+const copyPlaceholder = computed(() => (
+  joinPath(props.api.fsCwd.value || '/', `${basename(props.api.previewFilePath.value)}.copy`)
+));
 
 function openNewFileModal() {
   newFileName.value = '';
@@ -159,6 +218,21 @@ function openNewFolderModal() {
 function closeNewFolderModal() {
   showNewFolderModal.value = false;
   newFolderName.value = '';
+}
+
+function basename(path: string) {
+  return path.split('/').filter(Boolean).pop() || 'file';
+}
+
+function openCopyModal() {
+  const source = props.api.previewFilePath.value;
+  copyDestination.value = source ? joinPath(props.api.fsCwd.value || '/', `${basename(source)}.copy`) : '';
+  showCopyModal.value = true;
+}
+
+function closeCopyModal() {
+  showCopyModal.value = false;
+  copyDestination.value = '';
 }
 
 function joinPath(cwd: string, name: string): string {
@@ -192,6 +266,34 @@ async function submitNewFolder() {
   try {
     await props.api.fsCreateDirectory(path);
     closeNewFolderModal();
+  } catch {
+    // error is surfaced via api.fsError in parent
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function submitCopyPreviewFile() {
+  const source = props.api.previewFilePath.value;
+  const destination = copyDestination.value.trim();
+  if (!source || !destination || submitting.value) return;
+  submitting.value = true;
+  try {
+    await props.api.fsCopy(source, destination);
+    closeCopyModal();
+  } catch {
+    // error is surfaced via api.fsError in parent
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function submitRemovePreviewFile() {
+  const source = props.api.previewFilePath.value;
+  if (!source || submitting.value) return;
+  submitting.value = true;
+  try {
+    await props.api.fsRemove(source);
   } catch {
     // error is surfaced via api.fsError in parent
   } finally {

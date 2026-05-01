@@ -28,6 +28,7 @@ import {
   type CodexSkill,
   type CodexThread,
   type CodexThreadListParams,
+  type CodexThreadReadResult,
   type CodexTurn,
   type CodexToolRequestUserInputParams,
   type CodexWindowsSandboxSetupStartResult,
@@ -402,7 +403,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const fsError = ref('');
   const previewFileContent = ref('');
   const previewFilePath = ref('');
-  const sandboxPath = ref('~');
+  const sandboxPath = ref('');
   const fsSuggestions = ref<string[]>([]);
   const fsShowSuggestions = ref(false);
   const homeDir = ref('');
@@ -504,11 +505,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     });
   }
 
-  function upsertThread(thread: CodexThread) {
+  function upsertThread(thread: CodexThread, refreshGitInfo = true) {
+    const normalizedThread = normalizeThreadCwd(thread);
     const index = threads.value.findIndex((item) => item.id === thread.id);
-    if (index === -1) threads.value = [thread, ...threads.value];
-    else threads.value[index] = { ...threads.value[index], ...thread };
-    if (!activeThreadId.value) activeThreadId.value = thread.id;
+    if (index === -1) threads.value = [normalizedThread, ...threads.value];
+    else threads.value[index] = { ...threads.value[index], ...normalizedThread };
+    if (!activeThreadId.value) activeThreadId.value = normalizedThread.id;
+    if (refreshGitInfo && !normalizedThread.gitInfo?.root) void upsertThreadWithGitInfo(normalizedThread);
   }
 
   function pushTranscript(role: CodexTranscriptEntry['role'], text: string) {
@@ -577,7 +580,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
      if (notification.method === 'thread/started') {
        const thread = extractThread(notification.params);
-       if (thread) upsertThread(thread);
+       if (thread) void upsertThreadWithGitInfo(thread);
        return;
      }
 
@@ -945,6 +948,29 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     ));
   }
 
+  async function refreshHomeDir(force = false) {
+    if (homeDir.value && !force) return homeDir.value;
+    try {
+      const httpUrl = codexBridgeHttpUrl(
+        appendCodexBridgeToken(url.value.trim(), bridgeToken.value.trim() || undefined),
+        '/homedir',
+      );
+      const res = await fetch(httpUrl, { method: 'GET' });
+      if (res.ok) {
+        const data = await res.json() as { home?: string };
+        const home = data.home?.trim();
+        if (home) {
+          homeDir.value = home;
+          return homeDir.value;
+        }
+      }
+    } catch {
+      if (!homeDir.value) homeDir.value = '/';
+    }
+    if (!homeDir.value) homeDir.value = '/';
+    return homeDir.value;
+  }
+
   async function connect(nextUrl = url.value) {
     disconnect();
     url.value = nextUrl.trim();
@@ -952,21 +978,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     errorMessage.value = '';
     adapter = makeAdapter();
 
-    if (!homeDir.value) {
-      try {
-        const httpUrl = codexBridgeHttpUrl(
-          appendCodexBridgeToken(url.value.trim(), bridgeToken.value.trim() || undefined),
-          '/homedir',
-        );
-        const res = await fetch(httpUrl, { method: 'GET' });
-        if (res.ok) {
-          const data = await res.json() as { home?: string };
-          if (data.home) homeDir.value = data.home;
-        }
-      } catch {
-        homeDir.value = '';
-      }
-    }
+    await refreshHomeDir();
     unsubscribeNotifications = adapter.onNotification(handleNotification);
     unsubscribeServerRequests = adapter.onServerRequest(handleServerRequest);
 
@@ -975,7 +987,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       initialized.value = true;
       status.value = 'connected';
       await refreshThreads();
-      await openAsSandbox('~');
+      await openAsSandbox(homeDir.value || '/');
     } catch (error) {
       status.value = 'error';
       errorMessage.value = error instanceof Error ? error.message : String(error);
@@ -1000,8 +1012,82 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   async function refreshThreads(params: CodexThreadListParams = {}) {
     if (!adapter) return;
     const result = await adapter.listThreads({ limit: 50, sortKey: 'updated_at', ...params });
-    threads.value = result.data;
-    if (!activeThreadId.value && result.data[0]) activeThreadId.value = result.data[0].id;
+    const normalizedThreads = result.data.map(normalizeThreadCwd);
+    const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
+    threads.value = enrichedThreads;
+    if (!activeThreadId.value && enrichedThreads[0]) activeThreadId.value = enrichedThreads[0].id;
+  }
+
+  const gitInfoByDirectory = new Map<string, NonNullable<CodexThread['gitInfo']>>();
+  const gitInfoRequests = new Map<string, Promise<CodexThread['gitInfo'] | null>>();
+
+  function parseVcsInfo(raw: unknown): CodexThread['gitInfo'] | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const record = raw as Record<string, unknown>;
+    const root = typeof record.root === 'string' ? expandPath(record.root).trim() : '';
+    const branch = typeof record.branch === 'string' ? record.branch.trim() : '';
+    const sha = typeof record.sha === 'string' ? record.sha.trim() : '';
+    const originUrl = typeof record.originUrl === 'string' ? record.originUrl.trim() : '';
+    if (!root) return null;
+    return {
+      root,
+      ...(branch ? { branch } : {}),
+      ...(sha ? { sha } : {}),
+      ...(originUrl ? { originUrl } : {}),
+    };
+  }
+
+  async function resolveThreadGitInfo(directory: string): Promise<CodexThread['gitInfo'] | null> {
+    const cwd = expandPath(directory).trim();
+    if (!adapter || !cwd) return null;
+    if (gitInfoByDirectory.has(cwd)) return gitInfoByDirectory.get(cwd) ?? null;
+    const existing = gitInfoRequests.get(cwd);
+    if (existing) return existing;
+    const request = (async () => {
+      try {
+        const raw = await adapter?.getVcsInfo?.(cwd);
+        const info = parseVcsInfo(raw);
+        if (info?.root) gitInfoByDirectory.set(cwd, info);
+        return info;
+      } catch {
+        return null;
+      } finally {
+        gitInfoRequests.delete(cwd);
+      }
+    })();
+    gitInfoRequests.set(cwd, request);
+    return request;
+  }
+
+  async function enrichThreadWithGitInfo(thread: CodexThread): Promise<CodexThread> {
+    const normalizedThread = normalizeThreadCwd(thread);
+    if (normalizedThread.gitInfo?.root) return normalizedThread;
+    const cwd = normalizedThread.cwd?.trim();
+    if (!cwd) return normalizedThread;
+    const gitInfo = await resolveThreadGitInfo(cwd);
+    return gitInfo?.root ? { ...normalizedThread, gitInfo } : normalizedThread;
+  }
+
+  async function upsertThreadWithGitInfo(thread: CodexThread) {
+    const enrichedThread = await enrichThreadWithGitInfo(thread);
+    upsertThread(enrichedThread, false);
+  }
+
+  function isUnmaterializedThreadError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return /not materialized/i.test(message) ||
+      /includeTurns is unavailable/i.test(message) ||
+      /no rollout found/i.test(message);
+  }
+
+  async function readThreadForHistory(threadId: string): Promise<CodexThreadReadResult> {
+    if (!adapter) throw new Error('Codex is not connected.');
+    try {
+      return await adapter.readThread({ threadId, includeTurns: true });
+    } catch (error) {
+      if (!isUnmaterializedThreadError(error)) throw error;
+      return adapter.readThread({ threadId, includeTurns: false });
+    }
   }
 
   async function selectThread(threadId: string) {
@@ -1013,12 +1099,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     loadingThread.value = true;
     errorMessage.value = '';
     try {
-      const read = await adapter.readThread({ threadId, includeTurns: true });
+      const read = await readThreadForHistory(threadId);
       upsertThread(read.thread);
       activeThreadId.value = read.thread.id;
       setTranscriptFromTurns(read.thread.turns ?? []);
-      const resumed = await adapter.resumeThread({ threadId });
-      upsertThread(resumed.thread);
+      try {
+        const resumed = await adapter.resumeThread({ threadId });
+        upsertThread(resumed.thread);
+      } catch (error) {
+        if (!isUnmaterializedThreadError(error)) throw error;
+      }
     } catch (error) {
       errorMessage.value = error instanceof Error ? error.message : String(error);
       throw error;
@@ -1028,8 +1118,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   async function hydrateThread(threadId: string) {
-    const read = await adapter?.readThread({ threadId, includeTurns: true });
-    if (!read) return;
+    if (!adapter) return;
+    const read = await readThreadForHistory(threadId);
     upsertThread(read.thread);
     activeThreadId.value = read.thread.id;
     setTranscriptFromTurns(read.thread.turns ?? []);
@@ -1038,15 +1128,19 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   async function startThread(cwd?: string) {
     if (!adapter) throw new Error('Codex is not connected.');
     const params: { cwd?: string; model?: string } = {};
-    if (cwd) params.cwd = cwd;
+    if (cwd) params.cwd = expandPath(cwd);
     if (selectedModel.value) params.model = selectedModel.value;
     const result = await adapter.startThread(params);
-    upsertThread(result.thread);
-    activeThreadId.value = result.thread.id;
+    const thread = params.cwd && !result.thread.cwd ? { ...result.thread, cwd: params.cwd } : result.thread;
+    const gitInfo = thread.cwd ? await resolveThreadGitInfo(thread.cwd) : null;
+    const enrichedThread = gitInfo?.root ? { ...thread, gitInfo } : thread;
+    upsertThread(enrichedThread, false);
+    activeThreadId.value = enrichedThread.id;
     transcript.value = [];
+    canonicalHistory.value = [];
     activeTurn.value = null;
     pruneServerRequestsForActiveContext();
-    return result.thread;
+    return enrichedThread;
   }
 
   async function setThreadName(threadId: string, name: string) {
@@ -1067,7 +1161,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         activeTurn.value = null;
       }
     };
-    await adapter.archiveThread({ threadId });
+    try {
+      await adapter.archiveThread({ threadId });
+    } catch (error) {
+      if (!isUnmaterializedThreadError(error)) throw error;
+      hideThread(threadId);
+      return;
+    }
     removeArchivedThread();
     await refreshThreads();
     removeArchivedThread();
@@ -1156,9 +1256,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (trimmed === '~') return homeDir.value || '/';
     if (trimmed.startsWith('~/')) {
       const home = homeDir.value;
-      if (home) return home + trimmed.slice(1);
+      if (home) return `${home.replace(/\/+$/u, '')}/${trimmed.slice(2).replace(/^\/+/, '')}`;
     }
     return trimmed;
+  }
+
+  function normalizeThreadCwd(thread: CodexThread): CodexThread {
+    const cwd = thread.cwd?.trim();
+    if (!cwd) return thread;
+    const expanded = expandPath(cwd);
+    return expanded === cwd ? thread : { ...thread, cwd: expanded };
   }
 
   async function readDirectory(path: string) {
@@ -1213,6 +1320,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return new TextDecoder('utf-8').decode(bytes);
   }
 
+  function codexFileResultToText(result: { dataBase64?: string; content?: string; encoding?: string }) {
+    if (typeof result.content === 'string' && result.encoding !== 'base64') return result.content;
+    if (typeof result.content === 'string' && result.encoding === 'base64') return base64ToUtf8(result.content);
+    if (typeof result.dataBase64 === 'string') return base64ToUtf8(result.dataBase64);
+    return '';
+  }
+
   async function readFile(path: string) {
     if (!adapter) throw new Error('Codex is not connected.');
     fsLoading.value = true;
@@ -1220,7 +1334,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const resolved = expandPath(path);
     try {
       const result = await adapter.readFile({ path: resolved });
-      previewFileContent.value = base64ToUtf8(result.dataBase64);
+      previewFileContent.value = codexFileResultToText(result);
       previewFilePath.value = resolved;
     } catch (error) {
       fsError.value = error instanceof Error ? error.message : String(error);
@@ -1469,6 +1583,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       } finally {
         modelsLoading.value = false;
       }
+    }
+
+    async function listProviders() {
+      if (!adapter) throw new Error('Codex is not connected.');
+      return adapter.listProviders();
     }
 
     function selectModel(modelId: string) {
@@ -1728,7 +1847,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       });
     }
 
-    async function updateThreadMetadata(threadId: string, gitInfo: { branch?: string; sha?: string; originUrl?: string } | null) {
+    async function updateThreadMetadata(threadId: string, gitInfo: { branch?: string; sha?: string; originUrl?: string; root?: string } | null) {
       if (!adapter) throw new Error('Codex is not connected.');
       const result = await adapter.updateThreadMetadata({ threadId, gitInfo });
       upsertThread(result.thread);
@@ -1779,6 +1898,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (!adapter) throw new Error('Codex is not connected.');
       const resolved = expandPath(path);
       await adapter.removeFile({ path: resolved });
+      if (previewFilePath.value === resolved) clearPreview();
+      if (fsCwd.value) await readDirectory(fsCwd.value);
     }
 
     async function fsWatch(watchId: string, path: string) {
@@ -1807,6 +1928,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const resolvedSource = expandPath(source);
       const resolvedDest = expandPath(destination);
       await adapter.copyFile({ sourcePath: resolvedSource, destinationPath: resolvedDest });
+      if (fsCwd.value) await readDirectory(fsCwd.value);
     }
 
     async function writeCommandExec(processId: string, deltaBase64?: string, closeStdin?: boolean) {
@@ -1849,9 +1971,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       fsBreadcrumbs,
       fsSuggestions,
       fsShowSuggestions,
-     connect,
-     disconnect,
-     refreshThreads,
+      connect,
+      disconnect,
+      refreshHomeDir,
+      refreshThreads,
      selectThread,
      startThread,
      setThreadName,
@@ -1929,7 +2052,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
        // New namespace methods
        fsWriteFile,
        fsCreateDirectory,
-        refreshModels,
+         refreshModels,
+         listProviders,
        selectModel,
        refreshSkills,
       toggleSkill,

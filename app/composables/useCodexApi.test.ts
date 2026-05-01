@@ -94,6 +94,85 @@ describe('useCodexApi', () => {
     expect(api.activeThreadId.value).toBe('thr_existing');
   });
 
+  it('expands tilde cwd values loaded from Codex threads', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({
+      data: [
+        { id: 'thr_home', preview: 'Home', cwd: '~' },
+        { id: 'thr_repo', preview: 'Repo', cwd: '~/repo' },
+      ],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    api.homeDir.value = '/home/codex';
+
+    await api.connect();
+
+    expect(api.threads.value.map((thread) => thread.cwd)).toEqual(['/home/codex', '/home/codex/repo']);
+  });
+
+  it('falls back to reading unmaterialized threads without turns', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn()
+      .mockRejectedValueOnce(new Error('thread thr_empty is not materialized yet; includeTurns is unavailable before first user message'))
+      .mockResolvedValueOnce({ thread: { id: 'thr_empty', preview: 'Empty thread' } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.selectThread('thr_empty');
+
+    expect(mock.adapter.readThread).toHaveBeenNthCalledWith(1, { threadId: 'thr_empty', includeTurns: true });
+    expect(mock.adapter.readThread).toHaveBeenNthCalledWith(2, { threadId: 'thr_empty', includeTurns: false });
+    expect(api.activeThreadId.value).toBe('thr_empty');
+    expect(api.canonicalHistory.value).toEqual([]);
+    expect(api.errorMessage.value).toBe('');
+  });
+
+  it('keeps the requested cwd when a newly started thread omits cwd', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    api.homeDir.value = '/home/codex';
+
+    await api.connect();
+    const thread = await api.startThread('~/repo');
+
+    expect(mock.adapter.startThread).toHaveBeenCalledWith({ cwd: '/home/codex/repo' });
+    expect(thread.cwd).toBe('/home/codex/repo');
+    expect(api.threads.value.find((item) => item.id === 'thr_new')?.cwd).toBe('/home/codex/repo');
+  });
+
+  it('enriches newly started threads with git root metadata', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', cwd: '/repo/subdir', preview: '' } });
+    mock.adapter.getVcsInfo = vi.fn().mockResolvedValue({ root: '/repo', branch: 'main' });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    const thread = await api.startThread('/repo/subdir');
+
+    expect(mock.adapter.getVcsInfo).toHaveBeenCalledWith('/repo/subdir');
+    expect(thread.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+    expect(api.threads.value.find((item) => item.id === 'thr_new')?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+  });
+
+  it('waits for git metadata before inserting thread-started notifications', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.getVcsInfo = vi.fn().mockResolvedValue({ root: '/repo', branch: 'main' });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    mock.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'thr_notify', cwd: '/repo/subdir', preview: '' } },
+    });
+
+    expect(api.threads.value.find((item) => item.id === 'thr_notify')).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(api.threads.value.find((item) => item.id === 'thr_notify')?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+    });
+  });
+
   it('sends prompts to the active thread and records user transcript entries', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -121,7 +200,9 @@ describe('useCodexApi', () => {
     mock.emit({ method: 'item/agentMessage/delta', params: { delta: ', Codex.' } });
 
     expect(api.activeThreadId.value).toBe('thr_existing');
-    expect(api.threads.value[0]).toEqual({ id: 'thr_stream', preview: '' });
+    await vi.waitFor(() => {
+      expect(api.threads.value[0]).toEqual({ id: 'thr_stream', preview: '' });
+    });
     expect(api.transcript.value).toEqual([
       expect.objectContaining({ role: 'assistant', text: 'Hello, Codex.' }),
     ]);
@@ -155,6 +236,21 @@ describe('useCodexApi', () => {
     expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual(['user', 'assistant']);
   });
 
+  it('keeps selecting an empty thread when resume reports no rollout', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_empty', preview: 'Empty', turns: [] } });
+    mock.adapter.resumeThread = vi.fn().mockRejectedValue(new Error('no rollout found for thread id thr_empty'));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.selectThread('thr_empty');
+
+    expect(mock.adapter.resumeThread).toHaveBeenCalledWith({ threadId: 'thr_empty' });
+    expect(api.activeThreadId.value).toBe('thr_empty');
+    expect(api.canonicalHistory.value).toEqual([]);
+    expect(api.errorMessage.value).toBe('');
+  });
+
   it('refreshes and updates thread names from notifications', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -186,6 +282,21 @@ describe('useCodexApi', () => {
     expect(mock.adapter.archiveThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
     expect(api.activeThreadId.value).toBe('');
     expect(api.activeTurn.value).toBeNull();
+  });
+
+  it('hides empty no-rollout threads when archive is rejected by Codex', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.archiveThread = vi.fn().mockRejectedValue(new Error('no rollout found for thread id thr_existing'));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.archiveThread('thr_existing');
+
+    expect(mock.adapter.archiveThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
+    expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(true);
+    expect(api.visibleThreads.value).toEqual([]);
+    expect(api.activeThreadId.value).toBe('');
+    expect(api.errorMessage.value).toBe('');
   });
 
   it('tracks and resolves server-initiated approval requests', async () => {

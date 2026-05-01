@@ -60,6 +60,7 @@ export interface LocaleMessages {
       unsupportedAttachment: string;
       attachmentFailed: string;
       sendFailed: string;
+      shellFailed: string;
       stopFailed: string;
       worktreeCreateFailed: string;
       worktreeDeleteFailed: string;
@@ -418,6 +419,8 @@ export interface LocaleMessages {
       providerDisabled: string;
       modelEnabled: string;
       modelDisabled: string;
+      unsupportedBackendFeature: string;
+      backendManagedProvider: string;
     };
     prompts: {
       selectAuthMethod: string;

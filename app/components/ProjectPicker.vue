@@ -66,7 +66,7 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
-import { getActiveBackendAdapter } from '../backends/registry';
+import { getActiveBackendAdapter, getActiveBackendKind } from '../backends/registry';
 import { splitFileContentDirectoryAndPath } from '../utils/path';
 
 type FileNode = {
@@ -236,10 +236,14 @@ async function fetchDirectory(dir: string) {
 
   try {
     const cleanDir = dir.replace(/\/+$/, '') || '/';
-    const [data, gitEntries] = await Promise.all([
-      listDirectory(cleanDir, controller.signal),
-      listDirectory(`${cleanDir}/.git`, controller.signal),
-    ]);
+    const data = await listDirectory(cleanDir, controller.signal);
+    let gitEntries: FileNode[] = [];
+    try {
+      gitEntries = await listDirectory(`${cleanDir}/.git`, controller.signal);
+    } catch (gitError) {
+      if ((gitError as Error).name === 'AbortError') throw gitError;
+      gitEntries = [];
+    }
     if (requestId !== fetchRequestId) return;
     allEntries.value = data;
     hasGitDirectory.value = gitEntries.length > 0;
@@ -255,7 +259,10 @@ async function fetchDirectory(dir: string) {
 }
 
 async function listDirectory(dir: string, signal: AbortSignal) {
-  const { directory, path } = splitFileContentDirectoryAndPath(dir, null);
+  const cleanDir = cleanDirectoryPath(dir);
+  const { directory, path } = getActiveBackendKind() === 'codex'
+    ? { directory: cleanDir, path: '.' }
+    : splitFileContentDirectoryAndPath(cleanDir, null);
   const listFiles = getActiveBackendAdapter().listFiles;
   if (!listFiles) throw new Error('Active backend does not support file listing.');
   const data = (await listFiles(
