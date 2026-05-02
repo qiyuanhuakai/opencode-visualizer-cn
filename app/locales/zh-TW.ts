@@ -681,6 +681,10 @@ const messages: LocaleMessages = {
         label: '顯示 Codex 按鈕',
         description: '在右上角顯示 Codex 面板按鈕。',
       },
+      showCodexInStatusMonitor: {
+        label: '在狀態監控中顯示 Codex',
+        description: '在狀態監控懸浮窗中顯示獨立的 Codex 分頁。',
+      },
     },
   },
   floatingWindow: {
@@ -1191,6 +1195,9 @@ const messages: LocaleMessages = {
       transcriptWebSearch: '網頁搜尋',
       rateLimits: '速率限制',
       refreshRateLimits: '重新整理',
+      fileManagerTitle: '檔案管理器',
+      openWorkspaceTools: '開啟工作區工具',
+      threadActionsTitle: '執行緒操作',
       reviewBranchPlaceholder: '分支名稱',
       reviewCommitPlaceholder: '提交雜湊',
       reviewCustomPlaceholder: '自訂指令...',
@@ -1304,7 +1311,6 @@ const messages: LocaleMessages = {
       shellCommandRun: '執行',
       compactThread: '壓縮歷史',
       compactThreadConfirm: '壓縮對話歷史？此操作不可復原。',
-      injectItems: '注入項目',
       loadedThreads: '已載入執行緒',
       loadedThreadsEmpty: '記憶體中沒有已載入的執行緒',
       tokenUsage: '令牌使用',

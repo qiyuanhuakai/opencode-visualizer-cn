@@ -681,6 +681,10 @@ const messages: LocaleMessages = {
         label: 'Montri Codex-butanon',
         description: 'Montri la Codex-panelbutonon en la supra-destra angulo.',
       },
+      showCodexInStatusMonitor: {
+        label: 'Montri Codex en stato-monitoro',
+        description: 'Montri apartan Codex-langeton en la stato-monitoro.',
+      },
     },
   },
   floatingWindow: {
@@ -1191,6 +1195,9 @@ const messages: LocaleMessages = {
       transcriptWebSearch: 'Retpaĝa Serĉo',
       rateLimits: 'Rap limiting',
       refreshRateLimits: 'Refreŝigi',
+      fileManagerTitle: 'Dosieradministrilo',
+      openWorkspaceTools: 'Malfermi laborajn ilojn',
+      threadActionsTitle: 'Fadenaj agoj',
       reviewBranchPlaceholder: 'branĉnomo',
       reviewCommitPlaceholder: 'komittaĵo haketo',
       reviewCustomPlaceholder: 'propraj instrukcioj...',
@@ -1304,7 +1311,6 @@ const messages: LocaleMessages = {
       shellCommandRun: 'Ruli',
       compactThread: 'Kompakti Historion',
       compactThreadConfirm: 'Kompakti konversacian historion? Tio ne estas malfarebla.',
-      injectItems: 'Injekti Erojn',
       loadedThreads: 'Ŝargitaj Fadeno',
       loadedThreadsEmpty: 'Neniuj fadenoj ŝargitaj en memoro',
       tokenUsage: 'Token-Uzo',

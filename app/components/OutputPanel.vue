@@ -20,51 +20,42 @@
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
 
-            <!-- Normal rendering for small sessions (≤20 threads) -->
-            <template v-if="!shouldVirtualize">
-              <template v-for="root in visibleRoots" :key="root.id">
-                <ThreadBlock
-                  v-show="!isLoading && shouldRenderRoot(root)"
-                  :root="root"
-                  :theme="theme"
-                  :files-with-basenames="filesWithBasenames"
-                  :is-reverted-preview="isRevertedPreview(root)"
-                  :current-session-id="currentSessionId"
-                  :session-history-meta-by-id="sessionHistoryMetaById"
-                  :resolve-agent-color="resolveAgentColor"
-                  :resolve-model-meta="resolveModelMeta"
-                  :compute-context-percent="computeContextPercent"
-                  :session-revert="sessionRevert"
-                  :assistant-html="getAssistantHtml(root.id)"
-                  :deferred-transition-key="getDeferredTransitionKey(root)"
-                  @fork-message="emit('fork-message', $event)"
-                  @revert-message="emit('revert-message', $event)"
-                  @undo-revert="emit('undo-revert')"
-                  @show-message-diff="emit('show-message-diff', $event)"
-                  @open-image="emit('open-image', $event)"
-                  @show-thread-history="emit('show-thread-history', $event)"
-                  @message-rendered="handleMessageRendered"
-                />
+            <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
+              <!-- Normal rendering for small sessions (≤20 threads) -->
+              <template v-if="!shouldVirtualize">
+                <template v-for="root in visibleRoots" :key="root.id">
+                  <ThreadBlock
+                    v-show="!isLoading && shouldRenderRoot(root)"
+                    :root="root"
+                    :theme="theme"
+                    :files-with-basenames="filesWithBasenames"
+                    :is-reverted-preview="isRevertedPreview(root)"
+                    :current-session-id="currentSessionId"
+                    :session-history-meta-by-id="sessionHistoryMetaById"
+                    :resolve-agent-color="resolveAgentColor"
+                    :resolve-model-meta="resolveModelMeta"
+                    :compute-context-percent="computeContextPercent"
+                    :session-revert="sessionRevert"
+                    :assistant-html="getAssistantHtml(root.id)"
+                    :deferred-transition-key="getDeferredTransitionKey(root)"
+                    @fork-message="emit('fork-message', $event)"
+                    @revert-message="emit('revert-message', $event)"
+                    @undo-revert="emit('undo-revert')"
+                    @show-message-diff="emit('show-message-diff', $event)"
+                    @open-image="emit('open-image', $event)"
+                    @show-thread-history="emit('show-thread-history', $event)"
+                    @message-rendered="handleMessageRendered"
+                  />
+                </template>
               </template>
-            </template>
 
-            <!-- Virtual scroll for large sessions (>20 threads) -->
-            <template v-else>
-              <div
-                class="virtual-scroll-spacer"
-                :style="{ height: `${totalContentHeight}px`, position: 'relative' }"
-              >
+              <!-- Virtual scroll for large sessions (>20 threads) -->
+              <template v-else>
+                <div class="virtual-scroll-spacer" :style="{ height: `${virtualTopSpacerHeight}px` }"></div>
                 <div
                   v-for="root in visibleThreadRoots"
                   :key="root.id"
                   class="virtual-scroll-item"
-                  :style="{
-                    position: 'absolute',
-                    top: '0',
-                    left: '0',
-                    right: '0',
-                    transform: `translateY(${threadOffsets.map.get(root.id) ?? 0}px)`,
-                  }"
                   :ref="(el) => setThreadRef(el as HTMLElement | null, root.id)"
                 >
                   <ThreadBlock
@@ -90,8 +81,9 @@
                     @message-rendered="handleMessageRendered"
                   />
                 </div>
-              </div>
-            </template>
+                <div class="virtual-scroll-spacer" :style="{ height: `${virtualBottomSpacerHeight}px` }"></div>
+              </template>
+            </div>
 
             <FileRefPopup ref="fileRefPopupRef" :files="files" @open-file="handlePopupOpenFile" />
           </div>
@@ -161,6 +153,7 @@ const props = defineProps<{
   currentSessionId?: string;
   sessionHistoryMetaById?: Record<string, { parentID?: string; label: string }>;
   isLoading?: boolean;
+  isAnchoring?: boolean;
   sessionRevert?: {
     messageID: string;
     partID?: string;
@@ -281,6 +274,10 @@ const fileRefPopupRef = ref<{
 } | null>(null);
 let contentResizeObserver: ResizeObserver | undefined;
 let resizeNotifyFrameId: number | null = null;
+let scrollToBottomFrameId: number | null = null;
+let settleScrollToBottom: (() => void) | null = null;
+let restoreAnchorFrameId: number | null = null;
+let restoreAnchorToken = 0;
 
 // ── Virtual scroll ──────────────────────────────────────────────
 const THREAD_ESTIMATED_HEIGHT = 240;
@@ -297,10 +294,12 @@ let containerResizeObserver: ResizeObserver | undefined;
 
 let threadResizeObserver: ResizeObserver | undefined;
 const observedThreadElements = new Map<Element, string>();
+const threadElementsById = new Map<string, HTMLElement>();
 let heightUpdateFrameId: number | null = null;
 const pendingHeightUpdates = new Map<string, number>();
 
 const shouldVirtualize = computed(() => visibleRoots.value.length > 20);
+const shouldHideMessages = computed(() => Boolean(props.isAnchoring && !props.isLoading));
 
 function getThreadHeight(root: MessageInfo): number {
   if (!shouldRenderRoot(root)) return 0;
@@ -319,11 +318,17 @@ const threadOffsets = computed(() => {
   return { map, offsets, totalHeight: offset };
 });
 
-const totalContentHeight = computed(() => threadOffsets.value.totalHeight);
-
-const visibleThreadRoots = computed(() => {
+const visibleThreadWindow = computed(() => {
   const roots = visibleRoots.value;
-  if (roots.length <= 20) return roots;
+  if (roots.length <= 20) {
+    return {
+      roots,
+      startIdx: 0,
+      endIdx: roots.length,
+      topSpacerHeight: 0,
+      bottomSpacerHeight: 0,
+    };
+  }
 
   const { offsets } = threadOffsets.value;
 
@@ -349,11 +354,26 @@ const visibleThreadRoots = computed(() => {
   }
   endIdx = Math.min(roots.length, endIdx + OVERSCAN_COUNT);
 
-  return roots.slice(startIdx, endIdx);
+  let visibleHeight = 0;
+  for (let idx = startIdx; idx < endIdx; idx++) {
+    visibleHeight += getThreadHeight(roots[idx]);
+  }
+
+  return {
+    roots: roots.slice(startIdx, endIdx),
+    startIdx,
+    endIdx,
+    topSpacerHeight: offsets[startIdx] ?? 0,
+    bottomSpacerHeight: Math.max(0, threadOffsets.value.totalHeight - (offsets[startIdx] ?? 0) - visibleHeight),
+  };
 });
 
+const visibleThreadRoots = computed(() => visibleThreadWindow.value.roots);
+const virtualTopSpacerHeight = computed(() => visibleThreadWindow.value.topSpacerHeight);
+const virtualBottomSpacerHeight = computed(() => visibleThreadWindow.value.bottomSpacerHeight);
+
 const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
-  visibleRoots,
+  visibleRoots: visibleThreadRoots,
   theme: computed(() => props.theme),
   filesWithBasenames,
   getFinalAnswer,
@@ -420,6 +440,7 @@ function setupThreadResizeObserver() {
     heightUpdateFrameId = requestAnimationFrame(() => {
       heightUpdateFrameId = null;
       if (pendingHeightUpdates.size === 0) return;
+      const anchor = captureViewportAnchor();
       const newHeights = new Map(measuredHeights.value);
       for (const [rootId, height] of pendingHeightUpdates) {
         newHeights.set(rootId, height);
@@ -427,6 +448,21 @@ function setupThreadResizeObserver() {
       pendingHeightUpdates.clear();
       measuredHeights.value = newHeights;
       emit('content-resized');
+      if (anchor) {
+        restoreAnchorToken += 1;
+        const token = restoreAnchorToken;
+        nextTick(() => {
+          if (token !== restoreAnchorToken) return;
+          if (restoreAnchorFrameId !== null) {
+            cancelAnimationFrame(restoreAnchorFrameId);
+          }
+          restoreAnchorFrameId = requestAnimationFrame(() => {
+            restoreAnchorFrameId = null;
+            if (token !== restoreAnchorToken) return;
+            restoreViewportAnchor(anchor);
+          });
+        });
+      }
     });
   });
 }
@@ -438,16 +474,60 @@ function observeThreadElement(el: HTMLElement | null, rootId: string) {
     if (observedId === rootId && observedEl !== el) {
       threadResizeObserver.unobserve(observedEl);
       observedThreadElements.delete(observedEl);
+      if (threadElementsById.get(rootId) === observedEl) {
+        threadElementsById.delete(rootId);
+      }
     }
   }
   observedThreadElements.set(el, rootId);
+  threadElementsById.set(rootId, el);
   threadResizeObserver.observe(el);
 }
 
 function unobserveThreadElement(el: Element | null) {
   if (!el || !threadResizeObserver) return;
+  const rootId = observedThreadElements.get(el);
+  if (rootId && threadElementsById.get(rootId) === el) {
+    threadElementsById.delete(rootId);
+  }
   observedThreadElements.delete(el);
   threadResizeObserver.unobserve(el);
+}
+
+type ViewportAnchor = {
+  rootId: string;
+  offsetTop: number;
+};
+
+function captureViewportAnchor(): ViewportAnchor | null {
+  if (!shouldVirtualize.value || props.isFollowing) return null;
+  const panel = panelEl.value;
+  if (!panel) return null;
+  const panelTop = panel.getBoundingClientRect().top;
+  for (const root of visibleThreadRoots.value) {
+    const el = threadElementsById.get(root.id);
+    if (!el) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom <= panelTop) continue;
+    return {
+      rootId: root.id,
+      offsetTop: rect.top - panelTop,
+    };
+  }
+  return null;
+}
+
+function restoreViewportAnchor(anchor: ViewportAnchor) {
+  const panel = panelEl.value;
+  const el = threadElementsById.get(anchor.rootId);
+  if (!panel || !el) return;
+  const panelTop = panel.getBoundingClientRect().top;
+  const nextTop = el.getBoundingClientRect().top - panelTop;
+  const delta = nextTop - anchor.offsetTop;
+  if (Math.abs(delta) <= 0.5) return;
+  panel.scrollTop += delta;
+  pendingScrollTop = panel.scrollTop;
+  scrollTop.value = panel.scrollTop;
 }
 
 function setThreadRef(el: unknown, rootId: string) {
@@ -516,6 +596,7 @@ onBeforeUnmount(() => {
   threadResizeObserver?.disconnect();
   threadResizeObserver = undefined;
   observedThreadElements.clear();
+  threadElementsById.clear();
   if (resizeNotifyFrameId !== null) {
     cancelAnimationFrame(resizeNotifyFrameId);
     resizeNotifyFrameId = null;
@@ -532,36 +613,76 @@ onBeforeUnmount(() => {
     cancelAnimationFrame(heightUpdateFrameId);
     heightUpdateFrameId = null;
   }
+  if (scrollToBottomFrameId !== null) {
+    cancelAnimationFrame(scrollToBottomFrameId);
+    scrollToBottomFrameId = null;
+  }
+  if (restoreAnchorFrameId !== null) {
+    cancelAnimationFrame(restoreAnchorFrameId);
+    restoreAnchorFrameId = null;
+  }
+  restoreAnchorToken += 1;
+  settleScrollToBottom?.();
+  settleScrollToBottom = null;
   fileRefPopupRef.value?.closeFilePopup();
 });
 
-function scrollToBottom() {
+function scrollToBottom(): Promise<void> {
   const panel = panelEl.value;
-  if (!panel) return;
+  if (!panel) return Promise.resolve();
 
-  // 对于虚拟滚动，scrollHeight 在高度测量完成前可能不准确。
-  // 使用 RAF 循环持续滚动到底部，直到位置稳定。
-  let attempts = 0;
-  const maxAttempts = 20;
-  let lastScrollTop = -1;
-
-  function tick() {
-    if (attempts >= maxAttempts) return;
-    attempts++;
-
-    const target = panel!.scrollHeight;
-    if (panel!.scrollTop !== target) {
-      panel!.scrollTop = target;
-    }
-
-    // 如果 scrollTop 不再变化，说明已经稳定
-    if (panel!.scrollTop === lastScrollTop) return;
-    lastScrollTop = panel!.scrollTop;
-
-    requestAnimationFrame(tick);
+  if (scrollToBottomFrameId !== null) {
+    cancelAnimationFrame(scrollToBottomFrameId);
+    scrollToBottomFrameId = null;
   }
+  settleScrollToBottom?.();
+  settleScrollToBottom = null;
 
-  tick();
+  return new Promise((resolve) => {
+    let attempts = 0;
+    let stableFrames = 0;
+    let lastTarget = -1;
+    const maxAttempts = 12;
+
+    const finish = () => {
+      if (scrollToBottomFrameId !== null) {
+        cancelAnimationFrame(scrollToBottomFrameId);
+        scrollToBottomFrameId = null;
+      }
+      if (settleScrollToBottom === finish) {
+        settleScrollToBottom = null;
+      }
+      resolve();
+    };
+
+    settleScrollToBottom = finish;
+
+    const tick = () => {
+      const currentPanel = panelEl.value;
+      if (!currentPanel) {
+        finish();
+        return;
+      }
+
+      attempts += 1;
+      const target = Math.max(0, currentPanel.scrollHeight - currentPanel.clientHeight);
+      if (target !== lastTarget || Math.abs(currentPanel.scrollTop - target) > 0.5) {
+        currentPanel.scrollTop = target;
+      }
+      lastTarget = target;
+
+      const gap = Math.max(0, currentPanel.scrollHeight - currentPanel.clientHeight - currentPanel.scrollTop);
+      stableFrames = gap <= 0.5 ? stableFrames + 1 : 0;
+      if (stableFrames >= 2 || attempts >= maxAttempts) {
+        finish();
+        return;
+      }
+
+      scrollToBottomFrameId = requestAnimationFrame(tick);
+    };
+
+    scrollToBottomFrameId = requestAnimationFrame(tick);
+  });
 }
 
 const shellStyle = computed(() => {
@@ -640,6 +761,11 @@ defineExpose({ panelEl, scrollToBottom });
   flex-direction: column;
   gap: 6px;
   padding: 8px 12px 12px;
+}
+
+.output-panel-messages.is-anchor-pending {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .output-panel-content :deep(.markdown-host code.file-ref) {

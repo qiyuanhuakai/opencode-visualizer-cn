@@ -106,12 +106,14 @@ const DIRECTORY_SNAPSHOT_CACHE_LIMIT = 12;
 const scheduledDirectoryReloads = new Map<string, ReturnType<typeof setTimeout>>();
 const directorySidebarCache = new Map<string, DirectorySidebarSnapshot>();
 let scheduledGitStatusReload: ReturnType<typeof setTimeout> | null = null;
+let scheduledGitStatusReloadIncludeFileSnapshot = true;
 let gitStatusGeneration = 0;
 let branchListGeneration = 0;
 let gitFileListGeneration = 0;
 let branchEntriesLoadedForDirectory = false;
 let gitStatusRefreshInFlight: Promise<void> | null = null;
 let gitStatusRefreshQueued = false;
+let gitStatusRefreshQueuedIncludeFileSnapshot = false;
 const pendingFileWatcherEvents: FileWatcherUpdatedPacket[] = [];
 
 const BRANCH_LIST_FORMAT =
@@ -261,6 +263,7 @@ function clearScheduledGitStatusReload() {
   if (!scheduledGitStatusReload) return;
   clearTimeout(scheduledGitStatusReload);
   scheduledGitStatusReload = null;
+  scheduledGitStatusReloadIncludeFileSnapshot = true;
 }
 
 function isPathInsideDirectory(path: string, directory: string) {
@@ -332,11 +335,18 @@ function scheduleDirectoryReload(path: string) {
   );
 }
 
-function scheduleGitStatusReload() {
-  clearScheduledGitStatusReload();
+function scheduleGitStatusReload(includeFileSnapshot = true) {
+  if (scheduledGitStatusReload) {
+    scheduledGitStatusReloadIncludeFileSnapshot ||= includeFileSnapshot;
+    clearTimeout(scheduledGitStatusReload);
+  } else {
+    scheduledGitStatusReloadIncludeFileSnapshot = includeFileSnapshot;
+  }
   scheduledGitStatusReload = setTimeout(() => {
+    const nextIncludeFileSnapshot = scheduledGitStatusReloadIncludeFileSnapshot;
     scheduledGitStatusReload = null;
-    void refreshGitStatus();
+    scheduledGitStatusReloadIncludeFileSnapshot = true;
+    void refreshGitStatus({ includeFileSnapshot: nextIncludeFileSnapshot });
   }, GIT_STATUS_RELOAD_DEBOUNCE_MS);
 }
 
@@ -905,12 +915,18 @@ async function refreshGitStatusOnly() {
 }
 
 async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
+  const includeFileSnapshot = options.includeFileSnapshot ?? true;
   if (gitStatusRefreshInFlight) {
-    gitStatusRefreshQueued = true;
+    if (!gitStatusRefreshQueued) {
+      gitStatusRefreshQueued = true;
+      gitStatusRefreshQueuedIncludeFileSnapshot = includeFileSnapshot;
+    } else {
+      gitStatusRefreshQueuedIncludeFileSnapshot ||= includeFileSnapshot;
+    }
     return gitStatusRefreshInFlight;
   }
 
-  const includeFileSnapshot = options.includeFileSnapshot ?? true;
+  gitStatusRefreshQueuedIncludeFileSnapshot = false;
   gitStatusRefreshInFlight = (async () => {
     try {
       if (!includeFileSnapshot || fileTreeStrategy.value !== 'git') {
@@ -927,9 +943,11 @@ async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
     } finally {
       gitStatusRefreshInFlight = null;
       if (gitStatusRefreshQueued) {
+        const nextIncludeFileSnapshot = gitStatusRefreshQueuedIncludeFileSnapshot;
         gitStatusRefreshQueued = false;
+        gitStatusRefreshQueuedIncludeFileSnapshot = false;
         queueMicrotask(() => {
-          void refreshGitStatus();
+          void refreshGitStatus({ includeFileSnapshot: nextIncludeFileSnapshot });
         });
       }
     }
@@ -1159,8 +1177,11 @@ function feed(packet: FileWatcherUpdatedPacket) {
     }
   }
 
-  scheduleDirectoryReload(parentDirectoryPath(relativePath));
-  scheduleGitStatusReload();
+  const requiresTreeStructureReload = packet.event !== 'change';
+  if (requiresTreeStructureReload) {
+    scheduleDirectoryReload(parentDirectoryPath(relativePath));
+  }
+  scheduleGitStatusReload(requiresTreeStructureReload);
 }
 
 async function rebuildFileCache() {

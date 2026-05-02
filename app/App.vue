@@ -129,6 +129,7 @@
                     :compute-context-percent="computeContextPercent"
                     :session-revert="sessionRevert"
                     :is-loading="isLoadingHistory"
+                    :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
                     @fork-message="handleForkMessage"
@@ -375,6 +376,7 @@
     />
     <StatusMonitorModal
       :open="isStatusMonitorOpen"
+      :preload="connectionState === 'ready'"
       :session-id="selectedSessionId"
       :codex-api="codexApi"
       @close="isStatusMonitorOpen = false"
@@ -487,8 +489,10 @@ import CodexExperimentalFeatureManager from './components/codex/CodexExperimenta
 import CodexExternalAgentConfig from './components/codex/CodexExternalAgentConfig.vue';
 import CodexFeedbackUploader from './components/codex/CodexFeedbackUploader.vue';
 import CodexMcpServerManager from './components/codex/CodexMcpServerManager.vue';
+import CodexModelManager from './components/codex/CodexModelManager.vue';
 import CodexPluginManager from './components/codex/CodexPluginManager.vue';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
+import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
 import DiffViewer from './components/viewers/DiffViewer.vue';
 import ShellContent from './components/ToolWindow/Shell.vue';
@@ -901,7 +905,10 @@ function openCodexPanel() {
   const extent = fw.getExtent();
   void fw.open(CODEX_PANEL_KEY, {
     component: CodexPanel,
-    props: markRaw({ api: markRaw(codexApi) }),
+    props: markRaw({
+      api: markRaw(codexApi),
+      onOpenSubpanel: (panel: TopPanelCodexSubpanel) => openCodexSubpanel(panel),
+    }),
     title: t('codexPanel.title'),
     width,
     height,
@@ -924,6 +931,8 @@ type CodexSubpanelDefinition = {
 };
 
 const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefinition> = {
+  models: { component: CodexModelManager, titleKey: 'codexPanel.modelsTitle', width: 680, height: 560 },
+  fileManager: { component: CodexWorkspaceToolsPanel, titleKey: 'codexPanel.fileManagerTitle', width: 760, height: 620 },
   mcp: { component: CodexMcpServerManager, titleKey: 'codexPanel.mcpTitle', width: 700, height: 600 },
   skills: { component: CodexSkillsManager, titleKey: 'codexPanel.skillsTitle', width: 680, height: 560 },
   plugins: { component: CodexPluginManager, titleKey: 'codexPanel.pluginsTitle', width: 720, height: 600 },
@@ -938,6 +947,11 @@ const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefin
 function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
   if (!codexApi.connected.value) return;
   switch (panel) {
+    case 'models':
+      void codexApi.refreshModels();
+      break;
+    case 'fileManager':
+      break;
     case 'mcp':
       void codexApi.refreshMcpServers();
       break;
@@ -977,9 +991,15 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   const extent = fw.getExtent();
   const x = Math.max(20, extent.width - definition.width - 36);
   const y = 96;
+  const openCodexFilePreview = (path: string) => {
+    void openCodexNativeFilePreview(path);
+  };
   void fw.open(`codex-${panel}`, {
     component: definition.component,
-    props: { api: codexApi },
+    props: {
+      api: codexApi,
+      onOpenFilePreview: openCodexFilePreview,
+    },
     title: t(definition.titleKey),
     width: definition.width,
     height: definition.height,
@@ -994,11 +1014,75 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   refreshCodexSubpanel(panel);
 }
 
+async function openCodexNativeFilePreview(path: string) {
+  const key = `file-viewer:codex:${path}`;
+  const result = await codexApi.readFileRaw(path);
+  const encoding = typeof result.encoding === 'string' ? result.encoding : 'utf-8';
+  const binaryBase64 = result.type === 'binary'
+    ? (typeof result.dataBase64 === 'string'
+      ? result.dataBase64
+      : encoding === 'base64' && typeof result.content === 'string'
+        ? result.content
+        : undefined)
+    : undefined;
+  const fileContent = result.type === 'binary' ? undefined : codexApi.decodeReadFileText(result);
+
+  codexApi.previewFilePath.value = path;
+  if (typeof fileContent === 'string') {
+    codexApi.previewFileContent.value = fileContent;
+  }
+
+  if (fw.has(key)) {
+    const entry = fw.get(key);
+    if (entry?.minimized) fw.restore(key);
+    else fw.bringToFront(key);
+    fw.updateOptions(key, {
+      title: toFileViewerTitle(path),
+      props: {
+        ...entry?.props,
+        path,
+        absolutePath: path,
+        fileContent,
+        binaryBase64,
+        lang: guessLanguage(path),
+        gutterMode: 'default',
+        theme: shikiTheme.value,
+      },
+    });
+    return;
+  }
+
+  const pos = getFileViewerPosition(0.18, 0.14);
+
+  await fw.open(key, {
+    component: ContentViewer,
+    props: {
+      path,
+      absolutePath: path,
+      fileContent,
+      binaryBase64,
+      lang: guessLanguage(path),
+      gutterMode: 'default',
+      theme: shikiTheme.value,
+    },
+    closable: true,
+    resizable: true,
+    focusOnOpen: true,
+    scroll: 'manual',
+    title: toFileViewerTitle(path),
+    x: pos.x,
+    y: pos.y,
+    width: FILE_VIEWER_WINDOW_WIDTH,
+    height: FILE_VIEWER_WINDOW_HEIGHT,
+    expiry: Infinity,
+  });
+}
+
 const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
 const appEl = ref<HTMLDivElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
-const outputPanelRef = ref<{ panelEl: HTMLDivElement | null; scrollToBottom: () => void } | null>(null);
+const outputPanelRef = ref<{ panelEl: HTMLDivElement | null; scrollToBottom: () => Promise<void> } | null>(null);
 const topPanelRef = ref<{
   openSessionDropdown: () => void;
   closeSessionDropdown: () => void;
@@ -1010,7 +1094,9 @@ const outputPanelScrollMode = computed<ScrollMode>(() => 'follow');
 const {
   isFollowing,
   enableFollow,
+  pauseTracking,
   resetFollow,
+  resumeTracking,
   resumeFollow,
   notifyContentChange,
 } = useAutoScroller(outputPanelContainerEl, outputPanelScrollMode, {
@@ -1025,11 +1111,28 @@ function handleOutputPanelResumeFollow() {
 }
 
 function handleOutputPanelMessageRendered() {
+  if (isOutputAnchoring.value) return;
   notifyContentChange();
 }
 
 function handleOutputPanelContentResized() {
+  if (isOutputAnchoring.value) return;
   notifyContentChange();
+}
+
+async function anchorOutputToBottom() {
+  const requestId = ++outputAnchorRequestId;
+  isOutputAnchoring.value = true;
+  pauseTracking();
+  try {
+    await nextTick();
+    await outputPanelRef.value?.scrollToBottom();
+  } finally {
+    if (requestId === outputAnchorRequestId) {
+      isOutputAnchoring.value = false;
+      resumeTracking({ syncToBottom: false });
+    }
+  }
 }
 
 function scheduleFloatingExtentSync() {
@@ -1058,6 +1161,8 @@ const runningToolIds = reactive(new Set<string>());
 const userMessageMetaById = ref<Record<string, UserMessageMeta>>({});
 const userMessageTimeById = ref<Record<string, number>>({});
 const isLoadingHistory = ref(false);
+const isOutputAnchoring = ref(false);
+const deferredSessionReloadId = ref<string | null>(null);
 const globalEventUnsubscribers: Array<() => void> = [];
 
 const inputResizeState = ref<{
@@ -1077,6 +1182,9 @@ const sidePanelWidth = ref<number | null>(null);
 const appBodyEl = ref<HTMLDivElement | null>(null);
 const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
 let primaryHistoryRequestId = 0;
+let sessionReloadRequestId = 0;
+let outputAnchorRequestId = 0;
+const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
 const localPinnedSessionStore = ref<LocalPinnedSessionStore>(readPinnedSessionStore());
@@ -4776,6 +4884,11 @@ async function bootstrapSelections() {
 
   } finally {
     isBootstrapping.value = false;
+    const deferredSessionId = deferredSessionReloadId.value;
+    if (deferredSessionId && deferredSessionId === selectedSessionId.value) {
+      deferredSessionReloadId.value = null;
+      void reloadSelectedSessionState(deferredSessionId);
+    }
   }
 }
 
@@ -5062,10 +5175,18 @@ function storeUserMessageTime(messageId: string | undefined, messageTime?: numbe
   userMessageTimeById.value = { ...userMessageTimeById.value, [messageId]: messageTime };
 }
 
-async function fetchHistory(sessionId: string, isSubagentMessage = false) {
+async function fetchHistory(
+  sessionId: string,
+  isSubagentMessage = false,
+  rootRequestId?: number,
+  rootSessionId?: string,
+  incremental = false,
+) {
   if (!sessionId) return;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
-  const requestedDirectory = !isSubagentMessage ? getSelectedWorktreeDirectory() : '';
+  const requestedDirectory = getSelectedWorktreeDirectory();
+  const expectedRootRequestId = isSubagentMessage ? rootRequestId ?? 0 : requestId;
+  const expectedRootSessionId = rootSessionId ?? sessionId;
   try {
     const directory = getSelectedWorktreeDirectory();
     const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
@@ -5073,19 +5194,25 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
       directory: directory || undefined,
     })) as Array<Record<string, unknown>>;
     if (!Array.isArray(data)) return;
-    if (!isSubagentMessage) {
-      if (requestId !== primaryHistoryRequestId) return;
-      if (selectedSessionId.value !== sessionId) return;
-      if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
-    }
+    if (expectedRootRequestId !== primaryHistoryRequestId) return;
+    if (selectedSessionId.value !== expectedRootSessionId) return;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
     // 全量加载，避免消息在加载过程中逐步显示导致未加载内容的卡片残留
-    msg.loadHistory(data);
-
-    if (!isSubagentMessage) {
-      if (requestId !== primaryHistoryRequestId) return;
-      if (selectedSessionId.value !== sessionId) return;
-      if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
+    if (incremental) {
+      await msg.loadHistoryIncrementally(data, {
+        shouldContinue: () => {
+          if (expectedRootRequestId !== primaryHistoryRequestId) return false;
+          if (selectedSessionId.value !== expectedRootSessionId) return false;
+          return getSelectedWorktreeDirectory() === requestedDirectory;
+        },
+      });
+    } else {
+      msg.loadHistory(data);
     }
+
+    if (expectedRootRequestId !== primaryHistoryRequestId) return;
+    if (selectedSessionId.value !== expectedRootSessionId) return;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
 
     data.forEach((message) => {
       const info = message.info as Record<string, unknown> | undefined;
@@ -5102,11 +5229,39 @@ async function fetchHistory(sessionId: string, isSubagentMessage = false) {
   }
 }
 
-async function fetchAllowedSessionHistories(rootSessionId: string) {
+async function fetchRootSessionHistory(rootSessionId: string) {
   await fetchHistory(rootSessionId);
+  return primaryHistoryRequestId;
+}
+
+function reserveRootHistoryRequestId() {
+  primaryHistoryRequestId += 1;
+  return primaryHistoryRequestId;
+}
+
+async function fetchDescendantSessionHistories(rootSessionId: string, rootRequestId: number) {
   const descendantSessionIds = Array.from(allowedSessionIds.value).filter((id) => id !== rootSessionId);
   if (descendantSessionIds.length === 0) return;
-  await Promise.all(descendantSessionIds.map((id) => fetchHistory(id, true)));
+  await Promise.all(
+    descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId, true)),
+  );
+}
+
+function scheduleDescendantSessionHistoryHydration(
+  rootSessionId: string,
+  rootRequestId: number,
+  reloadRequestId: number,
+) {
+  requestAnimationFrame(() => {
+    if (reloadRequestId !== sessionReloadRequestId) return;
+    if (selectedSessionId.value !== rootSessionId) return;
+    void fetchDescendantSessionHistories(rootSessionId, rootRequestId).then(() => {
+      if (reloadRequestId !== sessionReloadRequestId) return;
+      if (selectedSessionId.value !== rootSessionId) return;
+      hydratedDescendantSessionIds.add(rootSessionId);
+      void reloadTodosForAllowedSessions();
+    });
+  });
 }
 
 function buildPtyWsUrl(path: string, directory?: string) {
@@ -6502,8 +6657,13 @@ function waitForPendingRenders(timeoutMs = 30000): Promise<void> {
 }
 
 async function reloadSelectedSessionState(newId?: string, oldId?: string) {
+  const reloadRequestId = ++sessionReloadRequestId;
   if (newId && isBootstrapping.value && !activeDirectory.value) {
+    deferredSessionReloadId.value = newId;
     return;
+  }
+  if (newId) {
+    deferredSessionReloadId.value = null;
   }
   fw.closeAll({ exclude: (key) => key.startsWith('shell:') });
   await nextTick();
@@ -6515,9 +6675,6 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
   reasoning.reset();
   subagentWindows.reset();
   retryStatus.value = null;
-  todosBySessionId.value = {};
-  todoLoadingBySessionId.value = {};
-  todoErrorBySessionId.value = {};
   await nextTick();
   if (newId) {
     const sessionId = newId;
@@ -6531,31 +6688,45 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
         }
         msg.loadHistory(codexWorkspace.history.value);
       } finally {
-        isLoadingHistory.value = false;
+        if (reloadRequestId === sessionReloadRequestId) {
+          isLoadingHistory.value = false;
+        }
       }
-      await nextTick();
-      outputPanelRef.value?.scrollToBottom();
+      if (reloadRequestId !== sessionReloadRequestId) return;
+      await anchorOutputToBottom();
+      if (reloadRequestId !== sessionReloadRequestId) return;
       nextTick(() => inputPanelRef.value?.focus());
       return;
     }
     const cacheHit = msg.tryLoadFromCache(sessionId);
+    const descendantsHydrated = hydratedDescendantSessionIds.has(sessionId);
     if (!cacheHit) {
+      hydratedDescendantSessionIds.delete(sessionId);
       isLoadingHistory.value = true;
+      let rootHistoryRequestId = 0;
       try {
-        await fetchAllowedSessionHistories(sessionId);
+        rootHistoryRequestId = await fetchRootSessionHistory(sessionId);
         // Allow one paint frame so that useAssistantPreRenderer's
         // watchEffect fires and submits worker tasks before we wait.
         await new Promise((resolve) => requestAnimationFrame(resolve));
         await waitForPendingRenders();
+        if (reloadRequestId === sessionReloadRequestId) {
+          scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
+        }
       } catch {
         // Render timeout or error — still show what we have
       } finally {
-        isLoadingHistory.value = false;
+        if (reloadRequestId === sessionReloadRequestId) {
+          isLoadingHistory.value = false;
+        }
       }
+    } else if (!descendantsHydrated) {
+      const rootHistoryRequestId = reserveRootHistoryRequestId();
+      scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
     }
-    await nextTick();
-    // Instant scroll to bottom — no smooth animation during session switch
-    outputPanelRef.value?.scrollToBottom();
+    if (reloadRequestId !== sessionReloadRequestId) return;
+    await anchorOutputToBottom();
+    if (reloadRequestId !== sessionReloadRequestId) return;
     if (uiInitState.value === 'ready') {
       await restoreShellSessions();
     }
@@ -6564,6 +6735,7 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
     void fetchPendingPermissions(directory);
     void fetchPendingQuestions(directory);
   }
+  if (reloadRequestId !== sessionReloadRequestId) return;
   nextTick(() => inputPanelRef.value?.focus());
 }
 
@@ -8161,10 +8333,6 @@ async function startInitialization() {
     await fetchHomePath();
     initLoadingMessage.value = t('app.status.loadingProjects');
     await bootstrapSelections();
-    if (selectedSessionId.value) {
-      initLoadingMessage.value = t('app.status.loadingSessionHistory');
-      await reloadSelectedSessionState();
-    }
     if (activeDirectory.value) {
       initLoadingMessage.value = t('app.status.loadingWorktreeState');
       const directory = activeDirectory.value || undefined;

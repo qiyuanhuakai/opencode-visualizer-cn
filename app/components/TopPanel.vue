@@ -596,6 +596,14 @@
                 <Icon icon="lucide:message-square" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.title') }}</span>
               </button>
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('models', close)">
+                <Icon icon="lucide:bot" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.modelsTitle') }}</span>
+              </button>
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('fileManager', close)">
+                <Icon icon="lucide:folder-tree" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.fileManagerTitle') }}</span>
+              </button>
               <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('mcp', close)">
                 <Icon icon="lucide:plug" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.mcpTitle') }}</span>
@@ -729,6 +737,8 @@ export type TopPanelBatchSessionActionPayload = {
 };
 
 export type TopPanelCodexSubpanel =
+  | 'models'
+  | 'fileManager'
   | 'mcp'
   | 'skills'
   | 'plugins'

@@ -672,6 +672,10 @@ export interface LocaleMessages {
         label: string;
         description: string;
       };
+      showCodexInStatusMonitor: {
+        label: string;
+        description: string;
+      };
     };
   };
   floatingWindow: {
@@ -1122,6 +1126,9 @@ export interface LocaleMessages {
       transcriptWebSearch: string;
       rateLimits: string;
       refreshRateLimits: string;
+      fileManagerTitle: string;
+      openWorkspaceTools: string;
+      threadActionsTitle: string;
       reviewBranchPlaceholder: string;
       reviewCommitPlaceholder: string;
       reviewCustomPlaceholder: string;
@@ -1243,7 +1250,6 @@ export interface LocaleMessages {
       shellCommandRun: string;
       compactThread: string;
       compactThreadConfirm: string;
-      injectItems: string;
       loadedThreads: string;
       loadedThreadsEmpty: string;
       tokenUsage: string;

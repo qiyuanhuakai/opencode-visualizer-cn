@@ -4,16 +4,18 @@ import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
+import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
 
-const props = defineProps<{ open: boolean; sessionId?: string; codexApi: CodexApi }>();
+const props = defineProps<{ open: boolean; sessionId?: string; codexApi: CodexApi; preload: boolean }>();
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
+const { showCodexInStatusMonitor } = useSettings();
 const popoverRef = ref<HTMLDivElement | null>(null);
 const msg = useMessages();
 const codexApi = props.codexApi;
@@ -56,6 +58,11 @@ const codexApiKeyInput = ref('');
 const loading = ref(false);
 const errorMessage = ref('');
 const togglingMcp = ref<string | null>(null);
+const hasLoaded = ref(false);
+
+let refreshPromise: Promise<void> | null = null;
+let refreshRequestId = 0;
+let tokenRequestId = 0;
 
 let clickHandler: ((e: MouseEvent) => void) | null = null;
 let escHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -85,7 +92,9 @@ function unbindEvents() {
 
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
-    activeTab.value = 'server';
+    if (!showCodexInStatusMonitor.value && activeTab.value === 'codex') {
+      activeTab.value = 'server';
+    }
     // Defer click binding to skip the current click event that opened the panel
     clickTimeoutId = setTimeout(() => {
       clickTimeoutId = null;
@@ -97,15 +106,32 @@ watch(() => props.open, (isOpen) => {
       document.addEventListener('click', clickHandler);
     }, 0);
     bindEvents();
-    refresh();
+    void ensureLoaded();
   } else {
     unbindEvents();
   }
 });
 
+watch(() => props.preload, (shouldPreload) => {
+  if (shouldPreload) {
+    void ensureLoaded();
+  } else if (!props.open) {
+    resetLoadedState();
+  }
+}, { immediate: true });
+
 watch(() => props.sessionId, (newId, oldId) => {
-  if (props.open && newId !== oldId) {
-    fetchTokenData();
+  if (newId === oldId) return;
+  if (!newId) {
+    tokenUsage.value = null;
+    tokenModelName.value = '';
+    tokenContextLimit.value = 0;
+    tokenUserMessages.value = 0;
+    tokenAssistantMessages.value = 0;
+    return;
+  }
+  if ((props.open || props.preload) && hasLoaded.value) {
+    void fetchTokenData();
   }
 });
 
@@ -113,7 +139,48 @@ onBeforeUnmount(() => {
   unbindEvents();
 });
 
+watch(showCodexInStatusMonitor, (enabled) => {
+  if (!enabled && activeTab.value === 'codex') {
+    activeTab.value = 'server';
+  }
+});
+
+function resetTokenData() {
+  tokenRequestId++;
+  tokenUsage.value = null;
+  tokenModelName.value = '';
+  tokenContextLimit.value = 0;
+  tokenUserMessages.value = 0;
+  tokenAssistantMessages.value = 0;
+}
+
+function resetLoadedState() {
+  refreshRequestId++;
+  refreshPromise = null;
+  loading.value = false;
+  hasLoaded.value = false;
+  errorMessage.value = '';
+  skillUnsupported.value = false;
+  serverHealth.value = null;
+  mcpData.value = null;
+  lspData.value = null;
+  skillData.value = null;
+  configData.value = null;
+  resetTokenData();
+}
+
+function hasCoreStatusData() {
+  return serverHealth.value !== null
+    && mcpData.value !== null
+    && lspData.value !== null
+    && configData.value !== null;
+}
+
 async function refresh() {
+  if (refreshPromise) return refreshPromise;
+
+  const requestId = ++refreshRequestId;
+  refreshPromise = (async () => {
   loading.value = true;
   errorMessage.value = '';
   skillUnsupported.value = false;
@@ -129,6 +196,7 @@ async function refresh() {
       }),
       requireBackendMethod(backend().getGlobalConfig, 'global config')() as Promise<Record<string, unknown>>,
     ]);
+    if (requestId !== refreshRequestId) return;
     serverHealth.value = health.status === 'fulfilled' ? health.value : null;
     mcpData.value = mcp.status === 'fulfilled'
       ? (mcp.value as typeof mcpData.value)
@@ -154,12 +222,29 @@ async function refresh() {
       cfg.status === 'rejected'
     ) {
       errorMessage.value = t('statusMonitor.error');
+      hasLoaded.value = false;
+    } else {
+      hasLoaded.value = true;
     }
   } catch (e) {
     errorMessage.value = t('statusMonitor.error');
+    hasLoaded.value = false;
   } finally {
     loading.value = false;
+    refreshPromise = null;
   }
+  })();
+
+  return refreshPromise;
+}
+
+async function ensureLoaded() {
+  if (refreshPromise) {
+    await refreshPromise;
+    return;
+  }
+  if (hasLoaded.value && hasCoreStatusData()) return;
+  await refresh();
 }
 
 async function refreshCodexStatus() {
@@ -211,11 +296,17 @@ async function fetchContextLimit(providerId: string, modelId: string) {
 }
 
 async function fetchTokenData() {
-  if (!props.sessionId) return;
+  const sessionId = props.sessionId;
+  if (!sessionId) {
+    resetTokenData();
+    return;
+  }
+
+  const requestId = ++tokenRequestId;
 
   // Try to get messages from useMessages store first
   let sessionMessages: MessageInfo[] = [];
-  const sessionRoots = msg.roots.value.filter((root) => root.sessionID === props.sessionId);
+  const sessionRoots = msg.roots.value.filter((root) => root.sessionID === sessionId);
   for (const root of sessionRoots) {
     sessionMessages.push(...msg.getThread(root.id));
   }
@@ -224,23 +315,28 @@ async function fetchTokenData() {
   if (sessionMessages.length === 0) {
     try {
       const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
-      const messages = await listSessionMessages(props.sessionId, { limit: 100 });
+      const messages = await listSessionMessages(sessionId, { limit: 100 });
+      if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
       if (Array.isArray(messages) && messages.length > 0) {
         msg.loadHistory(messages);
         // Re-fetch from store after loading
-        const newRoots = msg.roots.value.filter((root) => root.sessionID === props.sessionId);
+        const newRoots = msg.roots.value.filter((root) => root.sessionID === sessionId);
         for (const root of newRoots) {
           sessionMessages.push(...msg.getThread(root.id));
         }
       }
     } catch {
-      tokenUsage.value = null;
+      if (requestId === tokenRequestId && props.sessionId === sessionId) {
+        resetTokenData();
+      }
       return;
     }
   }
 
   if (sessionMessages.length === 0) {
-    tokenUsage.value = null;
+    if (requestId === tokenRequestId && props.sessionId === sessionId) {
+      resetTokenData();
+    }
     return;
   }
 
@@ -267,6 +363,8 @@ async function fetchTokenData() {
       }
     }
   }
+
+  if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
 
   tokenUsage.value = latestUsage;
   tokenModelName.value = latestModelName;
@@ -367,15 +465,20 @@ function lspStatusClass(status: string) {
   return status === 'connected' ? 'status-dot-success' : 'status-dot-error';
 }
 
-const tabs: { id: TabId; labelKey: string }[] = [
-  { id: 'server', labelKey: 'statusMonitor.tabs.server' },
-  { id: 'mcp', labelKey: 'statusMonitor.tabs.mcp' },
-  { id: 'lsp', labelKey: 'statusMonitor.tabs.lsp' },
-  { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
-  { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
-  { id: 'token', labelKey: 'statusMonitor.tabs.token' },
-  { id: 'codex', labelKey: 'statusMonitor.tabs.codex' },
-];
+const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
+  const base: { id: TabId; labelKey: string }[] = [
+    { id: 'server', labelKey: 'statusMonitor.tabs.server' },
+    { id: 'mcp', labelKey: 'statusMonitor.tabs.mcp' },
+    { id: 'lsp', labelKey: 'statusMonitor.tabs.lsp' },
+    { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
+    { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
+    { id: 'token', labelKey: 'statusMonitor.tabs.token' },
+  ];
+  if (showCodexInStatusMonitor.value) {
+    base.push({ id: 'codex', labelKey: 'statusMonitor.tabs.codex' });
+  }
+  return base;
+});
 
 const currentTotalInfo = computed(() => {
   switch (activeTab.value) {
