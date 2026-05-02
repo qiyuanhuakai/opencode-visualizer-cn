@@ -156,6 +156,9 @@ const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true')
 const suppressAutoWindows = ref(storageGet(StorageKeys.settings.suppressAutoWindows) === 'true');
 const showMinimizeButtons = ref(storageGet(StorageKeys.settings.showMinimizeButtons) !== 'false');
 const showCodexButton = ref(storageGet(StorageKeys.settings.showCodexButton) === 'true');
+const showCodexInStatusMonitor = ref(
+  storageGet(StorageKeys.settings.showCodexInStatusMonitor) !== 'false',
+);
 const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === 'true');
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
@@ -190,6 +193,10 @@ watch(showMinimizeButtons, (value) => {
 
 watch(showCodexButton, (value) => {
   storageSet(StorageKeys.settings.showCodexButton, String(value));
+}, syncWatchOptions);
+
+watch(showCodexInStatusMonitor, (value) => {
+  storageSet(StorageKeys.settings.showCodexInStatusMonitor, String(value));
 }, syncWatchOptions);
 
 watch(dockAlwaysOpen, (value) => {
@@ -271,6 +278,9 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.showCodexButton)) {
       showCodexButton.value = event.newValue === 'true';
     }
+    if (event.key === storageKey(StorageKeys.settings.showCodexInStatusMonitor)) {
+      showCodexInStatusMonitor.value = event.newValue !== 'false';
+    }
     if (event.key === storageKey(StorageKeys.settings.dockAlwaysOpen)) {
       dockAlwaysOpen.value = event.newValue === 'true';
     }
@@ -327,6 +337,7 @@ export function useSettings() {
     suppressAutoWindows,
     showMinimizeButtons,
     showCodexButton,
+    showCodexInStatusMonitor,
     dockAlwaysOpen,
     terminalFontFamily,
     appMonospaceFontFamily,

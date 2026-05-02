@@ -681,6 +681,10 @@ const messages: LocaleMessages = {
         label: 'Show Codex button',
         description: 'Display the Codex panel button in the top-right corner.',
       },
+      showCodexInStatusMonitor: {
+        label: 'Show Codex in status monitor',
+        description: 'Display a dedicated Codex tab in the status monitor popover.',
+      },
     },
   },
   floatingWindow: {
@@ -1191,6 +1195,9 @@ const messages: LocaleMessages = {
       transcriptWebSearch: 'Web Search',
       rateLimits: 'Rate Limits',
       refreshRateLimits: 'Refresh',
+      fileManagerTitle: 'File Manager',
+      openWorkspaceTools: 'Open workspace tools',
+      threadActionsTitle: 'Thread actions',
       reviewBranchPlaceholder: 'branch name',
       reviewCommitPlaceholder: 'commit hash',
       reviewCustomPlaceholder: 'custom instructions...',
@@ -1304,7 +1311,6 @@ const messages: LocaleMessages = {
       shellCommandRun: 'Run',
       compactThread: 'Compact History',
       compactThreadConfirm: 'Compact conversation history? This cannot be undone.',
-      injectItems: 'Inject Items',
       loadedThreads: 'Loaded Threads',
       loadedThreadsEmpty: 'No threads loaded in memory',
       tokenUsage: 'Token Usage',

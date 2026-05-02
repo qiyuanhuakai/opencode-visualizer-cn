@@ -489,8 +489,10 @@ import CodexExperimentalFeatureManager from './components/codex/CodexExperimenta
 import CodexExternalAgentConfig from './components/codex/CodexExternalAgentConfig.vue';
 import CodexFeedbackUploader from './components/codex/CodexFeedbackUploader.vue';
 import CodexMcpServerManager from './components/codex/CodexMcpServerManager.vue';
+import CodexModelManager from './components/codex/CodexModelManager.vue';
 import CodexPluginManager from './components/codex/CodexPluginManager.vue';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
+import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
 import DiffViewer from './components/viewers/DiffViewer.vue';
 import ShellContent from './components/ToolWindow/Shell.vue';
@@ -903,7 +905,10 @@ function openCodexPanel() {
   const extent = fw.getExtent();
   void fw.open(CODEX_PANEL_KEY, {
     component: CodexPanel,
-    props: markRaw({ api: markRaw(codexApi) }),
+    props: markRaw({
+      api: markRaw(codexApi),
+      onOpenSubpanel: (panel: TopPanelCodexSubpanel) => openCodexSubpanel(panel),
+    }),
     title: t('codexPanel.title'),
     width,
     height,
@@ -926,6 +931,8 @@ type CodexSubpanelDefinition = {
 };
 
 const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefinition> = {
+  models: { component: CodexModelManager, titleKey: 'codexPanel.modelsTitle', width: 680, height: 560 },
+  fileManager: { component: CodexWorkspaceToolsPanel, titleKey: 'codexPanel.fileManagerTitle', width: 760, height: 620 },
   mcp: { component: CodexMcpServerManager, titleKey: 'codexPanel.mcpTitle', width: 700, height: 600 },
   skills: { component: CodexSkillsManager, titleKey: 'codexPanel.skillsTitle', width: 680, height: 560 },
   plugins: { component: CodexPluginManager, titleKey: 'codexPanel.pluginsTitle', width: 720, height: 600 },
@@ -940,6 +947,11 @@ const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefin
 function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
   if (!codexApi.connected.value) return;
   switch (panel) {
+    case 'models':
+      void codexApi.refreshModels();
+      break;
+    case 'fileManager':
+      break;
     case 'mcp':
       void codexApi.refreshMcpServers();
       break;
@@ -979,9 +991,15 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   const extent = fw.getExtent();
   const x = Math.max(20, extent.width - definition.width - 36);
   const y = 96;
+  const openCodexFilePreview = (path: string) => {
+    void openCodexNativeFilePreview(path);
+  };
   void fw.open(`codex-${panel}`, {
     component: definition.component,
-    props: { api: codexApi },
+    props: {
+      api: codexApi,
+      onOpenFilePreview: openCodexFilePreview,
+    },
     title: t(definition.titleKey),
     width: definition.width,
     height: definition.height,
@@ -994,6 +1012,70 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
     expiry: Infinity,
   });
   refreshCodexSubpanel(panel);
+}
+
+async function openCodexNativeFilePreview(path: string) {
+  const key = `file-viewer:codex:${path}`;
+  const result = await codexApi.readFileRaw(path);
+  const encoding = typeof result.encoding === 'string' ? result.encoding : 'utf-8';
+  const binaryBase64 = result.type === 'binary'
+    ? (typeof result.dataBase64 === 'string'
+      ? result.dataBase64
+      : encoding === 'base64' && typeof result.content === 'string'
+        ? result.content
+        : undefined)
+    : undefined;
+  const fileContent = result.type === 'binary' ? undefined : codexApi.decodeReadFileText(result);
+
+  codexApi.previewFilePath.value = path;
+  if (typeof fileContent === 'string') {
+    codexApi.previewFileContent.value = fileContent;
+  }
+
+  if (fw.has(key)) {
+    const entry = fw.get(key);
+    if (entry?.minimized) fw.restore(key);
+    else fw.bringToFront(key);
+    fw.updateOptions(key, {
+      title: toFileViewerTitle(path),
+      props: {
+        ...entry?.props,
+        path,
+        absolutePath: path,
+        fileContent,
+        binaryBase64,
+        lang: guessLanguage(path),
+        gutterMode: 'default',
+        theme: shikiTheme.value,
+      },
+    });
+    return;
+  }
+
+  const pos = getFileViewerPosition(0.18, 0.14);
+
+  await fw.open(key, {
+    component: ContentViewer,
+    props: {
+      path,
+      absolutePath: path,
+      fileContent,
+      binaryBase64,
+      lang: guessLanguage(path),
+      gutterMode: 'default',
+      theme: shikiTheme.value,
+    },
+    closable: true,
+    resizable: true,
+    focusOnOpen: true,
+    scroll: 'manual',
+    title: toFileViewerTitle(path),
+    x: pos.x,
+    y: pos.y,
+    width: FILE_VIEWER_WINDOW_WIDTH,
+    height: FILE_VIEWER_WINDOW_HEIGHT,
+    expiry: Infinity,
+  });
 }
 
 const outputEl = ref<HTMLElement | null>(null);

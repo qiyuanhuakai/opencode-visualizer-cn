@@ -681,6 +681,10 @@ const messages: LocaleMessages = {
         label: '显示 Codex 按钮',
         description: '在右上角显示 Codex 面板按钮。',
       },
+      showCodexInStatusMonitor: {
+        label: '在状态监控中显示 Codex',
+        description: '在状态监控悬浮窗中显示独立的 Codex 标签页。',
+      },
     },
   },
   floatingWindow: {
@@ -1191,6 +1195,9 @@ const messages: LocaleMessages = {
       transcriptWebSearch: '网页搜索',
       rateLimits: '速率限制',
       refreshRateLimits: '刷新',
+      fileManagerTitle: '文件管理器',
+      openWorkspaceTools: '打开工作区工具',
+      threadActionsTitle: '线程操作',
       reviewBranchPlaceholder: '分支名',
       reviewCommitPlaceholder: '提交哈希',
       reviewCustomPlaceholder: '自定义指令...',
@@ -1304,7 +1311,6 @@ const messages: LocaleMessages = {
       shellCommandRun: '运行',
       compactThread: '压缩历史',
       compactThreadConfirm: '压缩对话历史？此操作不可撤销。',
-      injectItems: '注入项目',
       loadedThreads: '已加载线程',
       loadedThreadsEmpty: '内存中没有已加载的线程',
       tokenUsage: '令牌使用',

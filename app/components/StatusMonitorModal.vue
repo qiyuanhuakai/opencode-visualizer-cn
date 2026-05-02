@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
+import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
@@ -14,6 +15,7 @@ const props = defineProps<{ open: boolean; sessionId?: string; codexApi: CodexAp
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
+const { showCodexInStatusMonitor } = useSettings();
 const popoverRef = ref<HTMLDivElement | null>(null);
 const msg = useMessages();
 const codexApi = props.codexApi;
@@ -90,7 +92,9 @@ function unbindEvents() {
 
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
-    activeTab.value = 'server';
+    if (!showCodexInStatusMonitor.value && activeTab.value === 'codex') {
+      activeTab.value = 'server';
+    }
     // Defer click binding to skip the current click event that opened the panel
     clickTimeoutId = setTimeout(() => {
       clickTimeoutId = null;
@@ -133,6 +137,12 @@ watch(() => props.sessionId, (newId, oldId) => {
 
 onBeforeUnmount(() => {
   unbindEvents();
+});
+
+watch(showCodexInStatusMonitor, (enabled) => {
+  if (!enabled && activeTab.value === 'codex') {
+    activeTab.value = 'server';
+  }
 });
 
 function resetTokenData() {
@@ -455,15 +465,20 @@ function lspStatusClass(status: string) {
   return status === 'connected' ? 'status-dot-success' : 'status-dot-error';
 }
 
-const tabs: { id: TabId; labelKey: string }[] = [
-  { id: 'server', labelKey: 'statusMonitor.tabs.server' },
-  { id: 'mcp', labelKey: 'statusMonitor.tabs.mcp' },
-  { id: 'lsp', labelKey: 'statusMonitor.tabs.lsp' },
-  { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
-  { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
-  { id: 'token', labelKey: 'statusMonitor.tabs.token' },
-  { id: 'codex', labelKey: 'statusMonitor.tabs.codex' },
-];
+const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
+  const base: { id: TabId; labelKey: string }[] = [
+    { id: 'server', labelKey: 'statusMonitor.tabs.server' },
+    { id: 'mcp', labelKey: 'statusMonitor.tabs.mcp' },
+    { id: 'lsp', labelKey: 'statusMonitor.tabs.lsp' },
+    { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
+    { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
+    { id: 'token', labelKey: 'statusMonitor.tabs.token' },
+  ];
+  if (showCodexInStatusMonitor.value) {
+    base.push({ id: 'codex', labelKey: 'statusMonitor.tabs.codex' });
+  }
+  return base;
+});
 
 const currentTotalInfo = computed(() => {
   switch (activeTab.value) {

@@ -20,6 +20,7 @@ import {
   type CodexExternalAgentConfigItem,
   type CodexFeedbackUploadParams,
   type CodexFsDirectoryEntry,
+  type CodexFsReadFileResult,
   type CodexModel,
   type CodexMcpServerInfo,
   type CodexPlugin,
@@ -988,6 +989,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       status.value = 'connected';
       await refreshThreads();
       await openAsSandbox(homeDir.value || '/');
+      await preloadPanelData();
     } catch (error) {
       status.value = 'error';
       errorMessage.value = error instanceof Error ? error.message : String(error);
@@ -1016,6 +1018,25 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
     threads.value = enrichedThreads;
     if (!activeThreadId.value && enrichedThreads[0]) activeThreadId.value = enrichedThreads[0].id;
+  }
+
+  async function preloadPanelData() {
+    if (!adapter) return;
+    await Promise.allSettled([
+      refreshAccount(),
+      refreshAccountRateLimits(),
+      refreshModels(),
+      refreshSkills(),
+      refreshPlugins(),
+      refreshMcpServers(),
+      refreshConfig(),
+      refreshApps(),
+      refreshExperimentalFeatures(),
+      refreshCollaborationModes(),
+      refreshConfigRequirements(),
+      detectExternalAgentConfig(true, fsCwd.value ? [fsCwd.value] : undefined),
+      refreshLoadedThreads(),
+    ]);
   }
 
   const gitInfoByDirectory = new Map<string, NonNullable<CodexThread['gitInfo']>>();
@@ -1327,6 +1348,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return '';
   }
 
+  function decodeReadFileText(result: { dataBase64?: string; content?: string; encoding?: string }) {
+    return codexFileResultToText(result);
+  }
+
   async function readFile(path: string) {
     if (!adapter) throw new Error('Codex is not connected.');
     fsLoading.value = true;
@@ -1342,6 +1367,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     } finally {
       fsLoading.value = false;
     }
+  }
+
+  async function readFileRaw(path: string): Promise<CodexFsReadFileResult> {
+    if (!adapter) throw new Error('Codex is not connected.');
+    return adapter.readFile({ path: expandPath(path) });
   }
 
   function clearPreview() {
@@ -1975,7 +2005,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       disconnect,
       refreshHomeDir,
       refreshThreads,
-     selectThread,
+      preloadPanelData,
+      selectThread,
      startThread,
      setThreadName,
      archiveThread,
@@ -1994,6 +2025,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      openAsSandbox,
      createThreadInSandbox,
       readFile,
+      readFileRaw,
+      decodeReadFileText,
       clearPreview,
       updatePathSuggestions,
       hidePathSuggestions,

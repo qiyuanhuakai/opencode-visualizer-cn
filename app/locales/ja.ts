@@ -681,6 +681,10 @@ const messages: LocaleMessages = {
         label: 'Codex ボタンを表示',
         description: '右上に Codex パネルボタンを表示します。',
       },
+      showCodexInStatusMonitor: {
+        label: 'ステータスモニターに Codex を表示',
+        description: 'ステータスモニターのポップオーバーに Codex 専用タブを表示します。',
+      },
     },
   },
   floatingWindow: {
@@ -1191,6 +1195,9 @@ const messages: LocaleMessages = {
       transcriptWebSearch: 'ウェブ検索',
       rateLimits: 'レート制限',
       refreshRateLimits: '更新',
+      fileManagerTitle: 'ファイルマネージャー',
+      openWorkspaceTools: 'ワークスペースツールを開く',
+      threadActionsTitle: 'スレッド操作',
       reviewBranchPlaceholder: 'ブランチ名',
       reviewCommitPlaceholder: 'コミットハッシュ',
       reviewCustomPlaceholder: 'カスタム指示...',
@@ -1304,7 +1311,6 @@ const messages: LocaleMessages = {
       shellCommandRun: '実行',
       compactThread: '履歴を圧縮',
       compactThreadConfirm: '会話履歴を圧縮しますか？この操作は元に戻せません。',
-      injectItems: '項目を注入',
       loadedThreads: '読み込み済みスレッド',
       loadedThreadsEmpty: 'メモリに読み込まれたスレッドがありません',
       tokenUsage: 'トークン使用量',

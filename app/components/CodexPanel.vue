@@ -189,24 +189,26 @@
           v-for="thread in displayThreads"
           :key="thread.id"
           class="codex-thread-item"
-          :class="{ active: thread.id === api.activeThreadId.value }"
+          :class="{ active: thread.id === api.activeThreadId.value, 'has-overlay-actions': !showArchived && !showHidden }"
         >
           <div class="codex-thread-row">
             <button
               type="button"
               class="codex-thread-select"
               :disabled="api.loadingThread.value"
-              :title="thread.id"
+              :title="thread.name || thread.preview || thread.id"
               @click="selectThread(thread.id)"
             >
-              <span class="codex-thread-title">
-                <Icon
-                  v-if="api.pinnedThreadIds.value.has(thread.id)"
-                  icon="mdi:pin"
-                  width="12"
-                  class="codex-pin-icon"
-                />
-                {{ thread.name || thread.preview || thread.id }}
+              <span class="codex-thread-title-row">
+                <span class="codex-thread-title">
+                  <Icon
+                    v-if="api.pinnedThreadIds.value.has(thread.id)"
+                    icon="mdi:pin"
+                    width="12"
+                    class="codex-pin-icon"
+                  />
+                  {{ thread.name || thread.preview || thread.id }}
+                </span>
               </span>
               <small class="codex-thread-cwd" v-if="thread.cwd" :title="thread.cwd">
                 <Icon icon="mdi:folder-outline" width="10" />
@@ -215,11 +217,11 @@
               <small v-else>{{ thread.id }}</small>
             </button>
             <div class="codex-thread-actions">
-              <button
-                v-if="!showArchived && !showHidden"
-                type="button"
-                class="codex-icon-button"
-                :disabled="!api.connected.value"
+                <button
+                  v-if="!showArchived && !showHidden"
+                  type="button"
+                  class="codex-icon-button"
+                  :disabled="!api.connected.value"
                 :title="
                   api.pinnedThreadIds.value.has(thread.id)
                     ? t('codexPanel.unpin')
@@ -232,12 +234,12 @@
                   width="14"
                 />
               </button>
-              <button
-                v-if="!showArchived && !showHidden"
-                type="button"
-                class="codex-icon-button"
-                :disabled="!api.connected.value"
-                :title="t('codexPanel.hide')"
+                <button
+                  v-if="!showArchived && !showHidden"
+                  type="button"
+                  class="codex-icon-button"
+                  :disabled="!api.connected.value"
+                  :title="t('codexPanel.hide')"
                 @click="api.hideThread(thread.id)"
               >
                 <Icon icon="mdi:eye-off" width="14" />
@@ -270,112 +272,10 @@
           {{ t('codexPanel.loadingThread') }}
         </div>
         <div v-if="api.activeThreadId.value" class="codex-active-thread-tools">
-          <label class="codex-rename-field">
-            <span>{{ t('codexPanel.threadName') }}</span>
-            <input
-              v-model="threadName"
-              class="codex-input"
-              type="text"
-              :disabled="!api.connected.value"
-              :placeholder="t('codexPanel.renamePlaceholder')"
-            />
-          </label>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value"
-            @click="renameThread()"
-          >
-            {{ t('codexPanel.rename') }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value"
-            @click="unsubscribeActiveThread()"
-          >
-            {{ t('codexPanel.unsubscribe') }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value || !api.activeTurn.value"
-            @click="interruptTurn()"
-          >
-            {{ t('codexPanel.interrupt') }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value"
-            :title="t('codexPanel.fork')"
-            @click="forkActiveThread()"
-          >
-            {{ t('codexPanel.fork') }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value"
-            :title="t('codexPanel.rollbackTurns')"
-            @click="rollbackActiveThread()"
-          >
-            {{ t('codexPanel.rollback') }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value"
-            @click="togglePin(api.activeThreadId.value)"
-          >
-            {{
-              api.pinnedThreadIds.value.has(api.activeThreadId.value)
-                ? t('codexPanel.unpin')
-                : t('codexPanel.pin')
-            }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button danger"
-            :disabled="!api.connected.value"
-            @click="archiveActiveThread()"
-          >
-            {{ t('codexPanel.archive') }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value || !api.activeThreadId.value"
-            @click="api.showShellCommand.value = true"
-          >
-            {{ t('codexPanel.shellCommand') }}
-          </button>
-          <button
-            type="button"
-            class="codex-small-text-button"
-            :disabled="!api.connected.value || !api.activeThreadId.value"
-            @click="compactActiveThread()"
-          >
-            {{ t('codexPanel.compactThread') }}
-          </button>
           <span v-if="api.activeTurn.value" class="codex-turn-status">
             {{ t('codexPanel.turnStatus') }}
             {{ api.activeTurn.value.status || t('codexPanel.turnActive') }}
           </span>
-        </div>
-
-        <!-- Tab navigation -->
-        <div v-if="api.activeThreadId.value" class="codex-tab-bar">
-          <button
-            v-for="tab in tabs"
-            :key="tab.key"
-            type="button"
-            class="codex-tab-button"
-            :class="{ 'is-active': activeTab === tab.key }"
-            @click="activeTab = tab.key"
-          >
-            {{ tab.label() }}
-          </button>
         </div>
 
         <div v-if="api.serverRequests.value.length > 0" class="codex-approval-list">
@@ -536,7 +436,6 @@
           </section>
         </div>
 
-        <template v-if="activeTab === 'chat'">
         <div
           v-if="api.transcript.value.length === 0"
           class="codex-empty codex-output-empty"
@@ -591,126 +490,6 @@
           </div>
         </article>
 
-        <div v-if="api.previewFilePath.value" class="codex-file-preview">
-          <div class="codex-file-preview-header">
-            <span>{{ api.previewFilePath.value }}</span>
-            <button
-              type="button"
-              class="codex-icon-button"
-              :title="t('codexPanel.closePreview')"
-              @click="api.clearPreview()"
-            >
-              <Icon icon="mdi:close" width="14" />
-            </button>
-          </div>
-          <pre class="codex-file-preview-body">{{ api.previewFileContent.value }}</pre>
-        </div>
-
-        <div v-if="api.activeThreadId.value" class="codex-sandbox">
-          <!-- 工具栏：路径输入 + 按钮 -->
-          <div class="codex-sandbox-toolbar">
-            <input
-              v-model="api.sandboxPath.value"
-              class="codex-input codex-sandbox-input"
-              type="text"
-              :disabled="!api.connected.value"
-              :placeholder="t('codexPanel.fsPathPlaceholder')"
-              @keydown.enter.prevent="api.openAsSandbox(api.sandboxPath.value)"
-              @keydown.tab.prevent="handleSuggestionKeydown"
-              @keydown.down.prevent="handleSuggestionKeydown"
-              @keydown.up.prevent="handleSuggestionKeydown"
-              @keydown.escape.prevent="handleSuggestionKeydown"
-              @input="selectedSuggestionIndex = -1; api.updatePathSuggestions(api.sandboxPath.value)"
-              @blur="api.hidePathSuggestions()"
-            />
-            <ul
-              v-if="api.fsShowSuggestions.value && api.fsSuggestions.value.length > 0"
-              class="codex-fs-suggestions"
-            >
-              <li
-                v-for="(suggestion, index) in api.fsSuggestions.value"
-                :key="suggestion"
-                :class="{ 'is-selected': index === selectedSuggestionIndex }"
-                @mousedown.prevent="selectSuggestion(suggestion)"
-              >
-                <Icon icon="mdi:folder" width="12" />
-                {{ suggestion }}
-              </li>
-            </ul>
-            <button
-              type="button"
-              class="codex-small-button"
-              :disabled="!api.connected.value || !api.sandboxPath.value"
-              :title="t('codexPanel.sandboxBrowse')"
-              @click="api.openAsSandbox(api.sandboxPath.value)"
-            >
-              <Icon icon="mdi:folder-open" width="14" />
-            </button>
-            <button
-              type="button"
-              class="codex-small-button"
-              :disabled="!api.connected.value || !api.sandboxPath.value"
-              :title="t('codexPanel.fsNewThreadHere')"
-              @click="createThreadInSandbox()"
-            >
-              <Icon icon="mdi:plus" width="14" />
-            </button>
-          </div>
-
-          <!-- 面包屑导航 -->
-          <div v-if="api.fsBreadcrumbs.value.length > 0" class="codex-breadcrumbs">
-            <button
-              v-for="crumb in api.fsBreadcrumbs.value"
-              :key="crumb.path"
-              type="button"
-              class="codex-breadcrumb-item"
-              :disabled="!api.connected.value || api.fsLoading.value"
-              @click="api.navigateToPath(crumb.path)"
-            >
-              {{ crumb.name === '/' ? t('codexPanel.fsBreadcrumbRoot') : crumb.name }}
-            </button>
-          </div>
-
-          <CodexFsManager :api="api" />
-
-          <!-- 上级目录按钮 -->
-          <button
-            v-if="api.fsCwd.value && api.fsCwd.value !== '/'"
-            type="button"
-            class="codex-sandbox-item codex-parent-dir"
-            :disabled="!api.connected.value || api.fsLoading.value"
-            @click="api.navigateToParent()"
-          >
-            <Icon icon="mdi:arrow-up" width="14" />
-            <span>{{ t('codexPanel.fsParentDirectory') }}</span>
-          </button>
-
-          <!-- 加载和错误状态 -->
-          <div v-if="api.fsLoading.value" class="codex-empty">{{ t('common.loading') }}</div>
-          <div v-else-if="api.fsError.value" class="codex-error">{{ api.fsError.value }}</div>
-          <div v-else-if="api.fsEntries.value.length === 0" class="codex-empty">{{ t('codexPanel.sandboxEmpty') }}</div>
-
-          <!-- 文件列表 -->
-          <div v-else class="codex-sandbox-list">
-            <button
-              v-for="entry in api.fsEntries.value"
-              :key="entry.fileName"
-              type="button"
-              class="codex-sandbox-item"
-              :class="{ 'is-directory': entry.isDirectory }"
-              @click="handleFsEntryClick(entry)"
-            >
-              <Icon
-                :icon="entry.isDirectory ? 'mdi:folder' : 'mdi:file-document-outline'"
-                width="14"
-                :class="entry.isDirectory ? 'codex-dir-icon' : 'codex-file-icon'"
-              />
-              <span>{{ entry.fileName }}</span>
-            </button>
-          </div>
-        </div>
-        </template>
-
         <!-- Shell Command Input -->
         <div v-if="api.showShellCommand.value" class="codex-shell-command">
           <div class="codex-shell-command-header">
@@ -741,18 +520,6 @@
           </button>
         </div>
 
-        <!-- Other tab contents -->
-        <CodexModelManager v-if="activeTab === 'models'" :api="api" />
-        <CodexSkillsManager v-if="activeTab === 'skills'" :api="api" />
-        <CodexPluginManager v-if="activeTab === 'plugins'" :api="api" />
-        <CodexMcpServerManager v-if="activeTab === 'mcp'" :api="api" />
-        <CodexConfigViewer v-if="activeTab === 'config'" :api="api" />
-        <CodexAppManager v-if="activeTab === 'apps'" :api="api" />
-        <CodexExperimentalFeatureManager v-if="activeTab === 'experimentalFeatures'" :api="api" />
-        <CodexCollaborationModeManager v-if="activeTab === 'collaborationModes'" :api="api" />
-        <CodexExternalAgentConfig v-if="activeTab === 'externalAgentConfig'" :api="api" />
-        <CodexFeedbackUploader v-if="activeTab === 'feedback'" :api="api" />
-
         <details v-if="api.events.value.length > 0" class="codex-events">
           <summary>
             {{ t('codexPanel.events') }} · {{ api.events.value.length }}
@@ -766,97 +533,140 @@
        </main>
      </div>
 
-     <!-- Rate limits display -->
-     <div v-if="api.accountRateLimits.value" class="codex-rate-limits">
-       <div class="codex-rate-limit-header">
-         <span class="codex-rate-limit-title">{{ t('codexPanel.rateLimits') }}</span>
-         <button
-           type="button"
-           class="codex-small-button"
-           :title="t('codexPanel.refreshRateLimits')"
-           @click="api.refreshAccountRateLimits()"
-         >
-           <Icon icon="mdi:refresh" width="14" />
-         </button>
-       </div>
-       <div class="codex-rate-limit-bar">
-         <div
-           class="codex-rate-limit-fill"
-           :style="{ width: api.accountRateLimits.value.primary.usedPercent + '%' }"
-           :class="{ 'is-high': api.accountRateLimits.value.primary.usedPercent > 80 }"
-         ></div>
-       </div>
-       <div class="codex-rate-limit-info">
-         {{ api.accountRateLimits.value.primary.usedPercent }}% used ·
-         {{ api.accountRateLimits.value.primary.windowDurationMins }}min window
-       </div>
-     </div>
+      <form class="codex-prompt" @submit.prevent="sendPrompt">
+        <div class="codex-toolbar-strip">
+          <button
+            v-if="api.accountRateLimits.value"
+            type="button"
+            class="codex-rate-limit-chip"
+            :title="`${t('codexPanel.rateLimits')} · ${t('codexPanel.refreshRateLimits')}`"
+            @click="api.refreshAccountRateLimits()"
+          >
+            <span class="codex-rate-limit-chip-label">{{ t('codexPanel.rateLimits') }}</span>
+            <span class="codex-rate-limit-chip-value">
+              {{ api.accountRateLimits.value.primary.usedPercent }}%
+            </span>
+            <span class="codex-rate-limit-chip-meta">
+              used · {{ api.accountRateLimits.value.primary.windowDurationMins }}m window
+            </span>
+            <Icon icon="mdi:refresh" width="14" />
+          </button>
+          <div class="codex-toolbar-strip-actions">
+            <input
+              v-if="api.activeThreadId.value"
+              v-model="threadName"
+              class="codex-rename-input"
+              type="text"
+              :disabled="!api.connected.value"
+              :placeholder="t('codexPanel.threadName')"
+            />
+            <button
+              v-if="api.activeThreadId.value"
+              type="button"
+              class="codex-small-text-button"
+              :disabled="!api.connected.value"
+              @click="renameThread()"
+            >
+              {{ t('codexPanel.rename') }}
+            </button>
+            <Dropdown
+              v-if="api.activeThreadId.value"
+              class="codex-inline-dropdown"
+              :label="t('codexPanel.threadActionsTitle')"
+              :title="t('codexPanel.threadActionsTitle')"
+              :auto-focus="false"
+              menu-icon="lucide:chevron-down"
+              :popup-style="{ minWidth: '180px', width: '200px' }"
+            >
+              <template #default="{ close }">
+                <div class="codex-inline-menu">
+                  <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeTurn.value" @click="interruptTurn().finally(close)">
+                    {{ t('codexPanel.interrupt') }}
+                  </button>
+                  <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value" @click="forkActiveThread().finally(close)">
+                    {{ t('codexPanel.fork') }}
+                  </button>
+                  <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value" @click="rollbackActiveThread().finally(close)">
+                    {{ t('codexPanel.rollback') }}
+                  </button>
+                  <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeThreadId.value" @click="api.showShellCommand.value = true; close()">
+                    {{ t('codexPanel.shellCommand') }}
+                  </button>
+                  <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeThreadId.value" @click="compactActiveThread().finally(close)">
+                    {{ t('codexPanel.compactThread') }}
+                  </button>
+                  <button type="button" class="codex-inline-menu-item is-danger" :disabled="!api.connected.value" @click="archiveActiveThread().finally(close)">
+                    {{ t('codexPanel.archive') }}
+                  </button>
+                </div>
+              </template>
+            </Dropdown>
+            <button
+              type="button"
+              class="codex-small-text-button"
+              :disabled="!api.connected.value"
+              @click="openSubpanel('fileManager')"
+            >
+              {{ t('codexPanel.fileManagerTitle') }}
+            </button>
+          </div>
+        </div>
 
-     <form class="codex-prompt" @submit.prevent="sendPrompt">
-      <div v-if="api.selectedModel.value" class="codex-model-selector">
-        <span class="codex-model-selector-label">{{ api.selectedModel.value }}</span>
-        <button
-          type="button"
-          class="codex-small-text-button"
-          @click="activeTab = 'models'"
-        >
-          {{ t('codexPanel.modelsTitle') }}
-        </button>
-      </div>
-      <div class="codex-prompt-actions">
-        <button
-          type="button"
-          class="codex-small-text-button"
-          :disabled="!api.connected.value || !api.activeThreadId.value"
-          @click="reviewUncommittedChanges"
-        >
-          {{ t('codexPanel.reviewStart') }}
-        </button>
-        <button
-          type="button"
-          class="codex-small-text-button"
-          :disabled="!api.connected.value || !api.activeThreadId.value || !promptText.trim()"
-          @click="injectPromptItems"
-        >
-          {{ t('codexPanel.injectItems') }}
-        </button>
-        <button
-          type="button"
-          class="codex-small-text-button"
-          :disabled="!api.connected.value"
-          @click="api.sendAddCreditsNudge('credits')"
-        >
-          {{ t('codexPanel.rateLimits') }}+
-        </button>
-      </div>
-      <textarea
-        v-model="promptText"
-        class="codex-prompt-input"
-        rows="3"
-        :disabled="!api.connected.value || api.pending.value"
-        :placeholder="t('codexPanel.promptPlaceholder')"
-        @keydown.enter.exact.prevent="sendPrompt"
-      ></textarea>
-      <button
-        v-if="api.activeTurn.value?.status === 'inProgress'"
-        type="button"
-        class="codex-primary-button codex-send-button"
-        :disabled="!api.connected.value || promptText.trim().length === 0"
-        @click.prevent="steerTurn()"
-      >
-        {{ t('codexPanel.steerTurn') }}
-      </button>
-      <button
-        v-else
-        type="submit"
-        class="codex-primary-button codex-send-button"
-        :disabled="
-          !api.connected.value || api.pending.value || promptText.trim().length === 0
-        "
-      >
-        {{ api.pending.value ? t('codexPanel.sending') : t('codexPanel.send') }}
-      </button>
-    </form>
+        <div class="codex-composer-shell">
+          <textarea
+            v-model="promptText"
+            class="codex-prompt-input"
+            rows="3"
+            :disabled="!api.connected.value || api.pending.value"
+            :placeholder="t('codexPanel.promptPlaceholder')"
+            @keydown.enter.exact.prevent="sendPrompt"
+          ></textarea>
+
+          <div class="codex-composer-toolbar">
+            <div class="codex-composer-left">
+              <div v-if="api.selectedModel.value" class="codex-model-selector">
+                <span class="codex-model-selector-label">{{ api.selectedModel.value }}</span>
+              </div>
+              <button
+                type="button"
+                class="codex-small-text-button codex-model-open-button"
+                :disabled="!api.connected.value"
+                @click="openSubpanel('models')"
+              >
+                {{ t('codexPanel.modelsTitle') }}
+              </button>
+            </div>
+
+            <div class="codex-composer-right">
+              <button
+                type="button"
+                class="codex-small-text-button codex-review-button"
+                :disabled="!api.connected.value || !api.activeThreadId.value"
+                @click="reviewUncommittedChanges"
+              >
+                {{ t('codexPanel.reviewStart') }}
+              </button>
+              <button
+                v-if="api.activeTurn.value?.status === 'inProgress'"
+                type="button"
+                class="codex-primary-button codex-send-button"
+                :disabled="!api.connected.value || promptText.trim().length === 0"
+                @click.prevent="steerTurn()"
+              >
+                {{ t('codexPanel.steerTurn') }}
+              </button>
+              <button
+                v-else
+                type="submit"
+                class="codex-primary-button codex-send-button"
+                :disabled="!api.connected.value || api.pending.value || promptText.trim().length === 0"
+              >
+                {{ api.pending.value ? t('codexPanel.sending') : t('codexPanel.send') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </form>
   </section>
 </template>
 
@@ -865,25 +675,20 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import type { CodexJsonRpcId } from '../backends/codex/jsonRpcClient';
-import type { CodexFsDirectoryEntry } from '../backends/codex/codexAdapter';
 import type { CodexTranscriptEntry } from '../composables/useCodexApi';
 import { useCodexApi } from '../composables/useCodexApi';
 import { configureCodexBackend } from '../backends/registry';
-import CodexModelManager from './codex/CodexModelManager.vue';
-import CodexSkillsManager from './codex/CodexSkillsManager.vue';
-import CodexPluginManager from './codex/CodexPluginManager.vue';
-import CodexMcpServerManager from './codex/CodexMcpServerManager.vue';
-import CodexConfigViewer from './codex/CodexConfigViewer.vue';
-import CodexFsManager from './codex/CodexFsManager.vue';
-import CodexAppManager from './codex/CodexAppManager.vue';
-import CodexExperimentalFeatureManager from './codex/CodexExperimentalFeatureManager.vue';
-import CodexCollaborationModeManager from './codex/CodexCollaborationModeManager.vue';
-import CodexExternalAgentConfig from './codex/CodexExternalAgentConfig.vue';
-import CodexFeedbackUploader from './codex/CodexFeedbackUploader.vue';
+import type { TopPanelCodexSubpanel } from './TopPanel.vue';
+import Dropdown from './Dropdown.vue';
 
 const props = defineProps<{
   autoConnect?: boolean;
   api?: ReturnType<typeof useCodexApi>;
+  onOpenSubpanel?: (panel: TopPanelCodexSubpanel) => void;
+}>();
+
+const emit = defineEmits<{
+  openSubpanel: [panel: TopPanelCodexSubpanel];
 }>();
 
  const { t } = useI18n();
@@ -892,27 +697,16 @@ const props = defineProps<{
  const promptText = ref('');
  const threadName = ref('');
  const showArchived = ref(false);
- const showHidden = ref(false);
- const showLoginPanel = ref(false);
+const showHidden = ref(false);
+const showLoginPanel = ref(false);
   const apiKeyInput = ref('');
-  const selectedSuggestionIndex = ref(-1);
-  const activeTab = ref('chat');
   const toolInputResponses = ref<Record<string, string>>({});
-  const recentEvents = computed(() => api.events.value.slice(-8).reverse());
+const recentEvents = computed(() => api.events.value.slice(-8).reverse());
 
-  const tabs = [
-    { key: 'chat', label: () => t('codexPanel.tabChat') },
-    { key: 'models', label: () => t('codexPanel.tabModels') },
-    { key: 'skills', label: () => t('codexPanel.tabSkills') },
-    { key: 'plugins', label: () => t('codexPanel.tabPlugins') },
-    { key: 'mcp', label: () => t('codexPanel.tabMcp') },
-    { key: 'config', label: () => t('codexPanel.tabConfig') },
-    { key: 'apps', label: () => t('codexPanel.tabApps') },
-    { key: 'experimentalFeatures', label: () => t('codexPanel.tabExperimentalFeatures') },
-    { key: 'collaborationModes', label: () => t('codexPanel.tabCollaborationModes') },
-    { key: 'externalAgentConfig', label: () => t('codexPanel.tabExternalAgentConfig') },
-    { key: 'feedback', label: () => t('codexPanel.tabFeedback') },
-  ];
+function openSubpanel(panel: TopPanelCodexSubpanel) {
+  props.onOpenSubpanel?.(panel);
+  emit('openSubpanel', panel);
+}
 const activeThread = computed(
   () =>
     api.threads.value.find((thread) => thread.id === api.activeThreadId.value) ??
@@ -992,7 +786,9 @@ async function selectThread(threadId: string) {
 
 async function renameThread() {
   if (!api.activeThreadId.value) return;
-  await api.setThreadName(api.activeThreadId.value, threadName.value);
+  const newName = threadName.value.trim();
+  if (!newName) return;
+  await api.setThreadName(api.activeThreadId.value, newName);
 }
 
 async function archiveActiveThread() {
@@ -1003,10 +799,6 @@ async function archiveActiveThread() {
 async function unarchiveThread(threadId: string) {
   showArchived.value = false;
   await api.unarchiveThread(threadId);
-}
-
-async function unsubscribeActiveThread() {
-  await api.unsubscribeThread();
 }
 
 async function interruptTurn() {
@@ -1080,15 +872,6 @@ async function reviewUncommittedChanges() {
   await api.reviewThread({ type: 'uncommittedChanges' }, 'inline');
 }
 
-async function injectPromptItems() {
-  const text = promptText.value.trim();
-  if (!text || !api.activeThreadId.value) return;
-  promptText.value = '';
-  await api.injectThreadItems(api.activeThreadId.value, [
-    { type: 'userMessage', content: [{ type: 'text', text }] },
-  ]);
-}
-
 async function runShellCommand() {
   const command = api.shellCommandInput.value.trim();
   if (!command || !api.activeThreadId.value) return;
@@ -1101,72 +884,6 @@ async function compactActiveThread() {
   if (!api.activeThreadId.value) return;
   if (!confirm(t('codexPanel.compactThreadConfirm'))) return;
   await api.startThreadCompaction(api.activeThreadId.value);
-}
-
-async function createThreadInSandbox() {
-  if (!api.sandboxPath.value) return;
-  await api.createThreadInSandbox();
-  api.sandboxPath.value = '';
-}
-
-async function selectSuggestion(suggestion: string) {
-  api.sandboxPath.value = suggestion;
-  selectedSuggestionIndex.value = -1;
-  api.hidePathSuggestions();
-  await api.openAsSandbox(suggestion);
-}
-
-function handleSuggestionKeydown(event: KeyboardEvent) {
-  const suggestions = api.fsSuggestions.value;
-  if (suggestions.length === 0) return;
-
-  if (event.key === 'Tab') {
-    event.preventDefault();
-    if (selectedSuggestionIndex.value >= 0) {
-      selectSuggestion(suggestions[selectedSuggestionIndex.value]);
-    } else if (suggestions[0]) {
-      selectSuggestion(suggestions[0]);
-    }
-    return;
-  }
-
-  if (event.key === 'ArrowDown') {
-    event.preventDefault();
-    selectedSuggestionIndex.value =
-      selectedSuggestionIndex.value < suggestions.length - 1
-        ? selectedSuggestionIndex.value + 1
-        : 0;
-    return;
-  }
-
-  if (event.key === 'ArrowUp') {
-    event.preventDefault();
-    selectedSuggestionIndex.value =
-      selectedSuggestionIndex.value > 0
-        ? selectedSuggestionIndex.value - 1
-        : suggestions.length - 1;
-    return;
-  }
-
-  if (event.key === 'Escape') {
-    selectedSuggestionIndex.value = -1;
-    api.hidePathSuggestions();
-  }
-}
-
-function joinFsPath(base: string, name: string): string {
-  if (!base || base === '/') return `/${name}`;
-  if (base.endsWith('/')) return `${base}${name}`;
-  return `${base}/${name}`;
-}
-
-async function handleFsEntryClick(entry: CodexFsDirectoryEntry) {
-  const path = joinFsPath(api.fsCwd.value, entry.fileName);
-  if (entry.isDirectory) {
-    await api.readDirectory(path);
-  } else {
-    await api.readFile(path);
-  }
 }
 
 function getEntryTypeClass(text: string): string {
@@ -1208,6 +925,7 @@ function getEntryLabel(entry: CodexTranscriptEntry): string {
   color: var(--theme-floating-text, #e2e8f0);
   background: var(--theme-floating-surface-base, rgba(15, 23, 42, 0.96));
   font-family: var(--app-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, monospace);
+  overflow: hidden;
 }
 
 .codex-panel-header,
@@ -1221,14 +939,8 @@ function getEntryLabel(entry: CodexTranscriptEntry): string {
 .codex-prompt {
   border-top: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-bottom: 0;
-  flex-wrap: wrap;
-}
-
-.codex-prompt-actions {
-  display: flex;
-  flex: 1 0 100%;
-  gap: 8px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .codex-url-field,
@@ -1250,24 +962,28 @@ function getEntryLabel(entry: CodexTranscriptEntry): string {
 .codex-prompt-input {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
-  border-radius: 10px;
   appearance: none;
   outline: none;
-  background: var(--theme-input-bg, rgba(2, 6, 23, 0.65));
   color: var(--theme-text-primary, #e2e8f0);
 }
 
 .codex-input {
   height: 34px;
   padding: 0 10px;
+  border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
+  border-radius: 10px;
+  background: var(--theme-input-bg, rgba(2, 6, 23, 0.65));
 }
 
 .codex-prompt-input {
   flex: 1 1 auto;
   resize: none;
-  padding: 10px;
+  min-height: 60px;
+  padding: 12px;
   line-height: 1.45;
+  border: 0;
+  border-radius: 10px 10px 0 0;
+  background: transparent;
 }
 
 .codex-primary-button,
@@ -1296,8 +1012,9 @@ function getEntryLabel(entry: CodexTranscriptEntry): string {
 }
 
 .codex-send-button {
-  align-self: stretch;
-  height: auto;
+  align-self: auto;
+  height: 34px;
+  min-width: 84px;
 }
 
 button:disabled,
@@ -1317,9 +1034,10 @@ input:disabled {
 
 .codex-panel-body {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 300px minmax(0, 1fr);
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
 }
 
 .codex-thread-list {
@@ -1389,7 +1107,9 @@ input:disabled {
 .codex-thread-item {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 0;
+  padding: 4px;
+  border-radius: 10px;
 }
 
 .codex-thread-item.active {
@@ -1400,34 +1120,60 @@ input:disabled {
 
 .codex-thread-row {
   display: flex;
-  align-items: center;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 0;
+  position: relative;
 }
 
 .codex-thread-select {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
-  padding: 9px;
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 10px;
   text-align: left;
+  border-radius: 10px;
 }
 
 .codex-thread-item.active .codex-thread-select {
   background: rgba(37, 99, 235, 0.18);
 }
 
-  .codex-thread-actions {
-    display: flex;
-    gap: 2px;
-    flex-shrink: 0;
-    padding-right: 4px;
-  }
+.codex-thread-actions {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 
 .codex-thread-action {
-  min-height: 26px;
+  min-height: 30px;
   font-size: 11px;
+}
+
+.codex-thread-actions .codex-icon-button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.88);
+}
+
+.codex-thread-actions .codex-icon-button:hover:not(:disabled) {
+  background: rgba(51, 65, 85, 0.96);
+}
+
+.codex-thread-title-row {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  padding-right: 72px;
 }
 
 .codex-thread-title {
@@ -1444,17 +1190,18 @@ input:disabled {
   color: var(--theme-accent-primary, #60a5fa);
 }
 
-  .codex-thread-item small {
+.codex-thread-item small {
   overflow: hidden;
   color: var(--theme-text-muted, #94a3b8);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-  .codex-thread-cwd {
+.codex-thread-cwd {
   display: flex;
   align-items: center;
   gap: 4px;
+  padding-right: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1472,42 +1219,40 @@ input:disabled {
   overflow: auto;
 }
 
-.codex-tab-bar {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  border-bottom: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
-  overflow-x: auto;
-  flex-shrink: 0;
-}
-
-.codex-tab-button {
-  padding: 6px 12px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--theme-text-muted, #94a3b8);
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.codex-tab-button:hover {
-  background: rgba(148, 163, 184, 0.12);
-  color: var(--theme-text-primary, #e2e8f0);
-}
-
-.codex-tab-button.is-active {
-  border-color: var(--theme-accent-primary, #60a5fa);
-  background: rgba(37, 99, 235, 0.15);
-  color: var(--theme-accent-primary, #93c5fd);
-}
-
 .codex-active-thread-tools {
   display: flex;
   flex-wrap: wrap;
-  align-items: end;
+  align-items: center;
   gap: 8px;
+}
+
+.codex-inline-dropdown {
+  align-self: center;
+}
+
+.codex-inline-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.codex-inline-menu-item {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--theme-text-primary, #e2e8f0);
+  text-align: left;
+  cursor: pointer;
+}
+
+.codex-inline-menu-item:hover:not(:disabled) {
+  background: rgba(96, 165, 250, 0.12);
+}
+
+.codex-inline-menu-item.is-danger {
+  color: var(--theme-status-error, #f87171);
 }
 
 .codex-approval-list {
@@ -1521,7 +1266,7 @@ input:disabled {
   flex: 1 1 320px;
   padding: 12px 14px;
   border: 1px solid rgba(251, 191, 36, 0.32);
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(120, 53, 15, 0.2);
 }
 
@@ -1565,7 +1310,7 @@ input:disabled {
 
 .codex-approval-detail.is-network {
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: rgba(37, 99, 235, 0.12);
 }
 
@@ -1580,7 +1325,7 @@ input:disabled {
 .codex-approval-command {
   display: block;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: 10px;
   background: rgba(2, 6, 23, 0.5);
   font-family: var(--app-monospace-font-family, ui-monospace, monospace);
   font-size: 12px;
@@ -1596,7 +1341,7 @@ input:disabled {
 .codex-approval-amendment {
   margin: 0;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: 10px;
   background: rgba(2, 6, 23, 0.4);
   font-size: 11px;
   color: var(--theme-text-primary, #e2e8f0);
@@ -1638,7 +1383,7 @@ input:disabled {
   min-height: 32px;
   padding: 0 12px;
   border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--theme-button-bg, rgba(30, 41, 59, 0.82));
   color: var(--theme-text-primary, #e2e8f0);
   font-size: 12px;
@@ -1686,7 +1431,7 @@ input:disabled {
 .codex-message {
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
-  border-radius: 12px;
+  border-radius: 10px;
   background: rgba(15, 23, 42, 0.48);
 }
 
@@ -1720,7 +1465,7 @@ input:disabled {
 
 .codex-command-block {
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: rgba(2, 6, 23, 0.65);
   margin-bottom: 8px;
 }
@@ -1775,82 +1520,6 @@ input:disabled {
   line-height: 1.5;
 }
 
-.codex-file-preview {
-  border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-.codex-file-preview-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-  color: var(--theme-text-muted, #94a3b8);
-  background: rgba(15, 23, 42, 0.6);
-  border-bottom: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
-}
-
-.codex-file-preview-body {
-  margin: 0;
-  padding: 12px;
-  max-height: 320px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--theme-text-primary, #e2e8f0);
-  background: rgba(2, 6, 23, 0.45);
-}
-
-.codex-sandbox {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
-  border-radius: 12px;
-  background: rgba(15, 23, 42, 0.35);
-}
-
-.codex-sandbox-cwd {
-  font-size: 11px;
-  color: var(--theme-text-muted, #94a3b8);
-  word-break: break-word;
-}
-
-.codex-sandbox-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 4px;
-}
-
-.codex-sandbox-item {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.18));
-  border-radius: 8px;
-  font-size: 12px;
-  color: var(--theme-text-primary, #e2e8f0);
-  background: var(--theme-button-bg, rgba(30, 41, 59, 0.6));
-  cursor: pointer;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.codex-sandbox-item:hover {
-  border-color: var(--theme-accent-primary, #60a5fa);
-}
-
-
-
 .codex-events {
   margin-top: auto;
   color: var(--theme-text-muted, #94a3b8);
@@ -1861,70 +1530,6 @@ input:disabled {
   margin: 8px 0 0;
   padding-left: 20px;
 }
-
-.codex-sandbox-toolbar {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  margin-bottom: 6px;
-}
-
-.codex-sandbox-input {
-  flex: 1 1 auto;
-}
-
-.codex-breadcrumbs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  align-items: center;
-  font-size: 11px;
-  margin-bottom: 6px;
-}
-
-.codex-breadcrumb-item {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px 6px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--theme-text-muted, #94a3b8);
-  cursor: pointer;
-  font-size: 11px;
-}
-
-.codex-breadcrumb-item:hover {
-  background: rgba(148, 163, 184, 0.12);
-  color: var(--theme-text-primary, #e2e8f0);
-}
-
-.codex-breadcrumb-item:not(:last-child)::after {
-  content: '/';
-  margin-left: 4px;
-  color: var(--theme-text-muted, #94a3b8);
-  opacity: 0.5;
-}
-
-.codex-parent-dir {
-  border-style: dashed;
-  opacity: 0.8;
-  width: 100%;
-  justify-content: flex-start;
-  margin-bottom: 4px;
-}
-
-.codex-dir-icon {
-  color: var(--theme-accent-primary, #60a5fa);
-}
-
-.codex-file-icon {
-  color: var(--theme-text-muted, #94a3b8);
-}
-
- .codex-sandbox-item.is-directory {
-   font-weight: 600;
- }
 
  /* Account status styles */
  .codex-account-status {
@@ -1938,7 +1543,7 @@ input:disabled {
    align-items: center;
    gap: 6px;
    padding: 4px 10px;
-   border-radius: 999px;
+   border-radius: 10px;
    background: rgba(37, 99, 235, 0.18);
    font-size: 12px;
    color: var(--theme-text-primary, #e2e8f0);
@@ -1982,10 +1587,10 @@ input:disabled {
    letter-spacing: 0.08em;
  }
 
- .codex-device-code {
-   padding: 10px;
-   border: 1px dashed var(--theme-accent-primary, rgba(96, 165, 250, 0.5));
-   border-radius: 10px;
+  .codex-device-code {
+    padding: 10px;
+    border: 1px dashed var(--theme-accent-primary, rgba(96, 165, 250, 0.5));
+    border-radius: 10px;
    text-align: center;
  }
 
@@ -2000,10 +1605,10 @@ input:disabled {
    font-size: 12px;
  }
 
- .codex-device-code-value {
-   margin-top: 8px;
-   padding: 8px 16px;
-   border-radius: 8px;
+  .codex-device-code-value {
+    margin-top: 8px;
+    padding: 8px 16px;
+    border-radius: 10px;
    background: rgba(2, 6, 23, 0.65);
    font-family: var(--app-monospace-font-family, ui-monospace, monospace);
    font-size: 18px;
@@ -2019,10 +1624,10 @@ input:disabled {
  }
 
  /* Rate limits styles */
- .codex-rate-limits {
-   padding: 10px;
-   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
-   border-radius: 12px;
+  .codex-rate-limits {
+    padding: 10px;
+    border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
+    border-radius: 10px;
    background: rgba(15, 23, 42, 0.35);
    margin: 8px 12px;
  }
@@ -2065,41 +1670,6 @@ input:disabled {
     color: var(--theme-text-muted, #94a3b8);
   }
 
-  .codex-fs-suggestions {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    z-index: 100;
-    margin: 2px 0 0;
-    padding: 4px 0;
-    list-style: none;
-    background: var(--theme-panel-bg, rgba(30, 41, 59, 0.95));
-    border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.18));
-    border-radius: 8px;
-    max-height: 200px;
-    overflow-y: auto;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  }
-
-  .codex-fs-suggestions li {
-    padding: 6px 12px;
-    font-size: 12px;
-    color: var(--theme-text-primary, #e2e8f0);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .codex-fs-suggestions li:hover,
-  .codex-fs-suggestions li.is-selected {
-    background: var(--theme-button-hover-bg, rgba(96, 165, 250, 0.15));
-  }
-
   .codex-thread-cwd {
     display: flex;
     align-items: center;
@@ -2111,12 +1681,133 @@ input:disabled {
     white-space: nowrap;
   }
 
-  .codex-sandbox-toolbar {
-    position: relative;
-  }
+.codex-toolbar-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+}
 
-  .codex-sandbox-toolbar .codex-input {
-    position: relative;
-    z-index: 10;
-  }
+.codex-composer-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
+  border-radius: 10px;
+  background: var(--theme-input-bg, rgba(2, 6, 23, 0.65));
+}
+
+.codex-composer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--theme-border, rgba(148, 163, 184, 0.24)) 75%, transparent);
+  background: rgba(15, 23, 42, 0.32);
+}
+
+.codex-composer-left,
+.codex-composer-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.codex-composer-left {
+  flex: 1 1 auto;
+}
+
+.codex-composer-right {
+  flex: 0 0 auto;
+}
+
+.codex-model-open-button,
+.codex-review-button {
+  min-height: 32px;
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.88);
+}
+
+.codex-rate-limit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--theme-accent-primary, #60a5fa) 38%, rgba(148, 163, 184, 0.24));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--theme-accent-primary, #2563eb) 12%, rgba(15, 23, 42, 0.78));
+  color: var(--theme-text-primary, #e2e8f0);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.2);
+}
+
+.codex-rate-limit-chip-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--theme-text-muted, #cbd5e1);
+}
+
+.codex-rate-limit-chip-value {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--theme-text-primary, #f8fafc);
+}
+
+.codex-rate-limit-chip-meta {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--theme-text-muted, #cbd5e1);
+}
+
+.codex-model-selector {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  max-width: 220px;
+  padding: 0 10px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  border-radius: 10px;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.codex-model-selector-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--theme-text-primary, #e2e8f0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.codex-toolbar-strip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.codex-rename-input {
+  width: 120px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
+  border-radius: 10px;
+  background: var(--theme-input-bg, rgba(2, 6, 23, 0.65));
+  color: var(--theme-text-primary, #e2e8f0);
+  font-size: 12px;
+  outline: none;
+  appearance: none;
+}
+
+.codex-rename-input:focus {
+  border-color: var(--theme-accent-primary, #60a5fa);
+}
 </style>
