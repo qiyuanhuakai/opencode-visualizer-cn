@@ -472,7 +472,7 @@ function getUserBoxStyle() {
 }
 
 function formatThreadTimestamp(root: MessageInfo): string {
-  return formatMessageTime(getMessageTime(finalAnswer.value) ?? getMessageTime(root));
+  return formatMessageTime(getMessageTime(root) ?? getMessageTime(finalAnswer.value));
 }
 
 function getCompletedTime(message?: MessageInfo): number | undefined {
@@ -481,7 +481,8 @@ function getCompletedTime(message?: MessageInfo): number | undefined {
 }
 
 function formatThreadElapsed(root: MessageInfo): string {
-  return formatElapsedTime(getMessageTime(root), getCompletedTime(finalAnswer.value));
+  const end = getCompletedTime(finalAnswer.value) ?? getMessageTime(finalAnswer.value);
+  return formatElapsedTime(getMessageTime(root), end);
 }
 
 function getThreadTokens(): MessageTokens | null {

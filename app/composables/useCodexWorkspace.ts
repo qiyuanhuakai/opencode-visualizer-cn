@@ -19,7 +19,8 @@ export type CodexWorkspaceApi = {
 };
 
 function threadTimestamp(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return value > 0 && value < 1_000_000_000_000 ? value * 1000 : value;
 }
 
 function expandHomePath(path: string, homeDirectory: string) {
@@ -35,6 +36,11 @@ function basename(path: string) {
 }
 
 function threadSandboxDirectory(thread: CodexThread | undefined, fallbackDirectory = CODEX_DEFAULT_DIRECTORY) {
+  const cwd = thread?.cwd?.trim();
+  if (cwd) {
+    const expanded = expandHomePath(cwd, fallbackDirectory);
+    if (expanded && expanded !== CODEX_DEFAULT_DIRECTORY) return expanded;
+  }
   const root = thread?.gitInfo?.root?.trim();
   if (root) return expandHomePath(root, fallbackDirectory);
   return CODEX_DEFAULT_DIRECTORY;

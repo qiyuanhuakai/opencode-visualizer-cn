@@ -443,8 +443,9 @@ function loadHistory(entries: unknown[]) {
     const hasMessage = messages.value.has(info.id);
     const messageRef = ensureMessage(info.id, false);
     if (!hasMessage) collectionChanged = true;
-    if (!messageRef.value.info) {
-      messageRef.value.info = accumulated?.info ?? info;
+    const mergedInfo = accumulated?.info ?? info;
+    if (!messageRef.value.info || JSON.stringify(messageRef.value.info) !== JSON.stringify(mergedInfo)) {
+      messageRef.value.info = mergedInfo;
       triggerMessageRef(messageRef);
     }
     if (!Array.isArray(partsList)) continue;
@@ -453,7 +454,14 @@ function loadHistory(entries: unknown[]) {
       if (!isMessagePart(item)) continue;
       const merged = accumulated?.parts.get(item.id) ?? item;
       const key = partLookupKey(merged.messageID, merged.id);
-      if (parts.has(key)) continue;
+      const existingPart = parts.get(key);
+      if (existingPart) {
+        if (JSON.stringify(existingPart.value) !== JSON.stringify(merged)) {
+          existingPart.value = merged;
+          triggerRef(existingPart);
+        }
+        continue;
+      }
       const partRef = shallowRef(merged);
       parts.set(key, partRef);
       messageRef.value.parts.add(partRef);
@@ -462,7 +470,14 @@ function loadHistory(entries: unknown[]) {
     if (accumulated) {
       for (const [partId, accPart] of accumulated.parts) {
         const key = partLookupKey(accPart.messageID, partId);
-        if (parts.has(key)) continue;
+        const existingPart = parts.get(key);
+        if (existingPart) {
+          if (JSON.stringify(existingPart.value) !== JSON.stringify(accPart)) {
+            existingPart.value = accPart;
+            triggerRef(existingPart);
+          }
+          continue;
+        }
         const partRef = shallowRef(accPart);
         parts.set(key, partRef);
         messageRef.value.parts.add(partRef);
@@ -496,6 +511,17 @@ async function loadHistoryIncrementally(
 function reset() {
   messages.value.clear();
   parts.clear();
+  triggerCollection();
+}
+
+function removeMessage(id: string) {
+  const messageRef = messages.value.get(id);
+  if (!messageRef) return;
+  for (const partRef of messageRef.value.parts) {
+    const part = partRef.value;
+    parts.delete(partLookupKey(part.messageID, part.id));
+  }
+  messages.value.delete(id);
   triggerCollection();
 }
 
@@ -590,6 +616,7 @@ export function useMessages() {
     updatePart,
     loadHistory,
     loadHistoryIncrementally,
+    removeMessage,
     reset,
     saveSessionState,
     tryLoadFromCache,

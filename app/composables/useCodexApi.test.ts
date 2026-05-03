@@ -142,6 +142,45 @@ describe('useCodexApi', () => {
     expect(api.threads.value.find((item) => item.id === 'thr_new')?.cwd).toBe('/home/codex/repo');
   });
 
+  it('preserves known cwd and git info when later thread reads omit them', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
+    mock.adapter.getVcsInfo = vi.fn().mockResolvedValue({ root: '/repo', branch: 'main' });
+    mock.adapter.readThread = vi.fn().mockResolvedValue({
+      thread: {
+        id: 'thr_new',
+        name: 'Existing named thread',
+        turns: [{ id: 'turn_old', items: [] }],
+      },
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    api.homeDir.value = '/home/codex';
+
+    await api.connect();
+    await api.startThread('/repo/subdir');
+    await api.selectThread('thr_new');
+
+    const thread = api.threads.value.find((item) => item.id === 'thr_new');
+    expect(thread?.cwd).toBe('/repo/subdir');
+    expect(thread?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+  });
+
+  it('preserves known cwd when refreshThreads returns a thinner thread payload', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn()
+      .mockResolvedValueOnce({ data: [{ id: 'thr_existing', preview: 'Existing thread', cwd: '/repo/subdir' }], nextCursor: null })
+      .mockResolvedValueOnce({ data: [{ id: 'thr_existing', preview: 'Existing thread' }], nextCursor: null });
+    mock.adapter.getVcsInfo = vi.fn().mockResolvedValue({ root: '/repo', branch: 'main' });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.refreshThreads();
+
+    const thread = api.threads.value.find((item) => item.id === 'thr_existing');
+    expect(thread?.cwd).toBe('/repo/subdir');
+    expect(thread?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+  });
+
   it('enriches newly started threads with git root metadata', async () => {
     const mock = createAdapterMock();
     mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', cwd: '/repo/subdir', preview: '' } });
@@ -472,5 +511,221 @@ describe('useCodexApi', () => {
 
     api.clearPreview();
     expect(api.previewFilePath.value).toBe('');
+  });
+
+  it('pushes completed items to realtimeHistoryQueue for OutputPanel bridge', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Test realtime.');
+
+    const userEntries = api.realtimeHistoryQueue.value.filter((e) => e.info.role === 'user');
+    expect(userEntries).toHaveLength(1);
+    expect(userEntries[0]?.parts[0]).toMatchObject({ type: 'text', text: 'Test realtime.' });
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'agent-realtime-1',
+          type: 'agentMessage',
+          text: 'Realtime answer',
+        },
+      },
+    });
+
+    const assistantEntries = api.realtimeHistoryQueue.value.filter((e) => e.info.role === 'assistant');
+    expect(assistantEntries.length).toBeGreaterThan(0);
+    expect(assistantEntries.some((e) => e.parts.some((p) => p.type === 'text' && 'text' in p && p.text === 'Realtime answer'))).toBe(true);
+  });
+
+  it('pushes user message to realtimeHistoryQueue immediately on sendPrompt', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    expect(api.realtimeHistoryQueue.value).toEqual([]);
+
+    await api.sendPrompt('Hello immediately.');
+
+    const userEntries = api.realtimeHistoryQueue.value.filter((e) => e.info.role === 'user');
+    expect(userEntries).toHaveLength(1);
+    expect(userEntries[0]?.info.role).toBe('user');
+    expect(userEntries[0]?.info.id).toContain(':user:0');
+    expect(userEntries[0]?.info.id).toBe('turn_1:user:0');
+    expect(userEntries.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
+    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.includes('pending-turn:'))).toBe(true);
+    expect(Object.values(api.realtimeMessageAliases.value)).toContain('turn_1:user:0');
+    expect(userEntries[0]?.parts).toHaveLength(1);
+    expect(userEntries[0]?.parts[0]).toMatchObject({ type: 'text', text: 'Hello immediately.' });
+  });
+
+  it('updates realtimeStreamingPart on agent message deltas', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Stream test.');
+
+    expect(api.realtimeStreamingPart.value).not.toBeNull();
+    expect(api.realtimeStreamingPart.value?.info.id).toContain(':assistant');
+    expect(api.realtimeStreamingPart.value?.part.text).toBe('');
+
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'Hello' } });
+    expect(api.realtimeStreamingPart.value?.part.text).toBe('Hello');
+
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: ', world!' } });
+    expect(api.realtimeStreamingPart.value?.part.text).toBe('Hello, world!');
+  });
+
+  it('marks realtimeStreamingPart completed when agent message completes', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Complete test.');
+
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'Partial' } });
+    expect(api.realtimeStreamingPart.value).not.toBeNull();
+
+    mock.emit({
+      method: 'item/completed',
+      params: { item: { id: 'agent-1', type: 'agentMessage', text: 'Final answer' } },
+    });
+    expect(api.realtimeStreamingPart.value?.part.text).toBe('Final answer');
+    expect(api.realtimeStreamingPart.value?.part.time?.end).toEqual(expect.any(Number));
+  });
+
+  it('uses one canonical assistant text part across streaming and completed history', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Create a file');
+
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'Hello' } });
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: ', world!' } });
+    mock.emit({
+      method: 'item/completed',
+      params: { item: { id: 'agent-1', type: 'agentMessage', text: 'Hello, world!' } },
+    });
+
+    const assistantEntries = api.realtimeHistoryQueue.value.filter((entry) => entry.info.role === 'assistant');
+    expect(assistantEntries).toHaveLength(1);
+    const textParts = assistantEntries[0]?.parts.filter((part) => part.type === 'text') ?? [];
+    expect(textParts).toHaveLength(1);
+    expect(textParts[0]?.id).toBe('turn_1:assistant:text');
+    expect(textParts[0]).toMatchObject({ messageID: 'turn_1:assistant', text: 'Hello, world!' });
+  });
+
+  it('updates realtimeReasoningPart on reasoning deltas', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Reasoning test.');
+
+    mock.emit({
+      method: 'item/reasoning/summaryTextDelta',
+      params: { itemId: 'reasoning-1', delta: 'Thinking...' },
+    });
+
+    expect(api.realtimeReasoningPart.value).not.toBeNull();
+    expect(api.realtimeReasoningPart.value?.part.type).toBe('reasoning');
+    expect(api.realtimeReasoningPart.value?.part.text).toBe('Thinking...');
+    expect(api.realtimeReasoningPart.value?.info.id).toContain(':assistant');
+
+    mock.emit({
+      method: 'item/reasoning/summaryTextDelta',
+      params: { itemId: 'reasoning-1', delta: ' more thoughts' },
+    });
+    expect(api.realtimeReasoningPart.value?.part.text).toBe('Thinking... more thoughts');
+  });
+
+  it('tracks tool parts from item/started notifications', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Tool test.');
+
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'cmd-1',
+          type: 'commandExecution',
+          command: ['pnpm', 'test'],
+          cwd: '/repo',
+        },
+      },
+    });
+
+    expect(api.realtimeToolParts.value).toHaveLength(1);
+    expect(api.realtimeToolParts.value[0]?.part.type).toBe('tool');
+    expect(api.realtimeToolParts.value[0]?.part.state.status).toBe('running');
+  });
+
+  it('marks realtime tool parts completed and writes them to realtime history on item completion', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Tool completion test.');
+
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'cmd-1',
+          type: 'commandExecution',
+          command: ['pnpm', 'test'],
+          cwd: '/repo',
+        },
+      },
+    });
+
+    mock.emit({ method: 'command/exec/outputDelta', params: { callId: 'cmd-1', delta: 'running output' } });
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'cmd-1',
+          type: 'commandExecution',
+          command: ['pnpm', 'test'],
+          cwd: '/repo',
+          aggregatedOutput: 'final output',
+        },
+      },
+    });
+
+    expect(api.realtimeToolParts.value).toHaveLength(0);
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'cmd-1'));
+    expect(toolEntry).toBeDefined();
+    const toolPart = toolEntry?.parts.find((part) => part.id === 'cmd-1');
+    expect(toolPart).toMatchObject({ type: 'tool', state: { status: 'completed' } });
+  });
+
+  it('clears realtimeStreamingPart and realtimeToolParts when selecting a thread', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Test.');
+
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'streaming' } });
+    mock.emit({
+      method: 'item/started',
+      params: { item: { id: 'cmd-1', type: 'commandExecution', command: 'ls' } },
+    });
+
+    expect(api.realtimeStreamingPart.value).not.toBeNull();
+    expect(api.realtimeToolParts.value).toHaveLength(1);
+
+    await api.selectThread('thr_existing');
+
+    expect(api.realtimeStreamingPart.value).toBeNull();
+    expect(api.realtimeReasoningPart.value).toBeNull();
+    expect(api.realtimeToolParts.value).toEqual([]);
   });
 });
