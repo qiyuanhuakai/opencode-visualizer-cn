@@ -763,6 +763,12 @@ defineExpose({ panelEl, scrollToBottom });
   padding: 8px 12px 12px;
 }
 
+.output-panel-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .output-panel-messages.is-anchor-pending {
   visibility: hidden;
   pointer-events: none;

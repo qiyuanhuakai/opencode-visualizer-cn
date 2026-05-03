@@ -7,7 +7,8 @@
 
 ### 新后端支持(alpha)
 
-- [x] 将codex app-server逐步接入vis前端，同时保留codex panel用于最小化使用/调试/与opencode并行使用
+- [ ] 将codex app-server逐步接入vis前端，同时保留codex panel用于最小化使用/调试/与opencode并行使用。
+- [ ] 但是其仍然不能实际投入使用，因为存在一个致命bug始终无法解决
 
 ### 状态监控
 
