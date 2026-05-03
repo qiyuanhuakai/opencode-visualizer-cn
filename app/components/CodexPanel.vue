@@ -777,7 +777,8 @@ async function toggleHidden() {
 async function startThread() {
   showArchived.value = false;
   showHidden.value = false;
-  await api.startThread();
+  const cwd = api.sandboxPath.value || api.fsCwd.value || undefined;
+  await api.startThread(cwd);
 }
 
 async function selectThread(threadId: string) {

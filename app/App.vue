@@ -526,7 +526,7 @@ import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml, type RenderRequest } from './utils/workerRenderer';
 import type { HistoryWindowEntry, MessageDiffEntry } from './types/message';
-import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
+import type { AssistantMessageInfo, MessagePart, ReasoningPart, ToolPart, UserMessageInfo } from './types/sse';
 import type { ProjectState, SandboxState } from './types/worker-state';
 import type { SessionTreeData, SessionTreeProject, SessionTreeSandbox, SessionTreeSession } from './types/session-tree';
 import type { Terminal } from '@xterm/xterm';
@@ -563,6 +563,7 @@ import {
 import type { BackendKind } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
+import { shouldPreservePendingCodexSelection } from './utils/codexSessionSelection';
 import { splitFileContentDirectoryAndPath, normalizeDirectory } from './utils/path';
 import { useCredentials } from './composables/useCredentials';
 import { useSettings } from './composables/useSettings';
@@ -3960,6 +3961,7 @@ async function createSessionInDirectory(directory: string) {
     const creation = (async () => {
       const thread = await codexApi.startThread(codexDirectory);
       if (!thread?.id) return undefined;
+      codexPendingSessionLock.value = thread.id;
       selectedProjectId.value = CODEX_PROJECT_ID;
       selectedSessionId.value = thread.id;
       return {
@@ -4822,7 +4824,7 @@ async function handleProjectDirectorySelect(directory: string) {
 
   if (activeBackendKind.value === 'codex') {
     const existing = codexApi.visibleThreads.value.find((thread) => (
-      normalizeDirectory(thread.cwd || codexApi.homeDir.value || '/') === targetDirectory
+      codexThreadDirectoryMatch(thread, targetDirectory)
     ));
     const sessionId = existing?.id || (await createSessionInDirectory(targetDirectory))?.id || '';
     if (!sessionId) return;
@@ -7036,8 +7038,104 @@ watch(
   (history) => {
     if (activeBackendKind.value !== 'codex') return;
     if (!selectedSessionId.value) return;
+    msg.reset();
     msg.loadHistory(history);
+    reapplyCodexSharedBackfill();
   },
+);
+
+let lastRealtimeQueueSignature = '';
+const codexPendingSessionLock = ref('');
+watch(
+  () => codexApi.realtimeHistoryQueue.value.map((entry) => `${entry.info.id}:${entry.parts.map((part) => part.id).join(',')}`).join('|'),
+  (signature) => {
+    if (activeBackendKind.value !== 'codex') return;
+    if (!selectedSessionId.value) return;
+    if (!signature || signature === lastRealtimeQueueSignature) {
+      lastRealtimeQueueSignature = signature;
+      return;
+    }
+    lastRealtimeQueueSignature = signature;
+    if (codexApi.realtimeHistoryQueue.value.length > 0) {
+      for (const [provisionalId, finalizedId] of Object.entries(codexApi.realtimeMessageAliases.value)) {
+        if (!provisionalId || !finalizedId || provisionalId === finalizedId) continue;
+        msg.removeMessage(provisionalId);
+      }
+      msg.loadHistory(codexApi.realtimeHistoryQueue.value.filter((entry) => entry.info.sessionID === selectedSessionId.value));
+    }
+  },
+);
+
+watch(selectedSessionId, () => {
+  lastRealtimeQueueSignature = '';
+});
+
+watch(
+  () => codexApi.realtimeStreamingPart.value,
+  (streaming) => {
+    if (activeBackendKind.value !== 'codex') return;
+    if (!selectedSessionId.value) return;
+    if (!streaming) return;
+    if (streaming.info.sessionID !== selectedSessionId.value) return;
+    const { info, part } = streaming;
+    msg.updateMessage(info);
+    msg.updatePart(part);
+    if (part.time?.end) updateReasoningExpiry(part.sessionID, 'idle');
+  },
+);
+
+watch(
+  () => codexApi.realtimeReasoningPart.value,
+  (reasoning) => {
+    if (activeBackendKind.value !== 'codex') return;
+    if (!selectedSessionId.value) return;
+    if (!reasoning) return;
+    if (reasoning.info.sessionID !== selectedSessionId.value) return;
+    const { info, part } = reasoning;
+    const reasoningMessageId = part.messageID;
+    void reasoningMessageId;
+    msg.updateMessage(info);
+    msg.updatePart(part);
+    updateReasoningExpiry(part.sessionID, part.time?.end ? 'idle' : 'busy');
+  },
+);
+
+watch(
+  () => codexApi.realtimeToolParts.value,
+  (toolParts) => {
+    if (activeBackendKind.value !== 'codex') return;
+    if (!selectedSessionId.value) return;
+    for (const { info, part } of toolParts.filter(({ info }) => info.sessionID === selectedSessionId.value)) {
+      const toolMessageId = part.messageID;
+      void toolMessageId;
+      msg.updateMessage(info);
+      msg.updatePart(part);
+      if (shouldRenderToolWindow(part.tool) && !suppressAutoWindows.value) {
+        openToolPartAsWindow(part);
+      }
+    }
+  },
+  { deep: true },
+);
+
+watch(
+  () => codexApi.tokenUsage.value,
+  (usage) => {
+    if (activeBackendKind.value !== 'codex') return;
+    if (!selectedSessionId.value) return;
+    applyCodexTokenUsageToSharedMessages(usage);
+  },
+  { deep: true },
+);
+
+watch(
+  () => codexApi.diffState.value,
+  (state) => {
+    if (activeBackendKind.value !== 'codex') return;
+    if (!selectedSessionId.value) return;
+    applyCodexDiffStateToSharedMessages(state);
+  },
+  { deep: true },
 );
 
 function backend() {
@@ -7072,6 +7170,89 @@ function normalizeProjectDirectoryForActiveBackend(directory: string) {
   return normalizeDirectory(trimmed || home || '/');
 }
 
+function codexThreadDirectoryMatch(thread: { cwd?: string; gitInfo?: { root?: string } | null }, directory: string) {
+  const target = normalizeDirectory(directory);
+  const cwd = normalizeDirectory(thread.cwd || '');
+  if (cwd) return cwd === target;
+  const root = normalizeDirectory(thread.gitInfo?.root || '');
+  return Boolean(root) && root === target;
+}
+
+function findCodexHistoryMessage<TMessage extends AssistantMessageInfo | UserMessageInfo>(
+  predicate: (info: AssistantMessageInfo | UserMessageInfo) => info is TMessage,
+): TMessage | null {
+  const history = codexWorkspace.history.value;
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    if (!entry) continue;
+    if (predicate(entry.info as AssistantMessageInfo | UserMessageInfo)) return entry.info as TMessage;
+  }
+  return null;
+}
+
+function parseCodexDiffEntries(diffText: string): MessageDiffEntry[] {
+  const trimmed = diffText.trim();
+  if (!trimmed) return [];
+  const chunks = trimmed.split(/(?=^diff --git )/m).map((chunk) => chunk.trim()).filter(Boolean);
+  if (chunks.length === 0) {
+    return [{ file: 'changes.diff', diff: trimmed }];
+  }
+  return chunks.map((chunk, index) => {
+    const match = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m);
+    const file = match?.[2] || match?.[1] || `changes-${index + 1}.diff`;
+    return { file, diff: chunk };
+  });
+}
+
+function applyCodexTokenUsageToSharedMessages(rawUsage: unknown) {
+  const usage = rawUsage && typeof rawUsage === 'object' ? rawUsage as Record<string, unknown> : null;
+  if (!usage) return;
+  const assistantInfo = findCodexHistoryMessage((info): info is AssistantMessageInfo => info.role === 'assistant');
+  if (!assistantInfo) return;
+  const input = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
+  const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
+  const reasoning = typeof usage.reasoningTokens === 'number' ? usage.reasoningTokens : 0;
+  const total = typeof usage.totalTokens === 'number' ? usage.totalTokens : input + output + reasoning;
+  const updated: AssistantMessageInfo = {
+    ...assistantInfo,
+    tokens: {
+      ...assistantInfo.tokens,
+      input,
+      output,
+      reasoning,
+      total,
+      cache: assistantInfo.tokens.cache,
+    },
+  };
+  msg.updateMessage(updated);
+}
+
+function applyCodexDiffStateToSharedMessages(state: { threadId: string; turnId: string; diff: string } | null) {
+  if (!state?.turnId || !state.diff.trim()) return;
+  const userInfo = findCodexHistoryMessage((info): info is UserMessageInfo => info.role === 'user' && info.id.startsWith(`${state.turnId}:user:`));
+  if (!userInfo) return;
+  const updated: UserMessageInfo = {
+    ...userInfo,
+    summary: {
+      ...userInfo.summary,
+      diffs: parseCodexDiffEntries(state.diff).map((entry) => ({
+        file: entry.file,
+        patch: entry.diff,
+        additions: 0,
+        deletions: 0,
+      })),
+    },
+  };
+  msg.updateMessage(updated);
+}
+
+function reapplyCodexSharedBackfill() {
+  if (activeBackendKind.value !== 'codex') return;
+  if (!selectedSessionId.value) return;
+  applyCodexTokenUsageToSharedMessages(codexApi.tokenUsage.value);
+  applyCodexDiffStateToSharedMessages(codexApi.diffState.value);
+}
+
 function splitFileContentPathForActiveBackend(targetPath: string, sandboxDirectory: string | null) {
   return splitFileContentDirectoryAndPath(targetPath, sandboxDirectory, {
     strictSandbox: activeBackendKind.value === 'codex',
@@ -7097,6 +7278,19 @@ watch(
     const hasSelectedSession = Boolean(
       selectedSessionId.value && Object.values(projectSandboxes).some((sandbox) => sandbox.sessions[selectedSessionId.value]),
     );
+    if (codexPendingSessionLock.value && hasSelectedSession && selectedSessionId.value === codexPendingSessionLock.value) {
+      codexPendingSessionLock.value = '';
+    }
+    if (shouldPreservePendingCodexSelection({
+      pendingSessionLock: codexPendingSessionLock.value,
+      selectedSessionId: selectedSessionId.value,
+      projectSandboxes,
+    })) {
+      if (homeDir && homePath.value !== homeDir) {
+        homePath.value = homeDir;
+      }
+      return;
+    }
     if (!hasSelectedSession && activeSessionId && selectedSessionId.value !== activeSessionId) {
       selectedSessionId.value = activeSessionId;
     }

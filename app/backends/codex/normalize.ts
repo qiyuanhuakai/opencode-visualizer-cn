@@ -1,4 +1,13 @@
-import type { AssistantMessageInfo, MessageInfo, MessagePart, TextPart, ToolPart, UserMessageInfo } from '../../types/sse';
+import type {
+  AssistantMessageInfo,
+  CompactionPart,
+  MessageInfo,
+  MessagePart,
+  ReasoningPart,
+  TextPart,
+  ToolPart,
+  UserMessageInfo,
+} from '../../types/sse';
 
 type CodexRecord = Record<string, unknown>;
 
@@ -11,6 +20,18 @@ export type CodexCanonicalHistoryEntry = {
   info: MessageInfo;
   parts: MessagePart[];
 };
+
+export function codexUserMessageId(turnId: string, index = 0) {
+  return `${turnId}:user:${index}`;
+}
+
+export function codexAssistantMessageId(turnId: string) {
+  return `${turnId}:assistant`;
+}
+
+export function codexAssistantTextPartId(turnId: string) {
+  return `${codexAssistantMessageId(turnId)}:text`;
+}
 
 function isRecord(value: unknown): value is CodexRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -134,6 +155,39 @@ function createToolPart(params: {
   };
 }
 
+function createReasoningPart(params: {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  text: string;
+  createdAt: number;
+}): ReasoningPart {
+  return {
+    id: params.id,
+    sessionID: params.sessionId,
+    messageID: params.messageId,
+    type: 'reasoning',
+    text: params.text,
+    metadata: { source: 'codex' },
+    time: { start: params.createdAt, end: params.createdAt },
+  };
+}
+
+function createCompactionPart(params: {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  createdAt: number;
+}): CompactionPart {
+  return {
+    id: params.id,
+    sessionID: params.sessionId,
+    messageID: params.messageId,
+    type: 'compaction',
+    auto: false,
+  };
+}
+
 export function normalizeCodexTurnItems(params: {
   sessionId: string;
   turnId: string;
@@ -144,20 +198,49 @@ export function normalizeCodexTurnItems(params: {
   const messages: MessageInfo[] = [];
   const parts: MessagePart[] = [];
   let parentMessageId = '';
-  let assistantMessageId = `${params.turnId}:assistant`;
+  let assistantMessageId = codexAssistantMessageId(params.turnId);
+  let userMessageIndex = 0;
+  let assistantMessage: AssistantMessageInfo | undefined;
+
+  function ensureAssistantMessage(itemTime: number) {
+    if (!assistantMessage) {
+      assistantMessage = createAssistantMessage({
+        id: assistantMessageId,
+        sessionId: params.sessionId,
+        parentId: parentMessageId,
+        createdAt: itemTime,
+        completedAt: itemTime,
+      });
+      messages.push(assistantMessage);
+      return assistantMessage;
+    }
+
+    if (!assistantMessage.parentID && parentMessageId) {
+      assistantMessage.parentID = parentMessageId;
+    }
+    if (itemTime < assistantMessage.time.created) {
+      assistantMessage.time.created = itemTime;
+    }
+    const currentCompleted = numberValue(assistantMessage.time.completed, assistantMessage.time.created);
+    if (itemTime > currentCompleted) {
+      assistantMessage.time.completed = itemTime;
+    }
+    return assistantMessage;
+  }
 
   params.items.forEach((item, index) => {
     if (!isRecord(item)) return;
     const type = stringValue(item.type);
     const itemId = codexItemId(item, `${params.turnId}:item:${index}`);
+    const itemTime = numberValue(item.createdAt, createdAt + index);
 
     if (type === 'userMessage') {
       const text = extractUserText(item);
       if (!text) return;
       const message = createUserMessage({
-        id: itemId,
+        id: codexUserMessageId(params.turnId, userMessageIndex),
         sessionId: params.sessionId,
-        createdAt: numberValue(item.createdAt, createdAt + index),
+        createdAt: itemTime,
       });
       messages.push(message);
       parts.push(createTextPart({
@@ -168,28 +251,21 @@ export function normalizeCodexTurnItems(params: {
         createdAt: message.time.created,
       }));
       parentMessageId = message.id;
-      assistantMessageId = `${params.turnId}:assistant:${index}`;
+      userMessageIndex += 1;
       return;
     }
 
-    if (!messages.some((message) => message.id === assistantMessageId)) {
-      messages.push(createAssistantMessage({
-        id: assistantMessageId,
-        sessionId: params.sessionId,
-        parentId: parentMessageId,
-        createdAt: numberValue(item.createdAt, createdAt + index),
-      }));
-    }
+    ensureAssistantMessage(itemTime);
 
     if (type === 'agentMessage') {
       const text = stringValue(item.text);
       if (!text) return;
       parts.push(createTextPart({
-        id: `${itemId}:text`,
+        id: codexAssistantTextPartId(params.turnId),
         sessionId: params.sessionId,
         messageId: assistantMessageId,
         text,
-        createdAt: numberValue(item.createdAt, createdAt + index),
+        createdAt: itemTime,
       }));
       return;
     }
@@ -205,7 +281,7 @@ export function normalizeCodexTurnItems(params: {
         title: command || 'Codex command',
         input: { command, cwd: stringValue(item.cwd) },
         output,
-        createdAt: numberValue(item.createdAt, createdAt + index),
+        createdAt: itemTime,
       }));
       return;
     }
@@ -221,8 +297,138 @@ export function normalizeCodexTurnItems(params: {
         title: files.length > 0 ? `Codex file changes (${files.length})` : 'Codex file changes',
         input: { files },
         output: changes.map((change) => stringValue(change.diff)).filter(Boolean).join('\n'),
-        createdAt: numberValue(item.createdAt, createdAt + index),
+        createdAt: itemTime,
       }));
+      return;
+    }
+
+    if (type === 'reasoning') {
+      const summary = stringValue(item.summary);
+      const content = stringValue(item.text) || stringValue(item.content);
+      const text = summary || content;
+      if (!text) return;
+      parts.push(createReasoningPart({
+        id: itemId,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        text,
+        createdAt: itemTime,
+      }));
+      return;
+    }
+
+    if (type === 'plan') {
+      const text = stringValue(item.text);
+      if (!text) return;
+      parts.push(createTextPart({
+        id: `${itemId}:text`,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        text,
+        createdAt: itemTime,
+      }));
+      return;
+    }
+
+    if (type === 'mcpToolCall') {
+      const server = stringValue(item.server);
+      const tool = stringValue(item.tool);
+      const args = isRecord(item.arguments) ? item.arguments : {};
+      const result = stringValue(item.result);
+      const error = stringValue(item.error);
+      parts.push(createToolPart({
+        id: itemId,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        tool: tool || 'mcp',
+        title: server && tool ? `${server}.${tool}` : tool || 'MCP tool call',
+        input: { server, tool, ...args },
+        output: error || result,
+        createdAt: itemTime,
+      }));
+      return;
+    }
+
+    if (type === 'dynamicToolCall' || type === 'collabToolCall') {
+      const tool = stringValue(item.tool);
+      const args = isRecord(item.arguments) ? item.arguments : {};
+      const status = stringValue(item.status);
+      const contentItems = Array.isArray(item.contentItems) ? item.contentItems : [];
+      const outputText = contentItems
+        .filter(isRecord)
+        .map((ci) => stringValue(ci.text))
+        .filter(Boolean)
+        .join('\n');
+      parts.push(createToolPart({
+        id: itemId,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        tool: tool || 'dynamic',
+        title: tool || 'Dynamic tool call',
+        input: args,
+        output: outputText || status,
+        createdAt: itemTime,
+      }));
+      return;
+    }
+
+    if (type === 'webSearch') {
+      const query = stringValue(item.query);
+      const action = isRecord(item.action) ? item.action : null;
+      const actionType = action ? stringValue(action.type) : '';
+      const actionUrl = action ? stringValue(action.url) : '';
+      const text = [
+        query ? `Web search: ${query}` : '',
+        actionType ? `action: ${actionType}` : '',
+        actionUrl ? `url: ${actionUrl}` : '',
+      ].filter(Boolean).join('\n');
+      if (!text) return;
+      parts.push(createTextPart({
+        id: `${itemId}:text`,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        text,
+        createdAt: itemTime,
+      }));
+      return;
+    }
+
+    if (type === 'imageView') {
+      const path = stringValue(item.path);
+      if (!path) return;
+      parts.push(createTextPart({
+        id: `${itemId}:text`,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        text: `Image: ${path}`,
+        createdAt: itemTime,
+      }));
+      return;
+    }
+
+    if (type === 'enteredReviewMode' || type === 'exitedReviewMode') {
+      const review = stringValue(item.review);
+      const text = type === 'enteredReviewMode'
+        ? `Entered review mode: ${review || 'current changes'}`
+        : (review ? `Review: ${review}` : 'Exited review mode');
+      parts.push(createTextPart({
+        id: `${itemId}:text`,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        text,
+        createdAt: itemTime,
+      }));
+      return;
+    }
+
+    if (type === 'contextCompaction') {
+      parts.push(createCompactionPart({
+        id: itemId,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        createdAt: itemTime,
+      }));
+      return;
     }
   });
 
