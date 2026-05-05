@@ -303,6 +303,44 @@ describe('CodexAdapter', () => {
     });
   });
 
+  it('passes cwd when resuming an existing thread and starting a prompt turn', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const prompt = adapter.sendPrompt({ threadId: 'thr_1', text: 'Continue here.', cwd: '/repo' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { thread: { id: 'thr_1', cwd: '/repo' } });
+    await waitForSent(socket, 4);
+    socket.respond(3, { turn: { id: 'turn_2', status: 'inProgress' } });
+
+    await expect(prompt).resolves.toEqual({
+      threadId: 'thr_1',
+      thread: undefined,
+      turn: { id: 'turn_2', status: 'inProgress' },
+    });
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'thread/resume',
+      params: { threadId: 'thr_1', cwd: '/repo' },
+    });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 3,
+      method: 'turn/start',
+      params: {
+        threadId: 'thr_1',
+        input: [{ type: 'text', text: 'Continue here.' }],
+        cwd: '/repo',
+      },
+    });
+  });
+
   it('replaces an empty no-rollout thread when sending a prompt', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
@@ -330,7 +368,7 @@ describe('CodexAdapter', () => {
     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
       id: 2,
       method: 'thread/resume',
-      params: { threadId: 'thr_empty' },
+      params: { threadId: 'thr_empty', model: 'gpt-5.4', cwd: '/repo' },
     });
     expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
       id: 3,

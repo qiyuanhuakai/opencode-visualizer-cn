@@ -156,14 +156,22 @@
 
                 <div
                   v-for="worktree in displayedTree"
-                  :key="worktree.directory"
+                  :key="worktree.key || worktree.directory"
                   class="tree-worktree"
                   :style="worktreeAccentStyle(worktree)"
                 >
                   <div class="tree-worktree-header">
                     <div class="tree-header-main">
                       <Icon
-                        :icon="worktree.projectId === 'global' ? 'lucide:globe' : 'lucide:package'"
+                        :icon="
+                          worktree.kind === 'global'
+                            ? 'lucide:globe-2'
+                            : worktree.kind === 'sandbox'
+                              ? 'lucide:folder-git-2'
+                              : worktree.projectId === 'global'
+                                ? 'lucide:globe'
+                                : 'lucide:package'
+                        "
                         class="tree-header-icon"
                       />
                       <div class="tree-label">
@@ -176,15 +184,15 @@
                       </div>
                     </div>
                     <button
-                      v-if="worktree.projectId && worktree.projectId !== 'global'"
+                      v-if="worktree.projectId && worktree.projectId !== 'global' && (!codexMode || worktree.kind === 'sandbox')"
                       type="button"
                       class="tree-action-button"
                       :class="worktree.isPinned ? 'pinned' : 'pin'"
                       :title="worktree.isPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
                       @click.stop="
                         worktree.isPinned
-                          ? handleUnpinProject(worktree.projectId)
-                          : handlePinProject(worktree.projectId)
+                          ? handleUnpinWorktree(worktree)
+                          : handlePinWorktree(worktree)
                       "
                     >
                       <Icon
@@ -194,7 +202,7 @@
                       />
                     </button>
                     <button
-                      v-if="worktree.projectId && worktree.projectId !== 'global'"
+                      v-if="!codexMode && worktree.projectId && worktree.projectId !== 'global'"
                       type="button"
                       class="tree-action-button worktree-settings"
                       :title="$t('topPanel.projectSettings')"
@@ -211,14 +219,23 @@
 
                   <div
                     v-for="sandbox in worktree.sandboxes"
-                    :key="sandbox.directory"
+                    :key="sandbox.key || sandbox.directory"
                     class="tree-sandbox"
+                    :class="{ 'is-branch': sandbox.kind === 'branch' }"
                   >
                     <div class="tree-sandbox-header">
                       <div class="tree-header-main">
                         <Icon
                           :icon="
-                            worktree.projectId === 'global' ? 'lucide:folder' : 'lucide:git-branch'
+                            worktree.projectId === 'global'
+                              ? 'lucide:folder'
+                              : sandbox.kind === 'folder'
+                                ? 'lucide:folder'
+                                : sandbox.kind === 'global'
+                                  ? 'lucide:globe-2'
+                                  : sandbox.kind === 'branch'
+                                    ? 'lucide:git-branch'
+                                    : 'lucide:folder-git-2'
                           "
                           class="tree-header-icon"
                         />
@@ -233,6 +250,7 @@
                       </div>
                       <div class="tree-actions">
                         <button
+                          v-if="sandbox.kind !== 'global' && (sandbox.kind !== 'sandbox' || sandbox.sessions.length > 0)"
                           type="button"
                           class="tree-action-button new-session"
                           :title="$t('topPanel.newSession')"
@@ -243,7 +261,7 @@
                           <Icon icon="lucide:message-circle-plus" :width="16" :height="16" />
                         </button>
                         <button
-                          v-if="worktree.projectId !== 'global'"
+                          v-if="!codexMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch'"
                           type="button"
                           class="tree-action-button fork"
                           :title="$t('topPanel.createSandbox')"
@@ -252,7 +270,7 @@
                           <Icon icon="lucide:git-branch-plus" :width="16" :height="16" />
                         </button>
                         <button
-                          v-if="worktree.projectId !== 'global'"
+                          v-if="!codexMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch'"
                           type="button"
                           class="tree-action-button"
                           :class="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'pinned' : 'pin'"
@@ -272,7 +290,9 @@
                         <button
                           v-if="
                             canDeleteSandbox(sandbox.directory, worktree.directory) &&
-                            worktree.projectId !== 'global'
+                            worktree.projectId !== 'global' &&
+                            !codexMode &&
+                            sandbox.kind !== 'branch'
                           "
                           type="button"
                           class="tree-action-button danger"
@@ -326,24 +346,6 @@
                         </div>
                         <template #action>
                           <div class="tree-session-actions">
-                            <button
-                              v-if="codexMode && !session.archivedAt"
-                              type="button"
-                              class="tree-action-button session-fork"
-                              :title="$t('codexPanel.fork')"
-                              @click.stop.prevent="handleSessionFork(session.id)"
-                            >
-                              <Icon icon="lucide:git-fork" :width="16" :height="16" />
-                            </button>
-                            <button
-                              v-if="codexMode && !session.archivedAt"
-                              type="button"
-                              class="tree-action-button session-rollback"
-                              :title="$t('codexPanel.rollbackTurns')"
-                              @click.stop.prevent="handleSessionRollback(session.id)"
-                            >
-                              <Icon icon="lucide:rotate-ccw" :width="16" :height="16" />
-                            </button>
                             <button
                               v-if="codexMode && !session.archivedAt"
                               type="button"
@@ -700,21 +702,28 @@ export type TopPanelSession = {
 };
 
 export type TopPanelSandbox = {
+  key?: string;
   directory: string;
   branch?: string;
+  kind?: 'global' | 'sandbox' | 'folder' | 'branch';
   sessions: TopPanelSession[];
+  latestUpdated?: number;
+  oldestCreated?: number;
   pinnedAt?: number;
   isPinned?: boolean;
   isImplicitlyPinned?: boolean;
 };
 
 export type TopPanelWorktree = {
+  key?: string;
   directory: string;
   label: string;
   name?: string;
   projectId?: string;
   projectColor?: string;
+  kind?: 'global' | 'sandbox';
   sandboxes: TopPanelSandbox[];
+  latestUpdated?: number;
   pinnedAt?: number;
   isPinned?: boolean;
 };
@@ -792,8 +801,6 @@ const emit = defineEmits<{
   (event: 'unarchive-session', value: string): void;
   (event: 'rename-session', value: string): void;
   (event: 'hide-session', value: string): void;
-  (event: 'fork-session', value: string): void;
-  (event: 'rollback-session', value: string): void;
   (event: 'compact-session', value: string): void;
   (event: 'unsubscribe-session', value: string): void;
   (event: 'pin-session', value: string): void;
@@ -1149,6 +1156,24 @@ function handleUnpinProject(projectId: string | undefined) {
   emit('unpin-project', projectId);
 }
 
+function handlePinWorktree(worktree: TopPanelWorktree) {
+  if (!worktree.projectId) return;
+  if (props.codexMode && worktree.kind === 'sandbox') {
+    handlePinSandbox(worktree.projectId, worktree.directory);
+    return;
+  }
+  handlePinProject(worktree.projectId);
+}
+
+function handleUnpinWorktree(worktree: TopPanelWorktree) {
+  if (!worktree.projectId) return;
+  if (props.codexMode && worktree.kind === 'sandbox') {
+    handleUnpinSandbox(worktree.projectId, worktree.directory);
+    return;
+  }
+  handleUnpinProject(worktree.projectId);
+}
+
 function handlePinSandbox(projectId: string | undefined, directory: string) {
   if (!projectId) return;
   emit('pin-sandbox', { projectId, directory });
@@ -1200,14 +1225,6 @@ function handleSessionRename(sessionId: string) {
 
 function handleSessionHide(sessionId: string) {
   emit('hide-session', sessionId);
-}
-
-function handleSessionFork(sessionId: string) {
-  emit('fork-session', sessionId);
-}
-
-function handleSessionRollback(sessionId: string) {
-  emit('rollback-session', sessionId);
 }
 
 function handleSessionCompact(sessionId: string) {
@@ -1594,6 +1611,14 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   padding: 5px 8px 5px 24px;
 }
 
+.tree-sandbox.is-branch .tree-sandbox-header {
+  padding-left: 40px;
+}
+
+.tree-sandbox.is-branch .tree-header-icon {
+  color: var(--theme-status-git-attention, #93c5fd);
+}
+
 .tree-label {
   display: contents;
 }
@@ -1765,6 +1790,14 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   pointer-events: none;
 }
 
+.tree-sandbox.is-branch:not(:last-child)::before {
+  left: 31px;
+}
+
+.tree-sandbox.is-branch:not(:last-child)::after {
+  left: 31px;
+}
+
 .tree-sandbox:not(:last-child)::after {
   content: '';
   position: absolute;
@@ -1788,6 +1821,26 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   border-bottom-left-radius: 4px;
   pointer-events: none;
+}
+
+.tree-sandbox.is-branch:last-child::before {
+  left: 31px;
+}
+
+.tree-sandbox.is-branch .tree-session-row :deep(.ui-dropdown-item) {
+  padding-left: 56px;
+}
+
+.tree-sandbox.is-branch .tree-session-row:not(:last-child)::before {
+  left: 47px;
+}
+
+.tree-sandbox.is-branch .tree-session-row:not(:last-child)::after {
+  left: 47px;
+}
+
+.tree-sandbox.is-branch .tree-session-row:last-child::before {
+  left: 47px;
 }
 
 /* --- Sandbox → Session branches --- */

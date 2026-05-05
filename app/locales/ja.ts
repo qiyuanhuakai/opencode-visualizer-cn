@@ -322,9 +322,7 @@ const messages: LocaleMessages = {
       loginChatgpt: 'ChatGPT ログイン',
       loginDeviceCode: 'デバイスコード',
       logout: 'ログアウト',
-      rateLimits: 'レート制限',
-      rateLimitUsed: '使用済み',
-      refresh: 'Codex 状態を更新',
+      rateLimitUsed: '使用済み（5時間）',
     },
   },
   providerManager: {

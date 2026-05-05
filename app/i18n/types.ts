@@ -321,9 +321,7 @@ export interface LocaleMessages {
       loginChatgpt: string;
       loginDeviceCode: string;
       logout: string;
-      rateLimits: string;
       rateLimitUsed: string;
-      refresh: string;
     };
   };
   providerManager: {

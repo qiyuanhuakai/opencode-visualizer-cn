@@ -322,9 +322,7 @@ const messages: LocaleMessages = {
       loginChatgpt: 'ChatGPT ensaluto',
       loginDeviceCode: 'Aparata kodo',
       logout: 'Elsaluti',
-      rateLimits: 'Limoj',
-      rateLimitUsed: 'Uzita',
-      refresh: 'Refreŝigi Codex-staton',
+      rateLimitUsed: 'Uzita (5h)',
     },
   },
   providerManager: {

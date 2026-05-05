@@ -74,6 +74,7 @@ export function codexThreadToSession(
     title: threadTitle(thread),
     status: threadStatus(thread),
     directory: sessionDirectory,
+    gitInfo: thread.gitInfo ?? null,
     timeCreated: threadTimestamp(thread.createdAt),
     timeUpdated: threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt),
     timePinned: pinnedThreadIds.has(thread.id) ? 1 : undefined,

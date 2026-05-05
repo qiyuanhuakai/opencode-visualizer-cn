@@ -777,8 +777,12 @@ async function toggleHidden() {
 async function startThread() {
   showArchived.value = false;
   showHidden.value = false;
-  const cwd = api.sandboxPath.value || api.fsCwd.value || undefined;
+  const cwd = selectedSandboxCwd();
   await api.startThread(cwd);
+}
+
+function selectedSandboxCwd() {
+  return api.selectedSandboxCwd();
 }
 
 async function selectThread(threadId: string) {
@@ -858,7 +862,7 @@ async function sendPrompt() {
   const text = promptText.value.trim();
   if (!text) return;
   promptText.value = '';
-  await api.sendPrompt(text);
+  await api.sendPrompt(text, { cwd: selectedSandboxCwd() });
 }
 
 async function steerTurn() {
