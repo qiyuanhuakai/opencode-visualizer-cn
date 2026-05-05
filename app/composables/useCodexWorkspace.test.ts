@@ -22,6 +22,7 @@ describe('useCodexWorkspace', () => {
       id: 'thread-1',
       title: 'Implement bridge',
       directory: '/repo',
+      gitInfo: { root: '/repo', branch: 'main' },
       status: 'busy',
       timeUpdated: 20_000,
     });

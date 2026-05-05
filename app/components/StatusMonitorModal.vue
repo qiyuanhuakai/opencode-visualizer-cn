@@ -781,6 +781,13 @@ function formatPercent(value: number, total: number): string {
             {{ $t('statusMonitor.codex.notConnected') }}
           </div>
           <div v-else class="status-monitor-list">
+            <div v-if="codexApi.account.value && codexApi.accountRateLimits.value" class="token-usage-bar-row codex-usage-bar">
+              <div class="token-usage-track">
+                <div class="token-usage-fill" :style="{ width: `${codexRateLimitPercent}%` }" />
+              </div>
+              <span class="token-usage-percent">{{ codexRateLimitPercent }}%</span>
+            </div>
+
             <div class="status-monitor-row">
               <div class="status-monitor-row-main">
                 <span class="status-dot" :class="codexApi.account.value ? 'status-dot-success' : 'status-dot-warning'" />
@@ -849,26 +856,6 @@ function formatPercent(value: number, total: number): string {
                 {{ codexApi.loginError.value }}
               </div>
             </div>
-
-            <div class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.codex.rateLimits') }}</span>
-              <span class="token-value">
-                {{ codexApi.accountRateLimits.value ? `${codexRateLimitPercent}%` : '-' }}
-              </span>
-            </div>
-            <div v-if="codexApi.accountRateLimits.value" class="token-usage-bar-row">
-              <div class="token-usage-track">
-                <div class="token-usage-fill" :style="{ width: `${codexRateLimitPercent}%` }" />
-              </div>
-              <span class="token-usage-percent">{{ codexRateLimitPercent }}%</span>
-            </div>
-            <button
-              type="button"
-              class="status-monitor-action-button"
-              @click="refreshCodexStatus"
-            >
-              {{ $t('statusMonitor.codex.refresh') }}
-            </button>
           </div>
         </div>
 
@@ -1361,6 +1348,10 @@ function formatPercent(value: number, total: number): string {
   gap: 6px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12));
+}
+
+.codex-usage-bar {
+  border-bottom: none;
 }
 
 .token-usage-track {

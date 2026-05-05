@@ -229,6 +229,64 @@ describe('useCodexApi', () => {
     ]);
   });
 
+  it('sends prompts with the selected thread and cwd snapshot', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    api.homeDir.value = '/home/codex';
+
+    await api.connect();
+    await api.sendPrompt('Continue here.', { threadId: 'thr_existing', cwd: '~/repo' });
+
+    expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      threadId: 'thr_existing',
+      text: 'Continue here.',
+      cwd: '/home/codex/repo',
+    });
+  });
+
+  it('preserves a newly materialized active thread when list refresh is temporarily stale', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.sendPrompt = vi.fn().mockResolvedValue({
+      threadId: 'thr_materialized',
+      thread: { id: 'thr_materialized', preview: 'New prompt', cwd: '/repo' },
+      turn: { id: 'turn_2', status: 'inProgress' },
+    } satisfies CodexPromptResult);
+    mock.adapter.listThreads = vi.fn()
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_existing', preview: 'Existing thread', cwd: '/repo' }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_existing', preview: 'Existing thread', cwd: '/repo' }],
+        nextCursor: null,
+      });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('First prompt.', { threadId: 'thr_empty', cwd: '/repo' });
+    await api.refreshThreads();
+
+    expect(api.activeThreadId.value).toBe('thr_materialized');
+    expect(api.threads.value.map((thread) => thread.id)).toContain('thr_materialized');
+  });
+
+  it('falls back to the active thread cwd when creating a sandbox thread without a selected path', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({
+      data: [{ id: 'thr_existing', preview: 'Existing thread', cwd: '/repo/' }],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    api.sandboxPath.value = '   ';
+    api.fsCwd.value = '';
+    await api.createThreadInSandbox();
+
+    expect(api.selectedSandboxCwd()).toBe('/repo');
+    expect(mock.adapter.startThread).toHaveBeenLastCalledWith({ cwd: '/repo' });
+  });
+
   it('updates state from thread and agent delta notifications', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });

@@ -322,9 +322,7 @@ const messages: LocaleMessages = {
       loginChatgpt: 'ChatGPT 登录',
       loginDeviceCode: '设备码',
       logout: '退出登录',
-      rateLimits: '限额',
-      rateLimitUsed: '已用',
-      refresh: '刷新 Codex 状态',
+      rateLimitUsed: '已用（五小时）',
     },
   },
   providerManager: {

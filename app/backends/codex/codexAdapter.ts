@@ -1332,7 +1332,14 @@ export class CodexAdapter implements BackendAdapter {
     }
     if (input.threadId) {
       try {
-        await this.resumeThread({ threadId: input.threadId });
+        await this.resumeThread({
+          threadId: input.threadId,
+          model: input.thread?.model ?? input.model,
+          cwd: input.thread?.cwd ?? input.cwd,
+          approvalPolicy: input.thread?.approvalPolicy ?? input.approvalPolicy,
+          sandbox: input.thread?.sandbox,
+          personality: input.thread?.personality ?? input.personality,
+        });
       } catch (error) {
         if (!isUnmaterializedThreadError(error)) throw error;
         startedThread = await this.startThread({

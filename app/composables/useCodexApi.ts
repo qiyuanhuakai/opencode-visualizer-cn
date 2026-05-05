@@ -1325,8 +1325,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   async function refreshThreads(params: CodexThreadListParams = {}) {
     if (!adapter) return;
     const result = await adapter.listThreads({ limit: 50, sortKey: 'updated_at', ...params });
+    const existingThreads = threads.value;
     const normalizedThreads = result.data.map((thread) => {
-      const existing = threads.value.find((item) => item.id === thread.id);
+      const existing = existingThreads.find((item) => item.id === thread.id);
       return normalizeThreadCwd({
         ...existing,
         ...thread,
@@ -1336,6 +1337,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         updatedAt: thread.updatedAt ?? existing?.updatedAt,
       });
     });
+    const returnedThreadIds = new Set(normalizedThreads.map((thread) => thread.id));
+    const activeLocalThread = activeThreadId.value
+      ? existingThreads.find((thread) => thread.id === activeThreadId.value)
+      : undefined;
+    if (activeLocalThread && !returnedThreadIds.has(activeLocalThread.id)) {
+      normalizedThreads.push(normalizeThreadCwd(activeLocalThread));
+    }
     const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
     threads.value = enrichedThreads;
     if (!activeThreadId.value && enrichedThreads[0]) activeThreadId.value = enrichedThreads[0].id;
@@ -1635,6 +1643,31 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return trimmed;
   }
 
+  function normalizeCwd(input: string) {
+    const expanded = expandPath(input).trim();
+    if (expanded === '/') return expanded;
+    return expanded.replace(/\/+$/u, '');
+  }
+
+  function activeThreadCwd() {
+    const cwd = threads.value.find((thread) => thread.id === activeThreadId.value)?.cwd?.trim();
+    return cwd ? normalizeCwd(cwd) : undefined;
+  }
+
+  function firstUsableCwd(...candidates: Array<string | undefined>) {
+    for (const candidate of candidates) {
+      const trimmed = candidate?.trim();
+      if (!trimmed) continue;
+      const normalized = normalizeCwd(trimmed);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  }
+
+  function selectedSandboxCwd() {
+    return firstUsableCwd(sandboxPath.value, fsCwd.value, activeThreadCwd());
+  }
+
   function normalizeThreadCwd(thread: CodexThread): CodexThread {
     const cwd = thread.cwd?.trim();
     if (!cwd) return thread;
@@ -1680,7 +1713,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   async function createThreadInSandbox() {
-    const path = expandPath(sandboxPath.value || fsCwd.value || '');
+    const path = selectedSandboxCwd();
     if (!path) throw new Error('No sandbox path selected.');
     await startThread(path);
   }
@@ -1807,97 +1840,111 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     serverRequests.value = serverRequests.value.filter((request) => request.id !== id);
   }
 
-  async function sendPrompt(text: string, options: { model?: string; effort?: string } = {}) {
-     const prompt = text.trim();
-     if (!prompt) return null;
-     if (!adapter) throw new Error('Codex is not connected.');
+  function resolvePromptCwd(cwd: string | undefined, threadId: string) {
+    const explicitCwd = cwd?.trim();
+    if (explicitCwd) return normalizeCwd(explicitCwd);
+    const threadCwd = threads.value.find((thread) => thread.id === threadId)?.cwd?.trim();
+    return threadCwd ? normalizeCwd(threadCwd) : undefined;
+  }
 
-     pending.value = true;
-     errorMessage.value = '';
-     pushTranscript('user', prompt);
+  async function sendPrompt(
+    text: string,
+    options: { model?: string; effort?: string; cwd?: string; threadId?: string } = {},
+  ) {
+    const prompt = text.trim();
+    if (!prompt) return null;
+    if (!adapter) throw new Error('Codex is not connected.');
 
-     const pendingTurnId = activeTurn.value?.id || `pending-turn:${Date.now()}`;
-     const userMessageId = codexUserMessageId(pendingTurnId, 0);
-     const userPartId = `${userMessageId}:text`;
-     const sessionId = activeThreadId.value || 'codex-pending';
-     const now = Date.now();
-     const userInfo: MessageInfo = {
-       id: userMessageId,
-       sessionID: sessionId,
-       role: 'user',
-       time: { created: now },
-       agent: 'codex',
-       model: { providerID: 'codex', modelID: selectedModel.value || 'unknown' },
-     };
-     const userPart: TextPart = {
-       id: userPartId,
-       sessionID: sessionId,
-       messageID: userMessageId,
-       type: 'text',
-       text: prompt,
-       time: { start: now, end: now },
-     };
-      realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue([
-        ...realtimeHistoryQueue.value,
-        { info: userInfo, parts: [userPart] },
-      ]);
+    pending.value = true;
+    errorMessage.value = '';
+    pushTranscript('user', prompt);
 
-     try {
-       const model = (options.model ?? selectedModel.value) || undefined;
-       const input: CodexPromptInput = activeThreadId.value
-          ? { threadId: activeThreadId.value, text: prompt, model, effort: options.effort }
-          : { text: prompt, model, effort: options.effort };
-       const result = await adapter.sendPrompt(input);
-       activeThreadId.value = result.threadId;
-       if (result.thread) upsertThread(result.thread);
-       activeTurn.value = result.turn;
+    const pendingTurnId = activeTurn.value?.id || `pending-turn:${Date.now()}`;
+    const targetThreadId = options.threadId ?? activeThreadId.value;
+    const userMessageId = codexUserMessageId(pendingTurnId, 0);
+    const userPartId = `${userMessageId}:text`;
+    const sessionId = targetThreadId || 'codex-pending';
+    const now = Date.now();
+    const userInfo: MessageInfo = {
+      id: userMessageId,
+      sessionID: sessionId,
+      role: 'user',
+      time: { created: now },
+      agent: 'codex',
+      model: { providerID: 'codex', modelID: selectedModel.value || 'unknown' },
+    };
+    const userPart: TextPart = {
+      id: userPartId,
+      sessionID: sessionId,
+      messageID: userMessageId,
+      type: 'text',
+      text: prompt,
+      time: { start: now, end: now },
+    };
+    realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue([
+      ...realtimeHistoryQueue.value,
+      { info: userInfo, parts: [userPart] },
+    ]);
 
-       const finalizedTurnId = result.turn.id || pendingTurnId;
-       const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, 0);
-        if (realtimeHistoryQueue.value.length > 0) {
-          const lastEntry = realtimeHistoryQueue.value[realtimeHistoryQueue.value.length - 1];
-          if (lastEntry?.info.id === userMessageId) {
-            const nextQueue = [...realtimeHistoryQueue.value];
-            nextQueue[nextQueue.length - 1] = {
-             info: { ...lastEntry.info, id: finalizedUserMessageId, sessionID: result.threadId },
-             parts: lastEntry.parts.map((part) => ({
-               ...part,
-               id: `${finalizedUserMessageId}:text`,
-               sessionID: result.threadId,
-               messageID: finalizedUserMessageId,
-             })),
-            };
-            realtimeHistoryQueue.value = nextQueue;
-            realtimeMessageAliases.value = {
-              ...realtimeMessageAliases.value,
-              [userMessageId]: finalizedUserMessageId,
-            };
-          }
+    try {
+      const model = (options.model ?? selectedModel.value) || undefined;
+      const cwd = resolvePromptCwd(options.cwd, targetThreadId);
+      const input: CodexPromptInput = { text: prompt };
+      if (targetThreadId) input.threadId = targetThreadId;
+      if (model) input.model = model;
+      if (options.effort) input.effort = options.effort;
+      if (cwd) input.cwd = cwd;
+      const result = await adapter.sendPrompt(input);
+      activeThreadId.value = result.threadId;
+      if (result.thread) upsertThread(result.thread);
+      activeTurn.value = result.turn;
+
+      const finalizedTurnId = result.turn.id || pendingTurnId;
+      const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, 0);
+      if (realtimeHistoryQueue.value.length > 0) {
+        const lastEntry = realtimeHistoryQueue.value[realtimeHistoryQueue.value.length - 1];
+        if (lastEntry?.info.id === userMessageId) {
+          const nextQueue = [...realtimeHistoryQueue.value];
+          nextQueue[nextQueue.length - 1] = {
+            info: { ...lastEntry.info, id: finalizedUserMessageId, sessionID: result.threadId },
+            parts: lastEntry.parts.map((part) => ({
+              ...part,
+              id: `${finalizedUserMessageId}:text`,
+              sessionID: result.threadId,
+              messageID: finalizedUserMessageId,
+            })),
+          };
+          realtimeHistoryQueue.value = nextQueue;
+          realtimeMessageAliases.value = {
+            ...realtimeMessageAliases.value,
+            [userMessageId]: finalizedUserMessageId,
+          };
         }
+      }
 
-       const assistantMessageId = codexAssistantMessageId(finalizedTurnId);
-       const assistantPartId = codexAssistantTextPartId(finalizedTurnId);
-       realtimeStreamingPart.value = {
-         info: createCodexAssistantInfo(result.threadId, assistantMessageId, Date.now(), finalizedUserMessageId),
-         part: {
-           id: assistantPartId,
-           sessionID: result.threadId,
-           messageID: assistantMessageId,
-           type: 'text',
-           text: '',
-           time: { start: Date.now() },
-         },
-         updatedAt: Date.now(),
-       };
+      const assistantMessageId = codexAssistantMessageId(finalizedTurnId);
+      const assistantPartId = codexAssistantTextPartId(finalizedTurnId);
+      realtimeStreamingPart.value = {
+        info: createCodexAssistantInfo(result.threadId, assistantMessageId, Date.now(), finalizedUserMessageId),
+        part: {
+          id: assistantPartId,
+          sessionID: result.threadId,
+          messageID: assistantMessageId,
+          type: 'text',
+          text: '',
+          time: { start: Date.now() },
+        },
+        updatedAt: Date.now(),
+      };
 
-       return result;
-     } catch (error) {
-       errorMessage.value = error instanceof Error ? error.message : String(error);
-       throw error;
-     } finally {
-       pending.value = false;
-     }
-   }
+      return result;
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      pending.value = false;
+    }
+  }
 
    // Review functions
    async function reviewThread(target: CodexReviewStartParams['target'], delivery: 'inline' | 'detached' = 'inline') {
@@ -2420,6 +2467,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       previewFileContent,
       previewFilePath,
       sandboxPath,
+      selectedSandboxCwd,
       homeDir,
       fsBreadcrumbs,
       fsSuggestions,

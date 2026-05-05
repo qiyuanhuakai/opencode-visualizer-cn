@@ -23,6 +23,12 @@ export type SessionState = {
   parentID?: string;
   status?: 'busy' | 'idle' | 'retry';
   directory?: string;
+  gitInfo?: {
+    branch?: string;
+    sha?: string;
+    originUrl?: string;
+    root?: string;
+  } | null;
   timeCreated?: number;
   timeUpdated?: number;
   timeArchived?: number;

@@ -7,12 +7,18 @@
 
 ### 新后端支持(alpha)
 
-- [ ] 将codex app-server逐步接入vis前端，同时保留codex panel用于最小化使用/调试/与opencode并行使用。
-- [ ] 但是其仍然不能实际投入使用，因为存在一个致命bug始终无法解决
+- [x] 将codex app-server逐步接入vis前端，同时保留codex panel用于最小化使用/调试/与opencode并行使用。
+	- [x] 文件树和文件管理：文件查看，文件预览，代码高亮，git diff，文件级别diff，git分支查看，文件搜索
+	- [x] 远程终端和pty支持
+	- [x] 会话树和会话管理：打开项目，创建新会话，发送消息，pin，归档，隐藏会话
+	- [x] 输出面板与输出管理：显示模型输出内容，复制，撤销消息，创建对话分支
+	- [x] 提供商与模型管理：切换模型和思考强度，账号登陆与退出登录
+	- [x] 状态监控：codex面板
+- [x] 但是其仍然不能实际投入使用，因为存在许多问题：详见[RoadMap.md](./RoadMap.md)
 
 ### 状态监控
 
-- [x] 添加了"codex"面板，允许在已连接codex app-server时查询codex已使用额度（5小时）（beta）
+- [x] 添加了"codex"面板，允许在已连接codex app-server时查询codex已使用额度（5小时）
 - [x] 引入了预加载，在连接opencode服务器时即进行加载
 
 ### Bug 修复

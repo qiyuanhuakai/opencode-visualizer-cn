@@ -25,9 +25,7 @@
            @unarchive-session="unarchiveSession"
            @rename-session="renameSession"
            @hide-session="hideCodexSession"
-           @fork-session="forkCodexSession"
-           @rollback-session="rollbackCodexSession"
-           @compact-session="compactCodexSession"
+            @compact-session="compactCodexSession"
            @unsubscribe-session="unsubscribeCodexSession"
            @pin-session="pinSession"
           @unpin-session="unpinSession"
@@ -583,6 +581,7 @@ import {
   writeDeletedSandboxStore,
   type DeletedSandboxStore,
 } from './utils/deletedSandboxes';
+import { buildCodexTopPanelTreeData } from './utils/codexTopPanelTree';
 
 const { t } = useI18n();
 
@@ -1725,6 +1724,8 @@ function computeProjectsHash(
         if (session) {
           hash += (session.timeUpdated ?? session.timeCreated ?? 0) & 0xffff;
           hash += (session.timePinned ?? 0) & 0xffff;
+          hash = mixStringIntoHash(hash, session.gitInfo?.root ?? '');
+          hash = mixStringIntoHash(hash, session.gitInfo?.branch ?? '');
         }
       }
     }
@@ -1774,7 +1775,7 @@ const sessionLocationById = computed(() => {
 });
 
 const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
-  const currentHash = treeDataHash.value;
+  const currentHash = `${activeBackendKind.value}:${treeDataHash.value}`;
   const now = Date.now();
   
   if (
@@ -1783,6 +1784,17 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
     now - treeDataCache.value.timestamp < TREE_DATA_CACHE_TTL_MS
   ) {
     return treeDataCache.value.data;
+  }
+
+  if (activeBackendKind.value === 'codex') {
+    const project = serverState.projects[CODEX_PROJECT_ID];
+    const data = project ? buildCodexTopPanelTreeData(project, {
+      pinnedStore: localPinnedSessionStore.value,
+      homePath: homePath.value,
+      resolveProjectColor: resolveProjectColorHex,
+    }) : [];
+    treeDataCache.value = { data, hash: currentHash, timestamp: now };
+    return data;
   }
   
   const entries = Object.values(serverState.projects)
@@ -6193,6 +6205,7 @@ async function sendMessage() {
   const slash = hasText ? parseSlashCommand(text) : null;
   const commandMatch = slash ? findCommandByName(slash.name) : null;
   if (activeBackendKind.value === 'codex') {
+    const codexDirectory = normalizeProjectDirectoryForActiveBackend(activeDirectory.value.trim());
     if (hasText) {
       recentUserInputs.push({ text, time: Date.now() });
       while (recentUserInputs.length > 20) recentUserInputs.shift();
@@ -6234,6 +6247,8 @@ async function sendMessage() {
         : undefined;
       if (selectedCodexModel) codexApi.selectModel(selectedCodexModel);
       await codexApi.sendPrompt(prompt, {
+        threadId: sessionId,
+        cwd: codexDirectory,
         model: selectedCodexModel,
         effort: selectedThinking.value,
       });
