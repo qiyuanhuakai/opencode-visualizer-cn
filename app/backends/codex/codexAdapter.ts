@@ -35,6 +35,30 @@ export type CodexInitializeResult = {
   platformOs?: string;
 };
 
+function normalizeGitPath(value: string) {
+  return value.trim().replace(/\\/g, '/').replace(/\/+$/u, '');
+}
+
+function commonRootFromGitCommonDir(commonGitDir: string, worktreeRoot: string) {
+  const gitDir = normalizeGitPath(commonGitDir);
+  const root = normalizeGitPath(worktreeRoot);
+  if (!gitDir) return '';
+  if (gitDir === '.git') return root;
+  if (gitDir.endsWith('/.git')) return gitDir.slice(0, -5) || '/';
+  const marker = '/.git/worktrees/';
+  const worktreeIndex = gitDir.indexOf(marker);
+  if (worktreeIndex > 0) return gitDir.slice(0, worktreeIndex) || '/';
+  return '';
+}
+
+export type CodexGitInfo = {
+  branch?: string;
+  sha?: string;
+  root?: string;
+  commonRoot?: string;
+  worktreeRoot?: string;
+} | null;
+
 export type CodexThread = {
   id: string;
   name?: string | null;
@@ -45,7 +69,7 @@ export type CodexThread = {
   updatedAt?: number;
   status?: unknown;
   cwd?: string;
-  gitInfo?: { branch?: string; sha?: string; originUrl?: string; root?: string } | null;
+  gitInfo?: CodexGitInfo;
 };
 
 export type CodexThreadListParams = {
@@ -603,7 +627,7 @@ export type CodexTurnSteerResult = {
 // thread/* types
 export type CodexThreadMetadataUpdateParams = {
   threadId: string;
-  gitInfo?: { branch?: string; sha?: string; originUrl?: string; root?: string } | null;
+  gitInfo?: CodexGitInfo;
 };
 
 export type CodexThreadMetadataUpdateResult = {
@@ -1811,6 +1835,8 @@ export class CodexAdapter implements BackendAdapter {
   async getVcsInfo(directory: string) {
     let root = '';
     let branch = '';
+    let commonRoot = '';
+    let sha = '';
     try {
       const rootResult = await this.commandExec({
         command: ['git', 'rev-parse', '--show-toplevel'],
@@ -1822,6 +1848,16 @@ export class CodexAdapter implements BackendAdapter {
       return { root: '', branch: '' };
     }
     try {
+      const commonDirResult = await this.commandExec({
+        command: ['git', 'rev-parse', '--git-common-dir'],
+        cwd: directory,
+        timeoutMs: 10_000,
+      });
+      commonRoot = commonRootFromGitCommonDir(commonDirResult.stdout, root);
+    } catch {
+      commonRoot = '';
+    }
+    try {
       const branchResult = await this.commandExec({
         command: ['git', 'branch', '--show-current'],
         cwd: directory,
@@ -1831,7 +1867,23 @@ export class CodexAdapter implements BackendAdapter {
     } catch {
       branch = '';
     }
-    return { root, branch };
+    try {
+      const shaResult = await this.commandExec({
+        command: ['git', 'rev-parse', '--short', 'HEAD'],
+        cwd: directory,
+        timeoutMs: 10_000,
+      });
+      sha = shaResult.stdout.trim();
+    } catch {
+      sha = '';
+    }
+    return {
+      root,
+      branch,
+      ...(commonRoot ? { commonRoot } : {}),
+      ...(commonRoot && commonRoot !== root ? { worktreeRoot: root } : {}),
+      ...(sha ? { sha } : {}),
+    };
   }
   private async bridgeJson(endpoint: `/${string}`, init: RequestInit = {}) {
     const response = await fetch(codexBridgeHttpUrl(this.bridgeUrl, endpoint), init);

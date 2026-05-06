@@ -196,6 +196,7 @@ const messages: LocaleMessages = {
       archive: 'Arkivi',
       unarchive: 'Malarkivi',
       delete: 'Forigi',
+      archiveCodex: 'Arkivi en Codex',
     },
     empty: {
       noMatchingSessions: 'Neniu kongrua seanco',
@@ -219,6 +220,7 @@ const messages: LocaleMessages = {
       pin: 'Alpingli seancon al flanka panelo',
       unarchive: 'Malarkivi seancon',
       archive: 'Arkivi seancon (kun Shift-klavo por forigi definitive)',
+      archiveCodex: 'Arkivi seancon en Codex',
       deletePermanently: 'Forigi seancon definitive',
       rename: 'Renomi seancon',
       select: 'Elekti seancon',
@@ -228,6 +230,8 @@ const messages: LocaleMessages = {
       deleteWorktree: 'Forigi worktree "{directory}"?',
       deleteSession: 'Forigi seancon?',
       deleteSessions: 'Forigi {count} elektita(j)n seanco(j)n?',
+      archiveCodexSession: 'Arkivi ĉi tiun Codex-seancon distance?',
+      archiveCodexSessions: 'Arkivi {count} elektita(j)n Codex-seanco(j)n distance?',
     },
     meta: {
       created: 'Kreita',

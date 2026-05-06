@@ -94,6 +94,53 @@ describe('useCodexApi', () => {
     expect(api.activeThreadId.value).toBe('thr_existing');
   });
 
+  it('lists archived threads without replacing the active thread list', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn()
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_active', preview: 'Active thread' }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_archived', preview: 'Archived thread' }],
+        nextCursor: null,
+      });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    const archived = await api.listThreads({ archived: true });
+
+    expect(archived.map((thread) => thread.id)).toEqual(['thr_archived']);
+    expect(api.threads.value.map((thread) => thread.id)).toEqual(['thr_active']);
+    expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(2, {
+      limit: 50,
+      sortKey: 'updated_at',
+      archived: true,
+    });
+  });
+
+  it('strips raw git remote URLs from loaded thread metadata', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({
+      data: [{
+        id: 'thr_repo',
+        preview: 'Repo',
+        cwd: '/repo',
+        gitInfo: {
+          root: '/repo',
+          branch: 'main',
+          originUrl: 'https://token@example.com/org/repo.git',
+        },
+      }],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+
+    expect(api.threads.value[0]?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+  });
+
   it('expands tilde cwd values loaded from Codex threads', async () => {
     const mock = createAdapterMock();
     mock.adapter.listThreads = vi.fn().mockResolvedValue({

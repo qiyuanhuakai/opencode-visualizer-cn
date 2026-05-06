@@ -1322,11 +1322,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (resetStatus) status.value = 'idle';
   }
 
-  async function refreshThreads(params: CodexThreadListParams = {}) {
+  async function fetchThreadList(params: CodexThreadListParams = {}) {
     if (!adapter) return;
     const result = await adapter.listThreads({ limit: 50, sortKey: 'updated_at', ...params });
     const existingThreads = threads.value;
-    const normalizedThreads = result.data.map((thread) => {
+    return result.data.map((thread) => {
       const existing = existingThreads.find((item) => item.id === thread.id);
       return normalizeThreadCwd({
         ...existing,
@@ -1337,6 +1337,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         updatedAt: thread.updatedAt ?? existing?.updatedAt,
       });
     });
+  }
+
+  async function listThreads(params: CodexThreadListParams = {}) {
+    const normalizedThreads = await fetchThreadList(params);
+    if (!normalizedThreads) return [];
+    return Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
+  }
+
+  async function refreshThreads(params: CodexThreadListParams = {}) {
+    const normalizedThreads = await fetchThreadList(params);
+    if (!normalizedThreads) return;
+    const existingThreads = threads.value;
     const returnedThreadIds = new Set(normalizedThreads.map((thread) => thread.id));
     const activeLocalThread = activeThreadId.value
       ? existingThreads.find((thread) => thread.id === activeThreadId.value)
@@ -1377,14 +1389,22 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const root = typeof record.root === 'string' ? expandPath(record.root).trim() : '';
     const branch = typeof record.branch === 'string' ? record.branch.trim() : '';
     const sha = typeof record.sha === 'string' ? record.sha.trim() : '';
-    const originUrl = typeof record.originUrl === 'string' ? record.originUrl.trim() : '';
+    const commonRoot = typeof record.commonRoot === 'string' ? expandPath(record.commonRoot).trim() : '';
+    const worktreeRoot = typeof record.worktreeRoot === 'string' ? expandPath(record.worktreeRoot).trim() : '';
     if (!root) return null;
     return {
       root,
       ...(branch ? { branch } : {}),
       ...(sha ? { sha } : {}),
-      ...(originUrl ? { originUrl } : {}),
+      ...(commonRoot ? { commonRoot } : {}),
+      ...(worktreeRoot ? { worktreeRoot } : {}),
     };
+  }
+
+  function sanitizeThreadGitInfo(gitInfo: CodexThread['gitInfo']): CodexThread['gitInfo'] {
+    if (!gitInfo) return gitInfo;
+    const { originUrl: _originUrl, ...safeGitInfo } = gitInfo as NonNullable<CodexThread['gitInfo']> & { originUrl?: unknown };
+    return safeGitInfo;
   }
 
   async function resolveThreadGitInfo(directory: string): Promise<CodexThread['gitInfo'] | null> {
@@ -1411,11 +1431,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function enrichThreadWithGitInfo(thread: CodexThread): Promise<CodexThread> {
     const normalizedThread = normalizeThreadCwd(thread);
-    if (normalizedThread.gitInfo?.root) return normalizedThread;
     const cwd = normalizedThread.cwd?.trim();
     if (!cwd) return normalizedThread;
+    if (
+      normalizedThread.gitInfo?.root &&
+      normalizedThread.gitInfo.commonRoot
+    ) {
+      return normalizedThread;
+    }
     const gitInfo = await resolveThreadGitInfo(cwd);
-    return gitInfo?.root ? { ...normalizedThread, gitInfo } : normalizedThread;
+    return gitInfo?.root
+      ? { ...normalizedThread, gitInfo: { ...gitInfo, ...normalizedThread.gitInfo } }
+      : normalizedThread;
   }
 
   async function upsertThreadWithGitInfo(thread: CodexThread) {
@@ -1670,9 +1697,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function normalizeThreadCwd(thread: CodexThread): CodexThread {
     const cwd = thread.cwd?.trim();
-    if (!cwd) return thread;
+    const gitInfo = sanitizeThreadGitInfo(thread.gitInfo);
+    const baseThread = gitInfo === thread.gitInfo ? thread : { ...thread, gitInfo };
+    if (!cwd) return baseThread;
     const expanded = expandPath(cwd);
-    return expanded === cwd ? thread : { ...thread, cwd: expanded };
+    return expanded === cwd ? baseThread : { ...baseThread, cwd: expanded };
   }
 
   async function readDirectory(path: string) {
@@ -2342,7 +2371,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       });
     }
 
-    async function updateThreadMetadata(threadId: string, gitInfo: { branch?: string; sha?: string; originUrl?: string; root?: string } | null) {
+  async function updateThreadMetadata(threadId: string, gitInfo: { branch?: string; sha?: string; root?: string; commonRoot?: string; worktreeRoot?: string } | null) {
       if (!adapter) throw new Error('Codex is not connected.');
       const result = await adapter.updateThreadMetadata({ threadId, gitInfo });
       upsertThread(result.thread);
@@ -2476,6 +2505,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       disconnect,
       refreshHomeDir,
       refreshThreads,
+      listThreads,
       preloadPanelData,
       selectThread,
      startThread,

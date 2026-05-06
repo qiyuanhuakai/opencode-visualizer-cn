@@ -196,6 +196,7 @@ const messages: LocaleMessages = {
       archive: '封存',
       unarchive: '取消封存',
       delete: '刪除',
+      archiveCodex: '在 Codex 中封存',
     },
     empty: {
       noMatchingSessions: '無符合的工作階段',
@@ -219,6 +220,7 @@ const messages: LocaleMessages = {
       pin: '置頂工作階段到側邊欄',
       unarchive: '取消封存工作階段',
       archive: '封存工作階段 (按住 Shift 鍵可永久刪除)',
+      archiveCodex: '在 Codex 中封存工作階段',
       deletePermanently: '永久刪除工作階段',
       rename: '重新命名工作階段',
       select: '選擇工作階段',
@@ -228,6 +230,8 @@ const messages: LocaleMessages = {
       deleteWorktree: '刪除工作區 "{directory}"?',
       deleteSession: '刪除工作階段?',
       deleteSessions: '刪除 {count} 個選中的工作階段?',
+      archiveCodexSession: '遠端封存這個 Codex 工作階段?',
+      archiveCodexSessions: '遠端封存 {count} 個選中的 Codex 工作階段?',
     },
     meta: {
       created: '建立時間',

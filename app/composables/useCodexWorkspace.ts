@@ -16,6 +16,7 @@ export type CodexWorkspaceApi = {
   canonicalHistory: Ref<CodexCanonicalHistoryEntry[]>;
   homeDir?: Ref<string>;
   pinnedThreadIds?: Ref<Set<string>>;
+  hiddenThreadIds?: Ref<Set<string>>;
 };
 
 function threadTimestamp(value: unknown) {
@@ -67,6 +68,7 @@ export function codexThreadToSession(
   thread: CodexThread,
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedThreadIds: Set<string> = new Set(),
+  hiddenThreadIds: Set<string> = new Set(),
   sessionDirectory = threadSandboxDirectory(thread, fallbackDirectory),
 ): SessionState {
   return {
@@ -78,6 +80,9 @@ export function codexThreadToSession(
     timeCreated: threadTimestamp(thread.createdAt),
     timeUpdated: threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt),
     timePinned: pinnedThreadIds.has(thread.id) ? 1 : undefined,
+    timeArchived: hiddenThreadIds.has(thread.id)
+      ? (threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt) ?? 1)
+      : undefined,
   };
 }
 
@@ -85,6 +90,7 @@ export function createCodexProjectState(
   threads: CodexThread[],
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedThreadIds: Set<string> = new Set(),
+  hiddenThreadIds: Set<string> = new Set(),
 ): ProjectState {
   const primaryDirectory = CODEX_DEFAULT_DIRECTORY;
   const sandboxes: ProjectState['sandboxes'] = {};
@@ -98,7 +104,7 @@ export function createCodexProjectState(
       sessions: {},
     };
     sandbox.rootSessions.push(thread.id);
-    sandbox.sessions[thread.id] = codexThreadToSession(thread, fallbackDirectory, pinnedThreadIds, directory);
+    sandbox.sessions[thread.id] = codexThreadToSession(thread, fallbackDirectory, pinnedThreadIds, hiddenThreadIds, directory);
     sandboxes[directory] = sandbox;
   }
 
@@ -125,6 +131,7 @@ export function useCodexWorkspace(api: CodexWorkspaceApi) {
     api.visibleThreads.value,
     fallbackDirectory.value,
     api.pinnedThreadIds?.value,
+    api.hiddenThreadIds?.value,
   ));
   const projects = computed<Record<string, ProjectState>>(() => ({
     [CODEX_PROJECT_ID]: project.value,

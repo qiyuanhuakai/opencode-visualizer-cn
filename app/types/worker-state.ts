@@ -26,8 +26,9 @@ export type SessionState = {
   gitInfo?: {
     branch?: string;
     sha?: string;
-    originUrl?: string;
     root?: string;
+    commonRoot?: string;
+    worktreeRoot?: string;
   } | null;
   timeCreated?: number;
   timeUpdated?: number;

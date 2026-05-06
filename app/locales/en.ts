@@ -196,6 +196,7 @@ const messages: LocaleMessages = {
       archive: 'Archive',
       unarchive: 'Unarchive',
       delete: 'Delete',
+      archiveCodex: 'Archive in Codex',
     },
     empty: {
       noMatchingSessions: 'No matching sessions',
@@ -219,6 +220,7 @@ const messages: LocaleMessages = {
       pin: 'Pin session to side panel',
       unarchive: 'Unarchive session',
       archive: 'Archive session (with Shift key to delete permanently)',
+      archiveCodex: 'Archive session in Codex',
       deletePermanently: 'Delete session permanently',
       rename: 'Rename session',
       select: 'Select session',
@@ -228,6 +230,8 @@ const messages: LocaleMessages = {
       deleteWorktree: 'Delete worktree "{directory}"?',
       deleteSession: 'Delete session?',
       deleteSessions: 'Delete {count} selected session(s)?',
+      archiveCodexSession: 'Archive this Codex session remotely?',
+      archiveCodexSessions: 'Archive {count} selected Codex session(s) remotely?',
     },
     meta: {
       created: 'Created',

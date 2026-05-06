@@ -196,6 +196,7 @@ const messages: LocaleMessages = {
       archive: 'アーカイブ',
       unarchive: 'アーカイブ解除',
       delete: '削除',
+      archiveCodex: 'Codexでアーカイブ',
     },
     empty: {
       noMatchingSessions: '一致するセッションがありません',
@@ -219,6 +220,7 @@ const messages: LocaleMessages = {
       pin: 'セッションをサイドパネルにピン留め',
       unarchive: 'セッションをアーカイブ解除',
       archive: 'セッションをアーカイブ（Shiftキーで完全削除）',
+      archiveCodex: 'Codexでセッションをアーカイブ',
       deletePermanently: 'セッションを完全削除',
       rename: 'セッション名を変更',
       select: 'セッションを選択',
@@ -228,6 +230,8 @@ const messages: LocaleMessages = {
       deleteWorktree: 'ワークツリー「{directory}」を削除しますか？',
       deleteSession: 'セッションを削除しますか？',
       deleteSessions: '選択した{count}件のセッションを削除しますか？',
+      archiveCodexSession: 'このCodexセッションをリモートでアーカイブしますか？',
+      archiveCodexSessions: '選択した{count}件のCodexセッションをリモートでアーカイブしますか？',
     },
     meta: {
       created: '作成日',

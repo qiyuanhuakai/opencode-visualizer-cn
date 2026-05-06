@@ -196,6 +196,7 @@ const messages: LocaleMessages = {
       archive: '归档',
       unarchive: '取消归档',
       delete: '删除',
+      archiveCodex: '在 Codex 中归档',
     },
     empty: {
       noMatchingSessions: '无匹配的会话',
@@ -219,6 +220,7 @@ const messages: LocaleMessages = {
       pin: '置顶会话到侧边栏',
       unarchive: '取消归档会话',
       archive: '归档会话 (按住 Shift 键可永久删除)',
+      archiveCodex: '在 Codex 中归档会话',
       deletePermanently: '永久删除会话',
       rename: '重命名会话',
       select: '选择会话',
@@ -228,6 +230,8 @@ const messages: LocaleMessages = {
       deleteWorktree: '删除工作区 "{directory}"?',
       deleteSession: '删除会话?',
       deleteSessions: '删除 {count} 个选中的会话?',
+      archiveCodexSession: '远程归档这个 Codex 会话?',
+      archiveCodexSessions: '远程归档 {count} 个选中的 Codex 会话?',
     },
     meta: {
       created: '创建时间',

@@ -1,4 +1,5 @@
 import type { ProjectState, SandboxState } from '../types/worker-state';
+import type { SessionTreeData, SessionTreeProject, SessionTreeSandbox } from '../types/session-tree';
 import {
   normalizePinnedAt,
   pinnedSessionStoreKey,
@@ -35,6 +36,7 @@ export type CodexTopPanelSession = {
 export type CodexTopPanelSandbox = {
   key?: string;
   directory: string;
+  pinDirectory?: string;
   branch?: string;
   kind?: 'global' | 'sandbox' | 'folder' | 'branch';
   sessions: CodexTopPanelSession[];
@@ -64,6 +66,40 @@ type TopPanelSandboxEntry = CodexTopPanelSandbox & {
   oldestCreated: number;
 };
 
+type BranchEntry = {
+  directory: string;
+  pinDirectory: string;
+  pinnedAt: number;
+  isPinned: boolean;
+  isImplicitlyPinned: boolean;
+  sessions: CodexTopPanelSession[];
+};
+
+type RepoEntry = {
+  root: string;
+  name: string;
+  pinnedAt: number;
+  isPinned: boolean;
+  isImplicitlyPinned: boolean;
+  branches: Map<string, BranchEntry>;
+};
+
+export function codexSessionRepoRoot(
+  session: Pick<SandboxState['sessions'][string], 'gitInfo'>,
+  homePath: string,
+) {
+  const root = session.gitInfo?.commonRoot || session.gitInfo?.root || '';
+  return root ? normalizeCodexMetadataPath(root, homePath) : '';
+}
+
+function codexSessionWorktreeRoot(
+  session: Pick<SandboxState['sessions'][string], 'gitInfo' | 'directory'>,
+  homePath: string,
+) {
+  const root = session.gitInfo?.worktreeRoot || session.gitInfo?.root || session.directory || '';
+  return root ? normalizeCodexMetadataPath(root, homePath) : '';
+}
+
 function basenameForDisplay(path: string, fallback: string) {
   return path.replace(/\/+$/u, '').split('/').filter(Boolean).at(-1) || fallback;
 }
@@ -77,6 +113,10 @@ function normalizeCodexMetadataPath(path: string, homePath: string) {
     return normalizeDirectory(`${(home || CODEX_TOP_PANEL_DEFAULT_DIRECTORY).replace(/\/+$/u, '')}/${trimmed.slice(2).replace(/^\/+/, '')}`);
   }
   return normalizeDirectory(trimmed);
+}
+
+function codexBranchPinDirectory(repoRoot: string, branchName: string) {
+  return `codex-branch:${repoRoot}:${branchName}`;
 }
 
 function buildTopPanelSession(
@@ -118,6 +158,7 @@ function sortTopPanelSessions(sessions: CodexTopPanelSession[]) {
 function createTopPanelSandboxEntry(params: {
   key?: string;
   directory: string;
+  pinDirectory?: string;
   branch?: string;
   kind?: 'global' | 'sandbox' | 'folder' | 'branch';
   sessions: CodexTopPanelSession[];
@@ -151,22 +192,16 @@ export function buildCodexTopPanelTreeData(
   const globalSandboxName = options.globalSandboxName ?? CODEX_TOP_PANEL_GLOBAL_SANDBOX_NAME;
   const projectPinnedAt = normalizePinnedAt(pinnedStore[projectPinKey(project.id)]);
   const globalFolders = new Map<string, CodexTopPanelSession[]>();
-  const repos = new Map<string, {
-    root: string;
-    name: string;
-    pinnedAt: number;
-    isPinned: boolean;
-    isImplicitlyPinned: boolean;
-    branches: Map<string, CodexTopPanelSession[]>;
-  }>();
+  const repos = new Map<string, RepoEntry>();
 
   for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
     const sandboxRootSessions = sandbox.rootSessions
       .map((sessionId) => sandbox.sessions[sessionId])
       .filter((session): session is NonNullable<typeof session> => Boolean(session));
     for (const session of sandboxRootSessions) {
-      const gitRoot = session.gitInfo?.root ? normalizeCodexMetadataPath(session.gitInfo.root, homePath) : '';
-      if (!gitRoot) {
+      const repoRoot = codexSessionRepoRoot(session, homePath);
+      const worktreeRoot = codexSessionWorktreeRoot(session, homePath);
+      if (!repoRoot) {
         const folderDirectory = normalizeDirectory(session.directory || sandbox.directory || defaultDirectory);
         const folderSessions = globalFolders.get(folderDirectory) ?? [];
         folderSessions.push(buildTopPanelSession(project.id, session, projectPinnedAt, pinnedStore));
@@ -174,7 +209,7 @@ export function buildCodexTopPanelTreeData(
         continue;
       }
 
-      const repoLocalValue = pinnedStore[sandboxPinKey(project.id, gitRoot)];
+      const repoLocalValue = pinnedStore[sandboxPinKey(project.id, repoRoot)];
       const repoPinnedAt = normalizePinnedAt(repoLocalValue);
       const isRepoDirectlyPinned = repoPinnedAt > 0;
       const isRepoExplicitlyUnpinned = typeof repoLocalValue === 'number' && repoLocalValue < 0;
@@ -182,22 +217,43 @@ export function buildCodexTopPanelTreeData(
       const repoEffectivePinnedAt = isRepoPinned
         ? (isRepoDirectlyPinned ? repoPinnedAt : projectPinnedAt)
         : 0;
-      const repo = repos.get(gitRoot) ?? {
-        root: gitRoot,
-        name: basenameForDisplay(gitRoot, globalSandboxName),
+      const repo = repos.get(repoRoot) ?? {
+        root: repoRoot,
+        name: basenameForDisplay(repoRoot, globalSandboxName),
         pinnedAt: repoEffectivePinnedAt,
         isPinned: isRepoDirectlyPinned,
         isImplicitlyPinned: isRepoPinned && !isRepoDirectlyPinned,
-        branches: new Map<string, CodexTopPanelSession[]>(),
+        branches: new Map<string, BranchEntry>(),
       };
       repo.pinnedAt = Math.max(repo.pinnedAt, repoEffectivePinnedAt);
       repo.isPinned = repo.isPinned || isRepoDirectlyPinned;
       repo.isImplicitlyPinned = repo.isImplicitlyPinned || (isRepoPinned && !isRepoDirectlyPinned);
       const branchName = session.gitInfo?.branch?.trim() || 'detached';
-      const branchSessions = repo.branches.get(branchName) ?? [];
-      branchSessions.push(buildTopPanelSession(project.id, session, repoEffectivePinnedAt, pinnedStore));
-      repo.branches.set(branchName, branchSessions);
-      repos.set(gitRoot, repo);
+      const branchDirectory = worktreeRoot || repoRoot;
+      const branchPinDirectory = codexBranchPinDirectory(repoRoot, branchName);
+      const branchLocalValue = pinnedStore[sandboxPinKey(project.id, branchPinDirectory)];
+      const branchPinnedAt = normalizePinnedAt(branchLocalValue);
+      const isBranchDirectlyPinned = branchPinnedAt > 0;
+      const isBranchExplicitlyUnpinned = typeof branchLocalValue === 'number' && branchLocalValue < 0;
+      const isBranchPinned = isBranchDirectlyPinned || (repoEffectivePinnedAt > 0 && !isBranchExplicitlyUnpinned);
+      const branchEffectivePinnedAt = isBranchPinned
+        ? (isBranchDirectlyPinned ? branchPinnedAt : repoEffectivePinnedAt)
+        : 0;
+      const branch = repo.branches.get(branchName) ?? {
+        directory: branchDirectory,
+        pinDirectory: branchPinDirectory,
+        pinnedAt: branchEffectivePinnedAt,
+        isPinned: isBranchDirectlyPinned,
+        isImplicitlyPinned: isBranchPinned && !isBranchDirectlyPinned,
+        sessions: [],
+      };
+      if (branch.directory === repoRoot && branchDirectory !== repoRoot) branch.directory = branchDirectory;
+      branch.pinnedAt = Math.max(branch.pinnedAt, branchEffectivePinnedAt);
+      branch.isPinned = branch.isPinned || isBranchDirectlyPinned;
+      branch.isImplicitlyPinned = branch.isImplicitlyPinned || (isBranchPinned && !isBranchDirectlyPinned);
+      branch.sessions.push(buildTopPanelSession(project.id, session, branchEffectivePinnedAt, pinnedStore));
+      repo.branches.set(branchName, branch);
+      repos.set(repoRoot, repo);
     }
   }
 
@@ -238,15 +294,16 @@ export function buildCodexTopPanelTreeData(
     .forEach((repo) => {
       const branchSandboxes = Array.from(repo.branches.entries())
         .sort(([left], [right]) => left.localeCompare(right))
-        .map(([branchName, sessions]) => createTopPanelSandboxEntry({
+        .map(([branchName, branch]) => createTopPanelSandboxEntry({
           key: `codex:branch:${repo.root}:${branchName}`,
-          directory: repo.root,
+          directory: branch.directory,
+          pinDirectory: branch.pinDirectory,
           branch: branchName,
           kind: 'branch',
-          sessions,
-          pinnedAt: repo.pinnedAt,
-          isPinned: false,
-          isImplicitlyPinned: repo.pinnedAt > 0,
+          sessions: branch.sessions,
+          pinnedAt: branch.pinnedAt,
+          isPinned: branch.isPinned,
+          isImplicitlyPinned: branch.isImplicitlyPinned,
         }));
       worktrees.push({
         key: `codex:repo:${repo.root}`,
@@ -266,4 +323,60 @@ export function buildCodexTopPanelTreeData(
     });
 
   return worktrees;
+}
+
+export function buildCodexSessionTreeData(worktrees: CodexTopPanelWorktree[]): SessionTreeData {
+  const projects: SessionTreeProject[] = [];
+  for (const worktree of worktrees) {
+    const sandboxes: SessionTreeSandbox[] = [];
+    for (const sandbox of worktree.sandboxes) {
+      const sessions = sandbox.sessions
+        .filter((session) => !session.archivedAt && (session.isPinned || session.isImplicitlyPinned))
+        .map((session) => ({
+          type: 'session' as const,
+          sessionId: session.id,
+          projectId: worktree.projectId ?? '',
+          directory: sandbox.directory,
+          title: session.title || session.slug || session.id,
+          status: session.status,
+          pinnedAt: session.pinnedAt ?? 0,
+          isPinned: Boolean(session.isPinned),
+          isImplicitlyPinned: Boolean(session.isImplicitlyPinned),
+        }));
+      const sandboxPinned = Boolean(sandbox.isPinned || sandbox.isImplicitlyPinned);
+      if (sessions.length === 0 && !sandboxPinned) continue;
+      sandboxes.push({
+        type: 'sandbox',
+        key: sandbox.key,
+        directory: sandbox.directory,
+        pinDirectory: sandbox.pinDirectory,
+        projectId: worktree.projectId ?? '',
+        name: sandbox.branch || basenameForDisplay(sandbox.directory, CODEX_TOP_PANEL_GLOBAL_SANDBOX_NAME),
+        kind: sandbox.kind,
+        pinnedAt: sandbox.pinnedAt ?? 0,
+        isPinned: Boolean(sandbox.isPinned),
+        isImplicitlyPinned: Boolean(sandbox.isImplicitlyPinned),
+        sessions,
+      });
+    }
+    const worktreePinned = Boolean(worktree.isPinned);
+    if (sandboxes.length === 0 && !worktreePinned) continue;
+    projects.push({
+      type: 'project',
+      key: worktree.key,
+      projectId: worktree.projectId ?? '',
+      directory: worktree.directory,
+      pinDirectory: worktree.kind === 'sandbox' ? worktree.directory : undefined,
+      kind: worktree.kind,
+      name: worktree.name || worktree.label || basenameForDisplay(worktree.directory, CODEX_TOP_PANEL_GLOBAL_SANDBOX_NAME),
+      color: worktree.projectColor,
+      pinnedAt: worktree.pinnedAt ?? 0,
+      isPinned: worktreePinned,
+      sandboxes,
+    });
+  }
+  return projects.sort((a, b) => {
+    if (a.pinnedAt !== b.pinnedAt) return b.pinnedAt - a.pinnedAt;
+    return a.name.localeCompare(b.name);
+  });
 }

@@ -122,4 +122,15 @@ describe('useCodexWorkspace', () => {
 
     expect(project.sandboxes['/repo'].sessions['thread-1'].timePinned).toBe(1);
   });
+
+  it('marks locally hidden Codex threads as archived sessions for TopPanel search', () => {
+    const project = createCodexProjectState(
+      [{ id: 'thread-hidden', name: 'Hidden thread', cwd: '/repo', updatedAt: 42 }],
+      '/home/user',
+      new Set(),
+      new Set(['thread-hidden']),
+    );
+
+    expect(project.sandboxes['/repo'].sessions['thread-hidden'].timeArchived).toBe(42_000);
+  });
 });

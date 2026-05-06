@@ -9,7 +9,7 @@
       {{ t('threadBlock.undo') }}
     </button>
     <button
-      v-else-if="root.role === 'user' && root.sessionID"
+      v-else-if="canForkThread(root)"
       type="button"
       class="ib-action ib-top-right"
       @click="confirmFork()"
@@ -129,6 +129,7 @@ import type {
   ThreadTarget as ThreadTargetType,
 } from '../types/message';
 import type { MessageInfo, QuestionInfo, SubtaskPart, ToolPart } from '../types/sse';
+import type { BackendKind } from '../backends/types';
 import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
 
@@ -157,6 +158,8 @@ const props = defineProps<{
     snapshot?: string;
     diff?: string;
   } | null;
+  backendKind?: BackendKind;
+  isLatestRoot?: boolean;
   assistantHtml?: string;
   deferredTransitionKey: string;
 }>();
@@ -421,6 +424,12 @@ function showThreadDiff(root: MessageInfo) {
 
 function canRevertThread(root: MessageInfo): boolean {
   if (props.sessionRevert) return false;
+  if (props.backendKind === 'codex' && !props.isLatestRoot) return false;
+  return root.role === 'user' && Boolean(root.sessionID);
+}
+
+function canForkThread(root: MessageInfo): boolean {
+  if (props.backendKind === 'codex' && !props.isLatestRoot) return false;
   return root.role === 'user' && Boolean(root.sessionID);
 }
 
