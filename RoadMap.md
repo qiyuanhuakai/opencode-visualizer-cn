@@ -6,8 +6,7 @@
 
 - [ ] 修复已知问题
 	- [ ] "历史记录"功能中subagent的历史和主agnet混在一起
-	- [ ] opencode snapshot有严重的阻塞性问题，建议关闭。但是关闭会导致无法使用session diff功能
-	- [ ] 考虑使用其他方案替代snapshot，实现所有provider共用的session diff
+
 	
 - [ ] vis-bridge 模块化本地桥接服务器：集成外部开发工具，扩展与第三方工具的联动能力。
 	- [?] codex

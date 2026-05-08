@@ -819,6 +819,7 @@ type ShellSession = {
   socket?: WebSocket;
   exiting?: boolean;
   closeOnSuccess?: boolean;
+  exitCode?: number;
   exitResolve?: (exitCode: number) => void;
 };
 
@@ -5380,6 +5381,11 @@ async function createPtySession(command?: string, args?: string[]) {
   return parsePtyInfo(data);
 }
 
+function buildOpenInEditorCommand(absolutePath: string) {
+  const escapedPath = absolutePath.replace(/'/g, "'\"'\"'");
+  return `editor_cmd=\${VISUAL:-\${EDITOR:-}}; if [ -z "$editor_cmd" ]; then printf '%s\\n' 'VISUAL/EDITOR is not set.'; exit 127; fi; eval "$editor_cmd '${escapedPath}'"; status=$?; exit $status`;
+}
+
 async function updatePtySize(ptyId: string, rows: number, cols: number, directory?: string) {
     const updatePtySize = requireBackendMethod(backend().updatePtySize, 'PTY resizing');
     const data = await updatePtySize(ptyId, {
@@ -5588,12 +5594,17 @@ function connectShellSocket(ptyId: string) {
       if (bytes.length > 0 && bytes[0] === 0) {
         const json = ptyMetaDecoder.decode(bytes.subarray(1));
         try {
-          const meta = JSON.parse(json) as { cursor?: unknown };
+          const meta = JSON.parse(json) as { cursor?: unknown; exitCode?: unknown };
           if (
             typeof meta.cursor === 'number' &&
             Number.isSafeInteger(meta.cursor) &&
             meta.cursor >= 0
           ) {
+            return;
+          }
+          if (typeof meta.exitCode === 'number' && Number.isFinite(meta.exitCode)) {
+            session.exitCode = meta.exitCode;
+            handlePtyEvent({ type: 'pty.exited', info: null, id: ptyId, exitCode: meta.exitCode });
             return;
           }
         } catch {
@@ -5608,7 +5619,7 @@ function connectShellSocket(ptyId: string) {
       const trimmed = event.data.trim();
       if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
         try {
-          const meta = JSON.parse(trimmed) as { cursor?: unknown } & Record<string, unknown>;
+          const meta = JSON.parse(trimmed) as { cursor?: unknown; exitCode?: unknown } & Record<string, unknown>;
           const keys = Object.keys(meta);
           if (
             keys.length === 1 &&
@@ -5617,6 +5628,15 @@ function connectShellSocket(ptyId: string) {
             Number.isSafeInteger(meta.cursor) &&
             meta.cursor >= 0
           ) {
+            return;
+          }
+          if (
+            keys.length === 1 &&
+            keys[0] === 'exitCode' &&
+            typeof meta.exitCode === 'number' &&
+            Number.isFinite(meta.exitCode)
+          ) {
+            handlePtyEvent({ type: 'pty.exited', info: null, id: ptyId, exitCode: meta.exitCode });
             return;
           }
         } catch {
@@ -5640,6 +5660,16 @@ function connectShellSocket(ptyId: string) {
   socket.addEventListener('close', () => {
     if (session.exiting) {
       setTimeout(() => removeShellWindow(ptyId), SHELL_LINGER_MS);
+      return;
+    }
+    if (activeBackendKind.value === 'codex') {
+      if (typeof session.exitCode === 'number') {
+        if (session.closeOnSuccess && session.exitCode === 0) {
+          lingerAndRemoveShellWindow(ptyId);
+        }
+        return;
+      }
+      handlePtyEvent({ type: 'pty.exited', info: null, id: ptyId, exitCode: -1 });
     }
   });
 }
@@ -5675,6 +5705,15 @@ function lingerAndRemoveShellWindow(ptyId: string) {
   }
 }
 
+function refreshFileArtifactsForPty(ptyId: string) {
+  const filePath = ptyToFileMap.get(ptyId);
+  if (!filePath) return;
+  void refreshOpenFileViewersForPath(filePath);
+  void refreshOpenGitDiffWindowsForPath(filePath);
+  feed({ file: filePath, event: 'change' });
+  ptyToFileMap.delete(ptyId);
+}
+
 function handleFloatingWindowClose(key: string) {
   if (key.startsWith('shell:')) {
     const ptyId = key.slice('shell:'.length);
@@ -5701,15 +5740,28 @@ async function handleFloatingWindowOpen(key: string) {
   const absolutePath = entry?.props?.absolutePath;
   if (!absolutePath || typeof absolutePath !== 'string') return;
 
+  if (!ptySupported.value) {
+    setSendStatusKey('app.error.shellFailed', {
+      message: t('app.error.unavailable', { action: t('floatingWindow.openInEditor') }),
+    });
+    return;
+  }
+
   const directory = activeDirectory.value.trim();
   if (!directory) return;
 
-  // Escape path safely for shell: use single-quote wrapping with internal single-quote handling
-  const escapedPath = absolutePath.replace(/'/g, "'\"'\"'");
-  const pty = await createPtySession('/bin/sh', ['-c', `$EDITOR '${escapedPath}'`]);
-  if (pty) {
+  try {
+    const pty = await createPtySession('/bin/sh', ['-c', buildOpenInEditorCommand(absolutePath)]);
+    if (!pty) {
+      setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
+      return;
+    }
     ptyToFileMap.set(pty.id, absolutePath);
     await ensureShellWindow(pty);
+    const session = shellSessionsByPtyId.get(pty.id);
+    if (session) session.closeOnSuccess = true;
+  } catch (error) {
+    setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
   }
 }
 
@@ -7707,7 +7759,6 @@ async function openGitDiff(payload: { path: string; staged: boolean }) {
     return;
   }
 
-  const snapshotMode: WorktreeSnapshotMode = staged ? 'staged' : 'changes';
   const modeLabel = staged ? t('app.git.staged') : t('app.git.unstaged');
   const pos = getFileViewerPosition();
   await fw.open(key, {
@@ -7727,47 +7778,56 @@ async function openGitDiff(payload: { path: string; staged: boolean }) {
   });
 
   try {
-    const output = await runOneShotPtyCommand('bash', [
-      '--noprofile',
-      '--norc',
-      '-c',
-      FILE_SNAPSHOT_SCRIPT,
-      '_',
-      snapshotMode,
-      path,
-    ]);
-    const snapshot = parseFileSnapshotOutput(output);
-    if (!fw.has(key)) return;
-    await fw.open(key, {
-      component: DiffViewer,
-      props: {
-        path,
-        isDiff: true,
-        diffCode: snapshot.before,
-        diffAfter: snapshot.after,
-        diffCodeBase64: snapshot.beforeBase64,
-        diffAfterBase64: snapshot.afterBase64,
-        gutterMode: 'double',
-        lang: guessLanguage(path),
-        theme: shikiTheme.value,
-      },
-      closable: true,
-      resizable: true,
-      focusOnOpen: true,
-      scroll: 'manual',
-      title: `${path} (${modeLabel})`,
-      x: pos.x,
-      y: pos.y,
-      width: FILE_VIEWER_WINDOW_WIDTH,
-      height: FILE_VIEWER_WINDOW_HEIGHT,
-      expiry: Infinity,
-    });
+    await updateGitDiffWindow(key, { path, staged });
   } catch (error) {
     log('File snapshot failed', error);
     if (fw.has(key)) {
       await fw.close(key);
     }
   }
+}
+
+async function updateGitDiffWindow(key: string, payload: { path: string; staged: boolean }) {
+  const { path, staged } = payload;
+  const snapshotMode: WorktreeSnapshotMode = staged ? 'staged' : 'changes';
+  const modeLabel = staged ? t('app.git.staged') : t('app.git.unstaged');
+  const existingEntry = fw.get(key);
+  const fallbackPos = getFileViewerPosition();
+  const output = await runOneShotPtyCommand('bash', [
+    '--noprofile',
+    '--norc',
+    '-c',
+    FILE_SNAPSHOT_SCRIPT,
+    '_',
+    snapshotMode,
+    path,
+  ]);
+  const snapshot = parseFileSnapshotOutput(output);
+  if (!fw.has(key)) return;
+  await fw.open(key, {
+    component: DiffViewer,
+    props: {
+      path,
+      isDiff: true,
+      diffCode: snapshot.before,
+      diffAfter: snapshot.after,
+      diffCodeBase64: snapshot.beforeBase64,
+      diffAfterBase64: snapshot.afterBase64,
+      gutterMode: 'double',
+      lang: guessLanguage(path),
+      theme: shikiTheme.value,
+    },
+    closable: true,
+    resizable: true,
+    focusOnOpen: existingEntry?.focusOnOpen ?? true,
+    scroll: 'manual',
+    title: `${path} (${modeLabel})`,
+    x: existingEntry?.x ?? fallbackPos.x,
+    y: existingEntry?.y ?? fallbackPos.y,
+    width: existingEntry?.width ?? FILE_VIEWER_WINDOW_WIDTH,
+    height: existingEntry?.height ?? FILE_VIEWER_WINDOW_HEIGHT,
+    expiry: Infinity,
+  });
 }
 
 async function openAllGitDiff(mode: WorktreeSnapshotMode = 'all') {
@@ -8426,6 +8486,27 @@ async function refreshOpenFileViewersForPath(filePath: string) {
   await Promise.all(tasks);
 }
 
+async function refreshOpenGitDiffWindowsForPath(filePath: string) {
+  const normalizedTarget = resolveFileViewerAbsolutePath(filePath);
+  const tasks = fw.entries.value
+    .filter((entry) => entry.key.startsWith('git-diff:changes:') || entry.key.startsWith('git-diff:staged:'))
+    .filter((entry) => {
+      const entryPath = typeof entry.props?.path === 'string' ? entry.props.path : '';
+      return entryPath && resolveFileViewerAbsolutePath(entryPath) === normalizedTarget;
+    })
+    .map((entry) => {
+      const path = typeof entry.props?.path === 'string' ? entry.props.path : '';
+      if (!path) return Promise.resolve();
+      return updateGitDiffWindow(entry.key, {
+        path,
+        staged: entry.key.startsWith('git-diff:staged:'),
+      }).catch((error) => {
+        log('Git diff refresh failed', error);
+      });
+    });
+  await Promise.all(tasks);
+}
+
 async function openFileViewer(path: string, lines?: string) {
   const key = toFileViewerKey(path, lines);
   if (fw.has(key)) {
@@ -8554,6 +8635,10 @@ function handlePtyEvent(event: {
       waiter(exitCode);
     }
     const session = shellSessionsByPtyId.get(ptyId);
+    if (session) session.exitCode = exitCode;
+    if (activeBackendKind.value === 'codex' && session?.closeOnSuccess && exitCode === 0) {
+      refreshFileArtifactsForPty(ptyId);
+    }
     if (session?.closeOnSuccess && exitCode !== 0) {
       session.terminal.write(`\r\n\u001b[31m[Command failed: ${exitCode}]\u001b[0m\r\n`);
       return;
@@ -8885,11 +8970,8 @@ onMounted(() => {
   );
   globalEventUnsubscribers.push(
     ge.on('pty.deleted', ({ id }) => {
-      const filePath = ptyToFileMap.get(id);
-      if (filePath) {
-        void refreshOpenFileViewersForPath(filePath);
-        feed({ file: filePath, event: 'change' });
-        ptyToFileMap.delete(id);
+      if (activeBackendKind.value !== 'codex') {
+        refreshFileArtifactsForPty(id);
       }
       lingerAndRemoveShellWindow(id);
     }),

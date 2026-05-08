@@ -3,10 +3,12 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [v0.5.2 released]
+## [v0.5.4 released]
 
 ### Bug 修复
 - [x] 修复了对untracked files的统计导致的严重opencode server阻塞问题，该修复会导致git diff不再统计untracked files的行数，但仍然显示它的diff
+- [x] 修复了“用编辑器打开”功能在codex后端不可用的问题
+- [x] 修复了在codex后端关闭编辑器窗口时文件内容和diff不会自动刷新的问题
 
 ## [v0.5.1 released]
 

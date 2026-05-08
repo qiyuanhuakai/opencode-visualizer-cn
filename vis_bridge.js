@@ -395,8 +395,49 @@ function decodeWebSocketFrames(buffer) {
   return { frames, remaining: buffer.subarray(offset) };
 }
 
+const PTY_BUFFER_LIMIT = 2 * 1024 * 1024;
+const PTY_EXIT_GRACE_MS = 1500;
+
+function encodePtyMetaFrame(meta) {
+  const payload = Buffer.concat([
+    Buffer.from([0]),
+    Buffer.from(JSON.stringify(meta), 'utf8'),
+  ]);
+  return encodeWebSocketFrame(payload, 2);
+}
+
+function trimPtyBuffer(buffer) {
+  if (buffer.length <= PTY_BUFFER_LIMIT) return buffer;
+  return buffer.slice(buffer.length - PTY_BUFFER_LIMIT);
+}
+
 function createPtyManager(options = {}) {
   const sessions = new Map();
+
+  function scheduleCleanup(session, delay = PTY_EXIT_GRACE_MS) {
+    if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
+    session.cleanupTimer = setTimeout(() => {
+      if (sessions.get(session.id) !== session) return;
+      sessions.delete(session.id);
+    }, delay);
+  }
+
+  function appendOutput(session, data) {
+    const chunk = String(data);
+    session.buffer = trimPtyBuffer(session.buffer + chunk);
+    for (const socket of session.sockets) {
+      if (socket.destroyed) continue;
+      socket.write(encodeWebSocketFrame(chunk, 1));
+    }
+  }
+
+  function sendExitToSocket(session, socket) {
+    if (socket.destroyed) return;
+    if (typeof session.exitCode === 'number') {
+      socket.write(encodePtyMetaFrame({ exitCode: session.exitCode }));
+    }
+    socket.end(encodeWebSocketFrame(Buffer.alloc(0), 8));
+  }
 
   async function create(payload = {}) {
     const nodePty = await loadNodePty(options.ptyModule);
@@ -421,16 +462,24 @@ function createPtyManager(options = {}) {
       createdAt: Date.now(),
       pty: ptyProcess,
       sockets: new Set(),
+      buffer: '',
+      status: 'running',
+      exitCode: undefined,
+      cleanupTimer: undefined,
       disposed: false,
     };
     sessions.set(id, session);
-    ptyProcess.onExit?.(() => {
+    ptyProcess.onData?.((data) => {
+      appendOutput(session, data);
+    });
+    ptyProcess.onExit?.((event = {}) => {
       session.disposed = true;
+      session.status = 'exited';
+      if (typeof event.exitCode === 'number') session.exitCode = event.exitCode;
       for (const socket of session.sockets) {
-        try { socket.write(encodeWebSocketFrame(Buffer.alloc(0), 8)); } catch {}
-        socket.destroy();
+        try { sendExitToSocket(session, socket); } catch {}
       }
-      sessions.delete(id);
+      scheduleCleanup(session);
     });
     return { id };
   }
@@ -442,6 +491,8 @@ function createPtyManager(options = {}) {
       args: session.args,
       cwd: session.cwd,
       title: session.title,
+      status: session.status,
+      ...(typeof session.exitCode === 'number' ? { exitCode: session.exitCode } : {}),
       createdAt: session.createdAt,
     }));
   }
@@ -456,6 +507,7 @@ function createPtyManager(options = {}) {
   function remove(id) {
     const session = sessions.get(id);
     if (!session) return false;
+    if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
     sessions.delete(id);
     session.disposed = true;
     for (const socket of session.sockets) socket.destroy();
@@ -472,13 +524,11 @@ function createPtyManager(options = {}) {
     if (!session) return false;
     let buffer = Buffer.alloc(0);
     session.sockets.add(socket);
-    const dataDisposable = session.pty.onData((data) => {
-      if (socket.destroyed) return;
-      socket.write(encodeWebSocketFrame(data, 1));
-    });
+    if (session.buffer) {
+      socket.write(encodeWebSocketFrame(session.buffer, 1));
+    }
     const detach = () => {
       session.sockets.delete(socket);
-      dataDisposable?.dispose?.();
     };
     socket.on('data', (chunk) => {
       try {
@@ -503,6 +553,10 @@ function createPtyManager(options = {}) {
     socket.once('close', detach);
     socket.once('error', detach);
     if (head.length > 0) socket.emit('data', head);
+    if (session.status === 'exited') {
+      sendExitToSocket(session, socket);
+      scheduleCleanup(session, 100);
+    }
     return true;
   }
 
