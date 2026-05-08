@@ -8646,7 +8646,6 @@ async function startInitialization() {
         fetchPendingPermissions(directory),
         fetchPendingQuestions(directory),
       ]);
-      void refreshGitStatus();
     }
     connectionState.value = 'ready';
     uiInitState.value = 'ready';

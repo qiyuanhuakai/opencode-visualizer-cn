@@ -33,6 +33,10 @@ export type GitStatus = {
   branch: GitBranchInfo;
   files: GitFileStatus[];
   diffStats: GitDiffStats;
+  untracked?: {
+    eligibleFileCount: number;
+    pending: boolean;
+  };
 };
 
 export type BranchEntry = {
