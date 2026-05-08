@@ -26,6 +26,19 @@ describe('provider config patches', () => {
     });
   });
 
+  it('adds a re-enabled provider to an existing enabled whitelist', () => {
+    expect(
+      buildProviderDisabledPatch(
+        { enabled_providers: ['openai'], disabled_providers: ['omniroute'] },
+        'omniroute',
+        true,
+      ),
+    ).toEqual({
+      enabled_providers: ['openai', 'omniroute'],
+      disabled_providers: [],
+    });
+  });
+
   it('preserves the disabled-provider-only patch even when an enabled whitelist exists', () => {
     expect(
       buildProviderDisabledPatch(

@@ -21,6 +21,8 @@ export type BackendRequestOptions = {
 
 export type BackendQueryValue = string | number | boolean | undefined;
 
+export type ConfigMergeStrategy = 'replace' | 'upsert';
+
 export type ListSessionsOptions = {
   directory?: string;
   instanceDirectory?: string;
@@ -72,6 +74,8 @@ export type BackendAdapter = {
   getPathInfo?(options?: BackendRequestOptions): Promise<Record<string, string>>;
   getGlobalConfig?(): Promise<unknown>;
   updateGlobalConfig?(payload: Record<string, unknown>): Promise<unknown>;
+  writeConfigValue?(params: { keyPath: string; value: unknown; mergeStrategy?: ConfigMergeStrategy }): Promise<unknown>;
+  batchWriteConfig?(params: { edits: Array<{ keyPath: string; value: unknown; mergeStrategy?: ConfigMergeStrategy }> }): Promise<unknown>;
   listFiles?(payload: { directory: string; path?: string }, options?: BackendRequestOptions): Promise<unknown>;
   readFileContent?(payload: { directory: string; path: string }, options?: BackendRequestOptions): Promise<unknown>;
   readFileContentBytes?(payload: { directory: string; path: string }, options?: BackendRequestOptions): Promise<Uint8Array>;

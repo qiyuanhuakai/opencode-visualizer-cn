@@ -7,7 +7,7 @@ import {
   sandboxPinKey,
   type LocalPinnedSessionStore,
 } from './pinnedSessions';
-import { normalizeDirectory } from './path';
+import { normalizeAbsolutePathNoParent, normalizeDirectory } from './path';
 
 export const CODEX_TOP_PANEL_DEFAULT_DIRECTORY = '/';
 export const CODEX_TOP_PANEL_GLOBAL_SANDBOX_NAME = 'Global';
@@ -108,11 +108,13 @@ function normalizeCodexMetadataPath(path: string, homePath: string) {
   const trimmed = path.trim();
   if (!trimmed) return '';
   const home = homePath.trim();
-  if (trimmed === '~') return normalizeDirectory(home || CODEX_TOP_PANEL_DEFAULT_DIRECTORY);
+  const normalizedHome = home.startsWith('/') ? normalizeAbsolutePathNoParent(home) : CODEX_TOP_PANEL_DEFAULT_DIRECTORY;
+  if (trimmed === '~') return normalizeDirectory(normalizedHome || CODEX_TOP_PANEL_DEFAULT_DIRECTORY);
   if (trimmed.startsWith('~/')) {
-    return normalizeDirectory(`${(home || CODEX_TOP_PANEL_DEFAULT_DIRECTORY).replace(/\/+$/u, '')}/${trimmed.slice(2).replace(/^\/+/, '')}`);
+    return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${trimmed.slice(2).replace(/^\/+/, '')}`));
   }
-  return normalizeDirectory(trimmed);
+  if (trimmed.startsWith('/')) return normalizeDirectory(normalizeAbsolutePathNoParent(trimmed));
+  return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${trimmed}`));
 }
 
 function codexBranchPinDirectory(repoRoot: string, branchName: string) {

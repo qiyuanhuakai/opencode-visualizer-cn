@@ -166,6 +166,7 @@
               :has-model-options="hasModelOptions"
               :has-thinking-options="hasThinkingOptions"
               :can-attach="canAttach"
+              :attachment-accept="attachmentAccept"
               :is-thinking="isThinking"
               :can-abort="canAbort"
               :commands="commandOptions"
@@ -516,6 +517,7 @@ import { useMessages } from './composables/useMessages';
 import { pendingWorkerRenders } from './composables/useRenderState';
 import { useOpenCodeApi } from './composables/useOpenCodeApi';
 import { useCodexApi } from './composables/useCodexApi';
+import type { CodexTurnInputItem } from './backends/codex/codexAdapter';
 import { CODEX_PROJECT_ID, createCodexProjectState, useCodexWorkspace } from './composables/useCodexWorkspace';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
@@ -557,11 +559,11 @@ import {
   getActiveBackendAdapter,
   setActiveBackendKind,
 } from './backends/registry';
-import type { BackendKind } from './backends/types';
+import type { BackendKind, ConfigMergeStrategy } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { shouldPreservePendingCodexSelection } from './utils/codexSessionSelection';
-import { splitFileContentDirectoryAndPath, normalizeDirectory } from './utils/path';
+import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
 import { useCredentials } from './composables/useCredentials';
 import { useSettings } from './composables/useSettings';
 import {
@@ -1279,7 +1281,12 @@ type ProviderConfigState = {
   enabled_providers?: string[];
   disabled_providers?: string[];
   provider?: Record<string, unknown>;
+  model_providers?: Record<string, unknown>;
+  model_provider?: string;
+  model?: string;
 };
+
+const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';
 
 type ModelVisibilityEntry = {
   providerID: string;
@@ -2409,7 +2416,7 @@ const canSend = computed(() =>
     connectionState.value === 'ready' &&
     selectedSessionId.value &&
     !isSending.value &&
-    (messageInput.value.trim().length > 0 || attachments.value.length > 0),
+    (messageInput.value.trim().length > 0 || (attachments.value.length > 0 && canAttach.value)),
   ),
 );
 
@@ -2482,7 +2489,12 @@ const subagentOptions = computed(() => {
       isSubagent: true,
     }));
 });
-const canAttach = computed(() => availableModelOptions.value.length > 0);
+const selectedModelInfo = computed(() => availableModelOptions.value.find((model) => model.id === selectedModel.value));
+const canAttach = computed(() => {
+  if (activeBackendKind.value === 'codex') return Boolean(selectedModelInfo.value?.attachmentCapable);
+  return availableModelOptions.value.length > 0;
+});
+const attachmentAccept = computed(() => (activeBackendKind.value === 'codex' ? 'image/*' : '*/*'));
 const commandOptions = computed(() => {
   const list = commands.value.slice();
   const hasShell = list.some((command) => command.name.toLowerCase() === 'shell');
@@ -2647,6 +2659,35 @@ function parseProviderModelKey(value: string) {
   const modelID = normalized.slice(slashIndex + 1).trim();
   if (!providerID || !modelID) return { providerID: '', modelID: '' };
   return { providerID, modelID };
+}
+
+async function syncCodexActiveProviderModel(providerID: string, modelID: string) {
+  const normalizedProvider = providerID.trim();
+  const normalizedModel = modelID.trim();
+  if (!normalizedProvider || !normalizedModel) return;
+
+  const codexProvider = codexAppServerProviderId(normalizedProvider);
+  const edits: Array<{ keyPath: string; value: unknown; mergeStrategy: ConfigMergeStrategy }> = [];
+
+  edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });
+  edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });
+  await codexApi.batchWriteConfig(edits);
+  providerConfig.value = (codexApi.config.value?.config as ProviderConfigState | undefined) ?? providerConfig.value;
+}
+
+function codexAppServerProviderId(providerID: string) {
+  const normalizedProvider = providerID.trim();
+  return normalizedProvider === CODEX_PROJECT_ID ? CODEX_OFFICIAL_MODEL_PROVIDER : normalizedProvider;
+}
+
+function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: string) {
+  const desiredProvider = codexAppServerProviderId(providerID);
+  if (!sessionId || !desiredProvider) return false;
+  const currentProvider = codexApi.threads.value
+    .find((thread) => thread.id === sessionId)
+    ?.modelProvider
+    ?.trim();
+  return Boolean(currentProvider && currentProvider !== desiredProvider);
 }
 
 function normalizeIdList(values?: string[]) {
@@ -3446,7 +3487,7 @@ async function fetchGlobalProviderConfig() {
   try {
     if (activeBackendKind.value === 'codex') {
       await codexApi.refreshConfig();
-      providerConfig.value = (codexApi.config.value as ProviderConfigState | null) ?? null;
+      providerConfig.value = (codexApi.config.value?.config as ProviderConfigState | undefined) ?? null;
       return;
     }
     const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
@@ -3768,6 +3809,10 @@ function normalizeAttachmentMime(mime: string) {
 
 async function handleAddAttachments(files: File[]) {
   const accepted = files.filter((file) => file.size > 0 || file.type.length > 0 || file.name.length > 0);
+  if (activeBackendKind.value === 'codex' && accepted.some((file) => !normalizeAttachmentMime(file.type || '').startsWith('image/'))) {
+    setSendStatusKey('app.error.unsupportedAttachment');
+    return;
+  }
   if (accepted.length === 0) {
     setSendStatusKey('app.error.unsupportedAttachment');
     return;
@@ -4961,7 +5006,7 @@ async function fetchProviders(force = false) {
           providerID,
           providerLabel: providerLabel,
           variants: model.variants,
-          attachmentCapable: true,
+          attachmentCapable: model.capabilities?.attachment ?? false,
         });
       });
     });
@@ -6246,28 +6291,52 @@ async function sendMessage() {
       }
       const atAgent = hasText ? parseAtAgent(text) : null;
       const messageText = atAgent ? atAgent.text : text;
-      const attachmentText = attachments.value.map((item) => {
+      const codexInput: CodexTurnInputItem[] = [];
+      if (messageText) codexInput.push({ type: 'text', text: messageText });
+      for (const item of attachments.value) {
         if (item.lineComment) {
-          return formatCommentNote(
-            item.lineComment.path,
-            item.lineComment.startLine,
-            item.lineComment.endLine,
-            item.lineComment.text,
-          );
+          codexInput.push({
+            type: 'text',
+            text: formatCommentNote(
+              item.lineComment.path,
+              item.lineComment.startLine,
+              item.lineComment.endLine,
+              item.lineComment.text,
+            ),
+          });
+          continue;
         }
-        return `[file: ${item.filename}]`;
-      });
-      const prompt = [messageText, ...attachmentText].filter(Boolean).join('\n\n');
-      const selectedModelIDs = parseProviderModelKey(selectedModel.value);
-      const selectedCodexModel = selectedModelIDs.providerID === CODEX_PROJECT_ID
-        ? selectedModelIDs.modelID
-        : undefined;
-      if (selectedCodexModel) codexApi.selectModel(selectedCodexModel);
+        if (!item.mime.startsWith('image/')) {
+          setSendStatusKey('app.error.unsupportedAttachment');
+          return;
+        }
+        codexInput.push({ type: 'image', url: item.dataUrl });
+      }
+      const prompt = codexInput
+        .filter((item): item is Extract<CodexTurnInputItem, { type: 'text' }> => item.type === 'text')
+        .map((item) => item.text)
+        .join('\n\n');
+      const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
+      const selectedModelIDs = selectedInfo
+        ? { providerID: selectedInfo.providerID?.trim() ?? '', modelID: selectedInfo.modelID.trim() }
+        : parseProviderModelKey(selectedModel.value);
+      const selectedCodexModelKey = selectedInfo?.id || selectedModel.value.trim();
+      const selectedCodexModel = selectedModelIDs.modelID || (!selectedCodexModelKey.includes('/') ? selectedCodexModelKey : undefined);
+      const selectedCodexProvider = selectedModelIDs.providerID || (selectedCodexModel ? CODEX_PROJECT_ID : '');
+      const startNewCodexThread = selectedCodexProvider
+        ? shouldStartNewCodexThreadForProvider(sessionId, selectedCodexProvider)
+        : false;
+      if (selectedCodexProvider && selectedCodexModel) {
+        await syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);
+      }
+      if (selectedCodexModelKey) codexApi.selectModel(selectedCodexModelKey);
       await codexApi.sendPrompt(prompt, {
-        threadId: sessionId,
+        threadId: startNewCodexThread ? undefined : sessionId,
+        forceNewThread: startNewCodexThread,
         cwd: codexDirectory,
         model: selectedCodexModel,
         effort: selectedThinking.value,
+        input: codexInput,
       });
       await codexApi.refreshThreads();
       if (codexApi.activeThreadId.value) {
@@ -6942,6 +7011,11 @@ watch(selectedModel, () => {
   }
 });
 
+watch(isProviderManagerOpen, (open) => {
+  if (!open || activeBackendKind.value !== 'codex') return;
+  void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
+});
+
 watch(hiddenModels, (value) => {
   writeHiddenModelsToStorage(value);
 });
@@ -7194,12 +7268,15 @@ function normalizeProjectDirectoryForActiveBackend(directory: string) {
   const trimmed = directory.trim();
   if (activeBackendKind.value !== 'codex') return normalizeDirectory(trimmed);
   const home = normalizeDirectory(codexApi.homeDir.value || homePath.value || '/');
-  if (trimmed === '~') return home || '/';
+  const normalizedHome = home.startsWith('/') ? normalizeAbsolutePathNoParent(home) : '/';
+  if (trimmed === '~') return normalizedHome || '/';
   if (trimmed.startsWith('~/')) {
     const suffix = trimmed.slice(2).replace(/^\/+/, '');
-    return normalizeDirectory(`${home.replace(/\/+$/u, '')}/${suffix}`);
+    return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${suffix}`));
   }
-  return normalizeDirectory(trimmed || home || '/');
+  if (!trimmed) return normalizeDirectory(normalizedHome || '/');
+  if (trimmed.startsWith('/')) return normalizeDirectory(normalizeAbsolutePathNoParent(trimmed));
+  return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${trimmed}`));
 }
 
 function codexThreadDirectoryMatch(thread: { cwd?: string; gitInfo?: { root?: string } | null }, directory: string) {
@@ -8517,15 +8594,17 @@ async function startInitialization() {
     try {
       connectionState.value = 'connecting';
       initLoadingMessage.value = t('app.connection.connecting');
-      await codexApi.connect(credentials.codexBridgeUrl.value);
+      await codexApi.connect(credentials.codexBridgeUrl.value, (phase) => {
+        if (phase === 'home') initLoadingMessage.value = t('app.status.loadingCodexHome');
+        else if (phase === 'handshake') initLoadingMessage.value = t('app.status.loadingCodexHandshake');
+        else if (phase === 'threads') initLoadingMessage.value = t('app.status.loadingCodexThreads');
+        else if (phase === 'workspace') initLoadingMessage.value = t('app.status.loadingCodexWorkspace');
+        else initLoadingMessage.value = t('app.status.loadingCodexModels');
+      });
       const existingThreadId = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
-      const thread = existingThreadId
-        ? undefined
-        : await codexApi.startThread(codexApi.homeDir.value || '/');
-      const nextThreadId = existingThreadId || thread?.id || '';
-      if (nextThreadId) {
-        await codexApi.selectThread(nextThreadId);
-        selectedSessionId.value = nextThreadId;
+      if (existingThreadId) {
+        await codexApi.selectThread(existingThreadId);
+        selectedSessionId.value = existingThreadId;
       }
       await Promise.all([fetchGlobalProviderConfig(), fetchProviders(true), fetchAgents()]);
       connectionState.value = 'ready';

@@ -177,4 +177,19 @@ describe('buildCodexTopPanelTreeData', () => {
       expect.objectContaining({ sessionId: 'scratch', title: 'Scratch', isPinned: true }),
     ]);
   });
+
+  it('does not create literal tilde or parent-directory worktrees for Codex metadata paths', () => {
+    const project = createCodexProjectState(
+      [
+        { id: 'parent', cwd: '..', updatedAt: 1 },
+        { id: 'home-child', cwd: '~/repo', updatedAt: 2 },
+      ],
+      '/home/codex',
+    );
+
+    const [global]: CodexTopPanelWorktree[] = buildCodexTopPanelTreeData(project, { pinnedStore: {}, homePath: '/home/codex' });
+
+    expect(global).toMatchObject({ kind: 'global', name: 'Global', directory: '/' });
+    expect(global.sandboxes.map((sandbox) => sandbox.directory).sort()).toEqual(['/home', '/home/codex/repo']);
+  });
 });

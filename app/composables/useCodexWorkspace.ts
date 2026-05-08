@@ -3,6 +3,7 @@ import type { CodexThread } from '../backends/codex/codexAdapter';
 import { CODEX_PROJECT_ID } from '../backends/codex/bridgeUrl';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import type { ProjectState, SessionState } from '../types/worker-state';
+import { normalizeAbsolutePathNoParent } from '../utils/path';
 
 export { CODEX_PROJECT_ID };
 export const CODEX_SANDBOX_NAME = 'Codex';
@@ -27,9 +28,12 @@ function threadTimestamp(value: unknown) {
 function expandHomePath(path: string, homeDirectory: string) {
   const raw = path.trim();
   const home = homeDirectory.trim() || CODEX_DEFAULT_DIRECTORY;
-  if (raw === '~') return home;
-  if (raw.startsWith('~/')) return `${home.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}`;
-  return raw;
+  const normalizedHome = home.startsWith('/') ? normalizeAbsolutePathNoParent(home) : CODEX_DEFAULT_DIRECTORY;
+  if (raw === '~') return normalizedHome;
+  if (raw.startsWith('~/')) return normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}`);
+  if (raw.startsWith('/')) return normalizeAbsolutePathNoParent(raw);
+  if (!raw) return CODEX_DEFAULT_DIRECTORY;
+  return normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${raw}`);
 }
 
 function basename(path: string) {

@@ -7,6 +7,7 @@ import {
 } from './jsonRpcClient';
 import type {
   BackendAdapter,
+  ConfigMergeStrategy,
   BackendQueryValue,
   BackendRequestOptions,
   ListSessionsOptions,
@@ -253,6 +254,7 @@ export type CodexTurnInterruptParams = {
 export type CodexPromptInput = Omit<CodexTurnStartParams, 'threadId' | 'input'> & {
   threadId?: string;
   text: string;
+  input?: CodexTurnInputItem[];
   thread?: CodexThreadStartParams;
 };
 
@@ -760,13 +762,13 @@ export type CodexAppListResult = {
 export type CodexConfigValueWriteParams = {
   keyPath: string;
   value: unknown;
-  mergeStrategy?: 'replace' | 'upsert' | 'remove';
+  mergeStrategy?: ConfigMergeStrategy;
 };
 
 export type CodexConfigValueWriteResult = {};
 
 export type CodexConfigBatchWriteParams = {
-  edits: Array<{ keyPath: string; value: unknown; mergeStrategy?: 'replace' | 'upsert' | 'remove' }>;
+  edits: Array<{ keyPath: string; value: unknown; mergeStrategy?: ConfigMergeStrategy }>;
 };
 
 export type CodexConfigBatchWriteResult = {};
@@ -931,6 +933,84 @@ function codexModelVariants(model: CodexModel) {
       { description: effort.description },
     ]),
   );
+}
+
+function codexModelSupportsImageInput(model: CodexModel) {
+  return model.inputModalities ? model.inputModalities.includes('image') : true;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function configuredCodexProviderModels(
+  providerID: string,
+  providerConfig: Record<string, unknown>,
+  fullConfig: Record<string, unknown>,
+) {
+  const visConfig = isRecord(fullConfig.vis) ? fullConfig.vis : {};
+  const visProviders = isRecord(visConfig.model_providers) ? visConfig.model_providers : {};
+  const visProvider = isRecord(visProviders[providerID]) ? visProviders[providerID] : {};
+  const modelsSource = isRecord(visProvider.models)
+    ? visProvider.models
+    : isRecord(providerConfig.models)
+      ? providerConfig.models
+      : {};
+  const models: Record<string, CodexProviderModel> = {};
+  Object.entries(modelsSource).forEach(([modelID, modelConfig]) => {
+    const id = modelID.trim();
+    if (!id) return;
+    const modelRecord = isRecord(modelConfig) ? modelConfig : {};
+    models[id] = {
+      id,
+      name: stringValue(modelRecord.name) || id,
+      providerID,
+      status: 'connected',
+      variants: {},
+      capabilities: { attachment: true, reasoning: true, toolcall: true },
+    };
+  });
+
+  const activeProvider = stringValue(fullConfig.model_provider);
+  const activeModel = stringValue(fullConfig.model);
+  if (activeProvider === providerID && activeModel && !models[activeModel]) {
+    models[activeModel] = {
+      id: activeModel,
+      name: activeModel,
+      providerID,
+      status: 'connected',
+      variants: {},
+      capabilities: { attachment: true, reasoning: true, toolcall: true },
+    };
+  }
+  return models;
+}
+
+function configWithLayeredVisModelProviders(
+  config: Record<string, unknown>,
+  layers?: CodexConfigLayer[],
+) {
+  const layeredModelProviders: Record<string, unknown> = {};
+  for (const layer of layers ?? []) {
+    const layerVis = isRecord(layer.config.vis) ? layer.config.vis : {};
+    const layerProviders = isRecord(layerVis.model_providers) ? layerVis.model_providers : {};
+    Object.assign(layeredModelProviders, layerProviders);
+  }
+  const configVis = isRecord(config.vis) ? config.vis : {};
+  const configProviders = isRecord(configVis.model_providers) ? configVis.model_providers : {};
+  Object.assign(layeredModelProviders, configProviders);
+  if (Object.keys(layeredModelProviders).length === 0) return config;
+  return {
+    ...config,
+    vis: {
+      ...configVis,
+      model_providers: layeredModelProviders,
+    },
+  };
 }
 
 function expandCodexHomePath(path: string | undefined, homeDirectory?: string) {
@@ -1180,6 +1260,9 @@ export class CodexAdapter implements BackendAdapter {
     this.listSessions = this.listSessions.bind(this);
     this.getPathInfo = this.getPathInfo.bind(this);
     this.getGlobalConfig = this.getGlobalConfig.bind(this);
+    this.updateGlobalConfig = this.updateGlobalConfig.bind(this);
+    this.writeConfigValue = this.writeConfigValue.bind(this);
+    this.batchWriteConfig = this.batchWriteConfig.bind(this);
     this.listFiles = this.listFiles.bind(this);
     this.readFileContent = this.readFileContent.bind(this);
     this.readFileContentBytes = this.readFileContentBytes.bind(this);
@@ -1376,9 +1459,12 @@ export class CodexAdapter implements BackendAdapter {
       }
     }
 
+    const turnInput = input.input && input.input.length > 0
+      ? input.input
+      : [{ type: 'text', text: input.text } satisfies CodexTurnInputItem];
     const turn = await this.startTurn({
       threadId,
-      input: [{ type: 'text', text: input.text }],
+      input: turnInput,
       cwd: input.cwd,
       approvalPolicy: input.approvalPolicy,
       sandboxPolicy: input.sandboxPolicy,
@@ -1717,6 +1803,7 @@ export class CodexAdapter implements BackendAdapter {
   async listSessions(options?: ListSessionsOptions) {
     const result = await this.listThreads({
       limit: options?.limit,
+      modelProviders: null,
       cwd: options?.directory,
       searchTerm: options?.search,
     });
@@ -1726,6 +1813,8 @@ export class CodexAdapter implements BackendAdapter {
 
   async listProviders() {
     const result = await this.listModels({ includeHidden: true });
+    const configResult = await this.readConfig({ includeLayers: true }).catch(() => null);
+    const config = configResult ? configWithLayeredVisModelProviders(configResult.config ?? {}, configResult.layers) : {};
     const allModels = result.data;
     const models = Object.fromEntries(
       allModels.map((model) => {
@@ -1737,7 +1826,7 @@ export class CodexAdapter implements BackendAdapter {
           status: model.upgrade ? 'available' : 'connected',
           variants,
           capabilities: {
-            attachment: model.inputModalities?.includes('image') ?? false,
+            attachment: codexModelSupportsImageInput(model),
             reasoning: Object.keys(variants).length > 0,
             toolcall: true,
           },
@@ -1752,10 +1841,32 @@ export class CodexAdapter implements BackendAdapter {
       models,
     };
     const defaultModel = allModels.find((model) => model.isDefault) ?? allModels.find((model) => !model.hidden) ?? allModels[0];
+    const providers = [provider];
+    const connected = new Set([CODEX_PROJECT_ID]);
+    const defaults: Record<string, string> = defaultModel ? { [CODEX_PROJECT_ID]: defaultModel.id } : {};
+    const configuredProviders = isRecord(config.model_providers) ? config.model_providers : {};
+    Object.entries(configuredProviders).forEach(([providerID, rawProviderConfig]) => {
+      const id = providerID.trim();
+      if (!id || id === CODEX_PROJECT_ID || !isRecord(rawProviderConfig)) return;
+      const configuredModels = configuredCodexProviderModels(id, rawProviderConfig, config);
+      if (Object.keys(configuredModels).length === 0) return;
+      providers.push({
+        id,
+        name: stringValue(rawProviderConfig.name) || id,
+        source: 'config',
+        models: configuredModels,
+      });
+      connected.add(id);
+    });
+    const activeProvider = stringValue(config.model_provider);
+    const activeModel = stringValue(config.model);
+    if (activeProvider && activeModel && providers.some((item) => item.id === activeProvider)) {
+      defaults[activeProvider] = activeModel;
+    }
     return {
-      all: [provider],
-      connected: [CODEX_PROJECT_ID],
-      default: defaultModel ? { [CODEX_PROJECT_ID]: defaultModel.id } : {},
+      all: providers,
+      connected: Array.from(connected),
+      default: defaults,
     };
   }
 
@@ -1787,7 +1898,7 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async getSessionStatusMap(directory?: string) {
-    const result = await this.listThreads({ cwd: directory, limit: 100, sortKey: 'updated_at' });
+    const result = await this.listThreads({ cwd: directory, limit: 100, sortKey: 'updated_at', modelProviders: null });
     return Object.fromEntries(
       result.data.map((thread) => [thread.id, normalizeCodexStatus(thread.status)]),
     );
@@ -2038,7 +2149,21 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async getGlobalConfig() {
-    return this.readConfig();
+    const result = await this.readConfig();
+    return result.config;
+  }
+
+  async updateGlobalConfig(payload: Record<string, unknown>) {
+    const edits = Object.entries(payload)
+      .filter((entry): entry is [string, Exclude<unknown, undefined>] => entry[1] !== undefined)
+      .map(([keyPath, value]) => ({
+        keyPath,
+        value,
+        mergeStrategy: 'replace' as const,
+    }));
+    await this.batchWriteConfig({ edits });
+    const result = await this.readConfig();
+    return result.config;
   }
 
   async updateMcp(payload: { name: string; config: Record<string, unknown> }) {

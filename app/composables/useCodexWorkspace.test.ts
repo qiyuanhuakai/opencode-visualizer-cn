@@ -103,6 +103,21 @@ describe('useCodexWorkspace', () => {
     expect(project.sandboxes['/home/codex/repo'].sessions['thread-child'].directory).toBe('/home/codex/repo');
   });
 
+  it('resolves relative and parent cwd values against home before building sandboxes', () => {
+    const project = createCodexProjectState(
+      [
+        { id: 'thread-parent', name: 'Parent', cwd: '..' },
+        { id: 'thread-relative', name: 'Relative', cwd: './notes/../repo' },
+      ],
+      '/home/codex',
+    );
+
+    expect(project.sandboxes['..']).toBeUndefined();
+    expect(project.sandboxes['./notes/../repo']).toBeUndefined();
+    expect(project.sandboxes['/home'].rootSessions).toContain('thread-parent');
+    expect(project.sandboxes['/home/codex/repo'].rootSessions).toContain('thread-relative');
+  });
+
   it('expands tilde git roots with the bridge home directory', () => {
     const project = createCodexProjectState(
       [{ id: 'thread-child', name: 'Child', cwd: '~/repo/subdir', gitInfo: { root: '~/repo', branch: 'main' } }],

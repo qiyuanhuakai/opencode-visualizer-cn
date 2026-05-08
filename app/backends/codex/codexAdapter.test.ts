@@ -159,6 +159,64 @@ describe('CodexAdapter', () => {
     });
   });
 
+  it('lists sessions across all model providers', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const sessions = adapter.listSessions({ limit: 2, directory: '/repo', search: 'hello' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'thread/list',
+      params: {
+        limit: 2,
+        modelProviders: null,
+        cwd: '/repo',
+        searchTerm: 'hello',
+      },
+    });
+
+    socket.respond(2, { data: [], nextCursor: null });
+    await expect(sessions).resolves.toEqual([]);
+  });
+
+  it('loads session statuses across all model providers', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const statuses = adapter.getSessionStatusMap('/repo');
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'thread/list',
+      params: {
+        cwd: '/repo',
+        limit: 100,
+        sortKey: 'updated_at',
+        modelProviders: null,
+      },
+    });
+
+    socket.respond(2, { data: [{ id: 'thr_1', status: { type: 'notLoaded' } }], nextCursor: null });
+    await expect(statuses).resolves.toEqual({ thr_1: 'idle' });
+  });
+
   it('starts a new thread and turn for simple prompts', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
@@ -196,6 +254,113 @@ describe('CodexAdapter', () => {
         model: 'gpt-5.4',
       },
     });
+  });
+
+  it('passes image input items to turn/start', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const prompt = adapter.sendPrompt({
+      text: 'Review this image.',
+      cwd: '/repo',
+      input: [
+        { type: 'text', text: 'Review this image.' },
+        { type: 'image', url: 'data:image/png;base64,AA==' },
+      ],
+    });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { thread: { id: 'thr_image', preview: '' } });
+    await waitForSent(socket, 4);
+    socket.respond(3, { turn: { id: 'turn_image', status: 'inProgress', items: [], error: null } });
+
+    await expect(prompt).resolves.toEqual({
+      threadId: 'thr_image',
+      thread: { id: 'thr_image', preview: '' },
+      turn: { id: 'turn_image', status: 'inProgress', items: [], error: null },
+    });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 3,
+      method: 'turn/start',
+      params: {
+        threadId: 'thr_image',
+        input: [
+          { type: 'text', text: 'Review this image.' },
+          { type: 'image', url: 'data:image/png;base64,AA==' },
+        ],
+        cwd: '/repo',
+      },
+    });
+  });
+
+  it('writes Codex config patches through batchWriteConfig', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const update = adapter.updateGlobalConfig({
+      model_provider: 'proxy',
+      'model_providers.proxy': { name: 'Proxy', base_url: 'https://proxy.example.com/v1', wire_api: 'responses' },
+    });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'config/batchWrite',
+      params: {
+        edits: [
+          { keyPath: 'model_provider', value: 'proxy', mergeStrategy: 'replace' },
+          {
+            keyPath: 'model_providers.proxy',
+            value: { name: 'Proxy', base_url: 'https://proxy.example.com/v1', wire_api: 'responses' },
+            mergeStrategy: 'replace',
+          },
+        ],
+      },
+    });
+    socket.respond(2, {});
+    await waitForSent(socket, 4);
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 3, method: 'config/read', params: {} });
+    socket.respond(3, { config: { model_provider: 'proxy' } });
+
+    await expect(update).resolves.toEqual({ model_provider: 'proxy' });
+  });
+
+  it('keeps global config methods bound for shared provider UI destructuring', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const updateGlobalConfig = adapter.updateGlobalConfig;
+    const update = updateGlobalConfig({ model_provider: 'proxy' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'config/batchWrite',
+      params: { edits: [{ keyPath: 'model_provider', value: 'proxy', mergeStrategy: 'replace' }] },
+    });
+    socket.respond(2, {});
+    await waitForSent(socket, 4);
+    socket.respond(3, { config: { model_provider: 'proxy' } });
+
+    await expect(update).resolves.toEqual({ model_provider: 'proxy' });
   });
 
   it('translates shared permission and question replies into Codex server responses', async () => {
@@ -596,6 +761,35 @@ describe('CodexAdapter', () => {
       ],
       nextCursor: null,
     });
+    await waitForSent(socket, 4);
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 3, method: 'config/read', params: { includeLayers: true } });
+    socket.respond(3, {
+      config: {
+        model_provider: 'proxy',
+        model: 'proxy-model',
+        model_providers: {
+          proxy: { name: 'Proxy', base_url: 'https://proxy.example.com/v1', wire_api: 'responses' },
+          omniroute: { name: 'omniroute', base_url: 'http://localhost:20128/v1', wire_api: 'responses', env_key: 'OPENAI_API_KEY' },
+        },
+        vis: {
+          model_providers: {
+            proxy: { models: { 'proxy-model': { name: 'Proxy Model' } } },
+          },
+        },
+      },
+      layers: [
+        {
+          source: 'config.toml',
+          config: {
+            vis: {
+              model_providers: {
+                omniroute: { models: { 'mimo/mimo-v2.5': { name: 'mimo-v2.5' } } },
+              },
+            },
+          },
+        },
+      ],
+    });
 
     await expect(providers).resolves.toEqual({
       all: [
@@ -626,16 +820,54 @@ describe('CodexAdapter', () => {
               status: 'connected',
               variants: {},
               capabilities: {
-                attachment: false,
+                attachment: true,
                 reasoning: false,
                 toolcall: true,
               },
             },
           },
         },
+        {
+          id: 'proxy',
+          name: 'Proxy',
+          source: 'config',
+          models: {
+            'proxy-model': {
+              id: 'proxy-model',
+              name: 'Proxy Model',
+              providerID: 'proxy',
+              status: 'connected',
+              variants: {},
+              capabilities: {
+                attachment: true,
+                reasoning: true,
+                toolcall: true,
+              },
+            },
+          },
+        },
+        {
+          id: 'omniroute',
+          name: 'omniroute',
+          source: 'config',
+          models: {
+            'mimo/mimo-v2.5': {
+              id: 'mimo/mimo-v2.5',
+              name: 'mimo-v2.5',
+              providerID: 'omniroute',
+              status: 'connected',
+              variants: {},
+              capabilities: {
+                attachment: true,
+                reasoning: true,
+                toolcall: true,
+              },
+            },
+          },
+        },
       ],
-      connected: ['codex'],
-      default: { codex: 'gpt-5.5-codex' },
+      connected: ['codex', 'proxy', 'omniroute'],
+      default: { codex: 'gpt-5.5-codex', proxy: 'proxy-model' },
     });
     await expect(adapter.listProviderAuthMethods()).resolves.toEqual({ codex: [] });
   });

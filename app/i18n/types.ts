@@ -31,6 +31,11 @@ export interface LocaleMessages {
     status: {
       ready: string;
       loadingServerPath: string;
+      loadingCodexHome: string;
+      loadingCodexHandshake: string;
+      loadingCodexThreads: string;
+      loadingCodexWorkspace: string;
+      loadingCodexModels: string;
       loadingProjects: string;
       loadingSessionHistory: string;
       loadingWorktreeState: string;
@@ -397,6 +402,7 @@ export interface LocaleMessages {
         nameRequired: string;
         baseUrlRequired: string;
         baseUrlFormat: string;
+        codexEnvKeyRequired: string;
         required: string;
         duplicate: string;
       };

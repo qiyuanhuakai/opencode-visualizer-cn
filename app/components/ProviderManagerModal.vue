@@ -582,11 +582,20 @@ type CustomProviderConfig = {
   models: Record<string, { name: string }>;
 };
 
+type CodexCustomProviderConfig = {
+  name: string;
+  base_url: string;
+  wire_api: 'responses';
+  env_key?: string;
+  http_headers?: Record<string, string>;
+  models?: Record<string, { name: string }>;
+};
+
 type CustomProviderValidationResult = {
   providerID: string;
   name: string;
   key?: string;
-  config: CustomProviderConfig;
+  config: CustomProviderConfig | CodexCustomProviderConfig;
 };
 
 const POPULAR_PROVIDER_IDS = ['opencode', 'opencode-go', 'openai', 'github-copilot', 'anthropic', 'google'];
@@ -721,6 +730,17 @@ const filteredGroups = computed(() => {
   );
 });
 
+function parseModelKey(modelKey: string) {
+  const normalized = modelKey.trim();
+  const slashIndex = normalized.indexOf('/');
+  if (slashIndex <= 0 || slashIndex >= normalized.length - 1) {
+    return { providerID: '', modelID: '' };
+  }
+  const providerID = normalized.slice(0, slashIndex).trim();
+  const modelID = normalized.slice(slashIndex + 1).trim();
+  return providerID && modelID ? { providerID, modelID } : { providerID: '', modelID: '' };
+}
+
 const disabledModelCount = computed(() => props.hiddenModels.length);
 
 watch(
@@ -851,6 +871,7 @@ function isBackendManagedProvider(provider: ProviderInfo) {
 
 function supportsProviderConfigUpdates() {
   const active = backend();
+  if (active.kind === 'codex') return Boolean(active.updateGlobalConfig);
   return Boolean(active.updateGlobalConfig && active.setProviderAuth);
 }
 
@@ -859,7 +880,11 @@ function canDisconnectProvider(provider: ProviderInfo) {
 }
 
 function isConfigBackedProvider(provider: ProviderInfo) {
-  return provider.source === 'config' || provider.source === 'custom' || Boolean(props.providerConfig?.provider?.[provider.id]);
+  const modelProviders = props.providerConfig?.model_providers;
+  const hasCodexProvider = Boolean(
+    modelProviders && typeof modelProviders === 'object' && !Array.isArray(modelProviders) && provider.id in modelProviders,
+  );
+  return provider.source === 'config' || provider.source === 'custom' || Boolean(props.providerConfig?.provider?.[provider.id]) || hasCodexProvider;
 }
 
 function providerTypeLabel(provider: ProviderInfo) {
@@ -891,6 +916,7 @@ function validateCustomProvider() {
   const baseURL = customProviderForm.value.baseURL.trim();
   const apiKey = customProviderForm.value.apiKey.trim();
   const env = apiKey.match(/^\{env:([^}]+)\}$/)?.[1]?.trim();
+  const isCodexBackend = backend().kind === 'codex';
   const disabledProviders = normalizeProviderIds(props.providerConfig?.disabled_providers);
   const existingProviderIds = new Set(props.providers.map((provider) => provider.id));
   const isDisabledExistingProvider = disabledProviders.includes(providerID);
@@ -908,6 +934,8 @@ function validateCustomProvider() {
       ? validationMessage('providerManager.custom.errors.baseUrlRequired')
       : !/^https?:\/\//.test(baseURL)
         ? validationMessage('providerManager.custom.errors.baseUrlFormat')
+        : isCodexBackend && apiKey && !env
+          ? validationMessage('providerManager.custom.errors.codexEnvKeyRequired')
         : '',
   };
 
@@ -956,22 +984,34 @@ function validateCustomProvider() {
       .filter((header) => header.key && header.value)
       .map((header) => [header.key, header.value]),
   );
+  const modelMetadata = Object.fromEntries(
+    customProviderForm.value.models.map((model) => [model.id.trim(), { name: model.name.trim() }]),
+  );
+  const codexConfig: CodexCustomProviderConfig = {
+    name,
+    base_url: baseURL,
+    wire_api: 'responses',
+    ...(env ? { env_key: env } : {}),
+    ...(Object.keys(headers).length > 0 ? { http_headers: headers } : {}),
+    models: modelMetadata,
+  };
+  const openCodeConfig: CustomProviderConfig = {
+    npm: CUSTOM_PROVIDER_NPM,
+    name,
+    ...(env ? { env: [env] } : {}),
+    options: {
+      baseURL,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    },
+    models: Object.fromEntries(
+      customProviderForm.value.models.map((model) => [model.id.trim(), { name: model.name.trim() }]),
+    ),
+  };
   return {
     providerID,
     name,
-    key: apiKey && !env ? apiKey : undefined,
-    config: {
-      npm: CUSTOM_PROVIDER_NPM,
-      name,
-      ...(env ? { env: [env] } : {}),
-      options: {
-        baseURL,
-        ...(Object.keys(headers).length > 0 ? { headers } : {}),
-      },
-      models: Object.fromEntries(
-        customProviderForm.value.models.map((model) => [model.id.trim(), { name: model.name.trim() }]),
-      ),
-    },
+    key: !isCodexBackend && apiKey && !env ? apiKey : undefined,
+    config: isCodexBackend ? codexConfig : openCodeConfig,
   } satisfies CustomProviderValidationResult;
 }
 
@@ -997,18 +1037,32 @@ async function submitCustomProvider() {
   busyProviderId.value = CUSTOM_PROVIDER_BUSY_ID;
   try {
     const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
+    const providerEnablePatch = buildProviderDisabledPatch(props.providerConfig, result.providerID, true);
+    if (backend().kind === 'codex') {
+      const codexConfig = result.config as CodexCustomProviderConfig;
+      const modelMetadata = codexConfig.models ?? {};
+      const nextConfig = (await updateGlobalConfig({
+        [`model_providers.${result.providerID}`]: codexConfig,
+        [`vis.model_providers.${result.providerID}`]: { models: modelMetadata },
+        ...providerEnablePatch,
+      })) as ProviderConfigState;
+      emit('config-updated', nextConfig ?? {});
+      emit('providers-changed');
+      setFeedback(t('providerManager.messages.connected', { name: result.name }), 'success');
+      closeCustomProviderForm();
+      resetCustomProviderForm();
+      return;
+    }
     if (result.key) {
       const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
       await setProviderAuth(result.providerID, { type: 'api', key: result.key });
     }
-    const disabledProviders = normalizeProviderIds(props.providerConfig?.disabled_providers)
-      .filter((providerId) => providerId !== result.providerID);
     const nextConfig = (await updateGlobalConfig({
       provider: {
         ...props.providerConfig?.provider,
         [result.providerID]: result.config,
       },
-      disabled_providers: disabledProviders,
+      ...providerEnablePatch,
     })) as ProviderConfigState;
     emit('config-updated', nextConfig ?? {});
     emit('providers-changed');
@@ -1107,14 +1161,14 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
 function toggleModel(modelKey: string, nextEnabled: boolean) {
   const nextByKey = new Map<string, ModelVisibilityEntry>();
   props.hiddenModels.forEach((key) => {
-    const [providerID, modelID] = key.split('/');
+    const { providerID, modelID } = parseModelKey(key);
     if (!providerID || !modelID) return;
     nextByKey.set(key, { providerID, modelID, visibility: 'hide' });
   });
   if (nextEnabled) {
     nextByKey.delete(modelKey);
   } else {
-    const [providerID, modelID] = modelKey.split('/');
+    const { providerID, modelID } = parseModelKey(modelKey);
     if (providerID && modelID) {
       nextByKey.set(modelKey, { providerID, modelID, visibility: 'hide' });
     }
@@ -1190,19 +1244,20 @@ async function disconnectProvider(provider: ProviderInfo) {
   }
   const providerId = provider.id;
   if (!providerId) return;
-    const confirmed = showConfirm ? await showConfirm(t('providerManager.confirm.disconnect', { providerId })) : true;
+  const confirmed = showConfirm ? await showConfirm(t('providerManager.confirm.disconnect', { providerId })) : true;
   if (!confirmed) return;
   busyProviderId.value = providerId;
   try {
-    const deleteProviderAuth = requireBackendMethod(backend().deleteProviderAuth, 'provider auth deletion');
     if (isConfigBackedProvider(provider)) {
       const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
-      await deleteProviderAuth(providerId).catch(() => undefined);
+      const deleteProviderAuth = backend().deleteProviderAuth;
+      if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);
       const result = (await updateGlobalConfig(
         buildProviderDisabledPatch(props.providerConfig, providerId, false),
       )) as ProviderConfigState;
       emit('config-updated', result ?? {});
     } else {
+      const deleteProviderAuth = requireBackendMethod(backend().deleteProviderAuth, 'provider auth deletion');
       await deleteProviderAuth(providerId);
     }
     emit('providers-changed');

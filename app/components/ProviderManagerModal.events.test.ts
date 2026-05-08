@@ -51,9 +51,29 @@ describe('ProviderManagerModal events', () => {
     expect(modalSource).toContain('provider: {');
     expect(modalSource).toContain('[result.providerID]: result.config');
     expect(modalSource).toContain("await setProviderAuth(result.providerID, { type: 'api', key: result.key });");
-    expect(modalSource).toContain('disabled_providers: disabledProviders');
+    expect(modalSource).toContain('const providerEnablePatch = buildProviderDisabledPatch(props.providerConfig, result.providerID, true);');
     expect(providerConfigSource).toContain('provider?: Record<string, unknown>;');
     expect(i18nTypesSource).toContain('custom: {');
+  });
+
+  it('supports Codex custom providers through config.toml model_providers', () => {
+    const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
+    const backendTypesSource = readSource(resolve(__dirname, '../backends/types.ts'));
+    const codexAdapterSource = readSource(resolve(__dirname, '../backends/codex/codexAdapter.ts'));
+
+    expect(modalSource).toContain("active.kind === 'codex'");
+    expect(modalSource).toContain('type CodexCustomProviderConfig');
+    expect(modalSource).toContain("wire_api: 'responses'");
+    expect(modalSource).toContain('models?: Record<string, { name: string }>;');
+    expect(modalSource).toContain('models: modelMetadata');
+    expect(modalSource).toContain('[`model_providers.${result.providerID}`]: codexConfig');
+    expect(modalSource).toContain('[`vis.model_providers.${result.providerID}`]: { models: modelMetadata }');
+    expect(modalSource).toContain('...providerEnablePatch');
+    expect(modalSource).toContain('buildProviderDisabledPatch(props.providerConfig, result.providerID, true)');
+    expect(modalSource).not.toContain('model_provider: result.providerID');
+    expect(backendTypesSource).toContain('batchWriteConfig?');
+    expect(codexAdapterSource).toContain("this.client.request<CodexConfigBatchWriteResult>('config/batchWrite'");
+    expect(codexAdapterSource).toContain('async updateGlobalConfig(payload: Record<string, unknown>)');
   });
 
   it('persists disconnects for config-backed providers', () => {
@@ -61,7 +81,7 @@ describe('ProviderManagerModal events', () => {
 
     expect(modalSource).toContain("provider.source === 'config' || provider.source === 'custom'");
     expect(modalSource).toContain("provider.source !== 'env'");
-    expect(modalSource).toContain('await deleteProviderAuth(providerId).catch(() => undefined);');
+    expect(modalSource).toContain('if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);');
     expect(modalSource).toContain('buildProviderDisabledPatch(props.providerConfig, providerId, false)');
     expect(modalSource).toContain("@click=\"disconnectProvider(provider)\"");
   });
@@ -74,6 +94,45 @@ describe('ProviderManagerModal events', () => {
     expect(modalSource).not.toContain("emit('select-model'");
     expect(modalSource).not.toContain('selectProvider(');
     expect(appSource).not.toContain('@select-model="handleSelectedModelUpdate"');
+  });
+
+  it('keeps slash-containing model ids intact when toggling visibility', () => {
+    const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
+
+    expect(modalSource).toContain('function parseModelKey(modelKey: string)');
+    expect(modalSource).toContain("const slashIndex = normalized.indexOf('/');");
+    expect(modalSource).toContain('const modelID = normalized.slice(slashIndex + 1).trim();');
+    expect(modalSource).toContain('const { providerID, modelID } = parseModelKey(modelKey);');
+    expect(modalSource).not.toContain('const [providerID, modelID] = modelKey.split');
+  });
+
+  it('refreshes Codex providers when opening provider manager', () => {
+    const appSource = readSource(resolve(__dirname, '../App.vue'));
+
+    expect(appSource).toContain('watch(isProviderManagerOpen, (open) => {');
+    expect(appSource).toContain("if (!open || activeBackendKind.value !== 'codex') return;");
+    expect(appSource).toContain('void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);');
+  });
+
+  it('syncs Codex active provider and model before sending custom models', () => {
+    const appSource = readSource(resolve(__dirname, '../App.vue'));
+
+    expect(appSource).toContain('async function syncCodexActiveProviderModel(providerID: string, modelID: string)');
+    expect(appSource).toContain("const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';");
+    expect(appSource).toContain('function codexAppServerProviderId(providerID: string)');
+    expect(appSource).toContain('function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: string)');
+    expect(appSource).toContain('const codexProvider = codexAppServerProviderId(normalizedProvider);');
+    expect(appSource).toContain('?.modelProvider');
+    expect(appSource).toContain("? CODEX_OFFICIAL_MODEL_PROVIDER");
+    expect(appSource).toContain("edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });");
+    expect(appSource).toContain("edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });");
+    expect(appSource).not.toContain('configStringValue(');
+    expect(appSource).not.toContain("mergeStrategy: 'remove'");
+    expect(appSource).toContain('const startNewCodexThread = selectedCodexProvider');
+    expect(appSource).toContain('forceNewThread: startNewCodexThread');
+    expect(appSource).toContain('await syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);');
+    expect(appSource).toContain('if (selectedCodexModelKey) codexApi.selectModel(selectedCodexModelKey);');
+    expect(appSource).not.toContain('codexApi.selectModel(selectedCodexModel);');
   });
 
   it('renders all providers as compact two-column rows instead of card grid items', () => {
