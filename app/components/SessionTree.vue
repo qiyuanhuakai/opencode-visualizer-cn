@@ -6,31 +6,32 @@
     <ul v-else class="session-tree-list">
       <li
         v-for="project in projects"
-        :key="project.projectId"
+        :key="projectKey(project)"
         class="session-tree-project"
       >
         <div
           class="session-tree-row"
           :class="{ 'is-pinned': project.isPinned }"
-          @click="toggleExpand(`project:${project.projectId}`)"
+          @click="toggleExpand(`project:${projectKey(project)}`)"
         >
           <span class="session-tree-toggle">
             <Icon
-              :icon="isExpanded(`project:${project.projectId}`) ? 'lucide:chevron-down' : 'lucide:chevron-right'"
+              :icon="isExpanded(`project:${projectKey(project)}`) ? 'lucide:chevron-down' : 'lucide:chevron-right'"
               width="14"
               height="14"
             />
           </span>
           <span class="session-tree-icon">
-            <Icon icon="lucide:package" width="14" height="14" />
+            <Icon :icon="projectIcon(project)" width="14" height="14" />
           </span>
           <span class="session-tree-label">{{ project.name }}</span>
           <button
+            v-if="canPinProject(project)"
             type="button"
             class="session-tree-pin"
             :class="{ 'is-pinned': project.isPinned }"
             :title="project.isPinned ? $t('sidePanel.session.sessionTree.unpinProject') : $t('sidePanel.session.sessionTree.pinProject')"
-            @click.stop="project.isPinned ? emit('unpin-project', project.projectId) : emit('pin-project', project.projectId)"
+            @click.stop="project.isPinned ? unpinProject(project) : pinProject(project)"
           >
             <Icon
               :icon="project.isPinned ? 'lucide:pin-off' : 'lucide:pin'"
@@ -40,39 +41,40 @@
           </button>
         </div>
         <ul
-          v-if="isExpanded(`project:${project.projectId}`)"
+          v-if="isExpanded(`project:${projectKey(project)}`)"
           class="session-tree-children"
         >
           <li
             v-for="sandbox in project.sandboxes"
-            :key="`${project.projectId}:${sandbox.directory}`"
+            :key="sandboxKey(project, sandbox)"
             class="session-tree-sandbox"
           >
             <div
               class="session-tree-row"
               :class="{ 'is-pinned': sandbox.isPinned || sandbox.isImplicitlyPinned }"
               :style="{ paddingLeft: 'calc(4px + 14px)' }"
-              @click="toggleExpand(`sandbox:${project.projectId}:${sandbox.directory}`)"
+              @click="toggleExpand(`sandbox:${sandboxKey(project, sandbox)}`)"
             >
               <span class="session-tree-toggle">
                 <Icon
-                  :icon="isExpanded(`sandbox:${project.projectId}:${sandbox.directory}`) ? 'lucide:chevron-down' : 'lucide:chevron-right'"
+                  :icon="isExpanded(`sandbox:${sandboxKey(project, sandbox)}`) ? 'lucide:chevron-down' : 'lucide:chevron-right'"
                   width="14"
                   height="14"
                 />
               </span>
               <span class="session-tree-icon">
-                <Icon icon="lucide:git-branch" width="14" height="14" />
+                <Icon :icon="sandboxIcon(sandbox)" width="14" height="14" />
               </span>
               <span class="session-tree-label">{{ sandbox.name }}</span>
               <button
+                v-if="canPinSandbox(sandbox)"
                 type="button"
                 class="session-tree-pin"
                 :class="{ 'is-pinned': sandbox.isPinned || sandbox.isImplicitlyPinned }"
                 :title="sandbox.isPinned || sandbox.isImplicitlyPinned ? $t('sidePanel.session.sessionTree.unpinSandbox') : $t('sidePanel.session.sessionTree.pinSandbox')"
                 @click.stop="sandbox.isPinned || sandbox.isImplicitlyPinned
-                  ? emit('unpin-sandbox', { projectId: project.projectId, directory: sandbox.directory })
-                  : emit('pin-sandbox', { projectId: project.projectId, directory: sandbox.directory })"
+                  ? unpinSandbox(sandbox)
+                  : pinSandbox(sandbox)"
               >
                 <Icon
                   :icon="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'lucide:pin-off' : 'lucide:pin'"
@@ -82,7 +84,7 @@
               </button>
             </div>
             <ul
-              v-if="isExpanded(`sandbox:${project.projectId}:${sandbox.directory}`)"
+              v-if="isExpanded(`sandbox:${sandboxKey(project, sandbox)}`)"
               class="session-tree-children"
             >
               <li
@@ -143,7 +145,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
-import type { SessionTreeProject } from '../types/session-tree';
+import type { SessionTreeProject, SessionTreeSandbox } from '../types/session-tree';
 
 const props = defineProps<{
   projects: SessionTreeProject[];
@@ -165,6 +167,58 @@ const emit = defineEmits<{
 
 function isExpanded(path: string): boolean {
   return props.expandedPaths.includes(path);
+}
+
+function projectKey(project: SessionTreeProject): string {
+  return project.key || project.projectId;
+}
+
+function sandboxKey(project: SessionTreeProject, sandbox: SessionTreeSandbox): string {
+  return sandbox.key || `${projectKey(project)}:${sandbox.pinDirectory || sandbox.directory}`;
+}
+
+function projectIcon(project: SessionTreeProject): string {
+  if (project.kind === 'global') return 'lucide:globe';
+  return 'lucide:package';
+}
+
+function sandboxIcon(sandbox: SessionTreeSandbox): string {
+  if (sandbox.kind === 'folder') return 'lucide:folder';
+  if (sandbox.kind === 'global') return 'lucide:globe';
+  if (sandbox.kind === 'branch') return 'lucide:git-branch';
+  return 'lucide:git-branch';
+}
+
+function canPinProject(project: SessionTreeProject): boolean {
+  return project.kind !== 'global';
+}
+
+function canPinSandbox(sandbox: SessionTreeSandbox): boolean {
+  return sandbox.kind !== 'global' && sandbox.kind !== 'folder';
+}
+
+function pinProject(project: SessionTreeProject): void {
+  if (project.pinDirectory) {
+    emit('pin-sandbox', { projectId: project.projectId, directory: project.pinDirectory });
+    return;
+  }
+  emit('pin-project', project.projectId);
+}
+
+function unpinProject(project: SessionTreeProject): void {
+  if (project.pinDirectory) {
+    emit('unpin-sandbox', { projectId: project.projectId, directory: project.pinDirectory });
+    return;
+  }
+  emit('unpin-project', project.projectId);
+}
+
+function pinSandbox(sandbox: SessionTreeSandbox): void {
+  emit('pin-sandbox', { projectId: sandbox.projectId, directory: sandbox.pinDirectory || sandbox.directory });
+}
+
+function unpinSandbox(sandbox: SessionTreeSandbox): void {
+  emit('unpin-sandbox', { projectId: sandbox.projectId, directory: sandbox.pinDirectory || sandbox.directory });
 }
 
 function toggleExpand(path: string): void {

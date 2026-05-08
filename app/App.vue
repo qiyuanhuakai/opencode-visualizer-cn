@@ -21,13 +21,11 @@
           @open-shell="openShellFromInput('')"
           @delete-active-directory="deleteWorktree"
           @delete-session="deleteSession"
-           @archive-session="archiveSession"
-           @unarchive-session="unarchiveSession"
-           @rename-session="renameSession"
-           @hide-session="hideCodexSession"
-            @compact-session="compactCodexSession"
-           @unsubscribe-session="unsubscribeCodexSession"
-           @pin-session="pinSession"
+          @archive-session="archiveSession"
+          @unarchive-session="unarchiveSession"
+          @rename-session="renameSession"
+          @compact-session="compactCodexSession"
+          @pin-session="pinSession"
           @unpin-session="unpinSession"
           @pin-project="pinProject"
           @unpin-project="unpinProject"
@@ -126,6 +124,7 @@
                     :resolve-model-meta="resolveModelMetaForPath"
                     :compute-context-percent="computeContextPercent"
                     :session-revert="sessionRevert"
+                    :backend-kind="activeBackendKind"
                     :is-loading="isLoadingHistory"
                     :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
@@ -167,6 +166,7 @@
               :has-model-options="hasModelOptions"
               :has-thinking-options="hasThinkingOptions"
               :can-attach="canAttach"
+              :attachment-accept="attachmentAccept"
               :is-thinking="isThinking"
               :can-abort="canAbort"
               :commands="commandOptions"
@@ -517,7 +517,8 @@ import { useMessages } from './composables/useMessages';
 import { pendingWorkerRenders } from './composables/useRenderState';
 import { useOpenCodeApi } from './composables/useOpenCodeApi';
 import { useCodexApi } from './composables/useCodexApi';
-import { CODEX_PROJECT_ID, useCodexWorkspace } from './composables/useCodexWorkspace';
+import type { CodexTurnInputItem } from './backends/codex/codexAdapter';
+import { CODEX_PROJECT_ID, createCodexProjectState, useCodexWorkspace } from './composables/useCodexWorkspace';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
 import { useSessionSelection } from './composables/useSessionSelection';
@@ -558,11 +559,11 @@ import {
   getActiveBackendAdapter,
   setActiveBackendKind,
 } from './backends/registry';
-import type { BackendKind } from './backends/types';
+import type { BackendKind, ConfigMergeStrategy } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { shouldPreservePendingCodexSelection } from './utils/codexSessionSelection';
-import { splitFileContentDirectoryAndPath, normalizeDirectory } from './utils/path';
+import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
 import { useCredentials } from './composables/useCredentials';
 import { useSettings } from './composables/useSettings';
 import {
@@ -581,7 +582,7 @@ import {
   writeDeletedSandboxStore,
   type DeletedSandboxStore,
 } from './utils/deletedSandboxes';
-import { buildCodexTopPanelTreeData } from './utils/codexTopPanelTree';
+import { buildCodexSessionTreeData, buildCodexTopPanelTreeData } from './utils/codexTopPanelTree';
 
 const { t } = useI18n();
 
@@ -1280,7 +1281,12 @@ type ProviderConfigState = {
   enabled_providers?: string[];
   disabled_providers?: string[];
   provider?: Record<string, unknown>;
+  model_providers?: Record<string, unknown>;
+  model_provider?: string;
+  model?: string;
 };
+
+const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';
 
 type ModelVisibilityEntry = {
   providerID: string;
@@ -1775,7 +1781,12 @@ const sessionLocationById = computed(() => {
 });
 
 const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
-  const currentHash = `${activeBackendKind.value}:${treeDataHash.value}`;
+  const codexTopPanelHash = activeBackendKind.value === 'codex'
+    ? codexApi.threads.value
+      .map((thread) => `${thread.id}:${thread.updatedAt ?? ''}:${thread.name ?? ''}:${thread.cwd ?? ''}:${thread.gitInfo?.root ?? ''}:${thread.gitInfo?.commonRoot ?? ''}:${thread.gitInfo?.worktreeRoot ?? ''}:${thread.gitInfo?.branch ?? ''}`)
+      .join('|') + `:hidden=${Array.from(codexApi.hiddenThreadIds.value).sort().join(',')}:pinned=${Array.from(codexApi.pinnedThreadIds.value).sort().join(',')}`
+    : '';
+  const currentHash = `${activeBackendKind.value}:${treeDataHash.value}:${codexTopPanelHash}`;
   const now = Date.now();
   
   if (
@@ -1787,7 +1798,12 @@ const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
   }
 
   if (activeBackendKind.value === 'codex') {
-    const project = serverState.projects[CODEX_PROJECT_ID];
+    const project = createCodexProjectState(
+      codexApi.threads.value,
+      codexApi.homeDir.value || '/',
+      codexApi.pinnedThreadIds.value,
+      codexApi.hiddenThreadIds.value,
+    );
     const data = project ? buildCodexTopPanelTreeData(project, {
       pinnedStore: localPinnedSessionStore.value,
       homePath: homePath.value,
@@ -2261,7 +2277,12 @@ const todoPanelSessions = computed(() => {
 });
 
 const sessionTreeData = computed<SessionTreeData>(() => {
-  const currentHash = treeDataHash.value;
+  const codexSessionTreeHash = activeBackendKind.value === 'codex'
+    ? topPanelTreeData.value
+      .map((worktree) => `${worktree.key ?? worktree.directory}:${worktree.pinnedAt ?? 0}:${worktree.sandboxes.map((sandbox) => `${sandbox.key ?? sandbox.directory}:${sandbox.pinDirectory ?? ''}:${sandbox.pinnedAt ?? 0}:${sandbox.sessions.map((session) => `${session.id}:${session.pinnedAt ?? 0}:${session.archivedAt ?? 0}`).join(',')}`).join(';')}`)
+      .join('|')
+    : '';
+  const currentHash = `${activeBackendKind.value}:${treeDataHash.value}:${codexSessionTreeHash}`;
   const now = Date.now();
 
   if (
@@ -2274,6 +2295,12 @@ const sessionTreeData = computed<SessionTreeData>(() => {
 
   const store = localPinnedSessionStore.value;
   const result: SessionTreeProject[] = [];
+
+  if (activeBackendKind.value === 'codex') {
+    const data = buildCodexSessionTreeData(topPanelTreeData.value);
+    sessionTreeDataCache.value = { data, hash: currentHash, timestamp: now };
+    return data;
+  }
 
   for (const project of Object.values(serverState.projects)) {
     const projectName =
@@ -2389,7 +2416,7 @@ const canSend = computed(() =>
     connectionState.value === 'ready' &&
     selectedSessionId.value &&
     !isSending.value &&
-    (messageInput.value.trim().length > 0 || attachments.value.length > 0),
+    (messageInput.value.trim().length > 0 || (attachments.value.length > 0 && canAttach.value)),
   ),
 );
 
@@ -2462,7 +2489,12 @@ const subagentOptions = computed(() => {
       isSubagent: true,
     }));
 });
-const canAttach = computed(() => availableModelOptions.value.length > 0);
+const selectedModelInfo = computed(() => availableModelOptions.value.find((model) => model.id === selectedModel.value));
+const canAttach = computed(() => {
+  if (activeBackendKind.value === 'codex') return Boolean(selectedModelInfo.value?.attachmentCapable);
+  return availableModelOptions.value.length > 0;
+});
+const attachmentAccept = computed(() => (activeBackendKind.value === 'codex' ? 'image/*' : '*/*'));
 const commandOptions = computed(() => {
   const list = commands.value.slice();
   const hasShell = list.some((command) => command.name.toLowerCase() === 'shell');
@@ -2627,6 +2659,35 @@ function parseProviderModelKey(value: string) {
   const modelID = normalized.slice(slashIndex + 1).trim();
   if (!providerID || !modelID) return { providerID: '', modelID: '' };
   return { providerID, modelID };
+}
+
+async function syncCodexActiveProviderModel(providerID: string, modelID: string) {
+  const normalizedProvider = providerID.trim();
+  const normalizedModel = modelID.trim();
+  if (!normalizedProvider || !normalizedModel) return;
+
+  const codexProvider = codexAppServerProviderId(normalizedProvider);
+  const edits: Array<{ keyPath: string; value: unknown; mergeStrategy: ConfigMergeStrategy }> = [];
+
+  edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });
+  edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });
+  await codexApi.batchWriteConfig(edits);
+  providerConfig.value = (codexApi.config.value?.config as ProviderConfigState | undefined) ?? providerConfig.value;
+}
+
+function codexAppServerProviderId(providerID: string) {
+  const normalizedProvider = providerID.trim();
+  return normalizedProvider === CODEX_PROJECT_ID ? CODEX_OFFICIAL_MODEL_PROVIDER : normalizedProvider;
+}
+
+function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: string) {
+  const desiredProvider = codexAppServerProviderId(providerID);
+  if (!sessionId || !desiredProvider) return false;
+  const currentProvider = codexApi.threads.value
+    .find((thread) => thread.id === sessionId)
+    ?.modelProvider
+    ?.trim();
+  return Boolean(currentProvider && currentProvider !== desiredProvider);
 }
 
 function normalizeIdList(values?: string[]) {
@@ -3426,7 +3487,7 @@ async function fetchGlobalProviderConfig() {
   try {
     if (activeBackendKind.value === 'codex') {
       await codexApi.refreshConfig();
-      providerConfig.value = (codexApi.config.value as ProviderConfigState | null) ?? null;
+      providerConfig.value = (codexApi.config.value?.config as ProviderConfigState | undefined) ?? null;
       return;
     }
     const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
@@ -3748,6 +3809,10 @@ function normalizeAttachmentMime(mime: string) {
 
 async function handleAddAttachments(files: File[]) {
   const accepted = files.filter((file) => file.size > 0 || file.type.length > 0 || file.name.length > 0);
+  if (activeBackendKind.value === 'codex' && accepted.some((file) => !normalizeAttachmentMime(file.type || '').startsWith('image/'))) {
+    setSendStatusKey('app.error.unsupportedAttachment');
+    return;
+  }
   if (accepted.length === 0) {
     setSendStatusKey('app.error.unsupportedAttachment');
     return;
@@ -4157,6 +4222,13 @@ async function deleteSession(sessionId: string, hints?: { projectId?: string; di
   let optimisticProjectId = '';
   let previousOverride: number | undefined;
   try {
+    if (activeBackendKind.value === 'codex') {
+      await codexApi.archiveThread(sessionId);
+      if (selectedSessionId.value === sessionId) {
+        selectedSessionId.value = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
+      }
+      return;
+    }
     const { projectId, directory } = resolveSessionOperationPayload(
       sessionId,
       hints?.projectId,
@@ -4186,7 +4258,7 @@ async function archiveSession(sessionId: string, hints?: { projectId?: string; d
   let previousOverride: number | undefined;
   try {
     if (activeBackendKind.value === 'codex') {
-      await codexApi.archiveThread(sessionId);
+      codexApi.hideThread(sessionId);
       if (selectedSessionId.value === sessionId) {
         selectedSessionId.value = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
       }
@@ -4221,8 +4293,15 @@ async function unarchiveSession(sessionId: string, hints?: { projectId?: string;
   let previousOverride: number | undefined;
   try {
     if (activeBackendKind.value === 'codex') {
-      await codexApi.unarchiveThread(sessionId);
-      selectedSessionId.value = codexApi.activeThreadId.value || sessionId;
+      if (codexApi.hiddenThreadIds.value.has(sessionId)) {
+        codexApi.unhideThread(sessionId);
+        selectedProjectId.value = CODEX_PROJECT_ID;
+        selectedSessionId.value = sessionId;
+        await codexApi.selectThread(sessionId);
+      } else {
+        await codexApi.unarchiveThread(sessionId);
+        selectedSessionId.value = codexApi.activeThreadId.value || sessionId;
+      }
       return;
     }
     const { projectId, directory } = resolveSessionOperationPayload(
@@ -4508,13 +4587,14 @@ async function runTopPanelBatchSessionActionTarget(
         codexApi.unpinThread(target.sessionId);
         return;
       case 'archive':
-        await codexApi.archiveThread(target.sessionId);
+        codexApi.hideThread(target.sessionId);
         return;
       case 'unarchive':
-        await codexApi.unarchiveThread(target.sessionId);
+        if (codexApi.hiddenThreadIds.value.has(target.sessionId)) codexApi.unhideThread(target.sessionId);
+        else await codexApi.unarchiveThread(target.sessionId);
         return;
       case 'delete':
-        codexApi.hideThread(target.sessionId);
+        await codexApi.archiveThread(target.sessionId);
         return;
       default:
         throw new Error(`Unsupported Codex batch session action: ${action}`);
@@ -4674,14 +4754,6 @@ function handleSidePanelUnpinSession(payload: { sessionId: string; projectId: st
   void unpinSession(payload.sessionId, { projectId: payload.projectId });
 }
 
-function hideCodexSession(sessionId: string) {
-  if (activeBackendKind.value !== 'codex' || !sessionId) return;
-  codexApi.hideThread(sessionId);
-  if (selectedSessionId.value === sessionId) {
-    selectedSessionId.value = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
-  }
-}
-
 async function forkCodexSession(sessionId: string) {
   if (activeBackendKind.value !== 'codex' || !sessionId) return;
   if (!ensureConnectionReady(t('app.actions.fork'))) return;
@@ -4725,16 +4797,6 @@ async function compactCodexSession(sessionId: string) {
   sessionError.value = '';
   try {
     await codexApi.startThreadCompaction(sessionId);
-  } catch (error) {
-    sessionError.value = toErrorMessage(error);
-  }
-}
-
-async function unsubscribeCodexSession(sessionId: string) {
-  if (activeBackendKind.value !== 'codex' || !sessionId) return;
-  sessionError.value = '';
-  try {
-    await codexApi.unsubscribeThread(sessionId);
   } catch (error) {
     sessionError.value = toErrorMessage(error);
   }
@@ -4944,7 +5006,7 @@ async function fetchProviders(force = false) {
           providerID,
           providerLabel: providerLabel,
           variants: model.variants,
-          attachmentCapable: true,
+          attachmentCapable: model.capabilities?.attachment ?? false,
         });
       });
     });
@@ -6229,28 +6291,52 @@ async function sendMessage() {
       }
       const atAgent = hasText ? parseAtAgent(text) : null;
       const messageText = atAgent ? atAgent.text : text;
-      const attachmentText = attachments.value.map((item) => {
+      const codexInput: CodexTurnInputItem[] = [];
+      if (messageText) codexInput.push({ type: 'text', text: messageText });
+      for (const item of attachments.value) {
         if (item.lineComment) {
-          return formatCommentNote(
-            item.lineComment.path,
-            item.lineComment.startLine,
-            item.lineComment.endLine,
-            item.lineComment.text,
-          );
+          codexInput.push({
+            type: 'text',
+            text: formatCommentNote(
+              item.lineComment.path,
+              item.lineComment.startLine,
+              item.lineComment.endLine,
+              item.lineComment.text,
+            ),
+          });
+          continue;
         }
-        return `[file: ${item.filename}]`;
-      });
-      const prompt = [messageText, ...attachmentText].filter(Boolean).join('\n\n');
-      const selectedModelIDs = parseProviderModelKey(selectedModel.value);
-      const selectedCodexModel = selectedModelIDs.providerID === CODEX_PROJECT_ID
-        ? selectedModelIDs.modelID
-        : undefined;
-      if (selectedCodexModel) codexApi.selectModel(selectedCodexModel);
+        if (!item.mime.startsWith('image/')) {
+          setSendStatusKey('app.error.unsupportedAttachment');
+          return;
+        }
+        codexInput.push({ type: 'image', url: item.dataUrl });
+      }
+      const prompt = codexInput
+        .filter((item): item is Extract<CodexTurnInputItem, { type: 'text' }> => item.type === 'text')
+        .map((item) => item.text)
+        .join('\n\n');
+      const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
+      const selectedModelIDs = selectedInfo
+        ? { providerID: selectedInfo.providerID?.trim() ?? '', modelID: selectedInfo.modelID.trim() }
+        : parseProviderModelKey(selectedModel.value);
+      const selectedCodexModelKey = selectedInfo?.id || selectedModel.value.trim();
+      const selectedCodexModel = selectedModelIDs.modelID || (!selectedCodexModelKey.includes('/') ? selectedCodexModelKey : undefined);
+      const selectedCodexProvider = selectedModelIDs.providerID || (selectedCodexModel ? CODEX_PROJECT_ID : '');
+      const startNewCodexThread = selectedCodexProvider
+        ? shouldStartNewCodexThreadForProvider(sessionId, selectedCodexProvider)
+        : false;
+      if (selectedCodexProvider && selectedCodexModel) {
+        await syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);
+      }
+      if (selectedCodexModelKey) codexApi.selectModel(selectedCodexModelKey);
       await codexApi.sendPrompt(prompt, {
-        threadId: sessionId,
+        threadId: startNewCodexThread ? undefined : sessionId,
+        forceNewThread: startNewCodexThread,
         cwd: codexDirectory,
         model: selectedCodexModel,
         effort: selectedThinking.value,
+        input: codexInput,
       });
       await codexApi.refreshThreads();
       if (codexApi.activeThreadId.value) {
@@ -6925,6 +7011,11 @@ watch(selectedModel, () => {
   }
 });
 
+watch(isProviderManagerOpen, (open) => {
+  if (!open || activeBackendKind.value !== 'codex') return;
+  void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
+});
+
 watch(hiddenModels, (value) => {
   writeHiddenModelsToStorage(value);
 });
@@ -7177,12 +7268,15 @@ function normalizeProjectDirectoryForActiveBackend(directory: string) {
   const trimmed = directory.trim();
   if (activeBackendKind.value !== 'codex') return normalizeDirectory(trimmed);
   const home = normalizeDirectory(codexApi.homeDir.value || homePath.value || '/');
-  if (trimmed === '~') return home || '/';
+  const normalizedHome = home.startsWith('/') ? normalizeAbsolutePathNoParent(home) : '/';
+  if (trimmed === '~') return normalizedHome || '/';
   if (trimmed.startsWith('~/')) {
     const suffix = trimmed.slice(2).replace(/^\/+/, '');
-    return normalizeDirectory(`${home.replace(/\/+$/u, '')}/${suffix}`);
+    return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${suffix}`));
   }
-  return normalizeDirectory(trimmed || home || '/');
+  if (!trimmed) return normalizeDirectory(normalizedHome || '/');
+  if (trimmed.startsWith('/')) return normalizeDirectory(normalizeAbsolutePathNoParent(trimmed));
+  return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${trimmed}`));
 }
 
 function codexThreadDirectoryMatch(thread: { cwd?: string; gitInfo?: { root?: string } | null }, directory: string) {
@@ -8500,15 +8594,17 @@ async function startInitialization() {
     try {
       connectionState.value = 'connecting';
       initLoadingMessage.value = t('app.connection.connecting');
-      await codexApi.connect(credentials.codexBridgeUrl.value);
+      await codexApi.connect(credentials.codexBridgeUrl.value, (phase) => {
+        if (phase === 'home') initLoadingMessage.value = t('app.status.loadingCodexHome');
+        else if (phase === 'handshake') initLoadingMessage.value = t('app.status.loadingCodexHandshake');
+        else if (phase === 'threads') initLoadingMessage.value = t('app.status.loadingCodexThreads');
+        else if (phase === 'workspace') initLoadingMessage.value = t('app.status.loadingCodexWorkspace');
+        else initLoadingMessage.value = t('app.status.loadingCodexModels');
+      });
       const existingThreadId = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
-      const thread = existingThreadId
-        ? undefined
-        : await codexApi.startThread(codexApi.homeDir.value || '/');
-      const nextThreadId = existingThreadId || thread?.id || '';
-      if (nextThreadId) {
-        await codexApi.selectThread(nextThreadId);
-        selectedSessionId.value = nextThreadId;
+      if (existingThreadId) {
+        await codexApi.selectThread(existingThreadId);
+        selectedSessionId.value = existingThreadId;
       }
       await Promise.all([fetchGlobalProviderConfig(), fetchProviders(true), fetchAgents()]);
       connectionState.value = 'ready';

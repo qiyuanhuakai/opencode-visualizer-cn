@@ -451,6 +451,7 @@ const props = defineProps<{
   hasModelOptions: boolean;
   hasThinkingOptions: boolean;
   canAttach?: boolean;
+  attachmentAccept?: string;
   isThinking: boolean;
   canAbort: boolean;
   commands: CommandOption[];
@@ -497,7 +498,7 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const modelDropdownRef = ref<HTMLElement | null>(null);
 const modelSearchQuery = ref('');
-const acceptMime = '*/*';
+const acceptMime = computed(() => props.attachmentAccept ?? '*/*');
 
 const { enterToSend } = useSettings();
 

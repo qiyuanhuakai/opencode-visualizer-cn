@@ -12,9 +12,12 @@ export type SessionTreeSession = {
 
 export type SessionTreeSandbox = {
   type: 'sandbox';
+  key?: string;
   directory: string;
+  pinDirectory?: string;
   projectId: string;
   name: string;
+  kind?: 'global' | 'sandbox' | 'folder' | 'branch';
   pinnedAt: number;
   isPinned: boolean;
   isImplicitlyPinned: boolean;
@@ -23,7 +26,11 @@ export type SessionTreeSandbox = {
 
 export type SessionTreeProject = {
   type: 'project';
+  key?: string;
   projectId: string;
+  directory?: string;
+  pinDirectory?: string;
+  kind?: 'global' | 'sandbox';
   name: string;
   color?: string;
   pinnedAt: number;

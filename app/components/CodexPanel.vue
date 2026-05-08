@@ -195,8 +195,8 @@
             <button
               type="button"
               class="codex-thread-select"
-              :disabled="api.loadingThread.value"
               :title="thread.name || thread.preview || thread.id"
+              :disabled="api.loadingThread.value || showArchived"
               @click="selectThread(thread.id)"
             >
               <span class="codex-thread-title-row">
@@ -233,16 +233,6 @@
                   :icon="api.pinnedThreadIds.value.has(thread.id) ? 'mdi:pin-off' : 'mdi:pin'"
                   width="14"
                 />
-              </button>
-                <button
-                  v-if="!showArchived && !showHidden"
-                  type="button"
-                  class="codex-icon-button"
-                  :disabled="!api.connected.value"
-                  :title="t('codexPanel.hide')"
-                @click="api.hideThread(thread.id)"
-              >
-                <Icon icon="mdi:eye-off" width="14" />
               </button>
               <button
                 v-if="showHidden"
@@ -596,7 +586,7 @@
                     {{ t('codexPanel.compactThread') }}
                   </button>
                   <button type="button" class="codex-inline-menu-item is-danger" :disabled="!api.connected.value" @click="archiveActiveThread().finally(close)">
-                    {{ t('codexPanel.archive') }}
+                    {{ t('topPanel.management.archive') }}
                   </button>
                 </div>
               </template>
@@ -674,6 +664,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
+import type { CodexThread } from '../backends/codex/codexAdapter';
 import type { CodexJsonRpcId } from '../backends/codex/jsonRpcClient';
 import type { CodexTranscriptEntry } from '../composables/useCodexApi';
 import { useCodexApi } from '../composables/useCodexApi';
@@ -694,10 +685,11 @@ const emit = defineEmits<{
  const { t } = useI18n();
  const fallbackApi = useCodexApi();
  const api = props.api ?? fallbackApi;
- const promptText = ref('');
- const threadName = ref('');
- const showArchived = ref(false);
+const promptText = ref('');
+const threadName = ref('');
+const showArchived = ref(false);
 const showHidden = ref(false);
+const archivedThreads = ref<CodexThread[]>([]);
 const showLoginPanel = ref(false);
   const apiKeyInput = ref('');
   const toolInputResponses = ref<Record<string, string>>({});
@@ -715,7 +707,7 @@ const activeThread = computed(
 
 const displayThreads = computed(() => {
   if (showHidden.value) return api.threads.value.filter((thread) => api.hiddenThreadIds.value.has(thread.id));
-  if (showArchived.value) return api.threads.value;
+  if (showArchived.value) return archivedThreads.value;
   return api.visibleThreads.value;
 });
 
@@ -759,12 +751,17 @@ onMounted(() => {
 });
 
 async function refreshThreads() {
-  await api.refreshThreads(showArchived.value ? { archived: true } : {});
+  if (showArchived.value) {
+    archivedThreads.value = await api.listThreads({ archived: true });
+    return;
+  }
+  await api.refreshThreads();
 }
 
 async function toggleArchived() {
   showArchived.value = !showArchived.value;
   if (showArchived.value) showHidden.value = false;
+  if (!showArchived.value) archivedThreads.value = [];
   await refreshThreads();
 }
 

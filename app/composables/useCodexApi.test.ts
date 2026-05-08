@@ -77,6 +77,7 @@ describe('useCodexApi', () => {
 
   it('connects through a Codex adapter and loads threads', async () => {
     const mock = createAdapterMock();
+    const phases: string[] = [];
     const api = useCodexApi({
       url: 'ws://localhost:23004/codex',
       bridgeToken: 'local-token',
@@ -86,12 +87,159 @@ describe('useCodexApi', () => {
       },
     });
 
-    await api.connect();
+    await api.connect(undefined, (phase) => phases.push(phase));
 
     expect(api.status.value).toBe('connected');
     expect(api.initialized.value).toBe(true);
     expect(api.threads.value).toEqual([{ id: 'thr_existing', preview: 'Existing thread' }]);
     expect(api.activeThreadId.value).toBe('thr_existing');
+    expect(phases).toEqual(['home', 'handshake', 'threads', 'workspace', 'panelData']);
+  });
+
+  it('sends Codex image input items without degrading them to file text', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    await api.sendPrompt('', {
+      threadId: 'thr_existing',
+      input: [{ type: 'image', url: 'data:image/png;base64,AA==' }],
+    });
+
+    expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      text: '',
+      threadId: 'thr_existing',
+      input: [{ type: 'image', url: 'data:image/png;base64,AA==' }],
+    });
+  });
+
+  it('sends only the Codex model id when the selected UI key includes a provider', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    api.selectModel('omniroute/mimo/mimo-v2.5');
+    await api.sendPrompt('Hello custom model.', { threadId: 'thr_existing' });
+
+    expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      text: 'Hello custom model.',
+      threadId: 'thr_existing',
+      model: 'mimo/mimo-v2.5',
+    });
+  });
+
+  it('keeps slash-containing explicit Codex model ids intact', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    api.selectModel('omniroute/mimo/mimo-v2.5');
+    await api.sendPrompt('Hello explicit custom model.', {
+      threadId: 'thr_existing',
+      model: 'mimo/mimo-v2.5',
+    });
+
+    expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      text: 'Hello explicit custom model.',
+      threadId: 'thr_existing',
+      model: 'mimo/mimo-v2.5',
+    });
+  });
+
+  it('lists archived threads without replacing the active thread list', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn()
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_active', preview: 'Active thread' }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_archived', preview: 'Archived thread' }],
+        nextCursor: null,
+      });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    const archived = await api.listThreads({ archived: true });
+
+    expect(archived.map((thread) => thread.id)).toEqual(['thr_archived']);
+    expect(api.threads.value.map((thread) => thread.id)).toEqual(['thr_active']);
+    expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(2, {
+      limit: 50,
+      sortKey: 'updated_at',
+      modelProviders: null,
+      archived: true,
+    });
+  });
+
+  it('requests all Codex model providers when refreshing threads', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.refreshThreads();
+
+    expect(mock.adapter.listThreads).toHaveBeenLastCalledWith({
+      limit: 50,
+      sortKey: 'updated_at',
+      modelProviders: null,
+    });
+  });
+
+  it('merges explicit provider thread lists when custom providers are configured', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readConfig = vi.fn().mockResolvedValue({
+      config: {
+        model_provider: 'omniroute',
+        model_providers: { omniroute: { name: 'OmniRoute' } },
+      },
+    });
+    mock.adapter.listThreads = vi.fn()
+      .mockResolvedValueOnce({ data: [{ id: 'custom-null', preview: 'Null custom', modelProvider: 'omniroute', updatedAt: 2 }], nextCursor: null })
+      .mockResolvedValueOnce({ data: [{ id: 'official', preview: 'OpenAI', modelProvider: 'openai', updatedAt: 3 }], nextCursor: null })
+      .mockResolvedValueOnce({ data: [{ id: 'custom-explicit', preview: 'Custom', modelProvider: 'omniroute', updatedAt: 1 }], nextCursor: null });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+
+    expect(api.threads.value.map((thread) => thread.id)).toEqual(['official', 'custom-null', 'custom-explicit']);
+    expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(1, {
+      limit: 50,
+      sortKey: 'updated_at',
+      modelProviders: null,
+    });
+    expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(2, {
+      limit: 50,
+      sortKey: 'updated_at',
+      modelProviders: ['openai'],
+    });
+    expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(3, {
+      limit: 50,
+      sortKey: 'updated_at',
+      modelProviders: ['omniroute'],
+    });
+  });
+
+  it('strips raw git remote URLs from loaded thread metadata', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({
+      data: [{
+        id: 'thr_repo',
+        preview: 'Repo',
+        cwd: '/repo',
+        gitInfo: {
+          root: '/repo',
+          branch: 'main',
+          originUrl: 'https://token@example.com/org/repo.git',
+        },
+      }],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+
+    expect(api.threads.value[0]?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
   });
 
   it('expands tilde cwd values loaded from Codex threads', async () => {
@@ -140,6 +288,22 @@ describe('useCodexApi', () => {
     expect(mock.adapter.startThread).toHaveBeenCalledWith({ cwd: '/home/codex/repo' });
     expect(thread.cwd).toBe('/home/codex/repo');
     expect(api.threads.value.find((item) => item.id === 'thr_new')?.cwd).toBe('/home/codex/repo');
+  });
+
+  it('starts threads with the bare Codex model id from the selected UI key', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    api.homeDir.value = '/home/codex';
+
+    await api.connect();
+    api.selectModel('omniroute/mimo/mimo-v2.5');
+    await api.startThread('~/repo');
+
+    expect(mock.adapter.startThread).toHaveBeenCalledWith({
+      cwd: '/home/codex/repo',
+      model: 'mimo/mimo-v2.5',
+    });
   });
 
   it('preserves known cwd and git info when later thread reads omit them', async () => {
@@ -244,6 +408,25 @@ describe('useCodexApi', () => {
     });
   });
 
+  it('can force a new thread instead of resuming the active thread', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    await api.sendPrompt('Start on the selected provider.', {
+      threadId: 'thr_existing',
+      forceNewThread: true,
+      model: 'mimo/mimo-v2.5',
+      cwd: '/repo',
+    });
+
+    expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      text: 'Start on the selected provider.',
+      model: 'mimo/mimo-v2.5',
+      cwd: '/repo',
+    });
+  });
+
   it('preserves a newly materialized active thread when list refresh is temporarily stale', async () => {
     const mock = createAdapterMock();
     mock.adapter.sendPrompt = vi.fn().mockResolvedValue({
@@ -285,6 +468,17 @@ describe('useCodexApi', () => {
 
     expect(api.selectedSandboxCwd()).toBe('/repo');
     expect(mock.adapter.startThread).toHaveBeenLastCalledWith({ cwd: '/repo' });
+  });
+
+  it('normalizes relative sandbox paths against home before starting threads', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    api.homeDir.value = '/home/codex';
+
+    await api.connect();
+    await api.startThread('../shared/./work');
+
+    expect(mock.adapter.startThread).toHaveBeenLastCalledWith({ cwd: '/home/shared/work' });
   });
 
   it('updates state from thread and agent delta notifications', async () => {
@@ -359,7 +553,9 @@ describe('useCodexApi', () => {
       id: 'thr_existing',
       name: 'Renamed',
     }));
-    expect(mock.adapter.listThreads).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(mock.adapter.listThreads).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('renames, archives, unsubscribes, and interrupts active Codex threads', async () => {

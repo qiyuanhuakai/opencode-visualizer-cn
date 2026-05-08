@@ -24,11 +24,12 @@ import {
   type CodexModel,
   type CodexMcpServerInfo,
   type CodexPlugin,
-  type CodexPromptInput,
-  type CodexReviewStartParams,
-  type CodexSkill,
-  type CodexThread,
-  type CodexThreadListParams,
+    type CodexPromptInput,
+    type CodexReviewStartParams,
+    type CodexSkill,
+    type CodexThread,
+    type CodexThreadListResult,
+    type CodexThreadListParams,
   type CodexThreadReadResult,
   type CodexTurn,
   type CodexToolRequestUserInputParams,
@@ -48,8 +49,10 @@ import {
   normalizeCodexTurnsToHistory,
   type CodexCanonicalHistoryEntry,
 } from '../backends/codex/normalize';
+import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type { MessageInfo, MessagePart, ReasoningPart, TextPart, ToolPart } from '../types/sse';
+import { normalizeAbsolutePathNoParent } from '../utils/path';
 
 export type CodexConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -96,6 +99,8 @@ export type CodexApiOptions = {
   bridgeToken?: string;
   adapterFactory?: (options: CodexAdapterOptions) => CodexAdapter;
 };
+
+export type CodexConnectPhase = 'home' | 'handshake' | 'threads' | 'workspace' | 'panelData';
 
 type CodexRealtimePartRecord<TPart extends MessagePart = MessagePart> = {
   info: MessageInfo;
@@ -593,15 +598,28 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     pushTranscript('assistant', text);
   }
 
+  function parseSelectedCodexModel(value: string | undefined) {
+    const normalized = value?.trim() ?? '';
+    if (!normalized) return { providerID: 'codex', modelID: '' };
+    const slashIndex = normalized.indexOf('/');
+    if (slashIndex <= 0 || slashIndex >= normalized.length - 1) {
+      return { providerID: 'codex', modelID: normalized };
+    }
+    const providerID = normalized.slice(0, slashIndex).trim() || 'codex';
+    const modelID = normalized.slice(slashIndex + 1).trim() || normalized;
+    return { providerID, modelID };
+  }
+
   function createCodexAssistantInfo(sessionId: string, messageId: string, createdAt: number, parentId = ''): MessageInfo {
+    const model = parseSelectedCodexModel(selectedModel.value);
     return {
       id: messageId,
       sessionID: sessionId,
       role: 'assistant',
       time: { created: createdAt },
       parentID: parentId,
-      modelID: selectedModel.value || 'codex',
-      providerID: 'codex',
+      modelID: model.modelID || 'codex',
+      providerID: model.providerID,
       mode: 'codex',
       agent: 'codex',
       path: { cwd: '', root: '' },
@@ -1283,23 +1301,28 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return homeDir.value;
   }
 
-  async function connect(nextUrl = url.value) {
+  async function connect(nextUrl = url.value, onPhase?: (phase: CodexConnectPhase) => void) {
     disconnect();
     url.value = nextUrl.trim();
     status.value = 'connecting';
     errorMessage.value = '';
     adapter = makeAdapter();
 
+    onPhase?.('home');
     await refreshHomeDir();
     unsubscribeNotifications = adapter.onNotification(handleNotification);
     unsubscribeServerRequests = adapter.onServerRequest(handleServerRequest);
 
     try {
+      onPhase?.('handshake');
       await adapter.initialize();
       initialized.value = true;
       status.value = 'connected';
+      onPhase?.('threads');
       await refreshThreads();
-      await openAsSandbox(homeDir.value || '/');
+      onPhase?.('workspace');
+      await openAsSandbox(selectedSandboxCwd() || homeDir.value || '/');
+      onPhase?.('panelData');
       await preloadPanelData();
     } catch (error) {
       status.value = 'error';
@@ -1322,11 +1345,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (resetStatus) status.value = 'idle';
   }
 
-  async function refreshThreads(params: CodexThreadListParams = {}) {
+  async function fetchThreadList(params: CodexThreadListParams = {}) {
     if (!adapter) return;
-    const result = await adapter.listThreads({ limit: 50, sortKey: 'updated_at', ...params });
+    const baseParams = { limit: 50, sortKey: 'updated_at' as const, modelProviders: null, ...params };
+    const result = await listThreadsAcrossConfiguredProviders(baseParams);
     const existingThreads = threads.value;
-    const normalizedThreads = result.data.map((thread) => {
+    return result.data.map((thread) => {
       const existing = existingThreads.find((item) => item.id === thread.id);
       return normalizeThreadCwd({
         ...existing,
@@ -1337,6 +1361,77 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         updatedAt: thread.updatedAt ?? existing?.updatedAt,
       });
     });
+  }
+
+  async function configuredThreadModelProviderIds() {
+    const providerIds = new Set<string>(['openai']);
+    const collect = (rawConfig: unknown) => {
+      if (!isRecord(rawConfig)) return;
+      const activeProvider = typeof rawConfig.model_provider === 'string' ? rawConfig.model_provider.trim() : '';
+      if (activeProvider) providerIds.add(activeProvider);
+      const modelProviders = isRecord(rawConfig.model_providers) ? rawConfig.model_providers : null;
+      if (modelProviders) {
+        Object.keys(modelProviders)
+          .map((providerId) => providerId.trim())
+          .filter(Boolean)
+          .forEach((providerId) => providerIds.add(providerId));
+      }
+    };
+
+    let configResult = config.value;
+    if (!configResult && typeof adapter?.readConfig === 'function') {
+      try {
+        configResult = await adapter.readConfig({ includeLayers: true });
+        config.value = configResult;
+      } catch {
+        configResult = null;
+      }
+    }
+    collect(configResult?.config);
+    for (const layer of configResult?.layers ?? []) collect(layer.config);
+    return Array.from(providerIds);
+  }
+
+  async function listThreadsAcrossConfiguredProviders(
+    params: CodexThreadListParams & { limit: number; sortKey: 'updated_at' | 'created_at'; modelProviders?: string[] | null },
+  ): Promise<CodexThreadListResult> {
+    if (!adapter) return { data: [], nextCursor: null };
+    const currentAdapter = adapter;
+    if (params.modelProviders !== undefined && params.modelProviders !== null) {
+      return currentAdapter.listThreads(params);
+    }
+
+    const providerIds = await configuredThreadModelProviderIds();
+    if (providerIds.length <= 1) return currentAdapter.listThreads(params);
+
+    const requests = [
+      currentAdapter.listThreads(params),
+      ...providerIds.map((providerId) => currentAdapter.listThreads({ ...params, modelProviders: [providerId] })),
+    ];
+    const results = await Promise.allSettled(requests);
+    const merged = new Map<string, CodexThread>();
+    let nextCursor: string | null = null;
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue;
+      nextCursor ??= result.value.nextCursor;
+      for (const thread of result.value.data) merged.set(thread.id, { ...merged.get(thread.id), ...thread });
+    }
+    return {
+      data: Array.from(merged.values()).sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0)),
+      nextCursor,
+    };
+  }
+
+  async function listThreads(params: CodexThreadListParams = {}) {
+    const normalizedThreads = await fetchThreadList(params);
+    if (!normalizedThreads) return [];
+    return Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
+  }
+
+  async function refreshThreads(params: CodexThreadListParams = {}) {
+    const normalizedThreads = await fetchThreadList(params);
+    if (!normalizedThreads) return;
+    const existingThreads = threads.value;
     const returnedThreadIds = new Set(normalizedThreads.map((thread) => thread.id));
     const activeLocalThread = activeThreadId.value
       ? existingThreads.find((thread) => thread.id === activeThreadId.value)
@@ -1377,14 +1472,22 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const root = typeof record.root === 'string' ? expandPath(record.root).trim() : '';
     const branch = typeof record.branch === 'string' ? record.branch.trim() : '';
     const sha = typeof record.sha === 'string' ? record.sha.trim() : '';
-    const originUrl = typeof record.originUrl === 'string' ? record.originUrl.trim() : '';
+    const commonRoot = typeof record.commonRoot === 'string' ? expandPath(record.commonRoot).trim() : '';
+    const worktreeRoot = typeof record.worktreeRoot === 'string' ? expandPath(record.worktreeRoot).trim() : '';
     if (!root) return null;
     return {
       root,
       ...(branch ? { branch } : {}),
       ...(sha ? { sha } : {}),
-      ...(originUrl ? { originUrl } : {}),
+      ...(commonRoot ? { commonRoot } : {}),
+      ...(worktreeRoot ? { worktreeRoot } : {}),
     };
+  }
+
+  function sanitizeThreadGitInfo(gitInfo: CodexThread['gitInfo']): CodexThread['gitInfo'] {
+    if (!gitInfo) return gitInfo;
+    const { originUrl: _originUrl, ...safeGitInfo } = gitInfo as NonNullable<CodexThread['gitInfo']> & { originUrl?: unknown };
+    return safeGitInfo;
   }
 
   async function resolveThreadGitInfo(directory: string): Promise<CodexThread['gitInfo'] | null> {
@@ -1411,11 +1514,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function enrichThreadWithGitInfo(thread: CodexThread): Promise<CodexThread> {
     const normalizedThread = normalizeThreadCwd(thread);
-    if (normalizedThread.gitInfo?.root) return normalizedThread;
     const cwd = normalizedThread.cwd?.trim();
     if (!cwd) return normalizedThread;
+    if (
+      normalizedThread.gitInfo?.root &&
+      normalizedThread.gitInfo.commonRoot
+    ) {
+      return normalizedThread;
+    }
     const gitInfo = await resolveThreadGitInfo(cwd);
-    return gitInfo?.root ? { ...normalizedThread, gitInfo } : normalizedThread;
+    return gitInfo?.root
+      ? { ...normalizedThread, gitInfo: { ...gitInfo, ...normalizedThread.gitInfo } }
+      : normalizedThread;
   }
 
   async function upsertThreadWithGitInfo(thread: CodexThread) {
@@ -1507,7 +1617,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (!adapter) throw new Error('Codex is not connected.');
     const params: { cwd?: string; model?: string } = {};
     if (cwd) params.cwd = expandPath(cwd);
-    if (selectedModel.value) params.model = selectedModel.value;
+    const selectedCodexModel = parseSelectedCodexModel(selectedModel.value).modelID;
+    if (selectedCodexModel) params.model = selectedCodexModel;
     const result = await adapter.startThread(params);
     const thread = params.cwd && !result.thread.cwd ? { ...result.thread, cwd: params.cwd } : result.thread;
     const gitInfo = thread.cwd ? await resolveThreadGitInfo(thread.cwd) : null;
@@ -1635,12 +1746,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function expandPath(input: string): string {
     const trimmed = input.trim();
-    if (trimmed === '~') return homeDir.value || '/';
+    const home = homeDir.value || '/';
+    if (trimmed === '~') return home;
     if (trimmed.startsWith('~/')) {
-      const home = homeDir.value;
-      if (home) return `${home.replace(/\/+$/u, '')}/${trimmed.slice(2).replace(/^\/+/, '')}`;
+      return normalizeAbsolutePathNoParent(`${home.replace(/\/+$/u, '')}/${trimmed.slice(2).replace(/^\/+/, '')}`);
     }
-    return trimmed;
+    if (!trimmed) return '';
+    if (trimmed.startsWith('/')) return normalizeAbsolutePathNoParent(trimmed);
+    return normalizeAbsolutePathNoParent(`${home.replace(/\/+$/u, '')}/${trimmed}`);
   }
 
   function normalizeCwd(input: string) {
@@ -1670,9 +1783,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function normalizeThreadCwd(thread: CodexThread): CodexThread {
     const cwd = thread.cwd?.trim();
-    if (!cwd) return thread;
+    const gitInfo = sanitizeThreadGitInfo(thread.gitInfo);
+    const baseThread = gitInfo === thread.gitInfo ? thread : { ...thread, gitInfo };
+    if (!cwd) return baseThread;
     const expanded = expandPath(cwd);
-    return expanded === cwd ? thread : { ...thread, cwd: expanded };
+    return expanded === cwd ? baseThread : { ...baseThread, cwd: expanded };
   }
 
   async function readDirectory(path: string) {
@@ -1849,10 +1964,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function sendPrompt(
     text: string,
-    options: { model?: string; effort?: string; cwd?: string; threadId?: string } = {},
+    options: { model?: string; effort?: string; cwd?: string; threadId?: string; input?: CodexPromptInput['input']; forceNewThread?: boolean } = {},
   ) {
     const prompt = text.trim();
-    if (!prompt) return null;
+    const inputItems = options.input?.filter((item) => item.type !== 'text' || item.text.trim().length > 0) ?? [];
+    if (!prompt && inputItems.length === 0) return null;
     if (!adapter) throw new Error('Codex is not connected.');
 
     pending.value = true;
@@ -1860,18 +1976,19 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     pushTranscript('user', prompt);
 
     const pendingTurnId = activeTurn.value?.id || `pending-turn:${Date.now()}`;
-    const targetThreadId = options.threadId ?? activeThreadId.value;
+    const targetThreadId = options.forceNewThread ? '' : (options.threadId ?? activeThreadId.value);
     const userMessageId = codexUserMessageId(pendingTurnId, 0);
     const userPartId = `${userMessageId}:text`;
     const sessionId = targetThreadId || 'codex-pending';
     const now = Date.now();
+    const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
     const userInfo: MessageInfo = {
       id: userMessageId,
       sessionID: sessionId,
       role: 'user',
       time: { created: now },
       agent: 'codex',
-      model: { providerID: 'codex', modelID: selectedModel.value || 'unknown' },
+      model: { providerID: selectedModelInfo.providerID, modelID: selectedModelInfo.modelID || 'unknown' },
     };
     const userPart: TextPart = {
       id: userPartId,
@@ -1887,9 +2004,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     ]);
 
     try {
-      const model = (options.model ?? selectedModel.value) || undefined;
+      const model = options.model?.trim() || parseSelectedCodexModel(selectedModel.value).modelID || undefined;
       const cwd = resolvePromptCwd(options.cwd, targetThreadId);
       const input: CodexPromptInput = { text: prompt };
+      if (inputItems.length > 0) input.input = inputItems;
       if (targetThreadId) input.threadId = targetThreadId;
       if (model) input.model = model;
       if (options.effort) input.effort = options.effort;
@@ -2198,24 +2316,24 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       }
     }
 
-    async function writeConfigValue(keyPath: string, value: unknown, mergeStrategy?: string) {
+    async function writeConfigValue(keyPath: string, value: unknown, mergeStrategy?: ConfigMergeStrategy) {
       if (!adapter) throw new Error('Codex is not connected.');
       const params: CodexConfigValueWriteParams = {
         keyPath,
         value,
-        mergeStrategy: mergeStrategy as CodexConfigValueWriteParams['mergeStrategy'],
+        mergeStrategy,
       };
       await adapter.writeConfigValue(params);
       await refreshConfig();
     }
 
-    async function batchWriteConfig(edits: Array<{ keyPath: string; value: unknown; mergeStrategy?: string }>) {
+    async function batchWriteConfig(edits: Array<{ keyPath: string; value: unknown; mergeStrategy?: ConfigMergeStrategy }>) {
       if (!adapter) throw new Error('Codex is not connected.');
       const params: CodexConfigBatchWriteParams = {
         edits: edits.map((edit) => ({
           keyPath: edit.keyPath,
           value: edit.value,
-          mergeStrategy: edit.mergeStrategy as CodexConfigBatchWriteParams['edits'][number]['mergeStrategy'],
+          mergeStrategy: edit.mergeStrategy,
         })),
       };
       await adapter.batchWriteConfig(params);
@@ -2342,7 +2460,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       });
     }
 
-    async function updateThreadMetadata(threadId: string, gitInfo: { branch?: string; sha?: string; originUrl?: string; root?: string } | null) {
+  async function updateThreadMetadata(threadId: string, gitInfo: { branch?: string; sha?: string; root?: string; commonRoot?: string; worktreeRoot?: string } | null) {
       if (!adapter) throw new Error('Codex is not connected.');
       const result = await adapter.updateThreadMetadata({ threadId, gitInfo });
       upsertThread(result.thread);
@@ -2476,6 +2594,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       disconnect,
       refreshHomeDir,
       refreshThreads,
+      listThreads,
       preloadPanelData,
       selectThread,
      startThread,

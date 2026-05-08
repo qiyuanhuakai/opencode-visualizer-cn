@@ -144,7 +144,7 @@
                     :disabled="batchDeleteTargets.length === 0"
                     @click.stop="emitBatchSessionAction('delete')"
                   >
-                    {{ $t('topPanel.management.delete') }} · {{ batchDeleteTargets.length }}
+                    {{ codexMode ? $t('topPanel.management.archiveCodex') : $t('topPanel.management.delete') }} · {{ batchDeleteTargets.length }}
                   </button>
                 </div>
               </div>
@@ -165,9 +165,9 @@
                       <Icon
                         :icon="
                           worktree.kind === 'global'
-                            ? 'lucide:globe-2'
+                            ? 'lucide:globe'
                             : worktree.kind === 'sandbox'
-                              ? 'lucide:folder-git-2'
+                              ? 'lucide:package'
                               : worktree.projectId === 'global'
                                 ? 'lucide:globe'
                                 : 'lucide:package'
@@ -232,11 +232,11 @@
                               : sandbox.kind === 'folder'
                                 ? 'lucide:folder'
                                 : sandbox.kind === 'global'
-                                  ? 'lucide:globe-2'
-                                  : sandbox.kind === 'branch'
-                                    ? 'lucide:git-branch'
-                                    : 'lucide:folder-git-2'
-                          "
+                                  ? 'lucide:globe'
+                                   : sandbox.kind === 'branch'
+                                     ? 'lucide:git-branch'
+                                     : 'lucide:git-branch'
+                           "
                           class="tree-header-icon"
                         />
                         <div class="tree-label">
@@ -270,15 +270,15 @@
                           <Icon icon="lucide:git-branch-plus" :width="16" :height="16" />
                         </button>
                         <button
-                          v-if="!codexMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch'"
+                          v-if="worktree.projectId && worktree.projectId !== 'global' && (codexMode ? sandbox.kind === 'branch' : sandbox.kind !== 'branch')"
                           type="button"
                           class="tree-action-button"
                           :class="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'pinned' : 'pin'"
                           :title="sandbox.isPinned || sandbox.isImplicitlyPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
                           @click.stop="
                             sandbox.isPinned || sandbox.isImplicitlyPinned
-                              ? handleUnpinSandbox(worktree.projectId, sandbox.directory)
-                              : handlePinSandbox(worktree.projectId, sandbox.directory)
+                              ? handleUnpinSandbox(worktree.projectId, sandbox.pinDirectory || sandbox.directory)
+                              : handlePinSandbox(worktree.projectId, sandbox.pinDirectory || sandbox.directory)
                           "
                         >
                           <Icon
@@ -356,24 +356,6 @@
                               <Icon icon="lucide:archive-restore" :width="16" :height="16" />
                             </button>
                             <button
-                              v-if="codexMode && !session.archivedAt"
-                              type="button"
-                              class="tree-action-button session-unsubscribe"
-                              :title="$t('codexPanel.unsubscribe')"
-                              @click.stop.prevent="handleSessionUnsubscribe(session.id)"
-                            >
-                              <Icon icon="lucide:bell-off" :width="16" :height="16" />
-                            </button>
-                            <button
-                              v-if="codexMode && !session.archivedAt"
-                              type="button"
-                              class="tree-action-button session-hide"
-                              :title="$t('codexPanel.hide')"
-                              @click.stop.prevent="handleSessionHide(session.id)"
-                            >
-                              <Icon icon="lucide:eye-off" :width="16" :height="16" />
-                            </button>
-                            <button
                               v-if="!session.archivedAt"
                               type="button"
                               class="tree-action-button session-rename"
@@ -409,16 +391,16 @@
                               v-if="!session.archivedAt"
                               type="button"
                               class="tree-action-button session-del"
-                              :class="isShiftPressed ? 'danger' : 'archive'"
+                              :class="isShiftPressed && !codexMode ? 'danger' : 'archive'"
                               :title="
-                                isShiftPressed
-                                  ? $t('topPanel.sessionActions.deletePermanently')
-                                  : $t('topPanel.sessionActions.archive')
+                                  isShiftPressed
+                                    ? (codexMode ? $t('topPanel.sessionActions.archiveCodex') : $t('topPanel.sessionActions.deletePermanently'))
+                                    : $t('topPanel.sessionActions.archive')
                               "
                               @click.stop.prevent="handleSessionAction(session.id, close)"
                             >
                               <Icon
-                                :icon="isShiftPressed ? 'lucide:trash-2' : 'lucide:archive'"
+                                :icon="isShiftPressed ? (codexMode ? 'lucide:cloud-upload' : 'lucide:trash-2') : 'lucide:archive'"
                                 :width="16"
                                 :height="16"
                               />
@@ -704,6 +686,7 @@ export type TopPanelSession = {
 export type TopPanelSandbox = {
   key?: string;
   directory: string;
+  pinDirectory?: string;
   branch?: string;
   kind?: 'global' | 'sandbox' | 'folder' | 'branch';
   sessions: TopPanelSession[];
@@ -800,9 +783,7 @@ const emit = defineEmits<{
   (event: 'archive-session', value: string): void;
   (event: 'unarchive-session', value: string): void;
   (event: 'rename-session', value: string): void;
-  (event: 'hide-session', value: string): void;
   (event: 'compact-session', value: string): void;
-  (event: 'unsubscribe-session', value: string): void;
   (event: 'pin-session', value: string): void;
   (event: 'unpin-session', value: string): void;
   (event: 'pin-project', projectId: string): void;
@@ -1004,30 +985,29 @@ const displayedTree = computed(() => {
         const sandboxes = worktree.sandboxes
           .map((sandbox) => {
             const sandboxMatches = matchesQuery(query, sandbox.directory, sandbox.branch);
-            const sessions = sandbox.sessions.filter(
-              (session) =>
-                worktreeMatches ||
-                sandboxMatches ||
-                matchesQuery(
-                  query,
-                  session.title,
-                  session.slug,
-                  session.id,
-                  session.archivedAt ? 'archived' : undefined,
-                  session.pinnedAt ? 'pinned' : undefined,
-                  session.timeCreated ? formatSessionTime(session.timeCreated) : undefined,
-                  session.timeUpdated ? formatSessionTime(session.timeUpdated) : undefined,
-                ),
-            );
-            if (!worktreeMatches && !sandboxMatches && sessions.length === 0) return null;
+            const sessions = sandbox.sessions.filter((session) => {
+              const sessionMatches = matchesQuery(
+                query,
+                session.title,
+                session.slug,
+                session.id,
+                session.archivedAt ? 'archived' : undefined,
+                session.pinnedAt ? 'pinned' : undefined,
+                session.timeCreated ? formatSessionTime(session.timeCreated) : undefined,
+                session.timeUpdated ? formatSessionTime(session.timeUpdated) : undefined,
+              );
+              if (session.archivedAt) return sessionMatches;
+              return worktreeMatches || sandboxMatches || sessionMatches;
+            });
+            if (sessions.length === 0) return null;
             return {
               ...sandbox,
-              sessions: worktreeMatches || sandboxMatches ? sandbox.sessions : sessions,
+              sessions,
             };
           })
           .filter((sandbox): sandbox is TopPanelSandbox => sandbox !== null);
 
-        if (!worktreeMatches && sandboxes.length === 0) return null;
+        if (sandboxes.length === 0) return null;
         return { ...worktree, sandboxes };
       })
       .filter((worktree): worktree is TopPanelWorktree => worktree !== null);
@@ -1201,7 +1181,9 @@ async function handleSandboxDelete(
 }
 
 async function handleSessionDelete(sessionId: string, close?: () => void) {
-  const confirmed = showConfirm ? await showConfirm(t('topPanel.confirm.deleteSession')) : true;
+  const confirmed = showConfirm
+    ? await showConfirm(t(props.codexMode ? 'topPanel.confirm.archiveCodexSession' : 'topPanel.confirm.deleteSession'))
+    : true;
   if (!confirmed) return;
   emit('delete-session', sessionId);
   close?.();
@@ -1223,16 +1205,8 @@ function handleSessionRename(sessionId: string) {
   emit('rename-session', sessionId);
 }
 
-function handleSessionHide(sessionId: string) {
-  emit('hide-session', sessionId);
-}
-
 function handleSessionCompact(sessionId: string) {
   emit('compact-session', sessionId);
-}
-
-function handleSessionUnsubscribe(sessionId: string) {
-  emit('unsubscribe-session', sessionId);
 }
 
 function handleSessionPinToggle(sessionId: string, isPinned = false) {
@@ -1294,7 +1268,9 @@ async function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload[
   if (sessions.length === 0) return;
 
   if (action === 'delete') {
-    const confirmed = showConfirm ? await showConfirm(t('topPanel.confirm.deleteSessions', { count: sessions.length })) : true;
+    const confirmed = showConfirm
+      ? await showConfirm(t(props.codexMode ? 'topPanel.confirm.archiveCodexSessions' : 'topPanel.confirm.deleteSessions', { count: sessions.length }))
+      : true;
     if (!confirmed) return;
   }
 
@@ -1613,10 +1589,6 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 
 .tree-sandbox.is-branch .tree-sandbox-header {
   padding-left: 40px;
-}
-
-.tree-sandbox.is-branch .tree-header-icon {
-  color: var(--theme-status-git-attention, #93c5fd);
 }
 
 .tree-label {

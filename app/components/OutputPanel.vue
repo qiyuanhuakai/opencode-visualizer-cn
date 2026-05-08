@@ -36,6 +36,8 @@
                     :resolve-model-meta="resolveModelMeta"
                     :compute-context-percent="computeContextPercent"
                     :session-revert="sessionRevert"
+                    :backend-kind="backendKind"
+                    :is-latest-root="root.id === latestRootId"
                     :assistant-html="getAssistantHtml(root.id)"
                     :deferred-transition-key="getDeferredTransitionKey(root)"
                     @fork-message="emit('fork-message', $event)"
@@ -70,6 +72,8 @@
                     :resolve-model-meta="resolveModelMeta"
                     :compute-context-percent="computeContextPercent"
                     :session-revert="sessionRevert"
+                    :backend-kind="backendKind"
+                    :is-latest-root="root.id === latestRootId"
                     :assistant-html="getAssistantHtml(root.id)"
                     :deferred-transition-key="getDeferredTransitionKey(root)"
                     @fork-message="emit('fork-message', $event)"
@@ -129,6 +133,7 @@ import type {
   ModelMeta,
 } from '../types/message';
 import type { MessageInfo } from '../types/sse';
+import type { BackendKind } from '../backends/types';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -160,6 +165,7 @@ const props = defineProps<{
     snapshot?: string;
     diff?: string;
   } | null;
+  backendKind?: BackendKind;
 }>();
 
 const emit = defineEmits<{
@@ -184,6 +190,8 @@ const visibleRoots = computed(() => {
   if (!currentSessionId) return msg.roots.value;
   return msg.roots.value.filter((root) => root.sessionID === currentSessionId);
 });
+
+const latestRootId = computed(() => visibleRoots.value.at(-1)?.id ?? '');
 
 const revertedPreviewRootId = computed(() => {
   const revert = props.sessionRevert;
