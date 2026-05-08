@@ -3,7 +3,7 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [Unreleased]
+## [v0.5.1 released]
 
 ### 新后端支持(alpha)
 
@@ -38,8 +38,8 @@
 
 ### 无法实现功能
 
-- [ ] 由于codex appserver自身的问题，无法实现以下功能：
-	- [ ] 完善快捷命令，支持完整的“/”命令
+- [x] 由于codex appserver自身的问题，无法实现以下功能：
+	- [x] 支持完整的“/”命令
 
 ## [v0.4.5 released]
 
