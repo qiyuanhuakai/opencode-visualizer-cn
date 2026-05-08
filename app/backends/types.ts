@@ -79,6 +79,7 @@ export type BackendAdapter = {
   listFiles?(payload: { directory: string; path?: string }, options?: BackendRequestOptions): Promise<unknown>;
   readFileContent?(payload: { directory: string; path: string }, options?: BackendRequestOptions): Promise<unknown>;
   readFileContentBytes?(payload: { directory: string; path: string }, options?: BackendRequestOptions): Promise<Uint8Array>;
+  writeFileContent?(payload: { directory: string; path: string; content: string }, options?: BackendRequestOptions): Promise<unknown>;
   getSessionDiff?(payload: { sessionID: string; directory?: string }): Promise<unknown>;
   listProjects?(directory?: string): Promise<unknown>;
   getCurrentProject?(directory?: string): Promise<unknown>;

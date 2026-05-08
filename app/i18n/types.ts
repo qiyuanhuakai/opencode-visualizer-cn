@@ -684,6 +684,10 @@ export interface LocaleMessages {
         label: string;
         description: string;
       };
+      editInVis: {
+        label: string;
+        description: string;
+      };
     };
   };
   floatingWindow: {
@@ -698,6 +702,9 @@ export interface LocaleMessages {
     tool: string;
     minimizeWindow: string;
     closeWindow: string;
+    editInVis: string;
+    confirmDiscardEdit: string;
+    editConflict: string;
     openInEditor: string;
     previousMatch: string;
     nextMatch: string;
@@ -940,6 +947,36 @@ export interface LocaleMessages {
   messageViewer: {
     rendered: string;
     source: string;
+  };
+  viewers: {
+    content: {
+      image: string;
+      rendered: string;
+      source: string;
+      edit: string;
+      save: string;
+      saving: string;
+      cancel: string;
+      editing: string;
+      unsavedChanges: string;
+      hex: string;
+      info: string;
+      archive: string;
+      pdf: string;
+    };
+    diff: {
+      diff: string;
+      modified: string;
+      original: string;
+    };
+    archive: {
+      name: string;
+      size: string;
+      date: string;
+      fileCount: string;
+      unsupported: string;
+      empty: string;
+    };
   };
   render: {
     copyCode: string;

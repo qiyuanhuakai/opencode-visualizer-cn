@@ -277,6 +277,17 @@
               <span class="toggle-track" />
             </label>
           </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.experimentalFeatures.editInVis.label') }}</div>
+              <div class="setting-description">{{ $t('settings.experimentalFeatures.editInVis.description') }}</div>
+            </div>
+            <label class="toggle-switch">
+              <input v-model="editInVis" type="checkbox" class="toggle-input" />
+              <span class="toggle-track" />
+            </label>
+          </div>
         </template>
 
         <template v-else>
@@ -631,6 +642,7 @@ const {
   showMinimizeButtons,
   showCodexButton,
   showCodexInStatusMonitor,
+  editInVis,
   dockAlwaysOpen,
   terminalFontFamily,
   appMonospaceFontFamily,

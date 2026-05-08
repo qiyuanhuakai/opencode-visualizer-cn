@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, promises as fs } from 'node:fs';
 import { createServer } from 'node:http';
 import { connect as connectTcp } from 'node:net';
 import { connect as connectTls } from 'node:tls';
 import { homedir } from 'node:os';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -339,6 +340,67 @@ function normalizePtyCwd(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : homedir();
 }
 
+function normalizeFsPath(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('File path is required.');
+  }
+  return path.resolve(value.trim());
+}
+
+function normalizeFsRoot(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('File root is required.');
+  }
+  return path.resolve(value.trim());
+}
+
+function isPathWithinRoot(targetPath, rootPath) {
+  const relative = path.relative(rootPath, targetPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function assertFsPathWithinRoot(filePath, rootPath) {
+  const normalizedPath = normalizeFsPath(filePath);
+  const normalizedRoot = normalizeFsRoot(rootPath);
+  if (!isPathWithinRoot(normalizedPath, normalizedRoot)) {
+    throw new Error('File path is outside the allowed root.');
+  }
+  return { normalizedPath, normalizedRoot };
+}
+
+function createFsManager() {
+  return {
+    async getCapabilities(rootPath) {
+      const normalizedRoot = normalizeFsRoot(rootPath);
+      const stats = await fs.stat(normalizedRoot);
+      if (!stats.isDirectory()) {
+        throw new Error('FS root must be a directory.');
+      }
+      await fs.access(normalizedRoot, fs.constants.R_OK | fs.constants.W_OK);
+      return { root: normalizedRoot, writable: true };
+    },
+    async readFile(filePath, rootPath) {
+      const { normalizedPath } = assertFsPathWithinRoot(filePath, rootPath);
+      const content = await fs.readFile(normalizedPath);
+      return {
+        path: normalizedPath,
+        content: content.toString('utf8'),
+        dataBase64: content.toString('base64'),
+        encoding: 'utf-8',
+        type: 'text',
+      };
+    },
+    async writeFile(filePath, rootPath, content) {
+      const { normalizedPath } = assertFsPathWithinRoot(filePath, rootPath);
+      if (typeof content !== 'string') {
+        throw new Error('File content must be a string.');
+      }
+      await fs.writeFile(normalizedPath, content, 'utf8');
+      return { path: normalizedPath };
+    },
+  };
+}
+
 function encodeWebSocketFrame(data, opcode = 1) {
   const payload = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
   const length = payload.length;
@@ -395,8 +457,49 @@ function decodeWebSocketFrames(buffer) {
   return { frames, remaining: buffer.subarray(offset) };
 }
 
+const PTY_BUFFER_LIMIT = 2 * 1024 * 1024;
+const PTY_EXIT_GRACE_MS = 1500;
+
+function encodePtyMetaFrame(meta) {
+  const payload = Buffer.concat([
+    Buffer.from([0]),
+    Buffer.from(JSON.stringify(meta), 'utf8'),
+  ]);
+  return encodeWebSocketFrame(payload, 2);
+}
+
+function trimPtyBuffer(buffer) {
+  if (buffer.length <= PTY_BUFFER_LIMIT) return buffer;
+  return buffer.slice(buffer.length - PTY_BUFFER_LIMIT);
+}
+
 function createPtyManager(options = {}) {
   const sessions = new Map();
+
+  function scheduleCleanup(session, delay = PTY_EXIT_GRACE_MS) {
+    if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
+    session.cleanupTimer = setTimeout(() => {
+      if (sessions.get(session.id) !== session) return;
+      sessions.delete(session.id);
+    }, delay);
+  }
+
+  function appendOutput(session, data) {
+    const chunk = String(data);
+    session.buffer = trimPtyBuffer(session.buffer + chunk);
+    for (const socket of session.sockets) {
+      if (socket.destroyed) continue;
+      socket.write(encodeWebSocketFrame(chunk, 1));
+    }
+  }
+
+  function sendExitToSocket(session, socket) {
+    if (socket.destroyed) return;
+    if (typeof session.exitCode === 'number') {
+      socket.write(encodePtyMetaFrame({ exitCode: session.exitCode }));
+    }
+    socket.end(encodeWebSocketFrame(Buffer.alloc(0), 8));
+  }
 
   async function create(payload = {}) {
     const nodePty = await loadNodePty(options.ptyModule);
@@ -421,16 +524,24 @@ function createPtyManager(options = {}) {
       createdAt: Date.now(),
       pty: ptyProcess,
       sockets: new Set(),
+      buffer: '',
+      status: 'running',
+      exitCode: undefined,
+      cleanupTimer: undefined,
       disposed: false,
     };
     sessions.set(id, session);
-    ptyProcess.onExit?.(() => {
+    ptyProcess.onData?.((data) => {
+      appendOutput(session, data);
+    });
+    ptyProcess.onExit?.((event = {}) => {
       session.disposed = true;
+      session.status = 'exited';
+      if (typeof event.exitCode === 'number') session.exitCode = event.exitCode;
       for (const socket of session.sockets) {
-        try { socket.write(encodeWebSocketFrame(Buffer.alloc(0), 8)); } catch {}
-        socket.destroy();
+        try { sendExitToSocket(session, socket); } catch {}
       }
-      sessions.delete(id);
+      scheduleCleanup(session);
     });
     return { id };
   }
@@ -442,6 +553,8 @@ function createPtyManager(options = {}) {
       args: session.args,
       cwd: session.cwd,
       title: session.title,
+      status: session.status,
+      ...(typeof session.exitCode === 'number' ? { exitCode: session.exitCode } : {}),
       createdAt: session.createdAt,
     }));
   }
@@ -456,6 +569,7 @@ function createPtyManager(options = {}) {
   function remove(id) {
     const session = sessions.get(id);
     if (!session) return false;
+    if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
     sessions.delete(id);
     session.disposed = true;
     for (const socket of session.sockets) socket.destroy();
@@ -472,13 +586,11 @@ function createPtyManager(options = {}) {
     if (!session) return false;
     let buffer = Buffer.alloc(0);
     session.sockets.add(socket);
-    const dataDisposable = session.pty.onData((data) => {
-      if (socket.destroyed) return;
-      socket.write(encodeWebSocketFrame(data, 1));
-    });
+    if (session.buffer) {
+      socket.write(encodeWebSocketFrame(session.buffer, 1));
+    }
     const detach = () => {
       session.sockets.delete(socket);
-      dataDisposable?.dispose?.();
     };
     socket.on('data', (chunk) => {
       try {
@@ -503,6 +615,10 @@ function createPtyManager(options = {}) {
     socket.once('close', detach);
     socket.once('error', detach);
     if (head.length > 0) socket.emit('data', head);
+    if (session.status === 'exited') {
+      sendExitToSocket(session, socket);
+      scheduleCleanup(session, 100);
+    }
     return true;
   }
 
@@ -542,9 +658,41 @@ async function handlePtyHttpRequest(request, response, requestUrl, manager) {
   }
 }
 
+async function handleFsHttpRequest(request, response, requestUrl, manager) {
+  try {
+    if (requestUrl.pathname === '/fs/capabilities' && request.method === 'GET') {
+      const result = await manager.getCapabilities(requestUrl.searchParams.get('root'));
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    if (requestUrl.pathname === '/fs/readFile' && request.method === 'GET') {
+      const result = await manager.readFile(
+        requestUrl.searchParams.get('path'),
+        requestUrl.searchParams.get('root'),
+      );
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    if (requestUrl.pathname === '/fs/writeFile' && request.method === 'POST') {
+      const payload = await readJsonBody(request);
+      const result = await manager.writeFile(payload?.path, payload?.root, payload?.content);
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    writeJsonHttpResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
+}
+
 function requiresPtyToken(options) {
   const host = String(options.host ?? DEFAULT_HOST).trim();
   return Boolean(!options.bridgeToken && host && !isLoopbackHostname(host) && (isWildcardHost(host) || host !== 'localhost'));
+}
+
+function requiresFsToken(options) {
+  return requiresPtyToken(options);
 }
 
 function rejectUnprotectedPtyHttp(response) {
@@ -553,6 +701,10 @@ function rejectUnprotectedPtyHttp(response) {
 
 function rejectUnprotectedPtySocket(socket) {
   writeHttpResponse(socket, 403, 'Forbidden', { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
+}
+
+function rejectUnprotectedFsHttp(response) {
+  writeJsonHttpResponse(response, 403, { error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
 }
 
 function handlePtyUpgrade(request, clientSocket, head, options, manager) {
@@ -619,6 +771,7 @@ function authorizeHttpRequest(request, response, bridgeToken) {
 export function createVisBridgeServer(options) {
   const bridgeOptions = { host: DEFAULT_HOST, ...options };
   const ptyManager = createPtyManager(bridgeOptions);
+  const fsManager = createFsManager();
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
@@ -647,6 +800,18 @@ export function createVisBridgeServer(options) {
       }
       if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
       void handlePtyHttpRequest(request, response, requestUrl, ptyManager).then((handled) => {
+        if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
+      });
+      return;
+    }
+
+    if (requestUrl.pathname === '/fs/capabilities' || requestUrl.pathname === '/fs/readFile' || requestUrl.pathname === '/fs/writeFile') {
+      if (requiresFsToken(bridgeOptions)) {
+        rejectUnprotectedFsHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      void handleFsHttpRequest(request, response, requestUrl, fsManager).then((handled) => {
         if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
       });
       return;

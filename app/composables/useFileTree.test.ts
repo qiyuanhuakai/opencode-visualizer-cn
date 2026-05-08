@@ -96,15 +96,20 @@ describe('useFileTree', () => {
       if (script.includes('status --porcelain')) {
         return [
           '## main',
+          ' M src/a.ts',
+          '##PREFIX',
+          '',
           '##HEAD',
           'abc123',
           '##DIFFSTAT',
+          ' 1 file changed, 1 insertion(+)',
           '',
           '##DIFFSTAT_CACHED',
           '',
-          '##UNTRACKED_STAT',
-          '0',
         ].join('\0');
+      }
+      if (script.includes('git ls-files --others --exclude-standard -z')) {
+        return '1';
       }
       if (script.includes('ls-files --cached --others --exclude-standard')) {
         return 'src/a.ts\0src/b.ts\0';
@@ -117,6 +122,76 @@ describe('useFileTree', () => {
     await vi.runOnlyPendingTimersAsync();
     vi.useRealTimers();
     document.body.innerHTML = '';
+  });
+
+  it('auto-runs git status with diff stats during initial directory hydration', async () => {
+    const mounted = await mountComposable();
+    await mounted.settle();
+
+    const scripts = mockRunOneShotPtyCommand.mock.calls.map((call) => call[1]?.at(-1) ?? '');
+    const statusScripts = scripts.filter((script) => script.includes('status --porcelain'));
+    expect(statusScripts).toHaveLength(1);
+    expect(statusScripts[0]).toContain("printf '\\0##PREFIX\\0'");
+    expect(statusScripts[0]).toContain("printf '\\0##HEAD\\0'");
+    expect(statusScripts[0]).toContain('git diff --shortstat');
+    expect(statusScripts[0]).toContain('git diff --cached --shortstat');
+    expect(statusScripts[0]).not.toContain('wc -l <');
+    expect(
+      scripts.some((script) => script.includes('ls-files --cached --others --exclude-standard')),
+    ).toBe(true);
+    expect(
+      scripts.some((script) => script.includes('git ls-files --others --exclude-standard -z')),
+    ).toBe(true);
+    expect(statusScripts[0]).toContain('-uno');
+    expect(mounted.api.gitStatus.value?.files).toHaveLength(1);
+    expect(mounted.api.gitStatus.value?.files.map((entry) => entry.path)).toEqual(['src/a.ts']);
+    expect(mounted.api.gitStatus.value?.diffStats.unstaged.additions).toBe(1);
+    expect(mounted.api.gitStatus.value?.untracked?.eligibleFileCount).toBe(1);
+    expect(mounted.api.gitStatus.value?.untracked?.pending).toBe(false);
+
+    mounted.unmount();
+  });
+
+  it('normalizes git status paths relative to the active subdirectory', async () => {
+    const mounted = await mountComposable();
+    mounted.activeDirectory.value = '/repo/src';
+    mockRunOneShotPtyCommand.mockImplementation(async (_command, args = []) => {
+      const script = args.at(-1) ?? '';
+      if (script.includes('status --porcelain')) {
+        return [
+          '## main',
+          ' M src/a.ts',
+          ' M src/nested/b.ts',
+          '##PREFIX',
+          'src/',
+          '##HEAD',
+          'abc123',
+          '##DIFFSTAT',
+          ' 2 files changed, 3 insertions(+)',
+          '',
+          '##DIFFSTAT_CACHED',
+          '',
+        ].join('\0');
+      }
+      if (script.includes('git ls-files --others --exclude-standard -z')) {
+        return '0';
+      }
+      if (script.includes('ls-files --cached --others --exclude-standard')) {
+        return 'a.ts\0nested/b.ts\0';
+      }
+      return '';
+    });
+
+    await mounted.settle();
+    await mounted.settle();
+
+    expect(mounted.api.gitStatus.value?.files.map((entry) => entry.path)).toEqual([
+      'a.ts',
+      'nested/b.ts',
+    ]);
+    expect(Object.keys(mounted.api.gitStatusByPath.value).sort()).toEqual(['a.ts', 'nested/b.ts']);
+
+    mounted.unmount();
   });
 
   it('skips full git file snapshot reload for content-only change events', async () => {
@@ -157,15 +232,19 @@ describe('useFileTree', () => {
         });
         return [
           '## main',
+          ' M src/a.ts',
+          '##PREFIX',
+          '',
           '##HEAD',
           'abc123',
           '##DIFFSTAT',
           '',
           '##DIFFSTAT_CACHED',
           '',
-          '##UNTRACKED_STAT',
-          '0',
         ].join('\0');
+      }
+      if (script.includes('git ls-files --others --exclude-standard -z')) {
+        return '0';
       }
       if (script.includes('ls-files --cached --others --exclude-standard')) {
         return 'src/a.ts\0src/b.ts\0';

@@ -26,15 +26,27 @@ const GIT_ENV_PREAMBLE = [
 
 const GIT_STATUS_SCRIPT = [
   GIT_ENV_PREAMBLE,
-  'git -c color.status=false -c color.ui=false --no-pager status --porcelain=v1 -z -b -uall 2>/dev/null',
+  'git -c color.status=false -c color.ui=false --no-pager status --porcelain=v1 -z -b -uno 2>/dev/null',
+  "printf '\\0##PREFIX\\0'",
+  'git rev-parse --show-prefix 2>/dev/null',
   "printf '\\0##HEAD\\0'",
   'git rev-parse --short HEAD 2>/dev/null',
   "printf '\\0##DIFFSTAT\\0'",
   'git diff --shortstat 2>/dev/null',
   "printf '\\0##DIFFSTAT_CACHED\\0'",
   'git diff --cached --shortstat 2>/dev/null',
-  "printf '\\0##UNTRACKED_STAT\\0'",
-  'untracked=0; while IFS= read -r -d \'\' f; do untracked=$((untracked + $(wc -l < "$f"))); done < <(git ls-files --others --exclude-standard -z); printf \'%s\' "$untracked"',
+].join('\n');
+
+const GIT_UNTRACKED_COUNT_SCRIPT = [
+  GIT_ENV_PREAMBLE,
+  'count=0',
+  'while IFS= read -r -d "" f; do',
+  '  [ -f "$f" ] || continue',
+  '  size=$(wc -c < "$f" 2>/dev/null || printf "0")',
+  '  [ "$size" -le 1048576 ] || continue',
+  '  count=$((count + 1))',
+  'done < <(git ls-files --others --exclude-standard -z)',
+  'printf "%s" "$count"',
 ].join('\n');
 
 const GIT_FILE_LIST_SCRIPT = [
@@ -110,10 +122,12 @@ let scheduledGitStatusReloadIncludeFileSnapshot = true;
 let gitStatusGeneration = 0;
 let branchListGeneration = 0;
 let gitFileListGeneration = 0;
+let untrackedCountGeneration = 0;
 let branchEntriesLoadedForDirectory = false;
 let gitStatusRefreshInFlight: Promise<void> | null = null;
 let gitStatusRefreshQueued = false;
 let gitStatusRefreshQueuedIncludeFileSnapshot = false;
+let untrackedCountRefreshInFlight: Promise<void> | null = null;
 const pendingFileWatcherEvents: FileWatcherUpdatedPacket[] = [];
 
 const BRANCH_LIST_FORMAT =
@@ -419,7 +433,7 @@ function parseShortstatLine(line: string): { additions: number; deletions: numbe
   };
 }
 
-function parseGitStatusOutput(output: string): GitStatus {
+function parseGitStatusOutput(output: string): { status: GitStatus; repoRelativeCwdPrefix: string } {
   const cleaned = stripAnsi(output).replace(/\r/g, '');
   const tokens = cleaned.split('\0');
 
@@ -429,7 +443,9 @@ function parseGitStatusOutput(output: string): GitStatus {
     behind: 0,
   };
   const entries: GitFileStatus[] = [];
-  let section: 'status' | 'head' | 'diffstat' | 'diffstat_cached' | 'untracked_stat' = 'status';
+  let section: 'status' | 'prefix' | 'head' | 'diffstat' | 'diffstat_cached' | 'untracked_stat' =
+    'status';
+  let repoRelativeCwdPrefix = '';
   let headShort = '';
   let unstagedAdditions = 0;
   let unstagedDeletions = 0;
@@ -443,6 +459,10 @@ function parseGitStatusOutput(output: string): GitStatus {
 
     // Section markers (may contain embedded newlines from surrounding commands)
     const stripped = trimmed.replace(/\n/g, '').trim();
+    if (stripped === '##PREFIX') {
+      section = 'prefix';
+      continue;
+    }
     if (stripped === '##HEAD') {
       section = 'head';
       continue;
@@ -457,6 +477,18 @@ function parseGitStatusOutput(output: string): GitStatus {
     }
     if (stripped === '##UNTRACKED_STAT') {
       section = 'untracked_stat';
+      continue;
+    }
+
+    if (section === 'prefix') {
+      const lines = rawToken.split('\n');
+      for (const line of lines) {
+        const t = line.trim();
+        if (!repoRelativeCwdPrefix && t) {
+          repoRelativeCwdPrefix = t;
+        }
+      }
+      section = 'status';
       continue;
     }
 
@@ -534,12 +566,40 @@ function parseGitStatusOutput(output: string): GitStatus {
   }
 
   return {
-    branch,
-    files: entries,
-    diffStats: {
-      staged: { additions: stagedAdditions, deletions: stagedDeletions },
-      unstaged: { additions: unstagedAdditions, deletions: unstagedDeletions },
+    repoRelativeCwdPrefix,
+    status: {
+      branch,
+      files: entries,
+      diffStats: {
+        staged: { additions: stagedAdditions, deletions: stagedDeletions },
+        unstaged: { additions: unstagedAdditions, deletions: unstagedDeletions },
+      },
     },
+  };
+}
+
+function mapGitStatusPathToActiveDirectory(path: string, repoRelativeCwdPrefix: string) {
+  const normalizedPath = normalizeRelativePath(path);
+  const normalizedPrefix = normalizeRelativePath(repoRelativeCwdPrefix);
+  if (normalizedPrefix === '.' || !normalizedPrefix) return normalizedPath;
+  const prefix = `${normalizedPrefix}/`;
+  if (normalizedPath === normalizedPrefix) return '.';
+  if (normalizedPath.startsWith(prefix)) {
+    return normalizeRelativePath(normalizedPath.slice(prefix.length));
+  }
+  return normalizedPath;
+}
+
+function normalizeGitStatusToActiveDirectory(status: GitStatus, repoRelativeCwdPrefix: string): GitStatus {
+  return {
+    ...status,
+    files: status.files.map((entry) => ({
+      ...entry,
+      path: mapGitStatusPathToActiveDirectory(entry.path, repoRelativeCwdPrefix),
+      origPath: entry.origPath
+        ? mapGitStatusPathToActiveDirectory(entry.origPath, repoRelativeCwdPrefix)
+        : undefined,
+    })),
   };
 }
 
@@ -559,6 +619,7 @@ function cloneGitStatus(status: GitStatus | null): GitStatus | null {
       staged: { ...status.diffStats.staged },
       unstaged: { ...status.diffStats.unstaged },
     },
+    untracked: status.untracked ? { ...status.untracked } : undefined,
   };
 }
 
@@ -880,6 +941,15 @@ function setGitStatus(next: GitStatus | null) {
   gitStatusByPath.value = byPath;
 }
 
+function updateUntrackedSummary(updater: (current: GitStatus['untracked']) => GitStatus['untracked']) {
+  if (!gitStatus.value) return;
+  gitStatus.value = {
+    ...gitStatus.value,
+    untracked: updater(gitStatus.value.untracked),
+  };
+  cacheCurrentDirectoryState(getOptions().activeDirectory.value.trim());
+}
+
 async function refreshGitStatusOnly() {
   const { activeDirectory } = getOptions();
   const directory = activeDirectory.value.trim();
@@ -899,19 +969,76 @@ async function refreshGitStatusOnly() {
         GIT_STATUS_SCRIPT,
       ]);
       if (generation !== gitStatusGeneration) return;
-      if (!output.includes('##HEAD')) {
+      if (!output.trim()) {
         setGitStatus(null);
         cacheCurrentDirectoryState(directory);
         return;
       }
       const parsed = parseGitStatusOutput(output);
-      const filesByPath = new Map(parsed.files.map((entry) => [entry.path, entry]));
-      parsed.files = Array.from(filesByPath.values()).sort((a, b) => a.path.localeCompare(b.path));
-      setGitStatus(parsed);
+      const normalizedStatus = normalizeGitStatusToActiveDirectory(
+        parsed.status,
+        parsed.repoRelativeCwdPrefix,
+      );
+      const filesByPath = new Map(normalizedStatus.files.map((entry) => [entry.path, entry]));
+      normalizedStatus.files = Array.from(filesByPath.values()).sort((a, b) =>
+        a.path.localeCompare(b.path),
+      );
+      normalizedStatus.untracked = {
+        eligibleFileCount: 0,
+        pending: true,
+      };
+      setGitStatus(normalizedStatus);
       cacheCurrentDirectoryState(directory);
     },
     () => activeDirectory.value.trim() === directory,
   );
+}
+
+async function refreshUntrackedEligibleCount() {
+  const { activeDirectory } = getOptions();
+  const directory = activeDirectory.value.trim();
+  if (!directory || !gitStatus.value) return;
+  if (untrackedCountRefreshInFlight) return untrackedCountRefreshInFlight;
+
+  updateUntrackedSummary((current) => ({
+    eligibleFileCount: current?.eligibleFileCount ?? 0,
+    pending: true,
+  }));
+
+  const { runOneShotPtyCommand } = usePtyOneshot();
+  untrackedCountRefreshInFlight = (async () => {
+    try {
+      await retryOnce(
+        async () => {
+          const generation = ++untrackedCountGeneration;
+          const output = await runOneShotPtyCommand('bash', [
+            '--noprofile',
+            '--norc',
+            '-c',
+            GIT_UNTRACKED_COUNT_SCRIPT,
+          ]);
+          if (generation !== untrackedCountGeneration) return;
+          if (activeDirectory.value.trim() !== directory) return;
+          const match = output.match(/\d+/);
+          const eligibleFileCount = match ? Number.parseInt(match[0], 10) || 0 : 0;
+          updateUntrackedSummary(() => ({ eligibleFileCount, pending: false }));
+        },
+        () => activeDirectory.value.trim() === directory,
+      );
+    } catch {
+      if (activeDirectory.value.trim() !== directory) return;
+      updateUntrackedSummary((current) => ({
+        eligibleFileCount: current?.eligibleFileCount ?? 0,
+        pending: false,
+      }));
+    } finally {
+      if (activeDirectory.value.trim() === directory) {
+        untrackedCountRefreshInFlight = null;
+      }
+    }
+  })();
+
+  return untrackedCountRefreshInFlight;
 }
 
 async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
@@ -940,6 +1067,7 @@ async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
       if (statusResult.status === 'rejected') {
         return;
       }
+      void refreshUntrackedEligibleCount();
     } finally {
       gitStatusRefreshInFlight = null;
       if (gitStatusRefreshQueued) {
@@ -1298,7 +1426,9 @@ function initializeFileTree(options: UseFileTreeOptions) {
       fileCacheBuildId += 1;
       gitStatusGeneration += 1;
       gitFileListGeneration += 1;
+      untrackedCountGeneration += 1;
       branchListGeneration += 1;
+      untrackedCountRefreshInFlight = null;
       treeLoading.value = false;
       branchListLoading.value = false;
       expandedTreePathSet.value = new Set();
@@ -1313,7 +1443,9 @@ function initializeFileTree(options: UseFileTreeOptions) {
         resetSidebarState();
       }
       void reloadTree();
-      void refreshGitStatus({ includeFileSnapshot: false });
+      void refreshGitStatus({ includeFileSnapshot: false }).then(() => {
+        void refreshUntrackedEligibleCount();
+      });
     },
     { immediate: true },
   );

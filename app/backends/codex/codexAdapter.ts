@@ -1266,6 +1266,7 @@ export class CodexAdapter implements BackendAdapter {
     this.listFiles = this.listFiles.bind(this);
     this.readFileContent = this.readFileContent.bind(this);
     this.readFileContentBytes = this.readFileContentBytes.bind(this);
+    this.writeFileContent = this.writeFileContent.bind(this);
     this.listPtys = this.listPtys.bind(this);
     this.createPty = this.createPty.bind(this);
     this.updatePtySize = this.updatePtySize.bind(this);
@@ -1941,6 +1942,19 @@ export class CodexAdapter implements BackendAdapter {
   async readFileContentBytes(payload: { directory: string; path: string }) {
     const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
     return codexReadFileBytes(result);
+  }
+
+  async writeFileContent(payload: { directory: string; path: string; content: string }) {
+    const root = resolveCodexFsPath(payload.directory, '.');
+    return this.bridgeJson('/fs/writeFile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: resolveCodexFsPath(payload.directory, payload.path),
+        root,
+        content: payload.content,
+      }),
+    });
   }
 
   async getVcsInfo(directory: string) {

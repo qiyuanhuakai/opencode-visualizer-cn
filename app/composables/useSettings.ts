@@ -159,6 +159,7 @@ const showCodexButton = ref(storageGet(StorageKeys.settings.showCodexButton) ===
 const showCodexInStatusMonitor = ref(
   storageGet(StorageKeys.settings.showCodexInStatusMonitor) !== 'false',
 );
+const editInVis = ref(storageGet(StorageKeys.settings.editInVis) === 'true');
 const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === 'true');
 const terminalFontFamily = ref(readTerminalFontFamily());
 const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
@@ -197,6 +198,10 @@ watch(showCodexButton, (value) => {
 
 watch(showCodexInStatusMonitor, (value) => {
   storageSet(StorageKeys.settings.showCodexInStatusMonitor, String(value));
+}, syncWatchOptions);
+
+watch(editInVis, (value) => {
+  storageSet(StorageKeys.settings.editInVis, String(value));
 }, syncWatchOptions);
 
 watch(dockAlwaysOpen, (value) => {
@@ -281,6 +286,9 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.showCodexInStatusMonitor)) {
       showCodexInStatusMonitor.value = event.newValue !== 'false';
     }
+    if (event.key === storageKey(StorageKeys.settings.editInVis)) {
+      editInVis.value = event.newValue === 'true';
+    }
     if (event.key === storageKey(StorageKeys.settings.dockAlwaysOpen)) {
       dockAlwaysOpen.value = event.newValue === 'true';
     }
@@ -338,6 +346,7 @@ export function useSettings() {
     showMinimizeButtons,
     showCodexButton,
     showCodexInStatusMonitor,
+    editInVis,
     dockAlwaysOpen,
     terminalFontFamily,
     appMonospaceFontFamily,

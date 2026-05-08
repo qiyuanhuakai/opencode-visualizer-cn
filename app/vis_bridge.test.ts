@@ -1,6 +1,10 @@
 import { once } from 'node:events';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
+import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createVisBridgeServer } from '../vis_bridge';
@@ -93,6 +97,80 @@ async function sendUpgrade(port: number, path: string, authorization?: string, o
   const [chunk] = await once(socket, 'data') as [Buffer];
   socket.destroy();
   return chunk.toString('utf8');
+}
+
+function encodeMaskedWebSocketFrame(data: string | Buffer, opcode = 1) {
+  const payload = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+  const mask = randomBytes(4);
+  const maskedPayload = Buffer.from(payload);
+  for (let index = 0; index < maskedPayload.length; index += 1) {
+    maskedPayload[index] ^= mask[index % 4];
+  }
+  const length = payload.length;
+  if (length < 126) {
+    return Buffer.concat([Buffer.from([0x80 | opcode, 0x80 | length]), mask, maskedPayload]);
+  }
+  if (length <= 0xffff) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(length, 2);
+    return Buffer.concat([header, mask, maskedPayload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x80 | opcode;
+  header[1] = 0x80 | 127;
+  header.writeBigUInt64BE(BigInt(length), 2);
+  return Buffer.concat([header, mask, maskedPayload]);
+}
+
+function decodeServerFrames(buffer: Buffer) {
+  const frames: Array<{ opcode: number; payload: Buffer }> = [];
+  let offset = 0;
+  while (buffer.length - offset >= 2) {
+    const first = buffer[offset];
+    const second = buffer[offset + 1];
+    const opcode = first & 0x0f;
+    let length = second & 0x7f;
+    let headerLength = 2;
+    if (length === 126) {
+      if (buffer.length - offset < 4) break;
+      length = buffer.readUInt16BE(offset + 2);
+      headerLength = 4;
+    } else if (length === 127) {
+      if (buffer.length - offset < 10) break;
+      length = Number(buffer.readBigUInt64BE(offset + 2));
+      headerLength = 10;
+    }
+    const frameLength = headerLength + length;
+    if (buffer.length - offset < frameLength) break;
+    const payload = buffer.subarray(offset + headerLength, offset + frameLength);
+    frames.push({ opcode, payload });
+    offset += frameLength;
+  }
+  return { frames, remaining: buffer.subarray(offset) };
+}
+
+async function openWebSocket(port: number, path: string) {
+  const socket = createConnection({ host: '127.0.0.1', port });
+  await once(socket, 'connect');
+  const headers = [
+    `GET ${path} HTTP/1.1`,
+    `Host: 127.0.0.1:${port}`,
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+    'Sec-WebSocket-Version: 13',
+  ];
+  socket.write(`${headers.join('\r\n')}\r\n\r\n`);
+  const [chunk] = await once(socket, 'data') as [Buffer];
+  const marker = Buffer.from('\r\n\r\n');
+  const index = chunk.indexOf(marker);
+  if (index < 0) throw new Error('Expected WebSocket upgrade response.');
+  return {
+    socket,
+    initialData: chunk.subarray(index + marker.length),
+  };
 }
 
 describe('vis_bridge', () => {
@@ -236,6 +314,66 @@ describe('vis_bridge', () => {
     expect(spawned[0]?.killed).toBe(true);
   });
 
+  it('retains exited PTY briefly for replay and emits exit meta', async () => {
+    let exitHandler: ((event?: { exitCode?: number }) => void) | undefined;
+    let dataHandler: ((data: string) => void) | undefined;
+    const ptyModule = {
+      spawn() {
+        return {
+          onData(callback: (data: string) => void) {
+            dataHandler = callback;
+            return { dispose: () => { dataHandler = undefined; } };
+          },
+          onExit(callback: (event?: { exitCode?: number }) => void) {
+            exitHandler = callback;
+            return { dispose: () => { exitHandler = undefined; } };
+          },
+          write: () => {},
+          resize: () => {},
+          kill: () => {},
+        };
+      },
+    };
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+      ptyModule,
+    });
+    const port = await listen(server);
+
+    const created = await requestJson(port, '/pty', 'POST', { cwd: '/repo', command: 'bash', args: ['-lc', 'echo hi'], title: 'One-shot PTY' });
+    expect(created.status).toBe(200);
+    const id = (created.body as { id: string }).id;
+
+    dataHandler?.('editor-output\n');
+    exitHandler?.({ exitCode: 0 });
+
+    await expect(readHttpBody(port, '/pty')).resolves.toEqual({
+      status: 200,
+      body: [expect.objectContaining({ id, status: 'exited', exitCode: 0 })],
+    });
+
+    const { socket, initialData } = await openWebSocket(port, `/pty/${id}/connect`);
+    socket.write(encodeMaskedWebSocketFrame('ping', 9));
+    const chunks: Buffer[] = initialData.length > 0 ? [initialData] : [];
+    const onData = (chunk: Buffer) => chunks.push(chunk);
+    socket.on('data', onData);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    socket.off('data', onData);
+    socket.destroy();
+
+    const decoded = decodeServerFrames(Buffer.concat(chunks));
+    const textPayloads = decoded.frames
+      .filter((frame) => frame.opcode === 1)
+      .map((frame) => frame.payload.toString('utf8'));
+    const binaryPayloads = decoded.frames.filter((frame) => frame.opcode === 2).map((frame) => frame.payload);
+    const closeFrame = decoded.frames.find((frame) => frame.opcode === 8);
+
+    expect(textPayloads.join('')).toContain('editor-output');
+    expect(binaryPayloads.some((payload) => payload[0] === 0 && payload.subarray(1).toString('utf8').includes('"exitCode":0'))).toBe(true);
+    expect(closeFrame).toBeTruthy();
+  });
+
   it('rejects PTY endpoints on non-loopback hosts without bridge auth', async () => {
     const server = createVisBridgeServer({
       host: '0.0.0.0',
@@ -252,6 +390,95 @@ describe('vis_bridge', () => {
     await expect(requestJson(port, '/pty', 'POST', { cwd: '/repo' })).resolves.toEqual({
       status: 403,
       body: { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' },
+    });
+  });
+
+  it('serves bridge-backed fs read and write endpoints', async () => {
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-'));
+    const filePath = path.join(dir, 'note.txt');
+    await writeFile(filePath, 'hello bridge', 'utf8');
+
+    await expect(readHttpBody(port, `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+      status: 200,
+      body: {
+        path: filePath,
+        content: 'hello bridge',
+        dataBase64: Buffer.from('hello bridge', 'utf8').toString('base64'),
+        encoding: 'utf-8',
+        type: 'text',
+      },
+    });
+
+    await expect(requestJson(port, '/fs/writeFile', 'POST', { path: filePath, root: dir, content: 'updated bridge' })).resolves.toEqual({
+      status: 200,
+      body: { path: filePath },
+    });
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('updated bridge');
+    await expect(readHttpBody(port, `/fs/capabilities?root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+      status: 200,
+      body: { root: dir, writable: true },
+    });
+  });
+
+  it('rejects fs access outside declared root', async () => {
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-root-'));
+    const sibling = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-sibling-'));
+    const outsideFile = path.join(sibling, 'outside.txt');
+    await writeFile(outsideFile, 'outside', 'utf8');
+
+    await expect(readHttpBody(port, `/fs/readFile?path=${encodeURIComponent(outsideFile)}&root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+      status: 500,
+      body: { error: 'File path is outside the allowed root.' },
+    });
+  });
+
+  it('rejects unprotected fs endpoints on non-loopback hosts without bridge auth', async () => {
+    const server = createVisBridgeServer({
+      host: '0.0.0.0',
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+    await expect(requestJson(port, '/fs/writeFile', 'POST', { path: '/tmp/file.txt', root: '/tmp', content: 'x' })).resolves.toEqual({
+      status: 403,
+      body: { error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' },
+    });
+  });
+
+  it('allows fs endpoints on non-loopback hosts when bridge auth is configured', async () => {
+    const server = createVisBridgeServer({
+      host: '0.0.0.0',
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+      bridgeToken: 'secret-token',
+    });
+    const port = await listen(server);
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-auth-'));
+    const filePath = path.join(dir, 'token.txt');
+    await writeFile(filePath, 'authorized', 'utf8');
+
+    await expect(readHttpBody(
+      port,
+      `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}&token=secret-token`,
+    )).resolves.toEqual({
+      status: 200,
+      body: {
+        path: filePath,
+        content: 'authorized',
+        dataBase64: Buffer.from('authorized', 'utf8').toString('base64'),
+        encoding: 'utf-8',
+        type: 'text',
+      },
     });
   });
 });

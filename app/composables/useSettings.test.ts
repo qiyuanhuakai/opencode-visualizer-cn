@@ -74,6 +74,25 @@ describe('useSettings', () => {
     expect(storage.getItem('opencode.settings.enterToSend.v1')).toBe('true');
   });
 
+  it('reads and writes editInVis setting', async () => {
+    const settings = await importFresh();
+    expect(settings.editInVis.value).toBe(false);
+
+    settings.editInVis.value = true;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(storage.getItem('opencode.settings.editInVis.v1')).toBe('true');
+  });
+
+  it('reacts to external storage events for editInVis', async () => {
+    const settings = await importFresh();
+    const event = {
+      key: 'opencode.settings.editInVis.v1',
+      newValue: 'true',
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(event);
+    expect(settings.editInVis.value).toBe(true);
+  });
+
   it('resets dockAlwaysOpen when showMinimizeButtons is disabled', async () => {
     const settings = await importFresh();
     settings.dockAlwaysOpen.value = true;
