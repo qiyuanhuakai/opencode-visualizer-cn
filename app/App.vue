@@ -198,6 +198,7 @@
               @focus="fw.bringToFront(entry.key)"
               @minimize="handleFloatingWindowMinimize(entry.key)"
               @close="handleFloatingWindowClose(entry.key)"
+              @edit="handleFloatingWindowEdit(entry.key)"
               @open="handleFloatingWindowOpen(entry.key)"
             />
           </TransitionGroup>
@@ -518,6 +519,7 @@ import { pendingWorkerRenders } from './composables/useRenderState';
 import { useOpenCodeApi } from './composables/useOpenCodeApi';
 import { useCodexApi } from './composables/useCodexApi';
 import type { CodexTurnInputItem } from './backends/codex/codexAdapter';
+import { appendCodexBridgeToken, codexBridgeHttpUrl } from './backends/codex/bridgeUrl';
 import { CODEX_PROJECT_ID, createCodexProjectState, useCodexWorkspace } from './composables/useCodexWorkspace';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
@@ -595,6 +597,7 @@ const {
   suppressAutoWindows,
   showMinimizeButtons,
   dockAlwaysOpen,
+  editInVis,
   terminalFontFamily,
   appMonospaceFontFamily,
   terminalFontSizePx,
@@ -617,6 +620,10 @@ const TERM_GUTTER_WIDTH_EM = 3.2;
 const TRANSPARENT_TERMINAL_BACKGROUND = 'rgba(0, 0, 0, 0)';
 
 const SHELL_LINGER_MS = 1000;
+const editingFileDrafts = reactive<Record<string, string>>({});
+const editingFileBaseContent = reactive<Record<string, string>>({});
+const editingFileSaving = reactive<Record<string, boolean>>({});
+const bridgeFsWritable = ref(false);
 const TREE_DATA_CACHE_TTL_MS = 15000;
 const COMMIT_SNAPSHOT_SCRIPT = [
   'stty -opost -echo 2>/dev/null',
@@ -1560,13 +1567,21 @@ function handlePromptClose() {
 const confirmDialogRef = ref<HTMLDialogElement | null>(null);
 const confirmMessage = ref('');
 let confirmResolve: ((value: boolean) => void) | null = null;
+const confirmQueue: Array<{ message: string; resolve: (value: boolean) => void }> = [];
+
+function drainConfirmQueue() {
+  if (confirmResolve || confirmQueue.length === 0) return;
+  const next = confirmQueue.shift();
+  if (!next) return;
+  confirmMessage.value = next.message;
+  confirmResolve = next.resolve;
+  confirmDialogRef.value?.showModal();
+}
 
 async function showConfirm(message: string): Promise<boolean> {
-  confirmMessage.value = message;
-  confirmResolve = null;
   return new Promise((resolve) => {
-    confirmResolve = resolve;
-    confirmDialogRef.value?.showModal();
+    confirmQueue.push({ message, resolve });
+    drainConfirmQueue();
   });
 }
 
@@ -1574,6 +1589,7 @@ function handleConfirmAccept() {
   confirmDialogRef.value?.close();
   confirmResolve?.(true);
   confirmResolve = null;
+  queueMicrotask(drainConfirmQueue);
 }
 
 function handleConfirmClose() {
@@ -1581,6 +1597,7 @@ function handleConfirmClose() {
     confirmResolve(false);
     confirmResolve = null;
   }
+  queueMicrotask(drainConfirmQueue);
 }
 
 import { provide } from 'vue';
@@ -5386,6 +5403,186 @@ function buildOpenInEditorCommand(absolutePath: string) {
   return `editor_cmd=\${VISUAL:-\${EDITOR:-}}; if [ -z "$editor_cmd" ]; then printf '%s\\n' 'VISUAL/EDITOR is not set.'; exit 127; fi; eval "$editor_cmd '${escapedPath}'"; status=$?; exit $status`;
 }
 
+function getFileViewerEditState(key: string) {
+  return {
+    editing: Object.prototype.hasOwnProperty.call(editingFileDrafts, key),
+    editableContent: editingFileDrafts[key],
+    isSaving: editingFileSaving[key] === true,
+  };
+}
+
+function clearFileViewerEditState(key: string) {
+  delete editingFileDrafts[key];
+  delete editingFileBaseContent[key];
+  delete editingFileSaving[key];
+}
+
+function updateFileViewerEditProps(key: string, extraProps: Record<string, unknown> = {}) {
+  const entry = fw.get(key);
+  if (!entry) return;
+  const { editing, editableContent, isSaving } = getFileViewerEditState(key);
+  fw.updateOptions(key, {
+    props: {
+      ...entry.props,
+      ...extraProps,
+      editing,
+      editableContent,
+      isSaving,
+      onSaveEdit: (content: string) => saveFileViewerEdit(key, content),
+      onCancelEdit: () => cancelFileViewerEdit(key),
+    },
+  });
+}
+
+function canCurrentBackendEditInVis() {
+  if (!editInVis.value) return false;
+  if (typeof backend().writeFileContent === 'function') return true;
+  return bridgeFsWritable.value;
+}
+
+function refreshAllFileViewerEditCapabilities() {
+  const canEdit = canCurrentBackendEditInVis();
+  for (const entry of fw.entries.value) {
+    if (!entry.key.startsWith('file-viewer:')) continue;
+    fw.updateOptions(entry.key, {
+      props: {
+        ...entry.props,
+        canEditInVis: canEdit,
+      },
+    });
+  }
+}
+
+async function probeConnectedBridgeFs() {
+  const bridgeUrl = codexApi.url.value?.trim();
+  if (!bridgeUrl || !codexApi.connected.value) {
+    bridgeFsWritable.value = false;
+    refreshAllFileViewerEditCapabilities();
+    return false;
+  }
+  try {
+    const probeRoot = activeDirectory.value.trim() || codexApi.homeDir.value || homePath.value || '/';
+    const response = await fetch(
+      appendCodexBridgeToken(
+        `${codexBridgeHttpUrl(bridgeUrl, '/fs/capabilities')}?${new URLSearchParams({
+          root: probeRoot,
+        }).toString()}`,
+        codexApi.bridgeToken.value,
+      ),
+    );
+    bridgeFsWritable.value = response.ok;
+    refreshAllFileViewerEditCapabilities();
+    return response.ok;
+  } catch {
+    bridgeFsWritable.value = false;
+    refreshAllFileViewerEditCapabilities();
+    return false;
+  }
+}
+
+async function writeFileThroughConnectedBridge(payload: { directory: string; absolutePath: string; content: string }) {
+  const bridgeUrl = codexApi.url.value?.trim();
+  if (!bridgeUrl || !codexApi.connected.value || !bridgeFsWritable.value) {
+    throw new Error('No connected vis_bridge is available for file editing.');
+  }
+  const response = await fetch(
+    appendCodexBridgeToken(codexBridgeHttpUrl(bridgeUrl, '/fs/writeFile'), codexApi.bridgeToken.value),
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        path: payload.absolutePath,
+        root: payload.directory,
+        content: payload.content,
+      }),
+    },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(body || `Bridge file write failed (${response.status})`);
+  }
+}
+
+async function writeFileForVisEdit(payload: { directory: string; path: string; absolutePath: string; content: string }) {
+  const writeFileContent = backend().writeFileContent;
+  if (typeof writeFileContent === 'function') {
+    await writeFileContent({ directory: payload.directory, path: payload.path, content: payload.content });
+    return;
+  }
+  await writeFileThroughConnectedBridge({
+    directory: payload.directory,
+    absolutePath: payload.absolutePath,
+    content: payload.content,
+  });
+  const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+  const persisted = (await readFileContent({
+    directory: payload.directory,
+    path: payload.path,
+  })) as FileContentResponse;
+  const persistedContent = typeof persisted?.content === 'string' ? persisted.content : '';
+  if (persistedContent !== payload.content) {
+    throw new Error('Bridge write did not persist the expected file content.');
+  }
+}
+
+function handleFloatingWindowEdit(key: string) {
+  if (!editInVis.value) return;
+  const entry = fw.get(key);
+  if (!entry || !key.startsWith('file-viewer:')) return;
+  if (entry.props?.canEditInVis !== true) return;
+  if (typeof entry.props?.binaryBase64 === 'string') return;
+  const fileContent = typeof entry.props?.fileContent === 'string' ? entry.props.fileContent : '';
+  editingFileDrafts[key] = fileContent;
+  editingFileBaseContent[key] = fileContent;
+  editingFileSaving[key] = false;
+  updateFileViewerEditProps(key);
+}
+
+function cancelFileViewerEdit(key: string) {
+  clearFileViewerEditState(key);
+  updateFileViewerEditProps(key);
+}
+
+async function saveFileViewerEdit(key: string, content: string) {
+  const entry = fw.get(key);
+  if (!entry) return;
+  if (entry.props?.canEditInVis !== true) return;
+  const fileDirectory = typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
+  const filePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
+  const absolutePath = typeof entry.props?.absolutePath === 'string' ? entry.props.absolutePath : '';
+  if (!fileDirectory || !filePath || !absolutePath) return;
+
+  try {
+    editingFileSaving[key] = true;
+    updateFileViewerEditProps(key, { editableContent: content });
+    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+    const latest = (await readFileContent({
+      directory: fileDirectory,
+      path: filePath,
+    })) as FileContentResponse;
+    const latestContent = typeof latest?.content === 'string' ? latest.content : '';
+    if (latestContent !== (editingFileBaseContent[key] ?? '')) {
+      editingFileSaving[key] = false;
+      updateFileViewerEditProps(key);
+      setSendStatusText(t('floatingWindow.editConflict'));
+      return;
+    }
+    await writeFileForVisEdit({ directory: fileDirectory, path: filePath, absolutePath, content });
+    editingFileDrafts[key] = content;
+    editingFileBaseContent[key] = content;
+    clearFileViewerEditState(key);
+    await refreshFileViewerWindow(key, { bringToFront: false });
+    await refreshOpenGitDiffWindowsForPath(absolutePath);
+    feed({ file: absolutePath, event: 'change' });
+    setSendStatusText(`${t('floatingWindow.editInVis')} · ${t('viewers.content.save')}`);
+  } catch (error) {
+    editingFileSaving[key] = false;
+    editingFileDrafts[key] = content;
+    updateFileViewerEditProps(key);
+    setSendStatusKey('app.error.fileLoadFailed', { message: toErrorMessage(error) });
+  }
+}
+
 async function updatePtySize(ptyId: string, rows: number, cols: number, directory?: string) {
     const updatePtySize = requireBackendMethod(backend().updatePtySize, 'PTY resizing');
     const data = await updatePtySize(ptyId, {
@@ -5720,6 +5917,19 @@ function handleFloatingWindowClose(key: string) {
     removeShellWindow(ptyId, { kill: true });
     return;
   }
+  if (Object.prototype.hasOwnProperty.call(editingFileDrafts, key)) {
+    const entry = fw.get(key);
+    const currentContent = typeof entry?.props?.fileContent === 'string' ? entry.props.fileContent : '';
+    if (editingFileDrafts[key] !== currentContent) {
+      void showConfirm(t('floatingWindow.confirmDiscardEdit')).then((shouldDiscard) => {
+        if (!shouldDiscard) return;
+        clearFileViewerEditState(key);
+        void fw.close(key);
+      });
+      return;
+    }
+  }
+  clearFileViewerEditState(key);
   void fw.close(key);
 }
 
@@ -7175,6 +7385,14 @@ watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelecti
   immediate: true,
 });
 
+watch(
+  [editInVis, activeBackendKind, activeDirectory, () => codexApi.connected.value, () => codexApi.url.value, () => codexApi.bridgeToken.value],
+  () => {
+    void probeConnectedBridgeFs();
+  },
+  { immediate: true },
+);
+
 watchEffect(() => {
   configureOpenCodeBackend({
     baseUrl: credentials.baseUrl.value,
@@ -8348,6 +8566,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
       props: {
         ...entry.props,
         path,
+        backendKind: activeBackendKind.value,
+        canEditInVis: canCurrentBackendEditInVis(),
         rawHtml: t('app.read.noActiveDirectorySelected'),
         lines,
         gutterMode: 'none',
@@ -8366,6 +8586,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
     const type = data?.type === 'binary' ? 'binary' : 'text';
     const encoding = typeof data?.encoding === 'string' ? data.encoding : 'utf-8';
     const content = typeof data?.content === 'string' ? data.content : '';
+    const isEditing = Object.prototype.hasOwnProperty.call(editingFileDrafts, key);
     const isBase64Payload = encoding === 'base64';
 
     // Force binary treatment for PDF files
@@ -8378,6 +8599,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
           props: {
             ...entry.props,
             path,
+            backendKind: activeBackendKind.value,
+            canEditInVis: canCurrentBackendEditInVis(),
             fileDirectory: directory,
             filePath,
             rawHtml: t('app.read.binaryContentNotIncluded'),
@@ -8389,6 +8612,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
             theme: shikiTheme.value,
           },
         });
+        updateFileViewerEditProps(key);
         return;
       }
 
@@ -8417,6 +8641,8 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         props: {
           ...entry.props,
           path,
+          backendKind: activeBackendKind.value,
+          canEditInVis: canCurrentBackendEditInVis(),
           fileDirectory: directory,
           filePath,
           rawHtml: undefined,
@@ -8429,15 +8655,26 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
           theme: shikiTheme.value,
         },
       });
+      updateFileViewerEditProps(key);
       return;
     }
 
     const textContent = content;
     const fileSizeBytes = new TextEncoder().encode(textContent).length;
+    if (!isEditing) {
+      delete editingFileDrafts[key];
+      delete editingFileBaseContent[key];
+      delete editingFileSaving[key];
+    } else if (!(key in editingFileDrafts)) {
+      editingFileDrafts[key] = textContent;
+      editingFileBaseContent[key] = textContent;
+    }
     fw.updateOptions(key, {
       props: {
         ...entry.props,
         path,
+        backendKind: activeBackendKind.value,
+        canEditInVis: canCurrentBackendEditInVis(),
         fileDirectory: directory,
         filePath,
         rawHtml: undefined,
@@ -8450,11 +8687,14 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         theme: shikiTheme.value,
       },
     });
+    updateFileViewerEditProps(key, isEditing ? { editableContent: editingFileDrafts[key] } : {});
   } catch (error) {
     fw.updateOptions(key, {
       props: {
         ...entry.props,
         path,
+        backendKind: activeBackendKind.value,
+        canEditInVis: canCurrentBackendEditInVis(),
         fileDirectory: directory,
         filePath,
         rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
@@ -8465,6 +8705,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         theme: shikiTheme.value,
       },
     });
+    updateFileViewerEditProps(key);
   }
 
   if (options?.bringToFront) {
@@ -8524,6 +8765,8 @@ async function openFileViewer(path: string, lines?: string) {
     props: {
       path,
       absolutePath,
+      backendKind: activeBackendKind.value,
+      canEditInVis: canCurrentBackendEditInVis(),
       fileDirectory: requestPath.directory,
       filePath: requestPath.path,
       lang,
@@ -8532,6 +8775,11 @@ async function openFileViewer(path: string, lines?: string) {
       onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
         addLineComment(payload);
       },
+      editing: false,
+      editableContent: '',
+      isSaving: false,
+      onSaveEdit: (content: string) => saveFileViewerEdit(key, content),
+      onCancelEdit: () => cancelFileViewerEdit(key),
       theme: shikiTheme.value,
     },
     closable: true,

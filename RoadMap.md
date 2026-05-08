@@ -14,7 +14,6 @@
 			- [ ] 完善“历史记录”，现在还不能正确记录会话历史和工具调用
 			- [ ] 完善动效状态，现在发送消息会出现显示异常
 		- [ ] 完善状态监控面板？
-	- [ ] 加入webui编辑器/files api端点：考虑替换掉$EDITOR打开的方式	
 	- [ ] oh-my-pi
 	- [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
 	- [ ] [gnhf](https://github.com/kunchenguid/gnhf)
@@ -26,6 +25,3 @@
 ## [Paused for difficulties]
 
 > 如需查看详细的版本变更记录，请参阅 [CHANGELOG.md](./CHANGELOG.md)。
-
-
-

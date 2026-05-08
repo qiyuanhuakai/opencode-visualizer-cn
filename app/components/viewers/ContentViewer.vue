@@ -12,7 +12,25 @@
         {{ mode.label }}
       </button>
     </div>
+    <div v-if="isEditing" class="viewer-edit-toolbar">
+      <span class="viewer-edit-status">{{ isDirty ? t('viewers.content.unsavedChanges') : t('viewers.content.editing') }}</span>
+      <div class="viewer-edit-actions">
+        <button type="button" class="viewer-edit-btn" :disabled="isSaving" @click="handleCancel">
+          {{ t('viewers.content.cancel') }}
+        </button>
+        <button type="button" class="viewer-edit-btn primary" :disabled="isSaving || !isDirty" @click="handleSave">
+          {{ isSaving ? t('viewers.content.saving') : t('viewers.content.save') }}
+        </button>
+      </div>
+    </div>
     <div class="viewer-body">
+      <CodeMirrorEditor
+        v-if="activeMode === 'edit'"
+        v-model="editableContent"
+        :lang="lang"
+        :theme="theme"
+        :word-wrap="true"
+      />
       <ImageRenderer v-if="activeMode === 'image'" :src="effectiveImageSrc || ''" :alt="path" />
       <PdfRenderer v-else-if="activeMode === 'pdf'" :src="effectivePdfSrc || ''" @rendered="emit('rendered')" />
       <MarkdownRenderer
@@ -65,6 +83,7 @@
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import CodeRenderer from '../renderers/CodeRenderer.vue';
+import CodeMirrorEditor from '../renderers/CodeMirrorEditor.vue';
 import HexRenderer from '../renderers/HexRenderer.vue';
 import ImageRenderer from '../renderers/ImageRenderer.vue';
 import MarkdownRenderer from '../renderers/MarkdownRenderer.vue';
@@ -74,7 +93,7 @@ import { detectFileType } from '../../utils/fileTypeDetector';
 
 const { t } = useI18n();
 
-type ModeId = 'rendered' | 'source' | 'image' | 'hex' | 'info' | 'archive' | 'pdf';
+type ModeId = 'rendered' | 'source' | 'edit' | 'image' | 'hex' | 'info' | 'archive' | 'pdf';
 
 const props = defineProps<{
   path?: string;
@@ -87,6 +106,11 @@ const props = defineProps<{
   theme?: string;
   lines?: string;
   imageSrc?: string;
+  editing?: boolean;
+  isSaving?: boolean;
+  editableContent?: string;
+  onSaveEdit?: (content: string) => Promise<void> | void;
+  onCancelEdit?: () => void;
   onRequestAddLineComment?: (payload: { path: string; startLine: number; endLine: number; text: string }) => void;
 }>();
 
@@ -333,6 +357,24 @@ const showBinaryInfo = computed(() => {
   return fileTypeInfo.value !== null;
 });
 
+const isEditing = computed(() => props.editing === true);
+const isSaving = computed(() => props.isSaving === true);
+const editableContent = ref(props.editableContent ?? props.fileContent ?? '');
+
+watch(() => props.editableContent, (value) => {
+  if (typeof value === 'string' && value !== editableContent.value) {
+    editableContent.value = value;
+  }
+});
+
+watch(() => props.fileContent, (value) => {
+  if (!isEditing.value && typeof value === 'string' && value !== editableContent.value) {
+    editableContent.value = value;
+  }
+});
+
+const isDirty = computed(() => editableContent.value !== (props.fileContent ?? ''));
+
 const availableModes = computed<Array<{ id: ModeId; label: string }>>(() => {
   const modes: Array<{ id: ModeId; label: string }> = [];
   if (effectiveImageSrc.value) modes.push({ id: 'image', label: t('viewers.content.image') });
@@ -342,6 +384,9 @@ const availableModes = computed<Array<{ id: ModeId; label: string }>>(() => {
     modes.push({ id: 'source', label: t('viewers.content.source') });
   } else if (effectiveFileContent.value != null && !isBitmapImage.value && !showBinaryInfo.value && !isPdf.value) {
     modes.push({ id: 'source', label: t('viewers.content.source') });
+  }
+  if (isEditing.value && effectiveFileContent.value != null && !shouldTreatAsBinary.value && !isPdf.value) {
+    modes.push({ id: 'edit', label: t('viewers.content.edit') });
   }
   if (showBinaryInfo.value) {
     modes.push({ id: 'info', label: t('viewers.content.info') });
@@ -355,6 +400,7 @@ const availableModes = computed<Array<{ id: ModeId; label: string }>>(() => {
 });
 
 const preferredDefaultMode = computed<ModeId>(() => {
+  if (isEditing.value) return 'edit';
   if (isPdf.value) return 'pdf';
   if (showBinaryInfo.value) return 'info';
   return 'source';
@@ -385,6 +431,15 @@ const activeMode = computed<ModeId>(() => {
 });
 
 const showModeTabs = computed(() => availableModes.value.length > 1);
+
+async function handleSave() {
+  if (!props.onSaveEdit) return;
+  await props.onSaveEdit(editableContent.value);
+}
+
+function handleCancel() {
+  props.onCancelEdit?.();
+}
 </script>
 
 <style scoped>
@@ -437,6 +492,52 @@ const showModeTabs = computed(() => availableModes.value.length > 1);
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.content-viewer-root:has(.code-mirror-editor-root) .viewer-body {
+  overflow: hidden;
+}
+
+.viewer-edit-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--floating-border-muted, rgba(90, 100, 120, 0.35));
+  background: var(--floating-surface-muted, rgba(26, 29, 36, 0.95));
+}
+
+.viewer-edit-status {
+  font-size: 11px;
+  color: var(--floating-text-soft, #8a8f9a);
+}
+
+.viewer-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewer-edit-btn {
+  border: 1px solid var(--floating-border-muted, rgba(90, 100, 120, 0.35));
+  background: transparent;
+  color: var(--floating-text-secondary, #cbd5e1);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.viewer-edit-btn.primary {
+  background: color-mix(in srgb, var(--window-color, #3a4150) 55%, #60a5fa);
+  color: #fff;
+  border-color: transparent;
+}
+
+.viewer-edit-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .viewer-rendered-markdown {

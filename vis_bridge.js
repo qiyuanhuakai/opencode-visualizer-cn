@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, promises as fs } from 'node:fs';
 import { createServer } from 'node:http';
 import { connect as connectTcp } from 'node:net';
 import { connect as connectTls } from 'node:tls';
 import { homedir } from 'node:os';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 
 const DEFAULT_HOST = '127.0.0.1';
@@ -339,6 +340,67 @@ function normalizePtyCwd(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : homedir();
 }
 
+function normalizeFsPath(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('File path is required.');
+  }
+  return path.resolve(value.trim());
+}
+
+function normalizeFsRoot(value) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error('File root is required.');
+  }
+  return path.resolve(value.trim());
+}
+
+function isPathWithinRoot(targetPath, rootPath) {
+  const relative = path.relative(rootPath, targetPath);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function assertFsPathWithinRoot(filePath, rootPath) {
+  const normalizedPath = normalizeFsPath(filePath);
+  const normalizedRoot = normalizeFsRoot(rootPath);
+  if (!isPathWithinRoot(normalizedPath, normalizedRoot)) {
+    throw new Error('File path is outside the allowed root.');
+  }
+  return { normalizedPath, normalizedRoot };
+}
+
+function createFsManager() {
+  return {
+    async getCapabilities(rootPath) {
+      const normalizedRoot = normalizeFsRoot(rootPath);
+      const stats = await fs.stat(normalizedRoot);
+      if (!stats.isDirectory()) {
+        throw new Error('FS root must be a directory.');
+      }
+      await fs.access(normalizedRoot, fs.constants.R_OK | fs.constants.W_OK);
+      return { root: normalizedRoot, writable: true };
+    },
+    async readFile(filePath, rootPath) {
+      const { normalizedPath } = assertFsPathWithinRoot(filePath, rootPath);
+      const content = await fs.readFile(normalizedPath);
+      return {
+        path: normalizedPath,
+        content: content.toString('utf8'),
+        dataBase64: content.toString('base64'),
+        encoding: 'utf-8',
+        type: 'text',
+      };
+    },
+    async writeFile(filePath, rootPath, content) {
+      const { normalizedPath } = assertFsPathWithinRoot(filePath, rootPath);
+      if (typeof content !== 'string') {
+        throw new Error('File content must be a string.');
+      }
+      await fs.writeFile(normalizedPath, content, 'utf8');
+      return { path: normalizedPath };
+    },
+  };
+}
+
 function encodeWebSocketFrame(data, opcode = 1) {
   const payload = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
   const length = payload.length;
@@ -596,9 +658,41 @@ async function handlePtyHttpRequest(request, response, requestUrl, manager) {
   }
 }
 
+async function handleFsHttpRequest(request, response, requestUrl, manager) {
+  try {
+    if (requestUrl.pathname === '/fs/capabilities' && request.method === 'GET') {
+      const result = await manager.getCapabilities(requestUrl.searchParams.get('root'));
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    if (requestUrl.pathname === '/fs/readFile' && request.method === 'GET') {
+      const result = await manager.readFile(
+        requestUrl.searchParams.get('path'),
+        requestUrl.searchParams.get('root'),
+      );
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    if (requestUrl.pathname === '/fs/writeFile' && request.method === 'POST') {
+      const payload = await readJsonBody(request);
+      const result = await manager.writeFile(payload?.path, payload?.root, payload?.content);
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    writeJsonHttpResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    return true;
+  }
+}
+
 function requiresPtyToken(options) {
   const host = String(options.host ?? DEFAULT_HOST).trim();
   return Boolean(!options.bridgeToken && host && !isLoopbackHostname(host) && (isWildcardHost(host) || host !== 'localhost'));
+}
+
+function requiresFsToken(options) {
+  return requiresPtyToken(options);
 }
 
 function rejectUnprotectedPtyHttp(response) {
@@ -607,6 +701,10 @@ function rejectUnprotectedPtyHttp(response) {
 
 function rejectUnprotectedPtySocket(socket) {
   writeHttpResponse(socket, 403, 'Forbidden', { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
+}
+
+function rejectUnprotectedFsHttp(response) {
+  writeJsonHttpResponse(response, 403, { error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
 }
 
 function handlePtyUpgrade(request, clientSocket, head, options, manager) {
@@ -673,6 +771,7 @@ function authorizeHttpRequest(request, response, bridgeToken) {
 export function createVisBridgeServer(options) {
   const bridgeOptions = { host: DEFAULT_HOST, ...options };
   const ptyManager = createPtyManager(bridgeOptions);
+  const fsManager = createFsManager();
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
@@ -701,6 +800,18 @@ export function createVisBridgeServer(options) {
       }
       if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
       void handlePtyHttpRequest(request, response, requestUrl, ptyManager).then((handled) => {
+        if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
+      });
+      return;
+    }
+
+    if (requestUrl.pathname === '/fs/capabilities' || requestUrl.pathname === '/fs/readFile' || requestUrl.pathname === '/fs/writeFile') {
+      if (requiresFsToken(bridgeOptions)) {
+        rejectUnprotectedFsHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      void handleFsHttpRequest(request, response, requestUrl, fsManager).then((handled) => {
         if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
       });
       return;

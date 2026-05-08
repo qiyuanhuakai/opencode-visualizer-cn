@@ -10,7 +10,7 @@ import { useSettings } from '../composables/useSettings';
 import { resolveFloatingWindowThemeType } from '../utils/floatingWindowTheme';
 import { Icon } from '@iconify/vue';
 
-const { showMinimizeButtons, showOpenInEditorButton, openInEditorMaxSizeMb, floatingPreviewWordWrap } = useSettings();
+const { showMinimizeButtons, showOpenInEditorButton, openInEditorMaxSizeMb, floatingPreviewWordWrap, editInVis } = useSettings();
 
 const { t } = useI18n();
 
@@ -23,6 +23,7 @@ const emit = defineEmits<{
   focus: [key: string];
   close: [key: string];
   minimize: [key: string];
+  edit: [key: string];
   open: [key: string];
 }>();
 
@@ -181,6 +182,13 @@ const canOpenInEditor = computed(() => {
   if (!props.entry.key.startsWith('file-viewer:')) return false;
   const size = typeof props.entry.props?.fileSizeBytes === 'number' ? props.entry.props.fileSizeBytes : 0;
   return size <= openInEditorMaxSizeMb.value * 1024 * 1024;
+});
+
+const canEditInVis = computed(() => {
+  if (!editInVis.value) return false;
+  if (!props.entry.key.startsWith('file-viewer:')) return false;
+  if (props.entry.props?.canEditInVis !== true) return false;
+  return props.entry.props?.binaryBase64 == null;
 });
 
 const scrollClass = computed(() => {
@@ -525,9 +533,19 @@ function onResizeEnd(e: PointerEvent) {
       <span class="title">{{ entry.title || t('floatingWindow.tool') }}</span>
       <div class="window-actions">
         <button
+          v-if="canEditInVis"
+          class="open-btn"
+          :aria-label="t('floatingWindow.editInVis')"
+          :title="t('floatingWindow.editInVis')"
+          @click.stop="emit('edit', entry.key)"
+        >
+          <Icon icon="lucide:square-pen" :width="14" :height="14" />
+        </button>
+        <button
           v-if="canOpenInEditor"
           class="open-btn"
           :aria-label="t('floatingWindow.openInEditor')"
+          :title="t('floatingWindow.openInEditor')"
           @click.stop="emit('open', entry.key)"
         >
           <Icon icon="lucide:external-link" :width="14" :height="14" />
@@ -536,6 +554,7 @@ function onResizeEnd(e: PointerEvent) {
           v-if="showMinimizeButtons"
           class="minimize-btn"
           :aria-label="t('floatingWindow.minimizeWindow')"
+          :title="t('floatingWindow.minimizeWindow')"
           @click.stop="onMinimize"
         >
           <Icon icon="lucide:minus" :width="14" :height="14" />
@@ -544,6 +563,7 @@ function onResizeEnd(e: PointerEvent) {
           v-if="canCloseWindow"
           class="close-btn"
           :aria-label="t('floatingWindow.closeWindow')"
+          :title="t('floatingWindow.closeWindow')"
           @click.stop="onClose"
         >
           <Icon icon="lucide:x" :width="14" :height="14" />

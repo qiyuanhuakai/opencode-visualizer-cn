@@ -1,6 +1,6 @@
 {
   "name": "opencode_visualizer_cn",
-  "version": "0.5.1",
+  "version": "0.5.4",
   "description": "Vis - OpenCode Visualizer",
   "keywords": [
     "opencode",
@@ -46,7 +46,10 @@
     "@codemirror/lang-python": "^6.2.1",
     "@codemirror/lang-xml": "^6.1.0",
     "@codemirror/lang-yaml": "^6.1.3",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
     "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.42.1",
     "@fiahfy/icns": "^0.0.7",
     "@hono/node-server": "^1.19.9",
     "buffer": "^6.0.3",

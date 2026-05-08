@@ -726,6 +726,31 @@ describe('CodexAdapter', () => {
     await waitForSent(socket, 7);
     socket.respond(6, { content: 'plain text' });
     await expect(readPlainContent).resolves.toEqual({ content: 'plain text', encoding: 'utf-8', type: 'text' });
+    const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+    const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ input, init });
+      return {
+        ok: true,
+        json: async () => ({}),
+      } as Response;
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    try {
+      await expect(adapter.writeFileContent({ directory: '/repo', path: 'README.md', content: 'updated' })).resolves.toEqual({});
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(fetchCalls).toEqual([
+      {
+        input: 'http://localhost:4500/fs/writeFile',
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: '/repo/README.md', root: '/repo', content: 'updated' }),
+        },
+      },
+    ]);
     const getLspStatus = adapter.getLspStatus;
     await expect(getLspStatus()).resolves.toEqual([]);
   });

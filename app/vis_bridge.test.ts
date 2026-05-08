@@ -1,7 +1,10 @@
 import { once } from 'node:events';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createVisBridgeServer } from '../vis_bridge';
@@ -387,6 +390,95 @@ describe('vis_bridge', () => {
     await expect(requestJson(port, '/pty', 'POST', { cwd: '/repo' })).resolves.toEqual({
       status: 403,
       body: { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' },
+    });
+  });
+
+  it('serves bridge-backed fs read and write endpoints', async () => {
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-'));
+    const filePath = path.join(dir, 'note.txt');
+    await writeFile(filePath, 'hello bridge', 'utf8');
+
+    await expect(readHttpBody(port, `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+      status: 200,
+      body: {
+        path: filePath,
+        content: 'hello bridge',
+        dataBase64: Buffer.from('hello bridge', 'utf8').toString('base64'),
+        encoding: 'utf-8',
+        type: 'text',
+      },
+    });
+
+    await expect(requestJson(port, '/fs/writeFile', 'POST', { path: filePath, root: dir, content: 'updated bridge' })).resolves.toEqual({
+      status: 200,
+      body: { path: filePath },
+    });
+    await expect(readFile(filePath, 'utf8')).resolves.toBe('updated bridge');
+    await expect(readHttpBody(port, `/fs/capabilities?root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+      status: 200,
+      body: { root: dir, writable: true },
+    });
+  });
+
+  it('rejects fs access outside declared root', async () => {
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-root-'));
+    const sibling = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-sibling-'));
+    const outsideFile = path.join(sibling, 'outside.txt');
+    await writeFile(outsideFile, 'outside', 'utf8');
+
+    await expect(readHttpBody(port, `/fs/readFile?path=${encodeURIComponent(outsideFile)}&root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+      status: 500,
+      body: { error: 'File path is outside the allowed root.' },
+    });
+  });
+
+  it('rejects unprotected fs endpoints on non-loopback hosts without bridge auth', async () => {
+    const server = createVisBridgeServer({
+      host: '0.0.0.0',
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+    });
+    const port = await listen(server);
+    await expect(requestJson(port, '/fs/writeFile', 'POST', { path: '/tmp/file.txt', root: '/tmp', content: 'x' })).resolves.toEqual({
+      status: 403,
+      body: { error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' },
+    });
+  });
+
+  it('allows fs endpoints on non-loopback hosts when bridge auth is configured', async () => {
+    const server = createVisBridgeServer({
+      host: '0.0.0.0',
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+      bridgeToken: 'secret-token',
+    });
+    const port = await listen(server);
+    const dir = await mkdtemp(path.join(tmpdir(), 'vis-bridge-fs-auth-'));
+    const filePath = path.join(dir, 'token.txt');
+    await writeFile(filePath, 'authorized', 'utf8');
+
+    await expect(readHttpBody(
+      port,
+      `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}&token=secret-token`,
+    )).resolves.toEqual({
+      status: 200,
+      body: {
+        path: filePath,
+        content: 'authorized',
+        dataBase64: Buffer.from('authorized', 'utf8').toString('base64'),
+        encoding: 'utf-8',
+        type: 'text',
+      },
     });
   });
 });

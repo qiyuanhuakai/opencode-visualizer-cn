@@ -5,6 +5,12 @@
 ---
 ## [v0.5.4 released]
 
+### 编辑器集成(beta)
+
+- [x] 实验性功能：嵌入CodeMirror6代码编辑器，支持在codex和opencode后端通过vis_bridge的/fs/writeFile http节点在web端编辑本地文件
+- [x] 实现了完整的代码编辑器功能，适配了项目已有的字体设置和主题方案
+
+
 ### Bug 修复
 - [x] 修复了对untracked files的统计导致的严重opencode server阻塞问题，该修复会导致git diff不再统计untracked files的行数，但仍然显示它的diff
 - [x] 修复了“用编辑器打开”功能在codex后端不可用的问题
