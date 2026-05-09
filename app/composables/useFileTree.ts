@@ -75,6 +75,7 @@ type FileTreeStrategy = 'filesystem' | 'git';
 
 type UseFileTreeOptions = {
   activeDirectory: Ref<string>;
+  activeBackendKind?: Ref<string>;
 };
 
 type DirectorySidebarSnapshot = {
@@ -1418,8 +1419,8 @@ function initializeFileTree(options: UseFileTreeOptions) {
   boundOptions = options;
   usePtyOneshot({ activeDirectory: options.activeDirectory, translate: tFunction ?? undefined });
   watch(
-    () => options.activeDirectory.value,
-    (directory) => {
+    () => [options.activeDirectory.value, options.activeBackendKind?.value ?? ''] as const,
+    ([directory]) => {
       clearScheduledDirectoryReloads();
       clearScheduledGitStatusReload();
 

@@ -114,6 +114,40 @@ describe('ProviderManagerModal events', () => {
     expect(appSource).toContain('void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);');
   });
 
+  it('resets Codex selection and force-refreshes OpenCode providers when switching back to OpenCode', () => {
+    const appSource = readSource(resolve(__dirname, '../App.vue'));
+    const activationSource = readSource(resolve(__dirname, '../composables/useBackendActivation.ts'));
+
+    expect(appSource).toContain("import { useBackendActivation } from './composables/useBackendActivation';");
+    expect(appSource).toContain('const {');
+    expect(appSource).toContain('} = useBackendActivation({');
+    expect(appSource).toContain('async function hydrateActiveWorktreeResources() {');
+    expect(activationSource).toContain("options.activeBackendKind.value = 'opencode';");
+    expect(activationSource).toContain("options.setActiveBackendKind('opencode');");
+    expect(activationSource).toContain('options.serverState.bootstrapped.value = false;');
+    expect(activationSource).toContain('Object.keys(options.serverState.projects).forEach((key) => {');
+    expect(activationSource).toContain("options.selectedProjectId.value = '';");
+    expect(activationSource).toContain("options.selectedSessionId.value = '';");
+    expect(activationSource).toContain('options.providerConfig.value = null;');
+    expect(activationSource).toContain('options.providersLoaded.value = false;');
+    expect(activationSource).toContain('options.providers.value = [];');
+    expect(activationSource).toContain('options.connectedProviderIds.value = [];');
+    expect(activationSource).toContain('options.modelOptions.value = [];');
+    expect(activationSource).toContain("options.selectedModel.value = '';");
+    expect(activationSource).toContain('await options.bootstrapSelections();');
+    expect(activationSource).toContain('await options.hydrateActiveWorktreeResources();');
+    expect(activationSource).toContain('await options.fetchGlobalProviderConfig();');
+    expect(activationSource).toContain('await Promise.all([options.fetchProviders(true), options.fetchAgents()]);');
+  });
+
+  it('only restores initial OpenCode query selection when that session exists in state', () => {
+    const appSource = readSource(resolve(__dirname, '../App.vue'));
+
+    expect(appSource).toContain('function sessionExistsInProjects(projectId: string, sessionId: string)');
+    expect(appSource).toContain('sessionExistsInProjects(initialProjectId, initialSessionId)');
+    expect(appSource).toContain('await initializeSessionSelection();');
+  });
+
   it('syncs Codex active provider and model before sending custom models', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
 
