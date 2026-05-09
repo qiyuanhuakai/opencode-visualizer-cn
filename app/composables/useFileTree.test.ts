@@ -194,6 +194,46 @@ describe('useFileTree', () => {
     mounted.unmount();
   });
 
+  it('reloads the tree when backend changes even if the directory string stays the same', async () => {
+    vi.resetModules();
+
+    const activeDirectory = ref('/repo');
+    const activeBackendKind = ref('codex');
+    const { useFileTree } = await import('./useFileTree');
+
+    const i18n = createI18n({
+      legacy: false,
+      locale: 'en',
+      messages: createMessages(),
+    });
+
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+
+    const app = createApp(
+      defineComponent({
+        setup() {
+          useFileTree({ activeDirectory, activeBackendKind });
+          return () => null;
+        },
+      }),
+    );
+
+    app.use(i18n);
+    app.mount(root);
+    await flushAsyncWork();
+    mockListFiles.mockClear();
+    mockRunOneShotPtyCommand.mockClear();
+
+    activeBackendKind.value = 'opencode';
+    await flushAsyncWork();
+
+    expect(mockRunOneShotPtyCommand).toHaveBeenCalled();
+
+    app.unmount();
+    root.remove();
+  });
+
   it('skips full git file snapshot reload for content-only change events', async () => {
     const mounted = await mountComposable();
     await mounted.settle();

@@ -567,6 +567,7 @@ import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { shouldPreservePendingCodexSelection } from './utils/codexSessionSelection';
 import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
 import { useCredentials } from './composables/useCredentials';
+import { useBackendActivation } from './composables/useBackendActivation';
 import { useSettings } from './composables/useSettings';
 import {
   StorageKeys,
@@ -1626,7 +1627,6 @@ const connectionState = ref<'connecting' | 'bootstrapping' | 'ready' | 'reconnec
 );
 const reconnectingMessage = ref('');
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let initializationInFlight = false;
 const loginUrl = ref(DEFAULT_OPENCODE_URL);
 const loginUsername = ref('');
 const loginPassword = ref('');
@@ -2215,7 +2215,7 @@ const {
   branchListLoading,
   refreshBranchEntries,
   ensureBranchEntriesLoaded,
-} = useFileTree({ activeDirectory });
+  } = useFileTree({ activeDirectory, activeBackendKind });
 
 const treeDirectoryName = computed(() => {
   const raw = activeDirectory.value.trim();
@@ -2902,6 +2902,33 @@ function replaceQuerySelection(projectId: string, sessionId: string) {
   params.delete('worktree');
   url.search = params.toString();
   window.history.replaceState({}, '', url.toString());
+}
+
+function sessionExistsInProjects(projectId: string, sessionId: string) {
+  const normalizedProjectId = projectId.trim();
+  const normalizedSessionId = sessionId.trim();
+  if (!normalizedProjectId || !normalizedSessionId) return false;
+  const project = serverState.projects[normalizedProjectId];
+  if (!project) return false;
+  return Object.values(project.sandboxes).some((sandbox) => Boolean(sandbox.sessions[normalizedSessionId]));
+}
+
+async function hydrateActiveWorktreeResources() {
+  const directory = activeDirectory.value.trim();
+  if (!directory) return;
+  initLoadingMessage.value = t('app.status.loadingWorktreeState');
+  await Promise.all([
+    reloadTree(),
+    refreshGitStatus({ includeFileSnapshot: false }),
+    fetchCommands(directory),
+    fetchPendingPermissions(directory),
+    fetchPendingQuestions(directory),
+  ]);
+}
+
+function handleOpenCodeUnauthorized(message: string) {
+  storageSet(StorageKeys.state.lastAuthError, message);
+  credentials.clear();
 }
 
 function normalizeStoredAttachment(value: unknown): Attachment | null {
@@ -4970,7 +4997,7 @@ async function bootstrapSelections() {
       selectedProjectId.value = CODEX_PROJECT_ID;
       const activeSessionId = codexWorkspace.activeSessionId.value;
       if (!selectedSessionId.value && activeSessionId) selectedSessionId.value = activeSessionId;
-    } else if (initialProjectId && initialSessionId) {
+    } else if (initialProjectId && initialSessionId && sessionExistsInProjects(initialProjectId, initialSessionId)) {
       await switchSessionSelection(initialProjectId, initialSessionId);
     } else {
       await initializeSessionSelection();
@@ -8909,99 +8936,41 @@ function handlePtyEvent(event: {
   }
 }
 
-async function startInitialization() {
-  if (initializationInFlight) return;
-  if (credentials.backendKind.value === 'codex') {
-    initializationInFlight = true;
-    ge.disconnect();
-    activeBackendKind.value = 'codex';
-    setActiveBackendKind('codex');
-    configureCodexBackend({
-      bridgeUrl: credentials.codexBridgeUrl.value,
-      bridgeToken: credentials.codexBridgeToken.value,
-    });
-    codexApi.url.value = credentials.codexBridgeUrl.value;
-    codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
-    uiInitState.value = 'loading';
-    initErrorMessage.value = '';
-    try {
-      connectionState.value = 'connecting';
-      initLoadingMessage.value = t('app.connection.connecting');
-      await codexApi.connect(credentials.codexBridgeUrl.value, (phase) => {
-        if (phase === 'home') initLoadingMessage.value = t('app.status.loadingCodexHome');
-        else if (phase === 'handshake') initLoadingMessage.value = t('app.status.loadingCodexHandshake');
-        else if (phase === 'threads') initLoadingMessage.value = t('app.status.loadingCodexThreads');
-        else if (phase === 'workspace') initLoadingMessage.value = t('app.status.loadingCodexWorkspace');
-        else initLoadingMessage.value = t('app.status.loadingCodexModels');
-      });
-      const existingThreadId = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
-      if (existingThreadId) {
-        await codexApi.selectThread(existingThreadId);
-        selectedSessionId.value = existingThreadId;
-      }
-      await Promise.all([fetchGlobalProviderConfig(), fetchProviders(true), fetchAgents()]);
-      connectionState.value = 'ready';
-      uiInitState.value = 'ready';
-      await nextTick();
-      if (selectedSessionId.value) {
-        await reloadSelectedSessionState(selectedSessionId.value);
-      }
-    } catch (error) {
-      codexApi.disconnect();
-      connectionState.value = 'error';
-      initErrorMessage.value = toErrorMessage(error);
-      uiInitState.value = 'login';
-    } finally {
-      initializationInFlight = false;
-    }
-    return;
-  }
-  initializationInFlight = true;
-  activeBackendKind.value = 'opencode';
-  setActiveBackendKind('opencode');
-  uiInitState.value = 'loading';
-  initErrorMessage.value = '';
-  reconnectingMessage.value = '';
-  try {
-    connectionState.value = 'connecting';
-    initLoadingMessage.value = t('app.connection.connecting');
-    await ge.connect({ failFast: true, timeoutMs: 10000 });
-    connectionState.value = 'bootstrapping';
-    initLoadingMessage.value = t('app.status.loadingServerPath');
-    await fetchHomePath();
-    initLoadingMessage.value = t('app.status.loadingProjects');
-    await bootstrapSelections();
-    if (activeDirectory.value) {
-      initLoadingMessage.value = t('app.status.loadingWorktreeState');
-      const directory = activeDirectory.value || undefined;
-      await Promise.all([
-        fetchCommands(directory),
-        fetchPendingPermissions(directory),
-        fetchPendingQuestions(directory),
-      ]);
-    }
-    connectionState.value = 'ready';
-    uiInitState.value = 'ready';
-    await Promise.all([fetchGlobalProviderConfig(), fetchProviders()]);
-    await fetchAgents();
-  } catch (error) {
-    if (!initializationInFlight) return;
-    ge.disconnect();
-    const msg = toErrorMessage(error);
-    connectionState.value = 'error';
-    if (/\(40[13]\)/.test(msg)) {
-      storageSet(StorageKeys.state.lastAuthError, msg);
-      credentials.clear();
-      initErrorMessage.value = msg;
-      uiInitState.value = 'login';
-    } else {
-      initErrorMessage.value = msg;
-      uiInitState.value = 'login';
-    }
-  } finally {
-    initializationInFlight = false;
-  }
-}
+const {
+  startInitialization,
+  abortInitialization,
+} = useBackendActivation({
+  credentials,
+  codexApi,
+  ge,
+  activeBackendKind,
+  uiInitState,
+  initLoadingMessage,
+  initErrorMessage,
+  connectionState,
+  reconnectingMessage,
+  selectedProjectId,
+  selectedSessionId,
+  providerConfig,
+  providersLoaded,
+  providers,
+  connectedProviderIds,
+  modelOptions,
+  selectedModel,
+  serverState,
+  t,
+  toErrorMessage,
+  setActiveBackendKind,
+  configureCodexBackend,
+  fetchGlobalProviderConfig,
+  fetchProviders,
+  fetchAgents,
+  fetchHomePath,
+  bootstrapSelections,
+  hydrateActiveWorktreeResources,
+  reloadSelectedSessionState,
+  handleOpenCodeUnauthorized,
+});
 
 function handleLogin() {
   if (loginBackendKind.value === 'codex') {
@@ -9016,11 +8985,7 @@ function handleLogin() {
 }
 
 function handleAbortInit() {
-  ge.disconnect();
-  initializationInFlight = false;
-  connectionState.value = 'connecting';
-  uiInitState.value = 'login';
-  initErrorMessage.value = '';
+  abortInitialization();
 }
 
 function handleLogout() {
