@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+- [x] 修复了在opencode和codex后端之间切换的不同步问题
+
 ## [v0.5.4 released]
 
 ### 编辑器集成(beta)
