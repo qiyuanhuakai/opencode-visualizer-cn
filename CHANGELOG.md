@@ -6,7 +6,10 @@
 
 ## [Unreleased]
 
+### Bug 修复
+
 - [x] 修复了在opencode和codex后端之间切换的不同步问题
+- [x] 修复了编辑器的“当前行指示器”不遵守主题设置的问题
 
 ## [v0.5.4 released]
 
