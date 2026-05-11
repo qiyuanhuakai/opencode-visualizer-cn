@@ -6,6 +6,7 @@
 
 ## [Unreleased]
 
+
 ### Bug 修复
 
 - [x] 修复了在opencode和codex后端之间切换的不同步问题
@@ -24,6 +25,7 @@
 - [x] 由于codex appserver自身的问题，无法实现以下功能：
    - [ ] 会话级别的token消耗显示
          
+
 ## [v0.5.4 released]
 
 ### 编辑器集成(beta)
