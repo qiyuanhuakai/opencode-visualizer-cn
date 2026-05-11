@@ -815,6 +815,61 @@ describe('useCodexApi', () => {
     expect(userEntries[0]?.parts[0]).toMatchObject({ type: 'text', text: 'Hello immediately.' });
   });
 
+  it('does not reuse the previous active turn id for a new provisional user message', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.sendPrompt = vi.fn().mockResolvedValue({
+      threadId: 'thr_existing',
+      turn: { id: 'turn_2', status: 'inProgress' },
+    } satisfies CodexPromptResult);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    api.activeTurn.value = { id: 'turn_old', status: 'completed' } as never;
+
+    await api.sendPrompt('Fresh turn please.');
+
+    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.startsWith('turn_old:'))).toBe(false);
+    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.startsWith('pending-turn:'))).toBe(true);
+    expect(api.realtimeHistoryQueue.value.find((entry) => entry.info.role === 'user')?.info.id).toBe('turn_2:user:0');
+  });
+
+  it('removes provisional realtime user history if sendPrompt fails', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.sendPrompt = vi.fn().mockRejectedValue(new Error('send failed'));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await expect(api.sendPrompt('Will fail.')).rejects.toThrow('send failed');
+
+    expect(api.realtimeHistoryQueue.value).toEqual([]);
+  });
+
+  it('finalizes the provisional user entry even if another realtime entry lands before sendPrompt resolves', async () => {
+    const mock = createAdapterMock();
+    let resolveSend: ((result: CodexPromptResult) => void) | null = null;
+    mock.adapter.sendPrompt = vi.fn().mockImplementation(() => new Promise<CodexPromptResult>((resolve) => {
+      resolveSend = resolve;
+    }));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    const pendingSend = api.sendPrompt('Race test.');
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'Early' } });
+    expect(resolveSend).not.toBeNull();
+    resolveSend!({
+      threadId: 'thr_existing',
+      turn: { id: 'turn_race', status: 'inProgress' },
+    });
+    await pendingSend;
+
+    const userEntries = api.realtimeHistoryQueue.value.filter((entry) => entry.info.role === 'user');
+    expect(userEntries).toHaveLength(1);
+    expect(userEntries[0]?.info.id).toBe('turn_race:user:0');
+    expect(userEntries[0]?.parts[0]).toMatchObject({ id: 'turn_race:user:0:text', text: 'Race test.' });
+    expect(userEntries.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
+    expect(Object.values(api.realtimeMessageAliases.value)).toContain('turn_race:user:0');
+  });
+
   it('updates realtimeStreamingPart on agent message deltas', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -870,6 +925,32 @@ describe('useCodexApi', () => {
     expect(textParts).toHaveLength(1);
     expect(textParts[0]?.id).toBe('turn_1:assistant:text');
     expect(textParts[0]).toMatchObject({ messageID: 'turn_1:assistant', text: 'Hello, world!' });
+  });
+
+  it('merges completed tool parts into the existing assistant entry instead of duplicating assistant history rows', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Create a file');
+
+    mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'Done' } });
+    mock.emit({
+      method: 'item/started',
+      params: { item: { id: 'cmd-1', type: 'commandExecution', command: ['ls'], cwd: '/repo' } },
+    });
+    mock.emit({
+      method: 'item/completed',
+      params: { item: { id: 'cmd-1', type: 'commandExecution', command: ['ls'], cwd: '/repo', aggregatedOutput: 'file.txt' } },
+    });
+    mock.emit({
+      method: 'item/completed',
+      params: { item: { id: 'agent-1', type: 'agentMessage', text: 'Done' } },
+    });
+
+    const assistantEntries = api.realtimeHistoryQueue.value.filter((entry) => entry.info.role === 'assistant');
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]?.parts.some((part) => part.type === 'tool')).toBe(true);
+    expect(assistantEntries[0]?.parts.some((part) => part.type === 'text' && 'text' in part && part.text === 'Done')).toBe(true);
   });
 
   it('updates realtimeReasoningPart on reasoning deltas', async () => {
@@ -958,6 +1039,201 @@ describe('useCodexApi', () => {
     expect(toolEntry).toBeDefined();
     const toolPart = toolEntry?.parts.find((part) => part.id === 'cmd-1');
     expect(toolPart).toMatchObject({ type: 'tool', state: { status: 'completed' } });
+    expect(toolPart).toMatchObject({ type: 'tool', state: { output: 'running outputfinal output' } });
+  });
+
+  it('maps failed tool completion to error state instead of leaving tool loading forever', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Search the web');
+
+    mock.emit({
+      method: 'item/started',
+      params: { item: { id: 'web-1', type: 'webSearch', query: 'vite docs' } },
+    });
+    mock.emit({
+      method: 'item/completed',
+      params: { item: { id: 'web-1', type: 'webSearch', query: 'vite docs', status: 'failed' } },
+    });
+
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'web-1'));
+    const toolPart = toolEntry?.parts.find((part) => part.id === 'web-1');
+    expect(toolPart).toMatchObject({ type: 'tool', state: { status: 'error' } });
+    expect(api.realtimeToolParts.value).toHaveLength(0);
+  });
+
+  it('replaces started fileChange shell parts with finalized edit metadata on completion', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Edit one file after start');
+
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'edit-started-1',
+          type: 'fileChange',
+          changes: [{ path: 'empty.ts', diff: '' }],
+        },
+      },
+    });
+
+    expect(api.realtimeToolParts.value[0]?.part).toMatchObject({
+      id: 'edit-started-1',
+      tool: 'edit',
+      state: { status: 'running' },
+    });
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'edit-started-1',
+          type: 'fileChange',
+          status: 'completed',
+          changes: [{ path: 'empty.ts', diff: '' }],
+        },
+      },
+    });
+
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'edit-started-1'));
+    const toolPart = toolEntry?.parts.find((part) => part.id === 'edit-started-1');
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      tool: 'edit',
+      state: {
+        status: 'completed',
+        input: { filePath: 'empty.ts', files: ['empty.ts'] },
+        output: 'File changed: empty.ts',
+        metadata: { filediff: { patch: 'File changed: empty.ts' } },
+      },
+    });
+  });
+
+  it('replaces started webSearch shell parts with finalized completed output on completion', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Search after start');
+
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'web-started-1',
+          type: 'webSearch',
+          query: '',
+        },
+      },
+    });
+
+    expect(api.realtimeToolParts.value[0]?.part).toMatchObject({
+      id: 'web-started-1',
+      tool: 'websearch',
+      state: { status: 'running' },
+    });
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'web-started-1',
+          type: 'webSearch',
+          status: 'completed',
+          query: 'vite docs',
+          action: { type: 'open', url: 'https://vite.dev' },
+        },
+      },
+    });
+
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'web-started-1'));
+    const toolPart = toolEntry?.parts.find((part) => part.id === 'web-started-1');
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      tool: 'websearch',
+      state: {
+        status: 'completed',
+        input: { query: 'vite docs', action: 'open', url: 'https://vite.dev' },
+        output: expect.stringContaining('Query: vite docs'),
+      },
+    });
+  });
+
+  it('maps completed single-file fileChange notifications into edit history entries', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Edit one file');
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'edit-1',
+          type: 'fileChange',
+          status: 'completed',
+          changes: [{ path: 'a.ts', diff: '@@ patch a' }],
+        },
+      },
+    });
+
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'edit-1'));
+    const toolPart = toolEntry?.parts.find((part) => part.id === 'edit-1');
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      tool: 'edit',
+      state: {
+        status: 'completed',
+        input: { filePath: 'a.ts', files: ['a.ts'] },
+        metadata: { filediff: { patch: '@@ patch a' } },
+      },
+    });
+  });
+
+  it('maps completed multi-file fileChange notifications into multiedit history entries', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Edit two files');
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'edit-2',
+          type: 'fileChange',
+          status: 'completed',
+          changes: [
+            { path: 'a.ts', diff: '@@ patch a' },
+            { path: 'b.ts', diff: '@@ patch b' },
+          ],
+        },
+      },
+    });
+
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'edit-2'));
+    const toolPart = toolEntry?.parts.find((part) => part.id === 'edit-2');
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      tool: 'multiedit',
+      state: {
+        status: 'completed',
+        input: { filePath: 'a.ts', files: ['a.ts', 'b.ts'] },
+        metadata: {
+          results: [
+            { path: 'a.ts', filediff: { patch: '@@ patch a' } },
+            { path: 'b.ts', filediff: { patch: '@@ patch b' } },
+          ],
+        },
+      },
+    });
   });
 
   it('clears realtimeStreamingPart and realtimeToolParts when selecting a thread', async () => {
@@ -981,5 +1257,33 @@ describe('useCodexApi', () => {
     expect(api.realtimeStreamingPart.value).toBeNull();
     expect(api.realtimeReasoningPart.value).toBeNull();
     expect(api.realtimeToolParts.value).toEqual([]);
+  });
+
+  it('clears provisional realtime aliases and history when selecting a different thread', async () => {
+    const mock = createAdapterMock();
+    let resolveSend: ((result: CodexPromptResult) => void) | null = null;
+    mock.adapter.sendPrompt = vi.fn().mockImplementation(() => new Promise<CodexPromptResult>((resolve) => {
+      resolveSend = resolve;
+    }));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    const pendingSend = api.sendPrompt('Pending thread switch');
+
+    expect(api.realtimeHistoryQueue.value.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(true);
+
+    await api.selectThread('thr_existing');
+
+    expect(api.realtimeHistoryQueue.value.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
+    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.includes('pending-turn:'))).toBe(false);
+
+    expect(resolveSend).not.toBeNull();
+    resolveSend!({
+      threadId: 'thr_existing',
+      turn: { id: 'turn_after_switch', status: 'inProgress' },
+    });
+    await pendingSend;
+
+    expect(api.realtimeHistoryQueue.value.some((entry) => entry.info.id === 'turn_after_switch:user:0')).toBe(false);
   });
 });

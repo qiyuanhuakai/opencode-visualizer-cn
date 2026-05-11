@@ -5,16 +5,21 @@
 ## [In Progress] 
 
 - [ ] 修复已知问题
-	- [ ] "历史记录"功能中subagent的历史和主agnet混在一起
+    - [ ] "历史记录"功能中subagent的历史和主agnet混在一起
+    - [ ] codex：刷新页面导致历史记录消失
+    - [ ] codex：模型名称只在当前tune的第一个操作显示，后面就都不显示了
+    - [ ] codex：之前的会话时间会跟随最新会话的时间刷新
+    - [ ] codex：会话不显示持续时间
+    - [ ] codex：edit悬浮窗不显示内容
+    - [ ] codex：websearch webfetch悬浮窗会把页面上的“复制 已复制”包括进去
 
 	
 - [ ] vis-bridge 模块化本地桥接服务器：集成外部开发工具，扩展与第三方工具的联动能力。
 	- [?] codex
-		- [ ] 完善“输出面板”，包括
-			- [ ] 完善“历史记录”，现在还不能正确记录会话历史和工具调用
-			- [ ] 完善动效状态，现在发送消息会出现显示异常
-		- [ ] 完善状态监控面板？
+	    - [ ] 实现会话级别diff
+	    - [ ] 完善状态监控面板（由于我不经常使用codex，只能确保其基本可用）
 	- [ ] oh-my-pi
+    - [ ] astrcodey
 	- [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
 	- [ ] [gnhf](https://github.com/kunchenguid/gnhf)
 	- [ ] [tokscale](https://github.com/junhoyeo/tokscale)

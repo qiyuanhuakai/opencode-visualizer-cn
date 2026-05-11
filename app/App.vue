@@ -586,6 +586,7 @@ import {
   type DeletedSandboxStore,
 } from './utils/deletedSandboxes';
 import { buildCodexSessionTreeData, buildCodexTopPanelTreeData } from './utils/codexTopPanelTree';
+import { shouldSkipAutoOpenWebTool } from './utils/codexToolWindows';
 
 const { t } = useI18n();
 
@@ -6629,6 +6630,7 @@ async function sendMessage() {
       });
       await codexApi.refreshThreads();
       if (codexApi.activeThreadId.value) {
+        if (startNewCodexThread) codexPendingSessionLock.value = codexApi.activeThreadId.value;
         selectedSessionId.value = codexApi.activeThreadId.value;
       }
       attachments.value = [];
@@ -7062,23 +7064,27 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
   if (oldId) {
     msg.saveSessionState(oldId);
   }
-  msg.reset();
-  resetFollow();
-  reasoning.reset();
-  subagentWindows.reset();
-  retryStatus.value = null;
-  await nextTick();
   if (newId) {
     const sessionId = newId;
     if (activeBackendKind.value === 'codex') {
       isLoadingHistory.value = true;
       try {
+        let nextHistory = codexWorkspace.history.value;
         if (codexApi.activeThreadId.value !== sessionId) {
           await codexApi.selectThread(sessionId);
-        } else if (codexWorkspace.history.value.length === 0) {
+          nextHistory = codexWorkspace.history.value;
+        } else if (nextHistory.length === 0) {
           await codexApi.selectThread(sessionId);
+          nextHistory = codexWorkspace.history.value;
         }
-        msg.loadHistory(codexWorkspace.history.value);
+        msg.reset();
+        resetFollow();
+        reasoning.reset();
+        subagentWindows.reset();
+        retryStatus.value = null;
+        await nextTick();
+        msg.loadHistory(nextHistory);
+        reapplyCodexSharedBackfill();
       } finally {
         if (reloadRequestId === sessionReloadRequestId) {
           isLoadingHistory.value = false;
@@ -7090,6 +7096,12 @@ async function reloadSelectedSessionState(newId?: string, oldId?: string) {
       nextTick(() => inputPanelRef.value?.focus());
       return;
     }
+    msg.reset();
+    resetFollow();
+    reasoning.reset();
+    subagentWindows.reset();
+    retryStatus.value = null;
+    await nextTick();
     const cacheHit = msg.tryLoadFromCache(sessionId);
     const descendantsHydrated = hydratedDescendantSessionIds.has(sessionId);
     if (!cacheHit) {
@@ -7441,16 +7453,40 @@ watch(
   (history) => {
     if (activeBackendKind.value !== 'codex') return;
     if (!selectedSessionId.value) return;
-    msg.reset();
     msg.loadHistory(history);
     reapplyCodexSharedBackfill();
   },
 );
 
 let lastRealtimeQueueSignature = '';
+const lastCodexRealtimeToolWindowSignature = new Map<string, string>();
 const codexPendingSessionLock = ref('');
+
+function matchesActiveCodexRealtimeSession(sessionId: string) {
+  const target = selectedSessionId.value;
+  if (!target) return false;
+  if (sessionId === target) return true;
+  if (codexPendingSessionLock.value && sessionId === 'codex-pending' && target === codexPendingSessionLock.value) return true;
+  return false;
+}
+
 watch(
-  () => codexApi.realtimeHistoryQueue.value.map((entry) => `${entry.info.id}:${entry.parts.map((part) => part.id).join(',')}`).join('|'),
+  () => codexApi.realtimeHistoryQueue.value.map((entry) => `${entry.info.id}:${entry.parts.map((part) => {
+    if (part.type === 'tool') {
+      const output = part.state.status === 'completed'
+        ? part.state.output
+        : part.state.status === 'error'
+          ? part.state.error
+          : part.state.status === 'running'
+            ? part.state.metadata?.output || ''
+            : '';
+      return `${part.id}:${part.state.status}:${output}`;
+    }
+    if (part.type === 'text' || part.type === 'reasoning') {
+      return `${part.id}:${part.text}`;
+    }
+    return part.id;
+  }).join(',')}`).join('|'),
   (signature) => {
     if (activeBackendKind.value !== 'codex') return;
     if (!selectedSessionId.value) return;
@@ -7464,13 +7500,21 @@ watch(
         if (!provisionalId || !finalizedId || provisionalId === finalizedId) continue;
         msg.removeMessage(provisionalId);
       }
-      msg.loadHistory(codexApi.realtimeHistoryQueue.value.filter((entry) => entry.info.sessionID === selectedSessionId.value));
+      const realtimeEntries = codexApi.realtimeHistoryQueue.value.filter((entry) => matchesActiveCodexRealtimeSession(entry.info.sessionID));
+      for (const entry of realtimeEntries) {
+        msg.updateMessage(entry.info);
+        for (const part of entry.parts) {
+          msg.updatePart(part);
+        }
+      }
+      syncRealtimeCodexToolWindows(realtimeEntries);
     }
   },
 );
 
 watch(selectedSessionId, () => {
   lastRealtimeQueueSignature = '';
+  lastCodexRealtimeToolWindowSignature.clear();
 });
 
 watch(
@@ -7479,7 +7523,7 @@ watch(
     if (activeBackendKind.value !== 'codex') return;
     if (!selectedSessionId.value) return;
     if (!streaming) return;
-    if (streaming.info.sessionID !== selectedSessionId.value) return;
+    if (!matchesActiveCodexRealtimeSession(streaming.info.sessionID)) return;
     const { info, part } = streaming;
     msg.updateMessage(info);
     msg.updatePart(part);
@@ -7493,7 +7537,7 @@ watch(
     if (activeBackendKind.value !== 'codex') return;
     if (!selectedSessionId.value) return;
     if (!reasoning) return;
-    if (reasoning.info.sessionID !== selectedSessionId.value) return;
+    if (!matchesActiveCodexRealtimeSession(reasoning.info.sessionID)) return;
     const { info, part } = reasoning;
     const reasoningMessageId = part.messageID;
     void reasoningMessageId;
@@ -7508,13 +7552,20 @@ watch(
   (toolParts) => {
     if (activeBackendKind.value !== 'codex') return;
     if (!selectedSessionId.value) return;
-    for (const { info, part } of toolParts.filter(({ info }) => info.sessionID === selectedSessionId.value)) {
+    for (const { info, part } of toolParts.filter(({ info }) => matchesActiveCodexRealtimeSession(info.sessionID))) {
       const toolMessageId = part.messageID;
       void toolMessageId;
       msg.updateMessage(info);
       msg.updatePart(part);
       if (shouldRenderToolWindow(part.tool) && !suppressAutoWindows.value) {
         openToolPartAsWindow(part);
+        const windowKey = part.callID || part.id;
+        fw.updateOptions(windowKey, {
+          status:
+            part.state.status === 'running' || part.state.status === 'completed' || part.state.status === 'error'
+              ? part.state.status
+              : undefined,
+        });
       }
     }
   },
@@ -8300,6 +8351,8 @@ function openToolPartAsWindow(
   keyPrefix?: string,
 ): string[] {
   const openedKeys: string[] = [];
+  const isHistoryOpen = Boolean(keyPrefix?.startsWith('history-tool:'));
+  if (shouldSkipAutoOpenWebTool(toolPart, isHistoryOpen)) return openedKeys;
   const payload = {
     type: 'message.part.updated',
     payload: {
@@ -8369,6 +8422,36 @@ function openToolPartAsWindow(
     }
   });
   return openedKeys;
+}
+
+function syncRealtimeCodexToolWindows(entries: Array<{ parts: MessagePart[] }>) {
+  if (suppressAutoWindows.value) return;
+  entries.forEach((entry) => {
+    entry.parts.forEach((part) => {
+      if (part.type !== 'tool') return;
+      if (!shouldRenderToolWindow(part.tool)) return;
+      const contentSignature = part.state.status === 'completed'
+        ? part.state.output
+        : part.state.status === 'error'
+          ? part.state.error
+          : part.state.status === 'running'
+            ? part.state.metadata?.output || ''
+            : '';
+      const windowKey = part.callID || part.id;
+      const signature = `${part.tool}:${part.state.status}:${contentSignature}:${JSON.stringify(part.state.input ?? {})}`;
+      if (lastCodexRealtimeToolWindowSignature.get(windowKey) === signature) {
+        return;
+      }
+      lastCodexRealtimeToolWindowSignature.set(windowKey, signature);
+      openToolPartAsWindow(part);
+      fw.updateOptions(windowKey, {
+        status:
+          part.state.status === 'running' || part.state.status === 'completed' || part.state.status === 'error'
+            ? part.state.status
+            : undefined,
+      });
+    });
+  });
 }
 
 const historyToolWindowKeys = new Set<string>();
