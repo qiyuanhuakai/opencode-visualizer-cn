@@ -1,6 +1,7 @@
 import type {
   AssistantMessageInfo,
   CompactionPart,
+  FilePart,
   MessageInfo,
   MessagePart,
   ReasoningPart,
@@ -14,6 +15,11 @@ type CodexRecord = Record<string, unknown>;
 export type CodexCanonicalMessageBundle = {
   messages: MessageInfo[];
   parts: MessagePart[];
+};
+
+export type CodexNormalizeModel = {
+  providerID?: string;
+  modelID?: string;
 };
 
 export type CodexCanonicalHistoryEntry = {
@@ -53,9 +59,45 @@ function extractUserText(item: CodexRecord) {
   const content = Array.isArray(item.content) ? item.content : [];
   const parts = content
     .filter(isRecord)
+    .filter((entry) => stringValue(entry.type) === 'text')
     .map((entry) => stringValue(entry.text).trim())
     .filter((text) => text.length > 0);
   return parts.join('\n');
+}
+
+function extractUserFiles(item: CodexRecord) {
+  const content = Array.isArray(item.content) ? item.content : [];
+  const files: Array<{ id: string; url: string; filename: string; mime: string }> = [];
+  content.filter(isRecord).forEach((entry, index) => {
+    const type = stringValue(entry.type);
+    if (type === 'image') {
+      const url = stringValue(entry.url);
+      if (!url) return;
+      const mimeMatch = url.match(/^data:([^;,]+)/u);
+      const mime = mimeMatch?.[1] || 'image/*';
+      const extension = mime.split('/')[1]?.split('+')[0] || 'img';
+      files.push({
+        id: stringValue(entry.id, `image:${index}`),
+        url,
+        filename: `image-${index + 1}.${extension}`,
+        mime,
+      });
+      return;
+    }
+    if (type === 'localImage') {
+      const path = stringValue(entry.path);
+      if (!path) return;
+      const filename = path.split(/[\\/]/u).filter(Boolean).pop() || `image-${index + 1}`;
+      const extension = filename.split('.').pop()?.toLowerCase() || '';
+      files.push({
+        id: stringValue(entry.id, `local-image:${index}`),
+        url: path,
+        filename,
+        mime: extension ? `image/${extension === 'jpg' ? 'jpeg' : extension}` : 'image/*',
+      });
+    }
+  });
+  return files;
 }
 
 function commandText(item: CodexRecord) {
@@ -69,6 +111,7 @@ function createUserMessage(params: {
   id: string;
   sessionId: string;
   createdAt: number;
+  model?: CodexNormalizeModel;
 }): UserMessageInfo {
   return {
     id: params.id,
@@ -76,7 +119,10 @@ function createUserMessage(params: {
     role: 'user',
     time: { created: params.createdAt },
     agent: 'codex',
-    model: { providerID: 'codex', modelID: 'codex' },
+    model: {
+      providerID: params.model?.providerID || 'codex',
+      modelID: params.model?.modelID || 'codex',
+    },
   };
 }
 
@@ -86,6 +132,7 @@ function createAssistantMessage(params: {
   parentId: string;
   createdAt: number;
   completedAt?: number;
+  model?: CodexNormalizeModel;
 }): AssistantMessageInfo {
   return {
     id: params.id,
@@ -93,8 +140,8 @@ function createAssistantMessage(params: {
     role: 'assistant',
     time: { created: params.createdAt, completed: params.completedAt },
     parentID: params.parentId,
-    modelID: 'codex',
-    providerID: 'codex',
+    modelID: params.model?.modelID || 'codex',
+    providerID: params.model?.providerID || 'codex',
     mode: 'codex',
     agent: 'codex',
     path: { cwd: '', root: '' },
@@ -135,7 +182,10 @@ function createToolPart(params: {
   output: string;
   title: string;
   createdAt: number;
+  status?: string;
+  metadata?: Record<string, unknown>;
 }): ToolPart {
+  const isError = params.status === 'failed' || params.status === 'declined' || params.status === 'error';
   return {
     id: params.id,
     sessionID: params.sessionId,
@@ -143,15 +193,42 @@ function createToolPart(params: {
     type: 'tool',
     callID: params.id,
     tool: params.tool,
-    state: {
-      status: 'completed',
-      input: params.input,
-      output: params.output,
-      title: params.title,
-      metadata: { source: 'codex' },
-      time: { start: params.createdAt, end: params.createdAt },
-    },
+    state: isError
+      ? {
+        status: 'error',
+        input: params.input,
+        error: params.output || params.status || 'Codex tool failed',
+        metadata: { source: 'codex', codexStatus: params.status, ...(params.metadata ?? {}) },
+        time: { start: params.createdAt, end: params.createdAt },
+      }
+      : {
+        status: 'completed',
+        input: params.input,
+        output: params.output,
+        title: params.title,
+        metadata: { source: 'codex', codexStatus: params.status, ...(params.metadata ?? {}) },
+        time: { start: params.createdAt, end: params.createdAt },
+      },
     metadata: { source: 'codex' },
+  };
+}
+
+function createFilePart(params: {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  mime: string;
+  filename: string;
+  url: string;
+}): FilePart {
+  return {
+    id: params.id,
+    sessionID: params.sessionId,
+    messageID: params.messageId,
+    type: 'file',
+    mime: params.mime,
+    filename: params.filename,
+    url: params.url,
   };
 }
 
@@ -193,11 +270,13 @@ export function normalizeCodexTurnItems(params: {
   turnId: string;
   items: unknown[];
   createdAt?: number;
+  model?: CodexNormalizeModel;
+  parentMessageId?: string;
 }): CodexCanonicalMessageBundle {
   const createdAt = params.createdAt ?? Date.now();
   const messages: MessageInfo[] = [];
   const parts: MessagePart[] = [];
-  let parentMessageId = '';
+  let parentMessageId = params.parentMessageId ?? '';
   let assistantMessageId = codexAssistantMessageId(params.turnId);
   let userMessageIndex = 0;
   let assistantMessage: AssistantMessageInfo | undefined;
@@ -210,6 +289,7 @@ export function normalizeCodexTurnItems(params: {
         parentId: parentMessageId,
         createdAt: itemTime,
         completedAt: itemTime,
+        model: params.model,
       });
       messages.push(assistantMessage);
       return assistantMessage;
@@ -236,20 +316,34 @@ export function normalizeCodexTurnItems(params: {
 
     if (type === 'userMessage') {
       const text = extractUserText(item);
-      if (!text) return;
+      const files = extractUserFiles(item);
+      if (!text && files.length === 0) return;
       const message = createUserMessage({
         id: codexUserMessageId(params.turnId, userMessageIndex),
         sessionId: params.sessionId,
         createdAt: itemTime,
+        model: params.model,
       });
       messages.push(message);
-      parts.push(createTextPart({
-        id: `${itemId}:text`,
-        sessionId: params.sessionId,
-        messageId: message.id,
-        text,
-        createdAt: message.time.created,
-      }));
+      if (text) {
+        parts.push(createTextPart({
+          id: `${message.id}:text`,
+          sessionId: params.sessionId,
+          messageId: message.id,
+          text,
+          createdAt: message.time.created,
+        }));
+      }
+      files.forEach((file, fileIndex) => {
+        parts.push(createFilePart({
+          id: `${message.id}:file:${file.id || fileIndex}`,
+          sessionId: params.sessionId,
+          messageId: message.id,
+          mime: file.mime,
+          filename: file.filename,
+          url: file.url,
+        }));
+      });
       parentMessageId = message.id;
       userMessageIndex += 1;
       return;
@@ -273,6 +367,7 @@ export function normalizeCodexTurnItems(params: {
     if (type === 'commandExecution') {
       const command = commandText(item);
       const output = stringValue(item.aggregatedOutput) || stringValue(item.output);
+      const status = stringValue(item.status);
       parts.push(createToolPart({
         id: itemId,
         sessionId: params.sessionId,
@@ -282,6 +377,7 @@ export function normalizeCodexTurnItems(params: {
         input: { command, cwd: stringValue(item.cwd) },
         output,
         createdAt: itemTime,
+        status,
       }));
       return;
     }
@@ -289,15 +385,34 @@ export function normalizeCodexTurnItems(params: {
     if (type === 'fileChange') {
       const changes = Array.isArray(item.changes) ? item.changes.filter(isRecord) : [];
       const files = changes.map((change) => stringValue(change.path)).filter(Boolean);
+      const status = stringValue(item.status);
+      const firstPath = files[0] || '';
+      const changeResults = changes.map((change) => {
+        const path = stringValue(change.path);
+        const rawDiff = stringValue(change.diff);
+        const diff = rawDiff || (path ? `File changed: ${path}` : 'File changed');
+        return {
+          path,
+          diff,
+          filediff: {
+            patch: diff,
+          },
+        };
+      }).filter((entry) => entry.path || entry.diff);
+      const isMultiFile = changeResults.length > 1;
       parts.push(createToolPart({
         id: itemId,
         sessionId: params.sessionId,
         messageId: assistantMessageId,
-        tool: 'edit',
+        tool: isMultiFile ? 'multiedit' : 'edit',
         title: files.length > 0 ? `Codex file changes (${files.length})` : 'Codex file changes',
-        input: { files },
-        output: changes.map((change) => stringValue(change.diff)).filter(Boolean).join('\n'),
+        input: { files, filePath: firstPath },
+        output: changeResults.map((change) => change.diff).filter(Boolean).join('\n'),
         createdAt: itemTime,
+        status,
+        metadata: isMultiFile
+          ? { results: changeResults }
+          : { filediff: { patch: changeResults[0]?.diff || '' } },
       }));
       return;
     }
@@ -318,15 +433,6 @@ export function normalizeCodexTurnItems(params: {
     }
 
     if (type === 'plan') {
-      const text = stringValue(item.text);
-      if (!text) return;
-      parts.push(createTextPart({
-        id: `${itemId}:text`,
-        sessionId: params.sessionId,
-        messageId: assistantMessageId,
-        text,
-        createdAt: itemTime,
-      }));
       return;
     }
 
@@ -336,6 +442,7 @@ export function normalizeCodexTurnItems(params: {
       const args = isRecord(item.arguments) ? item.arguments : {};
       const result = stringValue(item.result);
       const error = stringValue(item.error);
+      const status = stringValue(item.status);
       parts.push(createToolPart({
         id: itemId,
         sessionId: params.sessionId,
@@ -345,6 +452,7 @@ export function normalizeCodexTurnItems(params: {
         input: { server, tool, ...args },
         output: error || result,
         createdAt: itemTime,
+        status,
       }));
       return;
     }
@@ -368,6 +476,7 @@ export function normalizeCodexTurnItems(params: {
         input: args,
         output: outputText || status,
         createdAt: itemTime,
+        status,
       }));
       return;
     }
@@ -377,18 +486,25 @@ export function normalizeCodexTurnItems(params: {
       const action = isRecord(item.action) ? item.action : null;
       const actionType = action ? stringValue(action.type) : '';
       const actionUrl = action ? stringValue(action.url) : '';
-      const text = [
-        query ? `Web search: ${query}` : '',
-        actionType ? `action: ${actionType}` : '',
-        actionUrl ? `url: ${actionUrl}` : '',
-      ].filter(Boolean).join('\n');
-      if (!text) return;
-      parts.push(createTextPart({
-        id: `${itemId}:text`,
+      const status = stringValue(item.status);
+      parts.push(createToolPart({
+        id: itemId,
         sessionId: params.sessionId,
         messageId: assistantMessageId,
-        text,
+        tool: 'websearch',
+        title: query || actionUrl || 'Codex web search',
+        input: {
+          query,
+          ...(actionType ? { action: actionType } : {}),
+          ...(actionUrl ? { url: actionUrl } : {}),
+        },
+        output: [
+          query ? `Query: ${query}` : '',
+          actionType ? `Action: ${actionType}` : '',
+          actionUrl ? `URL: ${actionUrl}` : '',
+        ].filter(Boolean).join('\n'),
         createdAt: itemTime,
+        status,
       }));
       return;
     }
@@ -396,28 +512,18 @@ export function normalizeCodexTurnItems(params: {
     if (type === 'imageView') {
       const path = stringValue(item.path);
       if (!path) return;
-      parts.push(createTextPart({
-        id: `${itemId}:text`,
+      parts.push(createFilePart({
+        id: itemId,
         sessionId: params.sessionId,
         messageId: assistantMessageId,
-        text: `Image: ${path}`,
-        createdAt: itemTime,
+        mime: 'image/*',
+        filename: path.split(/[\\/]/u).filter(Boolean).pop() || 'image',
+        url: path,
       }));
       return;
     }
 
     if (type === 'enteredReviewMode' || type === 'exitedReviewMode') {
-      const review = stringValue(item.review);
-      const text = type === 'enteredReviewMode'
-        ? `Entered review mode: ${review || 'current changes'}`
-        : (review ? `Review: ${review}` : 'Exited review mode');
-      parts.push(createTextPart({
-        id: `${itemId}:text`,
-        sessionId: params.sessionId,
-        messageId: assistantMessageId,
-        text,
-        createdAt: itemTime,
-      }));
       return;
     }
 
@@ -439,6 +545,7 @@ export function normalizeCodexTurnsToHistory(params: {
   sessionId: string;
   turns: Array<{ id?: unknown; items?: unknown; createdAt?: unknown }>;
   createdAt?: number;
+  model?: CodexNormalizeModel;
 }): CodexCanonicalHistoryEntry[] {
   const entries: CodexCanonicalHistoryEntry[] = [];
   for (const [index, turn] of params.turns.entries()) {
@@ -449,6 +556,7 @@ export function normalizeCodexTurnsToHistory(params: {
       turnId,
       items,
       createdAt: numberValue(turn.createdAt, params.createdAt ?? Date.now() + index),
+      model: params.model,
     });
     for (const info of bundle.messages) {
       entries.push({

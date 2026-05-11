@@ -218,6 +218,10 @@ function toolSummary(part: ToolPart): string {
       return path || 'edit';
     }
     case 'multiedit': {
+      const files = Array.isArray(input?.files)
+        ? input.files.filter((file): file is string => typeof file === 'string' && file.trim().length > 0)
+        : [];
+      if (files.length > 0) return files.join(', ');
       const path = typeof input?.filePath === 'string' ? input.filePath : '';
       return path || 'multiedit';
     }

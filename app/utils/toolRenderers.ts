@@ -16,7 +16,7 @@ export type ToolRenderersHelpers = {
   shouldRenderToolWindow: (tool: string) => boolean;
   extractToolOutputText: (output: unknown) => string | undefined;
   formatToolValue: (value: unknown) => string;
-  renderWorkerHtml: (args: { id: string; code: string; lang: string; theme: string; gutterMode?: 'none' | 'single' | 'double'; gutterLines?: string[]; grepPattern?: string; lineOffset?: number; lineLimit?: number; files?: string[] }) => Promise<string>;
+  renderWorkerHtml: (args: { id: string; code: string; lang: string; theme: string; gutterMode?: 'none' | 'single' | 'double'; gutterLines?: string[]; grepPattern?: string; lineOffset?: number; lineLimit?: number; files?: string[]; copyButtonLabel?: string; copiedLabel?: string; copyCodeAriaLabel?: string; copyMarkdownAriaLabel?: string }) => Promise<string>;
   renderReadHtmlFromApi: (args: { callId?: string; path?: string; lang: string; lineOffset?: number; lineLimit?: number; fallbackText?: string }) => Promise<string>;
   resolveReadWritePath: (
     input?: Record<string, unknown>,
@@ -293,7 +293,6 @@ export function extractFileRead(
         };
       }
       case 'read': {
-        if (status === 'completed' || status === 'error') return null;
         const readPath = helpers.resolveReadWritePath(input, metadata, state);
         const isDirectory = outputText?.includes('<type>directory</type>') ?? false;
         const readLang = helpers.guessLanguageFromPath(readPath);
@@ -446,6 +445,10 @@ export function extractFileRead(
               lang: webfetchLang,
               theme: 'github-dark',
               gutterMode: 'none',
+              copyButtonLabel: '',
+              copiedLabel: '',
+              copyCodeAriaLabel: '',
+              copyMarkdownAriaLabel: '',
             }),
           variant: 'plain' as const,
           callId,
@@ -484,6 +487,10 @@ export function extractFileRead(
               lang: 'markdown',
               theme: 'github-dark',
               gutterMode: 'none',
+              copyButtonLabel: '',
+              copiedLabel: '',
+              copyCodeAriaLabel: '',
+              copyMarkdownAriaLabel: '',
             }),
           variant: 'plain' as const,
           callId,
@@ -591,9 +598,16 @@ export function extractFileRead(
       }
       case 'multiedit': {
         if (status === 'running') return null;
-        const editPathMulti = helpers.resolveReadWritePath(input, metadata, state);
-        const multiLang = helpers.guessLanguageFromPath(editPathMulti);
         const results = Array.isArray(metadata?.results) ? metadata.results : [];
+        const resultPaths = results
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null;
+            const r = item as Record<string, unknown>;
+            return typeof r.path === 'string' && r.path.trim() ? r.path.trim() : null;
+          })
+          .filter((path): path is string => Boolean(path));
+        const editPathMulti = resultPaths[0] || helpers.resolveReadWritePath(input, metadata, state);
+        const multiLang = helpers.guessLanguageFromPath(editPathMulti);
         const editEntries = results
           .map((item) => {
             if (!item || typeof item !== 'object') return null;
@@ -608,15 +622,13 @@ export function extractFileRead(
             const fdAfter = typeof fd?.after === 'string' ? fd.after : undefined;
             const fdPatch = typeof fd?.patch === 'string' ? fd.patch : '';
             return {
+              path: typeof r.path === 'string' && r.path.trim() ? r.path.trim() : undefined,
               diff: fdBefore !== undefined && fdAfter !== undefined ? diff : fdPatch || diff,
               code: fdBefore,
               after: fdAfter,
             };
           })
-          .filter(
-            (item): item is { diff: string; code: string | undefined; after: string | undefined } =>
-              Boolean(item),
-          );
+          .filter((item): item is { path: string | undefined; diff: string; code: string | undefined; after: string | undefined } => item !== null);
         if (editEntries.length > 1) {
           return editEntries.map((entry, index) => ({
             content: helpers.renderEditDiffHtml({
@@ -633,8 +645,8 @@ export function extractFileRead(
               tool,
               'toolTitles.edit',
               t,
-              editPathMulti
-                ? `${editPathMulti} (${index + 1}/${editEntries.length})`
+              entry?.path
+                ? `${entry.path} (${index + 1}/${editEntries.length})`
                 : `(${index + 1}/${editEntries.length})`,
             ),
           }));

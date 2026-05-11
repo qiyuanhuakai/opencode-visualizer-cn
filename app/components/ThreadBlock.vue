@@ -136,7 +136,7 @@ import { formatElapsedTime, formatMessageError, formatMessageTime } from '../uti
 const { t } = useI18n();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
-const HISTORY_TOOL_NAMES = new Set(['bash', 'write', 'edit', 'multiedit', 'apply_patch']);
+const HISTORY_TOOL_NAMES = new Set(['bash', 'write', 'edit', 'multiedit', 'apply_patch', 'websearch', 'read', 'grep', 'glob', 'webfetch', 'codesearch']);
 
 const props = defineProps<{
   root: MessageInfo;

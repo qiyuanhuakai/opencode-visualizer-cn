@@ -314,4 +314,72 @@ describe('useMessages getDiffs', () => {
     expect(messages.getTextContent('turn_1:assistant')).toBe('final answer');
     expect(messages.getThread('turn_1:user:0').map((entry) => entry.id)).toEqual(['turn_1:user:0', 'turn_1:assistant']);
   });
+
+  it('preserves older canonical history when later realtime-only updates touch the newest message', () => {
+    const messages = useMessages();
+
+    messages.loadHistory([
+      {
+        info: {
+          id: 'turn_1:user:0',
+          sessionID: 'thread-1',
+          role: 'user',
+          time: { created: 1 },
+          agent: 'codex',
+          model: { providerID: 'codex', modelID: 'codex' },
+        },
+        parts: [{
+          id: 'turn_1:user:0:text',
+          sessionID: 'thread-1',
+          messageID: 'turn_1:user:0',
+          type: 'text',
+          text: 'first question',
+          time: { start: 1, end: 1 },
+        }],
+      },
+      {
+        info: {
+          id: 'turn_2:assistant',
+          sessionID: 'thread-1',
+          role: 'assistant',
+          time: { created: 2, completed: 3 },
+          parentID: 'turn_1:user:0',
+          modelID: 'codex',
+          providerID: 'codex',
+          mode: 'codex',
+          agent: 'codex',
+          path: { cwd: '/repo', root: '/repo' },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        },
+        parts: [{
+          id: 'turn_2:assistant:text',
+          sessionID: 'thread-1',
+          messageID: 'turn_2:assistant',
+          type: 'text',
+          text: 'latest answer',
+          time: { start: 2, end: 3 },
+        }],
+      },
+    ]);
+
+    messages.updatePart({
+      id: 'turn_2:assistant:text',
+      sessionID: 'thread-1',
+      messageID: 'turn_2:assistant',
+      type: 'text',
+      text: 'latest answer updated',
+      time: { start: 2, end: 4 },
+    });
+
+    expect(messages.get('turn_1:user:0')?.role).toBe('user');
+    const firstUserPart = messages.getParts('turn_1:user:0')[0];
+    const latestAssistantPart = messages.getParts('turn_2:assistant')[0];
+    expect(firstUserPart?.type).toBe('text');
+    expect(latestAssistantPart?.type).toBe('text');
+    if (!firstUserPart || firstUserPart.type !== 'text') throw new Error('Expected first user text part');
+    if (!latestAssistantPart || latestAssistantPart.type !== 'text') throw new Error('Expected latest assistant text part');
+    expect(firstUserPart.text).toBe('first question');
+    expect(latestAssistantPart.text).toBe('latest answer updated');
+  });
 });

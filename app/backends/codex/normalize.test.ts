@@ -105,7 +105,95 @@ describe('normalizeCodexTurnItems', () => {
     expect(result.parts[1]).toMatchObject({
       type: 'tool',
       tool: 'edit',
-      state: { status: 'completed', output: '@@ patch' },
+      state: {
+        status: 'completed',
+        input: { filePath: 'a.ts' },
+        output: '@@ patch',
+        metadata: { filediff: { patch: '@@ patch' } },
+      },
+    });
+  });
+
+  it('maps multi-file fileChange items to multiedit tool parts', () => {
+    const result = normalizeCodexTurnItems({
+      sessionId: 'thread-2b',
+      turnId: 'turn-2b',
+      items: [
+        {
+          id: 'files-2',
+          type: 'fileChange',
+          changes: [
+            { path: 'a.ts', diff: '@@ patch a' },
+            { path: 'b.ts', diff: '@@ patch b' },
+          ],
+        },
+      ],
+    });
+
+    expect(result.parts).toHaveLength(1);
+    expect(result.parts[0]).toMatchObject({
+      type: 'tool',
+      tool: 'multiedit',
+      state: {
+        status: 'completed',
+        input: { filePath: 'a.ts', files: ['a.ts', 'b.ts'] },
+        metadata: {
+          results: [
+            { path: 'a.ts', filediff: { patch: '@@ patch a' } },
+            { path: 'b.ts', filediff: { patch: '@@ patch b' } },
+          ],
+        },
+      },
+    });
+  });
+
+  it('keeps edit and multiedit visible even when Codex omits diff text', () => {
+    const single = normalizeCodexTurnItems({
+      sessionId: 'thread-2c',
+      turnId: 'turn-2c',
+      items: [
+        {
+          id: 'files-3',
+          type: 'fileChange',
+          changes: [{ path: 'empty.ts', diff: '' }],
+        },
+      ],
+    });
+    const multi = normalizeCodexTurnItems({
+      sessionId: 'thread-2d',
+      turnId: 'turn-2d',
+      items: [
+        {
+          id: 'files-4',
+          type: 'fileChange',
+          changes: [
+            { path: 'empty-a.ts', diff: '' },
+            { path: 'empty-b.ts', diff: '' },
+          ],
+        },
+      ],
+    });
+
+    expect(single.parts[0]).toMatchObject({
+      type: 'tool',
+      tool: 'edit',
+      state: {
+        output: 'File changed: empty.ts',
+        metadata: { filediff: { patch: 'File changed: empty.ts' } },
+      },
+    });
+    expect(multi.parts[0]).toMatchObject({
+      type: 'tool',
+      tool: 'multiedit',
+      state: {
+        output: 'File changed: empty-a.ts\nFile changed: empty-b.ts',
+        metadata: {
+          results: [
+            { path: 'empty-a.ts', filediff: { patch: 'File changed: empty-a.ts' } },
+            { path: 'empty-b.ts', filediff: { patch: 'File changed: empty-b.ts' } },
+          ],
+        },
+      },
     });
   });
 
@@ -133,7 +221,7 @@ describe('normalizeCodexTurnItems', () => {
     });
   });
 
-  it('maps plan items to canonical text parts', () => {
+  it('does not map plan items into assistant-visible parts', () => {
     const result = normalizeCodexTurnItems({
       sessionId: 'thread-p',
       turnId: 'turn-p',
@@ -146,11 +234,7 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
-    expect(result.parts).toHaveLength(1);
-    expect(result.parts[0]).toMatchObject({
-      type: 'text',
-      text: 'Step 1: Analyze\nStep 2: Fix',
-    });
+    expect(result.parts).toEqual([]);
   });
 
   it('maps mcpToolCall items to canonical tool parts', () => {
@@ -228,7 +312,7 @@ describe('normalizeCodexTurnItems', () => {
     });
   });
 
-  it('maps imageView and review mode items into assistant text history', () => {
+  it('maps imageView items into assistant history and excludes review-mode text from assistant bubbles', () => {
     const result = normalizeCodexTurnItems({
       sessionId: 'thread-extra',
       turnId: 'turn-extra',
@@ -241,10 +325,61 @@ describe('normalizeCodexTurnItems', () => {
 
     expect(result.messages).toHaveLength(1);
     expect(result.parts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'text', text: 'Image: /tmp/screenshot.png' }),
-      expect.objectContaining({ type: 'text', text: 'Entered review mode: current changes' }),
-      expect.objectContaining({ type: 'text', text: 'Review: looks good' }),
+      expect.objectContaining({ type: 'file', url: '/tmp/screenshot.png', filename: 'screenshot.png' }),
     ]));
+    expect(result.parts.some((part) => part.type === 'text' && 'text' in part && part.text.includes('review mode'))).toBe(false);
+    expect(result.parts.some((part) => part.type === 'text' && 'text' in part && part.text.includes('Review: looks good'))).toBe(false);
+  });
+
+  it('maps user message images into canonical file parts', () => {
+    const result = normalizeCodexTurnItems({
+      sessionId: 'thread-user-files',
+      turnId: 'turn-user-files',
+      items: [
+        {
+          id: 'user-with-image',
+          type: 'userMessage',
+          content: [
+            { type: 'text', text: 'look at this' },
+            { type: 'image', url: 'data:image/png;base64,AAA=' },
+            { type: 'localImage', path: '/tmp/local-shot.jpg' },
+          ],
+        },
+      ],
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ role: 'user' });
+    expect(result.parts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'text', text: 'look at this' }),
+      expect.objectContaining({ type: 'file', mime: 'image/png', url: 'data:image/png;base64,AAA=' }),
+      expect.objectContaining({ type: 'file', mime: 'image/jpeg', url: '/tmp/local-shot.jpg', filename: 'local-shot.jpg' }),
+    ]));
+  });
+
+  it('maps webSearch items into canonical websearch tool parts', () => {
+    const result = normalizeCodexTurnItems({
+      sessionId: 'thread-web',
+      turnId: 'turn-web',
+      items: [
+        {
+          id: 'web-1',
+          type: 'webSearch',
+          query: 'vite docs',
+          action: { type: 'openPage', url: 'https://vite.dev' },
+        },
+      ],
+    });
+
+    expect(result.parts).toEqual([
+      expect.objectContaining({
+        type: 'tool',
+        tool: 'websearch',
+        state: expect.objectContaining({
+          input: expect.objectContaining({ query: 'vite docs', action: 'openPage', url: 'https://vite.dev' }),
+        }),
+      }),
+    ]);
   });
 
   it('uses stable item ids when available', () => {
@@ -258,7 +393,7 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
-    expect(result.parts[0]?.id).toBe('stable-user-id:text');
+    expect(result.parts[0]?.id).toBe('turn-stable:user:0:text');
     expect(result.parts[1]?.id).toBe('turn-stable:assistant:text');
     expect(result.parts[2]?.id).toBe('stable-cmd-id');
   });

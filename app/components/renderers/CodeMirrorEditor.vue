@@ -126,8 +126,13 @@ const visualTheme = EditorView.theme({
     color: 'var(--floating-text-muted, #94a3b8)',
     backgroundColor: 'var(--floating-surface-muted, #242832)',
   },
-  '.cm-activeLine, .cm-activeLineGutter': {
-    backgroundColor: 'rgba(148, 163, 184, 0.15)',
+  '.cm-activeLine': {
+    backgroundColor: 'transparent',
+  },
+  '.cm-activeLineGutter': {
+    color: 'var(--floating-text-secondary, #cbd5e1)',
+    backgroundColor: 'color-mix(in srgb, var(--floating-accent, #76e4f7) 10%, var(--floating-surface-muted, #242832))',
+    boxShadow: 'inset 2px 0 0 var(--floating-accent, #76e4f7)',
   },
   '.cm-tooltip, .cm-panels': {
     color: 'var(--floating-text, #e2e8f0)',
@@ -170,6 +175,18 @@ function handleUpdate(update: ViewUpdate) {
   background: color-mix(in srgb, var(--floating-accent, #3a4150) 12%, var(--floating-surface-base, #1a1d24));
 }
 
+.code-mirror-editor :deep(.cm-content::selection),
+.code-mirror-editor :deep(.cm-line::selection),
+.code-mirror-editor :deep(.cm-gutterElement::selection) {
+  background: rgba(148, 163, 184, 0.22);
+}
+
+.code-mirror-editor :deep(.cm-content::-moz-selection),
+.code-mirror-editor :deep(.cm-line::-moz-selection),
+.code-mirror-editor :deep(.cm-gutterElement::-moz-selection) {
+  background: rgba(148, 163, 184, 0.22);
+}
+
 .code-mirror-editor :deep(.cm-scroller),
 .code-mirror-editor :deep(.cm-content),
 .code-mirror-editor :deep(.cm-line),
@@ -195,5 +212,7 @@ function handleUpdate(update: ViewUpdate) {
 
 .code-mirror-editor :deep(.cm-activeLineGutter) {
   color: var(--floating-text-secondary, #cbd5e1);
+  background: color-mix(in srgb, var(--floating-accent, #76e4f7) 10%, var(--floating-surface-muted, #242832));
+  box-shadow: inset 2px 0 0 var(--floating-accent, #76e4f7);
 }
 </style>
