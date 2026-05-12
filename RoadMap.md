@@ -18,6 +18,8 @@
 	- [?] codex
 	    - [ ] 实现会话级别diff
 	    - [ ] 完善状态监控面板（由于我不经常使用codex，只能确保其基本可用）
+    - [ ] deepseek-tui
+	- [ ] kimicode cli
 	- [ ] oh-my-pi
     - [ ] astrcodey
 	- [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
@@ -25,7 +27,6 @@
 	- [ ] [tokscale](https://github.com/junhoyeo/tokscale)
 	- [ ] [coding_agent_usage_tracker](https://github.com/Dicklesworthstone/coding_agent_usage_tracker)
 	- [ ] gemini cli
-	- [ ] kimicode cli
 
 ## [Paused for difficulties]
 
