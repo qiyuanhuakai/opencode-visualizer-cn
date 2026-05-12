@@ -5689,44 +5689,6 @@ watch(
 );
 
 watch(
-  [projectDirectory, activeDirectory, selectedSessionId],
-  ([pd, ad, sid], [prevPd, prevAd, prevSid] = ['', '', '']) => {
-    if (isBootstrapping.value) return;
-
-    const pdChanged = pd !== prevPd && typeof prevPd !== 'undefined';
-    const adChanged = ad !== prevAd && typeof prevAd !== 'undefined';
-    const sidChanged = sid !== prevSid && typeof prevSid !== 'undefined';
-
-    // pd/ad が変わっていなければ何もしない（sid だけの変更は意図的なセッション切り替え）
-    if (!pdChanged && !adChanged) return;
-
-    // pd/ad が変わったが sid も同時に変わった場合 = 意図的な一括選択 → クリアしない
-    // pd/ad だけ変わった場合 = ディレクトリ切り替え → sid をクリア
-    if (!sidChanged) {
-      const nextProjectId = (pd || selectedProjectId.value).trim();
-      const nextDirectory = ad.trim();
-      const candidates = (sessionsByProject.value[nextProjectId] ?? []).filter((session) => {
-        if (session.parentID || session.time?.archived) return false;
-        if (!nextDirectory) return true;
-        return !session.directory || session.directory === nextDirectory;
-      });
-      const nextSessionId = pickPreferredSessionId(candidates);
-      if (nextProjectId && nextSessionId) {
-        selectedProjectId.value = nextProjectId;
-        selectedSessionId.value = nextSessionId;
-      } else if (nextDirectory && activeBackendKind.value !== 'codex') {
-        void backendSessionLifecycle.createSessionInDirectory(nextDirectory);
-      }
-    }
-
-    if (adChanged && ad) {
-      void fetchCommands(ad);
-    }
-  },
-  { immediate: true },
-);
-
-watch(
   filteredSessions,
   () => {
     if (!bootstrapReady.value && !isBootstrapping.value) return;
@@ -6271,6 +6233,41 @@ const backendSessionReload = useBackendSessionReload({
   fetchPendingQuestions,
   focusInput,
 });
+
+watch(
+  [projectDirectory, activeDirectory, selectedSessionId],
+  ([pd, ad, sid], [prevPd, prevAd, prevSid] = ['', '', '']) => {
+    if (isBootstrapping.value) return;
+
+    const pdChanged = pd !== prevPd && typeof prevPd !== 'undefined';
+    const adChanged = ad !== prevAd && typeof prevAd !== 'undefined';
+    const sidChanged = sid !== prevSid && typeof prevSid !== 'undefined';
+
+    if (!pdChanged && !adChanged) return;
+
+    if (!sidChanged) {
+      const nextProjectId = (pd || selectedProjectId.value).trim();
+      const nextDirectory = ad.trim();
+      const candidates = (sessionsByProject.value[nextProjectId] ?? []).filter((session) => {
+        if (session.parentID || session.time?.archived) return false;
+        if (!nextDirectory) return true;
+        return !session.directory || session.directory === nextDirectory;
+      });
+      const nextSessionId = pickPreferredSessionId(candidates);
+      if (nextProjectId && nextSessionId) {
+        selectedProjectId.value = nextProjectId;
+        selectedSessionId.value = nextSessionId;
+      } else if (nextDirectory && activeBackendCapabilities.value.sessionManagementMode !== 'sandbox-first') {
+        void backendSessionLifecycle.createSessionInDirectory(nextDirectory);
+      }
+    }
+
+    if (adChanged && ad) {
+      void fetchCommands(ad);
+    }
+  },
+  { immediate: true },
+);
 
 watch(selectedSessionId, (newId, oldId) => backendSessionReload.reloadSelectedSessionState(newId, oldId), { immediate: true });
 
