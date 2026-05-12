@@ -142,14 +142,17 @@ describe('ProviderManagerModal events', () => {
 
   it('only restores initial OpenCode query selection when that session exists in state', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
+    const bootstrapSource = readSource(resolve(__dirname, '../composables/useBackendSelectionBootstrap.ts'));
 
     expect(appSource).toContain('function sessionExistsInProjects(projectId: string, sessionId: string)');
-    expect(appSource).toContain('sessionExistsInProjects(initialProjectId, initialSessionId)');
-    expect(appSource).toContain('await initializeSessionSelection();');
+    expect(appSource).toContain('await backendSelectionBootstrap.bootstrapSelection();');
+    expect(bootstrapSource).toContain('params.sessionExistsInProjects(initialProjectId, initialSessionId)');
+    expect(bootstrapSource).toContain('await params.initializeSessionSelection();');
   });
 
   it('syncs Codex active provider and model before sending custom models', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
+    const sendRuntimeSource = readSource(resolve(__dirname, '../composables/useBackendMessageSend.ts'));
 
     expect(appSource).toContain('async function syncCodexActiveProviderModel(providerID: string, modelID: string)');
     expect(appSource).toContain("const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';");
@@ -162,11 +165,11 @@ describe('ProviderManagerModal events', () => {
     expect(appSource).toContain("edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });");
     expect(appSource).not.toContain('configStringValue(');
     expect(appSource).not.toContain("mergeStrategy: 'remove'");
-    expect(appSource).toContain('const startNewCodexThread = selectedCodexProvider');
-    expect(appSource).toContain('forceNewThread: startNewCodexThread');
-    expect(appSource).toContain('await syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);');
-    expect(appSource).toContain('if (selectedCodexModelKey) codexApi.selectModel(selectedCodexModelKey);');
-    expect(appSource).not.toContain('codexApi.selectModel(selectedCodexModel);');
+    expect(sendRuntimeSource).toContain('const startNewCodexThread = selectedCodexProvider');
+    expect(sendRuntimeSource).toContain('forceNewThread: startNewCodexThread');
+    expect(sendRuntimeSource).toContain('await params.syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);');
+    expect(sendRuntimeSource).toContain('if (selectedCodexModelKey) params.codexApi.selectModel(selectedCodexModelKey);');
+    expect(sendRuntimeSource).not.toContain('codexApi.selectModel(selectedCodexModel);');
   });
 
   it('renders all providers as compact two-column rows instead of card grid items', () => {

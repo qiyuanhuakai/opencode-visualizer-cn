@@ -144,7 +144,7 @@
                     :disabled="batchDeleteTargets.length === 0"
                     @click.stop="emitBatchSessionAction('delete')"
                   >
-                    {{ codexMode ? $t('topPanel.management.archiveCodex') : $t('topPanel.management.delete') }} · {{ batchDeleteTargets.length }}
+        {{ sandboxFirstMode ? $t('topPanel.management.archiveCodex') : $t('topPanel.management.delete') }} · {{ batchDeleteTargets.length }}
                   </button>
                 </div>
               </div>
@@ -184,7 +184,7 @@
                       </div>
                     </div>
                     <button
-                      v-if="worktree.projectId && worktree.projectId !== 'global' && (!codexMode || worktree.kind === 'sandbox')"
+            v-if="worktree.projectId && worktree.projectId !== 'global' && (!sandboxFirstMode || worktree.kind === 'sandbox')"
                       type="button"
                       class="tree-action-button"
                       :class="worktree.isPinned ? 'pinned' : 'pin'"
@@ -202,7 +202,7 @@
                       />
                     </button>
                     <button
-                      v-if="!codexMode && worktree.projectId && worktree.projectId !== 'global'"
+            v-if="!sandboxFirstMode && worktree.projectId && worktree.projectId !== 'global'"
                       type="button"
                       class="tree-action-button worktree-settings"
                       :title="$t('topPanel.projectSettings')"
@@ -261,7 +261,7 @@
                           <Icon icon="lucide:message-circle-plus" :width="16" :height="16" />
                         </button>
                         <button
-                          v-if="!codexMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch'"
+                    v-if="!sandboxFirstMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch'"
                           type="button"
                           class="tree-action-button fork"
                           :title="$t('topPanel.createSandbox')"
@@ -270,7 +270,7 @@
                           <Icon icon="lucide:git-branch-plus" :width="16" :height="16" />
                         </button>
                         <button
-                          v-if="worktree.projectId && worktree.projectId !== 'global' && (codexMode ? sandbox.kind === 'branch' : sandbox.kind !== 'branch')"
+                    v-if="worktree.projectId && worktree.projectId !== 'global' && (sandboxFirstMode ? sandbox.kind === 'branch' : sandbox.kind !== 'branch')"
                           type="button"
                           class="tree-action-button"
                           :class="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'pinned' : 'pin'"
@@ -291,7 +291,7 @@
                           v-if="
                             canDeleteSandbox(sandbox.directory, worktree.directory) &&
                             worktree.projectId !== 'global' &&
-                            !codexMode &&
+                        !sandboxFirstMode &&
                             sandbox.kind !== 'branch'
                           "
                           type="button"
@@ -347,7 +347,7 @@
                         <template #action>
                           <div class="tree-session-actions">
                             <button
-                              v-if="codexMode && !session.archivedAt"
+                              v-if="sandboxFirstMode && !session.archivedAt"
                               type="button"
                               class="tree-action-button session-compact"
                               :title="$t('codexPanel.compactThread')"
@@ -391,16 +391,16 @@
                               v-if="!session.archivedAt"
                               type="button"
                               class="tree-action-button session-del"
-                              :class="isShiftPressed && !codexMode ? 'danger' : 'archive'"
+                                      :class="isShiftPressed && !sandboxFirstMode ? 'danger' : 'archive'"
                               :title="
                                   isShiftPressed
-                                    ? (codexMode ? $t('topPanel.sessionActions.archiveCodex') : $t('topPanel.sessionActions.deletePermanently'))
+                                        ? (sandboxFirstMode ? $t('topPanel.sessionActions.archiveCodex') : $t('topPanel.sessionActions.deletePermanently'))
                                     : $t('topPanel.sessionActions.archive')
                               "
                               @click.stop.prevent="handleSessionAction(session.id, close)"
                             >
                               <Icon
-                                :icon="isShiftPressed ? (codexMode ? 'lucide:cloud-upload' : 'lucide:trash-2') : 'lucide:archive'"
+                                      :icon="isShiftPressed ? (sandboxFirstMode ? 'lucide:cloud-upload' : 'lucide:trash-2') : 'lucide:archive'"
                                 :width="16"
                                 :height="16"
                               />
@@ -661,6 +661,14 @@ import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownSearch from './Dropdown/Search.vue';
 import { useSettings } from '../composables/useSettings';
+import type {
+  TopPanelBatchSessionActionPayload,
+  TopPanelBatchSessionTarget,
+  TopPanelNotificationSession,
+  TopPanelSandbox,
+  TopPanelSession,
+  TopPanelWorktree,
+} from '../types/top-panel';
 
 declare const __GIT_REVISION__: string;
 const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
@@ -669,64 +677,6 @@ const { suppressAutoWindows, showCodexButton } = useSettings();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const regionStyle = computed(() => undefined);
-
-export type TopPanelSession = {
-  id: string;
-  title?: string;
-  slug?: string;
-  status: 'busy' | 'idle' | 'retry' | 'unknown';
-  timeCreated?: number;
-  timeUpdated?: number;
-  archivedAt?: number;
-  pinnedAt?: number;
-  isPinned?: boolean;
-  isImplicitlyPinned?: boolean;
-};
-
-export type TopPanelSandbox = {
-  key?: string;
-  directory: string;
-  pinDirectory?: string;
-  branch?: string;
-  kind?: 'global' | 'sandbox' | 'folder' | 'branch';
-  sessions: TopPanelSession[];
-  latestUpdated?: number;
-  oldestCreated?: number;
-  pinnedAt?: number;
-  isPinned?: boolean;
-  isImplicitlyPinned?: boolean;
-};
-
-export type TopPanelWorktree = {
-  key?: string;
-  directory: string;
-  label: string;
-  name?: string;
-  projectId?: string;
-  projectColor?: string;
-  kind?: 'global' | 'sandbox';
-  sandboxes: TopPanelSandbox[];
-  latestUpdated?: number;
-  pinnedAt?: number;
-  isPinned?: boolean;
-};
-
-export type TopPanelNotificationSession = {
-  projectId: string;
-  sessionId: string;
-  count: number;
-};
-
-export type TopPanelBatchSessionTarget = {
-  sessionId: string;
-  projectId?: string;
-  directory: string;
-};
-
-export type TopPanelBatchSessionActionPayload = {
-  action: 'pin' | 'unpin' | 'archive' | 'unarchive' | 'delete';
-  sessions: TopPanelBatchSessionTarget[];
-};
 
 export type TopPanelCodexSubpanel =
   | 'models'
@@ -761,7 +711,7 @@ const props = defineProps<{
   activeDirectory: string;
   selectedSessionId: string;
   homePath?: string;
-  codexMode?: boolean;
+  sandboxFirstMode?: boolean;
   codexConnected?: boolean;
   ptySupported?: boolean;
 }>();
@@ -1138,7 +1088,7 @@ function handleUnpinProject(projectId: string | undefined) {
 
 function handlePinWorktree(worktree: TopPanelWorktree) {
   if (!worktree.projectId) return;
-  if (props.codexMode && worktree.kind === 'sandbox') {
+  if (props.sandboxFirstMode && worktree.kind === 'sandbox') {
     handlePinSandbox(worktree.projectId, worktree.directory);
     return;
   }
@@ -1147,7 +1097,7 @@ function handlePinWorktree(worktree: TopPanelWorktree) {
 
 function handleUnpinWorktree(worktree: TopPanelWorktree) {
   if (!worktree.projectId) return;
-  if (props.codexMode && worktree.kind === 'sandbox') {
+  if (props.sandboxFirstMode && worktree.kind === 'sandbox') {
     handleUnpinSandbox(worktree.projectId, worktree.directory);
     return;
   }
@@ -1182,7 +1132,7 @@ async function handleSandboxDelete(
 
 async function handleSessionDelete(sessionId: string, close?: () => void) {
   const confirmed = showConfirm
-    ? await showConfirm(t(props.codexMode ? 'topPanel.confirm.archiveCodexSession' : 'topPanel.confirm.deleteSession'))
+    ? await showConfirm(t(props.sandboxFirstMode ? 'topPanel.confirm.archiveCodexSession' : 'topPanel.confirm.deleteSession'))
     : true;
   if (!confirmed) return;
   emit('delete-session', sessionId);
@@ -1269,7 +1219,7 @@ async function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload[
 
   if (action === 'delete') {
     const confirmed = showConfirm
-      ? await showConfirm(t(props.codexMode ? 'topPanel.confirm.archiveCodexSessions' : 'topPanel.confirm.deleteSessions', { count: sessions.length }))
+      ? await showConfirm(t(props.sandboxFirstMode ? 'topPanel.confirm.archiveCodexSessions' : 'topPanel.confirm.deleteSessions', { count: sessions.length }))
       : true;
     if (!confirmed) return;
   }

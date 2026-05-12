@@ -11,29 +11,29 @@
           :active-directory="activeDirectory"
             :selected-session-id="selectedSessionId"
              :home-path="homePath"
-             :codex-mode="activeBackendKind === 'codex'"
+              :sandbox-first-mode="activeBackendCapabilities.sessionManagementMode === 'sandbox-first'"
              :codex-connected="codexApi.connected.value"
              :pty-supported="ptySupported"
           @select-notification="handleNotificationSessionSelect"
           @create-worktree-from="createWorktreeFromWorktree"
-          @new-session="createNewSession"
+          @new-session="backendSessionLifecycle.createNewSession"
           @new-session-in="handleNewSessionInSandbox"
           @open-shell="openShellFromInput('')"
           @delete-active-directory="deleteWorktree"
-          @delete-session="deleteSession"
-          @archive-session="archiveSession"
-          @unarchive-session="unarchiveSession"
-          @rename-session="renameSession"
-          @compact-session="compactCodexSession"
-          @pin-session="pinSession"
-          @unpin-session="unpinSession"
+          @delete-session="backendSessionActions.deleteSession"
+          @archive-session="backendSessionActions.archiveSession"
+          @unarchive-session="backendSessionActions.unarchiveSession"
+          @rename-session="backendSessionActions.renameSession"
+          @compact-session="backendSessionActions.compactSession"
+          @pin-session="backendSessionActions.pinSession"
+          @unpin-session="backendSessionActions.unpinSession"
           @pin-project="pinProject"
           @unpin-project="unpinProject"
           @pin-sandbox="(payload) => pinSandbox(payload.projectId, payload.directory)"
           @unpin-sandbox="(payload) => unpinSandbox(payload.projectId, payload.directory)"
           @select-session="handleTopPanelSessionSelect"
-          @batch-session-action="handleTopPanelBatchSessionAction"
-          @open-directory="openProjectPicker"
+          @batch-session-action="backendSessionActions.handleTopPanelBatchSessionAction"
+          @open-directory="handleOpenProjectDirectory"
           @edit-project="handleEditProject"
     @open-settings="isSettingsOpen = true"
     @open-provider-manager="isProviderManagerOpen = true"
@@ -129,8 +129,8 @@
                     :is-anchoring="isOutputAnchoring"
                     @message-rendered="handleOutputPanelMessageRendered"
                     @resume-follow="handleOutputPanelResumeFollow"
-                    @fork-message="handleForkMessage"
-                    @revert-message="handleRevertMessage"
+                    @fork-message="backendSessionActions.handleForkMessage"
+                    @revert-message="backendSessionActions.handleRevertMessage"
                     @undo-revert="handleUndoRevert"
                     @show-message-diff="handleShowMessageDiff"
                     @show-commit="handleShowCommit"
@@ -180,8 +180,8 @@
               @update:selected-model="handleSelectedModelUpdate"
               @update:selected-thinking="handleSelectedThinkingUpdate"
               @apply-history-entry="handleApplyHistoryEntry"
-              @send="sendMessage"
-              @abort="abortSession"
+              @send="backendMessageSend.sendMessage"
+              @abort="backendSessionLifecycle.abortSession"
               @add-attachments="handleAddAttachments"
               @remove-attachment="removeAttachment"
               @open-image="handleOpenImage"
@@ -449,7 +449,6 @@ import {
   onMounted,
   reactive,
   ref,
-  shallowRef,
   type Component,
   watch,
   watchEffect,
@@ -469,11 +468,7 @@ import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
 import Welcome from './components/Welcome.vue';
 import TopPanel, {
-  type TopPanelBatchSessionActionPayload,
-  type TopPanelBatchSessionTarget,
   type TopPanelCodexSubpanel,
-  type TopPanelNotificationSession,
-  type TopPanelWorktree,
 } from './components/TopPanel.vue';
 import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
@@ -512,24 +507,40 @@ import { useFloatingWindows } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions, type QuestionRequest } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
+import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
+import { useBackendSessionActions } from './composables/useBackendSessionActions';
+import { useBackendSessionLifecycle } from './composables/useBackendSessionLifecycle';
+import { useBackendMessageSend } from './composables/useBackendMessageSend';
+import { useBackendSessionReload } from './composables/useBackendSessionReload';
+import { useBackendSessionStatus } from './composables/useBackendSessionStatus';
+import { useBackendSelectionBootstrap } from './composables/useBackendSelectionBootstrap';
+import { useCodexMessageBridge } from './composables/useCodexMessageBridge';
 import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useMessages } from './composables/useMessages';
+import { useCodexWorkspaceSync } from './composables/useCodexWorkspaceSync';
 import { pendingWorkerRenders } from './composables/useRenderState';
 import { useOpenCodeApi } from './composables/useOpenCodeApi';
 import { useCodexApi } from './composables/useCodexApi';
-import type { CodexTurnInputItem } from './backends/codex/codexAdapter';
 import { appendCodexBridgeToken, codexBridgeHttpUrl } from './backends/codex/bridgeUrl';
-import { CODEX_PROJECT_ID, createCodexProjectState, useCodexWorkspace } from './composables/useCodexWorkspace';
+import { CODEX_PROJECT_ID, useCodexWorkspace } from './composables/useCodexWorkspace';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml, type RenderRequest } from './utils/workerRenderer';
 import type { HistoryWindowEntry, MessageDiffEntry } from './types/message';
-import type { AssistantMessageInfo, MessagePart, ReasoningPart, ToolPart, UserMessageInfo } from './types/sse';
+import type {
+  BackendProviderConfigState,
+  BackendProviderInfo,
+  BackendProviderResponse,
+  BackendSessionInfo,
+  BackendWorktreeInfo,
+} from './types/backend-domain';
+import type { ComposerAttachment, LineCommentData } from './types/composer';
+import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
+import type { TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState } from './types/worker-state';
-import type { SessionTreeData, SessionTreeProject, SessionTreeSandbox, SessionTreeSession } from './types/session-tree';
 import type { Terminal } from '@xterm/xterm';
 import { DEFAULT_OPENCODE_URL } from './utils/constants';
 import {
@@ -543,11 +554,6 @@ import {
   sandboxPinKey,
   type LocalPinnedSessionStore,
 } from './utils/pinnedSessions';
-import {
-  isBatchSessionAction,
-  normalizeBatchSessionTargets,
-} from './utils/batchSessionTargets';
-import { mapWithConcurrency } from './utils/mapWithConcurrency';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import {
   extractFileRead as extractToolFileRead,
@@ -564,7 +570,6 @@ import {
 import type { BackendKind, ConfigMergeStrategy } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
-import { shouldPreservePendingCodexSelection } from './utils/codexSessionSelection';
 import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
@@ -578,14 +583,12 @@ import {
   storageSetJSON,
 } from './utils/storageKeys';
 import {
-  isSandboxMarkedDeleted,
   markSandboxDeleted,
   pruneDeletedSandboxStore,
   readDeletedSandboxStore,
   writeDeletedSandboxStore,
   type DeletedSandboxStore,
 } from './utils/deletedSandboxes';
-import { buildCodexSessionTreeData, buildCodexTopPanelTreeData } from './utils/codexTopPanelTree';
 import { shouldSkipAutoOpenWebTool } from './utils/codexToolWindows';
 
 const { t } = useI18n();
@@ -626,7 +629,6 @@ const editingFileDrafts = reactive<Record<string, string>>({});
 const editingFileBaseContent = reactive<Record<string, string>>({});
 const editingFileSaving = reactive<Record<string, boolean>>({});
 const bridgeFsWritable = ref(false);
-const TREE_DATA_CACHE_TTL_MS = 15000;
 const COMMIT_SNAPSHOT_SCRIPT = [
   'stty -opost -echo 2>/dev/null',
   'export GIT_PAGER=cat',
@@ -853,15 +855,7 @@ type FileSnapshotResult = {
   afterBase64: string;
 };
 
-type LineCommentData = { path: string; startLine: number; endLine: number; text: string };
-
-type Attachment = {
-  id: string;
-  filename: string;
-  mime: string;
-  dataUrl: string;
-  lineComment?: LineCommentData;
-};
+type Attachment = ComposerAttachment;
 
 type ComposerDraft = {
   messageInput: string;
@@ -1193,7 +1187,7 @@ const sidePanelWidth = ref<number | null>(null);
 const appBodyEl = ref<HTMLDivElement | null>(null);
 const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
 let primaryHistoryRequestId = 0;
-let sessionReloadRequestId = 0;
+const sessionReloadRequestId = ref(0);
 let outputAnchorRequestId = 0;
 const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
@@ -1225,76 +1219,11 @@ const notificationPermissionRequested = ref(false);
 const sidePanelCollapsed = ref(readSidePanelCollapsed());
 const sidePanelActiveTab = ref(readSidePanelTab());
 
-type SessionInfo = {
-  id: string;
-  projectID?: string;
-  projectId?: string;
-  parentID?: string;
-  title?: string;
-  slug?: string;
-  status?: 'busy' | 'idle' | 'retry';
-  directory?: string;
-  time?: {
-    created?: number;
-    updated?: number;
-    archived?: number;
-    pinned?: number;
-  };
-  revert?: {
-    messageID: string;
-    partID?: string;
-    snapshot?: string;
-    diff?: string;
-  };
-};
-
-type WorktreeInfo = {
-  name: string;
-  branch: string;
-  directory: string;
-};
-
-type ProviderModel = {
-  id: string;
-  name?: string;
-  providerID?: string;
-  family?: string;
-  status?: string;
-  variants?: Record<string, unknown>;
-  limit?: {
-    context?: number;
-    input?: number;
-    output?: number;
-  };
-  capabilities?: {
-    attachment?: boolean;
-    reasoning?: boolean;
-    toolcall?: boolean;
-  };
-};
-
-type ProviderInfo = {
-  id: string;
-  name?: string;
-  source?: string;
-  key?: string;
-  models?: Record<string, ProviderModel>;
-};
-
-type ProviderResponse = {
-  all?: ProviderInfo[];
-  default?: Record<string, string>;
-  connected?: string[];
-};
-
-type ProviderConfigState = {
-  enabled_providers?: string[];
-  disabled_providers?: string[];
-  provider?: Record<string, unknown>;
-  model_providers?: Record<string, unknown>;
-  model_provider?: string;
-  model?: string;
-};
+type SessionInfo = BackendSessionInfo;
+type WorktreeInfo = BackendWorktreeInfo;
+type ProviderInfo = BackendProviderInfo;
+type ProviderResponse = BackendProviderResponse;
+type ProviderConfigState = BackendProviderConfigState;
 
 const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';
 
@@ -1710,73 +1639,6 @@ const filteredSessions = computed(() =>
   }),
 );
 
-const treeDataCache = shallowRef<{
-  data: TopPanelWorktree[];
-  hash: string;
-  timestamp: number;
-} | null>(null);
-
-const sessionTreeDataCache = shallowRef<{
-  data: SessionTreeData;
-  hash: string;
-  timestamp: number;
-} | null>(null);
-
-function mixStringIntoHash(hash: number, str: string): number {
-  let h = hash;
-  for (let i = 0; i < str.length; i++) {
-    h = ((h << 5) - h + str.charCodeAt(i)) | 0;
-  }
-  return h;
-}
-
-function computeProjectsHash(
-  projects: Record<string, ProjectState>,
-  pinnedStore: LocalPinnedSessionStore,
-  deletedStore: DeletedSandboxStore,
-): string {
-  let hash = 0;
-  const projectEntries = Object.entries(projects);
-  for (const [id, project] of projectEntries) {
-    hash ^= id.length + Object.keys(project.sandboxes).length;
-    hash = mixStringIntoHash(hash, project.name ?? '');
-    for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
-      hash += sandbox.rootSessions.length;
-      hash = mixStringIntoHash(hash, sandbox.name);
-      hash = mixStringIntoHash(hash, sandbox.directory);
-      for (const sessionId of sandbox.rootSessions) {
-        const session = sandbox.sessions[sessionId];
-        if (session) {
-          hash += (session.timeUpdated ?? session.timeCreated ?? 0) & 0xffff;
-          hash += (session.timePinned ?? 0) & 0xffff;
-          hash = mixStringIntoHash(hash, session.gitInfo?.root ?? '');
-          hash = mixStringIntoHash(hash, session.gitInfo?.branch ?? '');
-        }
-      }
-    }
-  }
-
-  const pinnedEntries = Object.entries(pinnedStore).sort(([left], [right]) =>
-    left.localeCompare(right),
-  );
-  const pinnedHash = pinnedEntries.map(([key, value]) => `${key}:${value}`).join('|');
-
-  const deletedEntries = Object.entries(deletedStore)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([projectId, directories]) => `${projectId}:${directories.slice().sort().join(',')}`);
-  const deletedHash = deletedEntries.join('|');
-
-  return `${hash}-${projectEntries.length}-${pinnedHash}-${deletedHash}`;
-}
-
-const treeDataHash = computed(() =>
-  computeProjectsHash(
-    serverState.projects,
-    localPinnedSessionStore.value,
-    deletedSandboxStore.value,
-  ),
-);
-
 const sessionLocationById = computed(() => {
   const locations = new Map<string, {
     projectId: string;
@@ -1799,158 +1661,15 @@ const sessionLocationById = computed(() => {
   return locations;
 });
 
-const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
-  const codexTopPanelHash = activeBackendKind.value === 'codex'
-    ? codexApi.threads.value
-      .map((thread) => `${thread.id}:${thread.updatedAt ?? ''}:${thread.name ?? ''}:${thread.cwd ?? ''}:${thread.gitInfo?.root ?? ''}:${thread.gitInfo?.commonRoot ?? ''}:${thread.gitInfo?.worktreeRoot ?? ''}:${thread.gitInfo?.branch ?? ''}`)
-      .join('|') + `:hidden=${Array.from(codexApi.hiddenThreadIds.value).sort().join(',')}:pinned=${Array.from(codexApi.pinnedThreadIds.value).sort().join(',')}`
-    : '';
-  const currentHash = `${activeBackendKind.value}:${treeDataHash.value}:${codexTopPanelHash}`;
-  const now = Date.now();
-  
-  if (
-    treeDataCache.value &&
-    treeDataCache.value.hash === currentHash &&
-    now - treeDataCache.value.timestamp < TREE_DATA_CACHE_TTL_MS
-  ) {
-    return treeDataCache.value.data;
-  }
-
-  if (activeBackendKind.value === 'codex') {
-    const project = createCodexProjectState(
-      codexApi.threads.value,
-      codexApi.homeDir.value || '/',
-      codexApi.pinnedThreadIds.value,
-      codexApi.hiddenThreadIds.value,
-    );
-    const data = project ? buildCodexTopPanelTreeData(project, {
-      pinnedStore: localPinnedSessionStore.value,
-      homePath: homePath.value,
-      resolveProjectColor: resolveProjectColorHex,
-    }) : [];
-    treeDataCache.value = { data, hash: currentHash, timestamp: now };
-    return data;
-  }
-  
-  const entries = Object.values(serverState.projects)
-    .map((project) => {
-      const worktreeDirectory = project.worktree;
-      const sandboxEntries = (Object.values(project.sandboxes) as SandboxState[])
-        .filter(
-          (sandbox) =>
-            sandbox.directory === worktreeDirectory ||
-            !isSandboxMarkedDeleted(deletedSandboxStore.value, project.id, sandbox.directory),
-        )
-        .map((sandbox) => {
-          const projectPinnedAt = normalizePinnedAt(localPinnedSessionStore.value[projectPinKey(project.id)]);
-          const sandboxLocalValue = localPinnedSessionStore.value[sandboxPinKey(project.id, sandbox.directory)];
-          const sandboxPinnedAt = normalizePinnedAt(sandboxLocalValue);
-          const isSandboxDirectlyPinned = sandboxPinnedAt > 0;
-          const isSandboxExplicitlyUnpinned = typeof sandboxLocalValue === 'number' && sandboxLocalValue < 0;
-          const isSandboxPinned = isSandboxDirectlyPinned || (projectPinnedAt > 0 && !isSandboxExplicitlyUnpinned);
-          const sandboxEffectivePinnedAt = isSandboxPinned
-            ? (isSandboxDirectlyPinned ? sandboxPinnedAt : projectPinnedAt)
-            : 0;
-          const sessionsForSandbox = sandbox.rootSessions
-            .map((sessionId) => sandbox.sessions[sessionId])
-            .filter((session): session is NonNullable<typeof session> => Boolean(session))
-            .map((session) => {
-              const sessionLocalValue = localPinnedSessionStore.value[pinnedSessionStoreKey(project.id, session.id)];
-              const sessionLocalPinnedAt = normalizePinnedAt(sessionLocalValue);
-              const sessionServerPinnedAt = normalizePinnedAt(session.timePinned);
-              const isSessionDirectlyPinned = sessionLocalPinnedAt > 0 || sessionServerPinnedAt > 0;
-              const isSessionExplicitlyUnpinned =
-                typeof sessionLocalValue === 'number' && sessionLocalValue < 0;
-              const isSessionImplicitlyPinned =
-                !isSessionDirectlyPinned && !isSessionExplicitlyUnpinned && isSandboxPinned;
-              return {
-                id: session.id,
-                title: session.title,
-                slug: session.slug,
-                status: (session.status ?? 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
-                timeCreated: session.timeCreated,
-                timeUpdated: session.timeUpdated ?? session.timeCreated,
-                archivedAt: session.timeArchived,
-                pinnedAt: isSessionDirectlyPinned
-                  ? (sessionLocalPinnedAt || sessionServerPinnedAt)
-                  : (isSessionImplicitlyPinned ? sandboxEffectivePinnedAt : 0),
-                isPinned: isSessionDirectlyPinned,
-                isImplicitlyPinned: isSessionImplicitlyPinned,
-              };
-            })
-            .sort((a, b) => {
-              const pinDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-              if (pinDiff !== 0) return pinDiff;
-              return (b.timeUpdated ?? b.timeCreated ?? 0) - (a.timeUpdated ?? a.timeCreated ?? 0);
-            });
-          const latestUpdated = sessionsForSandbox.reduce(
-            (max, session) => Math.max(max, session.timeUpdated ?? session.timeCreated ?? 0),
-            0,
-          );
-          const oldestCreated =
-            sessionsForSandbox.length > 0
-              ? Math.min(...sessionsForSandbox.map((session) => session.timeCreated ?? Infinity))
-              : 0;
-          return {
-            directory: sandbox.directory,
-            branch: sandbox.name || undefined,
-            sessions: sessionsForSandbox,
-            latestUpdated,
-            oldestCreated,
-            pinnedAt: sandboxEffectivePinnedAt,
-            isPinned: isSandboxDirectlyPinned,
-            isImplicitlyPinned: isSandboxPinned && !isSandboxDirectlyPinned,
-          };
-        })
-        .sort((a, b) => {
-          const aIsPrimary = a.directory === worktreeDirectory;
-          const bIsPrimary = b.directory === worktreeDirectory;
-          if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
-          return (b.oldestCreated || 0) - (a.oldestCreated || 0);
-        });
-      const latestSandboxUpdated = sandboxEntries
-        .flatMap((sandbox) => sandbox.sessions)
-        .reduce((max, session) => Math.max(max, session.timeUpdated ?? 0), 0);
-      const name =
-        project.name?.trim() || worktreeDirectory.replace(/\/+$/, '').split('/').pop() || undefined;
-      const projectPinnedAt = normalizePinnedAt(localPinnedSessionStore.value[projectPinKey(project.id)]);
-      return {
-        directory: worktreeDirectory,
-        label: replaceHomePrefix(worktreeDirectory),
-        name,
-        projectId: project.id,
-        projectColor: resolveProjectColorHex(project.icon?.color),
-        sandboxes: sandboxEntries,
-        latestUpdated: latestSandboxUpdated,
-        pinnedAt: projectPinnedAt,
-        isPinned: projectPinnedAt > 0,
-      };
-    })
-    .sort((a, b) => {
-      if (a.directory === '/' && b.directory !== '/') return 1;
-      if (b.directory === '/' && a.directory !== '/') return -1;
-      return (a.name || a.label).localeCompare(b.name || b.label);
-    });
-  
-  treeDataCache.value = { data: entries, hash: currentHash, timestamp: now };
-  return entries;
-});
-
-// Navigable session tree: mirrors TopPanel's displayedTree (no-search mode).
-// Filters archived sessions, truncates per-sandbox, and drops empty worktrees.
-const NAVIGABLE_MAX_SESSIONS = 5;
-const navigableTree = computed(() => {
-  return topPanelTreeData.value
-    .map((worktree) => ({
-      ...worktree,
-      sandboxes: worktree.sandboxes
-        .map((sandbox) => ({
-          ...sandbox,
-          sessions: sandbox.sessions.filter((s) => !s.archivedAt).slice(0, NAVIGABLE_MAX_SESSIONS),
-        }))
-        .filter((sandbox) => worktree.projectId !== 'global' || sandbox.sessions.length > 0),
-    }))
-    .filter((worktree) => worktree.sandboxes.some((sandbox) => sandbox.sessions.length > 0));
+const { topPanelTreeData, sessionTreeData, navigableTree } = useBackendSessionTrees({
+  activeBackendKind,
+  projects: serverState.projects,
+  pinnedStore: localPinnedSessionStore,
+  deletedSandboxStore,
+  homePath,
+  replaceHomePrefix,
+  resolveProjectColor: resolveProjectColorHex,
+  codexProjectId: CODEX_PROJECT_ID,
 });
 
 const allowedSessionIds = computed(() => {
@@ -2295,138 +2014,6 @@ const todoPanelSessions = computed(() => {
   return visible;
 });
 
-const sessionTreeData = computed<SessionTreeData>(() => {
-  const codexSessionTreeHash = activeBackendKind.value === 'codex'
-    ? topPanelTreeData.value
-      .map((worktree) => `${worktree.key ?? worktree.directory}:${worktree.pinnedAt ?? 0}:${worktree.sandboxes.map((sandbox) => `${sandbox.key ?? sandbox.directory}:${sandbox.pinDirectory ?? ''}:${sandbox.pinnedAt ?? 0}:${sandbox.sessions.map((session) => `${session.id}:${session.pinnedAt ?? 0}:${session.archivedAt ?? 0}`).join(',')}`).join(';')}`)
-      .join('|')
-    : '';
-  const currentHash = `${activeBackendKind.value}:${treeDataHash.value}:${codexSessionTreeHash}`;
-  const now = Date.now();
-
-  if (
-    sessionTreeDataCache.value &&
-    sessionTreeDataCache.value.hash === currentHash &&
-    now - sessionTreeDataCache.value.timestamp < TREE_DATA_CACHE_TTL_MS
-  ) {
-    return sessionTreeDataCache.value.data;
-  }
-
-  const store = localPinnedSessionStore.value;
-  const result: SessionTreeProject[] = [];
-
-  if (activeBackendKind.value === 'codex') {
-    const data = buildCodexSessionTreeData(topPanelTreeData.value);
-    sessionTreeDataCache.value = { data, hash: currentHash, timestamp: now };
-    return data;
-  }
-
-  for (const project of Object.values(serverState.projects)) {
-    const projectName =
-      project.name?.trim() || project.worktree.replace(/\/+$/, '').split('/').pop() || project.id;
-    const projectKey = projectPinKey(project.id);
-    const projectLocal = store[projectKey];
-    const isProjectPinned = typeof projectLocal === 'number' && projectLocal > 0;
-    const isProjectUnpinned = typeof projectLocal === 'number' && projectLocal < 0;
-
-    if (isProjectUnpinned) continue;
-
-    const sandboxes: SessionTreeSandbox[] = [];
-    for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
-      const sandboxKey = sandboxPinKey(project.id, sandbox.directory);
-      const sandboxLocal = store[sandboxKey];
-      const isSandboxDirectlyPinned = typeof sandboxLocal === 'number' && sandboxLocal > 0;
-      const isSandboxUnpinned = typeof sandboxLocal === 'number' && sandboxLocal < 0;
-      const isSandboxPinned = isSandboxDirectlyPinned || isProjectPinned;
-
-      if (isSandboxUnpinned) continue;
-
-      const sessions: SessionTreeSession[] = [];
-      for (const session of Object.values(sandbox.sessions)) {
-        if (session.parentID || session.timeArchived) continue;
-
-        const sessionKey = pinnedSessionStoreKey(project.id, session.id);
-        const sessionLocal = store[sessionKey];
-        const isSessionDirectlyPinned = typeof sessionLocal === 'number' && sessionLocal > 0;
-        const isSessionUnpinned = typeof sessionLocal === 'number' && sessionLocal < 0;
-
-        if (isSessionUnpinned) continue;
-
-        const serverPinnedAt = session.timePinned;
-        const isSessionPinned = isSessionDirectlyPinned || normalizePinnedAt(serverPinnedAt) > 0;
-        const isSessionInPinnedTree = isSessionPinned || isSandboxPinned || isProjectPinned;
-
-        if (!isSessionInPinnedTree) continue;
-
-        const isSessionImplicitlyPinned = isSessionInPinnedTree && !isSessionPinned;
-        const pinnedAt = isSessionPinned
-          ? (isSessionDirectlyPinned ? (sessionLocal as number) : normalizePinnedAt(serverPinnedAt))
-          : isSandboxDirectlyPinned
-            ? (sandboxLocal as number)
-            : (projectLocal as number);
-
-        sessions.push({
-          type: 'session',
-          sessionId: session.id,
-          projectId: project.id,
-          directory: sandbox.directory,
-          title: session.title || session.slug || session.id,
-          status: (session.status ?? 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
-          pinnedAt,
-          isPinned: isSessionPinned,
-          isImplicitlyPinned: isSessionImplicitlyPinned,
-        });
-      }
-
-      if (sessions.length === 0 && !isSandboxPinned) continue;
-
-      sessions.sort((a, b) => {
-        if (b.pinnedAt !== a.pinnedAt) return b.pinnedAt - a.pinnedAt;
-        return a.title.localeCompare(b.title);
-      });
-
-      const isSandboxImplicitlyPinned = isSandboxPinned && !isSandboxDirectlyPinned;
-      sandboxes.push({
-        type: 'sandbox',
-        directory: sandbox.directory,
-        projectId: project.id,
-        name: sandbox.name || 'main',
-        pinnedAt: isSandboxPinned ? (isSandboxDirectlyPinned ? (sandboxLocal as number) : (projectLocal as number)) : 0,
-        isPinned: isSandboxPinned && !isSandboxImplicitlyPinned,
-        isImplicitlyPinned: isSandboxImplicitlyPinned,
-        sessions,
-      });
-    }
-
-    if (sandboxes.length === 0 && !isProjectPinned) continue;
-
-    sandboxes.sort((a, b) => {
-      const aIsPrimary = a.directory === project.worktree;
-      const bIsPrimary = b.directory === project.worktree;
-      if (aIsPrimary !== bIsPrimary) return aIsPrimary ? -1 : 1;
-      return a.name.localeCompare(b.name);
-    });
-
-    result.push({
-      type: 'project',
-      projectId: project.id,
-      name: projectName,
-      color: resolveProjectColorHex(project.icon?.color),
-      pinnedAt: typeof projectLocal === 'number' ? projectLocal : 0,
-      isPinned: isProjectPinned,
-      sandboxes,
-    });
-  }
-
-  result.sort((a, b) => {
-    if (a.pinnedAt !== b.pinnedAt) return b.pinnedAt - a.pinnedAt;
-    return a.name.localeCompare(b.name);
-  });
-
-  sessionTreeDataCache.value = { data: result, hash: currentHash, timestamp: now };
-  return result;
-});
-
 const hasSession = computed(() => Boolean(selectedSessionId.value));
 
 const canSend = computed(() =>
@@ -2451,19 +2038,13 @@ const busyDescendantSessionIds = computed(() => {
   return ids;
 });
 
-const isThinking = computed(() => {
-  if (activeBackendKind.value === 'codex') {
-    const status = codexApi.activeTurn.value?.status;
-    return Boolean(status && status !== 'completed' && status !== 'failed' && status !== 'interrupted');
-  }
-  const selected = selectedSessionId.value;
-  const ownStatus = selected ? getSessionStatus(selected) : undefined;
-  return Boolean(
-    ownStatus === 'busy' ||
-    ownStatus === 'retry' ||
-    busyDescendantSessionIds.value.length > 0 ||
-    runningToolIds.size > 0,
-  );
+const { isThinking } = useBackendSessionStatus({
+  activeBackendKind,
+  selectedSessionId,
+  busyDescendantCount: computed(() => busyDescendantSessionIds.value.length),
+  runningToolCount: computed(() => runningToolIds.size),
+  codexActiveTurnStatus: computed(() => codexApi.activeTurn.value?.status),
+  getSessionStatus: (sessionId) => getSessionStatus(sessionId),
 });
 const canAbort = computed(() =>
   Boolean(
@@ -2510,10 +2091,10 @@ const subagentOptions = computed(() => {
 });
 const selectedModelInfo = computed(() => availableModelOptions.value.find((model) => model.id === selectedModel.value));
 const canAttach = computed(() => {
-  if (activeBackendKind.value === 'codex') return Boolean(selectedModelInfo.value?.attachmentCapable);
+  if (activeBackendCapabilities.value.imageAttachmentsOnly) return Boolean(selectedModelInfo.value?.attachmentCapable);
   return availableModelOptions.value.length > 0;
 });
-const attachmentAccept = computed(() => (activeBackendKind.value === 'codex' ? 'image/*' : '*/*'));
+const attachmentAccept = computed(() => (activeBackendCapabilities.value.imageAttachmentsOnly ? 'image/*' : '*/*'));
 const commandOptions = computed(() => {
   const list = commands.value.slice();
   const hasShell = list.some((command) => command.name.toLowerCase() === 'shell');
@@ -3531,14 +3112,12 @@ async function handleProvidersChanged() {
 
 async function fetchGlobalProviderConfig() {
   try {
-    if (activeBackendKind.value === 'codex') {
-      await codexApi.refreshConfig();
-      providerConfig.value = (codexApi.config.value?.config as ProviderConfigState | undefined) ?? null;
-      return;
-    }
     const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
     const data = (await getGlobalConfig()) as ProviderConfigState;
     providerConfig.value = data ?? null;
+    if (activeBackendCapabilities.value.providerConfig && activeBackendCapabilities.value.imageAttachmentsOnly) {
+      await codexApi.refreshConfig();
+    }
   } catch (error) {
     log('Provider config load failed', error);
   }
@@ -3855,7 +3434,7 @@ function normalizeAttachmentMime(mime: string) {
 
 async function handleAddAttachments(files: File[]) {
   const accepted = files.filter((file) => file.size > 0 || file.type.length > 0 || file.name.length > 0);
-  if (activeBackendKind.value === 'codex' && accepted.some((file) => !normalizeAttachmentMime(file.type || '').startsWith('image/'))) {
+  if (activeBackendCapabilities.value.imageAttachmentsOnly && accepted.some((file) => !normalizeAttachmentMime(file.type || '').startsWith('image/'))) {
     setSendStatusKey('app.error.unsupportedAttachment');
     return;
   }
@@ -4076,39 +3655,6 @@ async function handleSaveProject(payload: {
   }
 }
 
-async function createSessionInDirectory(directory: string) {
-  if (activeBackendKind.value === 'codex') {
-    const codexDirectory = normalizeProjectDirectoryForActiveBackend(directory);
-    const existing = codexSessionCreationByDirectory.get(codexDirectory);
-    if (existing) return existing;
-    const creation = (async () => {
-      const thread = await codexApi.startThread(codexDirectory);
-      if (!thread?.id) return undefined;
-      codexPendingSessionLock.value = thread.id;
-      selectedProjectId.value = CODEX_PROJECT_ID;
-      selectedSessionId.value = thread.id;
-      return {
-        id: thread.id,
-        projectID: CODEX_PROJECT_ID,
-        directory: normalizeProjectDirectoryForActiveBackend(thread.cwd || codexDirectory),
-        title: thread.name || thread.preview || thread.id,
-      } as SessionInfo;
-    })().finally(() => {
-      codexSessionCreationByDirectory.delete(codexDirectory);
-    });
-    codexSessionCreationByDirectory.set(codexDirectory, creation);
-    return creation;
-  }
-  const session = await openCodeApi.createSession(directory);
-  if (!session?.id) return undefined;
-  const nextProjectId = (session.projectID || selectedProjectId.value).trim();
-  if (nextProjectId) {
-    selectedProjectId.value = nextProjectId;
-  }
-  selectedSessionId.value = session.id;
-  return session;
-}
-
 async function createWorktreeFromWorktree(worktree: string) {
   if (!ensureConnectionReady(t('app.actions.creatingWorktree'))) return;
   worktreeError.value = '';
@@ -4122,7 +3668,7 @@ async function createWorktreeFromWorktree(worktree: string) {
       projectId: selectedProjectId.value,
     })) as WorktreeInfo;
     if (data && typeof data.directory === 'string') {
-      await createSessionInDirectory(data.directory);
+      await backendSessionLifecycle.createSessionInDirectory(data.directory);
     }
   } catch (error) {
     worktreeError.value = t('app.error.worktreeCreateFailed', { message: toErrorMessage(error) });
@@ -4177,7 +3723,7 @@ async function deleteWorktree(payload: { projectId?: string; worktree: string; d
         selectedProjectId.value = projectId;
         selectedSessionId.value = nextSessionId;
       } else {
-        await createSessionInDirectory(baseDir);
+        await backendSessionLifecycle.createSessionInDirectory(baseDir);
       }
     }
   } catch (error) {
@@ -4187,43 +3733,12 @@ async function deleteWorktree(payload: { projectId?: string; worktree: string; d
   }
 }
 
-async function openProjectPicker() {
-  if (activeBackendKind.value === 'codex') {
-    const home = await codexApi.refreshHomeDir(true);
-    if (home) homePath.value = home;
-  }
-  isProjectPickerOpen.value = true;
-}
-
-async function createNewSession(): Promise<SessionInfo | undefined> {
-  if (!ensureConnectionReady(t('app.actions.creatingSession'))) return undefined;
-  sessionError.value = '';
-  try {
-    const directory = activeDirectory.value.trim();
-    if (!directory) {
-      throw new Error(t('errors.sessionCreateEmptyDirectory'));
-
-    }
-    if (activeBackendKind.value === 'codex') {
-      return await createSessionInDirectory(directory);
-    }
-    const data = await openCodeApi.createSession(directory);
-    if (data && typeof data.id === 'string') {
-      const nextProjectId = (data.projectID || selectedProjectId.value).trim();
-      if (nextProjectId) {
-        selectedProjectId.value = nextProjectId;
-      }
-      selectedSessionId.value = data.id;
-    }
-    return data;
-  } catch (error) {
-    sessionError.value = t('app.error.sessionCreateFailed', { message: toErrorMessage(error) });
-    return undefined;
-  }
-}
-
 async function handleNewSessionInSandbox(payload: { worktree: string; directory: string }) {
-  await createSessionInDirectory(payload.directory);
+  await backendSessionLifecycle.createSessionInDirectory(payload.directory);
+}
+
+function handleOpenProjectDirectory() {
+  void backendSessionLifecycle.openProjectPicker(isProjectPickerOpen);
 }
 
 function handleTopPanelSessionSelect(payload: {
@@ -4259,281 +3774,6 @@ function handleNotificationSessionSelect() {
   const entry = serverState.notifications[nextKey];
   if (!entry) return;
   void switchSessionSelection(entry.projectId.trim(), entry.sessionId.trim());
-}
-
-async function deleteSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
-  if (!ensureConnectionReady(t('app.actions.deletingSession'))) return;
-  sessionError.value = '';
-  if (!sessionId) return;
-  let optimisticProjectId = '';
-  let previousOverride: number | undefined;
-  try {
-    if (activeBackendKind.value === 'codex') {
-      await codexApi.archiveThread(sessionId);
-      if (selectedSessionId.value === sessionId) {
-        selectedSessionId.value = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
-      }
-      return;
-    }
-    const { projectId, directory } = resolveSessionOperationPayload(
-      sessionId,
-      hints?.projectId,
-      hints?.directory,
-    );
-    optimisticProjectId = projectId;
-    previousOverride = getSessionPinnedOverride(projectId, sessionId);
-    clearLocalPinnedSessionOverride(projectId, sessionId);
-    await openCodeApi.deleteSession({
-      sessionId,
-      projectId,
-      directory,
-    });
-  } catch (error) {
-    if (optimisticProjectId) {
-      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-    }
-    sessionError.value = t('app.error.sessionDeleteFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function archiveSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
-  if (!ensureConnectionReady(t('app.actions.archivingSession'))) return;
-  sessionError.value = '';
-  if (!sessionId) return;
-  let optimisticProjectId = '';
-  let previousOverride: number | undefined;
-  try {
-    if (activeBackendKind.value === 'codex') {
-      codexApi.hideThread(sessionId);
-      if (selectedSessionId.value === sessionId) {
-        selectedSessionId.value = codexApi.activeThreadId.value || codexApi.visibleThreads.value[0]?.id || '';
-      }
-      return;
-    }
-    const { projectId, directory } = resolveSessionOperationPayload(
-      sessionId,
-      hints?.projectId,
-      hints?.directory,
-    );
-    optimisticProjectId = projectId;
-    previousOverride = getSessionPinnedOverride(projectId, sessionId);
-    clearLocalPinnedSessionOverride(projectId, sessionId);
-    await openCodeApi.archiveSession({
-      sessionId,
-      projectId,
-      directory,
-    });
-  } catch (error) {
-    if (optimisticProjectId) {
-      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-    }
-    sessionError.value = t('app.error.sessionArchiveFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function unarchiveSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
-  if (!ensureConnectionReady(t('app.actions.unarchivingSession'))) return;
-  sessionError.value = '';
-  if (!sessionId) return;
-  let optimisticProjectId = '';
-  let previousOverride: number | undefined;
-  try {
-    if (activeBackendKind.value === 'codex') {
-      if (codexApi.hiddenThreadIds.value.has(sessionId)) {
-        codexApi.unhideThread(sessionId);
-        selectedProjectId.value = CODEX_PROJECT_ID;
-        selectedSessionId.value = sessionId;
-        await codexApi.selectThread(sessionId);
-      } else {
-        await codexApi.unarchiveThread(sessionId);
-        selectedSessionId.value = codexApi.activeThreadId.value || sessionId;
-      }
-      return;
-    }
-    const { projectId, directory } = resolveSessionOperationPayload(
-      sessionId,
-      hints?.projectId,
-      hints?.directory,
-    );
-    optimisticProjectId = projectId;
-    previousOverride = getSessionPinnedOverride(projectId, sessionId);
-    clearLocalPinnedSessionOverride(projectId, sessionId);
-    await openCodeApi.unarchiveSession({
-      sessionId,
-      projectId,
-      directory,
-    });
-  } catch (error) {
-    if (optimisticProjectId) {
-      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-    }
-    sessionError.value = t('app.error.sessionUnarchiveFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function renameSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
-  if (!ensureConnectionReady(t('app.actions.renamingSession'))) return;
-  sessionError.value = '';
-  if (!sessionId) return;
-  try {
-    const resolved = findSessionInProjects(sessionId);
-    const currentTitle =
-      resolved?.session.title?.trim() ||
-      resolved?.session.slug?.trim() ||
-      sessionId;
-    const nextTitle = await showPrompt(t('topPanel.sessionActions.rename'), currentTitle);
-    if (nextTitle === null) return;
-    const trimmedTitle = nextTitle.trim();
-    if (!trimmedTitle || trimmedTitle === currentTitle) return;
-    if (activeBackendKind.value === 'codex') {
-      await codexApi.setThreadName(sessionId, trimmedTitle);
-      return;
-    }
-    const { projectId, directory } = resolveSessionOperationPayload(
-      sessionId,
-      hints?.projectId,
-      hints?.directory,
-    );
-    await openCodeApi.renameSession({
-      sessionId,
-      projectId,
-      directory,
-      title: trimmedTitle,
-    });
-  } catch (error) {
-    sessionError.value = t('app.error.sessionRenameFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function pinSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
-  if (!ensureConnectionReady(t('app.actions.pinningSession'))) return;
-  sessionError.value = '';
-  if (!sessionId) return;
-  let optimisticProjectId = '';
-  let previousOverride: number | undefined;
-  try {
-    if (activeBackendKind.value === 'codex') {
-      codexApi.pinThread(sessionId);
-      return;
-    }
-    const { projectId, directory } = resolveSessionOperationPayload(
-      sessionId,
-      hints?.projectId,
-      hints?.directory,
-    );
-    optimisticProjectId = projectId;
-    previousOverride = getSessionPinnedOverride(projectId, sessionId);
-    const pinnedAt = Date.now();
-    setLocalPinnedSession(projectId, sessionId, pinnedAt);
-    await openCodeApi.pinSession({
-      sessionId,
-      projectId,
-      directory,
-      pinnedAt,
-    });
-  } catch (error) {
-    if (optimisticProjectId) {
-      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-    }
-    sessionError.value = t('app.error.sessionPinFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function unpinSession(
-  sessionId: string,
-  hints?: { projectId?: string; directory?: string },
-) {
-  if (!sessionId) return;
-
-  if (activeBackendKind.value === 'codex') {
-    codexApi.unpinThread(sessionId);
-    return;
-  }
-
-  const { projectId, directory } = resolveSessionOperationPayload(
-    sessionId,
-    hints?.projectId,
-    hints?.directory,
-  );
-  const sessionKey = pinnedSessionStoreKey(projectId, sessionId);
-  const isDirectlyPinned = sessionKey && localPinnedSessionStore.value[sessionKey] > 0;
-
-  if (!isDirectlyPinned) {
-    // Implicitly pinned via parent project/sandbox: add unpin override and cascade upward
-    const next = { ...localPinnedSessionStore.value };
-    if (sessionKey) next[sessionKey] = -Date.now();
-
-    // Cascade: if no other visible sessions remain in this sandbox, unpin the sandbox
-    if (directory) {
-      const sandboxKey = sandboxPinKey(projectId, directory);
-      const isSandboxDirectlyPinned = sandboxKey && next[sandboxKey] > 0;
-
-      if (!isSandboxDirectlyPinned) {
-        const project = serverState.projects[projectId];
-        const sandbox = project?.sandboxes?.[directory];
-        if (sandbox) {
-          let hasVisibleSession = false;
-          for (const s of Object.values(sandbox.sessions)) {
-            if (s.parentID || s.timeArchived) continue;
-            if (s.id === sessionId) continue;
-            const sKey = pinnedSessionStoreKey(projectId, s.id);
-            const sUnpinned = sKey && next[sKey] < 0;
-            if (sUnpinned) continue;
-            // Session has no unpinned override and would be visible via project/sandbox pin
-            hasVisibleSession = true;
-            break;
-          }
-          if (!hasVisibleSession) {
-            // All sessions in sandbox are unpinned -> unpin sandbox
-            if (sandboxKey) next[sandboxKey] = -Date.now();
-
-            // Cascade further: if no visible sandboxes remain in project, unpin project
-            const projectKey = projectPinKey(projectId);
-            if (projectKey && next[projectKey] > 0 && project) {
-              let hasVisibleSandbox = false;
-              for (const sb of Object.values(project.sandboxes) as SandboxState[]) {
-                const sbKey = sandboxPinKey(projectId, sb.directory);
-                const sbUnpinned = sbKey && next[sbKey] < 0;
-                if (sbUnpinned) continue;
-                const sbDirectlyPinned = sbKey && next[sbKey] > 0;
-                if (sbDirectlyPinned || next[projectKey] > 0) {
-                  hasVisibleSandbox = true;
-                  break;
-                }
-              }
-              if (!hasVisibleSandbox) {
-                delete next[projectKey];
-              }
-            }
-          }
-        }
-      }
-    }
-
-     localPinnedSessionStore.value = next;
-    return;
-  }
-
-  // Directly pinned: use server API
-  if (!ensureConnectionReady(t('app.actions.unpinningSession'))) return;
-  sessionError.value = '';
-  let optimisticProjectId = '';
-  let previousOverride: number | undefined;
-  try {
-    optimisticProjectId = projectId;
-    previousOverride = getSessionPinnedOverride(projectId, sessionId);
-    setLocalUnpinnedSession(projectId, sessionId);
-    await openCodeApi.unpinSession({
-      sessionId,
-      projectId,
-      directory,
-    });
-  } catch (error) {
-    if (optimisticProjectId) {
-      restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-    }
-    sessionError.value = t('app.error.sessionUnpinFailed', { message: toErrorMessage(error) });
-  }
 }
 
 function pinProject(projectId: string) {
@@ -4620,169 +3860,6 @@ function toggleSessionTreeExpand(path: string) {
   writeSessionTreeExpandedPaths(next);
 }
 
-async function runTopPanelBatchSessionActionTarget(
-  action: TopPanelBatchSessionActionPayload['action'],
-  target: TopPanelBatchSessionTarget,
-) {
-  if (activeBackendKind.value === 'codex') {
-    switch (action) {
-      case 'pin':
-        codexApi.pinThread(target.sessionId);
-        return;
-      case 'unpin':
-        codexApi.unpinThread(target.sessionId);
-        return;
-      case 'archive':
-        codexApi.hideThread(target.sessionId);
-        return;
-      case 'unarchive':
-        if (codexApi.hiddenThreadIds.value.has(target.sessionId)) codexApi.unhideThread(target.sessionId);
-        else await codexApi.unarchiveThread(target.sessionId);
-        return;
-      case 'delete':
-        await codexApi.archiveThread(target.sessionId);
-        return;
-      default:
-        throw new Error(`Unsupported Codex batch session action: ${action}`);
-    }
-  }
-  const resolved = findSessionInProjects(target.sessionId);
-  const hints = {
-    projectId: target.projectId || resolved?.projectId,
-    directory: target.directory || resolved?.sandbox.directory,
-  };
-
-  const { projectId, directory } = resolveSessionOperationPayload(
-    target.sessionId,
-    hints.projectId,
-    hints.directory,
-  );
-  const previousOverride = getSessionPinnedOverride(projectId, target.sessionId);
-
-  switch (action) {
-    case 'pin': {
-      const pinnedAt = Date.now();
-      setLocalPinnedSession(projectId, target.sessionId, pinnedAt);
-      try {
-        await openCodeApi.pinSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-          pinnedAt,
-        });
-      } catch (error) {
-        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
-        throw error;
-      }
-      return;
-    }
-    case 'unpin': {
-      setLocalUnpinnedSession(projectId, target.sessionId);
-      try {
-        await openCodeApi.unpinSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-      } catch (error) {
-        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
-        throw error;
-      }
-      return;
-    }
-    case 'archive': {
-      clearLocalPinnedSessionOverride(projectId, target.sessionId);
-      try {
-        await openCodeApi.archiveSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-      } catch (error) {
-        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
-        throw error;
-      }
-      return;
-    }
-    case 'unarchive': {
-      clearLocalPinnedSessionOverride(projectId, target.sessionId);
-      try {
-        await openCodeApi.unarchiveSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-      } catch (error) {
-        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
-        throw error;
-      }
-      return;
-    }
-    case 'delete': {
-      clearLocalPinnedSessionOverride(projectId, target.sessionId);
-      try {
-        await openCodeApi.deleteSession({
-          sessionId: target.sessionId,
-          projectId,
-          directory,
-        });
-      } catch (error) {
-        restoreLocalPinnedSessionOverride(projectId, target.sessionId, previousOverride);
-        throw error;
-      }
-      return;
-    }
-    default:
-      throw new Error(`Unsupported batch session action: ${action}`);
-  }
-}
-
-async function handleTopPanelBatchSessionAction(payload: TopPanelBatchSessionActionPayload) {
-  if (!payload || !Array.isArray(payload.sessions) || payload.sessions.length === 0) return;
-
-  if (!ensureConnectionReady(t('app.actions.batchSessionOperation'))) return;
-
-   if (!isBatchSessionAction(payload.action)) {
-    sessionError.value = t('app.error.batchOperationPartialFailure', {
-      action: 'unknown',
-      failures: 1,
-      total: payload.sessions.length,
-      firstError: `Unsupported batch session action: ${String(payload.action)}`,
-    });
-    return;
-  }
-
-  const targets = normalizeBatchSessionTargets(payload.sessions) as TopPanelBatchSessionTarget[];
-
-  if (targets.length === 0) return;
-
-  sessionError.value = '';
-  const results = await mapWithConcurrency(
-    targets,
-    BATCH_SESSION_ACTION_CONCURRENCY,
-    async (target) => {
-      await runTopPanelBatchSessionActionTarget(payload.action, target);
-    },
-  );
-
-  const failures = results.flatMap((result, index) => {
-    if (result?.status === 'rejected') {
-      return [`${targets[index]?.sessionId}: ${toErrorMessage(result.reason)}`];
-    }
-    return [];
-  });
-
-  if (failures.length > 0) {
-    const firstError = failures[0];
-    sessionError.value = t('app.error.batchOperationPartialFailure', {
-      action: payload.action,
-      failures: failures.length,
-      total: targets.length,
-      firstError,
-    });
-  }
-}
-
 function handleSidePanelSessionSelect(payload: { projectId: string; sessionId: string }) {
   if (!payload?.sessionId) return;
   const projectId = payload.projectId?.trim() || resolveProjectIdForSession(payload.sessionId);
@@ -4792,107 +3869,12 @@ function handleSidePanelSessionSelect(payload: { projectId: string; sessionId: s
 
 function handleSidePanelPinSession(payload: { sessionId: string; projectId: string }) {
   if (!payload?.sessionId) return;
-  void pinSession(payload.sessionId, { projectId: payload.projectId });
+  void backendSessionActions.pinSession(payload.sessionId, { projectId: payload.projectId });
 }
 
 function handleSidePanelUnpinSession(payload: { sessionId: string; projectId: string }) {
   if (!payload?.sessionId) return;
-  void unpinSession(payload.sessionId, { projectId: payload.projectId });
-}
-
-async function forkCodexSession(sessionId: string) {
-  if (activeBackendKind.value !== 'codex' || !sessionId) return;
-  if (!ensureConnectionReady(t('app.actions.fork'))) return;
-  sessionError.value = '';
-  try {
-    setSendStatusKey('app.status.forking');
-    const thread = await codexApi.forkThread(sessionId);
-    if (thread?.id) {
-      selectedProjectId.value = CODEX_PROJECT_ID;
-      selectedSessionId.value = thread.id;
-    }
-    setSendStatusKey('app.status.forked');
-  } catch (error) {
-    sessionError.value = t('app.error.sessionForkFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function rollbackCodexSession(sessionId: string) {
-  if (activeBackendKind.value !== 'codex' || !sessionId) return;
-  if (!ensureConnectionReady(t('app.actions.revert'))) return;
-  sessionError.value = '';
-  try {
-    setSendStatusKey('app.status.reverting');
-    const thread = await codexApi.rollbackThread(sessionId, 1);
-    if (thread?.id) {
-      selectedProjectId.value = CODEX_PROJECT_ID;
-      selectedSessionId.value = thread.id;
-      await codexApi.selectThread(thread.id);
-      await reloadSelectedSessionState(thread.id);
-    }
-    setSendStatusKey('app.status.reverted');
-  } catch (error) {
-    sessionError.value = t('app.error.sessionRevertFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function compactCodexSession(sessionId: string) {
-  if (activeBackendKind.value !== 'codex' || !sessionId) return;
-  const confirmed = await showConfirm(t('codexPanel.compactThreadConfirm'));
-  if (!confirmed) return;
-  sessionError.value = '';
-  try {
-    await codexApi.startThreadCompaction(sessionId);
-  } catch (error) {
-    sessionError.value = toErrorMessage(error);
-  }
-}
-
-async function handleForkMessage(payload: { sessionId: string; messageId: string }) {
-  if (activeBackendKind.value === 'codex') {
-    await forkCodexSession(payload.sessionId);
-    return;
-  }
-  if (!ensureConnectionReady(t('app.actions.fork'))) return;
-  sessionError.value = '';
-  try {
-    setSendStatusKey('app.status.forking');
-    const data = (await openCodeApi.forkSession({
-      sessionId: payload.sessionId,
-      messageId: payload.messageId,
-      directory: activeDirectory.value.trim() || undefined,
-      projectId: selectedProjectId.value,
-    })) as SessionInfo;
-    if (data && typeof data.id === 'string') {
-      seedForkedSessionComposerDraft(payload, data);
-      await switchSessionSelection(selectedProjectId.value, data.id);
-    }
-    setSendStatusKey('app.status.forked');
-  } catch (error) {
-    sessionError.value = t('app.error.sessionForkFailed', { message: toErrorMessage(error) });
-  }
-}
-
-async function handleRevertMessage(payload: { sessionId: string; messageId: string }) {
-  if (activeBackendKind.value === 'codex') {
-    await rollbackCodexSession(payload.sessionId);
-    return;
-  }
-  if (!ensureConnectionReady(t('app.actions.revert'))) return;
-  sessionError.value = '';
-  try {
-    setSendStatusKey('app.status.reverting');
-    await openCodeApi.revertSession({
-      sessionId: payload.sessionId,
-      messageId: payload.messageId,
-      projectId: selectedProjectId.value,
-      directory: activeDirectory.value.trim() || undefined,
-    });
-    setSendStatusKey('app.status.reverted');
-    if (selectedSessionId.value === payload.sessionId) void reloadSelectedSessionState();
-  } catch (error) {
-    sessionError.value = t('app.error.sessionRevertFailed', { message: toErrorMessage(error) });
-  }
+  void backendSessionActions.unpinSession(payload.sessionId, { projectId: payload.projectId });
 }
 
 async function handleUndoRevert() {
@@ -4942,11 +3924,9 @@ async function handleProjectDirectorySelect(directory: string) {
   if (!directory) return;
   const targetDirectory = normalizeProjectDirectoryForActiveBackend(directory);
 
-  if (activeBackendKind.value === 'codex') {
-    const existing = codexApi.visibleThreads.value.find((thread) => (
-      codexThreadDirectoryMatch(thread, targetDirectory)
-    ));
-    const sessionId = existing?.id || (await createSessionInDirectory(targetDirectory))?.id || '';
+  if (activeBackendCapabilities.value.projectPickerCreatesSession) {
+    const existing = codexApi.visibleThreads.value.find((thread) => codexThreadDirectoryMatch(thread, targetDirectory));
+    const sessionId = existing?.id || await backendSessionLifecycle.handleProjectDirectorySelect(targetDirectory);
     if (!sessionId) return;
     if (existing) await codexApi.selectThread(existing.id);
     selectedProjectId.value = CODEX_PROJECT_ID;
@@ -4992,24 +3972,14 @@ async function bootstrapSelections() {
       });
     }
 
-    const initialProjectId = initialQuery.projectId.trim();
-    const initialSessionId = initialQuery.sessionId.trim();
-    if (activeBackendKind.value === 'codex') {
-      selectedProjectId.value = CODEX_PROJECT_ID;
-      const activeSessionId = codexWorkspace.activeSessionId.value;
-      if (!selectedSessionId.value && activeSessionId) selectedSessionId.value = activeSessionId;
-    } else if (initialProjectId && initialSessionId && sessionExistsInProjects(initialProjectId, initialSessionId)) {
-      await switchSessionSelection(initialProjectId, initialSessionId);
-    } else {
-      await initializeSessionSelection();
-    }
+    await backendSelectionBootstrap.bootstrapSelection();
 
   } finally {
     isBootstrapping.value = false;
     const deferredSessionId = deferredSessionReloadId.value;
     if (deferredSessionId && deferredSessionId === selectedSessionId.value) {
       deferredSessionReloadId.value = null;
-      void reloadSelectedSessionState(deferredSessionId);
+      void backendSessionReload.reloadSelectedSessionState(deferredSessionId);
     }
   }
 }
@@ -5021,9 +3991,8 @@ async function fetchProviders(force = false) {
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const data = activeBackendKind.value === 'codex'
-      ? (await codexApi.listProviders()) as ProviderResponse
-      : (await requireBackendMethod(backend().listProviders, 'providers')()) as ProviderResponse;
+    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
+    const data = (await listProviders()) as ProviderResponse;
     providers.value = Array.isArray(data.all) ? data.all : [];
     connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
@@ -5375,10 +4344,10 @@ function scheduleDescendantSessionHistoryHydration(
   reloadRequestId: number,
 ) {
   requestAnimationFrame(() => {
-    if (reloadRequestId !== sessionReloadRequestId) return;
+    if (reloadRequestId !== sessionReloadRequestId.value) return;
     if (selectedSessionId.value !== rootSessionId) return;
     void fetchDescendantSessionHistories(rootSessionId, rootRequestId).then(() => {
-      if (reloadRequestId !== sessionReloadRequestId) return;
+      if (reloadRequestId !== sessionReloadRequestId.value) return;
       if (selectedSessionId.value !== rootSessionId) return;
       hydratedDescendantSessionIds.add(rootSessionId);
       void reloadTodosForAllowedSessions();
@@ -5887,7 +4856,7 @@ function connectShellSocket(ptyId: string) {
       setTimeout(() => removeShellWindow(ptyId), SHELL_LINGER_MS);
       return;
     }
-    if (activeBackendKind.value === 'codex') {
+    if (activeBackendCapabilities.value.ptyExitRequiresSyntheticEvent) {
       if (typeof session.exitCode === 'number') {
         if (session.closeOnSuccess && session.exitCode === 0) {
           lingerAndRemoveShellWindow(ptyId);
@@ -6534,213 +5503,6 @@ async function sendCommand(sessionId: string, command: CommandInfo, commandArgs:
   });
 }
 
-async function sendMessage() {
-  if (!ensureConnectionReady(t('app.actions.sending'))) return;
-  if (!canSend.value) return;
-  const text = messageInput.value.trim();
-  const hasText = text.length > 0;
-  const hasAttachments = attachments.value.length > 0;
-  let sessionId = selectedSessionId.value;
-  if ((!hasText && !hasAttachments) || !sessionId) return;
-  if (!filteredSessions.value.some((session) => session.id === sessionId)) {
-    const fallbackId = pickPreferredSessionId(filteredSessions.value);
-    const fallback = fallbackId
-      ? filteredSessions.value.find((session) => session.id === fallbackId)
-      : filteredSessions.value[0];
-    if (!fallback) {
-      setSendStatusKey('app.error.noSessionSelected');
-      return;
-    }
-    selectedSessionId.value = fallback.id;
-    sessionId = fallback.id;
-  }
-  const slash = hasText ? parseSlashCommand(text) : null;
-  const commandMatch = slash ? findCommandByName(slash.name) : null;
-  if (activeBackendKind.value === 'codex') {
-    const codexDirectory = normalizeProjectDirectoryForActiveBackend(activeDirectory.value.trim());
-    if (hasText) {
-      recentUserInputs.push({ text, time: Date.now() });
-      while (recentUserInputs.length > 20) recentUserInputs.shift();
-    }
-    messageInput.value = '';
-    enableFollow();
-    isSending.value = true;
-    setSendStatusKey('app.status.sending');
-    try {
-      if (slash && slash.name.toLowerCase() === 'shell') {
-        if (!await openShellFromInput(slash.arguments ?? '')) return;
-        setSendStatusKey('app.status.shellReady');
-        clearComposerDraftForCurrentContext();
-        return;
-      }
-      if (slash && slash.name.toLowerCase() === 'debug') {
-        const debugResult = runDebugCommand(slash.arguments ?? '');
-        setSendStatusText(debugResult.message);
-        clearComposerDraftForCurrentContext();
-        return;
-      }
-      const atAgent = hasText ? parseAtAgent(text) : null;
-      const messageText = atAgent ? atAgent.text : text;
-      const codexInput: CodexTurnInputItem[] = [];
-      if (messageText) codexInput.push({ type: 'text', text: messageText });
-      for (const item of attachments.value) {
-        if (item.lineComment) {
-          codexInput.push({
-            type: 'text',
-            text: formatCommentNote(
-              item.lineComment.path,
-              item.lineComment.startLine,
-              item.lineComment.endLine,
-              item.lineComment.text,
-            ),
-          });
-          continue;
-        }
-        if (!item.mime.startsWith('image/')) {
-          setSendStatusKey('app.error.unsupportedAttachment');
-          return;
-        }
-        codexInput.push({ type: 'image', url: item.dataUrl });
-      }
-      const prompt = codexInput
-        .filter((item): item is Extract<CodexTurnInputItem, { type: 'text' }> => item.type === 'text')
-        .map((item) => item.text)
-        .join('\n\n');
-      const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
-      const selectedModelIDs = selectedInfo
-        ? { providerID: selectedInfo.providerID?.trim() ?? '', modelID: selectedInfo.modelID.trim() }
-        : parseProviderModelKey(selectedModel.value);
-      const selectedCodexModelKey = selectedInfo?.id || selectedModel.value.trim();
-      const selectedCodexModel = selectedModelIDs.modelID || (!selectedCodexModelKey.includes('/') ? selectedCodexModelKey : undefined);
-      const selectedCodexProvider = selectedModelIDs.providerID || (selectedCodexModel ? CODEX_PROJECT_ID : '');
-      const startNewCodexThread = selectedCodexProvider
-        ? shouldStartNewCodexThreadForProvider(sessionId, selectedCodexProvider)
-        : false;
-      if (selectedCodexProvider && selectedCodexModel) {
-        await syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);
-      }
-      if (selectedCodexModelKey) codexApi.selectModel(selectedCodexModelKey);
-      await codexApi.sendPrompt(prompt, {
-        threadId: startNewCodexThread ? undefined : sessionId,
-        forceNewThread: startNewCodexThread,
-        cwd: codexDirectory,
-        model: selectedCodexModel,
-        effort: selectedThinking.value,
-        input: codexInput,
-      });
-      await codexApi.refreshThreads();
-      if (codexApi.activeThreadId.value) {
-        if (startNewCodexThread) codexPendingSessionLock.value = codexApi.activeThreadId.value;
-        selectedSessionId.value = codexApi.activeThreadId.value;
-      }
-      attachments.value = [];
-      clearComposerDraftForCurrentContext();
-      setSendStatusKey('app.status.sent');
-    } catch (error) {
-      setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
-    } finally {
-      isSending.value = false;
-    }
-    return;
-  }
-  const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
-  const selectedModelIDs = parseProviderModelKey(selectedModel.value);
-  const providerID = selectedInfo?.providerID ?? (selectedModelIDs.providerID || undefined);
-  const modelID = selectedInfo?.modelID ?? (selectedModelIDs.modelID || undefined);
-  if (!providerID || !modelID || !isProviderEnabled(providerID) || !isModelAvailable(selectedModel.value)) {
-    ensureSelectedModelAvailable();
-    setSendStatusText('Select an enabled provider/model before sending.');
-    return;
-  }
-  if (hasText) {
-    recentUserInputs.push({ text, time: Date.now() });
-    while (recentUserInputs.length > 20) recentUserInputs.shift();
-  }
-  messageInput.value = '';
-  enableFollow();
-  isSending.value = true;
-  setSendStatusKey('app.status.sending');
-  try {
-    if (slash && slash.name.toLowerCase() === 'shell') {
-      if (!await openShellFromInput(slash.arguments ?? '')) return;
-      setSendStatusKey('app.status.shellReady');
-      clearComposerDraftForCurrentContext();
-      return;
-    }
-    if (slash && slash.name.toLowerCase() === 'debug') {
-      const debugResult = runDebugCommand(slash.arguments ?? '');
-      setSendStatusText(debugResult.message);
-      clearComposerDraftForCurrentContext();
-      return;
-    }
-    if (slash && commandMatch) {
-      await sendCommand(sessionId, commandMatch, slash.arguments ?? '');
-      setSendStatusKey('app.status.sent');
-      clearComposerDraftForCurrentContext();
-      return;
-    }
-    // Parse @agent syntax after slash command handling
-    const atAgent = hasText ? parseAtAgent(text) : null;
-    const agentMatch = atAgent ? findAgentByName(atAgent.agent) : null;
-    const directory = requireSelectedWorktree('send');
-    if (!directory) return;
-    const parts = [] as Array<Record<string, unknown>>;
-    // Use remaining text after @agent (or original text if no @agent)
-    const messageText = atAgent ? atAgent.text : text;
-    if (hasText && messageText) parts.push({ type: 'text', text: messageText });
-    if (hasAttachments) {
-      for (const item of attachments.value) {
-        if (item.lineComment) {
-          parts.push({
-            type: 'text',
-            text: formatCommentNote(
-              item.lineComment.path,
-              item.lineComment.startLine,
-              item.lineComment.endLine,
-              item.lineComment.text,
-            ),
-          });
-          parts.push({
-            type: 'file',
-            mime: 'text/plain',
-            url: buildLineCommentFileUrl(
-              item.lineComment.path,
-              item.lineComment.startLine,
-              item.lineComment.endLine,
-            ),
-            filename: item.filename.split(':')[0] || item.filename,
-          });
-        } else {
-          parts.push({
-            type: 'file',
-            mime: item.mime,
-            url: item.dataUrl,
-            filename: item.filename,
-          });
-        }
-      }
-    }
-    const sendPromptAsync = requireBackendMethod(backend().sendPromptAsync, 'session prompt sending');
-    await sendPromptAsync(sessionId, {
-      directory,
-      agent: agentMatch?.name ?? selectedMode.value,
-      model: {
-        providerID,
-        modelID: modelID || '',
-      },
-      variant: selectedThinking.value,
-      parts,
-    });
-    setSendStatusKey('app.status.sent');
-    attachments.value = [];
-    clearComposerDraftForCurrentContext();
-  } catch (error) {
-    setSendStatusKey('app.error.sendFailed', { message: toErrorMessage(error) });
-  } finally {
-    isSending.value = false;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Alt-Arrow session / project navigation helpers
 // ---------------------------------------------------------------------------
@@ -6818,7 +5580,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   // Ctrl-;: new chat
   if (event.ctrlKey && !event.metaKey && !event.altKey && event.key === ';') {
     event.preventDefault();
-    createNewSession();
+    backendSessionLifecycle.createNewSession();
     return;
   }
 
@@ -6843,7 +5605,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   // Alt-N: new session
   if (event.altKey && !event.ctrlKey && !event.metaKey && event.key.toLowerCase() === 'n') {
     event.preventDefault();
-    createNewSession();
+    backendSessionLifecycle.createNewSession();
     return;
   }
 
@@ -6897,7 +5659,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   if (now - lastEscTime < DOUBLE_ESC_THRESHOLD) {
     lastEscTime = 0;
     if (canAbort.value) {
-      abortSession();
+      backendSessionLifecycle.abortSession();
     }
   } else {
     lastEscTime = now;
@@ -6906,35 +5668,6 @@ function handleGlobalKeydown(event: KeyboardEvent) {
 
 function focusInput() {
   nextTick(() => inputPanelRef.value?.focus());
-}
-
-async function abortSession() {
-  if (!ensureConnectionReady(t('app.actions.stopping'))) return;
-  const sessionId = selectedSessionId.value;
-  if (!sessionId || isAborting.value) return;
-  isAborting.value = true;
-  setSendStatusKey('app.status.stopping');
-  try {
-    if (activeBackendKind.value === 'codex') {
-      await codexApi.interruptActiveTurn();
-      setSendStatusKey('app.status.stopped');
-      return;
-    }
-    const directory = activeDirectory.value.trim();
-    const busyDescendants = busyDescendantSessionIds.value;
-    const abortPromises = [
-      requireBackendMethod(backend().abortSession, 'session abort')(sessionId, directory || undefined),
-      ...busyDescendants.map((sid) =>
-      requireBackendMethod(backend().abortSession, 'session abort')(sid, directory || undefined).catch(() => {}),
-      ),
-    ];
-    await Promise.all(abortPromises);
-    setSendStatusKey('app.status.stopped');
-  } catch (error) {
-    setSendStatusKey('app.error.stopFailed', { message: toErrorMessage(error) });
-  } finally {
-    isAborting.value = false;
-  }
 }
 
 watch(
@@ -6982,7 +5715,7 @@ watch(
         selectedProjectId.value = nextProjectId;
         selectedSessionId.value = nextSessionId;
       } else if (nextDirectory && activeBackendKind.value !== 'codex') {
-        void createSessionInDirectory(nextDirectory);
+        void backendSessionLifecycle.createSessionInDirectory(nextDirectory);
       }
     }
 
@@ -7048,99 +5781,6 @@ function waitForPendingRenders(timeoutMs = 30000): Promise<void> {
       { immediate: true },
     );
   });
-}
-
-async function reloadSelectedSessionState(newId?: string, oldId?: string) {
-  const reloadRequestId = ++sessionReloadRequestId;
-  if (newId && isBootstrapping.value && !activeDirectory.value) {
-    deferredSessionReloadId.value = newId;
-    return;
-  }
-  if (newId) {
-    deferredSessionReloadId.value = null;
-  }
-  fw.closeAll({ exclude: (key) => key.startsWith('shell:') });
-  await nextTick();
-  if (oldId) {
-    msg.saveSessionState(oldId);
-  }
-  if (newId) {
-    const sessionId = newId;
-    if (activeBackendKind.value === 'codex') {
-      isLoadingHistory.value = true;
-      try {
-        let nextHistory = codexWorkspace.history.value;
-        if (codexApi.activeThreadId.value !== sessionId) {
-          await codexApi.selectThread(sessionId);
-          nextHistory = codexWorkspace.history.value;
-        } else if (nextHistory.length === 0) {
-          await codexApi.selectThread(sessionId);
-          nextHistory = codexWorkspace.history.value;
-        }
-        msg.reset();
-        resetFollow();
-        reasoning.reset();
-        subagentWindows.reset();
-        retryStatus.value = null;
-        await nextTick();
-        msg.loadHistory(nextHistory);
-        reapplyCodexSharedBackfill();
-      } finally {
-        if (reloadRequestId === sessionReloadRequestId) {
-          isLoadingHistory.value = false;
-        }
-      }
-      if (reloadRequestId !== sessionReloadRequestId) return;
-      await anchorOutputToBottom();
-      if (reloadRequestId !== sessionReloadRequestId) return;
-      nextTick(() => inputPanelRef.value?.focus());
-      return;
-    }
-    msg.reset();
-    resetFollow();
-    reasoning.reset();
-    subagentWindows.reset();
-    retryStatus.value = null;
-    await nextTick();
-    const cacheHit = msg.tryLoadFromCache(sessionId);
-    const descendantsHydrated = hydratedDescendantSessionIds.has(sessionId);
-    if (!cacheHit) {
-      hydratedDescendantSessionIds.delete(sessionId);
-      isLoadingHistory.value = true;
-      let rootHistoryRequestId = 0;
-      try {
-        rootHistoryRequestId = await fetchRootSessionHistory(sessionId);
-        // Allow one paint frame so that useAssistantPreRenderer's
-        // watchEffect fires and submits worker tasks before we wait.
-        await new Promise((resolve) => requestAnimationFrame(resolve));
-        await waitForPendingRenders();
-        if (reloadRequestId === sessionReloadRequestId) {
-          scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
-        }
-      } catch {
-        // Render timeout or error — still show what we have
-      } finally {
-        if (reloadRequestId === sessionReloadRequestId) {
-          isLoadingHistory.value = false;
-        }
-      }
-    } else if (!descendantsHydrated) {
-      const rootHistoryRequestId = reserveRootHistoryRequestId();
-      scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
-    }
-    if (reloadRequestId !== sessionReloadRequestId) return;
-    await anchorOutputToBottom();
-    if (reloadRequestId !== sessionReloadRequestId) return;
-    if (uiInitState.value === 'ready') {
-      await restoreShellSessions();
-    }
-    void reloadTodosForAllowedSessions();
-    const directory = activeDirectory.value || undefined;
-    void fetchPendingPermissions(directory);
-    void fetchPendingQuestions(directory);
-  }
-  if (reloadRequestId !== sessionReloadRequestId) return;
-  nextTick(() => inputPanelRef.value?.focus());
 }
 
 watch(
@@ -7418,8 +6058,6 @@ msg.bindScope(sessionScope);
 reasoning.bindScope(sessionScope);
 subagentWindows.bindScope(sessionScope);
 
-watch(selectedSessionId, (newId, oldId) => reloadSelectedSessionState(newId, oldId), { immediate: true });
-
 watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelectionToWorker, {
   immediate: true,
 });
@@ -7448,149 +6086,23 @@ watchEffect(() => {
   setActiveBackendKind(credentials.backendKind.value);
 });
 
-watch(
-  () => codexWorkspace.history.value,
-  (history) => {
-    if (activeBackendKind.value !== 'codex') return;
-    if (!selectedSessionId.value) return;
-    msg.loadHistory(history);
-    reapplyCodexSharedBackfill();
-  },
-);
-
-let lastRealtimeQueueSignature = '';
 const lastCodexRealtimeToolWindowSignature = new Map<string, string>();
 const codexPendingSessionLock = ref('');
-
-function matchesActiveCodexRealtimeSession(sessionId: string) {
-  const target = selectedSessionId.value;
-  if (!target) return false;
-  if (sessionId === target) return true;
-  if (codexPendingSessionLock.value && sessionId === 'codex-pending' && target === codexPendingSessionLock.value) return true;
-  return false;
-}
-
-watch(
-  () => codexApi.realtimeHistoryQueue.value.map((entry) => `${entry.info.id}:${entry.parts.map((part) => {
-    if (part.type === 'tool') {
-      const output = part.state.status === 'completed'
-        ? part.state.output
-        : part.state.status === 'error'
-          ? part.state.error
-          : part.state.status === 'running'
-            ? part.state.metadata?.output || ''
-            : '';
-      return `${part.id}:${part.state.status}:${output}`;
-    }
-    if (part.type === 'text' || part.type === 'reasoning') {
-      return `${part.id}:${part.text}`;
-    }
-    return part.id;
-  }).join(',')}`).join('|'),
-  (signature) => {
-    if (activeBackendKind.value !== 'codex') return;
-    if (!selectedSessionId.value) return;
-    if (!signature || signature === lastRealtimeQueueSignature) {
-      lastRealtimeQueueSignature = signature;
-      return;
-    }
-    lastRealtimeQueueSignature = signature;
-    if (codexApi.realtimeHistoryQueue.value.length > 0) {
-      for (const [provisionalId, finalizedId] of Object.entries(codexApi.realtimeMessageAliases.value)) {
-        if (!provisionalId || !finalizedId || provisionalId === finalizedId) continue;
-        msg.removeMessage(provisionalId);
-      }
-      const realtimeEntries = codexApi.realtimeHistoryQueue.value.filter((entry) => matchesActiveCodexRealtimeSession(entry.info.sessionID));
-      for (const entry of realtimeEntries) {
-        msg.updateMessage(entry.info);
-        for (const part of entry.parts) {
-          msg.updatePart(part);
-        }
-      }
-      syncRealtimeCodexToolWindows(realtimeEntries);
-    }
-  },
-);
-
-watch(selectedSessionId, () => {
-  lastRealtimeQueueSignature = '';
-  lastCodexRealtimeToolWindowSignature.clear();
+const codexMessageBridge = useCodexMessageBridge({
+  activeBackendKind,
+  selectedSessionId,
+  codexPendingSessionLock,
+  history: computed(() => codexWorkspace.history.value),
+  codexApi,
+  msg,
+  syncRealtimeToolWindows: syncRealtimeCodexToolWindows,
+  updateReasoningExpiry,
 });
 
-watch(
-  () => codexApi.realtimeStreamingPart.value,
-  (streaming) => {
-    if (activeBackendKind.value !== 'codex') return;
-    if (!selectedSessionId.value) return;
-    if (!streaming) return;
-    if (!matchesActiveCodexRealtimeSession(streaming.info.sessionID)) return;
-    const { info, part } = streaming;
-    msg.updateMessage(info);
-    msg.updatePart(part);
-    if (part.time?.end) updateReasoningExpiry(part.sessionID, 'idle');
-  },
-);
-
-watch(
-  () => codexApi.realtimeReasoningPart.value,
-  (reasoning) => {
-    if (activeBackendKind.value !== 'codex') return;
-    if (!selectedSessionId.value) return;
-    if (!reasoning) return;
-    if (!matchesActiveCodexRealtimeSession(reasoning.info.sessionID)) return;
-    const { info, part } = reasoning;
-    const reasoningMessageId = part.messageID;
-    void reasoningMessageId;
-    msg.updateMessage(info);
-    msg.updatePart(part);
-    updateReasoningExpiry(part.sessionID, part.time?.end ? 'idle' : 'busy');
-  },
-);
-
-watch(
-  () => codexApi.realtimeToolParts.value,
-  (toolParts) => {
-    if (activeBackendKind.value !== 'codex') return;
-    if (!selectedSessionId.value) return;
-    for (const { info, part } of toolParts.filter(({ info }) => matchesActiveCodexRealtimeSession(info.sessionID))) {
-      const toolMessageId = part.messageID;
-      void toolMessageId;
-      msg.updateMessage(info);
-      msg.updatePart(part);
-      if (shouldRenderToolWindow(part.tool) && !suppressAutoWindows.value) {
-        openToolPartAsWindow(part);
-        const windowKey = part.callID || part.id;
-        fw.updateOptions(windowKey, {
-          status:
-            part.state.status === 'running' || part.state.status === 'completed' || part.state.status === 'error'
-              ? part.state.status
-              : undefined,
-        });
-      }
-    }
-  },
-  { deep: true },
-);
-
-watch(
-  () => codexApi.tokenUsage.value,
-  (usage) => {
-    if (activeBackendKind.value !== 'codex') return;
-    if (!selectedSessionId.value) return;
-    applyCodexTokenUsageToSharedMessages(usage);
-  },
-  { deep: true },
-);
-
-watch(
-  () => codexApi.diffState.value,
-  (state) => {
-    if (activeBackendKind.value !== 'codex') return;
-    if (!selectedSessionId.value) return;
-    applyCodexDiffStateToSharedMessages(state);
-  },
-  { deep: true },
-);
+watch(selectedSessionId, () => {
+  codexMessageBridge.resetRealtimeQueueSignature();
+  lastCodexRealtimeToolWindowSignature.clear();
+});
 
 function backend() {
   return getActiveBackendAdapter();
@@ -7601,8 +6113,10 @@ const ptySupported = computed(() => {
   return Boolean(active.createPty && active.createPtyWebSocketUrl && active.deletePty);
 });
 
+const activeBackendCapabilities = computed(() => backend().capabilities);
+
 const projectPickerHomePath = computed(() => (
-  activeBackendKind.value === 'codex'
+  activeBackendCapabilities.value.projectPickerCreatesSession
     ? (codexApi.homeDir.value || homePath.value)
     : homePath.value
 ));
@@ -7635,128 +6149,199 @@ function codexThreadDirectoryMatch(thread: { cwd?: string; gitInfo?: { root?: st
   return Boolean(root) && root === target;
 }
 
-function findCodexHistoryMessage<TMessage extends AssistantMessageInfo | UserMessageInfo>(
-  predicate: (info: AssistantMessageInfo | UserMessageInfo) => info is TMessage,
-): TMessage | null {
-  const history = codexWorkspace.history.value;
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    const entry = history[index];
-    if (!entry) continue;
-    if (predicate(entry.info as AssistantMessageInfo | UserMessageInfo)) return entry.info as TMessage;
-  }
-  return null;
-}
-
-function parseCodexDiffEntries(diffText: string): MessageDiffEntry[] {
-  const trimmed = diffText.trim();
-  if (!trimmed) return [];
-  const chunks = trimmed.split(/(?=^diff --git )/m).map((chunk) => chunk.trim()).filter(Boolean);
-  if (chunks.length === 0) {
-    return [{ file: 'changes.diff', diff: trimmed }];
-  }
-  return chunks.map((chunk, index) => {
-    const match = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-    const file = match?.[2] || match?.[1] || `changes-${index + 1}.diff`;
-    return { file, diff: chunk };
-  });
-}
-
-function applyCodexTokenUsageToSharedMessages(rawUsage: unknown) {
-  const usage = rawUsage && typeof rawUsage === 'object' ? rawUsage as Record<string, unknown> : null;
-  if (!usage) return;
-  const assistantInfo = findCodexHistoryMessage((info): info is AssistantMessageInfo => info.role === 'assistant');
-  if (!assistantInfo) return;
-  const input = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
-  const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
-  const reasoning = typeof usage.reasoningTokens === 'number' ? usage.reasoningTokens : 0;
-  const total = typeof usage.totalTokens === 'number' ? usage.totalTokens : input + output + reasoning;
-  const updated: AssistantMessageInfo = {
-    ...assistantInfo,
-    tokens: {
-      ...assistantInfo.tokens,
-      input,
-      output,
-      reasoning,
-      total,
-      cache: assistantInfo.tokens.cache,
-    },
-  };
-  msg.updateMessage(updated);
-}
-
-function applyCodexDiffStateToSharedMessages(state: { threadId: string; turnId: string; diff: string } | null) {
-  if (!state?.turnId || !state.diff.trim()) return;
-  const userInfo = findCodexHistoryMessage((info): info is UserMessageInfo => info.role === 'user' && info.id.startsWith(`${state.turnId}:user:`));
-  if (!userInfo) return;
-  const updated: UserMessageInfo = {
-    ...userInfo,
-    summary: {
-      ...userInfo.summary,
-      diffs: parseCodexDiffEntries(state.diff).map((entry) => ({
-        file: entry.file,
-        patch: entry.diff,
-        additions: 0,
-        deletions: 0,
-      })),
-    },
-  };
-  msg.updateMessage(updated);
-}
-
-function reapplyCodexSharedBackfill() {
-  if (activeBackendKind.value !== 'codex') return;
-  if (!selectedSessionId.value) return;
-  applyCodexTokenUsageToSharedMessages(codexApi.tokenUsage.value);
-  applyCodexDiffStateToSharedMessages(codexApi.diffState.value);
-}
-
 function splitFileContentPathForActiveBackend(targetPath: string, sandboxDirectory: string | null) {
   return splitFileContentDirectoryAndPath(targetPath, sandboxDirectory, {
-    strictSandbox: activeBackendKind.value === 'codex',
+    strictSandbox: activeBackendCapabilities.value.strictSandboxPaths,
   });
 }
 
-watch(
-  [
-    activeBackendKind,
-    () => codexWorkspace.project.value,
-    () => codexWorkspace.activeSessionId.value,
-    () => codexApi.homeDir.value,
-  ],
-  ([backendKind, project, activeSessionId, homeDir]) => {
-    if (backendKind !== 'codex') return;
-    Object.keys(serverState.projects).forEach((key) => {
-      if (key !== CODEX_PROJECT_ID) delete serverState.projects[key];
-    });
-    serverState.projects[CODEX_PROJECT_ID] = project;
-    serverState.bootstrapped.value = true;
-    selectedProjectId.value = CODEX_PROJECT_ID;
-    const projectSandboxes = project.sandboxes;
-    const hasSelectedSession = Boolean(
-      selectedSessionId.value && Object.values(projectSandboxes).some((sandbox) => sandbox.sessions[selectedSessionId.value]),
-    );
-    if (codexPendingSessionLock.value && hasSelectedSession && selectedSessionId.value === codexPendingSessionLock.value) {
-      codexPendingSessionLock.value = '';
-    }
-    if (shouldPreservePendingCodexSelection({
-      pendingSessionLock: codexPendingSessionLock.value,
-      selectedSessionId: selectedSessionId.value,
-      projectSandboxes,
-    })) {
-      if (homeDir && homePath.value !== homeDir) {
-        homePath.value = homeDir;
-      }
-      return;
-    }
-    if (!hasSelectedSession && activeSessionId && selectedSessionId.value !== activeSessionId) {
-      selectedSessionId.value = activeSessionId;
-    }
-    if (homeDir && homePath.value !== homeDir) {
-      homePath.value = homeDir;
-    }
+useCodexWorkspaceSync({
+  activeBackendKind,
+  codexProject: computed(() => codexWorkspace.project.value),
+  codexActiveSessionId: computed(() => codexWorkspace.activeSessionId.value),
+  codexHomeDir: computed(() => codexApi.homeDir.value),
+  serverProjects: serverState.projects,
+  serverBootstrapped: serverState.bootstrapped,
+  selectedProjectId,
+  selectedSessionId,
+  homePath,
+  codexPendingSessionLock,
+});
+
+const backendSessionActions = useBackendSessionActions({
+  activeBackendKind,
+  codexProjectId: CODEX_PROJECT_ID,
+  selectedProjectId,
+  selectedSessionId,
+  activeDirectory,
+  localPinnedSessionStore,
+  serverProjects: serverState.projects,
+  openCodeApi,
+  codexApi,
+  ensureConnectionReady,
+  setSessionError: (message) => {
+    sessionError.value = message;
   },
-  { immediate: true },
-);
+  clearSessionError: () => {
+    sessionError.value = '';
+  },
+  toErrorMessage,
+  translate: t,
+  showPrompt,
+  showConfirm,
+  findSessionInProjects,
+  resolveProjectIdForSession,
+  resolveSessionOperationPayload,
+  getSessionPinnedOverride,
+  setLocalPinnedSession,
+  setLocalUnpinnedSession,
+  clearLocalPinnedSessionOverride,
+  restoreLocalPinnedSessionOverride,
+  switchSessionSelection,
+  reloadSelectedSessionState: async (newId?: string, oldId?: string) => {
+    await backendSessionReload.reloadSelectedSessionState(newId, oldId);
+  },
+  seedForkedSessionComposerDraft,
+  setSendStatusKey,
+  batchConcurrency: BATCH_SESSION_ACTION_CONCURRENCY,
+});
+
+const backendSessionLifecycle = useBackendSessionLifecycle({
+  activeBackendKind,
+  codexProjectId: CODEX_PROJECT_ID,
+  selectedProjectId,
+  selectedSessionId,
+  activeDirectory,
+  homePath,
+  codexPendingSessionLock,
+  codexSessionCreationByDirectory,
+  openCodeApi,
+  codexApi,
+  normalizeProjectDirectoryForActiveBackend,
+  codexThreadDirectoryMatch,
+  ensureConnectionReady,
+  translate: t,
+  toErrorMessage,
+  setSessionError: (message) => {
+    sessionError.value = message;
+  },
+  clearSessionError: () => {
+    sessionError.value = '';
+  },
+  setSendStatusKey,
+  isAborting,
+  busyDescendantSessionIds,
+  backendAbortSession: backend().abortSession,
+});
+
+const backendSessionReload = useBackendSessionReload({
+  activeBackendKind,
+  activeDirectory,
+  uiInitState,
+  isBootstrapping,
+  isLoadingHistory,
+  deferredSessionReloadId,
+  sessionReloadRequestId,
+  hydratedDescendantSessionIds,
+  msg,
+  fwCloseAll: () => {
+    fw.closeAll({ exclude: (key) => key.startsWith('shell:') });
+  },
+  resetFollow,
+  reasoningReset: () => {
+    reasoning.reset();
+  },
+  subagentWindowsReset: () => {
+    subagentWindows.reset();
+  },
+  clearRetryStatus: () => {
+    retryStatus.value = null;
+  },
+  codexApi,
+  codexHistory: computed(() => codexWorkspace.history.value),
+  codexReapplyBackfill: codexMessageBridge.reapplyCodexSharedBackfill,
+  fetchRootSessionHistory,
+  waitForPendingRenders,
+  reserveRootHistoryRequestId,
+  scheduleDescendantSessionHistoryHydration,
+  anchorOutputToBottom,
+  restoreShellSessions,
+  reloadTodosForAllowedSessions,
+  fetchPendingPermissions,
+  fetchPendingQuestions,
+  focusInput,
+});
+
+watch(selectedSessionId, (newId, oldId) => backendSessionReload.reloadSelectedSessionState(newId, oldId), { immediate: true });
+
+const backendMessageSend = useBackendMessageSend({
+  activeBackendKind,
+  codexProjectId: CODEX_PROJECT_ID,
+  selectedSessionId,
+  selectedModel,
+  selectedMode,
+  selectedThinking,
+  activeDirectory,
+  messageInput,
+  attachments,
+  recentUserInputs,
+  filteredSessions,
+  canSend,
+  isSending,
+  codexPendingSessionLock,
+  modelOptions,
+  commands,
+  agents,
+  providerConfig,
+  hiddenModels,
+  openCodeApi: {
+    sendPromptAsync: async (sessionId, payload) => {
+      const sendPromptAsync = requireBackendMethod(backend().sendPromptAsync, 'session prompt sending');
+      await sendPromptAsync(sessionId, payload);
+    },
+  },
+  codexApi,
+  ensureConnectionReady,
+  translate: t,
+  toErrorMessage,
+  parseSlashCommand,
+  findCommandByName,
+  findAgentByName,
+  parseAtAgent,
+  runDebugCommand,
+  openShellFromInput,
+  clearComposerDraftForCurrentContext,
+  enableFollow,
+  setSendStatusKey,
+  setSendStatusText,
+  pickPreferredSessionId,
+  normalizeProjectDirectoryForActiveBackend,
+  parseProviderModelKey,
+  syncCodexActiveProviderModel,
+  shouldStartNewCodexThreadForProvider,
+  isProviderEnabled,
+  isModelAvailable,
+  ensureSelectedModelAvailable,
+  requireSelectedWorktree,
+  sendCommand,
+  buildLineCommentFileUrl,
+  formatCommentNote,
+});
+
+const backendSelectionBootstrap = useBackendSelectionBootstrap({
+  activeBackendKind,
+  codexProjectId: CODEX_PROJECT_ID,
+  selectedProjectId,
+  selectedSessionId,
+  codexActiveSessionId: computed(() => codexWorkspace.activeSessionId.value),
+  initialProjectId: () => initialQuery.projectId,
+  initialSessionId: () => initialQuery.sessionId,
+  sessionExistsInProjects,
+  switchSessionSelection,
+  initializeSessionSelection: async () => {
+    await initializeSessionSelection();
+  },
+});
 
 function formatToolValue(value: unknown) {
   if (typeof value === 'string') return value;
@@ -8994,7 +7579,7 @@ function handlePtyEvent(event: {
     }
     const session = shellSessionsByPtyId.get(ptyId);
     if (session) session.exitCode = exitCode;
-    if (activeBackendKind.value === 'codex' && session?.closeOnSuccess && exitCode === 0) {
+    if (activeBackendCapabilities.value.ptyRefreshArtifactsOnSuccess && session?.closeOnSuccess && exitCode === 0) {
       refreshFileArtifactsForPty(ptyId);
     }
     if (session?.closeOnSuccess && exitCode !== 0) {
@@ -9051,7 +7636,7 @@ const {
   fetchHomePath,
   bootstrapSelections,
   hydrateActiveWorktreeResources,
-  reloadSelectedSessionState,
+  reloadSelectedSessionState: backendSessionReload.reloadSelectedSessionState,
   handleOpenCodeUnauthorized,
 });
 

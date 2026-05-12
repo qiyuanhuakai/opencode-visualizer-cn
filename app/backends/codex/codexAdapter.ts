@@ -1221,18 +1221,32 @@ function parseCodexToolQuestionRequest(requestId: string): {
 export class CodexAdapter implements BackendAdapter {
   readonly kind = 'codex' as const;
   readonly label = 'Codex';
-  readonly capabilities = {
+  readonly capabilities: BackendAdapter['capabilities'] = {
     projects: false,
     worktrees: false,
     sessions: true,
     sessionFork: true,
     sessionRevert: true,
+    sessionRename: true,
+    sessionArchive: true,
+    sessionUnarchive: true,
+    sessionDelete: true,
+    sessionPin: true,
+    sessionUnpin: true,
+    sessionCompact: true,
     files: true,
     terminal: true,
     permissions: true,
     questions: true,
     todos: false,
     status: true,
+    providerConfig: true,
+    imageAttachmentsOnly: true,
+    projectPickerCreatesSession: true,
+    ptyExitRequiresSyntheticEvent: true,
+    ptyRefreshArtifactsOnSuccess: true,
+    strictSandboxPaths: true,
+    sessionManagementMode: 'sandbox-first',
   };
 
   private readonly client: CodexJsonRpcClient;

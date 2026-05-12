@@ -6,12 +6,26 @@ export type BackendCapabilities = {
   sessions: boolean;
   sessionFork: boolean;
   sessionRevert: boolean;
+  sessionRename: boolean;
+  sessionArchive: boolean;
+  sessionUnarchive: boolean;
+  sessionDelete: boolean;
+  sessionPin: boolean;
+  sessionUnpin: boolean;
+  sessionCompact: boolean;
   files: boolean;
   terminal: boolean;
   permissions: boolean;
   questions: boolean;
   todos: boolean;
   status: boolean;
+  providerConfig: boolean;
+  imageAttachmentsOnly: boolean;
+  projectPickerCreatesSession: boolean;
+  ptyExitRequiresSyntheticEvent: boolean;
+  ptyRefreshArtifactsOnSuccess: boolean;
+  strictSandboxPaths: boolean;
+  sessionManagementMode: 'standard' | 'sandbox-first';
 };
 
 export type BackendRequestOptions = {
