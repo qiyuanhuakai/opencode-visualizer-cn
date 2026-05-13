@@ -297,8 +297,13 @@ export interface LocaleMessages {
       noData: string;
     };
     plugins: {
+      marketplaces: string;
       total: string;
       noData: string;
+      accessible: string;
+      enabled: string;
+      installed: string;
+      hiddenUnavailable: string;
     };
     skills: {
       total: string;
@@ -1310,11 +1315,10 @@ export interface LocaleMessages {
       tabApps: string;
       tabExperimentalFeatures: string;
       tabCollaborationModes: string;
-      tabExternalAgentConfig: string;
       tabFeedback: string;
-      // apps
-      appsTitle: string;
-      appsNoApps: string;
+      // connectors
+      connectorsTitle: string;
+      connectorsNoConnectors: string;
       appName: string;
       appDescription: string;
       appAccessible: string;
@@ -1335,14 +1339,6 @@ export interface LocaleMessages {
       collaborationModesTitle: string;
       collaborationModesNoModes: string;
       collaborationModeName: string;
-      // external agent config
-      externalAgentConfigTitle: string;
-      detect: string;
-      includeHome: string;
-      import_: string;
-      importSuccess: string;
-      importError: string;
-      externalAgentConfigNoItems: string;
       // feedback
       feedbackTitle: string;
       feedbackClassification: string;

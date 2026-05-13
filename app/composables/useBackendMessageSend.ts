@@ -36,12 +36,14 @@ type OpenCodeApiLike = {
 type CodexApiLike = {
   activeThreadId: Ref<string>;
   threads: Ref<Array<{ id: string; modelProvider?: string | null }>>;
+  collaborationModes: Ref<Array<{ id: string; name: string; description?: string }>>;
   sendPrompt: (prompt: string, options: {
     threadId?: string;
     forceNewThread?: boolean;
     cwd?: string;
     model?: string;
     effort?: string;
+    collaborationMode?: string;
     input?: CodexTurnInputItem[];
   }) => Promise<unknown>;
   refreshThreads: () => Promise<unknown>;
@@ -184,6 +186,9 @@ export function useBackendMessageSend(params: {
         const selectedCodexModelKey = selectedInfo?.id || params.selectedModel.value.trim();
         const selectedCodexModel = selectedModelIDs.modelID || (!selectedCodexModelKey.includes('/') ? selectedCodexModelKey : undefined);
         const selectedCodexProvider = selectedModelIDs.providerID || (selectedCodexModel ? params.codexProjectId : '');
+        const selectedCollaborationMode = params.codexApi.collaborationModes.value.some((mode) => mode.id === params.selectedMode.value)
+          ? params.selectedMode.value
+          : undefined;
         const startNewCodexThread = selectedCodexProvider
           ? params.shouldStartNewCodexThreadForProvider(sessionId, selectedCodexProvider)
           : false;
@@ -197,6 +202,7 @@ export function useBackendMessageSend(params: {
           cwd: codexDirectory,
           model: selectedCodexModel,
           effort: params.selectedThinking.value,
+          collaborationMode: selectedCollaborationMode,
           input: codexInput,
         });
         await params.codexApi.refreshThreads();

@@ -213,6 +213,7 @@ export type CodexTurnStartParams = {
   threadId: string;
   input: CodexTurnInputItem[];
   cwd?: string;
+  collaborationMode?: string;
   approvalPolicy?: string;
   sandboxPolicy?: unknown;
   model?: string;

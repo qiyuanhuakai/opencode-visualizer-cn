@@ -242,7 +242,7 @@
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
-                <span :style="agentValueStyle(id)">{{ findAgent(id)?.label }}</span>
+                <span :style="agentValueStyle(id)">{{ modeButtonLabel(id) }}</span>
               </template>
               <template #default>
                 <div class="dropdown-list">
@@ -527,9 +527,27 @@ type HistoryEntry = {
   isSubagent?: boolean;
 };
 
-function findAgentOption(id: string | undefined) {
-  if (!id) return undefined;
-  return props.agentOptions.find((option) => option.id === id);
+function extractAgentOptionId(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value;
+  if (value && typeof value === 'object' && 'value' in value) {
+    const nested = (value as { value?: unknown }).value;
+    if (typeof nested === 'string' && nested.trim()) return nested;
+  }
+  return undefined;
+}
+
+function findAgentOption(id: unknown) {
+  const normalizedId = extractAgentOptionId(id);
+  if (!normalizedId) return undefined;
+  return props.agentOptions.find((option) => option.id === normalizedId);
+}
+
+function modeButtonLabel(id: unknown) {
+  const option = findAgentOption(id);
+  if (option?.label) return option.label;
+  const normalizedId = extractAgentOptionId(id);
+  if (!normalizedId) return '';
+  return normalizedId.charAt(0).toUpperCase() + normalizedId.slice(1);
 }
 
 function historyEntryColor(entry: HistoryEntry) {
@@ -1113,7 +1131,7 @@ function resolveAgentStyle(name?: string, explicitColor?: string) {
 }
 
 function agentValueStyle(id: unknown) {
-  const agent = findAgent(id);
+  const agent = findAgentOption(id) ?? findAgent(id);
   return resolveAgentStyle(agent?.id, agent?.color);
 }
 
@@ -1678,6 +1696,18 @@ const inputMessageStyle = computed(() => {
   font-size: 10px;
   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   line-height: 1.2;
+}
+
+.agent-dropdown-item.is-current {
+  position: relative;
+}
+
+.agent-dropdown-current-mark {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  color: var(--theme-input-accent, var(--theme-border-accent, #60a5fa));
+  flex: 0 0 auto;
 }
 
 .history-dropdown-wrapper {

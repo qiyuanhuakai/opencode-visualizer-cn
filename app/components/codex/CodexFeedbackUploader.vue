@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import type { CodexFeedbackUploadParams } from '../../backends/codex/codexAdapter';
@@ -87,6 +87,12 @@ const submitting = ref(false);
 const status = ref<'idle' | 'success' | 'error'>('idle');
 const errorMessage = ref('');
 
+const activeConversationId = computed(() => props.api.activeThreadId.value || undefined);
+
+function encodeBase64(text: string) {
+  return btoa(unescape(encodeURIComponent(text)));
+}
+
 async function handleSubmit() {
   if (!props.api.connected.value || submitting.value || !classification.value) return;
 
@@ -98,6 +104,10 @@ async function handleSubmit() {
     classification: classification.value,
     reason: reason.value || undefined,
     logs: logs.value || undefined,
+    conversationId: activeConversationId.value,
+    extraLogFiles: logs.value
+      ? [{ name: `vis-feedback-${Date.now()}.log`, contentBase64: encodeBase64(logs.value) }]
+      : undefined,
   };
 
   try {

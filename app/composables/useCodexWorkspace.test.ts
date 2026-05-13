@@ -148,4 +148,22 @@ describe('useCodexWorkspace', () => {
 
     expect(project.sandboxes['/repo'].sessions['thread-hidden'].timeArchived).toBe(42_000);
   });
+
+  it('includes archived Codex threads in project state so TopPanel search can find them', () => {
+    const liveThreads = ref<CodexThread[]>([{ id: 'thread-live', name: 'Live thread', cwd: '/repo' }]);
+    const archivedThreads = ref<CodexThread[]>([{ id: 'thread-archived', name: 'Archived thread', cwd: '/repo', updatedAt: 99 }]);
+    const workspace = useCodexWorkspace({
+      threads: liveThreads,
+      visibleThreads: computed(() => liveThreads.value),
+      archivedThreads,
+      activeThreadId: ref('thread-live'),
+      canonicalHistory: ref([]),
+      homeDir: ref('/home/codex'),
+    });
+
+    expect(workspace.project.value.sandboxes['/repo'].sessions['thread-archived']).toMatchObject({
+      id: 'thread-archived',
+      timeArchived: 99_000,
+    });
+  });
 });
