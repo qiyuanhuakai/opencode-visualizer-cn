@@ -2,6 +2,7 @@
 import { ref, watch, computed, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
+import type { CodexPlugin } from '../backends/codex/codexAdapter';
 import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
 import { useSettings } from '../composables/useSettings';
@@ -48,6 +49,7 @@ const lspData = ref<Array<{ id: string; name: string; root: string; status: 'con
 const skillData = ref<Array<{ name: string; version?: string }> | null>(null);
 const skillUnsupported = ref(false);
 const configData = ref<Record<string, unknown> | null>(null);
+const codexPluginData = ref<CodexPlugin[]>([]);
 const tokenUsage = ref<MessageUsage | null>(null);
 const tokenModelName = ref<string>('');
 const tokenContextLimit = ref<number>(0);
@@ -166,6 +168,7 @@ function resetLoadedState() {
   lspData.value = null;
   skillData.value = null;
   configData.value = null;
+  codexPluginData.value = [];
   resetTokenData();
 }
 
@@ -253,7 +256,9 @@ async function refreshCodexStatus() {
     await Promise.allSettled([
       codexApi.refreshAccount(),
       codexApi.refreshAccountRateLimits(),
+      codexApi.refreshPlugins(),
     ]);
+    codexPluginData.value = codexApi.plugins.value.slice();
   } catch {
     errorMessage.value = t('statusMonitor.error');
   }
@@ -383,10 +388,46 @@ const mcpEntries = computed(() => {
 });
 
 const pluginEntries = computed(() => {
+  if (codexPluginData.value.length > 0) {
+    return codexPluginData.value
+      .filter((plugin) => plugin.isAccessible)
+      .map((plugin) => ({
+        id: plugin.id,
+        name: plugin.name,
+        enabled: plugin.isEnabled,
+        installed: plugin.state === 'installed',
+        accessible: plugin.isAccessible,
+      }));
+  }
   const plugins = configData.value?.plugin;
-  if (Array.isArray(plugins)) return plugins.map((p) => String(p));
-  if (typeof plugins === 'object' && plugins !== null) return Object.keys(plugins);
+  if (Array.isArray(plugins)) return plugins.map((p) => ({ id: String(p), name: String(p), enabled: true, installed: true, accessible: true }));
+  if (typeof plugins === 'object' && plugins !== null) return Object.keys(plugins).map((name) => ({ id: name, name, enabled: true, installed: true, accessible: true }));
   return [];
+});
+
+const hiddenPluginCount = computed(() => {
+  if (codexPluginData.value.length === 0) return 0;
+  return codexPluginData.value.filter((plugin) => !plugin.isAccessible).length;
+});
+
+const pluginStats = computed(() => {
+  const source = codexPluginData.value;
+  if (source.length === 0) {
+    return {
+      marketplaces: 0,
+      total: pluginEntries.value.length,
+      accessible: pluginEntries.value.filter((plugin) => plugin.accessible).length,
+      enabled: pluginEntries.value.filter((plugin) => plugin.enabled).length,
+      installed: pluginEntries.value.filter((plugin) => plugin.installed).length,
+    };
+  }
+  return {
+    marketplaces: codexApi.pluginMarketplaceCount.value,
+    total: source.length,
+    accessible: source.filter((plugin) => plugin.isAccessible).length,
+    enabled: source.filter((plugin) => plugin.isEnabled).length,
+    installed: source.filter((plugin) => plugin.state === 'installed').length,
+  };
 });
 
 const skillEntries = computed(() => {
@@ -674,20 +715,51 @@ function formatPercent(value: number, total: number): string {
           <div v-if="loading && !configData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="pluginEntries.length === 0" class="status-monitor-empty">
-            {{ $t('statusMonitor.plugins.noData') }}
+          <div v-else class="status-monitor-summary-grid">
+            <div class="status-monitor-summary-chip">
+              <span class="status-monitor-summary-label">{{ $t('statusMonitor.plugins.marketplaces') }}</span>
+              <span class="status-monitor-summary-value">{{ pluginStats.marketplaces }}</span>
+            </div>
+            <div class="status-monitor-summary-chip">
+              <span class="status-monitor-summary-label">{{ $t('statusMonitor.plugins.total') }}</span>
+              <span class="status-monitor-summary-value">{{ pluginStats.total }}</span>
+            </div>
+            <div class="status-monitor-summary-chip">
+              <span class="status-monitor-summary-label">{{ $t('statusMonitor.plugins.accessible') }}</span>
+              <span class="status-monitor-summary-value">{{ pluginStats.accessible }}</span>
+            </div>
+            <div class="status-monitor-summary-chip">
+              <span class="status-monitor-summary-label">{{ $t('statusMonitor.plugins.enabled') }}</span>
+              <span class="status-monitor-summary-value">{{ pluginStats.enabled }}</span>
+            </div>
+            <div class="status-monitor-summary-chip">
+              <span class="status-monitor-summary-label">{{ $t('statusMonitor.plugins.installed') }}</span>
+              <span class="status-monitor-summary-value">{{ pluginStats.installed }}</span>
+            </div>
           </div>
-          <div v-else class="status-monitor-list">
+          <div v-if="pluginEntries.length > 0" class="status-monitor-list">
+            <div v-if="hiddenPluginCount > 0" class="status-monitor-summary">
+              {{ $t('statusMonitor.plugins.hiddenUnavailable', { count: hiddenPluginCount }) }}
+            </div>
             <div
-              v-for="name in pluginEntries"
-              :key="name"
+              v-for="plugin in pluginEntries"
+              :key="plugin.id"
               class="status-monitor-row"
             >
               <div class="status-monitor-row-main">
-                <span class="status-dot status-dot-success" />
-                <span class="status-monitor-name">{{ name }}</span>
+                <span class="status-dot" :class="plugin.enabled ? 'status-dot-success' : plugin.installed ? 'status-dot-warning' : 'status-dot-muted'" />
+                <span class="status-monitor-name">{{ plugin.name }}</span>
+              </div>
+              <div class="status-monitor-meta-column">
+                <span class="status-monitor-meta">{{ plugin.enabled ? $t('codexPanel.appEnabled') : plugin.installed ? $t('codexPanel.appDisabled') : $t('codexPanel.appNotAccessible') }}</span>
               </div>
             </div>
+          </div>
+          <div v-else-if="hiddenPluginCount > 0" class="status-monitor-empty">
+            {{ $t('statusMonitor.plugins.hiddenUnavailable', { count: hiddenPluginCount }) }}
+          </div>
+          <div v-else class="status-monitor-empty">
+            {{ $t('statusMonitor.plugins.noData') }}
           </div>
         </div>
 
@@ -1156,6 +1228,24 @@ function formatPercent(value: number, total: number): string {
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+}
+
+.status-monitor-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.status-monitor-summary-chip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--theme-list-row-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
+  border: 1px solid var(--theme-list-row-border, var(--theme-modal-border, rgba(148, 163, 184, 0.12)));
+  border-radius: 8px;
 }
 
 .status-monitor-row {

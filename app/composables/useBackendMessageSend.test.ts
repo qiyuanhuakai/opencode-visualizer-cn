@@ -66,6 +66,7 @@ describe('useBackendMessageSend', () => {
     const codexApi = {
       activeThreadId: ref('session-1'),
       threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
+      collaborationModes: ref([]),
       sendPrompt: vi.fn().mockResolvedValue(undefined),
       refreshThreads: vi.fn().mockResolvedValue(undefined),
       selectModel: vi.fn(),
@@ -89,6 +90,31 @@ describe('useBackendMessageSend', () => {
     expect(base.attachments.value).toEqual([]);
   });
 
+  it('passes selected collaboration mode to Codex when switcher value matches a collaboration mode id', async () => {
+    const base = createBaseParams();
+    base.selectedMode.value = 'plan';
+    const codexApi = {
+      activeThreadId: ref('session-1'),
+      threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
+      collaborationModes: ref([{ id: 'plan', name: 'Plan' }]),
+      sendPrompt: vi.fn().mockResolvedValue(undefined),
+      refreshThreads: vi.fn().mockResolvedValue(undefined),
+      selectModel: vi.fn(),
+    };
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('codex'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi,
+    });
+
+    await runtime.sendMessage();
+
+    expect(codexApi.sendPrompt.mock.calls[0]?.[1]).toMatchObject({
+      collaborationMode: 'plan',
+    });
+  });
+
   it('routes slash commands to sendCommand for OpenCode backends', async () => {
     const base = createBaseParams();
     base.messageInput.value = '/fix issue';
@@ -101,6 +127,7 @@ describe('useBackendMessageSend', () => {
       codexApi: {
         activeThreadId: ref(''),
         threads: ref([]),
+        collaborationModes: ref([]),
         sendPrompt: vi.fn(),
         refreshThreads: vi.fn(),
         selectModel: vi.fn(),
@@ -124,6 +151,7 @@ describe('useBackendMessageSend', () => {
       codexApi: {
         activeThreadId: ref(''),
         threads: ref([]),
+        collaborationModes: ref([]),
         sendPrompt: vi.fn(),
         refreshThreads: vi.fn(),
         selectModel: vi.fn(),

@@ -576,14 +576,14 @@
                   <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value" @click="forkActiveThread().finally(close)">
                     {{ t('codexPanel.fork') }}
                   </button>
+                  <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeThreadId.value" @click="compactActiveThread().finally(close)">
+                    {{ t('codexPanel.compactThread') }}
+                  </button>
                   <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value" @click="rollbackActiveThread().finally(close)">
                     {{ t('codexPanel.rollback') }}
                   </button>
                   <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeThreadId.value" @click="api.showShellCommand.value = true; close()">
                     {{ t('codexPanel.shellCommand') }}
-                  </button>
-                  <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeThreadId.value" @click="compactActiveThread().finally(close)">
-                    {{ t('codexPanel.compactThread') }}
                   </button>
                   <button type="button" class="codex-inline-menu-item is-danger" :disabled="!api.connected.value" @click="archiveActiveThread().finally(close)">
                     {{ t('topPanel.management.archive') }}

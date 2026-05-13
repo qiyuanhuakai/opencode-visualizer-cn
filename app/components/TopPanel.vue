@@ -202,7 +202,7 @@
                       />
                     </button>
                     <button
-            v-if="!sandboxFirstMode && worktree.projectId && worktree.projectId !== 'global'"
+            v-if="!sandboxFirstMode && worktree.projectId && worktree.projectId !== 'global' && worktree.kind !== 'global' && worktree.kind !== 'sandbox'"
                       type="button"
                       class="tree-action-button worktree-settings"
                       :title="$t('topPanel.projectSettings')"
@@ -261,7 +261,7 @@
                           <Icon icon="lucide:message-circle-plus" :width="16" :height="16" />
                         </button>
                         <button
-                    v-if="!sandboxFirstMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch'"
+                     v-if="!sandboxFirstMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch' && sandbox.kind !== 'global' && sandbox.kind !== 'folder'"
                           type="button"
                           class="tree-action-button fork"
                           :title="$t('topPanel.createSandbox')"
@@ -291,8 +291,10 @@
                           v-if="
                             canDeleteSandbox(sandbox.directory, worktree.directory) &&
                             worktree.projectId !== 'global' &&
-                        !sandboxFirstMode &&
-                            sandbox.kind !== 'branch'
+                            !sandboxFirstMode &&
+                            sandbox.kind !== 'branch' &&
+                            sandbox.kind !== 'global' &&
+                            sandbox.kind !== 'folder'
                           "
                           type="button"
                           class="tree-action-button danger"
@@ -346,15 +348,6 @@
                         </div>
                         <template #action>
                           <div class="tree-session-actions">
-                            <button
-                              v-if="sandboxFirstMode && !session.archivedAt"
-                              type="button"
-                              class="tree-action-button session-compact"
-                              :title="$t('codexPanel.compactThread')"
-                              @click.stop.prevent="handleSessionCompact(session.id)"
-                            >
-                              <Icon icon="lucide:archive-restore" :width="16" :height="16" />
-                            </button>
                             <button
                               v-if="!session.archivedAt"
                               type="button"
@@ -600,9 +593,9 @@
                 <Icon icon="lucide:blocks" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.pluginsTitle') }}</span>
               </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('apps', close)">
+              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('connectors', close)">
                 <Icon icon="lucide:app-window" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.appsTitle') }}</span>
+                <span>{{ $t('codexPanel.connectorsTitle') }}</span>
               </button>
               <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('config', close)">
                 <Icon icon="lucide:file-json" :width="14" :height="14" />
@@ -615,10 +608,6 @@
               <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('collaborationModes', close)">
                 <Icon icon="lucide:users" :width="14" :height="14" />
                 <span>{{ $t('codexPanel.collaborationModesTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('externalAgentConfig', close)">
-                <Icon icon="lucide:import" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.externalAgentConfigTitle') }}</span>
               </button>
               <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('feedback', close)">
                 <Icon icon="lucide:send" :width="14" :height="14" />
@@ -684,11 +673,10 @@ export type TopPanelCodexSubpanel =
   | 'mcp'
   | 'skills'
   | 'plugins'
-  | 'apps'
+  | 'connectors'
   | 'config'
   | 'experimentalFeatures'
   | 'collaborationModes'
-  | 'externalAgentConfig'
   | 'feedback';
 
 type SandboxDeletePayload = {
@@ -1153,10 +1141,6 @@ function handleSessionUnarchive(sessionId: string) {
 
 function handleSessionRename(sessionId: string) {
   emit('rename-session', sessionId);
-}
-
-function handleSessionCompact(sessionId: string) {
-  emit('compact-session', sessionId);
 }
 
 function handleSessionPinToggle(sessionId: string, isPinned = false) {

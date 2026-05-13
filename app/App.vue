@@ -476,11 +476,10 @@ import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ThemeInjector from './components/ThemeInjector.vue';
 import CodexPanel from './components/CodexPanel.vue';
-import CodexAppManager from './components/codex/CodexAppManager.vue';
+import CodexConnectorManager from './components/codex/CodexConnectorManager.vue';
 import CodexCollaborationModeManager from './components/codex/CodexCollaborationModeManager.vue';
 import CodexConfigViewer from './components/codex/CodexConfigViewer.vue';
 import CodexExperimentalFeatureManager from './components/codex/CodexExperimentalFeatureManager.vue';
-import CodexExternalAgentConfig from './components/codex/CodexExternalAgentConfig.vue';
 import CodexFeedbackUploader from './components/codex/CodexFeedbackUploader.vue';
 import CodexMcpServerManager from './components/codex/CodexMcpServerManager.vue';
 import CodexModelManager from './components/codex/CodexModelManager.vue';
@@ -941,11 +940,10 @@ const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefin
   mcp: { component: CodexMcpServerManager, titleKey: 'codexPanel.mcpTitle', width: 700, height: 600 },
   skills: { component: CodexSkillsManager, titleKey: 'codexPanel.skillsTitle', width: 680, height: 560 },
   plugins: { component: CodexPluginManager, titleKey: 'codexPanel.pluginsTitle', width: 720, height: 600 },
-  apps: { component: CodexAppManager, titleKey: 'codexPanel.appsTitle', width: 640, height: 520 },
+  connectors: { component: CodexConnectorManager, titleKey: 'codexPanel.connectorsTitle', width: 640, height: 520 },
   config: { component: CodexConfigViewer, titleKey: 'codexPanel.configTitle', width: 720, height: 600, scroll: 'manual' },
   experimentalFeatures: { component: CodexExperimentalFeatureManager, titleKey: 'codexPanel.experimentalFeaturesTitle', width: 640, height: 520 },
   collaborationModes: { component: CodexCollaborationModeManager, titleKey: 'codexPanel.collaborationModesTitle', width: 600, height: 460 },
-  externalAgentConfig: { component: CodexExternalAgentConfig, titleKey: 'codexPanel.externalAgentConfigTitle', width: 640, height: 520 },
   feedback: { component: CodexFeedbackUploader, titleKey: 'codexPanel.feedbackTitle', width: 560, height: 500 },
 };
 
@@ -966,7 +964,7 @@ function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
     case 'plugins':
       void codexApi.refreshPlugins();
       break;
-    case 'apps':
+    case 'connectors':
       void codexApi.refreshApps();
       break;
     case 'config':
@@ -978,9 +976,6 @@ function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
       break;
     case 'collaborationModes':
       void codexApi.refreshCollaborationModes();
-      break;
-    case 'externalAgentConfig':
-      void codexApi.detectExternalAgentConfig();
       break;
     case 'feedback':
       break;
@@ -3063,7 +3058,7 @@ function resolveDefaultAgentModel(): { agent: string; model: string; variant: st
 
 function handleSelectedModeUpdate(value: string) {
   selectedMode.value = value;
-  applyAgentDefaults(value);
+  if (activeBackendKind.value !== 'codex') applyAgentDefaults(value);
   persistComposerDraftForCurrentContext();
 }
 
@@ -4075,6 +4070,22 @@ async function fetchAgents() {
   if (agentsLoading.value) return;
   agentsLoading.value = true;
   try {
+    if (activeBackendKind.value === 'codex') {
+      if (codexApi.connected.value) {
+        await codexApi.refreshCollaborationModes();
+      }
+      const options = codexApi.collaborationModes.value.map((mode) => ({
+        id: mode.id,
+        label: mode.name,
+        description: mode.description,
+        color: 'cyan',
+      }));
+      agentOptions.value = options;
+      if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
+        selectedMode.value = options.find((option) => option.id === 'default')?.id ?? options[0]?.id ?? '';
+      }
+      return;
+    }
     const listAgents = requireBackendMethod(backend().listAgents, 'agents');
     const data = (await listAgents()) as AgentInfo[];
     agents.value = Array.isArray(data) ? data : [];
@@ -6028,6 +6039,15 @@ watch(
   [editInVis, activeBackendKind, activeDirectory, () => codexApi.connected.value, () => codexApi.url.value, () => codexApi.bridgeToken.value],
   () => {
     void probeConnectedBridgeFs();
+  },
+  { immediate: true },
+);
+
+watch(
+  [activeBackendKind, () => codexApi.connected.value],
+  ([backendKind, connected]) => {
+    if (backendKind !== 'codex' || !connected) return;
+    void codexApi.refreshArchivedThreads();
   },
   { immediate: true },
 );

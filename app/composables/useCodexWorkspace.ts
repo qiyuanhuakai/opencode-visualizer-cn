@@ -13,6 +13,7 @@ export const CODEX_DEFAULT_DIRECTORY = '/';
 export type CodexWorkspaceApi = {
   visibleThreads: ComputedRef<CodexThread[]>;
   threads: Ref<CodexThread[]>;
+  archivedThreads?: Ref<CodexThread[]>;
   activeThreadId: Ref<string>;
   canonicalHistory: Ref<CodexCanonicalHistoryEntry[]>;
   homeDir?: Ref<string>;
@@ -95,6 +96,7 @@ export function createCodexProjectState(
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedThreadIds: Set<string> = new Set(),
   hiddenThreadIds: Set<string> = new Set(),
+  archivedThreadIds: Set<string> = new Set(),
 ): ProjectState {
   const primaryDirectory = CODEX_DEFAULT_DIRECTORY;
   const sandboxes: ProjectState['sandboxes'] = {};
@@ -108,7 +110,13 @@ export function createCodexProjectState(
       sessions: {},
     };
     sandbox.rootSessions.push(thread.id);
-    sandbox.sessions[thread.id] = codexThreadToSession(thread, fallbackDirectory, pinnedThreadIds, hiddenThreadIds, directory);
+    sandbox.sessions[thread.id] = codexThreadToSession(
+      thread,
+      fallbackDirectory,
+      pinnedThreadIds,
+      new Set([...hiddenThreadIds, ...(archivedThreadIds.has(thread.id) ? [thread.id] : [])]),
+      directory,
+    );
     sandboxes[directory] = sandbox;
   }
 
@@ -131,11 +139,19 @@ export function createCodexProjectState(
 
 export function useCodexWorkspace(api: CodexWorkspaceApi) {
   const fallbackDirectory = computed(() => api.homeDir?.value || CODEX_DEFAULT_DIRECTORY);
+  const allThreads = computed(() => {
+    const merged = new Map<string, CodexThread>();
+    api.visibleThreads.value.forEach((thread) => merged.set(thread.id, thread));
+    (api.archivedThreads?.value ?? []).forEach((thread) => merged.set(thread.id, thread));
+    return Array.from(merged.values());
+  });
+  const archivedThreadIds = computed(() => new Set((api.archivedThreads?.value ?? []).map((thread) => thread.id)));
   const project = computed(() => createCodexProjectState(
-    api.visibleThreads.value,
+    allThreads.value,
     fallbackDirectory.value,
     api.pinnedThreadIds?.value,
     api.hiddenThreadIds?.value,
+    archivedThreadIds.value,
   ));
   const projects = computed<Record<string, ProjectState>>(() => ({
     [CODEX_PROJECT_ID]: project.value,

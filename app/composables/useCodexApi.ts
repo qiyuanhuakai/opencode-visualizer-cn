@@ -453,7 +453,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const selectedModel = ref<string>('');
    const skills = ref<CodexSkill[]>([]);
    const skillsLoading = ref(false);
-   const plugins = ref<CodexPlugin[]>([]);
+    const plugins = ref<CodexPlugin[]>([]);
+    const pluginMarketplaceCount = ref(0);
    const pluginsLoading = ref(false);
    const mcpServers = ref<CodexMcpServerInfo[]>([]);
    const mcpServersLoading = ref(false);
@@ -502,6 +503,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   let nextTranscriptId = 1;
 
   const connected = computed(() => status.value === 'connected' && initialized.value);
+
+  const archivedThreads = ref<CodexThread[]>([]);
 
   const visibleThreads = computed(() => {
     const list = threads.value.filter((thread) => !hiddenThreadIds.value.has(thread.id));
@@ -1613,6 +1616,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
   }
 
+  async function refreshArchivedThreads(params: Omit<CodexThreadListParams, 'archived'> = {}) {
+    const normalizedThreads = await fetchThreadList({ ...params, archived: true });
+    if (!normalizedThreads) return;
+    archivedThreads.value = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
+  }
+
   async function refreshThreads(params: CodexThreadListParams = {}) {
     const normalizedThreads = await fetchThreadList(params);
     if (!normalizedThreads) return;
@@ -1643,7 +1652,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       refreshExperimentalFeatures(),
       refreshCollaborationModes(),
       refreshConfigRequirements(),
-      detectExternalAgentConfig(true, fsCwd.value ? [fsCwd.value] : undefined),
       refreshLoadedThreads(),
     ]);
   }
@@ -2175,7 +2183,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function sendPrompt(
     text: string,
-    options: { model?: string; effort?: string; cwd?: string; threadId?: string; input?: CodexPromptInput['input']; forceNewThread?: boolean } = {},
+    options: { model?: string; effort?: string; cwd?: string; threadId?: string; input?: CodexPromptInput['input']; forceNewThread?: boolean; collaborationMode?: string } = {},
   ) {
     const prompt = text.trim();
     const inputItems = options.input?.filter((item) => item.type !== 'text' || item.text.trim().length > 0) ?? [];
@@ -2214,6 +2222,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (targetThreadId) input.threadId = targetThreadId;
       if (model) input.model = model;
       if (options.effort) input.effort = options.effort;
+      if (options.collaborationMode) input.collaborationMode = options.collaborationMode;
       if (cwd) input.cwd = cwd;
       const result = await adapter.sendPrompt(input);
       activeThreadId.value = result.threadId;
@@ -2442,8 +2451,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       pluginsLoading.value = true;
       try {
         const result = await adapter.listPlugins();
+        pluginMarketplaceCount.value = result.marketplaces.length;
         plugins.value = result.marketplaces.flatMap((m) => m.plugins);
       } catch {
+        pluginMarketplaceCount.value = 0;
         plugins.value = [];
       } finally {
         pluginsLoading.value = false;
@@ -2785,8 +2796,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      loadingThread,
      initialized,
      connected,
-     visibleThreads,
-     pinnedThreadIds,
+      visibleThreads,
+      archivedThreads,
+      pinnedThreadIds,
      hiddenThreadIds,
       fsEntries,
       fsCwd,
@@ -2804,6 +2816,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       disconnect,
       refreshHomeDir,
       refreshThreads,
+      refreshArchivedThreads,
       listThreads,
       preloadPanelData,
       selectThread,
@@ -2861,6 +2874,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
        skills,
        skillsLoading,
       plugins,
+      pluginMarketplaceCount,
       pluginsLoading,
       mcpServers,
        mcpServersLoading,
