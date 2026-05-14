@@ -9,12 +9,12 @@
 ### 新后端支持(alpha)
 
 - [x] 重构了后端adaptor体系，将其从App.vue中抽出，便于接入新的后端
-- [ ] “协作模式”本质上就是plan/default模式切换，应该做到输入框左下角agent切换那里
-- [ ] 删除“外部代理配置”
-- [ ] 完善“反馈”的格式
-- [ ] codex panel的“插件”功能可用于安装卸载插件
-- [ ] status monitor面板支持显示codex插件
-- [ ] 修改“应用（app）”的翻译为“连接器（connector）”
+- [x] “协作模式”本质上就是plan/default模式切换，应该做到输入框左下角agent切换那里
+- [x] 删除“外部代理配置”
+- [x] 完善“反馈”的格式
+- [x] codex panel的“插件”功能可用于安装卸载插件
+- [x] status monitor面板支持显示codex插件
+- [x] 修改“应用（app）”的翻译为“连接器（connector）”
 
 ### Bug 修复
 
