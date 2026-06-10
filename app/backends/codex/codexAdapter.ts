@@ -436,6 +436,7 @@ export type CodexSkill = {
   enabled: boolean;
   interface?: CodexSkillInterface;
   dependencies?: CodexSkillDependencies;
+  path?: string; // SKILL.md 的绝对路径,来自 codex-rs SkillMetadata
 };
 
 export type CodexSkillsListCwdEntry = {
