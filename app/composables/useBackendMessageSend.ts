@@ -1,7 +1,8 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { ComposerAttachment } from '../types/composer';
-import type { CodexTurnInputItem } from '../backends/codex/codexAdapter';
+import type { CodexSkill, CodexTurnInputItem } from '../backends/codex/codexAdapter';
+import type { ParsedSkill } from '../utils/parseSkill';
 
 type ModelOption = {
   id: string;
@@ -79,6 +80,8 @@ export function useBackendMessageSend(params: {
   findCommandByName: (name: string) => CommandInfo | null;
   findAgentByName: (name: string) => AgentInfo | null;
   parseAtAgent: (input: string) => { agent: string; text: string } | null;
+  parseSkill?: (input: string, skills: ReadonlyArray<CodexSkill>) => ParsedSkill[];
+  availableSkills?: Ref<CodexSkill[]>;
   runDebugCommand: (args: string) => { ok: boolean; message: string };
   openShellFromInput: (input: string) => Promise<boolean>;
   clearComposerDraftForCurrentContext: () => void;
@@ -154,6 +157,12 @@ export function useBackendMessageSend(params: {
         const atAgent = hasText ? params.parseAtAgent(text) : null;
         const messageText = atAgent ? atAgent.text : text;
         const codexInput: CodexTurnInputItem[] = [];
+        if (hasText) {
+          const parsedSkills = params.parseSkill?.(text, params.availableSkills?.value ?? []) ?? [];
+          for (const skill of parsedSkills) {
+            codexInput.push({ type: 'skill', name: skill.name, path: skill.path });
+          }
+        }
         if (messageText) codexInput.push({ type: 'text', text: messageText });
         for (const item of params.attachments.value) {
           if (item.lineComment) {
