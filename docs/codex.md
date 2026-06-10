@@ -12,16 +12,26 @@ Like [MCP](https://modelcontextprotocol.io/), `codex app-server` supports bidire
 Supported transports:
 
 - `stdio` (`--listen stdio://`, default): newline-delimited JSON (JSONL).
-- `websocket` (`--listen ws://IP:PORT`, experimental and unsupported): one JSON-RPC message per WebSocket text frame.
+- `websocket` (`--listen ws://IP:PORT`, experimental and unsupported): one
+  JSON-RPC message per WebSocket text frame.
+- Unix socket (`--listen unix://` or `--listen unix://PATH`): WebSocket
+  connections over Codex's default app-server control socket or a custom Unix
+  socket path, using the standard HTTP Upgrade handshake.
 - `off` (`--listen off`): don't expose a local transport.
 
-When you run with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
+When you run with `--listen ws://IP:PORT`, the same listener also serves basic
+HTTP health probes:
 
 - `GET /readyz` returns `200 OK` once the listener accepts new connections.
-- `GET /healthz` returns `200 OK` when the request doesn't include an `Origin` header.
+- `GET /healthz` returns `200 OK` when the request doesn't include an `Origin`
+  header.
 - Requests with an `Origin` header are rejected with `403 Forbidden`.
 
-WebSocket transport is experimental and unsupported. Loopback listeners such as `ws://127.0.0.1:PORT` are appropriate for localhost and SSH port-forwarding workflows. Non-loopback WebSocket listeners currently allow unauthenticated connections by default during rollout, so configure WebSocket auth before exposing one remotely.
+WebSocket transport is experimental and unsupported. Local listeners such as
+`ws://127.0.0.1:PORT` are appropriate for localhost and SSH port-forwarding
+workflows. Non-loopback WebSocket listeners currently allow unauthenticated
+connections by default during rollout, so configure WebSocket auth before
+exposing one remotely.
 
 Supported WebSocket auth flags:
 
@@ -29,11 +39,20 @@ Supported WebSocket auth flags:
 - `--ws-auth capability-token --ws-token-sha256 HEX`
 - `--ws-auth signed-bearer-token --ws-shared-secret-file /absolute/path`
 
-For signed bearer tokens, you can also set `--ws-issuer`, `--ws-audience`, and `--ws-max-clock-skew-seconds`. Clients present the credential as `Authorization: Bearer <token>` during the WebSocket handshake, and app-server enforces auth before JSON-RPC `initialize`.
+For signed bearer tokens, you can also set `--ws-issuer`, `--ws-audience`, and
+`--ws-max-clock-skew-seconds`. Clients present the credential as
+`Authorization: Bearer <token>` during the WebSocket handshake, and app-server
+enforces auth before JSON-RPC `initialize`.
 
-Prefer `--ws-token-file` over passing raw bearer tokens on the command line. Use `--ws-token-sha256` only when the client keeps the raw high-entropy token in a separate local secret store; the hash is only a verifier, and clients still need the original token.
+Prefer `--ws-token-file` over passing raw bearer tokens on the command line. Use
+`--ws-token-sha256` only when the client keeps the raw high-entropy token in a
+separate local secret store; the hash is only a verifier, and clients still need
+the original token.
 
-In WebSocket mode, app-server uses bounded queues. When request ingress is full, the server rejects new requests with JSON-RPC error code `-32001` and message `"Server overloaded; retry later."` Clients should retry with an exponentially increasing delay and jitter.
+In WebSocket mode, app-server uses bounded queues. When request ingress is full,
+the server rejects new requests with JSON-RPC error code `-32001` and message
+`"Server overloaded; retry later."` Clients should retry with an exponentially
+increasing delay and jitter.
 
 ## Message schema
 
@@ -68,7 +87,9 @@ codex app-server generate-json-schema --out ./schemas
 
 ## Getting started
 
-1. Start the server with `codex app-server` (default stdio transport) or `codex app-server --listen ws://127.0.0.1:4500` (experimental WebSocket transport).
+1. Start the server with `codex app-server` (default stdio transport),
+   `codex app-server --listen ws://127.0.0.1:4500` (TCP WebSocket), or
+   `codex app-server --listen unix://` (default Unix socket).
 2. Connect a client over the selected transport, then send `initialize` followed by the `initialized` notification.
 3. Start a thread and a turn, then keep reading notifications from the active transport stream.
 
@@ -216,12 +237,16 @@ If a client sends an experimental method or field without opting in, app-server 
 
 - `thread/start` - create a new thread; emits `thread/started` and automatically subscribes you to turn/item events for that thread.
 - `thread/resume` - reopen an existing thread by id so later `turn/start` calls append to it.
-- `thread/fork` - fork a thread into a new thread id by copying stored history; emits `thread/started` for the new thread.
+- `thread/fork` - fork a thread into a new thread id by copying stored history; emits `thread/started` for the new thread. Returned threads include `forkedFromId` when available.
 - `thread/read` - read a stored thread by id without resuming it; set `includeTurns` to return full turn history. Returned `thread` objects include runtime `status`.
 - `thread/list` - page through stored thread logs; supports cursor-based pagination plus `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filters. Returned `thread` objects include runtime `status`.
-- `thread/turns/list` - page through a stored thread's turn history without resuming it.
+- `thread/turns/list` - page through a stored thread's turn history without resuming it. `itemsView` controls whether turn items are omitted, summarized, or fully loaded.
+- `thread/turns/items/list` - reserved for paged turn-item loading; currently returns unsupported.
 - `thread/loaded/list` - list the thread ids currently loaded in memory.
 - `thread/name/set` - set or update a thread's user-facing name for a loaded thread or a persisted rollout; emits `thread/name/updated`.
+- `thread/goal/set` - set the goal for a thread; emits `thread/goal/updated`.
+- `thread/goal/get` - read the current goal for a thread.
+- `thread/goal/clear` - clear the goal for a thread; emits `thread/goal/cleared`.
 - `thread/metadata/update` - patch SQLite-backed stored thread metadata; currently supports persisted `gitInfo`.
 - `thread/archive` - move a thread's log file into the archived directory; returns `{}` on success and emits `thread/archived`.
 - `thread/unsubscribe` - unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server unloads the thread after a no-subscriber inactivity grace period and emits `thread/closed`.
@@ -241,13 +266,20 @@ If a client sends an experimental method or field without opting in, app-server 
 - `command/exec/resize` - resize a running PTY-backed `command/exec` session.
 - `command/exec/terminate` - stop a running `command/exec` session.
 - `command/exec/outputDelta` (notify) - emitted for base64-encoded stdout/stderr chunks from a streaming `command/exec` session.
+- `process/spawn` - start an explicit process session outside Codex's sandbox (experimental; requires `capabilities.experimentalApi`).
+- `process/writeStdin` - write stdin bytes to a running `process/spawn` session or close stdin (experimental).
+- `process/resizePty` - resize a running PTY-backed process session (experimental).
+- `process/kill` - terminate a running process session (experimental).
+- `process/outputDelta` and `process/exited` (notify) - emitted for streaming process output and process exit status (experimental).
 - `model/list` - list available models (set `includeHidden: true` to include entries with `hidden: true`) with effort options, optional `upgrade`, and `inputModalities`.
+- `modelProvider/capabilities/read` - read provider capability bounds for model/provider combinations (experimental; requires `capabilities.experimentalApi`).
 - `experimentalFeature/list` - list feature flags with lifecycle stage metadata and cursor pagination.
-- `experimentalFeature/enablement/set` - patch in-memory runtime enablement for supported feature keys such as `apps` and `plugins`.
+- `experimentalFeature/enablement/set` - patch in-memory runtime settings for supported feature keys such as `apps` and `plugins`.
 - `collaborationMode/list` - list collaboration mode presets (experimental, no pagination).
 - `skills/list` - list skills for one or more `cwd` values (supports `forceReload` and optional `perCwdExtraUserRoots`).
 - `skills/changed` (notify) - emitted when watched local skill files change.
 - `marketplace/add` - add a remote plugin marketplace and persist it into the user's marketplace config.
+- `marketplace/upgrade` - refresh a configured Git marketplace, or all configured Git marketplaces when you omit the marketplace name.
 - `plugin/list` - list discovered plugin marketplaces and plugin state, including install/auth policy metadata, marketplace load errors, featured plugin ids, and local, Git, or remote plugin source metadata.
 - `plugin/read` - read one plugin by marketplace path or remote marketplace name and plugin name, including bundled skills, apps, and MCP server names when those details are available.
 - `plugin/install` - install a plugin from a marketplace path or remote marketplace name.
@@ -265,7 +297,7 @@ If a client sends an experimental method or field without opting in, app-server 
 - `feedback/upload` - submit a feedback report (classification + optional reason/logs + conversation id, plus optional `extraLogFiles` attachments).
 - `config/read` - fetch the effective configuration on disk after resolving configuration layering.
 - `externalAgentConfig/detect` - detect external-agent artifacts that can be migrated with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
-- `externalAgentConfig/import` - apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home); plugin imports emit `externalAgentConfig/import/completed`.
+- `externalAgentConfig/import` - apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home). Supported item types include config, skills, `AGENTS.md`, plugins, MCP server config, subagents, hooks, commands, and sessions; plugin imports emit `externalAgentConfig/import/completed`.
 - `config/value/write` - write a single configuration key/value to the user's `config.toml` on disk.
 - `config/batchWrite` - apply configuration edits atomically to the user's `config.toml` on disk.
 - `configRequirements/read` - fetch requirements from `requirements.toml` and/or MDM, including allow-lists, pinned `featureRequirements`, and residency/network requirements (or `null` if you haven't set any up).
@@ -346,7 +378,9 @@ Use this endpoint to discover feature flags with metadata and lifecycle stage:
 ## Threads
 
 - `thread/read` reads a stored thread without subscribing to it; set `includeTurns` to include turns.
-- `thread/turns/list` pages through a stored thread's turn history without resuming it.
+- `thread/turns/list` pages through a stored thread's turn history without
+  resuming it. Use `itemsView` to choose whether turn items are omitted,
+  summarized, or fully loaded.
 - `thread/list` supports cursor pagination plus `modelProviders`, `sourceKinds`, `archived`, `cwd`, and `searchTerm` filtering.
 - `thread/loaded/list` returns the thread IDs currently in memory.
 - `thread/archive` moves the thread's persisted JSONL log into the archived directory.
@@ -373,6 +407,7 @@ Start a fresh thread when you need a new Codex conversation.
 { "id": 10, "result": {
   "thread": {
     "id": "thr_123",
+    "sessionId": "thr_123",
     "preview": "",
     "ephemeral": false,
     "modelProvider": "openai",
@@ -383,6 +418,11 @@ Start a fresh thread when you need a new Codex conversation.
 ```
 
 `serviceName` is optional. Set it when you want app-server to tag thread-level metrics with your integration's service name.
+
+`thread.sessionId` identifies the current live session tree root. Root threads
+use their own thread id as the session id; forked threads keep the session id
+of the root they came from. Clients should read the session id from
+`thread.sessionId` instead of deriving it from the thread id.
 
 To continue a stored session, call `thread/resume` with the `thread.id` you recorded earlier. The response shape matches `thread/start`. You can also pass the same configuration overrides supported by `thread/start`, such as `personality`:
 
@@ -402,11 +442,49 @@ If you mark an enabled MCP server as `required` in config and that server fails 
 
 If you resume with a different model than the one recorded in the rollout, Codex emits a warning and applies a one-time model-switch instruction on the next turn.
 
+### Manage a thread goal
+
+Use `thread/goal/set`, `thread/goal/get`, and `thread/goal/clear` to manage the
+same persisted goal state surfaced by `/goal` in the TUI.
+
+```json
+{ "method": "thread/goal/set", "id": 13, "params": {
+  "threadId": "thr_123",
+  "objective": "Finish the migration and keep tests green",
+  "status": "active",
+  "tokenBudget": 40000
+} }
+{ "id": 13, "result": { "goal": {
+  "threadId": "thr_123",
+  "objective": "Finish the migration and keep tests green",
+  "status": "active",
+  "tokenBudget": 40000,
+  "tokensUsed": 0,
+  "timeUsedSeconds": 0
+} } }
+{ "method": "thread/goal/updated", "params": {
+  "threadId": "thr_123",
+  "goal": {
+    "threadId": "thr_123",
+    "objective": "Finish the migration and keep tests green",
+    "status": "active",
+    "tokenBudget": 40000,
+    "tokensUsed": 0,
+    "timeUsedSeconds": 0
+  }
+} }
+```
+
+Goal objectives must be non-empty and at most 4,000 characters. Supplying a new
+objective replaces the goal and resets usage accounting. Supplying the current
+non-terminal objective, or omitting `objective`, updates status or token budget
+while preserving usage history.
+
 To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it:
 
 ```json
 { "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123" } }
-{ "id": 12, "result": { "thread": { "id": "thr_456" } } }
+{ "id": 12, "result": { "thread": { "id": "thr_456", "sessionId": "thr_123", "forkedFromId": "thr_123" } } }
 { "method": "thread/started", "params": { "thread": { "id": "thr_456" } } }
 ```
 
@@ -430,11 +508,18 @@ Unlike `thread/resume`, `thread/read` doesn't load the thread into memory or emi
 
 Use `thread/turns/list` to page a stored thread's turn history without resuming it. Results default to newest-first so clients can fetch older turns with `nextCursor`. The response also includes `backwardsCursor`; pass it as `cursor` with `sortDirection: "asc"` to fetch turns newer than the first item from the earlier page.
 
+`itemsView` controls how much turn-item data the response includes:
+
+- `notLoaded` omits items.
+- `summary` returns summarized item data and is the default when omitted.
+- `full` returns full item data.
+
 ```json
 { "method": "thread/turns/list", "id": 20, "params": {
   "threadId": "thr_123",
   "limit": 50,
-  "sortDirection": "desc"
+  "sortDirection": "desc",
+  "itemsView": "summary"
 } }
 { "id": 20, "result": {
   "data": [],
@@ -442,6 +527,9 @@ Use `thread/turns/list` to page a stored thread's turn history without resuming 
   "backwardsCursor": "newer-turns-cursor-or-null"
 } }
 ```
+
+`thread/turns/items/list` is reserved for paged turn-item loading, but the
+current server returns an unsupported-method error.
 
 ### List threads (with pagination & filters)
 
@@ -820,6 +908,41 @@ When the reviewer finishes, the server emits `item/started` and `item/completed`
 
 Use this notification to render the reviewer output in your client.
 
+## Process execution
+
+`process/*` is an experimental, explicit process-control API. It requires
+`capabilities.experimentalApi = true` and runs outside Codex's sandbox. Use it
+only when your client intentionally exposes local process control without a
+sandbox.
+
+Start a process with `process/spawn` and provide a `processHandle`, then use
+that handle for stdin, resize, and kill requests. Output streams through
+`process/outputDelta` notifications and completion streams through
+`process/exited`.
+
+```json
+{ "method": "process/spawn", "id": 48, "params": {
+  "command": ["python3", "-m", "pytest", "-q"],
+  "processHandle": "pytest-1",
+  "cwd": "/Users/me/project",
+  "tty": true
+} }
+{ "id": 48, "result": {} }
+{ "method": "process/outputDelta", "params": {
+  "processHandle": "pytest-1",
+  "stream": "stdout",
+  "deltaBase64": "Li4u"
+} }
+{ "method": "process/exited", "params": {
+  "processHandle": "pytest-1",
+  "exitCode": 0
+} }
+```
+
+Use `process/writeStdin` with `deltaBase64`, `closeStdin`, or both to send
+input. Use `process/resizePty` for PTY resize events and `process/kill` to
+terminate a running process.
+
 ## Command execution
 
 `command/exec` runs a single command (`argv` array) under the server sandbox without creating a thread.
@@ -985,7 +1108,7 @@ All items emit two shared lifecycle events:
 - `item/reasoning/summaryPartAdded` - marks a boundary between reasoning summary sections.
 - `item/reasoning/textDelta` - streams raw reasoning text (when supported by the model).
 - `item/commandExecution/outputDelta` - streams stdout/stderr for a command; append deltas in order.
-- `item/fileChange/outputDelta` - contains the tool call response of the underlying `apply_patch` tool call.
+- `item/fileChange/outputDelta` - deprecated compatibility notification for legacy `apply_patch` text output. Current app-server versions no longer emit it; use `fileChange` items and `turn/diff/updated` instead.
 
 ## Errors
 
@@ -1044,6 +1167,9 @@ When the client responds to `item/tool/requestUserInput`, app-server emits `serv
 ### Dynamic tool calls (experimental)
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request or response flow are experimental APIs.
+
+Dynamic tool names and namespace names must follow Responses API naming
+constraints. Avoid reserved namespace names used by built-in Codex tools.
 
 When a dynamic tool is invoked during a turn, app-server emits:
 
@@ -1523,8 +1649,8 @@ Use this flow when your client owns the sign-in ceremony or when a browser callb
        "userCode": "ABCD-1234"
      }
    }
-   ```
 
+   ```
 2. Show `verificationUrl` and `userCode` to the user; the frontend owns the UX.
 3. Wait for notifications:
 
@@ -1657,9 +1783,9 @@ Field notes:
 - `usedPercent` is current usage within the quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
-- `planType` is included when the backend returns the ChatGPT plan associated with a bucket.
-- `credits` is included when the backend returns remaining workspace credit details.
-- `rateLimitReachedType` identifies the backend-classified limit state when one has been reached.
+- `planType` is included when the server returns the ChatGPT plan associated with a bucket.
+- `credits` is included when the server returns remaining workspace credit details.
+- `rateLimitReachedType` identifies the server-classified limit state when one has been reached.
 
 ### 7) Notify a workspace owner about a limit
 
