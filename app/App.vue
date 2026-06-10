@@ -170,6 +170,7 @@
               :is-thinking="isThinking"
               :can-abort="canAbort"
               :commands="commandOptions"
+              :available-skills="activeBackendKind === 'codex' ? codexApi.skills.value : []"
               :attachments="attachments"
               :message-input="messageInput"
               :selected-mode="selectedMode"
@@ -570,6 +571,7 @@ import type { BackendKind, ConfigMergeStrategy } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
+import { parseSkill as parseSkillFromText } from './utils/parseSkill';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
 import { useSettings } from './composables/useSettings';
@@ -5235,6 +5237,8 @@ function parseAtAgent(input: string): { agent: string; text: string } | null {
   return { agent, text };
 }
 
+const parseSkill = (input: string) => parseSkillFromText(input, codexApi.skills.value);
+
 const DEBUG_SUBCOMMANDS: Record<string, string> = {
   session: t('app.debug.session'),
   notification: t('app.debug.notification'),
@@ -6325,6 +6329,8 @@ const backendMessageSend = useBackendMessageSend({
   findCommandByName,
   findAgentByName,
   parseAtAgent,
+  parseSkill,
+  availableSkills: computed(() => activeBackendKind.value === 'codex' ? codexApi.skills.value : []),
   runDebugCommand,
   openShellFromInput,
   clearComposerDraftForCurrentContext,
