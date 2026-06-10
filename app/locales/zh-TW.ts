@@ -519,6 +519,12 @@ const messages: LocaleMessages = {
     variantTitle: '變體 (Ctrl-, / Ctrl-.)',
     selectAtAgent: '使用@選擇代理',
     atAgentTitle: '透過@指定代理',
+    skillPopup: {
+      title: '技能',
+      empty: '暫無可用技能',
+      disabledBadge: '[已停用]',
+      triggerHint: '輸入 $ 觸發技能',
+    },
     bookmarkCurrentInput: '收藏目前輸入',
     openBookmarks: '開啟收藏 (↓)',
     historySubagent: '子代理',

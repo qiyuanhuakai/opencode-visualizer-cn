@@ -509,8 +509,14 @@ export interface LocaleMessages {
      modelTitle: string;
      variantTitle: string;
      selectAtAgent: string;
-     atAgentTitle: string;
-     bookmarkCurrentInput: string;
+      atAgentTitle: string;
+      skillPopup: {
+        title: string;
+        empty: string;
+        disabledBadge: string;
+        triggerHint: string;
+      };
+      bookmarkCurrentInput: string;
     openBookmarks: string;
     historySubagent: string;
     removeFromFavoritesConfirm: string;

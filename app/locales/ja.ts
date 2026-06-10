@@ -519,6 +519,12 @@ const messages: LocaleMessages = {
     variantTitle: 'バリアント（Ctrl-, / Ctrl-.）',
     selectAtAgent: '@でエージェントを選択',
     atAgentTitle: '@でエージェント',
+    skillPopup: {
+      title: 'スキル',
+      empty: '利用可能なスキルがありません',
+      disabledBadge: '[無効]',
+      triggerHint: '$ を入力してスキルを呼び出す',
+    },
     bookmarkCurrentInput: '現在の入力をブックマーク',
     openBookmarks: 'ブックマークを開く（↓）',
     historySubagent: 'サブエージェント',
