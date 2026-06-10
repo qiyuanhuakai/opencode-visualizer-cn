@@ -23,6 +23,8 @@ function createBaseParams() {
     agents: ref([{ name: 'build' }]),
     providerConfig: ref<Record<string, unknown> | null>(null),
     hiddenModels: ref<string[]>([]),
+    parseSkill: () => [],
+    availableSkills: ref([]),
     ensureConnectionReady: () => true,
     translate: (key: string) => key,
     toErrorMessage: (error: unknown) => String(error),
@@ -167,5 +169,108 @@ describe('useBackendMessageSend', () => {
       agent: 'build',
       model: { providerID: 'provider', modelID: 'model-1' },
     });
+  });
+
+  it('attaches $skill-name tokens as {type:"skill"} items before text on Codex backend', async () => {
+    const base = createBaseParams();
+    base.messageInput.value = '$skill-creator add a new skill for CI';
+    const codexApi = {
+      activeThreadId: ref('session-1'),
+      threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
+      collaborationModes: ref([]),
+      sendPrompt: vi.fn().mockResolvedValue(undefined),
+      refreshThreads: vi.fn().mockResolvedValue(undefined),
+      selectModel: vi.fn(),
+    };
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('codex'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi,
+      availableSkills: ref([
+        { name: 'skill-creator', description: 'd', enabled: true, path: '/abs/skill-creator/SKILL.md' },
+      ]),
+      parseSkill: (input: string) => {
+        const m = input.match(/\$([\w-]+)/);
+        if (!m) return [];
+        return m[1] === 'skill-creator'
+          ? [{ name: 'skill-creator', path: '/abs/skill-creator/SKILL.md' }]
+          : [];
+      },
+    });
+
+    await runtime.sendMessage();
+
+    const opts = codexApi.sendPrompt.mock.calls[0]?.[1] as {
+      input?: Array<{ type: string; name?: string; path?: string; text?: string }>;
+    };
+    expect(opts.input).toBeDefined();
+    expect(opts.input?.[0]).toEqual({
+      type: 'skill',
+      name: 'skill-creator',
+      path: '/abs/skill-creator/SKILL.md',
+    });
+    expect(opts.input?.[1]).toMatchObject({
+      type: 'text',
+      text: '$skill-creator add a new skill for CI',
+    });
+  });
+
+  it('does not attach skill items when no $token is present in the Codex message', async () => {
+    const base = createBaseParams();
+    base.messageInput.value = 'just a regular message';
+    const codexApi = {
+      activeThreadId: ref('session-1'),
+      threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
+      collaborationModes: ref([]),
+      sendPrompt: vi.fn().mockResolvedValue(undefined),
+      refreshThreads: vi.fn().mockResolvedValue(undefined),
+      selectModel: vi.fn(),
+    };
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('codex'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi,
+      availableSkills: ref([
+        { name: 'skill-creator', description: 'd', enabled: true, path: '/abs/skill-creator/SKILL.md' },
+      ]),
+      parseSkill: () => [],
+    });
+
+    await runtime.sendMessage();
+
+    const opts = codexApi.sendPrompt.mock.calls[0]?.[1] as {
+      input?: Array<{ type: string }>;
+    };
+    expect(opts.input?.some((item) => item.type === 'skill')).toBe(false);
+  });
+
+  it('does not attach skill items on OpenCode backend even with $token present', async () => {
+    const base = createBaseParams();
+    base.messageInput.value = '$skill-creator hello';
+    const sendPromptAsync = vi.fn().mockResolvedValue(undefined);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('opencode'),
+      openCodeApi: { sendPromptAsync },
+      codexApi: {
+        activeThreadId: ref(''),
+        threads: ref([]),
+        collaborationModes: ref([]),
+        sendPrompt: vi.fn(),
+        refreshThreads: vi.fn(),
+        selectModel: vi.fn(),
+      },
+      availableSkills: ref([
+        { name: 'skill-creator', description: 'd', enabled: true, path: '/abs/skill-creator/SKILL.md' },
+      ]),
+      parseSkill: () => [{ name: 'skill-creator', path: '/abs/skill-creator/SKILL.md' }],
+    });
+
+    await runtime.sendMessage();
+
+    const payload = sendPromptAsync.mock.calls[0]?.[1] as { parts: Array<Record<string, unknown>> };
+    expect(payload.parts.some((part) => part.type === 'skill')).toBe(false);
   });
 });
