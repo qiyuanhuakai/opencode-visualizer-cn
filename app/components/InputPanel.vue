@@ -564,7 +564,7 @@ function modeButtonLabel(id: unknown) {
   const option = findAgentOption(id);
   if (option?.label) return option.label;
   const normalizedId = extractAgentOptionId(id);
-  if (!normalizedId) return '';
+  if (!normalizedId) return t('inputPanel.defaultAgent');
   return normalizedId.charAt(0).toUpperCase() + normalizedId.slice(1);
 }
 
@@ -1360,6 +1360,11 @@ const inputMessageStyle = computed(() => {
 
 .input-selects .input-control {
   height: 28px;
+}
+
+.input-selects > .input-field.compact:first-child {
+  flex: 0 1 auto;
+  min-width: 110px;
 }
 
 .input-dropdown-root {

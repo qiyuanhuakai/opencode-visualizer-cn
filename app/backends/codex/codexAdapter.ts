@@ -856,9 +856,10 @@ export type CodexExperimentalFeatureEnablementSetParams = {
 export type CodexExperimentalFeatureEnablementSetResult = {};
 
 export type CodexCollaborationMode = {
-  id: string;
+  mode: string;
   name: string;
-  description?: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
 };
 
 export type CodexCollaborationModeListResult = {
@@ -1483,6 +1484,7 @@ export class CodexAdapter implements BackendAdapter {
       threadId,
       input: turnInput,
       cwd: input.cwd,
+      collaborationMode: input.collaborationMode,
       approvalPolicy: input.approvalPolicy,
       sandboxPolicy: input.sandboxPolicy,
       model: input.model,

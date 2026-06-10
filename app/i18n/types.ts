@@ -492,6 +492,8 @@ export interface LocaleMessages {
   inputPanel: {
     placeholder: string;
     loadingAgents: string;
+    defaultAgent: string;
+    defaultAgentDescription: string;
     loadingModels: string;
     loading: string;
     searchPlaceholder: string;
@@ -931,6 +933,7 @@ export interface LocaleMessages {
     copy: string;
     paste: string;
     cut: string;
+    selected: string;
     selectAll: string;
     deselectAll: string;
     open: string;

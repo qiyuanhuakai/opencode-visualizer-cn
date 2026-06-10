@@ -501,6 +501,8 @@ const messages: LocaleMessages = {
   inputPanel: {
     placeholder: 'Sendu mesaĝon…',
     loadingAgents: 'Ŝargas agentojn…',
+    defaultAgent: 'Defaŭlta',
+    defaultAgentDescription: 'Defaŭlta reĝimo de Codex-agentilo',
     loadingModels: 'Ŝargas modelojn…',
     loading: 'Ŝargas…',
     searchPlaceholder: 'Serĉi…',
@@ -940,6 +942,7 @@ const messages: LocaleMessages = {
     copy: 'Kopii',
     paste: 'Alglui',
     cut: 'Eltondi',
+    selected: 'Elektita',
     selectAll: 'Elekti ĉiujn',
     deselectAll: 'Malelekti ĉiujn',
     open: 'Malfermi',

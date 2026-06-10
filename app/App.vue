@@ -4076,12 +4076,23 @@ async function fetchAgents() {
       if (codexApi.connected.value) {
         await codexApi.refreshCollaborationModes();
       }
-      const options = codexApi.collaborationModes.value.map((mode) => ({
-        id: mode.id,
+      let options: typeof agentOptions.value = codexApi.collaborationModes.value.map((mode) => ({
+        id: mode.mode,
         label: mode.name,
-        description: mode.description,
         color: 'cyan',
       }));
+      // Defensive fallback: if the Codex server returned no collaboration modes
+      // (e.g. the experimental `collaborationMode/list` API is not enabled),
+      // synthesize a Default option so the UI is never blank and the user can
+      // always see and select an agent.
+      if (options.length === 0) {
+        options.push({
+          id: 'default',
+          label: t('inputPanel.defaultAgent'),
+          description: t('inputPanel.defaultAgentDescription'),
+          color: 'cyan',
+        });
+      }
       agentOptions.value = options;
       if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
         selectedMode.value = options.find((option) => option.id === 'default')?.id ?? options[0]?.id ?? '';

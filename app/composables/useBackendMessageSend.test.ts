@@ -98,7 +98,7 @@ describe('useBackendMessageSend', () => {
     const codexApi = {
       activeThreadId: ref('session-1'),
       threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
-      collaborationModes: ref([{ id: 'plan', name: 'Plan' }]),
+      collaborationModes: ref([{ mode: 'plan', name: 'Plan' }]),
       sendPrompt: vi.fn().mockResolvedValue(undefined),
       refreshThreads: vi.fn().mockResolvedValue(undefined),
       selectModel: vi.fn(),

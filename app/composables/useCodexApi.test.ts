@@ -51,6 +51,7 @@ function createAdapterMock() {
     rollbackThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     readDirectory: vi.fn().mockResolvedValue({ entries: [{ name: 'file.txt', type: 'file' }] }),
     readFile: vi.fn().mockResolvedValue({ dataBase64: 'aGVsbG8=' }),
+    listCollaborationModes: vi.fn().mockResolvedValue({ data: [] }),
     respondToServerRequest: vi.fn(),
     sendPrompt: vi.fn().mockResolvedValue({
       threadId: 'thr_existing',
@@ -525,6 +526,54 @@ describe('useCodexApi', () => {
       expect.objectContaining({ role: 'assistant', text: 'thr_existing answer' }),
     ]);
     expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual(['user', 'assistant']);
+  });
+
+  it('keeps all turns in canonicalHistory when readThread returns multi-turn history (page refresh regression)', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({
+      thread: {
+        id: 'thr_multi',
+        name: 'Multi-turn thread',
+        turns: [
+          {
+            id: 'turn_1',
+            items: [
+              { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'First user prompt' }] },
+              { type: 'agentMessage', id: 'a1', text: 'First agent answer' },
+            ],
+          },
+          {
+            id: 'turn_2',
+            items: [
+              { type: 'userMessage', id: 'u2', content: [{ type: 'text', text: 'Second user prompt' }] },
+              { type: 'agentMessage', id: 'a2', text: 'Second agent answer' },
+            ],
+          },
+          {
+            id: 'turn_3',
+            items: [
+              { type: 'userMessage', id: 'u3', content: [{ type: 'text', text: 'Third user prompt' }] },
+              { type: 'agentMessage', id: 'a3', text: 'Third agent answer' },
+            ],
+          },
+        ],
+      },
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.selectThread('thr_multi');
+
+    expect(mock.adapter.readThread).toHaveBeenCalledWith({
+      threadId: 'thr_multi',
+      includeTurns: true,
+    });
+    expect(api.canonicalHistory.value.length).toBeGreaterThanOrEqual(6);
+    expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual([
+      'user', 'assistant',
+      'user', 'assistant',
+      'user', 'assistant',
+    ]);
   });
 
   it('keeps selecting an empty thread when resume reports no rollout', async () => {
@@ -1285,5 +1334,49 @@ describe('useCodexApi', () => {
     await pendingSend;
 
     expect(api.realtimeHistoryQueue.value.some((entry) => entry.info.id === 'turn_after_switch:user:0')).toBe(false);
+  });
+
+  it('returns empty list and warns when collaborationMode/list throws (experimental API not enabled)', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listCollaborationModes = vi.fn().mockRejectedValue(new Error('method not found'));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const result = await api.refreshCollaborationModes();
+    expect(result.data).toEqual([]);
+    expect(api.collaborationModes.value).toEqual([]);
+    expect(api.collaborationModesLoading.value).toBe(false);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('normalizes non-array data to empty array when collaborationMode/list returns malformed payload', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listCollaborationModes = vi.fn().mockResolvedValue({ data: null });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.refreshCollaborationModes();
+    expect(api.collaborationModes.value).toEqual([]);
+  });
+
+  it('preserves collaboration modes returned from a successful list call', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listCollaborationModes = vi.fn().mockResolvedValue({
+      data: [
+        { name: 'Plan', mode: 'plan', model: null, reasoningEffort: 'medium' },
+        { name: 'Default', mode: 'default', model: null, reasoningEffort: null },
+      ],
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const result = await api.refreshCollaborationModes();
+    expect(api.collaborationModes.value).toEqual([
+      { name: 'Plan', mode: 'plan', model: null, reasoningEffort: 'medium' },
+      { name: 'Default', mode: 'default', model: null, reasoningEffort: null },
+    ]);
+    expect(result.data).toEqual([
+      { name: 'Plan', mode: 'plan', model: null, reasoningEffort: 'medium' },
+      { name: 'Default', mode: 'default', model: null, reasoningEffort: null },
+    ]);
   });
 });

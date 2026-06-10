@@ -256,6 +256,68 @@ describe('CodexAdapter', () => {
     });
   });
 
+  it('forwards collaborationMode to turn/start when supplied via sendPrompt', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const prompt = adapter.sendPrompt({
+      threadId: 'thr_collab',
+      text: 'Plan this refactor.',
+      collaborationMode: 'plan',
+    });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { thread: { id: 'thr_collab' } });
+    await waitForSent(socket, 4);
+    socket.respond(3, { turn: { id: 'turn_collab', status: 'inProgress' } });
+
+    await expect(prompt).resolves.toEqual({
+      threadId: 'thr_collab',
+      thread: undefined,
+      turn: { id: 'turn_collab', status: 'inProgress' },
+    });
+    const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> }).params;
+    expect(sentParams).toMatchObject({
+      threadId: 'thr_collab',
+      collaborationMode: 'plan',
+    });
+  });
+
+  it('does NOT include collaborationMode key when not supplied to sendPrompt', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const prompt = adapter.sendPrompt({
+      threadId: 'thr_nomode',
+      text: 'No collaboration mode here.',
+    });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { thread: { id: 'thr_nomode' } });
+    await waitForSent(socket, 4);
+    socket.respond(3, { turn: { id: 'turn_nomode', status: 'inProgress' } });
+
+    await expect(prompt).resolves.toEqual({
+      threadId: 'thr_nomode',
+      thread: undefined,
+      turn: { id: 'turn_nomode', status: 'inProgress' },
+    });
+    const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> }).params;
+    expect(sentParams).not.toHaveProperty('collaborationMode');
+  });
+
   it('passes image input items to turn/start', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({

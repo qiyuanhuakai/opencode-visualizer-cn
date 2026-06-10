@@ -501,6 +501,8 @@ const messages: LocaleMessages = {
   inputPanel: {
     placeholder: 'メッセージを送信…',
     loadingAgents: 'エージェントを読み込み中…',
+    defaultAgent: 'デフォルト',
+    defaultAgentDescription: 'デフォルトの Codex エージェントモード',
     loadingModels: 'モデルを読み込み中…',
     loading: '読み込み中…',
     searchPlaceholder: '検索…',
@@ -940,6 +942,7 @@ const messages: LocaleMessages = {
     copy: 'コピー',
     paste: '貼り付け',
     cut: '切り取り',
+    selected: '選択中',
     selectAll: 'すべて選択',
     deselectAll: '選択を解除',
     open: '開く',

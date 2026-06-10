@@ -52,6 +52,55 @@ describe('useBackendSessionReload', () => {
     expect(msg.loadHistory).toHaveBeenCalledWith([{ id: 'history-1' }]);
   });
 
+  it('does NOT call msg.reset on Codex page refresh (no oldId)', async () => {
+    const msg = {
+      saveSessionState: vi.fn(),
+      reset: vi.fn(),
+      loadHistory: vi.fn(),
+      tryLoadFromCache: vi.fn().mockReturnValue(false),
+    };
+    const selectThread = vi.fn().mockResolvedValue(undefined);
+    const reload = useBackendSessionReload({
+      activeBackendKind: ref('codex'),
+      activeDirectory: ref('/repo'),
+      uiInitState: ref('ready'),
+      isBootstrapping: ref(false),
+      isLoadingHistory: ref(false),
+      deferredSessionReloadId: ref<string | null>(null),
+      sessionReloadRequestId: ref(0),
+      hydratedDescendantSessionIds: new Set<string>(),
+      msg,
+      fwCloseAll: vi.fn(),
+      resetFollow: vi.fn(),
+      reasoningReset: vi.fn(),
+      subagentWindowsReset: vi.fn(),
+      clearRetryStatus: vi.fn(),
+      codexApi: {
+        activeThreadId: ref('thread-1'),
+        selectThread,
+      },
+      codexHistory: ref([{ id: 'history-1' }, { id: 'history-2' }]),
+      codexReapplyBackfill: vi.fn(),
+      fetchRootSessionHistory: vi.fn(),
+      waitForPendingRenders: vi.fn(),
+      reserveRootHistoryRequestId: vi.fn(),
+      scheduleDescendantSessionHistoryHydration: vi.fn(),
+      anchorOutputToBottom: vi.fn().mockResolvedValue(undefined),
+      restoreShellSessions: vi.fn().mockResolvedValue(undefined),
+      reloadTodosForAllowedSessions: vi.fn(),
+      fetchPendingPermissions: vi.fn(),
+      fetchPendingQuestions: vi.fn(),
+      focusInput: vi.fn(),
+    });
+
+    await reload.reloadSelectedSessionState('thread-1', undefined);
+
+    expect(msg.saveSessionState).not.toHaveBeenCalled();
+    expect(selectThread).not.toHaveBeenCalled();
+    expect(msg.reset).not.toHaveBeenCalled();
+    expect(msg.loadHistory).toHaveBeenCalledWith([{ id: 'history-1' }, { id: 'history-2' }]);
+  });
+
   it('uses cache for OpenCode session reload and skips root fetch', async () => {
     const msg = {
       saveSessionState: vi.fn(),

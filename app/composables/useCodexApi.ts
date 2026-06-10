@@ -2629,8 +2629,17 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       collaborationModesLoading.value = true;
       try {
         const result: CodexCollaborationModeListResult = await adapter.listCollaborationModes();
-        collaborationModes.value = result.data;
+        collaborationModes.value = Array.isArray(result.data) ? result.data : [];
         return result;
+      } catch (error) {
+        collaborationModes.value = [];
+        if (typeof console !== 'undefined') {
+          console.warn(
+            '[Codex] collaborationMode/list failed (the experimental API may not be enabled on this Codex server):',
+            error,
+          );
+        }
+        return { data: [] };
       } finally {
         collaborationModesLoading.value = false;
       }

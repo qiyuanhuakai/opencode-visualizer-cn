@@ -501,6 +501,8 @@ const messages: LocaleMessages = {
   inputPanel: {
     placeholder: '傳送訊息...',
     loadingAgents: '載入代理中...',
+    defaultAgent: '預設',
+    defaultAgentDescription: '預設 Codex 代理模式',
     loadingModels: '載入模型中...',
     loading: '載入中...',
     searchPlaceholder: '搜尋...',
@@ -940,6 +942,7 @@ const messages: LocaleMessages = {
     copy: '複製',
     paste: '貼上',
     cut: '剪下',
+    selected: '已選中',
     selectAll: '全選',
     deselectAll: '取消全選',
     open: '開啟',

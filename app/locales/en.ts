@@ -501,6 +501,8 @@ const messages: LocaleMessages = {
   inputPanel: {
     placeholder: 'Send a message...',
     loadingAgents: 'Loading agents...',
+    defaultAgent: 'Default',
+    defaultAgentDescription: 'Default Codex agent mode',
     loadingModels: 'Loading models...',
     loading: 'Loading...',
     searchPlaceholder: 'Search...',
@@ -940,6 +942,7 @@ const messages: LocaleMessages = {
     copy: 'Copy',
     paste: 'Paste',
     cut: 'Cut',
+    selected: 'Selected',
     selectAll: 'Select all',
     deselectAll: 'Deselect all',
     open: 'Open',

@@ -23,16 +23,19 @@
     </div>
     <div v-else class="codex-collaboration-mode-list">
       <div
-        v-for="mode in api.collaborationModes.value"
-        :key="mode.id"
+          v-for="mode in api.collaborationModes.value"
+          :key="mode.mode"
         class="codex-collaboration-mode-item"
       >
         <div class="codex-collaboration-mode-header">
           <Icon icon="mdi:account-group" width="16" class="codex-collaboration-mode-icon" />
           <span class="codex-collaboration-mode-name">{{ mode.name }}</span>
+          <span v-if="mode.reasoningEffort" class="codex-collaboration-mode-effort">
+            · {{ mode.reasoningEffort }}
+          </span>
         </div>
-        <p v-if="mode.description" class="codex-collaboration-mode-description">
-          {{ mode.description }}
+        <p v-if="mode.model" class="codex-collaboration-mode-description">
+          {{ mode.model }}
         </p>
       </div>
     </div>
