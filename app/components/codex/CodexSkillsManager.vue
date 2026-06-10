@@ -40,7 +40,7 @@
               type="checkbox"
               :checked="skill.enabled"
               :disabled="!api.connected.value"
-              @change="api.toggleSkill(skill.name, ($event.target as HTMLInputElement).checked)"
+              @change="api.toggleSkill(skill.path ?? skill.name, ($event.target as HTMLInputElement).checked)"
             />
             <span class="codex-skill-toggle-slider" />
           </label>
