@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   CodexAdapter,
   type CodexAccount,
@@ -53,6 +53,17 @@ import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type { FilePart, MessageInfo, MessagePart, ReasoningPart, TextPart, ToolPart } from '../types/sse';
 import { normalizeAbsolutePathNoParent } from '../utils/path';
+import { StorageKeys, storageGet, storageSet } from '../utils/storageKeys';
+
+/**
+ * Read the persisted Codex active thread id from storage so the previously
+ * selected thread can be restored on refresh. Returns empty string when no
+ * value is stored or the storage backend is unavailable.
+ */
+function loadPersistedActiveThread(): string {
+  const persisted = storageGet(StorageKeys.state.codexActiveThread);
+  return typeof persisted === 'string' ? persisted : '';
+}
 
 export type CodexConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -418,7 +429,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const bridgeToken = ref(initialOptions.bridgeToken ?? getPersistedCodexBridgeToken());
   const errorMessage = ref('');
   const threads = ref<CodexThread[]>([]);
-  const activeThreadId = ref('');
+  const activeThreadId = ref(loadPersistedActiveThread());
+  watch(activeThreadId, (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      storageSet(StorageKeys.state.codexActiveThread, newId);
+    }
+  });
   const activeTurn = ref<CodexTurn | null>(null);
   const transcript = ref<CodexTranscriptEntry[]>([]);
   const canonicalHistory = ref<CodexCanonicalHistoryEntry[]>([]);
@@ -1666,7 +1682,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
     const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
     threads.value = enrichedThreads;
-    if (!activeThreadId.value && enrichedThreads[0]) activeThreadId.value = enrichedThreads[0].id;
+    if (activeThreadId.value && !enrichedThreads.some((thread) => thread.id === activeThreadId.value)) {
+      activeThreadId.value = enrichedThreads[0]?.id ?? '';
+    } else if (!activeThreadId.value && enrichedThreads[0]) {
+      activeThreadId.value = enrichedThreads[0].id;
+    }
   }
 
   async function preloadPanelData() {

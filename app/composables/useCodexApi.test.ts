@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
 import type { CodexAdapter, CodexPromptResult } from '../backends/codex/codexAdapter';
 import type { CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
+import { StorageKeys, storageGet, storageKey } from '../utils/storageKeys';
 
 function createAdapterMock() {
   let notificationHandler: ((notification: CodexJsonRpcNotification) => void) | null = null;
@@ -1544,6 +1545,100 @@ describe('useCodexApi', () => {
       const shared = api.threads.value.find((t) => t.id === 'thr_shared');
       expect(shared?.createdAt).toBe(900);
       expect(shared?.updatedAt).toBe(950);
+    });
+  });
+
+  describe('activeThreadId persistence', () => {
+    it('restores the active thread from storage on init', () => {
+      localStorage.setItem(storageKey(StorageKeys.state.codexActiveThread), 'thr_restored');
+
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+      expect(api.activeThreadId.value).toBe('thr_restored');
+    });
+
+    it('persists the active thread to storage when it changes to a non-empty value', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn().mockResolvedValueOnce({
+        data: [
+          { id: 'thr_one', preview: 'One' },
+          { id: 'thr_two', preview: 'Two' },
+        ],
+        nextCursor: null,
+      });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      await api.selectThread('thr_two');
+
+      expect(api.activeThreadId.value).toBe('thr_two');
+      expect(storageGet(StorageKeys.state.codexActiveThread)).toBe('thr_two');
+    });
+
+    it('does not overwrite the persisted active thread when it is cleared to empty', async () => {
+      localStorage.setItem(storageKey(StorageKeys.state.codexActiveThread), 'thr_keep');
+
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn().mockResolvedValueOnce({
+        data: [
+          { id: 'thr_keep', preview: 'Keep' },
+          { id: 'thr_other', preview: 'Other' },
+        ],
+        nextCursor: null,
+      });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      api.activeThreadId.value = '';
+
+      expect(storageGet(StorageKeys.state.codexActiveThread)).toBe('thr_keep');
+    });
+
+    it('clears a stale persisted active thread and falls back to the first thread on refresh', async () => {
+      localStorage.setItem(storageKey(StorageKeys.state.codexActiveThread), 'thr_deleted');
+
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn().mockResolvedValueOnce({
+        data: [
+          { id: 'thr_alpha', preview: 'Alpha' },
+          { id: 'thr_beta', preview: 'Beta' },
+        ],
+        nextCursor: null,
+      });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      expect(api.activeThreadId.value).toBe('thr_alpha');
+      expect(api.threads.value.map((t) => t.id)).toEqual(['thr_alpha', 'thr_beta']);
+    });
+
+    it('keeps the persisted active thread when the thread still exists in the refreshed list', async () => {
+      localStorage.setItem(storageKey(StorageKeys.state.codexActiveThread), 'thr_persisted');
+
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn().mockResolvedValueOnce({
+        data: [
+          { id: 'thr_other', preview: 'Other' },
+          { id: 'thr_persisted', preview: 'Persisted' },
+        ],
+        nextCursor: null,
+      });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      expect(api.activeThreadId.value).toBe('thr_persisted');
+    });
+
+    it('isolates codex activeThread from opencode session storage', async () => {
+      localStorage.setItem(storageKey('state.sessionId'), 'opc_session');
+      localStorage.setItem(storageKey('state.pinnedSessions'), JSON.stringify(['opc_session']));
+
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+      expect(api.activeThreadId.value).toBe('');
+      expect(storageGet(StorageKeys.state.codexActiveThread)).toBeNull();
     });
   });
 });
