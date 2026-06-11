@@ -483,6 +483,14 @@ async function handleSkillToggle(name: string, currentEnabled: boolean | undefin
       const entry = skillData.value.find((s) => s.name === name);
       if (entry) entry.enabled = nextEnabled;
     }
+    // Sync the shared codexApi.skills.value so downstream consumers
+    // (e.g. App.vue's availableSkills computed -> $ mention popup) see
+    // the new enabled state without waiting for a page refresh. Only
+    // valid on the Codex backend; no-op otherwise because the toggle
+    // UI is gated on `enabled` being present (i.e. Codex-only).
+    if (props.activeBackendKind === 'codex' && codexApi.connected) {
+      await codexApi.refreshSkills();
+    }
   } catch (e) {
     errorMessage.value = t('statusMonitor.skills.toggleFailed');
   } finally {
