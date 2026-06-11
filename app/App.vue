@@ -379,6 +379,7 @@
       :preload="connectionState === 'ready'"
       :session-id="selectedSessionId"
       :codex-api="codexApi"
+      :active-backend-kind="activeBackendKind"
       @close="isStatusMonitorOpen = false"
     />
     <ProjectSettingsDialog
@@ -6341,7 +6342,11 @@ const backendMessageSend = useBackendMessageSend({
   findAgentByName,
   parseAtAgent,
   parseSkill,
-  availableSkills: computed(() => activeBackendKind.value === 'codex' ? codexApi.skills.value : []),
+  availableSkills: computed(() =>
+    activeBackendKind.value === 'codex'
+      ? codexApi.skills.value.filter((skill) => skill.enabled !== false)
+      : []
+  ),
   runDebugCommand,
   openShellFromInput,
   clearComposerDraftForCurrentContext,

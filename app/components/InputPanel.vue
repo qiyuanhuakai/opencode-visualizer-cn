@@ -842,7 +842,7 @@ const skillMatches = computed<SkillOption[]>(() => {
   // Whitespace inside afterDollar means the skill name is already complete
   if (/\s/.test(afterDollar)) return [];
 
-  const list = props.availableSkills ?? [];
+  const list = (props.availableSkills ?? []).filter((s) => s.enabled !== false);
   if (list.length === 0) return [];
 
   const lower = query.toLowerCase();
