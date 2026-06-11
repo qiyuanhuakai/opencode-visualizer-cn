@@ -16,6 +16,9 @@
 - [x] 修改“应用（app）”的翻译为“连接器（connector）”
 - [x] 状态监控面板的 skills 标签支持启用/禁用 toggle（复用 MCP 模式，调用 Codex `skills/config/write` RPC）
 - [x] 启用 Codex adapter 的 `experimentalApi` capability，使 `collaborationMode/list` 等实验性 RPC 可用
+- [x] status monitor面板支持显示codex插件
+- [x] 修改“应用（app）”的翻译为“连接器（connector）”
+
 
 ### Bug 修复
 
