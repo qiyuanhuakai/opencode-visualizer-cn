@@ -1379,4 +1379,176 @@ describe('useCodexApi', () => {
       { name: 'Default', mode: 'default', model: null, reasoningEffort: null },
     ]);
   });
+
+  describe('monotonic timestamp protection', () => {
+    it('preserves existing createdAt/updatedAt when upsertThread receives older values', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn()
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_stale', preview: 'Stale', createdAt: 1000, updatedAt: 2000 }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_stale', preview: 'Stale', createdAt: 1000, updatedAt: 2000 }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_stale', preview: 'Stale', createdAt: 50, updatedAt: 150 }],
+          nextCursor: null,
+        });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      await api.refreshThreads();
+
+      expect(api.threads.value.find((t) => t.id === 'thr_stale')?.createdAt).toBe(1000);
+      expect(api.threads.value.find((t) => t.id === 'thr_stale')?.updatedAt).toBe(2000);
+
+      await api.refreshThreads();
+
+      const thread = api.threads.value.find((t) => t.id === 'thr_stale');
+      expect(thread?.createdAt).toBe(1000);
+      expect(thread?.updatedAt).toBe(2000);
+    });
+
+    it('accepts incoming createdAt/updatedAt when they are larger than existing', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn()
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_growing', preview: 'Growing', createdAt: 100, updatedAt: 200 }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_growing', preview: 'Growing', createdAt: 100, updatedAt: 200 }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_growing', preview: 'Growing', createdAt: 150, updatedAt: 250 }],
+          nextCursor: null,
+        });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      await api.refreshThreads();
+
+      await api.refreshThreads();
+
+      const thread = api.threads.value.find((t) => t.id === 'thr_growing');
+      expect(thread?.createdAt).toBe(150);
+      expect(thread?.updatedAt).toBe(250);
+    });
+
+    it('uses incoming createdAt/updatedAt when no existing value is present', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn().mockResolvedValueOnce({
+        data: [{ id: 'thr_fresh', preview: 'Fresh', createdAt: 300, updatedAt: 400 }],
+        nextCursor: null,
+      });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      const thread = api.threads.value.find((t) => t.id === 'thr_fresh');
+      expect(thread?.createdAt).toBe(300);
+      expect(thread?.updatedAt).toBe(400);
+    });
+
+    it('handles undefined existing timestamps without regressing incoming values', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn()
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_mixed', preview: 'Mixed' }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_mixed', preview: 'Mixed', createdAt: 10, updatedAt: 20 }],
+          nextCursor: null,
+        });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      await api.refreshThreads();
+
+      const thread = api.threads.value.find((t) => t.id === 'thr_mixed');
+      expect(thread?.createdAt).toBe(10);
+      expect(thread?.updatedAt).toBe(20);
+    });
+
+    it('does not regress timestamps when merging thread reads (mergeThreadReadResult)', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn().mockResolvedValue({
+        data: [{ id: 'thr_read', preview: 'Read', createdAt: 500, updatedAt: 600 }],
+        nextCursor: null,
+      });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      mock.adapter.readThread = vi.fn().mockResolvedValue({
+        thread: { id: 'thr_read', preview: 'Read', createdAt: 1, updatedAt: 2 },
+        turns: [],
+      });
+      await api.selectThread('thr_read');
+
+      const thread = api.threads.value.find((t) => t.id === 'thr_read');
+      expect(thread?.createdAt).toBe(500);
+      expect(thread?.updatedAt).toBe(600);
+    });
+
+    it('integration: refreshThreads does not regress previous session timestamps when the latest fetch returns older data for a known thread', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.listThreads = vi.fn()
+        .mockResolvedValueOnce({
+          data: [
+            { id: 'thr_latest', preview: 'Latest', createdAt: 1000, updatedAt: 5000 },
+            { id: 'thr_middle', preview: 'Middle', createdAt: 500, updatedAt: 3000 },
+            { id: 'thr_oldest', preview: 'Oldest', createdAt: 100, updatedAt: 1000 },
+          ],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [
+            { id: 'thr_latest', preview: 'Latest', createdAt: 0, updatedAt: 0 },
+            { id: 'thr_middle', preview: 'Middle', createdAt: 0, updatedAt: 0 },
+            { id: 'thr_oldest', preview: 'Oldest', createdAt: 0, updatedAt: 0 },
+          ],
+          nextCursor: null,
+        });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      await api.refreshThreads();
+
+      const byId = (id: string) => api.threads.value.find((t) => t.id === id);
+      expect(byId('thr_latest')?.createdAt).toBe(1000);
+      expect(byId('thr_latest')?.updatedAt).toBe(5000);
+      expect(byId('thr_middle')?.createdAt).toBe(500);
+      expect(byId('thr_middle')?.updatedAt).toBe(3000);
+      expect(byId('thr_oldest')?.createdAt).toBe(100);
+      expect(byId('thr_oldest')?.updatedAt).toBe(1000);
+    });
+
+    it('preserves monotonic timestamps when merging threads across multiple providers', async () => {
+      const mock = createAdapterMock();
+      mock.adapter.readConfig = vi.fn().mockResolvedValue({
+        config: {
+          model_provider: 'omniroute',
+          model_providers: { omniroute: { name: 'OmniRoute' } },
+        },
+      });
+      mock.adapter.listThreads = vi.fn()
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_shared', preview: 'Shared', modelProvider: 'openai', createdAt: 900, updatedAt: 950 }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_shared', preview: 'Shared', modelProvider: 'openai', createdAt: 1, updatedAt: 2 }],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          data: [{ id: 'thr_shared', preview: 'Shared', modelProvider: 'omniroute', createdAt: 100, updatedAt: 200 }],
+          nextCursor: null,
+        });
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      const shared = api.threads.value.find((t) => t.id === 'thr_shared');
+      expect(shared?.createdAt).toBe(900);
+      expect(shared?.updatedAt).toBe(950);
+    });
+  });
 });

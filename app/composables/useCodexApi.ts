@@ -118,6 +118,30 @@ function fileResultToDataUrl(path: string, result: CodexFsReadFileResult): strin
   return `data:${mime};base64,${base64}`;
 }
 
+/**
+ * Monotonic timestamp protection for Codex session metadata.
+ * Prevents stale bridge data from regressing `createdAt`/`updatedAt` to older
+ * values, which would otherwise cause previous sessions to "follow" the
+ * latest session's time on refresh.
+ */
+function monotonicTimestamps(
+  existing: Pick<CodexThread, 'createdAt' | 'updatedAt'> | undefined,
+  incoming: Pick<CodexThread, 'createdAt' | 'updatedAt'> | undefined,
+): { createdAt: number | undefined; updatedAt: number | undefined } {
+  const pickGreater = (
+    a: number | undefined,
+    b: number | undefined,
+  ): number | undefined => {
+    if (a === undefined) return b;
+    if (b === undefined) return a;
+    return Math.max(a, b);
+  };
+  return {
+    createdAt: pickGreater(existing?.createdAt, incoming?.createdAt),
+    updatedAt: pickGreater(existing?.updatedAt, incoming?.updatedAt),
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -541,13 +565,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function upsertThread(thread: CodexThread, refreshGitInfo = true) {
     const existing = threads.value.find((item) => item.id === thread.id);
+    const monotonic = monotonicTimestamps(existing, thread);
     const normalizedThread = normalizeThreadCwd({
       ...existing,
       ...thread,
       cwd: thread.cwd ?? existing?.cwd,
       gitInfo: thread.gitInfo ?? existing?.gitInfo,
-      createdAt: thread.createdAt ?? existing?.createdAt,
-      updatedAt: thread.updatedAt ?? existing?.updatedAt,
+      createdAt: monotonic.createdAt,
+      updatedAt: monotonic.updatedAt,
     });
     const index = threads.value.findIndex((item) => item.id === thread.id);
     if (index === -1) threads.value = [normalizedThread, ...threads.value];
@@ -1540,13 +1565,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const existingThreads = threads.value;
     return result.data.map((thread) => {
       const existing = existingThreads.find((item) => item.id === thread.id);
+      const monotonic = monotonicTimestamps(existing, thread);
       return normalizeThreadCwd({
         ...existing,
         ...thread,
         cwd: thread.cwd ?? existing?.cwd,
         gitInfo: thread.gitInfo ?? existing?.gitInfo,
-        createdAt: thread.createdAt ?? existing?.createdAt,
-        updatedAt: thread.updatedAt ?? existing?.updatedAt,
+        createdAt: monotonic.createdAt,
+        updatedAt: monotonic.updatedAt,
       });
     });
   }
@@ -1602,7 +1628,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
       nextCursor ??= result.value.nextCursor;
-      for (const thread of result.value.data) merged.set(thread.id, { ...merged.get(thread.id), ...thread });
+      for (const thread of result.value.data) {
+        const existing = merged.get(thread.id);
+        const monotonic = monotonicTimestamps(existing, thread);
+        merged.set(thread.id, { ...existing, ...thread, createdAt: monotonic.createdAt, updatedAt: monotonic.updatedAt });
+      }
     }
     return {
       data: Array.from(merged.values()).sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0)),
@@ -1739,6 +1769,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   ): CodexThreadReadResult {
     const existing = threads.value.find((item) => item.id === threadId);
     const thread = (read?.thread ?? { id: threadId }) as CodexThread;
+    const monotonic = monotonicTimestamps(existing, thread);
     return {
       ...read,
       thread: {
@@ -1747,8 +1778,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         id: thread.id || existing?.id || threadId,
         cwd: thread.cwd ?? existing?.cwd,
         gitInfo: thread.gitInfo ?? existing?.gitInfo,
-        createdAt: thread.createdAt ?? existing?.createdAt,
-        updatedAt: thread.updatedAt ?? existing?.updatedAt,
+        createdAt: monotonic.createdAt,
+        updatedAt: monotonic.updatedAt,
       },
     };
   }
