@@ -1309,6 +1309,7 @@ export class CodexAdapter implements BackendAdapter {
     this.getLspStatus = this.getLspStatus.bind(this);
     this.updateMcp = this.updateMcp.bind(this);
     this.getSkillStatus = this.getSkillStatus.bind(this);
+    this.updateSkill = this.updateSkill.bind(this);
     this.updateProject = this.updateProject.bind(this);
     this.createWorktree = this.createWorktree.bind(this);
     this.deleteWorktree = this.deleteWorktree.bind(this);
@@ -2210,6 +2211,14 @@ export class CodexAdapter implements BackendAdapter {
   async getSkillStatus() {
     const result = await this.listSkills({ cwds: [] });
     return result.data.flatMap((entry) => entry.skills);
+  }
+
+  async updateSkill(payload: { path: string; name?: string; enabled: boolean }) {
+    if (!payload?.path) {
+      throw new Error('updateSkill requires a skill path; Codex skills/config/write is keyed by path.');
+    }
+    await this.writeSkillConfig({ path: payload.path, enabled: payload.enabled });
+    return { path: payload.path, enabled: payload.enabled };
   }
 
   updateProject() {

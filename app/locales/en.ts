@@ -310,6 +310,9 @@ const messages: LocaleMessages = {
       total: 'Total: {count}',
       noData: 'No skills loaded.',
       unsupported: 'The current OpenCode version does not support viewing skill status.',
+      enable: 'Enable skill',
+      disable: 'Disable skill',
+      toggleFailed: 'Failed to toggle skill.',
     },
     token: {
       noSession: 'No session selected',

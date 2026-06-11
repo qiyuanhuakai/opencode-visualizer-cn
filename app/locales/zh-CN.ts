@@ -310,6 +310,9 @@ const messages: LocaleMessages = {
       total: '总数: {count}',
       noData: '没有已加载的技能。',
       unsupported: '当前 OpenCode 版本暂不支持查看技能状态。',
+      enable: '启用技能',
+      disable: '禁用技能',
+      toggleFailed: '切换技能状态失败。',
     },
     token: {
       noSession: '未选择会话',

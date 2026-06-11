@@ -310,6 +310,9 @@ const messages: LocaleMessages = {
       total: '合計: {count}',
       noData: 'スキルが読み込まれていません。',
       unsupported: '現在のOpenCodeバージョンではスキル状態の表示がサポートされていません。',
+      enable: 'スキルを有効化',
+      disable: 'スキルを無効化',
+      toggleFailed: 'スキルの切り替えに失敗しました。',
     },
     token: {
       noSession: 'セッションが選択されていません',

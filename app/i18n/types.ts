@@ -309,6 +309,9 @@ export interface LocaleMessages {
       total: string;
       noData: string;
       unsupported: string;
+      enable: string;
+      disable: string;
+      toggleFailed: string;
     };
     token: {
       noSession: string;

@@ -1236,11 +1236,57 @@ describe('CodexAdapter', () => {
          rateLimitReachedType: null,
        },
      });
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'account/rateLimits/read',
-       params: {},
-     });
-   });
- });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'account/rateLimits/read',
+        params: {},
+      });
+    });
+  });
+
+  describe('updateSkill', () => {
+    it('sends skills/config/write with the supplied path and enabled flag', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
+
+      const update = adapter.updateSkill({
+        path: '/Users/me/.codex/skills/skill-creator/SKILL.md',
+        enabled: false,
+      });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {});
+
+      await expect(update).resolves.toEqual({
+        path: '/Users/me/.codex/skills/skill-creator/SKILL.md',
+        enabled: false,
+      });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'skills/config/write',
+        params: {
+          path: '/Users/me/.codex/skills/skill-creator/SKILL.md',
+          enabled: false,
+        },
+      });
+    });
+
+    it('throws when path is missing (Codex keys the write by path)', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
+
+      await expect(
+        adapter.updateSkill({ path: '', enabled: true })
+      ).rejects.toThrow(/path/);
+    });
+  });
 });

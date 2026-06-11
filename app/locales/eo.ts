@@ -310,6 +310,9 @@ const messages: LocaleMessages = {
       total: 'Entute: {count}',
       noData: 'Neniu kapableco ŝargita.',
       unsupported: 'La aktuala OpenCode-versio ne subtenas vidon de kapableca stato.',
+      enable: 'Ŝalti kapablecon',
+      disable: 'Malŝalti kapablecon',
+      toggleFailed: 'Malsukcesis ŝanĝi la kapablecan staton.',
     },
     token: {
       noSession: 'Neniu sesio elektita',
