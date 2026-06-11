@@ -19,6 +19,7 @@ let adapters: Record<BackendKind, BackendAdapter | undefined> = {
   opencode: createOpenCodeAdapter(),
   codex: createCodexAdapter({
     url: appendCodexBridgeToken(getPersistedCodexBridgeUrl(), getPersistedCodexBridgeToken()),
+    experimentalApi: true,
   }),
 };
 
@@ -59,7 +60,10 @@ export function configureCodexBackend(options: { bridgeUrl: string; bridgeToken?
   else storageRemove(StorageKeys.auth.codexBridgeToken);
   adapters = {
     ...adapters,
-    codex: createCodexAdapter({ url: appendCodexBridgeToken(bridgeUrl, bridgeToken) }),
+    codex: createCodexAdapter({
+      url: appendCodexBridgeToken(bridgeUrl, bridgeToken),
+      experimentalApi: true,
+    }),
   };
 }
 

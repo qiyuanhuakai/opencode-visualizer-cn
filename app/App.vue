@@ -170,6 +170,7 @@
               :is-thinking="isThinking"
               :can-abort="canAbort"
               :commands="commandOptions"
+              :available-skills="activeBackendKind === 'codex' ? codexApi.skills.value : []"
               :attachments="attachments"
               :message-input="messageInput"
               :selected-mode="selectedMode"
@@ -378,6 +379,7 @@
       :preload="connectionState === 'ready'"
       :session-id="selectedSessionId"
       :codex-api="codexApi"
+      :active-backend-kind="activeBackendKind"
       @close="isStatusMonitorOpen = false"
     />
     <ProjectSettingsDialog
@@ -570,6 +572,7 @@ import type { BackendKind, ConfigMergeStrategy } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
+import { parseSkill as parseSkillFromText } from './utils/parseSkill';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
 import { useSettings } from './composables/useSettings';
@@ -4074,12 +4077,23 @@ async function fetchAgents() {
       if (codexApi.connected.value) {
         await codexApi.refreshCollaborationModes();
       }
-      const options = codexApi.collaborationModes.value.map((mode) => ({
-        id: mode.id,
+      let options: typeof agentOptions.value = codexApi.collaborationModes.value.map((mode) => ({
+        id: mode.mode,
         label: mode.name,
-        description: mode.description,
         color: 'cyan',
       }));
+      // Defensive fallback: if the Codex server returned no collaboration modes
+      // (e.g. the experimental `collaborationMode/list` API is not enabled),
+      // synthesize a Default option so the UI is never blank and the user can
+      // always see and select an agent.
+      if (options.length === 0) {
+        options.push({
+          id: 'default',
+          label: t('inputPanel.defaultAgent'),
+          description: t('inputPanel.defaultAgentDescription'),
+          color: 'cyan',
+        });
+      }
       agentOptions.value = options;
       if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
         selectedMode.value = options.find((option) => option.id === 'default')?.id ?? options[0]?.id ?? '';
@@ -5235,6 +5249,8 @@ function parseAtAgent(input: string): { agent: string; text: string } | null {
   return { agent, text };
 }
 
+const parseSkill = (input: string) => parseSkillFromText(input, codexApi.skills.value);
+
 const DEBUG_SUBCOMMANDS: Record<string, string> = {
   session: t('app.debug.session'),
   notification: t('app.debug.notification'),
@@ -6325,6 +6341,12 @@ const backendMessageSend = useBackendMessageSend({
   findCommandByName,
   findAgentByName,
   parseAtAgent,
+  parseSkill,
+  availableSkills: computed(() =>
+    activeBackendKind.value === 'codex'
+      ? codexApi.skills.value.filter((skill) => skill.enabled !== false)
+      : []
+  ),
   runDebugCommand,
   openShellFromInput,
   clearComposerDraftForCurrentContext,

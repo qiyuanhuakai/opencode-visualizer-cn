@@ -13,12 +13,17 @@
 - [x] 删除“外部代理配置”
 - [x] 完善“反馈”的格式
 - [x] codex panel的“插件”功能可用于安装卸载插件
+- [x] 修改“应用（app）”的翻译为“连接器（connector）”
+- [x] 状态监控面板的 skills 标签支持启用/禁用 toggle（复用 MCP 模式，调用 Codex `skills/config/write` RPC）
+- [x] 启用 Codex adapter 的 `experimentalApi` capability，使 `collaborationMode/list` 等实验性 RPC 可用
 - [x] status monitor面板支持显示codex插件
 - [x] 修改“应用（app）”的翻译为“连接器（connector）”
+
 
 ### Bug 修复
 
 - [x] 修复了在opencode和codex后端之间切换的不同步问题
+- [x] 修复了状态监控面板在 OpenCode 和 Codex 后端之间切换时不随之刷新的问题（缺 `activeBackendKind` prop / watcher）
 - [x] 修复了编辑器的“当前行指示器”不遵守主题设置的问题
 - [x] 修复了codex后端下ai发送的消息会另起一个消息框的问题
 - [x] 修复了codex后端下用户发送的消息会重复两遍的问题
@@ -27,12 +32,17 @@
 - [x] 修复了codex后端下ai的输出导致严重页面跳动的问题 
 - [x] 修复了codex后端下不显示历史记录的问题
 - [x] 修复了codex后端下用户发送的新消息会混入上一条消息，以及会被上一条消息混入的问题
+- [x] 修复了 Codex 后端下协作模式 (`collaborationMode`) 在 adapter 层被静默丢弃的问题（用户选择 agent 实际未生效，调用链 4 站中断在 `startTurn()`）
+- [x] 修复了 Codex 后端下刷新页面时线程历史丢失、只剩最新 turn 的问题（`useBackendSessionReload` 中 `msg.reset()` 与桥接 watcher 的竞态，仅在真正切换 session 时才允许重置）
+- [x] 修复了 Codex 后端下 agent 选择器显示空白的问题（`collaborationMode/list` 响应字段是 `mode` 而非 `id`，TS 类型与 wire 数据不匹配；按实测 wire 数据修正）
+- [x] 修复了 Codex 后端下禁用 skills 后 `$` 弹窗仍然显示已禁用 skill 的问题（`updateSkill` 成功后未同步共享 `codexApi.skills.value`）
 - [x] 但是其仍然不能实际投入使用，因为存在许多问题：详见[RoadMap.md](./RoadMap.md)
 
 ### 无法实现功能
 
 - [x] 由于codex appserver自身的问题，无法实现以下功能：
-   - [ ] 会话级别的token消耗显示
+   - [无法支持] 会话级别的token消耗显示
+  - [无法支持] status monitor面板支持显示codex插件
          
 
 ## [v0.5.4 released]

@@ -133,4 +133,5 @@ export type BackendAdapter = {
   getLspStatus?(): Promise<unknown>;
   updateMcp?(payload: { name: string; config: Record<string, unknown> }): Promise<unknown>;
   getSkillStatus?(): Promise<unknown>;
+  updateSkill?(payload: { path: string; name?: string; enabled: boolean }): Promise<unknown>;
 };

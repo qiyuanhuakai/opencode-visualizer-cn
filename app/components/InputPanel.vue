@@ -167,19 +167,19 @@
           </button>
         </div>
       </div>
-      <div class="command-dropdown-wrapper">
+      <div class="mention-dropdown-wrapper">
         <Dropdown
-          ref="commandDropdownRef"
-          :open="commandPopupOpen"
+          ref="mentionDropdownRef"
+          :open="mentionOpen"
           :auto-close="false"
           :auto-focus="false"
           :auto-highlight="true"
-          popup-class="input-dropdown-popup command-popup"
-          @select="handleCommandSelect"
+          popup-class="input-dropdown-popup mention-popup"
+          @select="handleMentionSelect"
         >
           <template #trigger><span /></template>
           <template #default>
-            <div class="dropdown-list">
+            <div v-if="activeMentionType === 'command'" class="dropdown-list">
               <DropdownItem
                 v-for="command in commandMatches"
                 :key="command.name"
@@ -193,22 +193,7 @@
                 </div>
               </DropdownItem>
             </div>
-          </template>
-        </Dropdown>
-      </div>
-      <div class="agent-dropdown-wrapper">
-        <Dropdown
-          ref="agentDropdownRef"
-          :open="agentPopupOpen"
-          :auto-close="false"
-          :auto-focus="false"
-          :auto-highlight="true"
-          popup-class="input-dropdown-popup agent-popup"
-          @select="handleAgentSelect"
-        >
-          <template #trigger><span /></template>
-          <template #default>
-            <div class="dropdown-list">
+            <div v-else-if="activeMentionType === 'agent'" class="dropdown-list">
               <DropdownItem
                 v-for="agent in agentMatches"
                 :key="agent.id"
@@ -221,6 +206,28 @@
                   </div>
                   <div v-if="agent.description" class="agent-popup-description">
                     {{ agent.description }}
+                  </div>
+                </div>
+              </DropdownItem>
+            </div>
+            <div v-else-if="activeMentionType === 'skill'" class="dropdown-list">
+              <DropdownItem
+                v-for="skill in skillMatches"
+                :key="skill.name"
+                :value="skill.name"
+              >
+                <div class="skill-dropdown-item">
+                  <div class="skill-popup-name">
+                    ${{ skill.name }}
+                    <span v-if="!skill.enabled" class="skill-popup-disabled">
+                      {{ $t('inputPanel.skillPopup.disabledBadge') }}
+                    </span>
+                  </div>
+                  <div
+                    v-if="skill.interface?.shortDescription || skill.description"
+                    class="skill-popup-description"
+                  >
+                    {{ skill.interface?.shortDescription || skill.description }}
                   </div>
                 </div>
               </DropdownItem>
@@ -242,13 +249,16 @@
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
-                <span :style="agentValueStyle(id)">{{ modeButtonLabel(id) }}</span>
+                <span :style="agentValueStyle(id)" :title="modeButtonLabel(id)">{{ modeButtonLabel(id) }}</span>
               </template>
               <template #default>
                 <div class="dropdown-list">
                   <div v-if="!hasAgentOptions" class="dropdown-empty">{{ $t('inputPanel.loadingAgents') }}</div>
                   <DropdownItem v-for="agent in agentOptions" :key="agent.id" :value="agent.id">
-                    <div class="agent-dropdown-item">
+                    <div
+                      class="agent-dropdown-item"
+                      :class="{ 'is-current': agent.id === props.selectedMode }"
+                    >
                       <span class="agent-dropdown-name" :style="agentOptionNameStyle(agent)">
                         {{ agent.label }}
                       </span>
@@ -259,6 +269,12 @@
                       >
                         {{ agent.description }}
                       </span>
+                      <span
+                        v-if="agent.id === props.selectedMode"
+                        class="agent-dropdown-current-mark"
+                        :title="$t('common.selected')"
+                        aria-hidden="true"
+                      >✓</span>
                     </div>
                   </DropdownItem>
                 </div>
@@ -422,6 +438,7 @@ import { useMessages } from '../composables/useMessages';
 import { useFavoriteMessages } from '../composables/useFavoriteMessages';
 import { getMessageVariant } from '../types/sse';
 import { useSettings } from '../composables/useSettings';
+import type { CodexSkill } from '../backends/codex/codexAdapter';
 type ModelOption = {
   id: string;
   modelID: string;
@@ -432,6 +449,7 @@ type ModelOption = {
 };
 type CommandOption = { name: string; description?: string; hints?: string[] };
 type AgentOption = { id: string; label: string; description?: string; color?: string; isSubagent?: boolean };
+type SkillOption = CodexSkill;
 type ThinkingChoice = { key: string; value: string | undefined; label: string };
 
 const { t } = useI18n();
@@ -455,6 +473,7 @@ const props = defineProps<{
   isThinking: boolean;
   canAbort: boolean;
   commands: CommandOption[];
+  availableSkills?: SkillOption[];
   attachments: Array<{
     id: string;
     filename: string;
@@ -515,8 +534,7 @@ type DropdownRef = {
 
 const historyDropdownRef = ref<DropdownRef | null>(null);
 const favoritesDropdownRef = ref<DropdownRef | null>(null);
-const commandDropdownRef = ref<DropdownRef | null>(null);
-const agentDropdownRef = ref<DropdownRef | null>(null);
+const mentionDropdownRef = ref<DropdownRef | null>(null);
 
 type HistoryEntry = {
   text: string;
@@ -546,7 +564,7 @@ function modeButtonLabel(id: unknown) {
   const option = findAgentOption(id);
   if (option?.label) return option.label;
   const normalizedId = extractAgentOptionId(id);
-  if (!normalizedId) return '';
+  if (!normalizedId) return t('inputPanel.defaultAgent');
   return normalizedId.charAt(0).toUpperCase() + normalizedId.slice(1);
 }
 
@@ -721,10 +739,25 @@ const commandMatches = computed(() => {
 
 const commandPopupDismissed = ref(false);
 const agentPopupDismissed = ref(false);
+const skillPopupDismissed = ref(false);
 
-const commandPopupOpen = computed(
-  () => !commandPopupDismissed.value && commandMatches.value.length > 0,
-);
+// --- Unified mention popup (command / agent / skill) ---
+// Priority: $skill > @agent > /command (most specific first)
+const activeMentionType = computed<'command' | 'agent' | 'skill' | null>(() => {
+  if (skillMatches.value.length > 0 && !skillPopupDismissed.value) return 'skill';
+  if (agentMatches.value.length > 0 && !agentPopupDismissed.value) return 'agent';
+  if (commandMatches.value.length > 0 && !commandPopupDismissed.value) return 'command';
+  return null;
+});
+
+const mentionOpen = computed(() => activeMentionType.value !== null);
+
+function dismissActiveMention() {
+  const type = activeMentionType.value;
+  if (type === 'skill') skillPopupDismissed.value = true;
+  else if (type === 'agent') agentPopupDismissed.value = true;
+  else if (type === 'command') commandPopupDismissed.value = true;
+}
 
 // --- Agent @ invocation ---
 const atQuery = computed(() => {
@@ -777,29 +810,68 @@ const agentMatches = computed(() => {
   return matches;
 });
 
-const agentPopupOpen = computed(
-  () => !agentPopupDismissed.value && agentMatches.value.length > 0,
-);
+// --- Skill $ invocation ---
+const skillQuery = computed(() => {
+  const value = messageValue.value;
+  const textarea = textareaRef.value;
+  const cursorPos = textarea?.selectionStart ?? value.length;
+  const textBeforeCursor = value.slice(0, cursorPos);
+  const lastDollar = textBeforeCursor.lastIndexOf('$');
+  if (lastDollar === -1) return '';
+  const afterDollar = textBeforeCursor.slice(lastDollar + 1);
+  if (afterDollar.startsWith(' ') || afterDollar.startsWith('\t') || afterDollar.startsWith('\n')) return '';
+  if (/\s/.test(afterDollar)) return '';
+  const match = afterDollar.match(/^(\S*)/);
+  return match?.[1] ?? '';
+});
+
+const skillMatches = computed<SkillOption[]>(() => {
+  const query = skillQuery.value;
+  const textarea = textareaRef.value;
+  const value = messageValue.value;
+  const cursorPos = textarea?.selectionStart ?? value.length;
+  const textBeforeCursor = value.slice(0, cursorPos);
+  const lastDollar = textBeforeCursor.lastIndexOf('$');
+
+  // Not in $ context if no $ found
+  if (lastDollar === -1) return [];
+
+  // $ followed by whitespace is not a valid $ context
+  const afterDollar = textBeforeCursor.slice(lastDollar + 1);
+  if (afterDollar.startsWith(' ') || afterDollar.startsWith('\t') || afterDollar.startsWith('\n')) return [];
+  // Whitespace inside afterDollar means the skill name is already complete
+  if (/\s/.test(afterDollar)) return [];
+
+  const list = (props.availableSkills ?? []).filter((s) => s.enabled !== false);
+  if (list.length === 0) return [];
+
+  const lower = query.toLowerCase();
+  return list.filter(
+    (s) => s.name.toLowerCase().startsWith(lower) ||
+           (s.interface?.displayName ?? '').toLowerCase().startsWith(lower),
+  );
+});
 
 watch(
   () => messageValue.value,
   () => {
     commandPopupDismissed.value = false;
     agentPopupDismissed.value = false;
+    skillPopupDismissed.value = false;
   },
 );
 
-function handleCommandSelect(name: unknown) {
-  if (typeof name === 'string') applyCommandSelection(name);
+function handleMentionSelect(value: unknown) {
+  if (typeof value !== 'string') return;
+  const type = activeMentionType.value;
+  if (type === 'command') applyCommandSelection(value);
+  else if (type === 'agent') applyAgentSelection(value);
+  else if (type === 'skill') applySkillSelection(value);
 }
 
 function applyCommandSelection(name: string) {
   messageValue.value = `/${name} `;
   nextTick(() => textareaRef.value?.focus());
-}
-
-function handleAgentSelect(id: unknown) {
-  if (typeof id === 'string') applyAgentSelection(id);
 }
 
 function applyAgentSelection(id: string) {
@@ -838,6 +910,38 @@ function applyAgentSelection(id: string) {
   // Set cursor position after the inserted agent name + space
   nextTick(() => {
     const newCursorPos = lastAtIndex + agent.label.length + 2; // +2 for '@' and ' '
+    textarea?.setSelectionRange(newCursorPos, newCursorPos);
+    textarea?.focus();
+  });
+}
+
+function applySkillSelection(name: string) {
+  const skill = (props.availableSkills ?? []).find((s) => s.name === name);
+  if (!skill) return;
+
+  const textarea = textareaRef.value;
+  const value = messageValue.value;
+  const cursorPos = textarea?.selectionStart ?? value.length;
+  const textBeforeCursor = value.slice(0, cursorPos);
+  const lastDollar = textBeforeCursor.lastIndexOf('$');
+  if (lastDollar === -1) return;
+  const textAfterDollar = value.slice(lastDollar + 1);
+  const whitespaceMatch = textAfterDollar.match(/\s/);
+  const queryEndOffset = whitespaceMatch ? whitespaceMatch.index! : textAfterDollar.length;
+  const queryEndPos = lastDollar + 1 + queryEndOffset;
+
+  const beforeDollar = value.slice(0, lastDollar);
+  const afterQuery = value.slice(queryEndPos);
+  messageValue.value = beforeDollar + '$' + skill.name + ' ' + afterQuery;
+
+  nextTick(() => {
+    nextTick(() => {
+      skillPopupDismissed.value = true;
+    });
+  });
+
+  nextTick(() => {
+    const newCursorPos = lastDollar + skill.name.length + 2; // +2 for '$' and ' '
     textarea?.setSelectionRange(newCursorPos, newCursorPos);
     textarea?.focus();
   });
@@ -917,21 +1021,21 @@ function handleModelDropdownOpenChange(open: boolean) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  // --- Agent @ popup: handle first (higher priority than command popup) ---
-  if (agentPopupOpen.value) {
+  // --- Unified mention popup (command / agent / skill) ---
+  if (mentionOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault();
-      agentPopupDismissed.value = true;
+      dismissActiveMention();
       return;
     }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      agentDropdownRef.value?.moveHighlight('down');
+      mentionDropdownRef.value?.moveHighlight('down');
       return;
     }
     if (event.key === 'ArrowUp') {
       event.preventDefault();
-      agentDropdownRef.value?.moveHighlight('up');
+      mentionDropdownRef.value?.moveHighlight('up');
       return;
     }
     if (
@@ -942,7 +1046,7 @@ function handleKeydown(event: KeyboardEvent) {
       !event.altKey
     ) {
       event.preventDefault();
-      agentDropdownRef.value?.selectHighlighted();
+      mentionDropdownRef.value?.selectHighlighted();
       return;
     }
     if (
@@ -953,47 +1057,7 @@ function handleKeydown(event: KeyboardEvent) {
       !event.altKey
     ) {
       event.preventDefault();
-      agentDropdownRef.value?.selectHighlighted();
-    }
-    return;
-  }
-  // --- Command / popup ---
-  if (commandPopupOpen.value) {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      commandPopupDismissed.value = true;
-      return;
-    }
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      commandDropdownRef.value?.moveHighlight('down');
-      return;
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      commandDropdownRef.value?.moveHighlight('up');
-      return;
-    }
-    if (
-      event.key === 'Tab' &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
-      event.preventDefault();
-      commandDropdownRef.value?.selectHighlighted();
-      return;
-    }
-    if (
-      event.key === 'Enter' &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
-      event.preventDefault();
-      commandDropdownRef.value?.selectHighlighted();
+      mentionDropdownRef.value?.selectHighlighted();
     }
     return;
   }
@@ -1296,6 +1360,11 @@ const inputMessageStyle = computed(() => {
 
 .input-selects .input-control {
   height: 28px;
+}
+
+.input-selects > .input-field.compact:first-child {
+  flex: 0 1 auto;
+  min-width: 110px;
 }
 
 .input-dropdown-root {
@@ -1609,7 +1678,7 @@ const inputMessageStyle = computed(() => {
   background: var(--theme-input-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.7)));
 }
 
-.command-dropdown-wrapper {
+.mention-dropdown-wrapper {
   position: absolute;
   top: 0;
   left: 0;
@@ -1618,11 +1687,11 @@ const inputMessageStyle = computed(() => {
   overflow: visible;
   pointer-events: none;
 }
-.command-dropdown-wrapper :deep(.ui-dropdown-menu) {
+.mention-dropdown-wrapper :deep(.ui-dropdown-menu) {
   pointer-events: auto;
 }
 
-:deep(.command-popup) {
+:deep(.mention-popup) {
   /* Open upward instead of downward */
   top: auto;
   bottom: anchor(top);
@@ -1631,7 +1700,7 @@ const inputMessageStyle = computed(() => {
   max-height: 220px;
 }
 
-:deep(.command-popup) .ui-dropdown-item[aria-selected='true'] {
+:deep(.mention-popup) .ui-dropdown-item[aria-selected='true'] {
   background: var(--theme-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
   border: 1px solid var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
 }
@@ -1654,33 +1723,13 @@ const inputMessageStyle = computed(() => {
   line-height: 1.2;
 }
 
-.agent-dropdown-wrapper {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 0;
-  overflow: visible;
-  pointer-events: none;
+.agent-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
 }
-.agent-dropdown-wrapper :deep(.ui-dropdown-menu) {
-  pointer-events: auto;
-}
-
-:deep(.agent-popup) {
-  /* Open upward instead of downward */
-  top: auto;
-  bottom: anchor(top);
-  margin-top: 0;
-  margin-bottom: 8px;
-  max-height: 220px;
-}
-
-:deep(.agent-popup) .ui-dropdown-item[aria-selected='true'] {
-  background: var(--theme-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
-  border: 1px solid var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
-}
-
 .agent-popup-name {
   font-size: var(--ui-font-size, 12px);
   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
@@ -1698,16 +1747,47 @@ const inputMessageStyle = computed(() => {
   line-height: 1.2;
 }
 
+.skill-dropdown-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+.skill-popup-name {
+  font-size: var(--ui-font-size, 12px);
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  line-height: 1.2;
+}
+.skill-popup-disabled {
+  font-size: 10px;
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  margin-left: 6px;
+  font-weight: 500;
+}
+.skill-popup-description {
+  font-size: 10px;
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  line-height: 1.2;
+}
+
 .agent-dropdown-item.is-current {
   position: relative;
+  background: var(--theme-input-active-bg, rgba(96, 165, 250, 0.12));
+  border-radius: 4px;
+  padding-right: 18px;
 }
 
 .agent-dropdown-current-mark {
-  margin-left: auto;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   display: inline-flex;
   align-items: center;
   color: var(--theme-input-accent, var(--theme-border-accent, #60a5fa));
-  flex: 0 0 auto;
+  pointer-events: none;
+  font-weight: 600;
 }
 
 .history-dropdown-wrapper {

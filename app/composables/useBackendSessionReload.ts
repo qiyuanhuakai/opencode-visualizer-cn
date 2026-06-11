@@ -59,12 +59,15 @@ export function useBackendSessionReload(params: {
       if (params.activeBackendKind.value === 'codex') {
         params.isLoadingHistory.value = true;
         try {
+          const isSessionSwitch = Boolean(oldId) && oldId !== sessionId;
           let nextHistory = params.codexHistory.value;
           if (params.codexApi.activeThreadId.value !== sessionId || nextHistory.length === 0) {
             await params.codexApi.selectThread(sessionId);
             nextHistory = params.codexHistory.value;
           }
-          params.msg.reset();
+          if (isSessionSwitch) {
+            params.msg.reset();
+          }
           params.resetFollow();
           params.reasoningReset();
           params.subagentWindowsReset();

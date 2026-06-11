@@ -309,6 +309,9 @@ export interface LocaleMessages {
       total: string;
       noData: string;
       unsupported: string;
+      enable: string;
+      disable: string;
+      toggleFailed: string;
     };
     token: {
       noSession: string;
@@ -492,6 +495,8 @@ export interface LocaleMessages {
   inputPanel: {
     placeholder: string;
     loadingAgents: string;
+    defaultAgent: string;
+    defaultAgentDescription: string;
     loadingModels: string;
     loading: string;
     searchPlaceholder: string;
@@ -509,8 +514,14 @@ export interface LocaleMessages {
      modelTitle: string;
      variantTitle: string;
      selectAtAgent: string;
-     atAgentTitle: string;
-     bookmarkCurrentInput: string;
+      atAgentTitle: string;
+      skillPopup: {
+        title: string;
+        empty: string;
+        disabledBadge: string;
+        triggerHint: string;
+      };
+      bookmarkCurrentInput: string;
     openBookmarks: string;
     historySubagent: string;
     removeFromFavoritesConfirm: string;
@@ -925,6 +936,7 @@ export interface LocaleMessages {
     copy: string;
     paste: string;
     cut: string;
+    selected: string;
     selectAll: string;
     deselectAll: string;
     open: string;

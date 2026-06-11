@@ -3,6 +3,7 @@ import { ref, watch, computed, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import type { CodexPlugin } from '../backends/codex/codexAdapter';
+import type { BackendKind } from '../backends/types';
 import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
 import { useSettings } from '../composables/useSettings';
@@ -12,7 +13,13 @@ import type { MessageInfo } from '../types/sse';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
 
-const props = defineProps<{ open: boolean; sessionId?: string; codexApi: CodexApi; preload: boolean }>();
+const props = defineProps<{
+  open: boolean;
+  sessionId?: string;
+  codexApi: CodexApi;
+  preload: boolean;
+  activeBackendKind: BackendKind;
+}>();
 const emit = defineEmits<{ close: [] }>();
 
 const { t } = useI18n();
@@ -46,7 +53,7 @@ const mcpData = ref<
   | null
 >(null);
 const lspData = ref<Array<{ id: string; name: string; root: string; status: 'connected' | 'error' }> | null>(null);
-const skillData = ref<Array<{ name: string; version?: string }> | null>(null);
+const skillData = ref<Array<{ name: string; version?: string; enabled?: boolean; path?: string }> | null>(null);
 const skillUnsupported = ref(false);
 const configData = ref<Record<string, unknown> | null>(null);
 const codexPluginData = ref<CodexPlugin[]>([]);
@@ -60,6 +67,7 @@ const codexApiKeyInput = ref('');
 const loading = ref(false);
 const errorMessage = ref('');
 const togglingMcp = ref<string | null>(null);
+const togglingSkill = ref<string | null>(null);
 const hasLoaded = ref(false);
 
 let refreshPromise: Promise<void> | null = null;
@@ -134,6 +142,16 @@ watch(() => props.sessionId, (newId, oldId) => {
   }
   if ((props.open || props.preload) && hasLoaded.value) {
     void fetchTokenData();
+  }
+});
+
+watch(() => props.activeBackendKind, (newKind, oldKind) => {
+  if (newKind === oldKind) return;
+  // Backend switched while modal is mounted: mcpData/lspData/skillData are
+  // from the OLD backend, so wipe and re-fetch with the NEW backend.
+  resetLoadedState();
+  if (props.open || props.preload) {
+    void ensureLoaded();
   }
 });
 
@@ -431,12 +449,54 @@ const pluginStats = computed(() => {
 });
 
 const skillEntries = computed(() => {
-  if (skillData.value) return skillData.value.map((s) => s.name);
+  if (skillData.value) {
+    return skillData.value.map((s) => ({
+      name: s.name,
+      enabled: s.enabled,
+      path: s.path,
+    }));
+  }
   const skills = configData.value?.skills;
-  if (Array.isArray(skills)) return skills.map((s) => (typeof s === 'string' ? s : s?.name || String(s)));
-  if (typeof skills === 'object' && skills !== null) return Object.keys(skills);
+  if (Array.isArray(skills)) return skills.map((s) => (typeof s === 'string' ? s : s?.name || String(s))).map((name) => ({ name, enabled: undefined as boolean | undefined, path: undefined as string | undefined }));
+  if (typeof skills === 'object' && skills !== null) return Object.keys(skills).map((name) => ({ name, enabled: undefined as boolean | undefined, path: undefined as string | undefined }));
   return [];
 });
+
+async function handleSkillToggle(name: string, currentEnabled: boolean | undefined, path: string | undefined) {
+  const updateSkill = backend().updateSkill;
+  if (typeof updateSkill !== 'function') {
+    errorMessage.value = t('statusMonitor.skills.toggleFailed');
+    return;
+  }
+  // Codex's skills/config/write is keyed by path; fall back to name for
+  // backends that accept a name-based key (forward-compat).
+  const key = path ?? name;
+  if (!key) {
+    errorMessage.value = t('statusMonitor.skills.toggleFailed');
+    return;
+  }
+  const nextEnabled = !currentEnabled;
+  togglingSkill.value = name;
+  try {
+    await updateSkill({ path: key, name, enabled: nextEnabled });
+    if (skillData.value) {
+      const entry = skillData.value.find((s) => s.name === name);
+      if (entry) entry.enabled = nextEnabled;
+    }
+    // Sync the shared codexApi.skills.value so downstream consumers
+    // (e.g. App.vue's availableSkills computed -> $ mention popup) see
+    // the new enabled state without waiting for a page refresh. Only
+    // valid on the Codex backend; no-op otherwise because the toggle
+    // UI is gated on `enabled` being present (i.e. Codex-only).
+    if (props.activeBackendKind === 'codex' && codexApi.connected) {
+      await codexApi.refreshSkills();
+    }
+  } catch (e) {
+    errorMessage.value = t('statusMonitor.skills.toggleFailed');
+  } finally {
+    togglingSkill.value = null;
+  }
+}
 
 async function handleMcpToggle(name: string, currentStatus: string) {
   const nextEnabled = currentStatus === 'disabled';
@@ -776,13 +836,31 @@ function formatPercent(value: number, total: number): string {
           </div>
           <div v-else class="status-monitor-list">
             <div
-              v-for="name in skillEntries"
-              :key="name"
+              v-for="skill in skillEntries"
+              :key="skill.name"
               class="status-monitor-row"
             >
               <div class="status-monitor-row-main">
-                <span class="status-dot status-dot-success" />
-                <span class="status-monitor-name">{{ name }}</span>
+                <span
+                  class="status-dot"
+                  :class="skill.enabled === false ? 'status-dot-muted' : 'status-dot-success'"
+                />
+                <span class="status-monitor-name">{{ skill.name }}</span>
+              </div>
+              <div v-if="skill.enabled !== undefined" class="status-monitor-row-actions">
+                <label
+                  class="toggle-switch"
+                  :title="skill.enabled ? $t('statusMonitor.skills.disable') : $t('statusMonitor.skills.enable')"
+                >
+                  <input
+                    type="checkbox"
+                    class="toggle-input"
+                    :checked="skill.enabled"
+                    :disabled="togglingSkill === skill.name"
+                    @change="handleSkillToggle(skill.name, skill.enabled, skill.path)"
+                  />
+                  <span class="toggle-track" />
+                </label>
               </div>
             </div>
           </div>
