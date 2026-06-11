@@ -1535,6 +1535,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     errorMessage.value = '';
     adapter = makeAdapter();
 
+    if (import.meta.env.DEV) console.time('codex-connect');
+
     onPhase?.('home');
     await refreshHomeDir();
     unsubscribeNotifications = adapter.onNotification(handleNotification);
@@ -1545,18 +1547,26 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       await adapter.initialize();
       initialized.value = true;
       status.value = 'connected';
+
+      // Post-init steps touch disjoint state (threads / sandbox / panel
+      // caches), so they can run in parallel. allSettled ensures one
+      // failure cannot block the others from completing.
       onPhase?.('threads');
-      await refreshThreads();
       onPhase?.('workspace');
-      await openAsSandbox(selectedSandboxCwd() || homeDir.value || '/');
       onPhase?.('panelData');
-      await preloadPanelData();
+      await Promise.allSettled([
+        refreshThreads(),
+        openAsSandbox(selectedSandboxCwd() || homeDir.value || '/'),
+        preloadPanelData(),
+      ]);
     } catch (error) {
       status.value = 'error';
       errorMessage.value = error instanceof Error ? error.message : String(error);
       disconnect(false);
+      if (import.meta.env.DEV) console.timeEnd('codex-connect');
       throw error;
     }
+    if (import.meta.env.DEV) console.timeEnd('codex-connect');
   }
 
   function disconnect(resetStatus = true) {
