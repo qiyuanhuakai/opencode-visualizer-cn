@@ -3,8 +3,8 @@ import { ref } from 'vue';
 import { useBackendSessionActions } from './useBackendSessionActions';
 
 describe('useBackendSessionActions', () => {
-  it('pins Codex sessions through codex runtime methods', async () => {
-    const pinThread = vi.fn();
+  it('pins Codex sessions through unified local pinned store', async () => {
+    const setLocalPinnedSession = vi.fn();
     const actions = useBackendSessionActions({
       activeBackendKind: ref('codex'),
       codexProjectId: 'codex',
@@ -32,8 +32,6 @@ describe('useBackendSessionActions', () => {
         unhideThread: vi.fn(),
         unarchiveThread: vi.fn(),
         setThreadName: vi.fn(),
-        pinThread,
-        unpinThread: vi.fn(),
         forkThread: vi.fn(),
         rollbackThread: vi.fn(),
         startThreadCompaction: vi.fn(),
@@ -50,7 +48,7 @@ describe('useBackendSessionActions', () => {
       resolveProjectIdForSession: () => 'codex',
       resolveSessionOperationPayload: () => ({ projectId: 'codex', directory: '/repo' }),
       getSessionPinnedOverride: () => undefined,
-      setLocalPinnedSession: vi.fn(),
+      setLocalPinnedSession,
       setLocalUnpinnedSession: vi.fn(),
       clearLocalPinnedSessionOverride: vi.fn(),
       restoreLocalPinnedSessionOverride: vi.fn(),
@@ -63,7 +61,7 @@ describe('useBackendSessionActions', () => {
 
     await actions.pinSession('thread-1');
 
-    expect(pinThread).toHaveBeenCalledWith('thread-1');
+    expect(setLocalPinnedSession).toHaveBeenCalledWith('codex', 'thread-1', expect.any(Number));
   });
 
   it('pins opencode sessions with optimistic local state and server call', async () => {
@@ -96,8 +94,6 @@ describe('useBackendSessionActions', () => {
         unhideThread: vi.fn(),
         unarchiveThread: vi.fn(),
         setThreadName: vi.fn(),
-        pinThread: vi.fn(),
-        unpinThread: vi.fn(),
         forkThread: vi.fn(),
         rollbackThread: vi.fn(),
         startThreadCompaction: vi.fn(),

@@ -777,7 +777,7 @@ describe('useCodexApi', () => {
     ]);
   });
 
-  it('locally hides and pins threads with persisted storage', async () => {
+  it('locally hides threads with in-memory state', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
@@ -786,15 +786,9 @@ describe('useCodexApi', () => {
     expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(true);
     expect(api.visibleThreads.value.length).toBe(0);
 
-    api.pinThread('thr_existing');
-    expect(api.pinnedThreadIds.value.has('thr_existing')).toBe(true);
-
     api.unhideThread('thr_existing');
     expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(false);
     expect(api.visibleThreads.value.length).toBe(1);
-
-    api.unpinThread('thr_existing');
-    expect(api.pinnedThreadIds.value.has('thr_existing')).toBe(false);
   });
 
   it('browses filesystem entries and reads file previews', async () => {

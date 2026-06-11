@@ -4,6 +4,7 @@ import { CODEX_PROJECT_ID } from '../backends/codex/bridgeUrl';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import type { ProjectState, SessionState } from '../types/worker-state';
 import { normalizeAbsolutePathNoParent } from '../utils/path';
+import { normalizePinnedAt, pinnedSessionStoreKey, type LocalPinnedSessionStore } from '../utils/pinnedSessions';
 
 export { CODEX_PROJECT_ID };
 export const CODEX_SANDBOX_NAME = 'Codex';
@@ -17,9 +18,16 @@ export type CodexWorkspaceApi = {
   activeThreadId: Ref<string>;
   canonicalHistory: Ref<CodexCanonicalHistoryEntry[]>;
   homeDir?: Ref<string>;
-  pinnedThreadIds?: Ref<Set<string>>;
+  pinnedStore?: Ref<LocalPinnedSessionStore>;
   hiddenThreadIds?: Ref<Set<string>>;
 };
+
+function isCodexThreadPinned(pinnedStore: LocalPinnedSessionStore | undefined, threadId: string): boolean {
+  if (!pinnedStore) return false;
+  const key = pinnedSessionStoreKey(CODEX_PROJECT_ID, threadId);
+  if (!key) return false;
+  return normalizePinnedAt(pinnedStore[key]) > 0;
+}
 
 function threadTimestamp(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
@@ -73,7 +81,7 @@ function threadStatus(thread: CodexThread): SessionState['status'] {
 export function codexThreadToSession(
   thread: CodexThread,
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
-  pinnedThreadIds: Set<string> = new Set(),
+  pinnedStore: LocalPinnedSessionStore = {},
   hiddenThreadIds: Set<string> = new Set(),
   sessionDirectory = threadSandboxDirectory(thread, fallbackDirectory),
 ): SessionState {
@@ -85,7 +93,7 @@ export function codexThreadToSession(
     gitInfo: thread.gitInfo ?? null,
     timeCreated: threadTimestamp(thread.createdAt),
     timeUpdated: threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt),
-    timePinned: pinnedThreadIds.has(thread.id) ? 1 : undefined,
+    timePinned: isCodexThreadPinned(pinnedStore, thread.id) ? 1 : undefined,
     timeArchived: hiddenThreadIds.has(thread.id)
       ? (threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt) ?? 1)
       : undefined,
@@ -95,7 +103,7 @@ export function codexThreadToSession(
 export function createCodexProjectState(
   threads: CodexThread[],
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
-  pinnedThreadIds: Set<string> = new Set(),
+  pinnedStore: LocalPinnedSessionStore = {},
   hiddenThreadIds: Set<string> = new Set(),
   archivedThreadIds: Set<string> = new Set(),
 ): ProjectState {
@@ -114,7 +122,7 @@ export function createCodexProjectState(
     sandbox.sessions[thread.id] = codexThreadToSession(
       thread,
       fallbackDirectory,
-      pinnedThreadIds,
+      pinnedStore,
       new Set([...hiddenThreadIds, ...(archivedThreadIds.has(thread.id) ? [thread.id] : [])]),
       directory,
     );
@@ -138,7 +146,10 @@ export function createCodexProjectState(
   };
 }
 
-export function useCodexWorkspace(api: CodexWorkspaceApi) {
+export function useCodexWorkspace(
+  api: CodexWorkspaceApi,
+  options: { pinnedStore?: Ref<LocalPinnedSessionStore> } = {},
+) {
   const fallbackDirectory = computed(() => api.homeDir?.value || CODEX_DEFAULT_DIRECTORY);
   const allThreads = computed(() => {
     const merged = new Map<string, CodexThread>();
@@ -150,7 +161,7 @@ export function useCodexWorkspace(api: CodexWorkspaceApi) {
   const project = computed(() => createCodexProjectState(
     allThreads.value,
     fallbackDirectory.value,
-    api.pinnedThreadIds?.value,
+    api.pinnedStore?.value ?? options.pinnedStore?.value,
     api.hiddenThreadIds?.value,
     archivedThreadIds.value,
   ));

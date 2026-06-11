@@ -327,9 +327,6 @@ const APPROVAL_DECISIONS_BY_METHOD: Record<string, ReadonlySet<string>> = {
   ]),
 };
 
-const PIN_STORAGE_KEY = 'vis.codex.pins.v1';
-const HIDE_STORAGE_KEY = 'vis.codex.hidden.v1';
-
 function extractApprovalContext(params: Record<string, unknown>): CodexApprovalContext {
   const context: CodexApprovalContext = {};
 
@@ -387,22 +384,6 @@ function extractApprovalContext(params: Record<string, unknown>): CodexApprovalC
   return context;
 }
 
-function loadThreadIdSet(key: string): Set<string> {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === 'string'));
-  } catch {
-    return new Set();
-  }
-  return new Set();
-}
-
-function saveThreadIdSet(key: string, set: Set<string>) {
-  localStorage.setItem(key, JSON.stringify(Array.from(set)));
-}
-
 function extractScopedApprovalRequest(
   request: CodexJsonRpcServerRequest,
   activeThreadId: string,
@@ -446,8 +427,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const pending = ref(false);
   const loadingThread = ref(false);
   const initialized = ref(false);
-  const pinnedThreadIds = ref<Set<string>>(loadThreadIdSet(PIN_STORAGE_KEY));
-  const hiddenThreadIds = ref<Set<string>>(loadThreadIdSet(HIDE_STORAGE_KEY));
+  const hiddenThreadIds = ref<Set<string>>(new Set());
   const fsEntries = ref<CodexFsDirectoryEntry[]>([]);
   const fsCwd = ref('');
   const fsLoading = ref(false);
@@ -534,9 +514,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const visibleThreads = computed(() => {
     const list = threads.value.filter((thread) => !hiddenThreadIds.value.has(thread.id));
     return list.sort((a, b) => {
-      const aPinned = pinnedThreadIds.value.has(a.id) ? 1 : 0;
-      const bPinned = pinnedThreadIds.value.has(b.id) ? 1 : 0;
-      if (aPinned !== bPinned) return bPinned - aPinned;
       const aTime = a.updatedAt ?? a.createdAt ?? 0;
       const bTime = b.updatedAt ?? b.createdAt ?? 0;
       return bTime - aTime;
@@ -1991,7 +1968,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function hideThread(threadId: string) {
     hiddenThreadIds.value = new Set([...hiddenThreadIds.value, threadId]);
-    saveThreadIdSet(HIDE_STORAGE_KEY, hiddenThreadIds.value);
     if (activeThreadId.value === threadId) {
       activeThreadId.value = visibleThreads.value[0]?.id ?? '';
       transcript.value = [];
@@ -2003,19 +1979,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const next = new Set(hiddenThreadIds.value);
     next.delete(threadId);
     hiddenThreadIds.value = next;
-    saveThreadIdSet(HIDE_STORAGE_KEY, hiddenThreadIds.value);
-  }
-
-  function pinThread(threadId: string) {
-    pinnedThreadIds.value = new Set([...pinnedThreadIds.value, threadId]);
-    saveThreadIdSet(PIN_STORAGE_KEY, pinnedThreadIds.value);
-  }
-
-  function unpinThread(threadId: string) {
-    const next = new Set(pinnedThreadIds.value);
-    next.delete(threadId);
-    pinnedThreadIds.value = next;
-    saveThreadIdSet(PIN_STORAGE_KEY, pinnedThreadIds.value);
   }
 
   function expandPath(input: string): string {
@@ -2860,10 +2823,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      loadingThread,
      initialized,
      connected,
-      visibleThreads,
-      archivedThreads,
-      pinnedThreadIds,
-     hiddenThreadIds,
+       visibleThreads,
+       archivedThreads,
+      hiddenThreadIds,
       fsEntries,
       fsCwd,
       fsLoading,
@@ -2892,11 +2854,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      interruptActiveTurn,
      forkThread,
      rollbackThread,
-     hideThread,
-     unhideThread,
-     pinThread,
-     unpinThread,
-     readDirectory,
+      hideThread,
+      unhideThread,
+      readDirectory,
      navigateToParent,
      navigateToPath,
      openAsSandbox,

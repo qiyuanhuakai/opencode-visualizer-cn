@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCodexProjectState } from '../composables/useCodexWorkspace';
+import { CODEX_PROJECT_ID, createCodexProjectState } from '../composables/useCodexWorkspace';
 import { buildCodexSessionTreeData, buildCodexTopPanelTreeData, type CodexTopPanelWorktree } from './codexTopPanelTree';
 
 describe('buildCodexTopPanelTreeData', () => {
@@ -165,7 +165,7 @@ describe('buildCodexTopPanelTreeData', () => {
         { id: 'scratch', name: 'Scratch', cwd: '/tmp/scratch', updatedAt: 1 },
       ],
       '/home/codex',
-      new Set(['scratch']),
+      { [`${CODEX_PROJECT_ID}:scratch`]: Date.now() },
     );
     const worktrees = buildCodexTopPanelTreeData(project, { pinnedStore: {}, homePath: '/home/codex' });
 

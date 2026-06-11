@@ -28,8 +28,6 @@ type CodexApiLike = {
   unhideThread: (sessionId: string) => void;
   unarchiveThread: (sessionId: string) => Promise<unknown>;
   setThreadName: (sessionId: string, name: string) => Promise<unknown>;
-  pinThread: (sessionId: string) => void;
-  unpinThread: (sessionId: string) => void;
   forkThread: (sessionId: string) => Promise<{ id?: string }>;
   rollbackThread: (sessionId: string, numTurns?: number) => Promise<{ id?: string }>;
   startThreadCompaction: (sessionId: string) => Promise<unknown>;
@@ -176,15 +174,14 @@ export function useBackendSessionActions(params: {
     let optimisticProjectId = '';
     let previousOverride: number | undefined;
     try {
-      if (params.activeBackendKind.value === 'codex') {
-        params.codexApi.pinThread(sessionId);
-        return;
-      }
       const { projectId, directory } = params.resolveSessionOperationPayload(sessionId, hints?.projectId, hints?.directory);
       optimisticProjectId = projectId;
       previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
       const pinnedAt = Date.now();
       params.setLocalPinnedSession(projectId, sessionId, pinnedAt);
+      if (params.activeBackendKind.value === 'codex') {
+        return;
+      }
       await params.openCodeApi.pinSession({ sessionId, projectId, directory, pinnedAt });
     } catch (error) {
       if (optimisticProjectId) params.restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
@@ -194,11 +191,6 @@ export function useBackendSessionActions(params: {
 
   async function unpinSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
     if (!sessionId) return;
-    if (params.activeBackendKind.value === 'codex') {
-      params.codexApi.unpinThread(sessionId);
-      return;
-    }
-
     const { projectId, directory } = params.resolveSessionOperationPayload(sessionId, hints?.projectId, hints?.directory);
     const sessionKey = pinnedSessionStoreKey(projectId, sessionId);
     const isDirectlyPinned = Boolean(sessionKey && params.localPinnedSessionStore.value[sessionKey] > 0);
@@ -250,6 +242,9 @@ export function useBackendSessionActions(params: {
     try {
       previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
       params.setLocalUnpinnedSession(projectId, sessionId);
+      if (params.activeBackendKind.value === 'codex') {
+        return;
+      }
       await params.openCodeApi.unpinSession({ sessionId, projectId, directory });
     } catch (error) {
       params.restoreLocalPinnedSessionOverride(projectId, sessionId, previousOverride);

@@ -555,6 +555,7 @@ import {
   sandboxPinKey,
   type LocalPinnedSessionStore,
 } from './utils/pinnedSessions';
+import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import {
   extractFileRead as extractToolFileRead,
@@ -915,6 +916,13 @@ function openCodexPanel() {
     component: CodexPanel,
     props: markRaw({
       api: markRaw(codexApi),
+      pinnedStore: localPinnedSessionStore,
+      onPinCodexThread: (threadId: string, directory: string) => {
+        void backendSessionActions.pinSession(threadId, { projectId: CODEX_PROJECT_ID, directory });
+      },
+      onUnpinCodexThread: (threadId: string, directory: string) => {
+        void backendSessionActions.unpinSession(threadId, { projectId: CODEX_PROJECT_ID, directory });
+      },
       onOpenSubpanel: (panel: TopPanelCodexSubpanel) => openCodexSubpanel(panel),
     }),
     title: t('codexPanel.title'),
@@ -1192,6 +1200,7 @@ const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
 const localPinnedSessionStore = ref<LocalPinnedSessionStore>(readPinnedSessionStore());
+migrateCodexPinsToUnifiedStore(localPinnedSessionStore);
 const deletedSandboxStore = ref<DeletedSandboxStore>(readDeletedSandboxStore());
 const sessionTreeExpandedPaths = ref<string[]>(readSessionTreeExpandedPaths());
 const composerDraftTabId =
@@ -1292,7 +1301,7 @@ const commandsLoading = ref(false);
 const serverState = useServerState();
 const openCodeApi = useOpenCodeApi(serverState.projects, t);
 const codexApi = useCodexApi();
-const codexWorkspace = useCodexWorkspace(codexApi);
+const codexWorkspace = useCodexWorkspace(codexApi, { pinnedStore: localPinnedSessionStore });
 const bootstrapReady = serverState.bootstrapped;
 const sessionSelection = useSessionSelection(
   computed(() => serverState.projects),

@@ -202,7 +202,7 @@
               <span class="codex-thread-title-row">
                 <span class="codex-thread-title">
                   <Icon
-                    v-if="api.pinnedThreadIds.value.has(thread.id)"
+                    v-if="isThreadPinned(thread.id)"
                     icon="mdi:pin"
                     width="12"
                     class="codex-pin-icon"
@@ -223,14 +223,14 @@
                   class="codex-icon-button"
                   :disabled="!api.connected.value"
                 :title="
-                  api.pinnedThreadIds.value.has(thread.id)
+                  isThreadPinned(thread.id)
                     ? t('codexPanel.unpin')
                     : t('codexPanel.pin')
                 "
-                @click="togglePin(thread.id)"
+                @click="togglePin(thread.id, threadDirectory(thread))"
               >
                 <Icon
-                  :icon="api.pinnedThreadIds.value.has(thread.id) ? 'mdi:pin-off' : 'mdi:pin'"
+                  :icon="isThreadPinned(thread.id) ? 'mdi:pin-off' : 'mdi:pin'"
                   width="14"
                 />
               </button>
@@ -664,7 +664,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch, type Ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import type { CodexThread } from '../backends/codex/codexAdapter';
@@ -672,6 +672,8 @@ import type { CodexJsonRpcId } from '../backends/codex/jsonRpcClient';
 import type { CodexTranscriptEntry } from '../composables/useCodexApi';
 import { useCodexApi } from '../composables/useCodexApi';
 import { configureCodexBackend } from '../backends/registry';
+import { CODEX_PROJECT_ID } from '../composables/useCodexWorkspace';
+import { normalizePinnedAt, type LocalPinnedSessionStore } from '../utils/pinnedSessions';
 import type { TopPanelCodexSubpanel } from './TopPanel.vue';
 import Dropdown from './Dropdown.vue';
 
@@ -679,6 +681,9 @@ const props = defineProps<{
   autoConnect?: boolean;
   api?: ReturnType<typeof useCodexApi>;
   onOpenSubpanel?: (panel: TopPanelCodexSubpanel) => void;
+  pinnedStore?: Ref<LocalPinnedSessionStore>;
+  onPinCodexThread?: (threadId: string, directory: string) => void;
+  onUnpinCodexThread?: (threadId: string, directory: string) => void;
 }>();
 
 const emit = defineEmits<{
@@ -713,6 +718,43 @@ const displayThreads = computed(() => {
   if (showArchived.value) return archivedThreads.value;
   return api.visibleThreads.value;
 });
+
+const codexPinnedThreadIds = computed<Set<string>>(() => {
+  const store = props.pinnedStore?.value;
+  const set = new Set<string>();
+  if (!store) return set;
+  for (const key of Object.keys(store)) {
+    const separatorIndex = key.indexOf(':');
+    if (separatorIndex < 0) continue;
+    const projectId = key.slice(0, separatorIndex);
+    const sessionId = key.slice(separatorIndex + 1);
+    if (projectId !== CODEX_PROJECT_ID) continue;
+    if (!sessionId) continue;
+    if (normalizePinnedAt(store[key]) > 0) set.add(sessionId);
+  }
+  return set;
+});
+
+function isThreadPinned(threadId: string): boolean {
+  return codexPinnedThreadIds.value.has(threadId);
+}
+
+function threadDirectory(thread: CodexThread | undefined): string {
+  if (!thread) return '/';
+  const cwd = thread.cwd?.trim();
+  if (cwd) return cwd;
+  const root = thread.gitInfo?.root?.trim();
+  if (root) return root;
+  return '/';
+}
+
+function togglePin(threadId: string, directory: string) {
+  if (isThreadPinned(threadId)) {
+    props.onUnpinCodexThread?.(threadId, directory);
+  } else {
+    props.onPinCodexThread?.(threadId, directory);
+  }
+}
 
 watch(activeThread, (thread) => {
   threadName.value = thread?.name ?? '';
@@ -818,14 +860,6 @@ async function forkActiveThread() {
 async function rollbackActiveThread() {
   if (!api.activeThreadId.value) return;
   await api.rollbackThread(api.activeThreadId.value, 1);
-}
-
-function togglePin(threadId: string) {
-  if (api.pinnedThreadIds.value.has(threadId)) {
-    api.unpinThread(threadId);
-  } else {
-    api.pinThread(threadId);
-  }
 }
 
 function resolveRequest(id: CodexJsonRpcId, decision: string) {
