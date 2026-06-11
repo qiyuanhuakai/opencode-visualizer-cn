@@ -302,4 +302,32 @@ describe('extractFileRead for edit/multiedit', () => {
       copyMarkdownAriaLabel: '',
     });
   });
+
+  it('renderWorkerHtmlWithI18n preserves caller-supplied empty copy labels via spread order', async () => {
+    let receivedArgs: Record<string, unknown> | null = null;
+    const mockRenderWorkerHtml = async (args: Record<string, unknown>) => {
+      receivedArgs = args;
+      return '<pre>test</pre>';
+    };
+
+    function renderWorkerHtmlWithI18n(args: Record<string, unknown>) {
+      return mockRenderWorkerHtml({
+        copyButtonLabel: 'Copy',
+        copiedLabel: 'Copied',
+        copyCodeAriaLabel: 'Copy code',
+        copyMarkdownAriaLabel: 'Copy markdown',
+        ...args,
+      });
+    }
+
+    await renderWorkerHtmlWithI18n({ code: 'test', lang: 'markdown', copyButtonLabel: '' });
+    expect(receivedArgs).toMatchObject({
+      copyButtonLabel: '',
+    });
+
+    await renderWorkerHtmlWithI18n({ code: 'test', lang: 'markdown' });
+    expect(receivedArgs).toMatchObject({
+      copyButtonLabel: 'Copy',
+    });
+  });
 });

@@ -5999,13 +5999,13 @@ const toolRendererReadTypesKey = `FILE_${'READ'}_EVENT_TYPES`;
 const toolRendererWriteTypesKey = `FILE_${'WRITE'}_EVENT_TYPES`;
 const toolRendererMessageTypesKey = `MESSAGE_${'EVENT_TYPES'}`;
 
-function renderWorkerHtmlWithI18n(args: Omit<RenderRequest, 'copyButtonLabel' | 'copiedLabel' | 'copyCodeAriaLabel' | 'copyMarkdownAriaLabel'>) {
+function renderWorkerHtmlWithI18n(args: RenderRequest) {
   return renderWorkerHtml({
-    ...args,
     copyButtonLabel: t('render.copyCode'),
     copiedLabel: t('render.copied'),
     copyCodeAriaLabel: t('render.copyCodeAria'),
     copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
+    ...args,
   });
 }
 
