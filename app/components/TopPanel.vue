@@ -771,6 +771,11 @@ const MAX_WORKTREES = Infinity;
 const MAX_SANDBOXES = Infinity;
 const MAX_SESSIONS = Infinity;
 
+// Matches the "(N archived)" suffix appended by `displayedTree` to sandbox/global labels
+// when every session in a container has been archived. Used by the worktree/global
+// filters below to keep these containers visible so users can still locate them.
+const ARCHIVED_ONLY_LABEL = /\s*\(\d+ archived\)$/;
+
 const searchQuery = ref('');
 const isShiftPressed = ref(false);
 const managementMode = ref(false);
@@ -950,26 +955,48 @@ const displayedTree = computed(() => {
       })
       .filter((worktree): worktree is TopPanelWorktree => worktree !== null);
   } else {
+    // Non-search mode: filter archived sessions but preserve sandbox/global containers
+    // that only contain archived sessions, so users can still locate and unarchive them.
+    // Sandboxes whose every session is archived get an "(N archived)" suffix on the label.
     worktrees = worktrees
       .map((worktree) => ({
         ...worktree,
-        sandboxes: worktree.sandboxes.map((sandbox) => ({
-          ...sandbox,
-          sessions: sandbox.sessions.filter((session) => !session.archivedAt),
-        })),
+        sandboxes: worktree.sandboxes.map((sandbox) => {
+          const archivedCount = sandbox.sessions.reduce(
+          (n, session) => n + (session.archivedAt ?1 :0),
+            0,
+          );
+          const sessions = sandbox.sessions.filter((session) => !session.archivedAt);
+          let branch = sandbox.branch;
+          if (archivedCount >0 && sessions.length ===0) {
+          const baseName = sandbox.branch || directoryBasename(sandbox.directory);
+          branch = `${baseName} (${archivedCount} archived)`;
+          }
+          return { ...sandbox, branch, sessions };
+        }),
       }))
-      .filter((worktree) => worktree.sandboxes.some((sandbox) => sandbox.sessions.length > 0));
-  }
+      .filter((worktree) =>
+        worktree.sandboxes.some(
+        (sandbox) =>
+          sandbox.sessions.length >0 || ARCHIVED_ONLY_LABEL.test(sandbox.branch ?? ''),
+        ),
+      );
+    }
 
   return worktrees.slice(0, MAX_WORKTREES).map((worktree) => ({
     ...worktree,
     sandboxes: worktree.sandboxes
-      .filter((sandbox) => worktree.projectId !== 'global' || sandbox.sessions.length > 0)
+      .filter(
+      (sandbox) =>
+        worktree.projectId !== 'global'
+        || sandbox.sessions.length >0
+        || ARCHIVED_ONLY_LABEL.test(sandbox.branch ?? ''),
+      )
       .slice(0, MAX_SANDBOXES)
       .map((sandbox) => ({
         ...sandbox,
         sessions: sandbox.sessions.slice(0, MAX_SESSIONS),
-      })),
+      }))
   }));
 });
 
