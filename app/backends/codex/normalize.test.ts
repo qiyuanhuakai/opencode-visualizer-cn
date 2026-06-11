@@ -459,4 +459,105 @@ describe('normalizeCodexTurnItems', () => {
       ]),
     );
   });
+
+  it('sets time.completed when turnStatus is completed', () => {
+    const result = normalizeCodexTurnItems({
+      sessionId: 'thread-completed',
+      turnId: 'turn-completed',
+      createdAt: 100,
+      items: [
+        { id: 'u1', type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
+        { id: 'cmd1', type: 'commandExecution', createdAt: 120, command: 'ls', aggregatedOutput: 'ok' },
+        { id: 'a1', type: 'agentMessage', createdAt: 150, text: 'done' },
+      ],
+      turnStatus: 'completed',
+      turn: { completedAt: 160 },
+    });
+
+    const assistant = result.messages.find((m) => m.role === 'assistant');
+    expect(assistant).toBeDefined();
+    if (!assistant || assistant.role !== 'assistant') throw new Error('Expected assistant');
+    expect(assistant.time.created).toBe(120);
+    expect(assistant.time.completed).toBe(160);
+  });
+
+  it('falls back to max item time.end when turn has no completedAt', () => {
+    const result = normalizeCodexTurnItems({
+      sessionId: 'thread-item-end',
+      turnId: 'turn-item-end',
+      createdAt: 100,
+      items: [
+        { id: 'u1', type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
+        { id: 'cmd1', type: 'commandExecution', createdAt: 120, command: 'ls', aggregatedOutput: 'ok', time: { end: 140 } },
+        { id: 'a1', type: 'agentMessage', createdAt: 150, text: 'done', time: { end: 155 } },
+      ],
+      turnStatus: 'completed',
+      turn: {},
+    });
+
+    const assistant = result.messages.find((m) => m.role === 'assistant');
+    expect(assistant).toBeDefined();
+    if (!assistant || assistant.role !== 'assistant') throw new Error('Expected assistant');
+    expect(assistant.time.completed).toBe(155);
+  });
+
+  it('does not set time.completed when turnStatus is inProgress', () => {
+    const result = normalizeCodexTurnItems({
+      sessionId: 'thread-inprogress',
+      turnId: 'turn-inprogress',
+      createdAt: 100,
+      items: [
+        { id: 'u1', type: 'userMessage', content: [{ type: 'text', text: 'hi' }] },
+        { id: 'cmd1', type: 'commandExecution', createdAt: 120, command: 'ls', aggregatedOutput: 'ok' },
+        { id: 'a1', type: 'agentMessage', createdAt: 130, text: 'working...' },
+      ],
+      turnStatus: 'inProgress',
+    });
+
+    const assistant = result.messages.find((m) => m.role === 'assistant');
+    expect(assistant).toBeDefined();
+    if (!assistant || assistant.role !== 'assistant') throw new Error('Expected assistant');
+    expect(assistant.time.created).toBe(120);
+    expect(assistant.time.completed).toBeUndefined();
+  });
+
+  it('normalizeCodexTurnsToHistory passes turn status for duration display', () => {
+    const history = normalizeCodexTurnsToHistory({
+      sessionId: 'thread-status',
+      createdAt: 100,
+      turns: [
+        {
+          id: 'turn-done',
+          status: 'completed',
+          createdAt: 100,
+          items: [
+            { id: 'u1', type: 'userMessage', content: [{ type: 'text', text: 'go' }] },
+            { id: 'a1', type: 'agentMessage', createdAt: 110, text: 'done', time: { end: 115 } },
+          ],
+        },
+        {
+          id: 'turn-wip',
+          status: 'inProgress',
+          createdAt: 200,
+          items: [
+            { id: 'u2', type: 'userMessage', content: [{ type: 'text', text: 'next' }] },
+            { id: 'a2', type: 'agentMessage', createdAt: 210, text: 'working' },
+          ],
+        },
+      ],
+    });
+
+    const doneAssistant = history.find((e) => e.info.role === 'assistant' && e.info.id.includes('turn-done'));
+    const wipAssistant = history.find((e) => e.info.role === 'assistant' && e.info.id.includes('turn-wip'));
+
+    expect(doneAssistant).toBeDefined();
+    expect(wipAssistant).toBeDefined();
+
+    if (doneAssistant?.info.role === 'assistant') {
+      expect(doneAssistant.info.time.completed).toBe(115);
+    }
+    if (wipAssistant?.info.role === 'assistant') {
+      expect(wipAssistant.info.time.completed).toBeUndefined();
+    }
+  });
 });

@@ -51,6 +51,10 @@ function numberValue(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function codexItemId(item: CodexRecord, fallback: string) {
   return stringValue(item.id, fallback);
 }
@@ -124,6 +128,20 @@ function createUserMessage(params: {
       modelID: params.model?.modelID || 'codex',
     },
   };
+}
+
+function extractTurnCompletedTime(turn: { items?: unknown[]; completedAt?: unknown; finishedAt?: unknown }): number | undefined {
+  const direct = asNumber(turn.completedAt) ?? asNumber(turn.finishedAt);
+  if (direct !== undefined) return direct;
+  let max: number | undefined;
+  for (const item of turn.items ?? []) {
+    if (!isRecord(item)) continue;
+    const time = item.time;
+    if (!isRecord(time)) continue;
+    const end = asNumber(time.end);
+    if (end !== undefined && (max === undefined || end > max)) max = end;
+  }
+  return max;
 }
 
 function createAssistantMessage(params: {
@@ -272,8 +290,14 @@ export function normalizeCodexTurnItems(params: {
   createdAt?: number;
   model?: CodexNormalizeModel;
   parentMessageId?: string;
+  turnStatus?: string;
+  turn?: { items?: unknown[]; completedAt?: unknown; finishedAt?: unknown };
 }): CodexCanonicalMessageBundle {
   const createdAt = params.createdAt ?? Date.now();
+  const hasExplicitStatus = params.turnStatus != null && params.turnStatus !== '';
+  const isCompleted = params.turnStatus === 'completed';
+  const turnForExtraction = { ...params.turn, items: params.turn?.items ?? params.items };
+  const turnCompletedTime = isCompleted ? extractTurnCompletedTime(turnForExtraction) : undefined;
   const messages: MessageInfo[] = [];
   const parts: MessagePart[] = [];
   let parentMessageId = params.parentMessageId ?? '';
@@ -283,12 +307,18 @@ export function normalizeCodexTurnItems(params: {
 
   function ensureAssistantMessage(itemTime: number) {
     if (!assistantMessage) {
+      let completedAt: number | undefined;
+      if (isCompleted) {
+        completedAt = turnCompletedTime ?? itemTime;
+      } else if (!hasExplicitStatus) {
+        completedAt = itemTime;
+      }
       assistantMessage = createAssistantMessage({
         id: assistantMessageId,
         sessionId: params.sessionId,
         parentId: parentMessageId,
         createdAt: itemTime,
-        completedAt: itemTime,
+        completedAt,
         model: params.model,
       });
       messages.push(assistantMessage);
@@ -301,9 +331,11 @@ export function normalizeCodexTurnItems(params: {
     if (itemTime < assistantMessage.time.created) {
       assistantMessage.time.created = itemTime;
     }
-    const currentCompleted = numberValue(assistantMessage.time.completed, assistantMessage.time.created);
-    if (itemTime > currentCompleted) {
-      assistantMessage.time.completed = itemTime;
+    if (isCompleted || !hasExplicitStatus) {
+      const currentCompleted = numberValue(assistantMessage.time.completed, assistantMessage.time.created);
+      if (itemTime > currentCompleted) {
+        assistantMessage.time.completed = itemTime;
+      }
     }
     return assistantMessage;
   }
@@ -547,7 +579,7 @@ export function normalizeCodexTurnItems(params: {
 
 export function normalizeCodexTurnsToHistory(params: {
   sessionId: string;
-  turns: Array<{ id?: unknown; items?: unknown; createdAt?: unknown }>;
+  turns: Array<{ id?: unknown; items?: unknown; createdAt?: unknown; status?: unknown }>;
   createdAt?: number;
   model?: CodexNormalizeModel;
 }): CodexCanonicalHistoryEntry[] {
@@ -555,12 +587,15 @@ export function normalizeCodexTurnsToHistory(params: {
   for (const [index, turn] of params.turns.entries()) {
     const turnId = stringValue(turn.id, `${params.sessionId}:turn:${index}`);
     const items = Array.isArray(turn.items) ? turn.items : [];
+    const turnStatus = stringValue(turn.status);
     const bundle = normalizeCodexTurnItems({
       sessionId: params.sessionId,
       turnId,
       items,
       createdAt: numberValue(turn.createdAt, params.createdAt ?? Date.now() + index),
       model: params.model,
+      turnStatus,
+      turn,
     });
     for (const info of bundle.messages) {
       entries.push({
