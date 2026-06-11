@@ -135,6 +135,7 @@
                     @show-message-diff="handleShowMessageDiff"
                     @show-commit="handleShowCommit"
                     @show-thread-history="handleShowThreadHistory"
+                    @show-subagent-history="handleShowSubagentHistory"
                     @edit-message="handleEditMessage"
                     @open-image="handleOpenImage"
                     @open-file="openFileViewer"
@@ -465,6 +466,7 @@ import GlobContent from './components/ToolWindow/Glob.vue';
 import GrepContent from './components/ToolWindow/Grep.vue';
 import ReasoningContent from './components/ToolWindow/Reasoning.vue';
 import ThreadHistoryContent from './components/ThreadHistoryContent.vue';
+import SubagentHistoryContent from './components/SubagentHistoryContent.vue';
 import SubagentContent from './components/ToolWindow/Subagent.vue';
 import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
@@ -7183,6 +7185,42 @@ function handleShowThreadHistory(payload: { entries: HistoryWindowEntry[] }) {
     x,
     y,
     afterClose: closeHistoryToolWindows,
+  });
+}
+
+function handleShowSubagentHistory(payload: { sessionId: string; label: string }) {
+  const sessionId = payload.sessionId?.trim();
+  if (!sessionId) return;
+  const label = payload.label?.trim() || sessionId;
+  const key = `subagent-history:${sessionId}`;
+  if (fw.has(key)) {
+    fw.bringToFront(key);
+    return;
+  }
+  const { width, height } = fw.getExtent();
+  const winW = 720;
+  const winH = 520;
+  const x = Math.max(0, Math.round((width - winW) / 2));
+  const y = Math.max(0, Math.round((height - winH) / 2));
+  fw.open(key, {
+    component: SubagentHistoryContent,
+    props: {
+      parentThreadId: sessionId,
+      sessionLabel: label,
+      theme: shikiTheme.value,
+    },
+    title: `${t('app.windowTitles.subagentHistory')} · ${label}`,
+    scroll: 'follow',
+    smoothEngine: 'native',
+    closable: true,
+    resizable: true,
+    focusOnOpen: true,
+    variant: 'message',
+    expiry: Infinity,
+    width: winW,
+    height: winH,
+    x,
+    y,
   });
 }
 

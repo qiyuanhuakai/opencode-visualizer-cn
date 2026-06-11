@@ -102,6 +102,7 @@ const messages: LocaleMessages = {
       reasoningSimple: '🤔 Pensas…',
       question: 'Demando: {title}',
       permission: 'Permeso: {title}',
+      subagentHistory: 'Subagenta historio',
     },
     debug: {
       session: 'Montri seancografan arbon',
@@ -1064,6 +1065,13 @@ const messages: LocaleMessages = {
     historyLabel: 'Historio',
     fork: 'FORKO',
     undo: 'MALFARI',
+    viewSubagent: 'Rigardi subagenton',
+    viewSubagentTitle: 'Malfermi subagenthistorion por {sessionId}',
+  },
+  subagentHistory: {
+    title: 'Subagento',
+    close: 'Fermi',
+    empty: 'Ankoraŭ neniu subagenta historio disponeblas.',
   },
   imageViewer: {
     failedToLoad: 'Ŝargo de bildo malsukcesis',

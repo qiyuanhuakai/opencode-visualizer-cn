@@ -101,6 +101,7 @@ export interface LocaleMessages {
       reasoningSimple: string;
       question: string;
       permission: string;
+      subagentHistory: string;
     };
     debug: {
       session: string;
@@ -1023,6 +1024,13 @@ export interface LocaleMessages {
     historyLabel: string;
     fork: string;
     undo: string;
+    viewSubagent: string;
+    viewSubagentTitle: string;
+  };
+  subagentHistory: {
+    title: string;
+    close: string;
+    empty: string;
   };
   imageViewer: {
     failedToLoad: string;

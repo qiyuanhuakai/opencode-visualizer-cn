@@ -100,6 +100,12 @@ export function codexThreadToSession(
   };
 }
 
+function isCodexSubagentThread(thread: CodexThread): boolean {
+  if (thread.source === 'subagent') return true;
+  if (thread.parentThreadId) return true;
+  return false;
+}
+
 export function createCodexProjectState(
   threads: CodexThread[],
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
@@ -111,6 +117,9 @@ export function createCodexProjectState(
   const sandboxes: ProjectState['sandboxes'] = {};
 
   for (const thread of threads) {
+    // Bug #1: skip subagent threads in the sidebar; they're surfaced via the
+    // "View subagent" button on the main thread block, not as top-level entries.
+    if (isCodexSubagentThread(thread)) continue;
     const directory = threadSandboxDirectory(thread, fallbackDirectory);
     const sandbox = sandboxes[directory] ?? {
       directory,

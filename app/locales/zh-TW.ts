@@ -102,6 +102,7 @@ const messages: LocaleMessages = {
       reasoningSimple: '🤔 思考中...',
       question: '問題: {title}',
       permission: '權限: {title}',
+      subagentHistory: '子代理歷史',
     },
     debug: {
       session: '顯示工作階段圖樹',
@@ -1064,6 +1065,13 @@ const messages: LocaleMessages = {
     historyLabel: '歷史紀錄',
     fork: '分支',
     undo: '復原',
+    viewSubagent: '檢視子代理',
+    viewSubagentTitle: '開啟子代理歷史: {sessionId}',
+  },
+  subagentHistory: {
+    title: '子代理',
+    close: '關閉',
+    empty: '暫無子代理歷史紀錄。',
   },
   imageViewer: {
     failedToLoad: '圖片載入失敗',

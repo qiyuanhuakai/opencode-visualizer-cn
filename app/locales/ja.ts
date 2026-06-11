@@ -102,6 +102,7 @@ const messages: LocaleMessages = {
       reasoningSimple: '🤔 思考中…',
       question: '質問: {title}',
       permission: '権限: {title}',
+      subagentHistory: 'サブエージェント履歴',
     },
     debug: {
       session: 'セッショングラフツリーを表示',
@@ -1064,6 +1065,13 @@ const messages: LocaleMessages = {
     historyLabel: '履歴',
     fork: 'フォーク',
     undo: '取り消し',
+    viewSubagent: 'サブエージェントを表示',
+    viewSubagentTitle: 'サブエージェント履歴を開く: {sessionId}',
+  },
+  subagentHistory: {
+    title: 'サブエージェント',
+    close: '閉じる',
+    empty: 'サブエージェントの履歴はまだありません。',
   },
   imageViewer: {
     failedToLoad: '画像の読み込みに失敗しました',

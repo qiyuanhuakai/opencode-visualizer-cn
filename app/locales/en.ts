@@ -102,6 +102,7 @@ const messages: LocaleMessages = {
       reasoningSimple: '🤔 Thinking...',
       question: 'Question: {title}',
       permission: 'Permission: {title}',
+      subagentHistory: 'Subagent History',
     },
     debug: {
       session: 'Show session graph tree',
@@ -1064,6 +1065,13 @@ const messages: LocaleMessages = {
     historyLabel: 'History',
     fork: 'FORK',
     undo: 'UNDO',
+    viewSubagent: 'View subagent',
+    viewSubagentTitle: 'Open subagent history for {sessionId}',
+  },
+  subagentHistory: {
+    title: 'Subagent',
+    close: 'Close',
+    empty: 'No subagent history available yet.',
   },
   imageViewer: {
     failedToLoad: 'Failed to load image',

@@ -71,6 +71,9 @@ export type CodexThread = {
   status?: unknown;
   cwd?: string;
   gitInfo?: CodexGitInfo;
+  source?: 'main' | 'subagent';
+  parentThreadId?: string;
+  sessionId?: string;
 };
 
 export type CodexThreadListParams = {
@@ -906,6 +909,9 @@ type NormalizedCodexSession = {
   title?: string;
   status?: 'busy' | 'idle' | 'retry' | 'unknown';
   directory?: string;
+  source?: 'main' | 'subagent';
+  parentThreadId?: string;
+  sessionId?: string;
   time?: {
     created?: number;
     updated?: number;
@@ -1047,6 +1053,9 @@ function normalizeCodexThread(thread: CodexThread, homeDirectory?: string): Norm
     title: thread.name || thread.preview || undefined,
     status: normalizeCodexStatus(thread.status),
     directory,
+    source: thread.source,
+    parentThreadId: thread.parentThreadId,
+    sessionId: thread.sessionId,
     time: {
       created: thread.createdAt,
       updated: thread.updatedAt ?? thread.createdAt,

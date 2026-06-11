@@ -97,6 +97,27 @@
       <span class="ib-error-text">{{ formatMessageError(threadError, (key) => t(key)) }}</span>
     </div>
 
+    <div
+      v-if="!isRevertedPreview && subagentSessions.length > 0"
+      class="ib-subagent-section"
+    >
+      <div
+        v-for="session in subagentSessions"
+        :key="session.sessionId"
+        class="ib-subagent-row"
+      >
+        <span class="ib-subagent-label">🤖 {{ session.label }}</span>
+        <button
+          type="button"
+          class="ib-action ib-action-subagent"
+          :title="t('threadBlock.viewSubagentTitle', { sessionId: session.sessionId })"
+          @click="showSubagentHistory(session)"
+        >
+          {{ t('threadBlock.viewSubagent') }}
+        </button>
+      </div>
+    </div>
+
     <ThreadFooter
       v-if="!isRevertedPreview"
       :timestamp="formatThreadTimestamp(root)"
@@ -171,6 +192,7 @@ const emit = defineEmits<{
   (event: 'show-message-diff', payload: { messageKey: string; diffs: MessageDiffEntry[] }): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
   (event: 'show-thread-history', payload: { entries: HistoryWindowEntry[] }): void;
+  (event: 'show-subagent-history', payload: { sessionId: string; label: string }): void;
   (event: 'message-rendered', renderKey: string): void;
 }>();
 
@@ -212,22 +234,21 @@ const threadTargetAgentStyle = computed(() => {
   return { color };
 });
 
-const subagentThreadMessages = computed(() => {
+const subagentSessions = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();
-  if (!currentSessionId) return [] as MessageInfo[];
-
-  const rootCreatedAt = props.root.time.created;
-
-  return msg.roots.value
-    .filter((root) => root.role === 'user')
-    .filter((root) => root.sessionID !== currentSessionId)
-    .filter((root) => props.sessionHistoryMetaById?.[root.sessionID]?.parentID === currentSessionId)
-    .filter((root) => {
-      const createdAt = root.time.created;
-      return createdAt >= rootCreatedAt;
-    })
-    .flatMap((root) => msg.getThread(root.id))
-    .filter((item) => item.role === 'assistant');
+  if (!currentSessionId) return [] as Array<{ sessionId: string; label: string }>;
+  const seen = new Map<string, string>();
+  for (const root of msg.roots.value) {
+    if (root.role !== 'user') continue;
+    if (root.sessionID === currentSessionId) continue;
+    const meta: { parentID?: string; label: string } | undefined =
+      props.sessionHistoryMetaById?.[root.sessionID];
+    if (meta?.parentID !== currentSessionId) continue;
+    if (!seen.has(root.sessionID)) {
+      seen.set(root.sessionID, meta?.label || root.sessionID);
+    }
+  }
+  return Array.from(seen.entries()).map(([sessionId, label]) => ({ sessionId, label }));
 });
 
 function hasTextContent(message?: MessageInfo): boolean {
@@ -311,8 +332,48 @@ function extractQuestionAnswers(part: ToolPart): string[][] | undefined {
 
 function getHistoryEntries(): HistoryEntry[] {
   const entries: HistoryEntry[] = [];
-  const allHistoryMessages = [...threadMessages.value, ...subagentThreadMessages.value];
+  // Bug #1 fix: filter out subagent messages from main history view.
+  // Subagent sessions are exposed via the "View subagent" button on the
+  // main thread block, opening them in a separate floating window.
+  const allHistoryMessages = [...threadMessages.value];
   for (const msgInfo of allHistoryMessages) {
+    if (msgInfo.role === 'assistant' && hasTextContent(msgInfo)) {
+      entries.push({ kind: 'message', message: msgInfo, time: msgInfo.time.created });
+    }
+    const parts = msg.getParts(msgInfo.id);
+    for (const part of parts) {
+      if (part.type === 'reasoning') {
+        if (part.text) {
+          entries.push({ kind: 'reasoning', part, time: part.time.start });
+        }
+        continue;
+      }
+      if (part.type === 'subtask') {
+        entries.push({ kind: 'subtask', part, time: getSubtaskPartTime(part, msgInfo.time.created) });
+        continue;
+      }
+      if (part.type !== 'tool') continue;
+      if (part.state.status === 'pending') continue;
+      if (part.tool === 'question') {
+        entries.push({ kind: 'question', part, time: getToolPartTime(part) });
+        continue;
+      }
+      if (!HISTORY_TOOL_NAMES.has(part.tool)) continue;
+      entries.push({ kind: 'tool', part, time: getToolPartTime(part) });
+    }
+  }
+  return entries.sort((a, b) => a.time - b.time);
+}
+
+function getSubagentHistoryEntries(parentThreadId: string): HistoryEntry[] {
+  const target = parentThreadId.trim();
+  if (!target) return [];
+  const subagentRoots = msg.roots.value
+    .filter((root) => root.role === 'user')
+    .filter((root) => root.sessionID === target);
+  const messages = subagentRoots.flatMap((root) => msg.getThread(root.id));
+  const entries: HistoryEntry[] = [];
+  for (const msgInfo of messages) {
     if (msgInfo.role === 'assistant' && hasTextContent(msgInfo)) {
       entries.push({ kind: 'message', message: msgInfo, time: msgInfo.time.created });
     }
@@ -432,6 +493,12 @@ function canForkThread(root: MessageInfo): boolean {
   if (props.backendKind === 'codex' && !props.isLatestRoot) return false;
   return root.role === 'user' && Boolean(root.sessionID);
 }
+
+function showSubagentHistory(session: { sessionId: string; label: string }) {
+  emit('show-subagent-history', { sessionId: session.sessionId, label: session.label });
+}
+
+defineExpose({ getSubagentHistoryEntries, showSubagentHistory });
 
 async function confirmFork() {
   const root = props.root;
@@ -696,6 +763,47 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   color: var(--theme-text-danger, #fca5a5);
   font-size: 11px;
   line-height: 1.3;
+}
+
+.ib-subagent-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ib-subagent-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, #0ea5e9 35%, var(--ui-chip-border-subtle, rgba(90, 100, 120, 0.35)));
+  background: color-mix(in srgb, #0ea5e9 8%, var(--theme-chat-control-bg, rgba(30, 41, 59, 0.35)));
+  font-size: 11px;
+}
+
+.ib-subagent-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #7dd3fc;
+  font-family: var(--app-monospace-font-family);
+}
+
+.ib-action-subagent {
+  flex-shrink: 0;
+  border-color: color-mix(in srgb, #0ea5e9 50%, var(--ui-chip-border-subtle, rgba(90, 100, 120, 0.35)));
+  background: color-mix(in srgb, #0ea5e9 12%, var(--theme-chat-active-bg, rgba(51, 65, 85, 0.55)));
+  color: #7dd3fc;
+  font-weight: 600;
+}
+
+.ib-action-subagent:hover {
+  background: color-mix(in srgb, #0ea5e9 24%, var(--theme-chat-active-bg, rgba(51, 65, 85, 0.55)));
+  color: #bae6fd;
 }
 
 .ib-error-icon {
