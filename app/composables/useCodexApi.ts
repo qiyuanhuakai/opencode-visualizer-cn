@@ -68,6 +68,7 @@ export type CodexTranscriptEntry = {
   role: 'user' | 'assistant' | 'system';
   text: string;
   time: number;
+  modelName?: string;
 };
 
 export type CodexApprovalContext = {
@@ -581,23 +582,25 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (refreshGitInfo && !normalizedThread.gitInfo?.root) void upsertThreadWithGitInfo(normalizedThread);
   }
 
-  function pushTranscript(role: CodexTranscriptEntry['role'], text: string) {
+  function pushTranscript(role: CodexTranscriptEntry['role'], text: string, modelName?: string) {
     if (!text) return;
     transcript.value.push({
       id: nextTranscriptId,
       role,
       text,
       time: Date.now(),
+      ...(modelName ? { modelName } : {}),
     });
     nextTranscriptId += 1;
   }
 
-  function createTranscriptEntry(role: CodexTranscriptEntry['role'], text: string) {
+  function createTranscriptEntry(role: CodexTranscriptEntry['role'], text: string, modelName?: string) {
     const entry = {
       id: nextTranscriptId,
       role,
       text,
       time: Date.now(),
+      ...(modelName ? { modelName } : {}),
     } satisfies CodexTranscriptEntry;
     nextTranscriptId += 1;
     return entry;
@@ -606,6 +609,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   function setTranscriptFromTurns(turns: CodexTurn[] = []) {
     const activeThread = threads.value.find((thread) => thread.id === activeThreadId.value);
     const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
+    const modelName = selectedModelInfo.modelID || selectedModelInfo.providerID;
     canonicalHistory.value = normalizeCodexTurnsToHistory({
       sessionId: activeThreadId.value ?? 'codex-thread',
       turns,
@@ -618,12 +622,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const role = entry.info.role === 'assistant' ? 'assistant' : 'user';
       return entry.parts
         .filter((part): part is TextPart => isTextPart(part) && Boolean(part.text))
-        .map((part) => createTranscriptEntry(role, part.text));
+        .map((part) => createTranscriptEntry(role, part.text, modelName));
     });
     const systemEntries = turns.flatMap((turn) => {
       const items = Array.isArray(turn.items) ? turn.items : [];
       return items
-        .flatMap((item) => extractItemTranscriptEntries(item, createTranscriptEntry))
+        .flatMap((item) => extractItemTranscriptEntries(item, (role, text) => createTranscriptEntry(role, text, modelName)))
         .filter((entry) => entry.role === 'system');
     });
     transcript.value = [...textEntries, ...systemEntries];
@@ -636,10 +640,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       transcript.value[transcript.value.length - 1] = {
         ...last,
         text: `${last.text}${text}`,
+        modelName: last.modelName ?? currentSelectedModelName(),
       };
       return;
     }
-    pushTranscript('assistant', text);
+    pushTranscript('assistant', text, currentSelectedModelName());
   }
 
   function parseSelectedCodexModel(value: string | undefined) {
@@ -652,6 +657,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const providerID = normalized.slice(0, slashIndex).trim() || 'codex';
     const modelID = normalized.slice(slashIndex + 1).trim() || normalized;
     return { providerID, modelID };
+  }
+
+  function currentSelectedModelName(): string {
+    const info = parseSelectedCodexModel(selectedModel.value);
+    return info.modelID || info.providerID;
   }
 
   function createCodexAssistantInfo(sessionId: string, messageId: string, createdAt: number, parentId = ''): MessageInfo {
@@ -1003,9 +1013,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         if (isRecord(item) && item.type === 'agentMessage' && typeof item.text === 'string') {
           const last = transcript.value.at(-1);
           if (last?.role === 'assistant') {
-            transcript.value[transcript.value.length - 1] = { ...last, text: item.text };
+            transcript.value[transcript.value.length - 1] = {
+              ...last,
+              text: item.text,
+              modelName: last.modelName ?? currentSelectedModelName(),
+            };
           } else {
-            pushTranscript('assistant', item.text);
+            pushTranscript('assistant', item.text, currentSelectedModelName());
           }
           if (realtimeStreamingPart.value) {
             const completedAt = Date.now();
@@ -1084,7 +1098,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           reviewState.value = 'completed';
           const reviewText = typeof item.review === 'string' ? item.review : '';
           reviewResult.value = reviewText;
-          pushTranscript('system', `Review completed: ${reviewText}`);
+          pushTranscript('system', `Review completed: ${reviewText}`, currentSelectedModelName());
         }
         // Bridge completed items into the shared message model for OutputPanel realtime display
         if (isRecord(item) && typeof item.type === 'string' && !completedToolMerged) {
@@ -1118,7 +1132,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
          reviewState.value = 'reviewing';
          reviewResult.value = '';
          const reviewText = typeof item.review === 'string' ? item.review : '';
-         pushTranscript('system', `Review started: ${reviewText || 'current changes'}`);
+         pushTranscript('system', `Review started: ${reviewText || 'current changes'}`, currentSelectedModelName());
          return;
        }
          if (item && typeof item.type === 'string' && item.type !== 'userMessage' && item.type !== 'agentMessage') {

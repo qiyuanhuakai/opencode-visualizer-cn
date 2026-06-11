@@ -439,7 +439,10 @@
           :class="[`is-${entry.role}`, getEntryTypeClass(entry.text)]"
         >
           <div class="codex-message-role">
-            {{ getEntryLabel(entry) }}
+            <span>{{ getEntryLabel(entry) }}</span>
+            <span v-if="getEntryModel(entry)" class="codex-message-model">
+              {{ getEntryModel(entry) }}
+            </span>
           </div>
           <div class="codex-message-content">
             <!-- Command execution -->
@@ -914,6 +917,14 @@ function getEntryLabel(entry: CodexTranscriptEntry): string {
   if (text.startsWith('Tool call')) return t('codexPanel.transcriptToolCall');
   if (text.startsWith('Image')) return t('codexPanel.transcriptImage');
   return t('codexPanel.messageSystem');
+}
+
+function getEntryModel(entry: CodexTranscriptEntry): string {
+  const modelName = entry.modelName?.trim();
+  if (!modelName) return '';
+  const slashIndex = modelName.indexOf('/');
+  if (slashIndex <= 0 || slashIndex >= modelName.length - 1) return modelName;
+  return modelName.slice(slashIndex + 1).trim() || modelName;
 }
 </script>
 
@@ -1513,6 +1524,22 @@ input:disabled {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codex-message-model {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--theme-floating-surface-elevated, rgba(30, 41, 59, 0.6));
+  color: var(--theme-accent-primary, #93c5fd);
+  font-size: 10px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
 }
 
 .codex-message pre {

@@ -562,6 +562,7 @@ import {
 } from './utils/toolRenderers';
 import { toMessageDiffViewerEntry } from './utils/messageDiff';
 import { buildLineCommentFileUrl, formatCommentNote } from './utils/lineComment';
+import { resolveModelMetaForPath as resolveModelMetaForPathUtil } from './utils/resolveModelMeta';
 import {
   configureCodexBackend,
   configureOpenCodeBackend,
@@ -2224,13 +2225,7 @@ function resolveAgentColorForName(agentName?: string) {
 }
 
 function resolveModelMetaForPath(modelPath?: string) {
-  if (!modelPath) return undefined;
-  const matched = modelOptions.value.find((model) => model.id === modelPath);
-  if (!matched) return undefined;
-  return {
-    displayName: matched.displayName,
-    providerLabel: matched.providerLabel,
-  };
+  return resolveModelMetaForPathUtil(modelPath, modelOptions.value);
 }
 
 const currentAgentColor = computed(() => resolveAgentColorForName(selectedMode.value));
