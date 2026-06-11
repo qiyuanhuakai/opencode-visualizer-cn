@@ -100,6 +100,21 @@ node server.js
 
 然后打开 `http://localhost:23003`。
 
+### 部署到 GitHub Pages
+
+本仓库内置 `.github/workflows/deploy.yml`，可直接把前端静态资源托管到 GitHub Pages，让浏览器作为 SPA 直连本机 OpenCode server。
+
+```bash
+# 1. 推到你的 GitHub 仓库
+git push origin main
+
+# 2. 仓库 Settings → Pages → Source 选择 GitHub Actions
+# 3. 本机启动 OpenCode 时务必声明 CORS：
+opencode serve --cors https://<user>.github.io
+```
+
+> 详细步骤、自定义域名、CORS 排错，请参阅 [docs/deploy-github-pages.md](./docs/deploy-github-pages.md)。
+
 ---
 
 ## vis_bridge 使用说明
@@ -328,6 +343,21 @@ node server.js
 We recommend using `nohup node server.js 2>&1 &` to run the server persistently in the background.
 
 Then open `http://localhost:23003`.
+
+### Deploying to GitHub Pages
+
+This repo ships `.github/workflows/deploy.yml`, which builds the SPA and publishes it to GitHub Pages so the browser can connect directly to your local OpenCode server.
+
+```bash
+# 1. Push to your GitHub repository
+git push origin main
+
+# 2. In your repo: Settings → Pages → Source → GitHub Actions
+# 3. Start OpenCode with an explicit CORS origin:
+opencode serve --cors https://<user>.github.io
+```
+
+> Full steps, custom domain, and CORS troubleshooting: see [docs/deploy-github-pages.md](./docs/deploy-github-pages.md).
 
 ---
 

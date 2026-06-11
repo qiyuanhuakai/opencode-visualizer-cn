@@ -26,9 +26,6 @@
 - [ ] vis-bridge 模块化本地桥接服务器：集成外部开发工具，扩展与第三方工具的联动能力。
 	- [?] codex
 	    - [ ] 实现会话级别diff
-	    - [ ] 完善状态监控面板（由于我不经常使用codex，只能确保其基本可用）
-	    	- [ ] 适配“插件”相关功能
-        - [ ] 支持codex特有的“$”快捷命令，用于调用skills
     - [ ] deepseek-tui
     - [ ] reasonix
 	- [ ] kimicode cli
