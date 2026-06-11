@@ -29,7 +29,7 @@ describe('useCodexWorkspace', () => {
     expect(project.sandboxes['/other-repo/subdir'].sessions['thread-2']).toMatchObject({
       id: 'thread-2',
       directory: '/other-repo/subdir',
-      status: 'idle',
+      status: 'unknown',
     });
   });
 

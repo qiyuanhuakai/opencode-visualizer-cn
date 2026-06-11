@@ -1,5 +1,5 @@
 import { computed, type ComputedRef, type Ref } from 'vue';
-import type { CodexThread } from '../backends/codex/codexAdapter';
+import { extractStatusType, type CodexThread } from '../backends/codex/codexAdapter';
 import { CODEX_PROJECT_ID } from '../backends/codex/bridgeUrl';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import type { ProjectState, SessionState } from '../types/worker-state';
@@ -64,9 +64,10 @@ function threadTitle(thread: CodexThread) {
 }
 
 function threadStatus(thread: CodexThread): SessionState['status'] {
-  if (thread.status === 'busy' || thread.status === 'running' || thread.status === 'inProgress') return 'busy';
-  if (thread.status === 'retry') return 'retry';
-  return 'idle';
+  const type = extractStatusType(thread.status);
+  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy') return 'busy';
+  if (type === 'systemError' || type === 'retry') return 'retry';
+  return 'unknown' as SessionState['status'];
 }
 
 export function codexThreadToSession(

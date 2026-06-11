@@ -904,7 +904,7 @@ type NormalizedCodexSession = {
   id: string;
   projectID: string;
   title?: string;
-  status?: 'busy' | 'idle' | 'retry';
+  status?: 'busy' | 'idle' | 'retry' | 'unknown';
   directory?: string;
   time?: {
     created?: number;
@@ -914,10 +914,20 @@ type NormalizedCodexSession = {
   };
 };
 
-function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status'] {
-  if (status === 'running' || status === 'busy' || status === 'inProgress') return 'busy';
-  if (status === 'retry') return 'retry';
-  return 'idle';
+export function extractStatusType(status: unknown): string | undefined {
+  if (typeof status === 'string') return status;
+  if (status && typeof status === 'object' && 'type' in status) {
+    const t = (status as { type: unknown }).type;
+    return typeof t === 'string' ? t : undefined;
+  }
+  return undefined;
+}
+
+export function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status'] {
+  const type = extractStatusType(status);
+  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy') return 'busy';
+  if (type === 'systemError' || type === 'retry') return 'retry';
+  return 'unknown';
 }
 
 function normalizeCodexMcpStatus(status: string) {
@@ -1080,7 +1090,7 @@ function normalizeAbsoluteCodexPath(path: string) {
 function isWithinCodexRoot(root: string, target: string) {
   const normalizedRoot = normalizeAbsoluteCodexPath(root);
   const normalizedTarget = normalizeAbsoluteCodexPath(target);
-  if (normalizedRoot === '/') return normalizedTarget === '/';
+  if (normalizedRoot === '/') return true;
   const comparableRoot = /^[A-Za-z]:\//u.test(normalizedRoot) ? normalizedRoot.toLowerCase() : normalizedRoot;
   const comparableTarget = /^[A-Za-z]:\//u.test(normalizedTarget) ? normalizedTarget.toLowerCase() : normalizedTarget;
   return comparableTarget === comparableRoot || comparableTarget.startsWith(`${comparableRoot}/`);
