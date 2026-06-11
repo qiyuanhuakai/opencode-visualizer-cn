@@ -923,8 +923,12 @@ function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status']
 function normalizeCodexMcpStatus(status: string) {
   if (status === 'connected' || status === 'disabled' || status === 'failed') return status;
   if (status === 'needs_auth' || status === 'needs_client_registration') return status;
-  if (status === 'running' || status === 'ready') return 'connected';
+  if (status === 'running' || status === 'ready' || status === 'started' || status === 'starting') {
+    return 'connected';
+  }
+  if (status === 'stopped') return 'disabled';
   if (status === 'auth_required') return 'needs_auth';
+  if (status === 'error') return 'failed';
   return status ? 'failed' : 'disabled';
 }
 

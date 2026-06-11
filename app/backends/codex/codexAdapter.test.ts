@@ -1289,4 +1289,58 @@ describe('CodexAdapter', () => {
       ).rejects.toThrow(/path/);
     });
   });
+
+  describe('getMcpStatus / normalizeCodexMcpStatus', () => {
+    async function expectNormalizedMcpStatus(rawStatus: string, expected: string) {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
+
+      const status = adapter.getMcpStatus();
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 2);
+      socket.respond(2, { data: [{ name: 'server-a', status: rawStatus }] });
+
+      const result = await status;
+      expect(result['server-a']?.status).toBe(expected);
+    }
+
+    it('maps codex "started" to internal "connected"', async () => {
+      await expectNormalizedMcpStatus('started', 'connected');
+    });
+
+    it('maps codex "starting" to internal "connected"', async () => {
+      await expectNormalizedMcpStatus('starting', 'connected');
+    });
+
+    it('maps codex "stopped" to internal "disabled"', async () => {
+      await expectNormalizedMcpStatus('stopped', 'disabled');
+    });
+
+    it('maps codex "error" to internal "failed"', async () => {
+      await expectNormalizedMcpStatus('error', 'failed');
+    });
+
+    it('preserves opencode "running" / "ready" mapping to "connected"', async () => {
+      await expectNormalizedMcpStatus('running', 'connected');
+      await expectNormalizedMcpStatus('ready', 'connected');
+    });
+
+    it('preserves opencode "auth_required" mapping to "needs_auth"', async () => {
+      await expectNormalizedMcpStatus('auth_required', 'needs_auth');
+    });
+
+    it('preserves pass-through for internal status values', async () => {
+      await expectNormalizedMcpStatus('connected', 'connected');
+      await expectNormalizedMcpStatus('disabled', 'disabled');
+      await expectNormalizedMcpStatus('failed', 'failed');
+      await expectNormalizedMcpStatus('needs_auth', 'needs_auth');
+      await expectNormalizedMcpStatus('needs_client_registration', 'needs_client_registration');
+    });
+  });
 });
