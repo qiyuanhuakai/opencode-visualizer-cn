@@ -38,8 +38,8 @@
 ### 无法实现功能
 
 - [x] 由于codex appserver自身的问题，无法实现以下功能：
-   - [ ] 会话级别的token消耗显示
-- [无法支持] status monitor面板支持显示codex插件
+   - [无法支持] 会话级别的token消耗显示
+  - [无法支持] status monitor面板支持显示codex插件
          
 
 ## [v0.5.4 released]
