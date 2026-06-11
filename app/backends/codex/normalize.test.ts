@@ -174,23 +174,26 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
+    const singlePatch = '## File changed\n\nPath: empty.ts\n\nStatus: completed\n\n(Codex did not provide a unified diff.)';
+    const multiPatchA = '## File changed\n\nPath: empty-a.ts\n\nStatus: completed\n\n(Codex did not provide a unified diff.)';
+    const multiPatchB = '## File changed\n\nPath: empty-b.ts\n\nStatus: completed\n\n(Codex did not provide a unified diff.)';
     expect(single.parts[0]).toMatchObject({
       type: 'tool',
       tool: 'edit',
       state: {
-        output: 'File changed: empty.ts',
-        metadata: { filediff: { patch: 'File changed: empty.ts' } },
+        output: singlePatch,
+        metadata: { filediff: { patch: singlePatch } },
       },
     });
     expect(multi.parts[0]).toMatchObject({
       type: 'tool',
       tool: 'multiedit',
       state: {
-        output: 'File changed: empty-a.ts\nFile changed: empty-b.ts',
+        output: `${multiPatchA}\n${multiPatchB}`,
         metadata: {
           results: [
-            { path: 'empty-a.ts', filediff: { patch: 'File changed: empty-a.ts' } },
-            { path: 'empty-b.ts', filediff: { patch: 'File changed: empty-b.ts' } },
+            { path: 'empty-a.ts', filediff: { patch: multiPatchA } },
+            { path: 'empty-b.ts', filediff: { patch: multiPatchB } },
           ],
         },
       },

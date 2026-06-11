@@ -1151,14 +1151,15 @@ describe('useCodexApi', () => {
 
     const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'edit-started-1'));
     const toolPart = toolEntry?.parts.find((part) => part.id === 'edit-started-1');
+    const expectedPatch = '## File changed\n\nPath: empty.ts\n\nStatus: completed\n\n(Codex did not provide a unified diff.)';
     expect(toolPart).toMatchObject({
       type: 'tool',
       tool: 'edit',
       state: {
         status: 'completed',
         input: { filePath: 'empty.ts', files: ['empty.ts'] },
-        output: 'File changed: empty.ts',
-        metadata: { filediff: { patch: 'File changed: empty.ts' } },
+        output: expectedPatch,
+        metadata: { filediff: { patch: expectedPatch } },
       },
     });
   });

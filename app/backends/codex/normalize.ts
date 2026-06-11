@@ -389,8 +389,12 @@ export function normalizeCodexTurnItems(params: {
       const firstPath = files[0] || '';
       const changeResults = changes.map((change) => {
         const path = stringValue(change.path);
-        const rawDiff = stringValue(change.diff);
-        const diff = rawDiff || (path ? `File changed: ${path}` : 'File changed');
+        const rawDiff = stringValue(change.diff).trim();
+        const diff = rawDiff || (
+          path
+            ? `## File changed\n\nPath: ${path}\n\nStatus: ${status || 'completed'}\n\n(Codex did not provide a unified diff.)`
+            : `## File changed\n\nStatus: ${status || 'completed'}\n\n(Codex did not provide a unified diff.)`
+        );
         return {
           path,
           diff,
