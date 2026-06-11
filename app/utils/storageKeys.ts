@@ -73,6 +73,7 @@ export const StorageKeys = {
     sessionTreeExpanded: 'state.sessionTreeExpanded.v1',
     lastAuthError: 'state.lastAuthError.v1',
     deletedSandboxes: 'state.deletedSandboxes.v1',
+    codexActiveThread: 'state.codexActiveThread.v1',
   },
   drafts: {
     composer: 'drafts.composer.v1',
