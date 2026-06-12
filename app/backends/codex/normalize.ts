@@ -130,11 +130,12 @@ function createUserMessage(params: {
   };
 }
 
-function extractTurnCompletedTime(turn: { items?: unknown[]; completedAt?: unknown; finishedAt?: unknown }): number | undefined {
+function extractTurnCompletedTime(turn: { items?: unknown; completedAt?: unknown; finishedAt?: unknown }): number | undefined {
   const direct = asNumber(turn.completedAt) ?? asNumber(turn.finishedAt);
   if (direct !== undefined) return direct;
   let max: number | undefined;
-  for (const item of turn.items ?? []) {
+  const items = Array.isArray(turn.items) ? turn.items : [];
+  for (const item of items) {
     if (!isRecord(item)) continue;
     const time = item.time;
     if (!isRecord(time)) continue;
@@ -291,7 +292,7 @@ export function normalizeCodexTurnItems(params: {
   model?: CodexNormalizeModel;
   parentMessageId?: string;
   turnStatus?: string;
-  turn?: { items?: unknown[]; completedAt?: unknown; finishedAt?: unknown };
+  turn?: { items?: unknown; completedAt?: unknown; finishedAt?: unknown };
 }): CodexCanonicalMessageBundle {
   const createdAt = params.createdAt ?? Date.now();
   const hasExplicitStatus = params.turnStatus != null && params.turnStatus !== '';
