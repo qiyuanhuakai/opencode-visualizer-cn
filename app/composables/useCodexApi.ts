@@ -9,6 +9,7 @@ import {
   type CodexAppListResult,
   type CodexCollaborationMode,
   type CodexCollaborationModeListResult,
+  type CodexCollaborationModePayload,
   type CodexConfigBatchWriteParams,
   type CodexConfigReadResult,
   type CodexConfigRequirementsReadResult,
@@ -2221,7 +2222,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function sendPrompt(
     text: string,
-    options: { model?: string; effort?: string; cwd?: string; threadId?: string; input?: CodexPromptInput['input']; forceNewThread?: boolean; collaborationMode?: string } = {},
+    options: { model?: string; effort?: string; cwd?: string; threadId?: string; input?: CodexPromptInput['input']; forceNewThread?: boolean; collaborationMode?: CodexCollaborationModePayload } = {},
   ) {
     const prompt = text.trim();
     const inputItems = options.input?.filter((item) => item.type !== 'text' || item.text.trim().length > 0) ?? [];

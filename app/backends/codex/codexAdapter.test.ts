@@ -266,7 +266,11 @@ describe('CodexAdapter', () => {
     const prompt = adapter.sendPrompt({
       threadId: 'thr_collab',
       text: 'Plan this refactor.',
-      collaborationMode: 'plan',
+      model: 'gpt-5.5',
+      collaborationMode: {
+        mode: 'plan',
+        settings: { model: 'gpt-5.5', developer_instructions: null },
+      },
     });
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
@@ -285,7 +289,10 @@ describe('CodexAdapter', () => {
     const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> }).params;
     expect(sentParams).toMatchObject({
       threadId: 'thr_collab',
-      collaborationMode: 'plan',
+      collaborationMode: {
+        mode: 'plan',
+        settings: { model: 'gpt-5.5', developer_instructions: null },
+      },
     });
   });
 

@@ -212,11 +212,20 @@ export type CodexTurnInputItem =
   | { type: 'localImage'; path: string }
   | { type: 'skill'; name: string; path: string };
 
+export type CodexCollaborationModePayload = {
+  mode: string;
+  settings: {
+    model: string;
+    // `null` means "use the built-in instructions for the selected mode" per docs/codex.md
+    developer_instructions?: string | null;
+  };
+};
+
 export type CodexTurnStartParams = {
   threadId: string;
   input: CodexTurnInputItem[];
   cwd?: string;
-  collaborationMode?: string;
+  collaborationMode?: CodexCollaborationModePayload;
   approvalPolicy?: string;
   sandboxPolicy?: unknown;
   model?: string;
