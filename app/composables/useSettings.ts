@@ -152,10 +152,18 @@ function readExternalThemes(): ExternalThemeDefinition[] {
   return current;
 }
 
+function readForgePanelButton() {
+  const current = storageGet(StorageKeys.settings.showForgePanelButton);
+  if (current !== null) return current !== 'false';
+  return storageGet(StorageKeys.settings.showForgeButton) !== 'false';
+}
+
 const enterToSend = ref(storageGet(StorageKeys.settings.enterToSend) === 'true');
 const suppressAutoWindows = ref(storageGet(StorageKeys.settings.suppressAutoWindows) === 'true');
 const showMinimizeButtons = ref(storageGet(StorageKeys.settings.showMinimizeButtons) !== 'false');
 const showCodexButton = ref(storageGet(StorageKeys.settings.showCodexButton) === 'true');
+const showForgePanelButton = ref(readForgePanelButton());
+const showForgeButton = showForgePanelButton;
 const showCodexInStatusMonitor = ref(
   storageGet(StorageKeys.settings.showCodexInStatusMonitor) !== 'false',
 );
@@ -194,6 +202,11 @@ watch(showMinimizeButtons, (value) => {
 
 watch(showCodexButton, (value) => {
   storageSet(StorageKeys.settings.showCodexButton, String(value));
+}, syncWatchOptions);
+
+watch(showForgeButton, (value) => {
+  storageSet(StorageKeys.settings.showForgePanelButton, String(value));
+  storageSet(StorageKeys.settings.showForgeButton, String(value));
 }, syncWatchOptions);
 
 watch(showCodexInStatusMonitor, (value) => {
@@ -283,6 +296,12 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.showCodexButton)) {
       showCodexButton.value = event.newValue === 'true';
     }
+    if (event.key === storageKey(StorageKeys.settings.showForgeButton)) {
+      showForgeButton.value = event.newValue !== 'false';
+    }
+    if (event.key === storageKey(StorageKeys.settings.showForgePanelButton)) {
+      showForgePanelButton.value = event.newValue !== 'false';
+    }
     if (event.key === storageKey(StorageKeys.settings.showCodexInStatusMonitor)) {
       showCodexInStatusMonitor.value = event.newValue !== 'false';
     }
@@ -345,6 +364,8 @@ export function useSettings() {
     suppressAutoWindows,
     showMinimizeButtons,
     showCodexButton,
+    showForgePanelButton,
+    showForgeButton,
     showCodexInStatusMonitor,
     editInVis,
     dockAlwaysOpen,

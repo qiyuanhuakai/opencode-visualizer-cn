@@ -60,6 +60,8 @@ export const StorageKeys = {
     openInEditorMaxSizeMb: 'settings.openInEditorMaxSizeMb.v1',
     floatingPreviewWordWrap: 'settings.floatingPreviewWordWrap.v1',
     showCodexButton: 'settings.showCodexButton.v1',
+    showForgePanelButton: 'settings.showForgePanelButton.v1',
+    showForgeButton: 'settings.showForgeButton.v1',
     showCodexInStatusMonitor: 'settings.showCodexInStatusMonitor.v1',
     editInVis: 'settings.editInVis.v1',
     regionTheme: 'settings.regionTheme.v1',
@@ -74,6 +76,7 @@ export const StorageKeys = {
     lastAuthError: 'state.lastAuthError.v1',
     deletedSandboxes: 'state.deletedSandboxes.v1',
     codexActiveThread: 'state.codexActiveThread.v1',
+    forgePtyId: 'state.forgePtyId.v1',
   },
   drafts: {
     composer: 'drafts.composer.v1',

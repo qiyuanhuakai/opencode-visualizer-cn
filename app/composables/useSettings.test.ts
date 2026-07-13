@@ -40,9 +40,14 @@ describe('useSettings', () => {
   }
 
   it('has correct defaults when storage is empty', async () => {
+    // Given: no persisted user settings exist.
     const settings = await importFresh();
+
+    // When: the shared settings singleton is initialized.
+    // Then: Forge is visible by default because it only opens an optional PTY surface.
     expect(settings.enterToSend.value).toBe(false);
     expect(settings.showMinimizeButtons.value).toBe(true);
+    expect(settings.showForgeButton.value).toBe(true);
     expect(settings.dockAlwaysOpen.value).toBe(false);
     expect(settings.terminalFontFamily.value).toBe(settings.defaultTerminalFontFamily);
     expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
@@ -51,16 +56,22 @@ describe('useSettings', () => {
   });
 
   it('reads persisted values from storage on load', async () => {
+    // Given: the user hid Forge and changed several unrelated settings.
     storage.setItem('opencode.settings.enterToSend.v1', 'true');
     storage.setItem('opencode.settings.showMinimizeButtons.v1', 'false');
+    storage.setItem('opencode.settings.showForgeButton.v1', 'false');
     storage.setItem('opencode.settings.terminalFontFamily.v1', 'Test Terminal Font, monospace');
     storage.setItem('opencode.settings.appMonospaceFontFamily.v1', 'Test App Font, monospace');
     storage.setItem('opencode.settings.terminalFontSizePx.v1', '16');
     storage.setItem('opencode.settings.appFontSizePx.v1', '14');
 
+    // When: settings are loaded from storage.
     const settings = await importFresh();
+
+    // Then: the Forge visibility preference is restored with the rest of the settings.
     expect(settings.enterToSend.value).toBe(true);
     expect(settings.showMinimizeButtons.value).toBe(false);
+    expect(settings.showForgeButton.value).toBe(false);
     expect(settings.terminalFontFamily.value).toBe('Test Terminal Font, monospace');
     expect(settings.appMonospaceFontFamily.value).toBe('Test App Font, monospace');
     expect(settings.terminalFontSizePx.value).toBe(16);
@@ -81,6 +92,62 @@ describe('useSettings', () => {
     settings.editInVis.value = true;
     await new Promise((r) => setTimeout(r, 10));
     expect(storage.getItem('opencode.settings.editInVis.v1')).toBe('true');
+  });
+
+  it('reads and writes showForgeButton setting', async () => {
+    // Given: Forge is visible by default.
+    const settings = await importFresh();
+    expect(settings.showForgeButton.value).toBe(true);
+
+    // When: the user hides the Forge control.
+    settings.showForgeButton.value = false;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Then: the preference is persisted for the next app load.
+    expect(storage.getItem('opencode.settings.showForgeButton.v1')).toBe('false');
+  });
+
+  it('reads and writes the Forge panel button setting', async () => {
+    // Given: the Forge panel launcher is visible by default.
+    const settings = await importFresh();
+    expect(settings.showForgePanelButton.value).toBe(true);
+
+    // When: the user hides the Forge panel button from settings.
+    settings.showForgePanelButton.value = false;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Then: the panel button preference is persisted like the Codex panel button.
+    expect(storage.getItem('opencode.settings.showForgePanelButton.v1')).toBe('false');
+  });
+
+  it('reacts to external storage events for the Forge panel button setting', async () => {
+    // Given: another app window changes the Forge panel launcher preference.
+    const settings = await importFresh();
+    const event = {
+      key: 'opencode.settings.showForgePanelButton.v1',
+      newValue: 'false',
+    } as unknown as StorageEvent;
+
+    // When: the storage event reaches this window.
+    for (const listener of storageListeners) listener(event);
+
+    // Then: this window hides the Forge panel button immediately.
+    expect(settings.showForgePanelButton.value).toBe(false);
+  });
+
+  it('reacts to external storage events for showForgeButton', async () => {
+    // Given: settings are open in another app window.
+    const settings = await importFresh();
+    const event = {
+      key: 'opencode.settings.showForgeButton.v1',
+      newValue: 'false',
+    } as unknown as StorageEvent;
+
+    // When: the other window changes the Forge visibility preference.
+    for (const listener of storageListeners) listener(event);
+
+    // Then: this window hides the Forge control immediately.
+    expect(settings.showForgeButton.value).toBe(false);
   });
 
   it('reacts to external storage events for editInVis', async () => {

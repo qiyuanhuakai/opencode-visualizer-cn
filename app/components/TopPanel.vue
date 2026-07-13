@@ -632,40 +632,15 @@
             :height="16"
           />
         </button>
-      </div>
-      <div class="top-right">
-        <a
-          href="https://github.com/qiyuanhuakai/opencode-visualizer-cn"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="control-button github-button"
-          :title="$t('topPanel.github')"
-        >
-          <Icon icon="lucide:github" :width="16" :height="16" />
-        </a>
         <button
+          v-if="showForgePanelButton"
           type="button"
-          class="control-button settings-button"
-          :title="$t('topPanel.settings')"
-          @click="$emit('open-settings')"
+          class="control-button forge-button"
+          :disabled="!activeDirectory || !ptySupported"
+          @click="$emit('open-forge-panel')"
+          :title="$t('topPanel.openForge')"
         >
-          <Icon icon="lucide:settings" :width="16" :height="16" />
-        </button>
-        <button
-          type="button"
-          class="control-button provider-manager-button"
-          :title="$t('topPanel.providerManager')"
-          @click="$emit('open-provider-manager')"
-        >
-          <Icon icon="lucide:plug-zap" :width="16" :height="16" />
-        </button>
-        <button
-          type="button"
-          class="control-button status-monitor-button"
-          :title="$t('topPanel.statusMonitor')"
-          @click="$emit('open-status-monitor')"
-        >
-          <Icon icon="lucide:activity" :width="16" :height="16" />
+          <Icon icon="lucide:hammer" :width="16" :height="16" />
         </button>
         <Dropdown
           v-if="showCodexButton"
@@ -788,6 +763,41 @@
             </div>
           </template>
         </Dropdown>
+      </div>
+      <div class="top-right">
+        <a
+          href="https://github.com/qiyuanhuakai/opencode-visualizer-cn"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="control-button github-button"
+          :title="$t('topPanel.github')"
+        >
+          <Icon icon="lucide:github" :width="16" :height="16" />
+        </a>
+        <button
+          type="button"
+          class="control-button settings-button"
+          :title="$t('topPanel.settings')"
+          @click="$emit('open-settings')"
+        >
+          <Icon icon="lucide:settings" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
+          class="control-button provider-manager-button"
+          :title="$t('topPanel.providerManager')"
+          @click="$emit('open-provider-manager')"
+        >
+          <Icon icon="lucide:plug-zap" :width="16" :height="16" />
+        </button>
+        <button
+          type="button"
+          class="control-button status-monitor-button"
+          :title="$t('topPanel.statusMonitor')"
+          @click="$emit('open-status-monitor')"
+        >
+          <Icon icon="lucide:activity" :width="16" :height="16" />
+        </button>
         <button
           type="button"
           class="control-button suppress-button"
@@ -838,7 +848,7 @@ import type {
 declare const __GIT_REVISION__: string;
 const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
 const { t } = useI18n();
-const { suppressAutoWindows, showCodexButton } = useSettings();
+const { suppressAutoWindows, showCodexButton, showForgePanelButton } = useSettings();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const regionStyle = computed(() => undefined);
@@ -906,6 +916,7 @@ const emit = defineEmits<{
   (event: 'unpin-sandbox', payload: { projectId: string; directory: string }): void;
   (event: 'open-directory'): void;
   (event: 'open-shell'): void;
+  (event: 'open-forge-panel'): void;
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
   (event: 'open-provider-manager'): void;

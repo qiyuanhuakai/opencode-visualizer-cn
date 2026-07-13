@@ -212,6 +212,7 @@ export interface LocaleMessages {
     newSessionShortcut: string;
     createSandbox: string;
     openShell: string;
+    openForge: string;
     managementMode: {
       enter: string;
       exit: string;
@@ -697,6 +698,10 @@ export interface LocaleMessages {
         label: string;
         description: string;
       };
+      showForgeButton: {
+        label: string;
+        description: string;
+      };
       showCodexInStatusMonitor: {
         label: string;
         description: string;
@@ -705,6 +710,67 @@ export interface LocaleMessages {
         label: string;
         description: string;
       };
+    };
+  };
+  forgePanel: {
+    title: string;
+    description: string;
+    promptLabel: string;
+    promptPlaceholder: string;
+    modeSelector: string;
+    send: string;
+    auxiliaryTitle: string;
+    statusLabel: string;
+    statusButton: string;
+    statusUnavailable: string;
+    showSidebar: string;
+    hideSidebar: string;
+    refresh: string;
+    loading: string;
+    emptyConversations: string;
+    errorLabel: string;
+    previewTitle: string;
+    dump: string;
+    dumpTitle: string;
+    commandGroups: {
+      config: string;
+      temporary: string;
+      workspace: string;
+      conversation: string;
+    };
+    shortcuts: {
+      forge: string;
+      sage: string;
+      muse: string;
+      suggest: string;
+      commitPreview: string;
+      new: string;
+      clone: string;
+      conversation: string;
+      conversationRename: string;
+      conversationTree: string;
+      delete: string;
+      config: string;
+      configEdit: string;
+      configModel: string;
+      configReload: string;
+      configCommitModel: string;
+      configSuggestModel: string;
+      configReasoningEffort: string;
+      login: string;
+      logout: string;
+      model: string;
+      reasoningEffort: string;
+      info: string;
+      tools: string;
+      skill: string;
+      workspaceInfo: string;
+      workspaceSync: string;
+      workspaceInit: string;
+      compact: string;
+      copy: string;
+      edit: string;
+      retry: string;
     };
   };
   floatingWindow: {
