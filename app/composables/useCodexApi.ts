@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import {
   CodexAdapter,
   type CodexAccount,
@@ -9,6 +9,7 @@ import {
   type CodexAppListResult,
   type CodexCollaborationMode,
   type CodexCollaborationModeListResult,
+  type CodexCollaborationModePayload,
   type CodexConfigBatchWriteParams,
   type CodexConfigReadResult,
   type CodexConfigRequirementsReadResult,
@@ -53,6 +54,17 @@ import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type { FilePart, MessageInfo, MessagePart, ReasoningPart, TextPart, ToolPart } from '../types/sse';
 import { normalizeAbsolutePathNoParent } from '../utils/path';
+import { StorageKeys, storageGet, storageSet } from '../utils/storageKeys';
+
+/**
+ * Read the persisted Codex active thread id from storage so the previously
+ * selected thread can be restored on refresh. Returns empty string when no
+ * value is stored or the storage backend is unavailable.
+ */
+function loadPersistedActiveThread(): string {
+  const persisted = storageGet(StorageKeys.state.codexActiveThread);
+  return typeof persisted === 'string' ? persisted : '';
+}
 
 export type CodexConnectionStatus = 'idle' | 'connecting' | 'connected' | 'error';
 
@@ -68,6 +80,7 @@ export type CodexTranscriptEntry = {
   role: 'user' | 'assistant' | 'system';
   text: string;
   time: number;
+  modelName?: string;
 };
 
 export type CodexApprovalContext = {
@@ -116,6 +129,30 @@ function fileResultToDataUrl(path: string, result: CodexFsReadFileResult): strin
   const extension = path.split('.').pop()?.toLowerCase() || '';
   const mime = extension ? `image/${extension === 'jpg' ? 'jpeg' : extension}` : 'image/*';
   return `data:${mime};base64,${base64}`;
+}
+
+/**
+ * Monotonic timestamp protection for Codex session metadata.
+ * Prevents stale bridge data from regressing `createdAt`/`updatedAt` to older
+ * values, which would otherwise cause previous sessions to "follow" the
+ * latest session's time on refresh.
+ */
+function monotonicTimestamps(
+  existing: Pick<CodexThread, 'createdAt' | 'updatedAt'> | undefined,
+  incoming: Pick<CodexThread, 'createdAt' | 'updatedAt'> | undefined,
+): { createdAt: number | undefined; updatedAt: number | undefined } {
+  const pickGreater = (
+    a: number | undefined,
+    b: number | undefined,
+  ): number | undefined => {
+    if (a === undefined) return b;
+    if (b === undefined) return a;
+    return Math.max(a, b);
+  };
+  return {
+    createdAt: pickGreater(existing?.createdAt, incoming?.createdAt),
+    updatedAt: pickGreater(existing?.updatedAt, incoming?.updatedAt),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -302,9 +339,6 @@ const APPROVAL_DECISIONS_BY_METHOD: Record<string, ReadonlySet<string>> = {
   ]),
 };
 
-const PIN_STORAGE_KEY = 'vis.codex.pins.v1';
-const HIDE_STORAGE_KEY = 'vis.codex.hidden.v1';
-
 function extractApprovalContext(params: Record<string, unknown>): CodexApprovalContext {
   const context: CodexApprovalContext = {};
 
@@ -362,22 +396,6 @@ function extractApprovalContext(params: Record<string, unknown>): CodexApprovalC
   return context;
 }
 
-function loadThreadIdSet(key: string): Set<string> {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed)) return new Set(parsed.filter((id): id is string => typeof id === 'string'));
-  } catch {
-    return new Set();
-  }
-  return new Set();
-}
-
-function saveThreadIdSet(key: string, set: Set<string>) {
-  localStorage.setItem(key, JSON.stringify(Array.from(set)));
-}
-
 function extractScopedApprovalRequest(
   request: CodexJsonRpcServerRequest,
   activeThreadId: string,
@@ -412,7 +430,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const bridgeToken = ref(initialOptions.bridgeToken ?? getPersistedCodexBridgeToken());
   const errorMessage = ref('');
   const threads = ref<CodexThread[]>([]);
-  const activeThreadId = ref('');
+  const activeThreadId = ref(loadPersistedActiveThread());
+  watch(activeThreadId, (newId, oldId) => {
+    if (newId && newId !== oldId) {
+      storageSet(StorageKeys.state.codexActiveThread, newId);
+    }
+  });
   const activeTurn = ref<CodexTurn | null>(null);
   const transcript = ref<CodexTranscriptEntry[]>([]);
   const canonicalHistory = ref<CodexCanonicalHistoryEntry[]>([]);
@@ -421,8 +444,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const pending = ref(false);
   const loadingThread = ref(false);
   const initialized = ref(false);
-  const pinnedThreadIds = ref<Set<string>>(loadThreadIdSet(PIN_STORAGE_KEY));
-  const hiddenThreadIds = ref<Set<string>>(loadThreadIdSet(HIDE_STORAGE_KEY));
+  const hiddenThreadIds = ref<Set<string>>(new Set());
   const fsEntries = ref<CodexFsDirectoryEntry[]>([]);
   const fsCwd = ref('');
   const fsLoading = ref(false);
@@ -509,9 +531,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const visibleThreads = computed(() => {
     const list = threads.value.filter((thread) => !hiddenThreadIds.value.has(thread.id));
     return list.sort((a, b) => {
-      const aPinned = pinnedThreadIds.value.has(a.id) ? 1 : 0;
-      const bPinned = pinnedThreadIds.value.has(b.id) ? 1 : 0;
-      if (aPinned !== bPinned) return bPinned - aPinned;
       const aTime = a.updatedAt ?? a.createdAt ?? 0;
       const bTime = b.updatedAt ?? b.createdAt ?? 0;
       return bTime - aTime;
@@ -541,13 +560,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function upsertThread(thread: CodexThread, refreshGitInfo = true) {
     const existing = threads.value.find((item) => item.id === thread.id);
+    const monotonic = monotonicTimestamps(existing, thread);
     const normalizedThread = normalizeThreadCwd({
       ...existing,
       ...thread,
       cwd: thread.cwd ?? existing?.cwd,
       gitInfo: thread.gitInfo ?? existing?.gitInfo,
-      createdAt: thread.createdAt ?? existing?.createdAt,
-      updatedAt: thread.updatedAt ?? existing?.updatedAt,
+      createdAt: monotonic.createdAt,
+      updatedAt: monotonic.updatedAt,
     });
     const index = threads.value.findIndex((item) => item.id === thread.id);
     if (index === -1) threads.value = [normalizedThread, ...threads.value];
@@ -556,23 +576,25 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (refreshGitInfo && !normalizedThread.gitInfo?.root) void upsertThreadWithGitInfo(normalizedThread);
   }
 
-  function pushTranscript(role: CodexTranscriptEntry['role'], text: string) {
+  function pushTranscript(role: CodexTranscriptEntry['role'], text: string, modelName?: string) {
     if (!text) return;
     transcript.value.push({
       id: nextTranscriptId,
       role,
       text,
       time: Date.now(),
+      ...(modelName ? { modelName } : {}),
     });
     nextTranscriptId += 1;
   }
 
-  function createTranscriptEntry(role: CodexTranscriptEntry['role'], text: string) {
+  function createTranscriptEntry(role: CodexTranscriptEntry['role'], text: string, modelName?: string) {
     const entry = {
       id: nextTranscriptId,
       role,
       text,
       time: Date.now(),
+      ...(modelName ? { modelName } : {}),
     } satisfies CodexTranscriptEntry;
     nextTranscriptId += 1;
     return entry;
@@ -581,6 +603,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   function setTranscriptFromTurns(turns: CodexTurn[] = []) {
     const activeThread = threads.value.find((thread) => thread.id === activeThreadId.value);
     const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
+    const modelName = selectedModelInfo.modelID || selectedModelInfo.providerID;
     canonicalHistory.value = normalizeCodexTurnsToHistory({
       sessionId: activeThreadId.value ?? 'codex-thread',
       turns,
@@ -593,12 +616,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const role = entry.info.role === 'assistant' ? 'assistant' : 'user';
       return entry.parts
         .filter((part): part is TextPart => isTextPart(part) && Boolean(part.text))
-        .map((part) => createTranscriptEntry(role, part.text));
+        .map((part) => createTranscriptEntry(role, part.text, modelName));
     });
     const systemEntries = turns.flatMap((turn) => {
       const items = Array.isArray(turn.items) ? turn.items : [];
       return items
-        .flatMap((item) => extractItemTranscriptEntries(item, createTranscriptEntry))
+        .flatMap((item) => extractItemTranscriptEntries(item, (role, text) => createTranscriptEntry(role, text, modelName)))
         .filter((entry) => entry.role === 'system');
     });
     transcript.value = [...textEntries, ...systemEntries];
@@ -611,10 +634,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       transcript.value[transcript.value.length - 1] = {
         ...last,
         text: `${last.text}${text}`,
+        modelName: last.modelName ?? currentSelectedModelName(),
       };
       return;
     }
-    pushTranscript('assistant', text);
+    pushTranscript('assistant', text, currentSelectedModelName());
   }
 
   function parseSelectedCodexModel(value: string | undefined) {
@@ -627,6 +651,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const providerID = normalized.slice(0, slashIndex).trim() || 'codex';
     const modelID = normalized.slice(slashIndex + 1).trim() || normalized;
     return { providerID, modelID };
+  }
+
+  function currentSelectedModelName(): string {
+    const info = parseSelectedCodexModel(selectedModel.value);
+    return info.modelID || info.providerID;
   }
 
   function createCodexAssistantInfo(sessionId: string, messageId: string, createdAt: number, parentId = ''): MessageInfo {
@@ -978,9 +1007,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         if (isRecord(item) && item.type === 'agentMessage' && typeof item.text === 'string') {
           const last = transcript.value.at(-1);
           if (last?.role === 'assistant') {
-            transcript.value[transcript.value.length - 1] = { ...last, text: item.text };
+            transcript.value[transcript.value.length - 1] = {
+              ...last,
+              text: item.text,
+              modelName: last.modelName ?? currentSelectedModelName(),
+            };
           } else {
-            pushTranscript('assistant', item.text);
+            pushTranscript('assistant', item.text, currentSelectedModelName());
           }
           if (realtimeStreamingPart.value) {
             const completedAt = Date.now();
@@ -1059,7 +1092,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           reviewState.value = 'completed';
           const reviewText = typeof item.review === 'string' ? item.review : '';
           reviewResult.value = reviewText;
-          pushTranscript('system', `Review completed: ${reviewText}`);
+          pushTranscript('system', `Review completed: ${reviewText}`, currentSelectedModelName());
         }
         // Bridge completed items into the shared message model for OutputPanel realtime display
         if (isRecord(item) && typeof item.type === 'string' && !completedToolMerged) {
@@ -1093,7 +1126,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
          reviewState.value = 'reviewing';
          reviewResult.value = '';
          const reviewText = typeof item.review === 'string' ? item.review : '';
-         pushTranscript('system', `Review started: ${reviewText || 'current changes'}`);
+         pushTranscript('system', `Review started: ${reviewText || 'current changes'}`, currentSelectedModelName());
          return;
        }
          if (item && typeof item.type === 'string' && item.type !== 'userMessage' && item.type !== 'agentMessage') {
@@ -1496,6 +1529,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     errorMessage.value = '';
     adapter = makeAdapter();
 
+    if (import.meta.env.DEV) console.time('codex-connect');
+
     onPhase?.('home');
     await refreshHomeDir();
     unsubscribeNotifications = adapter.onNotification(handleNotification);
@@ -1506,18 +1541,26 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       await adapter.initialize();
       initialized.value = true;
       status.value = 'connected';
+
+      // Post-init steps touch disjoint state (threads / sandbox / panel
+      // caches), so they can run in parallel. allSettled ensures one
+      // failure cannot block the others from completing.
       onPhase?.('threads');
-      await refreshThreads();
       onPhase?.('workspace');
-      await openAsSandbox(selectedSandboxCwd() || homeDir.value || '/');
       onPhase?.('panelData');
-      await preloadPanelData();
+      await Promise.allSettled([
+        refreshThreads(),
+        openAsSandbox(selectedSandboxCwd() || homeDir.value || '/'),
+        preloadPanelData(),
+      ]);
     } catch (error) {
       status.value = 'error';
       errorMessage.value = error instanceof Error ? error.message : String(error);
       disconnect(false);
+      if (import.meta.env.DEV) console.timeEnd('codex-connect');
       throw error;
     }
+    if (import.meta.env.DEV) console.timeEnd('codex-connect');
   }
 
   function disconnect(resetStatus = true) {
@@ -1540,13 +1583,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const existingThreads = threads.value;
     return result.data.map((thread) => {
       const existing = existingThreads.find((item) => item.id === thread.id);
+      const monotonic = monotonicTimestamps(existing, thread);
       return normalizeThreadCwd({
         ...existing,
         ...thread,
         cwd: thread.cwd ?? existing?.cwd,
         gitInfo: thread.gitInfo ?? existing?.gitInfo,
-        createdAt: thread.createdAt ?? existing?.createdAt,
-        updatedAt: thread.updatedAt ?? existing?.updatedAt,
+        createdAt: monotonic.createdAt,
+        updatedAt: monotonic.updatedAt,
       });
     });
   }
@@ -1602,7 +1646,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
       nextCursor ??= result.value.nextCursor;
-      for (const thread of result.value.data) merged.set(thread.id, { ...merged.get(thread.id), ...thread });
+      for (const thread of result.value.data) {
+        const existing = merged.get(thread.id);
+        const monotonic = monotonicTimestamps(existing, thread);
+        merged.set(thread.id, { ...existing, ...thread, createdAt: monotonic.createdAt, updatedAt: monotonic.updatedAt });
+      }
     }
     return {
       data: Array.from(merged.values()).sort((a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0)),
@@ -1635,7 +1683,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
     const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
     threads.value = enrichedThreads;
-    if (!activeThreadId.value && enrichedThreads[0]) activeThreadId.value = enrichedThreads[0].id;
+    if (activeThreadId.value && !enrichedThreads.some((thread) => thread.id === activeThreadId.value)) {
+      activeThreadId.value = enrichedThreads[0]?.id ?? '';
+    } else if (!activeThreadId.value && enrichedThreads[0]) {
+      activeThreadId.value = enrichedThreads[0].id;
+    }
   }
 
   async function preloadPanelData() {
@@ -1739,6 +1791,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   ): CodexThreadReadResult {
     const existing = threads.value.find((item) => item.id === threadId);
     const thread = (read?.thread ?? { id: threadId }) as CodexThread;
+    const monotonic = monotonicTimestamps(existing, thread);
     return {
       ...read,
       thread: {
@@ -1747,8 +1800,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         id: thread.id || existing?.id || threadId,
         cwd: thread.cwd ?? existing?.cwd,
         gitInfo: thread.gitInfo ?? existing?.gitInfo,
-        createdAt: thread.createdAt ?? existing?.createdAt,
-        updatedAt: thread.updatedAt ?? existing?.updatedAt,
+        createdAt: monotonic.createdAt,
+        updatedAt: monotonic.updatedAt,
       },
     };
   }
@@ -1936,7 +1989,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function hideThread(threadId: string) {
     hiddenThreadIds.value = new Set([...hiddenThreadIds.value, threadId]);
-    saveThreadIdSet(HIDE_STORAGE_KEY, hiddenThreadIds.value);
     if (activeThreadId.value === threadId) {
       activeThreadId.value = visibleThreads.value[0]?.id ?? '';
       transcript.value = [];
@@ -1948,19 +2000,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const next = new Set(hiddenThreadIds.value);
     next.delete(threadId);
     hiddenThreadIds.value = next;
-    saveThreadIdSet(HIDE_STORAGE_KEY, hiddenThreadIds.value);
-  }
-
-  function pinThread(threadId: string) {
-    pinnedThreadIds.value = new Set([...pinnedThreadIds.value, threadId]);
-    saveThreadIdSet(PIN_STORAGE_KEY, pinnedThreadIds.value);
-  }
-
-  function unpinThread(threadId: string) {
-    const next = new Set(pinnedThreadIds.value);
-    next.delete(threadId);
-    pinnedThreadIds.value = next;
-    saveThreadIdSet(PIN_STORAGE_KEY, pinnedThreadIds.value);
   }
 
   function expandPath(input: string): string {
@@ -2183,7 +2222,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function sendPrompt(
     text: string,
-    options: { model?: string; effort?: string; cwd?: string; threadId?: string; input?: CodexPromptInput['input']; forceNewThread?: boolean; collaborationMode?: string } = {},
+    options: { model?: string; effort?: string; cwd?: string; threadId?: string; input?: CodexPromptInput['input']; forceNewThread?: boolean; collaborationMode?: CodexCollaborationModePayload } = {},
   ) {
     const prompt = text.trim();
     const inputItems = options.input?.filter((item) => item.type !== 'text' || item.text.trim().length > 0) ?? [];
@@ -2805,10 +2844,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      loadingThread,
      initialized,
      connected,
-      visibleThreads,
-      archivedThreads,
-      pinnedThreadIds,
-     hiddenThreadIds,
+       visibleThreads,
+       archivedThreads,
+      hiddenThreadIds,
       fsEntries,
       fsCwd,
       fsLoading,
@@ -2837,11 +2875,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      interruptActiveTurn,
      forkThread,
      rollbackThread,
-     hideThread,
-     unhideThread,
-     pinThread,
-     unpinThread,
-     readDirectory,
+      hideThread,
+      unhideThread,
+      readDirectory,
      navigateToParent,
      navigateToPath,
      openAsSandbox,

@@ -1,9 +1,10 @@
 import { computed, type ComputedRef, type Ref } from 'vue';
-import type { CodexThread } from '../backends/codex/codexAdapter';
+import { extractStatusType, type CodexThread } from '../backends/codex/codexAdapter';
 import { CODEX_PROJECT_ID } from '../backends/codex/bridgeUrl';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import type { ProjectState, SessionState } from '../types/worker-state';
 import { normalizeAbsolutePathNoParent } from '../utils/path';
+import { normalizePinnedAt, pinnedSessionStoreKey, type LocalPinnedSessionStore } from '../utils/pinnedSessions';
 
 export { CODEX_PROJECT_ID };
 export const CODEX_SANDBOX_NAME = 'Codex';
@@ -17,9 +18,16 @@ export type CodexWorkspaceApi = {
   activeThreadId: Ref<string>;
   canonicalHistory: Ref<CodexCanonicalHistoryEntry[]>;
   homeDir?: Ref<string>;
-  pinnedThreadIds?: Ref<Set<string>>;
+  pinnedStore?: Ref<LocalPinnedSessionStore>;
   hiddenThreadIds?: Ref<Set<string>>;
 };
+
+function isCodexThreadPinned(pinnedStore: LocalPinnedSessionStore | undefined, threadId: string): boolean {
+  if (!pinnedStore) return false;
+  const key = pinnedSessionStoreKey(CODEX_PROJECT_ID, threadId);
+  if (!key) return false;
+  return normalizePinnedAt(pinnedStore[key]) > 0;
+}
 
 function threadTimestamp(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
@@ -64,15 +72,16 @@ function threadTitle(thread: CodexThread) {
 }
 
 function threadStatus(thread: CodexThread): SessionState['status'] {
-  if (thread.status === 'busy' || thread.status === 'running' || thread.status === 'inProgress') return 'busy';
-  if (thread.status === 'retry') return 'retry';
-  return 'idle';
+  const type = extractStatusType(thread.status);
+  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy') return 'busy';
+  if (type === 'systemError' || type === 'retry') return 'retry';
+  return 'unknown' as SessionState['status'];
 }
 
 export function codexThreadToSession(
   thread: CodexThread,
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
-  pinnedThreadIds: Set<string> = new Set(),
+  pinnedStore: LocalPinnedSessionStore = {},
   hiddenThreadIds: Set<string> = new Set(),
   sessionDirectory = threadSandboxDirectory(thread, fallbackDirectory),
 ): SessionState {
@@ -84,17 +93,23 @@ export function codexThreadToSession(
     gitInfo: thread.gitInfo ?? null,
     timeCreated: threadTimestamp(thread.createdAt),
     timeUpdated: threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt),
-    timePinned: pinnedThreadIds.has(thread.id) ? 1 : undefined,
+    timePinned: isCodexThreadPinned(pinnedStore, thread.id) ? 1 : undefined,
     timeArchived: hiddenThreadIds.has(thread.id)
       ? (threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt) ?? 1)
       : undefined,
   };
 }
 
+function isCodexSubagentThread(thread: CodexThread): boolean {
+  if (thread.source === 'subagent') return true;
+  if (thread.parentThreadId) return true;
+  return false;
+}
+
 export function createCodexProjectState(
   threads: CodexThread[],
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
-  pinnedThreadIds: Set<string> = new Set(),
+  pinnedStore: LocalPinnedSessionStore = {},
   hiddenThreadIds: Set<string> = new Set(),
   archivedThreadIds: Set<string> = new Set(),
 ): ProjectState {
@@ -102,6 +117,9 @@ export function createCodexProjectState(
   const sandboxes: ProjectState['sandboxes'] = {};
 
   for (const thread of threads) {
+    // Bug #1: skip subagent threads in the sidebar; they're surfaced via the
+    // "View subagent" button on the main thread block, not as top-level entries.
+    if (isCodexSubagentThread(thread)) continue;
     const directory = threadSandboxDirectory(thread, fallbackDirectory);
     const sandbox = sandboxes[directory] ?? {
       directory,
@@ -113,7 +131,7 @@ export function createCodexProjectState(
     sandbox.sessions[thread.id] = codexThreadToSession(
       thread,
       fallbackDirectory,
-      pinnedThreadIds,
+      pinnedStore,
       new Set([...hiddenThreadIds, ...(archivedThreadIds.has(thread.id) ? [thread.id] : [])]),
       directory,
     );
@@ -137,7 +155,10 @@ export function createCodexProjectState(
   };
 }
 
-export function useCodexWorkspace(api: CodexWorkspaceApi) {
+export function useCodexWorkspace(
+  api: CodexWorkspaceApi,
+  options: { pinnedStore?: Ref<LocalPinnedSessionStore> } = {},
+) {
   const fallbackDirectory = computed(() => api.homeDir?.value || CODEX_DEFAULT_DIRECTORY);
   const allThreads = computed(() => {
     const merged = new Map<string, CodexThread>();
@@ -149,7 +170,7 @@ export function useCodexWorkspace(api: CodexWorkspaceApi) {
   const project = computed(() => createCodexProjectState(
     allThreads.value,
     fallbackDirectory.value,
-    api.pinnedThreadIds?.value,
+    api.pinnedStore?.value ?? options.pinnedStore?.value,
     api.hiddenThreadIds?.value,
     archivedThreadIds.value,
   ));

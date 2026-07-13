@@ -117,7 +117,7 @@ describe('extractFileRead for edit/multiedit', () => {
     WebContent: {},
   };
 
-  it('renders edit tool windows even when Codex diff text is missing', () => {
+  it('renders edit tool windows even when Codex diff text is missing', async () => {
     const result = extractFileRead({
       payload: {
         properties: {
@@ -140,7 +140,97 @@ describe('extractFileRead for edit/multiedit', () => {
     expect(result).toMatchObject({
       toolName: 'edit',
       title: '🔧 [toolTitles.edit] empty.ts',
-      content: 'DIFF:File changed: empty.ts',
+      variant: 'code',
+    });
+    const editContent = result && !Array.isArray(result) ? result.content : undefined;
+    expect(typeof editContent).toBe('function');
+    if (typeof editContent !== 'function') throw new Error('Expected edit content renderer function');
+    await expect(editContent()).resolves.toBe('<pre>rendered</pre>');
+  });
+
+  it('renders edit tool windows for non-standard patches via markdown worker', async () => {
+    let receivedArgs: Record<string, unknown> | null = null;
+    const helpersWithCapture = {
+      ...helpers,
+      renderWorkerHtml: async (args: Record<string, unknown>) => {
+        receivedArgs = args;
+        return '<pre>rendered</pre>';
+      },
+    };
+
+    const result = extractFileRead({
+      payload: {
+        properties: {
+          part: {
+            type: 'tool',
+            id: 'edit-ns-1',
+            callID: 'edit-ns-1',
+            tool: 'edit',
+            state: {
+              status: 'completed',
+              input: { filePath: 'src/app.ts' },
+              output: 'File changed: src/app.ts',
+              metadata: { filediff: { patch: 'File changed: src/app.ts' } },
+            },
+          },
+        },
+      },
+    }, 'message.part.updated', helpersWithCapture, (key: string) => key);
+
+    expect(result).not.toBeNull();
+    expect(Array.isArray(result)).toBe(false);
+    if (!result || Array.isArray(result)) throw new Error('Expected single edit floating window result');
+    expect(result).toMatchObject({
+      toolName: 'edit',
+      title: '🔧 [toolTitles.edit] src/app.ts',
+      variant: 'code',
+    });
+    const editContent = result.content;
+    expect(typeof editContent).toBe('function');
+    if (typeof editContent !== 'function') throw new Error('Expected edit content renderer function');
+    await expect(editContent()).resolves.toBe('<pre>rendered</pre>');
+    expect(receivedArgs).toMatchObject({
+      code: 'File changed: src/app.ts',
+      lang: 'markdown',
+    });
+  });
+
+  it('still renders edit tool windows as diffs when the patch contains @@ hunk headers', async () => {
+    let receivedArgs: Record<string, unknown> | null = null;
+    const helpersWithCapture = {
+      ...helpers,
+      renderEditDiffHtml: (args: { diff: string; lang: string }) => {
+        receivedArgs = { diff: args.diff, lang: args.lang };
+        return () => Promise.resolve('<pre>diff</pre>');
+      },
+    };
+
+    const result = extractFileRead({
+      payload: {
+        properties: {
+          part: {
+            type: 'tool',
+            id: 'edit-std-1',
+            callID: 'edit-std-1',
+            tool: 'edit',
+            state: {
+              status: 'completed',
+              input: { filePath: 'src/app.ts' },
+              output: '@@ -1 +1 @@',
+              metadata: { filediff: { patch: '@@ -1 +1 @@\n-old\n+new' } },
+            },
+          },
+        },
+      },
+    }, 'message.part.updated', helpersWithCapture, (key: string) => key);
+
+    expect(result).toMatchObject({
+      toolName: 'edit',
+      title: '🔧 [toolTitles.edit] src/app.ts',
+      variant: 'diff',
+    });
+    expect(receivedArgs).toMatchObject({
+      diff: '@@ -1 +1 @@\n-old\n+new',
     });
   });
 
@@ -300,6 +390,34 @@ describe('extractFileRead for edit/multiedit', () => {
       copiedLabel: '',
       copyCodeAriaLabel: '',
       copyMarkdownAriaLabel: '',
+    });
+  });
+
+  it('renderWorkerHtmlWithI18n preserves caller-supplied empty copy labels via spread order', async () => {
+    let receivedArgs: Record<string, unknown> | null = null;
+    const mockRenderWorkerHtml = async (args: Record<string, unknown>) => {
+      receivedArgs = args;
+      return '<pre>test</pre>';
+    };
+
+    function renderWorkerHtmlWithI18n(args: Record<string, unknown>) {
+      return mockRenderWorkerHtml({
+        copyButtonLabel: 'Copy',
+        copiedLabel: 'Copied',
+        copyCodeAriaLabel: 'Copy code',
+        copyMarkdownAriaLabel: 'Copy markdown',
+        ...args,
+      });
+    }
+
+    await renderWorkerHtmlWithI18n({ code: 'test', lang: 'markdown', copyButtonLabel: '' });
+    expect(receivedArgs).toMatchObject({
+      copyButtonLabel: '',
+    });
+
+    await renderWorkerHtmlWithI18n({ code: 'test', lang: 'markdown' });
+    expect(receivedArgs).toMatchObject({
+      copyButtonLabel: 'Copy',
     });
   });
 });

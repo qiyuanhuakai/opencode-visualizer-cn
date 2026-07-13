@@ -80,7 +80,9 @@
                 <div class="management-title">
                   <Icon icon="lucide:check-check" :width="14" :height="14" />
                   <span>{{ $t('topPanel.management.title') }}</span>
-                  <span class="management-count">{{ $t('topPanel.management.selectedCount', { count: selectedCount }) }}</span>
+                  <span class="management-count">{{
+                    $t('topPanel.management.selectedCount', { count: selectedCount })
+                  }}</span>
                 </div>
                 <div class="management-actions">
                   <button
@@ -96,7 +98,13 @@
                     :disabled="visibleSessionKeys.length === 0"
                     @click.stop="toggleSelectAllVisible"
                   >
-                    {{ $t(allVisibleSelected ? 'topPanel.management.unselectVisible' : 'topPanel.management.selectVisible') }}
+                    {{
+                      $t(
+                        allVisibleSelected
+                          ? 'topPanel.management.unselectVisible'
+                          : 'topPanel.management.selectVisible',
+                      )
+                    }}
                   </button>
                   <button
                     type="button"
@@ -144,14 +152,23 @@
                     :disabled="batchDeleteTargets.length === 0"
                     @click.stop="emitBatchSessionAction('delete')"
                   >
-        {{ sandboxFirstMode ? $t('topPanel.management.archiveCodex') : $t('topPanel.management.delete') }} · {{ batchDeleteTargets.length }}
+                    {{
+                      sandboxFirstMode
+                        ? $t('topPanel.management.archiveCodex')
+                        : $t('topPanel.management.delete')
+                    }}
+                    · {{ batchDeleteTargets.length }}
                   </button>
                 </div>
               </div>
 
               <div class="tree-content">
                 <div v-if="displayedTree.length === 0" class="tree-empty">
-                  {{ searchQuery ? $t('topPanel.empty.noMatchingSessions') : $t('topPanel.empty.noWorktrees') }}
+                  {{
+                    searchQuery
+                      ? $t('topPanel.empty.noMatchingSessions')
+                      : $t('topPanel.empty.noWorktrees')
+                  }}
                 </div>
 
                 <div
@@ -184,11 +201,19 @@
                       </div>
                     </div>
                     <button
-            v-if="worktree.projectId && worktree.projectId !== 'global' && (!sandboxFirstMode || worktree.kind === 'sandbox')"
+                      v-if="
+                        worktree.projectId &&
+                        worktree.projectId !== 'global' &&
+                        (!sandboxFirstMode || worktree.kind === 'sandbox')
+                      "
                       type="button"
                       class="tree-action-button"
                       :class="worktree.isPinned ? 'pinned' : 'pin'"
-                      :title="worktree.isPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
+                      :title="
+                        worktree.isPinned
+                          ? $t('topPanel.sessionActions.unpin')
+                          : $t('topPanel.sessionActions.pin')
+                      "
                       @click.stop="
                         worktree.isPinned
                           ? handleUnpinWorktree(worktree)
@@ -202,7 +227,13 @@
                       />
                     </button>
                     <button
-            v-if="!sandboxFirstMode && worktree.projectId && worktree.projectId !== 'global' && worktree.kind !== 'global' && worktree.kind !== 'sandbox'"
+                      v-if="
+                        !sandboxFirstMode &&
+                        worktree.projectId &&
+                        worktree.projectId !== 'global' &&
+                        worktree.kind !== 'global' &&
+                        worktree.kind !== 'sandbox'
+                      "
                       type="button"
                       class="tree-action-button worktree-settings"
                       :title="$t('topPanel.projectSettings')"
@@ -233,10 +264,10 @@
                                 ? 'lucide:folder'
                                 : sandbox.kind === 'global'
                                   ? 'lucide:globe'
-                                   : sandbox.kind === 'branch'
-                                     ? 'lucide:git-branch'
-                                     : 'lucide:git-branch'
-                           "
+                                  : sandbox.kind === 'branch'
+                                    ? 'lucide:git-branch'
+                                    : 'lucide:git-branch'
+                          "
                           class="tree-header-icon"
                         />
                         <div class="tree-label">
@@ -250,7 +281,10 @@
                       </div>
                       <div class="tree-actions">
                         <button
-                          v-if="sandbox.kind !== 'global' && (sandbox.kind !== 'sandbox' || sandbox.sessions.length > 0)"
+                          v-if="
+                            sandbox.kind !== 'global' &&
+                            (sandbox.kind !== 'sandbox' || sandbox.sessions.length > 0)
+                          "
                           type="button"
                           class="tree-action-button new-session"
                           :title="$t('topPanel.newSession')"
@@ -261,7 +295,13 @@
                           <Icon icon="lucide:message-circle-plus" :width="16" :height="16" />
                         </button>
                         <button
-                     v-if="!sandboxFirstMode && worktree.projectId !== 'global' && sandbox.kind !== 'branch' && sandbox.kind !== 'global' && sandbox.kind !== 'folder'"
+                          v-if="
+                            !sandboxFirstMode &&
+                            worktree.projectId !== 'global' &&
+                            sandbox.kind !== 'branch' &&
+                            sandbox.kind !== 'global' &&
+                            sandbox.kind !== 'folder'
+                          "
                           type="button"
                           class="tree-action-button fork"
                           :title="$t('topPanel.createSandbox')"
@@ -270,19 +310,39 @@
                           <Icon icon="lucide:git-branch-plus" :width="16" :height="16" />
                         </button>
                         <button
-                    v-if="worktree.projectId && worktree.projectId !== 'global' && (sandboxFirstMode ? sandbox.kind === 'branch' : sandbox.kind !== 'branch')"
+                          v-if="
+                            worktree.projectId &&
+                            worktree.projectId !== 'global' &&
+                            (sandboxFirstMode
+                              ? sandbox.kind === 'branch'
+                              : sandbox.kind !== 'branch')
+                          "
                           type="button"
                           class="tree-action-button"
                           :class="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'pinned' : 'pin'"
-                          :title="sandbox.isPinned || sandbox.isImplicitlyPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
+                          :title="
+                            sandbox.isPinned || sandbox.isImplicitlyPinned
+                              ? $t('topPanel.sessionActions.unpin')
+                              : $t('topPanel.sessionActions.pin')
+                          "
                           @click.stop="
                             sandbox.isPinned || sandbox.isImplicitlyPinned
-                              ? handleUnpinSandbox(worktree.projectId, sandbox.pinDirectory || sandbox.directory)
-                              : handlePinSandbox(worktree.projectId, sandbox.pinDirectory || sandbox.directory)
+                              ? handleUnpinSandbox(
+                                  worktree.projectId,
+                                  sandbox.pinDirectory || sandbox.directory,
+                                )
+                              : handlePinSandbox(
+                                  worktree.projectId,
+                                  sandbox.pinDirectory || sandbox.directory,
+                                )
                           "
                         >
                           <Icon
-                            :icon="sandbox.isPinned || sandbox.isImplicitlyPinned ? 'lucide:pin-off' : 'lucide:pin'"
+                            :icon="
+                              sandbox.isPinned || sandbox.isImplicitlyPinned
+                                ? 'lucide:pin-off'
+                                : 'lucide:pin'
+                            "
                             :width="14"
                             :height="14"
                           />
@@ -298,7 +358,14 @@
                           "
                           type="button"
                           class="tree-action-button danger"
-                          @click.stop="handleSandboxDelete(worktree.projectId, worktree.directory, sandbox.directory, close)"
+                          @click.stop="
+                            handleSandboxDelete(
+                              worktree.projectId,
+                              worktree.directory,
+                              sandbox.directory,
+                              close,
+                            )
+                          "
                         >
                           <Icon icon="lucide:trash-2" :width="16" :height="16" />
                         </button>
@@ -320,9 +387,13 @@
                           sessionId: session.id,
                         }"
                         :active="session.id === selectedSessionId"
-                       >
+                      >
                         <div class="tree-session-main">
-                          <span class="session-status-icon" :class="`is-${session.status}`" :title="session.status">
+                          <span
+                            class="session-status-icon"
+                            :class="`is-${session.status}`"
+                            :title="session.status"
+                          >
                             <template v-if="session.status === 'unknown'">
                               <span class="status-circle-outline"></span>
                             </template>
@@ -333,10 +404,12 @@
                               <span class="session-title">{{
                                 session.title || session.slug || session.id
                               }}</span>
-                              <span v-if="session.pinnedAt" class="session-badge-pinned">{{ $t('topPanel.badges.pinned') }}</span>
-                              <span v-if="session.archivedAt" class="session-badge-archived"
-                                >{{ $t('topPanel.badges.archived') }}</span
-                              >
+                              <span v-if="session.pinnedAt" class="session-badge-pinned">{{
+                                $t('topPanel.badges.pinned')
+                              }}</span>
+                              <span v-if="session.archivedAt" class="session-badge-archived">{{
+                                $t('topPanel.badges.archived')
+                              }}</span>
                             </div>
                             <span
                               v-if="session.timeCreated || session.timeUpdated"
@@ -361,12 +434,27 @@
                               v-if="!session.archivedAt"
                               type="button"
                               class="tree-action-button session-pin"
-                              :class="session.isPinned || session.isImplicitlyPinned ? 'pinned' : 'pin'"
-                              :title="session.isPinned || session.isImplicitlyPinned ? $t('topPanel.sessionActions.unpin') : $t('topPanel.sessionActions.pin')"
-                              @click.stop.prevent="handleSessionPinToggle(session.id, session.isPinned || session.isImplicitlyPinned)"
+                              :class="
+                                session.isPinned || session.isImplicitlyPinned ? 'pinned' : 'pin'
+                              "
+                              :title="
+                                session.isPinned || session.isImplicitlyPinned
+                                  ? $t('topPanel.sessionActions.unpin')
+                                  : $t('topPanel.sessionActions.pin')
+                              "
+                              @click.stop.prevent="
+                                handleSessionPinToggle(
+                                  session.id,
+                                  session.isPinned || session.isImplicitlyPinned,
+                                )
+                              "
                             >
                               <Icon
-                                :icon="session.isPinned || session.isImplicitlyPinned ? 'lucide:pin-off' : 'lucide:pin'"
+                                :icon="
+                                  session.isPinned || session.isImplicitlyPinned
+                                    ? 'lucide:pin-off'
+                                    : 'lucide:pin'
+                                "
                                 :width="16"
                                 :height="16"
                               />
@@ -384,16 +472,24 @@
                               v-if="!session.archivedAt"
                               type="button"
                               class="tree-action-button session-del"
-                                      :class="isShiftPressed && !sandboxFirstMode ? 'danger' : 'archive'"
+                              :class="isShiftPressed && !sandboxFirstMode ? 'danger' : 'archive'"
                               :title="
-                                  isShiftPressed
-                                        ? (sandboxFirstMode ? $t('topPanel.sessionActions.archiveCodex') : $t('topPanel.sessionActions.deletePermanently'))
-                                    : $t('topPanel.sessionActions.archive')
+                                isShiftPressed
+                                  ? sandboxFirstMode
+                                    ? $t('topPanel.sessionActions.archiveCodex')
+                                    : $t('topPanel.sessionActions.deletePermanently')
+                                  : $t('topPanel.sessionActions.archive')
                               "
                               @click.stop.prevent="handleSessionAction(session.id, close)"
                             >
                               <Icon
-                                      :icon="isShiftPressed ? (sandboxFirstMode ? 'lucide:cloud-upload' : 'lucide:trash-2') : 'lucide:archive'"
+                                :icon="
+                                  isShiftPressed
+                                    ? sandboxFirstMode
+                                      ? 'lucide:cloud-upload'
+                                      : 'lucide:trash-2'
+                                    : 'lucide:archive'
+                                "
                                 :width="16"
                                 :height="16"
                               />
@@ -412,7 +508,9 @@
                           ),
                         }"
                         :title="session.id"
-                        @click.stop="toggleManagedSession(worktree.projectId, sandbox.directory, session.id)"
+                        @click.stop="
+                          toggleManagedSession(worktree.projectId, sandbox.directory, session.id)
+                        "
                       >
                         <button
                           type="button"
@@ -425,7 +523,11 @@
                             ),
                           }"
                           :title="
-                            isManagedSessionSelected(worktree.projectId, sandbox.directory, session.id)
+                            isManagedSessionSelected(
+                              worktree.projectId,
+                              sandbox.directory,
+                              session.id,
+                            )
                               ? $t('topPanel.sessionActions.unselect')
                               : $t('topPanel.sessionActions.select')
                           "
@@ -435,7 +537,11 @@
                         >
                           <Icon
                             :icon="
-                              isManagedSessionSelected(worktree.projectId, sandbox.directory, session.id)
+                              isManagedSessionSelected(
+                                worktree.projectId,
+                                sandbox.directory,
+                                session.id,
+                              )
                                 ? 'lucide:check-square'
                                 : 'lucide:square'
                             "
@@ -444,7 +550,11 @@
                           />
                         </button>
                         <div class="tree-session-main">
-                          <span class="session-status-icon" :class="`is-${session.status}`" :title="session.status">
+                          <span
+                            class="session-status-icon"
+                            :class="`is-${session.status}`"
+                            :title="session.status"
+                          >
                             <template v-if="session.status === 'unknown'">
                               <span class="status-circle-outline"></span>
                             </template>
@@ -455,10 +565,12 @@
                               <span class="session-title">{{
                                 session.title || session.slug || session.id
                               }}</span>
-                              <span v-if="session.pinnedAt" class="session-badge-pinned">{{ $t('topPanel.badges.pinned') }}</span>
-                              <span v-if="session.archivedAt" class="session-badge-archived"
-                                >{{ $t('topPanel.badges.archived') }}</span
-                              >
+                              <span v-if="session.pinnedAt" class="session-badge-pinned">{{
+                                $t('topPanel.badges.pinned')
+                              }}</span>
+                              <span v-if="session.archivedAt" class="session-badge-archived">{{
+                                $t('topPanel.badges.archived')
+                              }}</span>
                             </div>
                             <span
                               v-if="session.timeCreated || session.timeUpdated"
@@ -475,16 +587,12 @@
               </div>
             </div>
 
-              <div class="tree-footer">
-                <button
-                  type="button"
-                  class="tree-footer-button"
-                  @click="handleOpenDirectory(close)"
-                >
-                  <Icon icon="lucide:folder-open" :width="14" :height="14" />
-                  {{ $t('topPanel.openProject') }}
-                </button>
-              </div>
+            <div class="tree-footer">
+              <button type="button" class="tree-footer-button" @click="handleOpenDirectory(close)">
+                <Icon icon="lucide:folder-open" :width="14" :height="14" />
+                {{ $t('topPanel.openProject') }}
+              </button>
+            </div>
           </template>
         </Dropdown>
 
@@ -510,7 +618,11 @@
           type="button"
           class="control-button management-toggle-button"
           :class="{ 'is-active': managementMode }"
-          :title="managementMode ? $t('topPanel.managementMode.exit') : $t('topPanel.managementMode.enter')"
+          :title="
+            managementMode
+              ? $t('topPanel.managementMode.exit')
+              : $t('topPanel.managementMode.enter')
+          "
           @pointerdown.stop.prevent
           @click.stop="toggleManagementMode"
         >
@@ -520,6 +632,137 @@
             :height="16"
           />
         </button>
+        <button
+          v-if="showForgePanelButton"
+          type="button"
+          class="control-button forge-button"
+          :disabled="!activeDirectory || !ptySupported"
+          @click="$emit('open-forge-panel')"
+          :title="$t('topPanel.openForge')"
+        >
+          <Icon icon="lucide:hammer" :width="16" :height="16" />
+        </button>
+        <Dropdown
+          v-if="showCodexButton"
+          class="codex-menu-root"
+          :title="$t('codexPanel.title')"
+          :button-class="['control-button', 'codex-button']"
+          menu-icon="lucide:chevron-down"
+          :popup-style="{ minWidth: '220px', width: '240px' }"
+          :auto-focus="false"
+        >
+          <template #label>
+            <Icon icon="lucide:bot" :width="16" :height="16" />
+          </template>
+          <template #default="{ close }">
+            <div class="codex-menu">
+              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexPanel(close)">
+                <Icon icon="lucide:message-square" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.title') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('models', close)"
+              >
+                <Icon icon="lucide:bot" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.modelsTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('fileManager', close)"
+              >
+                <Icon icon="lucide:folder-tree" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.fileManagerTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('mcp', close)"
+              >
+                <Icon icon="lucide:plug" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.mcpTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('skills', close)"
+              >
+                <Icon icon="lucide:sparkles" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.skillsTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('plugins', close)"
+              >
+                <Icon icon="lucide:blocks" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.pluginsTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('connectors', close)"
+              >
+                <Icon icon="lucide:app-window" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.connectorsTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('config', close)"
+              >
+                <Icon icon="lucide:file-json" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.configTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('experimentalFeatures', close)"
+              >
+                <Icon icon="lucide:flask-conical" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.experimentalFeaturesTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('collaborationModes', close)"
+              >
+                <Icon icon="lucide:users" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.collaborationModesTitle') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('feedback', close)"
+              >
+                <Icon icon="lucide:send" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.feedbackTitle') }}</span>
+              </button>
+            </div>
+          </template>
+        </Dropdown>
       </div>
       <div class="top-right">
         <a
@@ -555,72 +798,15 @@
         >
           <Icon icon="lucide:activity" :width="16" :height="16" />
         </button>
-        <Dropdown
-          v-if="showCodexButton"
-          class="codex-menu-root"
-          :title="$t('codexPanel.title')"
-          :button-class="['control-button', 'codex-button']"
-          menu-icon="lucide:chevron-down"
-          :popup-style="{ minWidth: '220px', width: '240px' }"
-          :auto-focus="false"
-        >
-          <template #label>
-            <Icon icon="lucide:bot" :width="16" :height="16" />
-          </template>
-          <template #default="{ close }">
-            <div class="codex-menu">
-              <button type="button" class="codex-menu-item" @click.stop="emitOpenCodexPanel(close)">
-                <Icon icon="lucide:message-square" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.title') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('models', close)">
-                <Icon icon="lucide:bot" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.modelsTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('fileManager', close)">
-                <Icon icon="lucide:folder-tree" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.fileManagerTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('mcp', close)">
-                <Icon icon="lucide:plug" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.mcpTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('skills', close)">
-                <Icon icon="lucide:sparkles" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.skillsTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('plugins', close)">
-                <Icon icon="lucide:blocks" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.pluginsTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('connectors', close)">
-                <Icon icon="lucide:app-window" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.connectorsTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('config', close)">
-                <Icon icon="lucide:file-json" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.configTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('experimentalFeatures', close)">
-                <Icon icon="lucide:flask-conical" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.experimentalFeaturesTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('collaborationModes', close)">
-                <Icon icon="lucide:users" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.collaborationModesTitle') }}</span>
-              </button>
-              <button type="button" class="codex-menu-item" :disabled="!codexConnected" :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined" @click.stop="emitOpenCodexSubpanel('feedback', close)">
-                <Icon icon="lucide:send" :width="14" :height="14" />
-                <span>{{ $t('codexPanel.feedbackTitle') }}</span>
-              </button>
-            </div>
-          </template>
-        </Dropdown>
         <button
           type="button"
           class="control-button suppress-button"
           :class="{ active: suppressAutoWindows }"
-          :title="suppressAutoWindows ? $t('topPanel.autoWindowsSuppressed') : $t('topPanel.suppressAutoWindows')"
+          :title="
+            suppressAutoWindows
+              ? $t('topPanel.autoWindowsSuppressed')
+              : $t('topPanel.suppressAutoWindows')
+          "
           @click="suppressAutoWindows = !suppressAutoWindows"
         >
           <Icon
@@ -662,7 +848,7 @@ import type {
 declare const __GIT_REVISION__: string;
 const gitRevision = typeof __GIT_REVISION__ !== 'undefined' ? __GIT_REVISION__ : 'dev';
 const { t } = useI18n();
-const { suppressAutoWindows, showCodexButton } = useSettings();
+const { suppressAutoWindows, showCodexButton, showForgePanelButton } = useSettings();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const regionStyle = computed(() => undefined);
@@ -730,6 +916,7 @@ const emit = defineEmits<{
   (event: 'unpin-sandbox', payload: { projectId: string; directory: string }): void;
   (event: 'open-directory'): void;
   (event: 'open-shell'): void;
+  (event: 'open-forge-panel'): void;
   (event: 'edit-project', payload: { projectId: string; worktree: string }): void;
   (event: 'open-settings'): void;
   (event: 'open-provider-manager'): void;
@@ -770,6 +957,11 @@ defineExpose({ openSessionDropdown, closeSessionDropdown, toggleSessionDropdown 
 const MAX_WORKTREES = Infinity;
 const MAX_SANDBOXES = Infinity;
 const MAX_SESSIONS = Infinity;
+
+// Matches the "(N archived)" suffix appended by `displayedTree` to sandbox/global labels
+// when every session in a container has been archived. Used by the worktree/global
+// filters below to keep these containers visible so users can still locate them.
+const ARCHIVED_ONLY_LABEL = /\s*\(\d+ archived\)$/;
 
 const searchQuery = ref('');
 const isShiftPressed = ref(false);
@@ -841,9 +1033,7 @@ const batchPinTargets = computed(() =>
   selectedEntries.value
     .filter(
       (entry) =>
-        !entry.session.archivedAt &&
-        !entry.session.isPinned &&
-        !entry.session.isImplicitlyPinned,
+        !entry.session.archivedAt && !entry.session.isPinned && !entry.session.isImplicitlyPinned,
     )
     .map((entry) => entry.target),
 );
@@ -859,9 +1049,7 @@ const batchUnpinTargets = computed(() =>
 );
 
 const batchArchiveTargets = computed(() =>
-  selectedEntries.value
-    .filter((entry) => !entry.session.archivedAt)
-    .map((entry) => entry.target),
+  selectedEntries.value.filter((entry) => !entry.session.archivedAt).map((entry) => entry.target),
 );
 
 const batchUnarchiveTargets = computed(() =>
@@ -950,21 +1138,43 @@ const displayedTree = computed(() => {
       })
       .filter((worktree): worktree is TopPanelWorktree => worktree !== null);
   } else {
+    // Non-search mode: filter archived sessions but preserve sandbox/global containers
+    // that only contain archived sessions, so users can still locate and unarchive them.
+    // Sandboxes whose every session is archived get an "(N archived)" suffix on the label.
     worktrees = worktrees
       .map((worktree) => ({
         ...worktree,
-        sandboxes: worktree.sandboxes.map((sandbox) => ({
-          ...sandbox,
-          sessions: sandbox.sessions.filter((session) => !session.archivedAt),
-        })),
+        sandboxes: worktree.sandboxes.map((sandbox) => {
+          const archivedCount = sandbox.sessions.reduce(
+            (n, session) => n + (session.archivedAt ? 1 : 0),
+            0,
+          );
+          const sessions = sandbox.sessions.filter((session) => !session.archivedAt);
+          let branch = sandbox.branch;
+          if (archivedCount > 0 && sessions.length === 0) {
+            const baseName = sandbox.branch || directoryBasename(sandbox.directory);
+            branch = `${baseName} (${archivedCount} archived)`;
+          }
+          return { ...sandbox, branch, sessions };
+        }),
       }))
-      .filter((worktree) => worktree.sandboxes.some((sandbox) => sandbox.sessions.length > 0));
+      .filter((worktree) =>
+        worktree.sandboxes.some(
+          (sandbox) =>
+            sandbox.sessions.length > 0 || ARCHIVED_ONLY_LABEL.test(sandbox.branch ?? ''),
+        ),
+      );
   }
 
   return worktrees.slice(0, MAX_WORKTREES).map((worktree) => ({
     ...worktree,
     sandboxes: worktree.sandboxes
-      .filter((sandbox) => worktree.projectId !== 'global' || sandbox.sessions.length > 0)
+      .filter(
+        (sandbox) =>
+          worktree.projectId !== 'global' ||
+          sandbox.sessions.length > 0 ||
+          ARCHIVED_ONLY_LABEL.test(sandbox.branch ?? ''),
+      )
       .slice(0, MAX_SANDBOXES)
       .map((sandbox) => ({
         ...sandbox,
@@ -1108,7 +1318,9 @@ async function handleSandboxDelete(
   directory: string,
   close?: () => void,
 ) {
-  const confirmed = showConfirm ? await showConfirm(t('topPanel.confirm.deleteWorktree', { directory })) : true;
+  const confirmed = showConfirm
+    ? await showConfirm(t('topPanel.confirm.deleteWorktree', { directory }))
+    : true;
   if (!confirmed) return;
   emit('delete-active-directory', {
     projectId,
@@ -1120,7 +1332,13 @@ async function handleSandboxDelete(
 
 async function handleSessionDelete(sessionId: string, close?: () => void) {
   const confirmed = showConfirm
-    ? await showConfirm(t(props.sandboxFirstMode ? 'topPanel.confirm.archiveCodexSession' : 'topPanel.confirm.deleteSession'))
+    ? await showConfirm(
+        t(
+          props.sandboxFirstMode
+            ? 'topPanel.confirm.archiveCodexSession'
+            : 'topPanel.confirm.deleteSession',
+        ),
+      )
     : true;
   if (!confirmed) return;
   emit('delete-session', sessionId);
@@ -1151,7 +1369,11 @@ function handleSessionPinToggle(sessionId: string, isPinned = false) {
   emit('pin-session', sessionId);
 }
 
-function isManagedSessionSelected(projectId: string | undefined, directory: string, sessionId: string) {
+function isManagedSessionSelected(
+  projectId: string | undefined,
+  directory: string,
+  sessionId: string,
+) {
   const key = managedSessionKey(projectId, directory, sessionId);
   return managedSessionKeys.value.includes(key);
 }
@@ -1203,7 +1425,14 @@ async function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload[
 
   if (action === 'delete') {
     const confirmed = showConfirm
-      ? await showConfirm(t(props.sandboxFirstMode ? 'topPanel.confirm.archiveCodexSessions' : 'topPanel.confirm.deleteSessions', { count: sessions.length }))
+      ? await showConfirm(
+          t(
+            props.sandboxFirstMode
+              ? 'topPanel.confirm.archiveCodexSessions'
+              : 'topPanel.confirm.deleteSessions',
+            { count: sessions.length },
+          ),
+        )
       : true;
     if (!confirmed) return;
   }
@@ -1384,7 +1613,10 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   gap: 8px;
   padding: 8px;
   border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-top-border, #334155));
-  background: var(--theme-search-bg, var(--theme-top-dropdown-bg, var(--theme-top-bg, rgba(15, 23, 42, 0.9))));
+  background: var(
+    --theme-search-bg,
+    var(--theme-top-dropdown-bg, var(--theme-top-bg, rgba(15, 23, 42, 0.9)))
+  );
   --ui-dropdown-text-muted: var(--theme-top-dropdown-text-muted, var(--theme-text-muted, #64748b));
 }
 
@@ -1401,7 +1633,10 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .tree-search :deep(.ui-dropdown-search-input):focus {
-  background: var(--theme-search-focus-bg, var(--theme-top-dropdown-active-bg, rgba(30, 64, 175, 0.15)));
+  background: var(
+    --theme-search-focus-bg,
+    var(--theme-top-dropdown-active-bg, rgba(30, 64, 175, 0.15))
+  );
 }
 
 .clear-search {
@@ -1461,7 +1696,11 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 
 .management-action.is-danger {
   color: var(--theme-text-danger, #fca5a5);
-  border-color: color-mix(in srgb, var(--theme-action-button-accent-border, var(--theme-status-danger, #fca5a5)) 45%, transparent);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-action-button-accent-border, var(--theme-status-danger, #fca5a5)) 45%,
+    transparent
+  );
 }
 
 .management-action:disabled {
@@ -1566,9 +1805,16 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .tree-action-button {
-  border: 1px solid var(--theme-top-dropdown-border, var(--ui-icon-action-border, var(--theme-icon-action-border, #334155)));
+  border: 1px solid
+    var(
+      --theme-top-dropdown-border,
+      var(--ui-icon-action-border, var(--theme-icon-action-border, #334155))
+    );
   border-radius: var(--ui-icon-action-radius);
-  background: var(--theme-top-dropdown-control-bg, var(--ui-icon-action-bg, var(--theme-icon-action-bg, #111a2c)));
+  background: var(
+    --theme-top-dropdown-control-bg,
+    var(--ui-icon-action-bg, var(--theme-icon-action-bg, #111a2c))
+  );
   color: var(--theme-top-dropdown-text, var(--theme-text-secondary, #cbd5e1));
   font-size: 10px;
   line-height: 1;
@@ -1583,7 +1829,10 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
 }
 
 .tree-action-button:hover {
-  background: var(--theme-top-dropdown-active-bg, var(--ui-icon-action-bg-hover, var(--theme-icon-action-bg-hover, #1d2a45)));
+  background: var(
+    --theme-top-dropdown-active-bg,
+    var(--ui-icon-action-bg-hover, var(--theme-icon-action-bg-hover, #1d2a45))
+  );
 }
 
 .tree-action-button.worktree-settings {
@@ -1692,7 +1941,8 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   left: 15px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-left: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   pointer-events: none;
 }
 
@@ -1711,7 +1961,8 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   top: 13px;
   width: 7px;
   height: 0;
-  border-top: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-top: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   pointer-events: none;
 }
 
@@ -1723,8 +1974,10 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   top: 0;
   width: 7px;
   height: 13px;
-  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
-  border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-left: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
+  border-bottom: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.5)));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }
@@ -1761,7 +2014,8 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   left: 31px;
   top: 0;
   bottom: 0;
-  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-left: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   pointer-events: none;
 }
 
@@ -1772,7 +2026,8 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   top: 14px;
   width: 7px;
   height: 0;
-  border-top: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-top: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   pointer-events: none;
 }
 
@@ -1784,8 +2039,10 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   top: 0;
   width: 7px;
   height: 14px;
-  border-left: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
-  border-bottom: 1px solid var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-left: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
+  border-bottom: 1px solid
+    var(--theme-top-dropdown-border, var(--theme-status-git-connector, rgba(71, 85, 105, 0.4)));
   border-bottom-left-radius: 4px;
   pointer-events: none;
 }

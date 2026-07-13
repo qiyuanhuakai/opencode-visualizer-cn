@@ -71,6 +71,9 @@ export type CodexThread = {
   status?: unknown;
   cwd?: string;
   gitInfo?: CodexGitInfo;
+  source?: 'main' | 'subagent';
+  parentThreadId?: string;
+  sessionId?: string;
 };
 
 export type CodexThreadListParams = {
@@ -209,11 +212,20 @@ export type CodexTurnInputItem =
   | { type: 'localImage'; path: string }
   | { type: 'skill'; name: string; path: string };
 
+export type CodexCollaborationModePayload = {
+  mode: string;
+  settings: {
+    model: string;
+    // `null` means "use the built-in instructions for the selected mode" per docs/codex.md
+    developer_instructions?: string | null;
+  };
+};
+
 export type CodexTurnStartParams = {
   threadId: string;
   input: CodexTurnInputItem[];
   cwd?: string;
-  collaborationMode?: string;
+  collaborationMode?: CodexCollaborationModePayload;
   approvalPolicy?: string;
   sandboxPolicy?: unknown;
   model?: string;
@@ -904,8 +916,11 @@ type NormalizedCodexSession = {
   id: string;
   projectID: string;
   title?: string;
-  status?: 'busy' | 'idle' | 'retry';
+  status?: 'busy' | 'idle' | 'retry' | 'unknown';
   directory?: string;
+  source?: 'main' | 'subagent';
+  parentThreadId?: string;
+  sessionId?: string;
   time?: {
     created?: number;
     updated?: number;
@@ -914,17 +929,31 @@ type NormalizedCodexSession = {
   };
 };
 
-function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status'] {
-  if (status === 'running' || status === 'busy' || status === 'inProgress') return 'busy';
-  if (status === 'retry') return 'retry';
-  return 'idle';
+export function extractStatusType(status: unknown): string | undefined {
+  if (typeof status === 'string') return status;
+  if (status && typeof status === 'object' && 'type' in status) {
+    const t = (status as { type: unknown }).type;
+    return typeof t === 'string' ? t : undefined;
+  }
+  return undefined;
+}
+
+export function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status'] {
+  const type = extractStatusType(status);
+  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy') return 'busy';
+  if (type === 'systemError' || type === 'retry') return 'retry';
+  return 'unknown';
 }
 
 function normalizeCodexMcpStatus(status: string) {
   if (status === 'connected' || status === 'disabled' || status === 'failed') return status;
   if (status === 'needs_auth' || status === 'needs_client_registration') return status;
-  if (status === 'running' || status === 'ready') return 'connected';
+  if (status === 'running' || status === 'ready' || status === 'started' || status === 'starting') {
+    return 'connected';
+  }
+  if (status === 'stopped') return 'disabled';
   if (status === 'auth_required') return 'needs_auth';
+  if (status === 'error') return 'failed';
   return status ? 'failed' : 'disabled';
 }
 
@@ -1033,6 +1062,9 @@ function normalizeCodexThread(thread: CodexThread, homeDirectory?: string): Norm
     title: thread.name || thread.preview || undefined,
     status: normalizeCodexStatus(thread.status),
     directory,
+    source: thread.source,
+    parentThreadId: thread.parentThreadId,
+    sessionId: thread.sessionId,
     time: {
       created: thread.createdAt,
       updated: thread.updatedAt ?? thread.createdAt,
@@ -1076,7 +1108,7 @@ function normalizeAbsoluteCodexPath(path: string) {
 function isWithinCodexRoot(root: string, target: string) {
   const normalizedRoot = normalizeAbsoluteCodexPath(root);
   const normalizedTarget = normalizeAbsoluteCodexPath(target);
-  if (normalizedRoot === '/') return normalizedTarget === '/';
+  if (normalizedRoot === '/') return true;
   const comparableRoot = /^[A-Za-z]:\//u.test(normalizedRoot) ? normalizedRoot.toLowerCase() : normalizedRoot;
   const comparableTarget = /^[A-Za-z]:\//u.test(normalizedTarget) ? normalizedTarget.toLowerCase() : normalizedTarget;
   return comparableTarget === comparableRoot || comparableTarget.startsWith(`${comparableRoot}/`);

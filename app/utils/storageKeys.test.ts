@@ -93,4 +93,11 @@ describe('storageKeys', () => {
     expect(storageGet(StorageKeys.settings.enterToSend)).toBe('true');
     expect(electronStore['opencode.settings.enterToSend.v1']).toBe('true');
   });
+
+  it('exposes codexActiveThread key for codex session persistence', () => {
+    expect(StorageKeys.state.codexActiveThread).toBe('state.codexActiveThread.v1');
+    storageSet(StorageKeys.state.codexActiveThread, 'thr_abc123');
+    expect(storageGet(StorageKeys.state.codexActiveThread)).toBe('thr_abc123');
+    expect(store['opencode.state.codexActiveThread.v1']).toBe('thr_abc123');
+  });
 });

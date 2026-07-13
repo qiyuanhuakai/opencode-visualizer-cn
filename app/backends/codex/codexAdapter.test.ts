@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createCodexAdapter } from './codexAdapter';
+import { createCodexAdapter, extractStatusType, normalizeCodexStatus } from './codexAdapter';
 
 type ListenerMap = {
   open: Array<() => void>;
@@ -214,7 +214,7 @@ describe('CodexAdapter', () => {
     });
 
     socket.respond(2, { data: [{ id: 'thr_1', status: { type: 'notLoaded' } }], nextCursor: null });
-    await expect(statuses).resolves.toEqual({ thr_1: 'idle' });
+    await expect(statuses).resolves.toEqual({ thr_1: 'unknown' });
   });
 
   it('starts a new thread and turn for simple prompts', async () => {
@@ -266,7 +266,11 @@ describe('CodexAdapter', () => {
     const prompt = adapter.sendPrompt({
       threadId: 'thr_collab',
       text: 'Plan this refactor.',
-      collaborationMode: 'plan',
+      model: 'gpt-5.5',
+      collaborationMode: {
+        mode: 'plan',
+        settings: { model: 'gpt-5.5', developer_instructions: null },
+      },
     });
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
@@ -285,7 +289,10 @@ describe('CodexAdapter', () => {
     const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> }).params;
     expect(sentParams).toMatchObject({
       threadId: 'thr_collab',
-      collaborationMode: 'plan',
+      collaborationMode: {
+        mode: 'plan',
+        settings: { model: 'gpt-5.5', developer_instructions: null },
+      },
     });
   });
 
@@ -735,7 +742,7 @@ describe('CodexAdapter', () => {
       id: 'thr_new',
       projectID: 'codex',
       directory: '/repo',
-      status: 'idle',
+      status: 'unknown',
     });
     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
       id: 2,
@@ -750,7 +757,7 @@ describe('CodexAdapter', () => {
       id: 'thr_fork',
       projectID: 'codex',
       directory: '/repo',
-      status: 'idle',
+      status: 'unknown',
     });
 
     const revertSession = adapter.revertSession('thr_1', 'msg_1');
@@ -760,7 +767,7 @@ describe('CodexAdapter', () => {
       id: 'thr_1',
       projectID: 'codex',
       directory: '/repo',
-      status: 'idle',
+      status: 'unknown',
     });
     expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
       id: 4,
@@ -815,6 +822,26 @@ describe('CodexAdapter', () => {
     ]);
     const getLspStatus = adapter.getLspStatus;
     await expect(getLspStatus()).resolves.toEqual([]);
+  });
+
+  it('allows listFiles under root "/" for subdirectory paths', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const result = adapter.listFiles({ directory: '/', path: 'subdir' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { entries: [{ fileName: 'index.ts', isDirectory: false }] });
+
+    await expect(result).resolves.toEqual([
+      { name: 'index.ts', path: 'subdir/index.ts', type: 'file' },
+    ]);
   });
 
   it('maps Codex models to provider options for the shared UI', async () => {
@@ -1287,6 +1314,108 @@ describe('CodexAdapter', () => {
       await expect(
         adapter.updateSkill({ path: '', enabled: true })
       ).rejects.toThrow(/path/);
+    });
+  });
+
+  describe('getMcpStatus / normalizeCodexMcpStatus', () => {
+    async function expectNormalizedMcpStatus(rawStatus: string, expected: string) {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
+
+      const status = adapter.getMcpStatus();
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 2);
+      socket.respond(2, { data: [{ name: 'server-a', status: rawStatus }] });
+
+      const result = await status;
+      expect(result['server-a']?.status).toBe(expected);
+    }
+
+    it('maps codex "started" to internal "connected"', async () => {
+      await expectNormalizedMcpStatus('started', 'connected');
+    });
+
+    it('maps codex "starting" to internal "connected"', async () => {
+      await expectNormalizedMcpStatus('starting', 'connected');
+    });
+
+    it('maps codex "stopped" to internal "disabled"', async () => {
+      await expectNormalizedMcpStatus('stopped', 'disabled');
+    });
+
+    it('maps codex "error" to internal "failed"', async () => {
+      await expectNormalizedMcpStatus('error', 'failed');
+    });
+
+    it('preserves opencode "running" / "ready" mapping to "connected"', async () => {
+      await expectNormalizedMcpStatus('running', 'connected');
+      await expectNormalizedMcpStatus('ready', 'connected');
+    });
+
+    it('preserves opencode "auth_required" mapping to "needs_auth"', async () => {
+      await expectNormalizedMcpStatus('auth_required', 'needs_auth');
+    });
+
+    it('preserves pass-through for internal status values', async () => {
+      await expectNormalizedMcpStatus('connected', 'connected');
+      await expectNormalizedMcpStatus('disabled', 'disabled');
+      await expectNormalizedMcpStatus('failed', 'failed');
+      await expectNormalizedMcpStatus('needs_auth', 'needs_auth');
+      await expectNormalizedMcpStatus('needs_client_registration', 'needs_client_registration');
+    });
+  });
+
+  describe('normalizeCodexStatus / extractStatusType', () => {
+    it('extracts the type field from a structured codex status object', () => {
+      expect(extractStatusType({ type: 'notLoaded' })).toBe('notLoaded');
+      expect(extractStatusType({ type: 'active', activeFlags: ['some'] })).toBe('active');
+      expect(extractStatusType({ type: 'systemError' })).toBe('systemError');
+    });
+
+    it('returns the value directly when status is a plain string', () => {
+      expect(extractStatusType('running')).toBe('running');
+      expect(extractStatusType('idle')).toBe('idle');
+    });
+
+    it('returns undefined for missing or invalid status values', () => {
+      expect(extractStatusType(undefined)).toBeUndefined();
+      expect(extractStatusType(null)).toBeUndefined();
+      expect(extractStatusType({})).toBeUndefined();
+      expect(extractStatusType({ type: 123 })).toBeUndefined();
+    });
+
+    it('maps structured codex "active" status (with activeFlags) to "busy"', () => {
+      expect(
+        normalizeCodexStatus({ type: 'active', activeFlags: ['streaming', 'awaitingApproval'] }),
+      ).toBe('busy');
+    });
+
+    it('maps structured codex "systemError" status to "retry"', () => {
+      expect(normalizeCodexStatus({ type: 'systemError' })).toBe('retry');
+    });
+
+    it('maps structured codex "notLoaded" / "idle" status to "unknown" (gray hollow, matches opencode)', () => {
+      expect(normalizeCodexStatus({ type: 'notLoaded' })).toBe('unknown');
+      expect(normalizeCodexStatus({ type: 'idle' })).toBe('unknown');
+    });
+
+    it('maps unknown / missing status values to "unknown"', () => {
+      expect(normalizeCodexStatus(undefined)).toBe('unknown');
+      expect(normalizeCodexStatus(null)).toBe('unknown');
+      expect(normalizeCodexStatus({})).toBe('unknown');
+    });
+
+    it('preserves string aliases for busy / retry (opencode-shaped payloads)', () => {
+      expect(normalizeCodexStatus('running')).toBe('busy');
+      expect(normalizeCodexStatus('inProgress')).toBe('busy');
+      expect(normalizeCodexStatus('busy')).toBe('busy');
+      expect(normalizeCodexStatus('retry')).toBe('retry');
     });
   });
 });

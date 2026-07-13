@@ -37,10 +37,11 @@
           @edit-project="handleEditProject"
     @open-settings="isSettingsOpen = true"
     @open-provider-manager="isProviderManagerOpen = true"
-     @open-status-monitor="isStatusMonitorOpen = true"
-     @open-codex-panel="openCodexPanel"
-     @open-codex-subpanel="openCodexSubpanel"
-           @logout="handleLogout"
+      @open-status-monitor="isStatusMonitorOpen = true"
+      @open-codex-panel="openCodexPanel"
+      @open-codex-subpanel="openCodexSubpanel"
+      @open-forge-panel="openForgePanel"
+            @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
       </header>
@@ -135,6 +136,7 @@
                     @show-message-diff="handleShowMessageDiff"
                     @show-commit="handleShowCommit"
                     @show-thread-history="handleShowThreadHistory"
+                    @show-subagent-history="handleShowSubagentHistory"
                     @edit-message="handleEditMessage"
                     @open-image="handleOpenImage"
                     @open-file="openFileViewer"
@@ -465,6 +467,7 @@ import GlobContent from './components/ToolWindow/Glob.vue';
 import GrepContent from './components/ToolWindow/Grep.vue';
 import ReasoningContent from './components/ToolWindow/Reasoning.vue';
 import ThreadHistoryContent from './components/ThreadHistoryContent.vue';
+import SubagentHistoryContent from './components/SubagentHistoryContent.vue';
 import SubagentContent from './components/ToolWindow/Subagent.vue';
 import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
@@ -478,6 +481,7 @@ import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ThemeInjector from './components/ThemeInjector.vue';
 import CodexPanel from './components/CodexPanel.vue';
+import ForgePanel from './components/ForgePanel.vue';
 import CodexConnectorManager from './components/codex/CodexConnectorManager.vue';
 import CodexCollaborationModeManager from './components/codex/CodexCollaborationModeManager.vue';
 import CodexConfigViewer from './components/codex/CodexConfigViewer.vue';
@@ -503,6 +507,7 @@ import {
 } from './components/ToolWindow/utils';
 import { useAutoScroller, type ScrollMode } from './composables/useAutoScroller';
 import { useFileTree, type FileNode } from './composables/useFileTree';
+import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
 import { useFloatingWindows } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionRequest } from './composables/usePermissions';
@@ -539,11 +544,13 @@ import type {
   BackendWorktreeInfo,
 } from './types/backend-domain';
 import type { ComposerAttachment, LineCommentData } from './types/composer';
+import type { ForgePanelAuxiliary } from './types/forge';
 import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
 import { DEFAULT_OPENCODE_URL } from './utils/constants';
+import { resolveRestoredPtyKind } from './utils/forgePty';
 import {
   isSamePinnedSessionStore,
   limitPinnedSessionStore,
@@ -555,6 +562,7 @@ import {
   sandboxPinKey,
   type LocalPinnedSessionStore,
 } from './utils/pinnedSessions';
+import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import {
   extractFileRead as extractToolFileRead,
@@ -562,6 +570,7 @@ import {
 } from './utils/toolRenderers';
 import { toMessageDiffViewerEntry } from './utils/messageDiff';
 import { buildLineCommentFileUrl, formatCommentNote } from './utils/lineComment';
+import { resolveModelMetaForPath as resolveModelMetaForPathUtil } from './utils/resolveModelMeta';
 import {
   configureCodexBackend,
   configureOpenCodeBackend,
@@ -573,6 +582,8 @@ import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
 import { parseSkill as parseSkillFromText } from './utils/parseSkill';
+import { clampShellWindowSize, type ShellWindowSize } from './utils/shellWindowSize';
+import { resolveTerminalScrollTarget } from './utils/terminalScroll';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
 import { useSettings } from './composables/useSettings';
@@ -623,6 +634,7 @@ const TERM_TITLEBAR_HEIGHT_PX = 22;
 const TERM_WINDOW_BORDER_PX = 2;
 const TERM_INNER_PADDING_X_PX = 4;
 const TERM_INNER_PADDING_Y_PX = 4;
+const FORGE_WINDOW_EXTRA_HEIGHT_PX = 92;
 const TERM_GUTTER_WIDTH_EM = 3.2;
 const TRANSPARENT_TERMINAL_BACKGROUND = 'rgba(0, 0, 0, 0)';
 
@@ -874,6 +886,8 @@ const BATCH_SESSION_ACTION_CONCURRENCY = 6;
 
 const fw = useFloatingWindows();
 const CODEX_PANEL_KEY = 'codex-panel';
+let forgePtyId = '';
+const shellWindowMinimums = new Map<string, ShellWindowSize>();
 const minimizedEntries = computed(() => fw.entries.value.filter((entry) => entry.minimized));
 const showDockPanel = computed(
   () => showMinimizeButtons.value && (dockAlwaysOpen.value || minimizedEntries.value.length > 0),
@@ -914,6 +928,13 @@ function openCodexPanel() {
     component: CodexPanel,
     props: markRaw({
       api: markRaw(codexApi),
+      pinnedStore: localPinnedSessionStore,
+      onPinCodexThread: (threadId: string, directory: string) => {
+        void backendSessionActions.pinSession(threadId, { projectId: CODEX_PROJECT_ID, directory });
+      },
+      onUnpinCodexThread: (threadId: string, directory: string) => {
+        void backendSessionActions.unpinSession(threadId, { projectId: CODEX_PROJECT_ID, directory });
+      },
       onOpenSubpanel: (panel: TopPanelCodexSubpanel) => openCodexSubpanel(panel),
     }),
     title: t('codexPanel.title'),
@@ -927,6 +948,74 @@ function openCodexPanel() {
     focusOnOpen: true,
     expiry: Infinity,
   });
+}
+
+function sendLineToPty(ptyId: string, line: string) {
+  const session = shellSessionsByPtyId.get(ptyId);
+  if (!session) return;
+  const socket = session.socket;
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(line);
+    return;
+  }
+  if (socket?.readyState === WebSocket.CONNECTING) {
+    socket.addEventListener('open', () => socket.send(line), { once: true });
+  }
+}
+
+async function openForgePanel() {
+  if (!ptySupported.value) {
+    setSendStatusKey('app.error.shellFailed', { message: t('app.error.unavailable', { action: t('topPanel.openForge') }) });
+    return;
+  }
+
+  const existingSession = forgePtyId ? shellSessionsByPtyId.get(forgePtyId) : undefined;
+  if (existingSession) {
+    const key = `shell:${forgePtyId}`;
+    fw.restore(key);
+    fw.bringToFront(key);
+    scheduleShellFit(forgePtyId);
+    existingSession.terminal.focus();
+    void forgeAuxiliary.refreshAll();
+    return;
+  }
+
+  const directory = activeDirectory.value.trim();
+  if (!directory) {
+    setSendStatusKey('app.error.shellFailed', { message: t('app.error.noWorktreeSelected') });
+    return;
+  }
+
+  try {
+    const pty = await createPtySession('/usr/bin/env', ['zsh', '-l'], t('forgePanel.title'));
+    if (!pty) {
+      setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
+      return;
+    }
+    forgePtyId = pty.id;
+    storageSet(StorageKeys.state.forgePtyId, pty.id);
+    await ensureShellWindow(pty, getForgeShellWindowOptions(pty, directory));
+    void forgeAuxiliary.refreshAll();
+  } catch (error) {
+    setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
+  }
+}
+
+function getForgeShellWindowOptions(pty: PtyInfo, directory: string): ShellWindowOptions {
+  const terminalSize = getTerminalWindowSize();
+  return {
+    component: ForgePanel,
+    props: {
+      shellId: pty.id,
+      cwd: pty.cwd || directory,
+      onSendLine: (line: string) => sendLineToPty(pty.id, line),
+      auxiliary: forgePanelAuxiliary,
+    },
+    minWidth: terminalSize.width,
+    minHeight: terminalSize.height + FORGE_WINDOW_EXTRA_HEIGHT_PX,
+    title: t('forgePanel.title'),
+    color: 'var(--theme-floating-shell-accent, var(--theme-accent-primary, var(--color-region-accent)))',
+  };
 }
 
 type CodexSubpanelDefinition = {
@@ -1191,6 +1280,7 @@ const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
 const localPinnedSessionStore = ref<LocalPinnedSessionStore>(readPinnedSessionStore());
+migrateCodexPinsToUnifiedStore(localPinnedSessionStore);
 const deletedSandboxStore = ref<DeletedSandboxStore>(readDeletedSandboxStore());
 const sessionTreeExpandedPaths = ref<string[]>(readSessionTreeExpandedPaths());
 const composerDraftTabId =
@@ -1291,7 +1381,7 @@ const commandsLoading = ref(false);
 const serverState = useServerState();
 const openCodeApi = useOpenCodeApi(serverState.projects, t);
 const codexApi = useCodexApi();
-const codexWorkspace = useCodexWorkspace(codexApi);
+const codexWorkspace = useCodexWorkspace(codexApi, { pinnedStore: localPinnedSessionStore });
 const bootstrapReady = serverState.bootstrapped;
 const sessionSelection = useSessionSelection(
   computed(() => serverState.projects),
@@ -1945,6 +2035,39 @@ const treeDirectoryName = computed(() => {
 });
 
 const { runOneShotPtyCommand } = usePtyOneshot({ activeDirectory, translate: t });
+const forgeAuxiliary = useForgeAuxiliary((command, args) => runOneShotPtyCommand(command, Array.from(args)));
+const forgePanelAuxiliary = {
+  get conversations() {
+    return forgeAuxiliary.conversations.value;
+  },
+  get selectedConversationId() {
+    return forgeAuxiliary.selectedConversationId.value;
+  },
+  get selectedMarkdown() {
+    return forgeAuxiliary.selectedMarkdown.value;
+  },
+  get selectedDump() {
+    return forgeAuxiliary.selectedDump.value;
+  },
+  get info() {
+    return forgeAuxiliary.info.value;
+  },
+  get loading() {
+    return forgeAuxiliary.loading.value;
+  },
+  get error() {
+    return forgeAuxiliary.error.value;
+  },
+  onRefresh: () => {
+    void forgeAuxiliary.refreshAll();
+  },
+  onSelectConversation: (id: string) => {
+    void forgeAuxiliary.selectConversation(id);
+  },
+  onDumpConversation: (id: string) => {
+    void forgeAuxiliary.dumpConversation(id);
+  },
+} satisfies ForgePanelAuxiliary;
 
 const sessionRevert = computed<SessionInfo['revert'] | null>(() => {
   const projectId = selectedProjectId.value.trim();
@@ -2224,13 +2347,7 @@ function resolveAgentColorForName(agentName?: string) {
 }
 
 function resolveModelMetaForPath(modelPath?: string) {
-  if (!modelPath) return undefined;
-  const matched = modelOptions.value.find((model) => model.id === modelPath);
-  if (!matched) return undefined;
-  return {
-    displayName: matched.displayName,
-    providerLabel: matched.providerLabel,
-  };
+  return resolveModelMetaForPathUtil(modelPath, modelOptions.value);
 }
 
 const currentAgentColor = computed(() => resolveAgentColorForName(selectedMode.value));
@@ -4407,7 +4524,7 @@ async function fetchPtyList(directory?: string) {
   return data.map(parsePtyInfo).filter((pty): pty is PtyInfo => Boolean(pty));
 }
 
-async function createPtySession(command?: string, args?: string[]) {
+async function createPtySession(command?: string, args?: string[], title = t('app.windowTitles.shell')) {
   const directory = activeDirectory.value || undefined;
     const createPty = requireBackendMethod(backend().createPty, 'PTY creation');
     const data = await createPty({
@@ -4415,7 +4532,7 @@ async function createPtySession(command?: string, args?: string[]) {
     command,
     args,
     cwd: directory,
-    title: t('app.windowTitles.shell'),
+    title,
   });
   return parsePtyInfo(data);
 }
@@ -4615,18 +4732,34 @@ async function updatePtySize(ptyId: string, rows: number, cols: number, director
   return parsePtyInfo(data);
 }
 
-async function ensureShellWindow(pty: PtyInfo) {
+type ShellWindowOptions = {
+  component?: Component;
+  props?: Record<string, unknown>;
+  title?: string;
+  color?: string;
+  minWidth?: number;
+  minHeight?: number;
+};
+
+async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {}) {
   if (shellSessionsByPtyId.has(pty.id)) return;
   const key = `shell:${pty.id}`;
+  if (options.minWidth !== undefined || options.minHeight !== undefined) {
+    shellWindowMinimums.set(key, {
+      width: options.minWidth ?? 0,
+      height: options.minHeight ?? 0,
+    });
+  }
   const { width, height } = getTerminalWindowSize();
   const randomPosition = getRandomWindowPosition({ width, height });
   fw.open(key, {
-    component: ShellContent,
-    props: { shellId: pty.id },
+    component: options.component ?? ShellContent,
+    props: options.props ?? { shellId: pty.id },
     closable: true,
     resizable: true,
     scroll: 'none',
-    title: pty.title === 'One-shot PTY' ? t('app.windowTitles.oneShotPty') : (pty.title || t('app.windowTitles.shell')),
+    title: options.title ?? (pty.title === 'One-shot PTY' ? t('app.windowTitles.oneShotPty') : (pty.title || t('app.windowTitles.shell'))),
+    color: options.color,
     width,
     height,
     x: randomPosition.x,
@@ -4695,8 +4828,14 @@ function resizeWindowToFitTerminal(key: string, terminal: Terminal, _host: HTMLE
   const chromeX = TERM_WINDOW_BORDER_PX + 2 * TERM_INNER_PADDING_X_PX; // 2 + 8 = 10
   const chromeY = TERM_WINDOW_BORDER_PX + TERM_TITLEBAR_HEIGHT_PX + 1 + TERM_INNER_PADDING_Y_PX; // 2 + 22 + 1 + 4 = 29
 
-  const newWidth = Math.ceil(contentWidth + chromeX);
-  const newHeight = Math.ceil(contentHeight + chromeY);
+  const measuredSize = {
+    width: Math.ceil(contentWidth + chromeX),
+    height: Math.ceil(contentHeight + chromeY),
+  };
+  const { width: newWidth, height: newHeight } = clampShellWindowSize(
+    measuredSize,
+    shellWindowMinimums.get(key),
+  );
 
   fw.updateOptions(key, { width: newWidth, height: newHeight });
 
@@ -4750,9 +4889,39 @@ function fitTerminalToContainer(session: ShellSession): boolean {
   const cols = Math.max(2, Math.floor((parentRect.width - scrollbarWidth) / cell.width));
   const rows = Math.max(1, Math.floor(parentRect.height / cell.height));
   if (cols !== session.terminal.cols || rows !== session.terminal.rows) {
+    const wasAtBottom = isTerminalViewportAtBottom(session.terminal);
     session.terminal.resize(cols, rows);
+    synchronizeTerminalViewport(session.terminal, wasAtBottom);
   }
   return true;
+}
+
+function isTerminalViewportAtBottom(terminal: Terminal) {
+  const buffer = terminal.buffer.active;
+  return buffer.viewportY >= buffer.baseY;
+}
+
+function synchronizeTerminalViewport(terminal: Terminal, wasAtBottomBeforeWrite: boolean) {
+  const buffer = terminal.buffer.active;
+  const target = resolveTerminalScrollTarget({
+    baseY: buffer.baseY,
+    cursorY: buffer.cursorY,
+    rows: terminal.rows,
+    viewportY: buffer.viewportY,
+    wasAtBottomBeforeWrite,
+  });
+  if (target.kind === 'bottom') {
+    terminal.scrollToBottom();
+    return;
+  }
+  if (target.kind === 'line') {
+    terminal.scrollToLine(target.line);
+  }
+}
+
+function writeTerminalOutput(session: ShellSession, data: string | Uint8Array) {
+  const wasAtBottom = isTerminalViewportAtBottom(session.terminal);
+  session.terminal.write(data, () => synchronizeTerminalViewport(session.terminal, wasAtBottom));
 }
 
 function notifyPtySize(session: ShellSession) {
@@ -4831,7 +5000,7 @@ function connectShellSocket(ptyId: string) {
         }
         return;
       }
-      session.terminal.write(bytes);
+      writeTerminalOutput(session, bytes);
       return;
     }
     if (typeof event.data === 'string') {
@@ -4862,7 +5031,7 @@ function connectShellSocket(ptyId: string) {
           // fall through to terminal output
         }
       }
-      session.terminal.write(event.data);
+      writeTerminalOutput(session, event.data);
     }
   });
   socket.addEventListener('open', () => {
@@ -4900,6 +5069,11 @@ function removeShellWindow(ptyId: string, options?: { kill?: boolean }) {
   session.socket?.close();
   session.terminal.dispose();
   shellSessionsByPtyId.delete(ptyId);
+  if (forgePtyId === ptyId) {
+    forgePtyId = '';
+    if (options?.kill) storageRemove(StorageKeys.state.forgePtyId);
+  }
+  shellWindowMinimums.delete(`shell:${ptyId}`);
   shellExitWaiters.delete(ptyId);
   ptyToFileMap.delete(ptyId);
   fw.close(`shell:${ptyId}`);
@@ -5030,10 +5204,17 @@ async function restoreShellSessions() {
     disposeShellWindows();
   }
   try {
+    const persistedForgePtyId = storageGet(StorageKeys.state.forgePtyId) ?? '';
     const ptys = await fetchPtyList(directory || undefined);
     ptys.forEach((pty) => {
       if (pty.status === 'exited') return;
       if (pty.title === 'One-shot PTY' || pty.title === 'Commit Snapshot') return;
+      if (resolveRestoredPtyKind(pty.id, persistedForgePtyId) === 'forge') {
+        forgePtyId = pty.id;
+        void ensureShellWindow(pty, getForgeShellWindowOptions(pty, directory));
+        void forgeAuxiliary.refreshAll();
+        return;
+      }
       ensureShellWindow(pty);
     });
   } catch (error) {
@@ -5999,13 +6180,13 @@ const toolRendererReadTypesKey = `FILE_${'READ'}_EVENT_TYPES`;
 const toolRendererWriteTypesKey = `FILE_${'WRITE'}_EVENT_TYPES`;
 const toolRendererMessageTypesKey = `MESSAGE_${'EVENT_TYPES'}`;
 
-function renderWorkerHtmlWithI18n(args: Omit<RenderRequest, 'copyButtonLabel' | 'copiedLabel' | 'copyCodeAriaLabel' | 'copyMarkdownAriaLabel'>) {
+function renderWorkerHtmlWithI18n(args: RenderRequest) {
   return renderWorkerHtml({
-    ...args,
     copyButtonLabel: t('render.copyCode'),
     copiedLabel: t('render.copied'),
     copyCodeAriaLabel: t('render.copyCodeAria'),
     copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
+    ...args,
   });
 }
 
@@ -7182,6 +7363,42 @@ function handleShowThreadHistory(payload: { entries: HistoryWindowEntry[] }) {
   });
 }
 
+function handleShowSubagentHistory(payload: { sessionId: string; label: string }) {
+  const sessionId = payload.sessionId?.trim();
+  if (!sessionId) return;
+  const label = payload.label?.trim() || sessionId;
+  const key = `subagent-history:${sessionId}`;
+  if (fw.has(key)) {
+    fw.bringToFront(key);
+    return;
+  }
+  const { width, height } = fw.getExtent();
+  const winW = 720;
+  const winH = 520;
+  const x = Math.max(0, Math.round((width - winW) / 2));
+  const y = Math.max(0, Math.round((height - winH) / 2));
+  fw.open(key, {
+    component: SubagentHistoryContent,
+    props: {
+      parentThreadId: sessionId,
+      sessionLabel: label,
+      theme: shikiTheme.value,
+    },
+    title: `${t('app.windowTitles.subagentHistory')} · ${label}`,
+    scroll: 'follow',
+    smoothEngine: 'native',
+    closable: true,
+    resizable: true,
+    focusOnOpen: true,
+    variant: 'message',
+    expiry: Infinity,
+    width: winW,
+    height: winH,
+    x,
+    y,
+  });
+}
+
 function handleOpenImage(payload: { url: string; filename: string }) {
   const { url, filename } = payload;
   const key = `image-viewer:${url}`;
@@ -7622,7 +7839,7 @@ function handlePtyEvent(event: {
       refreshFileArtifactsForPty(ptyId);
     }
     if (session?.closeOnSuccess && exitCode !== 0) {
-      session.terminal.write(`\r\n\u001b[31m[Command failed: ${exitCode}]\u001b[0m\r\n`);
+      writeTerminalOutput(session, `\r\n\u001b[31m[Command failed: ${exitCode}]\u001b[0m\r\n`);
       return;
     }
     lingerAndRemoveShellWindow(ptyId);

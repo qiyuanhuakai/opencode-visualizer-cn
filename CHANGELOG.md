@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.6.0 released]
 
 ### 新后端支持(alpha)
 
@@ -18,6 +18,18 @@
 - [x] 启用 Codex adapter 的 `experimentalApi` capability，使 `collaborationMode/list` 等实验性 RPC 可用
 - [x] status monitor面板支持显示codex插件
 - [x] 修改“应用（app）”的翻译为“连接器（connector）”
+- [x] forgecode panel 迭代与修复
+	- [x] 添加forge panel，用于以pty+辅助gui的形式与forgecode zsh交互
+    - [x] 设置里增加panel按钮的开关（类似codex panel）
+    - [x] 按钮位置移到管理模式的右侧；将codex panel的按钮移到forge panel的右侧
+    - [x] 修复pty终端的光标位置跟随不够智能的问题，现在经常出现光标在下方但滚动条滚不过去，或者光标在上方但是滚动条滚到底部的问题
+    - [x] 侧边栏支持伸缩和隐藏，删除会话按钮，让侧边栏本身支持:new :clone :conversation :conversation-rename :conversation-tree :delete
+    - [x] 输入框放到底部。输入框增加agent/功能选择器：forge muse sage suggest commit-preview
+    - [x] 增加config控制按钮和子菜单，支持:config :config-edit :config-model :config-reload :config-commit-model :config-suggest-model :config-reasoning-effort
+    - [x] 增加临时设置控制按钮和子菜单，支持:login :logout :model :reasoning-effort
+    - [x] 增加状态显示按钮和二级弹出悬浮窗，同时增加显示:info的model信息和:tools :skill :workspace-info
+    - [x] 增加工作区按钮和子菜单，支持:workspace-sync :workspace-init
+    - [x] 增加对话操作按钮和子菜单，支持:compact :copy :edit :retry
 
 
 ### Bug 修复

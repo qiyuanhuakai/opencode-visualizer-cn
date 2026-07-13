@@ -113,7 +113,10 @@ describe('useBackendMessageSend', () => {
     await runtime.sendMessage();
 
     expect(codexApi.sendPrompt.mock.calls[0]?.[1]).toMatchObject({
-      collaborationMode: 'plan',
+      collaborationMode: {
+        mode: 'plan',
+        settings: { model: 'model-1', developer_instructions: null },
+      },
     });
   });
 

@@ -48,6 +48,7 @@
 | **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速、输出面板虚拟滚动、悬浮窗弹出性能优化 | ✅ 已上线 |
 | **桌面应用** | Electron 桌面端打包，支持 Windows / macOS / Linux | ✅ 已上线 |
 | **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板；设置中开启实验性功能 | 🅰️ Alpha |
+| **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **路线图与计划**：请参阅 [RoadMap.md](./RoadMap.md)
@@ -146,6 +147,32 @@ node vis_bridge.js --target ws://127.0.0.1:4500
 4. 点击按钮并连接vis_bridge即可与codex panel交互
 
 > ⚠️ **注意**：Codex Panel 目前为 Alpha 状态，功能可能不稳定。需要有效的 OpenAI API 密钥和 Codex CLI 权限。
+
+---
+
+## Forge Panel 使用说明
+
+Forge Panel 是一个轻量级的 zsh PTY 悬浮窗口，直接运行本机 Forge CLI；实时输出始终由 xterm.js 原样渲染，不依赖终端文本识别。
+
+### 前置条件
+
+确保已安装并配置 Forge，且 `forge` 命令可在登录 zsh 中使用。需要使用 `:` 快捷命令时，先运行 Forge 的 setup 流程：
+
+```bash
+forge setup
+```
+
+### 使用 Forge Panel
+
+1. 进入 Vis 的“设置” → “实验性功能”，开启“Forge Panel 按钮”
+2. 顶栏管理模式按钮右侧会出现 Forge 按钮，点击后打开 zsh PTY 悬浮窗口
+3. 顶部菜单可执行配置、临时设置、工作区与对话操作；状态菜单提供 `:info`、`:tools`、`:skill` 与 `:workspace-info`
+4. 底部输入框可选择 Forge、Muse、Sage、Suggest 或 Commit Preview，并将提示词写入 PTY
+5. 右侧结构化栏使用 Forge CLI 读取状态、会话列表与预览；可执行 `:new`、`:clone`、`:conversation`、`:conversation-rename`、`:conversation-tree` 和 `:delete`
+
+侧栏可拖动调整宽度；向右拖过隐藏阈值后折叠，拖动隐藏滑杆向左可恢复。会话命令会随侧栏宽度在 6×1、3×2、2×3 布局间切换。Forge PTY 在页面刷新后会恢复为完整 Forge Panel，而不是普通终端。
+
+> ⚠️ **注意**：Forge Panel 目前为 Beta 状态。结构化读取依赖当前工作目录中的 Forge 数据；实时交互仍以 PTY 终端为准。
 
 ---
 
@@ -292,6 +319,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Performance** | Lazy loading for large sessions, background hydration, faster cold start, output panel virtual scrolling, floating window popup optimization | ✅ Available |
 | **Desktop App** | Electron desktop packaging for Windows / macOS / Linux | ✅ Available |
 | **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel; experimental features toggle in settings | 🅰️ Alpha |
+| **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **Roadmap & Plans**: [RoadMap.md](./RoadMap.md)
@@ -391,6 +419,32 @@ For more details, check the help content of `vis_bridge.js`.
 4. Click the button and connect to vis_bridge to interact with Codex Panel
 
 > ⚠️ **Note**: Codex Panel is currently in Alpha and features may be unstable. Requires a valid OpenAI API key and Codex CLI permissions.
+
+---
+
+## Forge Panel Usage
+
+Forge Panel is a lightweight zsh PTY floating window that runs the local Forge CLI directly. xterm.js renders realtime output as-is; the panel does not depend on terminal text recognition.
+
+### Prerequisites
+
+Install and configure Forge so the `forge` command is available from a login zsh. To use the `:` shortcuts, run Forge's setup flow first:
+
+```bash
+forge setup
+```
+
+### Using Forge Panel
+
+1. Go to Vis **Settings** → **Experimental Features** and enable **Forge Panel Button**
+2. Click the Forge button to the right of the management-mode button to open a zsh PTY floating window
+3. The top menus run configuration, temporary-setting, workspace, and conversation commands; the status menu provides `:info`, `:tools`, `:skill`, and `:workspace-info`
+4. Use the bottom prompt bar to choose Forge, Muse, Sage, Suggest, or Commit Preview, then send the prompt to the PTY
+5. The structured right rail reads Forge status, conversation lists, and previews through the Forge CLI; it also provides `:new`, `:clone`, `:conversation`, `:conversation-rename`, `:conversation-tree`, and `:delete`
+
+Drag the sidebar to resize it. Dragging it right past the hide threshold collapses it; drag the hidden rail left to restore it. Conversation commands adapt between 6×1, 3×2, and 2×3 layouts as the sidebar width changes. After a page refresh, the Forge PTY is restored as the complete Forge Panel rather than a plain terminal.
+
+> ⚠️ **Note**: Forge Panel is currently Beta. Structured reads use Forge data from the active working directory; realtime interaction always remains in the PTY terminal.
 
 ---
 

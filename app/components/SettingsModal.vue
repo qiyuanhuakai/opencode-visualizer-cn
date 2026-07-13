@@ -269,6 +269,17 @@
 
           <div class="setting-row">
             <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.experimentalFeatures.showForgeButton.label') }}</div>
+              <div class="setting-description">{{ $t('settings.experimentalFeatures.showForgeButton.description') }}</div>
+            </div>
+            <label class="toggle-switch">
+              <input v-model="showForgePanelButton" type="checkbox" class="toggle-input" />
+              <span class="toggle-track" />
+            </label>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
               <div class="setting-label">{{ $t('settings.experimentalFeatures.showCodexInStatusMonitor.label') }}</div>
               <div class="setting-description">{{ $t('settings.experimentalFeatures.showCodexInStatusMonitor.description') }}</div>
             </div>
@@ -641,6 +652,7 @@ const {
   enterToSend,
   showMinimizeButtons,
   showCodexButton,
+  showForgePanelButton,
   showCodexInStatusMonitor,
   editInVis,
   dockAlwaysOpen,

@@ -112,14 +112,21 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
 
       const existingThreadId = options.codexApi.activeThreadId.value || options.codexApi.visibleThreads.value[0]?.id || '';
       if (existingThreadId) {
-        await options.codexApi.selectThread(existingThreadId);
         options.selectedSessionId.value = existingThreadId;
       }
 
-      await Promise.all([
-        options.fetchGlobalProviderConfig(),
-        options.fetchProviders(true),
-        options.fetchAgents(),
+      // selectThread is independent of the provider fetches; run them in
+      // parallel to shorten startup. allSettled keeps one failure from
+      // blocking the rest of the boot sequence.
+      await Promise.allSettled([
+        existingThreadId
+          ? options.codexApi.selectThread(existingThreadId)
+          : Promise.resolve(),
+        Promise.all([
+          options.fetchGlobalProviderConfig(),
+          options.fetchProviders(true),
+          options.fetchAgents(),
+        ]),
       ]);
       await options.hydrateActiveWorktreeResources();
       options.connectionState.value = 'ready';

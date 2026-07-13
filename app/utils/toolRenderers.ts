@@ -582,14 +582,39 @@ export function extractFileRead(
         if (!diff && editAfter === undefined) return null;
         const editPath = helpers.resolveReadWritePath(input, metadata, state);
         const editLang = helpers.guessLanguageFromPath(editPath);
+        // Detect standard unified-diff format (contains `@@` hunk headers).
+        // When the patch is non-standard (e.g. codex only returns a terse fallback
+        // like "File changed: <path>"), fall back to rendering the patch as
+        // markdown so the floating window still shows meaningful content.
+        const isStandardDiff = Boolean(diff) && diff.includes('@@');
+        if (isStandardDiff) {
+          return {
+            content: helpers.renderEditDiffHtml({
+              diff,
+              code: editCode,
+              after: editAfter,
+              lang: editLang,
+            }),
+            variant: 'diff' as const,
+            callId,
+            toolName: tool,
+            toolStatus: status,
+            title: toolPrefix(tool, 'toolTitles.edit', t, editPath),
+          };
+        }
+        // Non-standard patch: render as markdown via the worker renderer so
+        // syntax highlighting / wrapping still applies, instead of returning
+        // null and leaving the floating window empty.
         return {
-          content: helpers.renderEditDiffHtml({
-            diff,
-            code: editCode,
-            after: editAfter,
-            lang: editLang,
-          }),
-          variant: 'diff' as const,
+          content: () =>
+            helpers.renderWorkerHtml({
+              id: `edit-md-${callId ?? Date.now().toString(36)}`,
+              code: diff,
+              lang: 'markdown',
+              theme: 'github-dark',
+              gutterMode: 'single',
+            }),
+          variant: 'code' as const,
           callId,
           toolName: tool,
           toolStatus: status,

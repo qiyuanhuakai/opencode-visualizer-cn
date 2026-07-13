@@ -1,7 +1,7 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { ComposerAttachment } from '../types/composer';
-import type { CodexSkill, CodexTurnInputItem } from '../backends/codex/codexAdapter';
+import type { CodexCollaborationModePayload, CodexSkill, CodexTurnInputItem } from '../backends/codex/codexAdapter';
 import type { ParsedSkill } from '../utils/parseSkill';
 
 type ModelOption = {
@@ -44,7 +44,7 @@ type CodexApiLike = {
     cwd?: string;
     model?: string;
     effort?: string;
-    collaborationMode?: string;
+    collaborationMode?: CodexCollaborationModePayload;
     input?: CodexTurnInputItem[];
   }) => Promise<unknown>;
   refreshThreads: () => Promise<unknown>;
@@ -195,9 +195,23 @@ export function useBackendMessageSend(params: {
         const selectedCodexModelKey = selectedInfo?.id || params.selectedModel.value.trim();
         const selectedCodexModel = selectedModelIDs.modelID || (!selectedCodexModelKey.includes('/') ? selectedCodexModelKey : undefined);
         const selectedCodexProvider = selectedModelIDs.providerID || (selectedCodexModel ? params.codexProjectId : '');
-        const selectedCollaborationMode = params.codexApi.collaborationModes.value.some((mode) => mode.mode === params.selectedMode.value)
-          ? params.selectedMode.value
-          : undefined;
+        // Build the Codex `collaborationMode` struct. The server requires a
+        // `settings.model` field inside the struct, so we can only forward
+        // the selection when the user has also chosen a model. Without a
+        // model we omit the field entirely and let the server use its
+        // built-in default for the thread.
+        const selectedModeId = params.selectedMode.value;
+        const selectedCollaborationMode =
+          selectedCodexModel
+          && params.codexApi.collaborationModes.value.some((mode) => mode.mode === selectedModeId)
+            ? {
+                mode: selectedModeId,
+                settings: {
+                  model: selectedCodexModel,
+                  developer_instructions: null,
+                },
+              }
+            : undefined;
         const startNewCodexThread = selectedCodexProvider
           ? params.shouldStartNewCodexThreadForProvider(sessionId, selectedCodexProvider)
           : false;

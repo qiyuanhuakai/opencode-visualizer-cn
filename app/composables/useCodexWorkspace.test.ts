@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue';
 import { describe, expect, it } from 'vitest';
 import { CODEX_PROJECT_ID, createCodexProjectState, useCodexWorkspace } from './useCodexWorkspace';
+import { pinnedSessionStoreKey } from '../utils/pinnedSessions';
 import type { CodexThread } from '../backends/codex/codexAdapter';
 
 describe('useCodexWorkspace', () => {
@@ -29,7 +30,7 @@ describe('useCodexWorkspace', () => {
     expect(project.sandboxes['/other-repo/subdir'].sessions['thread-2']).toMatchObject({
       id: 'thread-2',
       directory: '/other-repo/subdir',
-      status: 'idle',
+      status: 'unknown',
     });
   });
 
@@ -129,10 +130,11 @@ describe('useCodexWorkspace', () => {
   });
 
   it('marks locally pinned Codex threads as pinned sessions', () => {
+    const pinnedStore = { [pinnedSessionStoreKey(CODEX_PROJECT_ID, 'thread-1')]: Date.now() };
     const project = createCodexProjectState(
       [{ id: 'thread-1', name: 'Pinned thread', cwd: '/repo', gitInfo: { root: '/repo' } }],
       '/home/user',
-      new Set(['thread-1']),
+      pinnedStore,
     );
 
     expect(project.sandboxes['/repo'].sessions['thread-1'].timePinned).toBe(1);
@@ -142,7 +144,7 @@ describe('useCodexWorkspace', () => {
     const project = createCodexProjectState(
       [{ id: 'thread-hidden', name: 'Hidden thread', cwd: '/repo', updatedAt: 42 }],
       '/home/user',
-      new Set(),
+      {},
       new Set(['thread-hidden']),
     );
 
