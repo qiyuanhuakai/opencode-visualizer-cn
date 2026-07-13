@@ -22,17 +22,7 @@
     - [ ] codex: 路径"/"下的文件树明明能加载出来，但却显示“文件树加载失败”
     - [ ] codex：toppanel现在会显示有归档会话但没有显示会话的沙盒/global文件夹
 
-- [ ] forgecode panel 迭代与修复
-    - [ ] 设置里增加panel按钮的开关（类似codex panel）
-    - [ ] 按钮位置移到管理模式的右侧；将codex panel的按钮移到forge panel的右侧
-    - [ ] 修复pty终端的光标位置跟随不够智能的问题，现在经常出现光标在下方但滚动条滚不过去，或者光标在上方但是滚动条滚到底部的问题
-    - [ ] 侧边栏支持伸缩和隐藏，删除会话按钮，让侧边栏本身支持:new :clone :conversation :conversation-rename :conversation-tree :delete
-    - [ ] 输入框放到底部。输入框增加agent/功能选择器：forge muse sage suggest commit-preview
-    - [ ] 增加config控制按钮和子菜单，支持:config :config-edit :config-model :config-reload :config-commit-model :config-suggest-model :config-reasoning-effort
-    - [ ] 增加临时设置控制按钮和子菜单，支持:login :logout :model :reasoning-effort
-    - [ ] 增加状态显示按钮和二级弹出悬浮窗，同时增加显示:info的model信息和:tools :skill :workspace-info
-    - [ ] 增加工作区按钮和子菜单，支持:workspace-sync :workspace-init
-    - [ ] 增加对话操作按钮和子菜单，支持:compact :copy :edit :retry
+
 
 
 - [ ] vis-bridge 模块化本地桥接服务器：集成外部开发工具，扩展与第三方工具的联动能力。
