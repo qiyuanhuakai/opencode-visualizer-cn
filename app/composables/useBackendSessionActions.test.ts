@@ -56,7 +56,10 @@ describe('useBackendSessionActions', () => {
       reloadSelectedSessionState: vi.fn(),
       seedForkedSessionComposerDraft: vi.fn(),
       setSendStatusKey: vi.fn(),
+      setLocalSessionArchived: vi.fn(),
       batchConcurrency: 2,
+      backendDeleteSession: vi.fn(),
+      backendUpdateSession: vi.fn(),
     });
 
     await actions.pinSession('thread-1');
@@ -118,7 +121,10 @@ describe('useBackendSessionActions', () => {
       reloadSelectedSessionState: vi.fn(),
       seedForkedSessionComposerDraft: vi.fn(),
       setSendStatusKey: vi.fn(),
+      setLocalSessionArchived: vi.fn(),
       batchConcurrency: 2,
+      backendDeleteSession: vi.fn(),
+      backendUpdateSession: vi.fn(),
     });
 
     await actions.pinSession('session-1');
@@ -131,5 +137,71 @@ describe('useBackendSessionActions', () => {
       directory: '/repo',
     });
     expect(typeof pinSession.mock.calls[0]?.[0]?.pinnedAt).toBe('number');
+  });
+
+  it('routes ACP deletion through the active backend instead of OpenCode', async () => {
+    const backendDeleteSession = vi.fn().mockResolvedValue(undefined);
+    const openCodeDelete = vi.fn();
+    const actions = useBackendSessionActions({
+      activeBackendKind: ref('acp'),
+      codexProjectId: 'codex',
+      selectedProjectId: ref('acp'),
+      selectedSessionId: ref('session-1'),
+      activeDirectory: ref('/repo'),
+      localPinnedSessionStore: ref({}),
+      serverProjects: {},
+      openCodeApi: {
+        deleteSession: openCodeDelete,
+        archiveSession: vi.fn(),
+        unarchiveSession: vi.fn(),
+        renameSession: vi.fn(),
+        pinSession: vi.fn(),
+        unpinSession: vi.fn(),
+        forkSession: vi.fn(),
+        revertSession: vi.fn(),
+      },
+      codexApi: {
+        hiddenThreadIds: ref(new Set()),
+        visibleThreads: ref([]),
+        activeThreadId: ref(''),
+        archiveThread: vi.fn(),
+        hideThread: vi.fn(),
+        unhideThread: vi.fn(),
+        unarchiveThread: vi.fn(),
+        setThreadName: vi.fn(),
+        forkThread: vi.fn(),
+        rollbackThread: vi.fn(),
+        startThreadCompaction: vi.fn(),
+        selectThread: vi.fn(),
+      },
+      ensureConnectionReady: () => true,
+      setSessionError: vi.fn(),
+      clearSessionError: vi.fn(),
+      toErrorMessage: (error) => String(error),
+      translate: (key) => key,
+      showPrompt: vi.fn(),
+      showConfirm: vi.fn(),
+      findSessionInProjects: () => null,
+      resolveProjectIdForSession: () => 'acp',
+      resolveSessionOperationPayload: () => ({ projectId: 'acp', directory: '/repo' }),
+      getSessionPinnedOverride: () => undefined,
+      setLocalPinnedSession: vi.fn(),
+      setLocalUnpinnedSession: vi.fn(),
+      clearLocalPinnedSessionOverride: vi.fn(),
+      restoreLocalPinnedSessionOverride: vi.fn(),
+      switchSessionSelection: vi.fn(),
+      reloadSelectedSessionState: vi.fn(),
+      seedForkedSessionComposerDraft: vi.fn(),
+      setSendStatusKey: vi.fn(),
+      setLocalSessionArchived: vi.fn(),
+      batchConcurrency: 2,
+      backendDeleteSession,
+      backendUpdateSession: vi.fn(),
+    });
+
+    await actions.deleteSession('session-1');
+
+    expect(backendDeleteSession).toHaveBeenCalledWith('session-1', '/repo');
+    expect(openCodeDelete).not.toHaveBeenCalled();
   });
 });
