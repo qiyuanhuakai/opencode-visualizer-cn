@@ -48,6 +48,7 @@
 | **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速、输出面板虚拟滚动、悬浮窗弹出性能优化 | ✅ 已上线 |
 | **桌面应用** | Electron 桌面端打包，支持 Windows / macOS / Linux | ✅ 已上线 |
 | **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板；设置中开启实验性功能 | 🅰️ Alpha |
+| **ACP Agent 集成 (Alpha)** | ACP v1 作为第三后端复用主会话界面；状态监控中管理 Pi、Oh My Pi、Kimi Code 等 ACP Agent | 🅰️ Alpha |
 | **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
@@ -81,6 +82,7 @@
 | [Node.js](https://nodejs.org/) | ≥ 20 | 运行时与构建环境 |
 | [pnpm](https://pnpm.io/) | 10.29.3 (推荐) | 包管理器，本项目使用 `packageManager` 锁定 |
 | [OpenCode Server](https://github.com/sst/opencode) | 最新版 | 后端服务，提供 API 与智能体能力 |
+| ACP Agent CLI | 可选 | 如 `pi-acp`、`omp --mode acp`、`kimi acp`；在状态监控中按需启用 |
 | 系统 `$EDITOR` | 可选 | 用于"用编辑器打开"功能（如 VS Code、Neovim 等） |
 
 > 💡 **提示**：本项目默认端口已从 `3000` 修改为 `23003`，以减少在 WSL 上与 Windows 服务的端口冲突。
@@ -120,7 +122,7 @@ opencode serve --cors https://<user>.github.io
 
 ## vis_bridge 使用说明
 
-vis_bridge 是一个轻量桥接器，用于将 Codex app-server 的 JSON-RPC 协议转发到 Vis 前端，使 Codex Panel（实验性功能）能够正常工作。
+vis_bridge 是本地进程监督器与协议桥接器：启动时探测并托管 OpenCode server、Codex app-server，并按配置启动 ACP Agent。Codex 使用原生 WebSocket JSON-RPC；ACP v1 Agent 使用 stdio JSON-RPC 到 WebSocket 的转发。
 
 ### 安装 Codex CLI
 
@@ -134,11 +136,15 @@ codex --version
 
 
 ```bash
-codex app-server --listen ws://127.0.0.1:4500
+# 源码运行
+node vis_bridge.js
 
-node vis_bridge.js --target ws://127.0.0.1:4500
+# 构建并运行单文件可执行程序
+pnpm bridge:build
+./dist-bridge/vis_bridge
 ```
-详情可以查看vis_bridge.js的help内容
+
+vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 默认禁用，可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。
 ### 使用 Codex Panel
 
 1. 进入 Vis 的"设置"
@@ -319,6 +325,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Performance** | Lazy loading for large sessions, background hydration, faster cold start, output panel virtual scrolling, floating window popup optimization | ✅ Available |
 | **Desktop App** | Electron desktop packaging for Windows / macOS / Linux | ✅ Available |
 | **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel; experimental features toggle in settings | 🅰️ Alpha |
+| **ACP Agent Integration (Alpha)** | ACP v1 as a third backend using the shared main chat UI; manage Pi, Oh My Pi, Kimi Code, and other ACP agents in Status Monitor | 🅰️ Alpha |
 | **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
@@ -352,6 +359,7 @@ Before getting started, ensure your environment meets the following criteria:
 | [Node.js](https://nodejs.org/) | ≥ 20 | Runtime and build environment |
 | [pnpm](https://pnpm.io/) | 10.29.3 (recommended) | Package manager, locked via `packageManager` |
 | [OpenCode Server](https://github.com/sst/opencode) | Latest | Backend service providing API and agent capabilities |
+| ACP Agent CLI | Optional | For example `pi-acp`, `omp --mode acp`, or `kimi acp`; enable agents as needed in Status Monitor |
 | System `$EDITOR` | Optional | For "Open in Editor" feature (e.g., VS Code, Neovim) |
 
 > 💡 **Tip**: This project changed the default port from `3000` to `23003` to reduce conflicts with Windows services when using WSL.
@@ -391,7 +399,7 @@ opencode serve --cors https://<user>.github.io
 
 ## vis_bridge Usage
 
-vis_bridge is a lightweight bridge that forwards the Codex app-server JSON-RPC protocol to the Vis frontend, enabling the Codex Panel (experimental feature) to work properly.
+vis_bridge is a local process supervisor and protocol bridge. At startup it probes and manages OpenCode server and Codex app-server, then starts configured ACP agents. Codex keeps its native WebSocket JSON-RPC transport; ACP v1 agents are forwarded from stdio JSON-RPC to WebSocket.
 
 ### Install Codex CLI
 
@@ -404,12 +412,15 @@ codex --version
 ### Start vis_bridge
 
 ```bash
-codex app-server --listen ws://127.0.0.1:4500
+# Run from source
+node vis_bridge.js
 
-node vis_bridge.js --target ws://127.0.0.1:4500
+# Build and run the single-file executable
+pnpm bridge:build
+./dist-bridge/vis_bridge
 ```
 
-For more details, check the help content of `vis_bridge.js`.
+vis_bridge automatically adopts or starts the default OpenCode and Codex services. ACP agents are disabled by default; enable them under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required.
 
 ### Using Codex Panel
 
