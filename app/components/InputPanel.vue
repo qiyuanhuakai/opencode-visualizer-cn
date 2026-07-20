@@ -140,7 +140,14 @@
           <div
             v-else-if="item.lineComment"
             class="attachment-thumb line-comment-thumb"
-            :title="item.lineComment.path + ':' + item.lineComment.startLine + (item.lineComment.startLine === item.lineComment.endLine ? '' : '-' + item.lineComment.endLine)"
+            :title="
+              item.lineComment.path +
+              ':' +
+              item.lineComment.startLine +
+              (item.lineComment.startLine === item.lineComment.endLine
+                ? ''
+                : '-' + item.lineComment.endLine)
+            "
           >
             <Icon icon="lucide:message-square" :width="16" :height="16" />
           </div>
@@ -148,7 +155,14 @@
             class="attachment-meta"
             :title="
               item.lineComment
-                ? item.lineComment.path + ':' + item.lineComment.startLine + (item.lineComment.startLine === item.lineComment.endLine ? '' : '-' + item.lineComment.endLine) + ' — ' + item.lineComment.text
+                ? item.lineComment.path +
+                  ':' +
+                  item.lineComment.startLine +
+                  (item.lineComment.startLine === item.lineComment.endLine
+                    ? ''
+                    : '-' + item.lineComment.endLine) +
+                  ' — ' +
+                  item.lineComment.text
                 : item.filename
             "
           >
@@ -194,11 +208,7 @@
               </DropdownItem>
             </div>
             <div v-else-if="activeMentionType === 'agent'" class="dropdown-list">
-              <DropdownItem
-                v-for="agent in agentMatches"
-                :key="agent.id"
-                :value="agent.id"
-              >
+              <DropdownItem v-for="agent in agentMatches" :key="agent.id" :value="agent.id">
                 <div class="agent-dropdown-item">
                   <div class="agent-popup-name">
                     @{{ agent.label }}
@@ -210,12 +220,15 @@
                 </div>
               </DropdownItem>
             </div>
+            <div v-else-if="activeMentionType === 'file'" class="dropdown-list">
+              <DropdownItem v-for="file in fileMatches" :key="file" :value="file">
+                <div class="command-dropdown-item">
+                  <div class="command-name">@{{ file }}</div>
+                </div>
+              </DropdownItem>
+            </div>
             <div v-else-if="activeMentionType === 'skill'" class="dropdown-list">
-              <DropdownItem
-                v-for="skill in skillMatches"
-                :key="skill.name"
-                :value="skill.name"
-              >
+              <DropdownItem v-for="skill in skillMatches" :key="skill.name" :value="skill.name">
                 <div class="skill-dropdown-item">
                   <div class="skill-popup-name">
                     ${{ skill.name }}
@@ -240,7 +253,9 @@
           <div class="input-field compact">
             <Dropdown
               v-model="modeValue"
-              :placeholder="hasAgentOptions ? $t('inputPanel.selectAgent') : $t('inputPanel.loadingAgents')"
+              :placeholder="
+                hasAgentOptions ? $t('inputPanel.selectAgent') : $t('inputPanel.loadingAgents')
+              "
               :disabled="props.disabled || !hasAgentOptions"
               button-class="input-control input-dropdown-button"
               popup-class="input-dropdown-popup"
@@ -249,11 +264,15 @@
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
-                <span :style="agentValueStyle(id)" :title="modeButtonLabel(id)">{{ modeButtonLabel(id) }}</span>
+                <span :style="agentValueStyle(id)" :title="modeButtonLabel(id)">{{
+                  modeButtonLabel(id)
+                }}</span>
               </template>
               <template #default>
                 <div class="dropdown-list">
-                  <div v-if="!hasAgentOptions" class="dropdown-empty">{{ $t('inputPanel.loadingAgents') }}</div>
+                  <div v-if="!hasAgentOptions" class="dropdown-empty">
+                    {{ $t('inputPanel.loadingAgents') }}
+                  </div>
                   <DropdownItem v-for="agent in agentOptions" :key="agent.id" :value="agent.id">
                     <div
                       class="agent-dropdown-item"
@@ -274,8 +293,38 @@
                         class="agent-dropdown-current-mark"
                         :title="$t('common.selected')"
                         aria-hidden="true"
-                      >✓</span>
+                        >✓</span
+                      >
                     </div>
+                  </DropdownItem>
+                </div>
+              </template>
+            </Dropdown>
+          </div>
+          <div v-if="permissionModeOptions.length > 0" class="input-field compact">
+            <Dropdown
+              v-model="permissionModeValue"
+              :placeholder="$t('inputPanel.selectPermissionMode')"
+              :disabled="props.disabled || props.permissionModeDisabled"
+              button-class="input-control input-dropdown-button"
+              popup-class="input-dropdown-popup"
+              auto-close
+              :title="$t('inputPanel.permissionModeTitle')"
+              @update:open="handleModelDropdownOpenChange"
+            >
+              <template #value="{ value: id }">
+                <span>{{
+                  permissionModeOptions.find((option) => option.id === id)?.label ?? id
+                }}</span>
+              </template>
+              <template #default>
+                <div class="dropdown-list">
+                  <DropdownItem
+                    v-for="option in permissionModeOptions"
+                    :key="option.id"
+                    :value="option.id"
+                  >
+                    <span class="dropdown-item-label">{{ option.label }}</span>
                   </DropdownItem>
                 </div>
               </template>
@@ -286,7 +335,9 @@
           <div ref="modelDropdownRef" class="input-dropdown-root">
             <Dropdown
               v-model="modelValue"
-              :placeholder="hasModelOptions ? $t('inputPanel.selectModel') : $t('inputPanel.loadingModels')"
+              :placeholder="
+                hasModelOptions ? $t('inputPanel.selectModel') : $t('inputPanel.loadingModels')
+              "
               :disabled="props.disabled || !hasModelOptions"
               button-class="input-control input-dropdown-button"
               popup-class="input-dropdown-popup"
@@ -315,7 +366,9 @@
                   />
                   <div class="model-picker-list">
                     <div class="dropdown-list">
-                      <div v-if="!hasModelOptions" class="dropdown-empty">{{ $t('inputPanel.loadingModels') }}</div>
+                      <div v-if="!hasModelOptions" class="dropdown-empty">
+                        {{ $t('inputPanel.loadingModels') }}
+                      </div>
                       <div
                         v-else-if="filteredGroupedModelOptions.length === 0"
                         class="dropdown-empty"
@@ -350,12 +403,14 @@
         <div class="input-field compact">
           <Dropdown
             v-model="thinkingKeyValue"
-            :placeholder="hasThinkingOptions ? $t('inputPanel.selectVariant') : $t('inputPanel.loading')"
+            :placeholder="
+              hasThinkingOptions ? $t('inputPanel.selectVariant') : $t('inputPanel.loading')
+            "
             :disabled="props.disabled || !hasThinkingOptions"
             button-class="input-control input-dropdown-button"
             popup-class="input-dropdown-popup"
             auto-close
-              :title="$t('inputPanel.variantTitle')"
+            :title="$t('inputPanel.variantTitle')"
             @update:open="handleModelDropdownOpenChange"
           >
             <template #value="{ value: key }">
@@ -363,7 +418,9 @@
             </template>
             <template #default>
               <div class="dropdown-list">
-                <div v-if="!hasThinkingOptions" class="dropdown-empty">{{ $t('inputPanel.loading') }}</div>
+                <div v-if="!hasThinkingOptions" class="dropdown-empty">
+                  {{ $t('inputPanel.loading') }}
+                </div>
                 <DropdownItem
                   v-for="option in thinkingChoices"
                   :key="option.key"
@@ -379,7 +436,11 @@
           <button
             type="button"
             class="input-button bookmark-button"
-            :title="messageValue.trim() ? $t('inputPanel.bookmarkCurrentInput') : $t('inputPanel.openBookmarks')"
+            :title="
+              messageValue.trim()
+                ? $t('inputPanel.bookmarkCurrentInput')
+                : $t('inputPanel.openBookmarks')
+            "
             @click="messageValue.trim() ? bookmarkCurrentInput() : (favoritesOpen = true)"
           >
             <Icon
@@ -388,7 +449,9 @@
               :height="16"
             />
             <Transition name="bookmark-toast">
-              <span v-if="bookmarkToastVisible" class="bookmark-toast">{{ $t('inputPanel.bookmarked') }}</span>
+              <span v-if="bookmarkToastVisible" class="bookmark-toast">{{
+                $t('inputPanel.bookmarked')
+              }}</span>
             </Transition>
           </button>
           <button
@@ -448,7 +511,13 @@ type ModelOption = {
   providerLabel?: string;
 };
 type CommandOption = { name: string; description?: string; hints?: string[] };
-type AgentOption = { id: string; label: string; description?: string; color?: string; isSubagent?: boolean };
+type AgentOption = {
+  id: string;
+  label: string;
+  description?: string;
+  color?: string;
+  isSubagent?: boolean;
+};
 type SkillOption = CodexSkill;
 type ThinkingChoice = { key: string; value: string | undefined; label: string };
 
@@ -459,8 +528,13 @@ const props = defineProps<{
   messageInput: string;
   canSend: boolean;
   selectedMode: string;
+  selectedPermissionMode?: string;
+  permissionModeOptions?: Array<{ id: string; label: string }>;
+  permissionModeDisabled?: boolean;
   agentOptions: AgentOption[];
   subagentOptions?: AgentOption[];
+  mentionFiles?: string[];
+  preferFileMentions?: boolean;
   hasAgentOptions: boolean;
   selectedModel: string;
   selectedThinking: string | undefined;
@@ -485,11 +559,12 @@ const props = defineProps<{
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
-}>();;
+}>();
 
 const emit = defineEmits<{
   (event: 'update:message-input', value: string): void;
   (event: 'update:selected-mode', value: string): void;
+  (event: 'update:selected-permission-mode', value: string): void;
   (event: 'update:selected-model', value: string): void;
   (event: 'update:selected-thinking', value: string | undefined): void;
   (
@@ -511,6 +586,11 @@ const emit = defineEmits<{
 const messageValue = computed({
   get: () => props.messageInput,
   set: (value) => emit('update:message-input', value),
+});
+const permissionModeOptions = computed(() => props.permissionModeOptions ?? []);
+const permissionModeValue = computed({
+  get: () => props.selectedPermissionMode ?? '',
+  set: (value) => emit('update:selected-permission-mode', value),
 });
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
@@ -692,7 +772,9 @@ function handleFavoriteSelect(entry: unknown) {
 }
 
 async function confirmRemoveFavorite(index: number) {
-  const confirmed = showConfirm ? await showConfirm(t('inputPanel.removeFromFavoritesConfirm')) : true;
+  const confirmed = showConfirm
+    ? await showConfirm(t('inputPanel.removeFromFavoritesConfirm'))
+    : true;
   if (!confirmed) return;
   removeFavorite(index);
 }
@@ -739,13 +821,17 @@ const commandMatches = computed(() => {
 
 const commandPopupDismissed = ref(false);
 const agentPopupDismissed = ref(false);
+const filePopupDismissed = ref(false);
 const skillPopupDismissed = ref(false);
 
 // --- Unified mention popup (command / agent / skill) ---
 // Priority: $skill > @agent > /command (most specific first)
-const activeMentionType = computed<'command' | 'agent' | 'skill' | null>(() => {
+const activeMentionType = computed<'command' | 'agent' | 'file' | 'skill' | null>(() => {
   if (skillMatches.value.length > 0 && !skillPopupDismissed.value) return 'skill';
+  if (props.preferFileMentions && fileMatches.value.length > 0 && !filePopupDismissed.value)
+    return 'file';
   if (agentMatches.value.length > 0 && !agentPopupDismissed.value) return 'agent';
+  if (fileMatches.value.length > 0 && !filePopupDismissed.value) return 'file';
   if (commandMatches.value.length > 0 && !commandPopupDismissed.value) return 'command';
   return null;
 });
@@ -756,6 +842,7 @@ function dismissActiveMention() {
   const type = activeMentionType.value;
   if (type === 'skill') skillPopupDismissed.value = true;
   else if (type === 'agent') agentPopupDismissed.value = true;
+  else if (type === 'file') filePopupDismissed.value = true;
   else if (type === 'command') commandPopupDismissed.value = true;
 }
 
@@ -789,10 +876,10 @@ const agentMatches = computed(() => {
   const cursorPos = textarea?.selectionStart ?? value.length;
   const textBeforeCursor = value.slice(0, cursorPos);
   const lastAtIndex = textBeforeCursor.lastIndexOf('@');
-  
+
   // We're not in @ context if no @ found
   if (lastAtIndex === -1) return [];
-  
+
   // Check if @ is followed by whitespace (invalid @ context)
   const afterAt = textBeforeCursor.slice(lastAtIndex + 1);
   if (afterAt.startsWith(' ') || afterAt.startsWith('\t') || afterAt.startsWith('\n')) return [];
@@ -810,6 +897,21 @@ const agentMatches = computed(() => {
   return matches;
 });
 
+const fileMatches = computed(() => {
+  const query = atQuery.value.toLowerCase();
+  const textarea = textareaRef.value;
+  const value = messageValue.value;
+  const cursorPos = textarea?.selectionStart ?? value.length;
+  const beforeCursor = value.slice(0, cursorPos);
+  const atIndex = beforeCursor.lastIndexOf('@');
+  if (atIndex < 0) return [];
+  const afterAt = beforeCursor.slice(atIndex + 1);
+  if (/\s/.test(afterAt)) return [];
+  return (props.mentionFiles ?? [])
+    .filter((file) => file.toLowerCase().includes(query))
+    .slice(0, 30);
+});
+
 // --- Skill $ invocation ---
 const skillQuery = computed(() => {
   const value = messageValue.value;
@@ -819,7 +921,8 @@ const skillQuery = computed(() => {
   const lastDollar = textBeforeCursor.lastIndexOf('$');
   if (lastDollar === -1) return '';
   const afterDollar = textBeforeCursor.slice(lastDollar + 1);
-  if (afterDollar.startsWith(' ') || afterDollar.startsWith('\t') || afterDollar.startsWith('\n')) return '';
+  if (afterDollar.startsWith(' ') || afterDollar.startsWith('\t') || afterDollar.startsWith('\n'))
+    return '';
   if (/\s/.test(afterDollar)) return '';
   const match = afterDollar.match(/^(\S*)/);
   return match?.[1] ?? '';
@@ -838,7 +941,8 @@ const skillMatches = computed<SkillOption[]>(() => {
 
   // $ followed by whitespace is not a valid $ context
   const afterDollar = textBeforeCursor.slice(lastDollar + 1);
-  if (afterDollar.startsWith(' ') || afterDollar.startsWith('\t') || afterDollar.startsWith('\n')) return [];
+  if (afterDollar.startsWith(' ') || afterDollar.startsWith('\t') || afterDollar.startsWith('\n'))
+    return [];
   // Whitespace inside afterDollar means the skill name is already complete
   if (/\s/.test(afterDollar)) return [];
 
@@ -847,8 +951,9 @@ const skillMatches = computed<SkillOption[]>(() => {
 
   const lower = query.toLowerCase();
   return list.filter(
-    (s) => s.name.toLowerCase().startsWith(lower) ||
-           (s.interface?.displayName ?? '').toLowerCase().startsWith(lower),
+    (s) =>
+      s.name.toLowerCase().startsWith(lower) ||
+      (s.interface?.displayName ?? '').toLowerCase().startsWith(lower),
   );
 });
 
@@ -857,6 +962,7 @@ watch(
   () => {
     commandPopupDismissed.value = false;
     agentPopupDismissed.value = false;
+    filePopupDismissed.value = false;
     skillPopupDismissed.value = false;
   },
 );
@@ -866,7 +972,22 @@ function handleMentionSelect(value: unknown) {
   const type = activeMentionType.value;
   if (type === 'command') applyCommandSelection(value);
   else if (type === 'agent') applyAgentSelection(value);
+  else if (type === 'file') applyFileSelection(value);
   else if (type === 'skill') applySkillSelection(value);
+}
+
+function applyFileSelection(path: string) {
+  const textarea = textareaRef.value;
+  const cursorPos = textarea?.selectionStart ?? messageValue.value.length;
+  const beforeCursor = messageValue.value.slice(0, cursorPos);
+  const atIndex = beforeCursor.lastIndexOf('@');
+  if (atIndex < 0) return;
+  messageValue.value = `${messageValue.value.slice(0, atIndex)}@${path} ${messageValue.value.slice(cursorPos)}`;
+  nextTick(() => {
+    const nextCursor = atIndex + path.length + 2;
+    textareaRef.value?.focus();
+    textareaRef.value?.setSelectionRange(nextCursor, nextCursor);
+  });
 }
 
 function applyCommandSelection(name: string) {
@@ -877,36 +998,36 @@ function applyCommandSelection(name: string) {
 function applyAgentSelection(id: string) {
   const agent = findAgent(id);
   if (!agent) return;
-  
+
   const textarea = textareaRef.value;
   const value = messageValue.value;
   const cursorPos = textarea?.selectionStart ?? value.length;
-  
+
   // Find the last @ before cursor
   const textBeforeCursor = value.slice(0, cursorPos);
   const lastAtIndex = textBeforeCursor.lastIndexOf('@');
   if (lastAtIndex === -1) return;
-  
+
   // Find where the @query ends (next whitespace or cursor position)
   const textAfterAt = value.slice(lastAtIndex + 1);
   const whitespaceMatch = textAfterAt.match(/\s/);
   const queryEndOffset = whitespaceMatch ? whitespaceMatch.index! : textAfterAt.length;
   const queryEndPos = lastAtIndex + 1 + queryEndOffset;
-  
+
   // Build new value: text before @ + @agentName + space + text after query
   const beforeAt = value.slice(0, lastAtIndex);
   const afterQuery = value.slice(queryEndPos);
   const newValue = beforeAt + '@' + agent.label + ' ' + afterQuery;
-  
+
   messageValue.value = newValue;
-  
+
   // Dismiss popup - use double nextTick to ensure it happens after watch resets it
   nextTick(() => {
     nextTick(() => {
       agentPopupDismissed.value = true;
     });
   });
-  
+
   // Set cursor position after the inserted agent name + space
   nextTick(() => {
     const newCursorPos = lastAtIndex + agent.label.length + 2; // +2 for '@' and ' '
@@ -1185,8 +1306,10 @@ const modelValue = computed({
 function findAgent(id: unknown): AgentOption | undefined {
   if (id == null) return undefined;
   // Search in both primary agents and subagents
-  return (props.agentOptions ?? []).find((a) => a.id === id) ??
-         (props.subagentOptions ?? []).find((a) => a.id === id);
+  return (
+    (props.agentOptions ?? []).find((a) => a.id === id) ??
+    (props.subagentOptions ?? []).find((a) => a.id === id)
+  );
 }
 
 function resolveAgentStyle(name?: string, explicitColor?: string) {
@@ -1345,7 +1468,12 @@ const inputMessageStyle = computed(() => {
   align-items: center;
   gap: 4px;
   padding: 4px 8px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--theme-input-border, var(--theme-border-default, #334155)) 70%, transparent);
+  border-top: 1px solid
+    color-mix(
+      in srgb,
+      var(--theme-input-border, var(--theme-border-default, #334155)) 70%,
+      transparent
+    );
   flex: 0 0 auto;
 }
 
@@ -1416,12 +1544,24 @@ const inputMessageStyle = computed(() => {
 :deep(.input-dropdown-popup) {
   --ui-dropdown-bg: var(--theme-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
   --ui-dropdown-border: var(--theme-input-border, var(--theme-border-default, #334155));
-  --ui-dropdown-control-bg: var(--theme-input-control-bg, var(--theme-surface-panel-muted, rgba(11, 19, 32, 0.92)));
+  --ui-dropdown-control-bg: var(
+    --theme-input-control-bg,
+    var(--theme-surface-panel-muted, rgba(11, 19, 32, 0.92))
+  );
   --ui-dropdown-text: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   --ui-dropdown-text-muted: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
-  --ui-dropdown-accent: var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
-  --ui-dropdown-active-bg: var(--theme-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
-  --ui-dropdown-hover-bg: var(--theme-input-control-bg, var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.9)));
+  --ui-dropdown-accent: var(
+    --theme-input-accent,
+    var(--theme-border-accent, rgba(59, 130, 246, 0.45))
+  );
+  --ui-dropdown-active-bg: var(
+    --theme-input-active-bg,
+    var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2))
+  );
+  --ui-dropdown-hover-bg: var(
+    --theme-input-control-bg,
+    var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.9))
+  );
   /* Always open upward since input toolbar is at the bottom */
   top: auto;
   bottom: anchor(top);
@@ -1444,6 +1584,11 @@ const inputMessageStyle = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: min(20rem, calc(100dvh - 18rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 0.5rem;
+  scrollbar-gutter: stable;
 }
 
 .dropdown-empty {
@@ -1596,7 +1741,12 @@ const inputMessageStyle = computed(() => {
   gap: 6px;
   width: 100%;
   padding: 6px 8px 8px;
-  border-top: 1px solid color-mix(in srgb, var(--theme-input-border, var(--theme-border-default, #1e293b)) 80%, transparent);
+  border-top: 1px solid
+    color-mix(
+      in srgb,
+      var(--theme-input-border, var(--theme-border-default, #1e293b)) 80%,
+      transparent
+    );
   box-sizing: border-box;
   max-height: 45%;
   overflow: auto;
@@ -1701,7 +1851,10 @@ const inputMessageStyle = computed(() => {
 }
 
 :deep(.mention-popup) .ui-dropdown-item[aria-selected='true'] {
-  background: var(--theme-input-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
+  background: var(
+    --theme-input-active-bg,
+    var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2))
+  );
   border: 1px solid var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
 }
 
@@ -1814,7 +1967,7 @@ const inputMessageStyle = computed(() => {
   overflow: auto;
   /* Match input panel background */
   background: var(--theme-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
-   border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
   outline: none;
   box-shadow: var(--theme-shadow-floating, 0 -8px 24px rgba(2, 6, 23, 0.5));
   box-sizing: border-box;
@@ -1822,8 +1975,8 @@ const inputMessageStyle = computed(() => {
 
 :deep(.history-popup) .ui-dropdown-item {
   /* Match thread-block style */
-   background: var(--theme-input-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
-   border: 1px solid var(--theme-input-border, var(--theme-border-default, #1e293b));
+  background: var(--theme-input-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
+  border: 1px solid var(--theme-input-border, var(--theme-border-default, #1e293b));
   border-radius: 10px;
   padding: 8px;
 }
@@ -1834,12 +1987,12 @@ const inputMessageStyle = computed(() => {
 
 :deep(.history-popup) .ui-dropdown-item[aria-selected='true'],
 :deep(.history-popup) .ui-dropdown-item:hover {
-   background: var(--theme-input-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.7)));
-   border-color: var(--theme-input-accent, var(--theme-border-strong, #475569));
+  background: var(--theme-input-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.7)));
+  border-color: var(--theme-input-accent, var(--theme-border-strong, #475569));
 }
 
 .history-item {
-   border-left: 3px solid var(--theme-input-border, var(--theme-border-default, #334155));
+  border-left: 3px solid var(--theme-input-border, var(--theme-border-default, #334155));
   padding-left: 8px;
   flex: 1 1 auto;
   min-width: 0;
@@ -1847,7 +2000,7 @@ const inputMessageStyle = computed(() => {
 
 .history-item-text {
   font-size: var(--ui-font-size, 12px);
-   color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
   line-height: 1.4;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -1868,7 +2021,7 @@ const inputMessageStyle = computed(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-   color: var(--theme-input-text, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text, var(--theme-text-muted, #94a3b8));
 }
 
 .history-target-agent,
@@ -1883,19 +2036,19 @@ const inputMessageStyle = computed(() => {
 }
 
 .history-target-model {
-   color: var(--theme-input-text, var(--theme-text-primary, #f8fafc));
+  color: var(--theme-input-text, var(--theme-text-primary, #f8fafc));
 }
 
 .history-target-provider {
-   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .history-target-subagent {
-   color: #7dd3fc;
+  color: #7dd3fc;
 }
 
 .history-target-separator {
-   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .history-target-variant {
@@ -1910,7 +2063,7 @@ const inputMessageStyle = computed(() => {
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
-   color: var(--theme-input-text-muted, var(--theme-text-muted, #64748b));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #64748b));
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1935,7 +2088,7 @@ const inputMessageStyle = computed(() => {
 
 .input-button {
   background: transparent;
-   color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
+  color: var(--theme-input-text-muted, var(--theme-text-muted, #94a3b8));
   border: 1px solid transparent;
   border-radius: 8px;
   width: 28px;
