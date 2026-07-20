@@ -34,9 +34,9 @@ function createBaseParams() {
       const parts = trimmed.slice(1).split(/\s+/, 2);
       return { name: parts[0] || '', arguments: parts[1] || '' };
     },
-    findCommandByName: (name: string) => name === 'fix' ? { name: 'fix' } : null,
-    findAgentByName: (name: string) => name === 'build' ? { name: 'build' } : null,
-    parseAtAgent: () => null,
+    findCommandByName: (name: string) => (name === 'fix' ? { name: 'fix' } : null),
+    findAgentByName: (name: string) => (name === 'build' ? { name: 'build' } : null),
+    parseAtAgent: (_input: string): { agent: string; text: string } | null => null,
     runDebugCommand: (args: string) => ({ ok: true, message: args }),
     openShellFromInput: vi.fn().mockResolvedValue(true),
     clearComposerDraftForCurrentContext: vi.fn(),
@@ -56,15 +56,21 @@ function createBaseParams() {
     ensureSelectedModelAvailable: vi.fn(),
     requireSelectedWorktree: () => '/repo',
     sendCommand: vi.fn().mockResolvedValue(undefined),
-    buildLineCommentFileUrl: (path: string, startLine: number, endLine: number) => `${path}:${startLine}-${endLine}`,
-    formatCommentNote: (path: string, startLine: number, endLine: number, text: string) => `${path}:${startLine}-${endLine}:${text}`,
+    buildLineCommentFileUrl: (path: string, startLine: number, endLine: number) =>
+      `${path}:${startLine}-${endLine}`,
+    formatCommentNote: (path: string, startLine: number, endLine: number, text: string) =>
+      `${path}:${startLine}-${endLine}:${text}`,
+    resolveAgentMode: (mode: string) => mode,
+    buildAcpMentionContextParts: vi.fn().mockResolvedValue([]),
   };
 }
 
 describe('useBackendMessageSend', () => {
   it('sends Codex prompts with image attachments through runtime', async () => {
     const base = createBaseParams();
-    base.attachments.value = [{ id: 'a1', filename: 'img.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AA==' }];
+    base.attachments.value = [
+      { id: 'a1', filename: 'img.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AA==' },
+    ];
     const codexApi = {
       activeThreadId: ref('session-1'),
       threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
@@ -174,6 +180,81 @@ describe('useBackendMessageSend', () => {
     });
   });
 
+  it('adds bounded file context parts for ACP @ mentions', async () => {
+    const base = createBaseParams();
+    base.messageInput.value = 'Review @src/auth.ts';
+    base.resolveAgentMode = () => 'acceptEdits';
+    base.parseAtAgent = () => ({ agent: 'src/auth.ts', text: 'Review' });
+    base.findAgentByName = () => null;
+    base.buildAcpMentionContextParts = vi.fn().mockResolvedValue([
+      {
+        type: 'text',
+        text: 'Referenced file: src/auth.ts\n```ts\nexport const auth = true;\n```',
+      },
+    ]);
+    const sendPromptAsync = vi.fn().mockResolvedValue(undefined);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('acp'),
+      openCodeApi: { sendPromptAsync },
+      codexApi: {
+        activeThreadId: ref(''),
+        threads: ref([]),
+        collaborationModes: ref([]),
+        sendPrompt: vi.fn(),
+        refreshThreads: vi.fn(),
+        selectModel: vi.fn(),
+      },
+    });
+
+    await runtime.sendMessage();
+
+    expect(base.buildAcpMentionContextParts).toHaveBeenCalledWith('Review @src/auth.ts');
+    expect(sendPromptAsync).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        agent: 'acceptEdits',
+        parts: expect.arrayContaining([
+          expect.objectContaining({
+            type: 'text',
+            text: expect.stringContaining('Referenced file'),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it('sends ACP prompts through the shared sendPromptAsync path', async () => {
+    const base = createBaseParams();
+    base.selectedModel.value = 'acp/default';
+    base.modelOptions.value = [{ id: 'acp/default', providerID: 'acp', modelID: 'default' }];
+    const sendPromptAsync = vi.fn().mockResolvedValue(undefined);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('acp'),
+      openCodeApi: { sendPromptAsync },
+      codexApi: {
+        activeThreadId: ref(''),
+        threads: ref([]),
+        collaborationModes: ref([]),
+        sendPrompt: vi.fn(),
+        refreshThreads: vi.fn(),
+        selectModel: vi.fn(),
+      },
+    });
+
+    await runtime.sendMessage();
+
+    expect(sendPromptAsync).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        directory: '/repo',
+        model: { providerID: 'acp', modelID: 'default' },
+        parts: [{ type: 'text', text: 'hello world' }],
+      }),
+    );
+  });
+
   it('attaches $skill-name tokens as {type:"skill"} items before text on Codex backend', async () => {
     const base = createBaseParams();
     base.messageInput.value = '$skill-creator add a new skill for CI';
@@ -191,7 +272,12 @@ describe('useBackendMessageSend', () => {
       openCodeApi: { sendPromptAsync: vi.fn() },
       codexApi,
       availableSkills: ref([
-        { name: 'skill-creator', description: 'd', enabled: true, path: '/abs/skill-creator/SKILL.md' },
+        {
+          name: 'skill-creator',
+          description: 'd',
+          enabled: true,
+          path: '/abs/skill-creator/SKILL.md',
+        },
       ]),
       parseSkill: (input: string) => {
         const m = input.match(/\$([\w-]+)/);
@@ -236,7 +322,12 @@ describe('useBackendMessageSend', () => {
       openCodeApi: { sendPromptAsync: vi.fn() },
       codexApi,
       availableSkills: ref([
-        { name: 'skill-creator', description: 'd', enabled: true, path: '/abs/skill-creator/SKILL.md' },
+        {
+          name: 'skill-creator',
+          description: 'd',
+          enabled: true,
+          path: '/abs/skill-creator/SKILL.md',
+        },
       ]),
       parseSkill: () => [],
     });
@@ -266,7 +357,12 @@ describe('useBackendMessageSend', () => {
         selectModel: vi.fn(),
       },
       availableSkills: ref([
-        { name: 'skill-creator', description: 'd', enabled: true, path: '/abs/skill-creator/SKILL.md' },
+        {
+          name: 'skill-creator',
+          description: 'd',
+          enabled: true,
+          path: '/abs/skill-creator/SKILL.md',
+        },
       ]),
       parseSkill: () => [{ name: 'skill-creator', path: '/abs/skill-creator/SKILL.md' }],
     });
