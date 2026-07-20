@@ -1,10 +1,5 @@
 <template>
-  <dialog
-    ref="dialogRef"
-    class="provider-manager-backdrop"
-    @close="$emit('close')"
-    @cancel.prevent
-  >
+  <dialog ref="dialogRef" class="provider-manager-backdrop" @close="$emit('close')" @cancel.prevent>
     <div class="provider-manager-modal">
       <header class="provider-manager-header">
         <div class="provider-manager-title-wrap">
@@ -21,7 +16,7 @@
       </header>
 
       <div class="provider-manager-body">
-        <div class="provider-manager-tabs" role="tablist">
+        <div v-if="props.backendKind !== 'acp'" class="provider-manager-tabs" role="tablist">
           <button
             type="button"
             class="provider-manager-tab"
@@ -46,7 +41,22 @@
           {{ feedbackMessage }}
         </div>
 
-        <template v-if="showCustomProviderForm">
+        <template v-if="props.backendKind === 'acp'">
+          <section class="provider-section">
+            <div class="provider-section-header">
+              <div class="section-heading provider-section-title">
+                {{ $t('providerManager.acp.title') }}
+              </div>
+              <div class="section-meta">{{ $t('providerManager.acp.description') }}</div>
+            </div>
+            <button type="button" class="ghost-action" @click="emit('open-acp-auth-terminal')">
+              <Icon icon="lucide:square-terminal" :width="14" :height="14" />
+              {{ $t('providerManager.acp.openTerminal') }}
+            </button>
+          </section>
+        </template>
+
+        <template v-else-if="showCustomProviderForm">
           <form class="custom-provider-form" @submit.prevent="submitCustomProvider">
             <button type="button" class="provider-back-action" @click="closeCustomProviderForm">
               <Icon icon="lucide:arrow-left" :width="14" :height="14" />
@@ -58,7 +68,9 @@
                 <Icon icon="lucide:sparkles" :width="20" :height="20" />
               </div>
               <div>
-                <div class="section-heading custom-provider-title">{{ $t('providerManager.custom.title') }}</div>
+                <div class="section-heading custom-provider-title">
+                  {{ $t('providerManager.custom.title') }}
+                </div>
                 <p class="custom-provider-description">
                   {{ $t('providerManager.custom.description') }}
                 </p>
@@ -74,7 +86,10 @@
                 @input="customProviderErrors.providerID = ''"
               />
               <small :class="{ 'is-error': customProviderErrors.providerID }">
-                {{ customProviderErrors.providerID || $t('providerManager.custom.fields.providerId.description') }}
+                {{
+                  customProviderErrors.providerID ||
+                  $t('providerManager.custom.fields.providerId.description')
+                }}
               </small>
             </label>
 
@@ -86,7 +101,9 @@
                 :placeholder="$t('providerManager.custom.fields.name.placeholder')"
                 @input="customProviderErrors.name = ''"
               />
-              <small v-if="customProviderErrors.name" class="is-error">{{ customProviderErrors.name }}</small>
+              <small v-if="customProviderErrors.name" class="is-error">{{
+                customProviderErrors.name
+              }}</small>
             </label>
 
             <label class="custom-provider-field">
@@ -97,7 +114,9 @@
                 :placeholder="$t('providerManager.custom.fields.baseUrl.placeholder')"
                 @input="customProviderErrors.baseURL = ''"
               />
-              <small v-if="customProviderErrors.baseURL" class="is-error">{{ customProviderErrors.baseURL }}</small>
+              <small v-if="customProviderErrors.baseURL" class="is-error">{{
+                customProviderErrors.baseURL
+              }}</small>
             </label>
 
             <label class="custom-provider-field">
@@ -111,7 +130,9 @@
             </label>
 
             <div class="custom-provider-rows">
-              <div class="custom-provider-row-header">{{ $t('providerManager.custom.models.label') }}</div>
+              <div class="custom-provider-row-header">
+                {{ $t('providerManager.custom.models.label') }}
+              </div>
               <div
                 v-for="(model, index) in customProviderForm.models"
                 :key="model.row"
@@ -147,14 +168,20 @@
                   <Icon icon="lucide:trash-2" :width="14" :height="14" />
                 </button>
               </div>
-              <button type="button" class="ghost-action custom-provider-add" @click="addCustomModel">
+              <button
+                type="button"
+                class="ghost-action custom-provider-add"
+                @click="addCustomModel"
+              >
                 <Icon icon="lucide:plus" :width="13" :height="13" />
                 {{ $t('providerManager.custom.models.add') }}
               </button>
             </div>
 
             <div class="custom-provider-rows">
-              <div class="custom-provider-row-header">{{ $t('providerManager.custom.headers.label') }}</div>
+              <div class="custom-provider-row-header">
+                {{ $t('providerManager.custom.headers.label') }}
+              </div>
               <div
                 v-for="(header, index) in customProviderForm.headers"
                 :key="header.row"
@@ -171,7 +198,9 @@
                   <small v-if="header.err.key" class="is-error">{{ header.err.key }}</small>
                 </label>
                 <label>
-                  <span class="sr-only">{{ $t('providerManager.custom.headers.value.label') }}</span>
+                  <span class="sr-only">{{
+                    $t('providerManager.custom.headers.value.label')
+                  }}</span>
                   <input
                     v-model="header.value"
                     type="text"
@@ -190,13 +219,21 @@
                   <Icon icon="lucide:trash-2" :width="14" :height="14" />
                 </button>
               </div>
-              <button type="button" class="ghost-action custom-provider-add" @click="addCustomHeader">
+              <button
+                type="button"
+                class="ghost-action custom-provider-add"
+                @click="addCustomHeader"
+              >
                 <Icon icon="lucide:plus" :width="13" :height="13" />
                 {{ $t('providerManager.custom.headers.add') }}
               </button>
             </div>
 
-            <button type="submit" class="ghost-action secondary custom-provider-submit" :disabled="busyProviderId === CUSTOM_PROVIDER_BUSY_ID">
+            <button
+              type="submit"
+              class="ghost-action secondary custom-provider-submit"
+              :disabled="busyProviderId === CUSTOM_PROVIDER_BUSY_ID"
+            >
               {{ $t('providerManager.custom.submit') }}
             </button>
           </form>
@@ -212,7 +249,9 @@
                   </div>
                   <span class="section-heading-count">{{ connectedProviders.length }}</span>
                 </div>
-                <div class="section-meta">{{ $t('providerManager.sections.connectedDescription') }}</div>
+                <div class="section-meta">
+                  {{ $t('providerManager.sections.connectedDescription') }}
+                </div>
               </div>
 
               <div class="provider-list-shell">
@@ -227,7 +266,9 @@
                   <div class="provider-list-row-main">
                     <div class="provider-list-row-head">
                       <div class="provider-list-row-title">
-                        <span class="provider-name">{{ provider.name?.trim() || provider.id }}</span>
+                        <span class="provider-name">{{
+                          provider.name?.trim() || provider.id
+                        }}</span>
                         <span class="provider-id">{{ provider.id }}</span>
                       </div>
                       <div class="provider-badges">
@@ -245,7 +286,11 @@
                       </div>
                     </div>
                     <div class="provider-stats compact">
-                      <span>{{ $t('providerManager.providerStats.models', { count: providerModelCount(provider) }) }}</span>
+                      <span>{{
+                        $t('providerManager.providerStats.models', {
+                          count: providerModelCount(provider),
+                        })
+                      }}</span>
                       <span>
                         {{
                           $t('providerManager.providerStats.enabledModels', {
@@ -265,9 +310,17 @@
                         :checked="isProviderEnabled(provider.id)"
                         type="checkbox"
                         class="toggle-input"
-                        :disabled="busyProviderId === provider.id || isBackendManagedProvider(provider)"
-                        :title="isBackendManagedProvider(provider) ? $t('providerManager.messages.backendManagedProvider') : undefined"
-                        @change="toggleProvider(provider.id, ($event.target as HTMLInputElement).checked)"
+                        :disabled="
+                          busyProviderId === provider.id || isBackendManagedProvider(provider)
+                        "
+                        :title="
+                          isBackendManagedProvider(provider)
+                            ? $t('providerManager.messages.backendManagedProvider')
+                            : undefined
+                        "
+                        @change="
+                          toggleProvider(provider.id, ($event.target as HTMLInputElement).checked)
+                        "
                       />
                       <span class="toggle-track" />
                     </label>
@@ -292,8 +345,12 @@
                 @click="viewAllExpanded = !viewAllExpanded"
               >
                 <div class="provider-view-all-toggle-text">
-                  <span class="provider-view-all-toggle-title">{{ $t('providerManager.sections.allProviders') }}</span>
-                  <span class="provider-view-all-toggle-meta">{{ $t('providerManager.sections.allProvidersDescription') }}</span>
+                  <span class="provider-view-all-toggle-title">{{
+                    $t('providerManager.sections.allProviders')
+                  }}</span>
+                  <span class="provider-view-all-toggle-meta">{{
+                    $t('providerManager.sections.allProvidersDescription')
+                  }}</span>
                 </div>
                 <Icon
                   :icon="viewAllExpanded ? 'lucide:chevron-up' : 'lucide:chevron-down'"
@@ -315,7 +372,13 @@
                     type="button"
                     class="ghost-action provider-mini-row-action"
                     :disabled="!supportsProviderConfigUpdates()"
-                    :title="!supportsProviderConfigUpdates() ? $t('providerManager.messages.unsupportedBackendFeature', { feature: 'custom providers' }) : undefined"
+                    :title="
+                      !supportsProviderConfigUpdates()
+                        ? $t('providerManager.messages.unsupportedBackendFeature', {
+                            feature: 'custom providers',
+                          })
+                        : undefined
+                    "
                     @click="openCustomProviderForm"
                   >
                     {{ $t('providerManager.actions.connect') }}
@@ -329,11 +392,16 @@
                     :class="{ 'is-disabled': !isProviderEnabled(provider.id) }"
                   >
                     <div class="provider-mini-row-title">
-                      <span class="provider-mini-row-name">{{ provider.name?.trim() || provider.id }}</span>
+                      <span class="provider-mini-row-name">{{
+                        provider.name?.trim() || provider.id
+                      }}</span>
                       <span class="provider-mini-row-meta">{{ provider.id }}</span>
                     </div>
                     <div class="provider-mini-row-status">
-                      <span class="status-badge" :class="isProviderDisconnected(provider) ? 'is-warning' : 'is-enabled'">
+                      <span
+                        class="status-badge"
+                        :class="isProviderDisconnected(provider) ? 'is-warning' : 'is-enabled'"
+                      >
                         {{
                           isProviderDisconnected(provider)
                             ? $t('providerManager.badges.disconnected')
@@ -351,8 +419,8 @@
                       </button>
                     </div>
                   </article>
+                </div>
               </div>
-            </div>
             </section>
           </div>
         </template>
@@ -368,8 +436,12 @@
               />
             </label>
             <div class="model-toolbar-stats">
-              <span>{{ $t('providerManager.models.total', { count: filteredModels.length }) }}</span>
-              <span>{{ $t('providerManager.models.disabledCount', { count: disabledModelCount }) }}</span>
+              <span>{{
+                $t('providerManager.models.total', { count: filteredModels.length })
+              }}</span>
+              <span>{{
+                $t('providerManager.models.disabledCount', { count: disabledModelCount })
+              }}</span>
             </div>
           </section>
 
@@ -378,14 +450,12 @@
           </div>
 
           <div v-else class="model-group-list">
-            <section
-              v-for="group in filteredGroups"
-              :key="group.provider.id"
-              class="model-group"
-            >
+            <section v-for="group in filteredGroups" :key="group.provider.id" class="model-group">
               <div class="model-group-header">
                 <div>
-                  <div class="provider-name">{{ group.provider.name?.trim() || group.provider.id }}</div>
+                  <div class="provider-name">
+                    {{ group.provider.name?.trim() || group.provider.id }}
+                  </div>
                   <div class="provider-id">{{ group.provider.id }}</div>
                 </div>
                 <span
@@ -407,7 +477,8 @@
                   class="model-row"
                   :class="{
                     'is-selected': model.key === selectedModel,
-                    'is-disabled': isModelDisabled(model.key) || !isProviderEnabled(group.provider.id),
+                    'is-disabled':
+                      isModelDisabled(model.key) || !isProviderEnabled(group.provider.id),
                   }"
                 >
                   <div class="model-row-main">
@@ -432,10 +503,18 @@
                     <div class="model-meta-row">
                       <span v-if="model.family">{{ model.family }}</span>
                       <span v-if="model.limit?.context">
-                        {{ $t('providerManager.models.context', { count: formatCount(model.limit.context) }) }}
+                        {{
+                          $t('providerManager.models.context', {
+                            count: formatCount(model.limit.context),
+                          })
+                        }}
                       </span>
                       <span v-if="model.limit?.output">
-                        {{ $t('providerManager.models.output', { count: formatCount(model.limit.output) }) }}
+                        {{
+                          $t('providerManager.models.output', {
+                            count: formatCount(model.limit.output),
+                          })
+                        }}
                       </span>
                     </div>
                   </div>
@@ -453,7 +532,9 @@
                         :checked="!isModelDisabled(model.key)"
                         type="checkbox"
                         class="toggle-input"
-                        @change="toggleModel(model.key, ($event.target as HTMLInputElement).checked)"
+                        @change="
+                          toggleModel(model.key, ($event.target as HTMLInputElement).checked)
+                        "
                       />
                       <span class="toggle-track" />
                     </label>
@@ -515,11 +596,13 @@ type ProviderAuthMethod = {
   prompts?: ProviderAuthPrompt[];
 };
 
-type ProviderAuthPromptOption = string | {
-  hint?: string;
-  label?: string;
-  value?: string;
-};
+type ProviderAuthPromptOption =
+  | string
+  | {
+      hint?: string;
+      label?: string;
+      value?: string;
+    };
 
 type ProviderAuthPromptCondition = {
   key: string;
@@ -557,7 +640,10 @@ function backend() {
 }
 
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
-  if (!method) throw new Error(String(t('providerManager.messages.unsupportedBackendFeature', { feature: name })));
+  if (!method)
+    throw new Error(
+      String(t('providerManager.messages.unsupportedBackendFeature', { feature: name })),
+    );
   return method;
 }
 
@@ -598,7 +684,14 @@ type CustomProviderValidationResult = {
   config: CustomProviderConfig | CodexCustomProviderConfig;
 };
 
-const POPULAR_PROVIDER_IDS = ['opencode', 'opencode-go', 'openai', 'github-copilot', 'anthropic', 'google'];
+const POPULAR_PROVIDER_IDS = [
+  'opencode',
+  'opencode-go',
+  'openai',
+  'github-copilot',
+  'anthropic',
+  'google',
+];
 const CUSTOM_PROVIDER_NPM = '@ai-sdk/openai-compatible';
 const CUSTOM_PROVIDER_BUSY_ID = '__custom_provider__';
 const CUSTOM_PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
@@ -621,6 +714,7 @@ const props = defineProps<{
   selectedModel: string;
   hiddenModels: string[];
   providerConfig: ProviderConfigState | null;
+  backendKind?: 'opencode' | 'codex' | 'acp';
 }>();
 
 const emit = defineEmits<{
@@ -628,6 +722,7 @@ const emit = defineEmits<{
   (event: 'update:model-visibility', value: ModelVisibilityEntry[]): void;
   (event: 'config-updated', value: ProviderConfigState): void;
   (event: 'providers-changed'): void;
+  (event: 'open-acp-auth-terminal'): void;
 }>();
 
 const { t } = useI18n();
@@ -636,7 +731,9 @@ const dialogRef = ref<HTMLDialogElement | null>(null);
 const activeTab = ref<ProviderManagerTab>('providers');
 const modelSearch = ref('');
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
-const showPrompt = inject('showPrompt') as ((title: string, defaultValue?: string) => Promise<string | null>) | undefined;
+const showPrompt = inject('showPrompt') as
+  | ((title: string, defaultValue?: string) => Promise<string | null>)
+  | undefined;
 
 const busyProviderId = ref('');
 const feedbackMessage = ref('');
@@ -676,9 +773,12 @@ const connectedProviders = computed(() =>
 
 const allProvidersForView = computed(() =>
   [...props.providers].sort((a, b) => {
-    const connectedDelta = Number(connectedProviderIdSet.value.has(b.id)) - Number(connectedProviderIdSet.value.has(a.id));
+    const connectedDelta =
+      Number(connectedProviderIdSet.value.has(b.id)) -
+      Number(connectedProviderIdSet.value.has(a.id));
     if (connectedDelta !== 0) return connectedDelta;
-    const popularDelta = Number(POPULAR_PROVIDER_IDS.includes(a.id)) - Number(POPULAR_PROVIDER_IDS.includes(b.id));
+    const popularDelta =
+      Number(POPULAR_PROVIDER_IDS.includes(a.id)) - Number(POPULAR_PROVIDER_IDS.includes(b.id));
     if (popularDelta !== 0) return popularDelta;
     return (a.name?.trim() || a.id).localeCompare(b.name?.trim() || b.id);
   }),
@@ -713,7 +813,10 @@ const filteredModels = computed(() => {
 });
 
 const filteredGroups = computed(() => {
-  const grouped = new Map<string, { provider: ProviderInfo; models: typeof filteredModels.value }>();
+  const grouped = new Map<
+    string,
+    { provider: ProviderInfo; models: typeof filteredModels.value }
+  >();
   filteredModels.value.forEach((model) => {
     const existing = grouped.get(model.providerID);
     if (existing) {
@@ -726,7 +829,9 @@ const filteredGroups = computed(() => {
     });
   });
   return Array.from(grouped.values()).sort((a, b) =>
-    (a.provider.name?.trim() || a.provider.id).localeCompare(b.provider.name?.trim() || b.provider.id),
+    (a.provider.name?.trim() || a.provider.id).localeCompare(
+      b.provider.name?.trim() || b.provider.id,
+    ),
   );
 });
 
@@ -876,15 +981,27 @@ function supportsProviderConfigUpdates() {
 }
 
 function canDisconnectProvider(provider: ProviderInfo) {
-  return !isProviderDisconnected(provider) && provider.source !== 'env' && !isBackendManagedProvider(provider);
+  return (
+    !isProviderDisconnected(provider) &&
+    provider.source !== 'env' &&
+    !isBackendManagedProvider(provider)
+  );
 }
 
 function isConfigBackedProvider(provider: ProviderInfo) {
   const modelProviders = props.providerConfig?.model_providers;
   const hasCodexProvider = Boolean(
-    modelProviders && typeof modelProviders === 'object' && !Array.isArray(modelProviders) && provider.id in modelProviders,
+    modelProviders &&
+    typeof modelProviders === 'object' &&
+    !Array.isArray(modelProviders) &&
+    provider.id in modelProviders,
   );
-  return provider.source === 'config' || provider.source === 'custom' || Boolean(props.providerConfig?.provider?.[provider.id]) || hasCodexProvider;
+  return (
+    provider.source === 'config' ||
+    provider.source === 'custom' ||
+    Boolean(props.providerConfig?.provider?.[provider.id]) ||
+    hasCodexProvider
+  );
 }
 
 function providerTypeLabel(provider: ProviderInfo) {
@@ -903,7 +1020,9 @@ function providerNote(providerId: string) {
 
 function formatCount(value?: number) {
   if (!value || !Number.isFinite(value)) return '—';
-  return Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+  return Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(
+    value,
+  );
 }
 
 function validationMessage(key: string) {
@@ -936,7 +1055,7 @@ function validateCustomProvider() {
         ? validationMessage('providerManager.custom.errors.baseUrlFormat')
         : isCodexBackend && apiKey && !env
           ? validationMessage('providerManager.custom.errors.codexEnvKeyRequired')
-        : '',
+          : '',
   };
 
   const seenModels = new Set<string>();
@@ -948,7 +1067,9 @@ function validateCustomProvider() {
         ? validationMessage('providerManager.custom.errors.duplicate')
         : '';
     if (modelId) seenModels.add(modelId);
-    model.err.name = model.name.trim() ? '' : validationMessage('providerManager.custom.errors.required');
+    model.err.name = model.name.trim()
+      ? ''
+      : validationMessage('providerManager.custom.errors.required');
   });
 
   const seenHeaders = new Set<string>();
@@ -974,8 +1095,12 @@ function validateCustomProvider() {
     customProviderErrors.value.name ||
     customProviderErrors.value.baseURL,
   );
-  const hasModelErrors = customProviderForm.value.models.some((model) => model.err.id || model.err.name);
-  const hasHeaderErrors = customProviderForm.value.headers.some((header) => header.err.key || header.err.value);
+  const hasModelErrors = customProviderForm.value.models.some(
+    (model) => model.err.id || model.err.name,
+  );
+  const hasHeaderErrors = customProviderForm.value.headers.some(
+    (header) => header.err.key || header.err.value,
+  );
   if (hasFieldErrors || hasModelErrors || hasHeaderErrors) return null;
 
   const headers = Object.fromEntries(
@@ -1004,7 +1129,10 @@ function validateCustomProvider() {
       ...(Object.keys(headers).length > 0 ? { headers } : {}),
     },
     models: Object.fromEntries(
-      customProviderForm.value.models.map((model) => [model.id.trim(), { name: model.name.trim() }]),
+      customProviderForm.value.models.map((model) => [
+        model.id.trim(),
+        { name: model.name.trim() },
+      ]),
     ),
   };
   return {
@@ -1019,9 +1147,13 @@ async function submitCustomProvider() {
   const result = validateCustomProvider();
   if (!result) {
     customProviderErrors.value = {
-      providerID: customProviderErrors.value.providerID ? String(t(customProviderErrors.value.providerID)) : '',
+      providerID: customProviderErrors.value.providerID
+        ? String(t(customProviderErrors.value.providerID))
+        : '',
       name: customProviderErrors.value.name ? String(t(customProviderErrors.value.name)) : '',
-      baseURL: customProviderErrors.value.baseURL ? String(t(customProviderErrors.value.baseURL)) : '',
+      baseURL: customProviderErrors.value.baseURL
+        ? String(t(customProviderErrors.value.baseURL))
+        : '',
     };
     customProviderForm.value.models.forEach((model) => {
       model.err.id = model.err.id ? String(t(model.err.id)) : '';
@@ -1036,8 +1168,15 @@ async function submitCustomProvider() {
 
   busyProviderId.value = CUSTOM_PROVIDER_BUSY_ID;
   try {
-    const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
-    const providerEnablePatch = buildProviderDisabledPatch(props.providerConfig, result.providerID, true);
+    const updateGlobalConfig = requireBackendMethod(
+      backend().updateGlobalConfig,
+      'global config updates',
+    );
+    const providerEnablePatch = buildProviderDisabledPatch(
+      props.providerConfig,
+      result.providerID,
+      true,
+    );
     if (backend().kind === 'codex') {
       const codexConfig = result.config as CodexCustomProviderConfig;
       const modelMetadata = codexConfig.models ?? {};
@@ -1080,7 +1219,12 @@ async function pickAuthMethod(providerId: string) {
   const methods = providerAuthSummary(providerId);
   if (methods.length === 1) return { method: methods[0], index: 0 };
   const options = methods.map((method, index) => `${index + 1}. ${method.label}`).join('\n');
-  const raw = showPrompt ? await showPrompt(t('providerManager.prompts.selectAuthMethod', { providerId }) + '\n' + options, '1') : null;
+  const raw = showPrompt
+    ? await showPrompt(
+        t('providerManager.prompts.selectAuthMethod', { providerId }) + '\n' + options,
+        '1',
+      )
+    : null;
   if (!raw) return null;
   const index = Number(raw) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= methods.length) return null;
@@ -1088,11 +1232,11 @@ async function pickAuthMethod(providerId: string) {
 }
 
 function promptOptionLabel(option: ProviderAuthPromptOption) {
-  return typeof option === 'string' ? option : (option.label?.trim() || option.value?.trim() || '');
+  return typeof option === 'string' ? option : option.label?.trim() || option.value?.trim() || '';
 }
 
 function promptOptionValue(option: ProviderAuthPromptOption) {
-  return typeof option === 'string' ? option : (option.value?.trim() || option.label?.trim() || '');
+  return typeof option === 'string' ? option : option.value?.trim() || option.label?.trim() || '';
 }
 
 function shouldShowAuthPrompt(prompt: ProviderAuthPrompt, inputs: Record<string, string>) {
@@ -1102,21 +1246,25 @@ function shouldShowAuthPrompt(prompt: ProviderAuthPrompt, inputs: Record<string,
   return prompt.when.op === 'eq' ? actual === prompt.when.value : actual !== prompt.when.value;
 }
 
-async function collectAuthPromptInputs(
-  provider: ProviderInfo,
-  method: ProviderAuthMethod,
-) {
+async function collectAuthPromptInputs(provider: ProviderInfo, method: ProviderAuthMethod) {
   const prompts = method.prompts ?? [];
   const inputs: Record<string, string> = {};
   for (const prompt of prompts) {
     if (!prompt.key || !shouldShowAuthPrompt(prompt, inputs)) continue;
-    const title = prompt.message?.trim() || t('providerManager.prompts.enterValueForProvider', { key: prompt.key, providerName: provider.name?.trim() || provider.id });
+    const title =
+      prompt.message?.trim() ||
+      t('providerManager.prompts.enterValueForProvider', {
+        key: prompt.key,
+        providerName: provider.name?.trim() || provider.id,
+      });
     if (prompt.type === 'select') {
       const options = (prompt.options ?? [])
         .map((option) => ({ label: promptOptionLabel(option), value: promptOptionValue(option) }))
         .filter((option) => option.value.length > 0);
       if (options.length === 0) continue;
-      const optionText = options.map((option, index) => `${index + 1}. ${option.label || option.value}`).join('\n');
+      const optionText = options
+        .map((option, index) => `${index + 1}. ${option.label || option.value}`)
+        .join('\n');
       const raw = showPrompt ? await showPrompt(`${title}:\n${optionText}`, '1') : null;
       if (!raw) return null;
       const index = Number(raw) - 1;
@@ -1140,7 +1288,10 @@ async function toggleProvider(providerId: string, nextEnabled: boolean) {
   }
   busyProviderId.value = providerId;
   try {
-    const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
+    const updateGlobalConfig = requireBackendMethod(
+      backend().updateGlobalConfig,
+      'global config updates',
+    );
     const result = (await updateGlobalConfig(
       buildProviderDisabledPatch(props.providerConfig, providerId, nextEnabled),
     )) as ProviderConfigState;
@@ -1173,9 +1324,16 @@ function toggleModel(modelKey: string, nextEnabled: boolean) {
       nextByKey.set(modelKey, { providerID, modelID, visibility: 'hide' });
     }
   }
-  emit('update:model-visibility', Array.from(nextByKey.values()).sort((a, b) => `${a.providerID}/${a.modelID}`.localeCompare(`${b.providerID}/${b.modelID}`)));
+  emit(
+    'update:model-visibility',
+    Array.from(nextByKey.values()).sort((a, b) =>
+      `${a.providerID}/${a.modelID}`.localeCompare(`${b.providerID}/${b.modelID}`),
+    ),
+  );
   setFeedback(
-    nextEnabled ? t('providerManager.messages.modelEnabled', { modelKey }) : t('providerManager.messages.modelDisabled', { modelKey }),
+    nextEnabled
+      ? t('providerManager.messages.modelEnabled', { modelKey })
+      : t('providerManager.messages.modelDisabled', { modelKey }),
     'success',
   );
 }
@@ -1190,19 +1348,28 @@ async function connectProvider(provider: ProviderInfo) {
   busyProviderId.value = provider.id;
   try {
     if (picked.method.type === 'api') {
-      const key = showPrompt ? await showPrompt(t('providerManager.prompts.enterApiKey', { providerName: provider.name?.trim() || provider.id })) : null;
+      const key = showPrompt
+        ? await showPrompt(
+            t('providerManager.prompts.enterApiKey', {
+              providerName: provider.name?.trim() || provider.id,
+            }),
+          )
+        : null;
       if (!key) return;
       const trimmedKey = key.trim();
       const setProviderAuth = requireBackendMethod(backend().setProviderAuth, 'provider auth');
       await setProviderAuth(provider.id, { type: 'api', key: trimmedKey });
       emit('providers-changed');
-    setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
+      setFeedback(t('providerManager.messages.connected', { name: provider.id }), 'success');
       return;
     }
 
     const inputs = await collectAuthPromptInputs(provider, picked.method);
     if (!inputs) return;
-    const authorizeProviderOAuth = requireBackendMethod(backend().authorizeProviderOAuth, 'provider OAuth authorization');
+    const authorizeProviderOAuth = requireBackendMethod(
+      backend().authorizeProviderOAuth,
+      'provider OAuth authorization',
+    );
     const authorization = (await authorizeProviderOAuth(provider.id, {
       method: picked.index,
       inputs,
@@ -1211,19 +1378,33 @@ async function connectProvider(provider: ProviderInfo) {
       window.open(authorization.url, '_blank', 'noopener,noreferrer');
     }
     if (authorization?.method === 'code') {
-      const code = showPrompt ? await showPrompt(authorization.instructions || t('providerManager.prompts.pasteAuthCode', { providerId: provider.id })) : null;
+      const code = showPrompt
+        ? await showPrompt(
+            authorization.instructions ||
+              t('providerManager.prompts.pasteAuthCode', { providerId: provider.id }),
+          )
+        : null;
       if (!code) return;
-      const completeProviderOAuth = requireBackendMethod(backend().completeProviderOAuth, 'provider OAuth completion');
+      const completeProviderOAuth = requireBackendMethod(
+        backend().completeProviderOAuth,
+        'provider OAuth completion',
+      );
       await completeProviderOAuth(provider.id, {
         method: picked.index,
         code: code.trim(),
       });
     } else {
-      const confirmed = showConfirm ? await showConfirm(
-        authorization?.instructions || t('providerManager.prompts.completeOAuth', { providerId: provider.id }),
-      ) : true;
+      const confirmed = showConfirm
+        ? await showConfirm(
+            authorization?.instructions ||
+              t('providerManager.prompts.completeOAuth', { providerId: provider.id }),
+          )
+        : true;
       if (!confirmed) return;
-      const completeProviderOAuth = requireBackendMethod(backend().completeProviderOAuth, 'provider OAuth completion');
+      const completeProviderOAuth = requireBackendMethod(
+        backend().completeProviderOAuth,
+        'provider OAuth completion',
+      );
       await completeProviderOAuth(provider.id, {
         method: picked.index,
       });
@@ -1244,12 +1425,17 @@ async function disconnectProvider(provider: ProviderInfo) {
   }
   const providerId = provider.id;
   if (!providerId) return;
-  const confirmed = showConfirm ? await showConfirm(t('providerManager.confirm.disconnect', { providerId })) : true;
+  const confirmed = showConfirm
+    ? await showConfirm(t('providerManager.confirm.disconnect', { providerId }))
+    : true;
   if (!confirmed) return;
   busyProviderId.value = providerId;
   try {
     if (isConfigBackedProvider(provider)) {
-      const updateGlobalConfig = requireBackendMethod(backend().updateGlobalConfig, 'global config updates');
+      const updateGlobalConfig = requireBackendMethod(
+        backend().updateGlobalConfig,
+        'global config updates',
+      );
       const deleteProviderAuth = backend().deleteProviderAuth;
       if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);
       const result = (await updateGlobalConfig(
@@ -1257,7 +1443,10 @@ async function disconnectProvider(provider: ProviderInfo) {
       )) as ProviderConfigState;
       emit('config-updated', result ?? {});
     } else {
-      const deleteProviderAuth = requireBackendMethod(backend().deleteProviderAuth, 'provider auth deletion');
+      const deleteProviderAuth = requireBackendMethod(
+        backend().deleteProviderAuth,
+        'provider auth deletion',
+      );
       await deleteProviderAuth(providerId);
     }
     emit('providers-changed');
@@ -1365,9 +1554,16 @@ async function disconnectProvider(provider: ProviderInfo) {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 4px;
-  border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-muted, rgba(71, 85, 105, 0.42))));
+  border: 1px solid
+    var(
+      --theme-card-border,
+      var(--theme-modal-border, var(--theme-border-muted, rgba(71, 85, 105, 0.42)))
+    );
   border-radius: 10px;
-  background: var(--theme-card-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.45))));
+  background: var(
+    --theme-card-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.45)))
+  );
 }
 
 .provider-manager-tab {
@@ -1376,7 +1572,10 @@ async function disconnectProvider(provider: ProviderInfo) {
   justify-content: center;
   border: none;
   border-radius: 8px;
-  background: var(--theme-tab-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7))));
+  background: var(
+    --theme-tab-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.7)))
+  );
   color: var(--theme-tab-text, var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8)));
   font-size: 11px;
   font-weight: 700;
@@ -1386,8 +1585,14 @@ async function disconnectProvider(provider: ProviderInfo) {
 }
 
 .provider-manager-tab.is-active {
-  background: var(--theme-tab-active-bg, var(--theme-modal-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45))));
-  color: var(--theme-tab-active-text, var(--theme-modal-active-text, var(--theme-text-primary, #e2e8f0)));
+  background: var(
+    --theme-tab-active-bg,
+    var(--theme-modal-active-bg, var(--theme-surface-panel-active, rgba(30, 64, 175, 0.45)))
+  );
+  color: var(
+    --theme-tab-active-text,
+    var(--theme-modal-active-text, var(--theme-text-primary, #e2e8f0))
+  );
 }
 
 .provider-manager-feedback {
@@ -1398,7 +1603,10 @@ async function disconnectProvider(provider: ProviderInfo) {
 }
 
 .provider-manager-feedback.is-info {
-  background: var(--theme-modal-control-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.85)));
+  background: var(
+    --theme-modal-control-bg,
+    var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.85))
+  );
   color: var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1));
 }
 
@@ -1417,9 +1625,16 @@ async function disconnectProvider(provider: ProviderInfo) {
 .provider-card,
 .model-group,
 .model-row {
-  border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8))));
+  border: 1px solid
+    var(
+      --theme-card-border,
+      var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)))
+    );
   border-radius: 12px;
-  background: var(--theme-card-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46))));
+  background: var(
+    --theme-card-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46)))
+  );
 }
 
 .sr-only {
@@ -1501,9 +1716,13 @@ async function disconnectProvider(provider: ProviderInfo) {
 .custom-provider-row input {
   min-height: 38px;
   width: 100%;
-  border: 1px solid var(--theme-search-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
+  border: 1px solid
+    var(--theme-search-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
   border-radius: 9px;
-  background: var(--theme-search-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82))));
+  background: var(
+    --theme-search-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82)))
+  );
   color: var(--theme-search-text, var(--theme-modal-text, var(--theme-text-primary, #e2e8f0)));
   font-size: 13px;
   font-family: inherit;
@@ -1513,7 +1732,10 @@ async function disconnectProvider(provider: ProviderInfo) {
 
 .custom-provider-field input::placeholder,
 .custom-provider-row input::placeholder {
-  color: var(--theme-search-placeholder, var(--theme-modal-text-muted, var(--theme-text-muted, #64748b)));
+  color: var(
+    --theme-search-placeholder,
+    var(--theme-modal-text-muted, var(--theme-text-muted, #64748b))
+  );
 }
 
 .custom-provider-field input:focus,
@@ -1580,9 +1802,16 @@ async function disconnectProvider(provider: ProviderInfo) {
 .custom-provider-entry {
   width: 100%;
   justify-content: space-between;
-  border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8))));
+  border: 1px solid
+    var(
+      --theme-card-border,
+      var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)))
+    );
   border-radius: 10px;
-  background: var(--theme-card-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46))));
+  background: var(
+    --theme-card-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46)))
+  );
   padding: 10px;
   text-align: left;
 }
@@ -1686,7 +1915,8 @@ async function disconnectProvider(provider: ProviderInfo) {
   gap: 10px;
   min-height: 54px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)));
+  border-bottom: 1px solid
+    var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)));
 }
 
 .provider-list-row:last-child {
@@ -1750,7 +1980,10 @@ async function disconnectProvider(provider: ProviderInfo) {
   gap: 8px;
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
   border-radius: 8px;
-  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  background: var(
+    --theme-modal-control-bg,
+    var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72))
+  );
   color: var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1));
   font-size: 12px;
   font-family: inherit;
@@ -1760,7 +1993,10 @@ async function disconnectProvider(provider: ProviderInfo) {
 
 .provider-view-all-toggle:hover {
   border-color: var(--theme-modal-accent, var(--theme-border-strong, #475569));
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
+  background: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92))
+  );
 }
 
 .provider-view-all-toggle-text {
@@ -1801,9 +2037,16 @@ async function disconnectProvider(provider: ProviderInfo) {
   gap: 8px;
   min-height: 42px;
   padding: 6px 8px;
-  border: 1px solid var(--theme-card-border, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8))));
+  border: 1px solid
+    var(
+      --theme-card-border,
+      var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)))
+    );
   border-radius: 10px;
-  background: var(--theme-card-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46))));
+  background: var(
+    --theme-card-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46)))
+  );
   color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
   text-align: left;
 }
@@ -1862,7 +2105,12 @@ async function disconnectProvider(provider: ProviderInfo) {
 
 .provider-card.is-current {
   border-color: var(--theme-modal-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.55)));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 35%, transparent);
+  box-shadow: inset 0 0 0 1px
+    color-mix(
+      in srgb,
+      var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 35%,
+      transparent
+    );
 }
 
 .provider-card.is-disabled,
@@ -1933,9 +2181,15 @@ async function disconnectProvider(provider: ProviderInfo) {
 }
 
 .status-badge.is-current {
-  border-color: var(--theme-badge-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
+  border-color: var(
+    --theme-badge-border,
+    var(--theme-modal-border, var(--theme-border-default, #334155))
+  );
   color: var(--theme-badge-text, var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1)));
-  background: var(--theme-badge-bg, var(--theme-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.78))));
+  background: var(
+    --theme-badge-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.78)))
+  );
 }
 
 .status-badge.is-warning {
@@ -1947,7 +2201,10 @@ async function disconnectProvider(provider: ProviderInfo) {
 .auth-chip,
 .capability-chip {
   color: var(--theme-badge-text, var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1)));
-  background: var(--theme-badge-bg, var(--theme-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.78))));
+  background: var(
+    --theme-badge-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.78)))
+  );
 }
 
 .provider-stats,
@@ -1983,10 +2240,20 @@ async function disconnectProvider(provider: ProviderInfo) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--theme-action-button-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
+  border: 1px solid
+    var(
+      --theme-action-button-border,
+      var(--theme-modal-border, var(--theme-border-default, #334155))
+    );
   border-radius: 8px;
-  background: var(--theme-action-button-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82))));
-  color: var(--theme-action-button-text, var(--theme-modal-text, var(--theme-text-primary, #e2e8f0)));
+  background: var(
+    --theme-action-button-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82)))
+  );
+  color: var(
+    --theme-action-button-text,
+    var(--theme-modal-text, var(--theme-text-primary, #e2e8f0))
+  );
   font-size: 12px;
   font-family: inherit;
   padding: 7px 10px;
@@ -1994,8 +2261,14 @@ async function disconnectProvider(provider: ProviderInfo) {
 }
 
 .ghost-action:hover {
-  border-color: var(--theme-action-button-border, var(--theme-modal-accent, var(--theme-border-strong, #475569)));
-  background: var(--theme-action-button-hover-bg, var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92))));
+  border-color: var(
+    --theme-action-button-border,
+    var(--theme-modal-accent, var(--theme-border-strong, #475569))
+  );
+  background: var(
+    --theme-action-button-hover-bg,
+    var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)))
+  );
 }
 
 .ghost-action:disabled {
@@ -2008,9 +2281,22 @@ async function disconnectProvider(provider: ProviderInfo) {
 }
 
 .ghost-action.secondary {
-  border-color: var(--theme-action-button-accent-border, var(--theme-modal-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.35))));
-  background: var(--theme-action-button-accent-bg, color-mix(in srgb, var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 18%, transparent));
-  color: var(--theme-action-button-accent-text, var(--theme-modal-active-text, var(--theme-text-primary, #dbeafe)));
+  border-color: var(
+    --theme-action-button-accent-border,
+    var(--theme-modal-accent, var(--theme-border-accent, rgba(96, 165, 250, 0.35)))
+  );
+  background: var(
+    --theme-action-button-accent-bg,
+    color-mix(
+      in srgb,
+      var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 18%,
+      transparent
+    )
+  );
+  color: var(
+    --theme-action-button-accent-text,
+    var(--theme-modal-active-text, var(--theme-text-primary, #dbeafe))
+  );
 }
 
 .provider-toggle {
@@ -2038,8 +2324,15 @@ async function disconnectProvider(provider: ProviderInfo) {
   width: 36px;
   height: 20px;
   border-radius: 999px;
-  background: var(--theme-toggle-track, var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.95))));
-  border: 1px solid var(--theme-toggle-track-border, var(--theme-modal-border, var(--theme-border-muted, rgba(100, 116, 139, 0.55))));
+  background: var(
+    --theme-toggle-track,
+    var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.95)))
+  );
+  border: 1px solid
+    var(
+      --theme-toggle-track-border,
+      var(--theme-modal-border, var(--theme-border-muted, rgba(100, 116, 139, 0.55)))
+    );
   position: relative;
   transition: background 0.18s ease;
 }
@@ -2059,12 +2352,18 @@ async function disconnectProvider(provider: ProviderInfo) {
 }
 
 .toggle-input:checked + .toggle-track {
-  background: var(--theme-toggle-active-track, var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)));
+  background: var(
+    --theme-toggle-active-track,
+    var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6))
+  );
 }
 
 .toggle-input:checked + .toggle-track::after {
   transform: translateX(16px);
-  background: var(--theme-toggle-active-thumb, var(--theme-modal-active-text, var(--theme-text-inverse, #fff)));
+  background: var(
+    --theme-toggle-active-thumb,
+    var(--theme-modal-active-text, var(--theme-text-inverse, #fff))
+  );
 }
 
 .model-toolbar {
@@ -2083,9 +2382,13 @@ async function disconnectProvider(provider: ProviderInfo) {
   gap: 8px;
   min-height: 38px;
   padding: 0 12px;
-  border: 1px solid var(--theme-search-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
+  border: 1px solid
+    var(--theme-search-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
   border-radius: 10px;
-  background: var(--theme-search-bg, var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82))));
+  background: var(
+    --theme-search-bg,
+    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82)))
+  );
   color: var(--theme-search-icon, var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8)));
 }
 
@@ -2101,7 +2404,10 @@ async function disconnectProvider(provider: ProviderInfo) {
 }
 
 .model-search-field input::placeholder {
-  color: var(--theme-search-placeholder, var(--theme-modal-text-muted, var(--theme-text-muted, #64748b)));
+  color: var(
+    --theme-search-placeholder,
+    var(--theme-modal-text-muted, var(--theme-text-muted, #64748b))
+  );
 }
 
 .model-toolbar-stats {
@@ -2117,7 +2423,10 @@ async function disconnectProvider(provider: ProviderInfo) {
   padding: 30px 12px;
   text-align: center;
   font-size: 12px;
-  color: var(--theme-empty-state-text, var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8)));
+  color: var(
+    --theme-empty-state-text,
+    var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8))
+  );
 }
 
 .model-group {

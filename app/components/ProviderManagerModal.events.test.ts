@@ -11,26 +11,42 @@ describe('ProviderManagerModal events', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
     const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
 
-    expect(modalSource).toContain("(event: 'update:model-visibility', value: ModelVisibilityEntry[]): void;");
-    expect(modalSource).toContain("emit('update:model-visibility'");
+    expect(modalSource).toContain(
+      "(event: 'update:model-visibility', value: ModelVisibilityEntry[]): void;",
+    );
+    expect(modalSource).toMatch(/emit\(\s*'update:model-visibility'/u);
     expect(appSource).toContain('@update:model-visibility="handleModelVisibilityUpdate"');
 
     expect(modalSource).toContain("(event: 'config-updated', value: ProviderConfigState): void;");
-    expect(modalSource).toContain("emit('config-updated'");
+    expect(modalSource).toMatch(/emit\(\s*'config-updated'/u);
     expect(appSource).toContain('@config-updated="handleProviderConfigUpdated"');
 
     expect(modalSource).toContain("(event: 'providers-changed'): void;");
-    expect(modalSource).toContain("emit('providers-changed'");
+    expect(modalSource).toMatch(/emit\(\s*'providers-changed'/u);
     expect(appSource).toContain('@providers-changed="handleProvidersChanged"');
     expect(appSource).toContain('async function handleProvidersChanged()');
     expect(appSource).toContain('await fetchProviders(true);');
+  });
+
+  it('routes ACP provider setup through the floating terminal surface', () => {
+    const appSource = readSource(resolve(__dirname, '../App.vue'));
+    const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
+
+    expect(modalSource).toContain("props.backendKind === 'acp'");
+    expect(modalSource).toContain("(event: 'open-acp-auth-terminal'): void;");
+    expect(appSource).toContain('@open-acp-auth-terminal="openAcpAuthTerminal"');
+    expect(appSource).toContain('async function openAcpAuthTerminal()');
+    expect(appSource).toContain('await ensureShellWindow(pty, {');
+    expect(appSource).toContain('backend().authenticateAgent');
   });
 
   it('keeps provider connect buttons active when auth metadata is absent', () => {
     const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
 
     expect(modalSource).toContain('const DEFAULT_API_AUTH_METHOD: ProviderAuthMethod');
-    expect(modalSource).toContain('return methods && methods.length > 0 ? methods : [DEFAULT_API_AUTH_METHOD];');
+    expect(modalSource).toContain(
+      'return methods && methods.length > 0 ? methods : [DEFAULT_API_AUTH_METHOD];',
+    );
     expect(modalSource).not.toContain('if (methods.length === 0) return null;');
   });
 
@@ -38,7 +54,9 @@ describe('ProviderManagerModal events', () => {
     const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
 
     expect(modalSource).toContain("op: 'eq' | 'neq';");
-    expect(modalSource).toContain("return prompt.when.op === 'eq' ? actual === prompt.when.value : actual !== prompt.when.value;");
+    expect(modalSource).toContain(
+      "return prompt.when.op === 'eq' ? actual === prompt.when.value : actual !== prompt.when.value;",
+    );
   });
 
   it('adds an OpenCode-compatible custom provider flow', () => {
@@ -47,11 +65,15 @@ describe('ProviderManagerModal events', () => {
     const i18nTypesSource = readSource(resolve(__dirname, '../i18n/types.ts'));
 
     expect(modalSource).toContain('showCustomProviderForm');
-    expect(modalSource).toContain('CUSTOM_PROVIDER_NPM = \'@ai-sdk/openai-compatible\'');
+    expect(modalSource).toContain("CUSTOM_PROVIDER_NPM = '@ai-sdk/openai-compatible'");
     expect(modalSource).toContain('provider: {');
     expect(modalSource).toContain('[result.providerID]: result.config');
-    expect(modalSource).toContain("await setProviderAuth(result.providerID, { type: 'api', key: result.key });");
-    expect(modalSource).toContain('const providerEnablePatch = buildProviderDisabledPatch(props.providerConfig, result.providerID, true);');
+    expect(modalSource).toContain(
+      "await setProviderAuth(result.providerID, { type: 'api', key: result.key });",
+    );
+    expect(modalSource).toMatch(
+      /const providerEnablePatch = buildProviderDisabledPatch\(\s*props\.providerConfig,\s*result\.providerID,\s*true,?\s*\)/u,
+    );
     expect(providerConfigSource).toContain('provider?: Record<string, unknown>;');
     expect(i18nTypesSource).toContain('custom: {');
   });
@@ -67,23 +89,37 @@ describe('ProviderManagerModal events', () => {
     expect(modalSource).toContain('models?: Record<string, { name: string }>;');
     expect(modalSource).toContain('models: modelMetadata');
     expect(modalSource).toContain('[`model_providers.${result.providerID}`]: codexConfig');
-    expect(modalSource).toContain('[`vis.model_providers.${result.providerID}`]: { models: modelMetadata }');
+    expect(modalSource).toContain(
+      '[`vis.model_providers.${result.providerID}`]: { models: modelMetadata }',
+    );
     expect(modalSource).toContain('...providerEnablePatch');
-    expect(modalSource).toContain('buildProviderDisabledPatch(props.providerConfig, result.providerID, true)');
+    expect(modalSource).toMatch(
+      /buildProviderDisabledPatch\(\s*props\.providerConfig,\s*result\.providerID,\s*true,?\s*\)/u,
+    );
     expect(modalSource).not.toContain('model_provider: result.providerID');
     expect(backendTypesSource).toContain('batchWriteConfig?');
-    expect(codexAdapterSource).toContain("this.client.request<CodexConfigBatchWriteResult>('config/batchWrite'");
-    expect(codexAdapterSource).toContain('async updateGlobalConfig(payload: Record<string, unknown>)');
+    expect(codexAdapterSource).toContain(
+      "this.client.request<CodexConfigBatchWriteResult>('config/batchWrite'",
+    );
+    expect(codexAdapterSource).toContain(
+      'async updateGlobalConfig(payload: Record<string, unknown>)',
+    );
   });
 
   it('persists disconnects for config-backed providers', () => {
     const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));
 
-    expect(modalSource).toContain("provider.source === 'config' || provider.source === 'custom'");
+    expect(modalSource).toMatch(
+      /provider\.source === 'config'\s*\|\|\s*provider\.source === 'custom'/u,
+    );
     expect(modalSource).toContain("provider.source !== 'env'");
-    expect(modalSource).toContain('if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);');
-    expect(modalSource).toContain('buildProviderDisabledPatch(props.providerConfig, providerId, false)');
-    expect(modalSource).toContain("@click=\"disconnectProvider(provider)\"");
+    expect(modalSource).toContain(
+      'if (deleteProviderAuth) await deleteProviderAuth(providerId).catch(() => undefined);',
+    );
+    expect(modalSource).toContain(
+      'buildProviderDisabledPatch(props.providerConfig, providerId, false)',
+    );
+    expect(modalSource).toContain('@click="disconnectProvider(provider)"');
   });
 
   it('does not switch models by clicking provider cards', () => {
@@ -111,21 +147,29 @@ describe('ProviderManagerModal events', () => {
 
     expect(appSource).toContain('watch(isProviderManagerOpen, (open) => {');
     expect(appSource).toContain("if (!open || activeBackendKind.value !== 'codex') return;");
-    expect(appSource).toContain('void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);');
+    expect(appSource).toContain(
+      'void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);',
+    );
   });
 
   it('resets Codex selection and force-refreshes OpenCode providers when switching back to OpenCode', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
-    const activationSource = readSource(resolve(__dirname, '../composables/useBackendActivation.ts'));
+    const activationSource = readSource(
+      resolve(__dirname, '../composables/useBackendActivation.ts'),
+    );
 
-    expect(appSource).toContain("import { useBackendActivation } from './composables/useBackendActivation';");
+    expect(appSource).toContain(
+      "import { useBackendActivation } from './composables/useBackendActivation';",
+    );
     expect(appSource).toContain('const {');
     expect(appSource).toContain('} = useBackendActivation({');
     expect(appSource).toContain('async function hydrateActiveWorktreeResources() {');
     expect(activationSource).toContain("options.activeBackendKind.value = 'opencode';");
     expect(activationSource).toContain("options.setActiveBackendKind('opencode');");
     expect(activationSource).toContain('options.serverState.bootstrapped.value = false;');
-    expect(activationSource).toContain('Object.keys(options.serverState.projects).forEach((key) => {');
+    expect(activationSource).toContain(
+      'Object.keys(options.serverState.projects).forEach((key) => {',
+    );
     expect(activationSource).toContain("options.selectedProjectId.value = '';");
     expect(activationSource).toContain("options.selectedSessionId.value = '';");
     expect(activationSource).toContain('options.providerConfig.value = null;');
@@ -137,38 +181,62 @@ describe('ProviderManagerModal events', () => {
     expect(activationSource).toContain('await options.bootstrapSelections();');
     expect(activationSource).toContain('await options.hydrateActiveWorktreeResources();');
     expect(activationSource).toContain('await options.fetchGlobalProviderConfig();');
-    expect(activationSource).toContain('await Promise.all([options.fetchProviders(true), options.fetchAgents()]);');
+    expect(activationSource).toContain(
+      'await Promise.all([options.fetchProviders(true), options.fetchAgents()]);',
+    );
   });
 
   it('only restores initial OpenCode query selection when that session exists in state', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
-    const bootstrapSource = readSource(resolve(__dirname, '../composables/useBackendSelectionBootstrap.ts'));
+    const bootstrapSource = readSource(
+      resolve(__dirname, '../composables/useBackendSelectionBootstrap.ts'),
+    );
 
-    expect(appSource).toContain('function sessionExistsInProjects(projectId: string, sessionId: string)');
+    expect(appSource).toContain(
+      'function sessionExistsInProjects(projectId: string, sessionId: string)',
+    );
     expect(appSource).toContain('await backendSelectionBootstrap.bootstrapSelection();');
-    expect(bootstrapSource).toContain('params.sessionExistsInProjects(initialProjectId, initialSessionId)');
+    expect(bootstrapSource).toContain(
+      'params.sessionExistsInProjects(initialProjectId, initialSessionId)',
+    );
     expect(bootstrapSource).toContain('await params.initializeSessionSelection();');
   });
 
   it('syncs Codex active provider and model before sending custom models', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
-    const sendRuntimeSource = readSource(resolve(__dirname, '../composables/useBackendMessageSend.ts'));
+    const sendRuntimeSource = readSource(
+      resolve(__dirname, '../composables/useBackendMessageSend.ts'),
+    );
 
-    expect(appSource).toContain('async function syncCodexActiveProviderModel(providerID: string, modelID: string)');
+    expect(appSource).toContain(
+      'async function syncCodexActiveProviderModel(providerID: string, modelID: string)',
+    );
     expect(appSource).toContain("const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';");
     expect(appSource).toContain('function codexAppServerProviderId(providerID: string)');
-    expect(appSource).toContain('function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: string)');
-    expect(appSource).toContain('const codexProvider = codexAppServerProviderId(normalizedProvider);');
+    expect(appSource).toContain(
+      'function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: string)',
+    );
+    expect(appSource).toContain(
+      'const codexProvider = codexAppServerProviderId(normalizedProvider);',
+    );
     expect(appSource).toContain('?.modelProvider');
-    expect(appSource).toContain("? CODEX_OFFICIAL_MODEL_PROVIDER");
-    expect(appSource).toContain("edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });");
-    expect(appSource).toContain("edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });");
+    expect(appSource).toContain('? CODEX_OFFICIAL_MODEL_PROVIDER');
+    expect(appSource).toContain(
+      "edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });",
+    );
+    expect(appSource).toContain(
+      "edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });",
+    );
     expect(appSource).not.toContain('configStringValue(');
     expect(appSource).not.toContain("mergeStrategy: 'remove'");
     expect(sendRuntimeSource).toContain('const startNewCodexThread = selectedCodexProvider');
     expect(sendRuntimeSource).toContain('forceNewThread: startNewCodexThread');
-    expect(sendRuntimeSource).toContain('await params.syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);');
-    expect(sendRuntimeSource).toContain('if (selectedCodexModelKey) params.codexApi.selectModel(selectedCodexModelKey);');
+    expect(sendRuntimeSource).toContain(
+      'await params.syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);',
+    );
+    expect(sendRuntimeSource).toContain(
+      'if (selectedCodexModelKey) params.codexApi.selectModel(selectedCodexModelKey);',
+    );
     expect(sendRuntimeSource).not.toContain('codexApi.selectModel(selectedCodexModel);');
   });
 
