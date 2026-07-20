@@ -32,6 +32,7 @@
     - [ ] reasonix
 	- [ ] kimicode cli
 	- [ ] oh-my-pi
+	- [x] ACP v1 通用后端（Pi、Oh My Pi、Kimi Code；通过状态监控按需启用）
     - [ ] astrcodey
 	- [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
 	- [ ] [gnhf](https://github.com/kunchenguid/gnhf)
