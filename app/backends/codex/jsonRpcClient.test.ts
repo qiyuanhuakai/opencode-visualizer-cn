@@ -219,6 +219,50 @@ describe('CodexJsonRpcClient', () => {
     });
   });
 
+  it('supports strict JSON-RPC 2.0 envelopes and error responses for ACP', async () => {
+    const client = new CodexJsonRpcClient({
+      url: 'ws://localhost:23004/acp/oh-my-pi',
+      jsonRpcVersion: '2.0',
+      webSocketCtor: MockWebSocket,
+    });
+    const requestHandler = vi.fn();
+    client.onServerRequest(requestHandler);
+
+    const connected = client.connect();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await connected;
+
+    const initialize = client.request('initialize', { protocolVersion: 1 });
+    expect(JSON.parse(socket.sent[0] ?? '{}')).toEqual({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: 1 },
+    });
+    socket.emitMessage(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 1 } }));
+    await initialize;
+
+    socket.emitMessage(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'fs-1',
+      method: 'fs/read_text_file',
+      params: { sessionId: 'session-1', path: '/tmp/file' },
+    }));
+    expect(requestHandler).toHaveBeenCalledWith({
+      id: 'fs-1',
+      method: 'fs/read_text_file',
+      params: { sessionId: 'session-1', path: '/tmp/file' },
+    });
+
+    client.respondError('fs-1', -32601, 'Method not found');
+    expect(JSON.parse(socket.sent[1] ?? '{}')).toEqual({
+      jsonrpc: '2.0',
+      id: 'fs-1',
+      error: { code: -32601, message: 'Method not found' },
+    });
+  });
+
   it('times out unanswered requests', async () => {
     const client = new CodexJsonRpcClient({
       url: 'ws://localhost:4500',
