@@ -7,7 +7,10 @@ type ConnectionState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting'
 type CredentialsLike = {
   backendKind: Ref<BackendKind>;
   codexBridgeUrl: Ref<string>;
+  acpBridgeUrl: Ref<string>;
   codexBridgeToken: Ref<string>;
+  acpBridgeToken: Ref<string>;
+  acpAgentId: Ref<string>;
 };
 
 type CodexApiLike = {
@@ -53,9 +56,17 @@ export type UseBackendActivationOptions = {
   toErrorMessage: (error: unknown) => string;
   setActiveBackendKind: (kind: BackendKind) => void;
   configureCodexBackend: (options: { bridgeUrl: string; bridgeToken?: string }) => void;
+  configureAcpBackend: (options: {
+    bridgeUrl: string;
+    bridgeToken?: string;
+    agentId: string;
+  }) => void;
+  disconnectAcpBackend: () => void;
+  bootstrapAcpWorkspace: () => Promise<void>;
   fetchGlobalProviderConfig: () => Promise<void>;
   fetchProviders: (force?: boolean) => Promise<void>;
   fetchAgents: () => Promise<void>;
+  fetchCommands: () => Promise<void>;
   fetchHomePath: () => Promise<void>;
   bootstrapSelections: () => Promise<void>;
   hydrateActiveWorktreeResources: () => Promise<void>;
@@ -89,6 +100,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
 
   async function activateCodex() {
     options.ge.disconnect();
+    options.disconnectAcpBackend();
     options.activeBackendKind.value = 'codex';
     options.setActiveBackendKind('codex');
     options.configureCodexBackend({
@@ -103,14 +115,19 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
       await options.codexApi.connect(options.credentials.codexBridgeUrl.value, (phase) => {
-        if (phase === 'home') options.initLoadingMessage.value = options.t('app.status.loadingCodexHome');
-        else if (phase === 'handshake') options.initLoadingMessage.value = options.t('app.status.loadingCodexHandshake');
-        else if (phase === 'threads') options.initLoadingMessage.value = options.t('app.status.loadingCodexThreads');
-        else if (phase === 'workspace') options.initLoadingMessage.value = options.t('app.status.loadingCodexWorkspace');
+        if (phase === 'home')
+          options.initLoadingMessage.value = options.t('app.status.loadingCodexHome');
+        else if (phase === 'handshake')
+          options.initLoadingMessage.value = options.t('app.status.loadingCodexHandshake');
+        else if (phase === 'threads')
+          options.initLoadingMessage.value = options.t('app.status.loadingCodexThreads');
+        else if (phase === 'workspace')
+          options.initLoadingMessage.value = options.t('app.status.loadingCodexWorkspace');
         else options.initLoadingMessage.value = options.t('app.status.loadingCodexModels');
       });
 
-      const existingThreadId = options.codexApi.activeThreadId.value || options.codexApi.visibleThreads.value[0]?.id || '';
+      const existingThreadId =
+        options.codexApi.activeThreadId.value || options.codexApi.visibleThreads.value[0]?.id || '';
       if (existingThreadId) {
         options.selectedSessionId.value = existingThreadId;
       }
@@ -119,9 +136,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       // parallel to shorten startup. allSettled keeps one failure from
       // blocking the rest of the boot sequence.
       await Promise.allSettled([
-        existingThreadId
-          ? options.codexApi.selectThread(existingThreadId)
-          : Promise.resolve(),
+        existingThreadId ? options.codexApi.selectThread(existingThreadId) : Promise.resolve(),
         Promise.all([
           options.fetchGlobalProviderConfig(),
           options.fetchProviders(true),
@@ -146,6 +161,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   }
 
   async function activateOpenCode() {
+    options.disconnectAcpBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
     resetOpenCodeSelectionState();
@@ -180,6 +196,50 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
+  async function activateAcp() {
+    try {
+      options.ge.disconnect();
+      options.codexApi.disconnect();
+      options.activeBackendKind.value = 'acp';
+      options.configureAcpBackend({
+        bridgeUrl: options.credentials.acpBridgeUrl.value,
+        bridgeToken: options.credentials.acpBridgeToken.value,
+        agentId: options.credentials.acpAgentId.value,
+      });
+      options.setActiveBackendKind('acp');
+      resetOpenCodeSelectionState();
+      resetSharedUiState();
+      options.connectionState.value = 'connecting';
+      options.initLoadingMessage.value = options.t('app.connection.connecting');
+      await options.bootstrapAcpWorkspace();
+      await Promise.all([options.fetchAgents(), options.fetchCommands()]);
+      options.connectionState.value = 'ready';
+      options.uiInitState.value = 'ready';
+      void (async () => {
+        try {
+          if (options.selectedSessionId.value) {
+            await options.reloadSelectedSessionState(options.selectedSessionId.value);
+          }
+        } finally {
+          await Promise.all([
+            options.fetchGlobalProviderConfig(),
+            options.fetchProviders(true),
+            options.fetchAgents(),
+            options.fetchCommands(),
+          ]);
+          await options.hydrateActiveWorktreeResources();
+        }
+      })().catch(() => {});
+    } catch (error) {
+      options.disconnectAcpBackend();
+      options.connectionState.value = 'error';
+      options.initErrorMessage.value = options.toErrorMessage(error);
+      options.uiInitState.value = 'login';
+    } finally {
+      initializationInFlight.value = false;
+    }
+  }
+
   async function startInitialization() {
     if (initializationInFlight.value) return;
     initializationInFlight.value = true;
@@ -187,11 +247,16 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await activateCodex();
       return;
     }
+    if (options.credentials.backendKind.value === 'acp') {
+      await activateAcp();
+      return;
+    }
     await activateOpenCode();
   }
 
   function abortInitialization() {
     options.ge.disconnect();
+    options.disconnectAcpBackend();
     initializationInFlight.value = false;
     options.connectionState.value = 'connecting';
     options.uiInitState.value = 'login';
