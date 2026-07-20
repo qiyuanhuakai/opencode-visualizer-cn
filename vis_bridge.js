@@ -1,21 +1,29 @@
 #!/usr/bin/env node
-import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync, promises as fs } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { connect as connectTcp } from 'node:net';
 import { connect as connectTls } from 'node:tls';
 import { homedir } from 'node:os';
-import path from 'node:path';
 import { parseArgs } from 'node:util';
+import {
+  createRawWebSocketPeer,
+  createWebSocketAccept,
+  decodeWebSocketFrames,
+  encodeWebSocketFrame,
+} from './bridge/webSocketFrames.js';
+import { createBridgeConfigStore } from './bridge/bridgeConfig.js';
+import { createBridgeRuntime } from './bridge/bridgeRuntime.js';
+import { runWorkspaceCommand } from './bridge/workspaceCommand.js';
+import { createWorkspaceFsManager } from './bridge/workspaceFs.js';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 23004;
 const DEFAULT_PATH = '/codex';
 const DEFAULT_CODEX_WS_URL = 'ws://127.0.0.1:4500';
-const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
 function usage() {
-  return `vis_bridge - localhost WebSocket bridge for Codex app-server
+  return `vis_bridge - local supervisor and protocol bridge for OpenCode, Codex, and ACP agents
 
 Usage:
   vis_bridge [--target ws://127.0.0.1:4500] [--host 127.0.0.1] [--port 23004] [--path /codex]
@@ -28,6 +36,7 @@ Options:
   --bridge-token       Optional token required from clients via Authorization Bearer or ?token=.
   --upstream-token     Bearer token sent to Codex app-server during WebSocket handshake.
   --upstream-token-file Read upstream bearer token from file.
+  --config             Bridge supervisor config path.
   --help               Show this help.
 
 Environment:
@@ -39,6 +48,7 @@ Environment:
   VIS_BRIDGE_CODEX_TOKEN            Same as --upstream-token.
   VIS_BRIDGE_CODEX_TOKEN_FILE       Same as --upstream-token-file.
   VIS_BRIDGE_CODEX_AUTHORIZATION    Raw Authorization header for upstream.
+  VIS_BRIDGE_CONFIG                 Same as --config.
 `;
 }
 
@@ -53,6 +63,7 @@ function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
       'bridge-token': { type: 'string' },
       'upstream-token': { type: 'string' },
       'upstream-token-file': { type: 'string' },
+      config: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
     allowPositionals: false,
@@ -76,6 +87,7 @@ function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
     upstreamAuthorization:
       env.VIS_BRIDGE_CODEX_AUTHORIZATION ??
       bearerAuthorization(values['upstream-token'] ?? env.VIS_BRIDGE_CODEX_TOKEN ?? tokenFromFile),
+    configPath: values.config ?? env.VIS_BRIDGE_CONFIG,
   };
 }
 
@@ -90,20 +102,18 @@ function bearerAuthorization(token) {
 
 function writeHttpResponse(socket, statusCode, statusText, body, headers = {}) {
   const responseBody = typeof body === 'string' ? body : JSON.stringify(body);
-  socket.write([
-    `HTTP/1.1 ${statusCode} ${statusText}`,
-    'Connection: close',
-    'Content-Type: application/json; charset=utf-8',
-    `Content-Length: ${Buffer.byteLength(responseBody)}`,
-    ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
-    '',
-    responseBody,
-  ].join('\r\n'));
+  socket.write(
+    [
+      `HTTP/1.1 ${statusCode} ${statusText}`,
+      'Connection: close',
+      'Content-Type: application/json; charset=utf-8',
+      `Content-Length: ${Buffer.byteLength(responseBody)}`,
+      ...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
+      '',
+      responseBody,
+    ].join('\r\n'),
+  );
   socket.destroy();
-}
-
-function createWebSocketAccept(secWebSocketKey) {
-  return createHash('sha1').update(`${secWebSocketKey}${WS_GUID}`).digest('base64');
 }
 
 function isAuthorized(request, bridgeToken) {
@@ -112,25 +122,39 @@ function isAuthorized(request, bridgeToken) {
   if (authorization === `Bearer ${bridgeToken}`) return true;
 
   const requestUrl = new URL(request.url ?? '/', 'http://localhost');
-  return requestUrl.searchParams.get('token') === bridgeToken ||
-    requestUrl.searchParams.get('bridgeToken') === bridgeToken;
+  return (
+    requestUrl.searchParams.get('token') === bridgeToken ||
+    requestUrl.searchParams.get('bridgeToken') === bridgeToken
+  );
 }
 
 function isLoopbackHostname(hostname) {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1' || hostname === '[::1]';
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '[::1]'
+  );
 }
 
 function isWildcardHost(hostname) {
   return hostname === '0.0.0.0' || hostname === '::' || hostname === '[::]';
 }
 
-function isAllowedOrigin(origin) {
+const TOKENLESS_VIS_ORIGINS = new Set([
+  'http://127.0.0.1:5173',
+  'http://localhost:5173',
+  'http://[::1]:5173',
+  'http://127.0.0.1:23003',
+  'http://localhost:23003',
+  'http://[::1]:23003',
+]);
+
+function isAllowedOrigin(origin, bridgeToken) {
   if (!origin) return true;
+  if (bridgeToken) return true;
   try {
-    const parsed = new URL(origin);
-    // Allow local Electron protocols (file://, app://, etc.)
-    if (parsed.protocol === 'file:' || parsed.protocol === 'app:') return true;
-    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isLoopbackHostname(parsed.hostname);
+    return TOKENLESS_VIS_ORIGINS.has(new URL(origin).origin);
   } catch {
     return false;
   }
@@ -236,19 +260,27 @@ function connectUpstreamWebSocket(target, authorization) {
 async function proxyWebSocket(request, clientSocket, head, options) {
   const requestPath = new URL(request.url ?? '/', 'http://localhost').pathname;
   if (requestPath !== options.path) {
-    writeHttpResponse(clientSocket, 404, 'Not Found', { error: `Use WebSocket path ${options.path}` });
+    writeHttpResponse(clientSocket, 404, 'Not Found', {
+      error: `Use WebSocket path ${options.path}`,
+    });
     return;
   }
 
-  if (!isAllowedOrigin(request.headers.origin)) {
+  if (!isAllowedOrigin(request.headers.origin, options.bridgeToken)) {
     writeHttpResponse(clientSocket, 403, 'Forbidden', { error: 'Forbidden origin' });
     return;
   }
 
   if (!isAuthorized(request, options.bridgeToken)) {
-    writeHttpResponse(clientSocket, 401, 'Unauthorized', { error: 'Unauthorized' }, {
-      'WWW-Authenticate': 'Bearer realm="vis_bridge"',
-    });
+    writeHttpResponse(
+      clientSocket,
+      401,
+      'Unauthorized',
+      { error: 'Unauthorized' },
+      {
+        'WWW-Authenticate': 'Bearer realm="vis_bridge"',
+      },
+    );
     return;
   }
 
@@ -264,14 +296,16 @@ async function proxyWebSocket(request, clientSocket, head, options) {
 
   try {
     const upstream = await connectUpstreamWebSocket(options.target, options.upstreamAuthorization);
-    clientSocket.write([
-      'HTTP/1.1 101 Switching Protocols',
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      `Sec-WebSocket-Accept: ${createWebSocketAccept(secWebSocketKey)}`,
-      '',
-      '',
-    ].join('\r\n'));
+    clientSocket.write(
+      [
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${createWebSocketAccept(secWebSocketKey)}`,
+        '',
+        '',
+      ].join('\r\n'),
+    );
 
     if (head.length > 0) upstream.socket.write(head);
     if (upstream.head.length > 0) clientSocket.write(upstream.head);
@@ -340,131 +374,11 @@ function normalizePtyCwd(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : homedir();
 }
 
-function normalizeFsPath(value) {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('File path is required.');
-  }
-  return path.resolve(value.trim());
-}
-
-function normalizeFsRoot(value) {
-  if (typeof value !== 'string' || !value.trim()) {
-    throw new Error('File root is required.');
-  }
-  return path.resolve(value.trim());
-}
-
-function isPathWithinRoot(targetPath, rootPath) {
-  const relative = path.relative(rootPath, targetPath);
-  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
-}
-
-function assertFsPathWithinRoot(filePath, rootPath) {
-  const normalizedPath = normalizeFsPath(filePath);
-  const normalizedRoot = normalizeFsRoot(rootPath);
-  if (!isPathWithinRoot(normalizedPath, normalizedRoot)) {
-    throw new Error('File path is outside the allowed root.');
-  }
-  return { normalizedPath, normalizedRoot };
-}
-
-function createFsManager() {
-  return {
-    async getCapabilities(rootPath) {
-      const normalizedRoot = normalizeFsRoot(rootPath);
-      const stats = await fs.stat(normalizedRoot);
-      if (!stats.isDirectory()) {
-        throw new Error('FS root must be a directory.');
-      }
-      await fs.access(normalizedRoot, fs.constants.R_OK | fs.constants.W_OK);
-      return { root: normalizedRoot, writable: true };
-    },
-    async readFile(filePath, rootPath) {
-      const { normalizedPath } = assertFsPathWithinRoot(filePath, rootPath);
-      const content = await fs.readFile(normalizedPath);
-      return {
-        path: normalizedPath,
-        content: content.toString('utf8'),
-        dataBase64: content.toString('base64'),
-        encoding: 'utf-8',
-        type: 'text',
-      };
-    },
-    async writeFile(filePath, rootPath, content) {
-      const { normalizedPath } = assertFsPathWithinRoot(filePath, rootPath);
-      if (typeof content !== 'string') {
-        throw new Error('File content must be a string.');
-      }
-      await fs.writeFile(normalizedPath, content, 'utf8');
-      return { path: normalizedPath };
-    },
-  };
-}
-
-function encodeWebSocketFrame(data, opcode = 1) {
-  const payload = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
-  const length = payload.length;
-  if (length < 126) {
-    return Buffer.concat([Buffer.from([0x80 | opcode, length]), payload]);
-  }
-  if (length <= 0xffff) {
-    const header = Buffer.alloc(4);
-    header[0] = 0x80 | opcode;
-    header[1] = 126;
-    header.writeUInt16BE(length, 2);
-    return Buffer.concat([header, payload]);
-  }
-  const header = Buffer.alloc(10);
-  header[0] = 0x80 | opcode;
-  header[1] = 127;
-  header.writeBigUInt64BE(BigInt(length), 2);
-  return Buffer.concat([header, payload]);
-}
-
-function decodeWebSocketFrames(buffer) {
-  const frames = [];
-  let offset = 0;
-  while (buffer.length - offset >= 2) {
-    const first = buffer[offset];
-    const second = buffer[offset + 1];
-    const opcode = first & 0x0f;
-    const masked = (second & 0x80) !== 0;
-    let length = second & 0x7f;
-    let headerLength = 2;
-    if (length === 126) {
-      if (buffer.length - offset < 4) break;
-      length = buffer.readUInt16BE(offset + 2);
-      headerLength = 4;
-    } else if (length === 127) {
-      if (buffer.length - offset < 10) break;
-      const bigLength = buffer.readBigUInt64BE(offset + 2);
-      if (bigLength > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('WebSocket frame too large.');
-      length = Number(bigLength);
-      headerLength = 10;
-    }
-    const maskLength = masked ? 4 : 0;
-    const frameLength = headerLength + maskLength + length;
-    if (buffer.length - offset < frameLength) break;
-    const mask = masked ? buffer.subarray(offset + headerLength, offset + headerLength + 4) : undefined;
-    const payloadStart = offset + headerLength + maskLength;
-    const payload = Buffer.from(buffer.subarray(payloadStart, payloadStart + length));
-    if (mask) {
-      for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
-    }
-    frames.push({ opcode, payload });
-    offset += frameLength;
-  }
-  return { frames, remaining: buffer.subarray(offset) };
-}
-
 const PTY_BUFFER_LIMIT = 2 * 1024 * 1024;
 const PTY_EXIT_GRACE_MS = 1500;
 
 function encodePtyMetaFrame(meta) {
-  const payload = Buffer.concat([
-    Buffer.from([0]),
-    Buffer.from(JSON.stringify(meta), 'utf8'),
-  ]);
+  const payload = Buffer.concat([Buffer.from([0]), Buffer.from(JSON.stringify(meta), 'utf8')]);
   return encodeWebSocketFrame(payload, 2);
 }
 
@@ -504,9 +418,10 @@ function createPtyManager(options = {}) {
   async function create(payload = {}) {
     const nodePty = await loadNodePty(options.ptyModule);
     const id = randomBytes(16).toString('hex');
-    const command = typeof payload.command === 'string' && payload.command.trim()
-      ? payload.command.trim()
-      : defaultPtyShell();
+    const command =
+      typeof payload.command === 'string' && payload.command.trim()
+        ? payload.command.trim()
+        : defaultPtyShell();
     const args = Array.isArray(payload.args) ? payload.args.map(String) : [];
     const ptyProcess = nodePty.spawn(command, args, {
       name: 'xterm-256color',
@@ -539,7 +454,9 @@ function createPtyManager(options = {}) {
       session.status = 'exited';
       if (typeof event.exitCode === 'number') session.exitCode = event.exitCode;
       for (const socket of session.sockets) {
-        try { sendExitToSocket(session, socket); } catch {}
+        try {
+          sendExitToSocket(session, socket);
+        } catch {}
       }
       scheduleCleanup(session);
     });
@@ -573,7 +490,9 @@ function createPtyManager(options = {}) {
     sessions.delete(id);
     session.disposed = true;
     for (const socket of session.sockets) socket.destroy();
-    try { session.pty.kill(); } catch {}
+    try {
+      session.pty.kill();
+    } catch {}
     return true;
   }
 
@@ -606,7 +525,8 @@ function createPtyManager(options = {}) {
             socket.write(encodeWebSocketFrame(frame.payload, 10));
             continue;
           }
-          if (frame.opcode === 1 || frame.opcode === 2) session.pty.write(frame.payload.toString('utf8'));
+          if (frame.opcode === 1 || frame.opcode === 2)
+            session.pty.write(frame.payload.toString('utf8'));
         }
       } catch {
         socket.destroy();
@@ -642,7 +562,11 @@ async function handlePtyHttpRequest(request, response, requestUrl, manager) {
     const id = decodeURIComponent(match[1]);
     if (request.method === 'PUT') {
       const payload = await readJsonBody(request);
-      const ok = manager.resize(id, payload?.size?.rows ?? payload?.rows, payload?.size?.cols ?? payload?.cols);
+      const ok = manager.resize(
+        id,
+        payload?.size?.rows ?? payload?.rows,
+        payload?.size?.cols ?? payload?.cols,
+      );
       writeJsonHttpResponse(response, ok ? 200 : 404, ok ? {} : { error: 'PTY not found.' });
       return true;
     }
@@ -653,7 +577,9 @@ async function handlePtyHttpRequest(request, response, requestUrl, manager) {
     }
     return false;
   } catch (error) {
-    writeJsonHttpResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    writeJsonHttpResponse(response, 500, {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return true;
   }
 }
@@ -662,6 +588,14 @@ async function handleFsHttpRequest(request, response, requestUrl, manager) {
   try {
     if (requestUrl.pathname === '/fs/capabilities' && request.method === 'GET') {
       const result = await manager.getCapabilities(requestUrl.searchParams.get('root'));
+      writeJsonHttpResponse(response, 200, result);
+      return true;
+    }
+    if (requestUrl.pathname === '/fs/list' && request.method === 'GET') {
+      const result = await manager.listDirectory(
+        requestUrl.searchParams.get('path'),
+        requestUrl.searchParams.get('root'),
+      );
       writeJsonHttpResponse(response, 200, result);
       return true;
     }
@@ -681,30 +615,52 @@ async function handleFsHttpRequest(request, response, requestUrl, manager) {
     }
     return false;
   } catch (error) {
-    writeJsonHttpResponse(response, 500, { error: error instanceof Error ? error.message : String(error) });
+    writeJsonHttpResponse(response, 500, {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return true;
   }
 }
 
 function requiresPtyToken(options) {
   const host = String(options.host ?? DEFAULT_HOST).trim();
-  return Boolean(!options.bridgeToken && host && !isLoopbackHostname(host) && (isWildcardHost(host) || host !== 'localhost'));
+  return Boolean(
+    !options.bridgeToken &&
+    (!host || (!isLoopbackHostname(host) && (isWildcardHost(host) || host !== 'localhost'))),
+  );
 }
 
 function requiresFsToken(options) {
   return requiresPtyToken(options);
 }
 
+const BRIDGE_CONTROL_TOKEN_ERROR =
+  'Bridge control requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.';
+
+function rejectUnprotectedBridgeControlHttp(response) {
+  writeJsonHttpResponse(response, 403, { error: BRIDGE_CONTROL_TOKEN_ERROR });
+}
+
+function rejectUnprotectedBridgeControlUpgrade(socket) {
+  writeHttpResponse(socket, 403, 'Forbidden', { error: BRIDGE_CONTROL_TOKEN_ERROR });
+}
+
 function rejectUnprotectedPtyHttp(response) {
-  writeJsonHttpResponse(response, 403, { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
+  writeJsonHttpResponse(response, 403, {
+    error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.',
+  });
 }
 
 function rejectUnprotectedPtySocket(socket) {
-  writeHttpResponse(socket, 403, 'Forbidden', { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
+  writeHttpResponse(socket, 403, 'Forbidden', {
+    error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.',
+  });
 }
 
 function rejectUnprotectedFsHttp(response) {
-  writeJsonHttpResponse(response, 403, { error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' });
+  writeJsonHttpResponse(response, 403, {
+    error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.',
+  });
 }
 
 function handlePtyUpgrade(request, clientSocket, head, options, manager) {
@@ -715,32 +671,42 @@ function handlePtyUpgrade(request, clientSocket, head, options, manager) {
     rejectUnprotectedPtySocket(clientSocket);
     return true;
   }
-  if (!isAllowedOrigin(request.headers.origin)) {
+  if (!isAllowedOrigin(request.headers.origin, options.bridgeToken)) {
     writeHttpResponse(clientSocket, 403, 'Forbidden', { error: 'Forbidden origin' });
     return true;
   }
   if (!isAuthorized(request, options.bridgeToken)) {
-    writeHttpResponse(clientSocket, 401, 'Unauthorized', { error: 'Unauthorized' }, {
-      'WWW-Authenticate': 'Bearer realm="vis_bridge"',
-    });
+    writeHttpResponse(
+      clientSocket,
+      401,
+      'Unauthorized',
+      { error: 'Unauthorized' },
+      {
+        'WWW-Authenticate': 'Bearer realm="vis_bridge"',
+      },
+    );
     return true;
   }
   let secWebSocketKey;
   try {
     secWebSocketKey = assertWebSocketRequest(request);
   } catch (error) {
-    writeHttpResponse(clientSocket, 400, 'Bad Request', { error: error instanceof Error ? error.message : String(error) });
+    writeHttpResponse(clientSocket, 400, 'Bad Request', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return true;
   }
   const id = decodeURIComponent(match[1]);
-  clientSocket.write([
-    'HTTP/1.1 101 Switching Protocols',
-    'Upgrade: websocket',
-    'Connection: Upgrade',
-    `Sec-WebSocket-Accept: ${createWebSocketAccept(secWebSocketKey)}`,
-    '',
-    '',
-  ].join('\r\n'));
+  clientSocket.write(
+    [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${createWebSocketAccept(secWebSocketKey)}`,
+      '',
+      '',
+    ].join('\r\n'),
+  );
   if (!manager.attach(id, clientSocket, head)) {
     clientSocket.destroy();
   }
@@ -753,25 +719,133 @@ function writeJsonHttpResponse(response, statusCode, body, extraHeaders = {}) {
 }
 
 function authorizeHttpRequest(request, response, bridgeToken) {
-  if (!isAllowedOrigin(request.headers.origin)) {
+  if (!isAllowedOrigin(request.headers.origin, bridgeToken)) {
     writeJsonHttpResponse(response, 403, { error: 'Forbidden origin' });
     return false;
   }
 
   if (!isAuthorized(request, bridgeToken)) {
-    writeJsonHttpResponse(response, 401, { error: 'Unauthorized' }, {
-      'WWW-Authenticate': 'Bearer realm="vis_bridge"',
-    });
+    writeJsonHttpResponse(
+      response,
+      401,
+      { error: 'Unauthorized' },
+      {
+        'WWW-Authenticate': 'Bearer realm="vis_bridge"',
+      },
+    );
     return false;
   }
 
   return true;
 }
 
+async function handleSupervisorHttpRequest(request, response, requestUrl, runtime) {
+  if (requestUrl.pathname === '/api/v1/supervisor' && request.method === 'GET') {
+    writeJsonHttpResponse(response, 200, runtime.getStatus());
+    return true;
+  }
+  if (requestUrl.pathname === '/api/v1/agents' && request.method === 'GET') {
+    writeJsonHttpResponse(response, 200, await runtime.listAgents());
+    return true;
+  }
+  if (requestUrl.pathname === '/api/v1/agents' && request.method === 'POST') {
+    const agent = await runtime.upsertAgent(await readJsonBody(request));
+    writeJsonHttpResponse(response, 201, agent);
+    return true;
+  }
+  const match = requestUrl.pathname.match(/^\/api\/v1\/agents\/([^/]+)$/u);
+  if (!match) return false;
+  const id = decodeURIComponent(match[1]);
+  if (request.method === 'PUT') {
+    const agent = await runtime.updateAgent(id, await readJsonBody(request));
+    writeJsonHttpResponse(response, agent ? 200 : 404, agent ?? { error: 'ACP agent not found.' });
+    return true;
+  }
+  if (request.method === 'DELETE') {
+    const removed = await runtime.removeAgent(id);
+    writeJsonHttpResponse(
+      response,
+      removed ? 200 : 404,
+      removed ? { removed: true } : { error: 'ACP agent not found.' },
+    );
+    return true;
+  }
+  return false;
+}
+
+function handleAcpUpgrade(request, socket, head, options) {
+  const requestPath = new URL(request.url ?? '/', 'http://localhost').pathname;
+  const match = requestPath.match(/^\/acp\/([^/]+)$/u);
+  if (!match) return false;
+  if (requiresPtyToken(options)) {
+    rejectUnprotectedBridgeControlUpgrade(socket);
+    return true;
+  }
+  if (!options.runtime) {
+    writeHttpResponse(socket, 503, 'Service Unavailable', {
+      error: 'ACP supervisor is unavailable.',
+    });
+    return true;
+  }
+  if (!isAllowedOrigin(request.headers.origin, options.bridgeToken)) {
+    writeHttpResponse(socket, 403, 'Forbidden', { error: 'Forbidden origin' });
+    return true;
+  }
+  if (!isAuthorized(request, options.bridgeToken)) {
+    writeHttpResponse(
+      socket,
+      401,
+      'Unauthorized',
+      { error: 'Unauthorized' },
+      {
+        'WWW-Authenticate': 'Bearer realm="vis_bridge"',
+      },
+    );
+    return true;
+  }
+  let secWebSocketKey;
+  let id;
+  try {
+    secWebSocketKey = assertWebSocketRequest(request);
+    id = decodeURIComponent(match[1]);
+  } catch (error) {
+    writeHttpResponse(socket, 400, 'Bad Request', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
+  const status = options.runtime.getStatus().acpAgents.find((agent) => agent.id === id);
+  if (!status) {
+    writeHttpResponse(socket, 404, 'Not Found', { error: `ACP agent not found: ${id}.` });
+    return true;
+  }
+  if (status.state !== 'running' || status.connected) {
+    writeHttpResponse(socket, 409, 'Conflict', { error: `ACP agent is not available: ${id}.` });
+    return true;
+  }
+  socket.write(
+    [
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${createWebSocketAccept(secWebSocketKey)}`,
+      '',
+      '',
+    ].join('\r\n'),
+  );
+  const peer = createRawWebSocketPeer(socket, head, { heartbeatIntervalMs: 5_000 });
+  try {
+    options.runtime.attachAgent(id, peer);
+  } catch (error) {
+    peer.close(1013, error instanceof Error ? error.message : String(error));
+  }
+  return true;
+}
+
 export function createVisBridgeServer(options) {
   const bridgeOptions = { host: DEFAULT_HOST, ...options };
   const ptyManager = createPtyManager(bridgeOptions);
-  const fsManager = createFsManager();
+  const fsManager = createWorkspaceFsManager();
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
@@ -805,7 +879,12 @@ export function createVisBridgeServer(options) {
       return;
     }
 
-    if (requestUrl.pathname === '/fs/capabilities' || requestUrl.pathname === '/fs/readFile' || requestUrl.pathname === '/fs/writeFile') {
+    if (
+      requestUrl.pathname === '/fs/capabilities' ||
+      requestUrl.pathname === '/fs/list' ||
+      requestUrl.pathname === '/fs/readFile' ||
+      requestUrl.pathname === '/fs/writeFile'
+    ) {
       if (requiresFsToken(bridgeOptions)) {
         rejectUnprotectedFsHttp(response);
         return;
@@ -814,6 +893,54 @@ export function createVisBridgeServer(options) {
       void handleFsHttpRequest(request, response, requestUrl, fsManager).then((handled) => {
         if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
       });
+      return;
+    }
+
+    if (requestUrl.pathname === '/command/exec') {
+      if (requiresPtyToken(bridgeOptions)) {
+        rejectUnprotectedBridgeControlHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      if (request.method !== 'POST') {
+        writeJsonHttpResponse(response, 405, { error: 'Method not allowed' });
+        return;
+      }
+      void readJsonBody(request)
+        .then((payload) => runWorkspaceCommand(payload))
+        .then((result) => writeJsonHttpResponse(response, 200, result))
+        .catch((error) =>
+          writeJsonHttpResponse(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      return;
+    }
+
+    if (requestUrl.pathname.startsWith('/api/v1/')) {
+      if (requiresPtyToken(bridgeOptions)) {
+        rejectUnprotectedBridgeControlHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      if (!bridgeOptions.runtime) {
+        writeJsonHttpResponse(response, 503, { error: 'Bridge supervisor is unavailable.' });
+        return;
+      }
+      void handleSupervisorHttpRequest(
+        request,
+        response,
+        requestUrl,
+        bridgeOptions.runtime,
+      )
+        .then((handled) => {
+          if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
+        })
+        .catch((error) => {
+          writeJsonHttpResponse(response, 400, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       return;
     }
 
@@ -829,10 +956,18 @@ export function createVisBridgeServer(options) {
 
   server.on('upgrade', (request, socket, head) => {
     if (handlePtyUpgrade(request, socket, head, bridgeOptions, ptyManager)) return;
+    if (handleAcpUpgrade(request, socket, head, bridgeOptions)) return;
+    if (requiresPtyToken(bridgeOptions)) {
+      rejectUnprotectedBridgeControlUpgrade(socket);
+      return;
+    }
     void proxyWebSocket(request, socket, head, bridgeOptions);
   });
 
-  server.on('close', () => ptyManager.disposeAll());
+  server.on('close', () => {
+    ptyManager.disposeAll();
+    void bridgeOptions.runtime?.stop();
+  });
 
   return server;
 }
@@ -844,17 +979,29 @@ export function main() {
     return;
   }
 
-  const server = createVisBridgeServer(options);
+  const configStore = createBridgeConfigStore({ configPath: options.configPath });
+  const runtime = createBridgeRuntime({ configStore });
+  const server = createVisBridgeServer({ ...options, runtime });
+  void runtime.start().catch((error) => {
+    console.error(
+      `vis_bridge supervisor failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
   server.listen(options.port, options.host, () => {
     console.log(`vis_bridge listening on ws://${options.host}:${options.port}${options.path}`);
     console.log(`vis_bridge proxy target: ${options.target}`);
   });
 
-  const shutdown = () => {
+  const shutdown = async () => {
+    await runtime.stop();
     server.close(() => process.exit(0));
   };
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', () => {
+    void shutdown();
+  });
+  process.once('SIGTERM', () => {
+    void shutdown();
+  });
 }
 
 if (process.argv[1]?.endsWith('vis_bridge.js')) {

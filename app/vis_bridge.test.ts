@@ -8,18 +8,28 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createVisBridgeServer } from '../vis_bridge';
+import { createBridgeConfigStore } from '../bridge/bridgeConfig.js';
+import { createBridgeRuntime } from '../bridge/bridgeRuntime.js';
+import type { BridgeRuntime } from '../bridge/bridgeRuntime.js';
 
 type TestServer = ReturnType<typeof createVisBridgeServer>;
 
 const servers: TestServer[] = [];
+const runtimes: BridgeRuntime[] = [];
 
 afterEach(async () => {
-  await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    });
-  })));
+  await Promise.all(runtimes.splice(0).map((runtime) => runtime.stop()));
+  await Promise.all(
+    servers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        }),
+    ),
+  );
 });
 
 async function listen(server: TestServer) {
@@ -33,16 +43,19 @@ async function listen(server: TestServer) {
 
 async function readHttpBody(port: number, path: string, headers: Record<string, string> = {}) {
   return new Promise<{ status: number | undefined; body: unknown }>((resolve, reject) => {
-    const request = httpRequest({ host: '127.0.0.1', port, path, method: 'GET', headers }, (response) => {
-      const chunks: Buffer[] = [];
-      response.on('data', (chunk: Buffer) => chunks.push(chunk));
-      response.on('end', () => {
-        resolve({
-          status: response.statusCode,
-          body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+    const request = httpRequest(
+      { host: '127.0.0.1', port, path, method: 'GET', headers },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          resolve({
+            status: response.statusCode,
+            body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+          });
         });
-      });
-    });
+      },
+    );
     request.on('error', reject);
     request.end();
   });
@@ -57,23 +70,31 @@ async function requestJson(
 ) {
   return new Promise<{ status: number | undefined; body: unknown }>((resolve, reject) => {
     const payload = body === undefined ? '' : JSON.stringify(body);
-    const request = httpRequest({
-      host: '127.0.0.1',
-      port,
-      path,
-      method,
-      headers: {
-        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(payload)) } : {}),
-        ...headers,
+    const request = httpRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        path,
+        method,
+        headers: {
+          ...(payload
+            ? {
+                'Content-Type': 'application/json',
+                'Content-Length': String(Buffer.byteLength(payload)),
+              }
+            : {}),
+          ...headers,
+        },
       },
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      response.on('data', (chunk: Buffer) => chunks.push(chunk));
-      response.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        resolve({ status: response.statusCode, body: text ? JSON.parse(text) : null });
-      });
-    });
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({ status: response.statusCode, body: text ? JSON.parse(text) : null });
+        });
+      },
+    );
     request.on('error', reject);
     if (payload) request.write(payload);
     request.end();
@@ -94,7 +115,7 @@ async function sendUpgrade(port: number, path: string, authorization?: string, o
   if (authorization) headers.push(`Authorization: ${authorization}`);
   if (origin) headers.push(`Origin: ${origin}`);
   socket.write(`${headers.join('\r\n')}\r\n\r\n`);
-  const [chunk] = await once(socket, 'data') as [Buffer];
+  const [chunk] = (await once(socket, 'data')) as [Buffer];
   socket.destroy();
   return chunk.toString('utf8');
 }
@@ -163,7 +184,7 @@ async function openWebSocket(port: number, path: string) {
     'Sec-WebSocket-Version: 13',
   ];
   socket.write(`${headers.join('\r\n')}\r\n\r\n`);
-  const [chunk] = await once(socket, 'data') as [Buffer];
+  const [chunk] = (await once(socket, 'data')) as [Buffer];
   const marker = Buffer.from('\r\n\r\n');
   const index = chunk.indexOf(marker);
   if (index < 0) throw new Error('Expected WebSocket upgrade response.');
@@ -171,6 +192,71 @@ async function openWebSocket(port: number, path: string) {
     socket,
     initialData: chunk.subarray(index + marker.length),
   };
+}
+
+async function readNextTextFrame(
+  socket: ReturnType<typeof createConnection>,
+  initialData: Buffer = Buffer.alloc(0),
+) {
+  return new Promise<string>((resolve, reject) => {
+    let buffer: Buffer = Buffer.from(initialData);
+    const timeout = setTimeout(
+      () => finish(new Error('Timed out waiting for WebSocket text frame.')),
+      5_000,
+    );
+    const finish = (error?: Error, value?: string) => {
+      clearTimeout(timeout);
+      socket.off('data', onData);
+      if (error) reject(error);
+      else resolve(value ?? '');
+    };
+    const inspect = () => {
+      const decoded = decodeServerFrames(buffer);
+      buffer = decoded.remaining;
+      const textFrame = decoded.frames.find((frame) => frame.opcode === 1);
+      if (textFrame) finish(undefined, textFrame.payload.toString('utf8'));
+    };
+    const onData = (chunk: Buffer) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      inspect();
+    };
+    socket.on('data', onData);
+    inspect();
+  });
+}
+
+async function createTestRuntime(enabled = true) {
+  const directory = await mkdtemp(path.join(tmpdir(), 'vis-bridge-runtime-'));
+  const configStore = createBridgeConfigStore({ configPath: path.join(directory, 'bridge.json') });
+  await configStore.load();
+  await configStore.upsertAgent({
+    id: 'echo',
+    name: 'Echo ACP',
+    command: process.execPath,
+    args: [
+      '-e',
+      [
+        "const readline = require('node:readline');",
+        'const input = readline.createInterface({ input: process.stdin });',
+        "input.on('line', (line) => {",
+        '  const message = JSON.parse(line);',
+        "  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { protocolVersion: 1 } }) + '\\n');",
+        '});',
+      ].join('\n'),
+    ],
+    enabled,
+  });
+  const runtime = createBridgeRuntime({
+    configStore,
+    nativeSupervisor: {
+      start: async () => [],
+      stop: async () => {},
+      getStatus: () => [],
+    },
+  });
+  runtimes.push(runtime);
+  await runtime.start();
+  return runtime;
 }
 
 describe('vis_bridge', () => {
@@ -248,10 +334,27 @@ describe('vis_bridge', () => {
     });
     const port = await listen(server);
 
-    await expect(readHttpBody(port, '/homedir', { Origin: 'https://example.com' })).resolves.toEqual({
+    await expect(
+      readHttpBody(port, '/homedir', { Origin: 'https://example.com' }),
+    ).resolves.toEqual({
       status: 403,
       body: { error: 'Forbidden origin' },
     });
+  });
+
+  it('rejects file and foreign loopback origins without a bridge token', async () => {
+    const server = createVisBridgeServer({ path: '/codex', target: 'ws://127.0.0.1:1' });
+    const port = await listen(server);
+
+    await expect(readHttpBody(port, '/homedir', { Origin: 'file://' })).resolves.toMatchObject({
+      status: 403,
+    });
+    await expect(
+      readHttpBody(port, '/homedir', { Origin: 'http://127.0.0.1:9999' }),
+    ).resolves.toMatchObject({ status: 403 });
+    await expect(
+      readHttpBody(port, '/homedir', { Origin: 'http://127.0.0.1:5173' }),
+    ).resolves.toMatchObject({ status: 200 });
   });
 
   it('rejects non-loopback browser origins before contacting upstream', async () => {
@@ -264,22 +367,43 @@ describe('vis_bridge', () => {
     const rejected = await sendUpgrade(port, '/codex', undefined, 'https://example.com');
     expect(rejected).toContain('HTTP/1.1 403 Forbidden');
 
-    const loopbackButNoUpstream = await sendUpgrade(port, '/codex', undefined, 'http://localhost:5173');
+    const loopbackButNoUpstream = await sendUpgrade(
+      port,
+      '/codex',
+      undefined,
+      'http://localhost:5173',
+    );
     expect(loopbackButNoUpstream).toContain('HTTP/1.1 502 Bad Gateway');
   });
 
   it('serves OpenCode-compatible PTY REST endpoints through a PTY module', async () => {
-    const spawned: Array<{ command: string; args: string[]; options: Record<string, unknown>; killed: boolean; resized?: [number, number] }> = [];
+    const spawned: Array<{
+      command: string;
+      args: string[];
+      options: Record<string, unknown>;
+      killed: boolean;
+      resized?: [number, number];
+    }> = [];
     const ptyModule = {
       spawn(command: string, args: string[], options: Record<string, unknown>) {
-        const item = { command, args, options, killed: false, resized: undefined as [number, number] | undefined };
+        const item = {
+          command,
+          args,
+          options,
+          killed: false,
+          resized: undefined as [number, number] | undefined,
+        };
         spawned.push(item);
         return {
           onData: () => ({ dispose: () => {} }),
           onExit: () => ({ dispose: () => {} }),
           write: () => {},
-          resize: (cols: number, rows: number) => { item.resized = [cols, rows]; },
-          kill: () => { item.killed = true; },
+          resize: (cols: number, rows: number) => {
+            item.resized = [cols, rows];
+          },
+          kill: () => {
+            item.killed = true;
+          },
         };
       },
     };
@@ -290,7 +414,12 @@ describe('vis_bridge', () => {
     });
     const port = await listen(server);
 
-    const created = await requestJson(port, '/pty', 'POST', { cwd: '/repo', command: 'bash', args: ['-l'], title: 'Shell' });
+    const created = await requestJson(port, '/pty', 'POST', {
+      cwd: '/repo',
+      command: 'bash',
+      args: ['-l'],
+      title: 'Shell',
+    });
     expect(created.status).toBe(200);
     const id = (created.body as { id: string }).id;
     expect(id).toEqual(expect.any(String));
@@ -301,7 +430,9 @@ describe('vis_bridge', () => {
       body: [expect.objectContaining({ id, cwd: '/repo', title: 'Shell' })],
     });
 
-    await expect(requestJson(port, `/pty/${id}`, 'PUT', { size: { rows: 40, cols: 120 } })).resolves.toEqual({
+    await expect(
+      requestJson(port, `/pty/${id}`, 'PUT', { size: { rows: 40, cols: 120 } }),
+    ).resolves.toEqual({
       status: 200,
       body: {},
     });
@@ -322,11 +453,19 @@ describe('vis_bridge', () => {
         return {
           onData(callback: (data: string) => void) {
             dataHandler = callback;
-            return { dispose: () => { dataHandler = undefined; } };
+            return {
+              dispose: () => {
+                dataHandler = undefined;
+              },
+            };
           },
           onExit(callback: (event?: { exitCode?: number }) => void) {
             exitHandler = callback;
-            return { dispose: () => { exitHandler = undefined; } };
+            return {
+              dispose: () => {
+                exitHandler = undefined;
+              },
+            };
           },
           write: () => {},
           resize: () => {},
@@ -341,7 +480,12 @@ describe('vis_bridge', () => {
     });
     const port = await listen(server);
 
-    const created = await requestJson(port, '/pty', 'POST', { cwd: '/repo', command: 'bash', args: ['-lc', 'echo hi'], title: 'One-shot PTY' });
+    const created = await requestJson(port, '/pty', 'POST', {
+      cwd: '/repo',
+      command: 'bash',
+      args: ['-lc', 'echo hi'],
+      title: 'One-shot PTY',
+    });
     expect(created.status).toBe(200);
     const id = (created.body as { id: string }).id;
 
@@ -366,11 +510,18 @@ describe('vis_bridge', () => {
     const textPayloads = decoded.frames
       .filter((frame) => frame.opcode === 1)
       .map((frame) => frame.payload.toString('utf8'));
-    const binaryPayloads = decoded.frames.filter((frame) => frame.opcode === 2).map((frame) => frame.payload);
+    const binaryPayloads = decoded.frames
+      .filter((frame) => frame.opcode === 2)
+      .map((frame) => frame.payload);
     const closeFrame = decoded.frames.find((frame) => frame.opcode === 8);
 
     expect(textPayloads.join('')).toContain('editor-output');
-    expect(binaryPayloads.some((payload) => payload[0] === 0 && payload.subarray(1).toString('utf8').includes('"exitCode":0'))).toBe(true);
+    expect(
+      binaryPayloads.some(
+        (payload) =>
+          payload[0] === 0 && payload.subarray(1).toString('utf8').includes('"exitCode":0'),
+      ),
+    ).toBe(true);
     expect(closeFrame).toBeTruthy();
   });
 
@@ -389,7 +540,9 @@ describe('vis_bridge', () => {
 
     await expect(requestJson(port, '/pty', 'POST', { cwd: '/repo' })).resolves.toEqual({
       status: 403,
-      body: { error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' },
+      body: {
+        error: 'PTY requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.',
+      },
     });
   });
 
@@ -403,7 +556,12 @@ describe('vis_bridge', () => {
     const filePath = path.join(dir, 'note.txt');
     await writeFile(filePath, 'hello bridge', 'utf8');
 
-    await expect(readHttpBody(port, `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+    await expect(
+      readHttpBody(
+        port,
+        `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}`,
+      ),
+    ).resolves.toEqual({
       status: 200,
       body: {
         path: filePath,
@@ -414,12 +572,20 @@ describe('vis_bridge', () => {
       },
     });
 
-    await expect(requestJson(port, '/fs/writeFile', 'POST', { path: filePath, root: dir, content: 'updated bridge' })).resolves.toEqual({
+    await expect(
+      requestJson(port, '/fs/writeFile', 'POST', {
+        path: filePath,
+        root: dir,
+        content: 'updated bridge',
+      }),
+    ).resolves.toEqual({
       status: 200,
       body: { path: filePath },
     });
     await expect(readFile(filePath, 'utf8')).resolves.toBe('updated bridge');
-    await expect(readHttpBody(port, `/fs/capabilities?root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+    await expect(
+      readHttpBody(port, `/fs/capabilities?root=${encodeURIComponent(dir)}`),
+    ).resolves.toEqual({
       status: 200,
       body: { root: dir, writable: true },
     });
@@ -436,7 +602,12 @@ describe('vis_bridge', () => {
     const outsideFile = path.join(sibling, 'outside.txt');
     await writeFile(outsideFile, 'outside', 'utf8');
 
-    await expect(readHttpBody(port, `/fs/readFile?path=${encodeURIComponent(outsideFile)}&root=${encodeURIComponent(dir)}`)).resolves.toEqual({
+    await expect(
+      readHttpBody(
+        port,
+        `/fs/readFile?path=${encodeURIComponent(outsideFile)}&root=${encodeURIComponent(dir)}`,
+      ),
+    ).resolves.toEqual({
       status: 500,
       body: { error: 'File path is outside the allowed root.' },
     });
@@ -449,9 +620,17 @@ describe('vis_bridge', () => {
       target: 'ws://127.0.0.1:1',
     });
     const port = await listen(server);
-    await expect(requestJson(port, '/fs/writeFile', 'POST', { path: '/tmp/file.txt', root: '/tmp', content: 'x' })).resolves.toEqual({
+    await expect(
+      requestJson(port, '/fs/writeFile', 'POST', {
+        path: '/tmp/file.txt',
+        root: '/tmp',
+        content: 'x',
+      }),
+    ).resolves.toEqual({
       status: 403,
-      body: { error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.' },
+      body: {
+        error: 'FS requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.',
+      },
     });
   });
 
@@ -467,10 +646,12 @@ describe('vis_bridge', () => {
     const filePath = path.join(dir, 'token.txt');
     await writeFile(filePath, 'authorized', 'utf8');
 
-    await expect(readHttpBody(
-      port,
-      `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}&token=secret-token`,
-    )).resolves.toEqual({
+    await expect(
+      readHttpBody(
+        port,
+        `/fs/readFile?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(dir)}&token=secret-token`,
+      ),
+    ).resolves.toEqual({
       status: 200,
       body: {
         path: filePath,
@@ -480,5 +661,106 @@ describe('vis_bridge', () => {
         type: 'text',
       },
     });
+  });
+
+  it('serves authenticated supervisor state and reconciles persisted ACP settings', async () => {
+    const runtime = await createTestRuntime();
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+      bridgeToken: 'secret-token',
+      runtime,
+    });
+    const port = await listen(server);
+
+    await expect(readHttpBody(port, '/api/v1/supervisor')).resolves.toEqual({
+      status: 401,
+      body: { error: 'Unauthorized' },
+    });
+    const status = await readHttpBody(port, '/api/v1/supervisor?token=secret-token');
+    expect(status.status).toBe(200);
+    expect(status.body).toEqual(
+      expect.objectContaining({
+        services: [],
+        acpAgents: expect.arrayContaining([
+          expect.objectContaining({ id: 'echo', enabled: true, state: 'running' }),
+        ]),
+      }),
+    );
+
+    await expect(
+      requestJson(port, '/api/v1/agents/echo/sessions/session-1?token=secret-token', 'DELETE', {}),
+    ).resolves.toEqual({ status: 404, body: { error: 'Not found' } });
+
+    const disabled = await requestJson(port, '/api/v1/agents/echo?token=secret-token', 'PUT', {
+      enabled: false,
+    });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body).toEqual(
+      expect.objectContaining({ id: 'echo', enabled: false, state: 'disabled' }),
+    );
+    const persisted = await runtime.getConfig();
+    expect(persisted.acpAgents.find((agent) => agent.id === 'echo')?.enabled).toBe(false);
+  });
+
+  it.each(['0.0.0.0', ''])(
+    'rejects supervisor and ACP routes on unsafe host %j without bridge auth',
+    async (host) => {
+      const runtime = await createTestRuntime();
+      const server = createVisBridgeServer({
+        host,
+        path: '/codex',
+        target: 'ws://127.0.0.1:1',
+        runtime,
+      });
+      const port = await listen(server);
+
+      await expect(readHttpBody(port, '/api/v1/supervisor')).resolves.toEqual({
+        status: 403,
+        body: {
+          error:
+            'Bridge control requires VIS_BRIDGE_TOKEN when vis_bridge listens on a non-loopback host.',
+        },
+      });
+      expect(await sendUpgrade(port, '/acp/echo')).toContain('HTTP/1.1 403 Forbidden');
+      expect(await sendUpgrade(port, '/codex')).toContain('HTTP/1.1 403 Forbidden');
+    },
+  );
+
+  it('relays ACP JSON-RPC over a WebSocket route', async () => {
+    const runtime = await createTestRuntime();
+    const server = createVisBridgeServer({
+      path: '/codex',
+      target: 'ws://127.0.0.1:1',
+      runtime,
+    });
+    const port = await listen(server);
+
+    const { socket, initialData } = await openWebSocket(port, '/acp/echo');
+    socket.write(
+      encodeMaskedWebSocketFrame(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: 1,
+            clientCapabilities: {},
+            clientInfo: { name: 'vis', version: 'test' },
+          },
+        }),
+      ),
+    );
+
+    await expect(readNextTextFrame(socket, initialData)).resolves.toBe(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        result: { protocolVersion: 1 },
+      }),
+    );
+    const closed = once(socket, 'close');
+    socket.destroy();
+    await closed;
   });
 });
