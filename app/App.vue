@@ -367,14 +367,22 @@
                 name="acpBridgeToken"
                 @keydown.enter="handleLogin"
               />
-              <input
-                v-model="loginAcpAgentId"
-                type="text"
-                class="app-login-input"
+              <Dropdown
+                :model-value="loginAcpAgentId || undefined"
+                class="app-login-select"
                 :placeholder="t('app.login.acpAgentId')"
-                name="acpAgentId"
-                @keydown.enter="handleLogin"
-              />
+                auto-close
+                @update:model-value="loginAcpAgentId = $event ?? ''"
+              >
+                <template #value="{ value }">{{ loginAcpAgentLabel(value) }}</template>
+                <DropdownItem
+                  v-for="agent in loginAcpAgentOptions"
+                  :key="agent.id"
+                  :value="agent.id"
+                >
+                  {{ agent.name }} ({{ agent.id }})
+                </DropdownItem>
+              </Dropdown>
               <p class="app-login-hint">{{ t('app.login.acpBridgeHint') }}</p>
             </template>
           </div>
@@ -535,6 +543,8 @@ import {
 import { useI18n } from 'vue-i18n';
 import { bundledThemes } from 'shiki/bundle/web';
 import InputPanel from './components/InputPanel.vue';
+import Dropdown from './components/Dropdown.vue';
+import DropdownItem from './components/Dropdown/Item.vue';
 import OutputPanel from './components/OutputPanel.vue';
 import ProjectPicker from './components/ProjectPicker.vue';
 import FloatingWindow from './components/FloatingWindow.vue';
@@ -579,6 +589,7 @@ import {
   toolColor,
 } from './components/ToolWindow/utils';
 import { useAutoScroller, type ScrollMode } from './composables/useAutoScroller';
+import { fetchAcpBridgeAgents, type AcpAgentStatus } from './composables/useAcpBridge';
 import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
@@ -1817,6 +1828,56 @@ const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
 const loginCodexBridgeToken = ref(credentials.codexBridgeToken.value);
 const loginAcpBridgeToken = ref(credentials.acpBridgeToken.value);
 const loginAcpAgentId = ref(credentials.acpAgentId.value);
+const loginAcpAgents = ref<AcpAgentStatus[]>([]);
+let loginAcpAgentsGeneration = 0;
+let loginAcpAgentsTimer: ReturnType<typeof setTimeout> | null = null;
+
+const loginAcpAgentOptions = computed(() => {
+  const enabled = loginAcpAgents.value.filter((agent) => agent.enabled);
+  const current = loginAcpAgentId.value.trim();
+  if (current && !enabled.some((agent) => agent.id === current)) {
+    return [...enabled, { id: current, name: current }];
+  }
+  return enabled;
+});
+
+function loginAcpAgentLabel(value: unknown) {
+  const id = String(value ?? '');
+  const agent = loginAcpAgentOptions.value.find((item) => item.id === id);
+  return agent ? `${agent.name} (${agent.id})` : id;
+}
+
+async function refreshLoginAcpAgents() {
+  const generation = ++loginAcpAgentsGeneration;
+  const bridgeUrl = loginAcpBridgeUrl.value.trim();
+  if (!bridgeUrl) {
+    loginAcpAgents.value = [];
+    return;
+  }
+  try {
+    const agents = await fetchAcpBridgeAgents({
+      bridgeUrl,
+      bridgeToken: loginAcpBridgeToken.value.trim() || undefined,
+    });
+    if (generation !== loginAcpAgentsGeneration) return;
+    loginAcpAgents.value = agents;
+  } catch {
+    if (generation !== loginAcpAgentsGeneration) return;
+    loginAcpAgents.value = [];
+  }
+}
+
+watch(
+  [loginAcpBridgeUrl, loginAcpBridgeToken, loginBackendKind, uiInitState],
+  () => {
+    if (loginAcpAgentsTimer) clearTimeout(loginAcpAgentsTimer);
+    if (uiInitState.value !== 'login' || loginBackendKind.value !== 'acp') return;
+    loginAcpAgentsTimer = setTimeout(() => {
+      void refreshLoginAcpAgents();
+    }, 300);
+  },
+  { immediate: true },
+);
 const retryStatus = ref<{
   message: string;
   next: number;
@@ -3331,6 +3392,7 @@ function handleSelectedModeUpdate(value: string) {
   selectedMode.value = value;
   if (activeBackendKind.value !== 'codex') applyAgentDefaults(value);
   persistComposerDraftForCurrentContext();
+  syncAcpSelectionToSession();
 }
 
 function handleSelectedPermissionModeUpdate(value: string) {
@@ -3338,7 +3400,10 @@ function handleSelectedPermissionModeUpdate(value: string) {
 }
 
 function hydrateAcpModeConfiguration(options: unknown[]) {
-  const state = createAcpUiModeState(options, selectedAcpPermissionMode.value);
+  const draftAgent = selectedSessionId.value.trim()
+    ? readComposerDraft(selectedSessionId.value)?.agent
+    : undefined;
+  const state = createAcpUiModeState(options, selectedAcpPermissionMode.value, draftAgent);
   const permissions = createAcpPermissionModeList(options);
   agentOptions.value = createAcpAgentSelectorOptions(options, backend().label);
   selectedMode.value = state.agent;
@@ -3347,6 +3412,22 @@ function hydrateAcpModeConfiguration(options: unknown[]) {
     id: option.id,
     label: option.name,
   }));
+}
+
+function syncAcpSelectionToSession() {
+  if (activeBackendKind.value !== 'acp') return;
+  const sessionId = selectedSessionId.value.trim();
+  if (!sessionId) return;
+  const adapter = backend();
+  if (!adapter.syncSessionConfig) return;
+  const { modelID } = parseProviderModelKey(selectedModel.value);
+  void adapter
+    .syncSessionConfig(sessionId, {
+      model: modelID || selectedModel.value,
+      mode: resolvePromptAgentMode(selectedMode.value),
+      thoughtLevel: selectedThinking.value,
+    })
+    .catch((error) => log('ACP selection sync failed', error));
 }
 
 function resolvePromptAgentMode(mode: string) {
@@ -3429,6 +3510,7 @@ function handleApplyHistoryEntry(entry: {
 function handleSelectedModelUpdate(value: string) {
   if (value && !availableModelOptions.value.some((option) => option.id === value)) return;
   selectedModel.value = value;
+  syncAcpSelectionToSession();
   nextTick(() => {
     persistComposerDraftForCurrentContext();
   });
@@ -3487,6 +3569,7 @@ function handleModelVisibilityStorage(event: StorageEvent) {
 function handleSelectedThinkingUpdate(value: string | undefined) {
   selectedThinking.value = value;
   persistComposerDraftForCurrentContext();
+  syncAcpSelectionToSession();
 }
 
 function handleComposerDraftStorage(event: StorageEvent) {
@@ -4097,7 +4180,7 @@ async function deleteWorktree(payload: {
 }
 
 async function handleNewSessionInSandbox(payload: { worktree: string; directory: string }) {
-  await backendSessionLifecycle.createSessionInDirectory(payload.directory);
+  await backendSessionLifecycle.createSessionInDirectory(payload.directory, { reuseExisting: false });
 }
 
 function handleOpenProjectDirectory() {
@@ -4789,13 +4872,17 @@ async function openAcpAuthTerminal() {
     );
     const methods = await listMethods();
     const method =
-      methods.find((candidate) => candidate.type === 'terminal' && candidate.args?.length) ??
+      methods.find(
+        (candidate) =>
+          candidate.type === 'terminal' && (candidate.args?.length || candidate.initialInput),
+      ) ??
       (credentials.acpAgentId.value === 'oh-my-pi'
         ? {
             type: 'terminal',
             id: 'terminal',
             name: 'Set up Oh My Pi in terminal',
-            args: ['--acp-auth-terminal'],
+            args: [],
+            initialInput: '/providers\r',
           }
         : undefined);
     if (!method) throw new Error(t('providerManager.acp.unavailable'));
@@ -4816,15 +4903,43 @@ async function openAcpAuthTerminal() {
           });
           return;
         }
-        const authenticate = requireBackendMethod(
-          backend().authenticateAgent,
-          'ACP authentication completion',
-        );
-        await authenticate(method.id);
+        if (!method.initialInput) {
+          const authenticate = requireBackendMethod(
+            backend().authenticateAgent,
+            'ACP authentication completion',
+          );
+          await authenticate(method.id);
+        }
         await Promise.all([fetchProviders(), fetchAgents()]);
         setSendStatusText(t('providerManager.acp.completed'));
       },
     });
+    if (method.initialInput) {
+      const initialInput = method.initialInput;
+      const socket = shellSessionsByPtyId.get(pty.id)?.socket;
+      const sendInitialInput = () => {
+        // Give the interactive TUI a moment to boot, then deliver the command
+        // text and its carriage return separately — a \r sent too early is
+        // swallowed while the TUI is still switching into raw mode.
+        window.setTimeout(() => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          const text = initialInput.replace(/\r$/u, '');
+          if (text) socket.send(text);
+          if (initialInput.endsWith('\r')) {
+            window.setTimeout(() => {
+              if (socket.readyState === WebSocket.OPEN) socket.send('\r');
+            }, 800);
+          }
+        }, 1500);
+      };
+      if (socket) {
+        if (socket.readyState === WebSocket.OPEN) {
+          sendInitialInput();
+        } else {
+          socket.addEventListener('open', sendInitialInput, { once: true });
+        }
+      }
+    }
   } catch (error) {
     setSendStatusKey('app.error.providerLoadFailed', { message: toErrorMessage(error) });
   }
@@ -6691,7 +6806,15 @@ const acpMessageBridge = useAcpMessageBridge({
   onSessionUpdated: upsertAcpSession,
   onSessionDeleted: removeAcpSession,
   onCommandsUpdated: updateAcpCommands,
-  onConfigUpdated: hydrateAcpModeConfiguration,
+  onConfigUpdated: (options) => {
+    hydrateAcpModeConfiguration(options);
+    void fetchProviders();
+  },
+  onToolPart: (part) => {
+    if (part.type !== 'tool') return;
+    if (suppressAutoWindows.value) return;
+    openToolPartAsWindow(part);
+  },
 });
 
 watchEffect(() => {
@@ -9024,6 +9147,26 @@ body {
 .app-login-input:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.app-login-select {
+  width: 100%;
+}
+
+.app-login-select :deep(.ui-dropdown-button) {
+  padding: 8px 12px;
+  background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
+  border-radius: 6px;
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
+  font-size: 13px;
+  box-shadow: none;
+}
+
+.app-login-select :deep(.ui-dropdown-button:focus),
+.app-login-select.is-open :deep(.ui-dropdown-button) {
+  border-color: var(--theme-login-accent, var(--theme-accent-primary, #475569));
+  background: var(--theme-login-active-bg, var(--theme-surface-panel-active, #0f172a));
 }
 
 .app-login-checkbox {

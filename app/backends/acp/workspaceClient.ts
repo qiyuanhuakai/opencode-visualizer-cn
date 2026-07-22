@@ -1,6 +1,7 @@
 import type { BackendQueryValue, BackendRequestOptions } from '../types';
 import { acpBridgeHttpUrl, normalizeAcpBridgeUrl } from './bridgeUrl';
 import { toRecord } from './wire';
+import type { AcpSessionTurnMeta } from './history';
 
 type WorkspaceClientOptions = {
   bridgeUrl: string;
@@ -83,6 +84,30 @@ export class AcpWorkspaceClient {
       throw new Error(message);
     }
     return value;
+  }
+
+  async getAcpSessionMeta(agentId: string, sessionId: string): Promise<AcpSessionTurnMeta[]> {
+    try {
+      const result = await this.json(
+        `/api/v1/agents/${encodeURIComponent(agentId)}/session-meta/${encodeURIComponent(sessionId)}`,
+      );
+      if (!Array.isArray(result)) return [];
+      return result.flatMap((value): AcpSessionTurnMeta[] => {
+        const record = toRecord(value);
+        if (!record || typeof record.userText !== 'string') return [];
+        return [
+          {
+            userText: record.userText,
+            ...(typeof record.userTime === 'number' ? { userTime: record.userTime } : {}),
+            ...(typeof record.assistantTime === 'number' ? { assistantTime: record.assistantTime } : {}),
+            ...(typeof record.model === 'string' ? { model: record.model } : {}),
+            ...(typeof record.agent === 'string' ? { agent: record.agent } : {}),
+          },
+        ];
+      });
+    } catch {
+      return [];
+    }
   }
 
   listFiles(payload: { directory: string; path?: string }) {

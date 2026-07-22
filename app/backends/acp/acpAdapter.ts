@@ -8,6 +8,7 @@ import type {
   SessionUpdatePayload,
 } from '../types';
 import { AcpClient, type AcpClientOptions, type AcpPromptPayload } from './acpClient';
+import { createAcpAttributionStore } from './attributionStore';
 import { createAcpAgentList, createAcpProviderResponse } from './configOptions';
 import { normalizeAcpBridgeUrl } from './bridgeUrl';
 import { AcpWorkspaceClient } from './workspaceClient';
@@ -83,7 +84,13 @@ export class AcpAdapter implements BackendAdapter {
   private extensionSnapshotPromise: Promise<OmpExtension[]> | null = null;
 
   constructor(options: AcpClientOptions) {
-    this.acp = new AcpClient(options);
+    this.acp = new AcpClient({
+      ...options,
+      attributionStore: options.attributionStore ?? createAcpAttributionStore(),
+      sessionMetaFetcher:
+        options.sessionMetaFetcher ??
+        ((sessionId) => this.workspace.getAcpSessionMeta(options.agentId, sessionId)),
+    });
     this.agentId = options.agentId;
     this.isOhMyPi = options.agentId === 'oh-my-pi';
     this.capabilities.sessionDelete = false;
@@ -253,6 +260,10 @@ export class AcpAdapter implements BackendAdapter {
     return this.acp.getConfigOptions();
   }
 
+  syncSessionConfig(sessionId: string, selection: { model: string; mode: string; thoughtLevel?: string }) {
+    return this.acp.syncSessionConfig(sessionId, selection);
+  }
+
   async listCommands() {
     const commands = this.acp.getAvailableCommands();
     return commands.length > 0 || !this.isOhMyPi ? commands : OMP_FALLBACK_COMMANDS;
@@ -261,26 +272,50 @@ export class AcpAdapter implements BackendAdapter {
   async listAgentAuthMethods() {
     await this.acp.initialize();
     const methods = this.acp.getAuthMethods();
-    return methods.length > 0 || !this.isOhMyPi
-      ? methods
-      : [
-          {
-            type: 'terminal',
-            id: 'terminal',
-            name: 'Set up Oh My Pi in terminal',
-            args: ['--acp-auth-terminal'],
-          },
-        ];
+    if (this.agentId === 'kimi-code') {
+      // kimi --login does not exist ("unknown option --login"); providers are
+      // configured in the interactive TUI via the /provider page. Replace the
+      // broken advertised method with a plain TUI terminal plus the /provider
+      // keystrokes as initial input.
+      return [
+        {
+          type: 'terminal',
+          id: 'terminal',
+          name: 'Set up Kimi Code in terminal',
+          args: [],
+          initialInput: '/provider\r',
+        },
+      ];
+    }
+    if (this.isOhMyPi) {
+      // Provider setup lives in the TUI's /providers page; auto-type it after boot.
+      // Keep the agent-advertised terminal args (--acp-terminal-auth) when present.
+      const withInput = methods.map((method) =>
+        method.type === 'terminal' ? { ...method, initialInput: '/providers\r' } : method,
+      );
+      if (withInput.some((method) => method.type === 'terminal')) return withInput;
+      return [
+        ...withInput,
+        {
+          type: 'terminal',
+          id: 'terminal',
+          name: 'Set up Oh My Pi in terminal',
+          args: [],
+          initialInput: '/providers\r',
+        },
+      ];
+    }
+    return methods;
   }
 
   async createAgentAuthPty(methodId: string) {
     const method = (await this.listAgentAuthMethods()).find(
       (candidate) => candidate.id === methodId,
     );
-    if (!method || method.type !== 'terminal' || !method.args?.length) {
+    if (!method || method.type !== 'terminal' || (!method.args?.length && !method.initialInput)) {
       throw new Error(`ACP terminal authentication method is unavailable: ${methodId}.`);
     }
-    return this.workspace.createManagedAgentTerminal(this.agentId, method.args, method.name);
+    return this.workspace.createManagedAgentTerminal(this.agentId, method.args ?? [], method.name);
   }
 
   authenticateAgent(methodId: string) {

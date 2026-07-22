@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -238,4 +238,73 @@ describe('ACP client method handler', () => {
       { agentId: 'echo' },
     );
   });
+  it('returns empty content for missing files inside the agent data dir but still errors for workspace misses', async () => {
+    const workspace = await createWorkspace();
+    const fakeHome = await createWorkspace();
+    const handler = createAcpClientMethodHandler({ homeDir: fakeHome });
+    registerSession(handler, workspace, 'kimi-code');
+
+    // Transient plan artifact deleted after the turn: degrade to empty content.
+    const missingPlan = path.join(fakeHome, '.kimi-code', 'sessions', 'wd_x', 'session_1', 'agents', 'main', 'plans', 'gone.md');
+    await expect(
+      handler(
+        {
+          id: 30,
+          method: 'fs/read_text_file',
+          params: { sessionId: 'session-1', path: missingPlan },
+        },
+        { agentId: 'kimi-code' },
+      ),
+    ).resolves.toEqual({ content: '' });
+
+    // A missing file inside the workspace must surface an error (not silent empty).
+    await expect(
+      handler(
+        {
+          id: 31,
+          method: 'fs/read_text_file',
+          params: { sessionId: 'session-1', path: path.join(workspace, 'missing.txt') },
+        },
+        { agentId: 'kimi-code' },
+      ),
+    ).rejects.toThrow();
+  });
+
+
+  it('allows filesystem access inside the agent data directory but not for other agents', async () => {
+    const workspace = await createWorkspace();
+    const fakeHome = await createWorkspace();
+    const planDir = path.join(fakeHome, '.kimi-code', 'sessions', 'wd_x', 'session_1', 'agents', 'main', 'plans');
+    await mkdir(planDir, { recursive: true });
+    const planFile = path.join(planDir, 'plan.md');
+    await writeFile(planFile, 'plan-content', 'utf8');
+
+    const handler = createAcpClientMethodHandler({ homeDir: fakeHome });
+    registerSession(handler, workspace, 'kimi-code');
+    registerSession(handler, workspace, 'other-agent', 'session-2', 2);
+
+    await expect(
+      handler(
+        {
+          id: 20,
+          method: 'fs/read_text_file',
+          params: { sessionId: 'session-1', path: planFile },
+        },
+        { agentId: 'kimi-code' },
+      ),
+    ).resolves.toEqual({ content: 'plan-content' });
+
+    await expect(
+      handler(
+        {
+          id: 21,
+          method: 'fs/read_text_file',
+          params: { sessionId: 'session-2', path: planFile },
+        },
+        { agentId: 'other-agent' },
+      ),
+    ).rejects.toThrow('outside the ACP session roots');
+  });
+
+
 });

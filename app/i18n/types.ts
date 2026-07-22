@@ -301,6 +301,7 @@ export interface LocaleMessages {
       needsRegistration: string;
       noData: string;
       unsupported: string;
+      unsupportedAcp: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -311,6 +312,7 @@ export interface LocaleMessages {
       error: string;
       noData: string;
       unsupported: string;
+      unsupportedAcp: string;
     };
     plugins: {
       marketplaces: string;
@@ -321,11 +323,13 @@ export interface LocaleMessages {
       installed: string;
       hiddenUnavailable: string;
       unsupported: string;
+      unsupportedAcp: string;
     };
     skills: {
       total: string;
       noData: string;
       unsupported: string;
+      unsupportedAcp: string;
       enable: string;
       disable: string;
       toggleFailed: string;

@@ -1,4 +1,5 @@
 import { constants } from 'node:fs';
+import os from 'node:os';
 import { open, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createAcpTerminalManager } from './acpTerminalManager.js';
@@ -28,6 +29,15 @@ function parseRoots(params) {
 function isWithin(root, target) {
   return target === root || target.startsWith(`${root}${path.sep}`);
 }
+
+// Well-known per-agent data directories (relative to the user's home).
+// Agents can already read/write these paths directly as local processes; the
+// reverse-FS sandbox would otherwise break agents that keep session artifacts
+// (plans, transcripts) outside the workspace cwd.
+const AGENT_DATA_DIR_DEFAULTS = {
+  'kimi-code': ['.kimi-code'],
+  'oh-my-pi': ['.omp'],
+};
 
 export function createAcpClientMethodHandler(options = {}) {
   const terminalManager = options.terminalManager ?? createAcpTerminalManager();
@@ -72,12 +82,22 @@ export function createAcpClientMethodHandler(options = {}) {
     return params;
   }
 
+  const homeDir = options.homeDir ?? os.homedir();
+  function extraRoots(agentId) {
+    const configured = options.agentDataDirs?.[agentId];
+    if (Array.isArray(configured)) {
+      return configured.filter((dir) => typeof dir === 'string' && path.isAbsolute(dir));
+    }
+    return (AGENT_DATA_DIR_DEFAULTS[agentId] ?? []).map((dir) => path.join(homeDir, dir));
+  }
+
   async function resolveSessionPath(agentId, sessionId, requestedPath, forWrite = false) {
     if (typeof requestedPath !== 'string' || !path.isAbsolute(requestedPath)) {
       throw new Error('ACP filesystem paths must be absolute.');
     }
-    const roots = sessionRoots.get(sessionKey(agentId, sessionId));
-    if (!roots) throw new Error(`ACP session roots are unknown: ${sessionId}`);
+    const registered = sessionRoots.get(sessionKey(agentId, sessionId));
+    if (!registered) throw new Error(`ACP session roots are unknown: ${sessionId}`);
+    const roots = [...registered, ...extraRoots(agentId)];
     const resolved = path.resolve(requestedPath);
     if (!roots.some((rootPath) => isWithin(path.resolve(rootPath), resolved))) {
       throw new Error(`Path is outside the ACP session roots: ${requestedPath}`);
@@ -90,26 +110,46 @@ export function createAcpClientMethodHandler(options = {}) {
       target = await realpath(path.dirname(requestedPath));
     }
     for (const rootPath of roots) {
-      const root = await realpath(rootPath);
-      if (isWithin(root, target)) return requestedPath;
+      const root = await realpath(rootPath).catch(() => null);
+      if (root && isWithin(root, target)) return requestedPath;
     }
     throw new Error(`Path is outside the ACP session roots: ${requestedPath}`);
   }
 
+  function isWithinAgentDataDir(agentId, sessionId, requestedPath) {
+    if (typeof requestedPath !== 'string' || !path.isAbsolute(requestedPath)) return false;
+    if (!sessionRoots.has(sessionKey(agentId, sessionId))) return false;
+    const resolved = path.resolve(requestedPath);
+    return extraRoots(agentId).some((dir) => isWithin(path.resolve(dir), resolved));
+  }
   async function handler(request, context) {
     const params = requireParams(request);
     if (request.method === 'fs/read_text_file') {
-      const filePath = await resolveSessionPath(context.agentId, params.sessionId, params.path);
-      const content = await readFile(filePath, 'utf8');
-      const line = typeof params.line === 'number' ? Math.max(1, Math.trunc(params.line)) : 1;
-      const limit =
-        typeof params.limit === 'number' ? Math.max(0, Math.trunc(params.limit)) : undefined;
-      const lines = content.split(/\r?\n/u);
-      return {
-        content: lines
-          .slice(line - 1, limit === undefined ? undefined : line - 1 + limit)
-          .join('\n'),
-      };
+      try {
+        const filePath = await resolveSessionPath(context.agentId, params.sessionId, params.path);
+        const content = await readFile(filePath, 'utf8');
+        const line = typeof params.line === 'number' ? Math.max(1, Math.trunc(params.line)) : 1;
+        const limit =
+          typeof params.limit === 'number' ? Math.max(0, Math.trunc(params.limit)) : undefined;
+        const lines = content.split(/\r?\n/u);
+        return {
+          content: lines
+            .slice(line - 1, limit === undefined ? undefined : line - 1 + limit)
+            .join('\n'),
+        };
+      } catch (error) {
+        // Agents store transient artifacts (plans, scratch state) in their own
+        // data directories; those can legitimately vanish between turns. A
+        // missing workspace file stays an error, but a missing agent-data file
+        // degrades to empty content so session/load replay is not aborted.
+        if (
+          error && typeof error === 'object' && error.code === 'ENOENT' &&
+          isWithinAgentDataDir(context.agentId, params.sessionId, params.path)
+        ) {
+          return { content: '' };
+        }
+        throw error;
+      }
     }
     if (request.method === 'fs/write_text_file') {
       if (typeof params.content !== 'string')

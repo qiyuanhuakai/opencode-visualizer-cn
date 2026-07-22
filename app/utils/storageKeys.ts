@@ -78,6 +78,7 @@ export const StorageKeys = {
     codexActiveThread: 'state.codexActiveThread.v1',
     forgePtyId: 'state.forgePtyId.v1',
     acpArchivedSessions: 'state.acpArchivedSessions.v1',
+    acpMessageAttribution: 'state.acpMessageAttribution.v1',
   },
   drafts: {
     composer: 'drafts.composer.v1',

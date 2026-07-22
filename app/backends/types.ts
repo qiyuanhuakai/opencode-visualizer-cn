@@ -41,6 +41,7 @@ export type AgentAuthMethod = {
   description?: string;
   type?: string;
   args?: string[];
+  initialInput?: string;
 };
 
 export type ConfigMergeStrategy = 'replace' | 'upsert';
@@ -158,6 +159,10 @@ export type BackendAdapter = {
   createAgentAuthPty?(methodId: string): Promise<unknown>;
   authenticateAgent?(methodId: string): Promise<void>;
   getSessionConfigOptions?(): unknown[];
+  syncSessionConfig?(
+    sessionId: string,
+    selection: { model: string; mode: string; thoughtLevel?: string },
+  ): Promise<unknown>;
   listCommands?(directory?: string): Promise<unknown>;
   getSessionStatusMap?(directory?: string, options?: BackendRequestOptions): Promise<unknown>;
   listPendingPermissions?(directory?: string): Promise<unknown>;

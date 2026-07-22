@@ -61,6 +61,25 @@ const skillUnsupported = ref(false);
 const mcpUnsupported = ref(false);
 const lspUnsupported = ref(false);
 const pluginUnsupported = ref(false);
+const isAcpBackend = computed(() => props.activeBackendKind === 'acp');
+const mcpUnsupportedText = computed(() =>
+  t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported'),
+);
+const lspUnsupportedText = computed(() =>
+  t(isAcpBackend.value ? 'statusMonitor.lsp.unsupportedAcp' : 'statusMonitor.lsp.unsupported'),
+);
+const skillUnsupportedText = computed(() =>
+  t(
+    isAcpBackend.value ? 'statusMonitor.skills.unsupportedAcp' : 'statusMonitor.skills.unsupported',
+  ),
+);
+const pluginUnsupportedText = computed(() =>
+  t(
+    isAcpBackend.value
+      ? 'statusMonitor.plugins.unsupportedAcp'
+      : 'statusMonitor.plugins.unsupported',
+  ),
+);
 const configData = ref<Record<string, unknown> | null>(null);
 const codexPluginData = ref<CodexPlugin[]>([]);
 const backendPluginData = ref<Array<{
@@ -225,9 +244,10 @@ async function refresh() {
   mcpUnsupported.value = typeof activeBackend.getMcpStatus !== 'function';
   lspUnsupported.value = typeof activeBackend.getLspStatus !== 'function';
   skillUnsupported.value = typeof activeBackend.getSkillStatus !== 'function';
-  pluginUnsupported.value =
-    typeof activeBackend.getPluginStatus !== 'function' &&
-    typeof activeBackend.getGlobalConfig !== 'function';
+  pluginUnsupported.value = isAcpBackend.value
+    ? typeof activeBackend.getPluginStatus !== 'function'
+    : typeof activeBackend.getPluginStatus !== 'function' &&
+      typeof activeBackend.getGlobalConfig !== 'function';
   try {
     const [health, mcp, lsp, skills, cfg, plugins] = await Promise.allSettled([
       activeBackend.getGlobalHealth?.() ?? Promise.resolve(null),
@@ -257,8 +277,8 @@ async function refresh() {
     if (!mcpUnsupported.value && mcp.status === 'rejected') mcpUnsupported.value = true;
     if (!lspUnsupported.value && lsp.status === 'rejected') lspUnsupported.value = true;
     if (!skillUnsupported.value && skills.status === 'rejected') skillUnsupported.value = true;
-    if (!pluginUnsupported.value && plugins.status === 'rejected' && cfg.status === 'rejected') {
-      pluginUnsupported.value = true;
+    if (!pluginUnsupported.value && plugins.status === 'rejected') {
+      if (isAcpBackend.value || cfg.status === 'rejected') pluginUnsupported.value = true;
     }
 
     // Fetch token data for current session separately
@@ -750,7 +770,7 @@ function formatPercent(value: number, total: number): string {
             {{ $t('statusMonitor.loading') }}
           </div>
           <div v-else-if="mcpUnsupported && mcpEntries.length === 0" class="status-monitor-empty">
-            {{ $t('statusMonitor.mcp.unsupported') }}
+            {{ mcpUnsupportedText }}
           </div>
           <div v-else-if="mcpEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.mcp.noData') }}
@@ -797,7 +817,7 @@ function formatPercent(value: number, total: number): string {
             {{ $t('statusMonitor.loading') }}
           </div>
           <div v-else-if="lspUnsupported && (lspData || []).length === 0" class="status-monitor-empty">
-            {{ $t('statusMonitor.lsp.unsupported') }}
+            {{ lspUnsupportedText }}
           </div>
           <div v-else-if="(lspData || []).length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.lsp.noData') }}
@@ -828,9 +848,9 @@ function formatPercent(value: number, total: number): string {
             {{ $t('statusMonitor.loading') }}
           </div>
           <div v-else-if="pluginUnsupported" class="status-monitor-empty">
-            {{ $t('statusMonitor.plugins.unsupported') }}
+            {{ pluginUnsupportedText }}
           </div>
-          <div v-else class="status-monitor-summary-grid">
+          <div v-else-if="activeBackendKind === 'codex'" class="status-monitor-summary-grid">
             <div class="status-monitor-summary-chip">
               <span class="status-monitor-summary-label">{{ $t('statusMonitor.plugins.marketplaces') }}</span>
               <span class="status-monitor-summary-value">{{ pluginStats.marketplaces }}</span>
@@ -884,7 +904,7 @@ function formatPercent(value: number, total: number): string {
             {{ $t('statusMonitor.loading') }}
           </div>
           <div v-else-if="skillUnsupported && skillEntries.length === 0" class="status-monitor-empty">
-            {{ $t('statusMonitor.skills.unsupported') }}
+            {{ skillUnsupportedText }}
           </div>
           <div v-else-if="skillEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.skills.noData') }}

@@ -44,9 +44,25 @@ export function parseAcpSelectOptions(values: unknown[]): AcpSelectOption[] {
 }
 
 export function createAcpProviderResponse(values: unknown[], label: string) {
-  const model = parseAcpSelectOptions(values).find(
+  const selects = parseAcpSelectOptions(values);
+  const model = selects.find(
     (option) => option.category === 'model' || option.id === 'model',
   );
+  const thought = selects.find(
+    (option) =>
+      option.category === 'thought_level' || option.category === 'thinking' || option.id === 'thinking',
+  );
+  const variants = thought?.options.length
+    ? Object.fromEntries(
+        thought.options.map((option) => [
+          option.value,
+          {
+            name: option.name,
+            ...(option.description ? { description: option.description } : {}),
+          },
+        ]),
+      )
+    : undefined;
   const options = model?.options.length
     ? model.options
     : [{ value: 'default', name: 'Agent default' }];
@@ -63,6 +79,7 @@ export function createAcpProviderResponse(values: unknown[], label: string) {
               name: option.name,
               providerID: 'acp',
               capabilities: { attachment: true, reasoning: true, toolcall: true },
+              ...(variants ? { variants } : {}),
             },
           ]),
         ),
@@ -79,7 +96,7 @@ function isAcpPermissionMode(value: string) {
   return ACP_PERMISSION_MODE_VALUES.has(value);
 }
 
-function toAcpAgentModeId(value: string) {
+export function toAcpAgentModeId(value: string) {
   return value === 'normal' || value === 'default' ? 'default' : value;
 }
 
@@ -127,7 +144,11 @@ export function resolveAcpModeSelection(agent: string, permissionMode: string) {
   return agent === 'default' ? permissionMode : agent;
 }
 
-export function createAcpUiModeState(values: unknown[], previousPermissionMode: string) {
+export function createAcpUiModeState(
+  values: unknown[],
+  previousPermissionMode: string,
+  preferredAgent?: string,
+) {
   const mode = parseAcpSelectOptions(values).find(
     (option) => option.category === 'mode' || option.id === 'mode',
   );
@@ -138,9 +159,12 @@ export function createAcpUiModeState(values: unknown[], previousPermissionMode: 
       ? previousPermissionMode
       : permission.current;
   const agentOptions = createAcpAgentSelectorOptions(values, 'ACP');
-  const currentAgent = mode?.currentValue && isAcpAgentMode(mode.currentValue)
+  const serverAgent = mode?.currentValue && isAcpAgentMode(mode.currentValue)
     ? toAcpAgentModeId(mode.currentValue)
     : 'default';
+  const currentAgent = preferredAgent && agentOptions.some((option) => option.id === preferredAgent)
+    ? preferredAgent
+    : serverAgent;
   return {
     agent: agentOptions.some((option) => option.id === currentAgent) ? currentAgent : 'default',
     permissionMode,
@@ -172,7 +196,15 @@ export async function syncAcpPromptConfig(
       !option.options.some((candidate) => candidate.value === target.value)
     )
       continue;
-    await request({ sessionId, configId: option.id, value: target.value });
+    // Config sync is best-effort: some agents (kimi-code) reject idempotent sets
+    // ("Already in plan mode") with a protocol error. A rejected option must not
+    // abort the prompt or skip the remaining options; the local currentValue is
+    // left untouched so the true server state is not masked.
+    try {
+      await request({ sessionId, configId: option.id, value: target.value });
+    } catch {
+      continue;
+    }
     const source = values.find((value) => toRecord(value)?.id === option.id);
     const sourceRecord = toRecord(source);
     if (sourceRecord) sourceRecord.currentValue = target.value;

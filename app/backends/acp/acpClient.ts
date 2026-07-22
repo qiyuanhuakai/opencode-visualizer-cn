@@ -5,8 +5,12 @@ import {
   beginAcpPrompt,
   completeAcpPrompt,
   createAcpSessionState,
+  reattributeAcpEntries,
+  applyAcpAttribution,
+  applyAcpSessionMeta,
   type AcpHistoryEntry,
   type AcpSessionState,
+  type AcpSessionTurnMeta,
 } from './history';
 import {
   parseInitializeResult,
@@ -24,6 +28,7 @@ import { syncAcpPromptConfig } from './configOptions';
 import { loadAcpSessionHistory } from './sessionHistory';
 import { ACP_PROJECT_ID } from './bridgeUrl';
 import type { AcpClientEvent, AcpClientOptions, AcpPromptPayload } from './acpClientTypes';
+import type { AcpAttributionStore } from './attributionStore';
 
 export type { AcpPermissionRequest } from './permissionStore';
 export type { AcpClientEvent, AcpClientOptions, AcpPromptPayload } from './acpClientTypes';
@@ -55,10 +60,14 @@ export class AcpClient {
   private initializeResult: AcpInitializeResult | null = null;
   private activeSessionId: string | null = null;
   private lifecycleGeneration = 0;
+  private readonly attributionStore?: AcpAttributionStore;
+  private readonly sessionMetaFetcher?: (sessionId: string) => Promise<AcpSessionTurnMeta[]>;
 
   constructor(options: AcpClientOptions) {
     this.agentId = options.agentId;
     this.now = options.now ?? Date.now;
+    this.attributionStore = options.attributionStore;
+    this.sessionMetaFetcher = options.sessionMetaFetcher;
     this.client = new CodexJsonRpcClient({
       url: options.url,
       connectionLabel: 'ACP',
@@ -90,9 +99,22 @@ export class AcpClient {
     for (const handler of this.eventHandlers) handler(event);
   }
 
-  private emitEntry(entry: AcpHistoryEntry) {
-    this.emit({ type: 'message.updated', info: entry.info });
-    for (const part of entry.parts) this.emit({ type: 'message.part.updated', part });
+  private emitEntry(entry: AcpHistoryEntry, replay = false) {
+    this.emit({ type: 'message.updated', info: entry.info, replay });
+    for (const part of entry.parts) this.emit({ type: 'message.part.updated', part, replay });
+  }
+
+  private recordAttribution(entry: AcpHistoryEntry) {
+    if (!this.attributionStore) return;
+    const info = entry.info;
+    this.attributionStore.set(info.sessionID, info.id, {
+      agent: info.role === 'user' ? info.agent : info.mode,
+      modelID: info.role === 'user' ? info.model.modelID : info.modelID,
+      created: info.time.created,
+      ...(info.role === 'assistant' && typeof info.time.completed === 'number'
+        ? { completed: info.time.completed }
+        : {}),
+    });
   }
 
   async initialize() {
@@ -252,7 +274,11 @@ export class AcpClient {
         { model: payload.model.modelID, mode: payload.agent, thoughtLevel: payload.variant },
         (params) => this.client.request('session/set_config_option', params),
       );
-      const entries = beginAcpPrompt(state, payload.parts, this.now(), this.agentId);
+      const entries = beginAcpPrompt(state, payload.parts, this.now(), this.agentId, {
+        agent: payload.agent,
+        modelID: payload.model.modelID,
+      });
+      entries.forEach((entry) => this.recordAttribution(entry));
       state.info.status = 'busy';
       this.emit({ type: 'session.updated', info: state.info });
       entries.forEach((entry) => this.emitEntry(entry));
@@ -265,11 +291,15 @@ export class AcpClient {
           await this.client.request('session/prompt', { sessionId, prompt }),
         );
         const completed = completeAcpPrompt(state, result.stopReason, this.now(), result.usage);
-        if (completed) this.emitEntry(completed);
+        if (completed) {
+          this.recordAttribution(completed);
+          this.emitEntry(completed);
+        }
         state.info.status = 'idle';
         this.emit({ type: 'session.updated', info: state.info });
       } catch (error) {
         const completed = completeAcpPrompt(state, 'error', this.now());
+        if (completed) this.recordAttribution(completed);
         if (completed?.info.role === 'assistant') {
           completed.info.error = {
             name: 'ACPError',
@@ -290,6 +320,7 @@ export class AcpClient {
     await this.initialize();
     this.activatedSessions.add(sessionId);
     this.activeSessionId = sessionId;
+    const wasLoaded = this.loadedSessions.has(sessionId);
     const existing = this.historyLoads.get(sessionId);
     if (existing) return existing;
     const generation = this.lifecycleGeneration;
@@ -307,6 +338,20 @@ export class AcpClient {
       const entries = await loading;
       const state = this.sessions.get(sessionId);
       if (state) {
+        if (!wasLoaded) {
+          reattributeAcpEntries(state, this.agentId);
+          const restored = applyAcpAttribution(state, this.attributionStore?.get(sessionId) ?? {});
+          if (this.sessionMetaFetcher) {
+            try {
+              const turns = await this.sessionMetaFetcher(sessionId);
+              if (Array.isArray(turns) && turns.length > 0) {
+                applyAcpSessionMeta(state, turns, restored);
+              }
+            } catch {
+              // Session meta is a best-effort backfill; never block history.
+            }
+          }
+        }
         state.info.status = state.status;
         this.emit({ type: 'session.updated', info: state.info });
         this.emit({ type: 'config.updated', options: state.configOptions });
@@ -315,6 +360,15 @@ export class AcpClient {
     } finally {
       if (this.historyLoads.get(sessionId) === loading) this.historyLoads.delete(sessionId);
     }
+  }
+
+  async syncSessionConfig(sessionId: string, selection: { model: string; mode: string; thoughtLevel?: string }) {
+    await this.initialize();
+    const state = this.sessions.get(sessionId);
+    if (!state) return;
+    await syncAcpPromptConfig(sessionId, state.configOptions, selection, (params) =>
+      this.client.request('session/set_config_option', params),
+    );
   }
 
   getSessionStatusMap() {
@@ -392,7 +446,7 @@ export class AcpClient {
     this.sessions.set(params.sessionId, state);
     const entry = applyAcpUpdate(state, params.update, this.now(), this.agentId);
     state.info.status = state.status;
-    if (entry) this.emitEntry(entry);
+    if (entry) this.emitEntry(entry, !this.promptingSessions.has(params.sessionId));
     const update = toRecord(params.update);
     if (update?.sessionUpdate === 'available_commands_update') {
       this.emit({ type: 'commands.updated', commands: this.getAvailableCommands() });

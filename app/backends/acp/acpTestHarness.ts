@@ -1,4 +1,5 @@
 import { createAcpAdapter } from './acpAdapter';
+import type { AcpClientOptions } from './acpClientTypes';
 
 type ListenerMap = {
   open: Array<() => void>;
@@ -71,6 +72,38 @@ export async function initializeAdapter() {
         sessionCapabilities: { list: {} },
       },
       agentInfo: { name: 'oh-my-pi', title: 'Oh My Pi', version: '14.9.2' },
+    },
+  });
+  await initializing;
+  return { adapter, socket };
+}
+
+export async function initializeAdapterWithOptions(options?: Partial<AcpClientOptions> & { initializeAuthMethods?: unknown[] }) {
+  MockAcpWebSocket.instances = [];
+  const adapter = createAcpAdapter({
+    url: 'ws://localhost:23004/acp/oh-my-pi?token=secret',
+    agentId: 'oh-my-pi',
+    now: () => 1_700_000_000_000,
+    webSocketCtor: MockAcpWebSocket,
+    ...options,
+  });
+  const initializing = adapter.initialize();
+  const socket = MockAcpWebSocket.instances[0];
+  if (!socket) throw new Error('Expected ACP WebSocket instance.');
+  socket.open();
+  await Promise.resolve();
+  socket.receive({
+    jsonrpc: '2.0',
+    id: 1,
+    result: {
+      protocolVersion: 1,
+      agentCapabilities: {
+        loadSession: true,
+        promptCapabilities: { image: true },
+        sessionCapabilities: { list: {} },
+      },
+      agentInfo: { name: 'oh-my-pi', title: 'Oh My Pi', version: '14.9.2' },
+      ...(options?.initializeAuthMethods ? { authMethods: options.initializeAuthMethods } : {}),
     },
   });
   await initializing;

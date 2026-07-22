@@ -80,4 +80,56 @@ describe('useAcpMessageBridge', () => {
     expect(bridge.bind).toHaveBeenCalledWith(source);
     expect(bridge.stop).toHaveBeenCalledOnce();
   });
+
+  it('forwards live tool parts to onToolPart but suppresses replay-flagged events', () => {
+    let handler: ((event: AcpClientEvent) => void) | undefined;
+    const adapter = {
+      onEvent: vi.fn((next: (event: AcpClientEvent) => void) => {
+        handler = next;
+        return () => {
+          handler = undefined;
+        };
+      }),
+    };
+    const onToolPart = vi.fn();
+    const bridge = useAcpMessageBridge({
+      msg: { updateMessage: vi.fn(), updatePart: vi.fn() },
+      upsertPermissionEntry: vi.fn(),
+      onSessionUpdated: vi.fn(),
+      onToolPart,
+    });
+    bridge.bind(adapter);
+
+    const toolPart = {
+      id: 'part-tool',
+      sessionID: 'session-1',
+      messageID: 'assistant-1',
+      type: 'tool' as const,
+      callID: 'call-1',
+      tool: 'read',
+      state: {
+        status: 'completed' as const,
+        input: {},
+        output: 'ok',
+        title: 'read',
+        metadata: {},
+        time: { start: 1, end: 2 },
+      },
+    };
+    const textPart = {
+      id: 'part-text',
+      sessionID: 'session-1',
+      messageID: 'assistant-1',
+      type: 'text' as const,
+      text: 'hello',
+    };
+
+    handler?.({ type: 'message.part.updated', part: toolPart });
+    handler?.({ type: 'message.part.updated', part: textPart });
+    handler?.({ type: 'message.part.updated', part: { ...toolPart, id: 'part-tool-replay' }, replay: true });
+
+    expect(onToolPart).toHaveBeenCalledTimes(1);
+    expect(onToolPart).toHaveBeenCalledWith(toolPart);
+    bridge.stop();
+  });
 });

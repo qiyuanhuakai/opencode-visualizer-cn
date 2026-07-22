@@ -178,4 +178,50 @@ describe('useBackendSessionLifecycle', () => {
     await expect(lifecycle.handleProjectDirectorySelect('/repo')).resolves.toBe('acp-session');
     expect(createSession).toHaveBeenCalledTimes(1);
   });
+
+  it('createNewSession always creates a fresh ACP session even when one exists in the directory', async () => {
+    const selectedProjectId = ref('');
+    const selectedSessionId = ref('');
+    const existingSession = { id: 'old-session', directory: '/repo', title: 'Old' };
+    const createdSession = { id: 'new-session', directory: '/repo', title: 'new-session' };
+    const createSession = vi.fn().mockResolvedValue(createdSession);
+    const lifecycle = useBackendSessionLifecycle({
+      activeBackendKind: ref('acp'),
+      codexProjectId: 'codex',
+      acpProjectId: 'acp',
+      selectedProjectId,
+      selectedSessionId,
+      activeDirectory: ref('/repo'),
+      homePath: ref('/home/test'),
+      codexPendingSessionLock: ref(''),
+      codexSessionCreationByDirectory: new Map(),
+      openCodeApi: { createSession: vi.fn() },
+      codexApi: {
+        homeDir: ref('/home/test'),
+        activeThreadId: ref(''),
+        visibleThreads: ref([]),
+        startThread: vi.fn(),
+        refreshHomeDir: vi.fn(),
+        interruptActiveTurn: vi.fn(),
+      },
+      normalizeProjectDirectoryForActiveBackend: (directory) => directory,
+      codexThreadDirectoryMatch: () => false,
+      ensureConnectionReady: () => true,
+      translate: (key) => key,
+      toErrorMessage: (error) => String(error),
+      setSessionError: vi.fn(),
+      clearSessionError: vi.fn(),
+      setSendStatusKey: vi.fn(),
+      isAborting: ref(false),
+      busyDescendantSessionIds: ref([]),
+      backendCreateSession: createSession,
+      findAcpSessionByDirectory: () => existingSession,
+      backendAbortSession: undefined,
+    });
+
+    const session = await lifecycle.createNewSession();
+    expect(createSession).toHaveBeenCalledWith('/repo');
+    expect(session?.id).toBe('new-session');
+    expect(selectedSessionId.value).toBe('new-session');
+  });
 });

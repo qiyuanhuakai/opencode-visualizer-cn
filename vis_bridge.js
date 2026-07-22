@@ -16,6 +16,7 @@ import { createBridgeConfigStore } from './bridge/bridgeConfig.js';
 import { createBridgeRuntime } from './bridge/bridgeRuntime.js';
 import { runWorkspaceCommand } from './bridge/workspaceCommand.js';
 import { createWorkspaceFsManager } from './bridge/workspaceFs.js';
+import { loadAcpSessionTurnMeta } from './bridge/acpSessionMeta.js';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 23004;
@@ -751,6 +752,17 @@ async function handleSupervisorHttpRequest(request, response, requestUrl, runtim
   if (requestUrl.pathname === '/api/v1/agents' && request.method === 'POST') {
     const agent = await runtime.upsertAgent(await readJsonBody(request));
     writeJsonHttpResponse(response, 201, agent);
+    return true;
+  }
+  const sessionMetaMatch = requestUrl.pathname.match(
+    /^\/api\/v1\/agents\/([^/]+)\/session-meta\/([^/]+)$/u,
+  );
+  if (sessionMetaMatch && request.method === 'GET') {
+    const meta = await loadAcpSessionTurnMeta(
+      decodeURIComponent(sessionMetaMatch[1]),
+      decodeURIComponent(sessionMetaMatch[2]),
+    );
+    writeJsonHttpResponse(response, meta ? 200 : 404, meta ?? { error: 'ACP session meta unavailable.' });
     return true;
   }
   const match = requestUrl.pathname.match(/^\/api\/v1\/agents\/([^/]+)$/u);

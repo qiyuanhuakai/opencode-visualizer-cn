@@ -20,7 +20,7 @@ const messages: LocaleMessages = {
       codexBridgeToken: 'Bridge token（任意）',
       codexBridgeHint:
         'vis_bridge は、Vis/Electron と Codex CLI をリモート配置でもつなぐ必須の境界です。',
-      acpAgentId: '有効な ACP エージェント ID（例: oh-my-pi）',
+      acpAgentId: '有効な ACP エージェントを選択',
       acpBridgeHint:
         'エージェントは「ステータスモニター → ACP」で有効かつ実行中である必要があります。',
       acpBridgeUrl: 'vis_bridge WebSocket URL',
@@ -307,6 +307,7 @@ const messages: LocaleMessages = {
       needsRegistration: 'クライアント登録が必要',
       noData: 'MCPサーバーが設定されていません。',
       unsupported: 'このバックエンドは構造化された MCP 状態を公開していません。',
+      unsupportedAcp: 'この ACP エージェントは構造化された MCP 状態を公開していません。',
       enable: '有効化',
       disable: '無効化',
       toggleFailed: 'MCP状態の切り替えに失敗しました',
@@ -316,7 +317,8 @@ const messages: LocaleMessages = {
       connected: '接続済み',
       error: 'エラー',
       noData: 'アクティブなLSPサーバーがありません。',
-      unsupported: 'この ACP エージェントは構造化された LSP 状態を公開していません。',
+      unsupported: 'このバックエンドは構造化された LSP 状態を公開していません。',
+      unsupportedAcp: 'この ACP エージェントは構造化された LSP 状態を公開していません。',
     },
     plugins: {
       marketplaces: 'マーケットプレイス',
@@ -327,11 +329,13 @@ const messages: LocaleMessages = {
       installed: 'インストール済み',
       hiddenUnavailable: '{count} 個のカタログプラグインはこのセッションでは利用できません。',
       unsupported: 'このバックエンドは構造化されたプラグイン状態を公開していません。',
+      unsupportedAcp: 'この ACP エージェントは構造化されたプラグイン状態を公開していません。',
     },
     skills: {
       total: '合計: {count}',
       noData: 'スキルが読み込まれていません。',
       unsupported: '現在のOpenCodeバージョンではスキル状態の表示がサポートされていません。',
+      unsupportedAcp: 'この ACP エージェントは構造化されたスキル状態を公開していません。',
       enable: 'スキルを有効化',
       disable: 'スキルを無効化',
       toggleFailed: 'スキルの切り替えに失敗しました。',

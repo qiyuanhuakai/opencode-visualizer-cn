@@ -30,6 +30,7 @@ export function useAcpMessageBridge(options: {
   onSessionDeleted?(sessionId: string): void;
   onCommandsUpdated?(commands: Array<Record<string, unknown>>): void;
   onConfigUpdated?(options: unknown[]): void;
+  onToolPart?(part: MessagePart): void;
 }) {
   let unsubscribe: (() => void) | undefined;
 
@@ -45,6 +46,7 @@ export function useAcpMessageBridge(options: {
         options.msg.updateMessage(event.info);
       } else if (event.type === 'message.part.updated') {
         options.msg.updatePart(event.part);
+        if (!event.replay && event.part.type === 'tool') options.onToolPart?.(event.part);
       } else if (event.type === 'permission.asked') {
         options.upsertPermissionEntry(event.request);
       } else if (event.type === 'session.updated') {

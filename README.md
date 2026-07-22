@@ -144,7 +144,7 @@ pnpm bridge:build
 ./dist-bridge/vis_bridge
 ```
 
-vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 默认禁用，可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。
+vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 中 Kimi Code、Oh My Pi 与 Pi 默认启用，其余可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。
 ### 使用 Codex Panel
 
 1. 进入 Vis 的"设置"
@@ -420,7 +420,7 @@ pnpm bridge:build
 ./dist-bridge/vis_bridge
 ```
 
-vis_bridge automatically adopts or starts the default OpenCode and Codex services. ACP agents are disabled by default; enable them under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required.
+vis_bridge automatically adopts or starts the default OpenCode and Codex services. Among ACP agents, Kimi Code, Oh My Pi, and Pi are enabled by default; others can be enabled under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required.
 
 ### Using Codex Panel
 

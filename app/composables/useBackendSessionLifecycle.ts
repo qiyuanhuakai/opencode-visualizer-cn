@@ -80,7 +80,7 @@ export function useBackendSessionLifecycle(params: {
   findAcpSessionByDirectory?: (directory: string) => BackendSessionInfo | undefined;
   backendAbortSession: ((sessionId: string, directory?: string) => Promise<unknown>) | undefined;
 }) {
-  async function createSessionInDirectory(directory: string) {
+  async function createSessionInDirectory(directory: string, options?: { reuseExisting?: boolean }) {
     if (params.activeBackendKind.value === 'codex') {
       const codexDirectory = params.normalizeProjectDirectoryForActiveBackend(directory);
       const existing = params.codexSessionCreationByDirectory.get(codexDirectory);
@@ -103,7 +103,7 @@ export function useBackendSessionLifecycle(params: {
       params.codexSessionCreationByDirectory.set(codexDirectory, creation);
       return creation;
     }
-    if (params.activeBackendKind.value === 'acp') {
+    if (params.activeBackendKind.value === 'acp' && options?.reuseExisting !== false) {
       const existing = params.findAcpSessionByDirectory?.(
         params.normalizeProjectDirectoryForActiveBackend(directory),
       );
@@ -147,7 +147,7 @@ export function useBackendSessionLifecycle(params: {
     try {
       const directory = params.activeDirectory.value.trim();
       if (!directory) throw new Error(params.translate('errors.sessionCreateEmptyDirectory'));
-      return await createSessionInDirectory(directory);
+      return await createSessionInDirectory(directory, { reuseExisting: false });
     } catch (error) {
       const cause = error instanceof Error ? error : new Error(String(error));
       params.setSessionError(

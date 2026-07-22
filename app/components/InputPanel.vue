@@ -1671,6 +1671,12 @@ const inputMessageStyle = computed(() => {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.model-picker-list .dropdown-list {
+  max-height: none;
+  overflow-y: visible;
 }
 
 .model-search {

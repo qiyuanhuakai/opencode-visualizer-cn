@@ -27,6 +27,7 @@ export type AcpAuthMethod = {
   description?: string;
   type?: string;
   args?: string[];
+  initialInput?: string;
 };
 
 export type AcpSessionUpdateParams = {

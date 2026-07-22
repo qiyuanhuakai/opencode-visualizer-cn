@@ -1,12 +1,13 @@
 import type { BackendSessionInfo } from '../../types/backend-domain';
 import type { MessagePart } from '../../types/sse';
 import type { CodexWebSocketConstructor } from '../codex/jsonRpcClient';
-import type { AcpHistoryEntry } from './history';
+import type { AcpHistoryEntry, AcpSessionTurnMeta } from './history';
+import type { AcpAttributionStore } from './attributionStore';
 import type { AcpPermissionRequest } from './permissionStore';
 
 export type AcpClientEvent =
-  | { type: 'message.updated'; info: AcpHistoryEntry['info'] }
-  | { type: 'message.part.updated'; part: MessagePart }
+  | { type: 'message.updated'; info: AcpHistoryEntry['info']; replay?: boolean }
+  | { type: 'message.part.updated'; part: MessagePart; replay?: boolean }
   | { type: 'permission.asked'; request: AcpPermissionRequest }
   | { type: 'commands.updated'; commands: Array<Record<string, unknown>> }
   | { type: 'config.updated'; options: unknown[] }
@@ -20,6 +21,8 @@ export type AcpClientOptions = {
   agentId: string;
   now?: () => number;
   webSocketCtor?: CodexWebSocketConstructor;
+  attributionStore?: AcpAttributionStore;
+  sessionMetaFetcher?: (sessionId: string) => Promise<AcpSessionTurnMeta[]>;
 };
 
 export type AcpPromptPayload = {

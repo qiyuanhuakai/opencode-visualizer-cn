@@ -40,6 +40,34 @@ export type AcpAgentInput = Pick<AcpAgentStatus, 'id' | 'name' | 'command' | 'ar
   env?: Record<string, string>;
 };
 
+export type FetchAcpBridgeAgentsOptions = {
+  fetcher?: typeof fetch;
+  bridgeUrl: string;
+  bridgeToken?: string;
+};
+
+export async function fetchAcpBridgeAgents(options: FetchAcpBridgeAgentsOptions) {
+  const fetcher = options.fetcher ?? fetch;
+  const headers = new Headers();
+  const token = options.bridgeToken?.trim();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const response = await fetcher(acpBridgeHttpUrl(options.bridgeUrl, '/api/v1/supervisor'), {
+    headers: Object.fromEntries(headers.entries()),
+  });
+  const body: unknown = await response.json();
+  if (!response.ok) {
+    const message =
+      isRecord(body) && typeof body.error === 'string'
+        ? body.error
+        : `Bridge request failed (${response.status}).`;
+    throw new Error(message);
+  }
+  if (!isRecord(body) || !Array.isArray(body.acpAgents)) {
+    throw new Error('Invalid bridge supervisor response.');
+  }
+  return body.acpAgents.map(parseAgent);
+}
+
 type UseAcpBridgeOptions = {
   fetcher?: typeof fetch;
   bridgeUrl?: string;

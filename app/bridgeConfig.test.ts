@@ -22,28 +22,28 @@ async function createConfigPath() {
 }
 
 describe('bridgeConfig', () => {
-  it('provides disabled ACP presets with verified launch commands', () => {
+  it('provides ACP presets with verified launch commands', () => {
     expect(createDefaultBridgeConfig().acpAgents).toEqual([
       {
         id: 'pi',
         name: 'Pi',
         command: 'pi-acp',
         args: [],
-        enabled: false,
+        enabled: true,
       },
       {
         id: 'oh-my-pi',
         name: 'Oh My Pi',
         command: 'omp',
         args: ['--mode', 'acp'],
-        enabled: false,
+        enabled: true,
       },
       {
         id: 'kimi-code',
         name: 'Kimi Code',
         command: 'kimi',
         args: ['acp'],
-        enabled: false,
+        enabled: true,
       },
     ]);
   });

@@ -5,9 +5,9 @@ import path from 'node:path';
 const CONFIG_VERSION = 1;
 
 const ACP_PRESETS = [
-  { id: 'pi', name: 'Pi', command: 'pi-acp', args: [], enabled: false },
-  { id: 'oh-my-pi', name: 'Oh My Pi', command: 'omp', args: ['--mode', 'acp'], enabled: false },
-  { id: 'kimi-code', name: 'Kimi Code', command: 'kimi', args: ['acp'], enabled: false },
+  { id: 'pi', name: 'Pi', command: 'pi-acp', args: [], enabled: true },
+  { id: 'oh-my-pi', name: 'Oh My Pi', command: 'omp', args: ['--mode', 'acp'], enabled: true },
+  { id: 'kimi-code', name: 'Kimi Code', command: 'kimi', args: ['acp'], enabled: true },
 ];
 
 function isRecord(value) {

@@ -15,4 +15,10 @@ export type AcpClientMethodHandler = {
   stopAll(): Promise<void>;
 };
 
-export function createAcpClientMethodHandler(options?: object): AcpClientMethodHandler;
+export type AcpClientMethodHandlerOptions = {
+  terminalManager?: unknown;
+  homeDir?: string;
+  agentDataDirs?: Record<string, string[]>;
+};
+
+export function createAcpClientMethodHandler(options?: AcpClientMethodHandlerOptions): AcpClientMethodHandler;
