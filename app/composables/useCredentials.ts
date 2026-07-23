@@ -7,64 +7,35 @@ import {
   storageSet,
 } from '../utils/storageKeys';
 import type { BackendKind } from '../backends/types';
-import { DEFAULT_CODEX_BRIDGE_URL } from '../backends/registry';
+import {
+  DEFAULT_ACP_BRIDGE_URL,
+  DEFAULT_CODEX_BRIDGE_URL,
+  getPersistedAcpBridgeToken,
+  getPersistedAcpBridgeUrl,
+} from '../backends/registry';
+import { normalizeAcpBridgeUrl } from '../backends/acp/bridgeUrl';
+import {
+  migrateLegacyCredentials,
+  parseStoredCredentials,
+  type StoredCredentials,
+} from './credentialStorage';
 
-type Credentials = {
-  url: string;
-  username: string;
-  password: string;
-};
-
-const LEGACY_CREDENTIALS_STORAGE_KEY = 'credentials.v1';
+type Credentials = StoredCredentials;
 
 const url = ref('');
 const username = ref('');
 const password = ref('');
 const backendKind = ref<BackendKind>('opencode');
 const codexBridgeUrl = ref(DEFAULT_CODEX_BRIDGE_URL);
+const acpBridgeUrl = ref(DEFAULT_ACP_BRIDGE_URL);
 const codexBridgeToken = ref('');
+const acpBridgeToken = ref('');
+const acpAgentId = ref('');
 
 function applyCredentials(next: Credentials) {
   url.value = next.url;
   username.value = next.username;
   password.value = next.password;
-}
-
-function parseStoredCredentials(raw: string | null): Credentials | null {
-  if (!raw) return null;
-
-  try {
-    const data = JSON.parse(raw) as unknown;
-    if (!data || typeof data !== 'object') return null;
-
-    const record = data as Record<string, unknown>;
-    return {
-      url: typeof record.url === 'string' ? record.url : '',
-      username: typeof record.username === 'string' ? record.username : '',
-      password: typeof record.password === 'string' ? record.password : '',
-    };
-  } catch {
-    return null;
-  }
-}
-
-function migrateLegacyCredentials() {
-  const legacy = parseStoredCredentials(storageGet(LEGACY_CREDENTIALS_STORAGE_KEY));
-  if (!legacy) return null;
-
-  const normalizedUrl = legacy.url.trim();
-  const next: Credentials = {
-    url: normalizedUrl,
-    username: legacy.username,
-    password: legacy.password,
-  };
-
-  if (normalizedUrl) {
-    storageSet(StorageKeys.auth.serverUrl, normalizedUrl);
-  }
-  storageSet(StorageKeys.auth.credentials, JSON.stringify(next));
-  storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY);
-  return next;
 }
 
 export function useCredentials() {
@@ -82,6 +53,9 @@ export function useCredentials() {
 
   const isConfigured = computed(() => {
     if (backendKind.value === 'codex') return codexBridgeUrl.value.trim().length > 0;
+    if (backendKind.value === 'acp') {
+      return acpBridgeUrl.value.trim().length > 0 && acpAgentId.value.trim().length > 0;
+    }
     return url.value.trim().length > 0;
   });
 
@@ -126,14 +100,30 @@ export function useCredentials() {
     }
   }
 
+  function saveAcp(newBridgeUrl: string, newBridgeToken: string, newAgentId: string) {
+    const agentId = newAgentId.trim();
+    if (!agentId) throw new Error('ACP agent ID is required.');
+    const bridgeUrl = normalizeAcpBridgeUrl(newBridgeUrl);
+    saveBackendKind('acp');
+    acpBridgeUrl.value = bridgeUrl;
+    acpBridgeToken.value = newBridgeToken;
+    acpAgentId.value = agentId;
+    storageSet(StorageKeys.auth.acpBridgeUrl, bridgeUrl);
+    storageSet(StorageKeys.auth.acpAgentId, agentId);
+    if (newBridgeToken.trim()) storageSet(StorageKeys.auth.acpBridgeToken, newBridgeToken);
+    else storageRemove(StorageKeys.auth.acpBridgeToken);
+  }
+
   function load() {
     if (typeof window === 'undefined') return;
 
     try {
       const storedCredentials =
-        parseStoredCredentials(storageGet(StorageKeys.auth.credentials)) ?? migrateLegacyCredentials();
+        parseStoredCredentials(storageGet(StorageKeys.auth.credentials)) ??
+        migrateLegacyCredentials();
       const storedUrl = storageGet(StorageKeys.auth.serverUrl) ?? storedCredentials?.url ?? '';
       const storedBackendKind = storageGet(StorageKeys.auth.backendKind);
+      const storedAcpAgentId = storageGet(StorageKeys.auth.acpAgentId)?.trim() ?? '';
 
       if (!storageGet(StorageKeys.auth.serverUrl) && storedUrl) {
         storageSet(StorageKeys.auth.serverUrl, storedUrl);
@@ -144,9 +134,26 @@ export function useCredentials() {
         username: storedCredentials?.username ?? '',
         password: storedCredentials?.password ?? '',
       });
-      backendKind.value = storedBackendKind === 'codex' ? 'codex' : 'opencode';
-      codexBridgeUrl.value = storageGet(StorageKeys.auth.codexBridgeUrl) ?? DEFAULT_CODEX_BRIDGE_URL;
+      backendKind.value =
+        storedBackendKind === 'codex' || (storedBackendKind === 'acp' && storedAcpAgentId)
+          ? storedBackendKind
+          : 'opencode';
+      codexBridgeUrl.value =
+        storageGet(StorageKeys.auth.codexBridgeUrl) ?? DEFAULT_CODEX_BRIDGE_URL;
+      acpBridgeUrl.value = getPersistedAcpBridgeUrl();
+      acpBridgeToken.value = getPersistedAcpBridgeToken();
+      if (!storageGet(StorageKeys.auth.acpBridgeUrl)) {
+        storageSet(StorageKeys.auth.acpBridgeUrl, acpBridgeUrl.value);
+      }
+      if (
+        storedBackendKind === 'acp' &&
+        !storageGet(StorageKeys.auth.acpBridgeToken) &&
+        acpBridgeToken.value
+      ) {
+        storageSet(StorageKeys.auth.acpBridgeToken, acpBridgeToken.value);
+      }
       codexBridgeToken.value = storageGet(StorageKeys.auth.codexBridgeToken) ?? '';
+      acpAgentId.value = storedAcpAgentId;
     } catch {
       return;
     }
@@ -156,6 +163,7 @@ export function useCredentials() {
     const preservedUrl = url.value;
     const preservedBackendKind = backendKind.value;
     const preservedCodexUrl = codexBridgeUrl.value;
+    const preservedAcpUrl = acpBridgeUrl.value;
     url.value = preservedUrl;
     username.value = '';
     password.value = '';
@@ -172,6 +180,11 @@ export function useCredentials() {
       if (preservedBackendKind === 'codex') {
         storageSet(StorageKeys.auth.codexBridgeUrl, preservedCodexUrl);
         storageRemove(StorageKeys.auth.codexBridgeToken);
+        codexBridgeToken.value = '';
+      } else if (preservedBackendKind === 'acp') {
+        storageSet(StorageKeys.auth.acpBridgeUrl, preservedAcpUrl);
+        storageRemove(StorageKeys.auth.acpBridgeToken);
+        acpBridgeToken.value = '';
       }
     } catch {
       return;
@@ -181,7 +194,8 @@ export function useCredentials() {
   if (typeof window !== 'undefined') {
     window.addEventListener('storage', (event) => {
       if (event.key === storageKey(StorageKeys.auth.backendKind)) {
-        backendKind.value = event.newValue === 'codex' ? 'codex' : 'opencode';
+        backendKind.value =
+          event.newValue === 'codex' || event.newValue === 'acp' ? event.newValue : 'opencode';
         return;
       }
 
@@ -190,8 +204,25 @@ export function useCredentials() {
         return;
       }
 
+      if (event.key === storageKey(StorageKeys.auth.acpBridgeUrl)) {
+        acpBridgeUrl.value = event.newValue
+          ? normalizeAcpBridgeUrl(event.newValue)
+          : DEFAULT_ACP_BRIDGE_URL;
+        return;
+      }
+
       if (event.key === storageKey(StorageKeys.auth.codexBridgeToken)) {
         codexBridgeToken.value = event.newValue ?? '';
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.acpBridgeToken)) {
+        acpBridgeToken.value = event.newValue ?? '';
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.acpAgentId)) {
+        acpAgentId.value = event.newValue ?? '';
         return;
       }
 
@@ -222,13 +253,17 @@ export function useCredentials() {
     password,
     backendKind,
     codexBridgeUrl,
+    acpBridgeUrl,
     codexBridgeToken,
+    acpBridgeToken,
+    acpAgentId,
     authHeader,
     baseUrl,
     isConfigured,
     save,
     saveBackendKind,
     saveCodex,
+    saveAcp,
     load,
     clear,
   };

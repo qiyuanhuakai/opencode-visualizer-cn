@@ -2,7 +2,7 @@ import { computed, shallowRef, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { TopPanelWorktree } from '../types/top-panel';
 import type { SessionTreeData, SessionTreeProject, SessionTreeSandbox, SessionTreeSession } from '../types/session-tree';
-import type { ProjectState, SandboxState } from '../types/worker-state';
+import type { ProjectState, SandboxState, SessionState } from '../types/worker-state';
 import { buildCodexSessionTreeData, buildCodexTopPanelTreeData } from '../utils/codexTopPanelTree';
 import { isSandboxMarkedDeleted, type DeletedSandboxStore } from '../utils/deletedSandboxes';
 import {
@@ -28,6 +28,7 @@ function computeProjectsHash(
   projects: Record<string, ProjectState>,
   pinnedStore: LocalPinnedSessionStore,
   deletedStore: DeletedSandboxStore,
+  gitInfoByDirectory: Record<string, NonNullable<SessionState['gitInfo']>>,
 ): string {
   let hash = 0;
   const projectEntries = Object.entries(projects);
@@ -43,6 +44,7 @@ function computeProjectsHash(
         if (!session) continue;
         hash += (session.timeUpdated ?? session.timeCreated ?? 0) & 0xffff;
         hash += (session.timePinned ?? 0) & 0xffff;
+        hash = mixStringIntoHash(hash, String(session.timeArchived ?? ''));
         hash = mixStringIntoHash(hash, session.gitInfo?.root ?? '');
         hash = mixStringIntoHash(hash, session.gitInfo?.branch ?? '');
       }
@@ -54,112 +56,98 @@ function computeProjectsHash(
   const deletedEntries = Object.entries(deletedStore)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([projectId, directories]) => `${projectId}:${directories.slice().sort().join(',')}`);
-  return `${hash}-${projectEntries.length}-${pinnedHash}-${deletedEntries.join('|')}`;
+  const gitInfoEntries = Object.entries(gitInfoByDirectory)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([directory, info]) => `${directory}:${info.root}:${info.branch ?? ''}:${info.worktreeRoot ?? ''}`);
+  return `${hash}-${projectEntries.length}-${pinnedHash}-${deletedEntries.join('|')}-${gitInfoEntries.join('|')}`;
 }
 
-function buildOpenCodeTopPanelTreeData(params: {
+function buildNativeOpenCodeTopPanelTreeData(params: {
   projects: Record<string, ProjectState>;
   pinnedStore: LocalPinnedSessionStore;
   deletedSandboxStore: DeletedSandboxStore;
+  gitInfoByDirectory: Record<string, NonNullable<SessionState['gitInfo']>>;
+  homePath: string;
   replaceHomePrefix: (path: string) => string;
   resolveProjectColor: (color?: string) => string | undefined;
 }): TopPanelWorktree[] {
-  const { projects, pinnedStore, deletedSandboxStore, replaceHomePrefix, resolveProjectColor } = params;
-  return Object.values(projects)
-    .map((project) => {
-      const worktreeDirectory = project.worktree;
-      const sandboxes = (Object.values(project.sandboxes) as SandboxState[])
-        .filter(
-          (sandbox) =>
-            sandbox.directory === worktreeDirectory
-            || !isSandboxMarkedDeleted(deletedSandboxStore, project.id, sandbox.directory),
-        )
-        .map((sandbox) => {
-          const projectPinnedAt = normalizePinnedAt(pinnedStore[projectPinKey(project.id)]);
-          const sandboxLocalValue = pinnedStore[sandboxPinKey(project.id, sandbox.directory)];
-          const sandboxPinnedAt = normalizePinnedAt(sandboxLocalValue);
-          const isSandboxDirectlyPinned = sandboxPinnedAt > 0;
-          const isSandboxExplicitlyUnpinned = typeof sandboxLocalValue === 'number' && sandboxLocalValue < 0;
-          const isSandboxPinned = isSandboxDirectlyPinned || (projectPinnedAt > 0 && !isSandboxExplicitlyUnpinned);
-          const sandboxEffectivePinnedAt = isSandboxPinned
-            ? (isSandboxDirectlyPinned ? sandboxPinnedAt : projectPinnedAt)
-            : 0;
-          const sessions = sandbox.rootSessions
-            .map((sessionId) => sandbox.sessions[sessionId])
-            .filter((session): session is NonNullable<typeof session> => Boolean(session))
-            .map((session) => {
-              const sessionLocalValue = pinnedStore[pinnedSessionStoreKey(project.id, session.id)];
-              const sessionLocalPinnedAt = normalizePinnedAt(sessionLocalValue);
-              const sessionServerPinnedAt = normalizePinnedAt(session.timePinned);
-              const isSessionDirectlyPinned = sessionLocalPinnedAt > 0 || sessionServerPinnedAt > 0;
-              const isSessionExplicitlyUnpinned = typeof sessionLocalValue === 'number' && sessionLocalValue < 0;
-              const isSessionImplicitlyPinned = !isSessionDirectlyPinned && !isSessionExplicitlyUnpinned && isSandboxPinned;
-              return {
-                id: session.id,
-                title: session.title,
-                slug: session.slug,
-                status: (session.status ?? 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
-                timeCreated: session.timeCreated,
-                timeUpdated: session.timeUpdated ?? session.timeCreated,
-                archivedAt: session.timeArchived,
-                pinnedAt: isSessionDirectlyPinned
-                  ? (sessionLocalPinnedAt || sessionServerPinnedAt)
-                  : (isSessionImplicitlyPinned ? sandboxEffectivePinnedAt : 0),
-                isPinned: isSessionDirectlyPinned,
-                isImplicitlyPinned: isSessionImplicitlyPinned,
-              };
-            })
-            .sort((left, right) => {
-              const pinDiff = (right.pinnedAt ?? 0) - (left.pinnedAt ?? 0);
-              if (pinDiff !== 0) return pinDiff;
-              return (right.timeUpdated ?? right.timeCreated ?? 0) - (left.timeUpdated ?? left.timeCreated ?? 0);
-            });
-          const latestUpdated = sessions.reduce(
-            (max, session) => Math.max(max, session.timeUpdated ?? session.timeCreated ?? 0),
-            0,
-          );
-          const oldestCreated = sessions.length > 0
-            ? Math.min(...sessions.map((session) => session.timeCreated ?? Infinity))
-            : 0;
-          return {
-            directory: sandbox.directory,
-            branch: sandbox.name || undefined,
-            sessions,
-            latestUpdated,
-            oldestCreated,
-            pinnedAt: sandboxEffectivePinnedAt,
-            isPinned: isSandboxDirectlyPinned,
-            isImplicitlyPinned: isSandboxPinned && !isSandboxDirectlyPinned,
-          };
-        })
-        .sort((left, right) => {
-          const leftIsPrimary = left.directory === worktreeDirectory;
-          const rightIsPrimary = right.directory === worktreeDirectory;
-          if (leftIsPrimary !== rightIsPrimary) return leftIsPrimary ? -1 : 1;
-          return (right.oldestCreated || 0) - (left.oldestCreated || 0);
-        });
-      const latestUpdated = sandboxes
-        .flatMap((sandbox) => sandbox.sessions)
-        .reduce((max, session) => Math.max(max, session.timeUpdated ?? 0), 0);
-      const name = project.name?.trim() || worktreeDirectory.replace(/\/+$/, '').split('/').pop() || undefined;
-      const projectPinnedAt = normalizePinnedAt(pinnedStore[projectPinKey(project.id)]);
-      return {
-        directory: worktreeDirectory,
-        label: replaceHomePrefix(worktreeDirectory),
-        name,
-        projectId: project.id,
-        projectColor: resolveProjectColor(project.icon?.color),
-        sandboxes,
-        latestUpdated,
-        pinnedAt: projectPinnedAt,
-        isPinned: projectPinnedAt > 0,
-      } satisfies TopPanelWorktree;
-    })
-    .sort((left, right) => {
-      if (left.directory === '/' && right.directory !== '/') return 1;
-      if (right.directory === '/' && left.directory !== '/') return -1;
-      return (left.name || left.label).localeCompare(right.name || right.label);
+  const {
+    projects,
+    pinnedStore,
+    deletedSandboxStore,
+    replaceHomePrefix,
+    resolveProjectColor,
+  } = params;
+  return Object.values(projects).map((project) => {
+    const projectPinnedAt = normalizePinnedAt(pinnedStore[projectPinKey(project.id)]);
+    const sandboxes = (Object.values(project.sandboxes) as SandboxState[])
+      .filter((sandbox) => sandbox.directory === project.worktree
+        || !isSandboxMarkedDeleted(deletedSandboxStore, project.id, sandbox.directory))
+      .map((sandbox) => {
+        const pinnedAt = normalizePinnedAt(pinnedStore[sandboxPinKey(project.id, sandbox.directory)]);
+        return {
+          directory: sandbox.directory,
+          branch: sandbox.name,
+          kind: 'sandbox' as const,
+          pinnedAt,
+          isPinned: pinnedAt > 0,
+          sessions: sandbox.rootSessions.map((id) => sandbox.sessions[id]).filter(Boolean).map((session) => {
+            const sessionPinnedAt = normalizePinnedAt(pinnedStore[pinnedSessionStoreKey(project.id, session.id)])
+              || normalizePinnedAt(session.timePinned);
+            return {
+              id: session.id,
+              title: session.title,
+              slug: session.slug,
+              status: (session.status ?? 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
+              timeCreated: session.timeCreated,
+              timeUpdated: session.timeUpdated,
+              pinnedAt: sessionPinnedAt,
+              isPinned: sessionPinnedAt > 0,
+            };
+          }),
+        };
+      });
+    return {
+      directory: project.worktree,
+      label: replaceHomePrefix(project.worktree),
+      name: project.name,
+      projectId: project.id,
+      projectColor: resolveProjectColor(project.icon?.color),
+      kind: 'sandbox' as const,
+      pinnedAt: projectPinnedAt,
+      isPinned: projectPinnedAt > 0,
+      sandboxes,
+    };
+  });
+}
+
+function buildAcpTopPanelTreeData(params: {
+  projects: Record<string, ProjectState>;
+  pinnedStore: LocalPinnedSessionStore;
+  deletedSandboxStore: DeletedSandboxStore;
+  gitInfoByDirectory: Record<string, NonNullable<SessionState['gitInfo']>>;
+  homePath: string;
+  replaceHomePrefix: (path: string) => string;
+  resolveProjectColor: (color?: string) => string | undefined;
+}): TopPanelWorktree[] {
+  const { projects, pinnedStore, deletedSandboxStore, gitInfoByDirectory, homePath, replaceHomePrefix, resolveProjectColor } = params;
+  return Object.values(projects).flatMap((project) => {
+    const sandboxes = Object.fromEntries(Object.entries(project.sandboxes)
+      .filter(([, sandbox]) => sandbox.directory === project.worktree || !isSandboxMarkedDeleted(deletedSandboxStore, project.id, sandbox.directory))
+      .map(([directory, sandbox]) => [directory, {
+        ...sandbox,
+        sessions: Object.fromEntries(Object.entries(sandbox.sessions).map(([id, session]) => {
+          const gitInfo = session.gitInfo ?? gitInfoByDirectory[session.directory || sandbox.directory];
+          return [id, gitInfo ? { ...session, gitInfo } : session];
+        })),
+      }]));
+    return buildCodexTopPanelTreeData({ ...project, sandboxes }, {
+      pinnedStore, homePath, defaultDirectory: '/', keyPrefix: `backend:${project.id}`, resolveProjectColor,
     });
+  }).map((worktree) => ({
+    ...worktree,
+    label: worktree.kind === 'global' ? worktree.label : replaceHomePrefix(worktree.directory),
+  }));
 }
 
 function buildOpenCodeSessionTreeData(params: {
@@ -181,7 +169,7 @@ function buildOpenCodeSessionTreeData(params: {
       const sandboxLocal = pinnedStore[sandboxPinKey(project.id, sandbox.directory)];
       const isSandboxDirectlyPinned = typeof sandboxLocal === 'number' && sandboxLocal > 0;
       const isSandboxUnpinned = typeof sandboxLocal === 'number' && sandboxLocal < 0;
-      const isSandboxPinned = isSandboxDirectlyPinned || isProjectPinned;
+      const isSandboxPinned = isSandboxDirectlyPinned;
       if (isSandboxUnpinned) continue;
 
       const sessions: SessionTreeSession[] = [];
@@ -194,15 +182,13 @@ function buildOpenCodeSessionTreeData(params: {
 
         const serverPinnedAt = session.timePinned;
         const isSessionPinned = isSessionDirectlyPinned || normalizePinnedAt(serverPinnedAt) > 0;
-        const isSessionInPinnedTree = isSessionPinned || isSandboxPinned || isProjectPinned;
+        const isSessionInPinnedTree = isSessionPinned;
         if (!isSessionInPinnedTree) continue;
 
-        const isSessionImplicitlyPinned = isSessionInPinnedTree && !isSessionPinned;
+        const isSessionImplicitlyPinned = false;
         const pinnedAt = isSessionPinned
           ? (isSessionDirectlyPinned ? (sessionLocal as number) : normalizePinnedAt(serverPinnedAt))
-          : isSandboxDirectlyPinned
-            ? (sandboxLocal as number)
-            : (projectLocal as number);
+          : 0;
         sessions.push({
           type: 'session',
           sessionId: session.id,
@@ -221,14 +207,14 @@ function buildOpenCodeSessionTreeData(params: {
         if (right.pinnedAt !== left.pinnedAt) return right.pinnedAt - left.pinnedAt;
         return left.title.localeCompare(right.title);
       });
-      const isSandboxImplicitlyPinned = isSandboxPinned && !isSandboxDirectlyPinned;
+      const isSandboxImplicitlyPinned = false;
       sandboxes.push({
         type: 'sandbox',
         directory: sandbox.directory,
         projectId: project.id,
         name: sandbox.name || 'main',
         pinnedAt: isSandboxPinned ? (isSandboxDirectlyPinned ? (sandboxLocal as number) : (projectLocal as number)) : 0,
-        isPinned: isSandboxPinned && !isSandboxImplicitlyPinned,
+        isPinned: isSandboxPinned,
         isImplicitlyPinned: isSandboxImplicitlyPinned,
         sessions,
       });
@@ -263,6 +249,7 @@ export function useBackendSessionTrees(params: {
   projects: Record<string, ProjectState>;
   pinnedStore: Ref<LocalPinnedSessionStore>;
   deletedSandboxStore: Ref<DeletedSandboxStore>;
+  gitInfoByDirectory?: Ref<Record<string, NonNullable<SessionState['gitInfo']>>>;
   homePath: Ref<string>;
   replaceHomePrefix: (path: string) => string;
   resolveProjectColor: (color?: string) => string | undefined;
@@ -275,6 +262,7 @@ export function useBackendSessionTrees(params: {
     params.projects,
     params.pinnedStore.value,
     params.deletedSandboxStore.value,
+    params.gitInfoByDirectory?.value ?? {},
   ));
 
   const topPanelTreeData = computed<TopPanelWorktree[]>(() => {
@@ -298,10 +286,22 @@ export function useBackendSessionTrees(params: {
               })
             : [];
         })()
-      : buildOpenCodeTopPanelTreeData({
+          : params.activeBackendKind.value === 'acp'
+            ? buildAcpTopPanelTreeData({
+                projects: params.projects,
+                pinnedStore: params.pinnedStore.value,
+                deletedSandboxStore: params.deletedSandboxStore.value,
+                gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
+                homePath: params.homePath.value,
+                replaceHomePrefix: params.replaceHomePrefix,
+                resolveProjectColor: params.resolveProjectColor,
+              })
+            : buildNativeOpenCodeTopPanelTreeData({
           projects: params.projects,
           pinnedStore: params.pinnedStore.value,
           deletedSandboxStore: params.deletedSandboxStore.value,
+          gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
+          homePath: params.homePath.value,
           replaceHomePrefix: params.replaceHomePrefix,
           resolveProjectColor: params.resolveProjectColor,
         });
@@ -319,7 +319,7 @@ export function useBackendSessionTrees(params: {
     ) {
       return sessionTreeDataCache.value.data;
     }
-    const data = params.activeBackendKind.value === 'codex'
+    const data = params.activeBackendKind.value === 'codex' || params.activeBackendKind.value === 'acp'
       ? buildCodexSessionTreeData(topPanelTreeData.value)
       : buildOpenCodeSessionTreeData({
           projects: params.projects,

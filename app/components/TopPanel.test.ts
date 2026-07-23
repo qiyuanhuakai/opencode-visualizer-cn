@@ -39,10 +39,29 @@ function createMessages() {
           delete: 'Delete',
           archiveCodex: 'Archive Codex',
         },
-        sessionActions: { unpin: 'Unpin', pin: 'Pin' },
+        sessionActions: {
+          unpin: 'Unpin',
+          pin: 'Pin',
+          rename: 'Rename',
+          archive: 'Archive',
+          unarchive: 'Unarchive',
+          deletePermanently: 'Delete permanently',
+          archiveCodex: 'Archive Codex',
+        },
+        confirm: { deleteSession: 'Delete?', archiveCodexSession: 'Archive?' },
         projectSettings: 'Project settings',
         newSession: 'New session',
         createSandbox: 'Create sandbox',
+      },
+      sidePanel: {
+        session: {
+          sessionTree: {
+            pinProject: 'Pin project',
+            unpinProject: 'Unpin project',
+            pinSandbox: 'Pin sandbox',
+            unpinSandbox: 'Unpin sandbox',
+          },
+        },
       },
       codexPanel: {
         title: 'Codex',
@@ -96,7 +115,10 @@ describe('TopPanel', () => {
         },
       },
     });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ path: '/home/user' }), { status: 200 })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ path: '/home/user' }), { status: 200 })),
+    );
   });
 
   afterEach(() => {
@@ -113,20 +135,23 @@ describe('TopPanel', () => {
     const { default: TopPanel } = await import('./TopPanel.vue');
     const root = document.createElement('div');
     document.body.appendChild(root);
-    const app = createApp(defineComponent({
-      setup() {
-        return () => h(TopPanel, {
-          treeData: [],
-          notificationSessions: [],
-          projectDirectory: '/repo',
-          activeDirectory: '/repo',
-          selectedSessionId: 'session-1',
-          homePath: '/home/user',
-          codexConnected: true,
-          ptySupported: true,
-        });
-      },
-    }));
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(TopPanel, {
+              treeData: [],
+              notificationSessions: [],
+              projectDirectory: '/repo',
+              activeDirectory: '/repo',
+              selectedSessionId: 'session-1',
+              homePath: '/home/user',
+              codexConnected: true,
+              ptySupported: true,
+            });
+        },
+      }),
+    );
     app.provide('showConfirm', vi.fn());
     app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
     app.mount(root);
@@ -138,8 +163,124 @@ describe('TopPanel', () => {
     const codex = requireButton(root, '.codex-button');
 
     // Then: the order is management mode, Forge panel, then Codex panel.
-    expect(management.compareDocumentPosition(forge) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(management.compareDocumentPosition(forge) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(
+      0,
+    );
     expect(forge.compareDocumentPosition(codex) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    app.unmount();
+  });
+
+  it('shows only session actions supported by the active backend', async () => {
+    const { default: TopPanel } = await import('./TopPanel.vue');
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(TopPanel, {
+              treeData: [
+                {
+                  directory: '/repo',
+                  label: 'repo',
+                  projectId: 'acp',
+                  sandboxes: [
+                    {
+                      directory: '/repo',
+                      sessions: [{ id: 'session-1', title: 'Session', status: 'idle' }],
+                    },
+                  ],
+                },
+              ],
+              notificationSessions: [],
+              projectDirectory: '/repo',
+              activeDirectory: '/repo',
+              selectedSessionId: 'session-1',
+              ptySupported: true,
+              sessionActionCapabilities: {
+                rename: false,
+                pin: true,
+                unpin: true,
+                archive: false,
+                unarchive: false,
+                delete: false,
+              },
+            });
+        },
+      }),
+    );
+    app.provide('showConfirm', vi.fn());
+    app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+    app.mount(root);
+    requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+    await nextTick();
+
+    expect(root.querySelector('.session-rename')).toBeNull();
+    expect(root.querySelector('.session-del')).toBeNull();
+    expect(root.querySelector('.session-pin')).not.toBeNull();
+    app.unmount();
+  });
+
+  it('emits explicit repository and branch pin scopes with accessible labels', async () => {
+    const { default: TopPanel } = await import('./TopPanel.vue');
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const onPinSandbox = vi.fn();
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(TopPanel, {
+              treeData: [
+                {
+                  directory: '/repo',
+                  label: 'repo',
+                  name: 'repo',
+                  projectId: 'acp',
+                  kind: 'sandbox',
+                  pinScope: { level: 'repo', root: '/repo' },
+                  sandboxes: [
+                    {
+                      directory: '/repo-worktree',
+                      branch: 'feature',
+                      kind: 'branch',
+                      pinScope: {
+                        level: 'branch',
+                        directory: '/repo-worktree',
+                        repoRoot: '/repo',
+                      },
+                      sessions: [{ id: 'session-1', title: 'Session', status: 'idle' }],
+                    },
+                  ],
+                },
+              ],
+              notificationSessions: [],
+              projectDirectory: '/repo',
+              activeDirectory: '/repo-worktree',
+              selectedSessionId: 'session-1',
+              sandboxFirstMode: true,
+              onPinSandbox,
+            });
+        },
+      }),
+    );
+    app.provide('showConfirm', vi.fn());
+    app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+    app.mount(root);
+    requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+    await nextTick();
+
+    requireButton(root, 'button[aria-label="Pin project repo"]').click();
+    requireButton(root, 'button[aria-label="Pin sandbox feature"]').click();
+
+    expect(onPinSandbox).toHaveBeenNthCalledWith(1, {
+      projectId: 'acp',
+      scope: { level: 'repo', root: '/repo' },
+    });
+    expect(onPinSandbox).toHaveBeenNthCalledWith(2, {
+      projectId: 'acp',
+      scope: { level: 'branch', directory: '/repo-worktree', repoRoot: '/repo' },
+    });
     app.unmount();
   });
 });

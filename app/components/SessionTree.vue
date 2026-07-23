@@ -31,6 +31,11 @@
             class="session-tree-pin"
             :class="{ 'is-pinned': project.isPinned }"
             :title="project.isPinned ? $t('sidePanel.session.sessionTree.unpinProject') : $t('sidePanel.session.sessionTree.pinProject')"
+            :aria-label="`${
+              project.isPinned
+                ? $t('sidePanel.session.sessionTree.unpinProject')
+                : $t('sidePanel.session.sessionTree.pinProject')
+            } ${project.name}`"
             @click.stop="project.isPinned ? unpinProject(project) : pinProject(project)"
           >
             <Icon
@@ -72,6 +77,11 @@
                 class="session-tree-pin"
                 :class="{ 'is-pinned': sandbox.isPinned || sandbox.isImplicitlyPinned }"
                 :title="sandbox.isPinned || sandbox.isImplicitlyPinned ? $t('sidePanel.session.sessionTree.unpinSandbox') : $t('sidePanel.session.sessionTree.pinSandbox')"
+                :aria-label="`${
+                  sandbox.isPinned || sandbox.isImplicitlyPinned
+                    ? $t('sidePanel.session.sessionTree.unpinSandbox')
+                    : $t('sidePanel.session.sessionTree.pinSandbox')
+                } ${sandbox.name}`"
                 @click.stop="sandbox.isPinned || sandbox.isImplicitlyPinned
                   ? unpinSandbox(sandbox)
                   : pinSandbox(sandbox)"
@@ -110,6 +120,11 @@
                     class="session-tree-pin"
                     :class="{ 'is-pinned': session.isPinned || session.isImplicitlyPinned }"
                     :title="session.isPinned || session.isImplicitlyPinned ? $t('sidePanel.session.sessionTree.unpinSession') : $t('sidePanel.session.sessionTree.pinSession')"
+                    :aria-label="`${
+                      session.isPinned || session.isImplicitlyPinned
+                        ? $t('sidePanel.session.sessionTree.unpinSession')
+                        : $t('sidePanel.session.sessionTree.pinSession')
+                    } ${session.title}`"
                     @click.stop="session.isPinned || session.isImplicitlyPinned
                       ? emit('unpin-session', { projectId: project.projectId, sessionId: session.sessionId })
                       : emit('pin-session', { projectId: project.projectId, sessionId: session.sessionId })"
@@ -145,6 +160,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
+import type { ContainerPinPayload } from '../types/pin';
 import type { SessionTreeProject, SessionTreeSandbox } from '../types/session-tree';
 
 const props = defineProps<{
@@ -158,8 +174,8 @@ const emit = defineEmits<{
   (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'pin-project', projectId: string): void;
   (event: 'unpin-project', projectId: string): void;
-  (event: 'pin-sandbox', payload: { projectId: string; directory: string }): void;
-  (event: 'unpin-sandbox', payload: { projectId: string; directory: string }): void;
+  (event: 'pin-sandbox', payload: ContainerPinPayload): void;
+  (event: 'unpin-sandbox', payload: ContainerPinPayload): void;
   (event: 'pin-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'unpin-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'reload'): void;
@@ -174,7 +190,7 @@ function projectKey(project: SessionTreeProject): string {
 }
 
 function sandboxKey(project: SessionTreeProject, sandbox: SessionTreeSandbox): string {
-  return sandbox.key || `${projectKey(project)}:${sandbox.pinDirectory || sandbox.directory}`;
+  return sandbox.key || `${projectKey(project)}:${sandbox.directory}`;
 }
 
 function projectIcon(project: SessionTreeProject): string {
@@ -198,27 +214,33 @@ function canPinSandbox(sandbox: SessionTreeSandbox): boolean {
 }
 
 function pinProject(project: SessionTreeProject): void {
-  if (project.pinDirectory) {
-    emit('pin-sandbox', { projectId: project.projectId, directory: project.pinDirectory });
+  if (project.pinScope) {
+    emit('pin-sandbox', { projectId: project.projectId, scope: project.pinScope });
     return;
   }
   emit('pin-project', project.projectId);
 }
 
 function unpinProject(project: SessionTreeProject): void {
-  if (project.pinDirectory) {
-    emit('unpin-sandbox', { projectId: project.projectId, directory: project.pinDirectory });
+  if (project.pinScope) {
+    emit('unpin-sandbox', { projectId: project.projectId, scope: project.pinScope });
     return;
   }
   emit('unpin-project', project.projectId);
 }
 
 function pinSandbox(sandbox: SessionTreeSandbox): void {
-  emit('pin-sandbox', { projectId: sandbox.projectId, directory: sandbox.pinDirectory || sandbox.directory });
+  emit('pin-sandbox', {
+    projectId: sandbox.projectId,
+    scope: sandbox.pinScope ?? { level: 'branch', directory: sandbox.directory },
+  });
 }
 
 function unpinSandbox(sandbox: SessionTreeSandbox): void {
-  emit('unpin-sandbox', { projectId: sandbox.projectId, directory: sandbox.pinDirectory || sandbox.directory });
+  emit('unpin-sandbox', {
+    projectId: sandbox.projectId,
+    scope: sandbox.pinScope ?? { level: 'branch', directory: sandbox.directory },
+  });
 }
 
 function toggleExpand(path: string): void {

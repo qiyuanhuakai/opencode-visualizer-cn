@@ -10,14 +10,51 @@ type CodexApiLike = {
   homeDir: Ref<string>;
   activeThreadId: Ref<string>;
   visibleThreads: Ref<Array<{ id: string; cwd?: string; gitInfo?: { root?: string } | null }>>;
-  startThread: (directory: string) => Promise<{ id?: string; cwd?: string; name?: string | null; preview?: string | null }>;
+  startThread: (
+    directory: string,
+  ) => Promise<{ id?: string; cwd?: string; name?: string | null; preview?: string | null }>;
   refreshHomeDir: (force?: boolean) => Promise<string>;
   interruptActiveTurn: () => Promise<unknown>;
 };
 
+function parseCreatedSession(value: unknown): BackendSessionInfo | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const session = value as Record<string, unknown>;
+  if (typeof session.id !== 'string' || !session.id.trim()) return undefined;
+  return value as BackendSessionInfo;
+}
+
+type AbortBackend = {
+  abortSession?: (sessionId: string, directory?: string) => Promise<unknown>;
+};
+
+export function createDynamicBackendAbortSession(getBackend: () => AbortBackend) {
+  return async (sessionId: string, directory?: string) => {
+    const backend = getBackend();
+    if (!backend.abortSession) throw new Error('Session abort is unavailable.');
+    return backend.abortSession.call(backend, sessionId, directory);
+  };
+}
+
+export function sessionProjectIdForBackend(
+  kind: BackendKind,
+  codexProjectId: string,
+  acpProjectId: string,
+) {
+  switch (kind) {
+    case 'codex':
+      return codexProjectId;
+    case 'acp':
+      return acpProjectId;
+    case 'opencode':
+      throw new Error('OpenCode sessions do not use a synthetic project id.');
+  }
+}
+
 export function useBackendSessionLifecycle(params: {
   activeBackendKind: Ref<BackendKind>;
   codexProjectId: string;
+  acpProjectId: string;
   selectedProjectId: Ref<string>;
   selectedSessionId: Ref<string>;
   activeDirectory: Ref<string>;
@@ -27,7 +64,10 @@ export function useBackendSessionLifecycle(params: {
   openCodeApi: OpenCodeApiLike;
   codexApi: CodexApiLike;
   normalizeProjectDirectoryForActiveBackend: (directory: string) => string;
-  codexThreadDirectoryMatch: (thread: { cwd?: string; gitInfo?: { root?: string } | null }, directory: string) => boolean;
+  codexThreadDirectoryMatch: (
+    thread: { cwd?: string; gitInfo?: { root?: string } | null },
+    directory: string,
+  ) => boolean;
   ensureConnectionReady: (action: string) => boolean;
   translate: (key: string, params?: Record<string, unknown>) => string;
   toErrorMessage: (error: unknown) => string;
@@ -36,9 +76,11 @@ export function useBackendSessionLifecycle(params: {
   setSendStatusKey: (key: string, params?: Record<string, unknown>) => void;
   isAborting: Ref<boolean>;
   busyDescendantSessionIds: Ref<string[]>;
+  backendCreateSession: (directory: string) => Promise<unknown>;
+  findAcpSessionByDirectory?: (directory: string) => BackendSessionInfo | undefined;
   backendAbortSession: ((sessionId: string, directory?: string) => Promise<unknown>) | undefined;
 }) {
-  async function createSessionInDirectory(directory: string) {
+  async function createSessionInDirectory(directory: string, options?: { reuseExisting?: boolean }) {
     if (params.activeBackendKind.value === 'codex') {
       const codexDirectory = params.normalizeProjectDirectoryForActiveBackend(directory);
       const existing = params.codexSessionCreationByDirectory.get(codexDirectory);
@@ -61,9 +103,30 @@ export function useBackendSessionLifecycle(params: {
       params.codexSessionCreationByDirectory.set(codexDirectory, creation);
       return creation;
     }
-    const session = await params.openCodeApi.createSession(directory);
+    if (params.activeBackendKind.value === 'acp' && options?.reuseExisting !== false) {
+      const existing = params.findAcpSessionByDirectory?.(
+        params.normalizeProjectDirectoryForActiveBackend(directory),
+      );
+      if (existing) {
+        params.selectedProjectId.value = params.acpProjectId;
+        params.selectedSessionId.value = existing.id;
+        return existing;
+      }
+    }
+    const created =
+      params.activeBackendKind.value === 'acp'
+        ? await params.backendCreateSession(directory)
+        : await params.openCodeApi.createSession(directory);
+    const session = parseCreatedSession(created);
     if (!session?.id) return undefined;
-    const nextProjectId = (session.projectID || params.selectedProjectId.value).trim();
+    const nextProjectId =
+      params.activeBackendKind.value === 'acp'
+        ? sessionProjectIdForBackend(
+            params.activeBackendKind.value,
+            params.codexProjectId,
+            params.acpProjectId,
+          )
+        : (session.projectID || params.selectedProjectId.value).trim();
     if (nextProjectId) params.selectedProjectId.value = nextProjectId;
     params.selectedSessionId.value = session.id;
     return session;
@@ -78,14 +141,20 @@ export function useBackendSessionLifecycle(params: {
   }
 
   async function createNewSession() {
-    if (!params.ensureConnectionReady(params.translate('app.actions.creatingSession'))) return undefined;
+    if (!params.ensureConnectionReady(params.translate('app.actions.creatingSession')))
+      return undefined;
     params.clearSessionError();
     try {
       const directory = params.activeDirectory.value.trim();
       if (!directory) throw new Error(params.translate('errors.sessionCreateEmptyDirectory'));
-      return await createSessionInDirectory(directory);
+      return await createSessionInDirectory(directory, { reuseExisting: false });
     } catch (error) {
-      params.setSessionError(params.translate('app.error.sessionCreateFailed', { message: params.toErrorMessage(error) }));
+      const cause = error instanceof Error ? error : new Error(String(error));
+      params.setSessionError(
+        params.translate('app.error.sessionCreateFailed', {
+          message: params.toErrorMessage(cause),
+        }),
+      );
       return undefined;
     }
   }
@@ -94,13 +163,18 @@ export function useBackendSessionLifecycle(params: {
     if (!directory) return '';
     const targetDirectory = params.normalizeProjectDirectoryForActiveBackend(directory);
     if (params.activeBackendKind.value === 'codex') {
-      const existing = params.codexApi.visibleThreads.value.find((thread) => params.codexThreadDirectoryMatch(thread, targetDirectory));
+      const existing = params.codexApi.visibleThreads.value.find((thread) =>
+        params.codexThreadDirectoryMatch(thread, targetDirectory),
+      );
       const sessionId = existing?.id || (await createSessionInDirectory(targetDirectory))?.id || '';
       if (sessionId) {
         params.selectedProjectId.value = params.codexProjectId;
         params.selectedSessionId.value = sessionId;
       }
       return sessionId;
+    }
+    if (params.activeBackendKind.value === 'acp') {
+      return (await createSessionInDirectory(targetDirectory))?.id ?? '';
     }
     return targetDirectory;
   }
@@ -122,12 +196,15 @@ export function useBackendSessionLifecycle(params: {
       const directory = params.activeDirectory.value.trim();
       const abortPromises = [
         abortSession(sessionId, directory || undefined),
-        ...params.busyDescendantSessionIds.value.map((sid) => abortSession(sid, directory || undefined).catch(() => {})),
+        ...params.busyDescendantSessionIds.value.map((sid) =>
+          abortSession(sid, directory || undefined).catch(() => {}),
+        ),
       ];
       await Promise.all(abortPromises);
       params.setSendStatusKey('app.status.stopped');
     } catch (error) {
-      params.setSendStatusKey('app.error.stopFailed', { message: params.toErrorMessage(error) });
+      const cause = error instanceof Error ? error : new Error(String(error));
+      params.setSendStatusKey('app.error.stopFailed', { message: params.toErrorMessage(cause) });
     } finally {
       params.isAborting.value = false;
     }

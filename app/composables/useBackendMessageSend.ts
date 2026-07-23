@@ -1,7 +1,11 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { ComposerAttachment } from '../types/composer';
-import type { CodexCollaborationModePayload, CodexSkill, CodexTurnInputItem } from '../backends/codex/codexAdapter';
+import type {
+  CodexCollaborationModePayload,
+  CodexSkill,
+  CodexTurnInputItem,
+} from '../backends/codex/codexAdapter';
 import type { ParsedSkill } from '../utils/parseSkill';
 
 type ModelOption = {
@@ -25,28 +29,36 @@ type AgentInfo = {
 };
 
 type OpenCodeApiLike = {
-  sendPromptAsync: (sessionId: string, payload: {
-    directory: string;
-    agent: string;
-    model: { providerID?: string; modelID: string };
-    variant?: string;
-    parts: Record<string, unknown>[];
-  }) => Promise<unknown>;
+  sendPromptAsync: (
+    sessionId: string,
+    payload: {
+      directory: string;
+      agent: string;
+      model: { providerID?: string; modelID: string };
+      variant?: string;
+      parts: Record<string, unknown>[];
+    },
+  ) => Promise<unknown>;
 };
 
 type CodexApiLike = {
   activeThreadId: Ref<string>;
   threads: Ref<Array<{ id: string; modelProvider?: string | null }>>;
-  collaborationModes: Ref<Array<{ mode: string; name: string; model?: string | null; reasoningEffort?: string | null }>>;
-  sendPrompt: (prompt: string, options: {
-    threadId?: string;
-    forceNewThread?: boolean;
-    cwd?: string;
-    model?: string;
-    effort?: string;
-    collaborationMode?: CodexCollaborationModePayload;
-    input?: CodexTurnInputItem[];
-  }) => Promise<unknown>;
+  collaborationModes: Ref<
+    Array<{ mode: string; name: string; model?: string | null; reasoningEffort?: string | null }>
+  >;
+  sendPrompt: (
+    prompt: string,
+    options: {
+      threadId?: string;
+      forceNewThread?: boolean;
+      cwd?: string;
+      model?: string;
+      effort?: string;
+      collaborationMode?: CodexCollaborationModePayload;
+      input?: CodexTurnInputItem[];
+    },
+  ) => Promise<unknown>;
   refreshThreads: () => Promise<unknown>;
   selectModel: (modelKey: string) => void;
 };
@@ -100,6 +112,8 @@ export function useBackendMessageSend(params: {
   sendCommand: (sessionId: string, command: CommandInfo, commandArgs: string) => Promise<void>;
   buildLineCommentFileUrl: (path: string, startLine: number, endLine: number) => string;
   formatCommentNote: (path: string, startLine: number, endLine: number, text: string) => string;
+  resolveAgentMode: (mode: string) => string;
+  buildAcpMentionContextParts: (text: string) => Promise<Array<Record<string, unknown>>>;
 }) {
   function appendRecentInput(text: string) {
     if (!text) return;
@@ -134,7 +148,9 @@ export function useBackendMessageSend(params: {
     const commandMatch = slash ? params.findCommandByName(slash.name) : null;
 
     if (params.activeBackendKind.value === 'codex') {
-      const codexDirectory = params.normalizeProjectDirectoryForActiveBackend(params.activeDirectory.value.trim());
+      const codexDirectory = params.normalizeProjectDirectoryForActiveBackend(
+        params.activeDirectory.value.trim(),
+      );
       appendRecentInput(hasText ? text : '');
       params.messageInput.value = '';
       params.enableFollow();
@@ -142,7 +158,7 @@ export function useBackendMessageSend(params: {
       params.setSendStatusKey('app.status.sending');
       try {
         if (slash && slash.name.toLowerCase() === 'shell') {
-          if (!await params.openShellFromInput(slash.arguments ?? '')) return;
+          if (!(await params.openShellFromInput(slash.arguments ?? ''))) return;
           params.setSendStatusKey('app.status.shellReady');
           params.clearComposerDraftForCurrentContext();
           return;
@@ -185,16 +201,26 @@ export function useBackendMessageSend(params: {
         }
 
         const prompt = codexInput
-          .filter((item): item is Extract<CodexTurnInputItem, { type: 'text' }> => item.type === 'text')
+          .filter(
+            (item): item is Extract<CodexTurnInputItem, { type: 'text' }> => item.type === 'text',
+          )
           .map((item) => item.text)
           .join('\n\n');
-        const selectedInfo = params.modelOptions.value.find((model) => model.id === params.selectedModel.value);
+        const selectedInfo = params.modelOptions.value.find(
+          (model) => model.id === params.selectedModel.value,
+        );
         const selectedModelIDs = selectedInfo
-          ? { providerID: selectedInfo.providerID?.trim() ?? '', modelID: selectedInfo.modelID.trim() }
+          ? {
+              providerID: selectedInfo.providerID?.trim() ?? '',
+              modelID: selectedInfo.modelID.trim(),
+            }
           : params.parseProviderModelKey(params.selectedModel.value);
         const selectedCodexModelKey = selectedInfo?.id || params.selectedModel.value.trim();
-        const selectedCodexModel = selectedModelIDs.modelID || (!selectedCodexModelKey.includes('/') ? selectedCodexModelKey : undefined);
-        const selectedCodexProvider = selectedModelIDs.providerID || (selectedCodexModel ? params.codexProjectId : '');
+        const selectedCodexModel =
+          selectedModelIDs.modelID ||
+          (!selectedCodexModelKey.includes('/') ? selectedCodexModelKey : undefined);
+        const selectedCodexProvider =
+          selectedModelIDs.providerID || (selectedCodexModel ? params.codexProjectId : '');
         // Build the Codex `collaborationMode` struct. The server requires a
         // `settings.model` field inside the struct, so we can only forward
         // the selection when the user has also chosen a model. Without a
@@ -202,8 +228,8 @@ export function useBackendMessageSend(params: {
         // built-in default for the thread.
         const selectedModeId = params.selectedMode.value;
         const selectedCollaborationMode =
-          selectedCodexModel
-          && params.codexApi.collaborationModes.value.some((mode) => mode.mode === selectedModeId)
+          selectedCodexModel &&
+          params.codexApi.collaborationModes.value.some((mode) => mode.mode === selectedModeId)
             ? {
                 mode: selectedModeId,
                 settings: {
@@ -230,7 +256,8 @@ export function useBackendMessageSend(params: {
         });
         await params.codexApi.refreshThreads();
         if (params.codexApi.activeThreadId.value) {
-          if (startNewCodexThread) params.codexPendingSessionLock.value = params.codexApi.activeThreadId.value;
+          if (startNewCodexThread)
+            params.codexPendingSessionLock.value = params.codexApi.activeThreadId.value;
           params.selectedSessionId.value = params.codexApi.activeThreadId.value;
         }
         params.attachments.value = [];
@@ -244,11 +271,18 @@ export function useBackendMessageSend(params: {
       return;
     }
 
-    const selectedInfo = params.modelOptions.value.find((model) => model.id === params.selectedModel.value);
+    const selectedInfo = params.modelOptions.value.find(
+      (model) => model.id === params.selectedModel.value,
+    );
     const selectedModelIDs = params.parseProviderModelKey(params.selectedModel.value);
     const providerID = selectedInfo?.providerID ?? (selectedModelIDs.providerID || undefined);
     const modelID = selectedInfo?.modelID ?? (selectedModelIDs.modelID || undefined);
-    if (!providerID || !modelID || !params.isProviderEnabled(providerID) || !params.isModelAvailable(params.selectedModel.value)) {
+    if (
+      !providerID ||
+      !modelID ||
+      !params.isProviderEnabled(providerID) ||
+      !params.isModelAvailable(params.selectedModel.value)
+    ) {
       params.ensureSelectedModelAvailable();
       params.setSendStatusText('Select an enabled provider/model before sending.');
       return;
@@ -261,7 +295,7 @@ export function useBackendMessageSend(params: {
     params.setSendStatusKey('app.status.sending');
     try {
       if (slash && slash.name.toLowerCase() === 'shell') {
-        if (!await params.openShellFromInput(slash.arguments ?? '')) return;
+        if (!(await params.openShellFromInput(slash.arguments ?? ''))) return;
         params.setSendStatusKey('app.status.shellReady');
         params.clearComposerDraftForCurrentContext();
         return;
@@ -279,13 +313,17 @@ export function useBackendMessageSend(params: {
         return;
       }
 
-      const atAgent = hasText ? params.parseAtAgent(text) : null;
-      const agentMatch = atAgent ? params.findAgentByName(atAgent.agent) : null;
+      const parsedAtAgent = hasText ? params.parseAtAgent(text) : null;
+      const agentMatch = parsedAtAgent ? params.findAgentByName(parsedAtAgent.agent) : null;
+      const atAgent = agentMatch ? parsedAtAgent : null;
       const directory = params.requireSelectedWorktree('send');
       if (!directory) return;
       const parts: Array<Record<string, unknown>> = [];
       const messageText = atAgent ? atAgent.text : text;
       if (hasText && messageText) parts.push({ type: 'text', text: messageText });
+      if (params.activeBackendKind.value === 'acp' && messageText) {
+        parts.push(...(await params.buildAcpMentionContextParts(messageText)));
+      }
       if (hasAttachments) {
         for (const item of params.attachments.value) {
           if (item.lineComment) {
@@ -320,7 +358,7 @@ export function useBackendMessageSend(params: {
       }
       await params.openCodeApi.sendPromptAsync(sessionId, {
         directory,
-        agent: agentMatch?.name ?? params.selectedMode.value,
+        agent: agentMatch?.name ?? params.resolveAgentMode(params.selectedMode.value),
         model: {
           providerID,
           modelID: modelID || '',

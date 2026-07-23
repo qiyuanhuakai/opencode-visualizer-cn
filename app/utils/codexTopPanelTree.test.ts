@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { CODEX_PROJECT_ID, createCodexProjectState } from '../composables/useCodexWorkspace';
 import { buildCodexSessionTreeData, buildCodexTopPanelTreeData, type CodexTopPanelWorktree } from './codexTopPanelTree';
+import { applyPinHierarchyTransition, buildPinHierarchy } from './pinHierarchy';
 
 describe('buildCodexTopPanelTreeData', () => {
   it('groups Codex sessions into sandbox, branch or folder, and session layers', () => {
     const project = createCodexProjectState(
       [
         { id: 'non-git', name: 'Scratch', cwd: '/tmp/scratch', updatedAt: 1 },
-        { id: 'main-a', name: 'Main A', cwd: '/repo/packages/a', gitInfo: { root: '/repo', branch: 'main' }, updatedAt: 3 },
-        { id: 'main-b', name: 'Main B', cwd: '/repo/packages/b', gitInfo: { root: '/repo', branch: 'main' }, updatedAt: 4 },
-        { id: 'dev', name: 'Dev', cwd: '/repo', gitInfo: { root: '/repo', branch: 'dev' }, updatedAt: 2 },
+        { id: 'main-a', name: 'Main A', cwd: '/repo/packages/a', gitInfo: { root: '/repo', commonRoot: '/repo', worktreeRoot: '/repo', branch: 'main' }, updatedAt: 3 },
+        { id: 'main-b', name: 'Main B', cwd: '/repo/packages/b', gitInfo: { root: '/repo', commonRoot: '/repo', worktreeRoot: '/repo', branch: 'main' }, updatedAt: 4 },
+        { id: 'dev', name: 'Dev', cwd: '/repo-dev', gitInfo: { root: '/repo-dev', commonRoot: '/repo', worktreeRoot: '/repo-dev', branch: 'dev' }, updatedAt: 2 },
       ],
       '/home/codex',
     );
@@ -28,7 +29,7 @@ describe('buildCodexTopPanelTreeData', () => {
       ['branch', 'main'],
     ]);
     expect(worktrees[0].sandboxes[0].sessions.map((session) => session.id)).toEqual(['non-git']);
-    expect(worktrees[1].sandboxes[0]).toMatchObject({ directory: '/repo', sessions: [expect.objectContaining({ id: 'dev' })] });
+    expect(worktrees[1].sandboxes[0]).toMatchObject({ directory: '/repo-dev', sessions: [expect.objectContaining({ id: 'dev' })] });
     expect(worktrees[1].sandboxes[1]).toMatchObject({ directory: '/repo' });
     expect(worktrees[1].sandboxes[1].sessions.map((session) => session.id)).toEqual(['main-b', 'main-a']);
   });
@@ -49,26 +50,115 @@ describe('buildCodexTopPanelTreeData', () => {
     expect(branch?.sessions.map((session) => session.id)).toEqual(['subdir-b', 'subdir-a']);
   });
 
+  it('uses normalized git metadata for repository and branch pin transitions', () => {
+    const project = createCodexProjectState(
+      [
+        { id: 'subdir-a', cwd: '~/repo/a', gitInfo: { root: '~/repo', branch: 'main' }, updatedAt: 1 },
+        { id: 'subdir-b', cwd: '~/repo/b', gitInfo: { root: '~/repo', branch: 'main' }, updatedAt: 2 },
+      ],
+      '/home/codex',
+    );
+    const hierarchy = buildPinHierarchy(project, '/home/codex/repo', {}, '/home/codex');
+    expect(hierarchy).not.toBeNull();
+    if (!hierarchy) throw new Error('Expected normalized repository pin hierarchy');
+
+    expect(hierarchy.branches).toEqual([
+      expect.objectContaining({
+        key: 'sandbox:codex:/home/codex/repo',
+        sessionKeys: expect.arrayContaining(['codex:subdir-a', 'codex:subdir-b']),
+      }),
+    ]);
+    expect(applyPinHierarchyTransition(
+      {}, hierarchy, { level: 'branch', key: 'sandbox:codex:/home/codex/repo' }, true, 123,
+    )).toMatchObject({
+      'sandbox:codex:/home/codex/repo': 123,
+      'codex:subdir-a': 123,
+      'codex:subdir-b': 123,
+    });
+  });
+
   it('pins individual Codex branch rows without pinning sibling branches', () => {
     const project = createCodexProjectState(
       [
-        { id: 'main', cwd: '/repo', gitInfo: { root: '/repo', branch: 'main' }, updatedAt: 2 },
-        { id: 'dev', cwd: '/repo', gitInfo: { root: '/repo', branch: 'dev' }, updatedAt: 1 },
+        { id: 'main', cwd: '/repo', gitInfo: { root: '/repo', commonRoot: '/repo', worktreeRoot: '/repo', branch: 'main' }, updatedAt: 2 },
+        { id: 'dev', cwd: '/repo-dev', gitInfo: { root: '/repo-dev', commonRoot: '/repo', worktreeRoot: '/repo-dev', branch: 'dev' }, updatedAt: 1 },
       ],
       '/home/codex',
     );
 
     const [worktree]: CodexTopPanelWorktree[] = buildCodexTopPanelTreeData(project, {
-      pinnedStore: { 'sandbox:codex:codex-branch:/repo:main': 123 },
+      pinnedStore: { 'sandbox:codex:/repo': 123, 'codex:main': 123 },
       homePath: '/home/codex',
     });
     const main = worktree.sandboxes.find((sandbox) => sandbox.branch === 'main');
     const dev = worktree.sandboxes.find((sandbox) => sandbox.branch === 'dev');
 
-    expect(main).toMatchObject({ isPinned: true, pinDirectory: 'codex-branch:/repo:main' });
-    expect(main?.sessions[0]).toMatchObject({ id: 'main', isImplicitlyPinned: true, pinnedAt: 123 });
+    expect(main).toMatchObject({ isPinned: true, pinScope: { level: 'branch', directory: '/repo', repoRoot: '/repo' } });
+    expect(main?.sessions[0]).toMatchObject({ id: 'main', isPinned: true, isImplicitlyPinned: false, pinnedAt: 123 });
     expect(dev).toMatchObject({ isPinned: false, isImplicitlyPinned: false });
     expect(dev?.sessions[0]).toMatchObject({ id: 'dev', isImplicitlyPinned: false, pinnedAt: 0 });
+  });
+
+  it('renders an explicit repository cascade at every hierarchy level', () => {
+    const project = createCodexProjectState(
+      [
+        { id: 'main', cwd: '/repo', gitInfo: { root: '/repo', commonRoot: '/repo', worktreeRoot: '/repo', branch: 'main' }, updatedAt: 2 },
+        { id: 'dev', cwd: '/repo-dev', gitInfo: { root: '/repo-dev', commonRoot: '/repo', worktreeRoot: '/repo-dev', branch: 'dev' }, updatedAt: 1 },
+      ],
+      '/home/codex',
+    );
+
+    const [worktree]: CodexTopPanelWorktree[] = buildCodexTopPanelTreeData(project, {
+      pinnedStore: {
+        'repo:codex:/repo': 123,
+        'sandbox:codex:/repo': 123,
+        'sandbox:codex:/repo-dev': 123,
+        'codex:main': 123,
+        'codex:dev': 123,
+      },
+      homePath: '/home/codex',
+    });
+
+    expect(worktree).toMatchObject({
+      kind: 'sandbox',
+      pinScope: { level: 'repo', root: '/repo' },
+      isPinned: true,
+    });
+    expect(worktree.sandboxes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ branch: 'main', isPinned: true, isImplicitlyPinned: false }),
+      expect.objectContaining({ branch: 'dev', isPinned: true, isImplicitlyPinned: false }),
+    ]));
+  });
+
+  it('limits a repository-level transition to that repository in a multi-repo backend project', () => {
+    const project = createCodexProjectState(
+      [
+        { id: 'repo-a', cwd: '/repo-a', gitInfo: { root: '/repo-a', branch: 'main' }, updatedAt: 2 },
+        { id: 'repo-b', cwd: '/repo-b', gitInfo: { root: '/repo-b', branch: 'main' }, updatedAt: 1 },
+      ],
+      '/home/codex',
+    );
+    const repoAHierarchy = buildPinHierarchy(project, '/repo-a');
+    expect(repoAHierarchy).not.toBeNull();
+    if (!repoAHierarchy) throw new Error('Expected repository pin hierarchy');
+
+    const pinnedStore = applyPinHierarchyTransition(
+      {},
+      repoAHierarchy,
+      { level: 'project' },
+      true,
+      123,
+    );
+    const worktrees = buildCodexTopPanelTreeData(project, { pinnedStore, homePath: '/home/codex' });
+    const repoA = worktrees.find((worktree) => worktree.directory === '/repo-a');
+    const repoB = worktrees.find((worktree) => worktree.directory === '/repo-b');
+
+    expect(repoA).toMatchObject({ isPinned: true });
+    expect(repoA?.sandboxes[0]).toMatchObject({ isPinned: true });
+    expect(repoA?.sandboxes[0].sessions[0]).toMatchObject({ isPinned: true });
+    expect(repoB).toMatchObject({ isPinned: false, pinnedAt: 0 });
+    expect(repoB?.sandboxes[0]).toMatchObject({ isPinned: false, isImplicitlyPinned: false });
+    expect(repoB?.sandboxes[0].sessions[0]).toMatchObject({ isPinned: false, isImplicitlyPinned: false });
   });
 
   it('groups git worktrees under their common repository root while keeping branch cwd actions', () => {
@@ -119,23 +209,30 @@ describe('buildCodexTopPanelTreeData', () => {
       '/home/codex',
     );
     const worktrees = buildCodexTopPanelTreeData(project, {
-      pinnedStore: { 'sandbox:codex:codex-branch:/apps/vis_app/vis:feat/bridge': 123 },
+      pinnedStore: {
+        'sandbox:codex:/apps/vis_app/vis.feat-bridge': 123,
+        'codex:bridge': 123,
+      },
       homePath: '/home/codex',
     });
 
     const sidebarTree = buildCodexSessionTreeData(worktrees);
 
     expect(sidebarTree).toHaveLength(1);
-    expect(sidebarTree[0]).toMatchObject({ name: 'vis', pinDirectory: '/apps/vis_app/vis', kind: 'sandbox' });
+    expect(sidebarTree[0]).toMatchObject({ name: 'vis', pinScope: { level: 'repo', root: '/apps/vis_app/vis' }, kind: 'sandbox' });
     expect(sidebarTree[0].sandboxes).toHaveLength(1);
     expect(sidebarTree[0].sandboxes[0]).toMatchObject({
       name: 'feat/bridge',
       directory: '/apps/vis_app/vis.feat-bridge',
-      pinDirectory: 'codex-branch:/apps/vis_app/vis:feat/bridge',
+      pinScope: {
+        level: 'branch',
+        directory: '/apps/vis_app/vis.feat-bridge',
+        repoRoot: '/apps/vis_app/vis',
+      },
       isPinned: true,
     });
     expect(sidebarTree[0].sandboxes[0].sessions).toEqual([
-      expect.objectContaining({ sessionId: 'bridge', title: 'Bridge work', isImplicitlyPinned: true }),
+      expect.objectContaining({ sessionId: 'bridge', title: 'Bridge work', isPinned: true, isImplicitlyPinned: false }),
     ]);
   });
 

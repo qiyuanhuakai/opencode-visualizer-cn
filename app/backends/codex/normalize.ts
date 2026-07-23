@@ -55,6 +55,12 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function wireTimestampMs(value: unknown): number | undefined {
+  const num = asNumber(value);
+  if (num === undefined || num <= 0) return undefined;
+  return num < 1_000_000_000_000 ? num * 1000 : num;
+}
+
 function codexItemId(item: CodexRecord, fallback: string) {
   return stringValue(item.id, fallback);
 }
@@ -580,7 +586,14 @@ export function normalizeCodexTurnItems(params: {
 
 export function normalizeCodexTurnsToHistory(params: {
   sessionId: string;
-  turns: Array<{ id?: unknown; items?: unknown; createdAt?: unknown; status?: unknown }>;
+  turns: Array<{
+    id?: unknown;
+    items?: unknown;
+    createdAt?: unknown;
+    startedAt?: unknown;
+    completedAt?: unknown;
+    status?: unknown;
+  }>;
   createdAt?: number;
   model?: CodexNormalizeModel;
 }): CodexCanonicalHistoryEntry[] {
@@ -589,14 +602,16 @@ export function normalizeCodexTurnsToHistory(params: {
     const turnId = stringValue(turn.id, `${params.sessionId}:turn:${index}`);
     const items = Array.isArray(turn.items) ? turn.items : [];
     const turnStatus = stringValue(turn.status);
+    const startedMs = wireTimestampMs(turn.startedAt);
+    const completedMs = wireTimestampMs(turn.completedAt);
     const bundle = normalizeCodexTurnItems({
       sessionId: params.sessionId,
       turnId,
       items,
-      createdAt: numberValue(turn.createdAt, params.createdAt ?? Date.now() + index),
+      createdAt: startedMs ?? numberValue(turn.createdAt, params.createdAt ?? Date.now() + index),
       model: params.model,
       turnStatus,
-      turn,
+      turn: completedMs !== undefined ? { ...turn, completedAt: completedMs } : turn,
     });
     for (const info of bundle.messages) {
       entries.push({

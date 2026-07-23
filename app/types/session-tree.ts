@@ -1,3 +1,5 @@
+import type { ContainerPinScope } from './pin';
+
 export type SessionTreeSession = {
   type: 'session';
   sessionId: string;
@@ -14,7 +16,7 @@ export type SessionTreeSandbox = {
   type: 'sandbox';
   key?: string;
   directory: string;
-  pinDirectory?: string;
+  pinScope?: ContainerPinScope;
   projectId: string;
   name: string;
   kind?: 'global' | 'sandbox' | 'folder' | 'branch';
@@ -29,7 +31,7 @@ export type SessionTreeProject = {
   key?: string;
   projectId: string;
   directory?: string;
-  pinDirectory?: string;
+  pinScope?: ContainerPinScope;
   kind?: 'global' | 'sandbox';
   name: string;
   color?: string;

@@ -560,4 +560,31 @@ describe('normalizeCodexTurnItems', () => {
       expect(wipAssistant.info.time.completed).toBeUndefined();
     }
   });
+  it('maps wire startedAt/completedAt seconds to millisecond message times', () => {
+    // Real thread/read wire shape (codex app-server): turns carry startedAt/completedAt
+    // in Unix SECONDS and no createdAt; items carry no timestamps.
+    const history = normalizeCodexTurnsToHistory({
+      sessionId: 'thread-wire',
+      turns: [
+        {
+          id: 'turn-wire',
+          status: 'completed',
+          startedAt: 1778509222,
+          completedAt: 1778509256,
+          items: [
+            { id: 'u1', type: 'userMessage', content: [{ type: 'text', text: 'go' }] },
+            { id: 'a1', type: 'agentMessage', text: 'done' },
+          ],
+        },
+      ],
+    });
+    const user = history.find((entry) => entry.info.role === 'user');
+    const assistant = history.find((entry) => entry.info.role === 'assistant');
+    expect(user?.info.time.created).toBe(1778509222 * 1000);
+    expect(assistant).toBeDefined();
+    if (!assistant || assistant.info.role !== 'assistant') throw new Error('Expected assistant entry');
+    expect(assistant.info.time.created).toBeGreaterThanOrEqual(1778509222 * 1000);
+    expect(assistant.info.time.created).toBeLessThan(1778509222 * 1000 + 60_000);
+    expect(assistant.info.time.completed).toBe(1778509256 * 1000);
+  });
 });

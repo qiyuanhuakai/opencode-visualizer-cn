@@ -85,6 +85,7 @@ import { Icon } from '@iconify/vue';
 import TodoList from './TodoList.vue';
 import SessionTree from './SessionTree.vue';
 import type { BranchEntry } from '../types/git';
+import type { ContainerPinPayload } from '../types/pin';
 import type { SessionTreeData } from '../types/session-tree';
 import TreeView, {
   type GitBranchInfo,
@@ -137,8 +138,8 @@ const emit = defineEmits<{
   (event: 'toggle-expand', path: string): void;
   (event: 'pin-project', projectId: string): void;
   (event: 'unpin-project', projectId: string): void;
-  (event: 'pin-sandbox', payload: { projectId: string; directory: string }): void;
-  (event: 'unpin-sandbox', payload: { projectId: string; directory: string }): void;
+  (event: 'pin-sandbox', payload: ContainerPinPayload): void;
+  (event: 'unpin-sandbox', payload: ContainerPinPayload): void;
   (event: 'pin-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'unpin-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'reload'): void;

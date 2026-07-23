@@ -4,6 +4,16 @@
 
 ---
 
+## [Unreleased]
+
+### ACP 后端与本地桥接器
+
+- [x] 将 ACP v1 接入为 OpenCode、Codex 之外的第三后端，复用主 OutputPanel、InputPanel、会话与权限交互。
+- [x] 在状态监控面板中管理 Pi、Oh My Pi (`omp --mode acp`) 与 Kimi Code 等 ACP Agent。
+- [x] 将 vis_bridge 扩展为 OpenCode/Codex/ACP 进程监督器，并提供 Node SEA 单文件构建流程。
+- [x] ACP 反向文件与终端调用由 bridge 执行，按 Agent/Session 隔离并限制在会话目录。
+- [x] ACP 可选的 list/resume/load 能力按 Agent 声明降级，不伪造协议能力。
+
 ## [v0.6.0 released]
 
 ### 新后端支持(alpha)

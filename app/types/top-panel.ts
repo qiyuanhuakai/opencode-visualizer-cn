@@ -1,3 +1,5 @@
+import type { ContainerPinScope } from './pin';
+
 export type TopPanelSession = {
   id: string;
   title?: string;
@@ -14,7 +16,7 @@ export type TopPanelSession = {
 export type TopPanelSandbox = {
   key?: string;
   directory: string;
-  pinDirectory?: string;
+  pinScope?: ContainerPinScope;
   branch?: string;
   kind?: 'global' | 'sandbox' | 'folder' | 'branch';
   sessions: TopPanelSession[];
@@ -28,6 +30,7 @@ export type TopPanelSandbox = {
 export type TopPanelWorktree = {
   key?: string;
   directory: string;
+  pinScope?: ContainerPinScope;
   label: string;
   name?: string;
   projectId?: string;

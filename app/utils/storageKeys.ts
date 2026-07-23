@@ -77,6 +77,8 @@ export const StorageKeys = {
     deletedSandboxes: 'state.deletedSandboxes.v1',
     codexActiveThread: 'state.codexActiveThread.v1',
     forgePtyId: 'state.forgePtyId.v1',
+    acpArchivedSessions: 'state.acpArchivedSessions.v1',
+    acpMessageAttribution: 'state.acpMessageAttribution.v1',
   },
   drafts: {
     composer: 'drafts.composer.v1',
@@ -90,7 +92,10 @@ export const StorageKeys = {
     credentials: 'auth.credentials.v1',
     serverUrl: 'auth.serverUrl.v1',
     codexBridgeUrl: 'auth.codexBridgeUrl.v1',
+    acpBridgeUrl: 'auth.acpBridgeUrl.v1',
     codexBridgeToken: 'auth.codexBridgeToken.v1',
+    acpBridgeToken: 'auth.acpBridgeToken.v1',
+    acpAgentId: 'auth.acpAgentId.v1',
   },
 } as const;
 

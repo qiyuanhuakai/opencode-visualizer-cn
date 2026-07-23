@@ -1,19 +1,28 @@
 <template>
-   <div ref="appEl" class="app">
-     <ThemeInjector />
-       <template v-if="uiInitState === 'ready'">
-       <header class="app-header">
-         <TopPanel
-           ref="topPanelRef"
-           :tree-data="topPanelTreeData"
+  <div ref="appEl" class="app">
+    <ThemeInjector />
+    <template v-if="uiInitState === 'ready'">
+      <header class="app-header">
+        <TopPanel
+          ref="topPanelRef"
+          :tree-data="topPanelTreeData"
           :notification-sessions="notificationSessions"
           :project-directory="projectDirectory"
           :active-directory="activeDirectory"
-            :selected-session-id="selectedSessionId"
-             :home-path="homePath"
-              :sandbox-first-mode="activeBackendCapabilities.sessionManagementMode === 'sandbox-first'"
-             :codex-connected="codexApi.connected.value"
-             :pty-supported="ptySupported"
+          :selected-session-id="selectedSessionId"
+          :home-path="homePath"
+          :sandbox-first-mode="activeBackendCapabilities.sessionManagementMode === 'sandbox-first'"
+          :codex-connected="codexApi.connected.value"
+          :pty-supported="ptySupported"
+          :session-action-capabilities="{
+            rename: activeBackendCapabilities.sessionRename,
+            pin: activeBackendCapabilities.sessionPin,
+            unpin: activeBackendCapabilities.sessionUnpin,
+            archive: activeBackendCapabilities.sessionArchive,
+            unarchive: activeBackendCapabilities.sessionUnarchive,
+            delete: activeBackendCapabilities.sessionDelete,
+          }"
+          :worktrees-enabled="activeBackendCapabilities.worktrees"
           @select-notification="handleNotificationSessionSelect"
           @create-worktree-from="createWorktreeFromWorktree"
           @new-session="backendSessionLifecycle.createNewSession"
@@ -29,19 +38,19 @@
           @unpin-session="backendSessionActions.unpinSession"
           @pin-project="pinProject"
           @unpin-project="unpinProject"
-          @pin-sandbox="(payload) => pinSandbox(payload.projectId, payload.directory)"
-          @unpin-sandbox="(payload) => unpinSandbox(payload.projectId, payload.directory)"
+          @pin-sandbox="pinSandbox"
+          @unpin-sandbox="unpinSandbox"
           @select-session="handleTopPanelSessionSelect"
           @batch-session-action="backendSessionActions.handleTopPanelBatchSessionAction"
           @open-directory="handleOpenProjectDirectory"
           @edit-project="handleEditProject"
-    @open-settings="isSettingsOpen = true"
-    @open-provider-manager="isProviderManagerOpen = true"
-      @open-status-monitor="isStatusMonitorOpen = true"
-      @open-codex-panel="openCodexPanel"
-      @open-codex-subpanel="openCodexSubpanel"
-      @open-forge-panel="openForgePanel"
-            @logout="handleLogout"
+          @open-settings="isSettingsOpen = true"
+          @open-provider-manager="isProviderManagerOpen = true"
+          @open-status-monitor="isStatusMonitorOpen = true"
+          @open-codex-panel="openCodexPanel"
+          @open-codex-subpanel="openCodexSubpanel"
+          @open-forge-panel="openForgePanel"
+          @logout="handleLogout"
           @dropdown-closed="focusInput"
         />
       </header>
@@ -84,8 +93,8 @@
             @toggle-expand="toggleSessionTreeExpand"
             @pin-project="pinProject"
             @unpin-project="unpinProject"
-            @pin-sandbox="(payload) => pinSandbox(payload.projectId, payload.directory)"
-            @unpin-sandbox="(payload) => unpinSandbox(payload.projectId, payload.directory)"
+            @pin-sandbox="pinSandbox"
+            @unpin-sandbox="unpinSandbox"
             @pin-session="handleSidePanelPinSession"
             @unpin-session="handleSidePanelUnpinSession"
             @toggle-dir="toggleTreeDirectory"
@@ -160,6 +169,8 @@
               :can-send="canSend"
               :agent-options="agentOptions"
               :subagent-options="subagentOptions"
+              :mention-files="acpMentionFiles"
+              :prefer-file-mentions="activeBackendKind === 'acp'"
               :has-agent-options="hasAgentOptions"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
@@ -176,10 +187,14 @@
               :attachments="attachments"
               :message-input="messageInput"
               :selected-mode="selectedMode"
+              :selected-permission-mode="selectedAcpPermissionMode"
+              :permission-mode-options="activeBackendKind === 'acp' ? acpPermissionModeOptions : []"
+              :permission-mode-disabled="activeBackendKind === 'acp' && selectedMode === 'plan'"
               :selected-model="selectedModel"
               :selected-thinking="selectedThinking"
               @update:message-input="handleMessageInputUpdate"
               @update:selected-mode="handleSelectedModeUpdate"
+              @update:selected-permission-mode="handleSelectedPermissionModeUpdate"
               @update:selected-model="handleSelectedModelUpdate"
               @update:selected-thinking="handleSelectedThinkingUpdate"
               @apply-history-entry="handleApplyHistoryEntry"
@@ -214,14 +229,18 @@
             :key="`dock-${entry.key}`"
             type="button"
             class="window-dock-chip"
-            :title="$t('app.dock.restoreTitle', { title: entry.title || $t('app.dock.restoreFallbackWindow') })"
+            :title="
+              $t('app.dock.restoreTitle', {
+                title: entry.title || $t('app.dock.restoreFallbackWindow'),
+              })
+            "
             @click="restoreFloatingWindow(entry.key)"
           >
             <span class="window-dock-chip-title">{{ entry.title || entry.key }}</span>
           </button>
         </div>
-       </footer>
-      </template>
+      </footer>
+    </template>
     <div v-else class="app-loading-view" role="status" aria-live="polite">
       <div class="app-loading-card">
         <div class="absolute w-0 h-0 -z-10 flex items-center justify-center">
@@ -256,6 +275,7 @@
               type="button"
               class="app-login-backend"
               :class="{ active: loginBackendKind === 'opencode' }"
+              :aria-pressed="loginBackendKind === 'opencode'"
               @click="loginBackendKind = 'opencode'"
             >
               {{ t('app.login.openCodeBackend') }}
@@ -264,44 +284,54 @@
               type="button"
               class="app-login-backend"
               :class="{ active: loginBackendKind === 'codex' }"
+              :aria-pressed="loginBackendKind === 'codex'"
               @click="loginBackendKind = 'codex'"
             >
               {{ t('app.login.codexBackend') }}
+            </button>
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'acp' }"
+              :aria-pressed="loginBackendKind === 'acp'"
+              @click="loginBackendKind = 'acp'"
+            >
+              {{ t('app.login.acpBackend') }}
             </button>
           </div>
           <div class="app-login-fields">
             <template v-if="loginBackendKind === 'opencode'">
               <input
-              v-model="loginUsername"
-              type="text"
-              class="app-login-input"
-              :placeholder="t('app.login.username')"
-              name="username"
-              :disabled="!loginRequiresAuth"
-              @keydown.enter="handleLogin"
-            />
+                v-model="loginUsername"
+                type="text"
+                class="app-login-input"
+                :placeholder="t('app.login.username')"
+                name="username"
+                :disabled="!loginRequiresAuth"
+                @keydown.enter="handleLogin"
+              />
               <input
-              v-model="loginPassword"
-              type="password"
-              class="app-login-input"
-              :placeholder="t('app.login.password')"
-              :disabled="!loginRequiresAuth"
-              @keydown.enter="handleLogin"
-            />
+                v-model="loginPassword"
+                type="password"
+                class="app-login-input"
+                :placeholder="t('app.login.password')"
+                :disabled="!loginRequiresAuth"
+                @keydown.enter="handleLogin"
+              />
               <label class="app-login-checkbox">
-              <input v-model="loginRequiresAuth" type="checkbox" />
-              {{ t('app.login.authRequired') }}
+                <input v-model="loginRequiresAuth" type="checkbox" />
+                {{ t('app.login.authRequired') }}
               </label>
               <input
-              v-model="loginUrl"
-              type="text"
-              class="app-login-input"
-              :placeholder="$t('app.login.url')"
-              name="url"
-              @keydown.enter="handleLogin"
-            />
+                v-model="loginUrl"
+                type="text"
+                class="app-login-input"
+                :placeholder="$t('app.login.url')"
+                name="url"
+                @keydown.enter="handleLogin"
+              />
             </template>
-            <template v-else>
+            <template v-else-if="loginBackendKind === 'codex'">
               <input
                 v-model="loginCodexBridgeUrl"
                 type="text"
@@ -319,6 +349,41 @@
                 @keydown.enter="handleLogin"
               />
               <p class="app-login-hint">{{ t('app.login.codexBridgeHint') }}</p>
+            </template>
+            <template v-else>
+              <input
+                v-model="loginAcpBridgeUrl"
+                type="text"
+                class="app-login-input"
+                :placeholder="t('app.login.acpBridgeUrl')"
+                name="acpBridgeUrl"
+                @keydown.enter="handleLogin"
+              />
+              <input
+                v-model="loginAcpBridgeToken"
+                type="password"
+                class="app-login-input"
+                :placeholder="t('app.login.acpBridgeToken')"
+                name="acpBridgeToken"
+                @keydown.enter="handleLogin"
+              />
+              <Dropdown
+                :model-value="loginAcpAgentId || undefined"
+                class="app-login-select"
+                :placeholder="t('app.login.acpAgentId')"
+                auto-close
+                @update:model-value="loginAcpAgentId = $event ?? ''"
+              >
+                <template #value="{ value }">{{ loginAcpAgentLabel(value) }}</template>
+                <DropdownItem
+                  v-for="agent in loginAcpAgentOptions"
+                  :key="agent.id"
+                  :value="agent.id"
+                >
+                  {{ agent.name }} ({{ agent.id }})
+                </DropdownItem>
+              </Dropdown>
+              <p class="app-login-hint">{{ t('app.login.acpBridgeHint') }}</p>
             </template>
           </div>
           <p v-if="initErrorMessage" class="app-loading-message app-error-message">
@@ -371,10 +436,12 @@
       :selected-model="selectedModel"
       :hidden-models="hiddenModels"
       :provider-config="providerConfig"
+      :backend-kind="activeBackendKind"
       @close="isProviderManagerOpen = false"
       @update:model-visibility="handleModelVisibilityUpdate"
       @config-updated="handleProviderConfigUpdated"
       @providers-changed="handleProvidersChanged"
+      @open-acp-auth-terminal="openAcpAuthTerminal"
     />
     <StatusMonitorModal
       :open="isStatusMonitorOpen"
@@ -413,10 +480,18 @@
           @keydown.esc.prevent="promptDialogRef?.close()"
         />
         <div class="prompt-dialog-actions">
-          <button type="button" class="prompt-dialog-btn prompt-dialog-btn-cancel" @click="promptDialogRef?.close()">
+          <button
+            type="button"
+            class="prompt-dialog-btn prompt-dialog-btn-cancel"
+            @click="promptDialogRef?.close()"
+          >
             {{ t('app.prompt.cancel') }}
           </button>
-          <button type="button" class="prompt-dialog-btn prompt-dialog-btn-confirm" @click="handlePromptConfirm">
+          <button
+            type="button"
+            class="prompt-dialog-btn prompt-dialog-btn-confirm"
+            @click="handlePromptConfirm"
+          >
             {{ t('app.prompt.confirm') }}
           </button>
         </div>
@@ -432,10 +507,18 @@
       <div class="confirm-dialog">
         <div class="confirm-dialog-message">{{ confirmMessage }}</div>
         <div class="confirm-dialog-actions">
-          <button type="button" class="confirm-dialog-btn confirm-dialog-btn-cancel" @click="confirmDialogRef?.close()">
+          <button
+            type="button"
+            class="confirm-dialog-btn confirm-dialog-btn-cancel"
+            @click="confirmDialogRef?.close()"
+          >
             {{ t('app.prompt.cancel') }}
           </button>
-          <button type="button" class="confirm-dialog-btn confirm-dialog-btn-confirm" @click="handleConfirmAccept">
+          <button
+            type="button"
+            class="confirm-dialog-btn confirm-dialog-btn-confirm"
+            @click="handleConfirmAccept"
+          >
             {{ t('app.prompt.confirm') }}
           </button>
         </div>
@@ -460,6 +543,8 @@ import {
 import { useI18n } from 'vue-i18n';
 import { bundledThemes } from 'shiki/bundle/web';
 import InputPanel from './components/InputPanel.vue';
+import Dropdown from './components/Dropdown.vue';
+import DropdownItem from './components/Dropdown/Item.vue';
 import OutputPanel from './components/OutputPanel.vue';
 import ProjectPicker from './components/ProjectPicker.vue';
 import FloatingWindow from './components/FloatingWindow.vue';
@@ -472,9 +557,7 @@ import SubagentContent from './components/ToolWindow/Subagent.vue';
 import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
 import Welcome from './components/Welcome.vue';
-import TopPanel, {
-  type TopPanelCodexSubpanel,
-} from './components/TopPanel.vue';
+import TopPanel, { type TopPanelCodexSubpanel } from './components/TopPanel.vue';
 import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import StatusMonitorModal from './components/StatusMonitorModal.vue';
@@ -506,6 +589,7 @@ import {
   toolColor,
 } from './components/ToolWindow/utils';
 import { useAutoScroller, type ScrollMode } from './composables/useAutoScroller';
+import { fetchAcpBridgeAgents, type AcpAgentStatus } from './composables/useAcpBridge';
 import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
@@ -515,7 +599,11 @@ import { useQuestions, type QuestionRequest } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
 import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
 import { useBackendSessionActions } from './composables/useBackendSessionActions';
-import { useBackendSessionLifecycle } from './composables/useBackendSessionLifecycle';
+import {
+  createDynamicBackendAbortSession,
+  sessionProjectIdForBackend,
+  useBackendSessionLifecycle,
+} from './composables/useBackendSessionLifecycle';
 import { useBackendMessageSend } from './composables/useBackendMessageSend';
 import { useBackendSessionReload } from './composables/useBackendSessionReload';
 import { useBackendSessionStatus } from './composables/useBackendSessionStatus';
@@ -545,9 +633,10 @@ import type {
 } from './types/backend-domain';
 import type { ComposerAttachment, LineCommentData } from './types/composer';
 import type { ForgePanelAuxiliary } from './types/forge';
+import type { ContainerPinPayload } from './types/pin';
 import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { TopPanelNotificationSession } from './types/top-panel';
-import type { ProjectState, SandboxState } from './types/worker-state';
+import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
 import { DEFAULT_OPENCODE_URL } from './utils/constants';
 import { resolveRestoredPtyKind } from './utils/forgePty';
@@ -557,11 +646,11 @@ import {
   normalizePinnedAt,
   parsePinnedSessionStore,
   pinnedSessionStoreKey,
-  projectPinKey,
   reconcilePinnedSessionStore,
   sandboxPinKey,
   type LocalPinnedSessionStore,
 } from './utils/pinnedSessions';
+import { applyPinHierarchyTransition, buildPinHierarchy } from './utils/pinHierarchy';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import {
@@ -572,20 +661,36 @@ import { toMessageDiffViewerEntry } from './utils/messageDiff';
 import { buildLineCommentFileUrl, formatCommentNote } from './utils/lineComment';
 import { resolveModelMetaForPath as resolveModelMetaForPathUtil } from './utils/resolveModelMeta';
 import {
+  configureAcpBackend,
+  disconnectAcpBackend,
   configureCodexBackend,
   configureOpenCodeBackend,
   getActiveBackendAdapter,
+  getBackendAdapter,
   setActiveBackendKind,
 } from './backends/registry';
+import { AcpAdapter } from './backends/acp/acpAdapter';
+import {
+  createAcpAgentSelectorOptions,
+  createAcpPermissionModeList,
+  createAcpUiModeState,
+  resolveAcpModeSelection,
+} from './backends/acp/configOptions';
+import { ACP_PROJECT_ID } from './backends/acp/bridgeUrl';
 import type { BackendKind, ConfigMergeStrategy } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
-import { splitFileContentDirectoryAndPath, normalizeAbsolutePathNoParent, normalizeDirectory } from './utils/path';
+import {
+  splitFileContentDirectoryAndPath,
+  normalizeAbsolutePathNoParent,
+  normalizeDirectory,
+} from './utils/path';
 import { parseSkill as parseSkillFromText } from './utils/parseSkill';
 import { clampShellWindowSize, type ShellWindowSize } from './utils/shellWindowSize';
 import { resolveTerminalScrollTarget } from './utils/terminalScroll';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
+import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
 import { useSettings } from './composables/useSettings';
 import {
   StorageKeys,
@@ -708,7 +813,10 @@ function normalizeShellTitle(value: string): string {
   return normalized;
 }
 
-function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key: string) => string): string {
+function buildWorktreeSnapshotScript(
+  mode: WorktreeSnapshotMode,
+  translate: (key: string) => string,
+): string {
   const title =
     mode === 'staged'
       ? translate('app.git.stagedChanges')
@@ -725,10 +833,10 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key
   } else if (mode === 'changes') {
     // Only files with worktree changes (y != ' '); include untracked (y='?')
     filterLines = ['  [ "$y" = " " ] && continue'];
-   } else {
-     // All: include all files (git status already filters to changed files)
-     filterLines = [];
-   }
+  } else {
+    // All: include all files (git status already filters to changed files)
+    filterLines = [];
+  }
   // Before/after source depends on mode
   let beforeLines: string[];
   let afterLines: string[];
@@ -789,22 +897,22 @@ function buildWorktreeSnapshotScript(mode: WorktreeSnapshotMode, translate: (key
     '  path=${line#???}',
     '  old=$path',
     '  new=$path',
-  '  code=M',
-  '  if [ "$x" = "?" ] && [ "$y" = "?" ]; then',
-  '    code=A',
-  '  elif [ "$x" = "D" ] || [ "$y" = "D" ]; then',
-  '    code=D',
-  '  elif [ "$x" = "A" ]; then',
-  '    code=A',
-  '  elif [ "$x" = "R" ] || [ "$y" = "R" ]; then',
-  '    code=R',
-  '    old=${path%% -> *}',
-  '    new=${path#* -> }',
-  '  elif [ "$x" = "C" ] || [ "$y" = "C" ]; then',
-  '    code=C',
-  '    old=${path%% -> *}',
-  '    new=${path#* -> }',
-  '  fi',
+    '  code=M',
+    '  if [ "$x" = "?" ] && [ "$y" = "?" ]; then',
+    '    code=A',
+    '  elif [ "$x" = "D" ] || [ "$y" = "D" ]; then',
+    '    code=D',
+    '  elif [ "$x" = "A" ]; then',
+    '    code=A',
+    '  elif [ "$x" = "R" ] || [ "$y" = "R" ]; then',
+    '    code=R',
+    '    old=${path%% -> *}',
+    '    new=${path#* -> }',
+    '  elif [ "$x" = "C" ] || [ "$y" = "C" ]; then',
+    '    code=C',
+    '    old=${path%% -> *}',
+    '    new=${path#* -> }',
+    '  fi',
     '  printf "##FILE\\t%s\\t%s\\n" "$code" "$new"',
     ...beforeLines,
     ...afterLines,
@@ -933,7 +1041,10 @@ function openCodexPanel() {
         void backendSessionActions.pinSession(threadId, { projectId: CODEX_PROJECT_ID, directory });
       },
       onUnpinCodexThread: (threadId: string, directory: string) => {
-        void backendSessionActions.unpinSession(threadId, { projectId: CODEX_PROJECT_ID, directory });
+        void backendSessionActions.unpinSession(threadId, {
+          projectId: CODEX_PROJECT_ID,
+          directory,
+        });
       },
       onOpenSubpanel: (panel: TopPanelCodexSubpanel) => openCodexSubpanel(panel),
     }),
@@ -965,7 +1076,9 @@ function sendLineToPty(ptyId: string, line: string) {
 
 async function openForgePanel() {
   if (!ptySupported.value) {
-    setSendStatusKey('app.error.shellFailed', { message: t('app.error.unavailable', { action: t('topPanel.openForge') }) });
+    setSendStatusKey('app.error.shellFailed', {
+      message: t('app.error.unavailable', { action: t('topPanel.openForge') }),
+    });
     return;
   }
 
@@ -1014,7 +1127,8 @@ function getForgeShellWindowOptions(pty: PtyInfo, directory: string): ShellWindo
     minWidth: terminalSize.width,
     minHeight: terminalSize.height + FORGE_WINDOW_EXTRA_HEIGHT_PX,
     title: t('forgePanel.title'),
-    color: 'var(--theme-floating-shell-accent, var(--theme-accent-primary, var(--color-region-accent)))',
+    color:
+      'var(--theme-floating-shell-accent, var(--theme-accent-primary, var(--color-region-accent)))',
   };
 }
 
@@ -1027,16 +1141,67 @@ type CodexSubpanelDefinition = {
 };
 
 const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefinition> = {
-  models: { component: CodexModelManager, titleKey: 'codexPanel.modelsTitle', width: 680, height: 560 },
-  fileManager: { component: CodexWorkspaceToolsPanel, titleKey: 'codexPanel.fileManagerTitle', width: 760, height: 620 },
-  mcp: { component: CodexMcpServerManager, titleKey: 'codexPanel.mcpTitle', width: 700, height: 600 },
-  skills: { component: CodexSkillsManager, titleKey: 'codexPanel.skillsTitle', width: 680, height: 560 },
-  plugins: { component: CodexPluginManager, titleKey: 'codexPanel.pluginsTitle', width: 720, height: 600 },
-  connectors: { component: CodexConnectorManager, titleKey: 'codexPanel.connectorsTitle', width: 640, height: 520 },
-  config: { component: CodexConfigViewer, titleKey: 'codexPanel.configTitle', width: 720, height: 600, scroll: 'manual' },
-  experimentalFeatures: { component: CodexExperimentalFeatureManager, titleKey: 'codexPanel.experimentalFeaturesTitle', width: 640, height: 520 },
-  collaborationModes: { component: CodexCollaborationModeManager, titleKey: 'codexPanel.collaborationModesTitle', width: 600, height: 460 },
-  feedback: { component: CodexFeedbackUploader, titleKey: 'codexPanel.feedbackTitle', width: 560, height: 500 },
+  models: {
+    component: CodexModelManager,
+    titleKey: 'codexPanel.modelsTitle',
+    width: 680,
+    height: 560,
+  },
+  fileManager: {
+    component: CodexWorkspaceToolsPanel,
+    titleKey: 'codexPanel.fileManagerTitle',
+    width: 760,
+    height: 620,
+  },
+  mcp: {
+    component: CodexMcpServerManager,
+    titleKey: 'codexPanel.mcpTitle',
+    width: 700,
+    height: 600,
+  },
+  skills: {
+    component: CodexSkillsManager,
+    titleKey: 'codexPanel.skillsTitle',
+    width: 680,
+    height: 560,
+  },
+  plugins: {
+    component: CodexPluginManager,
+    titleKey: 'codexPanel.pluginsTitle',
+    width: 720,
+    height: 600,
+  },
+  connectors: {
+    component: CodexConnectorManager,
+    titleKey: 'codexPanel.connectorsTitle',
+    width: 640,
+    height: 520,
+  },
+  config: {
+    component: CodexConfigViewer,
+    titleKey: 'codexPanel.configTitle',
+    width: 720,
+    height: 600,
+    scroll: 'manual',
+  },
+  experimentalFeatures: {
+    component: CodexExperimentalFeatureManager,
+    titleKey: 'codexPanel.experimentalFeaturesTitle',
+    width: 640,
+    height: 520,
+  },
+  collaborationModes: {
+    component: CodexCollaborationModeManager,
+    titleKey: 'codexPanel.collaborationModesTitle',
+    width: 600,
+    height: 460,
+  },
+  feedback: {
+    component: CodexFeedbackUploader,
+    titleKey: 'codexPanel.feedbackTitle',
+    width: 560,
+    height: 500,
+  },
 };
 
 function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
@@ -1110,13 +1275,14 @@ async function openCodexNativeFilePreview(path: string) {
   const key = `file-viewer:codex:${path}`;
   const result = await codexApi.readFileRaw(path);
   const encoding = typeof result.encoding === 'string' ? result.encoding : 'utf-8';
-  const binaryBase64 = result.type === 'binary'
-    ? (typeof result.dataBase64 === 'string'
-      ? result.dataBase64
-      : encoding === 'base64' && typeof result.content === 'string'
-        ? result.content
-        : undefined)
-    : undefined;
+  const binaryBase64 =
+    result.type === 'binary'
+      ? typeof result.dataBase64 === 'string'
+        ? result.dataBase64
+        : encoding === 'base64' && typeof result.content === 'string'
+          ? result.content
+          : undefined
+      : undefined;
   const fileContent = result.type === 'binary' ? undefined : codexApi.decodeReadFileText(result);
 
   codexApi.previewFilePath.value = path;
@@ -1174,7 +1340,10 @@ const outputEl = ref<HTMLElement | null>(null);
 const inputEl = ref<HTMLElement | null>(null);
 const appEl = ref<HTMLDivElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
-const outputPanelRef = ref<{ panelEl: HTMLDivElement | null; scrollToBottom: () => Promise<void> } | null>(null);
+const outputPanelRef = ref<{
+  panelEl: HTMLDivElement | null;
+  scrollToBottom: () => Promise<void>;
+} | null>(null);
 const topPanelRef = ref<{
   openSessionDropdown: () => void;
   closeSessionDropdown: () => void;
@@ -1290,6 +1459,7 @@ const composerDraftTabId =
 const shellSessionsByPtyId = new Map<string, ShellSession>();
 const pendingShellFits = new Set<string>();
 const shellExitWaiters = new Map<string, (exitCode: number) => void>();
+const shellExitCallbacks = new Map<string, (exitCode: number) => void | Promise<void>>();
 const ptyToFileMap = new Map<string, string>();
 const codexSessionCreationByDirectory = new Map<string, Promise<SessionInfo | undefined>>();
 const ptyMetaDecoder = new TextDecoder();
@@ -1624,6 +1794,8 @@ provide('showPrompt', showPrompt);
 provide('showConfirm', showConfirm);
 
 const selectedMode = ref('build');
+const selectedAcpPermissionMode = ref('normal');
+const acpPermissionModeOptions = ref<Array<{ id: string; label: string }>>([]);
 const selectedModel = ref('');
 const selectedThinking = ref<string | undefined>(undefined);
 const hiddenModels = ref<string[]>(readHiddenModelsFromStorage());
@@ -1652,18 +1824,73 @@ const loginRequiresAuth = ref(false);
 const activeBackendKind = ref<BackendKind>('opencode');
 const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
+const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
 const loginCodexBridgeToken = ref(credentials.codexBridgeToken.value);
+const loginAcpBridgeToken = ref(credentials.acpBridgeToken.value);
+const loginAcpAgentId = ref(credentials.acpAgentId.value);
+const loginAcpAgents = ref<AcpAgentStatus[]>([]);
+let loginAcpAgentsGeneration = 0;
+let loginAcpAgentsTimer: ReturnType<typeof setTimeout> | null = null;
+
+const loginAcpAgentOptions = computed(() => {
+  const enabled = loginAcpAgents.value.filter((agent) => agent.enabled);
+  const current = loginAcpAgentId.value.trim();
+  if (current && !enabled.some((agent) => agent.id === current)) {
+    return [...enabled, { id: current, name: current }];
+  }
+  return enabled;
+});
+
+function loginAcpAgentLabel(value: unknown) {
+  const id = String(value ?? '');
+  const agent = loginAcpAgentOptions.value.find((item) => item.id === id);
+  return agent ? `${agent.name} (${agent.id})` : id;
+}
+
+async function refreshLoginAcpAgents() {
+  const generation = ++loginAcpAgentsGeneration;
+  const bridgeUrl = loginAcpBridgeUrl.value.trim();
+  if (!bridgeUrl) {
+    loginAcpAgents.value = [];
+    return;
+  }
+  try {
+    const agents = await fetchAcpBridgeAgents({
+      bridgeUrl,
+      bridgeToken: loginAcpBridgeToken.value.trim() || undefined,
+    });
+    if (generation !== loginAcpAgentsGeneration) return;
+    loginAcpAgents.value = agents;
+  } catch {
+    if (generation !== loginAcpAgentsGeneration) return;
+    loginAcpAgents.value = [];
+  }
+}
+
+watch(
+  [loginAcpBridgeUrl, loginAcpBridgeToken, loginBackendKind, uiInitState],
+  () => {
+    if (loginAcpAgentsTimer) clearTimeout(loginAcpAgentsTimer);
+    if (uiInitState.value !== 'login' || loginBackendKind.value !== 'acp') return;
+    loginAcpAgentsTimer = setTimeout(() => {
+      void refreshLoginAcpAgents();
+    }, 300);
+  },
+  { immediate: true },
+);
 const retryStatus = ref<{
   message: string;
   next: number;
   attempt: number;
 } | null>(null);
 
-const loginTitle = computed(() => (
+const loginTitle = computed(() =>
   loginBackendKind.value === 'codex'
     ? t('app.login.codexTitle')
-    : t('app.login.title')
-));
+    : loginBackendKind.value === 'acp'
+      ? t('app.login.acpTitle')
+      : t('app.login.title'),
+);
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
   sendStatus.value = params ? { mode: 'i18n', key, params } : { mode: 'i18n', key };
@@ -1695,7 +1922,9 @@ const statusText = computed(() => {
   if (openCodeApi.pending.value) {
     return t('app.status.synchronizing');
   }
-  return projectError.value || worktreeError.value || sessionError.value || resolvedSendStatus.value;
+  return (
+    projectError.value || worktreeError.value || sessionError.value || resolvedSendStatus.value
+  );
 });
 const isStatusError = computed(() =>
   Boolean(projectError.value || worktreeError.value || sessionError.value || retryStatus.value),
@@ -1728,14 +1957,17 @@ const filteredSessions = computed(() =>
 );
 
 const sessionLocationById = computed(() => {
-  const locations = new Map<string, {
-    projectId: string;
-    sandbox: SandboxState;
-    session: SandboxState['sessions'][string];
-  }>();
+  const locations = new Map<
+    string,
+    {
+      projectId: string;
+      sandbox: SandboxState;
+      session: SandboxState['sessions'][string];
+    }
+  >();
 
   for (const [projectId, project] of Object.entries(serverState.projects)) {
-    for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
+    for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
       for (const session of Object.values(sandbox.sessions)) {
         locations.set(session.id, {
           projectId,
@@ -1749,11 +1981,16 @@ const sessionLocationById = computed(() => {
   return locations;
 });
 
+const acpGitInfoByDirectory = ref<Record<string, NonNullable<SessionState['gitInfo']>>>({});
+const acpGitInfoCheckedDirectories = new Set<string>();
+let acpGitInfoHydrationQueued = false;
+
 const { topPanelTreeData, sessionTreeData, navigableTree } = useBackendSessionTrees({
   activeBackendKind,
   projects: serverState.projects,
   pinnedStore: localPinnedSessionStore,
   deletedSandboxStore,
+  gitInfoByDirectory: acpGitInfoByDirectory,
   homePath,
   replaceHomePrefix,
   resolveProjectColor: resolveProjectColorHex,
@@ -1806,9 +2043,9 @@ const { upsertQuestionEntry, removeQuestionEntry, pruneQuestionEntries, fetchPen
     onRejected: dismissCodexToolQuestionDialog,
   });
 
-type CodexServerDialogRequest = typeof codexApi.serverRequests.value[number];
-type CodexToolUserInputDialogRequest = typeof codexApi.toolUserInputRequests.value[number];
-type CodexDynamicToolCallDialogRequest = typeof codexApi.dynamicToolCalls.value[number];
+type CodexServerDialogRequest = (typeof codexApi.serverRequests.value)[number];
+type CodexToolUserInputDialogRequest = (typeof codexApi.toolUserInputRequests.value)[number];
+type CodexDynamicToolCallDialogRequest = (typeof codexApi.dynamicToolCalls.value)[number];
 
 function encodeCodexDialogRequestId(id: string | number) {
   return `codex:${JSON.stringify(id)}`;
@@ -1914,7 +2151,9 @@ function normalizeCodexPermissionRequest(request: CodexServerDialogRequest): Per
   };
 }
 
-function normalizeCodexToolQuestionRequest(request: CodexToolUserInputDialogRequest): QuestionRequest {
+function normalizeCodexToolQuestionRequest(
+  request: CodexToolUserInputDialogRequest,
+): QuestionRequest {
   return {
     id: encodeCodexToolQuestionRequestId(request),
     sessionID: request.threadId,
@@ -1932,17 +2171,21 @@ function normalizeCodexToolQuestionRequest(request: CodexToolUserInputDialogRequ
   };
 }
 
-function normalizeCodexDynamicToolCallRequest(request: CodexDynamicToolCallDialogRequest): QuestionRequest {
+function normalizeCodexDynamicToolCallRequest(
+  request: CodexDynamicToolCallDialogRequest,
+): QuestionRequest {
   return {
     id: encodeCodexDynamicToolCallRequestId(request),
     sessionID: request.threadId,
-    questions: [{
-      question: JSON.stringify(request.arguments, null, 2),
-      header: `Dynamic tool: ${request.toolName}`,
-      options: [{ label: 'Respond', description: 'Provide content items as plain text.' }],
-      multiple: false,
-      custom: true,
-    }],
+    questions: [
+      {
+        question: JSON.stringify(request.arguments, null, 2),
+        header: `Dynamic tool: ${request.toolName}`,
+        options: [{ label: 'Respond', description: 'Provide content items as plain text.' }],
+        multiple: false,
+        custom: true,
+      },
+    ],
     tool: {
       messageID: request.turnId,
       callID: String(request.requestId),
@@ -1986,11 +2229,15 @@ watch(
   () => codexApi.dynamicToolCalls.value,
   (requests) => {
     if (activeBackendKind.value !== 'codex') return;
-    const nextIds = new Set(requests.map((request) => encodeCodexDynamicToolCallRequestId(request)));
+    const nextIds = new Set(
+      requests.map((request) => encodeCodexDynamicToolCallRequestId(request)),
+    );
     codexDynamicQuestionDialogIds.value.forEach((id) => {
       if (!nextIds.has(id)) removeQuestionEntry(id);
     });
-    requests.forEach((request) => upsertQuestionEntry(normalizeCodexDynamicToolCallRequest(request)));
+    requests.forEach((request) =>
+      upsertQuestionEntry(normalizeCodexDynamicToolCallRequest(request)),
+    );
     codexDynamicQuestionDialogIds.value = nextIds;
   },
   { deep: true },
@@ -2013,6 +2260,7 @@ const {
   treeError,
   gitStatus,
   gitStatusByPath,
+  files: fileTreeFiles,
   refreshGitStatus,
   reloadTree,
   feed,
@@ -2023,7 +2271,7 @@ const {
   branchListLoading,
   refreshBranchEntries,
   ensureBranchEntriesLoaded,
-  } = useFileTree({ activeDirectory, activeBackendKind });
+} = useFileTree({ activeDirectory, activeBackendKind });
 
 const treeDirectoryName = computed(() => {
   const raw = activeDirectory.value.trim();
@@ -2035,7 +2283,9 @@ const treeDirectoryName = computed(() => {
 });
 
 const { runOneShotPtyCommand } = usePtyOneshot({ activeDirectory, translate: t });
-const forgeAuxiliary = useForgeAuxiliary((command, args) => runOneShotPtyCommand(command, Array.from(args)));
+const forgeAuxiliary = useForgeAuxiliary((command, args) =>
+  runOneShotPtyCommand(command, Array.from(args)),
+);
 const forgePanelAuxiliary = {
   get conversations() {
     return forgeAuxiliary.conversations.value;
@@ -2075,7 +2325,7 @@ const sessionRevert = computed<SessionInfo['revert'] | null>(() => {
   if (!projectId || !sessionId) return null;
   const project = serverState.projects[projectId];
   if (!project) return null;
-  for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
+  for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
     const session = sandbox.sessions[sessionId];
     if (session) return session.revert ?? null;
   }
@@ -2182,16 +2432,12 @@ function isProviderConnected(providerId: string) {
 }
 
 const availableModelOptions = computed(() =>
-  modelOptions.value.filter(
-    (model) => {
-      const providerId = model.providerID?.trim() ?? '';
-      return (
-        isProviderConnected(providerId) &&
-        isProviderEnabled(providerId) &&
-        isModelAvailable(model.id)
-      );
-    },
-  ),
+  modelOptions.value.filter((model) => {
+    const providerId = model.providerID?.trim() ?? '';
+    return (
+      isProviderConnected(providerId) && isProviderEnabled(providerId) && isModelAvailable(model.id)
+    );
+  }),
 );
 const hasModelOptions = computed(() => availableModelOptions.value.length > 0);
 const hasThinkingOptions = computed(() => thinkingOptions.value.length > 0);
@@ -2210,12 +2456,17 @@ const subagentOptions = computed(() => {
       isSubagent: true,
     }));
 });
-const selectedModelInfo = computed(() => availableModelOptions.value.find((model) => model.id === selectedModel.value));
+const selectedModelInfo = computed(() =>
+  availableModelOptions.value.find((model) => model.id === selectedModel.value),
+);
 const canAttach = computed(() => {
-  if (activeBackendCapabilities.value.imageAttachmentsOnly) return Boolean(selectedModelInfo.value?.attachmentCapable);
+  if (activeBackendCapabilities.value.imageAttachmentsOnly)
+    return Boolean(selectedModelInfo.value?.attachmentCapable);
   return availableModelOptions.value.length > 0;
 });
-const attachmentAccept = computed(() => (activeBackendCapabilities.value.imageAttachmentsOnly ? 'image/*' : '*/*'));
+const attachmentAccept = computed(() =>
+  activeBackendCapabilities.value.imageAttachmentsOnly ? 'image/*' : '*/*',
+);
 const commandOptions = computed(() => {
   const list = commands.value.slice();
   const hasShell = list.some((command) => command.name.toLowerCase() === 'shell');
@@ -2387,12 +2638,15 @@ async function syncCodexActiveProviderModel(providerID: string, modelID: string)
   edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });
   edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });
   await codexApi.batchWriteConfig(edits);
-  providerConfig.value = (codexApi.config.value?.config as ProviderConfigState | undefined) ?? providerConfig.value;
+  providerConfig.value =
+    (codexApi.config.value?.config as ProviderConfigState | undefined) ?? providerConfig.value;
 }
 
 function codexAppServerProviderId(providerID: string) {
   const normalizedProvider = providerID.trim();
-  return normalizedProvider === CODEX_PROJECT_ID ? CODEX_OFFICIAL_MODEL_PROVIDER : normalizedProvider;
+  return normalizedProvider === CODEX_PROJECT_ID
+    ? CODEX_OFFICIAL_MODEL_PROVIDER
+    : normalizedProvider;
 }
 
 function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: string) {
@@ -2400,8 +2654,7 @@ function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: str
   if (!sessionId || !desiredProvider) return false;
   const currentProvider = codexApi.threads.value
     .find((thread) => thread.id === sessionId)
-    ?.modelProvider
-    ?.trim();
+    ?.modelProvider?.trim();
   return Boolean(currentProvider && currentProvider !== desiredProvider);
 }
 
@@ -2431,11 +2684,15 @@ function parseModelVisibilityStore(raw: string | null): ModelVisibilityStore {
               (entry.visibility === 'show' || entry.visibility === 'hide'),
           )
         : [],
-      recent: Array.isArray(parsed.recent) ? parsed.recent.filter((value): value is string => typeof value === 'string') : [],
+      recent: Array.isArray(parsed.recent)
+        ? parsed.recent.filter((value): value is string => typeof value === 'string')
+        : [],
       variant:
         parsed.variant && typeof parsed.variant === 'object' && !Array.isArray(parsed.variant)
           ? Object.fromEntries(
-              Object.entries(parsed.variant).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+              Object.entries(parsed.variant).filter(
+                (entry): entry is [string, string] => typeof entry[1] === 'string',
+              ),
             )
           : {},
     };
@@ -2450,7 +2707,9 @@ function modelVisibilityKey(providerID: string, modelID: string) {
 
 function readHiddenModelsFromStorage() {
   if (typeof window === 'undefined') return [];
-  const currentStore = parseModelVisibilityStore(window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY));
+  const currentStore = parseModelVisibilityStore(
+    window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY),
+  );
   const currentHidden = currentStore.user
     .filter((entry) => entry.visibility === 'hide')
     .map((entry) => modelVisibilityKey(entry.providerID, entry.modelID));
@@ -2459,7 +2718,9 @@ function readHiddenModelsFromStorage() {
   if (!legacyRaw) return [];
   try {
     const legacy = JSON.parse(legacyRaw) as string[];
-    return Array.isArray(legacy) ? [...new Set(legacy.filter((value): value is string => typeof value === 'string'))].sort() : [];
+    return Array.isArray(legacy)
+      ? [...new Set(legacy.filter((value): value is string => typeof value === 'string'))].sort()
+      : [];
   } catch {
     return [];
   }
@@ -2467,7 +2728,9 @@ function readHiddenModelsFromStorage() {
 
 function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
   if (typeof window === 'undefined') return;
-  const store = parseModelVisibilityStore(window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY));
+  const store = parseModelVisibilityStore(
+    window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY),
+  );
   const hiddenSet = new Set(nextHiddenModels);
   const preservedUser = store.user.filter(
     (entry) => !hiddenSet.has(modelVisibilityKey(entry.providerID, entry.modelID)),
@@ -2480,8 +2743,8 @@ function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
         const { providerID, modelID } = parseProviderModelKey(key);
         return providerID && modelID ? { providerID, modelID, visibility: 'hide' as const } : null;
       })
-      .filter(
-        (entry): entry is { providerID: string; modelID: string; visibility: 'hide' } => Boolean(entry),
+      .filter((entry): entry is { providerID: string; modelID: string; visibility: 'hide' } =>
+        Boolean(entry),
       ),
   ];
   window.localStorage.setItem(
@@ -2509,16 +2772,12 @@ function isProviderEnabled(providerId: string) {
 }
 
 function getFirstAvailableModelId() {
-  return modelOptions.value.find(
-    (model) => {
-      const providerId = model.providerID?.trim() ?? '';
-      return (
-        isProviderConnected(providerId) &&
-        isProviderEnabled(providerId) &&
-        isModelAvailable(model.id)
-      );
-    },
-  )?.id;
+  return modelOptions.value.find((model) => {
+    const providerId = model.providerID?.trim() ?? '';
+    return (
+      isProviderConnected(providerId) && isProviderEnabled(providerId) && isModelAvailable(model.id)
+    );
+  })?.id;
 }
 
 function ensureSelectedModelAvailable() {
@@ -2607,7 +2866,9 @@ function sessionExistsInProjects(projectId: string, sessionId: string) {
   if (!normalizedProjectId || !normalizedSessionId) return false;
   const project = serverState.projects[normalizedProjectId];
   if (!project) return false;
-  return Object.values(project.sandboxes).some((sandbox) => Boolean(sandbox.sessions[normalizedSessionId]));
+  return Object.values(project.sandboxes).some((sandbox) =>
+    Boolean(sandbox.sessions[normalizedSessionId]),
+  );
 }
 
 async function hydrateActiveWorktreeResources() {
@@ -2641,14 +2902,22 @@ function normalizeStoredAttachment(value: unknown): Attachment | null {
     if (!rawLineComment || typeof rawLineComment !== 'object') return null;
     const lineCommentRecord = rawLineComment as Record<string, unknown>;
     const path = typeof lineCommentRecord.path === 'string' ? lineCommentRecord.path : '';
-    const startLine = typeof lineCommentRecord.startLine === 'number' ? lineCommentRecord.startLine : Number.NaN;
-    const endLine = typeof lineCommentRecord.endLine === 'number' ? lineCommentRecord.endLine : Number.NaN;
+    const startLine =
+      typeof lineCommentRecord.startLine === 'number' ? lineCommentRecord.startLine : Number.NaN;
+    const endLine =
+      typeof lineCommentRecord.endLine === 'number' ? lineCommentRecord.endLine : Number.NaN;
     const line = typeof lineCommentRecord.line === 'number' ? lineCommentRecord.line : Number.NaN;
     // Support both old (line) and new (startLine/endLine) formats
     const resolvedStartLine = Number.isFinite(startLine) ? startLine : line;
     const resolvedEndLine = Number.isFinite(endLine) ? endLine : line;
     const text = typeof lineCommentRecord.text === 'string' ? lineCommentRecord.text : '';
-    if (!path || !Number.isFinite(resolvedStartLine) || !Number.isFinite(resolvedEndLine) || typeof lineCommentRecord.text !== 'string') return null;
+    if (
+      !path ||
+      !Number.isFinite(resolvedStartLine) ||
+      !Number.isFinite(resolvedEndLine) ||
+      typeof lineCommentRecord.text !== 'string'
+    )
+      return null;
     lineComment = { path, startLine: resolvedStartLine, endLine: resolvedEndLine, text };
   }
   if (!id || !filename || !mime || (!dataUrl && !lineComment)) return null;
@@ -2771,7 +3040,7 @@ function getEffectiveSessionPinnedAt(
   projectId: string,
   sessionId: string,
   serverPinnedAt?: number,
-  directory?: string,
+  _directory?: string,
 ) {
   const store = localPinnedSessionStore.value;
   const key = pinnedSessionStoreKey(projectId, sessionId);
@@ -2781,16 +3050,6 @@ function getEffectiveSessionPinnedAt(
       return normalizePinnedAt(localValue);
     }
   }
-  if (directory) {
-    const sandboxKey = sandboxPinKey(projectId, directory);
-    if (sandboxKey && sandboxKey in store && store[sandboxKey] > 0) {
-      return store[sandboxKey];
-    }
-  }
-  const projectKey = projectPinKey(projectId);
-  if (projectKey && projectKey in store && store[projectKey] > 0) {
-    return store[projectKey];
-  }
   return normalizePinnedAt(serverPinnedAt);
 }
 
@@ -2799,22 +3058,67 @@ function getSessionEffectivePinnedAt(session: SessionInfo) {
   return getEffectiveSessionPinnedAt(projectId, session.id, session.time?.pinned);
 }
 
+function getPinHierarchy(projectId: string, repoRoot?: string) {
+  const project = serverState.projects[projectId];
+  if (!project) return null;
+  return buildPinHierarchy(project, repoRoot, acpGitInfoByDirectory.value, homePath.value);
+}
+
+function resolveSessionPinRepoRoot(projectId: string, sessionId: string) {
+  if (activeBackendKind.value === 'opencode') return undefined;
+  const project = serverState.projects[projectId];
+  if (!project) return undefined;
+  for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
+    const session = sandbox.sessions[sessionId];
+    if (!session) continue;
+    const gitInfo = session.gitInfo
+      ?? acpGitInfoByDirectory.value[session.directory ?? sandbox.directory]
+      ?? acpGitInfoByDirectory.value[sandbox.directory];
+    return gitInfo?.commonRoot || gitInfo?.root;
+  }
+  return undefined;
+}
+
+function transitionPinHierarchy(
+  projectId: string,
+  target: Parameters<typeof applyPinHierarchyTransition>[2],
+  pinned: boolean,
+  timestamp = Date.now(),
+  repoRoot?: string,
+) {
+  const hierarchy = getPinHierarchy(projectId, repoRoot);
+  if (!hierarchy) return;
+  localPinnedSessionStore.value = applyPinHierarchyTransition(
+    localPinnedSessionStore.value,
+    hierarchy,
+    target,
+    pinned,
+    timestamp,
+  );
+}
+
 function setLocalPinnedSession(projectId: string, sessionId: string, pinnedAt: number) {
   const key = pinnedSessionStoreKey(projectId, sessionId);
   if (!key) return;
-  localPinnedSessionStore.value = limitPinnedSessionStore({
-    ...localPinnedSessionStore.value,
-    [key]: pinnedAt,
-  }, 10000);
+  transitionPinHierarchy(
+    projectId,
+    { level: 'session', key },
+    true,
+    pinnedAt,
+    resolveSessionPinRepoRoot(projectId, sessionId),
+  );
 }
 
 function setLocalUnpinnedSession(projectId: string, sessionId: string) {
   const key = pinnedSessionStoreKey(projectId, sessionId);
   if (!key) return;
-  localPinnedSessionStore.value = {
-    ...localPinnedSessionStore.value,
-    [key]: -Date.now(),
-  };
+  transitionPinHierarchy(
+    projectId,
+    { level: 'session', key },
+    false,
+    Date.now(),
+    resolveSessionPinRepoRoot(projectId, sessionId),
+  );
 }
 
 function clearLocalPinnedSessionOverride(projectId: string, sessionId: string) {
@@ -2830,7 +3134,11 @@ function restoreLocalPinnedSessionOverride(
   sessionId: string,
   previousOverride?: number,
 ) {
-  if (typeof previousOverride === 'number' && Number.isFinite(previousOverride) && previousOverride !== 0) {
+  if (
+    typeof previousOverride === 'number' &&
+    Number.isFinite(previousOverride) &&
+    previousOverride !== 0
+  ) {
     const key = pinnedSessionStoreKey(projectId, sessionId);
     if (!key) return;
     localPinnedSessionStore.value = {
@@ -2842,115 +3150,11 @@ function restoreLocalPinnedSessionOverride(
   clearLocalPinnedSessionOverride(projectId, sessionId);
 }
 
-function clearNegativeSandboxAndSessionOverridesForProject(
-  projectId: string,
-  store: LocalPinnedSessionStore,
-) {
-  const project = serverState.projects[projectId];
-  if (!project) return store;
-
-  let next = store;
-  for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
-    const sandboxKey = sandboxPinKey(projectId, sandbox.directory);
-    if (sandboxKey && next[sandboxKey] < 0) {
-      if (next === store) next = { ...store };
-      delete next[sandboxKey];
-    }
-
-    for (const session of Object.values(sandbox.sessions)) {
-      const sessionKey = pinnedSessionStoreKey(projectId, session.id);
-      if (sessionKey && next[sessionKey] < 0) {
-        if (next === store) next = { ...store };
-        delete next[sessionKey];
-      }
-    }
-  }
-
-  return next;
-}
-
-function clearNegativeSessionOverridesForSandbox(
-  projectId: string,
-  directory: string,
-  store: LocalPinnedSessionStore,
-) {
-  const sandbox = serverState.projects[projectId]?.sandboxes?.[directory];
-  if (!sandbox) return store;
-
-  let next = store;
-  const sandboxKey = sandboxPinKey(projectId, directory);
-  if (sandboxKey && next[sandboxKey] < 0) {
-    if (next === store) next = { ...store };
-    delete next[sandboxKey];
-  }
-
-  for (const session of Object.values(sandbox.sessions)) {
-    const sessionKey = pinnedSessionStoreKey(projectId, session.id);
-    if (sessionKey && next[sessionKey] < 0) {
-      if (next === store) next = { ...store };
-      delete next[sessionKey];
-    }
-  }
-
-  return next;
-}
-
-function clearSandboxAndSessionOverridesForProject(
-  projectId: string,
-  store: LocalPinnedSessionStore,
-) {
-  const project = serverState.projects[projectId];
-  if (!project) return store;
-
-  let next = store;
-  for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
-    const sandboxKey = sandboxPinKey(projectId, sandbox.directory);
-    if (sandboxKey && sandboxKey in next) {
-      if (next === store) next = { ...store };
-      delete next[sandboxKey];
-    }
-
-    for (const session of Object.values(sandbox.sessions)) {
-      const sessionKey = pinnedSessionStoreKey(projectId, session.id);
-      if (sessionKey && sessionKey in next) {
-        if (next === store) next = { ...store };
-        delete next[sessionKey];
-      }
-    }
-  }
-
-  return next;
-}
-
-function clearSessionOverridesForSandbox(
-  projectId: string,
-  directory: string,
-  store: LocalPinnedSessionStore,
-) {
-  const sandbox = serverState.projects[projectId]?.sandboxes?.[directory];
-  if (!sandbox) return store;
-
-  let next = store;
-  for (const session of Object.values(sandbox.sessions)) {
-    const sessionKey = pinnedSessionStoreKey(projectId, session.id);
-    if (sessionKey && sessionKey in next) {
-      if (next === store) next = { ...store };
-      delete next[sessionKey];
-    }
-  }
-
-  return next;
-}
-
 function reconcileLocalPinnedSessionStore() {
   if (!bootstrapReady.value) return;
   const currentStore = localPinnedSessionStore.value;
   if (Object.keys(currentStore).length === 0) return;
-  const nextStore = reconcilePinnedSessionStore(
-    currentStore,
-    serverState.projects,
-    10000,
-  );
+  const nextStore = reconcilePinnedSessionStore(currentStore, serverState.projects, 10000);
 
   if (isSamePinnedSessionStore(currentStore, nextStore)) return;
   localPinnedSessionStore.value = nextStore;
@@ -3028,9 +3232,17 @@ function findSessionInProjects(sessionId: string) {
   return sessionLocationById.value.get(target) ?? null;
 }
 
-function resolveSessionOperationPayload(sessionId: string, projectIdHint?: string, directoryHint?: string) {
+function resolveSessionOperationPayload(
+  sessionId: string,
+  projectIdHint?: string,
+  directoryHint?: string,
+) {
   const resolved = findSessionInProjects(sessionId);
-  const projectId = (projectIdHint || resolved?.projectId || resolveProjectIdForSession(sessionId)).trim();
+  const projectId = (
+    projectIdHint ||
+    resolved?.projectId ||
+    resolveProjectIdForSession(sessionId)
+  ).trim();
   const directory = (directoryHint || resolved?.sandbox.directory || activeDirectory.value).trim();
   return {
     projectId,
@@ -3180,6 +3392,104 @@ function handleSelectedModeUpdate(value: string) {
   selectedMode.value = value;
   if (activeBackendKind.value !== 'codex') applyAgentDefaults(value);
   persistComposerDraftForCurrentContext();
+  syncAcpSelectionToSession();
+}
+
+function handleSelectedPermissionModeUpdate(value: string) {
+  selectedAcpPermissionMode.value = value;
+}
+
+function hydrateAcpModeConfiguration(options: unknown[]) {
+  const draftAgent = selectedSessionId.value.trim()
+    ? readComposerDraft(selectedSessionId.value)?.agent
+    : undefined;
+  const state = createAcpUiModeState(options, selectedAcpPermissionMode.value, draftAgent);
+  const permissions = createAcpPermissionModeList(options);
+  agentOptions.value = createAcpAgentSelectorOptions(options, backend().label);
+  selectedMode.value = state.agent;
+  selectedAcpPermissionMode.value = state.permissionMode;
+  acpPermissionModeOptions.value = permissions.options.map((option) => ({
+    id: option.id,
+    label: option.name,
+  }));
+}
+
+function syncAcpSelectionToSession() {
+  if (activeBackendKind.value !== 'acp') return;
+  const sessionId = selectedSessionId.value.trim();
+  if (!sessionId) return;
+  const adapter = backend();
+  if (!adapter.syncSessionConfig) return;
+  const { modelID } = parseProviderModelKey(selectedModel.value);
+  void adapter
+    .syncSessionConfig(sessionId, {
+      model: modelID || selectedModel.value,
+      mode: resolvePromptAgentMode(selectedMode.value),
+      thoughtLevel: selectedThinking.value,
+    })
+    .catch((error) => log('ACP selection sync failed', error));
+}
+
+function resolvePromptAgentMode(mode: string) {
+  return activeBackendKind.value === 'acp'
+    ? resolveAcpModeSelection(mode, selectedAcpPermissionMode.value)
+    : mode;
+}
+
+const ACP_MENTION_FILE_LIMIT = 3;
+const ACP_MENTION_FILE_BYTE_LIMIT = 48 * 1024;
+const ACP_MENTION_TOTAL_BYTE_LIMIT = 96 * 1024;
+
+const acpMentionFiles = computed(() => {
+  const paths = new Set(fileTreeFiles.value);
+  const stack = [...treeNodes.value];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (node.type === 'file') paths.add(node.path);
+    if (node.children?.length) stack.push(...node.children);
+  }
+  return [...paths].sort((a, b) => a.localeCompare(b));
+});
+
+async function buildAcpMentionContextParts(text: string) {
+  if (activeBackendKind.value !== 'acp') return [];
+  const knownFiles = new Set(acpMentionFiles.value);
+  const paths = [...text.matchAll(/@([^\s]+)/gu)]
+    .map((match) => match[1]?.replace(/[),.;:!?]+$/u, '') ?? '')
+    .filter((path, index, values) => knownFiles.has(path) && values.indexOf(path) === index)
+    .slice(0, ACP_MENTION_FILE_LIMIT);
+  const parts: Array<Record<string, unknown>> = [];
+  let totalBytes = 0;
+  const readFileContent = backend().readFileContent;
+  if (!readFileContent) return parts;
+  for (const path of paths) {
+    try {
+      const response = await readFileContent({ directory: activeDirectory.value, path });
+      if (!response || typeof response !== 'object') continue;
+      const content = Reflect.get(response, 'content');
+      if (typeof content !== 'string' || content.includes('\0')) continue;
+      const remaining = ACP_MENTION_TOTAL_BYTE_LIMIT - totalBytes;
+      if (remaining <= 0) break;
+      const encoded = new TextEncoder().encode(content);
+      const acceptedBytes = Math.min(encoded.byteLength, ACP_MENTION_FILE_BYTE_LIMIT, remaining);
+      const excerpt = new TextDecoder().decode(encoded.slice(0, acceptedBytes));
+      totalBytes += acceptedBytes;
+      const extension =
+        path
+          .split('.')
+          .at(-1)
+          ?.replace(/[^a-z0-9_-]/giu, '') ?? '';
+      const truncated = acceptedBytes < encoded.byteLength ? '\n[File truncated by VIS]' : '';
+      parts.push({
+        type: 'text',
+        text: `Referenced file: ${path}\n\n\`\`\`${extension}\n${excerpt}${truncated}\n\`\`\``,
+      });
+    } catch (error) {
+      log('ACP mention file load failed', { path, error });
+    }
+  }
+  return parts;
 }
 
 function handleApplyHistoryEntry(entry: {
@@ -3200,6 +3510,7 @@ function handleApplyHistoryEntry(entry: {
 function handleSelectedModelUpdate(value: string) {
   if (value && !availableModelOptions.value.some((option) => option.id === value)) return;
   selectedModel.value = value;
+  syncAcpSelectionToSession();
   nextTick(() => {
     persistComposerDraftForCurrentContext();
   });
@@ -3230,7 +3541,10 @@ async function fetchGlobalProviderConfig() {
     const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
     const data = (await getGlobalConfig()) as ProviderConfigState;
     providerConfig.value = data ?? null;
-    if (activeBackendCapabilities.value.providerConfig && activeBackendCapabilities.value.imageAttachmentsOnly) {
+    if (
+      activeBackendCapabilities.value.providerConfig &&
+      activeBackendCapabilities.value.imageAttachmentsOnly
+    ) {
       await codexApi.refreshConfig();
     }
   } catch (error) {
@@ -3239,7 +3553,11 @@ async function fetchGlobalProviderConfig() {
 }
 
 function handleModelVisibilityStorage(event: StorageEvent) {
-  if (event.key !== MODEL_VISIBILITY_STORAGE_KEY && event.key !== LEGACY_DISABLED_MODELS_STORAGE_KEY) return;
+  if (
+    event.key !== MODEL_VISIBILITY_STORAGE_KEY &&
+    event.key !== LEGACY_DISABLED_MODELS_STORAGE_KEY
+  )
+    return;
   try {
     hiddenModels.value = readHiddenModelsFromStorage();
     ensureSelectedModelAvailable();
@@ -3251,6 +3569,7 @@ function handleModelVisibilityStorage(event: StorageEvent) {
 function handleSelectedThinkingUpdate(value: string | undefined) {
   selectedThinking.value = value;
   persistComposerDraftForCurrentContext();
+  syncAcpSelectionToSession();
 }
 
 function handleComposerDraftStorage(event: StorageEvent) {
@@ -3271,10 +3590,7 @@ function handleComposerDraftStorage(event: StorageEvent) {
 
 function handlePinnedSessionStoreStorage(event: StorageEvent) {
   if (event.key !== storageKey(StorageKeys.state.pinnedSessions)) return;
-  const nextStore = limitPinnedSessionStore(
-    parsePinnedSessionStore(event.newValue, 10000),
-    10000,
-  );
+  const nextStore = limitPinnedSessionStore(parsePinnedSessionStore(event.newValue, 10000), 10000);
   if (isSamePinnedSessionStore(localPinnedSessionStore.value, nextStore)) return;
   localPinnedSessionStore.value = nextStore;
 }
@@ -3409,10 +3725,7 @@ function syncAppMonospaceMetrics() {
       '--message-font-size',
       `${messageFontSizePx.value}px`,
     );
-    document.documentElement.style.setProperty(
-      '--ui-font-size',
-      `${uiFontSizePx.value}px`,
-    );
+    document.documentElement.style.setProperty('--ui-font-size', `${uiFontSizePx.value}px`);
   }
 }
 
@@ -3420,7 +3733,7 @@ async function waitForTerminalFontsReady(fontFamily = terminalFontFamily.value) 
   if (typeof document === 'undefined' || !('fonts' in document)) return;
   const fontSet = document.fonts;
   const requestedFonts = splitFontFamilyList(fontFamily).map((family) =>
-    fontSet.load(`${TERM_FONT_SIZE_PX.value}px ${family}`)
+    fontSet.load(`${TERM_FONT_SIZE_PX.value}px ${family}`),
   );
   await Promise.allSettled(requestedFonts);
   await fontSet.ready;
@@ -3463,7 +3776,10 @@ function syncFloatingExtent() {
   canvas.style.setProperty('--canvas-top', `${topOffset}px`);
   canvas.style.setProperty('--canvas-height', `${availableHeight}px`);
   canvas.style.setProperty('--dock-reserved', `${dockReserved}px`);
-  canvas.style.setProperty('--tool-area-height', `${Math.max(0, availableHeight - dockReserved)}px`);
+  canvas.style.setProperty(
+    '--tool-area-height',
+    `${Math.max(0, availableHeight - dockReserved)}px`,
+  );
   const rect = canvas.getBoundingClientRect();
   fw.setExtent(rect.width, rect.height);
 }
@@ -3548,8 +3864,13 @@ function normalizeAttachmentMime(mime: string) {
 }
 
 async function handleAddAttachments(files: File[]) {
-  const accepted = files.filter((file) => file.size > 0 || file.type.length > 0 || file.name.length > 0);
-  if (activeBackendCapabilities.value.imageAttachmentsOnly && accepted.some((file) => !normalizeAttachmentMime(file.type || '').startsWith('image/'))) {
+  const accepted = files.filter(
+    (file) => file.size > 0 || file.type.length > 0 || file.name.length > 0,
+  );
+  if (
+    activeBackendCapabilities.value.imageAttachmentsOnly &&
+    accepted.some((file) => !normalizeAttachmentMime(file.type || '').startsWith('image/'))
+  ) {
     setSendStatusKey('app.error.unsupportedAttachment');
     return;
   }
@@ -3559,12 +3880,12 @@ async function handleAddAttachments(files: File[]) {
   }
   try {
     const next = await Promise.all(
-        accepted.map(async (file) => ({
-          id: generateAttachmentId(),
-          filename: file.name || 'image',
-          mime: normalizeAttachmentMime(file.type || 'text/plain'),
-          dataUrl: await readFileAsDataUrl(file),
-        })),
+      accepted.map(async (file) => ({
+        id: generateAttachmentId(),
+        filename: file.name || 'image',
+        mime: normalizeAttachmentMime(file.type || 'text/plain'),
+        dataUrl: await readFileAsDataUrl(file),
+      })),
     );
     attachments.value = [...attachments.value, ...next];
     persistComposerDraftForCurrentContext();
@@ -3573,11 +3894,17 @@ async function handleAddAttachments(files: File[]) {
   }
 }
 
-function addLineComment(payload: { path: string; startLine: number; endLine: number; text: string }) {
+function addLineComment(payload: {
+  path: string;
+  startLine: number;
+  endLine: number;
+  text: string;
+}) {
   const basename = payload.path.split(/[\\/]/).pop() || payload.path;
-  const lineLabel = payload.startLine === payload.endLine
-    ? `${payload.startLine}`
-    : `${payload.startLine}-${payload.endLine}`;
+  const lineLabel =
+    payload.startLine === payload.endLine
+      ? `${payload.startLine}`
+      : `${payload.startLine}-${payload.endLine}`;
   const attachment: Attachment = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     filename: `${basename}:${lineLabel}`,
@@ -3790,7 +4117,11 @@ async function createWorktreeFromWorktree(worktree: string) {
   }
 }
 
-async function deleteWorktree(payload: { projectId?: string; worktree: string; directory: string }) {
+async function deleteWorktree(payload: {
+  projectId?: string;
+  worktree: string;
+  directory: string;
+}) {
   if (!ensureConnectionReady(t('app.actions.deletingWorktree'))) return;
   worktreeError.value = '';
   const targetDir = normalizeDirectory(payload.directory);
@@ -3849,7 +4180,7 @@ async function deleteWorktree(payload: { projectId?: string; worktree: string; d
 }
 
 async function handleNewSessionInSandbox(payload: { worktree: string; directory: string }) {
-  await backendSessionLifecycle.createSessionInDirectory(payload.directory);
+  await backendSessionLifecycle.createSessionInDirectory(payload.directory, { reuseExisting: false });
 }
 
 function handleOpenProjectDirectory() {
@@ -3892,75 +4223,33 @@ function handleNotificationSessionSelect() {
 }
 
 function pinProject(projectId: string) {
-  if (!projectId) return;
-  const key = projectPinKey(projectId);
-  if (!key) return;
-  const next = clearNegativeSandboxAndSessionOverridesForProject(projectId, localPinnedSessionStore.value);
-  localPinnedSessionStore.value = {
-    ...next,
-    [key]: Date.now(),
-  };
+  transitionPinHierarchy(projectId, { level: 'project' }, true);
 }
 
 function unpinProject(projectId: string) {
-  if (!projectId) return;
-  const next = clearSandboxAndSessionOverridesForProject(projectId, { ...localPinnedSessionStore.value });
-
-  const projectKey = projectPinKey(projectId);
-  if (projectKey) delete next[projectKey];
-
-  localPinnedSessionStore.value = next;
+  transitionPinHierarchy(projectId, { level: 'project' }, false);
 }
 
-function pinSandbox(projectId: string, directory: string) {
-  if (!projectId || !directory) return;
-  const key = sandboxPinKey(projectId, directory);
+function pinSandbox(payload: ContainerPinPayload) {
+  const { projectId, scope } = payload;
+  if (scope.level === 'repo') {
+    transitionPinHierarchy(projectId, { level: 'project' }, true, Date.now(), scope.root);
+    return;
+  }
+  const key = sandboxPinKey(projectId, scope.directory);
   if (!key) return;
-  const next = clearNegativeSessionOverridesForSandbox(projectId, directory, localPinnedSessionStore.value);
-  localPinnedSessionStore.value = {
-    ...next,
-    [key]: Date.now(),
-  };
+  transitionPinHierarchy(projectId, { level: 'branch', key }, true, Date.now(), scope.repoRoot);
 }
 
-function unpinSandbox(projectId: string, directory: string) {
-  if (!projectId || !directory) return;
-  const next = clearSessionOverridesForSandbox(projectId, directory, { ...localPinnedSessionStore.value });
-
-  const sandboxKey = sandboxPinKey(projectId, directory);
-  const isDirectlyPinned = sandboxKey && next[sandboxKey] > 0;
-
-  if (isDirectlyPinned) {
-    // Directly pinned: remove sandbox key, keep session keys (they may be directly pinned)
-    delete next[sandboxKey];
-  } else {
-    // Implicitly pinned via project: add unpin override
-    if (sandboxKey) next[sandboxKey] = -Date.now();
+function unpinSandbox(payload: ContainerPinPayload) {
+  const { projectId, scope } = payload;
+  if (scope.level === 'repo') {
+    transitionPinHierarchy(projectId, { level: 'project' }, false, Date.now(), scope.root);
+    return;
   }
-
-  // Cascade: if project is pinned and no visible sandboxes remain, unpin project
-  const projectKey = projectPinKey(projectId);
-  if (projectKey && next[projectKey] > 0) {
-    const project = serverState.projects[projectId];
-    let hasVisibleSandbox = false;
-    if (project) {
-      for (const sb of Object.values(project.sandboxes) as SandboxState[]) {
-        const sbKey = sandboxPinKey(projectId, sb.directory);
-        const sbUnpinned = sbKey && next[sbKey] < 0;
-        if (sbUnpinned) continue;
-        const sbDirectlyPinned = sbKey && next[sbKey] > 0;
-        if (sbDirectlyPinned || next[projectKey] > 0) {
-          hasVisibleSandbox = true;
-          break;
-        }
-      }
-    }
-    if (!hasVisibleSandbox) {
-      delete next[projectKey];
-    }
-  }
-
-  localPinnedSessionStore.value = next;
+  const key = sandboxPinKey(projectId, scope.directory);
+  if (!key) return;
+  transitionPinHierarchy(projectId, { level: 'branch', key }, false, Date.now(), scope.repoRoot);
 }
 
 function toggleSessionTreeExpand(path: string) {
@@ -4040,23 +4329,33 @@ async function handleProjectDirectorySelect(directory: string) {
   const targetDirectory = normalizeProjectDirectoryForActiveBackend(directory);
 
   if (activeBackendCapabilities.value.projectPickerCreatesSession) {
-    const existing = codexApi.visibleThreads.value.find((thread) => codexThreadDirectoryMatch(thread, targetDirectory));
-    const sessionId = existing?.id || await backendSessionLifecycle.handleProjectDirectorySelect(targetDirectory);
+    const sessionProjectId = sessionProjectIdForBackend(
+      activeBackendKind.value,
+      CODEX_PROJECT_ID,
+      ACP_PROJECT_ID,
+    );
+    const existing = codexApi.visibleThreads.value.find((thread) =>
+      codexThreadDirectoryMatch(thread, targetDirectory),
+    );
+    const sessionId =
+      existing?.id || (await backendSessionLifecycle.handleProjectDirectorySelect(targetDirectory));
     if (!sessionId) return;
     if (existing) await codexApi.selectThread(existing.id);
-    selectedProjectId.value = CODEX_PROJECT_ID;
+    selectedProjectId.value = sessionProjectId;
     selectedSessionId.value = sessionId;
     await nextTick();
     try {
-      await switchSessionSelection(CODEX_PROJECT_ID, sessionId);
+      await switchSessionSelection(sessionProjectId, sessionId);
     } catch {
-      selectedProjectId.value = CODEX_PROJECT_ID;
+      selectedProjectId.value = sessionProjectId;
       selectedSessionId.value = sessionId;
     }
     return;
   }
 
-  const isNewProject = !Object.values(serverState.projects).some((p) => p.worktree === targetDirectory);
+  const isNewProject = !Object.values(serverState.projects).some(
+    (p) => p.worktree === targetDirectory,
+  );
 
   const { projectId, sessionId } = await openCodeApi.openProject(targetDirectory);
   ge.sendToWorker({
@@ -4088,7 +4387,6 @@ async function bootstrapSelections() {
     }
 
     await backendSelectionBootstrap.bootstrapSelection();
-
   } finally {
     isBootstrapping.value = false;
     const deferredSessionId = deferredSessionReloadId.value;
@@ -4159,7 +4457,12 @@ async function fetchProviders(force = false) {
       const defaults = data.default ?? {};
       const preferredModelId = Object.entries(defaults)
         .map(([providerID, modelID]) => buildProviderModelKey(providerID, modelID))
-        .find((value) => Boolean(value) && isModelAvailable(value) && isProviderEnabled(parseProviderModelKey(value).providerID));
+        .find(
+          (value) =>
+            Boolean(value) &&
+            isModelAvailable(value) &&
+            isProviderEnabled(parseProviderModelKey(value).providerID),
+        );
       const firstModel = getFirstAvailableModelId();
       selectedModel.value = preferredModelId || firstModel || '';
     }
@@ -4213,7 +4516,8 @@ async function fetchAgents() {
       }
       agentOptions.value = options;
       if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
-        selectedMode.value = options.find((option) => option.id === 'default')?.id ?? options[0]?.id ?? '';
+        selectedMode.value =
+          options.find((option) => option.id === 'default')?.id ?? options[0]?.id ?? '';
       }
       return;
     }
@@ -4232,6 +4536,10 @@ async function fetchAgents() {
         color: agent.color,
       }));
     agentOptions.value = options;
+    if (activeBackendKind.value === 'acp') {
+      hydrateAcpModeConfiguration(backend().getSessionConfigOptions?.() ?? []);
+      return;
+    }
     if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
       const preferred = options.find((option) => option.id === 'build')?.id ?? options[0]?.id;
       if (preferred) {
@@ -4291,7 +4599,11 @@ function showBrowserNotification(
     (entry) => entry.id === sessionId && resolveProjectIdForSession(entry.id) === projectId,
   );
   const kind =
-    type === 'permission' ? t('app.notification.permission') : type === 'question' ? t('app.notification.question') : t('app.notification.idle');
+    type === 'permission'
+      ? t('app.notification.permission')
+      : type === 'question'
+        ? t('app.notification.question')
+        : t('app.notification.idle');
   const sessionName = session ? sessionLabel(session) : sessionId;
   const body =
     type === 'idle'
@@ -4418,14 +4730,20 @@ async function fetchHistory(
   if (!sessionId) return;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
   const requestedDirectory = getSelectedWorktreeDirectory();
-  const expectedRootRequestId = isSubagentMessage ? rootRequestId ?? 0 : requestId;
+  const expectedRootRequestId = isSubagentMessage ? (rootRequestId ?? 0) : requestId;
   const expectedRootSessionId = rootSessionId ?? sessionId;
   try {
     const directory = getSelectedWorktreeDirectory();
-    const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
+    const listSessionMessages = requireBackendMethod(
+      backend().listSessionMessages,
+      'session messages',
+    );
     const data = (await listSessionMessages(sessionId, {
       directory: directory || undefined,
     })) as Array<Record<string, unknown>>;
+    if (activeBackendKind.value === 'acp') {
+      await Promise.allSettled([fetchAgents(), fetchCommands()]);
+    }
     if (!Array.isArray(data)) return;
     if (expectedRootRequestId !== primaryHistoryRequestId) return;
     if (selectedSessionId.value !== expectedRootSessionId) return;
@@ -4456,7 +4774,6 @@ async function fetchHistory(
       storeUserMessageMeta(id, meta);
       storeUserMessageTime(id, messageTime);
     });
-
   } catch (error) {
     log('History load failed', error);
   }
@@ -4473,7 +4790,9 @@ function reserveRootHistoryRequestId() {
 }
 
 async function fetchDescendantSessionHistories(rootSessionId: string, rootRequestId: number) {
-  const descendantSessionIds = Array.from(allowedSessionIds.value).filter((id) => id !== rootSessionId);
+  const descendantSessionIds = Array.from(allowedSessionIds.value).filter(
+    (id) => id !== rootSessionId,
+  );
   if (descendantSessionIds.length === 0) return;
   await Promise.all(
     descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId, true)),
@@ -4498,7 +4817,10 @@ function scheduleDescendantSessionHistoryHydration(
 }
 
 function buildPtyWsUrl(path: string, directory?: string) {
-  const createPtyWebSocketUrl = requireBackendMethod(backend().createPtyWebSocketUrl, 'PTY websocket URLs');
+  const createPtyWebSocketUrl = requireBackendMethod(
+    backend().createPtyWebSocketUrl,
+    'PTY websocket URLs',
+  );
   return createPtyWebSocketUrl(path, { directory });
 }
 
@@ -4518,16 +4840,20 @@ function parsePtyInfo(value: unknown): PtyInfo | null {
 }
 
 async function fetchPtyList(directory?: string) {
-    const listPtys = requireBackendMethod(backend().listPtys, 'PTY listing');
-    const data = await listPtys(directory);
+  const listPtys = requireBackendMethod(backend().listPtys, 'PTY listing');
+  const data = await listPtys(directory);
   if (!Array.isArray(data)) return [] as PtyInfo[];
   return data.map(parsePtyInfo).filter((pty): pty is PtyInfo => Boolean(pty));
 }
 
-async function createPtySession(command?: string, args?: string[], title = t('app.windowTitles.shell')) {
+async function createPtySession(
+  command?: string,
+  args?: string[],
+  title = t('app.windowTitles.shell'),
+) {
   const directory = activeDirectory.value || undefined;
-    const createPty = requireBackendMethod(backend().createPty, 'PTY creation');
-    const data = await createPty({
+  const createPty = requireBackendMethod(backend().createPty, 'PTY creation');
+  const data = await createPty({
     directory,
     command,
     args,
@@ -4535,6 +4861,88 @@ async function createPtySession(command?: string, args?: string[], title = t('ap
     title,
   });
   return parsePtyInfo(data);
+}
+
+async function openAcpAuthTerminal() {
+  if (activeBackendKind.value !== 'acp') return;
+  try {
+    const listMethods = requireBackendMethod(
+      backend().listAgentAuthMethods,
+      'ACP authentication methods',
+    );
+    const methods = await listMethods();
+    const method =
+      methods.find(
+        (candidate) =>
+          candidate.type === 'terminal' && (candidate.args?.length || candidate.initialInput),
+      ) ??
+      (credentials.acpAgentId.value === 'oh-my-pi'
+        ? {
+            type: 'terminal',
+            id: 'terminal',
+            name: 'Set up Oh My Pi in terminal',
+            args: [],
+            initialInput: '/providers\r',
+          }
+        : undefined);
+    if (!method) throw new Error(t('providerManager.acp.unavailable'));
+    isProviderManagerOpen.value = false;
+    await nextTick();
+    const createAuthPty = requireBackendMethod(
+      backend().createAgentAuthPty,
+      'ACP terminal authentication',
+    );
+    const pty = parsePtyInfo(await createAuthPty(method.id));
+    if (!pty) throw new Error('ACP authentication PTY response is invalid.');
+    await ensureShellWindow(pty, {
+      title: method.name,
+      onExit: async (exitCode) => {
+        if (exitCode !== 0) {
+          setSendStatusKey('app.error.providerLoadFailed', {
+            message: t('providerManager.acp.failed', { exitCode }),
+          });
+          return;
+        }
+        if (!method.initialInput) {
+          const authenticate = requireBackendMethod(
+            backend().authenticateAgent,
+            'ACP authentication completion',
+          );
+          await authenticate(method.id);
+        }
+        await Promise.all([fetchProviders(), fetchAgents()]);
+        setSendStatusText(t('providerManager.acp.completed'));
+      },
+    });
+    if (method.initialInput) {
+      const initialInput = method.initialInput;
+      const socket = shellSessionsByPtyId.get(pty.id)?.socket;
+      const sendInitialInput = () => {
+        // Give the interactive TUI a moment to boot, then deliver the command
+        // text and its carriage return separately — a \r sent too early is
+        // swallowed while the TUI is still switching into raw mode.
+        window.setTimeout(() => {
+          if (!socket || socket.readyState !== WebSocket.OPEN) return;
+          const text = initialInput.replace(/\r$/u, '');
+          if (text) socket.send(text);
+          if (initialInput.endsWith('\r')) {
+            window.setTimeout(() => {
+              if (socket.readyState === WebSocket.OPEN) socket.send('\r');
+            }, 800);
+          }
+        }, 1500);
+      };
+      if (socket) {
+        if (socket.readyState === WebSocket.OPEN) {
+          sendInitialInput();
+        } else {
+          socket.addEventListener('open', sendInitialInput, { once: true });
+        }
+      }
+    }
+  } catch (error) {
+    setSendStatusKey('app.error.providerLoadFailed', { message: toErrorMessage(error) });
+  }
 }
 
 function buildOpenInEditorCommand(absolutePath: string) {
@@ -4600,7 +5008,8 @@ async function probeConnectedBridgeFs() {
     return false;
   }
   try {
-    const probeRoot = activeDirectory.value.trim() || codexApi.homeDir.value || homePath.value || '/';
+    const probeRoot =
+      activeDirectory.value.trim() || codexApi.homeDir.value || homePath.value || '/';
     const response = await fetch(
       appendCodexBridgeToken(
         `${codexBridgeHttpUrl(bridgeUrl, '/fs/capabilities')}?${new URLSearchParams({
@@ -4619,13 +5028,20 @@ async function probeConnectedBridgeFs() {
   }
 }
 
-async function writeFileThroughConnectedBridge(payload: { directory: string; absolutePath: string; content: string }) {
+async function writeFileThroughConnectedBridge(payload: {
+  directory: string;
+  absolutePath: string;
+  content: string;
+}) {
   const bridgeUrl = codexApi.url.value?.trim();
   if (!bridgeUrl || !codexApi.connected.value || !bridgeFsWritable.value) {
     throw new Error('No connected vis_bridge is available for file editing.');
   }
   const response = await fetch(
-    appendCodexBridgeToken(codexBridgeHttpUrl(bridgeUrl, '/fs/writeFile'), codexApi.bridgeToken.value),
+    appendCodexBridgeToken(
+      codexBridgeHttpUrl(bridgeUrl, '/fs/writeFile'),
+      codexApi.bridgeToken.value,
+    ),
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4642,10 +5058,19 @@ async function writeFileThroughConnectedBridge(payload: { directory: string; abs
   }
 }
 
-async function writeFileForVisEdit(payload: { directory: string; path: string; absolutePath: string; content: string }) {
+async function writeFileForVisEdit(payload: {
+  directory: string;
+  path: string;
+  absolutePath: string;
+  content: string;
+}) {
   const writeFileContent = backend().writeFileContent;
   if (typeof writeFileContent === 'function') {
-    await writeFileContent({ directory: payload.directory, path: payload.path, content: payload.content });
+    await writeFileContent({
+      directory: payload.directory,
+      path: payload.path,
+      content: payload.content,
+    });
     return;
   }
   await writeFileThroughConnectedBridge({
@@ -4686,9 +5111,11 @@ async function saveFileViewerEdit(key: string, content: string) {
   const entry = fw.get(key);
   if (!entry) return;
   if (entry.props?.canEditInVis !== true) return;
-  const fileDirectory = typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
+  const fileDirectory =
+    typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
   const filePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
-  const absolutePath = typeof entry.props?.absolutePath === 'string' ? entry.props.absolutePath : '';
+  const absolutePath =
+    typeof entry.props?.absolutePath === 'string' ? entry.props.absolutePath : '';
   if (!fileDirectory || !filePath || !absolutePath) return;
 
   try {
@@ -4723,8 +5150,8 @@ async function saveFileViewerEdit(key: string, content: string) {
 }
 
 async function updatePtySize(ptyId: string, rows: number, cols: number, directory?: string) {
-    const updatePtySize = requireBackendMethod(backend().updatePtySize, 'PTY resizing');
-    const data = await updatePtySize(ptyId, {
+  const updatePtySize = requireBackendMethod(backend().updatePtySize, 'PTY resizing');
+  const data = await updatePtySize(ptyId, {
     directory,
     rows,
     cols,
@@ -4739,10 +5166,12 @@ type ShellWindowOptions = {
   color?: string;
   minWidth?: number;
   minHeight?: number;
+  onExit?: (exitCode: number) => void | Promise<void>;
 };
 
 async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {}) {
   if (shellSessionsByPtyId.has(pty.id)) return;
+  if (options.onExit) shellExitCallbacks.set(pty.id, options.onExit);
   const key = `shell:${pty.id}`;
   if (options.minWidth !== undefined || options.minHeight !== undefined) {
     shellWindowMinimums.set(key, {
@@ -4758,7 +5187,11 @@ async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {})
     closable: true,
     resizable: true,
     scroll: 'none',
-    title: options.title ?? (pty.title === 'One-shot PTY' ? t('app.windowTitles.oneShotPty') : (pty.title || t('app.windowTitles.shell'))),
+    title:
+      options.title ??
+      (pty.title === 'One-shot PTY'
+        ? t('app.windowTitles.oneShotPty')
+        : pty.title || t('app.windowTitles.shell')),
     color: options.color,
     width,
     height,
@@ -4767,10 +5200,10 @@ async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {})
     expiry: Infinity,
     onResize: () => scheduleShellFit(pty.id),
   });
-  
+
   // Dynamic import of Terminal for code splitting
   const { Terminal } = await import('@xterm/xterm');
-  
+
   const terminal = new Terminal({
     cols: TERM_COLUMNS,
     rows: TERM_ROWS,
@@ -5007,7 +5440,10 @@ function connectShellSocket(ptyId: string) {
       const trimmed = event.data.trim();
       if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
         try {
-          const meta = JSON.parse(trimmed) as { cursor?: unknown; exitCode?: unknown } & Record<string, unknown>;
+          const meta = JSON.parse(trimmed) as { cursor?: unknown; exitCode?: unknown } & Record<
+            string,
+            unknown
+          >;
           const keys = Object.keys(meta);
           if (
             keys.length === 1 &&
@@ -5075,12 +5511,13 @@ function removeShellWindow(ptyId: string, options?: { kill?: boolean }) {
   }
   shellWindowMinimums.delete(`shell:${ptyId}`);
   shellExitWaiters.delete(ptyId);
+  shellExitCallbacks.delete(ptyId);
   ptyToFileMap.delete(ptyId);
   fw.close(`shell:${ptyId}`);
   if (options?.kill) {
     const directory = session.pty.cwd || activeDirectory.value || undefined;
-      const deletePty = backend().deletePty;
-      deletePty?.(ptyId, directory).catch((error) => {
+    const deletePty = backend().deletePty;
+    deletePty?.(ptyId, directory).catch((error) => {
       log('PTY delete failed', error);
     });
   }
@@ -5115,7 +5552,8 @@ function handleFloatingWindowClose(key: string) {
   }
   if (Object.prototype.hasOwnProperty.call(editingFileDrafts, key)) {
     const entry = fw.get(key);
-    const currentContent = typeof entry?.props?.fileContent === 'string' ? entry.props.fileContent : '';
+    const currentContent =
+      typeof entry?.props?.fileContent === 'string' ? entry.props.fileContent : '';
     if (editingFileDrafts[key] !== currentContent) {
       void showConfirm(t('floatingWindow.confirmDiscardEdit')).then((shouldDiscard) => {
         if (!shouldDiscard) return;
@@ -5224,7 +5662,9 @@ async function restoreShellSessions() {
 
 async function openShellFromInput(input: string) {
   if (!ptySupported.value) {
-    setSendStatusKey('app.error.shellFailed', { message: t('app.error.unavailable', { action: t('topPanel.openShell') }) });
+    setSendStatusKey('app.error.shellFailed', {
+      message: t('app.error.unavailable', { action: t('topPanel.openShell') }),
+    });
     return false;
   }
   try {
@@ -5453,7 +5893,9 @@ function formatSessionGraphDump(): string {
   }, 0);
 
   lines.push(t('debug.projectTreeTitle'));
-  lines.push(`  ${t('debug.projectsCount')}: ${allProjects.length}  ${t('debug.sessionsTotal')}: ${totalSessions}`);
+  lines.push(
+    `  ${t('debug.projectsCount')}: ${allProjects.length}  ${t('debug.sessionsTotal')}: ${totalSessions}`,
+  );
   lines.push('');
 
   function fmtTime(ts?: number) {
@@ -5700,12 +6142,12 @@ function runDebugCommand(args: string): { ok: boolean; message: string } {
 async function sendCommand(sessionId: string, command: CommandInfo, commandArgs: string) {
   if (!ensureConnectionReady(t('app.actions.sendingCommands'))) return;
   const directory = activeDirectory.value.trim();
-    const sendCommand = requireBackendMethod(backend().sendCommand, 'session command sending');
-    await sendCommand(sessionId, {
+  const sendCommand = requireBackendMethod(backend().sendCommand, 'session command sending');
+  await sendCommand(sessionId, {
     directory: directory || undefined,
     command: command.name,
     arguments: commandArgs,
-    agent: command.agent || selectedMode.value,
+    agent: command.agent || resolvePromptAgentMode(selectedMode.value),
     model: command.model || selectedModel.value,
     variant: selectedThinking.value,
   });
@@ -6047,7 +6489,7 @@ watch(
 const pinnedSessionReconciliationDeps = computed(() => {
   const deps: Array<[string, number | undefined, number | undefined, string | undefined]> = [];
   for (const project of Object.values(serverState.projects)) {
-    for (const sandbox of (Object.values(project.sandboxes) as SandboxState[])) {
+    for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
       for (const session of Object.values(sandbox.sessions)) {
         const key = pinnedSessionStoreKey(project.id, session.id);
         if (!key) continue;
@@ -6066,12 +6508,9 @@ watch(
   { immediate: true },
 );
 
-watch(
-  pinnedSessionReconciliationDeps,
-  () => {
-    reconcileLocalPinnedSessionStore();
-  },
-);
+watch(pinnedSessionReconciliationDeps, () => {
+  reconcileLocalPinnedSessionStore();
+});
 
 watch(
   allowedSessionIds,
@@ -6233,7 +6672,14 @@ watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelecti
 });
 
 watch(
-  [editInVis, activeBackendKind, activeDirectory, () => codexApi.connected.value, () => codexApi.url.value, () => codexApi.bridgeToken.value],
+  [
+    editInVis,
+    activeBackendKind,
+    activeDirectory,
+    () => codexApi.connected.value,
+    () => codexApi.url.value,
+    () => codexApi.bridgeToken.value,
+  ],
   () => {
     void probeConnectedBridgeFs();
   },
@@ -6249,22 +6695,6 @@ watch(
   { immediate: true },
 );
 
-watchEffect(() => {
-  configureOpenCodeBackend({
-    baseUrl: credentials.baseUrl.value,
-    authorization: credentials.authHeader.value,
-  });
-  configureCodexBackend({
-    bridgeUrl: credentials.codexBridgeUrl.value,
-    bridgeToken: credentials.codexBridgeToken.value,
-  });
-  codexApi.url.value = credentials.codexBridgeUrl.value;
-  codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
-  activeBackendKind.value = credentials.backendKind.value;
-  loginBackendKind.value = credentials.backendKind.value;
-  setActiveBackendKind(credentials.backendKind.value);
-});
-
 const lastCodexRealtimeToolWindowSignature = new Map<string, string>();
 const codexPendingSessionLock = ref('');
 const codexMessageBridge = useCodexMessageBridge({
@@ -6278,6 +6708,161 @@ const codexMessageBridge = useCodexMessageBridge({
   updateReasoningExpiry,
 });
 
+function upsertAcpSession(info: BackendSessionInfo) {
+  const currentProject = serverState.projects[ACP_PROJECT_ID];
+  const existingDirectory = currentProject
+    ? Object.values(currentProject.sandboxes).find((sandbox) => sandbox.sessions[info.id])
+        ?.directory
+    : undefined;
+  const directory = info.directory?.trim() || existingDirectory || currentProject?.worktree || '';
+  if (!directory) return;
+  const project: ProjectState = currentProject ?? {
+    id: ACP_PROJECT_ID,
+    name: 'ACP',
+    worktree: directory,
+    sandboxes: {},
+  };
+  if (!currentProject) serverState.projects[ACP_PROJECT_ID] = project;
+  if (!project.worktree) project.worktree = directory;
+  const sandbox = project.sandboxes[directory] ?? {
+    directory,
+    name: directory.split('/').filter(Boolean).at(-1) ?? 'ACP',
+    rootSessions: [],
+    sessions: {},
+  };
+  project.sandboxes[directory] = sandbox;
+  sandbox.sessions[info.id] = {
+    ...sandbox.sessions[info.id],
+    id: info.id,
+    title: info.title,
+    status: info.status,
+    directory,
+    timeCreated: info.time?.created,
+    timeUpdated: info.time?.updated,
+    timeArchived: info.time?.archived,
+  };
+  if (!sandbox.rootSessions.includes(info.id)) sandbox.rootSessions.unshift(info.id);
+  scheduleAcpTopPanelGitInfoHydration();
+}
+
+function findAcpSessionByDirectory(directory: string): BackendSessionInfo | undefined {
+  const target = normalizeDirectory(directory);
+  const project = serverState.projects[ACP_PROJECT_ID];
+  if (!project) return undefined;
+  for (const sandbox of Object.values(project.sandboxes)) {
+    for (const session of Object.values(sandbox.sessions)) {
+      if (normalizeDirectory(session.directory || sandbox.directory) !== target) continue;
+      return {
+        id: session.id,
+        projectID: ACP_PROJECT_ID,
+        directory: session.directory || sandbox.directory,
+        title: session.title,
+        status: session.status,
+      };
+    }
+  }
+  return undefined;
+}
+
+function removeAcpSession(sessionId: string) {
+  const project = serverState.projects[ACP_PROJECT_ID];
+  if (!project) return;
+  for (const sandbox of Object.values(project.sandboxes)) {
+    if (!sandbox.sessions[sessionId]) continue;
+    delete sandbox.sessions[sessionId];
+    sandbox.rootSessions = sandbox.rootSessions.filter((id) => id !== sessionId);
+  }
+  if (selectedSessionId.value === sessionId) selectedSessionId.value = '';
+}
+
+function setAcpSessionArchived(sessionId: string, archived?: number) {
+  const project = serverState.projects[ACP_PROJECT_ID];
+  if (!project) return;
+  for (const sandbox of Object.values(project.sandboxes)) {
+    const session = sandbox.sessions[sessionId];
+    if (session) session.timeArchived = archived;
+  }
+}
+
+function updateAcpCommands(values: Array<Record<string, unknown>>) {
+  commands.value = values
+    .flatMap((value): CommandInfo[] => {
+      if (typeof value.name !== 'string') return [];
+      return [
+        {
+          name: value.name,
+          ...(typeof value.description === 'string' ? { description: value.description } : {}),
+          ...(typeof value.agent === 'string' ? { agent: value.agent } : {}),
+          ...(typeof value.model === 'string' ? { model: value.model } : {}),
+        },
+      ];
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+const acpMessageBridge = useAcpMessageBridge({
+  msg,
+  upsertPermissionEntry,
+  onSessionUpdated: upsertAcpSession,
+  onSessionDeleted: removeAcpSession,
+  onCommandsUpdated: updateAcpCommands,
+  onConfigUpdated: (options) => {
+    hydrateAcpModeConfiguration(options);
+    void fetchProviders();
+  },
+  onToolPart: (part) => {
+    if (part.type !== 'tool') return;
+    if (suppressAutoWindows.value) return;
+    openToolPartAsWindow(part);
+  },
+});
+
+watchEffect(() => {
+  configureOpenCodeBackend({
+    baseUrl: credentials.baseUrl.value,
+    authorization: credentials.authHeader.value,
+  });
+  configureCodexBackend({
+    bridgeUrl: credentials.codexBridgeUrl.value,
+    bridgeToken: credentials.codexBridgeToken.value,
+  });
+  const configuredAcp = credentials.acpAgentId.value.trim()
+    ? configureAcpBackend({
+        bridgeUrl: credentials.acpBridgeUrl.value,
+        bridgeToken: credentials.acpBridgeToken.value,
+        agentId: credentials.acpAgentId.value,
+      })
+    : undefined;
+  codexApi.url.value = credentials.codexBridgeUrl.value;
+  codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
+  const configuredBackendKind = credentials.backendKind.value;
+  const effectiveBackendKind =
+    uiInitState.value === 'login'
+      ? 'opencode'
+      : configuredBackendKind === 'acp' && !configuredAcp
+        ? 'opencode'
+        : configuredBackendKind;
+  activeBackendKind.value = effectiveBackendKind;
+  loginBackendKind.value = credentials.backendKind.value;
+  setActiveBackendKind(effectiveBackendKind);
+  syncAcpMessageBridge(acpMessageBridge, effectiveBackendKind, configuredAcp);
+});
+
+async function bootstrapAcpWorkspace() {
+  const adapter = getActiveBackendAdapter();
+  if (!(adapter instanceof AcpAdapter)) throw new Error('ACP backend is not configured.');
+  acpMessageBridge.bind(adapter);
+  await adapter.initialize();
+  acpGitInfoByDirectory.value = {};
+  acpGitInfoCheckedDirectories.clear();
+  const sessions = await adapter.listSessions();
+  sessions.forEach(upsertAcpSession);
+  const first = sessions[0];
+  selectedProjectId.value = first ? ACP_PROJECT_ID : '';
+  selectedSessionId.value = first?.id ?? '';
+  bootstrapReady.value = true;
+}
+
 watch(selectedSessionId, () => {
   codexMessageBridge.resetRealtimeQueueSignature();
   lastCodexRealtimeToolWindowSignature.clear();
@@ -6287,18 +6872,67 @@ function backend() {
   return getActiveBackendAdapter();
 }
 
+function parseAcpGitInfo(value: unknown): NonNullable<SessionState['gitInfo']> | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const root = Reflect.get(value, 'root');
+  if (typeof root !== 'string' || !root.trim()) return undefined;
+  const branch = Reflect.get(value, 'branch');
+  const commonRoot = Reflect.get(value, 'commonRoot');
+  const worktreeRoot = Reflect.get(value, 'worktreeRoot');
+  const sha = Reflect.get(value, 'sha');
+  return {
+    root,
+    ...(typeof branch === 'string' ? { branch } : {}),
+    ...(typeof commonRoot === 'string' ? { commonRoot } : {}),
+    ...(typeof worktreeRoot === 'string' ? { worktreeRoot } : {}),
+    ...(typeof sha === 'string' ? { sha } : {}),
+  };
+}
+
+function scheduleAcpTopPanelGitInfoHydration() {
+  if (acpGitInfoHydrationQueued || activeBackendKind.value !== 'acp') return;
+  acpGitInfoHydrationQueued = true;
+  queueMicrotask(() => {
+    acpGitInfoHydrationQueued = false;
+    void hydrateAcpTopPanelGitInfo();
+  });
+}
+
+async function hydrateAcpTopPanelGitInfo() {
+  const activeAdapter = backend();
+  if (activeBackendKind.value !== 'acp' || !activeAdapter.getVcsInfo) return;
+  const getVcsInfo = activeAdapter.getVcsInfo.bind(activeAdapter);
+  const project = serverState.projects[ACP_PROJECT_ID];
+  if (!project) return;
+  const directories = Object.values(project.sandboxes)
+    .map((sandbox) => sandbox.directory)
+    .filter((directory) => !acpGitInfoCheckedDirectories.has(directory));
+  await Promise.all(directories.map(async (directory) => {
+    acpGitInfoCheckedDirectories.add(directory);
+    try {
+      const gitInfo = parseAcpGitInfo(await getVcsInfo(directory));
+      if (!gitInfo) return;
+      acpGitInfoByDirectory.value = { ...acpGitInfoByDirectory.value, [directory]: gitInfo };
+    } catch (error) {
+      log('ACP TopPanel Git metadata probe failed', { directory, error });
+    }
+  }));
+}
+
 const ptySupported = computed(() => {
   const active = backend();
   return Boolean(active.createPty && active.createPtyWebSocketUrl && active.deletePty);
 });
 
-const activeBackendCapabilities = computed(() => backend().capabilities);
+const activeBackendCapabilities = computed(
+  () => getBackendAdapter(activeBackendKind.value).capabilities,
+);
 
-const projectPickerHomePath = computed(() => (
+const projectPickerHomePath = computed(() =>
   activeBackendCapabilities.value.projectPickerCreatesSession
-    ? (codexApi.homeDir.value || homePath.value)
-    : homePath.value
-));
+    ? codexApi.homeDir.value || homePath.value
+    : homePath.value,
+);
 
 function requireBackendMethod<T>(method: T | undefined, name: string): T {
   if (!method) throw new Error(`Active backend does not support ${name}.`);
@@ -6313,14 +6947,21 @@ function normalizeProjectDirectoryForActiveBackend(directory: string) {
   if (trimmed === '~') return normalizedHome || '/';
   if (trimmed.startsWith('~/')) {
     const suffix = trimmed.slice(2).replace(/^\/+/, '');
-    return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${suffix}`));
+    return normalizeDirectory(
+      normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${suffix}`),
+    );
   }
   if (!trimmed) return normalizeDirectory(normalizedHome || '/');
   if (trimmed.startsWith('/')) return normalizeDirectory(normalizeAbsolutePathNoParent(trimmed));
-  return normalizeDirectory(normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${trimmed}`));
+  return normalizeDirectory(
+    normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${trimmed}`),
+  );
 }
 
-function codexThreadDirectoryMatch(thread: { cwd?: string; gitInfo?: { root?: string } | null }, directory: string) {
+function codexThreadDirectoryMatch(
+  thread: { cwd?: string; gitInfo?: { root?: string } | null },
+  directory: string,
+) {
   const target = normalizeDirectory(directory);
   const cwd = normalizeDirectory(thread.cwd || '');
   if (cwd) return cwd === target;
@@ -6378,16 +7019,21 @@ const backendSessionActions = useBackendSessionActions({
   restoreLocalPinnedSessionOverride,
   switchSessionSelection,
   reloadSelectedSessionState: async (newId?: string, oldId?: string) => {
-    await backendSessionReload.reloadSelectedSessionState(newId, oldId);
+    await reloadSelectedSessionAndAcpOptions(newId, oldId);
   },
   seedForkedSessionComposerDraft,
   setSendStatusKey,
+  setLocalSessionArchived: setAcpSessionArchived,
   batchConcurrency: BATCH_SESSION_ACTION_CONCURRENCY,
+  backendDeleteSession: (sessionId, directory) => backend().deleteSession(sessionId, directory),
+  backendUpdateSession: (sessionId, payload, directory) =>
+    backend().updateSession(sessionId, payload, directory),
 });
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
+  acpProjectId: ACP_PROJECT_ID,
   selectedProjectId,
   selectedSessionId,
   activeDirectory,
@@ -6410,7 +7056,9 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
   setSendStatusKey,
   isAborting,
   busyDescendantSessionIds,
-  backendAbortSession: backend().abortSession,
+  backendCreateSession: (directory) => backend().createSession(directory),
+  findAcpSessionByDirectory,
+  backendAbortSession: createDynamicBackendAbortSession(backend),
 });
 
 const backendSessionReload = useBackendSessionReload({
@@ -6451,6 +7099,12 @@ const backendSessionReload = useBackendSessionReload({
   focusInput,
 });
 
+async function reloadSelectedSessionAndAcpOptions(newId?: string, oldId?: string) {
+  await backendSessionReload.reloadSelectedSessionState(newId, oldId);
+  if (activeBackendKind.value !== 'acp' || !newId) return;
+  await Promise.all([fetchProviders(true), fetchAgents()]);
+}
+
 watch(
   [projectDirectory, activeDirectory, selectedSessionId],
   ([pd, ad, sid], [prevPd, prevAd, prevSid] = ['', '', '']) => {
@@ -6474,7 +7128,10 @@ watch(
       if (nextProjectId && nextSessionId) {
         selectedProjectId.value = nextProjectId;
         selectedSessionId.value = nextSessionId;
-      } else if (nextDirectory && activeBackendCapabilities.value.sessionManagementMode !== 'sandbox-first') {
+      } else if (
+        nextDirectory &&
+        activeBackendCapabilities.value.sessionManagementMode !== 'sandbox-first'
+      ) {
         void backendSessionLifecycle.createSessionInDirectory(nextDirectory);
       }
     }
@@ -6486,7 +7143,9 @@ watch(
   { immediate: true },
 );
 
-watch(selectedSessionId, (newId, oldId) => backendSessionReload.reloadSelectedSessionState(newId, oldId), { immediate: true });
+watch(selectedSessionId, (newId, oldId) => reloadSelectedSessionAndAcpOptions(newId, oldId), {
+  immediate: true,
+});
 
 const backendMessageSend = useBackendMessageSend({
   activeBackendKind,
@@ -6510,7 +7169,10 @@ const backendMessageSend = useBackendMessageSend({
   hiddenModels,
   openCodeApi: {
     sendPromptAsync: async (sessionId, payload) => {
-      const sendPromptAsync = requireBackendMethod(backend().sendPromptAsync, 'session prompt sending');
+      const sendPromptAsync = requireBackendMethod(
+        backend().sendPromptAsync,
+        'session prompt sending',
+      );
       await sendPromptAsync(sessionId, payload);
     },
   },
@@ -6526,7 +7188,7 @@ const backendMessageSend = useBackendMessageSend({
   availableSkills: computed(() =>
     activeBackendKind.value === 'codex'
       ? codexApi.skills.value.filter((skill) => skill.enabled !== false)
-      : []
+      : [],
   ),
   runDebugCommand,
   openShellFromInput,
@@ -6546,6 +7208,8 @@ const backendMessageSend = useBackendMessageSend({
   sendCommand,
   buildLineCommentFileUrl,
   formatCommentNote,
+  resolveAgentMode: resolvePromptAgentMode,
+  buildAcpMentionContextParts,
 });
 
 const backendSelectionBootstrap = useBackendSelectionBootstrap({
@@ -6970,7 +7634,9 @@ async function openAllGitDiff(mode: WorktreeSnapshotMode = 'all') {
 
     const first = snapshot.files[0];
     const title =
-      snapshot.files.length === 1 ? first.file : t('app.git.filesChanged', { count: snapshot.files.length });
+      snapshot.files.length === 1
+        ? first.file
+        : t('app.git.filesChanged', { count: snapshot.files.length });
     const diffTabs =
       snapshot.files.length > 1
         ? snapshot.files.map((entry) => ({
@@ -7105,7 +7771,9 @@ async function handleShowCommit(hashRaw: string) {
     const first = snapshot.files[0];
     const title =
       snapshot.title ||
-      (snapshot.files.length === 1 ? first.file : t('app.git.filesChanged', { count: snapshot.files.length }));
+      (snapshot.files.length === 1
+        ? first.file
+        : t('app.git.filesChanged', { count: snapshot.files.length }));
     const diffTabs =
       snapshot.files.length > 1
         ? snapshot.files.map((entry) => ({
@@ -7235,13 +7903,14 @@ function syncRealtimeCodexToolWindows(entries: Array<{ parts: MessagePart[] }>) 
     entry.parts.forEach((part) => {
       if (part.type !== 'tool') return;
       if (!shouldRenderToolWindow(part.tool)) return;
-      const contentSignature = part.state.status === 'completed'
-        ? part.state.output
-        : part.state.status === 'error'
-          ? part.state.error
-          : part.state.status === 'running'
-            ? part.state.metadata?.output || ''
-            : '';
+      const contentSignature =
+        part.state.status === 'completed'
+          ? part.state.output
+          : part.state.status === 'error'
+            ? part.state.error
+            : part.state.status === 'running'
+              ? part.state.metadata?.output || ''
+              : '';
       const windowKey = part.callID || part.id;
       const signature = `${part.tool}:${part.state.status}:${contentSignature}:${JSON.stringify(part.state.input ?? {})}`;
       if (lastCodexRealtimeToolWindowSignature.get(windowKey) === signature) {
@@ -7251,7 +7920,9 @@ function syncRealtimeCodexToolWindows(entries: Array<{ parts: MessagePart[] }>) 
       openToolPartAsWindow(part);
       fw.updateOptions(windowKey, {
         status:
-          part.state.status === 'running' || part.state.status === 'completed' || part.state.status === 'error'
+          part.state.status === 'running' ||
+          part.state.status === 'completed' ||
+          part.state.status === 'error'
             ? part.state.status
             : undefined,
       });
@@ -7302,10 +7973,10 @@ function handleOpenHistoryReasoning(payload: { part: ReasoningPart }) {
   historyToolWindowKeys.add(key);
   fw.open(key, {
     component: ReasoningContent,
-      props: {
-        entries: [{ id: payload.part.id, text: payload.part.text }],
-        theme: DEFAULT_SYNTAX_THEME,
-      },
+    props: {
+      entries: [{ id: payload.part.id, text: payload.part.text }],
+      theme: DEFAULT_SYNTAX_THEME,
+    },
     title: t('app.windowTitles.thought'),
     scroll: 'manual',
     closable: true,
@@ -7429,14 +8100,17 @@ function handleOpenImage(payload: { url: string; filename: string }) {
 async function handleEditMessage(payload: { sessionId: string; part: MessagePart }) {
   const directory = activeDirectory.value.trim();
   if (payload.part.type !== 'text') return;
-    const nextText = await showPrompt(t('app.prompt.editMessage'), payload.part.text);
-    if (nextText === null) return;
+  const nextText = await showPrompt(t('app.prompt.editMessage'), payload.part.text);
+  if (nextText === null) return;
   const trimmed = nextText.trimEnd();
   if (!trimmed) return;
   if (trimmed === payload.part.text) return;
   try {
     const part = { ...payload.part, text: trimmed };
-    const patchMessagePart = requireBackendMethod(backend().patchMessagePart, 'message part patching');
+    const patchMessagePart = requireBackendMethod(
+      backend().patchMessagePart,
+      'message part patching',
+    );
     await patchMessagePart({
       sessionID: payload.sessionId,
       messageID: part.messageID,
@@ -7505,10 +8179,13 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
   const path = typeof entry.props?.path === 'string' ? entry.props.path : '';
   if (!path) return;
   const lines = typeof entry.props?.lines === 'string' ? entry.props.lines : undefined;
-  const storedDirectory = typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
+  const storedDirectory =
+    typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
   const storedFilePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
   const fallbackDirectory = activeDirectory.value.trim();
-  const fallbackRequestPath = fallbackDirectory ? splitFileContentPathForActiveBackend(path, fallbackDirectory) : null;
+  const fallbackRequestPath = fallbackDirectory
+    ? splitFileContentPathForActiveBackend(path, fallbackDirectory)
+    : null;
   const directory = storedDirectory || fallbackRequestPath?.directory || '';
   const filePath = storedFilePath || fallbackRequestPath?.path || '';
 
@@ -7574,8 +8251,11 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         binaryContent = content;
       } else if (forceBinary) {
         try {
-    const readFileContentBytes = requireBackendMethod(backend().readFileContentBytes, 'binary file reading');
-    const bytes = await readFileContentBytes({ directory, path: filePath });
+          const readFileContentBytes = requireBackendMethod(
+            backend().readFileContentBytes,
+            'binary file reading',
+          );
+          const bytes = await readFileContentBytes({ directory, path: filePath });
           binaryContent = bytesToBase64(bytes);
           console.log('[App] Fetched raw binary data, size:', bytes.length);
         } catch (fetchError) {
@@ -7669,9 +8349,12 @@ async function refreshOpenFileViewersForPath(filePath: string) {
   const tasks = fw.entries.value
     .filter((entry) => entry.key.startsWith('file-viewer:'))
     .filter((entry) => {
-      const entryAbsolutePath = typeof entry.props?.absolutePath === 'string'
-        ? entry.props.absolutePath
-        : resolveFileViewerAbsolutePath(typeof entry.props?.path === 'string' ? entry.props.path : '');
+      const entryAbsolutePath =
+        typeof entry.props?.absolutePath === 'string'
+          ? entry.props.absolutePath
+          : resolveFileViewerAbsolutePath(
+              typeof entry.props?.path === 'string' ? entry.props.path : '',
+            );
       return entryAbsolutePath === normalizedTarget;
     })
     .map((entry) => refreshFileViewerWindow(entry.key));
@@ -7681,7 +8364,10 @@ async function refreshOpenFileViewersForPath(filePath: string) {
 async function refreshOpenGitDiffWindowsForPath(filePath: string) {
   const normalizedTarget = resolveFileViewerAbsolutePath(filePath);
   const tasks = fw.entries.value
-    .filter((entry) => entry.key.startsWith('git-diff:changes:') || entry.key.startsWith('git-diff:staged:'))
+    .filter(
+      (entry) =>
+        entry.key.startsWith('git-diff:changes:') || entry.key.startsWith('git-diff:staged:'),
+    )
     .filter((entry) => {
       const entryPath = typeof entry.props?.path === 'string' ? entry.props.path : '';
       return entryPath && resolveFileViewerAbsolutePath(entryPath) === normalizedTarget;
@@ -7710,7 +8396,10 @@ async function openFileViewer(path: string, lines?: string) {
   const pos = getFileViewerPosition(0.18, 0.14);
   const lang = guessLanguage(path);
   const absolutePath = resolveFileViewerAbsolutePath(path);
-  const requestPath = splitFileContentPathForActiveBackend(path, activeDirectory.value.trim() || null);
+  const requestPath = splitFileContentPathForActiveBackend(
+    path,
+    activeDirectory.value.trim() || null,
+  );
   fw.open(key, {
     component: ContentViewer,
     props: {
@@ -7723,7 +8412,12 @@ async function openFileViewer(path: string, lines?: string) {
       lang,
       lines,
       gutterMode: 'default',
-      onRequestAddLineComment: (payload: { path: string; startLine: number; endLine: number; text: string }) => {
+      onRequestAddLineComment: (payload: {
+        path: string;
+        startLine: number;
+        endLine: number;
+        text: string;
+      }) => {
         addLineComment(payload);
       },
       editing: false,
@@ -7835,7 +8529,14 @@ function handlePtyEvent(event: {
     }
     const session = shellSessionsByPtyId.get(ptyId);
     if (session) session.exitCode = exitCode;
-    if (activeBackendCapabilities.value.ptyRefreshArtifactsOnSuccess && session?.closeOnSuccess && exitCode === 0) {
+    const callback = shellExitCallbacks.get(ptyId);
+    shellExitCallbacks.delete(ptyId);
+    if (callback) void callback(exitCode);
+    if (
+      activeBackendCapabilities.value.ptyRefreshArtifactsOnSuccess &&
+      session?.closeOnSuccess &&
+      exitCode === 0
+    ) {
       refreshFileArtifactsForPty(ptyId);
     }
     if (session?.closeOnSuccess && exitCode !== 0) {
@@ -7860,10 +8561,7 @@ function handlePtyEvent(event: {
   }
 }
 
-const {
-  startInitialization,
-  abortInitialization,
-} = useBackendActivation({
+const { startInitialization, abortInitialization } = useBackendActivation({
   credentials,
   codexApi,
   ge,
@@ -7886,9 +8584,13 @@ const {
   toErrorMessage,
   setActiveBackendKind,
   configureCodexBackend,
+  configureAcpBackend,
+  disconnectAcpBackend,
+  bootstrapAcpWorkspace,
   fetchGlobalProviderConfig,
   fetchProviders,
   fetchAgents,
+  fetchCommands,
   fetchHomePath,
   bootstrapSelections,
   hydrateActiveWorktreeResources,
@@ -7899,6 +8601,11 @@ const {
 function handleLogin() {
   if (loginBackendKind.value === 'codex') {
     credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value);
+    void startInitialization();
+    return;
+  }
+  if (loginBackendKind.value === 'acp') {
+    credentials.saveAcp(loginAcpBridgeUrl.value, loginAcpBridgeToken.value, loginAcpAgentId.value);
     void startInitialization();
     return;
   }
@@ -7913,14 +8620,19 @@ function handleAbortInit() {
 }
 
 function handleLogout() {
+  uiInitState.value = 'login';
+  acpMessageBridge.stop();
+  disconnectAcpBackend();
   credentials.clear();
   ge.disconnect();
   activeBackendKind.value = credentials.backendKind.value;
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
+  loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
+  loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
+  loginAcpAgentId.value = credentials.acpAgentId.value;
   disposeShellWindows();
-  uiInitState.value = 'login';
   initErrorMessage.value = '';
   connectionState.value = 'connecting';
 }
@@ -7938,7 +8650,10 @@ onMounted(() => {
   activeBackendKind.value = credentials.backendKind.value;
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
+  loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
+  loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
+  loginAcpAgentId.value = credentials.acpAgentId.value;
 
   if (credentials.isConfigured.value) {
     loginUrl.value = credentials.url.value;
@@ -8132,6 +8847,8 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  acpMessageBridge.stop();
+  disconnectAcpBackend();
   window.removeEventListener('keydown', handleGlobalKeydown);
   window.removeEventListener('pointermove', handlePointerMove);
   window.removeEventListener('pointerup', handlePointerUp);
@@ -8236,9 +8953,18 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 0;
-  border: 1px solid color-mix(in srgb, var(--theme-login-border, var(--theme-border-default, #334155)) 88%, transparent);
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--theme-login-border, var(--theme-border-default, #334155)) 88%,
+      transparent
+    );
   border-radius: 16px;
-  background: color-mix(in srgb, var(--theme-login-control-bg, var(--theme-surface-panel-muted, #0b1320)) 96%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-login-control-bg, var(--theme-surface-panel-muted, #0b1320)) 96%,
+    transparent
+  );
   color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
   padding: 8px 16px;
   box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
@@ -8253,7 +8979,12 @@ body {
   height: 26px;
   margin: 0 auto 12px;
   border-radius: 50%;
-  border: 3px solid color-mix(in srgb, var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8)) 45%, transparent);
+  border: 3px solid
+    color-mix(
+      in srgb,
+      var(--theme-login-text-muted, var(--theme-text-muted, #94a3b8)) 45%,
+      transparent
+    );
   border-top-color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
   animation: app-loading-spin 0.85s linear infinite;
 }
@@ -8295,13 +9026,25 @@ body {
 }
 
 .app-loading-connect {
-  border-color: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 42%, transparent);
-  background: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 76%, transparent);
+  border-color: color-mix(
+    in srgb,
+    var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 42%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 76%,
+    transparent
+  );
   color: var(--theme-login-active-text, var(--theme-text-inverse, #ffffff));
 }
 
 .app-loading-connect:hover {
-  background: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 86%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 86%,
+    transparent
+  );
 }
 
 .app-loading-actions {
@@ -8336,7 +9079,7 @@ body {
 
 .app-login-backends {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -8355,8 +9098,16 @@ body {
 }
 
 .app-login-backend.active {
-  border-color: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 60%, transparent);
-  background: color-mix(in srgb, var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 18%, var(--theme-login-control-bg, #1e293b));
+  border-color: color-mix(
+    in srgb,
+    var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 60%,
+    transparent
+  );
+  background: color-mix(
+    in srgb,
+    var(--theme-login-accent, var(--theme-accent-primary, #60a5fa)) 18%,
+    var(--theme-login-control-bg, #1e293b)
+  );
   color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
 }
 
@@ -8396,6 +9147,26 @@ body {
 .app-login-input:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.app-login-select {
+  width: 100%;
+}
+
+.app-login-select :deep(.ui-dropdown-button) {
+  padding: 8px 12px;
+  background: var(--theme-login-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  border: 1px solid var(--theme-login-border, var(--theme-border-default, #334155));
+  border-radius: 6px;
+  color: var(--theme-login-text, var(--theme-text-primary, #e2e8f0));
+  font-size: 13px;
+  box-shadow: none;
+}
+
+.app-login-select :deep(.ui-dropdown-button:focus),
+.app-login-select.is-open :deep(.ui-dropdown-button) {
+  border-color: var(--theme-login-accent, var(--theme-accent-primary, #475569));
+  background: var(--theme-login-active-bg, var(--theme-surface-panel-active, #0f172a));
 }
 
 .app-login-checkbox {
@@ -8589,9 +9360,8 @@ body {
   --tool-area-height: var(--canvas-height, 100%);
   --term-font-family:
     'FiraCode Nerd Font Mono', 'FiraCode Nerd Font Mono Med', 'CaskaydiaCove Nerd Font Mono',
-    'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed',
-    'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono',
-    monospace;
+    'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono',
+    'Cascadia Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
   --term-font-size: 13px;
   --term-line-height: 1.1;
   --term-width: 670px;

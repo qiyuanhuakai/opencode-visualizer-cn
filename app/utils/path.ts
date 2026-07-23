@@ -44,6 +44,27 @@ export function normalizeDirectory(value?: string): string {
   const normalized = trimmed.replace(/\/+$/, '');
   return normalized || '/';
 }
+
+export function normalizeMetadataPath(value: string, homePath: string, fallback = '/'): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  const home = homePath.trim();
+  const normalizedFallback = normalizeAbsolutePathNoParent(fallback || '/');
+  const normalizedHome = home.startsWith('/')
+    ? normalizeAbsolutePathNoParent(home)
+    : normalizedFallback;
+  if (trimmed === '~') return normalizeDirectory(normalizedHome);
+  if (trimmed.startsWith('~/')) {
+    return normalizeDirectory(normalizeAbsolutePathNoParent(
+      `${normalizedHome.replace(/\/+$/u, '')}/${trimmed.slice(2).replace(/^\/+/, '')}`,
+    ));
+  }
+  if (trimmed.startsWith('/')) return normalizeDirectory(normalizeAbsolutePathNoParent(trimmed));
+  return normalizeDirectory(normalizeAbsolutePathNoParent(
+    `${normalizedHome.replace(/\/+$/u, '')}/${trimmed}`,
+  ));
+}
+
 export function splitFileContentDirectoryAndPath(
   targetPath: string,
   sandboxDirectory: string | null,

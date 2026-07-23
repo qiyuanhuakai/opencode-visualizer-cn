@@ -10,6 +10,7 @@ import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
+import AcpManagerPanel from './AcpManagerPanel.vue';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
 
@@ -37,14 +38,16 @@ function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T
   return method;
 }
 
-type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'codex';
+type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'acp' | 'codex';
 const activeTab = ref<TabId>('server');
+const acpManagerRef = ref<{ refresh: () => Promise<void> } | null>(null);
 
 const serverHealth = ref<{ healthy: boolean; version: string } | null>(null);
 const mcpData = ref<
   Record<
     string,
     | { status: 'connected' }
+    | { status: 'configured' }
     | { status: 'disabled' }
     | { status: 'failed'; error: string }
     | { status: 'needs_auth' }
@@ -55,8 +58,37 @@ const mcpData = ref<
 const lspData = ref<Array<{ id: string; name: string; root: string; status: 'connected' | 'error' }> | null>(null);
 const skillData = ref<Array<{ name: string; version?: string; enabled?: boolean; path?: string }> | null>(null);
 const skillUnsupported = ref(false);
+const mcpUnsupported = ref(false);
+const lspUnsupported = ref(false);
+const pluginUnsupported = ref(false);
+const isAcpBackend = computed(() => props.activeBackendKind === 'acp');
+const mcpUnsupportedText = computed(() =>
+  t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported'),
+);
+const lspUnsupportedText = computed(() =>
+  t(isAcpBackend.value ? 'statusMonitor.lsp.unsupportedAcp' : 'statusMonitor.lsp.unsupported'),
+);
+const skillUnsupportedText = computed(() =>
+  t(
+    isAcpBackend.value ? 'statusMonitor.skills.unsupportedAcp' : 'statusMonitor.skills.unsupported',
+  ),
+);
+const pluginUnsupportedText = computed(() =>
+  t(
+    isAcpBackend.value
+      ? 'statusMonitor.plugins.unsupportedAcp'
+      : 'statusMonitor.plugins.unsupported',
+  ),
+);
 const configData = ref<Record<string, unknown> | null>(null);
 const codexPluginData = ref<CodexPlugin[]>([]);
+const backendPluginData = ref<Array<{
+  id: string;
+  name: string;
+  enabled: boolean;
+  installed: boolean;
+  accessible: boolean;
+}>>([]);
 const tokenUsage = ref<MessageUsage | null>(null);
 const tokenModelName = ref<string>('');
 const tokenContextLimit = ref<number>(0);
@@ -181,12 +213,16 @@ function resetLoadedState() {
   hasLoaded.value = false;
   errorMessage.value = '';
   skillUnsupported.value = false;
+  mcpUnsupported.value = false;
+  lspUnsupported.value = false;
+  pluginUnsupported.value = false;
   serverHealth.value = null;
   mcpData.value = null;
   lspData.value = null;
   skillData.value = null;
   configData.value = null;
   codexPluginData.value = [];
+  backendPluginData.value = [];
   resetTokenData();
 }
 
@@ -204,31 +240,46 @@ async function refresh() {
   refreshPromise = (async () => {
   loading.value = true;
   errorMessage.value = '';
-  skillUnsupported.value = false;
+  const activeBackend = backend();
+  mcpUnsupported.value = typeof activeBackend.getMcpStatus !== 'function';
+  lspUnsupported.value = typeof activeBackend.getLspStatus !== 'function';
+  skillUnsupported.value = typeof activeBackend.getSkillStatus !== 'function';
+  pluginUnsupported.value = isAcpBackend.value
+    ? typeof activeBackend.getPluginStatus !== 'function'
+    : typeof activeBackend.getPluginStatus !== 'function' &&
+      typeof activeBackend.getGlobalConfig !== 'function';
   try {
-    const [health, mcp, lsp, skills, cfg] = await Promise.allSettled([
-      requireBackendMethod(backend().getGlobalHealth, 'global health')(),
-      requireBackendMethod(backend().getMcpStatus, 'MCP status')(),
-      requireBackendMethod(backend().getLspStatus, 'LSP status')(),
-      requireBackendMethod(backend().getSkillStatus, 'skill status')().catch(async () => {
-        // Current OpenCode version may not expose /skill endpoint
-        skillUnsupported.value = true;
-        return [] as Array<{ name: string; version?: string }>;
-      }),
-      requireBackendMethod(backend().getGlobalConfig, 'global config')() as Promise<Record<string, unknown>>,
+    const [health, mcp, lsp, skills, cfg, plugins] = await Promise.allSettled([
+      activeBackend.getGlobalHealth?.() ?? Promise.resolve(null),
+      activeBackend.getMcpStatus?.() ?? Promise.resolve({}),
+      activeBackend.getLspStatus?.() ?? Promise.resolve([]),
+      activeBackend.getSkillStatus?.() ?? Promise.resolve([]),
+      activeBackend.getGlobalConfig?.() ?? Promise.resolve({}),
+      activeBackend.getPluginStatus?.() ?? Promise.resolve([]),
     ]);
     if (requestId !== refreshRequestId) return;
     serverHealth.value = health.status === 'fulfilled' ? health.value : null;
     mcpData.value = mcp.status === 'fulfilled'
-      ? (mcp.value as typeof mcpData.value)
+      ? (mcp.value as typeof mcpData.value) ?? {}
       : null;
     lspData.value = lsp.status === 'fulfilled'
-      ? (lsp.value as typeof lspData.value)
+      ? (lsp.value as typeof lspData.value) ?? []
       : null;
     skillData.value = skills.status === 'fulfilled'
-      ? (skills.value as typeof skillData.value)
+      ? (skills.value as typeof skillData.value) ?? []
       : null;
-    configData.value = cfg.status === 'fulfilled' ? cfg.value : null;
+    configData.value = cfg.status === 'fulfilled'
+      ? (cfg.value as Record<string, unknown>)
+      : null;
+    backendPluginData.value = plugins.status === 'fulfilled'
+      ? (plugins.value as typeof backendPluginData.value)
+      : [];
+    if (!mcpUnsupported.value && mcp.status === 'rejected') mcpUnsupported.value = true;
+    if (!lspUnsupported.value && lsp.status === 'rejected') lspUnsupported.value = true;
+    if (!skillUnsupported.value && skills.status === 'rejected') skillUnsupported.value = true;
+    if (!pluginUnsupported.value && plugins.status === 'rejected') {
+      if (isAcpBackend.value || cfg.status === 'rejected') pluginUnsupported.value = true;
+    }
 
     // Fetch token data for current session separately
     if (props.sessionId) {
@@ -257,6 +308,14 @@ async function refresh() {
   })();
 
   return refreshPromise;
+}
+
+async function handleRefresh() {
+  if (activeTab.value === 'acp') {
+    await acpManagerRef.value?.refresh();
+    return;
+  }
+  await refresh();
 }
 
 async function ensureLoaded() {
@@ -417,6 +476,7 @@ const pluginEntries = computed(() => {
         accessible: plugin.isAccessible,
       }));
   }
+  if (backendPluginData.value.length > 0) return backendPluginData.value;
   const plugins = configData.value?.plugin;
   if (Array.isArray(plugins)) return plugins.map((p) => ({ id: String(p), name: String(p), enabled: true, installed: true, accessible: true }));
   if (typeof plugins === 'object' && plugins !== null) return Object.keys(plugins).map((name) => ({ id: name, name, enabled: true, installed: true, accessible: true }));
@@ -533,6 +593,8 @@ function mcpStatusText(status: string) {
   switch (status) {
     case 'connected':
       return t('statusMonitor.mcp.connected');
+    case 'configured':
+      return t('statusMonitor.mcp.configured');
     case 'disabled':
       return t('statusMonitor.mcp.disabled');
     case 'failed':
@@ -574,6 +636,7 @@ const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
     { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
     { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
     { id: 'token', labelKey: 'statusMonitor.tabs.token' },
+    { id: 'acp', labelKey: 'statusMonitor.tabs.acp' },
   ];
   if (showCodexInStatusMonitor.value) {
     base.push({ id: 'codex', labelKey: 'statusMonitor.tabs.codex' });
@@ -605,6 +668,8 @@ const currentTotalInfo = computed(() => {
       return tokenUsage.value
         ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
         : null;
+    case 'acp':
+      return null;
     case 'codex':
       return codexApi.accountRateLimits.value
         ? { label: t('statusMonitor.codex.rateLimitUsed'), count: codexRateLimitPercent.value }
@@ -665,7 +730,7 @@ function formatPercent(value: number, total: number): string {
           <span class="status-monitor-summary-value">{{ currentTotalInfo.count }}</span>
         </div>
 
-        <div v-if="errorMessage" class="status-monitor-feedback is-error">
+        <div v-if="errorMessage && activeTab !== 'acp'" class="status-monitor-feedback is-error">
           <span>{{ errorMessage }}</span>
           <button type="button" class="retry-button" @click="refresh">
             {{ $t('statusMonitor.retry') }}
@@ -704,6 +769,9 @@ function formatPercent(value: number, total: number): string {
           <div v-if="loading && !mcpData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
+          <div v-else-if="mcpUnsupported && mcpEntries.length === 0" class="status-monitor-empty">
+            {{ mcpUnsupportedText }}
+          </div>
           <div v-else-if="mcpEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.mcp.noData') }}
           </div>
@@ -725,6 +793,7 @@ function formatPercent(value: number, total: number): string {
                   </span>
                 </div>
                 <label
+                  v-if="typeof backend().updateMcp === 'function'"
                   class="toggle-switch"
                   :title="item.status === 'disabled' ? $t('statusMonitor.mcp.enable') : $t('statusMonitor.mcp.disable')"
                 >
@@ -746,6 +815,9 @@ function formatPercent(value: number, total: number): string {
         <div v-if="activeTab === 'lsp'" class="status-monitor-content">
           <div v-if="loading && !lspData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
+          </div>
+          <div v-else-if="lspUnsupported && (lspData || []).length === 0" class="status-monitor-empty">
+            {{ lspUnsupportedText }}
           </div>
           <div v-else-if="(lspData || []).length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.lsp.noData') }}
@@ -775,7 +847,10 @@ function formatPercent(value: number, total: number): string {
           <div v-if="loading && !configData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else class="status-monitor-summary-grid">
+          <div v-else-if="pluginUnsupported" class="status-monitor-empty">
+            {{ pluginUnsupportedText }}
+          </div>
+          <div v-else-if="activeBackendKind === 'codex'" class="status-monitor-summary-grid">
             <div class="status-monitor-summary-chip">
               <span class="status-monitor-summary-label">{{ $t('statusMonitor.plugins.marketplaces') }}</span>
               <span class="status-monitor-summary-value">{{ pluginStats.marketplaces }}</span>
@@ -797,7 +872,7 @@ function formatPercent(value: number, total: number): string {
               <span class="status-monitor-summary-value">{{ pluginStats.installed }}</span>
             </div>
           </div>
-          <div v-if="pluginEntries.length > 0" class="status-monitor-list">
+          <div v-if="!pluginUnsupported && pluginEntries.length > 0" class="status-monitor-list">
             <div v-if="hiddenPluginCount > 0" class="status-monitor-summary">
               {{ $t('statusMonitor.plugins.hiddenUnavailable', { count: hiddenPluginCount }) }}
             </div>
@@ -815,10 +890,10 @@ function formatPercent(value: number, total: number): string {
               </div>
             </div>
           </div>
-          <div v-else-if="hiddenPluginCount > 0" class="status-monitor-empty">
+          <div v-else-if="!pluginUnsupported && hiddenPluginCount > 0" class="status-monitor-empty">
             {{ $t('statusMonitor.plugins.hiddenUnavailable', { count: hiddenPluginCount }) }}
           </div>
-          <div v-else class="status-monitor-empty">
+          <div v-else-if="!pluginUnsupported" class="status-monitor-empty">
             {{ $t('statusMonitor.plugins.noData') }}
           </div>
         </div>
@@ -829,7 +904,7 @@ function formatPercent(value: number, total: number): string {
             {{ $t('statusMonitor.loading') }}
           </div>
           <div v-else-if="skillUnsupported && skillEntries.length === 0" class="status-monitor-empty">
-            {{ $t('statusMonitor.skills.unsupported') }}
+            {{ skillUnsupportedText }}
           </div>
           <div v-else-if="skillEntries.length === 0" class="status-monitor-empty">
             {{ $t('statusMonitor.skills.noData') }}
@@ -847,7 +922,7 @@ function formatPercent(value: number, total: number): string {
                 />
                 <span class="status-monitor-name">{{ skill.name }}</span>
               </div>
-              <div v-if="skill.enabled !== undefined" class="status-monitor-row-actions">
+              <div v-if="skill.enabled !== undefined && typeof backend().updateSkill === 'function'" class="status-monitor-row-actions">
                 <label
                   class="toggle-switch"
                   :title="skill.enabled ? $t('statusMonitor.skills.disable') : $t('statusMonitor.skills.enable')"
@@ -923,6 +998,10 @@ function formatPercent(value: number, total: number): string {
               <span class="token-value">{{ tokenAssistantMessages }}</span>
             </div>
           </div>
+        </div>
+
+        <div v-if="activeTab === 'acp'" class="status-monitor-content">
+          <AcpManagerPanel ref="acpManagerRef" />
         </div>
 
         <!-- Codex Tab -->
@@ -1017,7 +1096,7 @@ function formatPercent(value: number, total: number): string {
         class="refresh-button"
         :disabled="loading"
         :title="loading ? $t('statusMonitor.refreshing') : $t('statusMonitor.refresh')"
-        @click="refresh"
+        @click="handleRefresh"
       >
         <Icon icon="lucide:refresh-cw" :width="14" :height="14" />
       </button>

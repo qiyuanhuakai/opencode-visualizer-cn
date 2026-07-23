@@ -115,6 +115,7 @@
                     {{ $t('topPanel.management.clear') }}
                   </button>
                   <button
+                    v-if="sessionActions.pin"
                     type="button"
                     class="management-action"
                     :disabled="batchPinTargets.length === 0"
@@ -123,6 +124,7 @@
                     {{ $t('topPanel.management.pin') }} · {{ batchPinTargets.length }}
                   </button>
                   <button
+                    v-if="sessionActions.unpin"
                     type="button"
                     class="management-action"
                     :disabled="batchUnpinTargets.length === 0"
@@ -131,6 +133,7 @@
                     {{ $t('topPanel.management.unpin') }} · {{ batchUnpinTargets.length }}
                   </button>
                   <button
+                    v-if="sessionActions.archive"
                     type="button"
                     class="management-action"
                     :disabled="batchArchiveTargets.length === 0"
@@ -139,6 +142,7 @@
                     {{ $t('topPanel.management.archive') }} · {{ batchArchiveTargets.length }}
                   </button>
                   <button
+                    v-if="sessionActions.unarchive"
                     type="button"
                     class="management-action"
                     :disabled="batchUnarchiveTargets.length === 0"
@@ -147,6 +151,7 @@
                     {{ $t('topPanel.management.unarchive') }} · {{ batchUnarchiveTargets.length }}
                   </button>
                   <button
+                    v-if="sessionActions.delete"
                     type="button"
                     class="management-action is-danger"
                     :disabled="batchDeleteTargets.length === 0"
@@ -204,6 +209,7 @@
                       v-if="
                         worktree.projectId &&
                         worktree.projectId !== 'global' &&
+                        worktree.kind !== 'global' &&
                         (!sandboxFirstMode || worktree.kind === 'sandbox')
                       "
                       type="button"
@@ -214,6 +220,11 @@
                           ? $t('topPanel.sessionActions.unpin')
                           : $t('topPanel.sessionActions.pin')
                       "
+                      :aria-label="`${
+                        worktree.isPinned
+                          ? $t('sidePanel.session.sessionTree.unpinProject')
+                          : $t('sidePanel.session.sessionTree.pinProject')
+                      } ${worktree.name || worktree.label}`"
                       @click.stop="
                         worktree.isPinned
                           ? handleUnpinWorktree(worktree)
@@ -266,7 +277,7 @@
                                   ? 'lucide:globe'
                                   : sandbox.kind === 'branch'
                                     ? 'lucide:git-branch'
-                                    : 'lucide:git-branch'
+                                    : 'lucide:package'
                           "
                           class="tree-header-icon"
                         />
@@ -296,6 +307,7 @@
                         </button>
                         <button
                           v-if="
+                            props.worktreesEnabled !== false &&
                             !sandboxFirstMode &&
                             worktree.projectId !== 'global' &&
                             sandbox.kind !== 'branch' &&
@@ -313,9 +325,8 @@
                           v-if="
                             worktree.projectId &&
                             worktree.projectId !== 'global' &&
-                            (sandboxFirstMode
-                              ? sandbox.kind === 'branch'
-                              : sandbox.kind !== 'branch')
+                            worktree.kind !== 'global' &&
+                            sandbox.kind !== 'global'
                           "
                           type="button"
                           class="tree-action-button"
@@ -325,15 +336,26 @@
                               ? $t('topPanel.sessionActions.unpin')
                               : $t('topPanel.sessionActions.pin')
                           "
+                          :aria-label="`${
+                            sandbox.isPinned || sandbox.isImplicitlyPinned
+                              ? $t('sidePanel.session.sessionTree.unpinSandbox')
+                              : $t('sidePanel.session.sessionTree.pinSandbox')
+                          } ${sandbox.branch || directoryBasename(sandbox.directory)}`"
                           @click.stop="
                             sandbox.isPinned || sandbox.isImplicitlyPinned
                               ? handleUnpinSandbox(
                                   worktree.projectId,
-                                  sandbox.pinDirectory || sandbox.directory,
+                                  sandbox.pinScope || {
+                                    level: 'branch',
+                                    directory: sandbox.directory,
+                                  },
                                 )
                               : handlePinSandbox(
                                   worktree.projectId,
-                                  sandbox.pinDirectory || sandbox.directory,
+                                  sandbox.pinScope || {
+                                    level: 'branch',
+                                    directory: sandbox.directory,
+                                  },
                                 )
                           "
                         >
@@ -349,6 +371,7 @@
                         </button>
                         <button
                           v-if="
+                            props.worktreesEnabled !== false &&
                             canDeleteSandbox(sandbox.directory, worktree.directory) &&
                             worktree.projectId !== 'global' &&
                             !sandboxFirstMode &&
@@ -422,7 +445,7 @@
                         <template #action>
                           <div class="tree-session-actions">
                             <button
-                              v-if="!session.archivedAt"
+                              v-if="!session.archivedAt && sessionActions.rename"
                               type="button"
                               class="tree-action-button session-rename"
                               :title="$t('topPanel.sessionActions.rename')"
@@ -431,7 +454,12 @@
                               <Icon icon="lucide:pencil" :width="16" :height="16" />
                             </button>
                             <button
-                              v-if="!session.archivedAt"
+                              v-if="
+                                !session.archivedAt &&
+                                (session.isPinned || session.isImplicitlyPinned
+                                  ? sessionActions.unpin
+                                  : sessionActions.pin)
+                              "
                               type="button"
                               class="tree-action-button session-pin"
                               :class="
@@ -442,6 +470,11 @@
                                   ? $t('topPanel.sessionActions.unpin')
                                   : $t('topPanel.sessionActions.pin')
                               "
+                              :aria-label="`${
+                                session.isPinned || session.isImplicitlyPinned
+                                  ? $t('topPanel.sessionActions.unpin')
+                                  : $t('topPanel.sessionActions.pin')
+                              } ${session.title || session.slug || session.id}`"
                               @click.stop.prevent="
                                 handleSessionPinToggle(
                                   session.id,
@@ -460,7 +493,7 @@
                               />
                             </button>
                             <button
-                              v-else
+                              v-if="session.archivedAt && sessionActions.unarchive"
                               type="button"
                               class="tree-action-button session-unarchive"
                               :title="$t('topPanel.sessionActions.unarchive')"
@@ -469,12 +502,17 @@
                               <Icon icon="lucide:archive-restore" :width="16" :height="16" />
                             </button>
                             <button
-                              v-if="!session.archivedAt"
+                              v-if="
+                                !session.archivedAt &&
+                                (sessionActions.archive || sessionActions.delete)
+                              "
                               type="button"
                               class="tree-action-button session-del"
-                              :class="isShiftPressed && !sandboxFirstMode ? 'danger' : 'archive'"
+                              :class="
+                                shouldDeleteSession() && !sandboxFirstMode ? 'danger' : 'archive'
+                              "
                               :title="
-                                isShiftPressed
+                                shouldDeleteSession()
                                   ? sandboxFirstMode
                                     ? $t('topPanel.sessionActions.archiveCodex')
                                     : $t('topPanel.sessionActions.deletePermanently')
@@ -484,7 +522,7 @@
                             >
                               <Icon
                                 :icon="
-                                  isShiftPressed
+                                  shouldDeleteSession()
                                     ? sandboxFirstMode
                                       ? 'lucide:cloud-upload'
                                       : 'lucide:trash-2'
@@ -836,6 +874,7 @@ import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownSearch from './Dropdown/Search.vue';
 import { useSettings } from '../composables/useSettings';
+import type { ContainerPinPayload, ContainerPinScope } from '../types/pin';
 import type {
   TopPanelBatchSessionActionPayload,
   TopPanelBatchSessionTarget,
@@ -878,6 +917,15 @@ type SessionSelectPayload = {
   sessionId: string;
 };
 
+type SessionActionCapabilities = {
+  rename: boolean;
+  pin: boolean;
+  unpin: boolean;
+  archive: boolean;
+  unarchive: boolean;
+  delete: boolean;
+};
+
 const props = defineProps<{
   treeData: TopPanelWorktree[];
   notificationSessions: TopPanelNotificationSession[];
@@ -888,7 +936,21 @@ const props = defineProps<{
   sandboxFirstMode?: boolean;
   codexConnected?: boolean;
   ptySupported?: boolean;
+  sessionActionCapabilities?: SessionActionCapabilities;
+  worktreesEnabled?: boolean;
 }>();
+
+const sessionActions = computed<SessionActionCapabilities>(
+  () =>
+    props.sessionActionCapabilities ?? {
+      rename: true,
+      pin: true,
+      unpin: true,
+      archive: true,
+      unarchive: true,
+      delete: true,
+    },
+);
 
 const notifications = computed(() => props.notificationSessions ?? []);
 const totalNotificationCount = computed(() =>
@@ -912,8 +974,8 @@ const emit = defineEmits<{
   (event: 'unpin-session', value: string): void;
   (event: 'pin-project', projectId: string): void;
   (event: 'unpin-project', projectId: string): void;
-  (event: 'pin-sandbox', payload: { projectId: string; directory: string }): void;
-  (event: 'unpin-sandbox', payload: { projectId: string; directory: string }): void;
+  (event: 'pin-sandbox', payload: ContainerPinPayload): void;
+  (event: 'unpin-sandbox', payload: ContainerPinPayload): void;
   (event: 'open-directory'): void;
   (event: 'open-shell'): void;
   (event: 'open-forge-panel'): void;
@@ -1286,8 +1348,12 @@ function handleUnpinProject(projectId: string | undefined) {
 
 function handlePinWorktree(worktree: TopPanelWorktree) {
   if (!worktree.projectId) return;
+  if (worktree.pinScope) {
+    handlePinSandbox(worktree.projectId, worktree.pinScope);
+    return;
+  }
   if (props.sandboxFirstMode && worktree.kind === 'sandbox') {
-    handlePinSandbox(worktree.projectId, worktree.directory);
+    handlePinSandbox(worktree.projectId, { level: 'branch', directory: worktree.directory });
     return;
   }
   handlePinProject(worktree.projectId);
@@ -1295,21 +1361,25 @@ function handlePinWorktree(worktree: TopPanelWorktree) {
 
 function handleUnpinWorktree(worktree: TopPanelWorktree) {
   if (!worktree.projectId) return;
+  if (worktree.pinScope) {
+    handleUnpinSandbox(worktree.projectId, worktree.pinScope);
+    return;
+  }
   if (props.sandboxFirstMode && worktree.kind === 'sandbox') {
-    handleUnpinSandbox(worktree.projectId, worktree.directory);
+    handleUnpinSandbox(worktree.projectId, { level: 'branch', directory: worktree.directory });
     return;
   }
   handleUnpinProject(worktree.projectId);
 }
 
-function handlePinSandbox(projectId: string | undefined, directory: string) {
+function handlePinSandbox(projectId: string | undefined, scope: ContainerPinScope) {
   if (!projectId) return;
-  emit('pin-sandbox', { projectId, directory });
+  emit('pin-sandbox', { projectId, scope });
 }
 
-function handleUnpinSandbox(projectId: string | undefined, directory: string) {
+function handleUnpinSandbox(projectId: string | undefined, scope: ContainerPinScope) {
   if (!projectId) return;
-  emit('unpin-sandbox', { projectId, directory });
+  emit('unpin-sandbox', { projectId, scope });
 }
 
 async function handleSandboxDelete(
@@ -1346,11 +1416,15 @@ async function handleSessionDelete(sessionId: string, close?: () => void) {
 }
 
 async function handleSessionAction(sessionId: string, close?: () => void) {
-  if (isShiftPressed.value) {
+  if (shouldDeleteSession()) {
     await handleSessionDelete(sessionId, close);
     return;
   }
-  emit('archive-session', sessionId);
+  if (sessionActions.value.archive) emit('archive-session', sessionId);
+}
+
+function shouldDeleteSession() {
+  return sessionActions.value.delete && (!sessionActions.value.archive || isShiftPressed.value);
 }
 
 function handleSessionUnarchive(sessionId: string) {

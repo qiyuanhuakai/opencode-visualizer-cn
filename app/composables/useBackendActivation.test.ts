@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useBackendActivation } from './useBackendActivation';
+import type { BackendKind } from '../backends/types';
 
-function createHarness(initialBackend: 'opencode' | 'codex' = 'opencode') {
+function createHarness(initialBackend: BackendKind = 'opencode') {
   const calls: string[] = [];
   const credentials = {
-    backendKind: ref<'opencode' | 'codex'>(initialBackend),
+    backendKind: ref<BackendKind>(initialBackend),
     codexBridgeUrl: ref('http://localhost:4040'),
+    acpBridgeUrl: ref('ws://localhost:23004'),
     codexBridgeToken: ref('token'),
+    acpBridgeToken: ref('acp-token'),
+    acpAgentId: ref('oh-my-pi'),
   };
   const codexApi = {
     url: ref(''),
@@ -32,11 +36,13 @@ function createHarness(initialBackend: 'opencode' | 'codex' = 'opencode') {
       calls.push('ge.disconnect');
     }),
   };
-  const activeBackendKind = ref<'opencode' | 'codex'>('opencode');
+  const activeBackendKind = ref<BackendKind>('opencode');
   const uiInitState = ref<'loading' | 'ready' | 'error' | 'login'>('login');
   const initLoadingMessage = ref('');
   const initErrorMessage = ref('');
-  const connectionState = ref<'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error'>('connecting');
+  const connectionState = ref<'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error'>(
+    'connecting',
+  );
   const reconnectingMessage = ref('stale');
   const selectedProjectId = ref('old-project');
   const selectedSessionId = ref('old-session');
@@ -50,6 +56,12 @@ function createHarness(initialBackend: 'opencode' | 'codex' = 'opencode') {
     bootstrapped: ref(true),
     projects: { stale: {} as unknown },
   };
+  const configureAcpBackend = vi.fn(() => {
+    calls.push('configureAcpBackend');
+  });
+  const disconnectAcpBackend = vi.fn(() => {
+    calls.push('disconnectAcpBackend');
+  });
 
   const activation = useBackendActivation({
     credentials,
@@ -78,6 +90,13 @@ function createHarness(initialBackend: 'opencode' | 'codex' = 'opencode') {
     configureCodexBackend: () => {
       calls.push('configureCodexBackend');
     },
+    configureAcpBackend,
+    disconnectAcpBackend,
+    bootstrapAcpWorkspace: async () => {
+      calls.push('bootstrapAcpWorkspace');
+      selectedProjectId.value = 'acp';
+      selectedSessionId.value = 'acp-session';
+    },
     fetchGlobalProviderConfig: async () => {
       calls.push('fetchGlobalProviderConfig');
     },
@@ -86,6 +105,9 @@ function createHarness(initialBackend: 'opencode' | 'codex' = 'opencode') {
     },
     fetchAgents: async () => {
       calls.push('fetchAgents');
+    },
+    fetchCommands: async () => {
+      calls.push('fetchCommands');
     },
     fetchHomePath: async () => {
       calls.push('fetchHomePath');
@@ -123,6 +145,7 @@ function createHarness(initialBackend: 'opencode' | 'codex' = 'opencode') {
     modelOptions,
     selectedModel,
     serverState,
+    configureAcpBackend,
     activation,
   };
 }
@@ -145,6 +168,7 @@ describe('useBackendActivation', () => {
     expect(harness.modelOptions.value).toEqual([]);
     expect(harness.selectedModel.value).toBe('');
     expect(harness.calls).toEqual([
+      'disconnectAcpBackend',
       'setActiveBackendKind:opencode',
       'ge.connect',
       'fetchHomePath',
@@ -165,6 +189,7 @@ describe('useBackendActivation', () => {
     expect(harness.selectedSessionId.value).toBe('thread-1');
     expect(harness.calls).toEqual([
       'ge.disconnect',
+      'disconnectAcpBackend',
       'setActiveBackendKind:codex',
       'configureCodexBackend',
       'codex.connect',
@@ -175,5 +200,49 @@ describe('useBackendActivation', () => {
       'hydrateActiveWorktreeResources',
       'reloadSelectedSessionState',
     ]);
+  });
+
+  it('activates ACP through the shared bridge without connecting OpenCode events', async () => {
+    const harness = createHarness('acp');
+
+    await harness.activation.startInitialization();
+
+    expect(harness.activeBackendKind.value).toBe('acp');
+    expect(harness.selectedProjectId.value).toBe('acp');
+    expect(harness.selectedSessionId.value).toBe('acp-session');
+    expect(harness.configureAcpBackend).toHaveBeenCalledWith({
+      bridgeUrl: 'ws://localhost:23004',
+      bridgeToken: 'acp-token',
+      agentId: 'oh-my-pi',
+    });
+    await vi.waitFor(() => expect(harness.calls).toContain('hydrateActiveWorktreeResources'));
+    expect(harness.calls).toEqual([
+      'ge.disconnect',
+      'codex.disconnect',
+      'configureAcpBackend',
+      'setActiveBackendKind:acp',
+      'bootstrapAcpWorkspace',
+      'fetchAgents',
+      'fetchCommands',
+      'reloadSelectedSessionState',
+      'fetchGlobalProviderConfig',
+      'fetchProviders',
+      'fetchAgents',
+      'fetchCommands',
+      'hydrateActiveWorktreeResources',
+    ]);
+  });
+
+  it('reports ACP configuration failures and releases the initialization lock', async () => {
+    const harness = createHarness('acp');
+    harness.configureAcpBackend.mockImplementation(() => {
+      throw new Error('invalid ACP bridge');
+    });
+
+    await expect(harness.activation.startInitialization()).resolves.toBeUndefined();
+
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.initErrorMessage.value).toContain('invalid ACP bridge');
+    expect(harness.activation.initializationInFlight.value).toBe(false);
   });
 });

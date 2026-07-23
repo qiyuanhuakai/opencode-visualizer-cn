@@ -2,6 +2,8 @@ import type { ProjectState, SandboxState } from '../types/worker-state';
 
 export type LocalPinnedSessionStore = Record<string, number>;
 
+const PIN_HIERARCHY_MIGRATION_PREFIX = 'migration:pin-hierarchy:v1:';
+
 export function isSamePinnedSessionStore(a: LocalPinnedSessionStore, b: LocalPinnedSessionStore) {
   const keysA = Object.keys(a);
   const keysB = Object.keys(b);
@@ -61,6 +63,13 @@ export function projectPinKey(projectId: string) {
   return `project:${pid}`;
 }
 
+export function repoPinKey(projectId: string, root: string) {
+  const pid = projectId.trim();
+  const repoRoot = root.trim();
+  if (!pid || !repoRoot) return '';
+  return `repo:${pid}:${repoRoot}`;
+}
+
 export function sandboxPinKey(projectId: string, directory: string) {
   const pid = projectId.trim();
   const dir = directory.trim();
@@ -79,7 +88,6 @@ export function isSandboxPinned(
   projectId: string,
   directory: string,
 ): boolean {
-  if (isProjectPinned(store, projectId)) return true;
   const key = sandboxPinKey(projectId, directory);
   if (!key) return false;
   return normalizePinnedAt(store[key]) > 0;
@@ -89,10 +97,9 @@ export function isSessionEffectivelyPinned(
   store: LocalPinnedSessionStore,
   projectId: string,
   sessionId: string,
-  directory: string,
+  _directory: string,
   serverPinnedAt?: number,
 ): boolean {
-  if (isSandboxPinned(store, projectId, directory)) return true;
   const key = pinnedSessionStoreKey(projectId, sessionId);
   if (!key) return false;
   const localOverride = store[key];
@@ -120,6 +127,39 @@ export function reconcilePinnedSessionStore(
   const activeSessionKeys = new Set<string>();
 
   for (const project of Object.values(projects)) {
+    const projectKey = projectPinKey(project.id);
+    const projectPinnedAt = normalizePinnedAt(nextStore[projectKey]);
+    const descendants = (Object.values(project.sandboxes) as SandboxState[]).map((sandbox) => ({
+      sandboxKey: sandboxPinKey(project.id, sandbox.directory),
+      sessionKeys: Object.values(sandbox.sessions)
+        .filter((session) => !session.parentID && !session.timeArchived)
+        .map((session) => pinnedSessionStoreKey(project.id, session.id))
+        .filter(Boolean),
+    }));
+    const migrationKey = `${PIN_HIERARCHY_MIGRATION_PREFIX}${project.id}`;
+    const hasPositiveParent = projectPinnedAt > 0 || descendants.some(
+      ({ sandboxKey }) => normalizePinnedAt(nextStore[sandboxKey]) > 0,
+    );
+    if (nextStore[migrationKey] !== -1 && hasPositiveParent) {
+      for (const { sandboxKey, sessionKeys } of descendants) {
+        const sandboxOverride = nextStore[sandboxKey];
+        const hasSandboxOverride = typeof sandboxOverride === 'number' && sandboxOverride !== 0;
+        if (!hasSandboxOverride && projectPinnedAt > 0) {
+          nextStore[sandboxKey] = projectPinnedAt;
+        }
+        const inheritedPinnedAt = hasSandboxOverride
+          ? normalizePinnedAt(sandboxOverride)
+          : projectPinnedAt;
+        if (inheritedPinnedAt === 0) continue;
+        for (const sessionKey of sessionKeys) {
+          if (typeof nextStore[sessionKey] !== 'number') {
+            nextStore[sessionKey] = inheritedPinnedAt;
+          }
+        }
+      }
+      nextStore[migrationKey] = -1;
+    }
+
     for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
       for (const session of Object.values(sandbox.sessions)) {
         const key = pinnedSessionStoreKey(project.id, session.id);
@@ -146,7 +186,12 @@ export function reconcilePinnedSessionStore(
   }
 
   Object.keys(nextStore).forEach((key) => {
-    if (key.startsWith('project:') || key.startsWith('sandbox:')) {
+    if (
+      key.startsWith('project:')
+      || key.startsWith('repo:')
+      || key.startsWith('sandbox:')
+      || key.startsWith(PIN_HIERARCHY_MIGRATION_PREFIX)
+    ) {
       return;
     }
     if (!activeSessionKeys.has(key)) {

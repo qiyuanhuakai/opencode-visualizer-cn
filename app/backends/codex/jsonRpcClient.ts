@@ -51,7 +51,9 @@ export type CodexWebSocketConstructor = new (
 
 export type CodexJsonRpcClientOptions = {
   url: string;
+  connectionLabel?: string;
   protocols?: string | string[];
+  jsonRpcVersion?: '2.0';
   requestTimeoutMs?: number;
   webSocketCtor?: CodexWebSocketConstructor;
 };
@@ -86,7 +88,9 @@ function redactUrl(value: string) {
   }
 }
 
-function parseIncomingMessage(raw: string): CodexJsonRpcResponse | CodexJsonRpcNotification | CodexJsonRpcServerRequest | null {
+function parseIncomingMessage(
+  raw: string,
+): CodexJsonRpcResponse | CodexJsonRpcNotification | CodexJsonRpcServerRequest | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -133,21 +137,27 @@ function parseIncomingMessage(raw: string): CodexJsonRpcResponse | CodexJsonRpcN
 
 export class CodexJsonRpcClient {
   private readonly url: string;
+  private readonly connectionLabel: string;
   private readonly protocols?: string | string[];
   private readonly requestTimeoutMs: number;
   private readonly webSocketCtor?: CodexWebSocketConstructor;
+  private readonly jsonRpcVersion?: '2.0';
   private socket: CodexWebSocket | null = null;
   private connectPromise: Promise<void> | null = null;
   private nextId = 1;
   private readonly pending = new Map<CodexJsonRpcId, PendingRequest>();
-  private readonly notificationHandlers = new Set<(notification: CodexJsonRpcNotification) => void>();
+  private readonly notificationHandlers = new Set<
+    (notification: CodexJsonRpcNotification) => void
+  >();
   private readonly serverRequestHandlers = new Set<(request: CodexJsonRpcServerRequest) => void>();
 
   constructor(options: CodexJsonRpcClientOptions) {
     this.url = options.url;
+    this.connectionLabel = options.connectionLabel ?? 'Codex';
     this.protocols = options.protocols;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.webSocketCtor = options.webSocketCtor;
+    this.jsonRpcVersion = options.jsonRpcVersion;
   }
 
   isConnected() {
@@ -159,7 +169,8 @@ export class CodexJsonRpcClient {
     if (this.connectPromise) return this.connectPromise;
 
     const WebSocketCtor: CodexWebSocketConstructor | undefined =
-      this.webSocketCtor ?? (globalThis.WebSocket as unknown as CodexWebSocketConstructor | undefined);
+      this.webSocketCtor ??
+      (globalThis.WebSocket as unknown as CodexWebSocketConstructor | undefined);
     if (!WebSocketCtor) {
       return Promise.reject(new Error('WebSocket is not available in this environment.'));
     }
@@ -187,14 +198,18 @@ export class CodexJsonRpcClient {
       });
 
       socket.addEventListener('error', () => {
-        settle(() => reject(new Error(`Codex WebSocket connection failed: ${safeUrl}`)));
+        settle(() =>
+          reject(new Error(`${this.connectionLabel} WebSocket connection failed: ${safeUrl}`)),
+        );
       });
 
       socket.addEventListener('close', (event) => {
         const reason = event.reason ? `: ${event.reason}` : '';
-        this.rejectAllPending(new Error(`Codex WebSocket closed${reason}`));
+        this.rejectAllPending(new Error(`${this.connectionLabel} WebSocket closed${reason}`));
         if (this.socket === socket) this.socket = null;
-        settle(() => reject(new Error(`Codex WebSocket closed before opening${reason}`)));
+        settle(() =>
+          reject(new Error(`${this.connectionLabel} WebSocket closed before opening${reason}`)),
+        );
       });
     });
 
@@ -205,7 +220,7 @@ export class CodexJsonRpcClient {
     const socket = this.socket;
     this.socket = null;
     this.connectPromise = null;
-    this.rejectAllPending(new Error('Codex WebSocket disconnected.'));
+    this.rejectAllPending(new Error(`${this.connectionLabel} WebSocket disconnected.`));
     if (socket && socket.readyState !== 3) {
       socket.close();
     }
@@ -230,13 +245,13 @@ export class CodexJsonRpcClient {
     const id = this.nextId;
     this.nextId += 1;
 
-    const message: Record<string, unknown> = { id, method };
+    const message: Record<string, unknown> = this.withVersion({ id, method });
     if (params !== undefined) message.params = params;
 
     return new Promise<T>((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Codex JSON-RPC request timed out: ${method}`));
+        reject(new Error(`${this.connectionLabel} JSON-RPC request timed out: ${method}`));
       }, this.requestTimeoutMs);
 
       this.pending.set(id, {
@@ -257,20 +272,32 @@ export class CodexJsonRpcClient {
 
   notify(method: string, params?: unknown) {
     const socket = this.requireOpenSocket();
-    const message: Record<string, unknown> = { method };
+    const message: Record<string, unknown> = this.withVersion({ method });
     if (params !== undefined) message.params = params;
     socket.send(JSON.stringify(message));
   }
 
   respond(id: CodexJsonRpcId, result: unknown) {
     const socket = this.requireOpenSocket();
-    socket.send(JSON.stringify({ id, result }));
+    socket.send(JSON.stringify(this.withVersion({ id, result })));
+  }
+
+  respondError(id: CodexJsonRpcId, code: number, message: string, data?: unknown) {
+    const socket = this.requireOpenSocket();
+    const error: Record<string, unknown> = { code, message };
+    if (data !== undefined) error.data = data;
+    socket.send(JSON.stringify(this.withVersion({ id, error })));
+  }
+
+  private withVersion(message: Record<string, unknown>) {
+    if (!this.jsonRpcVersion) return message;
+    return { jsonrpc: this.jsonRpcVersion, ...message };
   }
 
   private requireOpenSocket() {
     const socket = this.socket;
     if (!socket || socket.readyState !== 1) {
-      throw new Error('Codex JSON-RPC client is not connected.');
+      throw new Error(`${this.connectionLabel} JSON-RPC client is not connected.`);
     }
     return socket;
   }
@@ -293,11 +320,9 @@ export class CodexJsonRpcClient {
       clearTimeout(pending.timeoutId);
 
       if (message.error) {
-        pending.reject(new CodexJsonRpcError(
-          message.error.code,
-          message.error.message,
-          message.error.data,
-        ));
+        pending.reject(
+          new CodexJsonRpcError(message.error.code, message.error.message, message.error.data),
+        );
         return;
       }
 

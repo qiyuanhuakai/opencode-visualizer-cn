@@ -33,16 +33,24 @@
 
     <div class="permission-body">
       <div class="permission-section">
-        <div class="section-title">{{ $t('toolWindow.permission.patternsTitle') }} ({{ request.patterns.length }})</div>
+        <div class="section-title">
+          {{ $t('toolWindow.permission.patternsTitle') }} ({{ request.patterns.length }})
+        </div>
         <ul class="pattern-list">
           <li v-for="pattern in request.patterns" :key="pattern">{{ pattern }}</li>
-          <li v-if="request.patterns.length === 0" class="empty">{{ $t('toolWindow.permission.none') }}</li>
+          <li v-if="request.patterns.length === 0" class="empty">
+            {{ $t('toolWindow.permission.none') }}
+          </li>
         </ul>
       </div>
 
       <div class="permission-section">
-        <div class="section-title">{{ $t('toolWindow.permission.metadataTitle') }} ({{ metadataEntries.length }})</div>
-        <div v-if="metadataEntries.length === 0" class="empty">{{ $t('toolWindow.permission.none') }}</div>
+        <div class="section-title">
+          {{ $t('toolWindow.permission.metadataTitle') }} ({{ metadataEntries.length }})
+        </div>
+        <div v-if="metadataEntries.length === 0" class="empty">
+          {{ $t('toolWindow.permission.none') }}
+        </div>
         <div v-for="entry in metadataEntries" :key="entry[0]" class="metadata-row">
           <div class="metadata-key">{{ entry[0] }}</div>
           <div class="metadata-value">{{ formatInlineValue(entry[1]) }}</div>
@@ -50,7 +58,9 @@
       </div>
 
       <div v-if="request.always.length > 0" class="permission-section">
-        <div class="section-title">{{ $t('toolWindow.permission.alwaysAllow') }} ({{ request.always.length }})</div>
+        <div class="section-title">
+          {{ $t('toolWindow.permission.alwaysAllow') }} ({{ request.always.length }})
+        </div>
         <ul class="pattern-list">
           <li v-for="pattern in request.always" :key="pattern">{{ pattern }}</li>
         </ul>
@@ -69,6 +79,7 @@
         {{ $t('toolWindow.permission.once') }}
       </button>
       <button
+        v-if="request.always.length > 0"
         type="button"
         class="permission-button is-always"
         :disabled="isSubmitting"
@@ -176,10 +187,15 @@ function emitReply(reply: PermissionReply) {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  border: 1px solid color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 58%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 58%, transparent);
   border-radius: 8px;
   padding: 6px 8px;
-  background: color-mix(in srgb, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)) 35%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-surface-panel, rgba(15, 23, 42, 0.92)) 35%,
+    transparent
+  );
 }
 
 .permission-row {
@@ -218,10 +234,15 @@ function emitReply(reply: PermissionReply) {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border: 1px solid color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 58%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 58%, transparent);
   border-radius: 8px;
   padding: 6px 8px;
-  background: color-mix(in srgb, var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.98)) 45%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-surface-panel-elevated, rgba(15, 23, 42, 0.98)) 45%,
+    transparent
+  );
 }
 
 .section-title {
@@ -279,7 +300,8 @@ function emitReply(reply: PermissionReply) {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  border-top: 1px solid color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 70%, transparent);
+  border-top: 1px solid
+    color-mix(in srgb, var(--theme-border-muted, rgba(148, 163, 184, 0.35)) 70%, transparent);
   padding-top: 8px;
 }
 

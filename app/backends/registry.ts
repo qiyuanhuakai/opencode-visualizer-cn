@@ -1,19 +1,43 @@
 import { createOpenCodeAdapter } from './openCodeAdapter';
 import { createCodexAdapter } from './codex/codexAdapter';
 import { appendCodexBridgeToken } from './codex/bridgeUrl';
+import { createAcpAdapter } from './acp/acpAdapter';
+import { acpBridgeWebSocketUrl, normalizeAcpBridgeUrl } from './acp/bridgeUrl';
 import type { BackendAdapter, BackendKind } from './types';
-import { StorageKeys, storageGet, storageRemove, storageSet } from '../utils/storageKeys';
+import { StorageKeys, storageGet } from '../utils/storageKeys';
 
 export const DEFAULT_CODEX_BRIDGE_URL = 'ws://localhost:23004/codex';
+export const DEFAULT_ACP_BRIDGE_URL = 'ws://localhost:23004';
 
 export function getPersistedCodexBridgeUrl() {
   const value = storageGet(StorageKeys.auth.codexBridgeUrl)?.trim();
   return value || DEFAULT_CODEX_BRIDGE_URL;
 }
 
+export function getPersistedAcpBridgeUrl() {
+  const value = storageGet(StorageKeys.auth.acpBridgeUrl)?.trim();
+  if (value) return normalizeAcpBridgeUrl(value);
+  if (storageGet(StorageKeys.auth.backendKind) !== 'acp') return DEFAULT_ACP_BRIDGE_URL;
+  const legacyValue = storageGet(StorageKeys.auth.codexBridgeUrl)?.trim();
+  return legacyValue ? normalizeAcpBridgeUrl(legacyValue) : DEFAULT_ACP_BRIDGE_URL;
+}
+
 export function getPersistedCodexBridgeToken() {
   return storageGet(StorageKeys.auth.codexBridgeToken) ?? '';
 }
+
+export function getPersistedAcpBridgeToken() {
+  const value = storageGet(StorageKeys.auth.acpBridgeToken);
+  if (value !== null) return value;
+  return storageGet(StorageKeys.auth.backendKind) === 'acp' ? getPersistedCodexBridgeToken() : '';
+}
+
+export function getPersistedAcpAgentId() {
+  return storageGet(StorageKeys.auth.acpAgentId)?.trim() ?? '';
+}
+
+let acpAdapter: ReturnType<typeof createAcpAdapter> | undefined;
+let acpAdapterKey = '';
 
 let adapters: Record<BackendKind, BackendAdapter | undefined> = {
   opencode: createOpenCodeAdapter(),
@@ -21,6 +45,7 @@ let adapters: Record<BackendKind, BackendAdapter | undefined> = {
     url: appendCodexBridgeToken(getPersistedCodexBridgeUrl(), getPersistedCodexBridgeToken()),
     experimentalApi: true,
   }),
+  acp: acpAdapter,
 };
 
 let activeBackendKind: BackendKind = 'opencode';
@@ -55,9 +80,6 @@ export function configureCodexBackend(options: { bridgeUrl: string; bridgeToken?
     throw new Error('Codex bridge URL is required.');
   }
   const bridgeToken = options.bridgeToken?.trim() ?? '';
-  storageSet(StorageKeys.auth.codexBridgeUrl, bridgeUrl);
-  if (bridgeToken) storageSet(StorageKeys.auth.codexBridgeToken, bridgeToken);
-  else storageRemove(StorageKeys.auth.codexBridgeToken);
   adapters = {
     ...adapters,
     codex: createCodexAdapter({
@@ -65,6 +87,37 @@ export function configureCodexBackend(options: { bridgeUrl: string; bridgeToken?
       experimentalApi: true,
     }),
   };
+}
+
+export function configureAcpBackend(options: {
+  bridgeUrl: string;
+  bridgeToken?: string;
+  agentId: string;
+}) {
+  const bridgeUrl = options.bridgeUrl.trim();
+  if (!bridgeUrl) throw new Error('ACP bridge URL is required.');
+  const agentId = options.agentId.trim();
+  if (!agentId) throw new Error('ACP agent ID is required.');
+  const bridgeToken = options.bridgeToken?.trim() ?? '';
+  const nextKey = JSON.stringify([bridgeUrl, bridgeToken, agentId]);
+  if (acpAdapter && acpAdapterKey === nextKey) return acpAdapter;
+  acpAdapter?.disconnect();
+  acpAdapter = createAcpAdapter({
+    url: acpBridgeWebSocketUrl(bridgeUrl, agentId, bridgeToken),
+    bridgeUrl,
+    bridgeToken,
+    agentId,
+  });
+  acpAdapterKey = nextKey;
+  adapters = {
+    ...adapters,
+    acp: acpAdapter,
+  };
+  return acpAdapter;
+}
+
+export function disconnectAcpBackend() {
+  acpAdapter?.disconnect();
 }
 
 export function getBackendAdapter(kind: BackendKind) {
