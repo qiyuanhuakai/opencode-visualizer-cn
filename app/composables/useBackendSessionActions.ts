@@ -64,7 +64,6 @@ type CodexApiLike = {
   archiveThread: (sessionId: string) => Promise<unknown>;
   hideThread: (sessionId: string) => void;
   unhideThread: (sessionId: string) => void;
-  unarchiveThread: (sessionId: string) => Promise<unknown>;
   setThreadName: (sessionId: string, name: string) => Promise<unknown>;
   forkThread: (sessionId: string) => Promise<{ id?: string }>;
   rollbackThread: (sessionId: string, numTurns?: number) => Promise<{ id?: string }>;
@@ -248,15 +247,13 @@ export function useBackendSessionActions(params: {
         return;
       }
       if (params.activeBackendKind.value === 'codex') {
-        if (params.codexApi.hiddenThreadIds.value.has(sessionId)) {
-          params.codexApi.unhideThread(sessionId);
-          params.selectedProjectId.value = params.codexProjectId;
-          params.selectedSessionId.value = sessionId;
-          await params.codexApi.selectThread(sessionId);
-        } else {
-          await params.codexApi.unarchiveThread(sessionId);
-          params.selectedSessionId.value = params.codexApi.activeThreadId.value || sessionId;
+        if (!params.codexApi.hiddenThreadIds.value.has(sessionId)) {
+          throw new Error('Codex recoverable archive not found.');
         }
+        params.codexApi.unhideThread(sessionId);
+        params.selectedProjectId.value = params.codexProjectId;
+        params.selectedSessionId.value = sessionId;
+        await params.codexApi.selectThread(sessionId);
         return;
       }
       const { projectId, directory } = params.resolveSessionOperationPayload(
@@ -286,8 +283,9 @@ export function useBackendSessionActions(params: {
     if (!params.ensureConnectionReady(params.translate('app.actions.renamingSession'))) return;
     params.clearSessionError();
     if (!sessionId) return;
+    const backendKind = params.activeBackendKind.value;
     try {
-      if (params.activeBackendKind.value === 'acp') {
+      if (backendKind === 'acp') {
         throw new Error('ACP agent does not support session/set_name.');
       }
       const resolved = params.findSessionInProjects(sessionId);
@@ -298,9 +296,10 @@ export function useBackendSessionActions(params: {
         currentTitle,
       );
       if (nextTitle === null) return;
+      if (params.activeBackendKind.value !== backendKind) return;
       const trimmedTitle = nextTitle.trim();
       if (!trimmedTitle || trimmedTitle === currentTitle) return;
-      if (params.activeBackendKind.value === 'codex') {
+      if (backendKind === 'codex') {
         await params.codexApi.setThreadName(sessionId, trimmedTitle);
         return;
       }
@@ -526,6 +525,7 @@ export function useBackendSessionActions(params: {
   async function compactSession(sessionId: string) {
     if (params.activeBackendKind.value !== 'codex' || !sessionId) return;
     const confirmed = await params.showConfirm(params.translate('codexPanel.compactThreadConfirm'));
+    if (params.activeBackendKind.value !== 'codex') return;
     if (!confirmed) return;
     params.clearSessionError();
     try {
