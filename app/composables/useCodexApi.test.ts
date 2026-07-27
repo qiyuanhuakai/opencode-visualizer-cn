@@ -1,12 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
 import type { CodexAdapter, CodexPromptResult } from '../backends/codex/codexAdapter';
-import type { CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
-import { StorageKeys, storageGet, storageKey } from '../utils/storageKeys';
+import type { CodexJsonRpcId, CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
+import { StorageKeys, storageGet, storageGetJSON, storageKey } from '../utils/storageKeys';
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
 
 function createAdapterMock() {
   let notificationHandler: ((notification: CodexJsonRpcNotification) => void) | null = null;
-  let serverRequestHandler: ((request: { id: string; method: string; params?: unknown }) => void) | null = null;
+  let serverRequestHandler: ((request: { id: CodexJsonRpcId; method: string; params?: unknown }) => void) | null = null;
   const adapter = {
     initialize: vi.fn().mockResolvedValue({ userAgent: 'codex-test' }),
     disconnect: vi.fn(),
@@ -16,7 +24,7 @@ function createAdapterMock() {
         notificationHandler = null;
       });
     }),
-    onServerRequest: vi.fn((handler: (request: { id: string; method: string; params?: unknown }) => void) => {
+    onServerRequest: vi.fn((handler: (request: { id: CodexJsonRpcId; method: string; params?: unknown }) => void) => {
       serverRequestHandler = handler;
       return vi.fn(() => {
         serverRequestHandler = null;
@@ -45,7 +53,6 @@ function createAdapterMock() {
     resumeThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     setThreadName: vi.fn().mockResolvedValue({}),
     archiveThread: vi.fn().mockResolvedValue({}),
-    unarchiveThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     unsubscribeThread: vi.fn().mockResolvedValue({}),
     interruptTurn: vi.fn().mockResolvedValue({}),
     forkThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_fork', preview: '' } }),
@@ -53,6 +60,26 @@ function createAdapterMock() {
     readDirectory: vi.fn().mockResolvedValue({ entries: [{ name: 'file.txt', type: 'file' }] }),
     readFile: vi.fn().mockResolvedValue({ dataBase64: 'aGVsbG8=' }),
     listCollaborationModes: vi.fn().mockResolvedValue({ data: [] }),
+    getThreadGoal: vi.fn().mockResolvedValue({ goal: null }),
+    setThreadGoal: vi.fn(),
+    clearThreadGoal: vi.fn(),
+    readAccountUsage: vi.fn().mockResolvedValue({
+      summary: {
+        lifetimeTokens: null,
+        peakDailyTokens: null,
+        longestRunningTurnSec: null,
+        currentStreakDays: null,
+        longestStreakDays: null,
+      },
+      dailyUsageBuckets: null,
+    }),
+    readModelProviderCapabilities: vi.fn().mockResolvedValue({
+      namespaceTools: false,
+      imageGeneration: false,
+      webSearch: false,
+    }),
+    listPermissionProfiles: vi.fn().mockResolvedValue({ data: [], nextCursor: null }),
+    listLoadedThreads: vi.fn().mockResolvedValue({ data: ['thr_existing'] }),
     respondToServerRequest: vi.fn(),
     sendPrompt: vi.fn().mockResolvedValue({
       threadId: 'thr_existing',
@@ -65,7 +92,7 @@ function createAdapterMock() {
     emit(notification: CodexJsonRpcNotification) {
       notificationHandler?.(notification);
     },
-    emitServerRequest(request: { id: string; method: string; params?: unknown }) {
+    emitServerRequest(request: { id: CodexJsonRpcId; method: string; params?: unknown }) {
       serverRequestHandler?.(request);
     },
   };
@@ -96,6 +123,359 @@ describe('useCodexApi', () => {
     expect(api.threads.value).toEqual([{ id: 'thr_existing', preview: 'Existing thread' }]);
     expect(api.activeThreadId.value).toBe('thr_existing');
     expect(phases).toEqual(['home', 'handshake', 'threads', 'workspace', 'panelData']);
+  });
+
+  it('loads runtime inspector data through capability-tracked composable methods', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.getThreadGoal = vi.fn().mockResolvedValue({
+      goal: {
+        threadId: 'thr_existing',
+        objective: 'Ship the integration',
+        status: 'active',
+        tokenBudget: 1000,
+        tokensUsed: 50,
+        timeUsedSeconds: 12,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    });
+    mock.adapter.readAccountUsage = vi.fn().mockResolvedValue({
+      summary: {
+        lifetimeTokens: 100,
+        peakDailyTokens: 20,
+        longestRunningTurnSec: 12,
+        currentStreakDays: 3,
+        longestStreakDays: 7,
+      },
+      dailyUsageBuckets: [{ startDate: '2026-07-26', tokens: 20 }],
+    });
+    mock.adapter.readModelProviderCapabilities = vi.fn().mockResolvedValue({
+      namespaceTools: true,
+      imageGeneration: false,
+      webSearch: true,
+    });
+    mock.adapter.listPermissionProfiles = vi.fn().mockResolvedValue({
+      data: [{ id: 'default', description: 'Default profile' }],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    await Promise.all([
+      api.refreshThreadGoal('thr_existing'),
+      api.refreshAccountUsage(),
+      api.refreshModelProviderCapabilities(),
+      api.refreshPermissionProfiles('/workspace'),
+      api.refreshLoadedThreads(),
+    ]);
+
+    expect(api.threadGoal.value?.objective).toBe('Ship the integration');
+    expect(api.accountUsage.value?.summary.lifetimeTokens).toBe(100);
+    expect(api.modelProviderCapabilities.value).toEqual({
+      namespaceTools: true,
+      imageGeneration: false,
+      webSearch: true,
+    });
+    expect(api.permissionProfiles.value).toEqual([
+      { id: 'default', description: 'Default profile' },
+    ]);
+    expect(api.runtimeCapabilities.value).toMatchObject({
+      'thread/goal/get': 'supported',
+      'account/usage/read': 'supported',
+      'modelProvider/capabilities/read': 'supported',
+      'permissionProfile/list': 'supported',
+      'thread/loaded/list': 'supported',
+    });
+  });
+
+  it('keeps the selected thread goal when an older goal read resolves last', async () => {
+    const mock = createAdapterMock();
+    const staleGoal = deferred<{
+      goal: {
+        threadId: string;
+        objective: string;
+        status: 'active';
+        tokenBudget: null;
+        tokensUsed: number;
+        timeUsedSeconds: number;
+        createdAt: number;
+        updatedAt: number;
+      };
+    }>();
+    mock.adapter.getThreadGoal = vi.fn((params: { threadId: string }) => (
+      params.threadId === 'thr_existing'
+        ? staleGoal.promise
+        : Promise.resolve({
+          goal: {
+            threadId: params.threadId,
+            objective: 'Current goal',
+            status: 'active' as const,
+            tokenBudget: null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        })
+    ));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    const staleRefresh = api.refreshThreadGoal('thr_existing');
+    await api.selectThread('thr_current');
+    await api.refreshThreadGoal('thr_current');
+    staleGoal.resolve({
+      goal: {
+        threadId: 'thr_existing',
+        objective: 'Stale goal',
+        status: 'active',
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    });
+    await staleRefresh;
+
+    expect(api.threadGoal.value).toMatchObject({
+      threadId: 'thr_current',
+      objective: 'Current goal',
+    });
+  });
+
+  it('keeps the newest goal refresh for the selected thread', async () => {
+    const mock = createAdapterMock();
+    const staleGoal = deferred<{ goal: null }>();
+    mock.adapter.getThreadGoal = vi.fn()
+      .mockImplementationOnce(() => staleGoal.promise)
+      .mockResolvedValueOnce({
+        goal: {
+          threadId: 'thr_existing',
+          objective: 'Current goal',
+          status: 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    const staleRefresh = api.refreshThreadGoal('thr_existing');
+    await api.refreshThreadGoal('thr_existing');
+    staleGoal.resolve({ goal: null });
+    await staleRefresh;
+
+    expect(api.threadGoal.value?.objective).toBe('Current goal');
+  });
+
+  it('keeps live plans owned by their source thread', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    mock.emit({
+      method: 'turn/plan/updated',
+      params: {
+        threadId: 'thr_existing',
+        turnId: 'turn-1',
+        explanation: 'Implementation plan',
+        plan: [{ step: 'Probe runtime', status: 'completed' }],
+      },
+    });
+
+    expect(api.planItems.value).toEqual([
+      {
+        threadId: 'thr_existing',
+        turnId: 'turn-1',
+        explanation: 'Implementation plan',
+        plan: [{ step: 'Probe runtime', status: 'completed' }],
+      },
+    ]);
+  });
+
+  it('preserves each plugin marketplace locator when flattening plugin lists', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listPlugins = vi.fn().mockResolvedValue({
+      marketplaces: [{
+        name: 'local-marketplace',
+        path: '/repo/.agents/plugins/marketplace.json',
+        plugins: [{ id: 'demo', name: 'demo', isAccessible: true, isEnabled: false, source: { type: 'local', path: '/repo/plugins/demo' } }],
+      }],
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    await api.refreshPlugins();
+
+    expect(api.plugins.value).toEqual([expect.objectContaining({
+      id: 'demo',
+      marketplaceName: 'local-marketplace',
+      marketplacePath: '/repo/.agents/plugins/marketplace.json',
+    })]);
+  });
+
+  it('keeps the newest plugin refresh when an older request resolves last', async () => {
+    const mock = createAdapterMock();
+    const stalePlugins = deferred<{
+      marketplaces: Array<{
+        name: string;
+        path: string;
+        plugins: Array<{
+          id: string;
+          name: string;
+          isAccessible: boolean;
+          isEnabled: boolean;
+          source: { type: 'local'; path: string };
+        }>;
+      }>;
+    }>();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.adapter.listPlugins = vi.fn()
+      .mockImplementationOnce(() => stalePlugins.promise)
+      .mockResolvedValueOnce({
+        marketplaces: [{
+          name: 'current-marketplace',
+          path: '/current/marketplace.json',
+          plugins: [{ id: 'current', name: 'current', isAccessible: true, isEnabled: true, source: { type: 'local', path: '/current' } }],
+        }],
+      });
+
+    const staleRefresh = api.refreshPlugins();
+    await api.refreshPlugins();
+    stalePlugins.resolve({
+      marketplaces: [{
+        name: 'stale-marketplace',
+        path: '/stale/marketplace.json',
+        plugins: [{ id: 'stale', name: 'stale', isAccessible: true, isEnabled: false, source: { type: 'local', path: '/stale' } }],
+      }],
+    });
+    await staleRefresh;
+
+    expect(api.plugins.value.map((plugin) => plugin.id)).toEqual(['current']);
+  });
+
+  it('resolves connection once threads are ready without waiting for panel catalog hydration', async () => {
+    const mock = createAdapterMock();
+    let resolveModels: ((value: { data: []; nextCursor: null }) => void) | undefined;
+    mock.adapter.listModels = vi.fn(() => new Promise<{ data: []; nextCursor: null }>((resolve) => {
+      resolveModels = resolve;
+    }));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    let connected = false;
+
+    const connection = api.connect().then(() => {
+      connected = true;
+    });
+    await vi.waitFor(() => expect(mock.adapter.listThreads).toHaveBeenCalled());
+    await Promise.resolve();
+
+    expect(api.threads.value).toEqual([{ id: 'thr_existing', preview: 'Existing thread' }]);
+    expect(connected).toBe(true);
+
+    resolveModels?.({ data: [], nextCursor: null });
+    await connection;
+  });
+
+  it('lists threads without waiting for a cold config/read request', async () => {
+    const mock = createAdapterMock();
+    const pendingConfig = deferred<{ config: Record<string, unknown> }>();
+    mock.adapter.readConfig = vi.fn(() => pendingConfig.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    let connected = false;
+
+    void api.connect().then(() => {
+      connected = true;
+    });
+    await vi.waitFor(() => expect(mock.adapter.listThreads).toHaveBeenCalled());
+
+    expect(connected).toBe(true);
+    expect(api.status.value).toBe('connected');
+    pendingConfig.resolve({ config: {} });
+  });
+
+  it('keeps the newest account refresh when an older preload resolves last', async () => {
+    const mock = createAdapterMock();
+    const staleAccount = deferred<{ account: null }>();
+    mock.adapter.readAccount = vi.fn()
+      .mockImplementationOnce(() => staleAccount.promise)
+      .mockResolvedValueOnce({ account: { type: 'chatgpt', email: 'current@example.com' } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await vi.waitFor(() => expect(mock.adapter.readAccount).toHaveBeenCalledTimes(1));
+    await api.refreshAccount();
+    staleAccount.resolve({ account: null });
+    await vi.waitFor(() => expect(mock.adapter.readAccount).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+
+    expect(api.account.value).toEqual({ type: 'chatgpt', email: 'current@example.com' });
+  });
+
+  it('ignores panel preload results from a disconnected adapter', async () => {
+    const firstMock = createAdapterMock();
+    const secondMock = createAdapterMock();
+    const staleModels = deferred<Awaited<ReturnType<CodexAdapter['listModels']>>>();
+    firstMock.adapter.listModels = vi.fn(() => staleModels.promise);
+    secondMock.adapter.listModels = vi.fn().mockResolvedValue({
+      data: [{ id: 'current-model', model: 'current-model', displayName: 'Current model' }],
+      nextCursor: null,
+    });
+    let connection = 0;
+    const api = useCodexApi({
+      adapterFactory: () => {
+        connection += 1;
+        return connection === 1 ? firstMock.adapter : secondMock.adapter;
+      },
+    });
+
+    await api.connect();
+    await vi.waitFor(() => expect(firstMock.adapter.listModels).toHaveBeenCalled());
+    await api.connect();
+    await vi.waitFor(() => expect(api.models.value.map((model) => model.id)).toEqual(['current-model']));
+
+    staleModels.resolve({
+      data: [{ id: 'stale-model', model: 'stale-model', displayName: 'Stale model' }],
+      nextCursor: null,
+    });
+    await Promise.resolve();
+
+    expect(api.models.value.map((model) => model.id)).toEqual(['current-model']);
+  });
+
+  it('ignores a stale home directory response when the same adapter reconnects', async () => {
+    const mock = createAdapterMock();
+    const staleHome = deferred<Response>();
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => staleHome.promise)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ home: '/current-home' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    try {
+      const staleConnection = api.connect();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      await api.connect();
+      expect(api.homeDir.value).toBe('/current-home');
+
+      staleHome.resolve(new Response(JSON.stringify({ home: '/stale-home' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+      await staleConnection;
+
+      expect(api.homeDir.value).toBe('/current-home');
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
   });
 
   it('sends Codex image input items without degrading them to file text', async () => {
@@ -148,30 +528,20 @@ describe('useCodexApi', () => {
     });
   });
 
-  it('lists archived threads without replacing the active thread list', async () => {
+  it('never requests native archived threads through the VIS session refresh flow', async () => {
     const mock = createAdapterMock();
-    mock.adapter.listThreads = vi.fn()
-      .mockResolvedValueOnce({
-        data: [{ id: 'thr_active', preview: 'Active thread' }],
-        nextCursor: null,
-      })
-      .mockResolvedValueOnce({
-        data: [{ id: 'thr_archived', preview: 'Archived thread' }],
-        nextCursor: null,
-      });
+    const listThreadsMock = vi.fn().mockResolvedValue({
+      data: [{ id: 'thr_active', preview: 'Active thread' }],
+      nextCursor: null,
+    });
+    mock.adapter.listThreads = listThreadsMock;
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
-    const archived = await api.listThreads({ archived: true });
+    await api.refreshThreads();
 
-    expect(archived.map((thread) => thread.id)).toEqual(['thr_archived']);
     expect(api.threads.value.map((thread) => thread.id)).toEqual(['thr_active']);
-    expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(2, {
-      limit: 50,
-      sortKey: 'updated_at',
-      modelProviders: null,
-      archived: true,
-    });
+    expect(listThreadsMock).not.toHaveBeenCalledWith(expect.objectContaining({ archived: true }));
   });
 
   it('requests all Codex model providers when refreshing threads', async () => {
@@ -204,7 +574,9 @@ describe('useCodexApi', () => {
 
     await api.connect();
 
-    expect(api.threads.value.map((thread) => thread.id)).toEqual(['official', 'custom-null', 'custom-explicit']);
+    await vi.waitFor(() => {
+      expect(api.threads.value.map((thread) => thread.id)).toEqual(['official', 'custom-null', 'custom-explicit']);
+    });
     expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(1, {
       limit: 50,
       sortKey: 'updated_at',
@@ -220,6 +592,91 @@ describe('useCodexApi', () => {
       sortKey: 'updated_at',
       modelProviders: ['omniroute'],
     });
+  });
+
+  it('ignores provider discovery from an older connection generation when the adapter is reused', async () => {
+    const mock = createAdapterMock();
+    const staleProviderConfig = deferred<Awaited<ReturnType<CodexAdapter['readConfig']>>>();
+    const stalePanelConfig = deferred<Awaited<ReturnType<CodexAdapter['readConfig']>>>();
+    const currentConfig = {
+      config: {
+        model_provider: 'current',
+        model_providers: { current: { name: 'Current' } },
+      },
+    };
+    mock.adapter.readConfig = vi.fn()
+      .mockImplementationOnce(() => staleProviderConfig.promise)
+      .mockImplementationOnce(() => stalePanelConfig.promise)
+      .mockResolvedValue(currentConfig);
+    let baseListCount = 0;
+    mock.adapter.listThreads = vi.fn(({ modelProviders }: { modelProviders?: string[] | null }) => {
+      if (modelProviders === null) {
+        baseListCount += 1;
+        const id = baseListCount === 1 ? 'first-base' : 'current-base';
+        return Promise.resolve({ data: [{ id, preview: id }], nextCursor: null });
+      }
+      const providerId = modelProviders?.[0] ?? 'unknown';
+      return Promise.resolve({
+        data: [{ id: `${providerId}-thread`, preview: providerId, modelProvider: providerId }],
+        nextCursor: null,
+      });
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await vi.waitFor(() => expect(mock.adapter.readConfig).toHaveBeenCalledTimes(2));
+    await api.connect();
+    await vi.waitFor(() => {
+      expect(api.config.value).toEqual(currentConfig);
+      expect(api.threads.value.map((thread) => thread.id)).toContain('current-thread');
+    });
+
+    staleProviderConfig.resolve({
+      config: {
+        model_provider: 'stale',
+        model_providers: { stale: { name: 'Stale' } },
+      },
+    });
+    stalePanelConfig.resolve({ config: { model_provider: 'stale-panel' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(api.config.value).toEqual(currentConfig);
+    expect(api.threads.value.map((thread) => thread.id)).not.toContain('stale-thread');
+  });
+
+  it('ignores stale thread enrichment after the same adapter reconnects', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const staleVcs = deferred<Awaited<ReturnType<CodexAdapter['getVcsInfo']>>>();
+    mock.adapter.getVcsInfo = vi.fn()
+      .mockImplementationOnce(() => staleVcs.promise)
+      .mockResolvedValue({ root: '/current', branch: 'main' });
+    mock.adapter.listThreads = vi.fn()
+      .mockResolvedValueOnce({
+        data: [{ id: 'stale-thread', preview: 'Stale', cwd: '/repo' }],
+        nextCursor: null,
+      })
+      .mockResolvedValue({
+        data: [{ id: 'current-thread', preview: 'Current', cwd: '/repo' }],
+        nextCursor: null,
+      });
+
+    const staleRefresh = api.refreshThreads({}, false);
+    await vi.waitFor(() => expect(mock.adapter.getVcsInfo).toHaveBeenCalledWith('/repo'));
+    const currentConnect = api.connect();
+    await vi.waitFor(() => expect(mock.adapter.getVcsInfo).toHaveBeenCalledTimes(2));
+    await currentConnect;
+    expect(api.threads.value.map((thread) => thread.id)).toContain('current-thread');
+    expect(api.threads.value.map((thread) => thread.id)).not.toContain('stale-thread');
+
+    staleVcs.resolve({ root: '/repo', branch: 'old' });
+    await staleRefresh;
+
+    expect(api.threads.value.map((thread) => thread.id)).toContain('current-thread');
+    expect(api.threads.value.map((thread) => thread.id)).not.toContain('stale-thread');
   });
 
   it('strips raw git remote URLs from loaded thread metadata', async () => {
@@ -276,6 +733,91 @@ describe('useCodexApi', () => {
     expect(api.activeThreadId.value).toBe('thr_empty');
     expect(api.canonicalHistory.value).toEqual([]);
     expect(api.errorMessage.value).toBe('');
+  });
+
+  it('keeps the newest thread selection when an older read resolves last', async () => {
+    const mock = createAdapterMock();
+    const threadA = deferred<Awaited<ReturnType<CodexAdapter['readThread']>>>();
+    mock.adapter.readThread = vi.fn((params: { threadId: string }) => {
+      if (params.threadId === 'thread-a') return threadA.promise;
+      return Promise.resolve({
+        thread: {
+          id: params.threadId,
+          turns: [{
+            id: `${params.threadId}:turn`,
+            items: [
+              { type: 'userMessage', id: `${params.threadId}:user`, content: [{ type: 'text', text: `${params.threadId} prompt` }] },
+              { type: 'agentMessage', id: `${params.threadId}:assistant`, text: `${params.threadId} answer` },
+            ],
+          }],
+        },
+      });
+    });
+    mock.adapter.resumeThread = vi.fn((params: { threadId: string }) => Promise.resolve({
+      thread: { id: params.threadId },
+    }));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    const selectingA = api.selectThread('thread-a');
+    await vi.waitFor(() => expect(mock.adapter.readThread).toHaveBeenCalledWith({
+      threadId: 'thread-a',
+      includeTurns: true,
+    }));
+    await api.selectThread('thread-b');
+
+    threadA.resolve({
+      thread: {
+        id: 'thread-a',
+        turns: [{
+          id: 'thread-a:turn',
+          items: [
+            { type: 'userMessage', id: 'thread-a:user', content: [{ type: 'text', text: 'thread-a prompt' }] },
+            { type: 'agentMessage', id: 'thread-a:assistant', text: 'thread-a answer' },
+          ],
+        }],
+      },
+    });
+    await selectingA;
+
+    expect(api.activeThreadId.value).toBe('thread-b');
+    expect(api.transcript.value.map((entry) => entry.text)).toEqual(['thread-b prompt', 'thread-b answer']);
+  });
+
+  it('persists a delayed completed item under its notification thread instead of the active thread', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thread-b');
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thread-a',
+        turnId: 'thread-a:turn',
+        item: {
+          id: 'thread-a:command',
+          type: 'commandExecution',
+          command: 'pwd',
+          cwd: '/repo-a',
+          status: 'completed',
+          aggregatedOutput: '/repo-a\n',
+        },
+      },
+    });
+
+    const threadAKey = `${StorageKeys.state.codexAuxiliaryHistory}.${encodeURIComponent('thread-a')}`;
+    const threadBKey = `${StorageKeys.state.codexAuxiliaryHistory}.${encodeURIComponent('thread-b')}`;
+    await vi.waitFor(() => {
+      const snapshot = storageGetJSON<{ entries?: Array<{ parts?: Array<{ id?: string }> }> }>(threadAKey);
+      expect(snapshot?.entries?.flatMap((entry) => entry.parts ?? []).map((part) => part.id)).toContain(
+        'thread-a:command',
+      );
+    });
+    expect(storageGetJSON(threadBKey)).toBeNull();
+    expect(api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id)).not.toContain(
+      'thread-a:command',
+    );
   });
 
   it('keeps the requested cwd when a newly started thread omits cwd', async () => {
@@ -675,7 +1217,9 @@ describe('useCodexApi', () => {
 
     api.resolveServerRequest('approval-1', 'accept');
 
-    expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith('approval-1', 'accept');
+    expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith('approval-1', {
+      decision: 'accept',
+    });
     expect(api.serverRequests.value).toEqual([]);
   });
 
@@ -776,6 +1320,82 @@ describe('useCodexApi', () => {
       expect.objectContaining({ role: 'user', text: 'thr_existing prompt' }),
       expect.objectContaining({ role: 'assistant', text: 'thr_existing answer' }),
     ]);
+  });
+
+  it('clears persisted auxiliary history when a thread is rolled back', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Create a cached tool turn.');
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+        item: {
+          id: 'rollback-command',
+          type: 'commandExecution',
+          command: 'pwd',
+          status: 'completed',
+          aggregatedOutput: '/repo\n',
+        },
+      },
+    });
+    const cacheKey = `${StorageKeys.state.codexAuxiliaryHistory}.${encodeURIComponent('thr_existing')}`;
+    await vi.waitFor(() => expect(storageGet(cacheKey)).not.toBeNull());
+
+    await api.rollbackThread('thr_existing', 1);
+
+    expect(storageGet(cacheKey)).toBeNull();
+    expect(api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id)).not.toContain(
+      'rollback-command',
+    );
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+        item: {
+          id: 'rollback-command-late',
+          type: 'commandExecution',
+          command: 'pwd',
+          status: 'completed',
+          aggregatedOutput: '/stale\n',
+        },
+      },
+    });
+
+    expect(storageGet(cacheKey)).toBeNull();
+    expect(api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id)).not.toContain(
+      'rollback-command-late',
+    );
+  });
+
+  it('ignores delayed items after rollback even when no turn notification arrived', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Rollback before notifications.');
+    await api.rollbackThread('thr_existing', 1);
+
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+        item: {
+          id: 'late-without-notification',
+          type: 'commandExecution',
+          command: 'pwd',
+          status: 'completed',
+          aggregatedOutput: '/stale\n',
+        },
+      },
+    });
+
+    const cacheKey = `${StorageKeys.state.codexAuxiliaryHistory}.${encodeURIComponent('thr_existing')}`;
+    expect(storageGet(cacheKey)).toBeNull();
   });
 
   it('locally hides threads with in-memory state', async () => {
@@ -1084,6 +1704,72 @@ describe('useCodexApi', () => {
     const toolPart = toolEntry?.parts.find((part) => part.id === 'cmd-1');
     expect(toolPart).toMatchObject({ type: 'tool', state: { status: 'completed' } });
     expect(toolPart).toMatchObject({ type: 'tool', state: { output: 'running outputfinal output' } });
+  });
+
+  it('restores persisted reasoning and non-web tool parts when server history omits them', async () => {
+    const firstMock = createAdapterMock();
+    const firstApi = useCodexApi({ adapterFactory: () => firstMock.adapter });
+    await firstApi.connect();
+    await firstApi.sendPrompt('Persist auxiliary history.');
+
+    firstMock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'reasoning-persisted',
+          type: 'reasoning',
+          summary: ['Inspecting the command'],
+          content: [],
+        },
+      },
+    });
+    firstMock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'command-persisted',
+          type: 'commandExecution',
+          command: 'pwd',
+          cwd: '/repo',
+          status: 'inProgress',
+        },
+      },
+    });
+    firstMock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'command-persisted',
+          type: 'commandExecution',
+          command: 'pwd',
+          cwd: '/repo',
+          status: 'completed',
+          aggregatedOutput: '/repo\n',
+        },
+      },
+    });
+
+    const cacheKey = 'state.codexAuxiliaryHistory.v1.thr_existing';
+    await vi.waitFor(() => {
+      const cached = storageGetJSON<{ entries?: Array<{ parts?: Array<{ id?: string }> }> }>(cacheKey);
+      expect(cached?.entries?.flatMap((entry) => entry.parts ?? []).map((part) => part.id)).toEqual(
+        expect.arrayContaining(['reasoning-persisted', 'command-persisted']),
+      );
+    });
+    firstApi.disconnect();
+
+    const secondMock = createAdapterMock();
+    const secondApi = useCodexApi({ adapterFactory: () => secondMock.adapter });
+    await secondApi.connect();
+    await secondApi.selectThread('thr_existing');
+
+    const restoredParts = secondApi.realtimeHistoryQueue.value.flatMap((entry) => entry.parts);
+    expect(restoredParts.filter((part) => part.id === 'reasoning-persisted')).toHaveLength(1);
+    expect(restoredParts.filter((part) => part.id === 'command-persisted')).toHaveLength(1);
+    expect(restoredParts.find((part) => part.id === 'command-persisted')).toMatchObject({
+      type: 'tool',
+      state: { status: 'completed', output: '/repo\n' },
+    });
   });
 
   it('maps failed tool completion to error state instead of leaving tool loading forever', async () => {
@@ -1545,6 +2231,259 @@ describe('useCodexApi', () => {
       const shared = api.threads.value.find((t) => t.id === 'thr_shared');
       expect(shared?.createdAt).toBe(900);
       expect(shared?.updatedAt).toBe(950);
+    });
+  });
+
+  describe('typed Codex server requests', () => {
+    it('queues and answers structured permission requests with the requested profile', async () => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      mock.emitServerRequest({
+        id: 7,
+        method: 'item/permissions/requestApproval',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          itemId: 'permission-item',
+          startedAtMs: 123,
+          cwd: '/repo',
+          reason: 'Need network access',
+          permissions: { network: { enabled: true } },
+        },
+      });
+
+      expect(api.permissionRequests.value).toHaveLength(1);
+      expect(api.permissionRequests.value[0]).toMatchObject({
+        dialogId: 'codex-permission:number:7',
+        sessionID: 'thr_existing',
+        requestedPermissions: { network: { enabled: true } },
+      });
+
+      api.replyPermissionRequest('codex-permission:number:7', 'always');
+
+      expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith(7, {
+        permissions: { network: { enabled: true } },
+        scope: 'session',
+      });
+      expect(api.permissionRequests.value).toEqual([]);
+    });
+
+    it('queues and answers MCP form elicitations without persisting answers', async () => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      mock.emitServerRequest({
+        id: 'elicitation-1',
+        method: 'mcpServer/elicitation/request',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          serverName: 'deployments',
+          mode: 'form',
+          message: 'Select target',
+          requestedSchema: {
+            type: 'object',
+            properties: { region: { type: 'string', enum: ['us', 'eu'] } },
+            required: ['region'],
+          },
+        },
+      });
+
+      expect(api.elicitationRequests.value[0]).toMatchObject({
+        mode: 'form',
+        dialogId: 'codex-elicitation:string:elicitation-1',
+        fields: [{ key: 'region', type: 'select', required: true }],
+      });
+
+      api.replyElicitationRequest('codex-elicitation:string:elicitation-1', 'accept', { region: 'eu' });
+
+      expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith('elicitation-1', {
+        action: 'accept',
+        content: { region: 'eu' },
+        _meta: null,
+      });
+      expect(api.elicitationRequests.value).toEqual([]);
+    });
+
+    it('clears pending structured requests on disconnect', async () => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      mock.emitServerRequest({
+        id: 'elicitation-2',
+        method: 'mcpServer/elicitation/request',
+        params: {
+          threadId: 'thr_existing',
+          turnId: null,
+          serverName: 'identity',
+          mode: 'url',
+          message: 'Authorize',
+          url: 'https://example.test',
+          elicitationId: 'external-1',
+        },
+      });
+      expect(api.elicitationRequests.value).toHaveLength(1);
+
+      api.disconnect();
+
+      expect(api.permissionRequests.value).toEqual([]);
+      expect(api.elicitationRequests.value).toEqual([]);
+    });
+
+    it('clears structured requests when the server resolves them', async () => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      mock.emitServerRequest({
+        id: 8,
+        method: 'item/permissions/requestApproval',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          itemId: 'permission-item',
+          cwd: '/repo',
+          permissions: { network: { enabled: true } },
+        },
+      });
+      mock.emitServerRequest({
+        id: 'elicitation-resolved',
+        method: 'mcpServer/elicitation/request',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          serverName: 'deployments',
+          mode: 'form',
+          message: 'Select target',
+          requestedSchema: { type: 'object', properties: {} },
+        },
+      });
+
+      mock.emit({ method: 'serverRequest/resolved', params: { requestId: 8 } });
+      mock.emit({ method: 'serverRequest/resolved', params: { requestId: 'elicitation-resolved' } });
+
+      expect(api.permissionRequests.value).toEqual([]);
+      expect(api.elicitationRequests.value).toEqual([]);
+    });
+
+    it('clears structured requests when the active turn changes', async () => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      mock.emitServerRequest({
+        id: 'permission-stale',
+        method: 'item/permissions/requestApproval',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          itemId: 'permission-item',
+          cwd: '/repo',
+          permissions: { network: { enabled: true } },
+        },
+      });
+      mock.emitServerRequest({
+        id: 'elicitation-stale',
+        method: 'mcpServer/elicitation/request',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          serverName: 'deployments',
+          mode: 'form',
+          message: 'Select target',
+          requestedSchema: { type: 'object', properties: {} },
+        },
+      });
+
+      mock.emit({
+        method: 'turn/started',
+        params: { threadId: 'thr_existing', turn: { id: 'turn_2', status: 'inProgress' } },
+      });
+
+      expect(api.permissionRequests.value).toEqual([]);
+      expect(api.elicitationRequests.value).toEqual([]);
+    });
+
+    it('parses and answers current-wire tool user-input requests', async () => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      mock.emitServerRequest({
+        id: 'tool-input',
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          itemId: 'item-1',
+          questions: [{
+            id: 'target',
+            header: 'Deployment target',
+            question: 'Where should this deploy?',
+            isOther: true,
+            isSecret: true,
+            options: [{ label: 'staging', description: 'Staging environment' }],
+          }],
+        },
+      });
+
+      expect(api.toolUserInputRequests.value).toEqual([{
+        requestId: 'tool-input',
+        itemId: 'item-1',
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+        questions: [{
+          id: 'target',
+          header: 'Deployment target',
+          text: 'Where should this deploy?',
+          isOther: true,
+          isSecret: true,
+          options: [{ label: 'staging', description: 'Staging environment' }],
+        }],
+      }]);
+
+      await api.respondToToolUserInput('tool-input', [{ questionId: 'target', response: 'staging' }]);
+
+      expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith('tool-input', {
+        answers: { target: { answers: ['staging'] } },
+      });
+    });
+
+    it('parses and answers current-wire dynamic tool calls', async () => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+
+      mock.emitServerRequest({
+        id: 9,
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          callId: 'call-1',
+          namespace: 'vis',
+          tool: 'deploy',
+          arguments: { target: 'staging' },
+        },
+      });
+
+      expect(api.dynamicToolCalls.value).toEqual([{
+        requestId: 9,
+        callId: 'call-1',
+        namespace: 'vis',
+        toolName: 'deploy',
+        arguments: { target: 'staging' },
+        threadId: 'thr_existing',
+        turnId: 'turn_1',
+      }]);
+
+      await api.respondToDynamicToolCall(9, [{ type: 'inputText', text: 'deployed' }]);
+
+      expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith(9, {
+        contentItems: [{ type: 'inputText', text: 'deployed' }],
+        success: true,
+      });
     });
   });
 

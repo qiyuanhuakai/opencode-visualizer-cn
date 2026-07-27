@@ -3,6 +3,7 @@ import {
   CodexAdapter,
   type CodexAccount,
   type CodexAccountRateLimitBucket,
+  type CodexAccountUsageResult,
   type CodexAdapterOptions,
   type CodexApp,
   type CodexAppListParams,
@@ -23,25 +24,48 @@ import {
   type CodexFsDirectoryEntry,
   type CodexFsReadFileResult,
   type CodexModel,
+  type CodexModelProviderCapabilitiesResult,
   type CodexMcpServerInfo,
   type CodexPlugin,
+  type CodexPermissionProfile,
     type CodexPromptInput,
     type CodexReviewStartParams,
     type CodexSkill,
     type CodexThread,
+    type CodexThreadGoal,
+    type CodexThreadGoalSetParams,
     type CodexThreadListResult,
     type CodexThreadListParams,
   type CodexThreadReadResult,
   type CodexTurn,
-  type CodexToolRequestUserInputParams,
   type CodexWindowsSandboxSetupStartResult,
 } from '../backends/codex/codexAdapter';
 import { appendCodexBridgeToken, codexBridgeHttpUrl } from '../backends/codex/bridgeUrl';
+import { createCodexCapabilityRegistry } from '../backends/codex/capabilityRegistry';
 import type {
   CodexJsonRpcId,
   CodexJsonRpcNotification,
   CodexJsonRpcServerRequest,
 } from '../backends/codex/jsonRpcClient';
+import {
+  buildCodexPermissionResponse,
+  buildMcpElicitationResponse,
+  parseCodexPermissionRequest,
+  parseMcpElicitationRequest,
+  type CodexPermissionReply,
+  type CodexPermissionRequest,
+  type McpElicitationAction,
+  type McpElicitationRequest,
+} from '../backends/codex/serverRequests';
+import {
+  buildDynamicToolCallResponse,
+  buildToolUserInputResponse,
+  parseDynamicToolCallRequest,
+  parseToolUserInputRequest,
+  type CodexDynamicToolCallRequest,
+  type CodexDynamicToolOutput,
+  type CodexToolUserInputRequest,
+} from '../backends/codex/toolServerRequests';
 import {
   codexAssistantMessageId,
   codexAssistantTextPartId,
@@ -50,6 +74,12 @@ import {
   normalizeCodexTurnsToHistory,
   type CodexCanonicalHistoryEntry,
 } from '../backends/codex/normalize';
+import {
+  clearCodexAuxiliaryHistory,
+  loadCodexAuxiliaryHistory,
+  mergeCodexAuxiliaryHistory,
+  saveCodexAuxiliaryHistory,
+} from '../backends/codex/auxiliaryHistory';
 import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type { FilePart, MessageInfo, MessagePart, ReasoningPart, TextPart, ToolPart } from '../types/sse';
@@ -424,6 +454,11 @@ function extractScopedApprovalRequest(
   };
 }
 
+export type CodexPluginWithMarketplace = CodexPlugin & {
+  marketplaceName: string;
+  marketplacePath?: string;
+};
+
 export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const status = ref<CodexConnectionStatus>('idle');
   const url = ref(initialOptions.url ?? getPersistedCodexBridgeUrl());
@@ -441,6 +476,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const canonicalHistory = ref<CodexCanonicalHistoryEntry[]>([]);
   const events = ref<CodexEventEntry[]>([]);
   const serverRequests = ref<CodexServerRequestEntry[]>([]);
+  const permissionRequests = ref<CodexPermissionRequest[]>([]);
+  const elicitationRequests = ref<McpElicitationRequest[]>([]);
   const pending = ref(false);
   const loadingThread = ref(false);
   const initialized = ref(false);
@@ -464,18 +501,27 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
    // Account state
    const account = ref<CodexAccount>(null);
    const accountAuthMode = ref<string | null>(null);
-   const accountPlanType = ref<string | null>(null);
-   const accountRateLimits = ref<CodexAccountRateLimitBucket | null>(null);
+	   const accountPlanType = ref<string | null>(null);
+	   const accountRateLimits = ref<CodexAccountRateLimitBucket | null>(null);
+	   const accountUsage = ref<CodexAccountUsageResult | null>(null);
+	   const accountUsageLoading = ref(false);
    const loginPending = ref(false);
    const loginError = ref('');
    const deviceCodeInfo = ref<{ verificationUrl: string; userCode: string } | null>(null);
 
-    const models = ref<CodexModel[]>([]);
-    const modelsLoading = ref(false);
+	    const models = ref<CodexModel[]>([]);
+	    const modelsLoading = ref(false);
+	    const modelProviderCapabilities = ref<CodexModelProviderCapabilitiesResult | null>(null);
+	    const modelProviderCapabilitiesLoading = ref(false);
+	    const permissionProfiles = ref<CodexPermissionProfile[]>([]);
+	    const permissionProfilesLoading = ref(false);
+	    const threadGoal = ref<CodexThreadGoal | null>(null);
+	    const threadGoalThreadId = ref<string | null>(null);
+	    const threadGoalLoading = ref(false);
     const selectedModel = ref<string>('');
    const skills = ref<CodexSkill[]>([]);
    const skillsLoading = ref(false);
-    const plugins = ref<CodexPlugin[]>([]);
+    const plugins = ref<CodexPluginWithMarketplace[]>([]);
     const pluginMarketplaceCount = ref(0);
    const pluginsLoading = ref(false);
    const mcpServers = ref<CodexMcpServerInfo[]>([]);
@@ -496,16 +542,21 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const windowsSandboxStatus = ref<{ mode: string; success: boolean; error?: string | null } | null>(null);
     const fuzzySearchResults = ref<Array<{ path: string; score: number }>>([]);
     const fuzzySearchQuery = ref('');
-    const toolUserInputRequests = ref<Array<{ requestId: CodexJsonRpcId; questions: Array<{ id: string; text: string; isOther?: boolean }>; threadId: string; turnId: string }>>([]);
-    const dynamicToolCalls = ref<Array<{ requestId: CodexJsonRpcId; toolName: string; arguments: Record<string, unknown>; threadId: string; turnId: string }>>([]);
+    const toolUserInputRequests = ref<CodexToolUserInputRequest[]>([]);
+    const dynamicToolCalls = ref<CodexDynamicToolCallRequest[]>([]);
     const realtimeHistoryQueue = ref<CodexCanonicalHistoryEntry[]>([]);
     const realtimeMessageAliases = ref<Record<string, string>>({});
     const realtimeStreamingPart = ref<CodexRealtimePartRecord<TextPart> | null>(null);
     const realtimeReasoningPart = ref<CodexRealtimePartRecord<ReasoningPart> | null>(null);
     const realtimeToolParts = ref<Array<CodexRealtimePartRecord<ToolPart>>>([]);
 
+    watch(realtimeHistoryQueue, (entries) => {
+      const threadIds = new Set(entries.map((entry) => entry.info.sessionID));
+      for (const threadId of threadIds) saveCodexAuxiliaryHistory(threadId, entries);
+    }, { flush: 'sync' });
+
     // New state for high/medium priority APIs
-    const planItems = ref<Array<{ turnId: string; explanation?: string; plan: Array<{ step: string; status: string }> }>>([]);
+	    const planItems = ref<Array<{ threadId: string; turnId: string; explanation?: string; plan: Array<{ step: string; status: string }> }>>([]);
     const diffState = ref<{ threadId: string; turnId: string; diff: string } | null>(null);
     const tokenUsage = ref<unknown>(null);
     const reasoningStreams = ref<Record<string, { summary: string; raw: string }>>({});
@@ -517,16 +568,50 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const shellCommandInput = ref('');
     const showShellCommand = ref(false);
     const commandProcessId = ref<string | null>(null);
+    const capabilityRegistry = createCodexCapabilityRegistry();
 
     let adapter: CodexAdapter | null = null;
   let unsubscribeNotifications: (() => void) | null = null;
   let unsubscribeServerRequests: (() => void) | null = null;
   let nextEventId = 1;
   let nextTranscriptId = 1;
+	  let threadSelectionGeneration = 0;
+	  let accountRefreshGeneration = 0;
+	  let threadGoalRefreshGeneration = 0;
+	  let pluginsRefreshGeneration = 0;
+	  let connectionGeneration = 0;
+	  type ConnectionRequest = { sourceAdapter: CodexAdapter; generation: number };
+	  const observedTurnIdsByThread = new Map<string, string[]>();
+	  const invalidatedTurnIdsByThread = new Map<string, Set<string>>();
+
+	  function recordObservedTurnId(threadId: string, turnId: string) {
+	    if (!threadId || !turnId) return;
+	    const ids = observedTurnIdsByThread.get(threadId) ?? [];
+	    if (!ids.includes(turnId)) observedTurnIdsByThread.set(threadId, [...ids, turnId]);
+	  }
+
+	  function invalidateRecentTurnIds(threadId: string, count: number) {
+	    const ids = observedTurnIdsByThread.get(threadId) ?? [];
+	    const removed = ids.splice(Math.max(0, ids.length - Math.max(0, Math.floor(count))));
+	    observedTurnIdsByThread.set(threadId, ids);
+	    const invalidated = invalidatedTurnIdsByThread.get(threadId) ?? new Set<string>();
+	    removed.forEach((turnId) => invalidated.add(turnId));
+	    invalidatedTurnIdsByThread.set(threadId, invalidated);
+	  }
+
+	  function isInvalidatedTurnId(threadId: string, turnId: string) {
+	    return invalidatedTurnIdsByThread.get(threadId)?.has(turnId) ?? false;
+	  }
+	  function captureConnection(): ConnectionRequest | null {
+	    const sourceAdapter = adapter;
+	    return sourceAdapter ? { sourceAdapter, generation: connectionGeneration } : null;
+	  }
+
+	  function isCurrentConnection(request: ConnectionRequest) {
+	    return adapter === request.sourceAdapter && connectionGeneration === request.generation;
+	  }
 
   const connected = computed(() => status.value === 'connected' && initialized.value);
-
-  const archivedThreads = ref<CodexThread[]>([]);
 
   const visibleThreads = computed(() => {
     const list = threads.value.filter((thread) => !hiddenThreadIds.value.has(thread.id));
@@ -602,6 +687,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function setTranscriptFromTurns(turns: CodexTurn[] = []) {
     const activeThread = threads.value.find((thread) => thread.id === activeThreadId.value);
+	  for (const turn of turns) recordObservedTurnId(activeThreadId.value, turn.id);
     const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
     const modelName = selectedModelInfo.modelID || selectedModelInfo.providerID;
     canonicalHistory.value = normalizeCodexTurnsToHistory({
@@ -938,6 +1024,36 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
   }
 
+  function persistRealtimeAuxiliaryHistory(threadId: string) {
+    if (!threadId) return;
+    const entries = [...realtimeHistoryQueue.value];
+    if (realtimeReasoningPart.value) {
+      entries.push({ info: realtimeReasoningPart.value.info, parts: [realtimeReasoningPart.value.part] });
+    }
+    for (const tool of realtimeToolParts.value) {
+      entries.push({ info: tool.info, parts: [tool.part] });
+    }
+    saveCodexAuxiliaryHistory(threadId, entries);
+  }
+
+  function persistCompletedAuxiliaryNotification(threadId: string, turnId: string, item: Record<string, unknown>) {
+    if (typeof item.type !== 'string') return;
+    const bundle = normalizeCodexTurnItems({
+      sessionId: threadId,
+      turnId: turnId || `${threadId}:realtime`,
+      items: [item],
+      parentMessageId: turnId ? codexUserMessageId(turnId, 0) : undefined,
+    });
+    const entries = bundle.messages.map((info) => ({
+      info,
+      parts: bundle.parts.filter((part) => part.messageID === info.id),
+    }));
+    saveCodexAuxiliaryHistory(
+      threadId,
+      mergeCodexAuxiliaryHistory(threadId, loadCodexAuxiliaryHistory(threadId), entries),
+    );
+  }
+
    function handleNotification(notification: CodexJsonRpcNotification) {
      events.value.push({
        id: nextEventId,
@@ -946,6 +1062,30 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
        time: Date.now(),
      });
      nextEventId += 1;
+
+     const notificationParams = isRecord(notification.params) ? notification.params : null;
+     const notificationThreadId = typeof notificationParams?.threadId === 'string'
+       ? notificationParams.threadId
+       : '';
+	     const notificationTurnId = typeof notificationParams?.turnId === 'string'
+	       ? notificationParams.turnId
+	       : '';
+	     if (notificationThreadId && notificationTurnId) {
+	       if (isInvalidatedTurnId(notificationThreadId, notificationTurnId)) return;
+	       recordObservedTurnId(notificationThreadId, notificationTurnId);
+	     }
+     const isRealtimeThreadNotification = notification.method.startsWith('item/')
+       || notification.method.startsWith('turn/')
+       || notification.method.startsWith('command/');
+     if (isRealtimeThreadNotification
+       && notificationThreadId
+       && notificationThreadId !== activeThreadId.value) {
+       if (notification.method === 'item/completed' && isRecord(notificationParams?.item)) {
+         persistCompletedAuxiliaryNotification(notificationThreadId, notificationTurnId, notificationParams.item);
+       }
+       if (notification.method === 'turn/completed') void refreshThreads();
+       return;
+     }
 
      if (notification.method === 'thread/started') {
        const thread = extractThread(notification.params);
@@ -970,17 +1110,19 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
        return;
      }
 
-      if (notification.method === 'serverRequest/resolved') {
+       if (notification.method === 'serverRequest/resolved') {
         const params = isRecord(notification.params) ? notification.params : null;
         const requestId = params?.requestId;
         serverRequests.value = serverRequests.value.filter((request) => {
           const requestParams = isRecord(request.params) ? request.params : null;
           return request.id !== requestId && requestParams?.requestId !== requestId && requestParams?.itemId !== requestId;
         });
-        toolUserInputRequests.value = toolUserInputRequests.value.filter((request) => request.requestId !== requestId);
-        dynamicToolCalls.value = dynamicToolCalls.value.filter((request) => request.requestId !== requestId);
-        return;
-      }
+         toolUserInputRequests.value = toolUserInputRequests.value.filter((request) => request.requestId !== requestId);
+         dynamicToolCalls.value = dynamicToolCalls.value.filter((request) => request.requestId !== requestId);
+         permissionRequests.value = permissionRequests.value.filter((request) => request.requestId !== requestId);
+         elicitationRequests.value = elicitationRequests.value.filter((request) => request.requestId !== requestId);
+         return;
+       }
 
       if (notification.method === 'turn/started' || notification.method === 'turn/completed') {
         const turn = extractTurn(notification.params);
@@ -996,7 +1138,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
             ? { ...realtimeReasoningPart.value, updatedAt: Date.now() }
             : null;
           void refreshThreads();
-          if (activeThreadId.value) void hydrateThread(activeThreadId.value);
+          const completedThreadId = notificationThreadId || activeThreadId.value;
+          if (completedThreadId) void hydrateThread(completedThreadId);
         }
         return;
       }
@@ -1041,12 +1184,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
             });
           }
         }
+        const realtimeSessionId = notificationThreadId || activeThreadId.value || 'codex-thread';
+        const realtimeTurnId = notificationTurnId || activeTurn.value?.id || `${realtimeSessionId}:realtime`;
         const normalizedBundle = isRecord(item) && typeof item.type === 'string'
           ? normalizeCodexTurnItems({
-            sessionId: activeThreadId.value ?? 'codex-thread',
-            turnId: activeTurn.value?.id ?? `${activeThreadId.value ?? 'codex-thread'}:realtime`,
+            sessionId: realtimeSessionId,
+            turnId: realtimeTurnId,
             items: [item],
-            parentMessageId: currentRealtimeParentId(activeThreadId.value ?? 'codex-thread'),
+            parentMessageId: currentRealtimeParentId(realtimeSessionId),
           })
           : null;
         const normalizedToolPart = normalizedBundle?.parts.find((part): part is ToolPart => part.type === 'tool') ?? null;
@@ -1130,8 +1275,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
          return;
        }
          if (item && typeof item.type === 'string' && item.type !== 'userMessage' && item.type !== 'agentMessage') {
-            const realtimeSessionId = activeThreadId.value ?? 'codex-thread';
-            const turnId = activeTurn.value?.id ?? `${realtimeSessionId}:realtime`;
+            const realtimeSessionId = notificationThreadId || activeThreadId.value || 'codex-thread';
+            const turnId = notificationTurnId || activeTurn.value?.id || `${realtimeSessionId}:realtime`;
             const bundle = normalizeCodexTurnItems({
               sessionId: realtimeSessionId,
               turnId,
@@ -1248,13 +1393,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       }
 
       if (notification.method === 'turn/plan/updated') {
+        capabilityRegistry.markSupported('turn/plan/updated');
         const params = isRecord(notification.params) ? notification.params : null;
+        const threadId = typeof params?.threadId === 'string' ? params.threadId : '';
         const turnId = typeof params?.turnId === 'string' ? params.turnId : '';
         const explanation = typeof params?.explanation === 'string' ? params.explanation : undefined;
         const plan = Array.isArray(params?.plan) ? params.plan : [];
-        if (turnId) {
-          const existingIndex = planItems.value.findIndex((p) => p.turnId === turnId);
+        if (threadId && turnId) {
+          const existingIndex = planItems.value.findIndex(
+            (entry) => entry.threadId === threadId && entry.turnId === turnId,
+          );
           const planEntry = {
+            threadId,
             turnId,
             explanation,
             plan: plan.filter((p: unknown) => isRecord(p)).map((p: Record<string, unknown>) => ({
@@ -1285,8 +1435,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           reasoningStreams.value[itemId] = { ...existing, summary: existing.summary + delta };
         }
          if (delta && itemId) {
-           const threadId = activeThreadId.value || 'codex-thread';
-           const messageId = codexAssistantMessageId(activeTurn.value?.id || `reasoning:${threadId}`);
+           const threadId = notificationThreadId || activeThreadId.value || 'codex-thread';
+           const messageId = codexAssistantMessageId(notificationTurnId || activeTurn.value?.id || `reasoning:${threadId}`);
           const existing = realtimeReasoningPart.value?.part;
           const accumulated = existing?.id === `${itemId}:reasoning`
             ? existing.text + delta
@@ -1334,8 +1484,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           reasoningStreams.value[itemId] = { ...existing, raw: existing.raw + delta };
         }
          if (delta && itemId) {
-           const threadId = activeThreadId.value || 'codex-thread';
-           const messageId = codexAssistantMessageId(activeTurn.value?.id || `reasoning:${threadId}`);
+           const threadId = notificationThreadId || activeThreadId.value || 'codex-thread';
+           const messageId = codexAssistantMessageId(notificationTurnId || activeTurn.value?.id || `reasoning:${threadId}`);
           const existing = realtimeReasoningPart.value?.part;
           const accumulated = existing?.id === `${itemId}:reasoning`
             ? existing.text + delta
@@ -1424,52 +1574,44 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
   function handleServerRequest(request: CodexJsonRpcServerRequest) {
-    const params = isRecord(request.params) ? request.params : null;
+    const permissionRequest = parseCodexPermissionRequest(request);
+    if (permissionRequest) {
+      permissionRequests.value = [
+        ...permissionRequests.value.filter((item) => item.dialogId !== permissionRequest.dialogId),
+        permissionRequest,
+      ];
+      return;
+    }
+
+    const elicitationRequest = parseMcpElicitationRequest(request);
+    if (elicitationRequest) {
+      elicitationRequests.value = [
+        ...elicitationRequests.value.filter((item) => item.dialogId !== elicitationRequest.dialogId),
+        elicitationRequest,
+      ];
+      return;
+    }
 
     if (request.method === 'account/chatgptAuthTokens/refresh') {
       adapter?.respondToServerRequest(request.id, { decline: {} });
       return;
     }
 
-    if (request.method === 'tool/requestUserInput') {
-      const threadId = typeof params?.threadId === 'string' ? params.threadId : '';
-      const turnId = typeof params?.turnId === 'string' ? params.turnId : '';
-      const questions = Array.isArray(params?.questions) ? params.questions : [];
-      if (threadId && turnId) {
-        toolUserInputRequests.value = [
-          ...toolUserInputRequests.value.filter((item) => item.requestId !== request.id),
-          {
-            requestId: request.id,
-            questions: questions
-              .filter((question): question is Record<string, unknown> => isRecord(question))
-              .map((question) => ({
-                id: typeof question.id === 'string' ? question.id : '',
-                text: typeof question.text === 'string' ? question.text : '',
-                isOther: typeof question.isOther === 'boolean' ? question.isOther : undefined,
-              }))
-              .filter((question) => question.id && question.text),
-            threadId,
-            turnId,
-          },
-        ];
-      }
+    const toolUserInputRequest = parseToolUserInputRequest(request);
+    if (toolUserInputRequest) {
+      toolUserInputRequests.value = [
+        ...toolUserInputRequests.value.filter((item) => item.requestId !== request.id),
+        toolUserInputRequest,
+      ];
       return;
     }
 
-    if (request.method === 'item/tool/call') {
-      const threadId = typeof params?.threadId === 'string' ? params.threadId : '';
-      const turnId = typeof params?.turnId === 'string' ? params.turnId : '';
-      const tool = isRecord(params?.tool) ? params.tool : null;
-      const toolName = typeof tool?.name === 'string'
-        ? tool.name
-        : typeof params?.toolName === 'string' ? params.toolName : '';
-      const args = isRecord(params?.arguments) ? params.arguments : {};
-      if (threadId && turnId && toolName) {
-        dynamicToolCalls.value = [
-          ...dynamicToolCalls.value.filter((item) => item.requestId !== request.id),
-          { requestId: request.id, toolName, arguments: args, threadId, turnId },
-        ];
-      }
+    const dynamicToolCall = parseDynamicToolCallRequest(request);
+    if (dynamicToolCall) {
+      dynamicToolCalls.value = [
+        ...dynamicToolCalls.value.filter((item) => item.requestId !== request.id),
+        dynamicToolCall,
+      ];
       return;
     }
 
@@ -1497,9 +1639,22 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     serverRequests.value = serverRequests.value.filter((request) => (
       request.threadId === threadId && request.turnId === turnId
     ));
+    permissionRequests.value = permissionRequests.value.filter((request) => (
+      request.sessionID === threadId && request.turnId === turnId
+    ));
+    elicitationRequests.value = elicitationRequests.value.filter((request) => (
+      request.sessionID === threadId && (request.turnId === null || request.turnId === turnId)
+    ));
+    toolUserInputRequests.value = toolUserInputRequests.value.filter((request) => (
+      request.threadId === threadId && request.turnId === turnId
+    ));
+    dynamicToolCalls.value = dynamicToolCalls.value.filter((request) => (
+      request.threadId === threadId && request.turnId === turnId
+    ));
   }
 
-  async function refreshHomeDir(force = false) {
+  async function refreshHomeDir(force = false, request: ConnectionRequest | null = captureConnection()) {
+    if (!request) return homeDir.value;
     if (homeDir.value && !force) return homeDir.value;
     try {
       const httpUrl = codexBridgeHttpUrl(
@@ -1507,8 +1662,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         '/homedir',
       );
       const res = await fetch(httpUrl, { method: 'GET' });
+      if (!isCurrentConnection(request)) return homeDir.value;
       if (res.ok) {
         const data = await res.json() as { home?: string };
+        if (!isCurrentConnection(request)) return homeDir.value;
         const home = data.home?.trim();
         if (home) {
           homeDir.value = home;
@@ -1516,6 +1673,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         }
       }
     } catch {
+      if (!isCurrentConnection(request)) return homeDir.value;
       if (!homeDir.value) homeDir.value = '/';
     }
     if (!homeDir.value) homeDir.value = '/';
@@ -1528,32 +1686,36 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     status.value = 'connecting';
     errorMessage.value = '';
     adapter = makeAdapter();
+    const request = captureConnection();
+    if (!request) return;
+    const sourceAdapter = request.sourceAdapter;
 
     if (import.meta.env.DEV) console.time('codex-connect');
 
     onPhase?.('home');
-    await refreshHomeDir();
-    unsubscribeNotifications = adapter.onNotification(handleNotification);
-    unsubscribeServerRequests = adapter.onServerRequest(handleServerRequest);
+    await refreshHomeDir(false, request);
+    if (!isCurrentConnection(request)) return;
+    unsubscribeNotifications = sourceAdapter.onNotification(handleNotification);
+    unsubscribeServerRequests = sourceAdapter.onServerRequest(handleServerRequest);
 
     try {
       onPhase?.('handshake');
-      await adapter.initialize();
+      await sourceAdapter.initialize();
+      if (!isCurrentConnection(request)) return;
       initialized.value = true;
       status.value = 'connected';
 
-      // Post-init steps touch disjoint state (threads / sandbox / panel
-      // caches), so they can run in parallel. allSettled ensures one
-      // failure cannot block the others from completing.
       onPhase?.('threads');
+      await Promise.allSettled([refreshThreads({}, false)]);
       onPhase?.('workspace');
       onPhase?.('panelData');
-      await Promise.allSettled([
-        refreshThreads(),
+      void Promise.allSettled([
+        refreshConfiguredProviderThreads(),
         openAsSandbox(selectedSandboxCwd() || homeDir.value || '/'),
         preloadPanelData(),
       ]);
     } catch (error) {
+      if (!isCurrentConnection(request)) return;
       status.value = 'error';
       errorMessage.value = error instanceof Error ? error.message : String(error);
       disconnect(false);
@@ -1564,22 +1726,40 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function disconnect(resetStatus = true) {
+    connectionGeneration += 1;
+    threadSelectionGeneration += 1;
+    accountRefreshGeneration += 1;
+    threadGoalRefreshGeneration += 1;
+    pluginsRefreshGeneration += 1;
     unsubscribeNotifications?.();
     unsubscribeNotifications = null;
     unsubscribeServerRequests?.();
     unsubscribeServerRequests = null;
     adapter?.disconnect();
     adapter = null;
+    capabilityRegistry.reset();
     initialized.value = false;
     activeTurn.value = null;
     serverRequests.value = [];
+    permissionRequests.value = [];
+    elicitationRequests.value = [];
+    toolUserInputRequests.value = [];
+    dynamicToolCalls.value = [];
+    threadGoal.value = null;
+    threadGoalThreadId.value = null;
+    threadGoalLoading.value = false;
     if (resetStatus) status.value = 'idle';
   }
 
-  async function fetchThreadList(params: CodexThreadListParams = {}) {
-    if (!adapter) return;
+  async function fetchThreadList(
+    params: CodexThreadListParams = {},
+    includeConfiguredProviders = true,
+    request: ConnectionRequest | null = captureConnection(),
+  ) {
+    if (!request) return;
     const baseParams = { limit: 50, sortKey: 'updated_at' as const, modelProviders: null, ...params };
-    const result = await listThreadsAcrossConfiguredProviders(baseParams);
+    const result = await listThreadsAcrossConfiguredProviders(baseParams, includeConfiguredProviders, request);
+    if (!isCurrentConnection(request)) return;
     const existingThreads = threads.value;
     return result.data.map((thread) => {
       const existing = existingThreads.find((item) => item.id === thread.id);
@@ -1595,7 +1775,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     });
   }
 
-  async function configuredThreadModelProviderIds() {
+  async function configuredThreadModelProviderIds(request: ConnectionRequest) {
+    if (!isCurrentConnection(request)) return null;
+    const { sourceAdapter } = request;
     const providerIds = new Set<string>(['openai']);
     const collect = (rawConfig: unknown) => {
       if (!isRecord(rawConfig)) return;
@@ -1611,29 +1793,34 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     };
 
     let configResult = config.value;
-    if (!configResult && typeof adapter?.readConfig === 'function') {
+    if (!configResult && typeof sourceAdapter.readConfig === 'function') {
       try {
-        configResult = await adapter.readConfig({ includeLayers: true });
+        configResult = await sourceAdapter.readConfig({ includeLayers: true });
+        if (!isCurrentConnection(request)) return null;
         config.value = configResult;
       } catch {
+        if (!isCurrentConnection(request)) return null;
         configResult = null;
       }
     }
     collect(configResult?.config);
     for (const layer of configResult?.layers ?? []) collect(layer.config);
-    return Array.from(providerIds);
+    return isCurrentConnection(request) ? Array.from(providerIds) : null;
   }
 
   async function listThreadsAcrossConfiguredProviders(
     params: CodexThreadListParams & { limit: number; sortKey: 'updated_at' | 'created_at'; modelProviders?: string[] | null },
+    includeConfiguredProviders = true,
+    request: ConnectionRequest | null = captureConnection(),
   ): Promise<CodexThreadListResult> {
-    if (!adapter) return { data: [], nextCursor: null };
-    const currentAdapter = adapter;
-    if (params.modelProviders !== undefined && params.modelProviders !== null) {
+    if (!request || !isCurrentConnection(request)) return { data: [], nextCursor: null };
+    const currentAdapter = request.sourceAdapter;
+    if (!includeConfiguredProviders || (params.modelProviders !== undefined && params.modelProviders !== null)) {
       return currentAdapter.listThreads(params);
     }
 
-    const providerIds = await configuredThreadModelProviderIds();
+    const providerIds = await configuredThreadModelProviderIds(request);
+    if (!providerIds || !isCurrentConnection(request)) return { data: [], nextCursor: null };
     if (providerIds.length <= 1) return currentAdapter.listThreads(params);
 
     const requests = [
@@ -1641,6 +1828,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       ...providerIds.map((providerId) => currentAdapter.listThreads({ ...params, modelProviders: [providerId] })),
     ];
     const results = await Promise.allSettled(requests);
+    if (!isCurrentConnection(request)) return { data: [], nextCursor: null };
     const merged = new Map<string, CodexThread>();
     let nextCursor: string | null = null;
     for (const result of results) {
@@ -1658,21 +1846,46 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     };
   }
 
-  async function listThreads(params: CodexThreadListParams = {}) {
-    const normalizedThreads = await fetchThreadList(params);
-    if (!normalizedThreads) return [];
-    return Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
+  async function refreshConfiguredProviderThreads() {
+    const request = captureConnection();
+    if (!request) return;
+    const { sourceAdapter } = request;
+    const providerIds = await configuredThreadModelProviderIds(request);
+    if (!providerIds || !isCurrentConnection(request) || providerIds.length <= 1) return;
+    const results = await Promise.allSettled(providerIds.map((providerId) => sourceAdapter.listThreads({
+      limit: 50,
+      sortKey: 'updated_at',
+      modelProviders: [providerId],
+    })));
+    if (!isCurrentConnection(request)) return;
+    const merged = new Map(threads.value.map((thread) => [thread.id, thread]));
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue;
+      for (const thread of result.value.data) {
+        const existing = merged.get(thread.id);
+        const monotonic = monotonicTimestamps(existing, thread);
+        merged.set(thread.id, normalizeThreadCwd({
+          ...existing,
+          ...thread,
+          cwd: thread.cwd ?? existing?.cwd,
+          gitInfo: thread.gitInfo ?? existing?.gitInfo,
+          createdAt: monotonic.createdAt,
+          updatedAt: monotonic.updatedAt,
+        }));
+      }
+    }
+    const enrichedThreads = await Promise.all([...merged.values()].map(enrichThreadWithGitInfo));
+    if (isCurrentConnection(request)) {
+      threads.value = enrichedThreads.sort(
+        (left, right) => (right.updatedAt ?? right.createdAt ?? 0) - (left.updatedAt ?? left.createdAt ?? 0),
+      );
+    }
   }
 
-  async function refreshArchivedThreads(params: Omit<CodexThreadListParams, 'archived'> = {}) {
-    const normalizedThreads = await fetchThreadList({ ...params, archived: true });
-    if (!normalizedThreads) return;
-    archivedThreads.value = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
-  }
-
-  async function refreshThreads(params: CodexThreadListParams = {}) {
-    const normalizedThreads = await fetchThreadList(params);
-    if (!normalizedThreads) return;
+  async function refreshThreads(params: CodexThreadListParams = {}, includeConfiguredProviders = true) {
+    const request = captureConnection();
+    const normalizedThreads = await fetchThreadList(params, includeConfiguredProviders, request);
+    if (!request || !isCurrentConnection(request) || !normalizedThreads) return;
     const existingThreads = threads.value;
     const returnedThreadIds = new Set(normalizedThreads.map((thread) => thread.id));
     const activeLocalThread = activeThreadId.value
@@ -1682,11 +1895,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       normalizedThreads.push(normalizeThreadCwd(activeLocalThread));
     }
     const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
+    if (!isCurrentConnection(request)) return;
     threads.value = enrichedThreads;
-    if (activeThreadId.value && !enrichedThreads.some((thread) => thread.id === activeThreadId.value)) {
-      activeThreadId.value = enrichedThreads[0]?.id ?? '';
-    } else if (!activeThreadId.value && enrichedThreads[0]) {
-      activeThreadId.value = enrichedThreads[0].id;
+    if (!loadingThread.value) {
+      if (activeThreadId.value && !enrichedThreads.some((thread) => thread.id === activeThreadId.value)) {
+        activeThreadId.value = enrichedThreads[0]?.id ?? '';
+      } else if (!activeThreadId.value && enrichedThreads[0]) {
+        activeThreadId.value = enrichedThreads[0].id;
+      }
     }
   }
 
@@ -1737,23 +1953,26 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function resolveThreadGitInfo(directory: string): Promise<CodexThread['gitInfo'] | null> {
     const cwd = expandPath(directory).trim();
-    if (!adapter || !cwd) return null;
-    if (gitInfoByDirectory.has(cwd)) return gitInfoByDirectory.get(cwd) ?? null;
-    const existing = gitInfoRequests.get(cwd);
+    const connection = captureConnection();
+    if (!connection || !cwd) return null;
+    const cacheKey = `${connection.generation}:${cwd}`;
+    if (gitInfoByDirectory.has(cacheKey)) return gitInfoByDirectory.get(cacheKey) ?? null;
+    const existing = gitInfoRequests.get(cacheKey);
     if (existing) return existing;
     const request = (async () => {
       try {
-        const raw = await adapter?.getVcsInfo?.(cwd);
+        const raw = await connection.sourceAdapter.getVcsInfo?.(cwd);
+        if (!isCurrentConnection(connection)) return null;
         const info = parseVcsInfo(raw);
-        if (info?.root) gitInfoByDirectory.set(cwd, info);
+        if (info?.root) gitInfoByDirectory.set(cacheKey, info);
         return info;
       } catch {
         return null;
       } finally {
-        gitInfoRequests.delete(cwd);
+        gitInfoRequests.delete(cacheKey);
       }
     })();
-    gitInfoRequests.set(cwd, request);
+    gitInfoRequests.set(cacheKey, request);
     return request;
   }
 
@@ -1806,14 +2025,17 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     };
   }
 
-  async function readThreadForHistory(threadId: string): Promise<CodexThreadReadResult> {
-    if (!adapter) throw new Error('Codex is not connected.');
+  async function readThreadForHistory(
+    threadId: string,
+    sourceAdapter: CodexAdapter | null = adapter,
+  ): Promise<CodexThreadReadResult> {
+    if (!sourceAdapter) throw new Error('Codex is not connected.');
     try {
-      const read = await adapter.readThread({ threadId, includeTurns: true });
+      const read = await sourceAdapter.readThread({ threadId, includeTurns: true });
       return mergeThreadReadResult(read, threadId);
     } catch (error) {
       if (!isUnmaterializedThreadError(error)) throw error;
-      const read = await adapter.readThread({ threadId, includeTurns: false });
+      const read = await sourceAdapter.readThread({ threadId, includeTurns: false });
       return mergeThreadReadResult(read, threadId);
     }
   }
@@ -1837,11 +2059,35 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return nextEntries;
   }
 
+  function restoreAuxiliaryHistory(threadId: string) {
+    const serverParts = new Set(canonicalHistory.value.flatMap((entry) => entry.parts.map((part) => part.id)));
+    const serverInfo = new Map(canonicalHistory.value.map((entry) => [entry.info.id, entry.info]));
+    const missingEntries = loadCodexAuxiliaryHistory(threadId)
+      .map((entry) => ({
+        info: serverInfo.get(entry.info.id) ?? entry.info,
+        parts: entry.parts.filter((part) => !serverParts.has(part.id)),
+      }))
+      .filter((entry) => entry.parts.length > 0);
+    realtimeHistoryQueue.value = mergeCodexAuxiliaryHistory(threadId, missingEntries);
+  }
+
   async function selectThread(threadId: string) {
     if (!adapter) throw new Error('Codex is not connected.');
     if (!threadId) return;
+    const sourceAdapter = adapter;
+    const selectionGeneration = ++threadSelectionGeneration;
+    const isCurrentSelection = () => (
+      adapter === sourceAdapter
+      && threadSelectionGeneration === selectionGeneration
+      && activeThreadId.value === threadId
+    );
+    persistRealtimeAuxiliaryHistory(activeThreadId.value);
     activeThreadId.value = threadId;
     activeTurn.value = null;
+    threadGoalRefreshGeneration += 1;
+    threadGoal.value = null;
+    threadGoalThreadId.value = null;
+    threadGoalLoading.value = false;
     pruneServerRequestsForActiveContext();
     realtimeHistoryQueue.value = [];
     realtimeMessageAliases.value = {};
@@ -1851,37 +2097,51 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     loadingThread.value = true;
     errorMessage.value = '';
     try {
-      let read = await readThreadForHistory(threadId);
+      let read = await readThreadForHistory(threadId, sourceAdapter);
+      if (!isCurrentSelection()) return;
       upsertThread(read.thread);
-      activeThreadId.value = read.thread.id;
       setTranscriptFromTurns(read.thread.turns ?? []);
-      canonicalHistory.value = await hydrateThreadImages(canonicalHistory.value);
+      const hydratedHistory = await hydrateThreadImages(canonicalHistory.value);
+      if (!isCurrentSelection()) return;
+      canonicalHistory.value = hydratedHistory;
       try {
-        const resumed = await adapter.resumeThread({ threadId });
+        const resumed = await sourceAdapter.resumeThread({ threadId });
+        if (!isCurrentSelection()) return;
         upsertThread(resumed.thread);
         if ((read.thread.turns?.length ?? 0) === 0) {
-          read = await readThreadForHistory(threadId);
+          read = await readThreadForHistory(threadId, sourceAdapter);
+          if (!isCurrentSelection()) return;
           upsertThread(read.thread);
-          activeThreadId.value = read.thread.id;
           setTranscriptFromTurns(read.thread.turns ?? []);
-          canonicalHistory.value = await hydrateThreadImages(canonicalHistory.value);
+          const resumedHistory = await hydrateThreadImages(canonicalHistory.value);
+          if (!isCurrentSelection()) return;
+          canonicalHistory.value = resumedHistory;
         }
       } catch (error) {
         if (!isUnmaterializedThreadError(error)) throw error;
       }
+      if (!isCurrentSelection()) return;
+      restoreAuxiliaryHistory(threadId);
     } catch (error) {
+      if (!isCurrentSelection()) return;
       errorMessage.value = error instanceof Error ? error.message : String(error);
       throw error;
     } finally {
-      loadingThread.value = false;
+      if (threadSelectionGeneration === selectionGeneration) loadingThread.value = false;
     }
   }
 
   async function hydrateThread(threadId: string) {
-    if (!adapter) return;
-    const read = await readThreadForHistory(threadId);
+    const sourceAdapter = adapter;
+    if (!sourceAdapter) return;
+    const selectionGeneration = threadSelectionGeneration;
+    const read = await readThreadForHistory(threadId, sourceAdapter);
+    if (adapter !== sourceAdapter
+      || threadSelectionGeneration !== selectionGeneration
+      || activeThreadId.value !== threadId) {
+      return;
+    }
     upsertThread(read.thread);
-    activeThreadId.value = read.thread.id;
     setTranscriptFromTurns(read.thread.turns ?? []);
   }
 
@@ -1938,16 +2198,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     removeArchivedThread();
   }
 
-  async function unarchiveThread(threadId: string) {
-    if (!adapter) throw new Error('Codex is not connected.');
-    const result = await adapter.unarchiveThread({ threadId });
-    upsertThread(result.thread);
-    activeThreadId.value = result.thread.id;
-    activeTurn.value = null;
-    pruneServerRequestsForActiveContext();
-    await refreshThreads();
-  }
-
   async function unsubscribeThread(threadId = activeThreadId.value) {
     if (!adapter) throw new Error('Codex is not connected.');
     if (!threadId) return;
@@ -1981,6 +2231,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   async function rollbackThread(threadId: string, numTurns = 1) {
     if (!adapter) throw new Error('Codex is not connected.');
     const result = await adapter.rollbackThread({ threadId, numTurns });
+	  invalidateRecentTurnIds(threadId, numTurns);
+    clearCodexAuxiliaryHistory(threadId);
+    realtimeHistoryQueue.value = realtimeHistoryQueue.value.filter((entry) => entry.info.sessionID !== threadId);
+    if (activeThreadId.value === threadId) {
+      realtimeReasoningPart.value = null;
+      realtimeToolParts.value = [];
+    }
     upsertThread(result.thread);
     await hydrateThread(result.thread.id);
     await refreshThreads();
@@ -2049,19 +2306,22 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   async function readDirectory(path: string) {
-    if (!adapter) throw new Error('Codex is not connected.');
+    const request = captureConnection();
+    if (!request) throw new Error('Codex is not connected.');
     fsLoading.value = true;
     fsError.value = '';
     const resolved = expandPath(path);
     try {
-      const result = await adapter.readDirectory({ path: resolved });
+      const result = await request.sourceAdapter.readDirectory({ path: resolved });
+      if (!isCurrentConnection(request)) return;
       fsEntries.value = result.entries;
       fsCwd.value = resolved;
     } catch (error) {
+      if (!isCurrentConnection(request)) return;
       fsError.value = error instanceof Error ? error.message : String(error);
       throw error;
     } finally {
-      fsLoading.value = false;
+      if (isCurrentConnection(request)) fsLoading.value = false;
     }
   }
 
@@ -2209,8 +2469,31 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       request.turnId !== activeTurn.value?.id ||
       !request.availableDecisions.includes(decision)
     ) return;
-    adapter.respondToServerRequest(id, decision);
+    adapter.respondToServerRequest(id, { decision });
     serverRequests.value = serverRequests.value.filter((request) => request.id !== id);
+  }
+
+  function replyPermissionRequest(dialogId: string, reply: CodexPermissionReply) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    const request = permissionRequests.value.find((item) => item.dialogId === dialogId);
+    if (!request) return;
+    adapter.respondToServerRequest(
+      request.requestId,
+      buildCodexPermissionResponse(request.requestedPermissions, reply),
+    );
+    permissionRequests.value = permissionRequests.value.filter((item) => item.dialogId !== dialogId);
+  }
+
+  function replyElicitationRequest(
+    dialogId: string,
+    action: McpElicitationAction,
+    content?: Record<string, unknown>,
+  ) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    const request = elicitationRequests.value.find((item) => item.dialogId === dialogId);
+    if (!request) return;
+    adapter.respondToServerRequest(request.requestId, buildMcpElicitationResponse(action, content));
+    elicitationRequests.value = elicitationRequests.value.filter((item) => item.dialogId !== dialogId);
   }
 
   function resolvePromptCwd(cwd: string | undefined, threadId: string) {
@@ -2269,6 +2552,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       activeTurn.value = result.turn;
 
       const finalizedTurnId = result.turn.id || pendingTurnId;
+      recordObservedTurnId(result.threadId, finalizedTurnId);
       const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, 0);
       if (realtimeHistoryQueue.value.length > 0) {
         let updated = false;
@@ -2355,17 +2639,21 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      return result;
    }
 
-   // Account functions
-   async function refreshAccount() {
-     if (!adapter) return;
-     try {
-       const result = await adapter.readAccount({ refreshToken: false });
-       account.value = result.account;
-       accountAuthMode.value = result.account?.type ?? null;
-     } catch {
-       account.value = null;
-     }
-   }
+	   // Account functions
+	   async function refreshAccount() {
+	     const sourceAdapter = adapter;
+	     if (!sourceAdapter) return;
+	     const refreshGeneration = ++accountRefreshGeneration;
+	     try {
+	       const result = await sourceAdapter.readAccount({ refreshToken: false });
+	       if (adapter !== sourceAdapter || accountRefreshGeneration !== refreshGeneration) return;
+	       account.value = result.account;
+	       accountAuthMode.value = result.account?.type ?? null;
+	     } catch {
+	       if (adapter !== sourceAdapter || accountRefreshGeneration !== refreshGeneration) return;
+	       account.value = null;
+	     }
+	   }
 
    async function loginWithApiKey(apiKey: string) {
      if (!adapter) throw new Error('Codex is not connected.');
@@ -2414,12 +2702,143 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
    }
 
     async function refreshAccountRateLimits() {
-      if (!adapter) return;
+      const request = captureConnection();
+      if (!request) return;
       try {
-        const result = await adapter.readAccountRateLimits();
+        const result = await request.sourceAdapter.readAccountRateLimits();
+        if (!isCurrentConnection(request)) return;
         accountRateLimits.value = result.rateLimits;
       } catch {
-        accountRateLimits.value = null;
+        if (isCurrentConnection(request)) accountRateLimits.value = null;
+      }
+    }
+
+    async function refreshAccountUsage() {
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
+      accountUsageLoading.value = true;
+      try {
+        const result = await capabilityRegistry.run('account/usage/read', () =>
+          request.sourceAdapter.readAccountUsage(),
+        );
+        if (isCurrentConnection(request)) accountUsage.value = result;
+        return result;
+      } finally {
+        if (isCurrentConnection(request)) accountUsageLoading.value = false;
+      }
+    }
+
+    async function refreshModelProviderCapabilities() {
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
+      modelProviderCapabilitiesLoading.value = true;
+      try {
+        const result = await capabilityRegistry.run('modelProvider/capabilities/read', () =>
+          request.sourceAdapter.readModelProviderCapabilities(),
+        );
+        if (isCurrentConnection(request)) modelProviderCapabilities.value = result;
+        return result;
+      } finally {
+        if (isCurrentConnection(request)) modelProviderCapabilitiesLoading.value = false;
+      }
+    }
+
+    async function refreshPermissionProfiles(cwd?: string) {
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
+      permissionProfilesLoading.value = true;
+      try {
+        const result = await capabilityRegistry.run('permissionProfile/list', () =>
+          request.sourceAdapter.listPermissionProfiles({ cwd: cwd || undefined }),
+        );
+        if (isCurrentConnection(request)) permissionProfiles.value = result.data;
+        return result;
+      } finally {
+        if (isCurrentConnection(request)) permissionProfilesLoading.value = false;
+      }
+    }
+
+    async function refreshThreadGoal(threadId = activeThreadId.value) {
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
+      if (!threadId) return { goal: null };
+      const refreshGeneration = ++threadGoalRefreshGeneration;
+      if (activeThreadId.value === threadId) {
+        threadGoal.value = null;
+        threadGoalThreadId.value = null;
+      }
+      threadGoalLoading.value = true;
+      try {
+        const result = await capabilityRegistry.run('thread/goal/get', () =>
+          request.sourceAdapter.getThreadGoal({ threadId }),
+        );
+        if (
+          isCurrentConnection(request)
+          && threadGoalRefreshGeneration === refreshGeneration
+          && activeThreadId.value === threadId
+        ) {
+          threadGoal.value = result.goal;
+          threadGoalThreadId.value = threadId;
+        }
+        return result;
+      } finally {
+        if (isCurrentConnection(request) && threadGoalRefreshGeneration === refreshGeneration) {
+          threadGoalLoading.value = false;
+        }
+      }
+    }
+
+    async function setThreadGoal(params: Omit<CodexThreadGoalSetParams, 'threadId'>) {
+      const request = captureConnection();
+      if (!request || !activeThreadId.value) throw new Error('Codex thread is not selected.');
+      const threadId = activeThreadId.value;
+      if (threadGoalThreadId.value !== threadId) throw new Error('Codex thread goal is not loaded.');
+      const refreshGeneration = ++threadGoalRefreshGeneration;
+      threadGoalLoading.value = true;
+      try {
+        const result = await capabilityRegistry.run('thread/goal/set', () =>
+          request.sourceAdapter.setThreadGoal({ threadId, ...params }),
+        );
+        if (
+          isCurrentConnection(request)
+          && threadGoalRefreshGeneration === refreshGeneration
+          && activeThreadId.value === threadId
+        ) {
+          threadGoal.value = result.goal;
+          threadGoalThreadId.value = threadId;
+        }
+        return result;
+      } finally {
+        if (isCurrentConnection(request) && threadGoalRefreshGeneration === refreshGeneration) {
+          threadGoalLoading.value = false;
+        }
+      }
+    }
+
+    async function clearThreadGoal() {
+      const request = captureConnection();
+      if (!request || !activeThreadId.value) throw new Error('Codex thread is not selected.');
+      const threadId = activeThreadId.value;
+      if (threadGoalThreadId.value !== threadId) throw new Error('Codex thread goal is not loaded.');
+      const refreshGeneration = ++threadGoalRefreshGeneration;
+      threadGoalLoading.value = true;
+      try {
+        const result = await capabilityRegistry.run('thread/goal/clear', () =>
+          request.sourceAdapter.clearThreadGoal({ threadId }),
+        );
+        if (
+          isCurrentConnection(request)
+          && threadGoalRefreshGeneration === refreshGeneration
+          && activeThreadId.value === threadId
+        ) {
+          threadGoal.value = null;
+          threadGoalThreadId.value = threadId;
+        }
+        return result;
+      } finally {
+        if (isCurrentConnection(request) && threadGoalRefreshGeneration === refreshGeneration) {
+          threadGoalLoading.value = false;
+        }
       }
     }
 
@@ -2436,10 +2855,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshModels(includeHidden = false) {
-      if (!adapter) return;
+      const request = captureConnection();
+      if (!request) return;
       modelsLoading.value = true;
       try {
-        const result = await adapter.listModels({ includeHidden });
+        const result = await request.sourceAdapter.listModels({ includeHidden });
+        if (!isCurrentConnection(request)) return;
         models.value = result.data;
         if (!selectedModel.value) {
           const defaultModel = result.data.find((m) => m.isDefault);
@@ -2450,9 +2871,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           }
         }
       } catch {
-        models.value = [];
+        if (isCurrentConnection(request)) models.value = [];
       } finally {
-        modelsLoading.value = false;
+        if (isCurrentConnection(request)) modelsLoading.value = false;
       }
     }
 
@@ -2466,16 +2887,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshSkills() {
-      if (!adapter) return;
+      const request = captureConnection();
+      if (!request) return;
       skillsLoading.value = true;
       try {
         const cwds = fsCwd.value ? [fsCwd.value] : [];
-        const result = await adapter.listSkills({ cwds });
+        const result = await request.sourceAdapter.listSkills({ cwds });
+        if (!isCurrentConnection(request)) return;
         skills.value = result.data.flatMap((entry) => entry.skills);
       } catch {
-        skills.value = [];
+        if (isCurrentConnection(request)) skills.value = [];
       } finally {
-        skillsLoading.value = false;
+        if (isCurrentConnection(request)) skillsLoading.value = false;
       }
     }
 
@@ -2486,29 +2909,50 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshPlugins() {
-      if (!adapter) return;
+      const request = captureConnection();
+      if (!request) return;
+      const refreshGeneration = ++pluginsRefreshGeneration;
       pluginsLoading.value = true;
       try {
-        const result = await adapter.listPlugins();
+        const result = await request.sourceAdapter.listPlugins();
+        if (!isCurrentConnection(request) || pluginsRefreshGeneration !== refreshGeneration) return;
         pluginMarketplaceCount.value = result.marketplaces.length;
-        plugins.value = result.marketplaces.flatMap((m) => m.plugins);
+        plugins.value = result.marketplaces.flatMap((marketplace) =>
+          marketplace.plugins.map((plugin) => ({
+            ...plugin,
+            marketplaceName: marketplace.name,
+            marketplacePath: marketplace.path ?? undefined,
+          })),
+        );
       } catch {
-        pluginMarketplaceCount.value = 0;
-        plugins.value = [];
+        if (isCurrentConnection(request) && pluginsRefreshGeneration === refreshGeneration) {
+          pluginMarketplaceCount.value = 0;
+          plugins.value = [];
+        }
       } finally {
-        pluginsLoading.value = false;
+        if (isCurrentConnection(request) && pluginsRefreshGeneration === refreshGeneration) {
+          pluginsLoading.value = false;
+        }
       }
     }
 
-    async function installPlugin(marketplacePath: string, pluginName: string) {
+    async function installPlugin(
+      marketplacePath: string | undefined,
+      pluginName: string,
+      remoteMarketplaceName?: string,
+    ) {
       if (!adapter) throw new Error('Codex is not connected.');
-      await adapter.installPlugin({ marketplacePath, pluginName });
+      await adapter.installPlugin({ marketplacePath, remoteMarketplaceName, pluginName });
       await refreshPlugins();
     }
 
-    async function uninstallPlugin(marketplacePath: string, pluginName: string) {
+    async function uninstallPlugin(
+      marketplacePath: string | undefined,
+      pluginName: string,
+      remoteMarketplaceName?: string,
+    ) {
       if (!adapter) throw new Error('Codex is not connected.');
-      await adapter.uninstallPlugin({ marketplacePath, pluginName });
+      await adapter.uninstallPlugin({ marketplacePath, remoteMarketplaceName, pluginName });
       await refreshPlugins();
     }
 
@@ -2518,15 +2962,17 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshMcpServers() {
-      if (!adapter) return;
+      const request = captureConnection();
+      if (!request) return;
       mcpServersLoading.value = true;
       try {
-        const result = await adapter.listMcpServerStatus({ detail: 'full' });
+        const result = await request.sourceAdapter.listMcpServerStatus({ detail: 'full' });
+        if (!isCurrentConnection(request)) return;
         mcpServers.value = result.data;
       } catch {
-        mcpServers.value = [];
+        if (isCurrentConnection(request)) mcpServers.value = [];
       } finally {
-        mcpServersLoading.value = false;
+        if (isCurrentConnection(request)) mcpServersLoading.value = false;
       }
     }
 
@@ -2552,27 +2998,30 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshConfig() {
-      if (!adapter) return;
+      const request = captureConnection();
+      if (!request) return;
       configLoading.value = true;
       try {
-        const result = await adapter.readConfig({ includeLayers: true });
+        const result = await request.sourceAdapter.readConfig({ includeLayers: true });
+        if (!isCurrentConnection(request)) return;
         config.value = result;
       } catch {
-        config.value = null;
+        if (isCurrentConnection(request)) config.value = null;
       } finally {
-        configLoading.value = false;
+        if (isCurrentConnection(request)) configLoading.value = false;
       }
     }
 
     async function refreshApps(params: CodexAppListParams = {}) {
-      if (!adapter) throw new Error('Codex is not connected.');
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
       appsLoading.value = true;
       try {
-        const result: CodexAppListResult = await adapter.listApps(params);
-        apps.value = result.data;
+        const result: CodexAppListResult = await request.sourceAdapter.listApps(params);
+        if (isCurrentConnection(request)) apps.value = result.data;
         return result;
       } finally {
-        appsLoading.value = false;
+        if (isCurrentConnection(request)) appsLoading.value = false;
       }
     }
 
@@ -2601,22 +3050,30 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshConfigRequirements() {
-      if (!adapter) throw new Error('Codex is not connected.');
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
       configRequirementsLoading.value = true;
       try {
-        const result: CodexConfigRequirementsReadResult = await adapter.readConfigRequirements();
-        configRequirements.value = result.requirements;
+        const result: CodexConfigRequirementsReadResult = await capabilityRegistry.run(
+          'configRequirements/read',
+          () => request.sourceAdapter.readConfigRequirements(),
+        );
+        if (isCurrentConnection(request)) configRequirements.value = result.requirements;
         return result;
       } finally {
-        configRequirementsLoading.value = false;
+        if (isCurrentConnection(request)) configRequirementsLoading.value = false;
       }
     }
 
     async function detectExternalAgentConfig(includeHome?: boolean, cwds?: string[]) {
       if (!adapter) throw new Error('Codex is not connected.');
+      const sourceAdapter = adapter;
       externalAgentConfigLoading.value = true;
       try {
-        const result: CodexExternalAgentConfigDetectResult = await adapter.detectExternalAgentConfig({ includeHome, cwds });
+        const result: CodexExternalAgentConfigDetectResult = await capabilityRegistry.run(
+          'externalAgentConfig/detect',
+          () => sourceAdapter.detectExternalAgentConfig({ includeHome, cwds }),
+        );
         externalAgentConfigItems.value = result.items;
         return result;
       } finally {
@@ -2645,14 +3102,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshExperimentalFeatures() {
-      if (!adapter) throw new Error('Codex is not connected.');
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
       experimentalFeaturesLoading.value = true;
       try {
-        const result: CodexExperimentalFeatureListResult = await adapter.listExperimentalFeatures();
-        experimentalFeatures.value = result.data;
+        const result: CodexExperimentalFeatureListResult = await request.sourceAdapter.listExperimentalFeatures();
+        if (isCurrentConnection(request)) experimentalFeatures.value = result.data;
         return result;
       } finally {
-        experimentalFeaturesLoading.value = false;
+        if (isCurrentConnection(request)) experimentalFeaturesLoading.value = false;
       }
     }
 
@@ -2664,13 +3122,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshCollaborationModes() {
-      if (!adapter) throw new Error('Codex is not connected.');
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
       collaborationModesLoading.value = true;
       try {
-        const result: CodexCollaborationModeListResult = await adapter.listCollaborationModes();
-        collaborationModes.value = Array.isArray(result.data) ? result.data : [];
+        const result: CodexCollaborationModeListResult = await request.sourceAdapter.listCollaborationModes();
+        if (isCurrentConnection(request)) collaborationModes.value = Array.isArray(result.data) ? result.data : [];
         return result;
       } catch (error) {
+        if (!isCurrentConnection(request)) return { data: [] };
         collaborationModes.value = [];
         if (typeof console !== 'undefined') {
           console.warn(
@@ -2680,7 +3140,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         }
         return { data: [] };
       } finally {
-        collaborationModesLoading.value = false;
+        if (isCurrentConnection(request)) collaborationModesLoading.value = false;
       }
     }
 
@@ -2703,19 +3163,31 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function cleanThreadBackgroundTerminals(threadId: string) {
-      if (!adapter) throw new Error('Codex is not connected.');
-      await adapter.cleanThreadBackgroundTerminals({ threadId });
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
+      await capabilityRegistry.run('thread/backgroundTerminals/clean', () =>
+        request.sourceAdapter.cleanThreadBackgroundTerminals({ threadId }),
+      );
     }
 
-    async function respondToToolUserInput(requestId: CodexJsonRpcId, responses: Array<{ questionId: string; response: string }>) {
+    async function respondToToolUserInput(
+      requestId: CodexJsonRpcId,
+      responses: Array<{ questionId: string; response: string }>,
+    ) {
       if (!adapter) throw new Error('Codex is not connected.');
-      adapter.respondToServerRequest(requestId, { responses });
+      adapter.respondToServerRequest(requestId, buildToolUserInputResponse(
+        responses.map((response) => ({ questionId: response.questionId, answers: [response.response] })),
+      ));
       toolUserInputRequests.value = toolUserInputRequests.value.filter((request) => request.requestId !== requestId);
     }
 
-    async function respondToDynamicToolCall(requestId: CodexJsonRpcId, contentItems: unknown[]) {
+    async function respondToDynamicToolCall(
+      requestId: CodexJsonRpcId,
+      contentItems: CodexDynamicToolOutput[],
+      success = true,
+    ) {
       if (!adapter) throw new Error('Codex is not connected.');
-      adapter.respondToServerRequest(requestId, { contentItems });
+      adapter.respondToServerRequest(requestId, buildDynamicToolCallResponse(contentItems, success));
       dynamicToolCalls.value = dynamicToolCalls.value.filter((request) => request.requestId !== requestId);
     }
 
@@ -2751,9 +3223,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     async function refreshLoadedThreads() {
-      if (!adapter) return;
-      const result = await adapter.listLoadedThreads();
-      loadedThreadIds.value = result.data;
+      const request = captureConnection();
+      if (!request) return;
+      const result = await capabilityRegistry.run('thread/loaded/list', () =>
+        request.sourceAdapter.listLoadedThreads(),
+      );
+      if (isCurrentConnection(request)) loadedThreadIds.value = result.data;
     }
 
     async function refreshThreadTurns(threadId: string) {
@@ -2769,11 +3244,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     async function sendAddCreditsNudge(creditType: 'credits' | 'usage_limit' = 'credits') {
       if (!adapter) throw new Error('Codex is not connected.');
       return adapter.sendAddCreditsNudge({ creditType });
-    }
-
-    async function requestToolUserInput(params: CodexToolRequestUserInputParams) {
-      if (!adapter) throw new Error('Codex is not connected.');
-      return adapter.requestUserInput(params);
     }
 
     async function fsRemove(path: string) {
@@ -2838,14 +3308,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       realtimeStreamingPart,
      realtimeReasoningPart,
      realtimeToolParts,
-     events,
-     serverRequests,
+	     events,
+	     serverRequests,
+	     permissionRequests,
+	     elicitationRequests,
      pending,
      loadingThread,
      initialized,
      connected,
        visibleThreads,
-       archivedThreads,
       hiddenThreadIds,
       fsEntries,
       fsCwd,
@@ -2863,14 +3334,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       disconnect,
       refreshHomeDir,
       refreshThreads,
-      refreshArchivedThreads,
-      listThreads,
       preloadPanelData,
       selectThread,
      startThread,
      setThreadName,
      archiveThread,
-     unarchiveThread,
      unsubscribeThread,
      interruptActiveTurn,
      forkThread,
@@ -2888,7 +3356,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       clearPreview,
       updatePathSuggestions,
       hidePathSuggestions,
-      resolveServerRequest,
+	      resolveServerRequest,
+	      replyPermissionRequest,
+	      replyElicitationRequest,
      sendPrompt,
      // New review state
      reviewState,
@@ -2897,8 +3367,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      // New account state
      account,
      accountAuthMode,
-     accountPlanType,
-     accountRateLimits,
+	     accountPlanType,
+	     accountRateLimits,
+	     accountUsage,
+	     accountUsageLoading,
      loginPending,
      loginError,
      deviceCodeInfo,
@@ -2911,10 +3383,23 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
      loginWithDeviceCode,
      cancelLogin,
      logoutAccount,
-      refreshAccountRateLimits,
+	      refreshAccountRateLimits,
+	      refreshAccountUsage,
+	      refreshModelProviderCapabilities,
+	      refreshPermissionProfiles,
+	      refreshThreadGoal,
+	      setThreadGoal,
+	      clearThreadGoal,
       // New namespace state
        models,
-       modelsLoading,
+	       modelsLoading,
+	       modelProviderCapabilities,
+	       modelProviderCapabilitiesLoading,
+	       permissionProfiles,
+	       permissionProfilesLoading,
+	       threadGoal,
+	       threadGoalThreadId,
+	       threadGoalLoading,
        selectedModel,
        skills,
        skillsLoading,
@@ -2934,6 +3419,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
        configRequirements,
        configRequirementsLoading,
        externalAgentConfigItems,
+       runtimeCapabilities: capabilityRegistry.states,
        externalAgentConfigLoading,
        externalAgentImportStatus,
        windowsSandboxStatus,
@@ -2997,7 +3483,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         refreshThreadTurns,
         readPlugin,
         sendAddCreditsNudge,
-        requestToolUserInput,
         fsRemove,
        fsWatch,
        fsUnwatch,
