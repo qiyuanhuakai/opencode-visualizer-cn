@@ -2,7 +2,10 @@
 import { ref, watch, computed, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
-import type { CodexPlugin } from '../backends/codex/codexAdapter';
+import {
+  getCodexWeeklyRateLimitWindow,
+  type CodexPlugin,
+} from '../backends/codex/codexAdapter';
 import type { BackendKind } from '../backends/types';
 import { getActiveBackendAdapter } from '../backends/registry';
 import { useMessages } from '../composables/useMessages';
@@ -354,10 +357,13 @@ async function handleCodexLogout() {
   await refreshCodexStatus();
 }
 
+const codexWeeklyRateLimit = computed(() =>
+  getCodexWeeklyRateLimitWindow(codexApi.accountRateLimits.value),
+);
 const codexRateLimitPercent = computed(() => {
-  const limits = codexApi.accountRateLimits.value;
-  if (!limits || typeof limits.primary?.usedPercent !== 'number') return 0;
-  return Math.max(0, Math.min(100, Math.round(limits.primary.usedPercent)));
+  const usedPercent = codexWeeklyRateLimit.value?.usedPercent;
+  if (typeof usedPercent !== 'number') return 0;
+  return Math.max(0, Math.min(100, Math.round(usedPercent)));
 });
 
 async function fetchContextLimit(providerId: string, modelId: string) {
@@ -671,7 +677,7 @@ const currentTotalInfo = computed(() => {
     case 'acp':
       return null;
     case 'codex':
-      return codexApi.accountRateLimits.value
+      return codexWeeklyRateLimit.value
         ? { label: t('statusMonitor.codex.rateLimitUsed'), count: codexRateLimitPercent.value }
         : null;
     default:
@@ -1010,7 +1016,7 @@ function formatPercent(value: number, total: number): string {
             {{ $t('statusMonitor.codex.notConnected') }}
           </div>
           <div v-else class="status-monitor-list">
-            <div v-if="codexApi.account.value && codexApi.accountRateLimits.value" class="token-usage-bar-row codex-usage-bar">
+            <div v-if="codexApi.account.value && codexWeeklyRateLimit" class="token-usage-bar-row codex-usage-bar">
               <div class="token-usage-track">
                 <div class="token-usage-fill" :style="{ width: `${codexRateLimitPercent}%` }" />
               </div>
@@ -1237,7 +1243,7 @@ function formatPercent(value: number, total: number): string {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding-right: 4px;
+  padding-right: 12px;
 }
 
 .status-monitor-summary-label {
