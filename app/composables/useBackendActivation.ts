@@ -62,6 +62,7 @@ export type UseBackendActivationOptions = {
     agentId: string;
   }) => void;
   disconnectAcpBackend: () => void;
+  disconnectCodexBackend: () => void;
   bootstrapAcpWorkspace: () => Promise<void>;
   fetchGlobalProviderConfig: () => Promise<void>;
   fetchProviders: (force?: boolean) => Promise<void>;
@@ -152,6 +153,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       }
     } catch (error) {
       options.codexApi.disconnect();
+      options.disconnectCodexBackend();
       options.connectionState.value = 'error';
       options.initErrorMessage.value = options.toErrorMessage(error);
       options.uiInitState.value = 'login';
@@ -162,6 +164,8 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
 
   async function activateOpenCode() {
     options.disconnectAcpBackend();
+    options.codexApi.disconnect();
+    options.disconnectCodexBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
     resetOpenCodeSelectionState();
@@ -200,6 +204,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     try {
       options.ge.disconnect();
       options.codexApi.disconnect();
+      options.disconnectCodexBackend();
       options.activeBackendKind.value = 'acp';
       options.configureAcpBackend({
         bridgeUrl: options.credentials.acpBridgeUrl.value,
@@ -257,6 +262,8 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   function abortInitialization() {
     options.ge.disconnect();
     options.disconnectAcpBackend();
+    options.codexApi.disconnect();
+    options.disconnectCodexBackend();
     initializationInFlight.value = false;
     options.connectionState.value = 'connecting';
     options.uiInitState.value = 'login';

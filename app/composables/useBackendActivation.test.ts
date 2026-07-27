@@ -62,6 +62,9 @@ function createHarness(initialBackend: BackendKind = 'opencode') {
   const disconnectAcpBackend = vi.fn(() => {
     calls.push('disconnectAcpBackend');
   });
+  const disconnectCodexBackend = vi.fn(() => {
+    calls.push('disconnectCodexBackend');
+  });
 
   const activation = useBackendActivation({
     credentials,
@@ -92,6 +95,7 @@ function createHarness(initialBackend: BackendKind = 'opencode') {
     },
     configureAcpBackend,
     disconnectAcpBackend,
+    disconnectCodexBackend,
     bootstrapAcpWorkspace: async () => {
       calls.push('bootstrapAcpWorkspace');
       selectedProjectId.value = 'acp';
@@ -169,6 +173,8 @@ describe('useBackendActivation', () => {
     expect(harness.selectedModel.value).toBe('');
     expect(harness.calls).toEqual([
       'disconnectAcpBackend',
+      'codex.disconnect',
+      'disconnectCodexBackend',
       'setActiveBackendKind:opencode',
       'ge.connect',
       'fetchHomePath',
@@ -219,6 +225,7 @@ describe('useBackendActivation', () => {
     expect(harness.calls).toEqual([
       'ge.disconnect',
       'codex.disconnect',
+      'disconnectCodexBackend',
       'configureAcpBackend',
       'setActiveBackendKind:acp',
       'bootstrapAcpWorkspace',
