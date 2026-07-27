@@ -103,26 +103,42 @@
         </p>
         <div class="codex-plugin-actions">
           <button
+            type="button"
+            class="codex-small-text-button"
+            :data-plugin-details="plugin.name"
+            :data-plugin-marketplace="plugin.marketplaceName"
+            :data-plugin-marketplace-path="plugin.marketplacePath"
+            :disabled="!api.connected.value || detailLoading === plugin.id"
+            @click="loadPluginDetails(plugin)"
+          >
+            <Icon icon="mdi:information-outline" width="14" />
+            {{ t('codexPanel.pluginDetails') }}
+          </button>
+          <button
             v-if="!plugin.isEnabled && plugin.state !== 'installed'"
             type="button"
             class="codex-small-text-button"
-            :disabled="!api.connected.value || actingPlugin === plugin.name"
+            :disabled="!api.connected.value || actingPlugin === plugin.id"
             @click="installPlugin(plugin)"
           >
             <Icon icon="mdi:download" width="14" />
-            {{ actingPlugin === plugin.name ? t('codexPanel.pluginsInstalling') : t('codexPanel.pluginsInstall') }}
+            {{ actingPlugin === plugin.id ? t('codexPanel.pluginsInstalling') : t('codexPanel.pluginsInstall') }}
           </button>
           <button
             v-else
             type="button"
             class="codex-small-text-button danger"
-            :disabled="!api.connected.value || actingPlugin === plugin.name"
+            :disabled="!api.connected.value || actingPlugin === plugin.id"
             @click="uninstallPlugin(plugin)"
           >
             <Icon icon="mdi:delete" width="14" />
-            {{ actingPlugin === plugin.name ? t('codexPanel.pluginsUninstalling') : t('codexPanel.pluginsUninstall') }}
+            {{ actingPlugin === plugin.id ? t('codexPanel.pluginsUninstalling') : t('codexPanel.pluginsUninstall') }}
           </button>
         </div>
+        <CodexPluginDetail v-if="pluginDetails[plugin.id]" :result="pluginDetails[plugin.id]" />
+        <p v-if="pluginDetailErrors[plugin.id]" class="codex-error" role="alert">
+          {{ pluginDetailErrors[plugin.id] }}
+        </p>
       </div>
     </div>
   </section>
@@ -132,8 +148,9 @@
 import { ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
-import type { CodexPlugin } from '../../backends/codex/codexAdapter';
-import { useCodexApi } from '../../composables/useCodexApi';
+import type { CodexPluginReadResult } from '../../backends/codex/codexAdapter';
+import { useCodexApi, type CodexPluginWithMarketplace } from '../../composables/useCodexApi';
+import CodexPluginDetail from './CodexPluginDetail.vue';
 
 const props = defineProps<{
   api: ReturnType<typeof useCodexApi>;
@@ -145,6 +162,9 @@ const showAddMarketplace = ref(false);
 const marketplacePath = ref('');
 const submitting = ref(false);
 const actingPlugin = ref<string>('');
+const detailLoading = ref('');
+const pluginDetails = ref<Record<string, CodexPluginReadResult>>({});
+const pluginDetailErrors = ref<Record<string, string>>({});
 
 function closeAddMarketplace() {
   showAddMarketplace.value = false;
@@ -166,21 +186,19 @@ async function submitAddMarketplace() {
   }
 }
 
-function getMarketplacePath(plugin: CodexPlugin): string {
-  if (plugin.source?.type === 'local' && plugin.source.path) {
-    return plugin.source.path;
-  }
-  if (plugin.source?.type === 'git' && plugin.source.path) {
-    return plugin.source.path;
-  }
-  return '';
+function getMarketplacePath(plugin: CodexPluginWithMarketplace): string | undefined {
+  return plugin.marketplacePath;
 }
 
-async function installPlugin(plugin: CodexPlugin) {
+function getRemoteMarketplaceName(plugin: CodexPluginWithMarketplace): string | undefined {
+  return getMarketplacePath(plugin) ? undefined : plugin.marketplaceName;
+}
+
+async function installPlugin(plugin: CodexPluginWithMarketplace) {
   if (actingPlugin.value) return;
-  actingPlugin.value = plugin.name;
+  actingPlugin.value = plugin.id;
   try {
-    await props.api.installPlugin(getMarketplacePath(plugin), plugin.name);
+    await props.api.installPlugin(getMarketplacePath(plugin), plugin.name, getRemoteMarketplaceName(plugin));
   } catch {
     // errors handled by adapter
   } finally {
@@ -188,15 +206,35 @@ async function installPlugin(plugin: CodexPlugin) {
   }
 }
 
-async function uninstallPlugin(plugin: CodexPlugin) {
+async function uninstallPlugin(plugin: CodexPluginWithMarketplace) {
   if (actingPlugin.value) return;
-  actingPlugin.value = plugin.name;
+  actingPlugin.value = plugin.id;
   try {
-    await props.api.uninstallPlugin(getMarketplacePath(plugin), plugin.name);
+    await props.api.uninstallPlugin(getMarketplacePath(plugin), plugin.name, getRemoteMarketplaceName(plugin));
   } catch {
     // errors handled by adapter
   } finally {
     actingPlugin.value = '';
+  }
+}
+
+async function loadPluginDetails(plugin: CodexPluginWithMarketplace) {
+  detailLoading.value = plugin.id;
+  pluginDetailErrors.value = { ...pluginDetailErrors.value, [plugin.id]: '' };
+  try {
+    const result = await props.api.readPlugin(
+      plugin.name,
+      getMarketplacePath(plugin),
+      getRemoteMarketplaceName(plugin),
+    );
+    pluginDetails.value = { ...pluginDetails.value, [plugin.id]: result };
+  } catch (error) {
+    pluginDetailErrors.value = {
+      ...pluginDetailErrors.value,
+      [plugin.id]: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    detailLoading.value = '';
   }
 }
 </script>
