@@ -81,6 +81,23 @@
         </div>
       </div>
     </div>
+
+    <!-- External Agent Config -->
+    <div class="codex-config-section codex-config-section-external">
+      <div class="codex-config-section-header" @click="toggleSection('externalAgent')">
+        <Icon
+          :icon="expandedSections.has('externalAgent') ? 'mdi:chevron-down' : 'mdi:chevron-right'"
+          width="14"
+        />
+        <span class="codex-config-section-title">{{ t('codexPanel.externalAgentConfigTitle') }}</span>
+        <span v-if="api.externalAgentConfigItems.value.length" class="codex-config-section-badge">
+          {{ api.externalAgentConfigItems.value.length }}
+        </span>
+      </div>
+      <div v-if="expandedSections.has('externalAgent')" class="codex-config-section-body">
+        <CodexExternalAgentConfig :api="api" />
+      </div>
+    </div>
   </section>
 </template>
 
@@ -88,6 +105,7 @@
 import { ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
+import CodexExternalAgentConfig from './CodexExternalAgentConfig.vue';
 import CodexJsonTreeNode from './CodexJsonTreeNode.vue';
 import type { useCodexApi } from '../../composables/useCodexApi';
 
