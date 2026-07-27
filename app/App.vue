@@ -72,6 +72,7 @@
             :active-tab="sidePanelActiveTab"
             :selected-session-id="selectedSessionId"
             :todo-sessions="todoPanelSessions"
+            :todo-label="activeBackendKind === 'codex' ? t('codexPanel.planTitle') : undefined"
             :session-tree-data="sessionTreeData"
             :session-tree-expanded-paths="sessionTreeExpandedPaths"
             :tree-nodes="treeNodes"
@@ -571,8 +572,10 @@ import CodexConfigViewer from './components/codex/CodexConfigViewer.vue';
 import CodexExperimentalFeatureManager from './components/codex/CodexExperimentalFeatureManager.vue';
 import CodexFeedbackUploader from './components/codex/CodexFeedbackUploader.vue';
 import CodexMcpServerManager from './components/codex/CodexMcpServerManager.vue';
+import CodexMcpElicitation from './components/codex/CodexMcpElicitation.vue';
 import CodexModelManager from './components/codex/CodexModelManager.vue';
 import CodexPluginManager from './components/codex/CodexPluginManager.vue';
+import CodexRuntimeInspector from './components/codex/CodexRuntimeInspector.vue';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
 import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
@@ -597,6 +600,8 @@ import { useFloatingWindows } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions, type QuestionRequest } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
+import { codexPlansToTodoSessions } from './utils/codexPlanTodos';
+import { createCodexSubpanelProps } from './utils/codexSubpanelProps';
 import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
 import { useBackendSessionActions } from './composables/useBackendSessionActions';
 import {
@@ -664,6 +669,7 @@ import {
   configureAcpBackend,
   disconnectAcpBackend,
   configureCodexBackend,
+  disconnectCodexBackend,
   configureOpenCodeBackend,
   getActiveBackendAdapter,
   getBackendAdapter,
@@ -924,6 +930,7 @@ const SUBAGENT_CLOSE_DELAY_MS = 3000;
 type TodoPanelSession = {
   sessionId: string;
   title: string;
+  description?: string;
   isSubagent: boolean;
   todos: TodoItem[];
   loading: boolean;
@@ -1184,6 +1191,13 @@ const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefin
     height: 600,
     scroll: 'manual',
   },
+  runtime: {
+    component: CodexRuntimeInspector,
+    titleKey: 'codexPanel.runtime.title',
+    width: 820,
+    height: 680,
+    scroll: 'none',
+  },
   experimentalFeatures: {
     component: CodexExperimentalFeatureManager,
     titleKey: 'codexPanel.experimentalFeaturesTitle',
@@ -1228,6 +1242,8 @@ function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
       void codexApi.refreshConfig();
       void codexApi.refreshConfigRequirements();
       break;
+    case 'runtime':
+      break;
     case 'experimentalFeatures':
       void codexApi.refreshExperimentalFeatures();
       break;
@@ -1253,10 +1269,7 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   };
   void fw.open(`codex-${panel}`, {
     component: definition.component,
-    props: {
-      api: codexApi,
-      onOpenFilePreview: openCodexFilePreview,
-    },
+    props: createCodexSubpanelProps(codexApi, openCodexFilePreview),
     title: t(definition.titleKey),
     width: definition.width,
     height: definition.height,
@@ -2023,27 +2036,110 @@ const {
   upsertPermissionEntry,
   removePermissionEntry,
   prunePermissionEntries,
+  clearPermissionEntries,
   fetchPendingPermissions,
 } = usePermissions({
   fw,
   allowedSessionIds,
   activeDirectory,
   ensureConnectionReady,
+  sendReply: async (requestId, reply) => {
+    if (activeBackendKind.value === 'codex' && requestId.startsWith('codex:')) {
+      const request = codexApi.serverRequests.value.find(
+        (item) => encodeCodexDialogRequestId(item.id) === requestId,
+      );
+      if (!request) return;
+      const decision = reply === 'reject'
+        ? 'decline'
+        : reply === 'always' && request.availableDecisions.includes('acceptForSession')
+          ? 'acceptForSession'
+          : 'accept';
+      codexApi.resolveServerRequest(request.id, decision);
+      return;
+    }
+    if (activeBackendKind.value === 'codex' && requestId.startsWith('codex-permission:')) {
+      codexApi.replyPermissionRequest(requestId, reply);
+      return;
+    }
+    const replyPermission = getActiveBackendAdapter().replyPermission;
+    if (!replyPermission) throw new Error('Active backend does not support permission replies.');
+    await replyPermission(requestId, {
+      directory: activeDirectory.value.trim() || undefined,
+      reply,
+    });
+  },
   onReplied: dismissCodexPermissionDialog,
 });
 
-const { upsertQuestionEntry, removeQuestionEntry, pruneQuestionEntries, fetchPendingQuestions } =
-  useQuestions({
+const {
+  upsertQuestionEntry,
+  removeQuestionEntry,
+  pruneQuestionEntries,
+  clearQuestionEntries,
+  fetchPendingQuestions,
+} = useQuestions({
     fw,
     allowedSessionIds,
     activeDirectory,
     ensureConnectionReady,
     getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
+    sendReply: async (requestId, answers) => {
+      const toolRequest = codexApi.toolUserInputRequests.value.find(
+        (request) => encodeCodexToolQuestionRequestId(request) === requestId,
+      );
+      if (toolRequest) {
+        await codexApi.respondToToolUserInput(
+          toolRequest.requestId,
+          toolRequest.questions.map((question, index) => ({
+            questionId: question.id,
+            response: answers[index]?.join('\n') ?? '',
+          })),
+        );
+        return;
+      }
+      const dynamicRequest = codexApi.dynamicToolCalls.value.find(
+        (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
+      );
+      if (dynamicRequest) {
+        const text = answers.flat().join('\n');
+        await codexApi.respondToDynamicToolCall(
+          dynamicRequest.requestId,
+          text ? [{ type: 'inputText', text }] : [],
+        );
+        return;
+      }
+      const replyQuestion = getActiveBackendAdapter().replyQuestion;
+      if (!replyQuestion) throw new Error('Active backend does not support question replies.');
+      await replyQuestion(requestId, {
+        directory: activeDirectory.value.trim() || undefined,
+        answers,
+      });
+    },
+    sendReject: async (requestId) => {
+      const toolRequest = codexApi.toolUserInputRequests.value.find(
+        (request) => encodeCodexToolQuestionRequestId(request) === requestId,
+      );
+      if (toolRequest) {
+        await codexApi.respondToToolUserInput(toolRequest.requestId, []);
+        return;
+      }
+      const dynamicRequest = codexApi.dynamicToolCalls.value.find(
+        (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
+      );
+      if (dynamicRequest) {
+        await codexApi.respondToDynamicToolCall(dynamicRequest.requestId, [], false);
+        return;
+      }
+      const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+      if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
+      await rejectQuestion(requestId, activeDirectory.value.trim() || undefined);
+    },
     onReplied: dismissCodexToolQuestionDialog,
     onRejected: dismissCodexToolQuestionDialog,
   });
 
 type CodexServerDialogRequest = (typeof codexApi.serverRequests.value)[number];
+type CodexStructuredPermissionDialogRequest = (typeof codexApi.permissionRequests.value)[number];
 type CodexToolUserInputDialogRequest = (typeof codexApi.toolUserInputRequests.value)[number];
 type CodexDynamicToolCallDialogRequest = (typeof codexApi.dynamicToolCalls.value)[number];
 
@@ -2151,6 +2247,45 @@ function normalizeCodexPermissionRequest(request: CodexServerDialogRequest): Per
   };
 }
 
+function codexStructuredPermissionPatterns(request: CodexStructuredPermissionDialogRequest) {
+  const patterns = new Set<string>();
+  const network = request.requestedPermissions.network;
+  if (network && typeof network === 'object') {
+    const enabled = Reflect.get(network, 'enabled');
+    if (typeof enabled === 'boolean') patterns.add(`network: ${enabled ? 'enabled' : 'disabled'}`);
+  }
+  const fileSystem = request.requestedPermissions.fileSystem;
+  if (fileSystem && typeof fileSystem === 'object') {
+    for (const access of ['read', 'write'] as const) {
+      const paths = Reflect.get(fileSystem, access);
+      if (Array.isArray(paths)) {
+        paths.filter((path): path is string => typeof path === 'string').forEach((path) => {
+          patterns.add(`${access}: ${path}`);
+        });
+      }
+    }
+  }
+  return Array.from(patterns);
+}
+
+function normalizeCodexStructuredPermissionRequest(
+  request: CodexStructuredPermissionDialogRequest,
+): PermissionRequest {
+  return {
+    id: request.dialogId,
+    sessionID: request.sessionID,
+    permission: t('codexPanel.serverRequests.additionalPermissions'),
+    patterns: codexStructuredPermissionPatterns(request),
+    metadata: {
+      turnId: request.turnId,
+      itemId: request.itemId,
+      cwd: request.cwd,
+      reason: request.reason,
+    },
+    always: ['session'],
+  };
+}
+
 function normalizeCodexToolQuestionRequest(
   request: CodexToolUserInputDialogRequest,
 ): QuestionRequest {
@@ -2159,10 +2294,11 @@ function normalizeCodexToolQuestionRequest(
     sessionID: request.threadId,
     questions: request.questions.map((question) => ({
       question: question.text,
-      header: question.text,
-      options: [{ label: 'Respond', description: 'Provide a text response to Codex.' }],
+      header: question.header,
+      options: question.options.map((option) => ({ ...option })),
       multiple: false,
-      custom: true,
+      custom: question.isOther || question.options.length === 0,
+      secret: question.isSecret,
     })),
     tool: {
       messageID: request.turnId,
@@ -2188,14 +2324,38 @@ function normalizeCodexDynamicToolCallRequest(
     ],
     tool: {
       messageID: request.turnId,
-      callID: String(request.requestId),
+      callID: request.callId,
     },
   };
 }
 
 const codexPermissionDialogIds = ref<Set<string>>(new Set());
+const codexStructuredPermissionDialogIds = ref<Set<string>>(new Set());
+const codexElicitationDialogIds = ref<Set<string>>(new Set());
 const codexQuestionDialogIds = ref<Set<string>>(new Set());
 const codexDynamicQuestionDialogIds = ref<Set<string>>(new Set());
+
+watch(activeBackendKind, () => {
+  promptDialogRef.value?.close();
+  promptResolve?.(null);
+  promptResolve = null;
+  confirmDialogRef.value?.close();
+  confirmResolve?.(false);
+  confirmResolve = null;
+  confirmQueue.splice(0).forEach(({ resolve }) => resolve(false));
+  clearPermissionEntries();
+  clearQuestionEntries();
+  codexPermissionDialogIds.value.forEach(removePermissionEntry);
+  codexStructuredPermissionDialogIds.value.forEach(removePermissionEntry);
+  codexElicitationDialogIds.value.forEach((id) => fw.close(codexElicitationWindowKey(id)));
+  codexQuestionDialogIds.value.forEach(removeQuestionEntry);
+  codexDynamicQuestionDialogIds.value.forEach(removeQuestionEntry);
+  codexPermissionDialogIds.value = new Set();
+  codexStructuredPermissionDialogIds.value = new Set();
+  codexElicitationDialogIds.value = new Set();
+  codexQuestionDialogIds.value = new Set();
+  codexDynamicQuestionDialogIds.value = new Set();
+});
 
 watch(
   () => codexApi.serverRequests.value,
@@ -2207,6 +2367,71 @@ watch(
     });
     requests.forEach((request) => upsertPermissionEntry(normalizeCodexPermissionRequest(request)));
     codexPermissionDialogIds.value = nextIds;
+  },
+  { deep: true },
+);
+
+watch(
+  () => codexApi.permissionRequests.value,
+  (requests) => {
+    if (activeBackendKind.value !== 'codex') return;
+    const nextIds = new Set(requests.map((request) => request.dialogId));
+    codexStructuredPermissionDialogIds.value.forEach((id) => {
+      if (!nextIds.has(id)) removePermissionEntry(id);
+    });
+    requests.forEach((request) =>
+      upsertPermissionEntry(normalizeCodexStructuredPermissionRequest(request)),
+    );
+    codexStructuredPermissionDialogIds.value = nextIds;
+  },
+  { deep: true },
+);
+
+function codexElicitationWindowKey(dialogId: string) {
+  return `elicitation:${dialogId}`;
+}
+
+function openCodexElicitationDialog(
+  request: (typeof codexApi.elicitationRequests.value)[number],
+) {
+  const width = 560;
+  const height = request.mode === 'form' ? 560 : 340;
+  void fw.open(codexElicitationWindowKey(request.dialogId), {
+    component: CodexMcpElicitation,
+    props: {
+      request,
+      onReply: (
+        action: 'accept' | 'decline' | 'cancel',
+        content?: Record<string, unknown>,
+      ) => {
+        try {
+          codexApi.replyElicitationRequest(request.dialogId, action, content);
+        } catch (error) {
+          sessionError.value = toErrorMessage(error);
+        }
+      },
+    },
+    title: t('codexPanel.elicitation.title', { server: request.serverName }),
+    width,
+    height,
+    closable: false,
+    resizable: true,
+    scroll: 'none',
+    focusOnOpen: true,
+    expiry: Infinity,
+  });
+}
+
+watch(
+  () => codexApi.elicitationRequests.value,
+  (requests) => {
+    if (activeBackendKind.value !== 'codex') return;
+    const nextIds = new Set(requests.map((request) => request.dialogId));
+    codexElicitationDialogIds.value.forEach((id) => {
+      if (!nextIds.has(id)) fw.close(codexElicitationWindowKey(id));
+    });
+    requests.forEach(openCodexElicitationDialog);
+    codexElicitationDialogIds.value = nextIds;
   },
   { deep: true },
 );
@@ -2361,6 +2586,20 @@ watch(
 const todoPanelSessions = computed(() => {
   const allowed = allowedSessionIds.value;
   if (allowed.size === 0) return [] as TodoPanelSession[];
+  if (activeBackendKind.value === 'codex') {
+    const titles = new Map(
+      Array.from(allowed, (sessionId) => {
+        const session = sessions.value.find((item) => item.id === sessionId);
+        return [sessionId, sessionLabel(session ?? { id: sessionId })] as const;
+      }),
+    );
+    return codexPlansToTodoSessions(
+      codexApi.planItems.value,
+      allowed,
+      selectedSessionId.value,
+      titles,
+    );
+  }
   const list = Array.from(allowed).map((sessionId) => {
     const session = sessions.value.find((item) => item.id === sessionId);
     const title = sessionLabel(session ?? { id: sessionId });
@@ -6690,7 +6929,6 @@ watch(
   [activeBackendKind, () => codexApi.connected.value],
   ([backendKind, connected]) => {
     if (backendKind !== 'codex' || !connected) return;
-    void codexApi.refreshArchivedThreads();
   },
   { immediate: true },
 );
@@ -8586,6 +8824,7 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   configureCodexBackend,
   configureAcpBackend,
   disconnectAcpBackend,
+  disconnectCodexBackend,
   bootstrapAcpWorkspace,
   fetchGlobalProviderConfig,
   fetchProviders,
