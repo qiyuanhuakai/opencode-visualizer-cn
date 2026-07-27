@@ -14,6 +14,16 @@
 - [x] ACP 反向文件与终端调用由 bridge 执行，按 Agent/Session 隔离并限制在会话目录。
 - [x] ACP 可选的 list/resume/load 能力按 Agent 声明降级，不伪造协议能力。
 
+### Codex 后端修复
+
+- [x] 按 Codex app-server 当前协议仅显示精确 10,080 分钟的周限额，移除已经失效的 5 小时额度与分钟数文案，并统一 Status Monitor、Codex Panel 与多语言显示。
+- [x] 使用 app-server `initialize` 返回的真实运行版本替代硬编码版本，Status Monitor 现在可显示当前 Codex app-server 版本。
+- [x] 缩短 Codex 登录关键路径：线程列表就绪后即可进入主界面，模型、工具、配置、自定义提供商与 Codex Panel 数据改为后台加载。
+- [x] 修复 Codex reasoning 与非 Web Search 工具调用在主 VIS 中缺失或刷新后消失的问题；适配当前 reasoning 数组与 `collabAgentToolCall` wire 格式，并按线程持久化 app-server 历史接口无法返回的辅助消息。
+- [x] 修复仅包含 archived 会话的 fork 默认仍显示的问题；此类 fork 现在默认隐藏，但搜索 `archived` 时仍可检索对应 fork 与 archived 会话。
+- [x] 修复 Codex 线程切换、重连、rollback 与后台预加载中的异步竞态，防止旧线程事件、旧账号/配置/模型响应、旧 homedir 与 Git 信息覆盖当前连接或重新写回已回滚历史。
+- [x] 修复 Codex 自定义模型提供商线程补水阻塞登录、重复请求基础线程列表及后台合并后线程顺序错误的问题。
+
 ## [v0.6.0 released]
 
 ### 新后端支持(alpha)
@@ -27,7 +37,6 @@
 - [x] 状态监控面板的 skills 标签支持启用/禁用 toggle（复用 MCP 模式，调用 Codex `skills/config/write` RPC）
 - [x] 启用 Codex adapter 的 `experimentalApi` capability，使 `collaborationMode/list` 等实验性 RPC 可用
 - [x] status monitor面板支持显示codex插件
-- [x] 修改“应用（app）”的翻译为“连接器（connector）”
 - [x] forgecode panel 迭代与修复
 	- [x] 添加forge panel，用于以pty+辅助gui的形式与forgecode zsh交互
     - [x] 设置里增加panel按钮的开关（类似codex panel）
