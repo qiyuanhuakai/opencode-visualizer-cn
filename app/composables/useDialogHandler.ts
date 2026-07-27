@@ -133,6 +133,12 @@ export function useDialogHandler<R extends DialogRequestBase>(options: {
     }
   }
 
+  function clearAll() {
+    options.fw.closeAll({ exclude: (key) => !key.startsWith(`${options.kind}:`) });
+    sendingById.value = {};
+    errorById.value = {};
+  }
+
   function makeReplyFlow(props: {
     ensureConnectionReady: (action: string) => boolean;
     activeDirectory: Ref<string>;
@@ -197,6 +203,7 @@ export function useDialogHandler<R extends DialogRequestBase>(options: {
     refresh,
     remove,
     prune,
+    clearAll,
     makeReplyFlow,
     makeRejectFlow,
   };
