@@ -52,7 +52,18 @@
         </div>
 
         <div v-if="item.custom !== false" class="custom-answer">
+          <input
+            v-if="item.secret"
+            class="custom-input"
+            type="password"
+            :value="customAnswers[index] ?? ''"
+            :disabled="isSubmitting"
+            :placeholder="$t('toolWindow.question.customAnswer')"
+            autocomplete="off"
+            @input="updateCustom(index, $event)"
+          />
           <textarea
+            v-else
             class="custom-input"
             rows="3"
             :value="customAnswers[index] ?? ''"
@@ -105,6 +116,7 @@ type QuestionInfo = {
   options: QuestionOption[];
   multiple?: boolean;
   custom?: boolean;
+  secret?: boolean;
 };
 
 type QuestionRequest = {
@@ -150,8 +162,12 @@ function loadAllDrafts(): Record<string, QuestionDraft> {
 function saveDraft() {
   const all = loadAllDrafts();
   all[props.request.id] = {
-    selectedAnswers: selectedAnswers.value,
-    customAnswers: customAnswers.value,
+    selectedAnswers: selectedAnswers.value.map((answers, index) => (
+      props.request.questions[index]?.secret ? [] : answers
+    )),
+    customAnswers: customAnswers.value.map((answer, index) => (
+      props.request.questions[index]?.secret ? '' : answer
+    )),
   };
   storageSetJSON(draftStorageKey(), all);
 }
@@ -241,7 +257,7 @@ function toggleOption(index: number, label: string, multiple: boolean) {
 
 function updateCustom(index: number, event: Event) {
   const target = event.target;
-  if (!(target instanceof HTMLTextAreaElement)) return;
+  if (!(target instanceof HTMLTextAreaElement) && !(target instanceof HTMLInputElement)) return;
   customAnswers.value[index] = target.value;
   scheduleDraftSave();
 }

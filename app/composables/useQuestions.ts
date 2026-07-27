@@ -17,6 +17,7 @@ export type QuestionInfo = {
   options: QuestionOption[];
   multiple?: boolean;
   custom?: boolean;
+  secret?: boolean;
 };
 
 export type QuestionRequest = {
@@ -40,6 +41,8 @@ export function useQuestions(options: {
   activeDirectory: Ref<string>;
   ensureConnectionReady: (action: string) => boolean;
   getTextContent: (messageId: string) => string;
+  sendReply?: (requestId: string, answers: QuestionAnswer[]) => Promise<void>;
+  sendReject?: (requestId: string) => Promise<void>;
   onReplied?: (requestId: string) => void;
   onRejected?: (requestId: string) => void;
 }) {
@@ -55,6 +58,11 @@ export function useQuestions(options: {
     activeDirectory: options.activeDirectory,
     actionKey: 'app.actions.questionReply',
     sendReply: async (requestId, answers) => {
+      if (options.sendReply) {
+        await options.sendReply(requestId, normalizeQuestionAnswers(answers as QuestionAnswer[]));
+        options.onReplied?.(requestId);
+        return;
+      }
       const replyQuestion = getActiveBackendAdapter().replyQuestion;
       if (!replyQuestion) throw new Error('Active backend does not support question replies.');
       await replyQuestion(requestId, {
@@ -70,6 +78,11 @@ export function useQuestions(options: {
     activeDirectory: options.activeDirectory,
     actionKey: 'app.actions.questionReject',
     sendReject: async (requestId) => {
+      if (options.sendReject) {
+        await options.sendReject(requestId);
+        options.onRejected?.(requestId);
+        return;
+      }
       const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
       if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
       await rejectQuestion(requestId, options.activeDirectory.value.trim() || undefined);
@@ -123,6 +136,7 @@ export function useQuestions(options: {
         options: optionsList,
         multiple: info.multiple === true,
         custom: info.custom !== false,
+        secret: info.secret === true,
       });
     });
     const toolRaw =
@@ -186,6 +200,10 @@ export function useQuestions(options: {
     dialog.prune();
   }
 
+  function clearQuestionEntries() {
+    dialog.clearAll();
+  }
+
   function isQuestionSessionAllowed(request: QuestionRequest): boolean {
     return dialog.isSessionAllowed(request);
   }
@@ -221,6 +239,7 @@ export function useQuestions(options: {
     upsertQuestionEntry,
     removeQuestionEntry,
     pruneQuestionEntries,
+    clearQuestionEntries,
     handleQuestionReply,
     handleQuestionReject,
     isQuestionSessionAllowed,
