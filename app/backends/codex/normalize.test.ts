@@ -208,8 +208,8 @@ describe('normalizeCodexTurnItems', () => {
         {
           id: 'reasoning-1',
           type: 'reasoning',
-          summary: 'Thinking about the problem',
-          text: 'Detailed reasoning text',
+          summary: ['Thinking about the problem', 'Checking the result'],
+          content: ['Detailed reasoning text'],
         },
       ],
     });
@@ -220,7 +220,7 @@ describe('normalizeCodexTurnItems', () => {
     expect(result.parts[0]).toMatchObject({
       type: 'reasoning',
       id: 'reasoning-1',
-      text: 'Thinking about the problem',
+      text: 'Thinking about the problem\n\nChecking the result',
     });
   });
 
@@ -251,7 +251,11 @@ describe('normalizeCodexTurnItems', () => {
           server: 'my-server',
           tool: 'search',
           arguments: { query: 'test' },
-          result: 'found 3 results',
+          result: {
+            content: [{ type: 'text', text: 'found 3 results' }],
+            structuredContent: null,
+            _meta: null,
+          },
           status: 'completed',
         },
       ],
@@ -293,6 +297,35 @@ describe('normalizeCodexTurnItems', () => {
         output: 'tool output',
       },
     });
+  });
+
+  it('maps current collabAgentToolCall items to canonical tool parts', () => {
+    const result = normalizeCodexTurnItems({
+      sessionId: 'thread-collab',
+      turnId: 'turn-collab',
+      items: [
+        {
+          id: 'collab-1',
+          type: 'collabAgentToolCall',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'thread-collab',
+          receiverThreadIds: ['thread-child'],
+          prompt: 'Inspect the parser',
+          model: null,
+          reasoningEffort: null,
+          agentsStates: { 'thread-child': { status: 'completed' } },
+        },
+      ],
+    });
+
+    expect(result.parts).toEqual([
+      expect.objectContaining({
+        type: 'tool',
+        tool: 'spawnAgent',
+        state: expect.objectContaining({ status: 'completed' }),
+      }),
+    ]);
   });
 
   it('maps contextCompaction items to canonical compaction parts', () => {
@@ -440,7 +473,7 @@ describe('normalizeCodexTurnItems', () => {
           id: 'turn-4',
           items: [
             { id: 'u4', type: 'userMessage', content: [{ type: 'text', text: 'fix bug' }] },
-            { id: 'r4', type: 'reasoning', summary: 'analyzing code' },
+            { id: 'r4', type: 'reasoning', summary: ['analyzing code'], content: [] },
             { id: 'a4', type: 'agentMessage', text: 'fixed' },
             { id: 'c4', type: 'contextCompaction' },
           ],
