@@ -1,5 +1,5 @@
 import { reactive, ref } from 'vue';
-import type { WorkerToTabMessage } from '../types/sse-worker';
+import type { DirectorySessionHydration, WorkerToTabMessage } from '../types/sse-worker';
 import type { ProjectState, WorkerNotificationEntry } from '../types/worker-state';
 
 type NotificationShowMessage = Extract<WorkerToTabMessage, { type: 'notification.show' }>;
@@ -7,6 +7,8 @@ type NotificationShowMessage = Extract<WorkerToTabMessage, { type: 'notification
 export function useServerState() {
   const projects = reactive<Record<string, ProjectState>>({});
   const notifications = reactive<Record<string, WorkerNotificationEntry>>({});
+  const sessionHydrationByDirectory = reactive<Record<string, DirectorySessionHydration>>({});
+  const fullTreeHydrated = ref(false);
   const bootstrapped = ref(false);
 
   let onNotificationShow: ((message: NotificationShowMessage) => void) | undefined;
@@ -25,10 +27,19 @@ export function useServerState() {
     Object.assign(notifications, next);
   }
 
+  function replaceSessionHydration(next: Record<string, DirectorySessionHydration>) {
+    Object.keys(sessionHydrationByDirectory).forEach((key) => {
+      delete sessionHydrationByDirectory[key];
+    });
+    Object.assign(sessionHydrationByDirectory, next);
+  }
+
   function handleStateMessage(message: WorkerToTabMessage): boolean {
     if (message.type === 'state.bootstrap') {
       replaceProjects(message.projects);
       replaceNotifications(message.notifications);
+      replaceSessionHydration(message.sessionHydrationByDirectory ?? {});
+      fullTreeHydrated.value = false;
       bootstrapped.value = true;
       return true;
     }
@@ -42,6 +53,14 @@ export function useServerState() {
     }
     if (message.type === 'state.notifications-updated') {
       replaceNotifications(message.notifications);
+      return true;
+    }
+    if (message.type === 'state.directory-hydration-updated') {
+      sessionHydrationByDirectory[message.directory] = message.hydration;
+      return true;
+    }
+    if (message.type === 'state.background-hydration-complete') {
+      fullTreeHydrated.value = true;
       return true;
     }
     if (message.type === 'notification.show') {
@@ -58,6 +77,8 @@ export function useServerState() {
   return {
     projects,
     notifications,
+    sessionHydrationByDirectory,
+    fullTreeHydrated,
     bootstrapped,
     handleStateMessage,
     setNotificationShowHandler,

@@ -1141,6 +1141,7 @@ const messages: LocaleMessages = {
     noAvailableProject: '選択可能なプロジェクトがありません。',
     failedToResolveSessionId: '既存のセッションからセッションIDを解決できませんでした。',
     failedToResolveCreatedSession: '作成されたセッションの選択を解決できませんでした。',
+    sessionNotFound: 'このサーバーでセッションが見つかりませんでした。',
     sessionCreateEmptyWorktree: 'セッション作成に失敗しました: プロジェクトワークツリーが空です。',
     sessionCreateEmptyDirectory: 'セッション作成に失敗しました: アクティブディレクトリが空です。',
     noFilesInWorktreeSnapshot: 'ワークツリースナップショットからファイルを解析できませんでした。',

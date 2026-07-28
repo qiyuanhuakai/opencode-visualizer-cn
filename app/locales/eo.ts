@@ -1139,6 +1139,7 @@ const messages: LocaleMessages = {
     noAvailableProject: 'Neniu disponebla projekto por elekto.',
     failedToResolveSessionId: 'Ne eblis solvi seancan ID el ekzistanta seanco.',
     failedToResolveCreatedSession: 'Ne eblis solvi elekton por kreita seanco.',
+    sessionNotFound: 'Seanco ne trovita sur ĉi tiu servilo.',
     sessionCreateEmptyWorktree: 'Kreo de seanco malsukcesis: projekta worktree estas malplena.',
     sessionCreateEmptyDirectory: 'Kreo de seanco malsukcesis: aktiva dosierujo estas malplena.',
     noFilesInWorktreeSnapshot: 'Neniu dosiero analizita el laborarba ekrankopio.',

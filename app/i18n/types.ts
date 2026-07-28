@@ -1187,6 +1187,7 @@ export interface LocaleMessages {
     noAvailableProject: string;
     failedToResolveSessionId: string;
     failedToResolveCreatedSession: string;
+    sessionNotFound: string;
     sessionCreateEmptyWorktree: string;
     sessionCreateEmptyDirectory: string;
     noFilesInWorktreeSnapshot: string;

@@ -12,6 +12,10 @@ export function useBackendSelectionBootstrap(params: {
   sessionExistsInProjects: (projectId: string, sessionId: string) => boolean;
   switchSessionSelection: (projectId: string, sessionId: string) => Promise<void>;
   initializeSessionSelection: () => Promise<void>;
+  // Target-directed OpenCode bootstrap (useOpenCodeSelectionBootstrap). When
+  // provided, the OpenCode branch delegates to it and never falls back to a
+  // global unhydrated scan. Optional until App.vue is rewired.
+  bootstrapOpenCodeSelection?: () => Promise<void>;
 }) {
   async function bootstrapSelection() {
     const initialProjectId = params.initialProjectId().trim();
@@ -23,6 +27,11 @@ export function useBackendSelectionBootstrap(params: {
       if (!params.selectedSessionId.value && activeSessionId) {
         params.selectedSessionId.value = activeSessionId;
       }
+      return;
+    }
+
+    if (params.bootstrapOpenCodeSelection) {
+      await params.bootstrapOpenCodeSelection();
       return;
     }
 

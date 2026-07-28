@@ -1137,6 +1137,7 @@ const messages: LocaleMessages = {
     noAvailableProject: 'No available project for selection.',
     failedToResolveSessionId: 'Failed to resolve session id from existing session.',
     failedToResolveCreatedSession: 'Failed to resolve selection for created session.',
+    sessionNotFound: 'Session not found on this server.',
     sessionCreateEmptyWorktree: 'Session create failed: project worktree is empty.',
     sessionCreateEmptyDirectory: 'Session create failed: active directory is empty.',
     noFilesInWorktreeSnapshot: 'No files parsed from working tree snapshot.',

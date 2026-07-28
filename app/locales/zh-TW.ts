@@ -1123,6 +1123,7 @@ const messages: LocaleMessages = {
     noAvailableProject: '沒有可用的專案進行選擇。',
     failedToResolveSessionId: '無法從現有工作階段解析工作階段 ID。',
     failedToResolveCreatedSession: '無法解析建立工作階段的選擇。',
+    sessionNotFound: '在此伺服器上找不到該工作階段。',
     sessionCreateEmptyWorktree: '建立工作階段失敗：專案工作區為空。',
     sessionCreateEmptyDirectory: '建立工作階段失敗：活動目錄為空。',
     noFilesInWorktreeSnapshot: '無法從工作區快照解析檔案。',

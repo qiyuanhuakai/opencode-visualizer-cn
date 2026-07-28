@@ -1124,6 +1124,7 @@ const messages: LocaleMessages = {
     noAvailableProject: '没有可用的项目进行选择。',
     failedToResolveSessionId: '无法从现有会话解析会话 ID。',
     failedToResolveCreatedSession: '无法解析创建会话的选择。',
+    sessionNotFound: '在此服务器上未找到该会话。',
     sessionCreateEmptyWorktree: '创建会话失败：项目工作区为空。',
     sessionCreateEmptyDirectory: '创建会话失败：活动目录为空。',
     noFilesInWorktreeSnapshot: '无法从工作区快照解析文件。',

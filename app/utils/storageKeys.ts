@@ -80,6 +80,7 @@ export const StorageKeys = {
     forgePtyId: 'state.forgePtyId.v1',
     acpArchivedSessions: 'state.acpArchivedSessions.v1',
     acpMessageAttribution: 'state.acpMessageAttribution.v1',
+    openCodeLastSelection: 'state.openCodeLastSelection.v1',
   },
   drafts: {
     composer: 'drafts.composer.v1',

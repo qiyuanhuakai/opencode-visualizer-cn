@@ -625,6 +625,7 @@ import { appendCodexBridgeToken, codexBridgeHttpUrl } from './backends/codex/bri
 import { CODEX_PROJECT_ID, useCodexWorkspace } from './composables/useCodexWorkspace';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
+import { useOpenCodeSelectionBootstrap } from './composables/useOpenCodeSelectionBootstrap';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml, type RenderRequest } from './utils/workerRenderer';
@@ -699,6 +700,13 @@ import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
 import { useSettings } from './composables/useSettings';
 import {
+  clearOpenCodeLastSelection,
+  readOpenCodeLastSelection,
+  writeOpenCodeLastSelection,
+} from './utils/openCodeSelectionStorage';
+import { waitForState } from './utils/waitForState';
+import { mapWithConcurrency } from './utils/mapWithConcurrency';
+import {
   StorageKeys,
   storageGet,
   storageKey,
@@ -722,6 +730,7 @@ type LocalizedStatusState =
   | { mode: 'text'; text: string }
   | { mode: 'render'; render: () => string };
 const credentials = useCredentials();
+const ge = useGlobalEvents(credentials);
 const {
   suppressAutoWindows,
   showMinimizeButtons,
@@ -1566,10 +1575,51 @@ const openCodeApi = useOpenCodeApi(serverState.projects, t);
 const codexApi = useCodexApi();
 const codexWorkspace = useCodexWorkspace(codexApi, { pinnedStore: localPinnedSessionStore });
 const bootstrapReady = serverState.bootstrapped;
+
+const PROJECT_HYDRATION_CONCURRENCY = 2;
+
+async function ensureOpenCodeDirectoryHydrated(directoryHint: string): Promise<void> {
+  const directory = directoryHint.trim();
+  if (!directory) return;
+  const status = serverState.sessionHydrationByDirectory[directory]?.status;
+  if (status === 'loaded') return;
+  if (status !== 'loading') {
+    ge.sendToWorker({ type: 'load-sessions', directory });
+  }
+  await waitForState(
+    () => serverState.sessionHydrationByDirectory,
+    (hydration) => {
+      const next = hydration[directory]?.status;
+      return next === 'loaded' || next === 'error';
+    },
+  );
+  const hydration = serverState.sessionHydrationByDirectory[directory];
+  if (hydration?.status === 'error') {
+    throw new Error(hydration.error || t('errors.stateSyncFailed'));
+  }
+}
+
+async function ensureOpenCodeProjectHydrated(projectId: string): Promise<void> {
+  const project = serverState.projects[projectId];
+  if (!project) return;
+  const directories = new Set([
+    project.worktree,
+    ...Object.values(project.sandboxes).map((sandbox) => sandbox.directory),
+  ]);
+  const results = await mapWithConcurrency(
+    [...directories],
+    PROJECT_HYDRATION_CONCURRENCY,
+    ensureOpenCodeDirectoryHydrated,
+  );
+  for (const result of results) {
+    if (result.status === 'rejected') throw result.reason;
+  }
+}
+
 const sessionSelection = useSessionSelection(
   computed(() => serverState.projects),
-  async (projectId) => {
-    const directory = serverState.projects[projectId]?.worktree?.trim();
+  async (projectId, directoryHint) => {
+    const directory = directoryHint?.trim() || serverState.projects[projectId]?.worktree?.trim();
     if (!directory) {
       throw new Error(t('errors.sessionCreateEmptyWorktree'));
     }
@@ -1580,15 +1630,34 @@ const sessionSelection = useSessionSelection(
     return { id: created.id, projectId: projectId };
   },
   t,
+  {
+    ensureDirectoryHydrated: ensureOpenCodeDirectoryHydrated,
+    ensureProjectHydrated: ensureOpenCodeProjectHydrated,
+  },
 );
 const {
   selectedProjectId,
   selectedSessionId,
   projectDirectory,
   activeDirectory,
-  switchSession: switchSessionSelection,
+  switchSession: switchSessionSelectionInternal,
+  ensureDirectorySession,
   initialize: initializeSessionSelection,
 } = sessionSelection;
+
+function persistActiveOpenCodeSelection() {
+  if (activeBackendKind.value !== 'opencode') return;
+  const projectId = selectedProjectId.value.trim();
+  const sessionId = selectedSessionId.value.trim();
+  const directory = activeDirectory.value.trim();
+  if (!projectId || !sessionId || !directory) return;
+  writeOpenCodeLastSelection(currentServerUrl.value, { projectId, sessionId, directory });
+}
+
+async function switchSessionSelection(projectId: string, sessionId: string) {
+  await switchSessionSelectionInternal(projectId, sessionId);
+  persistActiveOpenCodeSelection();
+}
 
 function toSessionInfo(
   projectId: string,
@@ -1720,8 +1789,30 @@ const subagentWindows = useSubagentWindows({
 
 const homePath = ref('');
 const serverWorktreePath = ref('');
+const currentServerUrl = computed(() => credentials.baseUrl.value.trim().replace(/\/+$/, ''));
 
 const initialQuery = readQuerySelection();
+const { bootstrapOpenCodeSelection } = useOpenCodeSelectionBootstrap({
+  projects: computed(() => serverState.projects),
+  sessionHydrationByDirectory: () => serverState.sessionHydrationByDirectory,
+  serverWorktreePath: () => serverWorktreePath.value,
+  initialProjectId: () => initialQuery.projectId,
+  initialSessionId: () => initialQuery.sessionId,
+  readStoredSelection: () => readOpenCodeLastSelection(currentServerUrl.value),
+  clearStoredSelection: () => clearOpenCodeLastSelection(currentServerUrl.value),
+  loadDirectorySessions: (directory) => {
+    ge.sendToWorker({ type: 'load-sessions', directory });
+  },
+  selectedProjectId,
+  selectedSessionId,
+  switchSessionSelection,
+  ensureDirectorySession: async (projectId, directory) => {
+    const sessionId = await ensureDirectorySession(projectId, directory);
+    persistActiveOpenCodeSelection();
+    return sessionId;
+  },
+  translate: t,
+});
 const isProjectPickerOpen = ref(false);
 const editingProject = ref<{ projectId: string; worktree: string } | null>(null);
 const editingProjectMeta = computed(() => {
@@ -3114,9 +3205,7 @@ async function hydrateActiveWorktreeResources() {
   const directory = activeDirectory.value.trim();
   if (!directory) return;
   initLoadingMessage.value = t('app.status.loadingWorktreeState');
-  await Promise.all([
-    reloadTree(),
-    refreshGitStatus({ includeFileSnapshot: false }),
+  await Promise.allSettled([
     fetchCommands(directory),
     fetchPendingPermissions(directory),
     fetchPendingQuestions(directory),
@@ -6893,8 +6982,34 @@ const toolRendererHelpers = {
   WebContent,
 };
 
-const ge = useGlobalEvents(credentials);
-ge.setWorkerMessageHandler(serverState.handleStateMessage);
+let fullTreeMarkRecorded = false;
+
+function markFullTreeReady() {
+  if (
+    fullTreeMarkRecorded ||
+    !serverState.fullTreeHydrated.value ||
+    uiInitState.value !== 'ready'
+  ) {
+    return;
+  }
+  fullTreeMarkRecorded = true;
+  if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+    performance.mark('vis:opencode-full-tree');
+  }
+}
+
+ge.setWorkerMessageHandler((message) => {
+  const handled = serverState.handleStateMessage(message);
+  if (!handled) return false;
+  if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+    if (message.type === 'state.bootstrap') {
+      fullTreeMarkRecorded = false;
+      performance.mark('vis:opencode-topology-ready');
+    }
+  }
+  if (message.type === 'state.background-hydration-complete') markFullTreeReady();
+  return true;
+});
 serverState.setNotificationShowHandler((message) => {
   showBrowserNotification(message.projectId, message.sessionId, message.kind);
 });
@@ -6909,6 +7024,8 @@ subagentWindows.bindScope(sessionScope);
 watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelectionToWorker, {
   immediate: true,
 });
+
+watch([() => serverState.fullTreeHydrated.value, uiInitState], markFullTreeReady);
 
 watch(
   [
@@ -7463,6 +7580,7 @@ const backendSelectionBootstrap = useBackendSelectionBootstrap({
   initializeSessionSelection: async () => {
     await initializeSessionSelection();
   },
+  bootstrapOpenCodeSelection,
 });
 
 function formatToolValue(value: unknown) {

@@ -1,4 +1,8 @@
-import type { TabToWorkerMessage, WorkerToTabMessage } from '../types/sse-worker';
+import type {
+  DirectorySessionHydration,
+  TabToWorkerMessage,
+  WorkerToTabMessage,
+} from '../types/sse-worker';
 import type {
   ProjectInfo,
   SessionInfo,
@@ -13,6 +17,7 @@ import { createNotificationManager } from '../utils/notificationManager';
 import { createOpenCodeAdapter } from '../backends/openCodeAdapter';
 import { createSseConnection, type SseConnection } from '../utils/sseConnection';
 import { createStateBuilder } from '../utils/stateBuilder';
+import { mapWithConcurrency } from '../utils/mapWithConcurrency';
 
 type SharedWorkerSelf = {
   onconnect: ((event: MessageEvent) => void) | null;
@@ -35,19 +40,18 @@ type ConnectionState = {
     projectId: string;
     sessionId: string;
   } | null;
-  sessionHydrationLevelByDirectory: Map<string, 'preview' | 'full'>;
-  sessionHydrationInFlightByDirectory: Map<
-    string,
-    {
-      mode: 'preview' | 'full';
-      promise: Promise<void>;
-    }
-  >;
+  sessionHydrationByDirectory: Map<string, DirectorySessionHydration>;
+  sessionHydrationInFlightByDirectory: Map<string, Promise<void>>;
   vcsHydratedDirectories: Set<string>;
   vcsHydrationInFlightByDirectory: Map<string, Promise<void>>;
   isBootstrappingState: boolean;
   bufferedStatePackets: SsePacket[];
   pendingSelectedDirectory: string | null;
+  topologyReady: boolean;
+  hydrationGeneration: number;
+  backgroundHydrationRequested: boolean;
+  backgroundHydrationStarted: boolean;
+  backgroundHydrationCompleteSent: boolean;
 };
 
 const connections = new Map<string, ConnectionState>();
@@ -88,6 +92,23 @@ function broadcast(state: ConnectionState, message: WorkerToTabMessage) {
   for (const port of state.ports) {
     send(port, message);
   }
+}
+
+function isCurrentConnection(state: ConnectionState) {
+  return connections.get(state.key) === state;
+}
+
+function getSessionHydrationSnapshot(state: ConnectionState) {
+  return Object.fromEntries(state.sessionHydrationByDirectory);
+}
+
+function emitDirectoryHydration(
+  state: ConnectionState,
+  directory: string,
+  hydration: DirectorySessionHydration,
+) {
+  state.sessionHydrationByDirectory.set(directory, hydration);
+  broadcast(state, { type: 'state.directory-hydration-updated', directory, hydration });
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -591,8 +612,8 @@ async function runOpencodeReadTask<T>(state: ConnectionState, task: () => Promis
 }
 
 function collectProjectDirectories(projects: Array<Record<string, unknown>>) {
-  const directories: string[] = [''];
-  const seen = new Set<string>(directories);
+  const directories: string[] = [];
+  const seen = new Set<string>();
 
   projects.forEach((project) => {
     const worktree = normalizeDirectory(asString(project.worktree) ?? '');
@@ -613,73 +634,65 @@ function collectProjectDirectories(projects: Array<Record<string, unknown>>) {
   return directories;
 }
 
-async function loadDirectorySessions(
-  state: ConnectionState,
-  directory: string,
-  mode: 'preview' | 'full',
-) {
+async function loadDirectorySessions(state: ConnectionState, directory: string) {
   const normalizedDirectory = normalizeDirectory(directory);
-  const currentLevel = state.sessionHydrationLevelByDirectory.get(normalizedDirectory);
-  if (currentLevel === 'full' || (currentLevel === 'preview' && mode === 'preview')) {
+  const hydration = state.sessionHydrationByDirectory.get(normalizedDirectory);
+  if (!hydration || hydration.status === 'loaded') {
     return;
   }
 
   const inFlight = state.sessionHydrationInFlightByDirectory.get(normalizedDirectory);
   if (inFlight) {
-    if (inFlight.mode === 'full' || inFlight.mode === mode) {
-      await inFlight.promise;
-      return;
-    }
-    await inFlight.promise;
-    return loadDirectorySessions(state, normalizedDirectory, mode);
+    await inFlight;
+    return;
   }
 
+  const generation = state.hydrationGeneration;
+  emitDirectoryHydration(state, normalizedDirectory, { status: 'loading' });
   const promise = runOpencodeReadTask(state, async () => {
     const [rawSessions, rawStatuses] = await Promise.all([
-      opencodeBackend.listSessions({
-        directory: normalizedDirectory,
-        roots: true,
-      }),
+      opencodeBackend.listSessions({ directory: normalizedDirectory, roots: true }),
       opencodeBackend.getSessionStatusMap?.(normalizedDirectory),
     ]);
+    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) return;
 
     // Guard against resurrecting a deleted worktree: if the sandbox no longer
     // exists in the current state builder, skip applying stale session data.
     const liveProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
     const liveProject = liveProjectId ? state.stateBuilder.getProject(liveProjectId) : undefined;
-    if (!liveProject?.sandboxes[normalizedDirectory]) {
-      return;
-    }
+    if (!liveProject?.sandboxes[normalizedDirectory]) return;
 
-    const sessions = asObjectArray(rawSessions) as Parameters<
-      typeof state.stateBuilder.applySessions
-    >[0];
+    const sessions = asObjectArray(rawSessions) as Parameters<typeof state.stateBuilder.applySessions>[0];
     state.stateBuilder.applySessions(sessions);
     state.stateBuilder.applyStatuses(asStatusMap(rawStatuses));
 
     const projectIds = new Set<string>();
     const resolvedProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
-    if (resolvedProjectId) {
-      projectIds.add(resolvedProjectId);
-    }
+    if (resolvedProjectId) projectIds.add(resolvedProjectId);
     for (const session of sessions) {
       const projectId = session.projectID?.trim();
       if (projectId) projectIds.add(projectId);
     }
-
-    for (const projectId of projectIds) {
-      emitProjectUpdated(state, projectId);
-    }
-
-    state.sessionHydrationLevelByDirectory.set(normalizedDirectory, mode);
-  }).finally(() => {
+    for (const projectId of projectIds) emitProjectUpdated(state, projectId);
+    emitDirectoryHydration(state, normalizedDirectory, { status: 'loaded' });
+  })
+    .catch((error: unknown) => {
+      if (isCurrentConnection(state) && state.hydrationGeneration === generation) {
+        emitDirectoryHydration(state, normalizedDirectory, {
+          status: 'error',
+          error: error instanceof Error ? error.message : 'Failed to load directory sessions.',
+        });
+      }
+      throw error;
+    })
+    .finally(() => {
     const active = state.sessionHydrationInFlightByDirectory.get(normalizedDirectory);
-    if (active?.promise === promise) {
+    if (active === promise) {
       state.sessionHydrationInFlightByDirectory.delete(normalizedDirectory);
     }
   });
 
-  state.sessionHydrationInFlightByDirectory.set(normalizedDirectory, { mode, promise });
+  state.sessionHydrationInFlightByDirectory.set(normalizedDirectory, promise);
   await promise;
 }
 
@@ -695,8 +708,10 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
     return;
   }
 
+  const generation = state.hydrationGeneration;
   const promise = runOpencodeReadTask(state, async () => {
     const raw = await opencodeBackend.getVcsInfo?.(normalizedDirectory).catch(() => null);
+    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) return;
     const vcsInfo = asRecord(raw);
     if (!vcsInfo) {
       state.vcsHydratedDirectories.add(normalizedDirectory);
@@ -728,58 +743,23 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   await promise;
 }
 
-const BACKGROUND_HYDRATION_BATCH_SIZE = 20;
-const BACKGROUND_HYDRATION_DELAY_MS = 80;
+const BACKGROUND_HYDRATION_CONCURRENCY = 2;
 
-function scheduleBackgroundHydration(state: ConnectionState, directories: string[]) {
+function startBackgroundHydration(state: ConnectionState) {
+  if (!state.topologyReady || state.backgroundHydrationStarted) return;
+  state.backgroundHydrationStarted = true;
+  const generation = state.hydrationGeneration;
+  const directories = [...state.sessionHydrationByDirectory].flatMap(([directory, hydration]) =>
+    hydration.status === 'loaded' ? [] : [directory],
+  );
   void (async () => {
-    // 优先加载当前激活的目录
-    const activeDirectory = state.pendingSelectedDirectory;
-    const otherDirectories = directories.filter(
-      (directory) => normalizeDirectory(directory) !== activeDirectory
-    );
-    
-    // 先立即加载当前激活目录（如果存在且不是pendingSelectedDirectory）
-    if (activeDirectory) {
-      const activeDirExists = directories.some(
-        (directory) => normalizeDirectory(directory) === activeDirectory
-      );
-      if (activeDirExists) {
-        await Promise.all([
-          loadDirectorySessions(state, activeDirectory, 'full').catch(() => {}),
-          loadDirectoryVcs(state, activeDirectory).catch(() => {}),
-        ]);
-      }
-    }
-    
-    // 其余目录分批延迟加载
-    const batches: string[][] = [];
-    for (let i = 0; i < otherDirectories.length; i += BACKGROUND_HYDRATION_BATCH_SIZE) {
-      batches.push(otherDirectories.slice(i, i + BACKGROUND_HYDRATION_BATCH_SIZE));
-    }
-    
-    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-      if (!connections.has(state.key)) return;
-      
-      const batch = batches[batchIndex]!;
-      const isFirstBatch = batchIndex === 0;
-      
-      // 第一批不延迟，后续批次延迟
-      if (!isFirstBatch) {
-        await new Promise((resolve) => setTimeout(resolve, BACKGROUND_HYDRATION_DELAY_MS));
-      }
-      
-      // 并行加载当前批次的所有目录
-      await Promise.all(
-        batch.map(async (directory) => {
-          if (!connections.has(state.key)) return;
-          await Promise.all([
-            loadDirectorySessions(state, directory, 'full').catch(() => {}),
-            loadDirectoryVcs(state, directory).catch(() => {}),
-          ]);
-        })
-      );
-    }
+    await mapWithConcurrency(directories, BACKGROUND_HYDRATION_CONCURRENCY, async (directory) => {
+      if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) return;
+      await Promise.allSettled([loadDirectorySessions(state, directory), loadDirectoryVcs(state, directory)]);
+    });
+    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation || state.backgroundHydrationCompleteSent) return;
+    state.backgroundHydrationCompleteSent = true;
+    broadcast(state, { type: 'state.background-hydration-complete' });
   })();
 }
 
@@ -796,14 +776,14 @@ function requestPriorityHydration(state: ConnectionState, directory?: string) {
   const normalizedDirectory = normalizeDirectory(directory ?? '');
   if (!normalizedDirectory) return;
   state.pendingSelectedDirectory = normalizedDirectory;
-  void loadDirectorySessions(state, normalizedDirectory, 'full')
+  if (!state.topologyReady) return;
+  void loadDirectorySessions(state, normalizedDirectory)
     .catch(() => {})
     .finally(() => {
       if (state.pendingSelectedDirectory === normalizedDirectory) {
         state.pendingSelectedDirectory = null;
       }
     });
-  void loadDirectoryVcs(state, normalizedDirectory).catch(() => {});
 }
 
 function emitProjectUpdated(state: ConnectionState, projectId: string | null) {
@@ -1030,56 +1010,48 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
   }
 }
 
-async function bootstrapState(state: ConnectionState): Promise<void> {
+async function bootstrapState(state: ConnectionState, forceRestart = false): Promise<void> {
   if (state.bootstrapPromise) {
-    return state.bootstrapPromise;
+    if (!forceRestart) {
+      return state.bootstrapPromise;
+    }
+    // The reconnect already bumped hydrationGeneration, so the pending run
+    // aborts at its post-await guard; detach it so the fresh run can start.
+    state.bootstrapPromise = undefined;
   }
 
   const builder = createStateBuilder();
+  let aborted = false;
   const run = (async () => {
     state.isBootstrappingState = true;
+    const generation = state.hydrationGeneration;
     const projects = asObjectArray<Record<string, unknown>>(
       await runOpencodeReadTask(state, () => opencodeBackend.listProjects?.() ?? Promise.resolve([])),
     );
-    const directories = collectProjectDirectories(projects);
-
+    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) {
+      aborted = true;
+      return;
+    }
     builder.applyProjects(projects as Parameters<typeof builder.applyProjects>[0]);
-
-    await Promise.all(
-      directories.map(async (directory) => {
-        const [sessions, statuses, vcsInfo] = await runOpencodeReadTask(state, () =>
-          Promise.all([
-            opencodeBackend.listSessions({
-              directory,
-              roots: true,
-            }),
-            opencodeBackend.getSessionStatusMap?.(directory),
-            opencodeBackend.getVcsInfo?.(directory).catch(() => null),
-          ]),
-        );
-        builder.applySessions(
-          asObjectArray(sessions) as Parameters<typeof builder.applySessions>[0],
-        );
-        builder.applyStatuses(asStatusMap(statuses));
-        const branch = asString(asRecord(vcsInfo)?.branch);
-        if (branch) {
-          builder.applyVcsInfo(directory, { branch });
-        }
-      }),
-    );
-
     builder.getDefaultProjectId();
     state.stateBuilder = builder;
-    state.sessionHydrationLevelByDirectory.clear();
-    directories.forEach((directory) => {
-      state.sessionHydrationLevelByDirectory.set(normalizeDirectory(directory), 'full');
-    });
-    state.vcsHydratedDirectories = new Set(directories.map((directory) => normalizeDirectory(directory)));
+    state.hydrationGeneration += 1;
+    state.sessionHydrationByDirectory.clear();
+    for (const directory of collectProjectDirectories(projects)) {
+      state.sessionHydrationByDirectory.set(directory, { status: 'unloaded' });
+    }
+    state.sessionHydrationInFlightByDirectory.clear();
+    state.vcsHydratedDirectories.clear();
+    state.vcsHydrationInFlightByDirectory.clear();
+    state.backgroundHydrationStarted = false;
+    state.backgroundHydrationCompleteSent = false;
+    state.topologyReady = true;
 
     broadcast(state, {
       type: 'state.bootstrap',
       projects: state.stateBuilder.getState().projects,
       notifications: state.notificationManager.getState(),
+      sessionHydrationByDirectory: getSessionHydrationSnapshot(state),
     });
 
     state.isBootstrappingState = false;
@@ -1088,12 +1060,15 @@ async function bootstrapState(state: ConnectionState): Promise<void> {
     if (state.pendingSelectedDirectory) {
       requestPriorityHydration(state, state.pendingSelectedDirectory);
     }
-
-    scheduleBackgroundHydration(state, directories);
+    if (state.backgroundHydrationRequested) {
+      startBackgroundHydration(state);
+    }
   })();
 
   const bootstrapPromise = run.finally(() => {
-    state.isBootstrappingState = false;
+    if (!aborted) {
+      state.isBootstrappingState = false;
+    }
     if (state.bootstrapPromise === bootstrapPromise) {
       state.bootstrapPromise = undefined;
     }
@@ -1136,13 +1111,18 @@ function createConnectionState(baseUrl: string, authorization?: string, errorMes
       sessionId: state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId),
     })),
     activeSelection: null,
-    sessionHydrationLevelByDirectory: new Map(),
+    sessionHydrationByDirectory: new Map(),
     sessionHydrationInFlightByDirectory: new Map(),
     vcsHydratedDirectories: new Set(),
     vcsHydrationInFlightByDirectory: new Map(),
     isBootstrappingState: false,
     bufferedStatePackets: [],
     pendingSelectedDirectory: null,
+    topologyReady: false,
+    hydrationGeneration: 0,
+    backgroundHydrationRequested: false,
+    backgroundHydrationStarted: false,
+    backgroundHydrationCompleteSent: false,
     client: createSseConnection({
       onPacket(packet) {
         broadcast(state, { type: 'packet', packet });
@@ -1152,9 +1132,10 @@ function createConnectionState(baseUrl: string, authorization?: string, errorMes
         state.connected = true;
         broadcast(state, { type: 'connection.open' });
         if (isReconnect) {
+          state.hydrationGeneration += 1;
           broadcast(state, { type: 'connection.reconnected' });
         }
-        void bootstrapState(state).catch((error) => {
+        void bootstrapState(state, isReconnect).catch((error) => {
           const message =
             error instanceof Error ? error.message : 'Failed to bootstrap worker state.';
           broadcast(state, { type: 'connection.error', message });
@@ -1189,6 +1170,7 @@ function attachPort(port: MessagePort, baseUrl: string, authorization?: string, 
         type: 'state.bootstrap',
         projects: state.stateBuilder.getState().projects,
         notifications: state.notificationManager.getState(),
+        sessionHydrationByDirectory: getSessionHydrationSnapshot(state),
       });
     }
   }
@@ -1221,8 +1203,7 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
     const directory = normalizeDirectory(message.directory);
     if (!directory) return;
 
-    void loadDirectorySessions(state, directory, 'full').catch(() => {});
-    void loadDirectoryVcs(state, directory).catch(() => {});
+    void loadDirectorySessions(state, directory).catch(() => {});
     return;
   }
 
@@ -1252,17 +1233,18 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
 
     if (directory) {
       requestPriorityHydration(state, directory);
-      return;
-    }
-
-     const project = state.stateBuilder.getProject(projectId);
-     if (project) {
-       for (const sandbox of Object.values(project.sandboxes)) {
-         if (!sandbox.sessions[sessionId]) continue;
-         requestPriorityHydration(state, sandbox.directory);
-         break;
+    } else {
+      const project = state.stateBuilder.getProject(projectId);
+      if (project) {
+        for (const sandbox of Object.values(project.sandboxes)) {
+          if (!sandbox.sessions[sessionId]) continue;
+          requestPriorityHydration(state, sandbox.directory);
+          break;
+        }
       }
     }
+    state.backgroundHydrationRequested = true;
+    startBackgroundHydration(state);
     return;
   }
 
@@ -1280,6 +1262,9 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
     }
     const changedProjectId = state.stateBuilder.removeSandboxDirectory(projectId, directory);
     emitProjectUpdated(state, changedProjectId);
+    if (state.sessionHydrationByDirectory.has(directory)) {
+      emitDirectoryHydration(state, directory, { status: 'error', error: 'Sandbox deleted.' });
+    }
   }
 }
 
