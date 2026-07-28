@@ -24,6 +24,14 @@
 - [x] 修复 Codex 线程切换、重连、rollback 与后台预加载中的异步竞态，防止旧线程事件、旧账号/配置/模型响应、旧 homedir 与 Git 信息覆盖当前连接或重新写回已回滚历史。
 - [x] 修复 Codex 自定义模型提供商线程补水阻塞登录、重复请求基础线程列表及后台合并后线程顺序错误的问题。
 
+### OpenCode 冷启动性能优化
+
+- [x] OpenCode 冷启动改为拓扑优先：SharedWorker bootstrap 只加载项目/目录拓扑，目录会话按 unloaded/loading/loaded/error 独立水合，首个有效选择后以最多 2 个目录并发后台补齐完整会话树。
+- [x] 登录目标按"显式链接 → 按 server URL 隔离的持久化选择 → 当前 worktree → 首个项目 worktree"确定；持久化目标失效时清除记录并安全降级，显式目标不存在时提示 not-found 且不会误建会话。
+- [x] 目录未加载（unloaded/loading/error）不再被当作空目录；只有加载完成的空目录才允许在指定目录创建一个新会话。
+- [x] UI Ready 提前到目标会话可选中即完成；文件树、git status、命令、权限与问题改为后台异步加载，不再阻塞登录。
+- [x] 实测默认插件冷启动（同机同数据集）：session-selectable 2864.6ms、UI Ready 2864.7ms（原阻塞式启动为 60.9s）。
+
 ## [v0.6.0 released]
 
 ### 新后端支持(alpha)
