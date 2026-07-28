@@ -153,6 +153,7 @@ import type { MessageInfo, QuestionInfo, SubtaskPart, ToolPart } from '../types/
 import type { BackendKind } from '../backends/types';
 import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
+import { resolveThreadSubagentSessions } from '../utils/threadSubagents';
 
 const { t } = useI18n();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
@@ -237,18 +238,8 @@ const threadTargetAgentStyle = computed(() => {
 const subagentSessions = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();
   if (!currentSessionId) return [] as Array<{ sessionId: string; label: string }>;
-  const seen = new Map<string, string>();
-  for (const root of msg.roots.value) {
-    if (root.role !== 'user') continue;
-    if (root.sessionID === currentSessionId) continue;
-    const meta: { parentID?: string; label: string } | undefined =
-      props.sessionHistoryMetaById?.[root.sessionID];
-    if (meta?.parentID !== currentSessionId) continue;
-    if (!seen.has(root.sessionID)) {
-      seen.set(root.sessionID, meta?.label || root.sessionID);
-    }
-  }
-  return Array.from(seen.entries()).map(([sessionId, label]) => ({ sessionId, label }));
+  const threadParts = threadMessages.value.flatMap((message) => msg.getParts(message.id));
+  return resolveThreadSubagentSessions(threadParts, currentSessionId, props.sessionHistoryMetaById);
 });
 
 function hasTextContent(message?: MessageInfo): boolean {
