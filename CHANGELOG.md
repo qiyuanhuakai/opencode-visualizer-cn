@@ -16,6 +16,19 @@
 
 ### Codex 后端修复
 
+#### Codex app-server 全面接入
+
+- [x] 以实际 app-server 探测结果为准建立运行时能力注册表；UI 仅暴露当前连接真实可用的能力，并为明确幂等的读取请求提供受连接 generation 约束的 `-32001` 退避重试。
+- [x] 完整接入 command/file approval、结构化 permission request、MCP elicitation、tool user input 与 dynamic tool call 请求；所有响应固定返回收到请求的原连接，切换后端或断开连接时立即清理未决请求与弹窗。
+- [x] MCP 表单支持必填字段、accept/decline/cancel 与显式 HTTP/HTTPS 外链；密码和其他 secret answer 仅保存在内存中，不写入草稿或持久化存储。
+- [x] 将 `turn/plan/updated` 实时计划投影到左侧 Plan 面板，并按当前线程隔离 pending、in progress 与 completed 状态，不在消息流中重复渲染。
+- [x] 新增 Runtime Inspector，集中提供线程 Goal 设置/清除、Account Usage、Provider Capabilities、Permission Profiles、Config Requirements、Loaded Threads 与显式后台终端清理；unsupported、gated 与 unknown 状态均明确展示。
+- [x] 接入 External Agent Config、`plugin/read` 插件详情、工作区 `fs/getMetadata` 与 `fs/watch/unwatch`，并保留插件 marketplace 来源身份和组件级 watch 生命周期。
+- [x] 明确区分会话语义：VIS Archive 仅使用本地 `hiddenThreadIds`，可恢复；VIS Delete 调用 Codex 原生 `thread/archive`，不可通过 VIS 恢复，且不暴露或调用原生 `thread/unarchive`。
+- [x] 加固多后端生命周期：OpenCode、Codex 与 ACP 之间切换时同时断开 UI 与 registry 持有的 Codex adapter，取消通用 prompt/confirm 与请求窗口，并阻止旧连接、旧线程或旧 backend 的异步结果和操作写入当前状态。
+
+#### 兼容性与稳定性修复
+
 - [x] 按 Codex app-server 当前协议仅显示精确 10,080 分钟的周限额，移除已经失效的 5 小时额度与分钟数文案，并统一 Status Monitor、Codex Panel 与多语言显示。
 - [x] 使用 app-server `initialize` 返回的真实运行版本替代硬编码版本，Status Monitor 现在可显示当前 Codex app-server 版本。
 - [x] 缩短 Codex 登录关键路径：线程列表就绪后即可进入主界面，模型、工具、配置、自定义提供商与 Codex Panel 数据改为后台加载。
