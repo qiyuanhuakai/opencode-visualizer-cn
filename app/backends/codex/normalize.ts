@@ -47,6 +47,38 @@ function stringValue(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback;
 }
 
+function stringListValue(value: unknown, separator = '\n\n') {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .join(separator);
+}
+
+function toolResultText(value: unknown) {
+  if (typeof value === 'string') return value;
+  if (!isRecord(value)) return '';
+  const message = stringValue(value.message);
+  if (message) return message;
+  const content = Array.isArray(value.content) ? value.content : [];
+  const contentText = content
+    .filter(isRecord)
+    .map((entry) => stringValue(entry.text))
+    .filter(Boolean)
+    .join('\n');
+  if (contentText) return contentText;
+  if (value.structuredContent !== null && value.structuredContent !== undefined) {
+    try {
+      return JSON.stringify(value.structuredContent);
+    } catch {
+      return '';
+    }
+  }
+  return '';
+}
+
 function numberValue(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
@@ -223,7 +255,7 @@ function createToolPart(params: {
         status: 'error',
         input: params.input,
         error: params.output || params.status || 'Codex tool failed',
-        metadata: { source: 'codex', codexStatus: params.status, ...(params.metadata ?? {}) },
+        metadata: { source: 'codex', codexStatus: params.status, ...params.metadata },
         time: { start: params.createdAt, end: params.createdAt },
       }
       : {
@@ -231,7 +263,7 @@ function createToolPart(params: {
         input: params.input,
         output: params.output,
         title: params.title,
-        metadata: { source: 'codex', codexStatus: params.status, ...(params.metadata ?? {}) },
+        metadata: { source: 'codex', codexStatus: params.status, ...params.metadata },
         time: { start: params.createdAt, end: params.createdAt },
       },
     metadata: { source: 'codex' },
@@ -461,8 +493,8 @@ export function normalizeCodexTurnItems(params: {
     }
 
     if (type === 'reasoning') {
-      const summary = stringValue(item.summary);
-      const content = stringValue(item.text) || stringValue(item.content);
+      const summary = stringListValue(item.summary);
+      const content = stringValue(item.text) || stringListValue(item.content);
       const text = summary || content;
       if (!text) return;
       parts.push(createReasoningPart({
@@ -483,8 +515,8 @@ export function normalizeCodexTurnItems(params: {
       const server = stringValue(item.server);
       const tool = stringValue(item.tool);
       const args = isRecord(item.arguments) ? item.arguments : {};
-      const result = stringValue(item.result);
-      const error = stringValue(item.error);
+      const result = toolResultText(item.result);
+      const error = toolResultText(item.error);
       const status = stringValue(item.status);
       parts.push(createToolPart({
         id: itemId,
@@ -500,7 +532,7 @@ export function normalizeCodexTurnItems(params: {
       return;
     }
 
-    if (type === 'dynamicToolCall' || type === 'collabToolCall') {
+    if (type === 'dynamicToolCall' || type === 'collabToolCall' || type === 'collabAgentToolCall') {
       const tool = stringValue(item.tool);
       const args = isRecord(item.arguments) ? item.arguments : {};
       const status = stringValue(item.status);

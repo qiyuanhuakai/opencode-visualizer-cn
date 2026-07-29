@@ -1,6 +1,17 @@
 import type { SsePacket } from './sse';
 import type { ProjectState, WorkerNotificationEntry } from './worker-state';
 
+/**
+ * Per-directory session hydration state.
+ * Tracks whether the sessions for a directory have been loaded by the worker.
+ * Note: 'unloaded' | 'loading' | 'error' must never be interpreted as
+ * "loaded with zero sessions" — only 'loaded' may mean loaded-empty.
+ */
+export type DirectorySessionHydration = {
+  status: 'unloaded' | 'loading' | 'loaded' | 'error';
+  error?: string;
+};
+
 export type TabToWorkerMessage =
   | {
       type: 'connect';
@@ -22,6 +33,13 @@ export type TabToWorkerMessage =
   | {
       type: 'load-sessions';
       directory: string;
+    }
+  | {
+      type: 'hydrate-referenced-subagents';
+      requestId: string;
+      rootSessionId: string;
+      directory: string;
+      sessionIds: string[];
     }
   | {
       type: 'sandbox.deleted';
@@ -49,6 +67,7 @@ export type WorkerToTabMessage =
       type: 'state.bootstrap';
       projects: Record<string, ProjectState>;
       notifications: Record<string, WorkerNotificationEntry>;
+      sessionHydrationByDirectory?: Record<string, DirectorySessionHydration>;
     }
   | {
       type: 'state.project-updated';
@@ -62,6 +81,21 @@ export type WorkerToTabMessage =
   | {
       type: 'state.notifications-updated';
       notifications: Record<string, WorkerNotificationEntry>;
+    }
+  | {
+      type: 'state.directory-hydration-updated';
+      directory: string;
+      hydration: DirectorySessionHydration;
+    }
+  | {
+      type: 'state.background-hydration-complete';
+    }
+  | {
+      type: 'state.referenced-subagents-hydrated';
+      requestId: string;
+      rootSessionId: string;
+      sessionIds: string[];
+      cancelled: boolean;
     }
   | {
       type: 'notification.show';

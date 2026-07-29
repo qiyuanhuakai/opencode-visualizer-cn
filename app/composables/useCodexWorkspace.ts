@@ -14,7 +14,6 @@ export const CODEX_DEFAULT_DIRECTORY = '/';
 export type CodexWorkspaceApi = {
   visibleThreads: ComputedRef<CodexThread[]>;
   threads: Ref<CodexThread[]>;
-  archivedThreads?: Ref<CodexThread[]>;
   activeThreadId: Ref<string>;
   canonicalHistory: Ref<CodexCanonicalHistoryEntry[]>;
   homeDir?: Ref<string>;
@@ -111,7 +110,6 @@ export function createCodexProjectState(
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedStore: LocalPinnedSessionStore = {},
   hiddenThreadIds: Set<string> = new Set(),
-  archivedThreadIds: Set<string> = new Set(),
 ): ProjectState {
   const primaryDirectory = CODEX_DEFAULT_DIRECTORY;
   const sandboxes: ProjectState['sandboxes'] = {};
@@ -132,7 +130,7 @@ export function createCodexProjectState(
       thread,
       fallbackDirectory,
       pinnedStore,
-      new Set([...hiddenThreadIds, ...(archivedThreadIds.has(thread.id) ? [thread.id] : [])]),
+      hiddenThreadIds,
       directory,
     );
     sandboxes[directory] = sandbox;
@@ -160,19 +158,11 @@ export function useCodexWorkspace(
   options: { pinnedStore?: Ref<LocalPinnedSessionStore> } = {},
 ) {
   const fallbackDirectory = computed(() => api.homeDir?.value || CODEX_DEFAULT_DIRECTORY);
-  const allThreads = computed(() => {
-    const merged = new Map<string, CodexThread>();
-    api.visibleThreads.value.forEach((thread) => merged.set(thread.id, thread));
-    (api.archivedThreads?.value ?? []).forEach((thread) => merged.set(thread.id, thread));
-    return Array.from(merged.values());
-  });
-  const archivedThreadIds = computed(() => new Set((api.archivedThreads?.value ?? []).map((thread) => thread.id)));
   const project = computed(() => createCodexProjectState(
-    allThreads.value,
+    api.threads.value,
     fallbackDirectory.value,
     api.pinnedStore?.value ?? options.pinnedStore?.value,
     api.hiddenThreadIds?.value,
-    archivedThreadIds.value,
   ));
   const projects = computed<Record<string, ProjectState>>(() => ({
     [CODEX_PROJECT_ID]: project.value,

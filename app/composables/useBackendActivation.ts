@@ -62,6 +62,7 @@ export type UseBackendActivationOptions = {
     agentId: string;
   }) => void;
   disconnectAcpBackend: () => void;
+  disconnectCodexBackend: () => void;
   bootstrapAcpWorkspace: () => Promise<void>;
   fetchGlobalProviderConfig: () => Promise<void>;
   fetchProviders: (force?: boolean) => Promise<void>;
@@ -76,6 +77,12 @@ export type UseBackendActivationOptions = {
 
 export function useBackendActivation(options: UseBackendActivationOptions) {
   const initializationInFlight = { value: false } as Ref<boolean>;
+
+  function markStartup(name: string) {
+    if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+      performance.mark(name);
+    }
+  }
 
   function resetSharedUiState() {
     options.uiInitState.value = 'loading';
@@ -152,6 +159,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       }
     } catch (error) {
       options.codexApi.disconnect();
+      options.disconnectCodexBackend();
       options.connectionState.value = 'error';
       options.initErrorMessage.value = options.toErrorMessage(error);
       options.uiInitState.value = 'login';
@@ -162,12 +170,15 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
 
   async function activateOpenCode() {
     options.disconnectAcpBackend();
+    options.codexApi.disconnect();
+    options.disconnectCodexBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
     resetOpenCodeSelectionState();
     resetSharedUiState();
 
     try {
+      markStartup('vis:opencode-connect-start');
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
       await options.ge.connect({ failFast: true, timeoutMs: 10000 });
@@ -176,13 +187,20 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await options.fetchHomePath();
       options.initLoadingMessage.value = options.t('app.status.loadingProjects');
       await options.bootstrapSelections();
-      await options.hydrateActiveWorktreeResources();
+      markStartup('vis:opencode-session-selectable');
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
+      markStartup('vis:opencode-ui-ready');
+      // Resource hydration (file tree, git status, commands, permissions,
+      // questions) is slow; run it detached so it never blocks or reverts Ready.
+      void options.hydrateActiveWorktreeResources().catch(() => {});
       await options.fetchGlobalProviderConfig();
       await Promise.all([options.fetchProviders(true), options.fetchAgents()]);
     } catch (error) {
       if (!initializationInFlight.value) return;
+      // Once the UI reached Ready, only connect/path/hydration/selection
+      // failures (all pre-Ready) may send the user back to login.
+      if (options.uiInitState.value === 'ready') return;
       options.ge.disconnect();
       const message = options.toErrorMessage(error);
       options.connectionState.value = 'error';
@@ -200,6 +218,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     try {
       options.ge.disconnect();
       options.codexApi.disconnect();
+      options.disconnectCodexBackend();
       options.activeBackendKind.value = 'acp';
       options.configureAcpBackend({
         bridgeUrl: options.credentials.acpBridgeUrl.value,
@@ -257,6 +276,8 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   function abortInitialization() {
     options.ge.disconnect();
     options.disconnectAcpBackend();
+    options.codexApi.disconnect();
+    options.disconnectCodexBackend();
     initializationInFlight.value = false;
     options.connectionState.value = 'connecting';
     options.uiInitState.value = 'login';

@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  extractFileRead,
-  extractStepFinish,
-  extractXmlTagContent,
-} from './toolRenderers';
+import { extractFileRead, extractStepFinish, extractXmlTagContent } from './toolRenderers';
 
 describe('extractXmlTagContent', () => {
   it('extracts content between tags', () => {
@@ -103,10 +99,12 @@ describe('extractFileRead for edit/multiedit', () => {
     formatToolValue: (value: unknown) => String(value ?? ''),
     renderWorkerHtml: renderWorkerHtmlMock,
     renderReadHtmlFromApi: async () => '<pre>read</pre>',
-    resolveReadWritePath: (input?: Record<string, unknown>) => (typeof input?.filePath === 'string' ? input.filePath : ''),
+    resolveReadWritePath: (input?: Record<string, unknown>) =>
+      typeof input?.filePath === 'string' ? input.filePath : '',
     guessLanguageFromPath: () => 'text',
     resolveReadRange: () => ({}),
-    renderEditDiffHtml: ({ patch, diff }: { patch?: string; diff: string }) => `DIFF:${patch ?? diff}`,
+    renderEditDiffHtml: ({ patch, diff }: { patch?: string; diff: string }) =>
+      `DIFF:${patch ?? diff}`,
     formatGlobToolTitle: () => '',
     formatListToolTitle: () => '',
     formatWebfetchToolTitle: () => '',
@@ -118,24 +116,29 @@ describe('extractFileRead for edit/multiedit', () => {
   };
 
   it('renders edit tool windows even when Codex diff text is missing', async () => {
-    const result = extractFileRead({
-      payload: {
-        properties: {
-          part: {
-            type: 'tool',
-            id: 'edit-1',
-            callID: 'edit-1',
-            tool: 'edit',
-            state: {
-              status: 'completed',
-              input: { filePath: 'empty.ts' },
-              output: 'File changed: empty.ts',
-              metadata: { filediff: { patch: 'File changed: empty.ts' } },
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'edit-1',
+              callID: 'edit-1',
+              tool: 'edit',
+              state: {
+                status: 'completed',
+                input: { filePath: 'empty.ts' },
+                output: 'File changed: empty.ts',
+                metadata: { filediff: { patch: 'File changed: empty.ts' } },
+              },
             },
           },
         },
       },
-    }, 'message.part.updated', helpers, (key: string) => key);
+      'message.part.updated',
+      helpers,
+      (key: string) => key,
+    );
 
     expect(result).toMatchObject({
       toolName: 'edit',
@@ -144,7 +147,8 @@ describe('extractFileRead for edit/multiedit', () => {
     });
     const editContent = result && !Array.isArray(result) ? result.content : undefined;
     expect(typeof editContent).toBe('function');
-    if (typeof editContent !== 'function') throw new Error('Expected edit content renderer function');
+    if (typeof editContent !== 'function')
+      throw new Error('Expected edit content renderer function');
     await expect(editContent()).resolves.toBe('<pre>rendered</pre>');
   });
 
@@ -158,28 +162,34 @@ describe('extractFileRead for edit/multiedit', () => {
       },
     };
 
-    const result = extractFileRead({
-      payload: {
-        properties: {
-          part: {
-            type: 'tool',
-            id: 'edit-ns-1',
-            callID: 'edit-ns-1',
-            tool: 'edit',
-            state: {
-              status: 'completed',
-              input: { filePath: 'src/app.ts' },
-              output: 'File changed: src/app.ts',
-              metadata: { filediff: { patch: 'File changed: src/app.ts' } },
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'edit-ns-1',
+              callID: 'edit-ns-1',
+              tool: 'edit',
+              state: {
+                status: 'completed',
+                input: { filePath: 'src/app.ts' },
+                output: 'File changed: src/app.ts',
+                metadata: { filediff: { patch: 'File changed: src/app.ts' } },
+              },
             },
           },
         },
       },
-    }, 'message.part.updated', helpersWithCapture, (key: string) => key);
+      'message.part.updated',
+      helpersWithCapture,
+      (key: string) => key,
+    );
 
     expect(result).not.toBeNull();
     expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) throw new Error('Expected single edit floating window result');
+    if (!result || Array.isArray(result))
+      throw new Error('Expected single edit floating window result');
     expect(result).toMatchObject({
       toolName: 'edit',
       title: '🔧 [toolTitles.edit] src/app.ts',
@@ -187,7 +197,8 @@ describe('extractFileRead for edit/multiedit', () => {
     });
     const editContent = result.content;
     expect(typeof editContent).toBe('function');
-    if (typeof editContent !== 'function') throw new Error('Expected edit content renderer function');
+    if (typeof editContent !== 'function')
+      throw new Error('Expected edit content renderer function');
     await expect(editContent()).resolves.toBe('<pre>rendered</pre>');
     expect(receivedArgs).toMatchObject({
       code: 'File changed: src/app.ts',
@@ -205,24 +216,29 @@ describe('extractFileRead for edit/multiedit', () => {
       },
     };
 
-    const result = extractFileRead({
-      payload: {
-        properties: {
-          part: {
-            type: 'tool',
-            id: 'edit-std-1',
-            callID: 'edit-std-1',
-            tool: 'edit',
-            state: {
-              status: 'completed',
-              input: { filePath: 'src/app.ts' },
-              output: '@@ -1 +1 @@',
-              metadata: { filediff: { patch: '@@ -1 +1 @@\n-old\n+new' } },
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'edit-std-1',
+              callID: 'edit-std-1',
+              tool: 'edit',
+              state: {
+                status: 'completed',
+                input: { filePath: 'src/app.ts' },
+                output: '@@ -1 +1 @@',
+                metadata: { filediff: { patch: '@@ -1 +1 @@\n-old\n+new' } },
+              },
             },
           },
         },
       },
-    }, 'message.part.updated', helpersWithCapture, (key: string) => key);
+      'message.part.updated',
+      helpersWithCapture,
+      (key: string) => key,
+    );
 
     expect(result).toMatchObject({
       toolName: 'edit',
@@ -235,60 +251,87 @@ describe('extractFileRead for edit/multiedit', () => {
   });
 
   it('renders multiedit entries with each file path in the title', () => {
-    const result = extractFileRead({
-      payload: {
-        properties: {
-          part: {
-            type: 'tool',
-            id: 'multiedit-1',
-            callID: 'multiedit-1',
-            tool: 'multiedit',
-            state: {
-              status: 'completed',
-              input: { filePath: 'a.ts', files: ['a.ts', 'b.ts'] },
-              output: 'File changed: a.ts\nFile changed: b.ts',
-              metadata: {
-                results: [
-                  { path: 'a.ts', diff: 'File changed: a.ts', filediff: { patch: 'File changed: a.ts' } },
-                  { path: 'b.ts', diff: 'File changed: b.ts', filediff: { patch: 'File changed: b.ts' } },
-                ],
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'multiedit-1',
+              callID: 'multiedit-1',
+              tool: 'multiedit',
+              state: {
+                status: 'completed',
+                input: { filePath: 'a.ts', files: ['a.ts', 'b.ts'] },
+                output: 'File changed: a.ts\nFile changed: b.ts',
+                metadata: {
+                  results: [
+                    {
+                      path: 'a.ts',
+                      diff: 'File changed: a.ts',
+                      filediff: { patch: 'File changed: a.ts' },
+                    },
+                    {
+                      path: 'b.ts',
+                      diff: 'File changed: b.ts',
+                      filediff: { patch: 'File changed: b.ts' },
+                    },
+                  ],
+                },
               },
             },
           },
         },
       },
-    }, 'message.part.updated', helpers, (key: string) => key);
+      'message.part.updated',
+      helpers,
+      (key: string) => key,
+    );
 
     expect(Array.isArray(result)).toBe(true);
     expect(result).toMatchObject([
-      { toolName: 'multiedit', title: '🔧 [toolTitles.edit] a.ts (1/2)', content: 'DIFF:File changed: a.ts' },
-      { toolName: 'multiedit', title: '🔧 [toolTitles.edit] b.ts (2/2)', content: 'DIFF:File changed: b.ts' },
+      {
+        toolName: 'multiedit',
+        title: '🔧 [toolTitles.edit] a.ts (1/2)',
+        content: 'DIFF:File changed: a.ts',
+      },
+      {
+        toolName: 'multiedit',
+        title: '🔧 [toolTitles.edit] b.ts (2/2)',
+        content: 'DIFF:File changed: b.ts',
+      },
     ]);
   });
 
   it('renders completed read tools into floating-window content instead of returning null', async () => {
-    const result = extractFileRead({
-      payload: {
-        properties: {
-          part: {
-            type: 'tool',
-            id: 'read-1',
-            callID: 'read-1',
-            tool: 'read',
-            state: {
-              status: 'completed',
-              input: { filePath: 'notes.md' },
-              output: '# hello',
-              title: 'read notes.md',
-              metadata: { source: 'codex' },
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'read-1',
+              callID: 'read-1',
+              tool: 'read',
+              state: {
+                status: 'completed',
+                input: { filePath: 'notes.md' },
+                output: '# hello',
+                title: 'read notes.md',
+                metadata: { source: 'codex' },
+              },
             },
           },
         },
       },
-    }, 'message.part.updated', helpers, (key: string) => key);
+      'message.part.updated',
+      helpers,
+      (key: string) => key,
+    );
 
     expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) throw new Error('Expected single read floating window result');
+    if (!result || Array.isArray(result))
+      throw new Error('Expected single read floating window result');
     expect(result).toMatchObject({
       toolName: 'read',
       title: '🔧 [toolTitles.read] notes.md',
@@ -297,7 +340,8 @@ describe('extractFileRead for edit/multiedit', () => {
     });
     const readContent = result.content;
     expect(typeof readContent).toBe('function');
-    if (typeof readContent !== 'function') throw new Error('Expected read content renderer function');
+    if (typeof readContent !== 'function')
+      throw new Error('Expected read content renderer function');
     await expect(readContent()).resolves.toBe('<pre>read</pre>');
   });
 
@@ -311,31 +355,38 @@ describe('extractFileRead for edit/multiedit', () => {
       },
     };
 
-    const result = extractFileRead({
-      payload: {
-        properties: {
-          part: {
-            type: 'tool',
-            id: 'web-1',
-            callID: 'web-1',
-            tool: 'websearch',
-            state: {
-              status: 'completed',
-              input: { query: 'vite docs' },
-              output: 'Result body',
-              title: 'search vite docs',
-              metadata: { source: 'codex' },
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'web-1',
+              callID: 'web-1',
+              tool: 'websearch',
+              state: {
+                status: 'completed',
+                input: { query: 'vite docs' },
+                output: 'Result body',
+                title: 'search vite docs',
+                metadata: { source: 'codex' },
+              },
             },
           },
         },
       },
-    }, 'message.part.updated', helpersWithCapture, (key: string) => key);
+      'message.part.updated',
+      helpersWithCapture,
+      (key: string) => key,
+    );
 
     expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) throw new Error('Expected single websearch floating window result');
+    if (!result || Array.isArray(result))
+      throw new Error('Expected single websearch floating window result');
     const websearchContent = result.content;
     expect(typeof websearchContent).toBe('function');
-    if (typeof websearchContent !== 'function') throw new Error('Expected websearch content renderer function');
+    if (typeof websearchContent !== 'function')
+      throw new Error('Expected websearch content renderer function');
     await expect(websearchContent()).resolves.toBe('<pre>search</pre>');
     expect(receivedArgs).toMatchObject({
       code: 'Result body',
@@ -344,6 +395,38 @@ describe('extractFileRead for edit/multiedit', () => {
       copiedLabel: '',
       copyCodeAriaLabel: '',
       copyMarkdownAriaLabel: '',
+    });
+  });
+
+  it('normalizes the live websearch tool alias into a search window', async () => {
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'web-alias-1',
+              callID: 'web-alias-1',
+              tool: 'websearch_web_search_exa',
+              state: {
+                status: 'completed',
+                input: { query: 'ACP protocol' },
+                output: 'Search results',
+                metadata: {},
+              },
+            },
+          },
+        },
+      },
+      'message.part.updated',
+      helpers,
+      (key: string) => key,
+    );
+
+    expect(result).toMatchObject({
+      toolName: 'websearch',
+      title: '🌐 [toolTitles.search]',
+      toolStatus: 'completed',
     });
   });
 
@@ -357,31 +440,38 @@ describe('extractFileRead for edit/multiedit', () => {
       },
     };
 
-    const result = extractFileRead({
-      payload: {
-        properties: {
-          part: {
-            type: 'tool',
-            id: 'fetch-1',
-            callID: 'fetch-1',
-            tool: 'webfetch',
-            state: {
-              status: 'completed',
-              input: { url: 'https://vite.dev', format: 'markdown' },
-              output: '# Vite',
-              title: 'fetch vite',
-              metadata: { source: 'codex' },
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'fetch-1',
+              callID: 'fetch-1',
+              tool: 'webfetch',
+              state: {
+                status: 'completed',
+                input: { url: 'https://vite.dev', format: 'markdown' },
+                output: '# Vite',
+                title: 'fetch vite',
+                metadata: { source: 'codex' },
+              },
             },
           },
         },
       },
-    }, 'message.part.updated', helpersWithCapture, (key: string) => key);
+      'message.part.updated',
+      helpersWithCapture,
+      (key: string) => key,
+    );
 
     expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) throw new Error('Expected single webfetch floating window result');
+    if (!result || Array.isArray(result))
+      throw new Error('Expected single webfetch floating window result');
     const webfetchContent = result.content;
     expect(typeof webfetchContent).toBe('function');
-    if (typeof webfetchContent !== 'function') throw new Error('Expected webfetch content renderer function');
+    if (typeof webfetchContent !== 'function')
+      throw new Error('Expected webfetch content renderer function');
     await expect(webfetchContent()).resolves.toBe('<pre>fetch</pre>');
     expect(receivedArgs).toMatchObject({
       code: '# Vite',

@@ -34,7 +34,13 @@ export function useBackendSessionReload(params: {
   fetchRootSessionHistory: (rootSessionId: string) => Promise<number>;
   waitForPendingRenders: () => Promise<void>;
   reserveRootHistoryRequestId: () => number;
-  scheduleDescendantSessionHistoryHydration: (sessionId: string, rootHistoryRequestId: number, reloadRequestId: number) => void;
+  scheduleDescendantSessionHistoryHydration: (
+    sessionId: string,
+    rootHistoryRequestId: number,
+    reloadRequestId: number,
+    referencedSessionIds?: string[],
+  ) => void;
+  hydrateReferencedSubagents?: (sessionId: string, reloadRequestId: number) => Promise<string[]>;
   anchorOutputToBottom: () => Promise<void>;
   restoreShellSessions: () => Promise<void>;
   reloadTodosForAllowedSessions: () => Promise<void> | void;
@@ -104,8 +110,24 @@ export function useBackendSessionReload(params: {
           rootHistoryRequestId = await params.fetchRootSessionHistory(sessionId);
           await new Promise((resolve) => requestAnimationFrame(resolve));
           await params.waitForPendingRenders();
+          const referencedSessionIds = params.hydrateReferencedSubagents
+            ? await params.hydrateReferencedSubagents(sessionId, reloadRequestId)
+            : undefined;
           if (reloadRequestId === params.sessionReloadRequestId.value) {
-            params.scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
+            if (referencedSessionIds) {
+              params.scheduleDescendantSessionHistoryHydration(
+                sessionId,
+                rootHistoryRequestId,
+                reloadRequestId,
+                referencedSessionIds,
+              );
+            } else {
+              params.scheduleDescendantSessionHistoryHydration(
+                sessionId,
+                rootHistoryRequestId,
+                reloadRequestId,
+              );
+            }
           }
         } catch {
           // Keep partial history if hydration/rendering fails.
@@ -116,7 +138,25 @@ export function useBackendSessionReload(params: {
         }
       } else if (!descendantsHydrated) {
         const rootHistoryRequestId = params.reserveRootHistoryRequestId();
-        params.scheduleDescendantSessionHistoryHydration(sessionId, rootHistoryRequestId, reloadRequestId);
+        const referencedSessionIds = params.hydrateReferencedSubagents
+          ? await params.hydrateReferencedSubagents(sessionId, reloadRequestId)
+          : undefined;
+        if (reloadRequestId === params.sessionReloadRequestId.value) {
+          if (referencedSessionIds) {
+            params.scheduleDescendantSessionHistoryHydration(
+              sessionId,
+              rootHistoryRequestId,
+              reloadRequestId,
+              referencedSessionIds,
+            );
+          } else {
+            params.scheduleDescendantSessionHistoryHydration(
+              sessionId,
+              rootHistoryRequestId,
+              reloadRequestId,
+            );
+          }
+        }
       }
 
       if (reloadRequestId !== params.sessionReloadRequestId.value) return;

@@ -70,6 +70,7 @@
     </div>
 
     <CodexFsManager :api="api" />
+    <CodexFsInspector :api="api" />
 
     <button
       v-if="api.fsCwd.value && api.fsCwd.value !== '/'"
@@ -113,6 +114,7 @@ import { useI18n } from 'vue-i18n';
 import type { CodexFsDirectoryEntry } from '../../backends/codex/codexAdapter';
 import { useCodexApi } from '../../composables/useCodexApi';
 import CodexFsManager from './CodexFsManager.vue';
+import CodexFsInspector from './CodexFsInspector.vue';
 
 const props = defineProps<{
   api: ReturnType<typeof useCodexApi>;

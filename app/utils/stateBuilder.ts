@@ -124,6 +124,7 @@ export function createStateBuilder() {
   const sessionLocationById = new Map<string, SessionLocation>();
   const ephemeralLastSeenAt = new Map<string, number>();
   const ephemeralLastActiveAt = new Map<string, number>();
+  const authoritativeChildSessionIds = new Set<string>();
 
   function getProject(projectId: string): ProjectState | undefined {
     return state.projects[projectId];
@@ -173,6 +174,9 @@ export function createStateBuilder() {
     });
     Array.from(ephemeralLastActiveAt.keys()).forEach((sessionId) => {
       if (!knownSessionIds.has(sessionId)) ephemeralLastActiveAt.delete(sessionId);
+    });
+    Array.from(authoritativeChildSessionIds).forEach((sessionId) => {
+      if (!knownSessionIds.has(sessionId)) authoritativeChildSessionIds.delete(sessionId);
     });
   }
 
@@ -295,6 +299,7 @@ export function createStateBuilder() {
     sessionLocationById.delete(sessionId);
     ephemeralLastSeenAt.delete(sessionId);
     ephemeralLastActiveAt.delete(sessionId);
+    authoritativeChildSessionIds.delete(sessionId);
     updateRootSessionOrder(sandbox);
     return entry.projectId;
   }
@@ -380,6 +385,7 @@ export function createStateBuilder() {
       Object.values(project.sandboxes).forEach((sandbox) => {
         Object.values(sandbox.sessions).forEach((session) => {
           if (!session.parentID) return;
+          if (authoritativeChildSessionIds.has(session.id)) return;
           if (session.status === 'busy' || session.status === 'retry') return;
           const seenAt =
             ephemeralLastSeenAt.get(session.id) ??
@@ -596,6 +602,16 @@ export function createStateBuilder() {
     });
   }
 
+  function applyAuthoritativeSessions(sessions: SessionInfo[]) {
+    const list = Array.isArray(sessions) ? sessions : [];
+    list.forEach((session) => {
+      if (session.parentID?.trim()) {
+        authoritativeChildSessionIds.add(session.id);
+      }
+    });
+    applySessions(list);
+  }
+
   function applyStatuses(statusMap: Record<string, { type?: string }>) {
     Object.entries(statusMap ?? {}).forEach(([sessionId, info]) => {
       const type = info?.type;
@@ -723,6 +739,7 @@ export function createStateBuilder() {
       sessionLocationById.delete(sessionId);
       ephemeralLastSeenAt.delete(sessionId);
       ephemeralLastActiveAt.delete(sessionId);
+      authoritativeChildSessionIds.delete(sessionId);
     });
 
     delete project.sandboxes[normalizedDirectory];
@@ -803,6 +820,7 @@ export function createStateBuilder() {
   return {
     applyProjects,
     applySessions,
+    applyAuthoritativeSessions,
     applyStatuses,
     applyVcsInfo,
     processSessionCreated,

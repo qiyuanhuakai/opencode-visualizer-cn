@@ -14,6 +14,50 @@
 - [x] ACP 反向文件与终端调用由 bridge 执行，按 Agent/Session 隔离并限制在会话目录。
 - [x] ACP 可选的 list/resume/load 能力按 Agent 声明降级，不伪造协议能力。
 
+### Codex 后端修复
+
+#### Codex app-server 更新相关维护
+
+- [x] 以实际 app-server 探测结果为准建立运行时能力注册表；UI 仅暴露当前连接真实可用的能力，并为明确幂等的读取请求提供受连接 generation 约束的 `-32001` 退避重试。
+- [x] 完整接入 command/file approval、结构化 permission request、MCP elicitation、tool user input 与 dynamic tool call 请求；所有响应固定返回收到请求的原连接，切换后端或断开连接时立即清理未决请求与弹窗。
+- [x] MCP 表单支持必填字段、accept/decline/cancel 与显式 HTTP/HTTPS 外链；密码和其他 secret answer 仅保存在内存中，不写入草稿或持久化存储。
+- [x] 将 `turn/plan/updated` 实时计划投影到左侧 Plan 面板，并按当前线程隔离 pending、in progress 与 completed 状态，不在消息流中重复渲染。
+- [x] 新增 Runtime Inspector Panel，集中提供线程 Goal 设置/清除、Account Usage、Provider Capabilities、Permission Profiles、Config Requirements、Loaded Threads 与显式后台终端清理；unsupported、gated 与 unknown 状态均明确展示。
+- [x] 接入 External Agent Config、`plugin/read` 插件详情、工作区 `fs/getMetadata` 与 `fs/watch/unwatch`，并保留插件 marketplace 来源身份和组件级 watch 生命周期。
+
+- [x] 按 Codex app-server 当前协议仅显示精确 10,080 分钟的周限额，移除已经失效的 5 小时额度与分钟数文案，并统一 Status Monitor、Codex Panel 与多语言显示。
+
+#### 兼容性与稳定性修复
+
+
+- [x] 使用 app-server `initialize` 返回的真实运行版本替代硬编码版本，Status Monitor 现在可显示当前 Codex app-server 版本。
+- [x] 缩短 Codex 登录关键路径：线程列表就绪后即可进入主界面，模型、工具、配置、自定义提供商与 Codex Panel 数据改为后台加载。
+- [x] 修复 Codex reasoning 与非 Web Search 工具调用在主 VIS 中缺失或刷新后消失的问题；适配当前 reasoning 数组与 `collabAgentToolCall` wire 格式，并按线程持久化 app-server 历史接口无法返回的辅助消息。
+- [x] 修复仅包含 archived 会话的 fork 默认仍显示的问题；此类 fork 现在默认隐藏，但搜索 `archived` 时仍可检索对应 fork 与 archived 会话。
+- [x] 修复 Codex 线程切换、重连、rollback 与后台预加载中的异步竞态，防止旧线程事件、旧账号/配置/模型响应、旧 homedir 与 Git 信息覆盖当前连接或重新写回已回滚历史。
+- [x] 修复 Codex 自定义模型提供商线程补水阻塞登录、重复请求基础线程列表及后台合并后线程顺序错误的问题。
+- [x] 明确区分会话语义：VIS Archive 仅使用本地 `hiddenThreadIds`，可恢复；VIS Delete 调用 Codex 原生 `thread/archive`，不可通过 VIS 恢复，且不暴露或调用原生 `thread/unarchive`。
+- [x] 加固多后端生命周期：OpenCode、Codex 与 ACP 之间切换时同时断开 UI 与 registry 持有的 Codex adapter，取消通用 prompt/confirm 与请求窗口，并阻止旧连接、旧线程或旧 backend 的异步结果和操作写入当前状态。
+- [x] 修复 Status Monitor 的 MCP 与 Token 长期停留在“加载中”问题：MCP 状态请求超时后回退到已配置状态，`-32601` 明确显示“不支持”；Token 使用独立 loading，并阻止旧会话、旧后端与旧刷新结果覆盖当前状态。
+- [x] 按 Codex app-server 的真实 MCP wire 数据归一化 `serverInfo`、`tools`、`resources`、`resourceTemplates` 与 `authStatus`，区分已连接、需要认证、已配置但连接状态不可用及已禁用状态。
+- [x] 修复插件状态解析：`plugin/list` 的插件实际嵌套在 `marketplaces[].plugins[]` 中，并使用 `installed`、`enabled`、`availability` 与 `interface` 字段；`DISABLED_BY_ADMIN` 不再误报为可用或启用。
+- [x] 完善 Status Monitor 的可访问性与多语言终态显示，补齐 tablist 键盘导航、ARIA 关联、MCP toggle 焦点状态、减少动画偏好及中日韩文本排版。
+
+### OpenCode 后端修复
+
+- [x] 修复原生 OpenCode 会话归档后仍被 TopPanel 当作活动会话的问题：将 canonical `SessionState.timeArchived` 投影为 `archivedAt`，使归档标记、恢复操作与活动会话过滤同步生效，并加入回归测试。
+- [x] 修复子代理名称与历史刷新后消失的问题：从根线程的 task 记录提取实际子会话 ID，由 SharedWorker 以最多 2 个请求并发精确水合并校验同目录、直接父子关系，不再为恢复历史加载整个目录的全部子会话。
+- [x] 修复子代理入口和历史窗口不遵循活动主题的问题：入口行、窗口外壳、历史条目、工具徽章及状态全部改用 floating、status 与 tool 语义主题令牌。
+- [x] 修复子代理历史中的 edit、multiedit、read、Web Search、Web Fetch 与思考详情无法打开的问题；统一 `toolRenderers` 的工具详情渲染路径，并兼容 OpenCode 实际 wire 名 `websearch_web_search_exa`。
+
+### OpenCode 冷启动性能优化
+
+- [x] OpenCode 冷启动改为拓扑优先：SharedWorker bootstrap 只加载项目/目录拓扑，目录会话按 unloaded/loading/loaded/error 独立水合，首个有效选择后以最多 2 个目录并发后台补齐完整会话树。
+- [x] 登录目标按"显式链接 → 按 server URL 隔离的持久化选择 → 当前 worktree → 首个项目 worktree"确定；持久化目标失效时清除记录并安全降级，显式目标不存在时提示 not-found 且不会误建会话。
+- [x] 目录未加载（unloaded/loading/error）不再被当作空目录；只有加载完成的空目录才允许在指定目录创建一个新会话。
+- [x] UI Ready 提前到目标会话可选中即完成；文件树、git status、命令、权限与问题改为后台异步加载，不再阻塞登录。
+
+
 ## [v0.6.0 released]
 
 ### 新后端支持(alpha)
@@ -27,7 +71,6 @@
 - [x] 状态监控面板的 skills 标签支持启用/禁用 toggle（复用 MCP 模式，调用 Codex `skills/config/write` RPC）
 - [x] 启用 Codex adapter 的 `experimentalApi` capability，使 `collaborationMode/list` 等实验性 RPC 可用
 - [x] status monitor面板支持显示codex插件
-- [x] 修改“应用（app）”的翻译为“连接器（connector）”
 - [x] forgecode panel 迭代与修复
 	- [x] 添加forge panel，用于以pty+辅助gui的形式与forgecode zsh交互
     - [x] 设置里增加panel按钮的开关（类似codex panel）

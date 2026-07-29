@@ -19,7 +19,6 @@
             >
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
-
             <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
               <!-- Normal rendering for small sessions (≤20 threads) -->
               <template v-if="!shouldVirtualize">

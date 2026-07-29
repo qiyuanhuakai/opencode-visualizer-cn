@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { createCodexAdapter, extractStatusType, normalizeCodexStatus } from './codexAdapter';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createCodexAdapter,
+  extractStatusType,
+  getCodexWeeklyRateLimitWindow,
+  normalizeCodexMcpServerInfo,
+  normalizeCodexStatus,
+} from './codexAdapter';
 
 type ListenerMap = {
   open: Array<() => void>;
@@ -72,6 +78,42 @@ async function waitForSent(socket: MockWebSocket, count: number) {
 }
 
 describe('CodexAdapter', () => {
+  it('selects only the weekly rate-limit window when a removed short window is still present', () => {
+    const weekly = {
+      usedPercent: 42,
+      windowDurationMins: 10_080,
+      resetsAt: 1_730_947_200,
+    };
+
+    expect(getCodexWeeklyRateLimitWindow({
+      limitId: 'codex',
+      primary: {
+        usedPercent: 25,
+        windowDurationMins: 300,
+        resetsAt: 1_730_900_000,
+      },
+      secondary: weekly,
+    })).toEqual(weekly);
+  });
+
+  it('does not label a longer rate-limit window as weekly', () => {
+    const weekly = {
+      usedPercent: 42,
+      windowDurationMins: 10_080,
+      resetsAt: 1_730_947_200,
+    };
+
+    expect(getCodexWeeklyRateLimitWindow({
+      limitId: 'codex',
+      primary: {
+        usedPercent: 7,
+        windowDurationMins: 43_200,
+        resetsAt: 1_733_539_200,
+      },
+      secondary: weekly,
+    })).toEqual(weekly);
+  });
+
   it('initializes with client metadata and sends initialized notification', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
@@ -94,9 +136,13 @@ describe('CodexAdapter', () => {
       },
     });
 
-    socket.respond(1, { userAgent: 'codex-test' });
-    await expect(initialized).resolves.toEqual({ userAgent: 'codex-test' });
+    const initializeResult = {
+      userAgent: 'vis/0.145.0 (Linux 6.6; x86_64) codex_cli_rs/0.145.0 (vis_test; 0.0.0)',
+    };
+    socket.respond(1, initializeResult);
+    await expect(initialized).resolves.toEqual(initializeResult);
     expect(JSON.parse(socket.sent[1] ?? '{}')).toEqual({ method: 'initialized', params: {} });
+    await expect(adapter.getGlobalHealth()).resolves.toEqual({ healthy: true, version: '0.145.0' });
   });
 
   it('treats an already-initialized transport as initialized', async () => {
@@ -453,17 +499,47 @@ describe('CodexAdapter', () => {
       { answers: [['Use this value']] },
     );
     await adapter.replyQuestion('codex-dynamic:44', { answers: [['Dynamic result']] });
+    await adapter.rejectQuestion('codex-tool:{"id":45,"questionIds":["question-b"]}');
+    await adapter.rejectQuestion('codex-dynamic:46');
 
-    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({ id: 42, result: 'acceptForSession' });
-    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 'req-1', result: 'decline' });
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({ id: 42, result: { decision: 'acceptForSession' } });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 'req-1', result: { decision: 'decline' } });
     expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
       id: 43,
-      result: { responses: [{ questionId: 'question-a', response: 'Use this value' }] },
+      result: { answers: { 'question-a': { answers: ['Use this value'] } } },
     });
     expect(JSON.parse(socket.sent[5] ?? '{}')).toEqual({
       id: 44,
-      result: { contentItems: [{ type: 'text', text: 'Dynamic result' }] },
+      result: {
+        contentItems: [{ type: 'inputText', text: 'Dynamic result' }],
+        success: true,
+      },
     });
+    expect(JSON.parse(socket.sent[6] ?? '{}')).toEqual({ id: 45, result: { answers: {} } });
+    expect(JSON.parse(socket.sent[7] ?? '{}')).toEqual({
+      id: 46,
+      result: { contentItems: [], success: false },
+    });
+  });
+
+  it('rejects native Codex unarchive through the shared session update surface', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const restore = adapter.updateSession('thr_1', { time: { archived: 0 } });
+    const socket = MockWebSocket.instances[0];
+    if (socket) {
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, { thread: { id: 'thr_1' } });
+    }
+
+    await expect(restore).rejects.toThrow('Codex native unarchive is disabled');
   });
 
   it('reads and resumes existing threads', async () => {
@@ -653,72 +729,62 @@ describe('CodexAdapter', () => {
       params: { threadId: 'thr_1' },
     });
 
-    const unarchive = adapter.unarchiveThread({ threadId: 'thr_1' });
+    const unsubscribe = adapter.unsubscribeThread({ threadId: 'thr_1' });
     await waitForSent(socket, 5);
-    socket.respond(4, { thread: { id: 'thr_1', name: 'Renamed' } });
-    await expect(unarchive).resolves.toEqual({ thread: { id: 'thr_1', name: 'Renamed' } });
+    socket.respond(4, {});
+    await expect(unsubscribe).resolves.toEqual({});
     expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
       id: 4,
-      method: 'thread/unarchive',
-      params: { threadId: 'thr_1' },
-    });
-
-    const unsubscribe = adapter.unsubscribeThread({ threadId: 'thr_1' });
-    await waitForSent(socket, 6);
-    socket.respond(5, {});
-    await expect(unsubscribe).resolves.toEqual({});
-    expect(JSON.parse(socket.sent[5] ?? '{}')).toEqual({
-      id: 5,
       method: 'thread/unsubscribe',
       params: { threadId: 'thr_1' },
     });
 
     const interrupt = adapter.interruptTurn({ threadId: 'thr_1', turnId: 'turn_1' });
-    await waitForSent(socket, 7);
-    socket.respond(6, {});
+    await waitForSent(socket, 6);
+    socket.respond(5, {});
     await expect(interrupt).resolves.toEqual({});
-    expect(JSON.parse(socket.sent[6] ?? '{}')).toEqual({
-      id: 6,
+    expect(JSON.parse(socket.sent[5] ?? '{}')).toEqual({
+      id: 5,
       method: 'turn/interrupt',
       params: { threadId: 'thr_1', turnId: 'turn_1' },
     });
 
     const fork = adapter.forkThread({ threadId: 'thr_1' });
-    await waitForSent(socket, 8);
-    socket.respond(7, { thread: { id: 'thr_2', preview: '' } });
+    await waitForSent(socket, 7);
+    socket.respond(6, { thread: { id: 'thr_2', preview: '' } });
     await expect(fork).resolves.toEqual({ thread: { id: 'thr_2', preview: '' } });
-    expect(JSON.parse(socket.sent[7] ?? '{}')).toEqual({
-      id: 7,
+    expect(JSON.parse(socket.sent[6] ?? '{}')).toEqual({
+      id: 6,
       method: 'thread/fork',
       params: { threadId: 'thr_1' },
     });
 
     const rollback = adapter.rollbackThread({ threadId: 'thr_1', numTurns: 1 });
-    await waitForSent(socket, 9);
-    socket.respond(8, { thread: { id: 'thr_1', name: 'Renamed' } });
+    await waitForSent(socket, 8);
+    socket.respond(7, { thread: { id: 'thr_1', name: 'Renamed' } });
     await expect(rollback).resolves.toEqual({ thread: { id: 'thr_1', name: 'Renamed' } });
-    expect(JSON.parse(socket.sent[8] ?? '{}')).toEqual({
-      id: 8,
+    expect(JSON.parse(socket.sent[7] ?? '{}')).toEqual({
+      id: 7,
       method: 'thread/rollback',
       params: { threadId: 'thr_1', numTurns: 1 },
     });
 
     const readDir = adapter.readDirectory({ path: '/tmp' });
-    await waitForSent(socket, 10);
-    socket.respond(9, { entries: [{ name: 'file.txt', type: 'file' }] });
+    await waitForSent(socket, 9);
+    socket.respond(8, { entries: [{ name: 'file.txt', type: 'file' }] });
     await expect(readDir).resolves.toEqual({ entries: [{ name: 'file.txt', type: 'file' }] });
-    expect(JSON.parse(socket.sent[9] ?? '{}')).toEqual({
-      id: 9,
+    expect(JSON.parse(socket.sent[8] ?? '{}')).toEqual({
+      id: 8,
       method: 'fs/readDirectory',
       params: { path: '/tmp' },
     });
 
     const readFile = adapter.readFile({ path: '/tmp/file.txt' });
-    await waitForSent(socket, 11);
-    socket.respond(10, { content: 'hello' });
+    await waitForSent(socket, 10);
+    socket.respond(9, { content: 'hello' });
     await expect(readFile).resolves.toEqual({ content: 'hello' });
-    expect(JSON.parse(socket.sent[10] ?? '{}')).toEqual({
-      id: 10,
+    expect(JSON.parse(socket.sent[9] ?? '{}')).toEqual({
+      id: 9,
       method: 'fs/readFile',
       params: { path: '/tmp/file.txt' },
     });
@@ -775,9 +841,15 @@ describe('CodexAdapter', () => {
       params: { threadId: 'thr_1', numTurns: 1 },
     });
 
-    await expect(adapter.deleteSession('thr_1')).rejects.toThrow(
-      'Codex does not support deleteSession; hide the thread locally or archive it instead.',
-    );
+    const deleteSession = adapter.deleteSession('thr_1');
+    await waitForSent(socket, 6);
+    expect(JSON.parse(socket.sent[5] ?? '{}')).toEqual({
+      id: 5,
+      method: 'thread/archive',
+      params: { threadId: 'thr_1' },
+    });
+    socket.respond(5, {});
+    await expect(deleteSession).resolves.toBeUndefined();
 
     const listFiles = adapter.listFiles;
     await expect(listFiles({ directory: '/repo', path: '../secret' })).rejects.toThrow(
@@ -787,13 +859,13 @@ describe('CodexAdapter', () => {
       'Codex file path is outside the active directory.',
     );
     const readFileContent = adapter.readFileContent({ directory: '/repo', path: 'README.md' });
-    await waitForSent(socket, 6);
-    socket.respond(5, { dataBase64: 'aGVsbG8=' });
+    await waitForSent(socket, 7);
+    socket.respond(6, { dataBase64: 'aGVsbG8=' });
     await expect(readFileContent).resolves.toEqual({ content: 'hello', encoding: 'utf-8', type: 'text' });
 
     const readPlainContent = adapter.readFileContent({ directory: '/repo', path: 'plain.txt' });
-    await waitForSent(socket, 7);
-    socket.respond(6, { content: 'plain text' });
+    await waitForSent(socket, 8);
+    socket.respond(7, { content: 'plain text' });
     await expect(readPlainContent).resolves.toEqual({ content: 'plain text', encoding: 'utf-8', type: 'text' });
     const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1225,7 +1297,7 @@ describe('CodexAdapter', () => {
      });
    });
 
-   it('reads account rate limits', async () => {
+    it('reads account rate limits', async () => {
      MockWebSocket.instances = [];
      const adapter = createCodexAdapter({
        url: 'ws://localhost:4500',
@@ -1268,6 +1340,45 @@ describe('CodexAdapter', () => {
         method: 'account/rateLimits/read',
         params: {},
       });
+    });
+
+    it('uses current wire methods for goals, usage, provider capabilities, and permission profiles', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
+
+      const goal = adapter.getThreadGoal({ threadId: 'thread-1' });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, { goal: null });
+      await expect(goal).resolves.toEqual({ goal: null });
+
+      const usage = adapter.readAccountUsage();
+      await waitForSent(socket, 4);
+      socket.respond(3, { summary: { lifetimeTokens: 12 }, dailyUsageBuckets: [] });
+      await usage;
+
+      const providerCapabilities = adapter.readModelProviderCapabilities();
+      await waitForSent(socket, 5);
+      socket.respond(4, { namespaceTools: true, imageGeneration: false, webSearch: true });
+      await providerCapabilities;
+
+      const profiles = adapter.listPermissionProfiles({ cwd: '/workspace' });
+      await waitForSent(socket, 6);
+      socket.respond(5, { data: [{ id: 'default', description: null }], nextCursor: null });
+      await profiles;
+
+      expect(socket.sent.slice(2).map((message) => JSON.parse(message))).toEqual([
+        { id: 2, method: 'thread/goal/get', params: { threadId: 'thread-1' } },
+        { id: 3, method: 'account/usage/read', params: {} },
+        { id: 4, method: 'modelProvider/capabilities/read', params: {} },
+        { id: 5, method: 'permissionProfile/list', params: { cwd: '/workspace' } },
+      ]);
     });
   });
 
@@ -1317,8 +1428,49 @@ describe('CodexAdapter', () => {
     });
   });
 
-  describe('getMcpStatus / normalizeCodexMcpStatus', () => {
-    async function expectNormalizedMcpStatus(rawStatus: string, expected: string) {
+  describe('getMcpStatus', () => {
+    it('normalizes the current MCP wire inventory for the manager UI', () => {
+      expect(
+        normalizeCodexMcpServerInfo({
+          name: 'officecli',
+          serverInfo: { name: 'officecli', version: '1.0.0' },
+          tools: { convert_to_pdf: { name: 'convert_to_pdf', description: 'Convert a file.' } },
+          resources: [{ name: 'templates', description: 'Office templates' }],
+          resourceTemplates: [],
+          authStatus: 'unsupported',
+        }),
+      ).toEqual({
+        name: 'officecli',
+        status: 'connected',
+        tools: [{ name: 'convert_to_pdf', description: 'Convert a file.' }],
+        resources: [{ name: 'templates', description: 'Office templates' }],
+        auth: { type: 'none', status: 'completed' },
+      });
+    });
+
+    it('normalizes notLoggedIn as an OAuth action requirement', () => {
+      expect(
+        normalizeCodexMcpServerInfo({
+          name: 'remote',
+          serverInfo: null,
+          tools: {},
+          resources: [],
+          resourceTemplates: [],
+          authStatus: 'notLoggedIn',
+        }),
+      ).toEqual({
+        name: 'remote',
+        status: 'needs_auth',
+        tools: [],
+        resources: [],
+        auth: { type: 'oauth', status: 'required' },
+      });
+    });
+
+    async function expectMcpListStatus(
+      entry: Record<string, unknown>,
+      expected: 'connected' | 'configured' | 'needs_auth',
+    ) {
       MockWebSocket.instances = [];
       const adapter = createCodexAdapter({
         url: 'ws://localhost:4500',
@@ -1330,45 +1482,156 @@ describe('CodexAdapter', () => {
       socket.emitOpen();
       await waitForSent(socket, 1);
       socket.respond(1, {});
-      await waitForSent(socket, 2);
-      socket.respond(2, { data: [{ name: 'server-a', status: rawStatus }] });
+      await waitForSent(socket, 3);
+      socket.respond(2, { config: {} });
+      await waitForSent(socket, 4);
+      socket.respond(3, { data: [{ name: 'server-a', ...entry }], nextCursor: null });
 
       const result = await status;
       expect(result['server-a']?.status).toBe(expected);
     }
 
-    it('maps codex "started" to internal "connected"', async () => {
-      await expectNormalizedMcpStatus('started', 'connected');
+    it('maps the current inventory wire shape to connected', async () => {
+      await expectMcpListStatus(
+        {
+          serverInfo: { name: 'officecli', version: '1.0.0' },
+          tools: { convert_to_pdf: { name: 'convert_to_pdf' } },
+          resources: [],
+          resourceTemplates: [],
+          authStatus: 'unsupported',
+        },
+        'connected',
+      );
     });
 
-    it('maps codex "starting" to internal "connected"', async () => {
-      await expectNormalizedMcpStatus('starting', 'connected');
+    it('maps notLoggedIn auth status to needs_auth', async () => {
+      await expectMcpListStatus(
+        {
+          serverInfo: null,
+          tools: {},
+          resources: [],
+          resourceTemplates: [],
+          authStatus: 'notLoggedIn',
+        },
+        'needs_auth',
+      );
     });
 
-    it('maps codex "stopped" to internal "disabled"', async () => {
-      await expectNormalizedMcpStatus('stopped', 'disabled');
+    it('keeps an inventory entry without connection evidence as configured', async () => {
+      await expectMcpListStatus(
+        {
+          serverInfo: null,
+          tools: {},
+          resources: [],
+          resourceTemplates: [],
+          authStatus: 'unsupported',
+        },
+        'configured',
+      );
     });
 
-    it('maps codex "error" to internal "failed"', async () => {
-      await expectNormalizedMcpStatus('error', 'failed');
+    it('falls back to configured MCP entries when the supported status call does not terminate', async () => {
+      vi.useFakeTimers();
+      try {
+        MockWebSocket.instances = [];
+        const adapter = createCodexAdapter({
+          url: 'ws://localhost:4500',
+          webSocketCtor: MockWebSocket,
+          mcpStatusTimeoutMs: 20,
+        });
+
+        const status = adapter.getMcpStatus();
+        const socket = MockWebSocket.instances[0]!;
+        socket.emitOpen();
+        await waitForSent(socket, 1);
+        socket.respond(1, {});
+        await waitForSent(socket, 3);
+        expect(JSON.parse(socket.sent[2] ?? '{}')).toMatchObject({
+          method: 'config/read',
+        });
+        socket.respond(2, {
+          config: {
+            mcp_servers: {
+              officecli: { command: 'officecli', args: ['mcp'], enabled: true },
+            },
+          },
+        });
+        await waitForSent(socket, 4);
+        expect(JSON.parse(socket.sent[3] ?? '{}')).toMatchObject({
+          method: 'mcpServerStatus/list',
+          params: { detail: 'toolsAndAuthOnly' },
+        });
+
+        await vi.advanceTimersByTimeAsync(20);
+
+        await expect(status).resolves.toEqual({
+          officecli: { status: 'configured' },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it('preserves opencode "running" / "ready" mapping to "connected"', async () => {
-      await expectNormalizedMcpStatus('running', 'connected');
-      await expectNormalizedMcpStatus('ready', 'connected');
-    });
+    it('preserves method-not-found so the UI can render MCP as unsupported', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-    it('preserves opencode "auth_required" mapping to "needs_auth"', async () => {
-      await expectNormalizedMcpStatus('auth_required', 'needs_auth');
-    });
+      const status = adapter.getMcpStatus();
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, { config: {} });
+      await waitForSent(socket, 4);
+      socket.reject(3, 'Method not found', -32601);
 
-    it('preserves pass-through for internal status values', async () => {
-      await expectNormalizedMcpStatus('connected', 'connected');
-      await expectNormalizedMcpStatus('disabled', 'disabled');
-      await expectNormalizedMcpStatus('failed', 'failed');
-      await expectNormalizedMcpStatus('needs_auth', 'needs_auth');
-      await expectNormalizedMcpStatus('needs_client_registration', 'needs_client_registration');
+      await expect(status).rejects.toMatchObject({ code: -32601 });
     });
+  });
+
+  it('normalizes the current plugin/list wire fields at the adapter boundary', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({ url: 'ws://localhost:4500', webSocketCtor: MockWebSocket });
+    const plugins = adapter.listPlugins();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 2);
+    socket.respond(2, {
+      marketplaces: [{ name: 'sisyphuslabs', path: '/home/test/.codex/plugins/cache/sisyphuslabs/marketplace.json', interface: null, plugins: [
+        { id: 'omo@sisyphuslabs', remotePluginId: null, version: null, localVersion: '4.19.1', name: 'omo', source: { type: 'local', path: '/home/test/.codex/plugins/omo/4.19.1' }, installed: true, enabled: true, availability: 'AVAILABLE', interface: { displayName: 'OMO', shortDescription: 'Unified local Codex components', logoUrl: 'https://example.test/omo.png' }, keywords: ['codex', 'mcp'] },
+        { id: 'admin-disabled@sisyphuslabs', name: 'admin-disabled', source: { type: 'remote' }, installed: true, enabled: true, availability: 'DISABLED_BY_ADMIN', interface: { shortDescription: 'Disabled by policy' }, keywords: [] },
+      ] }, { name: 'openai-curated-remote', path: null, interface: null, plugins: [] }],
+      marketplaceLoadErrors: [{ marketplaceName: 'broken-marketplace', error: 'unavailable' }], featuredPluginIds: ['omo@sisyphuslabs'],
+    });
+    await expect(plugins).resolves.toEqual({
+      marketplaces: [{ name: 'sisyphuslabs', path: '/home/test/.codex/plugins/cache/sisyphuslabs/marketplace.json', plugins: [
+        expect.objectContaining({ id: 'omo@sisyphuslabs', name: 'omo', description: 'Unified local Codex components', logoUrl: 'https://example.test/omo.png', isAccessible: true, isEnabled: true, state: 'installed' }),
+        expect.objectContaining({ id: 'admin-disabled@sisyphuslabs', isAccessible: false, isEnabled: false, state: 'installed' }),
+      ] }, { name: 'openai-curated-remote', path: null, plugins: [] }],
+      errors: [{ marketplaceName: 'broken-marketplace', error: 'unavailable' }], featured: ['omo@sisyphuslabs'],
+    });
+  });
+
+  it('writes MCP config under the live mcp_servers key', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({ url: 'ws://localhost:4500', webSocketCtor: MockWebSocket });
+    const update = adapter.updateMcp({ name: 'officecli', config: { command: 'officecli', enabled: false } });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({ id: 2, method: 'config/value/write', params: { keyPath: 'mcp_servers.officecli', value: { command: 'officecli', enabled: false }, mergeStrategy: 'replace' } });
+    socket.respond(2, {});
+    await waitForSent(socket, 4);
+    socket.respond(3, {});
+    await expect(update).resolves.toEqual({});
   });
 
   describe('normalizeCodexStatus / extractStatusType', () => {
@@ -1417,5 +1680,32 @@ describe('CodexAdapter', () => {
       expect(normalizeCodexStatus('busy')).toBe('busy');
       expect(normalizeCodexStatus('retry')).toBe('retry');
     });
+  });
+
+  it('maps BackendAdapter deletion to Codex native thread/archive', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const deletion = adapter.deleteSession('thread-delete');
+    void deletion.catch(() => undefined);
+    await flushPromises();
+    expect(MockWebSocket.instances).toHaveLength(1);
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'thread/archive',
+      params: { threadId: 'thread-delete' },
+    });
+    socket.respond(2, {});
+
+    await expect(deletion).resolves.toBeUndefined();
   });
 });

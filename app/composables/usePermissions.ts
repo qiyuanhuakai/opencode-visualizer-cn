@@ -28,6 +28,7 @@ export function usePermissions(options: {
   allowedSessionIds: ComputedRef<Set<string>>;
   activeDirectory: Ref<string>;
   ensureConnectionReady: (action: string) => boolean;
+  sendReply?: (requestId: string, reply: PermissionReply) => Promise<void>;
   onReplied?: (requestId: string) => void;
 }) {
   const { t } = useI18n();
@@ -42,6 +43,11 @@ export function usePermissions(options: {
     activeDirectory: options.activeDirectory,
     actionKey: 'app.actions.permissionReply',
     sendReply: async (requestId, reply) => {
+      if (options.sendReply) {
+        await options.sendReply(requestId, reply as PermissionReply);
+        options.onReplied?.(requestId);
+        return;
+      }
       const replyPermission = getActiveBackendAdapter().replyPermission;
       if (!replyPermission) throw new Error('Active backend does not support permission replies.');
       await replyPermission(requestId, {
@@ -135,6 +141,10 @@ export function usePermissions(options: {
     dialog.prune();
   }
 
+  function clearPermissionEntries() {
+    dialog.clearAll();
+  }
+
   function isPermissionSessionAllowed(request: PermissionRequest): boolean {
     return dialog.isSessionAllowed(request);
   }
@@ -164,6 +174,7 @@ export function usePermissions(options: {
     upsertPermissionEntry,
     removePermissionEntry,
     prunePermissionEntries,
+    clearPermissionEntries,
     handlePermissionReply,
     isPermissionSessionAllowed,
     fetchPendingPermissions,

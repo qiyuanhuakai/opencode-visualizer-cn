@@ -40,27 +40,11 @@ import { useI18n } from 'vue-i18n';
 import ThreadHistoryContent from './ThreadHistoryContent.vue';
 import { useMessages } from '../composables/useMessages';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
-import type {
-  HistoryEntry,
-  HistoryWindowEntry,
-} from '../types/message';
+import type { HistoryEntry, HistoryWindowEntry } from '../types/message';
 import type { QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from '../types/sse';
+import { isHistoryToolName } from '../utils/toolNames';
 
 const { t } = useI18n();
-
-const HISTORY_TOOL_NAMES = new Set([
-  'bash',
-  'write',
-  'edit',
-  'multiedit',
-  'apply_patch',
-  'websearch',
-  'read',
-  'grep',
-  'glob',
-  'webfetch',
-  'codesearch',
-]);
 
 const props = withDefaults(
   defineProps<{
@@ -164,7 +148,11 @@ const internalEntries = computed<HistoryEntry[]>(() => {
         continue;
       }
       if (part.type === 'subtask') {
-        entries.push({ kind: 'subtask', part, time: getSubtaskPartTime(part, msgInfo.time.created) });
+        entries.push({
+          kind: 'subtask',
+          part,
+          time: getSubtaskPartTime(part, msgInfo.time.created),
+        });
         continue;
       }
       if (part.type !== 'tool') continue;
@@ -173,7 +161,7 @@ const internalEntries = computed<HistoryEntry[]>(() => {
         entries.push({ kind: 'question', part, time: getToolPartTime(part) });
         continue;
       }
-      if (!HISTORY_TOOL_NAMES.has(part.tool)) continue;
+      if (!isHistoryToolName(part.tool)) continue;
       entries.push({ kind: 'tool', part, time: getToolPartTime(part) });
     }
   }
@@ -254,8 +242,8 @@ function handleReasoningClick(part: ReasoningPart) {
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
-  background: color-mix(in srgb, #0ea5e9 14%, var(--floating-surface-muted, #242832));
-  border-bottom: 1px solid color-mix(in srgb, #0ea5e9 35%, var(--floating-border-muted, #1e293b));
+  background: var(--floating-surface-muted, #242832);
+  border-bottom: 1px solid var(--floating-surface-outline, var(--floating-border-muted, #1e293b));
 }
 
 .subagent-header-meta {
@@ -285,7 +273,7 @@ function handleReasoningClick(part: ReasoningPart) {
   font-weight: 700;
   letter-spacing: 0.4px;
   text-transform: uppercase;
-  color: #7dd3fc;
+  color: var(--floating-surface-title-text, var(--floating-text, #e2e8f0));
 }
 
 .subagent-header-id {
@@ -302,9 +290,9 @@ function handleReasoningClick(part: ReasoningPart) {
   flex-shrink: 0;
   padding: 4px 10px;
   border-radius: 4px;
-  border: 1px solid color-mix(in srgb, #0ea5e9 35%, var(--floating-border-muted, #1e293b));
-  background: color-mix(in srgb, #0ea5e9 8%, var(--floating-surface-strong, #323a48));
-  color: var(--floating-text, #e2e8f0);
+  border: 1px solid var(--floating-surface-outline, var(--floating-border-muted, #1e293b));
+  background: var(--floating-surface-hover, var(--floating-surface-strong, #323a48));
+  color: var(--floating-surface-title-text, var(--floating-text, #e2e8f0));
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
@@ -314,8 +302,8 @@ function handleReasoningClick(part: ReasoningPart) {
 }
 
 .subagent-close-button:hover {
-  background: color-mix(in srgb, #0ea5e9 18%, var(--floating-surface-strong, #323a48));
-  border-color: color-mix(in srgb, #0ea5e9 60%, var(--floating-border-muted, #1e293b));
+  background: var(--floating-surface-active, var(--floating-surface-strong, #323a48));
+  border-color: var(--floating-surface-outline, var(--floating-border-muted, #1e293b));
 }
 
 .subagent-empty {

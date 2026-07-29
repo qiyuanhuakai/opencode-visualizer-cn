@@ -221,6 +221,80 @@ describe('TopPanel', () => {
     app.unmount();
   });
 
+  it('hides archived-only forks until archived sessions are searched', async () => {
+    const { default: TopPanel } = await import('./TopPanel.vue');
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(TopPanel, {
+              treeData: [
+                {
+                  directory: '/repo',
+                  label: 'repo',
+                  name: 'repo',
+                  projectId: 'codex',
+                  kind: 'sandbox',
+                  sandboxes: [
+                    {
+                      directory: '/repo',
+                      branch: 'main',
+                      kind: 'branch',
+                      sessions: [{ id: 'active', title: 'Active session', status: 'idle' }],
+                    },
+                    {
+                      directory: '/repo-archived-fork',
+                      branch: 'archived-fork',
+                      kind: 'branch',
+                      sessions: [
+                        {
+                          id: 'archived',
+                          title: 'Archived session',
+                          status: 'idle',
+                          archivedAt: 123,
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+              notificationSessions: [],
+              projectDirectory: '/repo',
+              activeDirectory: '/repo',
+              selectedSessionId: '',
+              sandboxFirstMode: true,
+            });
+        },
+      }),
+    );
+    app.provide('showConfirm', vi.fn());
+    app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+    app.mount(root);
+    requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+    await nextTick();
+
+    const visibleBranches = () =>
+      Array.from(root.querySelectorAll('.tree-sandbox .tree-label-name')).map((element) =>
+        element.textContent?.trim(),
+      );
+    expect(visibleBranches()).toEqual(['main']);
+
+    const search = root.querySelector<HTMLInputElement>('.ui-dropdown-search-input');
+    expect(search).not.toBeNull();
+    if (!search) throw new Error('Missing session search input');
+    search.value = 'archived';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+
+    expect(visibleBranches()).toEqual(['archived-fork']);
+    expect(root.querySelector('.tree-session-row .session-title')?.textContent?.trim()).toBe(
+      'Archived session',
+    );
+    app.unmount();
+  });
+
   it('emits explicit repository and branch pin scopes with accessible labels', async () => {
     const { default: TopPanel } = await import('./TopPanel.vue');
     const root = document.createElement('div');

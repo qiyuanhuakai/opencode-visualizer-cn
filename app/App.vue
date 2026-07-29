@@ -72,6 +72,7 @@
             :active-tab="sidePanelActiveTab"
             :selected-session-id="selectedSessionId"
             :todo-sessions="todoPanelSessions"
+            :todo-label="activeBackendKind === 'codex' ? t('codexPanel.planTitle') : undefined"
             :session-tree-data="sessionTreeData"
             :session-tree-expanded-paths="sessionTreeExpandedPaths"
             :tree-nodes="treeNodes"
@@ -571,8 +572,10 @@ import CodexConfigViewer from './components/codex/CodexConfigViewer.vue';
 import CodexExperimentalFeatureManager from './components/codex/CodexExperimentalFeatureManager.vue';
 import CodexFeedbackUploader from './components/codex/CodexFeedbackUploader.vue';
 import CodexMcpServerManager from './components/codex/CodexMcpServerManager.vue';
+import CodexMcpElicitation from './components/codex/CodexMcpElicitation.vue';
 import CodexModelManager from './components/codex/CodexModelManager.vue';
 import CodexPluginManager from './components/codex/CodexPluginManager.vue';
+import CodexRuntimeInspector from './components/codex/CodexRuntimeInspector.vue';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
 import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
@@ -597,6 +600,8 @@ import { useFloatingWindows } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions, type QuestionRequest } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
+import { codexPlansToTodoSessions } from './utils/codexPlanTodos';
+import { createCodexSubpanelProps } from './utils/codexSubpanelProps';
 import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
 import { useBackendSessionActions } from './composables/useBackendSessionActions';
 import {
@@ -620,6 +625,7 @@ import { appendCodexBridgeToken, codexBridgeHttpUrl } from './backends/codex/bri
 import { CODEX_PROJECT_ID, useCodexWorkspace } from './composables/useCodexWorkspace';
 import { useReasoningWindows } from './composables/useReasoningWindows';
 import { useServerState } from './composables/useServerState';
+import { useOpenCodeSelectionBootstrap } from './composables/useOpenCodeSelectionBootstrap';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
 import { renderWorkerHtml, type RenderRequest } from './utils/workerRenderer';
@@ -635,6 +641,7 @@ import type { ComposerAttachment, LineCommentData } from './types/composer';
 import type { ForgePanelAuxiliary } from './types/forge';
 import type { ContainerPinPayload } from './types/pin';
 import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
+import type { WorkerToTabMessage } from './types/sse-worker';
 import type { TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
@@ -653,6 +660,8 @@ import {
 import { applyPinHierarchyTransition, buildPinHierarchy } from './utils/pinHierarchy';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
+import { resolveThreadSubagentSessions } from './utils/threadSubagents';
+import { normalizeToolName } from './utils/toolNames';
 import {
   extractFileRead as extractToolFileRead,
   extractPatch as extractToolPatch,
@@ -664,6 +673,7 @@ import {
   configureAcpBackend,
   disconnectAcpBackend,
   configureCodexBackend,
+  disconnectCodexBackend,
   configureOpenCodeBackend,
   getActiveBackendAdapter,
   getBackendAdapter,
@@ -693,6 +703,13 @@ import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
 import { useSettings } from './composables/useSettings';
 import {
+  clearOpenCodeLastSelection,
+  readOpenCodeLastSelection,
+  writeOpenCodeLastSelection,
+} from './utils/openCodeSelectionStorage';
+import { waitForState } from './utils/waitForState';
+import { mapWithConcurrency } from './utils/mapWithConcurrency';
+import {
   StorageKeys,
   storageGet,
   storageKey,
@@ -716,6 +733,7 @@ type LocalizedStatusState =
   | { mode: 'text'; text: string }
   | { mode: 'render'; render: () => string };
 const credentials = useCredentials();
+const ge = useGlobalEvents(credentials);
 const {
   suppressAutoWindows,
   showMinimizeButtons,
@@ -924,6 +942,7 @@ const SUBAGENT_CLOSE_DELAY_MS = 3000;
 type TodoPanelSession = {
   sessionId: string;
   title: string;
+  description?: string;
   isSubagent: boolean;
   todos: TodoItem[];
   loading: boolean;
@@ -1184,6 +1203,13 @@ const codexSubpanelDefinitions: Record<TopPanelCodexSubpanel, CodexSubpanelDefin
     height: 600,
     scroll: 'manual',
   },
+  runtime: {
+    component: CodexRuntimeInspector,
+    titleKey: 'codexPanel.runtime.title',
+    width: 820,
+    height: 680,
+    scroll: 'none',
+  },
   experimentalFeatures: {
     component: CodexExperimentalFeatureManager,
     titleKey: 'codexPanel.experimentalFeaturesTitle',
@@ -1228,6 +1254,8 @@ function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
       void codexApi.refreshConfig();
       void codexApi.refreshConfigRequirements();
       break;
+    case 'runtime':
+      break;
     case 'experimentalFeatures':
       void codexApi.refreshExperimentalFeatures();
       break;
@@ -1253,10 +1281,7 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   };
   void fw.open(`codex-${panel}`, {
     component: definition.component,
-    props: {
-      api: codexApi,
-      onOpenFilePreview: openCodexFilePreview,
-    },
+    props: createCodexSubpanelProps(codexApi, openCodexFilePreview),
     title: t(definition.titleKey),
     width: definition.width,
     height: definition.height,
@@ -1445,6 +1470,18 @@ const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
 let primaryHistoryRequestId = 0;
 const sessionReloadRequestId = ref(0);
 let outputAnchorRequestId = 0;
+type ReferencedSubagentHydrationResult = Extract<
+  WorkerToTabMessage,
+  { type: 'state.referenced-subagents-hydrated' }
+>;
+const pendingReferencedSubagentHydrations = new Map<
+  string,
+  {
+    rootSessionId: string;
+    resolve: (sessionIds: string[]) => void;
+  }
+>();
+let referencedSubagentHydrationSequence = 0;
 const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
@@ -1553,10 +1590,51 @@ const openCodeApi = useOpenCodeApi(serverState.projects, t);
 const codexApi = useCodexApi();
 const codexWorkspace = useCodexWorkspace(codexApi, { pinnedStore: localPinnedSessionStore });
 const bootstrapReady = serverState.bootstrapped;
+
+const PROJECT_HYDRATION_CONCURRENCY = 2;
+
+async function ensureOpenCodeDirectoryHydrated(directoryHint: string): Promise<void> {
+  const directory = directoryHint.trim();
+  if (!directory) return;
+  const status = serverState.sessionHydrationByDirectory[directory]?.status;
+  if (status === 'loaded') return;
+  if (status !== 'loading') {
+    ge.sendToWorker({ type: 'load-sessions', directory });
+  }
+  await waitForState(
+    () => serverState.sessionHydrationByDirectory,
+    (hydration) => {
+      const next = hydration[directory]?.status;
+      return next === 'loaded' || next === 'error';
+    },
+  );
+  const hydration = serverState.sessionHydrationByDirectory[directory];
+  if (hydration?.status === 'error') {
+    throw new Error(hydration.error || t('errors.stateSyncFailed'));
+  }
+}
+
+async function ensureOpenCodeProjectHydrated(projectId: string): Promise<void> {
+  const project = serverState.projects[projectId];
+  if (!project) return;
+  const directories = new Set([
+    project.worktree,
+    ...Object.values(project.sandboxes).map((sandbox) => sandbox.directory),
+  ]);
+  const results = await mapWithConcurrency(
+    [...directories],
+    PROJECT_HYDRATION_CONCURRENCY,
+    ensureOpenCodeDirectoryHydrated,
+  );
+  for (const result of results) {
+    if (result.status === 'rejected') throw result.reason;
+  }
+}
+
 const sessionSelection = useSessionSelection(
   computed(() => serverState.projects),
-  async (projectId) => {
-    const directory = serverState.projects[projectId]?.worktree?.trim();
+  async (projectId, directoryHint) => {
+    const directory = directoryHint?.trim() || serverState.projects[projectId]?.worktree?.trim();
     if (!directory) {
       throw new Error(t('errors.sessionCreateEmptyWorktree'));
     }
@@ -1567,15 +1645,34 @@ const sessionSelection = useSessionSelection(
     return { id: created.id, projectId: projectId };
   },
   t,
+  {
+    ensureDirectoryHydrated: ensureOpenCodeDirectoryHydrated,
+    ensureProjectHydrated: ensureOpenCodeProjectHydrated,
+  },
 );
 const {
   selectedProjectId,
   selectedSessionId,
   projectDirectory,
   activeDirectory,
-  switchSession: switchSessionSelection,
+  switchSession: switchSessionSelectionInternal,
+  ensureDirectorySession,
   initialize: initializeSessionSelection,
 } = sessionSelection;
+
+function persistActiveOpenCodeSelection() {
+  if (activeBackendKind.value !== 'opencode') return;
+  const projectId = selectedProjectId.value.trim();
+  const sessionId = selectedSessionId.value.trim();
+  const directory = activeDirectory.value.trim();
+  if (!projectId || !sessionId || !directory) return;
+  writeOpenCodeLastSelection(currentServerUrl.value, { projectId, sessionId, directory });
+}
+
+async function switchSessionSelection(projectId: string, sessionId: string) {
+  await switchSessionSelectionInternal(projectId, sessionId);
+  persistActiveOpenCodeSelection();
+}
 
 function toSessionInfo(
   projectId: string,
@@ -1707,8 +1804,30 @@ const subagentWindows = useSubagentWindows({
 
 const homePath = ref('');
 const serverWorktreePath = ref('');
+const currentServerUrl = computed(() => credentials.baseUrl.value.trim().replace(/\/+$/, ''));
 
 const initialQuery = readQuerySelection();
+const { bootstrapOpenCodeSelection } = useOpenCodeSelectionBootstrap({
+  projects: computed(() => serverState.projects),
+  sessionHydrationByDirectory: () => serverState.sessionHydrationByDirectory,
+  serverWorktreePath: () => serverWorktreePath.value,
+  initialProjectId: () => initialQuery.projectId,
+  initialSessionId: () => initialQuery.sessionId,
+  readStoredSelection: () => readOpenCodeLastSelection(currentServerUrl.value),
+  clearStoredSelection: () => clearOpenCodeLastSelection(currentServerUrl.value),
+  loadDirectorySessions: (directory) => {
+    ge.sendToWorker({ type: 'load-sessions', directory });
+  },
+  selectedProjectId,
+  selectedSessionId,
+  switchSessionSelection,
+  ensureDirectorySession: async (projectId, directory) => {
+    const sessionId = await ensureDirectorySession(projectId, directory);
+    persistActiveOpenCodeSelection();
+    return sessionId;
+  },
+  translate: t,
+});
 const isProjectPickerOpen = ref(false);
 const editingProject = ref<{ projectId: string; worktree: string } | null>(null);
 const editingProjectMeta = computed(() => {
@@ -2023,27 +2142,111 @@ const {
   upsertPermissionEntry,
   removePermissionEntry,
   prunePermissionEntries,
+  clearPermissionEntries,
   fetchPendingPermissions,
 } = usePermissions({
   fw,
   allowedSessionIds,
   activeDirectory,
   ensureConnectionReady,
+  sendReply: async (requestId, reply) => {
+    if (activeBackendKind.value === 'codex' && requestId.startsWith('codex:')) {
+      const request = codexApi.serverRequests.value.find(
+        (item) => encodeCodexDialogRequestId(item.id) === requestId,
+      );
+      if (!request) return;
+      const decision =
+        reply === 'reject'
+          ? 'decline'
+          : reply === 'always' && request.availableDecisions.includes('acceptForSession')
+            ? 'acceptForSession'
+            : 'accept';
+      codexApi.resolveServerRequest(request.id, decision);
+      return;
+    }
+    if (activeBackendKind.value === 'codex' && requestId.startsWith('codex-permission:')) {
+      codexApi.replyPermissionRequest(requestId, reply);
+      return;
+    }
+    const replyPermission = getActiveBackendAdapter().replyPermission;
+    if (!replyPermission) throw new Error('Active backend does not support permission replies.');
+    await replyPermission(requestId, {
+      directory: activeDirectory.value.trim() || undefined,
+      reply,
+    });
+  },
   onReplied: dismissCodexPermissionDialog,
 });
 
-const { upsertQuestionEntry, removeQuestionEntry, pruneQuestionEntries, fetchPendingQuestions } =
-  useQuestions({
-    fw,
-    allowedSessionIds,
-    activeDirectory,
-    ensureConnectionReady,
-    getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
-    onReplied: dismissCodexToolQuestionDialog,
-    onRejected: dismissCodexToolQuestionDialog,
-  });
+const {
+  upsertQuestionEntry,
+  removeQuestionEntry,
+  pruneQuestionEntries,
+  clearQuestionEntries,
+  fetchPendingQuestions,
+} = useQuestions({
+  fw,
+  allowedSessionIds,
+  activeDirectory,
+  ensureConnectionReady,
+  getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
+  sendReply: async (requestId, answers) => {
+    const toolRequest = codexApi.toolUserInputRequests.value.find(
+      (request) => encodeCodexToolQuestionRequestId(request) === requestId,
+    );
+    if (toolRequest) {
+      await codexApi.respondToToolUserInput(
+        toolRequest.requestId,
+        toolRequest.questions.map((question, index) => ({
+          questionId: question.id,
+          response: answers[index]?.join('\n') ?? '',
+        })),
+      );
+      return;
+    }
+    const dynamicRequest = codexApi.dynamicToolCalls.value.find(
+      (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
+    );
+    if (dynamicRequest) {
+      const text = answers.flat().join('\n');
+      await codexApi.respondToDynamicToolCall(
+        dynamicRequest.requestId,
+        text ? [{ type: 'inputText', text }] : [],
+      );
+      return;
+    }
+    const replyQuestion = getActiveBackendAdapter().replyQuestion;
+    if (!replyQuestion) throw new Error('Active backend does not support question replies.');
+    await replyQuestion(requestId, {
+      directory: activeDirectory.value.trim() || undefined,
+      answers,
+    });
+  },
+  sendReject: async (requestId) => {
+    const toolRequest = codexApi.toolUserInputRequests.value.find(
+      (request) => encodeCodexToolQuestionRequestId(request) === requestId,
+    );
+    if (toolRequest) {
+      await codexApi.respondToToolUserInput(toolRequest.requestId, []);
+      return;
+    }
+    const dynamicRequest = codexApi.dynamicToolCalls.value.find(
+      (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
+    );
+    if (dynamicRequest) {
+      await codexApi.respondToDynamicToolCall(dynamicRequest.requestId, [], false);
+      return;
+    }
+    const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+    if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
+    await rejectQuestion(requestId, activeDirectory.value.trim() || undefined);
+  },
+  onReplied: dismissCodexToolQuestionDialog,
+  onRejected: dismissCodexToolQuestionDialog,
+});
 
 type CodexServerDialogRequest = (typeof codexApi.serverRequests.value)[number];
+type CodexStructuredPermissionDialogRequest = (typeof codexApi.permissionRequests.value)[number];
 type CodexToolUserInputDialogRequest = (typeof codexApi.toolUserInputRequests.value)[number];
 type CodexDynamicToolCallDialogRequest = (typeof codexApi.dynamicToolCalls.value)[number];
 
@@ -2151,6 +2354,47 @@ function normalizeCodexPermissionRequest(request: CodexServerDialogRequest): Per
   };
 }
 
+function codexStructuredPermissionPatterns(request: CodexStructuredPermissionDialogRequest) {
+  const patterns = new Set<string>();
+  const network = request.requestedPermissions.network;
+  if (network && typeof network === 'object') {
+    const enabled = Reflect.get(network, 'enabled');
+    if (typeof enabled === 'boolean') patterns.add(`network: ${enabled ? 'enabled' : 'disabled'}`);
+  }
+  const fileSystem = request.requestedPermissions.fileSystem;
+  if (fileSystem && typeof fileSystem === 'object') {
+    for (const access of ['read', 'write'] as const) {
+      const paths = Reflect.get(fileSystem, access);
+      if (Array.isArray(paths)) {
+        paths
+          .filter((path): path is string => typeof path === 'string')
+          .forEach((path) => {
+            patterns.add(`${access}: ${path}`);
+          });
+      }
+    }
+  }
+  return Array.from(patterns);
+}
+
+function normalizeCodexStructuredPermissionRequest(
+  request: CodexStructuredPermissionDialogRequest,
+): PermissionRequest {
+  return {
+    id: request.dialogId,
+    sessionID: request.sessionID,
+    permission: t('codexPanel.serverRequests.additionalPermissions'),
+    patterns: codexStructuredPermissionPatterns(request),
+    metadata: {
+      turnId: request.turnId,
+      itemId: request.itemId,
+      cwd: request.cwd,
+      reason: request.reason,
+    },
+    always: ['session'],
+  };
+}
+
 function normalizeCodexToolQuestionRequest(
   request: CodexToolUserInputDialogRequest,
 ): QuestionRequest {
@@ -2159,10 +2403,11 @@ function normalizeCodexToolQuestionRequest(
     sessionID: request.threadId,
     questions: request.questions.map((question) => ({
       question: question.text,
-      header: question.text,
-      options: [{ label: 'Respond', description: 'Provide a text response to Codex.' }],
+      header: question.header,
+      options: question.options.map((option) => ({ ...option })),
       multiple: false,
-      custom: true,
+      custom: question.isOther || question.options.length === 0,
+      secret: question.isSecret,
     })),
     tool: {
       messageID: request.turnId,
@@ -2188,14 +2433,38 @@ function normalizeCodexDynamicToolCallRequest(
     ],
     tool: {
       messageID: request.turnId,
-      callID: String(request.requestId),
+      callID: request.callId,
     },
   };
 }
 
 const codexPermissionDialogIds = ref<Set<string>>(new Set());
+const codexStructuredPermissionDialogIds = ref<Set<string>>(new Set());
+const codexElicitationDialogIds = ref<Set<string>>(new Set());
 const codexQuestionDialogIds = ref<Set<string>>(new Set());
 const codexDynamicQuestionDialogIds = ref<Set<string>>(new Set());
+
+watch(activeBackendKind, () => {
+  promptDialogRef.value?.close();
+  promptResolve?.(null);
+  promptResolve = null;
+  confirmDialogRef.value?.close();
+  confirmResolve?.(false);
+  confirmResolve = null;
+  confirmQueue.splice(0).forEach(({ resolve }) => resolve(false));
+  clearPermissionEntries();
+  clearQuestionEntries();
+  codexPermissionDialogIds.value.forEach(removePermissionEntry);
+  codexStructuredPermissionDialogIds.value.forEach(removePermissionEntry);
+  codexElicitationDialogIds.value.forEach((id) => fw.close(codexElicitationWindowKey(id)));
+  codexQuestionDialogIds.value.forEach(removeQuestionEntry);
+  codexDynamicQuestionDialogIds.value.forEach(removeQuestionEntry);
+  codexPermissionDialogIds.value = new Set();
+  codexStructuredPermissionDialogIds.value = new Set();
+  codexElicitationDialogIds.value = new Set();
+  codexQuestionDialogIds.value = new Set();
+  codexDynamicQuestionDialogIds.value = new Set();
+});
 
 watch(
   () => codexApi.serverRequests.value,
@@ -2207,6 +2476,66 @@ watch(
     });
     requests.forEach((request) => upsertPermissionEntry(normalizeCodexPermissionRequest(request)));
     codexPermissionDialogIds.value = nextIds;
+  },
+  { deep: true },
+);
+
+watch(
+  () => codexApi.permissionRequests.value,
+  (requests) => {
+    if (activeBackendKind.value !== 'codex') return;
+    const nextIds = new Set(requests.map((request) => request.dialogId));
+    codexStructuredPermissionDialogIds.value.forEach((id) => {
+      if (!nextIds.has(id)) removePermissionEntry(id);
+    });
+    requests.forEach((request) =>
+      upsertPermissionEntry(normalizeCodexStructuredPermissionRequest(request)),
+    );
+    codexStructuredPermissionDialogIds.value = nextIds;
+  },
+  { deep: true },
+);
+
+function codexElicitationWindowKey(dialogId: string) {
+  return `elicitation:${dialogId}`;
+}
+
+function openCodexElicitationDialog(request: (typeof codexApi.elicitationRequests.value)[number]) {
+  const width = 560;
+  const height = request.mode === 'form' ? 560 : 340;
+  void fw.open(codexElicitationWindowKey(request.dialogId), {
+    component: CodexMcpElicitation,
+    props: {
+      request,
+      onReply: (action: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) => {
+        try {
+          codexApi.replyElicitationRequest(request.dialogId, action, content);
+        } catch (error) {
+          sessionError.value = toErrorMessage(error);
+        }
+      },
+    },
+    title: t('codexPanel.elicitation.title', { server: request.serverName }),
+    width,
+    height,
+    closable: false,
+    resizable: true,
+    scroll: 'none',
+    focusOnOpen: true,
+    expiry: Infinity,
+  });
+}
+
+watch(
+  () => codexApi.elicitationRequests.value,
+  (requests) => {
+    if (activeBackendKind.value !== 'codex') return;
+    const nextIds = new Set(requests.map((request) => request.dialogId));
+    codexElicitationDialogIds.value.forEach((id) => {
+      if (!nextIds.has(id)) fw.close(codexElicitationWindowKey(id));
+    });
+    requests.forEach(openCodexElicitationDialog);
+    codexElicitationDialogIds.value = nextIds;
   },
   { deep: true },
 );
@@ -2361,6 +2690,20 @@ watch(
 const todoPanelSessions = computed(() => {
   const allowed = allowedSessionIds.value;
   if (allowed.size === 0) return [] as TodoPanelSession[];
+  if (activeBackendKind.value === 'codex') {
+    const titles = new Map(
+      Array.from(allowed, (sessionId) => {
+        const session = sessions.value.find((item) => item.id === sessionId);
+        return [sessionId, sessionLabel(session ?? { id: sessionId })] as const;
+      }),
+    );
+    return codexPlansToTodoSessions(
+      codexApi.planItems.value,
+      allowed,
+      selectedSessionId.value,
+      titles,
+    );
+  }
   const list = Array.from(allowed).map((sessionId) => {
     const session = sessions.value.find((item) => item.id === sessionId);
     const title = sessionLabel(session ?? { id: sessionId });
@@ -2875,9 +3218,7 @@ async function hydrateActiveWorktreeResources() {
   const directory = activeDirectory.value.trim();
   if (!directory) return;
   initLoadingMessage.value = t('app.status.loadingWorktreeState');
-  await Promise.all([
-    reloadTree(),
-    refreshGitStatus({ includeFileSnapshot: false }),
+  await Promise.allSettled([
     fetchCommands(directory),
     fetchPendingPermissions(directory),
     fetchPendingQuestions(directory),
@@ -3071,9 +3412,10 @@ function resolveSessionPinRepoRoot(projectId: string, sessionId: string) {
   for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
     const session = sandbox.sessions[sessionId];
     if (!session) continue;
-    const gitInfo = session.gitInfo
-      ?? acpGitInfoByDirectory.value[session.directory ?? sandbox.directory]
-      ?? acpGitInfoByDirectory.value[sandbox.directory];
+    const gitInfo =
+      session.gitInfo ??
+      acpGitInfoByDirectory.value[session.directory ?? sandbox.directory] ??
+      acpGitInfoByDirectory.value[sandbox.directory];
     return gitInfo?.commonRoot || gitInfo?.root;
   }
   return undefined;
@@ -4180,7 +4522,9 @@ async function deleteWorktree(payload: {
 }
 
 async function handleNewSessionInSandbox(payload: { worktree: string; directory: string }) {
-  await backendSessionLifecycle.createSessionInDirectory(payload.directory, { reuseExisting: false });
+  await backendSessionLifecycle.createSessionInDirectory(payload.directory, {
+    reuseExisting: false,
+  });
 }
 
 function handleOpenProjectDirectory() {
@@ -4789,9 +5133,58 @@ function reserveRootHistoryRequestId() {
   return primaryHistoryRequestId;
 }
 
-async function fetchDescendantSessionHistories(rootSessionId: string, rootRequestId: number) {
-  const descendantSessionIds = Array.from(allowedSessionIds.value).filter(
-    (id) => id !== rootSessionId,
+function collectReferencedSubagentSessionIds(rootSessionId: string): string[] {
+  const parts: MessagePart[] = [];
+  for (const messageRef of msg.messages.value.values()) {
+    const entry = messageRef.value;
+    if (entry.info?.sessionID !== rootSessionId) continue;
+    parts.push(...msg.getParts(entry.info.id));
+  }
+  return resolveThreadSubagentSessions(parts, rootSessionId).map(({ sessionId }) => sessionId);
+}
+
+function hydrateReferencedSubagents(
+  rootSessionId: string,
+  reloadRequestId: number,
+): Promise<string[]> {
+  if (activeBackendKind.value !== 'opencode') return Promise.resolve([]);
+  const directory = normalizeDirectory(activeDirectory.value);
+  const sessionIds = collectReferencedSubagentSessionIds(rootSessionId);
+  if (!directory || sessionIds.length === 0) return Promise.resolve([]);
+
+  referencedSubagentHydrationSequence += 1;
+  const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
+  return new Promise<string[]>((resolve) => {
+    pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
+    ge.sendToWorker({
+      type: 'hydrate-referenced-subagents',
+      requestId,
+      rootSessionId,
+      directory,
+      sessionIds,
+    });
+  });
+}
+
+function handleReferencedSubagentHydrationResult(
+  message: ReferencedSubagentHydrationResult,
+): boolean {
+  const pending = pendingReferencedSubagentHydrations.get(message.requestId);
+  if (!pending) return true;
+  pendingReferencedSubagentHydrations.delete(message.requestId);
+  const matchesRoot = pending.rootSessionId === message.rootSessionId;
+  pending.resolve(message.cancelled || !matchesRoot ? [] : message.sessionIds);
+  return true;
+}
+
+async function fetchDescendantSessionHistories(
+  rootSessionId: string,
+  rootRequestId: number,
+  referencedSessionIds?: string[],
+) {
+  const candidates = referencedSessionIds ?? Array.from(allowedSessionIds.value);
+  const descendantSessionIds = Array.from(new Set(candidates)).filter(
+    (id) => id !== rootSessionId && allowedSessionIds.value.has(id),
   );
   if (descendantSessionIds.length === 0) return;
   await Promise.all(
@@ -4803,16 +5196,19 @@ function scheduleDescendantSessionHistoryHydration(
   rootSessionId: string,
   rootRequestId: number,
   reloadRequestId: number,
+  referencedSessionIds?: string[],
 ) {
   requestAnimationFrame(() => {
     if (reloadRequestId !== sessionReloadRequestId.value) return;
     if (selectedSessionId.value !== rootSessionId) return;
-    void fetchDescendantSessionHistories(rootSessionId, rootRequestId).then(() => {
-      if (reloadRequestId !== sessionReloadRequestId.value) return;
-      if (selectedSessionId.value !== rootSessionId) return;
-      hydratedDescendantSessionIds.add(rootSessionId);
-      void reloadTodosForAllowedSessions();
-    });
+    void fetchDescendantSessionHistories(rootSessionId, rootRequestId, referencedSessionIds).then(
+      () => {
+        if (reloadRequestId !== sessionReloadRequestId.value) return;
+        if (selectedSessionId.value !== rootSessionId) return;
+        hydratedDescendantSessionIds.add(rootSessionId);
+        void reloadTodosForAllowedSessions();
+      },
+    );
   });
 }
 
@@ -6654,8 +7050,37 @@ const toolRendererHelpers = {
   WebContent,
 };
 
-const ge = useGlobalEvents(credentials);
-ge.setWorkerMessageHandler(serverState.handleStateMessage);
+let fullTreeMarkRecorded = false;
+
+function markFullTreeReady() {
+  if (
+    fullTreeMarkRecorded ||
+    !serverState.fullTreeHydrated.value ||
+    uiInitState.value !== 'ready'
+  ) {
+    return;
+  }
+  fullTreeMarkRecorded = true;
+  if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+    performance.mark('vis:opencode-full-tree');
+  }
+}
+
+ge.setWorkerMessageHandler((message) => {
+  if (message.type === 'state.referenced-subagents-hydrated') {
+    return handleReferencedSubagentHydrationResult(message);
+  }
+  const handled = serverState.handleStateMessage(message);
+  if (!handled) return false;
+  if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
+    if (message.type === 'state.bootstrap') {
+      fullTreeMarkRecorded = false;
+      performance.mark('vis:opencode-topology-ready');
+    }
+  }
+  if (message.type === 'state.background-hydration-complete') markFullTreeReady();
+  return true;
+});
 serverState.setNotificationShowHandler((message) => {
   showBrowserNotification(message.projectId, message.sessionId, message.kind);
 });
@@ -6670,6 +7095,8 @@ subagentWindows.bindScope(sessionScope);
 watch([selectedProjectId, selectedSessionId, activeDirectory], syncActiveSelectionToWorker, {
   immediate: true,
 });
+
+watch([() => serverState.fullTreeHydrated.value, uiInitState], markFullTreeReady);
 
 watch(
   [
@@ -6690,7 +7117,6 @@ watch(
   [activeBackendKind, () => codexApi.connected.value],
   ([backendKind, connected]) => {
     if (backendKind !== 'codex' || !connected) return;
-    void codexApi.refreshArchivedThreads();
   },
   { immediate: true },
 );
@@ -6907,16 +7333,18 @@ async function hydrateAcpTopPanelGitInfo() {
   const directories = Object.values(project.sandboxes)
     .map((sandbox) => sandbox.directory)
     .filter((directory) => !acpGitInfoCheckedDirectories.has(directory));
-  await Promise.all(directories.map(async (directory) => {
-    acpGitInfoCheckedDirectories.add(directory);
-    try {
-      const gitInfo = parseAcpGitInfo(await getVcsInfo(directory));
-      if (!gitInfo) return;
-      acpGitInfoByDirectory.value = { ...acpGitInfoByDirectory.value, [directory]: gitInfo };
-    } catch (error) {
-      log('ACP TopPanel Git metadata probe failed', { directory, error });
-    }
-  }));
+  await Promise.all(
+    directories.map(async (directory) => {
+      acpGitInfoCheckedDirectories.add(directory);
+      try {
+        const gitInfo = parseAcpGitInfo(await getVcsInfo(directory));
+        if (!gitInfo) return;
+        acpGitInfoByDirectory.value = { ...acpGitInfoByDirectory.value, [directory]: gitInfo };
+      } catch (error) {
+        log('ACP TopPanel Git metadata probe failed', { directory, error });
+      }
+    }),
+  );
 }
 
 const ptySupported = computed(() => {
@@ -7091,6 +7519,7 @@ const backendSessionReload = useBackendSessionReload({
   waitForPendingRenders,
   reserveRootHistoryRequestId,
   scheduleDescendantSessionHistoryHydration,
+  hydrateReferencedSubagents,
   anchorOutputToBottom,
   restoreShellSessions,
   reloadTodosForAllowedSessions,
@@ -7225,6 +7654,7 @@ const backendSelectionBootstrap = useBackendSelectionBootstrap({
   initializeSessionSelection: async () => {
     await initializeSessionSelection();
   },
+  bootstrapOpenCodeSelection,
 });
 
 function formatToolValue(value: unknown) {
@@ -7409,7 +7839,8 @@ const TOOL_WINDOW_SUPPORTED = new Set([
 ]);
 
 function shouldRenderToolWindow(tool: string) {
-  return !TOOL_WINDOW_HIDDEN.has(tool) && TOOL_WINDOW_SUPPORTED.has(tool);
+  const normalizedTool = normalizeToolName(tool);
+  return !TOOL_WINDOW_HIDDEN.has(normalizedTool) && TOOL_WINDOW_SUPPORTED.has(normalizedTool);
 }
 
 function parsePatchTextBlocks(patchText: string) {
@@ -8054,6 +8485,8 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
       parentThreadId: sessionId,
       sessionLabel: label,
       theme: shikiTheme.value,
+      onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),
+      onReasoningClick: (part: ReasoningPart) => handleOpenHistoryReasoning({ part }),
     },
     title: `${t('app.windowTitles.subagentHistory')} · ${label}`,
     scroll: 'follow',
@@ -8586,6 +9019,7 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   configureCodexBackend,
   configureAcpBackend,
   disconnectAcpBackend,
+  disconnectCodexBackend,
   bootstrapAcpWorkspace,
   fetchGlobalProviderConfig,
   fetchProviders,

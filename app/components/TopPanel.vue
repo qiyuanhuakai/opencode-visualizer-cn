@@ -773,6 +773,16 @@
                 class="codex-menu-item"
                 :disabled="!codexConnected"
                 :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
+                @click.stop="emitOpenCodexSubpanel('runtime', close)"
+              >
+                <Icon icon="lucide:activity" :width="14" :height="14" />
+                <span>{{ $t('codexPanel.runtime.title') }}</span>
+              </button>
+              <button
+                type="button"
+                class="codex-menu-item"
+                :disabled="!codexConnected"
+                :title="!codexConnected ? $t('codexPanel.connectToLoad') : undefined"
                 @click.stop="emitOpenCodexSubpanel('experimentalFeatures', close)"
               >
                 <Icon icon="lucide:flask-conical" :width="14" :height="14" />
@@ -900,6 +910,7 @@ export type TopPanelCodexSubpanel =
   | 'plugins'
   | 'connectors'
   | 'config'
+  | 'runtime'
   | 'experimentalFeatures'
   | 'collaborationModes'
   | 'feedback';
@@ -1019,11 +1030,6 @@ defineExpose({ openSessionDropdown, closeSessionDropdown, toggleSessionDropdown 
 const MAX_WORKTREES = Infinity;
 const MAX_SANDBOXES = Infinity;
 const MAX_SESSIONS = Infinity;
-
-// Matches the "(N archived)" suffix appended by `displayedTree` to sandbox/global labels
-// when every session in a container has been archived. Used by the worktree/global
-// filters below to keep these containers visible so users can still locate them.
-const ARCHIVED_ONLY_LABEL = /\s*\(\d+ archived\)$/;
 
 const searchQuery = ref('');
 const isShiftPressed = ref(false);
@@ -1200,43 +1206,23 @@ const displayedTree = computed(() => {
       })
       .filter((worktree): worktree is TopPanelWorktree => worktree !== null);
   } else {
-    // Non-search mode: filter archived sessions but preserve sandbox/global containers
-    // that only contain archived sessions, so users can still locate and unarchive them.
-    // Sandboxes whose every session is archived get an "(N archived)" suffix on the label.
     worktrees = worktrees
       .map((worktree) => ({
         ...worktree,
-        sandboxes: worktree.sandboxes.map((sandbox) => {
-          const archivedCount = sandbox.sessions.reduce(
-            (n, session) => n + (session.archivedAt ? 1 : 0),
-            0,
-          );
-          const sessions = sandbox.sessions.filter((session) => !session.archivedAt);
-          let branch = sandbox.branch;
-          if (archivedCount > 0 && sessions.length === 0) {
-            const baseName = sandbox.branch || directoryBasename(sandbox.directory);
-            branch = `${baseName} (${archivedCount} archived)`;
-          }
-          return { ...sandbox, branch, sessions };
-        }),
+        sandboxes: worktree.sandboxes
+          .map((sandbox) => ({
+            ...sandbox,
+            sessions: sandbox.sessions.filter((session) => !session.archivedAt),
+          }))
+          .filter((sandbox) => sandbox.sessions.length > 0),
       }))
-      .filter((worktree) =>
-        worktree.sandboxes.some(
-          (sandbox) =>
-            sandbox.sessions.length > 0 || ARCHIVED_ONLY_LABEL.test(sandbox.branch ?? ''),
-        ),
-      );
+      .filter((worktree) => worktree.sandboxes.length > 0);
   }
 
   return worktrees.slice(0, MAX_WORKTREES).map((worktree) => ({
     ...worktree,
     sandboxes: worktree.sandboxes
-      .filter(
-        (sandbox) =>
-          worktree.projectId !== 'global' ||
-          sandbox.sessions.length > 0 ||
-          ARCHIVED_ONLY_LABEL.test(sandbox.branch ?? ''),
-      )
+      .filter((sandbox) => worktree.projectId !== 'global' || sandbox.sessions.length > 0)
       .slice(0, MAX_SANDBOXES)
       .map((sandbox) => ({
         ...sandbox,

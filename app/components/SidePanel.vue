@@ -32,7 +32,7 @@
           <Icon icon="lucide:chevron-left" width="14" height="14" />
         </button>
       </div>
-      <TodoList v-show="activeTab === 'todo'" :sessions="todoSessions" />
+      <TodoList v-show="activeTab === 'todo'" :sessions="todoSessions" :title="todoLabel" />
       <div v-show="activeTab === 'session'" class="session-body">
         <div class="session-header">
           <div class="session-title">{{ $t('sidePanel.session.title') }}</div>
@@ -103,6 +103,7 @@ type TodoItem = {
 type TodoPanelSession = {
   sessionId: string;
   title: string;
+  description?: string;
   isSubagent: boolean;
   todos: TodoItem[];
   loading: boolean;
@@ -114,6 +115,7 @@ const props = defineProps<{
   activeTab: 'todo' | 'session' | 'tree';
   selectedSessionId: string;
   todoSessions: TodoPanelSession[];
+  todoLabel?: string;
   sessionTreeData: SessionTreeData;
   sessionTreeExpandedPaths: string[];
   treeNodes: TreeNode[];
@@ -156,7 +158,7 @@ import { useI18n } from 'vue-i18n';
 const { t } = useI18n();
 
 const tabs = computed(() => [
-  { id: 'todo' as const, label: t('sidePanel.tabs.todo') },
+  { id: 'todo' as const, label: props.todoLabel || t('sidePanel.tabs.todo') },
   { id: 'session' as const, label: t('sidePanel.tabs.session') },
   { id: 'tree' as const, label: t('sidePanel.tabs.tree') },
 ]);

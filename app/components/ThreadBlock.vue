@@ -65,10 +65,7 @@
               copy-button
             />
           </div>
-          <div
-            v-if="assistantAttachments.length > 0"
-            class="output-entry-attachments"
-          >
+          <div v-if="assistantAttachments.length > 0" class="output-entry-attachments">
             <img
               v-for="item in assistantAttachments"
               :key="item.id"
@@ -97,15 +94,8 @@
       <span class="ib-error-text">{{ formatMessageError(threadError, (key) => t(key)) }}</span>
     </div>
 
-    <div
-      v-if="!isRevertedPreview && subagentSessions.length > 0"
-      class="ib-subagent-section"
-    >
-      <div
-        v-for="session in subagentSessions"
-        :key="session.sessionId"
-        class="ib-subagent-row"
-      >
+    <div v-if="!isRevertedPreview && subagentSessions.length > 0" class="ib-subagent-section">
+      <div v-for="session in subagentSessions" :key="session.sessionId" class="ib-subagent-row">
         <span class="ib-subagent-label">🤖 {{ session.label }}</span>
         <button
           type="button"
@@ -153,11 +143,11 @@ import type { MessageInfo, QuestionInfo, SubtaskPart, ToolPart } from '../types/
 import type { BackendKind } from '../backends/types';
 import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
+import { resolveThreadSubagentSessions } from '../utils/threadSubagents';
+import { isHistoryToolName } from '../utils/toolNames';
 
 const { t } = useI18n();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
-
-const HISTORY_TOOL_NAMES = new Set(['bash', 'write', 'edit', 'multiedit', 'apply_patch', 'websearch', 'read', 'grep', 'glob', 'webfetch', 'codesearch']);
 
 const props = defineProps<{
   root: MessageInfo;
@@ -230,25 +220,15 @@ const threadTarget = computed<ThreadTargetType>(() => buildThreadTarget(props.ro
 const threadTargetAgentStyle = computed(() => {
   const color = props.resolveAgentColor
     ? props.resolveAgentColor(threadTarget.value.agent)
-    : '#4ade80';
+    : 'var(--theme-status-success, #86efac)';
   return { color };
 });
 
 const subagentSessions = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();
   if (!currentSessionId) return [] as Array<{ sessionId: string; label: string }>;
-  const seen = new Map<string, string>();
-  for (const root of msg.roots.value) {
-    if (root.role !== 'user') continue;
-    if (root.sessionID === currentSessionId) continue;
-    const meta: { parentID?: string; label: string } | undefined =
-      props.sessionHistoryMetaById?.[root.sessionID];
-    if (meta?.parentID !== currentSessionId) continue;
-    if (!seen.has(root.sessionID)) {
-      seen.set(root.sessionID, meta?.label || root.sessionID);
-    }
-  }
-  return Array.from(seen.entries()).map(([sessionId, label]) => ({ sessionId, label }));
+  const threadParts = threadMessages.value.flatMap((message) => msg.getParts(message.id));
+  return resolveThreadSubagentSessions(threadParts, currentSessionId, props.sessionHistoryMetaById);
 });
 
 function hasTextContent(message?: MessageInfo): boolean {
@@ -349,7 +329,11 @@ function getHistoryEntries(): HistoryEntry[] {
         continue;
       }
       if (part.type === 'subtask') {
-        entries.push({ kind: 'subtask', part, time: getSubtaskPartTime(part, msgInfo.time.created) });
+        entries.push({
+          kind: 'subtask',
+          part,
+          time: getSubtaskPartTime(part, msgInfo.time.created),
+        });
         continue;
       }
       if (part.type !== 'tool') continue;
@@ -358,7 +342,7 @@ function getHistoryEntries(): HistoryEntry[] {
         entries.push({ kind: 'question', part, time: getToolPartTime(part) });
         continue;
       }
-      if (!HISTORY_TOOL_NAMES.has(part.tool)) continue;
+      if (!isHistoryToolName(part.tool)) continue;
       entries.push({ kind: 'tool', part, time: getToolPartTime(part) });
     }
   }
@@ -386,7 +370,11 @@ function getSubagentHistoryEntries(parentThreadId: string): HistoryEntry[] {
         continue;
       }
       if (part.type === 'subtask') {
-        entries.push({ kind: 'subtask', part, time: getSubtaskPartTime(part, msgInfo.time.created) });
+        entries.push({
+          kind: 'subtask',
+          part,
+          time: getSubtaskPartTime(part, msgInfo.time.created),
+        });
         continue;
       }
       if (part.type !== 'tool') continue;
@@ -395,7 +383,7 @@ function getSubagentHistoryEntries(parentThreadId: string): HistoryEntry[] {
         entries.push({ kind: 'question', part, time: getToolPartTime(part) });
         continue;
       }
-      if (!HISTORY_TOOL_NAMES.has(part.tool)) continue;
+      if (!isHistoryToolName(part.tool)) continue;
       entries.push({ kind: 'tool', part, time: getToolPartTime(part) });
     }
   }
@@ -419,7 +407,9 @@ function showThreadHistory() {
         content: getMessageContent(entry.message),
         time: entry.time,
         sessionId: entry.message.sessionID,
-        isSubagent: Boolean(props.currentSessionId && entry.message.sessionID !== props.currentSessionId),
+        isSubagent: Boolean(
+          props.currentSessionId && entry.message.sessionID !== props.currentSessionId,
+        ),
         agent:
           entry.message.role === 'assistant' && 'agent' in entry.message && entry.message.agent
             ? entry.message.agent
@@ -622,10 +612,26 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 
 <style scoped>
 .thread-block {
-  --ui-chip-border-neutral: var(--theme-chip-border-neutral, var(--theme-chat-border, rgba(148, 163, 184, 0.65)));
-  --ui-chip-border-subtle: var(--theme-chip-border-subtle, color-mix(in srgb, var(--theme-chip-border-neutral, var(--theme-chat-border, rgba(148, 163, 184, 0.5))) 80%, transparent));
-  --ui-chip-bg-neutral: var(--theme-chip-bg-neutral, var(--theme-chat-control-bg, rgba(15, 23, 42, 0.75)));
-  --ui-chip-bg-hover: var(--theme-chip-bg-hover, var(--theme-chat-active-bg, rgba(30, 41, 59, 0.92)));
+  --ui-chip-border-neutral: var(
+    --theme-chip-border-neutral,
+    var(--theme-chat-border, rgba(148, 163, 184, 0.65))
+  );
+  --ui-chip-border-subtle: var(
+    --theme-chip-border-subtle,
+    color-mix(
+      in srgb,
+      var(--theme-chip-border-neutral, var(--theme-chat-border, rgba(148, 163, 184, 0.5))) 80%,
+      transparent
+    )
+  );
+  --ui-chip-bg-neutral: var(
+    --theme-chip-bg-neutral,
+    var(--theme-chat-control-bg, rgba(15, 23, 42, 0.75))
+  );
+  --ui-chip-bg-hover: var(
+    --theme-chip-bg-hover,
+    var(--theme-chat-active-bg, rgba(30, 41, 59, 0.92))
+  );
   --ui-chip-fg-neutral: var(--theme-chip-fg-neutral, var(--theme-chat-text, #bfdbfe));
   background: var(--theme-chat-bg, rgba(2, 6, 23, 0.6));
   border: 1px solid var(--theme-chat-border, #1e293b);
@@ -686,14 +692,14 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 }
 
 .ib-msg-body {
-   white-space: pre-wrap;
-   word-break: break-word;
-   font-size: var(--message-font-size, 13px);
-   --message-line-height: 1.2;
-   line-height: var(--message-line-height);
-   padding-top: 3px;
-   padding-left: 6px;
- }
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--message-font-size, 13px);
+  --message-line-height: 1.2;
+  line-height: var(--message-line-height);
+  padding-top: 3px;
+  padding-left: 6px;
+}
 
 .ib-top-right {
   float: right;
@@ -766,6 +772,10 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 }
 
 .ib-subagent-section {
+  --subagent-row-accent: var(
+    --theme-floating-subagent-accent,
+    var(--theme-chat-accent, var(--theme-accent-primary, #60a5fa))
+  );
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -778,8 +788,17 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   gap: 8px;
   padding: 6px 8px;
   border-radius: 6px;
-  border: 1px solid color-mix(in srgb, #0ea5e9 35%, var(--ui-chip-border-subtle, rgba(90, 100, 120, 0.35)));
-  background: color-mix(in srgb, #0ea5e9 8%, var(--theme-chat-control-bg, rgba(30, 41, 59, 0.35)));
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--subagent-row-accent) 35%,
+      var(--ui-chip-border-subtle, rgba(90, 100, 120, 0.35))
+    );
+  background: color-mix(
+    in srgb,
+    var(--subagent-row-accent) 8%,
+    var(--theme-chat-control-bg, rgba(30, 41, 59, 0.35))
+  );
   font-size: 11px;
 }
 
@@ -789,21 +808,33 @@ function getThreadUserRenderKey(root: MessageInfo): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #7dd3fc;
+  color: color-mix(in srgb, var(--subagent-row-accent) 62%, var(--theme-chat-text, #e2e8f0));
   font-family: var(--app-monospace-font-family);
 }
 
 .ib-action-subagent {
   flex-shrink: 0;
-  border-color: color-mix(in srgb, #0ea5e9 50%, var(--ui-chip-border-subtle, rgba(90, 100, 120, 0.35)));
-  background: color-mix(in srgb, #0ea5e9 12%, var(--theme-chat-active-bg, rgba(51, 65, 85, 0.55)));
-  color: #7dd3fc;
+  border-color: color-mix(
+    in srgb,
+    var(--subagent-row-accent) 50%,
+    var(--ui-chip-border-subtle, rgba(90, 100, 120, 0.35))
+  );
+  background: color-mix(
+    in srgb,
+    var(--subagent-row-accent) 12%,
+    var(--theme-chat-active-bg, rgba(51, 65, 85, 0.55))
+  );
+  color: color-mix(in srgb, var(--subagent-row-accent) 62%, var(--theme-chat-text, #e2e8f0));
   font-weight: 600;
 }
 
 .ib-action-subagent:hover {
-  background: color-mix(in srgb, #0ea5e9 24%, var(--theme-chat-active-bg, rgba(51, 65, 85, 0.55)));
-  color: #bae6fd;
+  background: color-mix(
+    in srgb,
+    var(--subagent-row-accent) 24%,
+    var(--theme-chat-active-bg, rgba(51, 65, 85, 0.55))
+  );
+  color: var(--theme-chat-text, #e2e8f0);
 }
 
 .ib-error-icon {

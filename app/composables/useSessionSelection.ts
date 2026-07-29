@@ -3,8 +3,19 @@ import type { ProjectState } from '../types/worker-state';
 import { waitForState } from '../utils/waitForState';
 import { uniqueBy } from '../utils/array';
 
-type CreateSessionFn = (projectId: string) => Promise<{ id: string; projectId: string }>;
+type CreateSessionFn = (
+  projectId: string,
+  directory?: string,
+) => Promise<{ id: string; projectId: string }>;
 type TranslateFn = (key: string, params?: Record<string, unknown>) => string;
+type HydrateFn = (key: string) => Promise<void>;
+
+export type SessionSelectionOptions = {
+  ensureDirectoryHydrated?: HydrateFn;
+  ensureProjectHydrated?: HydrateFn;
+};
+
+const noopHydrate: HydrateFn = async () => {};
 
 function listSandboxes(project: ProjectState) {
   return Object.keys(project.sandboxes).map((key) => project.sandboxes[key]);
@@ -15,7 +26,7 @@ function getProjectSessionIds(project: ProjectState): string[] {
   listSandboxes(project).forEach((sandbox) => {
     ids.push(...sandbox.rootSessions);
   });
-  return uniqueBy(ids, x => x);
+  return uniqueBy(ids, (x) => x);
 }
 
 function findMostRecentSession(
@@ -30,11 +41,7 @@ function findMostRecentSession(
         if (session.timeArchived) continue;
         const pinnedAt = session.timePinned ?? 0;
         const time = session.timeUpdated ?? session.timeCreated ?? 0;
-        if (
-          !best ||
-          pinnedAt > best.pinnedAt ||
-          (pinnedAt === best.pinnedAt && time > best.time)
-        ) {
+        if (!best || pinnedAt > best.pinnedAt || (pinnedAt === best.pinnedAt && time > best.time)) {
           best = { projectId, sessionId: session.id, pinnedAt, time };
         }
       }
@@ -44,12 +51,34 @@ function findMostRecentSession(
   return best;
 }
 
+function findDirectoryRootSession(project: ProjectState, directory: string): string | null {
+  let best: { sessionId: string; pinnedAt: number; time: number } | null = null;
+
+  for (const sandbox of listSandboxes(project)) {
+    if (sandbox.directory !== directory) continue;
+    for (const session of Object.values(sandbox.sessions)) {
+      if (session.parentID) continue;
+      if (session.timeArchived) continue;
+      const pinnedAt = session.timePinned ?? 0;
+      const time = session.timeUpdated ?? session.timeCreated ?? 0;
+      if (!best || pinnedAt > best.pinnedAt || (pinnedAt === best.pinnedAt && time > best.time)) {
+        best = { sessionId: session.id, pinnedAt, time };
+      }
+    }
+  }
+
+  return best?.sessionId ?? null;
+}
+
 export function useSessionSelection(
   projects: Ref<Record<string, ProjectState>>,
   createSessionFn: CreateSessionFn,
   translate?: TranslateFn,
+  options: SessionSelectionOptions = {},
 ) {
   const t = translate ?? ((key: string) => key);
+  const ensureDirectoryHydrated = options.ensureDirectoryHydrated ?? noopHydrate;
+  const ensureProjectHydrated = options.ensureProjectHydrated ?? noopHydrate;
   const selectedProjectId = ref<string>('');
   const selectedSessionId = ref<string>('');
 
@@ -99,7 +128,69 @@ export function useSessionSelection(
       return sessionId;
     }
 
+    // The session list read was empty: hydrate the project, then RE-READ the
+    // reactive map before deciding to create. A hydration error rejects as-is.
+    await ensureProjectHydrated(projectId);
+    const hydratedProject = projectMap.value[projectId];
+    if (hydratedProject) {
+      const hydratedIds = getProjectSessionIds(hydratedProject);
+      if (hydratedIds.length > 0) {
+        const sessionId = hydratedIds[0] ?? '';
+        if (!sessionId) {
+          throw new Error(t('errors.failedToResolveSessionId'));
+        }
+        selectedProjectId.value = projectId;
+        selectedSessionId.value = sessionId;
+        return sessionId;
+      }
+    }
+
     const created = await createSessionFn(projectId);
+    const createdProjectId = (created.projectId || projectId).trim();
+    const createdSessionId = created.id.trim();
+    if (!createdProjectId || !createdSessionId) {
+      throw new Error(t('errors.failedToResolveCreatedSession'));
+    }
+    selectedProjectId.value = createdProjectId;
+    selectedSessionId.value = createdSessionId;
+    return createdSessionId;
+  }
+
+  async function ensureDirectorySession(
+    projectIdHint: string,
+    directoryHint: string,
+  ): Promise<string> {
+    const projectId = projectIdHint.trim();
+    const directory = directoryHint.trim();
+    if (!projectId) {
+      throw new Error(t('errors.noAvailableProject'));
+    }
+    if (!directory) {
+      throw new Error(t('errors.sessionCreateEmptyDirectory'));
+    }
+
+    if (!projectMap.value[projectId]) {
+      await ensureProjectHydrated(projectId);
+    }
+    const project = projectMap.value[projectId];
+    if (!project) {
+      throw new Error(t('errors.noAvailableProject'));
+    }
+
+    let sessionId = findDirectoryRootSession(project, directory);
+    if (!sessionId) {
+      await ensureDirectoryHydrated(directory);
+      const hydratedProject = projectMap.value[projectId];
+      sessionId = hydratedProject ? findDirectoryRootSession(hydratedProject, directory) : null;
+    }
+
+    if (sessionId) {
+      selectedProjectId.value = projectId;
+      selectedSessionId.value = sessionId;
+      return sessionId;
+    }
+
+    const created = await createSessionFn(projectId, directory);
     const createdProjectId = (created.projectId || projectId).trim();
     const createdSessionId = created.id.trim();
     if (!createdProjectId || !createdSessionId) {
@@ -146,6 +237,7 @@ export function useSessionSelection(
     projectDirectory,
     switchSession,
     ensureSession,
+    ensureDirectorySession,
     initialize,
   };
 }

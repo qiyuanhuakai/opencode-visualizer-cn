@@ -140,18 +140,8 @@
             <button
               type="button"
               class="codex-small-button"
-              :class="{ active: showArchived }"
-              :disabled="!api.connected.value || showHidden"
-              :title="t('codexPanel.showArchived')"
-              @click="toggleArchived()"
-            >
-              <Icon icon="mdi:archive" width="16" />
-            </button>
-            <button
-              type="button"
-              class="codex-small-button"
               :class="{ active: showHidden }"
-              :disabled="!api.connected.value || showArchived"
+              :disabled="!api.connected.value"
               :title="t('codexPanel.showHidden')"
               @click="toggleHidden()"
             >
@@ -171,7 +161,7 @@
         <button
           type="button"
           class="codex-thread-new"
-          :disabled="!api.connected.value || showArchived"
+          :disabled="!api.connected.value"
           @click="startThread()"
         >
           {{ t('codexPanel.newThread') }}
@@ -189,14 +179,14 @@
           v-for="thread in displayThreads"
           :key="thread.id"
           class="codex-thread-item"
-          :class="{ active: thread.id === api.activeThreadId.value, 'has-overlay-actions': !showArchived && !showHidden }"
+          :class="{ active: thread.id === api.activeThreadId.value, 'has-overlay-actions': !showHidden }"
         >
           <div class="codex-thread-row">
             <button
               type="button"
               class="codex-thread-select"
               :title="thread.name || thread.preview || thread.id"
-              :disabled="api.loadingThread.value || showArchived"
+              :disabled="api.loadingThread.value"
               @click="selectThread(thread.id)"
             >
               <span class="codex-thread-title-row">
@@ -218,7 +208,7 @@
             </button>
             <div class="codex-thread-actions">
                 <button
-                  v-if="!showArchived && !showHidden"
+                  v-if="!showHidden"
                   type="button"
                   class="codex-icon-button"
                   :disabled="!api.connected.value"
@@ -242,15 +232,6 @@
                 @click="api.unhideThread(thread.id)"
               >
                 {{ t('codexPanel.unhide') }}
-              </button>
-              <button
-                v-if="showArchived"
-                type="button"
-                class="codex-small-text-button"
-                :disabled="!api.connected.value"
-                @click="unarchiveThread(thread.id)"
-              >
-                {{ t('codexPanel.unarchive') }}
               </button>
             </div>
           </div>
@@ -368,11 +349,12 @@
               :key="question.id"
               class="codex-tool-input-question"
             >
-              <label>{{ question.text }}</label>
+              <label>{{ question.header }}: {{ question.text }}</label>
               <input
                 v-model="toolInputResponses[request.requestId + '_' + question.id]"
                 class="codex-input"
-                type="text"
+                :type="question.isSecret ? 'password' : 'text'"
+                autocomplete="off"
                 :placeholder="question.isOther ? t('codexPanel.toolUserInputOther') : ''"
               />
             </div>
@@ -529,7 +511,7 @@
       <form class="codex-prompt" @submit.prevent="sendPrompt">
         <div class="codex-toolbar-strip">
           <button
-            v-if="api.accountRateLimits.value"
+            v-if="weeklyRateLimit"
             type="button"
             class="codex-rate-limit-chip"
             :title="`${t('codexPanel.rateLimits')} · ${t('codexPanel.refreshRateLimits')}`"
@@ -537,10 +519,10 @@
           >
             <span class="codex-rate-limit-chip-label">{{ t('codexPanel.rateLimits') }}</span>
             <span class="codex-rate-limit-chip-value">
-              {{ api.accountRateLimits.value.primary.usedPercent }}%
+              {{ weeklyRateLimit.usedPercent }}%
             </span>
             <span class="codex-rate-limit-chip-meta">
-              used · {{ api.accountRateLimits.value.primary.windowDurationMins }}m window
+              {{ t('statusMonitor.codex.rateLimitUsed') }}
             </span>
             <Icon icon="mdi:refresh" width="14" />
           </button>
@@ -588,7 +570,7 @@
                   <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeThreadId.value" @click="api.showShellCommand.value = true; close()">
                     {{ t('codexPanel.shellCommand') }}
                   </button>
-                  <button type="button" class="codex-inline-menu-item is-danger" :disabled="!api.connected.value" @click="archiveActiveThread().finally(close)">
+                  <button type="button" class="codex-inline-menu-item is-danger" :disabled="!api.connected.value" @click="hideActiveThread().finally(close)">
                     {{ t('topPanel.management.archive') }}
                   </button>
                 </div>
@@ -601,6 +583,14 @@
               @click="openSubpanel('fileManager')"
             >
               {{ t('codexPanel.fileManagerTitle') }}
+            </button>
+            <button
+              type="button"
+              class="codex-small-text-button"
+              :disabled="!api.connected.value"
+              @click="openSubpanel('runtime')"
+            >
+              {{ t('codexPanel.runtime.title') }}
             </button>
           </div>
         </div>
@@ -667,7 +657,10 @@
 import { computed, onMounted, ref, watch, type Ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
-import type { CodexThread } from '../backends/codex/codexAdapter';
+import {
+  getCodexWeeklyRateLimitWindow,
+  type CodexThread,
+} from '../backends/codex/codexAdapter';
 import type { CodexJsonRpcId } from '../backends/codex/jsonRpcClient';
 import type { CodexTranscriptEntry } from '../composables/useCodexApi';
 import { useCodexApi } from '../composables/useCodexApi';
@@ -695,13 +688,14 @@ const emit = defineEmits<{
  const api = props.api ?? fallbackApi;
 const promptText = ref('');
 const threadName = ref('');
-const showArchived = ref(false);
 const showHidden = ref(false);
-const archivedThreads = ref<CodexThread[]>([]);
 const showLoginPanel = ref(false);
   const apiKeyInput = ref('');
   const toolInputResponses = ref<Record<string, string>>({});
 const recentEvents = computed(() => api.events.value.slice(-8).reverse());
+const weeklyRateLimit = computed(() =>
+  getCodexWeeklyRateLimitWindow(api.accountRateLimits.value),
+);
 
 function openSubpanel(panel: TopPanelCodexSubpanel) {
   props.onOpenSubpanel?.(panel);
@@ -715,7 +709,6 @@ const activeThread = computed(
 
 const displayThreads = computed(() => {
   if (showHidden.value) return api.threads.value.filter((thread) => api.hiddenThreadIds.value.has(thread.id));
-  if (showArchived.value) return archivedThreads.value;
   return api.visibleThreads.value;
 });
 
@@ -796,28 +789,15 @@ onMounted(() => {
 });
 
 async function refreshThreads() {
-  if (showArchived.value) {
-    archivedThreads.value = await api.listThreads({ archived: true });
-    return;
-  }
   await api.refreshThreads();
-}
-
-async function toggleArchived() {
-  showArchived.value = !showArchived.value;
-  if (showArchived.value) showHidden.value = false;
-  if (!showArchived.value) archivedThreads.value = [];
-  await refreshThreads();
 }
 
 async function toggleHidden() {
   showHidden.value = !showHidden.value;
-  if (showHidden.value) showArchived.value = false;
   await refreshThreads();
 }
 
 async function startThread() {
-  showArchived.value = false;
   showHidden.value = false;
   const cwd = selectedSandboxCwd();
   await api.startThread(cwd);
@@ -838,14 +818,11 @@ async function renameThread() {
   await api.setThreadName(api.activeThreadId.value, newName);
 }
 
-async function archiveActiveThread() {
+async function hideActiveThread() {
   if (!api.activeThreadId.value) return;
-  await api.archiveThread(api.activeThreadId.value);
-}
-
-async function unarchiveThread(threadId: string) {
-  showArchived.value = false;
-  await api.unarchiveThread(threadId);
+  api.hideThread(api.activeThreadId.value);
+  const nextThreadId = api.visibleThreads.value[0]?.id;
+  if (nextThreadId) await api.selectThread(nextThreadId);
 }
 
 async function interruptTurn() {
@@ -868,7 +845,7 @@ function resolveRequest(id: CodexJsonRpcId, decision: string) {
 
 async function submitToolUserInput(
   requestId: CodexJsonRpcId,
-  questions: Array<{ id: string; text: string; isOther?: boolean }>,
+  questions: readonly { id: string; text: string; isOther: boolean; isSecret: boolean }[],
 ) {
   const responses = questions.map((q) => ({
     questionId: q.id,
@@ -889,7 +866,7 @@ async function acceptDynamicToolCall(requestId: CodexJsonRpcId) {
 }
 
 async function declineDynamicToolCall(requestId: CodexJsonRpcId) {
-  await api.respondToDynamicToolCall(requestId, []);
+  await api.respondToDynamicToolCall(requestId, [], false);
 }
 
 async function sendPrompt() {

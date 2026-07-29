@@ -79,7 +79,9 @@
           <div class="history-tool-content">
             <strong>@{{ entry.part.agent }}</strong>
             <span v-if="entry.part.description"> — {{ entry.part.description }}</span>
-            <div v-if="entry.part.prompt" class="history-subtask-prompt">{{ entry.part.prompt }}</div>
+            <div v-if="entry.part.prompt" class="history-subtask-prompt">
+              {{ entry.part.prompt }}
+            </div>
           </div>
         </div>
         <div
@@ -90,9 +92,11 @@
         >
           <div class="history-meta">
             <span class="history-index">🔧</span>
-            <span class="history-tool-badge" :class="`history-tool-${entry.part.tool}`">{{
-              toolBadgeLabel(entry.part.tool)
-            }}</span>
+            <span
+              class="history-tool-badge"
+              :class="`history-tool-${normalizeToolName(entry.part.tool)}`"
+              >{{ toolBadgeLabel(entry.part.tool) }}</span
+            >
             <span class="history-tool-status" :class="`is-${toolStatusLabel(entry.part)}`">{{
               translatedToolStatus(toolStatusLabel(entry.part))
             }}</span>
@@ -111,6 +115,7 @@ import MessageViewer from './MessageViewer.vue';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
 import type { QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from '../types/sse';
 import { resolveToolAccentColor } from '../utils/theme';
+import { normalizeToolName } from '../utils/toolNames';
 
 const { t } = useI18n();
 
@@ -186,7 +191,8 @@ function getCustomAnswer(entry: QuestionHistoryEntry, questionIndex: number): st
 }
 
 function toolBadgeLabel(tool: string): string {
-  switch (tool) {
+  const normalizedTool = normalizeToolName(tool);
+  switch (normalizedTool) {
     case 'bash':
       return t('toolTitles.shell');
     case 'write':
@@ -198,13 +204,14 @@ function toolBadgeLabel(tool: string): string {
     case 'apply_patch':
       return t('toolTitles.patch');
     default:
-      return tool.toUpperCase();
+      return normalizedTool.toUpperCase();
   }
 }
 
 function toolSummary(part: ToolPart): string {
   const input = part.state.input;
-  switch (part.tool) {
+  const tool = normalizeToolName(part.tool);
+  switch (tool) {
     case 'bash': {
       const cmd = typeof input?.command === 'string' ? input.command.trim() : '';
       return cmd ? `$ ${cmd.split('\n')[0].slice(0, 120)}` : '$ ...';
@@ -219,7 +226,9 @@ function toolSummary(part: ToolPart): string {
     }
     case 'multiedit': {
       const files = Array.isArray(input?.files)
-        ? input.files.filter((file): file is string => typeof file === 'string' && file.trim().length > 0)
+        ? input.files.filter(
+            (file): file is string => typeof file === 'string' && file.trim().length > 0,
+          )
         : [];
       if (files.length > 0) return files.join(', ');
       const path = typeof input?.filePath === 'string' ? input.filePath : '';
@@ -248,7 +257,7 @@ function toolSummary(part: ToolPart): string {
       return paths.length > 0 ? paths.join(', ') : 'patch';
     }
     default:
-      return part.tool;
+      return tool;
   }
 }
 
@@ -265,7 +274,7 @@ function translatedToolStatus(status: string): string {
 }
 
 function toolHeaderColor(tool: string): string {
-  return resolveToolAccentColor(tool);
+  return resolveToolAccentColor(normalizeToolName(tool));
 }
 
 function formatMessageTime(value?: number) {
@@ -283,6 +292,9 @@ function formatMessageTime(value?: number) {
 
 <style scoped>
 .history-content {
+  --history-reasoning-color: var(--theme-floating-reasoning-accent, var(--window-color));
+  --history-subagent-color: var(--theme-floating-subagent-accent, var(--window-color));
+  --history-question-color: var(--theme-status-success, var(--window-color));
 }
 
 .history-list {
@@ -293,15 +305,25 @@ function formatMessageTime(value?: number) {
 }
 
 .history-item {
-  border: 1px solid color-mix(in srgb, var(--window-color, #3a4150) 35%, var(--floating-border-muted, rgba(90, 100, 120, 0.35)));
+  border: 1px solid
+    color-mix(
+      in srgb,
+      var(--window-color, #3a4150) 35%,
+      var(--floating-border-muted, rgba(90, 100, 120, 0.35))
+    );
   border-radius: 8px;
-  background: color-mix(in srgb, var(--floating-surface-base, #1a1d24) 82%, black);
+  background: var(--floating-surface-subtle, #1e222a);
 }
 
 .history-meta {
   padding: 6px 10px;
-  background: color-mix(in srgb, var(--window-color, #3a4150) 14%, var(--floating-surface-muted, #242832));
-  border-bottom: 1px solid color-mix(in srgb, var(--window-color, #3a4150) 25%, var(--floating-border-muted, #1e293b));
+  background: color-mix(
+    in srgb,
+    var(--window-color, #3a4150) 14%,
+    var(--floating-surface-muted, #242832)
+  );
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--window-color, #3a4150) 25%, var(--floating-border-muted, #1e293b));
   border-radius: 7px 7px 0 0;
   display: flex;
   gap: 8px;
@@ -329,8 +351,12 @@ function formatMessageTime(value?: number) {
 .history-session-badge {
   padding: 2px 6px;
   border-radius: 4px;
-  background: color-mix(in srgb, #0ea5e9 18%, var(--floating-surface-strong, #323a48));
-  color: #7dd3fc;
+  background: color-mix(
+    in srgb,
+    var(--history-subagent-color) 18%,
+    var(--floating-surface-strong, #323a48)
+  );
+  color: var(--floating-text, #e2e8f0);
   font-size: 10px;
   font-weight: 600;
 }
@@ -343,20 +369,40 @@ function formatMessageTime(value?: number) {
 
 .history-item-reasoning {
   cursor: pointer;
-  border-color: color-mix(in srgb, #8b5cf6 40%, #1e293b);
+  border-color: color-mix(
+    in srgb,
+    var(--history-reasoning-color) 40%,
+    var(--floating-border-muted, #1e293b)
+  );
   transition:
     border-color 0.15s,
     background 0.15s;
 }
 
 .history-item-reasoning:hover {
-  border-color: color-mix(in srgb, #8b5cf6 60%, #1e293b);
-  background: color-mix(in srgb, #8b5cf6 6%, #020617);
+  border-color: color-mix(
+    in srgb,
+    var(--history-reasoning-color) 60%,
+    var(--floating-border-muted, #1e293b)
+  );
+  background: color-mix(
+    in srgb,
+    var(--history-reasoning-color) 6%,
+    var(--floating-surface-base, #1a1d24)
+  );
 }
 
 .history-item-subtask {
-  border-color: color-mix(in srgb, #0ea5e9 36%, #1e293b);
-  background: color-mix(in srgb, #0ea5e9 6%, #020617);
+  border-color: color-mix(
+    in srgb,
+    var(--history-subagent-color) 36%,
+    var(--floating-border-muted, #1e293b)
+  );
+  background: color-mix(
+    in srgb,
+    var(--history-subagent-color) 6%,
+    var(--floating-surface-base, #1a1d24)
+  );
 }
 
 .history-subtask-badge {
@@ -365,8 +411,12 @@ function formatMessageTime(value?: number) {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  background: rgba(8, 145, 178, 0.28);
-  color: #67e8f9;
+  background: color-mix(
+    in srgb,
+    var(--history-subagent-color) 28%,
+    var(--floating-surface-strong, #323a48)
+  );
+  color: var(--floating-text, #e2e8f0);
 }
 
 .history-subtask-prompt {
@@ -378,7 +428,11 @@ function formatMessageTime(value?: number) {
 }
 
 .history-item-reasoning .history-meta {
-  background: color-mix(in srgb, #8b5cf6 18%, rgba(15, 23, 42, 0.95));
+  background: color-mix(
+    in srgb,
+    var(--history-reasoning-color) 18%,
+    var(--floating-surface-muted, #242832)
+  );
   border-bottom: none;
 }
 
@@ -388,18 +442,34 @@ function formatMessageTime(value?: number) {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  background: rgba(88, 28, 135, 0.5);
-  color: #d8b4fe;
+  background: color-mix(
+    in srgb,
+    var(--history-reasoning-color) 38%,
+    var(--floating-surface-strong, #323a48)
+  );
+  color: var(--floating-text, #e2e8f0);
 }
 
 /* Question entry */
 .history-item-question {
-  border-color: color-mix(in srgb, #34d399 40%, #1e293b);
+  border-color: color-mix(
+    in srgb,
+    var(--history-question-color) 40%,
+    var(--floating-border-muted, #1e293b)
+  );
 }
 
 .history-meta-question {
-  background: color-mix(in srgb, #34d399 18%, rgba(15, 23, 42, 0.95));
-  border-bottom-color: color-mix(in srgb, #34d399 25%, #1e293b);
+  background: color-mix(
+    in srgb,
+    var(--history-question-color) 18%,
+    var(--floating-surface-muted, #242832)
+  );
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--history-question-color) 25%,
+    var(--floating-border-muted, #1e293b)
+  );
 }
 
 .history-question-badge {
@@ -408,25 +478,29 @@ function formatMessageTime(value?: number) {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  background: rgba(6, 78, 59, 0.6);
-  color: #6ee7b7;
+  background: color-mix(
+    in srgb,
+    var(--history-question-color) 32%,
+    var(--floating-surface-strong, #323a48)
+  );
+  color: var(--floating-text, #e2e8f0);
 }
 
 .history-question-status {
   font-size: 10px;
-  color: #64748b;
+  color: var(--theme-status-neutral, var(--floating-text-muted, #94a3b8));
 }
 
 .history-question-status.is-replied {
-  color: #4ade80;
+  color: var(--theme-status-success, var(--floating-text, #e2e8f0));
 }
 
 .history-question-status.is-rejected {
-  color: #f87171;
+  color: var(--theme-status-danger, var(--floating-text, #e2e8f0));
 }
 
 .history-question-status.is-pending {
-  color: #fbbf24;
+  color: var(--theme-status-warning, var(--floating-text, #e2e8f0));
 }
 
 .history-question-body {
@@ -476,7 +550,7 @@ function formatMessageTime(value?: number) {
 
 .history-question-option.is-selected {
   color: var(--floating-text, #e2e8f0);
-  background: rgba(52, 211, 153, 0.1);
+  background: color-mix(in srgb, var(--history-question-color) 10%, transparent);
 }
 
 .option-check {
@@ -499,8 +573,8 @@ function formatMessageTime(value?: number) {
 .history-question-custom {
   margin-top: 4px;
   padding: 4px 8px;
-  background: rgba(52, 211, 153, 0.08);
-  border-left: 2px solid #34d399;
+  background: color-mix(in srgb, var(--history-question-color) 8%, transparent);
+  border-left: 2px solid var(--history-question-color);
   border-radius: 2px;
   font-size: 12px;
   line-height: 1.4;
@@ -509,20 +583,40 @@ function formatMessageTime(value?: number) {
 
 .history-item-tool {
   cursor: pointer;
-  border-color: color-mix(in srgb, var(--tool-color, #64748b) 40%, var(--floating-border-muted, #1e293b));
+  border-color: color-mix(
+    in srgb,
+    var(--tool-color, #64748b) 40%,
+    var(--floating-border-muted, #1e293b)
+  );
   transition:
     border-color 0.15s,
     background 0.15s;
 }
 
 .history-item-tool:hover {
-  border-color: color-mix(in srgb, var(--tool-color, #64748b) 60%, var(--floating-border-muted, #1e293b));
-  background: color-mix(in srgb, var(--tool-color, #64748b) 6%, var(--floating-surface-base, #020617));
+  border-color: color-mix(
+    in srgb,
+    var(--tool-color, #64748b) 60%,
+    var(--floating-border-muted, #1e293b)
+  );
+  background: color-mix(
+    in srgb,
+    var(--tool-color, #64748b) 6%,
+    var(--floating-surface-base, #020617)
+  );
 }
 
 .history-item-tool .history-meta {
-  background: color-mix(in srgb, var(--tool-color, #64748b) 18%, var(--floating-surface-muted, rgba(15, 23, 42, 0.95)));
-  border-bottom-color: color-mix(in srgb, var(--tool-color, #64748b) 25%, var(--floating-border-muted, #1e293b));
+  background: color-mix(
+    in srgb,
+    var(--tool-color, #64748b) 18%,
+    var(--floating-surface-muted, rgba(15, 23, 42, 0.95))
+  );
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--tool-color, #64748b) 25%,
+    var(--floating-border-muted, #1e293b)
+  );
 }
 
 .history-tool-badge {
@@ -532,45 +626,28 @@ function formatMessageTime(value?: number) {
   font-weight: 700;
   letter-spacing: 0.5px;
   color: var(--floating-text, #e2e8f0);
-  background: color-mix(in srgb, var(--floating-surface-strong, #334155) 82%, transparent);
-}
-
-.history-tool-badge.history-tool-bash {
-  background: rgba(22, 78, 99, 0.7);
-  color: #67e8f9;
-}
-
-.history-tool-badge.history-tool-write {
-  background: rgba(21, 94, 117, 0.5);
-  color: #a5f3fc;
-}
-
-.history-tool-badge.history-tool-edit,
-.history-tool-badge.history-tool-multiedit {
-  background: rgba(30, 58, 138, 0.5);
-  color: #bfdbfe;
-}
-
-.history-tool-badge.history-tool-apply_patch {
-  background: rgba(30, 58, 138, 0.5);
-  color: #bfdbfe;
+  background: color-mix(
+    in srgb,
+    var(--tool-color, var(--window-color)) 24%,
+    var(--floating-surface-strong, #334155)
+  );
 }
 
 .history-tool-status {
   font-size: 10px;
-  color: #64748b;
+  color: var(--theme-status-neutral, var(--floating-text-muted, #94a3b8));
 }
 
 .history-tool-status.is-completed {
-  color: #4ade80;
+  color: var(--theme-status-success, var(--floating-text, #e2e8f0));
 }
 
 .history-tool-status.is-error {
-  color: #f87171;
+  color: var(--theme-status-danger, var(--floating-text, #e2e8f0));
 }
 
 .history-tool-status.is-running {
-  color: #fbbf24;
+  color: var(--theme-status-warning, var(--floating-text, #e2e8f0));
 }
 
 .history-tool-content {

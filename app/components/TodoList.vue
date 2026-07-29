@@ -1,7 +1,7 @@
 <template>
   <div class="todo-body">
     <div class="todo-header">
-      <div class="todo-title">{{ t('sidePanel.todo.title') }}</div>
+      <div class="todo-title">{{ props.title || t('sidePanel.todo.title') }}</div>
       <div class="todo-count">{{ totalCount }}</div>
     </div>
       <div v-if="sessions.length === 0" class="todo-empty">{{ t('sidePanel.todo.empty') }}</div>
@@ -11,6 +11,7 @@
           <span class="todo-group-title">{{ session.title }}</span>
           <span v-if="session.isSubagent" class="todo-badge">{{ t('common.subagent') }}</span>
         </header>
+        <p v-if="session.description" class="todo-group-description">{{ session.description }}</p>
         <div v-if="session.error" class="todo-error">{{ session.error }}</div>
         <ul v-else class="todo-list">
           <li
@@ -44,6 +45,7 @@ type TodoEntry = {
 type TodoSession = {
   sessionId: string;
   title: string;
+  description?: string;
   isSubagent: boolean;
   todos: TodoEntry[];
   loading: boolean;
@@ -52,6 +54,7 @@ type TodoSession = {
 
 const props = defineProps<{
   sessions: TodoSession[];
+  title?: string;
 }>();
 
 const totalCount = computed(() =>
@@ -152,6 +155,14 @@ function priorityLabel(priority: string): string {
   color: var(--theme-badge-accent-text, var(--theme-side-active-text, #93c5fd));
   background: var(--theme-badge-accent-bg, var(--theme-side-active-bg, rgba(30, 64, 175, 0.25)));
   font-size: 10px;
+}
+
+.todo-group-description {
+  margin: 0;
+  padding: 7px 8px 0;
+  color: var(--theme-side-text-muted, #94a3b8);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
 .todo-error {

@@ -3,7 +3,12 @@ import { ref } from 'vue';
 import { useBackendActivation } from './useBackendActivation';
 import type { BackendKind } from '../backends/types';
 
-function createHarness(initialBackend: BackendKind = 'opencode') {
+type HarnessOverrides = {
+  bootstrapSelections?: () => Promise<void>;
+  hydrateActiveWorktreeResources?: () => Promise<void>;
+};
+
+function createHarness(initialBackend: BackendKind = 'opencode', overrides: HarnessOverrides = {}) {
   const calls: string[] = [];
   const credentials = {
     backendKind: ref<BackendKind>(initialBackend),
@@ -62,6 +67,9 @@ function createHarness(initialBackend: BackendKind = 'opencode') {
   const disconnectAcpBackend = vi.fn(() => {
     calls.push('disconnectAcpBackend');
   });
+  const disconnectCodexBackend = vi.fn(() => {
+    calls.push('disconnectCodexBackend');
+  });
 
   const activation = useBackendActivation({
     credentials,
@@ -92,6 +100,7 @@ function createHarness(initialBackend: BackendKind = 'opencode') {
     },
     configureAcpBackend,
     disconnectAcpBackend,
+    disconnectCodexBackend,
     bootstrapAcpWorkspace: async () => {
       calls.push('bootstrapAcpWorkspace');
       selectedProjectId.value = 'acp';
@@ -112,12 +121,22 @@ function createHarness(initialBackend: BackendKind = 'opencode') {
     fetchHomePath: async () => {
       calls.push('fetchHomePath');
     },
-    bootstrapSelections: async () => {
-      calls.push('bootstrapSelections');
-    },
-    hydrateActiveWorktreeResources: async () => {
-      calls.push('hydrateActiveWorktreeResources');
-    },
+    bootstrapSelections:
+      overrides.bootstrapSelections ??
+      (async () => {
+        calls.push('bootstrapSelections');
+        if (initialBackend === 'opencode') {
+          performance.mark('vis:opencode-topology-ready');
+        }
+      }),
+    hydrateActiveWorktreeResources:
+      overrides.hydrateActiveWorktreeResources ??
+      (async () => {
+        calls.push('hydrateActiveWorktreeResources');
+        if (initialBackend === 'opencode') {
+          performance.mark('vis:opencode-full-tree');
+        }
+      }),
     reloadSelectedSessionState: async () => {
       calls.push('reloadSelectedSessionState');
     },
@@ -169,6 +188,8 @@ describe('useBackendActivation', () => {
     expect(harness.selectedModel.value).toBe('');
     expect(harness.calls).toEqual([
       'disconnectAcpBackend',
+      'codex.disconnect',
+      'disconnectCodexBackend',
       'setActiveBackendKind:opencode',
       'ge.connect',
       'fetchHomePath',
@@ -181,6 +202,7 @@ describe('useBackendActivation', () => {
   });
 
   it('runs the Codex activation path through the shared manager', async () => {
+    const markSpy = vi.spyOn(performance, 'mark');
     const harness = createHarness('codex');
 
     await harness.activation.startInitialization();
@@ -200,9 +222,14 @@ describe('useBackendActivation', () => {
       'hydrateActiveWorktreeResources',
       'reloadSelectedSessionState',
     ]);
+    expect(
+      markSpy.mock.calls.map(([name]) => name).filter((name) => name.startsWith('vis:opencode-')),
+    ).toEqual([]);
+    markSpy.mockRestore();
   });
 
   it('activates ACP through the shared bridge without connecting OpenCode events', async () => {
+    const markSpy = vi.spyOn(performance, 'mark');
     const harness = createHarness('acp');
 
     await harness.activation.startInitialization();
@@ -219,6 +246,7 @@ describe('useBackendActivation', () => {
     expect(harness.calls).toEqual([
       'ge.disconnect',
       'codex.disconnect',
+      'disconnectCodexBackend',
       'configureAcpBackend',
       'setActiveBackendKind:acp',
       'bootstrapAcpWorkspace',
@@ -231,6 +259,92 @@ describe('useBackendActivation', () => {
       'fetchCommands',
       'hydrateActiveWorktreeResources',
     ]);
+    expect(
+      markSpy.mock.calls.map(([name]) => name).filter((name) => name.startsWith('vis:opencode-')),
+    ).toEqual([]);
+    markSpy.mockRestore();
+  });
+
+  it('reaches Ready while resource hydration is still pending', async () => {
+    // Given: hydration never settles
+    const harness = createHarness('opencode', {
+      hydrateActiveWorktreeResources: () => new Promise<void>(() => {}),
+    });
+
+    // When: OpenCode activation runs
+    const initPromise = harness.activation.startInitialization();
+
+    // Then: the UI becomes Ready without waiting for hydration
+    await vi.waitFor(() => {
+      expect(harness.connectionState.value).toBe('ready');
+      expect(harness.uiInitState.value).toBe('ready');
+    });
+    await initPromise;
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+  });
+
+  it('keeps Ready state when resource hydration rejects after activation', async () => {
+    // Given: hydration fails after the UI is already Ready
+    let rejectHydration: ((error: unknown) => void) | undefined;
+    const harness = createHarness('opencode', {
+      hydrateActiveWorktreeResources: () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectHydration = reject;
+        }),
+    });
+    const initPromise = harness.activation.startInitialization();
+    await vi.waitFor(() => {
+      expect(harness.uiInitState.value).toBe('ready');
+    });
+    await initPromise;
+
+    // When: the detached hydration promise rejects
+    rejectHydration?.(new Error('hydration failed'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: state stays Ready, no disconnect, no login revert
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.uiInitState.value).toBe('ready');
+    expect(harness.initErrorMessage.value).toBe('');
+    expect(harness.calls).not.toContain('ge.disconnect');
+  });
+
+  it('records OpenCode startup marks from connection through full-tree hydration', async () => {
+    // Given: a spy on performance.mark
+    const markSpy = vi.spyOn(performance, 'mark');
+    const harness = createHarness('opencode');
+
+    // When: OpenCode activation completes
+    await harness.activation.startInitialization();
+
+    // Then: connection, topology, session selection, ready, and full-tree are ordered
+    const opencodeMarks = markSpy.mock.calls
+      .map(([name]) => name)
+      .filter((name) => name.startsWith('vis:opencode-'));
+    expect(opencodeMarks).toEqual([
+      'vis:opencode-connect-start',
+      'vis:opencode-topology-ready',
+      'vis:opencode-session-selectable',
+      'vis:opencode-ui-ready',
+      'vis:opencode-full-tree',
+    ]);
+    markSpy.mockRestore();
+  });
+
+  it('keeps credentials intact when OpenCode selection bootstrap fails', async () => {
+    // Given: selection hydration cannot resolve a target session
+    const bootstrapSelections = vi.fn(async () => {
+      throw new Error('errors.sessionNotFound');
+    });
+    const harness = createHarness('opencode', { bootstrapSelections });
+
+    // When: initialization reaches the selection failure
+    await harness.activation.startInitialization();
+
+    // Then: the initialization error is surfaced without an unauthorized credential reset
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.initErrorMessage.value).toContain('errors.sessionNotFound');
+    expect(harness.calls).not.toContain('handleOpenCodeUnauthorized:errors.sessionNotFound');
   });
 
   it('reports ACP configuration failures and releases the initialization lock', async () => {

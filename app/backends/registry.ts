@@ -38,13 +38,17 @@ export function getPersistedAcpAgentId() {
 
 let acpAdapter: ReturnType<typeof createAcpAdapter> | undefined;
 let acpAdapterKey = '';
+const initialCodexBridgeUrl = getPersistedCodexBridgeUrl();
+const initialCodexBridgeToken = getPersistedCodexBridgeToken();
+let codexAdapterKey = JSON.stringify([initialCodexBridgeUrl, initialCodexBridgeToken]);
+let codexAdapter = createCodexAdapter({
+  url: appendCodexBridgeToken(initialCodexBridgeUrl, initialCodexBridgeToken),
+  experimentalApi: true,
+});
 
 let adapters: Record<BackendKind, BackendAdapter | undefined> = {
   opencode: createOpenCodeAdapter(),
-  codex: createCodexAdapter({
-    url: appendCodexBridgeToken(getPersistedCodexBridgeUrl(), getPersistedCodexBridgeToken()),
-    experimentalApi: true,
-  }),
+  codex: codexAdapter,
   acp: acpAdapter,
 };
 
@@ -80,13 +84,19 @@ export function configureCodexBackend(options: { bridgeUrl: string; bridgeToken?
     throw new Error('Codex bridge URL is required.');
   }
   const bridgeToken = options.bridgeToken?.trim() ?? '';
+  const nextKey = JSON.stringify([bridgeUrl, bridgeToken]);
+  if (codexAdapterKey === nextKey) return codexAdapter;
+  codexAdapter.disconnect();
+  codexAdapter = createCodexAdapter({
+    url: appendCodexBridgeToken(bridgeUrl, bridgeToken),
+    experimentalApi: true,
+  });
+  codexAdapterKey = nextKey;
   adapters = {
     ...adapters,
-    codex: createCodexAdapter({
-      url: appendCodexBridgeToken(bridgeUrl, bridgeToken),
-      experimentalApi: true,
-    }),
+    codex: codexAdapter,
   };
+  return codexAdapter;
 }
 
 export function configureAcpBackend(options: {
@@ -118,6 +128,10 @@ export function configureAcpBackend(options: {
 
 export function disconnectAcpBackend() {
   acpAdapter?.disconnect();
+}
+
+export function disconnectCodexBackend() {
+  codexAdapter.disconnect();
 }
 
 export function getBackendAdapter(kind: BackendKind) {

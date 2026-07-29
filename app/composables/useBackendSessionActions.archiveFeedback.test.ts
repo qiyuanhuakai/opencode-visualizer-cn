@@ -31,7 +31,6 @@ function createAcpActions() {
       archiveThread: vi.fn(),
       hideThread: vi.fn(),
       unhideThread: vi.fn(),
-      unarchiveThread: vi.fn(),
       setThreadName: vi.fn(),
       forkThread: vi.fn(),
       rollbackThread: vi.fn(),

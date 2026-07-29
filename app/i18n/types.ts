@@ -295,6 +295,7 @@ export interface LocaleMessages {
       total: string;
       connected: string;
       configured: string;
+      configuredAcp: string;
       disabled: string;
       failed: string;
       needsAuth: string;
@@ -1187,6 +1188,7 @@ export interface LocaleMessages {
     noAvailableProject: string;
     failedToResolveSessionId: string;
     failedToResolveCreatedSession: string;
+    sessionNotFound: string;
     sessionCreateEmptyWorktree: string;
     sessionCreateEmptyDirectory: string;
     noFilesInWorktreeSnapshot: string;
@@ -1227,6 +1229,46 @@ export interface LocaleMessages {
   };
   codexPanel: {
     title: string;
+    serverRequests: {
+      additionalPermissions: string;
+    };
+    elicitation: {
+      title: string;
+      server: string;
+      required: string;
+      accept: string;
+      decline: string;
+      cancel: string;
+      openLink: string;
+    };
+    runtime: {
+      title: string;
+      capabilities: string;
+      goal: string;
+      objective: string;
+      tokenBudget: string;
+      status: string;
+      usage: string;
+      lifetimeTokens: string;
+      streakDays: string;
+      provider: string;
+      permissionProfiles: string;
+      configRequirements: string;
+      loadedThreads: string;
+      cleanBackgroundTerminals: string;
+      supported: string;
+      unsupported: string;
+      gated: string;
+      unknown: string;
+      enabled: string;
+      disabled: string;
+      goalStatusActive: string;
+      goalStatusPaused: string;
+      goalStatusBlocked: string;
+      goalStatusUsageLimited: string;
+      goalStatusBudgetLimited: string;
+      goalStatusComplete: string;
+    };
     urlLabel: string;
     tokenLabel: string;
     connect: string;
@@ -1236,7 +1278,6 @@ export interface LocaleMessages {
     newThread: string;
     noThreads: string;
     connectToLoad: string;
-    showArchived: string;
     showHidden: string;
     refreshThreads: string;
     rename: string;
@@ -1245,7 +1286,6 @@ export interface LocaleMessages {
     unsubscribe: string;
     interrupt: string;
     archive: string;
-    unarchive: string;
     fork: string;
     rollback: string;
     rollbackTurns: string;
@@ -1402,6 +1442,10 @@ export interface LocaleMessages {
     pluginsInstalling: string;
     pluginsUninstalling: string;
     pluginsInstalled: string;
+    pluginDetails: string;
+    pluginBundledSkills: string;
+    pluginBundledApps: string;
+    pluginBundledMcp: string;
     pluginsFeatured: string;
     pluginsReadMore: string;
     pluginsLoadError: string;
@@ -1429,12 +1473,25 @@ export interface LocaleMessages {
     configNoConfig: string;
     configMerged: string;
     configLayers: string;
+    externalAgentConfigTitle: string;
+    includeHome: string;
+    detect: string;
+    externalAgentConfigNoItems: string;
+    import_: string;
+    importSuccess: string;
     fsRemove: string;
     fsRemoveSuccess: string;
     fsRemoveError: string;
     fsWatch: string;
     fsUnwatch: string;
     fsGetMetadata: string;
+    fsInspector: {
+      title: string;
+      path: string;
+      metadata: string;
+      watch: string;
+      unwatch: string;
+    };
     fsCopy: string;
     fsCopySuccess: string;
     fsCopyError: string;
@@ -1452,6 +1509,7 @@ export interface LocaleMessages {
     tokenUsageOutput: string;
     tokenUsageReasoning: string;
     tokenUsageTotal: string;
+    planTitle: string;
     planStepPending: string;
     planStepInProgress: string;
     planStepCompleted: string;
