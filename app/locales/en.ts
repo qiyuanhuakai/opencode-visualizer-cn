@@ -298,7 +298,8 @@ const messages: LocaleMessages = {
     mcp: {
       total: 'Total: {count}',
       connected: 'Connected',
-      configured: 'Configured in OMP; connection status unavailable',
+      configured: 'Configured; connection status unavailable',
+      configuredAcp: 'Configured in OMP; connection status unavailable',
       disabled: 'Disabled',
       failed: 'Failed',
       needsAuth: 'Needs Auth',

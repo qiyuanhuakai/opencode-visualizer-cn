@@ -295,6 +295,7 @@ export interface LocaleMessages {
       total: string;
       connected: string;
       configured: string;
+      configuredAcp: string;
       disabled: string;
       failed: string;
       needsAuth: string;

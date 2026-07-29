@@ -300,7 +300,8 @@ const messages: LocaleMessages = {
     mcp: {
       total: '合計: {count}',
       connected: '接続済み',
-      configured: 'OMP で有効です。接続状態は取得できません',
+      configured: '設定済み。接続状態は取得できません',
+      configuredAcp: 'OMP で有効です。接続状態は取得できません',
       disabled: '無効',
       failed: '失敗',
       needsAuth: '認証が必要',

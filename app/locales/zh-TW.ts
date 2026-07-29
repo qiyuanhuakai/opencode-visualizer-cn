@@ -296,7 +296,8 @@ const messages: LocaleMessages = {
     mcp: {
       total: '總數: {count}',
       connected: '已連線',
-      configured: '已在 OMP 中啟用；連線狀態不可用',
+      configured: '已設定；連線狀態不可用',
+      configuredAcp: '已在 OMP 中啟用；連線狀態不可用',
       disabled: '已停用',
       failed: '啟動失敗',
       needsAuth: '需要認證',

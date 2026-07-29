@@ -298,7 +298,8 @@ const messages: LocaleMessages = {
     mcp: {
       total: 'Entute: {count}',
       connected: 'Konektita',
-      configured: 'Agordita en OMP; konekta stato ne disponeblas',
+      configured: 'Agordita; konekta stato ne disponeblas',
+      configuredAcp: 'Agordita en OMP; konekta stato ne disponeblas',
       disabled: 'Malŝaltita',
       failed: 'Malsukcesis',
       needsAuth: 'Postulas aŭtentigon',
