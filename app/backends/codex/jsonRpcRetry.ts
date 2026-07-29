@@ -8,6 +8,7 @@ export type CodexOverloadRetryPolicy = {
 
 export type CodexRequestOptions = {
   retryOverloaded?: CodexOverloadRetryPolicy;
+  timeoutMs?: number;
 };
 
 export type CodexIdempotentMethod =

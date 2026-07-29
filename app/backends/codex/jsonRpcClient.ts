@@ -148,9 +148,9 @@ export class CodexJsonRpcClient {
 
   request<T = unknown>(method: string, params?: unknown, options?: CodexRequestOptions): Promise<T> {
     const policy = options?.retryOverloaded;
-    if (!policy) return this.sendRequest<T>(method, params);
+    if (!policy) return this.sendRequest<T>(method, params, options?.timeoutMs);
     const generation = this.connectionGeneration;
-    return this.requestWithOverloadRetry<T>(method, params, policy, generation);
+    return this.requestWithOverloadRetry<T>(method, params, policy, generation, options?.timeoutMs);
   }
 
   private async requestWithOverloadRetry<T>(
@@ -158,10 +158,11 @@ export class CodexJsonRpcClient {
     params: unknown,
     policy: NonNullable<CodexRequestOptions['retryOverloaded']>,
     generation: number,
+    timeoutMs: number | undefined,
   ): Promise<T> {
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return await this.sendRequest<T>(method, params);
+        return await this.sendRequest<T>(method, params, timeoutMs);
       } catch (error) {
         if (!isCodexOverload(error) || attempt >= policy.maxAttempts) throw error;
         await waitForRetry(overloadRetryDelayMs(error, attempt, policy));
@@ -172,7 +173,7 @@ export class CodexJsonRpcClient {
     }
   }
 
-  private sendRequest<T>(method: string, params?: unknown): Promise<T> {
+  private sendRequest<T>(method: string, params?: unknown, timeoutMs = this.requestTimeoutMs): Promise<T> {
     const socket = this.requireOpenSocket();
     const id = this.nextId;
     this.nextId += 1;
@@ -184,7 +185,7 @@ export class CodexJsonRpcClient {
       const timeoutId = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`${this.connectionLabel} JSON-RPC request timed out: ${method}`));
-      }, this.requestTimeoutMs);
+      }, timeoutMs);
 
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
