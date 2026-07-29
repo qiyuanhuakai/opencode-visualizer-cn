@@ -1,5 +1,6 @@
 import {
   CodexJsonRpcClient,
+  CodexJsonRpcError,
   type CodexJsonRpcClientOptions,
   type CodexJsonRpcId,
   type CodexJsonRpcNotification,
@@ -19,6 +20,7 @@ import {
   type CodexIdempotentMethod,
 } from './jsonRpcRetry';
 import { normalizeCodexTurnsToHistory } from './normalize';
+import { normalizeCodexPluginListResult } from './pluginProtocol';
 import {
   buildDynamicToolCallResponse,
   buildToolUserInputResponse,
@@ -573,7 +575,17 @@ export type CodexMarketplaceAddResult = unknown;
 export type CodexPluginSourceLocal = { type: 'local'; path: string };
 export type CodexPluginSourceGit = { type: 'git'; url: string; path: string; refName: string; sha: string };
 export type CodexPluginSourceRemote = { type: 'remote' };
-export type CodexPluginSource = CodexPluginSourceLocal | CodexPluginSourceGit | CodexPluginSourceRemote;
+export type CodexPluginSourceNpm = {
+  type: 'npm';
+  package: string;
+  version: string;
+  registry: string;
+};
+export type CodexPluginSource =
+  | CodexPluginSourceLocal
+  | CodexPluginSourceGit
+  | CodexPluginSourceNpm
+  | CodexPluginSourceRemote;
 
 export type CodexPlugin = {
   id: string;
@@ -657,7 +669,7 @@ export type CodexMcpServerStartupStatusUpdatedNotificationParams = {
 };
 
 export type CodexMcpServerAuth = {
-  type: 'none' | 'oauth' | 'apiKey';
+  type: 'none' | 'oauth' | 'bearerToken';
   status: 'required' | 'pending' | 'completed';
 };
 
@@ -681,6 +693,15 @@ export type CodexMcpServerInfo = {
   auth?: CodexMcpServerAuth;
 };
 
+export type CodexMcpServerStatus = {
+  name: string;
+  serverInfo: { name: string; version: string; title?: string } | null;
+  tools: Record<string, CodexMcpServerTool>;
+  resources: CodexMcpServerResource[];
+  resourceTemplates: Array<Record<string, unknown>>;
+  authStatus: 'unsupported' | 'notLoggedIn' | 'bearerToken' | 'oAuth';
+};
+
 export type CodexMcpServerStatusListParams = {
   cursor?: string;
   limit?: number;
@@ -688,7 +709,7 @@ export type CodexMcpServerStatusListParams = {
 };
 
 export type CodexMcpServerStatusListResult = {
-  data: CodexMcpServerInfo[];
+  data: CodexMcpServerStatus[];
   nextCursor: string | null;
 };
 
@@ -986,6 +1007,7 @@ export type CodexFeedbackUploadResult = {};
 export type CodexAdapterOptions = CodexJsonRpcClientOptions & {
   clientInfo?: CodexClientInfo;
   experimentalApi?: boolean;
+  mcpStatusTimeoutMs?: number;
 };
 
 type NormalizedCodexSession = {
@@ -1021,16 +1043,50 @@ export function normalizeCodexStatus(status: unknown): NormalizedCodexSession['s
   return 'unknown';
 }
 
-function normalizeCodexMcpStatus(status: string) {
-  if (status === 'connected' || status === 'disabled' || status === 'failed') return status;
-  if (status === 'needs_auth' || status === 'needs_client_registration') return status;
-  if (status === 'running' || status === 'ready' || status === 'started' || status === 'starting') {
-    return 'connected';
+function normalizeCodexMcpListStatus(server: CodexMcpServerStatus) {
+  if (server.authStatus === 'notLoggedIn') return 'needs_auth' as const;
+  if (
+    server.serverInfo !== null ||
+    Object.keys(server.tools).length > 0 ||
+    server.resources.length > 0 ||
+    server.resourceTemplates.length > 0
+  ) {
+    return 'connected' as const;
   }
-  if (status === 'stopped') return 'disabled';
-  if (status === 'auth_required') return 'needs_auth';
-  if (status === 'error') return 'failed';
-  return status ? 'failed' : 'disabled';
+  return 'configured' as const;
+}
+
+export function normalizeCodexMcpServerInfo(server: CodexMcpServerStatus): CodexMcpServerInfo {
+  const auth: CodexMcpServerAuth =
+    server.authStatus === 'notLoggedIn'
+      ? { type: 'oauth', status: 'required' }
+      : server.authStatus === 'oAuth'
+        ? { type: 'oauth', status: 'completed' }
+        : server.authStatus === 'bearerToken'
+          ? { type: 'bearerToken', status: 'completed' }
+          : { type: 'none', status: 'completed' };
+  return {
+    name: server.name,
+    status: normalizeCodexMcpListStatus(server),
+    tools: Object.values(server.tools),
+    resources: server.resources,
+    auth,
+  };
+}
+
+function configuredCodexMcpStatuses(config: CodexConfigReadResult | null) {
+  if (!config) return {};
+  const source = isRecord(config.config.mcp_servers)
+    ? config.config.mcp_servers
+    : isRecord(config.config.mcp)
+      ? config.config.mcp
+      : {};
+  return Object.fromEntries(
+    Object.entries(source).map(([name, value]) => [
+      name,
+      { status: isRecord(value) && value.enabled === false ? 'disabled' : 'configured' },
+    ]),
+  ) as Record<string, { status: 'configured' | 'disabled' }>;
 }
 
 function codexModelVariants(model: CodexModel) {
@@ -1112,7 +1168,7 @@ function configWithLayeredVisModelProviders(
   const configProviders = isRecord(configVis.model_providers) ? configVis.model_providers : {};
   Object.assign(layeredModelProviders, configProviders);
   if (Object.keys(layeredModelProviders).length === 0) return config;
-  return {
+    return {
     ...config,
     vis: {
       ...configVis,
@@ -1132,7 +1188,7 @@ function expandCodexHomePath(path: string | undefined, homeDirectory?: string) {
 
 function normalizeCodexThread(thread: CodexThread, homeDirectory?: string): NormalizedCodexSession {
   const directory = expandCodexHomePath(thread.cwd, homeDirectory);
-    return {
+  return {
     id: thread.id,
     projectID: CODEX_PROJECT_ID,
     title: thread.name || thread.preview || undefined,
@@ -1363,6 +1419,7 @@ export class CodexAdapter implements BackendAdapter {
   private readonly client: CodexJsonRpcClient;
   private readonly clientInfo: CodexClientInfo;
   private readonly experimentalApi: boolean;
+  private readonly mcpStatusTimeoutMs: number;
   private readonly bridgeUrl: string;
   private readonly activeTurnByThreadId = new Map<string, string>();
   private initialized = false;
@@ -1372,6 +1429,7 @@ export class CodexAdapter implements BackendAdapter {
     this.client = new CodexJsonRpcClient(options);
     this.clientInfo = options.clientInfo ?? defaultClientInfo();
     this.experimentalApi = options.experimentalApi ?? false;
+    this.mcpStatusTimeoutMs = options.mcpStatusTimeoutMs ?? 3_000;
     this.bridgeUrl = options.url;
     this.bindBackendMethods();
   }
@@ -1733,7 +1791,8 @@ export class CodexAdapter implements BackendAdapter {
   // plugin/* methods
   async listPlugins(): Promise<CodexPluginListResult> {
     await this.ensureInitialized();
-    return this.requestRead<CodexPluginListResult>('plugin/list');
+    const result = await this.requestRead<unknown>('plugin/list');
+    return normalizeCodexPluginListResult(result);
   }
 
   async readPlugin(params: CodexPluginReadParams) {
@@ -2307,16 +2366,35 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async getMcpStatus() {
-    const result = await this.listMcpServerStatus();
-    return Object.fromEntries(
-      result.data.map((server) => [
-        server.name,
-        {
-          status: normalizeCodexMcpStatus(server.status),
-          error: server.error,
-        },
-      ]),
-    );
+    await this.ensureInitialized();
+    const requestOptions = {
+      ...CODEX_IDEMPOTENT_RETRY_OPTIONS,
+      timeoutMs: this.mcpStatusTimeoutMs,
+    };
+    const configRequest = this.client
+      .request<CodexConfigReadResult>('config/read', {}, requestOptions)
+      .catch(() => null);
+
+    try {
+      const result = await this.client.request<CodexMcpServerStatusListResult>(
+        'mcpServerStatus/list',
+        { detail: 'toolsAndAuthOnly' },
+        requestOptions,
+      );
+      const configured = configuredCodexMcpStatuses(await configRequest);
+      return {
+        ...configured,
+        ...Object.fromEntries(
+          result.data.map((server) => [
+            server.name,
+            { status: normalizeCodexMcpListStatus(server) },
+          ]),
+        ),
+      };
+    } catch (error) {
+      if (error instanceof CodexJsonRpcError && error.code === -32601) throw error;
+      return configuredCodexMcpStatuses(await configRequest);
+    }
   }
 
   async getLspStatus() {
@@ -2343,7 +2421,7 @@ export class CodexAdapter implements BackendAdapter {
 
   async updateMcp(payload: { name: string; config: Record<string, unknown> }) {
     await this.writeConfigValue({
-      keyPath: `mcp.${payload.name}`,
+      keyPath: `mcp_servers.${payload.name}`,
       value: payload.config,
       mergeStrategy: 'replace',
     });
