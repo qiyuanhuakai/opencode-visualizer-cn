@@ -1,6 +1,7 @@
 import { computed, ref, watch } from 'vue';
 import {
   CodexAdapter,
+  normalizeCodexMcpServerInfo,
   type CodexAccount,
   type CodexAccountRateLimitBucket,
   type CodexAccountUsageResult,
@@ -2968,7 +2969,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       try {
         const result = await request.sourceAdapter.listMcpServerStatus({ detail: 'full' });
         if (!isCurrentConnection(request)) return;
-        mcpServers.value = result.data;
+        mcpServers.value = result.data.map(normalizeCodexMcpServerInfo);
       } catch {
         if (isCurrentConnection(request)) mcpServers.value = [];
       } finally {
