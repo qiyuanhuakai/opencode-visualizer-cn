@@ -6,7 +6,7 @@ import { ref } from 'vue';
 import SubagentHistoryContent from './SubagentHistoryContent.vue';
 import { FLOATING_WINDOW_KEY } from '../composables/useFloatingWindow';
 import { useMessages } from '../composables/useMessages';
-import type { MessageInfo, ToolPart } from '../types/sse';
+import type { MessageInfo, ReasoningPart, ToolPart } from '../types/sse';
 
 function createMessages() {
   return {
@@ -128,21 +128,30 @@ function makeFloatingWindowStub() {
   };
 }
 
-function mount(props: { parentThreadId: string; sessionLabel?: string; theme?: string }) {
+function mount(props: {
+  parentThreadId: string;
+  sessionLabel?: string;
+  theme?: string;
+  onToolClick?: (part: ToolPart) => void;
+  onReasoningClick?: (part: ReasoningPart) => void;
+}) {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const closeSpy = vi.fn();
   // Cast to any to avoid Vue's strict component instance type narrowing in tests.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Child = SubagentHistoryContent as any;
-  const app = createApp(defineComponent({
-    setup() {
-      return () => h(Child, {
-        ...props,
-        onClose: closeSpy,
-      });
-    },
-  }));
+  const app = createApp(
+    defineComponent({
+      setup() {
+        return () =>
+          h(Child, {
+            ...props,
+            onClose: closeSpy,
+          });
+      },
+    }),
+  );
   const i18n = createI18n({ legacy: false, locale: 'en', messages: createMessages() });
   app.use(i18n);
   app.provide(FLOATING_WINDOW_KEY, makeFloatingWindowStub());
@@ -217,7 +226,9 @@ describe('SubagentHistoryContent', () => {
     const { root, app, closeSpy } = mount({ parentThreadId: 'close-session' });
     await flushRender();
 
-    const closeButton = root.querySelector('button.subagent-close-button') as HTMLButtonElement | null;
+    const closeButton = root.querySelector(
+      'button.subagent-close-button',
+    ) as HTMLButtonElement | null;
     expect(closeButton).not.toBeNull();
     expect(closeButton?.textContent?.trim()).toBe('Close');
 
@@ -250,6 +261,51 @@ describe('SubagentHistoryContent', () => {
     // The tool entry's summary should include the command (rendered via the
     // existing tool summary path, not the markdown worker)
     expect(root.textContent).toContain('$ ls');
+
+    app.unmount();
+    root.remove();
+  });
+
+  it('forwards edit, websearch, read, and thinking rows to detail handlers', async () => {
+    const sessionId = 'click-session';
+    const messageId = 'assistant-clicks';
+    const toolParts = ['edit', 'websearch_web_search_exa', 'read'].map((tool, index) =>
+      makeToolPart(`${messageId}-${index}`, sessionId, tool),
+    );
+    const reasoningPart: ReasoningPart = {
+      id: 'reasoning-click',
+      sessionID: sessionId,
+      messageID: messageId,
+      type: 'reasoning',
+      text: 'Inspecting the result',
+      time: { start: 4 },
+    };
+    useMessages().loadHistory([
+      {
+        info: makeUserMessage(sessionId, 'user-clicks', 1),
+        parts: [makeTextPart('user-clicks', sessionId, 'Inspect details')],
+      },
+      {
+        info: makeAssistantMessage(sessionId, messageId, 'user-clicks', 2),
+        parts: [...toolParts, reasoningPart],
+      },
+    ]);
+    await flushRender();
+    const onToolClick = vi.fn();
+    const onReasoningClick = vi.fn();
+    const { root, app } = mount({ parentThreadId: sessionId, onToolClick, onReasoningClick });
+    await flushRender();
+
+    root.querySelectorAll<HTMLElement>('.history-item-tool').forEach((row) => row.click());
+    root.querySelector<HTMLElement>('.history-item-reasoning')?.click();
+    await flushRender();
+
+    expect(onToolClick.mock.calls.map(([part]) => (part as ToolPart).tool)).toEqual([
+      'edit',
+      'websearch_web_search_exa',
+      'read',
+    ]);
+    expect(onReasoningClick).toHaveBeenCalledWith(reasoningPart);
 
     app.unmount();
     root.remove();
@@ -298,10 +354,12 @@ describe('SubagentHistoryContent', () => {
     // contributes a message because the other session's roots are filtered out.
     const targetMessageItems = Array.from(targetItems).filter((el) => {
       const html = el as HTMLElement;
-      return !html.classList.contains('history-item-reasoning') &&
+      return (
+        !html.classList.contains('history-item-reasoning') &&
         !html.classList.contains('history-item-question') &&
         !html.classList.contains('history-item-subtask') &&
-        !html.classList.contains('history-item-tool');
+        !html.classList.contains('history-item-tool')
+      );
     });
     expect(targetMessageItems.length).toBe(1);
 
