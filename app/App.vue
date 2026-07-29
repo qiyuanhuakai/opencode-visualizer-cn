@@ -641,6 +641,7 @@ import type { ComposerAttachment, LineCommentData } from './types/composer';
 import type { ForgePanelAuxiliary } from './types/forge';
 import type { ContainerPinPayload } from './types/pin';
 import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
+import type { WorkerToTabMessage } from './types/sse-worker';
 import type { TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
 import type { Terminal } from '@xterm/xterm';
@@ -659,6 +660,8 @@ import {
 import { applyPinHierarchyTransition, buildPinHierarchy } from './utils/pinHierarchy';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
+import { resolveThreadSubagentSessions } from './utils/threadSubagents';
+import { normalizeToolName } from './utils/toolNames';
 import {
   extractFileRead as extractToolFileRead,
   extractPatch as extractToolPatch,
@@ -1467,6 +1470,18 @@ const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
 let primaryHistoryRequestId = 0;
 const sessionReloadRequestId = ref(0);
 let outputAnchorRequestId = 0;
+type ReferencedSubagentHydrationResult = Extract<
+  WorkerToTabMessage,
+  { type: 'state.referenced-subagents-hydrated' }
+>;
+const pendingReferencedSubagentHydrations = new Map<
+  string,
+  {
+    rootSessionId: string;
+    resolve: (sessionIds: string[]) => void;
+  }
+>();
+let referencedSubagentHydrationSequence = 0;
 const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
@@ -2140,11 +2155,12 @@ const {
         (item) => encodeCodexDialogRequestId(item.id) === requestId,
       );
       if (!request) return;
-      const decision = reply === 'reject'
-        ? 'decline'
-        : reply === 'always' && request.availableDecisions.includes('acceptForSession')
-          ? 'acceptForSession'
-          : 'accept';
+      const decision =
+        reply === 'reject'
+          ? 'decline'
+          : reply === 'always' && request.availableDecisions.includes('acceptForSession')
+            ? 'acceptForSession'
+            : 'accept';
       codexApi.resolveServerRequest(request.id, decision);
       return;
     }
@@ -2169,65 +2185,65 @@ const {
   clearQuestionEntries,
   fetchPendingQuestions,
 } = useQuestions({
-    fw,
-    allowedSessionIds,
-    activeDirectory,
-    ensureConnectionReady,
-    getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
-    sendReply: async (requestId, answers) => {
-      const toolRequest = codexApi.toolUserInputRequests.value.find(
-        (request) => encodeCodexToolQuestionRequestId(request) === requestId,
+  fw,
+  allowedSessionIds,
+  activeDirectory,
+  ensureConnectionReady,
+  getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
+  sendReply: async (requestId, answers) => {
+    const toolRequest = codexApi.toolUserInputRequests.value.find(
+      (request) => encodeCodexToolQuestionRequestId(request) === requestId,
+    );
+    if (toolRequest) {
+      await codexApi.respondToToolUserInput(
+        toolRequest.requestId,
+        toolRequest.questions.map((question, index) => ({
+          questionId: question.id,
+          response: answers[index]?.join('\n') ?? '',
+        })),
       );
-      if (toolRequest) {
-        await codexApi.respondToToolUserInput(
-          toolRequest.requestId,
-          toolRequest.questions.map((question, index) => ({
-            questionId: question.id,
-            response: answers[index]?.join('\n') ?? '',
-          })),
-        );
-        return;
-      }
-      const dynamicRequest = codexApi.dynamicToolCalls.value.find(
-        (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
+      return;
+    }
+    const dynamicRequest = codexApi.dynamicToolCalls.value.find(
+      (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
+    );
+    if (dynamicRequest) {
+      const text = answers.flat().join('\n');
+      await codexApi.respondToDynamicToolCall(
+        dynamicRequest.requestId,
+        text ? [{ type: 'inputText', text }] : [],
       );
-      if (dynamicRequest) {
-        const text = answers.flat().join('\n');
-        await codexApi.respondToDynamicToolCall(
-          dynamicRequest.requestId,
-          text ? [{ type: 'inputText', text }] : [],
-        );
-        return;
-      }
-      const replyQuestion = getActiveBackendAdapter().replyQuestion;
-      if (!replyQuestion) throw new Error('Active backend does not support question replies.');
-      await replyQuestion(requestId, {
-        directory: activeDirectory.value.trim() || undefined,
-        answers,
-      });
-    },
-    sendReject: async (requestId) => {
-      const toolRequest = codexApi.toolUserInputRequests.value.find(
-        (request) => encodeCodexToolQuestionRequestId(request) === requestId,
-      );
-      if (toolRequest) {
-        await codexApi.respondToToolUserInput(toolRequest.requestId, []);
-        return;
-      }
-      const dynamicRequest = codexApi.dynamicToolCalls.value.find(
-        (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
-      );
-      if (dynamicRequest) {
-        await codexApi.respondToDynamicToolCall(dynamicRequest.requestId, [], false);
-        return;
-      }
-      const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
-      if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
-      await rejectQuestion(requestId, activeDirectory.value.trim() || undefined);
-    },
-    onReplied: dismissCodexToolQuestionDialog,
-    onRejected: dismissCodexToolQuestionDialog,
-  });
+      return;
+    }
+    const replyQuestion = getActiveBackendAdapter().replyQuestion;
+    if (!replyQuestion) throw new Error('Active backend does not support question replies.');
+    await replyQuestion(requestId, {
+      directory: activeDirectory.value.trim() || undefined,
+      answers,
+    });
+  },
+  sendReject: async (requestId) => {
+    const toolRequest = codexApi.toolUserInputRequests.value.find(
+      (request) => encodeCodexToolQuestionRequestId(request) === requestId,
+    );
+    if (toolRequest) {
+      await codexApi.respondToToolUserInput(toolRequest.requestId, []);
+      return;
+    }
+    const dynamicRequest = codexApi.dynamicToolCalls.value.find(
+      (request) => encodeCodexDynamicToolCallRequestId(request) === requestId,
+    );
+    if (dynamicRequest) {
+      await codexApi.respondToDynamicToolCall(dynamicRequest.requestId, [], false);
+      return;
+    }
+    const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
+    if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
+    await rejectQuestion(requestId, activeDirectory.value.trim() || undefined);
+  },
+  onReplied: dismissCodexToolQuestionDialog,
+  onRejected: dismissCodexToolQuestionDialog,
+});
 
 type CodexServerDialogRequest = (typeof codexApi.serverRequests.value)[number];
 type CodexStructuredPermissionDialogRequest = (typeof codexApi.permissionRequests.value)[number];
@@ -2350,9 +2366,11 @@ function codexStructuredPermissionPatterns(request: CodexStructuredPermissionDia
     for (const access of ['read', 'write'] as const) {
       const paths = Reflect.get(fileSystem, access);
       if (Array.isArray(paths)) {
-        paths.filter((path): path is string => typeof path === 'string').forEach((path) => {
-          patterns.add(`${access}: ${path}`);
-        });
+        paths
+          .filter((path): path is string => typeof path === 'string')
+          .forEach((path) => {
+            patterns.add(`${access}: ${path}`);
+          });
       }
     }
   }
@@ -2482,19 +2500,14 @@ function codexElicitationWindowKey(dialogId: string) {
   return `elicitation:${dialogId}`;
 }
 
-function openCodexElicitationDialog(
-  request: (typeof codexApi.elicitationRequests.value)[number],
-) {
+function openCodexElicitationDialog(request: (typeof codexApi.elicitationRequests.value)[number]) {
   const width = 560;
   const height = request.mode === 'form' ? 560 : 340;
   void fw.open(codexElicitationWindowKey(request.dialogId), {
     component: CodexMcpElicitation,
     props: {
       request,
-      onReply: (
-        action: 'accept' | 'decline' | 'cancel',
-        content?: Record<string, unknown>,
-      ) => {
+      onReply: (action: 'accept' | 'decline' | 'cancel', content?: Record<string, unknown>) => {
         try {
           codexApi.replyElicitationRequest(request.dialogId, action, content);
         } catch (error) {
@@ -3399,9 +3412,10 @@ function resolveSessionPinRepoRoot(projectId: string, sessionId: string) {
   for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
     const session = sandbox.sessions[sessionId];
     if (!session) continue;
-    const gitInfo = session.gitInfo
-      ?? acpGitInfoByDirectory.value[session.directory ?? sandbox.directory]
-      ?? acpGitInfoByDirectory.value[sandbox.directory];
+    const gitInfo =
+      session.gitInfo ??
+      acpGitInfoByDirectory.value[session.directory ?? sandbox.directory] ??
+      acpGitInfoByDirectory.value[sandbox.directory];
     return gitInfo?.commonRoot || gitInfo?.root;
   }
   return undefined;
@@ -4508,7 +4522,9 @@ async function deleteWorktree(payload: {
 }
 
 async function handleNewSessionInSandbox(payload: { worktree: string; directory: string }) {
-  await backendSessionLifecycle.createSessionInDirectory(payload.directory, { reuseExisting: false });
+  await backendSessionLifecycle.createSessionInDirectory(payload.directory, {
+    reuseExisting: false,
+  });
 }
 
 function handleOpenProjectDirectory() {
@@ -5117,9 +5133,58 @@ function reserveRootHistoryRequestId() {
   return primaryHistoryRequestId;
 }
 
-async function fetchDescendantSessionHistories(rootSessionId: string, rootRequestId: number) {
-  const descendantSessionIds = Array.from(allowedSessionIds.value).filter(
-    (id) => id !== rootSessionId,
+function collectReferencedSubagentSessionIds(rootSessionId: string): string[] {
+  const parts: MessagePart[] = [];
+  for (const messageRef of msg.messages.value.values()) {
+    const entry = messageRef.value;
+    if (entry.info?.sessionID !== rootSessionId) continue;
+    parts.push(...msg.getParts(entry.info.id));
+  }
+  return resolveThreadSubagentSessions(parts, rootSessionId).map(({ sessionId }) => sessionId);
+}
+
+function hydrateReferencedSubagents(
+  rootSessionId: string,
+  reloadRequestId: number,
+): Promise<string[]> {
+  if (activeBackendKind.value !== 'opencode') return Promise.resolve([]);
+  const directory = normalizeDirectory(activeDirectory.value);
+  const sessionIds = collectReferencedSubagentSessionIds(rootSessionId);
+  if (!directory || sessionIds.length === 0) return Promise.resolve([]);
+
+  referencedSubagentHydrationSequence += 1;
+  const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
+  return new Promise<string[]>((resolve) => {
+    pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
+    ge.sendToWorker({
+      type: 'hydrate-referenced-subagents',
+      requestId,
+      rootSessionId,
+      directory,
+      sessionIds,
+    });
+  });
+}
+
+function handleReferencedSubagentHydrationResult(
+  message: ReferencedSubagentHydrationResult,
+): boolean {
+  const pending = pendingReferencedSubagentHydrations.get(message.requestId);
+  if (!pending) return true;
+  pendingReferencedSubagentHydrations.delete(message.requestId);
+  const matchesRoot = pending.rootSessionId === message.rootSessionId;
+  pending.resolve(message.cancelled || !matchesRoot ? [] : message.sessionIds);
+  return true;
+}
+
+async function fetchDescendantSessionHistories(
+  rootSessionId: string,
+  rootRequestId: number,
+  referencedSessionIds?: string[],
+) {
+  const candidates = referencedSessionIds ?? Array.from(allowedSessionIds.value);
+  const descendantSessionIds = Array.from(new Set(candidates)).filter(
+    (id) => id !== rootSessionId && allowedSessionIds.value.has(id),
   );
   if (descendantSessionIds.length === 0) return;
   await Promise.all(
@@ -5131,16 +5196,19 @@ function scheduleDescendantSessionHistoryHydration(
   rootSessionId: string,
   rootRequestId: number,
   reloadRequestId: number,
+  referencedSessionIds?: string[],
 ) {
   requestAnimationFrame(() => {
     if (reloadRequestId !== sessionReloadRequestId.value) return;
     if (selectedSessionId.value !== rootSessionId) return;
-    void fetchDescendantSessionHistories(rootSessionId, rootRequestId).then(() => {
-      if (reloadRequestId !== sessionReloadRequestId.value) return;
-      if (selectedSessionId.value !== rootSessionId) return;
-      hydratedDescendantSessionIds.add(rootSessionId);
-      void reloadTodosForAllowedSessions();
-    });
+    void fetchDescendantSessionHistories(rootSessionId, rootRequestId, referencedSessionIds).then(
+      () => {
+        if (reloadRequestId !== sessionReloadRequestId.value) return;
+        if (selectedSessionId.value !== rootSessionId) return;
+        hydratedDescendantSessionIds.add(rootSessionId);
+        void reloadTodosForAllowedSessions();
+      },
+    );
   });
 }
 
@@ -6999,6 +7067,9 @@ function markFullTreeReady() {
 }
 
 ge.setWorkerMessageHandler((message) => {
+  if (message.type === 'state.referenced-subagents-hydrated') {
+    return handleReferencedSubagentHydrationResult(message);
+  }
   const handled = serverState.handleStateMessage(message);
   if (!handled) return false;
   if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
@@ -7262,16 +7333,18 @@ async function hydrateAcpTopPanelGitInfo() {
   const directories = Object.values(project.sandboxes)
     .map((sandbox) => sandbox.directory)
     .filter((directory) => !acpGitInfoCheckedDirectories.has(directory));
-  await Promise.all(directories.map(async (directory) => {
-    acpGitInfoCheckedDirectories.add(directory);
-    try {
-      const gitInfo = parseAcpGitInfo(await getVcsInfo(directory));
-      if (!gitInfo) return;
-      acpGitInfoByDirectory.value = { ...acpGitInfoByDirectory.value, [directory]: gitInfo };
-    } catch (error) {
-      log('ACP TopPanel Git metadata probe failed', { directory, error });
-    }
-  }));
+  await Promise.all(
+    directories.map(async (directory) => {
+      acpGitInfoCheckedDirectories.add(directory);
+      try {
+        const gitInfo = parseAcpGitInfo(await getVcsInfo(directory));
+        if (!gitInfo) return;
+        acpGitInfoByDirectory.value = { ...acpGitInfoByDirectory.value, [directory]: gitInfo };
+      } catch (error) {
+        log('ACP TopPanel Git metadata probe failed', { directory, error });
+      }
+    }),
+  );
 }
 
 const ptySupported = computed(() => {
@@ -7446,6 +7519,7 @@ const backendSessionReload = useBackendSessionReload({
   waitForPendingRenders,
   reserveRootHistoryRequestId,
   scheduleDescendantSessionHistoryHydration,
+  hydrateReferencedSubagents,
   anchorOutputToBottom,
   restoreShellSessions,
   reloadTodosForAllowedSessions,
@@ -7765,7 +7839,8 @@ const TOOL_WINDOW_SUPPORTED = new Set([
 ]);
 
 function shouldRenderToolWindow(tool: string) {
-  return !TOOL_WINDOW_HIDDEN.has(tool) && TOOL_WINDOW_SUPPORTED.has(tool);
+  const normalizedTool = normalizeToolName(tool);
+  return !TOOL_WINDOW_HIDDEN.has(normalizedTool) && TOOL_WINDOW_SUPPORTED.has(normalizedTool);
 }
 
 function parsePatchTextBlocks(patchText: string) {
@@ -8410,6 +8485,8 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
       parentThreadId: sessionId,
       sessionLabel: label,
       theme: shikiTheme.value,
+      onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),
+      onReasoningClick: (part: ReasoningPart) => handleOpenHistoryReasoning({ part }),
     },
     title: `${t('app.windowTitles.subagentHistory')} · ${label}`,
     scroll: 'follow',

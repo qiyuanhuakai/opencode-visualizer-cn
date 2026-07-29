@@ -111,9 +111,9 @@ describe('useBackendSessionReload', () => {
     const fetchRootSessionHistory = vi.fn();
     const scheduleDescendantSessionHistoryHydration = vi.fn();
     const reload = useBackendSessionReload({
-      activeBackendKind: ref('opencode'),
+      activeBackendKind: ref<'opencode'>('opencode'),
       activeDirectory: ref('/repo'),
-      uiInitState: ref('ready'),
+      uiInitState: ref<'ready'>('ready'),
       isBootstrapping: ref(false),
       isLoadingHistory: ref(false),
       deferredSessionReloadId: ref<string | null>(null),
@@ -148,5 +148,120 @@ describe('useBackendSessionReload', () => {
     expect(msg.tryLoadFromCache).toHaveBeenCalledWith('session-1');
     expect(fetchRootSessionHistory).not.toHaveBeenCalled();
     expect(scheduleDescendantSessionHistoryHydration).toHaveBeenCalledWith('session-1', 7, 1);
+  });
+
+  it('waits for referenced subagent metadata before hydrating exact child histories', async () => {
+    let finishHydration: (sessionIds: string[]) => void = () => {};
+    const hydrateReferencedSubagents = vi.fn(
+      () =>
+        new Promise<string[]>((resolve) => {
+          finishHydration = resolve;
+        }),
+    );
+    const scheduleDescendantSessionHistoryHydration = vi.fn();
+    const sessionReloadRequestId = ref(0);
+    const options = {
+      activeBackendKind: ref<'opencode'>('opencode'),
+      activeDirectory: ref('/repo'),
+      uiInitState: ref<'ready'>('ready'),
+      isBootstrapping: ref(false),
+      isLoadingHistory: ref(false),
+      deferredSessionReloadId: ref<string | null>(null),
+      sessionReloadRequestId,
+      hydratedDescendantSessionIds: new Set<string>(),
+      msg: {
+        saveSessionState: vi.fn(),
+        reset: vi.fn(),
+        loadHistory: vi.fn(),
+        tryLoadFromCache: vi.fn().mockReturnValue(true),
+      },
+      fwCloseAll: vi.fn(),
+      resetFollow: vi.fn(),
+      reasoningReset: vi.fn(),
+      subagentWindowsReset: vi.fn(),
+      clearRetryStatus: vi.fn(),
+      codexApi: { activeThreadId: ref(''), selectThread: vi.fn() },
+      codexHistory: ref([]),
+      codexReapplyBackfill: vi.fn(),
+      fetchRootSessionHistory: vi.fn(),
+      waitForPendingRenders: vi.fn(),
+      reserveRootHistoryRequestId: vi.fn().mockReturnValue(12),
+      scheduleDescendantSessionHistoryHydration,
+      hydrateReferencedSubagents,
+      anchorOutputToBottom: vi.fn().mockResolvedValue(undefined),
+      restoreShellSessions: vi.fn().mockResolvedValue(undefined),
+      reloadTodosForAllowedSessions: vi.fn(),
+      fetchPendingPermissions: vi.fn(),
+      fetchPendingQuestions: vi.fn(),
+      focusInput: vi.fn(),
+    };
+    const reload = useBackendSessionReload(options);
+
+    const pendingReload = reload.reloadSelectedSessionState('root-session');
+    await vi.waitFor(() =>
+      expect(hydrateReferencedSubagents).toHaveBeenCalledWith('root-session', 1),
+    );
+    expect(scheduleDescendantSessionHistoryHydration).not.toHaveBeenCalled();
+
+    finishHydration(['child-a', 'child-b']);
+    await pendingReload;
+
+    expect(scheduleDescendantSessionHistoryHydration).toHaveBeenCalledWith('root-session', 12, 1, [
+      'child-a',
+      'child-b',
+    ]);
+  });
+
+  it('does not schedule child history after a metadata wait is superseded', async () => {
+    let finishHydration: (sessionIds: string[]) => void = () => {};
+    const sessionReloadRequestId = ref(0);
+    const scheduleDescendantSessionHistoryHydration = vi.fn();
+    const options = {
+      activeBackendKind: ref<'opencode'>('opencode'),
+      activeDirectory: ref('/repo'),
+      uiInitState: ref<'ready'>('ready'),
+      isBootstrapping: ref(false),
+      isLoadingHistory: ref(false),
+      deferredSessionReloadId: ref<string | null>(null),
+      sessionReloadRequestId,
+      hydratedDescendantSessionIds: new Set<string>(),
+      msg: {
+        saveSessionState: vi.fn(),
+        reset: vi.fn(),
+        loadHistory: vi.fn(),
+        tryLoadFromCache: vi.fn().mockReturnValue(true),
+      },
+      fwCloseAll: vi.fn(),
+      resetFollow: vi.fn(),
+      reasoningReset: vi.fn(),
+      subagentWindowsReset: vi.fn(),
+      clearRetryStatus: vi.fn(),
+      codexApi: { activeThreadId: ref(''), selectThread: vi.fn() },
+      codexHistory: ref([]),
+      codexReapplyBackfill: vi.fn(),
+      fetchRootSessionHistory: vi.fn(),
+      waitForPendingRenders: vi.fn(),
+      reserveRootHistoryRequestId: vi.fn().mockReturnValue(3),
+      scheduleDescendantSessionHistoryHydration,
+      hydrateReferencedSubagents: () =>
+        new Promise<string[]>((resolve) => {
+          finishHydration = resolve;
+        }),
+      anchorOutputToBottom: vi.fn().mockResolvedValue(undefined),
+      restoreShellSessions: vi.fn().mockResolvedValue(undefined),
+      reloadTodosForAllowedSessions: vi.fn(),
+      fetchPendingPermissions: vi.fn(),
+      fetchPendingQuestions: vi.fn(),
+      focusInput: vi.fn(),
+    };
+    const reload = useBackendSessionReload(options);
+
+    const pendingReload = reload.reloadSelectedSessionState('root-session');
+    await vi.waitFor(() => expect(options.reserveRootHistoryRequestId).toHaveBeenCalled());
+    sessionReloadRequestId.value += 1;
+    finishHydration(['stale-child']);
+    await pendingReload;
+
+    expect(scheduleDescendantSessionHistoryHydration).not.toHaveBeenCalled();
   });
 });
