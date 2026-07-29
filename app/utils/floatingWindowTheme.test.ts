@@ -8,6 +8,7 @@ describe('floatingWindowTheme', () => {
     expect(resolveFloatingWindowThemeType('reasoning:123')).toBe('reasoning');
     expect(resolveFloatingWindowThemeType('history-reasoning:123')).toBe('reasoning');
     expect(resolveFloatingWindowThemeType('subagent:123')).toBe('subagent');
+    expect(resolveFloatingWindowThemeType('subagent-history:123')).toBe('subagent');
     expect(resolveFloatingWindowThemeType('file-viewer:/tmp/a.ts')).toBe('file');
     expect(resolveFloatingWindowThemeType('git-diff:all')).toBe('diff');
     expect(resolveFloatingWindowThemeType('message-diff:1')).toBe('diff');

@@ -34,6 +34,7 @@ export function resolveFloatingWindowThemeType(
   if (key.startsWith('shell:')) return 'shell';
   if (key.startsWith('reasoning:') || key.startsWith('history-reasoning:')) return 'reasoning';
   if (key.startsWith('subagent:')) return 'subagent';
+  if (key.startsWith('subagent-history:')) return 'subagent';
   if (key.startsWith('file-viewer:')) return 'file';
   if (
     key.startsWith('git-diff:') ||
