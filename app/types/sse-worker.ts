@@ -35,6 +35,13 @@ export type TabToWorkerMessage =
       directory: string;
     }
   | {
+      type: 'hydrate-referenced-subagents';
+      requestId: string;
+      rootSessionId: string;
+      directory: string;
+      sessionIds: string[];
+    }
+  | {
       type: 'sandbox.deleted';
       projectId: string;
       directory: string;
@@ -82,6 +89,13 @@ export type WorkerToTabMessage =
     }
   | {
       type: 'state.background-hydration-complete';
+    }
+  | {
+      type: 'state.referenced-subagents-hydrated';
+      requestId: string;
+      rootSessionId: string;
+      sessionIds: string[];
+      cancelled: boolean;
     }
   | {
       type: 'notification.show';

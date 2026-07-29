@@ -23,6 +23,13 @@ type SharedWorkerSelf = {
   onconnect: ((event: MessageEvent) => void) | null;
 };
 
+type ReferencedSubagentHydration = {
+  requestId: string;
+  rootSessionId: string;
+  generation: number;
+  controller: AbortController;
+};
+
 declare const self: SharedWorkerSelf;
 
 type ConnectionState = {
@@ -52,6 +59,7 @@ type ConnectionState = {
   backgroundHydrationRequested: boolean;
   backgroundHydrationStarted: boolean;
   backgroundHydrationCompleteSent: boolean;
+  referencedSubagentHydrationByPort: Map<MessagePort, ReferencedSubagentHydration>;
 };
 
 const connections = new Map<string, ConnectionState>();
@@ -611,6 +619,99 @@ async function runOpencodeReadTask<T>(state: ConnectionState, task: () => Promis
   }
 }
 
+function sendReferencedSubagentHydrationResult(
+  port: MessagePort,
+  hydration: ReferencedSubagentHydration,
+  sessionIds: string[],
+  cancelled: boolean,
+) {
+  send(port, {
+    type: 'state.referenced-subagents-hydrated',
+    requestId: hydration.requestId,
+    rootSessionId: hydration.rootSessionId,
+    sessionIds,
+    cancelled,
+  });
+}
+
+function cancelReferencedSubagentHydration(state: ConnectionState, port: MessagePort) {
+  const hydration = state.referencedSubagentHydrationByPort.get(port);
+  if (!hydration) return;
+  state.referencedSubagentHydrationByPort.delete(port);
+  hydration.controller.abort();
+  sendReferencedSubagentHydrationResult(port, hydration, [], true);
+}
+
+function cancelAllReferencedSubagentHydrations(state: ConnectionState) {
+  for (const port of state.referencedSubagentHydrationByPort.keys()) {
+    cancelReferencedSubagentHydration(state, port);
+  }
+}
+
+async function hydrateReferencedSubagents(
+  state: ConnectionState,
+  port: MessagePort,
+  request: Extract<TabToWorkerMessage, { type: 'hydrate-referenced-subagents' }>,
+) {
+  cancelReferencedSubagentHydration(state, port);
+
+  const requestId = request.requestId.trim();
+  const rootSessionId = request.rootSessionId.trim();
+  const directory = normalizeDirectory(request.directory);
+  const sessionIds = Array.from(
+    new Set(request.sessionIds.map((sessionId) => sessionId.trim()).filter(Boolean)),
+  ).filter((sessionId) => sessionId !== rootSessionId);
+  const hydration: ReferencedSubagentHydration = {
+    requestId,
+    rootSessionId,
+    generation: state.hydrationGeneration,
+    controller: new AbortController(),
+  };
+  const getSession = opencodeBackend.getSession;
+
+  if (!requestId || !rootSessionId || !directory || sessionIds.length === 0 || !getSession) {
+    sendReferencedSubagentHydrationResult(port, hydration, [], false);
+    return;
+  }
+
+  state.referencedSubagentHydrationByPort.set(port, hydration);
+  const results = await mapWithConcurrency(sessionIds, 2, async (sessionId) => {
+    const rawSession = await runOpencodeReadTask(state, () =>
+      getSession(sessionId, directory, { signal: hydration.controller.signal }),
+    );
+    if (!isSessionInfo(rawSession)) return null;
+    if (rawSession.id !== sessionId || rawSession.parentID?.trim() !== rootSessionId) return null;
+    if (normalizeDirectory(rawSession.directory) !== directory) return null;
+    return rawSession;
+  });
+
+  const activeHydration = state.referencedSubagentHydrationByPort.get(port);
+  if (activeHydration !== hydration) return;
+  if (
+    hydration.controller.signal.aborted ||
+    hydration.generation !== state.hydrationGeneration ||
+    !isCurrentConnection(state)
+  ) {
+    cancelReferencedSubagentHydration(state, port);
+    return;
+  }
+
+  const sessions = results.flatMap((result) =>
+    result.status === 'fulfilled' && result.value ? [result.value] : [],
+  );
+  state.stateBuilder.applyAuthoritativeSessions(sessions);
+  const projectIds = new Set(sessions.map((session) => session.projectID.trim()).filter(Boolean));
+  for (const projectId of projectIds) emitProjectUpdated(state, projectId);
+
+  state.referencedSubagentHydrationByPort.delete(port);
+  sendReferencedSubagentHydrationResult(
+    port,
+    hydration,
+    sessions.map((session) => session.id),
+    false,
+  );
+}
+
 function collectProjectDirectories(projects: Array<Record<string, unknown>>) {
   const directories: string[] = [];
   const seen = new Set<string>();
@@ -662,7 +763,9 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
     const liveProject = liveProjectId ? state.stateBuilder.getProject(liveProjectId) : undefined;
     if (!liveProject?.sandboxes[normalizedDirectory]) return;
 
-    const sessions = asObjectArray(rawSessions) as Parameters<typeof state.stateBuilder.applySessions>[0];
+    const sessions = asObjectArray(rawSessions) as Parameters<
+      typeof state.stateBuilder.applySessions
+    >[0];
     state.stateBuilder.applySessions(sessions);
     state.stateBuilder.applyStatuses(asStatusMap(rawStatuses));
 
@@ -728,7 +831,10 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
     const branch = asString(vcsInfo.branch);
     if (branch) {
       state.stateBuilder.applyVcsInfo(normalizedDirectory, { branch });
-      emitProjectUpdated(state, state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory));
+      emitProjectUpdated(
+        state,
+        state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory),
+      );
     }
 
     state.vcsHydratedDirectories.add(normalizedDirectory);
@@ -755,9 +861,17 @@ function startBackgroundHydration(state: ConnectionState) {
   void (async () => {
     await mapWithConcurrency(directories, BACKGROUND_HYDRATION_CONCURRENCY, async (directory) => {
       if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) return;
-      await Promise.allSettled([loadDirectorySessions(state, directory), loadDirectoryVcs(state, directory)]);
+      await Promise.allSettled([
+        loadDirectorySessions(state, directory),
+        loadDirectoryVcs(state, directory),
+      ]);
     });
-    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation || state.backgroundHydrationCompleteSent) return;
+    if (
+      !isCurrentConnection(state) ||
+      state.hydrationGeneration !== generation ||
+      state.backgroundHydrationCompleteSent
+    )
+      return;
     state.backgroundHydrationCompleteSent = true;
     broadcast(state, { type: 'state.background-hydration-complete' });
   })();
@@ -1026,7 +1140,10 @@ async function bootstrapState(state: ConnectionState, forceRestart = false): Pro
     state.isBootstrappingState = true;
     const generation = state.hydrationGeneration;
     const projects = asObjectArray<Record<string, unknown>>(
-      await runOpencodeReadTask(state, () => opencodeBackend.listProjects?.() ?? Promise.resolve([])),
+      await runOpencodeReadTask(
+        state,
+        () => opencodeBackend.listProjects?.() ?? Promise.resolve([]),
+      ),
     );
     if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) {
       aborted = true;
@@ -1089,6 +1206,7 @@ function detachPort(port: MessagePort) {
   portToKey.delete(port);
   const state = connections.get(key);
   if (!state) return;
+  cancelReferencedSubagentHydration(state, port);
   if (state.activeSelection?.port === port) {
     state.activeSelection = null;
   }
@@ -1096,7 +1214,16 @@ function detachPort(port: MessagePort) {
   cleanupIfUnused(state);
 }
 
-function createConnectionState(baseUrl: string, authorization?: string, errorMessages?: { emptyBaseUrl?: string; authenticationFailed?: string; streamClosed?: string; httpError?: (status: number) => string }) {
+function createConnectionState(
+  baseUrl: string,
+  authorization?: string,
+  errorMessages?: {
+    emptyBaseUrl?: string;
+    authenticationFailed?: string;
+    streamClosed?: string;
+    httpError?: (status: number) => string;
+  },
+) {
   const key = toKey(baseUrl, authorization);
   let state: ConnectionState;
   state = {
@@ -1123,6 +1250,7 @@ function createConnectionState(baseUrl: string, authorization?: string, errorMes
     backgroundHydrationRequested: false,
     backgroundHydrationStarted: false,
     backgroundHydrationCompleteSent: false,
+    referencedSubagentHydrationByPort: new Map(),
     client: createSseConnection({
       onPacket(packet) {
         broadcast(state, { type: 'packet', packet });
@@ -1132,6 +1260,7 @@ function createConnectionState(baseUrl: string, authorization?: string, errorMes
         state.connected = true;
         broadcast(state, { type: 'connection.open' });
         if (isReconnect) {
+          cancelAllReferencedSubagentHydrations(state);
           state.hydrationGeneration += 1;
           broadcast(state, { type: 'connection.reconnected' });
         }
@@ -1151,7 +1280,17 @@ function createConnectionState(baseUrl: string, authorization?: string, errorMes
   return state;
 }
 
-function attachPort(port: MessagePort, baseUrl: string, authorization?: string, errorMessages?: { emptyBaseUrl?: string; authenticationFailed?: string; streamClosed?: string; httpError?: (status: number) => string }) {
+function attachPort(
+  port: MessagePort,
+  baseUrl: string,
+  authorization?: string,
+  errorMessages?: {
+    emptyBaseUrl?: string;
+    authenticationFailed?: string;
+    streamClosed?: string;
+    httpError?: (status: number) => string;
+  },
+) {
   detachPort(port);
   const key = toKey(baseUrl, authorization);
   const existing = connections.get(key);
@@ -1182,7 +1321,10 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
 
   if (message.type === 'connect') {
     if (!message.baseUrl) {
-      send(port, { type: 'connection.error', message: message.errorMessages?.emptyBaseUrl ?? 'SSE base URL is empty.' });
+      send(port, {
+        type: 'connection.error',
+        message: message.errorMessages?.emptyBaseUrl ?? 'SSE base URL is empty.',
+      });
       return;
     }
     attachPort(port, message.baseUrl, message.authorization, message.errorMessages);
@@ -1207,16 +1349,31 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
     return;
   }
 
+  if (message.type === 'hydrate-referenced-subagents') {
+    void hydrateReferencedSubagents(state, port, message).catch(() => {
+      const hydration = state.referencedSubagentHydrationByPort.get(port);
+      if (!hydration || hydration.requestId !== message.requestId.trim()) return;
+      state.referencedSubagentHydrationByPort.delete(port);
+      sendReferencedSubagentHydrationResult(port, hydration, [], false);
+    });
+    return;
+  }
+
   if (message.type === 'selection.active') {
     const projectId = message.projectId.trim();
     const sessionId = message.sessionId.trim();
     const directory = normalizeDirectory(message.directory ?? '');
     if (!projectId || !sessionId) {
+      cancelReferencedSubagentHydration(state, port);
       if (state.activeSelection?.port === port) {
         state.activeSelection = null;
       }
       state.pendingSelectedDirectory = null;
       return;
+    }
+    const activeSubagentHydration = state.referencedSubagentHydrationByPort.get(port);
+    if (activeSubagentHydration && activeSubagentHydration.rootSessionId !== sessionId) {
+      cancelReferencedSubagentHydration(state, port);
     }
     state.activeSelection = {
       port,

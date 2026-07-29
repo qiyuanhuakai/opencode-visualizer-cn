@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => {
     configure: vi.fn(),
     listProjects: vi.fn(),
     listSessions: vi.fn(),
+    getSession: vi.fn(),
     getSessionStatusMap: vi.fn(),
     getVcsInfo: vi.fn(),
   };
@@ -105,6 +106,7 @@ beforeEach(() => {
   vi.stubGlobal('self', workerSelf);
   mocks.adapter.listProjects.mockResolvedValue([project(['/a', '/b'])]);
   mocks.adapter.listSessions.mockResolvedValue([]);
+  mocks.adapter.getSession.mockResolvedValue(undefined);
   mocks.adapter.getSessionStatusMap.mockResolvedValue({});
   mocks.adapter.getVcsInfo.mockResolvedValue({ branch: 'main' });
 });
@@ -115,6 +117,115 @@ afterEach(() => {
 });
 
 describe('SSE SharedWorker hydration', () => {
+  it('hydrates only referenced subagents before acknowledging the caller', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    mocks.adapter.listSessions.mockClear();
+    mocks.adapter.getSession
+      .mockResolvedValueOnce({
+        id: 'child-a',
+        slug: 'child-a',
+        projectID: 'project',
+        directory: '/a',
+        parentID: 'root',
+        title: 'Research persistence',
+        version: '1',
+        time: { created: 1, updated: 2 },
+      })
+      .mockResolvedValueOnce({
+        id: 'foreign-child',
+        slug: 'foreign-child',
+        projectID: 'project',
+        directory: '/a',
+        parentID: 'other-root',
+        title: 'Foreign',
+        version: '1',
+        time: { created: 1, updated: 2 },
+      });
+
+    post(worker, {
+      type: 'hydrate-referenced-subagents',
+      requestId: 'hydrate-1',
+      rootSessionId: 'root',
+      directory: '/a',
+      sessionIds: ['child-a', 'foreign-child', 'child-a'],
+    });
+
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'state.referenced-subagents-hydrated')).toHaveLength(1),
+    );
+
+    expect(mocks.adapter.getSession.mock.calls.map(([sessionId]) => sessionId)).toEqual([
+      'child-a',
+      'foreign-child',
+    ]);
+    expect(mocks.adapter.listSessions).not.toHaveBeenCalled();
+    const completion = messagesOf(worker.messages, 'state.referenced-subagents-hydrated')[0];
+    expect(completion).toMatchObject({
+      requestId: 'hydrate-1',
+      rootSessionId: 'root',
+      sessionIds: ['child-a'],
+      cancelled: false,
+    });
+    const projectUpdateIndex = worker.messages.findIndex(
+      (message) =>
+        message.type === 'state.project-updated' &&
+        message.project.sandboxes['/a']?.sessions['child-a']?.title === 'Research persistence',
+    );
+    const completionIndex = worker.messages.indexOf(completion);
+    expect(projectUpdateIndex).toBeGreaterThanOrEqual(0);
+    expect(completionIndex).toBeGreaterThan(projectUpdateIndex);
+  });
+
+  it('cancels referenced subagent hydration when the selected root changes', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const child = deferred<unknown>();
+    mocks.adapter.getSession.mockReturnValue(child.promise);
+
+    post(worker, {
+      type: 'hydrate-referenced-subagents',
+      requestId: 'hydrate-stale',
+      rootSessionId: 'root',
+      directory: '/a',
+      sessionIds: ['child'],
+    });
+    await vi.waitFor(() => expect(mocks.adapter.getSession).toHaveBeenCalledTimes(1));
+    post(worker, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'other-root',
+      directory: '/a',
+    });
+
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'state.referenced-subagents-hydrated')).toContainEqual({
+        type: 'state.referenced-subagents-hydrated',
+        requestId: 'hydrate-stale',
+        rootSessionId: 'root',
+        sessionIds: [],
+        cancelled: true,
+      }),
+    );
+    child.resolve({
+      id: 'child',
+      slug: 'child',
+      projectID: 'project',
+      directory: '/a',
+      parentID: 'root',
+      title: 'Stale child',
+      version: '1',
+      time: { created: 1, updated: 2 },
+    });
+    await flush();
+
+    expect(
+      messagesOf(worker.messages, 'state.project-updated').some(
+        ({ project: updated }) => updated.sandboxes['/a']?.sessions.child?.title === 'Stale child',
+      ),
+    ).toBe(false);
+  });
+
   it('emits topology bootstrap before any directory request resolves', async () => {
     const sessions = deferred<unknown>();
     mocks.adapter.listSessions.mockReturnValue(sessions.promise);
@@ -138,32 +249,41 @@ describe('SSE SharedWorker hydration', () => {
     post(worker, { type: 'load-sessions', directory: '/a' });
     post(worker, { type: 'load-sessions', directory: '/a' });
 
-    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.directory-hydration-updated')).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'state.directory-hydration-updated')).toHaveLength(2),
+    );
     expect(mocks.adapter.listSessions).toHaveBeenCalledTimes(1);
     expect(mocks.adapter.listSessions).toHaveBeenCalledWith({ directory: '/a', roots: true });
     expect(mocks.adapter.getVcsInfo).not.toHaveBeenCalled();
-    expect(messagesOf(worker.messages, 'state.directory-hydration-updated').map(({ hydration }) => hydration.status)).toEqual([
-      'loading',
-      'loaded',
-    ]);
+    expect(
+      messagesOf(worker.messages, 'state.directory-hydration-updated').map(
+        ({ hydration }) => hydration.status,
+      ),
+    ).toEqual(['loading', 'loaded']);
   });
 
   it('reports an error and permits a later retry', async () => {
     const worker = await connectWorker();
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
     mocks.adapter.listSessions.mockReset();
-    mocks.adapter.listSessions.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce([]);
+    mocks.adapter.listSessions
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce([]);
 
     post(worker, { type: 'load-sessions', directory: '/a' });
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.directory-hydration-updated').at(-1)?.hydration).toEqual({
+      expect(
+        messagesOf(worker.messages, 'state.directory-hydration-updated').at(-1)?.hydration,
+      ).toEqual({
         status: 'error',
         error: 'offline',
       }),
     );
     post(worker, { type: 'load-sessions', directory: '/a' });
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.directory-hydration-updated').at(-1)?.hydration).toEqual({ status: 'loaded' }),
+      expect(
+        messagesOf(worker.messages, 'state.directory-hydration-updated').at(-1)?.hydration,
+      ).toEqual({ status: 'loaded' }),
     );
     expect(mocks.adapter.listSessions).toHaveBeenCalledTimes(2);
   });
@@ -200,17 +320,33 @@ describe('SSE SharedWorker hydration', () => {
         active -= 1;
       }
     });
-    post(worker, { type: 'selection.active', projectId: 'project', sessionId: 'session', directory: '/a' });
+    post(worker, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'session',
+      directory: '/a',
+    });
 
-    for (let round = 0; round < 12 && messagesOf(worker.messages, 'state.background-hydration-complete').length === 0; round += 1) {
+    for (
+      let round = 0;
+      round < 12 && messagesOf(worker.messages, 'state.background-hydration-complete').length === 0;
+      round += 1
+    ) {
       pending.splice(0).forEach((item) => item.resolve([]));
       await flush();
     }
-    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.background-hydration-complete')).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'state.background-hydration-complete')).toHaveLength(1),
+    );
     console.info(`observed max active directory count: ${maxActive}`);
     expect(maxActive).toBeLessThanOrEqual(2);
     expect(mocks.adapter.getVcsInfo).toHaveBeenCalledTimes(4);
-    post(worker, { type: 'selection.active', projectId: 'project', sessionId: 'other', directory: '/b' });
+    post(worker, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'other',
+      directory: '/b',
+    });
     await flush();
     expect(messagesOf(worker.messages, 'state.background-hydration-complete')).toHaveLength(1);
   });
@@ -225,7 +361,9 @@ describe('SSE SharedWorker hydration', () => {
     sessions.resolve([]);
 
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']).toBeUndefined(),
+      expect(
+        messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a'],
+      ).toBeUndefined(),
     );
     expect(mocks.adapter.listSessions).toHaveBeenCalledTimes(1);
   });
@@ -237,8 +375,15 @@ describe('SSE SharedWorker hydration', () => {
     const first = deferred<unknown>();
     const second = deferred<unknown>();
     mocks.adapter.listSessions.mockReset();
-    mocks.adapter.listSessions.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    post(worker, { type: 'selection.active', projectId: 'project', sessionId: 'session', directory: '/a' });
+    mocks.adapter.listSessions
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    post(worker, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'session',
+      directory: '/a',
+    });
     await vi.waitFor(() => expect(mocks.adapter.listSessions).toHaveBeenCalledTimes(1));
     latestCallbacks().onOpen(true);
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2));
@@ -247,7 +392,9 @@ describe('SSE SharedWorker hydration', () => {
     await flush();
     expect(messagesOf(worker.messages, 'state.background-hydration-complete')).toHaveLength(0);
     second.resolve([]);
-    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.background-hydration-complete')).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'state.background-hydration-complete')).toHaveLength(1),
+    );
   });
 
   it('flushes an SSE packet buffered before topology installation', async () => {
@@ -260,7 +407,12 @@ describe('SSE SharedWorker hydration', () => {
         type: 'session.created',
         properties: {
           info: {
-            id: 'session', slug: 'session', projectID: 'project', directory: '/a', title: 'Session', version: '1',
+            id: 'session',
+            slug: 'session',
+            projectID: 'project',
+            directory: '/a',
+            title: 'Session',
+            version: '1',
             time: { created: 1, updated: 1 },
           },
         },
@@ -269,7 +421,9 @@ describe('SSE SharedWorker hydration', () => {
     projects.resolve([project(['/a'])]);
 
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
-    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.project-updated')).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'state.project-updated')).toHaveLength(1),
+    );
   });
 
   it('suppresses a stale VCS read that resolves after a reconnect bootstrap', async () => {
@@ -277,12 +431,19 @@ describe('SSE SharedWorker hydration', () => {
     const staleVcs = deferred<unknown>();
     const freshVcs = deferred<unknown>();
     mocks.adapter.getVcsInfo.mockReset();
-    mocks.adapter.getVcsInfo.mockReturnValueOnce(staleVcs.promise).mockReturnValueOnce(freshVcs.promise);
+    mocks.adapter.getVcsInfo
+      .mockReturnValueOnce(staleVcs.promise)
+      .mockReturnValueOnce(freshVcs.promise);
 
     const worker = await connectWorker();
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
 
-    post(worker, { type: 'selection.active', projectId: 'project', sessionId: 'session', directory: '/a' });
+    post(worker, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'session',
+      directory: '/a',
+    });
     await vi.waitFor(() => expect(mocks.adapter.getVcsInfo).toHaveBeenCalledTimes(1));
 
     latestCallbacks().onOpen(true);
@@ -314,7 +475,12 @@ describe('SSE SharedWorker hydration', () => {
     mocks.adapter.listProjects.mockReturnValue(staleProjects.promise);
     const first = await connectWorker();
 
-    post(first, { type: 'selection.active', projectId: 'project', sessionId: 'session', directory: '/stale' });
+    post(first, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'session',
+      directory: '/stale',
+    });
     post(first, { type: 'disconnect' });
 
     mocks.adapter.listProjects.mockResolvedValue([project(['/x'])]);
@@ -328,7 +494,10 @@ describe('SSE SharedWorker hydration', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // The stale run must not apply topology or kick off hydration for its directories.
-    expect(mocks.adapter.listSessions).not.toHaveBeenCalledWith({ directory: '/stale', roots: true });
+    expect(mocks.adapter.listSessions).not.toHaveBeenCalledWith({
+      directory: '/stale',
+      roots: true,
+    });
     expect(mocks.adapter.getVcsInfo).not.toHaveBeenCalledWith('/stale');
     expect(messagesOf(second.messages, 'state.bootstrap')).toHaveLength(1);
     expect(messagesOf(second.messages, 'state.bootstrap')[0]?.sessionHydrationByDirectory).toEqual({
