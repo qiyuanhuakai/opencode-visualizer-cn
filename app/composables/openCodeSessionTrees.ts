@@ -49,6 +49,7 @@ export function buildNativeOpenCodeTopPanelTreeData(params: {
               status: (session.status ?? 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
               timeCreated: session.timeCreated,
               timeUpdated: session.timeUpdated,
+              archivedAt: session.timeArchived,
               pinnedAt: sessionPinnedAt,
               isPinned: sessionPinnedAt > 0,
             };
