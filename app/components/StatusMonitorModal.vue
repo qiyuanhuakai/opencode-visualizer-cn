@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, computed, onBeforeUnmount } from 'vue';
+import { ref, watch, computed, nextTick, onBeforeUnmount } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import {
@@ -97,6 +97,7 @@ const tokenModelName = ref<string>('');
 const tokenContextLimit = ref<number>(0);
 const tokenUserMessages = ref<number>(0);
 const tokenAssistantMessages = ref<number>(0);
+const tokenLoading = ref(false);
 const codexApiKeyInput = ref('');
 
 const loading = ref(false);
@@ -106,6 +107,7 @@ const togglingSkill = ref<string | null>(null);
 const hasLoaded = ref(false);
 
 let refreshPromise: Promise<void> | null = null;
+let refreshPromiseRequestId = 0;
 let refreshRequestId = 0;
 let tokenRequestId = 0;
 
@@ -165,20 +167,16 @@ watch(() => props.preload, (shouldPreload) => {
   }
 }, { immediate: true });
 
-watch(() => props.sessionId, (newId, oldId) => {
-  if (newId === oldId) return;
-  if (!newId) {
-    tokenUsage.value = null;
-    tokenModelName.value = '';
-    tokenContextLimit.value = 0;
-    tokenUserMessages.value = 0;
-    tokenAssistantMessages.value = 0;
-    return;
-  }
-  if ((props.open || props.preload) && hasLoaded.value) {
-    void fetchTokenData();
-  }
-});
+watch(
+  () => props.sessionId,
+  (newId, oldId) => {
+    if (newId === oldId) return;
+    resetTokenData();
+    if (newId && (props.open || props.preload)) {
+      void fetchTokenData();
+    }
+  },
+);
 
 watch(() => props.activeBackendKind, (newKind, oldKind) => {
   if (newKind === oldKind) return;
@@ -202,6 +200,7 @@ watch(showCodexInStatusMonitor, (enabled) => {
 
 function resetTokenData() {
   tokenRequestId++;
+  tokenLoading.value = false;
   tokenUsage.value = null;
   tokenModelName.value = '';
   tokenContextLimit.value = 0;
@@ -212,6 +211,7 @@ function resetTokenData() {
 function resetLoadedState() {
   refreshRequestId++;
   refreshPromise = null;
+  refreshPromiseRequestId = 0;
   loading.value = false;
   hasLoaded.value = false;
   errorMessage.value = '';
@@ -237,13 +237,13 @@ function hasCoreStatusData() {
 }
 
 async function refresh() {
-  if (refreshPromise) return refreshPromise;
+  if (refreshPromise && refreshPromiseRequestId === refreshRequestId) return refreshPromise;
 
   const requestId = ++refreshRequestId;
-  refreshPromise = (async () => {
   loading.value = true;
   errorMessage.value = '';
   const activeBackend = backend();
+  const tokenRefresh = props.sessionId ? fetchTokenData() : Promise.resolve();
   mcpUnsupported.value = typeof activeBackend.getMcpStatus !== 'function';
   lspUnsupported.value = typeof activeBackend.getLspStatus !== 'function';
   skillUnsupported.value = typeof activeBackend.getSkillStatus !== 'function';
@@ -251,66 +251,72 @@ async function refresh() {
     ? typeof activeBackend.getPluginStatus !== 'function'
     : typeof activeBackend.getPluginStatus !== 'function' &&
       typeof activeBackend.getGlobalConfig !== 'function';
-  try {
-    const [health, mcp, lsp, skills, cfg, plugins] = await Promise.allSettled([
-      activeBackend.getGlobalHealth?.() ?? Promise.resolve(null),
-      activeBackend.getMcpStatus?.() ?? Promise.resolve({}),
-      activeBackend.getLspStatus?.() ?? Promise.resolve([]),
-      activeBackend.getSkillStatus?.() ?? Promise.resolve([]),
-      activeBackend.getGlobalConfig?.() ?? Promise.resolve({}),
-      activeBackend.getPluginStatus?.() ?? Promise.resolve([]),
-    ]);
-    if (requestId !== refreshRequestId) return;
-    serverHealth.value = health.status === 'fulfilled' ? health.value : null;
-    mcpData.value = mcp.status === 'fulfilled'
-      ? (mcp.value as typeof mcpData.value) ?? {}
-      : null;
-    lspData.value = lsp.status === 'fulfilled'
-      ? (lsp.value as typeof lspData.value) ?? []
-      : null;
-    skillData.value = skills.status === 'fulfilled'
-      ? (skills.value as typeof skillData.value) ?? []
-      : null;
-    configData.value = cfg.status === 'fulfilled'
-      ? (cfg.value as Record<string, unknown>)
-      : null;
-    backendPluginData.value = plugins.status === 'fulfilled'
-      ? (plugins.value as typeof backendPluginData.value)
-      : [];
-    if (!mcpUnsupported.value && mcp.status === 'rejected') mcpUnsupported.value = true;
-    if (!lspUnsupported.value && lsp.status === 'rejected') lspUnsupported.value = true;
-    if (!skillUnsupported.value && skills.status === 'rejected') skillUnsupported.value = true;
-    if (!pluginUnsupported.value && plugins.status === 'rejected') {
-      if (isAcpBackend.value || cfg.status === 'rejected') pluginUnsupported.value = true;
-    }
 
-    // Fetch token data for current session separately
-    if (props.sessionId) {
-      await fetchTokenData();
-    }
-    await refreshCodexStatus();
+  const currentRefresh = (async () => {
+    try {
+      const [health, mcp, lsp, skills, cfg, plugins] = await Promise.allSettled([
+        activeBackend.getGlobalHealth?.() ?? Promise.resolve(null),
+        activeBackend.getMcpStatus?.() ?? Promise.resolve({}),
+        activeBackend.getLspStatus?.() ?? Promise.resolve([]),
+        activeBackend.getSkillStatus?.() ?? Promise.resolve([]),
+        activeBackend.getGlobalConfig?.() ?? Promise.resolve({}),
+        activeBackend.getPluginStatus?.() ?? Promise.resolve([]),
+      ]);
+      if (requestId !== refreshRequestId) return;
+      serverHealth.value = health.status === 'fulfilled' ? health.value : null;
+      mcpData.value =
+        mcp.status === 'fulfilled' ? ((mcp.value as typeof mcpData.value) ?? {}) : null;
+      lspData.value =
+        lsp.status === 'fulfilled' ? ((lsp.value as typeof lspData.value) ?? []) : null;
+      skillData.value =
+        skills.status === 'fulfilled' ? ((skills.value as typeof skillData.value) ?? []) : null;
+      configData.value = cfg.status === 'fulfilled' ? (cfg.value as Record<string, unknown>) : null;
+      backendPluginData.value =
+        plugins.status === 'fulfilled' ? (plugins.value as typeof backendPluginData.value) : [];
+      if (!mcpUnsupported.value && mcp.status === 'rejected') mcpUnsupported.value = true;
+      if (!lspUnsupported.value && lsp.status === 'rejected') lspUnsupported.value = true;
+      if (!skillUnsupported.value && skills.status === 'rejected') skillUnsupported.value = true;
+      if (!pluginUnsupported.value && plugins.status === 'rejected') {
+        if (isAcpBackend.value || cfg.status === 'rejected') pluginUnsupported.value = true;
+      }
 
-    if (
-      health.status === 'rejected' &&
-      mcp.status === 'rejected' &&
-      lsp.status === 'rejected' &&
-      cfg.status === 'rejected'
-    ) {
+      await tokenRefresh;
+      if (requestId !== refreshRequestId) return;
+      await refreshCodexStatus(requestId);
+      if (requestId !== refreshRequestId) return;
+
+      if (
+        health.status === 'rejected' &&
+        mcp.status === 'rejected' &&
+        lsp.status === 'rejected' &&
+        cfg.status === 'rejected'
+      ) {
+        errorMessage.value = t('statusMonitor.error');
+        hasLoaded.value = false;
+      } else {
+        hasLoaded.value = true;
+      }
+    } catch (e) {
+      if (requestId !== refreshRequestId) return;
       errorMessage.value = t('statusMonitor.error');
       hasLoaded.value = false;
-    } else {
-      hasLoaded.value = true;
     }
-  } catch (e) {
-    errorMessage.value = t('statusMonitor.error');
-    hasLoaded.value = false;
-  } finally {
-    loading.value = false;
-    refreshPromise = null;
-  }
   })();
 
-  return refreshPromise;
+  refreshPromise = currentRefresh;
+  refreshPromiseRequestId = requestId;
+  void currentRefresh.then(
+    () => finishRefresh(requestId, currentRefresh),
+    () => finishRefresh(requestId, currentRefresh),
+  );
+  return currentRefresh;
+}
+
+function finishRefresh(requestId: number, completedRefresh: Promise<void>) {
+  if (requestId !== refreshRequestId || refreshPromise !== completedRefresh) return;
+  loading.value = false;
+  refreshPromise = null;
+  refreshPromiseRequestId = 0;
 }
 
 async function handleRefresh() {
@@ -330,7 +336,7 @@ async function ensureLoaded() {
   await refresh();
 }
 
-async function refreshCodexStatus() {
+async function refreshCodexStatus(requestId?: number) {
   if (codexApi.status.value !== 'connected') return;
   try {
     await Promise.allSettled([
@@ -338,9 +344,13 @@ async function refreshCodexStatus() {
       codexApi.refreshAccountRateLimits(),
       codexApi.refreshPlugins(),
     ]);
-    codexPluginData.value = codexApi.plugins.value.slice();
+    if (requestId === undefined || requestId === refreshRequestId) {
+      codexPluginData.value = codexApi.plugins.value.slice();
+    }
   } catch {
-    errorMessage.value = t('statusMonitor.error');
+    if (requestId === undefined || requestId === refreshRequestId) {
+      errorMessage.value = t('statusMonitor.error');
+    }
   }
 }
 
@@ -366,21 +376,26 @@ const codexRateLimitPercent = computed(() => {
   return Math.max(0, Math.min(100, Math.round(usedPercent)));
 });
 
-async function fetchContextLimit(providerId: string, modelId: string) {
+async function fetchContextLimit(
+  activeBackend: ReturnType<typeof backend>,
+  providerId: string,
+  modelId: string,
+) {
   try {
-    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
-    const response = await listProviders() as { all?: Array<{ id: string; models?: Record<string, { limit?: { context?: number } }> }> };
+    const listProviders = requireBackendMethod(activeBackend.listProviders, 'providers');
+    const response = (await listProviders.call(activeBackend)) as {
+      all?: Array<{ id: string; models?: Record<string, { limit?: { context?: number } }> }>;
+    };
     const providers = Array.isArray(response?.all) ? response.all : [];
     const provider = providers.find((p) => p.id === providerId);
     if (provider?.models) {
       const model = provider.models[modelId];
       if (model?.limit?.context) {
-        tokenContextLimit.value = model.limit.context;
+        return model.limit.context;
       }
     }
-  } catch {
-    // Provider list may fail, ignore
-  }
+  } catch {}
+  return 0;
 }
 
 async function fetchTokenData() {
@@ -391,6 +406,9 @@ async function fetchTokenData() {
   }
 
   const requestId = ++tokenRequestId;
+  tokenLoading.value = true;
+  tokenContextLimit.value = 0;
+  const activeBackend = backend();
 
   // Try to get messages from useMessages store first
   let sessionMessages: MessageInfo[] = [];
@@ -402,8 +420,11 @@ async function fetchTokenData() {
   // If store doesn't have this session's messages, load via API
   if (sessionMessages.length === 0) {
     try {
-      const listSessionMessages = requireBackendMethod(backend().listSessionMessages, 'session messages');
-      const messages = await listSessionMessages(sessionId, { limit: 100 });
+      const listSessionMessages = requireBackendMethod(
+        activeBackend.listSessionMessages,
+        'session messages',
+      );
+      const messages = await listSessionMessages.call(activeBackend, sessionId, { limit: 100 });
       if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
       if (Array.isArray(messages) && messages.length > 0) {
         msg.loadHistory(messages);
@@ -460,8 +481,17 @@ async function fetchTokenData() {
   tokenAssistantMessages.value = assistantCount;
 
   // Fetch model context limit
+  let contextLimit = 0;
   if (latestUsage?.providerId && latestUsage?.modelId) {
-    await fetchContextLimit(latestUsage.providerId, latestUsage.modelId);
+    contextLimit = await fetchContextLimit(
+      activeBackend,
+      latestUsage.providerId,
+      latestUsage.modelId,
+    );
+  }
+  if (requestId === tokenRequestId && props.sessionId === sessionId) {
+    tokenContextLimit.value = contextLimit;
+    tokenLoading.value = false;
   }
 }
 
@@ -566,10 +596,11 @@ async function handleSkillToggle(name: string, currentEnabled: boolean | undefin
 
 async function handleMcpToggle(name: string, currentStatus: string) {
   const nextEnabled = currentStatus === 'disabled';
-  const mcpConfigs = configData.value?.mcp;
-  const baseConfig = typeof mcpConfigs === 'object' && mcpConfigs !== null
-    ? (mcpConfigs as Record<string, Record<string, unknown>>)[name]
-    : undefined;
+  const mcpConfigs = configData.value?.mcp_servers ?? configData.value?.mcp;
+  const baseConfig =
+    typeof mcpConfigs === 'object' && mcpConfigs !== null
+      ? (mcpConfigs as Record<string, Record<string, unknown>>)[name]
+      : undefined;
 
   if (!baseConfig || typeof baseConfig !== 'object') {
     errorMessage.value = t('statusMonitor.mcp.toggleFailed');
@@ -600,7 +631,7 @@ function mcpStatusText(status: string) {
     case 'connected':
       return t('statusMonitor.mcp.connected');
     case 'configured':
-      return t('statusMonitor.mcp.configured');
+      return t(isAcpBackend.value ? 'statusMonitor.mcp.configuredAcp' : 'statusMonitor.mcp.configured');
     case 'disabled':
       return t('statusMonitor.mcp.disabled');
     case 'failed':
@@ -650,6 +681,31 @@ const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
   return base;
 });
 
+function handleTabKeydown(event: KeyboardEvent, index: number) {
+  let nextIndex: number;
+  switch (event.key) {
+    case 'ArrowRight':
+      nextIndex = (index + 1) % tabs.value.length;
+      break;
+    case 'ArrowLeft':
+      nextIndex = (index - 1 + tabs.value.length) % tabs.value.length;
+      break;
+    case 'Home':
+      nextIndex = 0;
+      break;
+    case 'End':
+      nextIndex = tabs.value.length - 1;
+      break;
+    default:
+      return;
+  }
+  event.preventDefault();
+  activeTab.value = tabs.value[nextIndex]?.id ?? activeTab.value;
+  void nextTick(() => {
+    popoverRef.value?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus();
+  });
+}
+
 const currentTotalInfo = computed(() => {
   switch (activeTab.value) {
     case 'server':
@@ -663,9 +719,7 @@ const currentTotalInfo = computed(() => {
         ? { label: t('statusMonitor.common.totalLabel'), count: (lspData.value || []).length }
         : null;
     case 'plugins':
-      return pluginEntries.value.length > 0
-        ? { label: t('statusMonitor.common.totalLabel'), count: pluginEntries.value.length }
-        : null;
+      return null;
     case 'skills':
       return skillEntries.value.length > 0
         ? { label: t('statusMonitor.common.totalLabel'), count: skillEntries.value.length }
@@ -716,21 +770,32 @@ function formatPercent(value: number, total: number): string {
       </button>
     </header>
 
-    <div class="status-monitor-tabs" role="tablist">
+    <div class="status-monitor-tabs" role="tablist" :aria-label="$t('statusMonitor.title')">
       <button
-        v-for="tab in tabs"
+        v-for="(tab, index) in tabs"
         :key="tab.id"
         type="button"
+        role="tab"
+        :id="`status-monitor-tab-${tab.id}`"
         class="status-monitor-tab"
         :class="{ 'is-active': activeTab === tab.id }"
         :aria-selected="activeTab === tab.id"
+        aria-controls="status-monitor-tabpanel"
+        :tabindex="activeTab === tab.id ? 0 : -1"
         @click="activeTab = tab.id"
+        @keydown="handleTabKeydown($event, index)"
       >
         {{ $t(tab.labelKey) }}
       </button>
     </div>
 
-    <div class="status-monitor-body">
+    <div
+      id="status-monitor-tabpanel"
+      class="status-monitor-body"
+      role="tabpanel"
+      :aria-labelledby="`status-monitor-tab-${activeTab}`"
+      tabindex="0"
+    >
       <div v-if="currentTotalInfo" class="status-monitor-actions">
           <span class="status-monitor-summary-label">{{ currentTotalInfo.label }}</span>
           <span class="status-monitor-summary-value">{{ currentTotalInfo.count }}</span>
@@ -793,7 +858,9 @@ function formatPercent(value: number, total: number): string {
               </div>
               <div class="status-monitor-row-actions">
                 <div class="status-monitor-meta-column">
-                  <span class="status-monitor-meta">{{ mcpStatusText(item.status) }}</span>
+                  <span class="status-monitor-meta status-monitor-mcp-status">
+                    {{ mcpStatusText(item.status) }}
+                  </span>
                   <span v-if="'error' in item && item.error" class="status-monitor-error">
                     {{ item.error }}
                   </span>
@@ -806,6 +873,11 @@ function formatPercent(value: number, total: number): string {
                   <input
                     type="checkbox"
                     class="toggle-input"
+                    :aria-label="
+                      item.status === 'disabled'
+                        ? $t('statusMonitor.mcp.enable')
+                        : $t('statusMonitor.mcp.disable')
+                    "
                     :checked="item.status !== 'disabled'"
                     :disabled="togglingMcp === item.name"
                     @change="handleMcpToggle(item.name, item.status)"
@@ -952,7 +1024,7 @@ function formatPercent(value: number, total: number): string {
           <div v-if="!sessionId" class="status-monitor-empty">
             {{ $t('statusMonitor.token.noSession') }}
           </div>
-          <div v-else-if="loading && !tokenUsage" class="status-monitor-empty">
+          <div v-else-if="tokenLoading && !tokenUsage" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
           <div v-else-if="!tokenUsage" class="status-monitor-empty">
@@ -1441,8 +1513,9 @@ function formatPercent(value: number, total: number): string {
   font-size: 13px;
   font-weight: 500;
   color: var(--theme-list-row-text, var(--theme-text-primary, #e2e8f0));
-  word-break: break-all;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   min-width: 0;
 }
 
@@ -1461,6 +1534,10 @@ function formatPercent(value: number, total: number): string {
 
 .status-monitor-meta.is-error {
   color: var(--theme-text-danger, #fca5a5);
+}
+
+.status-monitor-mcp-status {
+  white-space: nowrap;
 }
 
 .status-monitor-error {
@@ -1518,6 +1595,14 @@ function formatPercent(value: number, total: number): string {
 .toggle-input:checked + .toggle-track::after {
   background: var(--theme-toggle-active-thumb, var(--theme-text-inverse, #ffffff));
   transform: translateX(16px);
+}
+
+.toggle-input:focus-visible + .toggle-track {
+  outline: 2px solid var(--theme-focus-ring, var(--theme-modal-accent, #3b82f6));
+  outline-offset: 2px;
+  box-shadow:
+    0 0 0 2px var(--theme-modal-bg, #0f172a),
+    0 0 0 4px var(--theme-accent-primary, #60a5fa);
 }
 
 .toggle-input:disabled + .toggle-track {
@@ -1627,5 +1712,16 @@ function formatPercent(value: number, total: number): string {
   font-weight: 500;
   color: var(--theme-modal-text-muted, #94a3b8);
   text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-monitor-close-button,
+  .status-monitor-tab,
+  .refresh-button,
+  .toggle-track,
+  .toggle-track::after,
+  .token-usage-fill {
+    transition: none;
+  }
 }
 </style>
