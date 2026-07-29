@@ -1,3 +1,5 @@
+import { normalizeToolName } from './toolNames';
+
 export function extractXmlTagContent(text: string, tag: string): string | null {
   const open = `<${tag}>`;
   const close = `</${tag}>`;
@@ -230,9 +232,10 @@ export function extractFileRead(
     properties?.part && typeof properties.part === 'object'
       ? (properties.part as Record<string, unknown>)
       : undefined;
-  const tool = part?.tool;
-  if (part?.type === 'tool' && typeof tool === 'string') {
-    if (!helpers.shouldRenderToolWindow(tool) || tool === 'apply_patch') return null;
+  const rawTool = part?.tool;
+  if (part?.type === 'tool' && typeof rawTool === 'string') {
+    const tool = normalizeToolName(rawTool);
+    if (!helpers.shouldRenderToolWindow(rawTool) || tool === 'apply_patch') return null;
     const state =
       part?.state && typeof part.state === 'object'
         ? (part.state as Record<string, unknown>)

@@ -347,6 +347,38 @@ describe('extractFileRead for edit/multiedit', () => {
     });
   });
 
+  it('normalizes the live websearch tool alias into a search window', async () => {
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'web-alias-1',
+              callID: 'web-alias-1',
+              tool: 'websearch_web_search_exa',
+              state: {
+                status: 'completed',
+                input: { query: 'ACP protocol' },
+                output: 'Search results',
+                metadata: {},
+              },
+            },
+          },
+        },
+      },
+      'message.part.updated',
+      helpers,
+      (key: string) => key,
+    );
+
+    expect(result).toMatchObject({
+      toolName: 'websearch',
+      title: '🌐 [toolTitles.search]',
+      toolStatus: 'completed',
+    });
+  });
+
   it('renders webfetch markdown without copy-button chrome labels in the payload', async () => {
     let receivedArgs: Record<string, unknown> | null = null;
     const helpersWithCapture = {
