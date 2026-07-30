@@ -3,8 +3,19 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-
 ## [Unreleased]
+
+### CI 与发布流程
+
+- [x] 为所有 Pull Request 启用完整 CI 矩阵，并以 `Complete CI` 作为 `main` 分支的强制合并门禁；管理员同样不可绕过。
+- [x] VIS Release 现在同时构建并发布 Linux `.deb`、macOS `.pkg` 与 Windows NSIS `.exe` 格式的 vis_bridge 安装器，SEA 单文件仅作为安装器载荷，不再作为独立 Release 资产发布。
+- [x] 修复 Windows x64/arm64 安装器中的 NSIS 路径转换与插件目录初始化问题，并验证静默安装、重复安装、PATH 去重、命令执行及卸载流程。
+
+### vis_bridge 连接修复
+
+- [x] 修复 Windows Electron Release 与 GitHub Pages 无法连接 `ws://localhost:23004` 的问题；bridge 仅精确信任打包应用的 `app://index.html` 和正式站点的 `https://qiyuanhuakai.github.io` Origin，继续拒绝 `null`、伪造应用来源与外站来源。
+
+## [v0.7.0 released]
 
 ### ACP 后端与本地桥接器
 
