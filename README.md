@@ -134,6 +134,21 @@ codex --version
 
 ### 启动 vis_bridge
 
+发布页只提供原生安装包，不直接发布 `vis_bridge` 单文件：
+
+| 平台 | 安装文件 | 安装结果 |
+|---|---|---|
+| Linux | `VisBridge-<version>-<arch>-Linux.deb` | 安装到 `/usr/bin/vis_bridge` |
+| macOS | `VisBridge-<version>-<arch>-MacOS.pkg` | 安装到 `/usr/local/bin/vis_bridge` |
+| Windows | `VisBridge-<version>-<arch>-Windows.exe` | 安装到 `%LOCALAPPDATA%\Programs\vis_bridge` 并加入用户 PATH |
+
+从 [GitHub Releases](https://github.com/qiyuanhuakai/opencode-visualizer-cn/releases) 下载当前平台的安装包并运行；Windows 安装后需重新打开终端。安装完成后可验证：
+
+```bash
+vis_bridge --help
+```
+
+源码开发仍可直接运行或构建中间单文件：
 
 ```bash
 # 源码运行
@@ -410,6 +425,22 @@ codex --version
 ```
 
 ### Start vis_bridge
+
+GitHub Releases publish native installers only, not the intermediate standalone `vis_bridge` binary:
+
+| Platform | Installer | Result |
+|---|---|---|
+| Linux | `VisBridge-<version>-<arch>-Linux.deb` | Installs `/usr/bin/vis_bridge` |
+| macOS | `VisBridge-<version>-<arch>-MacOS.pkg` | Installs `/usr/local/bin/vis_bridge` |
+| Windows | `VisBridge-<version>-<arch>-Windows.exe` | Installs under `%LOCALAPPDATA%\Programs\vis_bridge` and adds it to the user PATH |
+
+Download and run the installer for your platform from [GitHub Releases](https://github.com/qiyuanhuakai/opencode-visualizer-cn/releases). Open a new terminal after installing on Windows, then verify the installation:
+
+```bash
+vis_bridge --help
+```
+
+For source development, the bridge can still be run directly or built as an intermediate standalone binary:
 
 ```bash
 # Run from source
