@@ -143,6 +143,8 @@ function isWildcardHost(hostname) {
 }
 
 const TOKENLESS_VIS_ORIGINS = new Set([
+  'app://index.html',
+  'https://qiyuanhuakai.github.io',
   'http://127.0.0.1:5173',
   'http://localhost:5173',
   'http://[::1]:5173',
@@ -154,6 +156,7 @@ const TOKENLESS_VIS_ORIGINS = new Set([
 function isAllowedOrigin(origin, bridgeToken) {
   if (!origin) return true;
   if (bridgeToken) return true;
+  if (TOKENLESS_VIS_ORIGINS.has(origin)) return true;
   try {
     return TOKENLESS_VIS_ORIGINS.has(new URL(origin).origin);
   } catch {
