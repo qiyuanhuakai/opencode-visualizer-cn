@@ -1,44 +1,65 @@
-name: Build Electron App
+name: Complete CI and Release
 
 on:
+  pull_request:
+  merge_group:
   push:
     branches: [main]
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint and type-check
+        run: pnpm lint
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Build web app
+        run: pnpm build
+
   build:
+    name: Build (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-2022, ubuntu-latest]
-
+        os: [macos-15-intel, windows-2022, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Get pnpm store directory
-        shell: bash
-        run: |
-          echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_ENV
-
-      - name: Setup pnpm cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-store-
+          cache: pnpm
 
       - name: Setup MSVC toolchain
         if: runner.os == 'Windows'
@@ -50,12 +71,12 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Electron app
-        run: pnpm vite build && npx electron-builder --publish never
+        run: pnpm build && pnpm exec electron-builder --publish never
 
-      - name: Upload artifacts
+      - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-artifacts
+          name: electron-${{ matrix.os }}-artifacts
           path: |
             dist-electron/*.dmg
             dist-electron/*.zip
@@ -65,17 +86,148 @@ jobs:
             dist-electron/*.blockmap
             dist-electron/*.yml
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
+
+  bridge-installers:
+    name: Bridge installer (${{ matrix.platform }}, ${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            msvc_arch: x64
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            msvc_arch: arm64
+          - runner: macos-15-intel
+            platform: macos
+            arch: x64
+            msvc_arch: x64
+          - runner: macos-latest
+            platform: macos
+            arch: arm64
+            msvc_arch: arm64
+          - runner: windows-2022
+            platform: windows
+            arch: x64
+            msvc_arch: x64
+          - runner: windows-11-arm
+            platform: windows
+            arch: arm64
+            msvc_arch: arm64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Setup MSVC toolchain
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+
+      - name: Install NSIS
+        if: runner.os == 'Windows'
+        run: choco install nsis --no-progress --yes
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build vis_bridge binary payload
+        run: pnpm bridge:build
+
+      - name: Package native vis_bridge installer
+        run: pnpm bridge:package-installer
+
+      - name: Exercise Linux installer
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          installer=(dist-bridge/installers/*.deb)
+          sudo dpkg -i "${installer[0]}"
+          test "$(command -v vis_bridge)" = '/usr/bin/vis_bridge'
+          vis_bridge --help
+          sudo dpkg -r vis-bridge
+
+      - name: Exercise macOS installer
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          package=(dist-bridge/installers/*.pkg)
+          sudo installer -pkg "${package[0]}" -target /
+          test "$(command -v vis_bridge)" = '/usr/local/bin/vis_bridge'
+          vis_bridge --help
+          sudo rm /usr/local/bin/vis_bridge
+
+      - name: Exercise Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem 'dist-bridge/installers/*.exe' | Select-Object -First 1
+          $firstInstall = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($firstInstall.ExitCode -ne 0) { throw "Installer exited with $($firstInstall.ExitCode)" }
+          $secondInstall = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($secondInstall.ExitCode -ne 0) { throw "Reinstall exited with $($secondInstall.ExitCode)" }
+          $installDirectory = Join-Path $env:LOCALAPPDATA 'Programs/vis_bridge'
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          $pathMatches = @($userPath -split ';' | Where-Object { $_ -eq $installDirectory })
+          if ($pathMatches.Count -ne 1) { throw "Installer added PATH entry $($pathMatches.Count) times" }
+          $env:Path = "$env:Path;$userPath"
+          vis_bridge --help
+          $uninstaller = Join-Path $installDirectory 'Uninstall.exe'
+          $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+          if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
+
+      - name: Upload vis_bridge installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-${{ matrix.platform }}-${{ matrix.arch }}-artifacts
+          path: |
+            dist-bridge/installers/*.deb
+            dist-bridge/installers/*.pkg
+            dist-bridge/installers/*.exe
+          retention-days: 7
+          if-no-files-found: error
+
+  complete-ci:
+    name: Complete CI
+    if: always()
+    needs: [validate, build, bridge-installers]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every CI job to pass
+        env:
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          BRIDGE_INSTALLERS_RESULT: ${{ needs.bridge-installers.result }}
+        run: |
+          if [ "$VALIDATE_RESULT" != 'success' ] || [ "$BUILD_RESULT" != 'success' ] || [ "$BRIDGE_INSTALLERS_RESULT" != 'success' ]; then
+            exit 1
+          fi
 
   release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish draft release
+    needs: [build, bridge-installers, complete-ci]
+    if: startsWith(github.ref, 'refs/tags/v') && needs.complete-ci.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Download all artifacts
+      - name: Download all installers
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -93,5 +245,6 @@ jobs:
             artifacts/**/*.exe
             artifacts/**/*.AppImage
             artifacts/**/*.deb
+            artifacts/**/*.pkg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
