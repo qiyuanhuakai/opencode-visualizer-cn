@@ -13,6 +13,8 @@ export type VisBridgeInstallerPaths = {
 
 export class VisBridgeInstallerTargetError extends Error {}
 
+export function createNsiPath(filePath: string): string;
+export function createWindowsInstallerScript(paths: VisBridgeInstallerPaths): string;
 export function createVisBridgeInstallerAssetName(target: VisBridgeInstallerTarget): string;
 export function createVisBridgeInstallerPaths(
   rootDirectory: string,

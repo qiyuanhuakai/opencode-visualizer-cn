@@ -2,8 +2,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  createNsiPath,
   createVisBridgeInstallerAssetName,
   createVisBridgeInstallerPaths,
+  createWindowsInstallerScript,
 } from '../scripts/package-vis-bridge-installer.mjs';
 
 describe('vis_bridge installer packaging', () => {
@@ -46,5 +48,23 @@ describe('vis_bridge installer packaging', () => {
         arch: 'ia32',
       });
     }).toThrow('Unsupported vis_bridge installer architecture: ia32');
+  });
+
+  it('preserves native Windows separators in NSIS compile-time paths', () => {
+    const binaryPath = String.raw`D:\a\vis\dist-bridge\vis_bridge.exe`;
+    expect(createNsiPath(binaryPath)).toBe(binaryPath);
+  });
+
+  it('initializes the NSIS plug-in directory before embedding the PATH helper', () => {
+    const paths = createVisBridgeInstallerPaths('/workspace', {
+      version: 'v1.2.3',
+      platform: 'win32',
+      arch: 'x64',
+    });
+    const script = createWindowsInstallerScript(paths);
+    expect(script.indexOf('  InitPluginsDir')).toBeGreaterThanOrEqual(0);
+    expect(script.indexOf('  InitPluginsDir')).toBeLessThan(
+      script.indexOf('  SetOutPath "$PLUGINSDIR"'),
+    );
   });
 });

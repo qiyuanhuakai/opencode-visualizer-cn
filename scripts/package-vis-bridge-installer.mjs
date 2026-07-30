@@ -139,8 +139,50 @@ function windowsPathScript(operation) {
   ].join('\r\n');
 }
 
-function nsiPath(filePath) {
-  return filePath.replaceAll('\\', '/').replaceAll('$', '$$').replaceAll('"', '$\\"');
+export function createNsiPath(filePath) {
+  return filePath.replaceAll('$', '$$').replaceAll('"', '$\\"');
+}
+
+export function createWindowsInstallerScript(paths) {
+  const addPathScript = path.join(paths.workspacePath, 'add-path.ps1');
+  const removePathScript = path.join(paths.workspacePath, 'remove-path.ps1');
+  return [
+    '!include "MUI2.nsh"',
+    '!include "WinMessages.nsh"',
+    'Unicode True',
+    'Name "Vis Bridge"',
+    `OutFile "${createNsiPath(paths.installerPath)}"`,
+    'InstallDir "$LOCALAPPDATA\\Programs\\vis_bridge"',
+    'RequestExecutionLevel user',
+    '!insertmacro MUI_PAGE_DIRECTORY',
+    '!insertmacro MUI_PAGE_INSTFILES',
+    '!insertmacro MUI_UNPAGE_CONFIRM',
+    '!insertmacro MUI_UNPAGE_INSTFILES',
+    '!insertmacro MUI_LANGUAGE "English"',
+    'Section "Install"',
+    '  SetOutPath "$INSTDIR"',
+    `  File /oname=vis_bridge.exe "${createNsiPath(paths.binaryPath)}"`,
+    `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
+    '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
+    '  InitPluginsDir',
+    '  SetOutPath "$PLUGINSDIR"',
+    `  File /oname=add-path.ps1 "${createNsiPath(addPathScript)}"`,
+    '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\\add-path.ps1" "$INSTDIR"\'',
+    '  Pop $0',
+    '  StrCmp $0 "0" +2',
+    '  Abort',
+    '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
+    'SectionEnd',
+    'Section "Uninstall"',
+    '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\remove-path.ps1" "$INSTDIR"\'',
+    '  Delete "$INSTDIR\\vis_bridge.exe"',
+    '  Delete "$INSTDIR\\remove-path.ps1"',
+    '  Delete "$INSTDIR\\Uninstall.exe"',
+    '  RMDir "$INSTDIR"',
+    '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
+    'SectionEnd',
+    '',
+  ].join('\r\n');
 }
 
 async function packageWindowsInstaller(paths) {
@@ -150,46 +192,7 @@ async function packageWindowsInstaller(paths) {
   await mkdir(paths.workspacePath, { recursive: true });
   await writeFile(addPathScript, windowsPathScript('add'), 'utf8');
   await writeFile(removePathScript, windowsPathScript('remove'), 'utf8');
-  await writeFile(
-    nsiScript,
-    [
-      '!include "MUI2.nsh"',
-      '!include "WinMessages.nsh"',
-      'Unicode True',
-      'Name "Vis Bridge"',
-      `OutFile "${nsiPath(paths.installerPath)}"`,
-      'InstallDir "$LOCALAPPDATA\\Programs\\vis_bridge"',
-      'RequestExecutionLevel user',
-      '!insertmacro MUI_PAGE_DIRECTORY',
-      '!insertmacro MUI_PAGE_INSTFILES',
-      '!insertmacro MUI_UNPAGE_CONFIRM',
-      '!insertmacro MUI_UNPAGE_INSTFILES',
-      '!insertmacro MUI_LANGUAGE "English"',
-      'Section "Install"',
-      '  SetOutPath "$INSTDIR"',
-      `  File /oname=vis_bridge.exe "${nsiPath(paths.binaryPath)}"`,
-      `  File /oname=remove-path.ps1 "${nsiPath(removePathScript)}"`,
-      '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
-      '  SetOutPath "$PLUGINSDIR"',
-      `  File /oname=add-path.ps1 "${nsiPath(addPathScript)}"`,
-      '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\\add-path.ps1" "$INSTDIR"\'',
-      '  Pop $0',
-      '  StrCmp $0 "0" +2',
-      '  Abort',
-      '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
-      'SectionEnd',
-      'Section "Uninstall"',
-      '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\remove-path.ps1" "$INSTDIR"\'',
-      '  Delete "$INSTDIR\\vis_bridge.exe"',
-      '  Delete "$INSTDIR\\remove-path.ps1"',
-      '  Delete "$INSTDIR\\Uninstall.exe"',
-      '  RMDir "$INSTDIR"',
-      '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
-      'SectionEnd',
-      '',
-    ].join('\r\n'),
-    'utf8',
-  );
+  await writeFile(nsiScript, createWindowsInstallerScript(paths), 'utf8');
   await execFileAsync('makensis', [nsiScript]);
 }
 
