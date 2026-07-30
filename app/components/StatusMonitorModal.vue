@@ -963,8 +963,10 @@ function formatPercent(value: number, total: number): string {
                 <span class="status-dot" :class="plugin.enabled ? 'status-dot-success' : plugin.installed ? 'status-dot-warning' : 'status-dot-muted'" />
                 <span class="status-monitor-name">{{ plugin.name }}</span>
               </div>
-              <div class="status-monitor-meta-column">
-                <span class="status-monitor-meta">{{ plugin.enabled ? $t('codexPanel.appEnabled') : plugin.installed ? $t('codexPanel.appDisabled') : $t('codexPanel.appNotAccessible') }}</span>
+              <div v-if="!plugin.enabled" class="status-monitor-meta-column">
+                <span class="status-monitor-meta">
+                  {{ plugin.installed ? $t('codexPanel.appDisabled') : $t('codexPanel.appNotAccessible') }}
+                </span>
               </div>
             </div>
           </div>
