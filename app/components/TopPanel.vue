@@ -275,9 +275,7 @@
                                 ? 'lucide:folder'
                                 : sandbox.kind === 'global'
                                   ? 'lucide:globe'
-                                  : sandbox.kind === 'branch'
-                                    ? 'lucide:git-branch'
-                                    : 'lucide:package'
+                                  : 'lucide:git-branch'
                           "
                           class="tree-header-icon"
                         />

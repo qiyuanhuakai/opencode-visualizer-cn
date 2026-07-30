@@ -217,6 +217,25 @@ describe('plugin stat-card grid gated to codex', () => {
   });
 });
 
+describe('plugin row status redundancy', () => {
+  it.each<BackendKind>(['opencode', 'codex'])(
+    'omits the enabled label for the %s backend while retaining the success dot',
+    async (backendKind) => {
+      adapterSlot.current = pluginEntriesAdapter();
+      const { root, app } = await mountModal(backendKind);
+
+      clickTab(root, 'Plugins');
+      await nextTick();
+      const row = [...root.querySelectorAll('.status-monitor-row')].find((candidate) =>
+        candidate.textContent?.includes('Demo'),
+      );
+      expect(row?.querySelector('.status-dot-success')).not.toBeNull();
+      expect(row?.querySelector('.status-monitor-meta')).toBeNull();
+      app.unmount();
+    },
+  );
+});
+
 describe('ACP pluginUnsupported not masked by getGlobalConfig', () => {
   it('shows the ACP plugin unsupported message when only getPluginStatus rejects', async () => {
     adapterSlot.current = acpUnsupportedAdapter();
