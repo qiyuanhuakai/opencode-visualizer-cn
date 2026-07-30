@@ -3,7 +3,7 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [Unreleased]
+## [v0.7.1 released]
 
 ### CI 与发布流程
 
