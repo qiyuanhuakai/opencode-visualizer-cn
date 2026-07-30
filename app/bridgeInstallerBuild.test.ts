@@ -2,6 +2,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  createNsiPath,
   createVisBridgeInstallerAssetName,
   createVisBridgeInstallerPaths,
 } from '../scripts/package-vis-bridge-installer.mjs';
@@ -46,5 +47,10 @@ describe('vis_bridge installer packaging', () => {
         arch: 'ia32',
       });
     }).toThrow('Unsupported vis_bridge installer architecture: ia32');
+  });
+
+  it('preserves native Windows separators in NSIS compile-time paths', () => {
+    const binaryPath = String.raw`D:\a\vis\dist-bridge\vis_bridge.exe`;
+    expect(createNsiPath(binaryPath)).toBe(binaryPath);
   });
 });

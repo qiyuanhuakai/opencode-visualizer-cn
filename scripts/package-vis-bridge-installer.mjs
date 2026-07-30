@@ -139,8 +139,8 @@ function windowsPathScript(operation) {
   ].join('\r\n');
 }
 
-function nsiPath(filePath) {
-  return filePath.replaceAll('\\', '/').replaceAll('$', '$$').replaceAll('"', '$\\"');
+export function createNsiPath(filePath) {
+  return filePath.replaceAll('$', '$$').replaceAll('"', '$\\"');
 }
 
 async function packageWindowsInstaller(paths) {
@@ -157,7 +157,7 @@ async function packageWindowsInstaller(paths) {
       '!include "WinMessages.nsh"',
       'Unicode True',
       'Name "Vis Bridge"',
-      `OutFile "${nsiPath(paths.installerPath)}"`,
+      `OutFile "${createNsiPath(paths.installerPath)}"`,
       'InstallDir "$LOCALAPPDATA\\Programs\\vis_bridge"',
       'RequestExecutionLevel user',
       '!insertmacro MUI_PAGE_DIRECTORY',
@@ -167,11 +167,11 @@ async function packageWindowsInstaller(paths) {
       '!insertmacro MUI_LANGUAGE "English"',
       'Section "Install"',
       '  SetOutPath "$INSTDIR"',
-      `  File /oname=vis_bridge.exe "${nsiPath(paths.binaryPath)}"`,
-      `  File /oname=remove-path.ps1 "${nsiPath(removePathScript)}"`,
+      `  File /oname=vis_bridge.exe "${createNsiPath(paths.binaryPath)}"`,
+      `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
       '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
       '  SetOutPath "$PLUGINSDIR"',
-      `  File /oname=add-path.ps1 "${nsiPath(addPathScript)}"`,
+      `  File /oname=add-path.ps1 "${createNsiPath(addPathScript)}"`,
       '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\\add-path.ps1" "$INSTDIR"\'',
       '  Pop $0',
       '  StrCmp $0 "0" +2',
