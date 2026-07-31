@@ -1429,7 +1429,7 @@ export class CodexAdapter implements BackendAdapter {
     this.client = new CodexJsonRpcClient(options);
     this.clientInfo = options.clientInfo ?? defaultClientInfo();
     this.experimentalApi = options.experimentalApi ?? false;
-    this.mcpStatusTimeoutMs = options.mcpStatusTimeoutMs ?? 3_000;
+    this.mcpStatusTimeoutMs = options.mcpStatusTimeoutMs ?? 30_000;
     this.bridgeUrl = options.url;
     this.bindBackendMethods();
   }
