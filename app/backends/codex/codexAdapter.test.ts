@@ -1572,6 +1572,66 @@ describe('CodexAdapter', () => {
       }
     });
 
+    it('uses the live MCP inventory when cold startup exceeds three seconds', async () => {
+      vi.useFakeTimers();
+      try {
+        MockWebSocket.instances = [];
+        const adapter = createCodexAdapter({
+          url: 'ws://localhost:4500',
+          webSocketCtor: MockWebSocket,
+        });
+
+        const status = adapter.getMcpStatus();
+        const socket = MockWebSocket.instances[0]!;
+        socket.emitOpen();
+        await waitForSent(socket, 1);
+        socket.respond(1, {});
+        await waitForSent(socket, 3);
+        socket.respond(2, {
+          config: {
+            mcp_servers: {
+              officecli: { command: 'officecli', args: ['mcp'], enabled: true },
+            },
+          },
+        });
+        await waitForSent(socket, 4);
+
+        await vi.advanceTimersByTimeAsync(3_001);
+        const liveServers = [
+          { name: 'codegraph', authStatus: 'unsupported', tool: 'codegraph_explore' },
+          { name: 'codex_apps', authStatus: 'bearerToken', tool: 'sites.get_site' },
+          { name: 'context7', authStatus: 'notLoggedIn', tool: 'query-docs' },
+          { name: 'git_bash', authStatus: 'unsupported', tool: '' },
+          { name: 'grep_app', authStatus: 'unsupported', tool: 'searchGitHub' },
+          { name: 'lsp', authStatus: 'unsupported', tool: 'diagnostics' },
+          { name: 'officecli', authStatus: 'unsupported', tool: 'officecli' },
+        ] as const;
+        socket.respond(3, {
+          data: liveServers.map(({ name, authStatus, tool }) => ({
+            name,
+            serverInfo: tool ? { name, version: 'live' } : null,
+            tools: tool ? { [tool]: { name: tool } } : {},
+            resources: [],
+            resourceTemplates: [],
+            authStatus,
+          })),
+          nextCursor: null,
+        });
+
+        await expect(status).resolves.toEqual({
+          codegraph: { status: 'connected' },
+          codex_apps: { status: 'connected' },
+          context7: { status: 'needs_auth' },
+          git_bash: { status: 'configured' },
+          grep_app: { status: 'connected' },
+          lsp: { status: 'connected' },
+          officecli: { status: 'connected' },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('preserves method-not-found so the UI can render MCP as unsupported', async () => {
       MockWebSocket.instances = [];
       const adapter = createCodexAdapter({

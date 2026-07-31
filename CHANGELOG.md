@@ -3,6 +3,12 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [Unreleased]
+
+### Codex 后端修复
+
+- [x] 修复 Status Monitor 在 MCP 冷启动超过 3 秒时过早回退到 `config/read`、导致 `codex_apps` 等运行时 MCP 缺失的问题；状态请求现在使用 30 秒有界等待，并继续在超时后回退到已配置状态。
+
 ## [v0.7.1 released]
 
 ### CI 与发布流程
