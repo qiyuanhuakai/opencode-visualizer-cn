@@ -9096,6 +9096,9 @@ onMounted(() => {
     });
   }
   credentials.load();
+  codexApi.url.value = credentials.codexBridgeUrl.value;
+  codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
+  void codexApi.restoreConnection().catch(() => undefined);
   activeBackendKind.value = credentials.backendKind.value;
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
