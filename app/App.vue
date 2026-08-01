@@ -3496,7 +3496,15 @@ function reconcileLocalPinnedSessionStore() {
   if (!bootstrapReady.value) return;
   const currentStore = localPinnedSessionStore.value;
   if (Object.keys(currentStore).length === 0) return;
-  const nextStore = reconcilePinnedSessionStore(currentStore, serverState.projects, 10000);
+  const sessionHydration = activeBackendKind.value === 'opencode'
+    ? serverState.sessionHydrationByDirectory
+    : undefined;
+  const nextStore = reconcilePinnedSessionStore(
+    currentStore,
+    serverState.projects,
+    10000,
+    sessionHydration,
+  );
 
   if (isSamePinnedSessionStore(currentStore, nextStore)) return;
   localPinnedSessionStore.value = nextStore;
@@ -6896,6 +6904,13 @@ const pinnedSessionReconciliationDeps = computed(() => {
   return deps;
 });
 
+const pinnedSessionHydrationDeps = computed(() =>
+  Object.entries(serverState.sessionHydrationByDirectory).map(([directory, hydration]) => [
+    directory,
+    hydration.status,
+  ] as const),
+);
+
 watch(
   () => [selectedProjectId.value, selectedSessionId.value, activeDirectory.value],
   () => {
@@ -6904,7 +6919,7 @@ watch(
   { immediate: true },
 );
 
-watch(pinnedSessionReconciliationDeps, () => {
+watch([pinnedSessionReconciliationDeps, pinnedSessionHydrationDeps], () => {
   reconcileLocalPinnedSessionStore();
 });
 
