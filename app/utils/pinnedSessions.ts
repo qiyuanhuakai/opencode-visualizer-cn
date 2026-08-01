@@ -1,4 +1,5 @@
 import type { ProjectState, SandboxState } from '../types/worker-state';
+import type { DirectorySessionHydration } from '../types/sse-worker';
 
 export type LocalPinnedSessionStore = Record<string, number>;
 
@@ -120,11 +121,31 @@ export function reconcilePinnedSessionStore(
   currentStore: LocalPinnedSessionStore,
   projects: Record<string, ProjectState>,
   limit: number,
+  sessionHydrationByDirectory?: Readonly<Record<string, DirectorySessionHydration>>,
 ): LocalPinnedSessionStore {
   if (Object.keys(currentStore).length === 0) return currentStore;
 
   const nextStore: LocalPinnedSessionStore = { ...limitPinnedSessionStore(currentStore, limit) };
   const activeSessionKeys = new Set<string>();
+  const incompleteProjectIds = new Set<string>();
+
+  if (sessionHydrationByDirectory) {
+    for (const project of Object.values(projects)) {
+      const directories = new Set(
+        [project.worktree, ...Object.values(project.sandboxes).map((sandbox) => sandbox.directory)]
+          .map((directory) => directory.trim())
+          .filter(Boolean),
+      );
+      if (
+        directories.size === 0
+        || Array.from(directories).some(
+          (directory) => sessionHydrationByDirectory[directory]?.status !== 'loaded',
+        )
+      ) {
+        incompleteProjectIds.add(project.id);
+      }
+    }
+  }
 
   for (const project of Object.values(projects)) {
     const projectKey = projectPinKey(project.id);
@@ -140,7 +161,11 @@ export function reconcilePinnedSessionStore(
     const hasPositiveParent = projectPinnedAt > 0 || descendants.some(
       ({ sandboxKey }) => normalizePinnedAt(nextStore[sandboxKey]) > 0,
     );
-    if (nextStore[migrationKey] !== -1 && hasPositiveParent) {
+    if (
+      nextStore[migrationKey] !== -1
+      && hasPositiveParent
+      && !incompleteProjectIds.has(project.id)
+    ) {
       for (const { sandboxKey, sessionKeys } of descendants) {
         const sandboxOverride = nextStore[sandboxKey];
         const hasSandboxOverride = typeof sandboxOverride === 'number' && sandboxOverride !== 0;
@@ -185,6 +210,10 @@ export function reconcilePinnedSessionStore(
     }
   }
 
+  const incompleteProjectSessionPrefixes = Array.from(
+    incompleteProjectIds,
+    (projectId) => `${projectId}:`,
+  );
   Object.keys(nextStore).forEach((key) => {
     if (
       key.startsWith('project:')
@@ -194,6 +223,7 @@ export function reconcilePinnedSessionStore(
     ) {
       return;
     }
+    if (incompleteProjectSessionPrefixes.some((prefix) => key.startsWith(prefix))) return;
     if (!activeSessionKeys.has(key)) {
       delete nextStore[key];
     }

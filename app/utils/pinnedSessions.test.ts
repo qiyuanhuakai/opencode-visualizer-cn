@@ -111,6 +111,77 @@ describe('pinned session optimistic overrides', () => {
     });
   });
 
+  it.each(['unloaded', 'loading', 'error'] as const)(
+    'preserves session pins while a project directory is %s',
+    (status) => {
+      // Given
+      const store: LocalPinnedSessionStore = { 'p1:s1': 123 };
+      const projects = { p1: { id: 'p1', worktree: '/pending', sandboxes: {} } };
+
+      // When
+      const next = reconcilePinnedSessionStore(store, projects, 10, {
+        '/pending': { status },
+      });
+
+      // Then
+      expect(next).toEqual(store);
+    },
+  );
+
+  it('removes stale session pins after the project directory is authoritatively loaded', () => {
+    // Given
+    const store: LocalPinnedSessionStore = { 'p1:stale': 123 };
+    const projects = { p1: { id: 'p1', worktree: '/loaded', sandboxes: {} } };
+
+    // When
+    const next = reconcilePinnedSessionStore(store, projects, 10, {
+      '/loaded': { status: 'loaded' },
+    });
+
+    // Then
+    expect(next).toEqual({});
+  });
+
+  it('defers legacy hierarchy expansion until the project is authoritatively loaded', () => {
+    // Given
+    const store: LocalPinnedSessionStore = { 'project:p1': 123 };
+    const pendingProjects = { p1: { id: 'p1', worktree: '/', sandboxes: {} } };
+
+    // When
+    const pending = reconcilePinnedSessionStore(store, pendingProjects, 10, {
+      '/': { status: 'unloaded' },
+    });
+    const loaded = reconcilePinnedSessionStore(pending, createProjects(), 10, {
+      '/': { status: 'loaded' },
+    });
+
+    // Then
+    expect(pending).toEqual(store);
+    expect(loaded).toMatchObject({
+      'project:p1': 123,
+      'sandbox:p1:/': 123,
+      'p1:s1': 123,
+    });
+  });
+
+  it('preserves ambiguous session keys when any matching project is incomplete', () => {
+    // Given
+    const store: LocalPinnedSessionStore = { 'p1:child:s1': 123 };
+    const projects = {
+      p1: { id: 'p1', worktree: '/pending', sandboxes: {} },
+      nested: { id: 'p1:child', worktree: '/loaded', sandboxes: {} },
+    };
+
+    // When
+    const next = reconcilePinnedSessionStore(store, projects, 10, {
+      '/pending': { status: 'unloaded' },
+      '/loaded': { status: 'loaded' },
+    });
+
+    // Then
+    expect(next).toEqual(store);
+  });
+
   it('expands legacy project-only pins into explicit sandbox and session entries', () => {
     const next = reconcilePinnedSessionStore({ 'project:p1': 123 }, createProjects(), 10);
 

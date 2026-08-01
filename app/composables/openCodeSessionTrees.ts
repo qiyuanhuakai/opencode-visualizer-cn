@@ -81,16 +81,12 @@ export function buildOpenCodeSessionTreeData(params: {
     const projectName = project.name?.trim() || project.worktree.replace(/\/+$/, '').split('/').pop() || project.id;
     const projectLocal = pinnedStore[projectPinKey(project.id)];
     const isProjectPinned = typeof projectLocal === 'number' && projectLocal > 0;
-    const isProjectUnpinned = typeof projectLocal === 'number' && projectLocal < 0;
-    if (isProjectUnpinned) continue;
 
     const sandboxes: SessionTreeSandbox[] = [];
     for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
       const sandboxLocal = pinnedStore[sandboxPinKey(project.id, sandbox.directory)];
       const isSandboxDirectlyPinned = typeof sandboxLocal === 'number' && sandboxLocal > 0;
-      const isSandboxUnpinned = typeof sandboxLocal === 'number' && sandboxLocal < 0;
       const isSandboxPinned = isSandboxDirectlyPinned;
-      if (isSandboxUnpinned) continue;
 
       const sessions: SessionTreeSession[] = [];
       for (const session of Object.values(sandbox.sessions)) {
@@ -128,11 +124,14 @@ export function buildOpenCodeSessionTreeData(params: {
         return left.title.localeCompare(right.title);
       });
       const isSandboxImplicitlyPinned = false;
+      const sandboxName = sandbox.name
+        || sandbox.directory.replace(/\/+$/, '').split('/').pop()
+        || sandbox.directory;
       sandboxes.push({
         type: 'sandbox',
         directory: sandbox.directory,
         projectId: project.id,
-        name: sandbox.name || 'main',
+        name: sandboxName,
         pinnedAt: isSandboxPinned ? (isSandboxDirectlyPinned ? (sandboxLocal as number) : (projectLocal as number)) : 0,
         isPinned: isSandboxPinned,
         isImplicitlyPinned: isSandboxImplicitlyPinned,
@@ -152,7 +151,7 @@ export function buildOpenCodeSessionTreeData(params: {
       projectId: project.id,
       name: projectName,
       color: resolveProjectColor(project.icon?.color),
-      pinnedAt: typeof projectLocal === 'number' ? projectLocal : 0,
+      pinnedAt: normalizePinnedAt(projectLocal),
       isPinned: isProjectPinned,
       sandboxes,
     });

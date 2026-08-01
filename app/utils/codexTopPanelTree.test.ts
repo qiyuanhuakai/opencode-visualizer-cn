@@ -236,6 +236,40 @@ describe('buildCodexTopPanelTreeData', () => {
     ]);
   });
 
+  it('keeps a pinned session visible when its repository and branch are explicitly unpinned', () => {
+    // Given
+    const project = createCodexProjectState(
+      [{ id: 'main', name: 'Main work', cwd: '/repo', gitInfo: { root: '/repo', branch: 'main' }, updatedAt: 1 }],
+      '/home/codex',
+    );
+    const worktrees = buildCodexTopPanelTreeData(project, {
+      pinnedStore: {
+        'repo:codex:/repo': -100,
+        'sandbox:codex:/repo': -200,
+        'codex:main': 300,
+      },
+      homePath: '/home/codex',
+    });
+
+    // When
+    const sidebarTree = buildCodexSessionTreeData(worktrees);
+
+    // Then
+    expect(sidebarTree).toMatchObject([
+      {
+        directory: '/repo',
+        isPinned: false,
+        sandboxes: [
+          {
+            directory: '/repo',
+            isPinned: false,
+            sessions: [{ sessionId: 'main', isPinned: true, pinnedAt: 300 }],
+          },
+        ],
+      },
+    ]);
+  });
+
   it('keeps multiple non-git folders visible below the Global sandbox', () => {
     const project = createCodexProjectState(
       [

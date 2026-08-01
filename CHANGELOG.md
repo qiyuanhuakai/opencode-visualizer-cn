@@ -9,6 +9,12 @@
 
 - [x] 修复 Status Monitor 在 MCP 冷启动超过 3 秒时过早回退到 `config/read`、导致 `codex_apps` 等运行时 MCP 缺失的问题；状态请求现在使用 30 秒有界等待，并继续在超时后回退到已配置状态。
 
+### OpenCode 后端修复
+
+- [x] 修复项目或分支未置顶时遮蔽已置顶下级分支、会话的问题；左侧会话树现在按三级独立置顶状态保留必要的父级容器。
+- [x] 修复 linked worktree 的 VCS 分支名尚未补齐时左栏误显示为 `main` 的问题；现在与顶部面板一致回退到实际工作树目录名。
+- [x] 修复冷启动后台 hydration 尚未完成时误删非活动项目 session pin 的竞态；仅在目录状态为 `loaded` 后清理 stale pin，并延后 legacy 层级迁移。
+
 ## [v0.7.1 released]
 
 ### CI 与发布流程
