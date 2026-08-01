@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n';
 import CodeContent from './CodeContent.vue';
 import { FLOATING_WINDOW_KEY, type FloatingWindowAPI } from '../composables/useFloatingWindow';
 import {
-  clampFloatingWindowPosition,
+  getFloatingWindowDragBounds,
   type FloatingWindowEntry,
   type useFloatingWindows,
 } from '../composables/useFloatingWindows';
@@ -324,11 +324,9 @@ function getDragBounds() {
   const extent = props.manager.getExtent();
   const w = Math.min(props.entry.width || 600, extent.width);
   const h = Math.min(props.entry.height || 400, extent.height);
+  const bounds = getFloatingWindowDragBounds({ width: w, height: h }, extent);
   return {
-    minX: 0,
-    maxX: Math.max(0, extent.width - w),
-    minY: 0,
-    maxY: Math.max(0, extent.height - h),
+    ...bounds,
     w,
     h,
     extent,
@@ -358,10 +356,9 @@ function onDragMove(e: PointerEvent) {
   const dy = e.clientY - lastPointerY;
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
-  const { w, h, extent } = getDragBounds();
-  const next = clampFloatingWindowPosition(dragX + dx, dragY + dy, w, h, extent);
-  dragX = next.x;
-  dragY = next.y;
+  const { minX, maxX, minY, maxY } = getDragBounds();
+  dragX += dx * (dragX < minX || dragX > maxX ? 0.5 : 1);
+  dragY += dy * (dragY < minY || dragY > maxY ? 0.5 : 1);
 
   // Direct DOM update — bypasses Vue reactivity and restyle cascade
   applyTransform(dragX, dragY);
