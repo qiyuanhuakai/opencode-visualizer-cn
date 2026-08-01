@@ -3,7 +3,11 @@ import { ref, computed, provide, watch, onBeforeUnmount, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import CodeContent from './CodeContent.vue';
 import { FLOATING_WINDOW_KEY, type FloatingWindowAPI } from '../composables/useFloatingWindow';
-import type { FloatingWindowEntry, useFloatingWindows } from '../composables/useFloatingWindows';
+import {
+  clampFloatingWindowPosition,
+  type FloatingWindowEntry,
+  type useFloatingWindows,
+} from '../composables/useFloatingWindows';
 import { useAutoScroller, type ScrollMode } from '../composables/useAutoScroller';
 import { useContentSearch } from '../composables/useContentSearch';
 import { useSettings } from '../composables/useSettings';
@@ -354,9 +358,10 @@ function onDragMove(e: PointerEvent) {
   const dy = e.clientY - lastPointerY;
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
-  const { minX, maxX, minY, maxY } = getDragBounds();
-  dragX += dx * (dragX < minX || dragX > maxX ? 0.5 : 1);
-  dragY += dy * (dragY < minY || dragY > maxY ? 0.5 : 1);
+  const { w, h, extent } = getDragBounds();
+  const next = clampFloatingWindowPosition(dragX + dx, dragY + dy, w, h, extent);
+  dragX = next.x;
+  dragY = next.y;
 
   // Direct DOM update — bypasses Vue reactivity and restyle cascade
   applyTransform(dragX, dragY);

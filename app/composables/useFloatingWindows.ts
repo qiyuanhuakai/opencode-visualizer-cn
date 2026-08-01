@@ -80,11 +80,28 @@ function nextZIndex(manualTier: boolean): number {
   return ++zIndexCounter + (manualTier ? MANUAL_ZINDEX_OFFSET : 0);
 }
 
+export function clampFloatingWindowPosition(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  extent: Extent,
+): { x: number; y: number } {
+  const renderedWidth = Math.min(width, Math.max(0, extent.width));
+  const renderedHeight = Math.min(height, Math.max(0, extent.height));
+  return {
+    x: Math.max(0, Math.min(x, Math.max(0, extent.width - renderedWidth))),
+    y: Math.max(0, Math.min(y, Math.max(0, extent.height - renderedHeight))),
+  };
+}
+
 function clampEntryToExtent(entry: FloatingWindowEntry, extent: Extent): void {
   const renderedWidth = Math.min(entry.width ?? 600, Math.max(0, extent.width));
   const renderedHeight = Math.min(entry.height ?? 400, Math.max(0, extent.height));
-  entry.x = Math.max(0, Math.min(entry.x, Math.max(0, extent.width - renderedWidth)));
-  entry.y = Math.max(0, Math.min(entry.y, Math.max(0, extent.height - renderedHeight)));
+  Object.assign(
+    entry,
+    clampFloatingWindowPosition(entry.x, entry.y, renderedWidth, renderedHeight, extent),
+  );
 }
 
 function variantToGutterMode(variant?: string): 'none' | 'single' | 'double' {
@@ -149,7 +166,7 @@ export function useFloatingWindows() {
 
   function setExtent(w: number, h: number) {
     extent = { width: Math.max(0, w), height: Math.max(0, h) };
-    if (entriesMap.size === 0) return;
+    if (entriesMap.size === 0 || extent.width === 0 || extent.height === 0) return;
     for (const entry of entriesMap.values()) clampEntryToExtent(entry, extent);
     rebuildEntries();
   }
@@ -328,6 +345,7 @@ export function useFloatingWindows() {
        }
      }
 
+     clampEntryToExtent(merged, extent);
      entriesMap.set(key, sanitizeEntry(merged));
      rebuildEntries();
 
@@ -422,6 +440,7 @@ export function useFloatingWindows() {
   function restore(key: string): void {
     const entry = entriesMap.get(key);
     if (!entry) return;
+    clampEntryToExtent(entry, extent);
     entry.minimized = false;
     bringToFront(key);
   }
