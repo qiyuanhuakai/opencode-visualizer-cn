@@ -302,16 +302,6 @@ let dragX = 0;
 let dragY = 0;
 let dragTarget: HTMLElement | null = null;
 let dragPointerId = -1;
-const TITLEBAR_VISIBLE_PX = 32;
-
-function getAxisBounds(extentSize: number, windowSize: number, visibleSize: number) {
-  const keepVisible = Math.max(1, Math.min(visibleSize, windowSize, extentSize));
-  return {
-    min: keepVisible - windowSize,
-    max: extentSize - keepVisible,
-  };
-}
-
 function applyTransform(x: number, y: number) {
   const el = windowEl.value;
   if (!el) return;
@@ -328,15 +318,13 @@ function cancelSnapAnimation() {
 
 function getDragBounds() {
   const extent = props.manager.getExtent();
-  const w = props.entry.width || 600;
-  const h = props.entry.height || 400;
-  const xBounds = getAxisBounds(extent.width, w, TITLEBAR_VISIBLE_PX);
-  const keepVisibleY = Math.max(1, Math.min(TITLEBAR_VISIBLE_PX, extent.height));
+  const w = Math.min(props.entry.width || 600, extent.width);
+  const h = Math.min(props.entry.height || 400, extent.height);
   return {
-    minX: xBounds.min,
-    maxX: xBounds.max,
+    minX: 0,
+    maxX: Math.max(0, extent.width - w),
     minY: 0,
-    maxY: extent.height - keepVisibleY,
+    maxY: Math.max(0, extent.height - h),
     w,
     h,
     extent,
@@ -504,8 +492,14 @@ function onResizeStart(e: PointerEvent) {
 function onResizeMove(e: PointerEvent) {
   const dx = e.clientX - resizeStartX;
   const dy = e.clientY - resizeStartY;
-  props.entry.width = Math.max(200, windowStartWidth + dx);
-  props.entry.height = Math.max(150, windowStartHeight + dy);
+  const extent = props.manager.getExtent();
+  const maxWidth = Math.max(1, extent.width - Math.max(0, props.entry.x));
+  const maxHeight = Math.max(1, extent.height - Math.max(0, props.entry.y));
+  props.entry.width = Math.min(maxWidth, Math.max(Math.min(200, maxWidth), windowStartWidth + dx));
+  props.entry.height = Math.min(
+    maxHeight,
+    Math.max(Math.min(150, maxHeight), windowStartHeight + dy),
+  );
 }
 
 function onResizeEnd(e: PointerEvent) {
@@ -671,7 +665,9 @@ function onResizeEnd(e: PointerEvent) {
   contain: layout;
   display: flex;
   flex-direction: column;
-  max-width: 100vw;
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: 100%;
   overflow: hidden;
   background: transparent;
   border: 1px solid var(--floating-accent, #3a4150);
