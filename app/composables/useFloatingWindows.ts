@@ -244,7 +244,7 @@ export function useFloatingWindows() {
       merged.y = pos.y;
     }
 
-    clampEntryForCreation(merged, extent);
+    if (!existing) clampEntryForCreation(merged, extent);
 
     // Execute beforeOpen hook
     if (merged.beforeOpen) {

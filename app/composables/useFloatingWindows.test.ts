@@ -123,6 +123,27 @@ describe('useFloatingWindows responsive geometry', () => {
     mounted.unmount();
   });
 
+  it('preserves an existing off-canvas position when opening the same key again', async () => {
+    // Given: an existing window has been moved outside the canvas
+    const mounted = mountFloatingWindows();
+    mounted.api.setExtent(375, 500);
+    await mounted.api.open('reopened-window', {
+      width: 300,
+      height: 300,
+      x: 50,
+      y: 100,
+      expiry: Infinity,
+    });
+    mounted.api.updateOptions('reopened-window', { x: 340, y: 468 });
+
+    // When: the same logical window is opened again to refresh its options
+    await mounted.api.open('reopened-window', { title: 'Updated title' });
+
+    // Then: reopening does not reinterpret the existing window as a new creation
+    expect(mounted.api.get('reopened-window')).toMatchObject({ x: 340, y: 468 });
+    mounted.unmount();
+  });
+
   it('preserves off-canvas geometry when restoring a minimized window', async () => {
     // Given: a minimized window the user placed partly outside the current extent
     const mounted = mountFloatingWindows();
