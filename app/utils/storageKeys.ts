@@ -76,6 +76,7 @@ export const StorageKeys = {
     lastAuthError: 'state.lastAuthError.v1',
     deletedSandboxes: 'state.deletedSandboxes.v1',
     codexActiveThread: 'state.codexActiveThread.v1',
+    codexPanelConnected: 'state.codexPanelConnected.v1',
     codexAuxiliaryHistory: 'state.codexAuxiliaryHistory.v1',
     forgePtyId: 'state.forgePtyId.v1',
     acpArchivedSessions: 'state.acpArchivedSessions.v1',
