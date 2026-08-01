@@ -42,7 +42,6 @@ export type Extent = { width: number; height: number };
 
 const TOOL_RUNNING_TTL_MS = 1000 * 60 * 10;
 const TOOL_COMPLETED_TTL_MS = 2000;
-const TITLEBAR_VISIBLE_PX = 32;
 
 const DEFAULT_OPTS: Partial<FloatingWindowEntry> = {
   closable: false,
@@ -81,12 +80,28 @@ function nextZIndex(manualTier: boolean): number {
   return ++zIndexCounter + (manualTier ? MANUAL_ZINDEX_OFFSET : 0);
 }
 
-function getAxisBounds(extentSize: number, windowSize: number, visibleSize: number) {
-  const keepVisible = Math.max(1, Math.min(visibleSize, windowSize, extentSize));
+export function clampFloatingWindowPosition(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  extent: Extent,
+): { x: number; y: number } {
+  const renderedWidth = Math.min(width, Math.max(0, extent.width));
+  const renderedHeight = Math.min(height, Math.max(0, extent.height));
   return {
-    min: keepVisible - windowSize,
-    max: extentSize - keepVisible,
+    x: Math.max(0, Math.min(x, Math.max(0, extent.width - renderedWidth))),
+    y: Math.max(0, Math.min(y, Math.max(0, extent.height - renderedHeight))),
   };
+}
+
+function clampEntryToExtent(entry: FloatingWindowEntry, extent: Extent): void {
+  const renderedWidth = Math.min(entry.width ?? 600, Math.max(0, extent.width));
+  const renderedHeight = Math.min(entry.height ?? 400, Math.max(0, extent.height));
+  Object.assign(
+    entry,
+    clampFloatingWindowPosition(entry.x, entry.y, renderedWidth, renderedHeight, extent),
+  );
 }
 
 function variantToGutterMode(variant?: string): 'none' | 'single' | 'double' {
@@ -150,7 +165,10 @@ export function useFloatingWindows() {
   };
 
   function setExtent(w: number, h: number) {
-    extent = { width: w, height: h };
+    extent = { width: Math.max(0, w), height: Math.max(0, h) };
+    if (entriesMap.size === 0 || extent.width === 0 || extent.height === 0) return;
+    for (const entry of entriesMap.values()) clampEntryToExtent(entry, extent);
+    rebuildEntries();
   }
 
   function getExtent(): Extent {
@@ -231,12 +249,7 @@ export function useFloatingWindows() {
       merged.y = pos.y;
     }
 
-    // Clamp position to visible bounds
-    const windowWidth = merged.width ?? 600;
-    const xBounds = getAxisBounds(extent.width, windowWidth, TITLEBAR_VISIBLE_PX);
-    const keepVisibleY = Math.max(1, Math.min(TITLEBAR_VISIBLE_PX, extent.height));
-    merged.x = Math.max(xBounds.min, Math.min(merged.x, xBounds.max));
-    merged.y = Math.max(0, Math.min(merged.y, extent.height - keepVisibleY));
+    clampEntryToExtent(merged, extent);
 
     // Execute beforeOpen hook
     if (merged.beforeOpen) {
@@ -332,6 +345,7 @@ export function useFloatingWindows() {
        }
      }
 
+     clampEntryToExtent(merged, extent);
      entriesMap.set(key, sanitizeEntry(merged));
      rebuildEntries();
 
@@ -426,6 +440,7 @@ export function useFloatingWindows() {
   function restore(key: string): void {
     const entry = entriesMap.get(key);
     if (!entry) return;
+    clampEntryToExtent(entry, extent);
     entry.minimized = false;
     bringToFront(key);
   }

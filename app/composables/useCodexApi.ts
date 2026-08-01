@@ -462,6 +462,7 @@ export type CodexPluginWithMarketplace = CodexPlugin & {
 
 export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const status = ref<CodexConnectionStatus>('idle');
+  const reconnectOnMount = ref(storageGet(StorageKeys.state.codexPanelConnected) === '1');
   const url = ref(initialOptions.url ?? getPersistedCodexBridgeUrl());
   const bridgeToken = ref(initialOptions.bridgeToken ?? getPersistedCodexBridgeToken());
   const errorMessage = ref('');
@@ -1682,7 +1683,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   async function connect(nextUrl = url.value, onPhase?: (phase: CodexConnectPhase) => void) {
-    disconnect();
+    teardownConnection(true);
     url.value = nextUrl.trim();
     status.value = 'connecting';
     errorMessage.value = '';
@@ -1705,6 +1706,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (!isCurrentConnection(request)) return;
       initialized.value = true;
       status.value = 'connected';
+      reconnectOnMount.value = true;
+      storageSet(StorageKeys.state.codexPanelConnected, '1');
 
       onPhase?.('threads');
       await Promise.allSettled([refreshThreads({}, false)]);
@@ -1719,14 +1722,19 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (!isCurrentConnection(request)) return;
       status.value = 'error';
       errorMessage.value = error instanceof Error ? error.message : String(error);
-      disconnect(false);
+      teardownConnection(false);
       if (import.meta.env.DEV) console.timeEnd('codex-connect');
       throw error;
     }
     if (import.meta.env.DEV) console.timeEnd('codex-connect');
   }
 
-  function disconnect(resetStatus = true) {
+  async function restoreConnection() {
+    if (!reconnectOnMount.value || connected.value || status.value === 'connecting') return;
+    await connect(url.value);
+  }
+
+  function teardownConnection(resetStatus: boolean) {
     connectionGeneration += 1;
     threadSelectionGeneration += 1;
     accountRefreshGeneration += 1;
@@ -1749,7 +1757,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     threadGoal.value = null;
     threadGoalThreadId.value = null;
     threadGoalLoading.value = false;
+    loadingThread.value = false;
     if (resetStatus) status.value = 'idle';
+  }
+
+  function disconnectTransport() {
+    teardownConnection(true);
+  }
+
+  function disconnect() {
+    disconnectTransport();
+    reconnectOnMount.value = false;
+    storageSet(StorageKeys.state.codexPanelConnected, '0');
   }
 
   async function fetchThreadList(
@@ -3296,6 +3315,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
     return {
      status,
+     reconnectOnMount,
      url,
      bridgeToken,
      errorMessage,
@@ -3332,7 +3352,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       fsSuggestions,
       fsShowSuggestions,
       connect,
-      disconnect,
+      restoreConnection,
+      disconnectTransport,
+     disconnect,
       refreshHomeDir,
       refreshThreads,
       preloadPanelData,

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
 import type { CodexAdapter, CodexPromptResult } from '../backends/codex/codexAdapter';
 import type { CodexJsonRpcId, CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
-import { StorageKeys, storageGet, storageGetJSON, storageKey } from '../utils/storageKeys';
+import { StorageKeys, storageGet, storageGetJSON, storageKey, storageSet } from '../utils/storageKeys';
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
@@ -123,6 +123,69 @@ describe('useCodexApi', () => {
     expect(api.threads.value).toEqual([{ id: 'thr_existing', preview: 'Existing thread' }]);
     expect(api.activeThreadId.value).toBe('thr_existing');
     expect(phases).toEqual(['home', 'handshake', 'threads', 'workspace', 'panelData']);
+  });
+
+  it('restores successful panel connection intent until the user disconnects', async () => {
+    // Given: the Codex panel establishes a real initialized connection
+    const firstMock = createAdapterMock();
+    const firstApi = useCodexApi({ adapterFactory: () => firstMock.adapter });
+    await firstApi.connect();
+    firstApi.disconnectTransport();
+    expect(firstApi.reconnectOnMount.value).toBe(true);
+    expect(storageGet(StorageKeys.state.codexPanelConnected)).toBe('1');
+
+    // When: a fresh API instance is created after a page reload
+    const reloadedMock = createAdapterMock();
+    const reloadedApi = useCodexApi({ adapterFactory: () => reloadedMock.adapter });
+
+    // Then: it remembers that the panel should reconnect
+    expect(reloadedApi.reconnectOnMount.value).toBe(true);
+    expect(storageGet(StorageKeys.state.codexPanelConnected)).toBe('1');
+
+    // When: the user explicitly disconnects the panel
+    reloadedApi.disconnect();
+
+    // Then: later reloads no longer reconnect automatically
+    const disconnectedApi = useCodexApi({ adapterFactory: () => createAdapterMock().adapter });
+    expect(disconnectedApi.reconnectOnMount.value).toBe(false);
+    expect(storageGet(StorageKeys.state.codexPanelConnected)).toBe('0');
+  });
+
+  it('restores a remembered connection without mounting the Codex panel', async () => {
+    // Given: a prior initialized connection left startup reconnect intent behind
+    storageSet(StorageKeys.state.codexPanelConnected, '1');
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    // When: the application startup lifecycle restores the API transport
+    await api.restoreConnection();
+
+    // Then: the connection is initialized before any panel component mounts
+    expect(mock.adapter.initialize).toHaveBeenCalledOnce();
+    expect(api.connected.value).toBe(true);
+  });
+
+  it('releases the loading lock when disconnecting during thread selection', async () => {
+    // Given: a connected API is still waiting for the selected thread
+    const pendingThread = deferred<Awaited<ReturnType<CodexAdapter['readThread']>>>();
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn().mockReturnValue(pendingThread.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const selection = api.selectThread('thread-pending');
+    await vi.waitFor(() => expect(mock.adapter.readThread).toHaveBeenCalledOnce());
+    expect(api.loadingThread.value).toBe(true);
+
+    // When: the transport disconnects before that request settles
+    api.disconnectTransport();
+
+    // Then: reconnecting cannot inherit the obsolete loading lock
+    expect(api.loadingThread.value).toBe(false);
+    await api.connect();
+    expect(api.loadingThread.value).toBe(false);
+    pendingThread.resolve({ thread: { id: 'thread-pending', turns: [] } });
+    await selection;
+    expect(api.loadingThread.value).toBe(false);
   });
 
   it('loads runtime inspector data through capability-tracked composable methods', async () => {

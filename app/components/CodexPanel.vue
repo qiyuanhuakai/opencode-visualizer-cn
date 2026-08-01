@@ -186,7 +186,7 @@
               type="button"
               class="codex-thread-select"
               :title="thread.name || thread.preview || thread.id"
-              :disabled="api.loadingThread.value"
+              :disabled="!api.connected.value || api.loadingThread.value"
               @click="selectThread(thread.id)"
             >
               <span class="codex-thread-title-row">
@@ -784,8 +784,11 @@ async function connect() {
 }
 
 onMounted(() => {
-  if (!props.autoConnect || api.connected.value || api.status.value === 'connecting') return;
-  void connect().catch(() => undefined);
+  if (props.autoConnect) {
+    void connect().catch(() => undefined);
+    return;
+  }
+  void api.restoreConnection().catch(() => undefined);
 });
 
 async function refreshThreads() {
@@ -1773,6 +1776,54 @@ input:disabled {
   min-height: 32px;
   border-radius: 10px;
   background: rgba(30, 41, 59, 0.88);
+}
+
+@media (max-width: 640px) {
+  .codex-panel {
+    overflow-y: auto;
+  }
+
+  .codex-panel-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .codex-url-field {
+    flex-basis: 100%;
+  }
+
+  .codex-token-field {
+    flex: 1 1 160px;
+  }
+
+  .codex-panel-body {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .codex-thread-list {
+    flex: 0 0 auto;
+    max-height: 220px;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
+  }
+
+  .codex-output {
+    flex: 0 0 auto;
+    min-height: 180px;
+    padding: 8px;
+    overflow: visible;
+  }
+
+  .codex-prompt {
+    flex: 0 0 auto;
+    gap: 8px;
+    padding: 8px;
+  }
 }
 
 .codex-rate-limit-chip {

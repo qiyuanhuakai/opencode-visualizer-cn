@@ -29,6 +29,9 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     disconnect: vi.fn(() => {
       calls.push('codex.disconnect');
     }),
+    disconnectTransport: vi.fn(() => {
+      calls.push('codex.disconnectTransport');
+    }),
     selectThread: vi.fn(async () => {
       calls.push('codex.selectThread');
     }),
@@ -188,7 +191,6 @@ describe('useBackendActivation', () => {
     expect(harness.selectedModel.value).toBe('');
     expect(harness.calls).toEqual([
       'disconnectAcpBackend',
-      'codex.disconnect',
       'disconnectCodexBackend',
       'setActiveBackendKind:opencode',
       'ge.connect',
@@ -245,7 +247,6 @@ describe('useBackendActivation', () => {
     await vi.waitFor(() => expect(harness.calls).toContain('hydrateActiveWorktreeResources'));
     expect(harness.calls).toEqual([
       'ge.disconnect',
-      'codex.disconnect',
       'disconnectCodexBackend',
       'configureAcpBackend',
       'setActiveBackendKind:acp',
@@ -358,5 +359,49 @@ describe('useBackendActivation', () => {
     expect(harness.uiInitState.value).toBe('login');
     expect(harness.initErrorMessage.value).toContain('invalid ACP bridge');
     expect(harness.activation.initializationInFlight.value).toBe(false);
+  });
+
+  it.each(['opencode', 'acp'] satisfies BackendKind[])(
+    'preserves the Codex panel connection when aborting %s initialization',
+    (backendKind) => {
+      // Given: a non-Codex backend is being initialized while the panel is connected
+      const harness = createHarness(backendKind);
+
+      // When: that backend initialization is aborted
+      harness.activation.abortInitialization();
+
+      // Then: only backend-owned transports are disconnected
+      expect(harness.codexApi.disconnect).not.toHaveBeenCalled();
+      expect(harness.calls).toContain('disconnectCodexBackend');
+    },
+  );
+
+  it('preserves reconnect intent when aborting Codex backend initialization', () => {
+    // Given: Codex is the backend being initialized
+    const harness = createHarness('codex');
+
+    // When: Codex initialization is aborted
+    harness.activation.abortInitialization();
+
+    // Then: only the current transport is closed
+    expect(harness.codexApi.disconnectTransport).toHaveBeenCalledOnce();
+    expect(harness.codexApi.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('preserves reconnect intent when Codex activation fails after connecting', async () => {
+    // Given: Codex transport connects before downstream workspace hydration fails
+    const harness = createHarness('codex', {
+      hydrateActiveWorktreeResources: async () => {
+        throw new Error('workspace hydration failed');
+      },
+    });
+
+    // When: Codex backend activation falls back to the login screen
+    await harness.activation.startInitialization();
+
+    // Then: transport is closed without treating the failure as an explicit disconnect
+    expect(harness.codexApi.disconnectTransport).toHaveBeenCalledOnce();
+    expect(harness.codexApi.disconnect).not.toHaveBeenCalled();
+    expect(harness.uiInitState.value).toBe('login');
   });
 });
