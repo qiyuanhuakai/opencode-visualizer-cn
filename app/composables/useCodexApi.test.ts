@@ -165,6 +165,29 @@ describe('useCodexApi', () => {
     expect(api.connected.value).toBe(true);
   });
 
+  it('releases the loading lock when disconnecting during thread selection', async () => {
+    // Given: a connected API is still waiting for the selected thread
+    const pendingThread = deferred<Awaited<ReturnType<CodexAdapter['readThread']>>>();
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn().mockReturnValue(pendingThread.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const selection = api.selectThread('thread-pending');
+    await vi.waitFor(() => expect(mock.adapter.readThread).toHaveBeenCalledOnce());
+    expect(api.loadingThread.value).toBe(true);
+
+    // When: the transport disconnects before that request settles
+    api.disconnectTransport();
+
+    // Then: reconnecting cannot inherit the obsolete loading lock
+    expect(api.loadingThread.value).toBe(false);
+    await api.connect();
+    expect(api.loadingThread.value).toBe(false);
+    pendingThread.resolve({ thread: { id: 'thread-pending', turns: [] } });
+    await selection;
+    expect(api.loadingThread.value).toBe(false);
+  });
+
   it('loads runtime inspector data through capability-tracked composable methods', async () => {
     const mock = createAdapterMock();
     mock.adapter.getThreadGoal = vi.fn().mockResolvedValue({

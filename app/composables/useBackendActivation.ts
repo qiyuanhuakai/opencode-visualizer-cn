@@ -275,7 +275,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   function abortInitialization() {
     options.ge.disconnect();
     options.disconnectAcpBackend();
-    if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnect();
+    if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnectTransport();
     options.disconnectCodexBackend();
     initializationInFlight.value = false;
     options.connectionState.value = 'connecting';

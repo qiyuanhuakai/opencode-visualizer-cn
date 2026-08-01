@@ -376,15 +376,16 @@ describe('useBackendActivation', () => {
     },
   );
 
-  it('disconnects the shared Codex API when aborting Codex backend initialization', () => {
+  it('preserves reconnect intent when aborting Codex backend initialization', () => {
     // Given: Codex is the backend being initialized
     const harness = createHarness('codex');
 
     // When: Codex initialization is aborted
     harness.activation.abortInitialization();
 
-    // Then: the shared Codex API connection is closed
-    expect(harness.codexApi.disconnect).toHaveBeenCalledOnce();
+    // Then: only the current transport is closed
+    expect(harness.codexApi.disconnectTransport).toHaveBeenCalledOnce();
+    expect(harness.codexApi.disconnect).not.toHaveBeenCalled();
   });
 
   it('preserves reconnect intent when Codex activation fails after connecting', async () => {

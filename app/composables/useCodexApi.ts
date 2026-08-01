@@ -1757,6 +1757,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     threadGoal.value = null;
     threadGoalThreadId.value = null;
     threadGoalLoading.value = false;
+    loadingThread.value = false;
     if (resetStatus) status.value = 'idle';
   }
 
