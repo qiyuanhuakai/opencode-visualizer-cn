@@ -46,8 +46,71 @@ describe('useFloatingWindows responsive geometry', () => {
       expiry: Infinity,
     });
 
-    // Then: the rendered window origin stays inside the mobile canvas
-    expect(mounted.api.get('mobile-window')).toMatchObject({ x: 0, y: 0 });
+    // Then: the created geometry fits entirely inside the mobile canvas
+    expect(mounted.api.get('mobile-window')).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 375,
+      height: 500,
+    });
+    mounted.unmount();
+  });
+
+  it('restores creation geometry after a zero-height loading extent becomes ready', async () => {
+    // Given: a terminal opens before the floating canvas has measurable height
+    const mounted = mountFloatingWindows();
+    mounted.api.setExtent(375, 0);
+    await mounted.api.open('loading-window', {
+      width: 600,
+      height: 400,
+      x: 100,
+      y: 100,
+      expiry: Infinity,
+    });
+
+    // When: page layout reports its first positive floating extent
+    mounted.api.setExtent(375, 500);
+
+    // Then: one deferred creation layout restores a visible, usable window
+    expect(mounted.api.get('loading-window')).toMatchObject({
+      x: 0,
+      y: 100,
+      width: 375,
+      height: 400,
+    });
+    mounted.unmount();
+  });
+
+  it('uses the latest extent when loading finishes before the window mounts', async () => {
+    // Given: asynchronous terminal setup starts while the canvas extent is zero
+    const mounted = mountFloatingWindows();
+    mounted.api.setExtent(375, 0);
+    let finishSetup: (() => void) | undefined;
+    const setupGate = new Promise<void>((resolve) => {
+      finishSetup = resolve;
+    });
+    const opening = mounted.api.open('async-loading-window', {
+      width: 600,
+      height: 400,
+      x: 100,
+      y: 100,
+      expiry: Infinity,
+      beforeOpen: () => setupGate,
+    });
+
+    // When: layout becomes ready before asynchronous setup completes
+    mounted.api.setExtent(375, 500);
+    if (!finishSetup) throw new Error('Expected beforeOpen setup gate.');
+    finishSetup();
+    await opening;
+
+    // Then: mounting uses the latest positive extent instead of stale zero geometry
+    expect(mounted.api.get('async-loading-window')).toMatchObject({
+      x: 0,
+      y: 100,
+      width: 375,
+      height: 400,
+    });
     mounted.unmount();
   });
 

@@ -95,11 +95,26 @@ export function getFloatingWindowDragBounds(windowSize: Extent, extent: Extent) 
   };
 }
 
-function clampEntryForCreation(entry: FloatingWindowEntry, extent: Extent): void {
-  const renderedWidth = Math.min(entry.width ?? 600, Math.max(0, extent.width));
-  const renderedHeight = Math.min(entry.height ?? 400, Math.max(0, extent.height));
-  entry.x = Math.max(0, Math.min(entry.x, Math.max(0, extent.width - renderedWidth)));
-  entry.y = Math.max(0, Math.min(entry.y, Math.max(0, extent.height - renderedHeight)));
+export function getFloatingWindowSnapPosition(
+  position: { x: number; y: number },
+  windowSize: Extent,
+  extent: Extent,
+): { x: number; y: number } {
+  if (extent.width <= 0 || extent.height <= 0) return position;
+  const bounds = getFloatingWindowDragBounds(windowSize, extent);
+  return {
+    x: Math.max(bounds.minX, Math.min(position.x, bounds.maxX)),
+    y: Math.max(bounds.minY, Math.min(position.y, bounds.maxY)),
+  };
+}
+
+function clampEntryForCreation(entry: FloatingWindowEntry, extent: Extent): boolean {
+  if (extent.width <= 0 || extent.height <= 0) return false;
+  entry.width = Math.min(entry.width || 600, extent.width);
+  entry.height = Math.min(entry.height || 400, extent.height);
+  entry.x = Math.max(0, Math.min(entry.x, Math.max(0, extent.width - entry.width)));
+  entry.y = Math.max(0, Math.min(entry.y, Math.max(0, extent.height - entry.height)));
+  return true;
 }
 
 function variantToGutterMode(variant?: string): 'none' | 'single' | 'double' {
@@ -148,6 +163,7 @@ function resolveExpiresAt(
 export function useFloatingWindows() {
   const { t } = useI18n();
   const entriesMap = reactive(new Map<string, FloatingWindowEntry>());
+  const pendingInitialLayoutKeys = new Set<string>();
   const entries = shallowRef<FloatingWindowEntry[]>([]);
 
   function rebuildEntries(): void {
@@ -164,6 +180,14 @@ export function useFloatingWindows() {
 
   function setExtent(w: number, h: number) {
     extent = { width: Math.max(0, w), height: Math.max(0, h) };
+    if (extent.width <= 0 || extent.height <= 0 || pendingInitialLayoutKeys.size === 0) return;
+    let changed = false;
+    for (const key of pendingInitialLayoutKeys) {
+      const entry = entriesMap.get(key);
+      if (entry) changed = clampEntryForCreation(entry, extent) || changed;
+      pendingInitialLayoutKeys.delete(key);
+    }
+    if (changed) rebuildEntries();
   }
 
   function getExtent(): Extent {
@@ -244,12 +268,12 @@ export function useFloatingWindows() {
       merged.y = pos.y;
     }
 
-    if (!existing) clampEntryForCreation(merged, extent);
-
     // Execute beforeOpen hook
     if (merged.beforeOpen) {
       await merged.beforeOpen();
     }
+
+    if (!existing && !clampEntryForCreation(merged, extent)) pendingInitialLayoutKeys.add(key);
 
     merged.isReady = true;
     const contentVersion = bumpRenderVersion(key);
@@ -461,6 +485,7 @@ export function useFloatingWindows() {
       await entry.beforeClose(el as HTMLElement);
     }
 
+    pendingInitialLayoutKeys.delete(key);
     entriesMap.delete(key);
     renderVersionMap.delete(key);
     if (!skipRebuild) rebuildEntries();
