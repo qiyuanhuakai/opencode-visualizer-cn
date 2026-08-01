@@ -19,6 +19,7 @@ type CodexApiLike = {
   activeThreadId: Ref<string>;
   visibleThreads: Ref<Array<{ id: string }>>;
   connect: (bridgeUrl: string, onPhase?: (phase: string) => void) => Promise<void>;
+  disconnectTransport: () => void;
   disconnect: () => void;
   selectThread: (threadId: string) => Promise<void>;
 };
@@ -158,7 +159,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
         await options.reloadSelectedSessionState(options.selectedSessionId.value);
       }
     } catch (error) {
-      options.codexApi.disconnect();
+      options.codexApi.disconnectTransport();
       options.disconnectCodexBackend();
       options.connectionState.value = 'error';
       options.initErrorMessage.value = options.toErrorMessage(error);
@@ -170,7 +171,6 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
 
   async function activateOpenCode() {
     options.disconnectAcpBackend();
-    options.codexApi.disconnect();
     options.disconnectCodexBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
@@ -217,7 +217,6 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   async function activateAcp() {
     try {
       options.ge.disconnect();
-      options.codexApi.disconnect();
       options.disconnectCodexBackend();
       options.activeBackendKind.value = 'acp';
       options.configureAcpBackend({
@@ -276,7 +275,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   function abortInitialization() {
     options.ge.disconnect();
     options.disconnectAcpBackend();
-    options.codexApi.disconnect();
+    if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnect();
     options.disconnectCodexBackend();
     initializationInFlight.value = false;
     options.connectionState.value = 'connecting';
