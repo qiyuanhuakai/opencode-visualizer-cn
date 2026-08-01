@@ -6,6 +6,13 @@
 
 ## [Unreleased]
 
+### Codex Panel 与浮窗修复
+
+- [x] Codex Panel 成功连接后仅持久化自动重连意图；页面刷新时由应用启动生命周期立即重建 transport，并通过真实 `account/read` 恢复账号状态，不再等到重新打开 Panel 才连接。
+- [x] OpenCode/ACP 登录、重登录与初始化中止不再断开独立的 Codex Panel transport；Codex 主后端激活失败只清理当前 transport，保留下一次启动的重连意图，只有用户显式点击 Disconnect 才清除该意图。
+- [x] 修复线程加载期间断开连接后 loading 锁无法释放的问题；断开状态下保留线程上下文但禁用线程选择和置顶操作，避免调用已销毁的 adapter。
+- [x] 浮动窗口在创建、恢复、拖动、缩放及 viewport 变化时始终约束在可见 canvas 内；桌面尺寸窗口切换到 375px 移动视口后会立即回到屏幕内，标题栏和操作按钮保持可访问。
+
 ## [v0.7.2 released]
 
 ### Codex 后端修复
