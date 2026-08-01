@@ -285,14 +285,14 @@ export function useFloatingWindows() {
 
     if (activeOpenTokens.get(key) !== openToken) return;
     const liveEntry = entriesMap.get(key);
-    if (existing && liveEntry) {
+    if (liveEntry) {
       merged.x = liveEntry.x;
       merged.y = liveEntry.y;
       merged.width = liveEntry.width;
       merged.height = liveEntry.height;
       merged.minimized = liveEntry.minimized;
     }
-    if (!existing && !clampEntryForCreation(merged, extent)) pendingInitialLayoutKeys.add(key);
+    if (!liveEntry && !clampEntryForCreation(merged, extent)) pendingInitialLayoutKeys.add(key);
 
     merged.isReady = true;
     const contentVersion = bumpRenderVersion(key);
@@ -506,6 +506,7 @@ export function useFloatingWindows() {
       await entry.beforeClose(el as HTMLElement);
     }
 
+    if (entriesMap.get(key) !== entry) return;
     pendingInitialLayoutKeys.delete(key);
     entriesMap.delete(key);
     renderVersionMap.delete(key);

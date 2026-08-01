@@ -180,4 +180,62 @@ describe('useFloatingWindows async lifecycle', () => {
     });
     mounted.unmount();
   });
+
+  it('does not let a delayed close delete a newer same-key open', async () => {
+    // Given: an existing window whose beforeClose is still pending
+    const mounted = mountFloatingWindows();
+    mounted.api.setExtent(800, 600);
+    const closeGate = createGate();
+    await mounted.api.open('close-race', {
+      title: 'Old',
+      beforeClose: () => closeGate.promise,
+      expiry: Infinity,
+    });
+    const closing = mounted.api.close('close-race');
+    await Promise.resolve();
+
+    // When: the same key is opened synchronously before the old close resumes
+    await mounted.api.open('close-race', {
+      title: 'New',
+      beforeClose: undefined,
+      expiry: Infinity,
+    });
+    closeGate.release();
+    await closing;
+
+    // Then: the old close cannot delete the newer entry
+    expect(mounted.api.get('close-race')?.title).toBe('New');
+    mounted.unmount();
+  });
+
+  it('keeps close authoritative over an earlier delayed reopen', async () => {
+    // Given: a delayed reopen captured an existing desktop-sized window
+    const mounted = mountFloatingWindows();
+    mounted.api.setExtent(375, 500);
+    await mounted.api.open('recreate-race', {
+      title: 'Old',
+      x: 100,
+      y: 100,
+      width: 600,
+      height: 400,
+      expiry: Infinity,
+    });
+    const openGate = createGate();
+    const reopening = mounted.api.open('recreate-race', {
+      title: 'New',
+      x: 100,
+      width: 600,
+      beforeOpen: () => openGate.promise,
+      expiry: Infinity,
+    });
+
+    // When: the old entry closes before the delayed reopen commits
+    await mounted.api.close('recreate-race');
+    openGate.release();
+    await reopening;
+
+    // Then: the earlier pending reopen cannot resurrect the closed window
+    expect(mounted.api.get('recreate-race')).toBeUndefined();
+    mounted.unmount();
+  });
 });
