@@ -318,6 +318,7 @@ function getDragGeometry() {
 }
 
 function onDragStart(e: PointerEvent) {
+  if (dragPointerId !== -1 || resizePointerId !== -1) return;
   if ((e.target as HTMLElement).closest('.close-btn, .minimize-btn, .open-btn')) return;
   e.preventDefault();
   dragTarget = e.currentTarget as HTMLElement;
@@ -336,6 +337,7 @@ function onDragStart(e: PointerEvent) {
 }
 
 function onDragMove(e: PointerEvent) {
+  if (e.pointerId !== dragPointerId) return;
   const dx = e.clientX - lastPointerX;
   const dy = e.clientY - lastPointerY;
   lastPointerX = e.clientX;
@@ -436,6 +438,7 @@ function onWindowPointerDownCapture(e: PointerEvent) {
 }
 
 function onResizeStart(e: PointerEvent) {
+  if (resizePointerId !== -1 || dragPointerId !== -1) return;
   if (props.entry.minimized) return;
   e.preventDefault();
   e.stopPropagation();
@@ -455,6 +458,7 @@ function onResizeStart(e: PointerEvent) {
 }
 
 function onResizeMove(e: PointerEvent) {
+  if (e.pointerId !== resizePointerId) return;
   const dx = e.clientX - resizeStartX;
   const dy = e.clientY - resizeStartY;
   props.entry.width = Math.max(200, windowStartWidth + dx);
