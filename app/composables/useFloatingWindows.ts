@@ -164,6 +164,7 @@ export function useFloatingWindows() {
   const { t } = useI18n();
   const entriesMap = reactive(new Map<string, FloatingWindowEntry>());
   const pendingInitialLayoutKeys = new Set<string>();
+  const activeOpenTokens = new Map<string, symbol>();
   const entries = shallowRef<FloatingWindowEntry[]>([]);
 
   function rebuildEntries(): void {
@@ -234,6 +235,8 @@ export function useFloatingWindows() {
   }
 
   onUnmounted(() => {
+    activeOpenTokens.clear();
+    pendingInitialLayoutKeys.clear();
     for (const timerId of timerMap.values()) {
       clearTimeout(timerId);
     }
@@ -242,6 +245,8 @@ export function useFloatingWindows() {
   });
 
   async function open(key: string, opts: Partial<FloatingWindowEntry>): Promise<void> {
+    const openToken = Symbol(key);
+    activeOpenTokens.set(key, openToken);
     const existing = entriesMap.get(key);
 
     // Merge with defaults and existing
@@ -270,9 +275,23 @@ export function useFloatingWindows() {
 
     // Execute beforeOpen hook
     if (merged.beforeOpen) {
-      await merged.beforeOpen();
+      try {
+        await merged.beforeOpen();
+      } catch (error) {
+        if (activeOpenTokens.get(key) === openToken) activeOpenTokens.delete(key);
+        throw error;
+      }
     }
 
+    if (activeOpenTokens.get(key) !== openToken) return;
+    const liveEntry = entriesMap.get(key);
+    if (existing && liveEntry) {
+      merged.x = liveEntry.x;
+      merged.y = liveEntry.y;
+      merged.width = liveEntry.width;
+      merged.height = liveEntry.height;
+      merged.minimized = liveEntry.minimized;
+    }
     if (!existing && !clampEntryForCreation(merged, extent)) pendingInitialLayoutKeys.add(key);
 
     merged.isReady = true;
@@ -319,6 +338,7 @@ export function useFloatingWindows() {
     const shouldFocusOnOpen = !existing && merged.focusOnOpen === true;
 
     entriesMap.set(key, sanitizeEntry(merged));
+    if (activeOpenTokens.get(key) === openToken) activeOpenTokens.delete(key);
     rebuildEntries();
     void resolveContent();
 
@@ -471,6 +491,7 @@ export function useFloatingWindows() {
   }
 
   async function close(key: string, skipRebuild = false): Promise<void> {
+    activeOpenTokens.delete(key);
     const entry = entriesMap.get(key);
     if (!entry) return;
 
