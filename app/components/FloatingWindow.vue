@@ -331,6 +331,8 @@ function onDragStart(e: PointerEvent) {
 
   dragTarget.addEventListener('pointermove', onDragMove);
   dragTarget.addEventListener('pointerup', onDragEnd);
+  dragTarget.addEventListener('pointercancel', onDragEnd);
+  dragTarget.addEventListener('lostpointercapture', onDragEnd);
 }
 
 function onDragMove(e: PointerEvent) {
@@ -345,20 +347,22 @@ function onDragMove(e: PointerEvent) {
   applyTransform(dragX, dragY);
 }
 
-function cleanupDrag() {
-  if (dragTarget) {
-    dragTarget.removeEventListener('pointermove', onDragMove);
-    dragTarget.removeEventListener('pointerup', onDragEnd);
-    if (dragPointerId >= 0) {
-      dragTarget.releasePointerCapture(dragPointerId);
-    }
-    dragTarget = null;
-    dragPointerId = -1;
-  }
+function cleanupDrag(releaseCapture: boolean) {
+  const target = dragTarget;
+  const pointerId = dragPointerId;
+  if (!target) return;
+  target.removeEventListener('pointermove', onDragMove);
+  target.removeEventListener('pointerup', onDragEnd);
+  target.removeEventListener('pointercancel', onDragEnd);
+  target.removeEventListener('lostpointercapture', onDragEnd);
+  dragTarget = null;
+  dragPointerId = -1;
+  if (releaseCapture && pointerId >= 0) target.releasePointerCapture(pointerId);
 }
 
-function onDragEnd() {
-  cleanupDrag();
+function onDragEnd(e: PointerEvent) {
+  if (e.pointerId !== dragPointerId) return;
+  cleanupDrag(e.type === 'pointerup');
   // Sync final position to Vue reactive state (single restyle)
   props.entry.x = dragX;
   props.entry.y = dragY;
@@ -381,7 +385,8 @@ function snapBack() {
 }
 
 onBeforeUnmount(() => {
-  cleanupDrag();
+  cleanupDrag(false);
+  cleanupResize(false);
   search.close();
 });
 
@@ -413,6 +418,8 @@ let resizeStartX = 0;
 let resizeStartY = 0;
 let windowStartWidth = 0;
 let windowStartHeight = 0;
+let resizeTarget: HTMLElement | null = null;
+let resizePointerId = -1;
 const RESIZE_CORNER_PX = 18;
 
 function onWindowPointerDownCapture(e: PointerEvent) {
@@ -430,16 +437,21 @@ function onWindowPointerDownCapture(e: PointerEvent) {
 
 function onResizeStart(e: PointerEvent) {
   if (props.entry.minimized) return;
+  e.preventDefault();
   e.stopPropagation();
   resizeStartX = e.clientX;
   resizeStartY = e.clientY;
   windowStartWidth = props.entry.width || 600;
   windowStartHeight = props.entry.height || 400;
 
-  const target = e.target as HTMLElement;
-  target.setPointerCapture(e.pointerId);
-  target.addEventListener('pointermove', onResizeMove);
-  target.addEventListener('pointerup', onResizeEnd);
+  resizeTarget = windowEl.value ?? null;
+  if (!resizeTarget) return;
+  resizePointerId = e.pointerId;
+  resizeTarget.setPointerCapture(e.pointerId);
+  resizeTarget.addEventListener('pointermove', onResizeMove);
+  resizeTarget.addEventListener('pointerup', onResizeEnd);
+  resizeTarget.addEventListener('pointercancel', onResizeEnd);
+  resizeTarget.addEventListener('lostpointercapture', onResizeEnd);
 }
 
 function onResizeMove(e: PointerEvent) {
@@ -449,11 +461,37 @@ function onResizeMove(e: PointerEvent) {
   props.entry.height = Math.max(150, windowStartHeight + dy);
 }
 
-function onResizeEnd(e: PointerEvent) {
-  const target = e.target as HTMLElement;
+function cleanupResize(releaseCapture: boolean) {
+  const target = resizeTarget;
+  const pointerId = resizePointerId;
+  if (!target) return;
   target.removeEventListener('pointermove', onResizeMove);
   target.removeEventListener('pointerup', onResizeEnd);
-  target.releasePointerCapture(e.pointerId);
+  target.removeEventListener('pointercancel', onResizeEnd);
+  target.removeEventListener('lostpointercapture', onResizeEnd);
+  resizeTarget = null;
+  resizePointerId = -1;
+  if (releaseCapture && pointerId >= 0) target.releasePointerCapture(pointerId);
+}
+
+function calibrateResizedPosition() {
+  const target = getFloatingWindowSnapPosition(
+    { x: props.entry.x, y: props.entry.y },
+    { width: props.entry.width || 600, height: props.entry.height || 400 },
+    props.manager.getExtent(),
+  );
+  if (target.x === props.entry.x && target.y === props.entry.y) return;
+  props.entry.x = target.x;
+  props.entry.y = target.y;
+  dragX = target.x;
+  dragY = target.y;
+  applyTransform(dragX, dragY);
+}
+
+function onResizeEnd(e: PointerEvent) {
+  if (e.pointerId !== resizePointerId) return;
+  cleanupResize(e.type === 'pointerup');
+  calibrateResizedPosition();
 
   if (props.entry.onResize) {
     props.entry.onResize(props.entry.width || 600, props.entry.height || 400);
@@ -645,6 +683,7 @@ function onResizeEnd(e: PointerEvent) {
 
 .floating-window-titlebar {
   height: 22px;
+  touch-action: none;
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -902,6 +941,7 @@ function onResizeEnd(e: PointerEvent) {
 .floating-window-resizer {
   position: absolute;
   z-index: 2;
+  touch-action: none;
   right: 0;
   bottom: 0;
   width: 14px;
