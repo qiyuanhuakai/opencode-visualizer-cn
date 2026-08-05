@@ -16,9 +16,15 @@ function emitPointer(
 ) {
   if (!target.setPointerCapture) target.setPointerCapture = () => undefined;
   if (!target.releasePointerCapture) target.releasePointerCapture = () => undefined;
-  target.dispatchEvent(
-    new PointerEvent(type, { bubbles: true, cancelable: true, clientX, clientY, pointerId }),
-  );
+  const event = new PointerEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    clientX,
+    clientY,
+    pointerId,
+  });
+  Reflect.set(event, '_vts', Date.now() + 1);
+  target.dispatchEvent(event);
 }
 
 async function mountFloatingWindow(): Promise<{

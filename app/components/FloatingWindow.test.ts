@@ -63,9 +63,9 @@ async function mountFloatingWindow() {
 function emitPointer(target: HTMLElement, type: string, x: number, y: number) {
   if (!target.setPointerCapture) target.setPointerCapture = () => undefined;
   if (!target.releasePointerCapture) target.releasePointerCapture = () => undefined;
-  target.dispatchEvent(
-    new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1 }),
-  );
+  const event = new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1 });
+  Reflect.set(event, '_vts', Date.now() + 1);
+  target.dispatchEvent(event);
 }
 
 describe('FloatingWindow gestures', () => {
