@@ -66,7 +66,7 @@ All spacing derives from a 4px base.
 ### Grid
 
 - Layout is application chrome, not a marketing grid.
-- Floating windows clamp to the visible canvas and keep the titlebar reachable.
+- Floating windows fit inside the canvas when created, then keep a reachable titlebar after drag or resize ends.
 - Terminal panels should default to approximately 80x24 cells and then resize around measured xterm cell dimensions.
 
 ## 5. Components
