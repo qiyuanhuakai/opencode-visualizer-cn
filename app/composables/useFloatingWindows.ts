@@ -266,11 +266,10 @@ export function useFloatingWindows() {
       merged.props = { ...existing.props, ...opts.props };
     }
 
-    // Set initial position if new and no explicit x/y provided
-    if (!existing && opts.x == null && opts.y == null) {
+    if (!existing && (opts.x == null || opts.y == null)) {
       const pos = getRandomPosition(merged.width ?? 600, merged.height ?? 400);
-      merged.x = pos.x;
-      merged.y = pos.y;
+      merged.x = opts.x ?? pos.x;
+      merged.y = opts.y ?? pos.y;
     }
 
     // Execute beforeOpen hook
@@ -300,17 +299,22 @@ export function useFloatingWindows() {
     const resolveContent = async () => {
       const entry = entriesMap.get(key);
       if (!entry) return;
-      if (renderVersionMap.get(key) !== contentVersion) return;
+      const isCurrent = () =>
+        entriesMap.get(key) === entry && renderVersionMap.get(key) === contentVersion;
+      if (!isCurrent()) return;
 
       if (typeof merged.content === 'function') {
         try {
-          entry.resolvedHtml = await (merged.content as () => Promise<string>)();
+          const resolved = await (merged.content as () => Promise<string>)();
+          if (!isCurrent()) return;
+          entry.resolvedHtml = resolved;
         } catch (e) {
+          if (!isCurrent()) return;
           entry.resolvedHtml = String(e);
         }
       } else if (merged.content && merged.lang) {
         try {
-          entry.resolvedHtml = await renderWorkerHtml({
+          const resolved = await renderWorkerHtml({
             id: nextRenderId(),
             code: merged.content,
             lang: merged.lang,
@@ -323,7 +327,10 @@ export function useFloatingWindows() {
             copyCodeAriaLabel: t('render.copyCodeAria'),
             copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
           });
+          if (!isCurrent()) return;
+          entry.resolvedHtml = resolved;
         } catch {
+          if (!isCurrent()) return;
           entry.resolvedHtml = `<pre>${merged.content}</pre>`;
         }
       } else if (merged.content) {
@@ -517,18 +524,18 @@ export function useFloatingWindows() {
     }
   }
 
-  function closeAll(options?: { exclude?: (key: string) => boolean }): void {
+  async function closeAll(options?: { exclude?: (key: string) => boolean }): Promise<void> {
     const exclude = options?.exclude;
+    for (const key of activeOpenTokens.keys()) {
+      if (!exclude?.(key)) activeOpenTokens.delete(key);
+    }
     for (const [key, timerId] of timerMap.entries()) {
       if (exclude?.(key)) continue;
       clearTimeout(timerId);
       timerMap.delete(key);
     }
-    // eslint-disable-next-line unicorn/no-useless-spread -- spread needed: close() deletes from entriesMap during iteration
-    for (const key of [...entriesMap.keys()]) {
-      if (exclude?.(key)) continue;
-      void close(key, true);
-    }
+    const keys = [...entriesMap.keys()].filter((key) => !exclude?.(key));
+    await Promise.all(keys.map((key) => close(key, true)));
     rebuildEntries();
   }
 
