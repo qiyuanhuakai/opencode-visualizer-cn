@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp, defineComponent } from 'vue';
 import { createI18n } from 'vue-i18n';
-import { clampFloatingWindowPosition, useFloatingWindows } from './useFloatingWindows';
+import { getFloatingWindowDragBounds, useFloatingWindows } from './useFloatingWindows';
 
 function mountFloatingWindows() {
   let api: ReturnType<typeof useFloatingWindows> | undefined;
@@ -46,12 +46,17 @@ describe('useFloatingWindows responsive geometry', () => {
       expiry: Infinity,
     });
 
-    // Then: the rendered window origin stays inside the mobile canvas
-    expect(mounted.api.get('mobile-window')).toMatchObject({ x: 0, y: 0 });
+    // Then: the created geometry fits entirely inside the mobile canvas
+    expect(mounted.api.get('mobile-window')).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 375,
+      height: 500,
+    });
     mounted.unmount();
   });
 
-  it('repositions an existing window when the viewport narrows', async () => {
+  it('preserves an existing window position when the viewport narrows', async () => {
     // Given: a visible window positioned near the right edge of a desktop canvas
     const mounted = mountFloatingWindows();
     mounted.api.setExtent(1280, 720);
@@ -66,12 +71,12 @@ describe('useFloatingWindows responsive geometry', () => {
     // When: the floating canvas shrinks to a mobile viewport
     mounted.api.setExtent(375, 500);
 
-    // Then: the same window is immediately moved back into view
-    expect(mounted.api.get('responsive-window')).toMatchObject({ x: 0, y: 0 });
+    // Then: viewport changes do not override the user-controlled position
+    expect(mounted.api.get('responsive-window')).toMatchObject({ x: 500, y: 100 });
     mounted.unmount();
   });
 
-  it('repositions a desktop window inside a tablet viewport', async () => {
+  it('preserves a desktop window position in a tablet viewport', async () => {
     // Given: a window at the right edge of a desktop canvas
     const mounted = mountFloatingWindows();
     mounted.api.setExtent(1280, 900);
@@ -86,23 +91,24 @@ describe('useFloatingWindows responsive geometry', () => {
     // When: the canvas narrows to a 768px tablet viewport
     mounted.api.setExtent(768, 900);
 
-    // Then: the complete window remains inside the available width
-    expect(mounted.api.get('tablet-window')).toMatchObject({ x: 8, y: 200 });
+    // Then: the window remains where the user left it
+    expect(mounted.api.get('tablet-window')).toMatchObject({ x: 520, y: 200 });
     mounted.unmount();
   });
 
-  it('clamps live drag coordinates to the visible extent', () => {
-    // Given: a desktop-sized window in a mobile extent
+  it('allows dragging beyond the canvas while keeping the titlebar reachable', () => {
+    // Given: a desktop-sized window and a mobile canvas
+    const windowSize = { width: 760, height: 560 };
     const extent = { width: 375, height: 500 };
 
-    // When: pointer movement requests coordinates outside every edge
-    const position = clampFloatingWindowPosition(900, -40, 760, 560, extent);
+    // When: drag bounds are calculated
+    const bounds = getFloatingWindowDragBounds(windowSize, extent);
 
-    // Then: the rendered origin cannot leave the extent
-    expect(position).toEqual({ x: 0, y: 0 });
+    // Then: most of the window may leave the canvas but 32px of titlebar stays reachable
+    expect(bounds).toEqual({ minX: -728, maxX: 343, minY: 0, maxY: 468 });
   });
 
-  it('clamps size and position updates before rebuilding entries', async () => {
+  it('preserves explicit position updates outside the canvas', async () => {
     // Given: a visible mobile window
     const mounted = mountFloatingWindows();
     mounted.api.setExtent(375, 500);
@@ -117,13 +123,34 @@ describe('useFloatingWindows responsive geometry', () => {
     // When: an option update supplies stale desktop geometry
     mounted.api.updateOptions('updated-window', { width: 760, height: 560, x: 900, y: 700 });
 
-    // Then: the updated window remains visible
-    expect(mounted.api.get('updated-window')).toMatchObject({ x: 0, y: 0 });
+    // Then: updateOptions retains the requested user-controlled position
+    expect(mounted.api.get('updated-window')).toMatchObject({ x: 900, y: 700 });
     mounted.unmount();
   });
 
-  it('clamps stale geometry when restoring a minimized window', async () => {
-    // Given: a minimized window whose stored geometry is outside the current extent
+  it('preserves an existing off-canvas position when opening the same key again', async () => {
+    // Given: an existing window has been moved outside the canvas
+    const mounted = mountFloatingWindows();
+    mounted.api.setExtent(375, 500);
+    await mounted.api.open('reopened-window', {
+      width: 300,
+      height: 300,
+      x: 50,
+      y: 100,
+      expiry: Infinity,
+    });
+    mounted.api.updateOptions('reopened-window', { x: 340, y: 468 });
+
+    // When: the same logical window is opened again to refresh its options
+    await mounted.api.open('reopened-window', { title: 'Updated title' });
+
+    // Then: reopening does not reinterpret the existing window as a new creation
+    expect(mounted.api.get('reopened-window')).toMatchObject({ x: 340, y: 468 });
+    mounted.unmount();
+  });
+
+  it('preserves off-canvas geometry when restoring a minimized window', async () => {
+    // Given: a minimized window the user placed partly outside the current extent
     const mounted = mountFloatingWindows();
     mounted.api.setExtent(375, 500);
     await mounted.api.open('restored-window', {
@@ -142,8 +169,8 @@ describe('useFloatingWindows responsive geometry', () => {
     // When: the window is restored
     mounted.api.restore('restored-window');
 
-    // Then: its full rendered bounds are reachable again
-    expect(mounted.api.get('restored-window')).toMatchObject({ x: 75, y: 100, minimized: false });
+    // Then: restore does not override the user-controlled position
+    expect(mounted.api.get('restored-window')).toMatchObject({ x: 900, y: 700, minimized: false });
     mounted.unmount();
   });
 

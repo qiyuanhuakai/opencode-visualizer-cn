@@ -42,6 +42,7 @@ export type Extent = { width: number; height: number };
 
 const TOOL_RUNNING_TTL_MS = 1000 * 60 * 10;
 const TOOL_COMPLETED_TTL_MS = 2000;
+const TITLEBAR_VISIBLE_PX = 32;
 
 const DEFAULT_OPTS: Partial<FloatingWindowEntry> = {
   closable: false,
@@ -80,28 +81,40 @@ function nextZIndex(manualTier: boolean): number {
   return ++zIndexCounter + (manualTier ? MANUAL_ZINDEX_OFFSET : 0);
 }
 
-export function clampFloatingWindowPosition(
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  extent: Extent,
-): { x: number; y: number } {
-  const renderedWidth = Math.min(width, Math.max(0, extent.width));
-  const renderedHeight = Math.min(height, Math.max(0, extent.height));
+export function getFloatingWindowDragBounds(windowSize: Extent, extent: Extent) {
+  const visibleX = Math.max(
+    1,
+    Math.min(TITLEBAR_VISIBLE_PX, windowSize.width, extent.width),
+  );
+  const visibleY = Math.max(1, Math.min(TITLEBAR_VISIBLE_PX, extent.height));
   return {
-    x: Math.max(0, Math.min(x, Math.max(0, extent.width - renderedWidth))),
-    y: Math.max(0, Math.min(y, Math.max(0, extent.height - renderedHeight))),
+    minX: visibleX - windowSize.width,
+    maxX: extent.width - visibleX,
+    minY: 0,
+    maxY: extent.height - visibleY,
   };
 }
 
-function clampEntryToExtent(entry: FloatingWindowEntry, extent: Extent): void {
-  const renderedWidth = Math.min(entry.width ?? 600, Math.max(0, extent.width));
-  const renderedHeight = Math.min(entry.height ?? 400, Math.max(0, extent.height));
-  Object.assign(
-    entry,
-    clampFloatingWindowPosition(entry.x, entry.y, renderedWidth, renderedHeight, extent),
-  );
+export function getFloatingWindowSnapPosition(
+  position: { x: number; y: number },
+  windowSize: Extent,
+  extent: Extent,
+): { x: number; y: number } {
+  if (extent.width <= 0 || extent.height <= 0) return position;
+  const bounds = getFloatingWindowDragBounds(windowSize, extent);
+  return {
+    x: Math.max(bounds.minX, Math.min(position.x, bounds.maxX)),
+    y: Math.max(bounds.minY, Math.min(position.y, bounds.maxY)),
+  };
+}
+
+function clampEntryForCreation(entry: FloatingWindowEntry, extent: Extent): boolean {
+  if (extent.width <= 0 || extent.height <= 0) return false;
+  entry.width = Math.min(entry.width || 600, extent.width);
+  entry.height = Math.min(entry.height || 400, extent.height);
+  entry.x = Math.max(0, Math.min(entry.x, Math.max(0, extent.width - entry.width)));
+  entry.y = Math.max(0, Math.min(entry.y, Math.max(0, extent.height - entry.height)));
+  return true;
 }
 
 function variantToGutterMode(variant?: string): 'none' | 'single' | 'double' {
@@ -150,6 +163,8 @@ function resolveExpiresAt(
 export function useFloatingWindows() {
   const { t } = useI18n();
   const entriesMap = reactive(new Map<string, FloatingWindowEntry>());
+  const pendingInitialLayoutKeys = new Set<string>();
+  const activeOpenTokens = new Map<string, symbol>();
   const entries = shallowRef<FloatingWindowEntry[]>([]);
 
   function rebuildEntries(): void {
@@ -166,9 +181,14 @@ export function useFloatingWindows() {
 
   function setExtent(w: number, h: number) {
     extent = { width: Math.max(0, w), height: Math.max(0, h) };
-    if (entriesMap.size === 0 || extent.width === 0 || extent.height === 0) return;
-    for (const entry of entriesMap.values()) clampEntryToExtent(entry, extent);
-    rebuildEntries();
+    if (extent.width <= 0 || extent.height <= 0 || pendingInitialLayoutKeys.size === 0) return;
+    let changed = false;
+    for (const key of pendingInitialLayoutKeys) {
+      const entry = entriesMap.get(key);
+      if (entry) changed = clampEntryForCreation(entry, extent) || changed;
+      pendingInitialLayoutKeys.delete(key);
+    }
+    if (changed) rebuildEntries();
   }
 
   function getExtent(): Extent {
@@ -215,6 +235,8 @@ export function useFloatingWindows() {
   }
 
   onUnmounted(() => {
+    activeOpenTokens.clear();
+    pendingInitialLayoutKeys.clear();
     for (const timerId of timerMap.values()) {
       clearTimeout(timerId);
     }
@@ -223,6 +245,8 @@ export function useFloatingWindows() {
   });
 
   async function open(key: string, opts: Partial<FloatingWindowEntry>): Promise<void> {
+    const openToken = Symbol(key);
+    activeOpenTokens.set(key, openToken);
     const existing = entriesMap.get(key);
 
     // Merge with defaults and existing
@@ -242,19 +266,32 @@ export function useFloatingWindows() {
       merged.props = { ...existing.props, ...opts.props };
     }
 
-    // Set initial position if new and no explicit x/y provided
-    if (!existing && opts.x == null && opts.y == null) {
+    if (!existing && (opts.x == null || opts.y == null)) {
       const pos = getRandomPosition(merged.width ?? 600, merged.height ?? 400);
-      merged.x = pos.x;
-      merged.y = pos.y;
+      merged.x = opts.x ?? pos.x;
+      merged.y = opts.y ?? pos.y;
     }
-
-    clampEntryToExtent(merged, extent);
 
     // Execute beforeOpen hook
     if (merged.beforeOpen) {
-      await merged.beforeOpen();
+      try {
+        await merged.beforeOpen();
+      } catch (error) {
+        if (activeOpenTokens.get(key) === openToken) activeOpenTokens.delete(key);
+        throw error;
+      }
     }
+
+    if (activeOpenTokens.get(key) !== openToken) return;
+    const liveEntry = entriesMap.get(key);
+    if (liveEntry) {
+      merged.x = liveEntry.x;
+      merged.y = liveEntry.y;
+      merged.width = liveEntry.width;
+      merged.height = liveEntry.height;
+      merged.minimized = liveEntry.minimized;
+    }
+    if (!liveEntry && !clampEntryForCreation(merged, extent)) pendingInitialLayoutKeys.add(key);
 
     merged.isReady = true;
     const contentVersion = bumpRenderVersion(key);
@@ -262,17 +299,22 @@ export function useFloatingWindows() {
     const resolveContent = async () => {
       const entry = entriesMap.get(key);
       if (!entry) return;
-      if (renderVersionMap.get(key) !== contentVersion) return;
+      const isCurrent = () =>
+        entriesMap.get(key) === entry && renderVersionMap.get(key) === contentVersion;
+      if (!isCurrent()) return;
 
       if (typeof merged.content === 'function') {
         try {
-          entry.resolvedHtml = await (merged.content as () => Promise<string>)();
+          const resolved = await (merged.content as () => Promise<string>)();
+          if (!isCurrent()) return;
+          entry.resolvedHtml = resolved;
         } catch (e) {
+          if (!isCurrent()) return;
           entry.resolvedHtml = String(e);
         }
       } else if (merged.content && merged.lang) {
         try {
-          entry.resolvedHtml = await renderWorkerHtml({
+          const resolved = await renderWorkerHtml({
             id: nextRenderId(),
             code: merged.content,
             lang: merged.lang,
@@ -285,7 +327,10 @@ export function useFloatingWindows() {
             copyCodeAriaLabel: t('render.copyCodeAria'),
             copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
           });
+          if (!isCurrent()) return;
+          entry.resolvedHtml = resolved;
         } catch {
+          if (!isCurrent()) return;
           entry.resolvedHtml = `<pre>${merged.content}</pre>`;
         }
       } else if (merged.content) {
@@ -300,6 +345,7 @@ export function useFloatingWindows() {
     const shouldFocusOnOpen = !existing && merged.focusOnOpen === true;
 
     entriesMap.set(key, sanitizeEntry(merged));
+    if (activeOpenTokens.get(key) === openToken) activeOpenTokens.delete(key);
     rebuildEntries();
     void resolveContent();
 
@@ -345,7 +391,6 @@ export function useFloatingWindows() {
        }
      }
 
-     clampEntryToExtent(merged, extent);
      entriesMap.set(key, sanitizeEntry(merged));
      rebuildEntries();
 
@@ -440,7 +485,6 @@ export function useFloatingWindows() {
   function restore(key: string): void {
     const entry = entriesMap.get(key);
     if (!entry) return;
-    clampEntryToExtent(entry, extent);
     entry.minimized = false;
     bringToFront(key);
   }
@@ -454,6 +498,7 @@ export function useFloatingWindows() {
   }
 
   async function close(key: string, skipRebuild = false): Promise<void> {
+    activeOpenTokens.delete(key);
     const entry = entriesMap.get(key);
     if (!entry) return;
 
@@ -468,6 +513,8 @@ export function useFloatingWindows() {
       await entry.beforeClose(el as HTMLElement);
     }
 
+    if (entriesMap.get(key) !== entry) return;
+    pendingInitialLayoutKeys.delete(key);
     entriesMap.delete(key);
     renderVersionMap.delete(key);
     if (!skipRebuild) rebuildEntries();
@@ -477,18 +524,18 @@ export function useFloatingWindows() {
     }
   }
 
-  function closeAll(options?: { exclude?: (key: string) => boolean }): void {
+  async function closeAll(options?: { exclude?: (key: string) => boolean }): Promise<void> {
     const exclude = options?.exclude;
+    for (const key of activeOpenTokens.keys()) {
+      if (!exclude?.(key)) activeOpenTokens.delete(key);
+    }
     for (const [key, timerId] of timerMap.entries()) {
       if (exclude?.(key)) continue;
       clearTimeout(timerId);
       timerMap.delete(key);
     }
-    // eslint-disable-next-line unicorn/no-useless-spread -- spread needed: close() deletes from entriesMap during iteration
-    for (const key of [...entriesMap.keys()]) {
-      if (exclude?.(key)) continue;
-      void close(key, true);
-    }
+    const keys = [...entriesMap.keys()].filter((key) => !exclude?.(key));
+    await Promise.all(keys.map((key) => close(key, true)));
     rebuildEntries();
   }
 

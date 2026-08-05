@@ -11,7 +11,9 @@
 - [x] Codex Panel 成功连接后仅持久化自动重连意图；页面刷新时由应用启动生命周期立即重建 transport，并通过真实 `account/read` 恢复账号状态，不再等到重新打开 Panel 才连接。
 - [x] OpenCode/ACP 登录、重登录与初始化中止不再断开独立的 Codex Panel transport；Codex 主后端初始化中止或激活失败也只清理当前 transport，保留下一次启动的重连意图，只有用户显式点击 Disconnect 才清除该意图。
 - [x] 修复线程加载期间断开连接后 loading 锁无法释放的问题；断开状态下保留线程上下文但禁用线程选择和置顶操作，避免调用已销毁的 adapter。
-- [x] 浮动窗口在创建、恢复、实时拖动、选项更新、缩放及 viewport 变化时始终约束在可见 canvas 内；临时 `0×0` ResizeObserver extent 不再覆盖有效坐标，桌面尺寸窗口切换到 375px 移动视口后会立即回到屏幕内，标题栏和操作按钮保持可访问。
+- [x] 浮动窗口创建时会把陈旧或桌面尺寸与坐标收敛到可见 canvas 内；实时拖动和缩放不再受 canvas、屏幕边缘或输入区限制，`pointerup`、`pointercancel` 或 capture 丢失时统一清理手势，非 owner pointer 与第二指针不能抢占手势；结束后仅独立校准真正越界的坐标轴并保留至少 32px 可拖标题栏，避免阻尼、跨轴回弹和残留 listener 造成随机跳动。
+- [x] 修复页面仍在加载、floating extent 暂为 `0×0` 时打开终端等窗口会被压成无高度横条且无法恢复的问题；窗口保留请求尺寸，并在首个有效 extent 到达时执行一次创建布局；异步 `beforeOpen` 采用同 key 最新请求生效语义，关闭窗口不会再被旧请求复活，旧 `beforeClose` 完成后也不会删除后打开的同 key 窗口。
+- [x] 浮窗批量关闭会等待全部异步 `beforeClose` 后再同步可见列表，并使尚未完成的旧 open 失效；初始异步内容不再覆盖后续 `setContent`，新建窗口只提供单轴坐标时也会独立生成另一轴的有限位置。
 
 ## [v0.7.2 released]
 

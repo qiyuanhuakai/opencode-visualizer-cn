@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n';
 import CodeContent from './CodeContent.vue';
 import { FLOATING_WINDOW_KEY, type FloatingWindowAPI } from '../composables/useFloatingWindow';
 import {
-  clampFloatingWindowPosition,
+  getFloatingWindowSnapPosition,
   type FloatingWindowEntry,
   type useFloatingWindows,
 } from '../composables/useFloatingWindows';
@@ -299,7 +299,6 @@ function onSearchKeydown(event: KeyboardEvent) {
 // During drag, we bypass Vue reactivity entirely and sync back on drag end.
 let lastPointerX = 0;
 let lastPointerY = 0;
-let snapAnimId: number | null = null;
 
 // Non-reactive drag position (avoids Vue overhead during drag)
 let dragX = 0;
@@ -313,33 +312,15 @@ function applyTransform(x: number, y: number) {
   el.style.setProperty('--win-y', `${y}px`);
 }
 
-function cancelSnapAnimation() {
-  if (snapAnimId !== null) {
-    cancelAnimationFrame(snapAnimId);
-    snapAnimId = null;
-  }
-}
-
-function getDragBounds() {
+function getDragGeometry() {
   const extent = props.manager.getExtent();
-  const w = Math.min(props.entry.width || 600, extent.width);
-  const h = Math.min(props.entry.height || 400, extent.height);
-  return {
-    minX: 0,
-    maxX: Math.max(0, extent.width - w),
-    minY: 0,
-    maxY: Math.max(0, extent.height - h),
-    w,
-    h,
-    extent,
-  };
+  return { w: props.entry.width || 600, h: props.entry.height || 400, extent };
 }
 
 function onDragStart(e: PointerEvent) {
+  if (dragPointerId !== -1 || resizePointerId !== -1) return;
   if ((e.target as HTMLElement).closest('.close-btn, .minimize-btn, .open-btn')) return;
   e.preventDefault();
-  cancelSnapAnimation();
-
   dragTarget = e.currentTarget as HTMLElement;
   dragTarget.setPointerCapture(e.pointerId);
   dragPointerId = e.pointerId;
@@ -351,36 +332,39 @@ function onDragStart(e: PointerEvent) {
 
   dragTarget.addEventListener('pointermove', onDragMove);
   dragTarget.addEventListener('pointerup', onDragEnd);
+  dragTarget.addEventListener('pointercancel', onDragEnd);
+  dragTarget.addEventListener('lostpointercapture', onDragEnd);
 }
 
 function onDragMove(e: PointerEvent) {
+  if (e.pointerId !== dragPointerId) return;
   const dx = e.clientX - lastPointerX;
   const dy = e.clientY - lastPointerY;
   lastPointerX = e.clientX;
   lastPointerY = e.clientY;
-  const { w, h, extent } = getDragBounds();
-  const next = clampFloatingWindowPosition(dragX + dx, dragY + dy, w, h, extent);
-  dragX = next.x;
-  dragY = next.y;
+  dragX += dx;
+  dragY += dy;
 
   // Direct DOM update — bypasses Vue reactivity and restyle cascade
   applyTransform(dragX, dragY);
 }
 
-function cleanupDrag() {
-  if (dragTarget) {
-    dragTarget.removeEventListener('pointermove', onDragMove);
-    dragTarget.removeEventListener('pointerup', onDragEnd);
-    if (dragPointerId >= 0) {
-      dragTarget.releasePointerCapture(dragPointerId);
-    }
-    dragTarget = null;
-    dragPointerId = -1;
-  }
+function cleanupDrag(releaseCapture: boolean) {
+  const target = dragTarget;
+  const pointerId = dragPointerId;
+  if (!target) return;
+  target.removeEventListener('pointermove', onDragMove);
+  target.removeEventListener('pointerup', onDragEnd);
+  target.removeEventListener('pointercancel', onDragEnd);
+  target.removeEventListener('lostpointercapture', onDragEnd);
+  dragTarget = null;
+  dragPointerId = -1;
+  if (releaseCapture && pointerId >= 0) target.releasePointerCapture(pointerId);
 }
 
-function onDragEnd() {
-  cleanupDrag();
+function onDragEnd(e: PointerEvent) {
+  if (e.pointerId !== dragPointerId) return;
+  cleanupDrag(e.type === 'pointerup');
   // Sync final position to Vue reactive state (single restyle)
   props.entry.x = dragX;
   props.entry.y = dragY;
@@ -388,66 +372,23 @@ function onDragEnd() {
 }
 
 function snapBack() {
-  const { minX, maxX, minY, maxY, w, h, extent } = getDragBounds();
-  const x = dragX;
-  const y = dragY;
-  if (x >= minX && x <= maxX && y >= minY && y <= maxY) return;
-
-  const cx = extent.width / 2 - w / 2;
-  const cy = extent.height / 2 - h / 2;
-  const dx = cx - x;
-  const dy = cy - y;
-  const validX = maxX >= minX;
-  const validY = maxY >= minY;
-
-  let t = 1;
-  const candidates: number[] = [];
-  if (validX && dx !== 0) {
-    if (x < minX) candidates.push((minX - x) / dx);
-    if (x > maxX) candidates.push((maxX - x) / dx);
-  }
-  if (validY && dy !== 0) {
-    if (y < minY) candidates.push((minY - y) / dy);
-    if (y > maxY) candidates.push((maxY - y) / dy);
-  }
-  if (candidates.length > 0) {
-    const tc = Math.min(Math.max(...candidates), 1);
-    const tx = x + tc * dx;
-    const ty = y + tc * dy;
-    if ((!validX || (tx >= minX && tx <= maxX)) && (!validY || (ty >= minY && ty <= maxY))) {
-      t = tc;
-    }
-  }
-
-  const finalX = x + t * dx;
-  const finalY = y + t * dy;
-  const startX = x;
-  const startY = y;
-  const startTime = performance.now();
-  const duration = 150;
-
-  function frame(now: number) {
-    const progress = Math.min((now - startTime) / duration, 1);
-    const ease = 1 - (1 - progress) * (1 - progress) * (1 - progress);
-    dragX = startX + (finalX - startX) * ease;
-    dragY = startY + (finalY - startY) * ease;
-    applyTransform(dragX, dragY);
-    if (progress < 1) {
-      snapAnimId = requestAnimationFrame(frame);
-    } else {
-      // Sync final position to Vue reactive state
-      props.entry.x = dragX;
-      props.entry.y = dragY;
-      snapAnimId = null;
-    }
-  }
-
-  snapAnimId = requestAnimationFrame(frame);
+  const { w, h, extent } = getDragGeometry();
+  const target = getFloatingWindowSnapPosition(
+    { x: dragX, y: dragY },
+    { width: w, height: h },
+    extent,
+  );
+  if (target.x === dragX && target.y === dragY) return;
+  dragX = target.x;
+  dragY = target.y;
+  props.entry.x = dragX;
+  props.entry.y = dragY;
+  applyTransform(dragX, dragY);
 }
 
 onBeforeUnmount(() => {
-  cancelSnapAnimation();
-  cleanupDrag();
+  cleanupDrag(false);
+  cleanupResize(false);
   search.close();
 });
 
@@ -479,39 +420,82 @@ let resizeStartX = 0;
 let resizeStartY = 0;
 let windowStartWidth = 0;
 let windowStartHeight = 0;
+let resizeTarget: HTMLElement | null = null;
+let resizePointerId = -1;
+const RESIZE_CORNER_PX = 18;
+
+function onWindowPointerDownCapture(e: PointerEvent) {
+  onFocus();
+  if (!props.entry.resizable || props.entry.minimized) return;
+  const target = e.target as HTMLElement;
+  if (target.closest('.floating-window-resizer')) return;
+  const rect = windowEl.value?.getBoundingClientRect();
+  if (!rect) return;
+  if (e.clientX < rect.right - RESIZE_CORNER_PX || e.clientY < rect.bottom - RESIZE_CORNER_PX) {
+    return;
+  }
+  onResizeStart(e);
+}
 
 function onResizeStart(e: PointerEvent) {
+  if (resizePointerId !== -1 || dragPointerId !== -1) return;
   if (props.entry.minimized) return;
+  e.preventDefault();
   e.stopPropagation();
   resizeStartX = e.clientX;
   resizeStartY = e.clientY;
   windowStartWidth = props.entry.width || 600;
   windowStartHeight = props.entry.height || 400;
 
-  const target = e.target as HTMLElement;
-  target.setPointerCapture(e.pointerId);
-  target.addEventListener('pointermove', onResizeMove);
-  target.addEventListener('pointerup', onResizeEnd);
+  resizeTarget = windowEl.value ?? null;
+  if (!resizeTarget) return;
+  resizePointerId = e.pointerId;
+  resizeTarget.setPointerCapture(e.pointerId);
+  resizeTarget.addEventListener('pointermove', onResizeMove);
+  resizeTarget.addEventListener('pointerup', onResizeEnd);
+  resizeTarget.addEventListener('pointercancel', onResizeEnd);
+  resizeTarget.addEventListener('lostpointercapture', onResizeEnd);
 }
 
 function onResizeMove(e: PointerEvent) {
+  if (e.pointerId !== resizePointerId) return;
   const dx = e.clientX - resizeStartX;
   const dy = e.clientY - resizeStartY;
-  const extent = props.manager.getExtent();
-  const maxWidth = Math.max(1, extent.width - Math.max(0, props.entry.x));
-  const maxHeight = Math.max(1, extent.height - Math.max(0, props.entry.y));
-  props.entry.width = Math.min(maxWidth, Math.max(Math.min(200, maxWidth), windowStartWidth + dx));
-  props.entry.height = Math.min(
-    maxHeight,
-    Math.max(Math.min(150, maxHeight), windowStartHeight + dy),
+  props.entry.width = Math.max(200, windowStartWidth + dx);
+  props.entry.height = Math.max(150, windowStartHeight + dy);
+}
+
+function cleanupResize(releaseCapture: boolean) {
+  const target = resizeTarget;
+  const pointerId = resizePointerId;
+  if (!target) return;
+  target.removeEventListener('pointermove', onResizeMove);
+  target.removeEventListener('pointerup', onResizeEnd);
+  target.removeEventListener('pointercancel', onResizeEnd);
+  target.removeEventListener('lostpointercapture', onResizeEnd);
+  resizeTarget = null;
+  resizePointerId = -1;
+  if (releaseCapture && pointerId >= 0) target.releasePointerCapture(pointerId);
+}
+
+function calibrateResizedPosition() {
+  const target = getFloatingWindowSnapPosition(
+    { x: props.entry.x, y: props.entry.y },
+    { width: props.entry.width || 600, height: props.entry.height || 400 },
+    props.manager.getExtent(),
   );
+  if (target.x === props.entry.x && target.y === props.entry.y) return;
+  props.entry.x = target.x;
+  props.entry.y = target.y;
+  dragX = target.x;
+  dragY = target.y;
+  applyTransform(dragX, dragY);
 }
 
 function onResizeEnd(e: PointerEvent) {
-  const target = e.target as HTMLElement;
-  target.removeEventListener('pointermove', onResizeMove);
-  target.removeEventListener('pointerup', onResizeEnd);
-  target.releasePointerCapture(e.pointerId);
+  if (e.pointerId !== resizePointerId) return;
+  cleanupResize(e.type === 'pointerup');
+  calibrateResizedPosition();
 
   if (props.entry.onResize) {
     props.entry.onResize(props.entry.width || 600, props.entry.height || 400);
@@ -525,7 +509,7 @@ function onResizeEnd(e: PointerEvent) {
     class="floating-window"
     :class="{ minimized: entry.minimized, 'is-hidden-minimized': entry.minimized }"
     :style="windowStyle"
-    @pointerdown.capture="onFocus"
+    @pointerdown.capture="onWindowPointerDownCapture"
     :data-floating-key="entry.key"
   >
     <div class="floating-window-titlebar" @pointerdown="onDragStart">
@@ -671,8 +655,6 @@ function onResizeEnd(e: PointerEvent) {
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  max-width: 100%;
-  max-height: 100%;
   overflow: hidden;
   background: transparent;
   border: 1px solid var(--floating-accent, #3a4150);
@@ -705,6 +687,7 @@ function onResizeEnd(e: PointerEvent) {
 
 .floating-window-titlebar {
   height: 22px;
+  touch-action: none;
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -961,6 +944,8 @@ function onResizeEnd(e: PointerEvent) {
 
 .floating-window-resizer {
   position: absolute;
+  z-index: 2;
+  touch-action: none;
   right: 0;
   bottom: 0;
   width: 14px;
