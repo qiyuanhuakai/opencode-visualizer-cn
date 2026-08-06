@@ -180,6 +180,37 @@ describe('useStreamCodeRender', () => {
     expect(container.innerHTML).toContain('line2');
   });
 
+  it('clears stale rows from the container when cancel+reopen happens', async () => {
+    // Given: a stream is open and has painted rows for theme A
+    const params = ref({ code: 'line1\nline2', lang: 'typescript', theme: 'github-dark' });
+    const { stream: stream1, triggerBatch: triggerBatch1 } = createMockStream();
+    const { stream: stream2 } = createMockStream();
+    mockStartStream.mockReturnValueOnce(stream1).mockReturnValueOnce(stream2);
+
+    const { containerRef } = useStreamCodeRender(params);
+    await nextTick();
+
+    const container = document.createElement('div');
+    containerRef.value = container;
+
+    triggerBatch1({
+      recall: 0,
+      stable: [
+        { content: 'line1', offset: 0, color: '#E1E4E8' },
+        { content: '\n', offset: 0 },
+      ],
+      unstable: [{ content: 'line2', offset: 0, color: '#E1E4E8' }],
+    });
+    expect(container.querySelectorAll('.code-row').length).toBeGreaterThan(0);
+
+    // When: theme changes (cancel + reopen with a fresh stream)
+    params.value = { code: 'line1\nline2', lang: 'typescript', theme: 'dark-plus' };
+    await nextTick();
+
+    // Then: rows from the cancelled session must not linger in the container
+    expect(container.querySelectorAll('.code-row').length).toBe(0);
+  });
+
   it('finalizes with converged HTML when stream closes', async () => {
     // Given: a stream is open
     const params = ref({ code: 'const x = 1;', lang: 'typescript', theme: 'github-dark' });

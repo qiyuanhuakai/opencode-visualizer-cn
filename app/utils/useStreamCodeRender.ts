@@ -71,6 +71,9 @@ export function useStreamCodeRender(
       activeStream = null;
     }
     patcher = null;
+    // A cancelled session's rows are invalid for the next session; a fresh
+    // patcher would reuse the existing pre.shiki > code and append after them.
+    containerRef.value?.replaceChildren();
   }
 
   function openStream(p: StreamCodeRenderParams) {
