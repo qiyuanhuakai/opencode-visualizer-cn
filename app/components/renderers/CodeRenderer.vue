@@ -114,7 +114,6 @@ const streamingRenderParams = computed<StreamCodeRenderParams | null>(() => {
   if (!props.streaming) return null;
   if (props.rawHtml && !props.fileContent) return null;
   const code = props.fileContent ?? '';
-  if (!code && !props.rawHtml) return null;
   if (!code) return null;
   return {
     code,

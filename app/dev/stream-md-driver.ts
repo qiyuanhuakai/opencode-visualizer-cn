@@ -580,7 +580,7 @@ const driver = {
             copyLabels.copiedLabel,
             copyLabels.copyCodeAriaLabel,
             copyLabels.copyMarkdownAriaLabel,
-          ].join(' '),
+          ].join('\u0000'),
           request.code,
         ) !== undefined,
     }));

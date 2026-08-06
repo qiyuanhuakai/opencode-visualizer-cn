@@ -468,8 +468,12 @@ async function main() {
     record('S2d', 'DOM snapshots 1s apart identical (no further mutations)', s2dSnap1 === s2dSnap2);
     record('S2d', 'zero DOM mutation entries after cancel settled', mutationsAtEnd === mutationsAfterCancelSettled, `after cancel settled=${mutationsAfterCancelSettled}, end=${mutationsAtEnd}`);
 
-    const s2dDone = await ev(() => window.__streamDriver.isDone());
-    record('S2d', 'stream never finalized after cancel', !s2dDone);
+    // Assert the real cancel contract — no finalize swap — rather than the DOM
+    // shape: after cancel empties the code, params legitimately go null and the
+    // component mounts the non-streaming branch, which shares the post-done
+    // selector that isDone() probes.
+    const s2dFinalizeCapture = await ev(() => window.__streamDriver.getFinalizeCaptureHTML());
+    record('S2d', 'stream never finalized after cancel', s2dFinalizeCapture === '', s2dFinalizeCapture.slice(0, 120));
 
     const s2dInPageErrors = await ev(() => window.__streamDriver.getConsoleErrors());
     artifact('s2d', 'console-errors.json', JSON.stringify({ inPage: s2dInPageErrors, playwright: pageErrors }, null, 2));
