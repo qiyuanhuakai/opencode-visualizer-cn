@@ -2,6 +2,7 @@
   <div ref="rootEl" class="code-renderer-content">
     <div ref="viewerBodyEl" class="viewer-body" @mousedown="onMouseDown" @scroll="onScroll">
       <div v-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
+      <div v-else-if="props.streaming && !streamDone" ref="streamContainerRef" class="code-scroll-content" />
       <div v-else-if="useVirtualScroll" class="code-scroll-content virtual-scroll">
         <div :style="{ height: topPadding + 'px' }" />
         <CodeContent
@@ -35,6 +36,7 @@ import { useI18n } from 'vue-i18n';
 import CodeContent from '../CodeContent.vue';
 import LineCommentOverlay from '../LineCommentOverlay.vue';
 import { type CodeRenderParams, useCodeRender } from '../../utils/useCodeRender';
+import { type StreamCodeRenderParams, useStreamCodeRender } from '../../utils/useStreamCodeRender';
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 
 const { t } = useI18n();
@@ -48,6 +50,7 @@ const props = defineProps<{
   gutterMode?: 'default' | 'none' | 'grep-source';
   theme?: string;
   lines?: string;
+  streaming?: boolean;
   onRequestAddLineComment?: (payload: { path: string; startLine: number; endLine: number; text: string }) => void;
 }>();
 
@@ -104,7 +107,38 @@ const renderParams = computed<CodeRenderParams | null>(() => {
   };
 });
 
-const { html: renderedHtml } = useCodeRender(renderParams);
+const streamingRenderParams = computed<StreamCodeRenderParams | null>(() => {
+  if (!props.streaming) return null;
+  if (props.rawHtml && !props.fileContent) return null;
+  const code = props.fileContent ?? '';
+  if (!code && !props.rawHtml) return null;
+  if (!code) return null;
+  return {
+    code,
+    lang: props.lang ?? 'text',
+    theme: props.theme ?? DEFAULT_SYNTAX_THEME,
+    gutterMode: viewerGutterMode.value,
+  };
+});
+
+const { html: renderedHtml } = useCodeRender(
+  computed(() => (props.streaming ? null : renderParams.value)),
+);
+
+const streamContainerRef = ref<HTMLElement | null>(null);
+const {
+  containerRef: streamContainer,
+  html: streamRenderedHtml,
+  done: streamDone,
+} = useStreamCodeRender(streamingRenderParams);
+
+watch(streamContainerRef, (el) => {
+  streamContainer.value = el;
+});
+
+const effectiveHtml = computed(() =>
+  props.streaming ? streamRenderedHtml.value : renderedHtml.value,
+);
 
 // Virtual scroll state
 const VIRTUAL_SCROLL_THRESHOLD = 500;
@@ -123,12 +157,12 @@ function extractCodeRows(html: string) {
 }
 
 const allRows = computed(() => {
-  const html = renderedHtml.value || props.rawHtml || '';
+  const html = effectiveHtml.value || props.rawHtml || '';
   if (!html) return [];
   return extractCodeRows(html);
 });
 
-const nonVirtualHtml = computed(() => renderedHtml.value || props.rawHtml || '');
+const nonVirtualHtml = computed(() => effectiveHtml.value || props.rawHtml || '');
 
 const useVirtualScroll = computed(() => allRows.value.length > VIRTUAL_SCROLL_THRESHOLD);
 
@@ -403,6 +437,11 @@ onBeforeUnmount(() => {
 });
 
 const showLoading = computed(() => {
+  if (props.streaming) {
+    if (streamDone.value || streamRenderedHtml.value) return false;
+    if (streamingRenderParams.value) return false;
+    return false;
+  }
   if (renderedHtml.value || props.rawHtml) return false;
   if (renderParams.value) return true;
   if (props.fileContent == null) return true;
