@@ -135,7 +135,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     activeReasoningMessageIdByKey.set(reasoningKey, messageId);
     lastReasoningMessageIdByKey.set(reasoningKey, messageId);
 
-    manager.upsertEntry(resolvedSessionId, partId, messageText);
+    manager.upsertEntry(resolvedSessionId, partId, messageText, !!part.time?.end);
 
     const messageInfo = manager.acc.getMessage(messageId)?.info;
     const isSubagent = resolvedSessionId !== selectedSessionId.value;

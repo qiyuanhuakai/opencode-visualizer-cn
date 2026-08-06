@@ -11,6 +11,7 @@ import { useDeltaAccumulator } from './useDeltaAccumulator';
 export type StreamingWindowEntry = {
   id: string;
   text: string;
+  completed?: boolean;
 };
 
 export type StreamingWindowConfig = {
@@ -76,7 +77,7 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     }
   }
 
-  function upsertEntry(sessionId: string, partId: string, text: string) {
+  function upsertEntry(sessionId: string, partId: string, text: string, completed?: boolean) {
     let sessionEntries = entriesBySession.get(sessionId);
     if (!sessionEntries) {
       sessionEntries = [];
@@ -84,9 +85,9 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     }
     const existingIndex = sessionEntries.findIndex((e) => e.id === partId);
     if (existingIndex >= 0) {
-      sessionEntries[existingIndex] = { id: partId, text };
+      sessionEntries[existingIndex] = { id: partId, text, completed };
     } else {
-      sessionEntries.push({ id: partId, text });
+      sessionEntries.push({ id: partId, text, completed });
     }
     return sessionEntries;
   }
