@@ -2,7 +2,7 @@
   <div ref="rootEl" class="code-renderer-content">
     <div ref="viewerBodyEl" class="viewer-body" @mousedown="onMouseDown" @scroll="onScroll">
       <div v-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
-      <div v-else-if="props.streaming && !streamDone" ref="streamContainerRef" class="code-scroll-content" />
+      <div v-else-if="props.streaming && streamingRenderParams && !streamDone" ref="streamContainerRef" class="code-scroll-content" />
       <div v-else-if="useVirtualScroll" class="code-scroll-content virtual-scroll">
         <div :style="{ height: topPadding + 'px' }" />
         <CodeContent
@@ -377,7 +377,7 @@ function applyLineSelection() {
 }
 
 watch(
-  [() => renderedHtml.value, () => props.rawHtml, () => props.lines],
+  [() => renderedHtml.value, () => props.rawHtml, () => props.lines, () => streamRenderedHtml.value, () => streamDone.value],
   () => {
     nextTick(() => {
       applyLineSelection();
@@ -443,7 +443,8 @@ const showLoading = computed(() => {
   if (props.streaming) {
     if (streamDone.value || streamRenderedHtml.value) return false;
     if (streamingRenderParams.value) return false;
-    return false;
+    if (props.rawHtml) return false;
+    return props.fileContent == null;
   }
   if (renderedHtml.value || props.rawHtml) return false;
   if (renderParams.value) return true;

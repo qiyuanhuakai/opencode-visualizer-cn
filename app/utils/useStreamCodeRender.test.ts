@@ -151,6 +151,60 @@ describe('useStreamCodeRender', () => {
     });
   });
 
+  it.each([
+    {
+      name: 'gutterMode',
+      base: { gutterMode: 'none' } as const,
+      changed: { gutterMode: 'single' } as const,
+    },
+    {
+      name: 'gutterLines',
+      base: { gutterLines: ['1'] },
+      changed: { gutterLines: ['1'] },
+    },
+    {
+      name: 'grepPattern',
+      base: { grepPattern: 'foo' },
+      changed: { grepPattern: 'bar' },
+    },
+    {
+      name: 'lineOffset',
+      base: { lineOffset: 0 },
+      changed: { lineOffset: 40 },
+    },
+    {
+      name: 'lineLimit',
+      base: { lineLimit: 100 },
+      changed: { lineLimit: 200 },
+    },
+  ])('cancels and reopens when only $name changes with identical code', async ({ base, changed }) => {
+    // Given: a stream is open with the base render params
+    const code = 'line1\nline2';
+    const params = ref<StreamCodeRenderParams>({
+      code,
+      lang: 'typescript',
+      theme: 'github-dark',
+      ...base,
+    });
+    const { stream: stream1, cancel: cancel1, sendChunk: sendChunk1 } = createMockStream();
+    const { stream: stream2 } = createMockStream();
+    mockStartStream.mockReturnValueOnce(stream1).mockReturnValueOnce(stream2);
+
+    const { containerRef: _containerRef } = useStreamCodeRender(params);
+    await nextTick();
+    expect(mockStartStream).toHaveBeenCalledTimes(1);
+
+    // When: only the scoped param changes; code/lang/theme stay identical
+    params.value = { code, lang: 'typescript', theme: 'github-dark', ...changed };
+    await nextTick();
+
+    // Then: the stale session is cancelled and a new one opens with the new params
+    expect(cancel1).toHaveBeenCalled();
+    expect(mockStartStream).toHaveBeenCalledTimes(2);
+    // And: the change was NOT silently funneled into the stale session as an empty diff
+    expect(sendChunk1).toHaveBeenCalledTimes(1);
+  });
+
   it('applies batches to the container via streamPatch', async () => {
     // Given: a stream is open with a container
     const params = ref({ code: 'line1\nline2', lang: 'typescript', theme: 'github-dark' });
@@ -178,6 +232,43 @@ describe('useStreamCodeRender', () => {
     expect(container.querySelector('.code-row')).not.toBeNull();
     expect(container.innerHTML).toContain('line1');
     expect(container.innerHTML).toContain('line2');
+  });
+
+  it('buffers batches arriving before the container attaches and replays them in order', async () => {
+    // Given: a stream opened during setup, before any container element exists
+    const params = ref({ code: 'line1\nline2', lang: 'typescript', theme: 'github-dark' });
+    const { stream, triggerBatch } = createMockStream();
+    mockStartStream.mockReturnValue(stream);
+
+    const { containerRef } = useStreamCodeRender(params);
+    await nextTick();
+
+    // When: a batch with a stable row arrives while containerRef is still null
+    triggerBatch({
+      recall: 0,
+      stable: [
+        { content: 'line1', offset: 0, color: '#E1E4E8' },
+        { content: '\n', offset: 0 },
+      ],
+      unstable: [],
+    });
+
+    // And: the container attaches afterwards
+    const container = document.createElement('div');
+    containerRef.value = container;
+    await nextTick();
+
+    // Then: the early batch is replayed, not dropped
+    expect(container.innerHTML).toContain('line1');
+
+    // And: a later batch lands after the replayed rows, preserving order
+    triggerBatch({
+      recall: 0,
+      stable: [{ content: 'line2', offset: 0, color: '#E1E4E8' }],
+      unstable: [],
+    });
+    expect(container.innerHTML).toContain('line2');
+    expect(container.innerHTML.indexOf('line1')).toBeLessThan(container.innerHTML.indexOf('line2'));
   });
 
   it('clears stale rows from the container when cancel+reopen happens', async () => {
@@ -233,6 +324,43 @@ describe('useStreamCodeRender', () => {
     expect(html.value).toBe(finalHtml);
     expect(done.value).toBe(true);
     expect(container.innerHTML).toBe(finalHtml);
+  });
+
+  it('ignores a stale close() resolving after a newer session has opened', async () => {
+    // Given: a stream is open whose close() promise stays pending
+    const params = ref({ code: 'const a = 1;', lang: 'typescript', theme: 'github-dark' });
+    const { stream: stream1, close: close1 } = createMockStream();
+    const { stream: stream2 } = createMockStream();
+    mockStartStream.mockReturnValueOnce(stream1).mockReturnValueOnce(stream2);
+    let resolveClose: (html: string) => void = () => {};
+    close1.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveClose = resolve;
+        }),
+    );
+
+    const { containerRef, html, done } = useStreamCodeRender(params);
+    const container = document.createElement('div');
+    containerRef.value = container;
+    await nextTick();
+
+    // When: the debounce fires close() and, while it is pending, a newer session opens
+    await vi.advanceTimersByTimeAsync(500);
+    expect(close1).toHaveBeenCalled();
+    params.value = { code: 'let b = 2;', lang: 'typescript', theme: 'github-dark' };
+    await nextTick();
+    expect(mockStartStream).toHaveBeenCalledTimes(2);
+
+    // And: the stale close() finally resolves with stale HTML
+    resolveClose('<div class="code-host">STALE</div>');
+    for (let i = 0; i < 6; i += 1) await Promise.resolve();
+    await nextTick();
+
+    // Then: the stale resolution must not clobber the new session
+    expect(html.value).not.toContain('STALE');
+    expect(done.value).toBe(false);
+    expect(container.innerHTML).not.toContain('STALE');
   });
 
   it('cancels stream on unmount', async () => {

@@ -22,6 +22,7 @@ import {
 } from './workerStream';
 import { createStreamPatcher, type StreamPatcher } from './streamPatch';
 import { batchToRows } from './streamRows';
+import type { StreamTokenBatch } from '../workers/streamHandler';
 import { useI18n } from '../i18n/useI18n';
 
 export type StreamCodeRenderParams = {
@@ -61,6 +62,7 @@ export function useStreamCodeRender(
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
   let requestId = 0;
   let lineOffset = 0;
+  let pendingBatches: StreamTokenBatch[] = [];
 
   function cancelActiveStream() {
     if (closeTimer) {
@@ -72,9 +74,31 @@ export function useStreamCodeRender(
       activeStream = null;
     }
     patcher = null;
+    pendingBatches = [];
     // A cancelled session's rows are invalid for the next session; a fresh
     // patcher would reuse the existing pre.shiki > code and append after them.
     containerRef.value?.replaceChildren();
+  }
+
+  function convertAndApply(p: StreamCodeRenderParams, target: StreamPatcher, batch: StreamTokenBatch) {
+    const mode = p.gutterMode ?? 'none';
+    const gutterLines = p.gutterLines ? toRaw(p.gutterLines) : undefined;
+    const streamBatch = batchToRows(batch, mode, gutterLines, lineOffset);
+    lineOffset += streamBatch.stableRows.length;
+    target.applyBatch(streamBatch);
+  }
+
+  function flushPendingBatches(p: StreamCodeRenderParams) {
+    if (!patcher && containerRef.value) {
+      patcher = createStreamPatcher(containerRef.value);
+    }
+    const target = patcher;
+    if (!target || pendingBatches.length === 0) return;
+    const queued = pendingBatches;
+    pendingBatches = [];
+    for (const queuedBatch of queued) {
+      convertAndApply(p, target, queuedBatch);
+    }
   }
 
   function openStream(p: StreamCodeRenderParams) {
@@ -101,15 +125,14 @@ export function useStreamCodeRender(
 
     activeStream.onBatch((batch) => {
       if (currentRequestId !== requestId) return;
-      if (!patcher && containerRef.value) {
-        patcher = createStreamPatcher(containerRef.value);
+      if (!patcher && !containerRef.value) {
+        pendingBatches.push(batch);
+        return;
       }
-      if (!patcher) return;
-      const mode = p.gutterMode ?? 'none';
-      const gutterLines = p.gutterLines ? toRaw(p.gutterLines) : undefined;
-      const streamBatch = batchToRows(batch, mode, gutterLines, lineOffset);
-      lineOffset += streamBatch.stableRows.length;
-      patcher.applyBatch(streamBatch);
+      flushPendingBatches(p);
+      const target = patcher;
+      if (!target) return;
+      convertAndApply(p, target, batch);
     });
 
     activeStream.sendChunk(p.code);
@@ -128,10 +151,12 @@ export function useStreamCodeRender(
   async function closeStream() {
     if (!activeStream) return;
     const stream = activeStream;
+    const closingRequestId = requestId;
     activeStream = null;
 
     try {
       const finalHtml = await stream.close();
+      if (closingRequestId !== requestId) return;
       if (containerRef.value) {
         if (!patcher) {
           patcher = createStreamPatcher(containerRef.value);
@@ -143,11 +168,17 @@ export function useStreamCodeRender(
       error.value = '';
       patcher = null;
     } catch (err) {
+      if (closingRequestId !== requestId) return;
       patcher = null;
       if (err instanceof RenderCancelledError) return;
       error.value = err instanceof Error ? err.message : t('render.renderFailed');
     }
   }
+
+  watch(containerRef, (el) => {
+    if (!el || !activeStream || !lastParams) return;
+    flushPendingBatches(lastParams);
+  });
 
   watch(
     params,
@@ -168,9 +199,16 @@ export function useStreamCodeRender(
       }
 
       const newCode = p.code;
-      const langThemeChanged = p.lang !== lastParams.lang || p.theme !== lastParams.theme;
+      const sessionParamsChanged =
+        p.lang !== lastParams.lang ||
+        p.theme !== lastParams.theme ||
+        (p.gutterMode ?? 'none') !== (lastParams.gutterMode ?? 'none') ||
+        p.gutterLines !== lastParams.gutterLines ||
+        p.grepPattern !== lastParams.grepPattern ||
+        p.lineOffset !== lastParams.lineOffset ||
+        p.lineLimit !== lastParams.lineLimit;
 
-      if (langThemeChanged || !newCode.startsWith(lastCode)) {
+      if (sessionParamsChanged || !newCode.startsWith(lastCode)) {
         openStream(p);
       } else {
         const suffix = newCode.slice(lastCode.length);
