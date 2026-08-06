@@ -115,14 +115,23 @@ function parseArgs(argv) {
       baseUrl = arg;
     }
   }
-  if (!['code', 'markdown'].includes(scenario)) {
-    throw new Error(`unknown scenario "${scenario}" (expected code|markdown)`);
+  if (!['code', 'markdown', 'markdown-stream', 'scaling', 'detailed'].includes(scenario)) {
+    throw new Error(`unknown scenario "${scenario}" (expected code|markdown|markdown-stream|scaling|detailed)`);
   }
   return { scenario, baseUrl };
 }
 
 const { scenario: SCENARIO, baseUrl: argUrl } = parseArgs(process.argv.slice(2));
-const OUT_DIR = SCENARIO === 'markdown' ? '/tmp/stream-bench-markdown' : '/tmp/stream-bench';
+const OUT_DIR =
+  SCENARIO === 'markdown'
+    ? '/tmp/stream-bench-markdown'
+    : SCENARIO === 'markdown-stream'
+      ? '/tmp/stream-bench-markdown-stream'
+      : SCENARIO === 'scaling'
+        ? '/tmp/stream-bench-scaling'
+        : SCENARIO === 'detailed'
+          ? '/tmp/stream-bench-detailed'
+          : '/tmp/stream-bench';
 const BASE_URL = argUrl || process.env.STREAM_BENCH_URL || 'http://127.0.0.1:5173';
 const BENCH_URL = `${BASE_URL}/dev/stream-bench.html`;
 const RUNS = 3;
@@ -131,12 +140,25 @@ const RUNS = 3;
 const COMBOS =
   SCENARIO === 'markdown'
     ? [{ fixture: 'reasoning', benchPath: 'markdown' }]
-    : ['big', 'small'].flatMap((fixture) =>
-        ['legacy', 'stream'].map((benchPath) => ({ fixture, benchPath })),
-      );
+    : SCENARIO === 'markdown-stream'
+      ? [{ fixture: 'reasoning', benchPath: 'markdown-stream' }]
+      : SCENARIO === 'scaling'
+        ? [1, 2, 4, 8].flatMap((size) => [
+            { fixture: `reasoning-${size}x`, benchPath: 'markdown', size },
+            { fixture: `reasoning-${size}x`, benchPath: 'markdown-stream', size },
+          ])
+        : SCENARIO === 'detailed'
+          ? [{ fixture: 'reasoning-1x', benchPath: 'markdown-stream-detailed', size: 1 }]
+          : ['big', 'small'].flatMap((fixture) =>
+              ['legacy', 'stream'].map((benchPath) => ({ fixture, benchPath })),
+            );
 
 fs.rmSync(OUT_DIR, { recursive: true, force: true });
 fs.mkdirSync(OUT_DIR, { recursive: true });
+
+// Known baseline cumulative bytes from the markdown scenario (3 runs median).
+// Used for sanity-checking the streaming path.
+const REASONING_BASELINE_BYTES = 3236149;
 
 function waitForServer(url, timeoutMs = 20000) {
   return new Promise((resolve, reject) => {
@@ -195,7 +217,7 @@ async function main() {
   const sanityFailures = [];
 
   try {
-    for (const { fixture, benchPath } of COMBOS) {
+    for (const { fixture, benchPath, size } of COMBOS) {
       for (let run = 1; run <= RUNS; run += 1) {
         const label = `${benchPath}/${fixture}/run${run}`;
         const context = await browser.newContext({
@@ -205,7 +227,8 @@ async function main() {
         const pageErrors = [];
         page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
         try {
-          const url = `${BENCH_URL}?path=${benchPath}&fixture=${fixture}&run=${run}`;
+          const sizeParam = size ? `&size=${size}` : '';
+          const url = `${BENCH_URL}?path=${benchPath}&fixture=${fixture}${sizeParam}&run=${run}`;
           await page.goto(url, { waitUntil: 'load' });
           await page.waitForFunction(() => window.__benchDone === true, null, {
             timeout: 180000,
@@ -271,6 +294,39 @@ async function main() {
               sanityFailures.push(`${label}: bytesSent not strictly increasing at delta ${nonMonotonic}`);
             }
           }
+          if (benchPath === 'markdown-stream') {
+            // Smoke assertions for the streaming markdown path:
+            const t = result.totals ?? {};
+            if (!(t.workerMs > 0)) sanityFailures.push(`${label}: totals.workerMs missing/zero (${t.workerMs})`);
+            if (!(t.domMs >= 0)) sanityFailures.push(`${label}: totals.domMs missing (${t.domMs})`);
+            if (!(t.bytesSent > 0)) sanityFailures.push(`${label}: totals.bytesSent missing/zero (${t.bytesSent})`);
+            if (result.sanity?.finalTextComplete !== true) {
+              sanityFailures.push(`${label}: accumulated text != REASONING_FULL_TEXT (broken delta loop)`);
+            }
+            const perChunk = result.perChunk ?? [];
+            if (perChunk.length !== result.chunkCount || result.chunkCount < 800 || result.chunkCount > 1500) {
+              sanityFailures.push(
+                `${label}: perChunk length ${perChunk.length} / chunkCount ${result.chunkCount} invalid (expected 800-1500 deltas)`,
+              );
+            }
+            const badChunk = perChunk.findIndex(
+              (m) =>
+                !(typeof m.streamWorkerMs === 'number' && Number.isFinite(m.streamWorkerMs) && m.streamWorkerMs >= 0) ||
+                !(typeof m.streamDomMs === 'number' && Number.isFinite(m.streamDomMs) && m.streamDomMs >= 0) ||
+                !(typeof m.bytesSent === 'number' && m.bytesSent > 0) ||
+                !(typeof m.codeLen === 'number' && m.codeLen > 0),
+            );
+            if (badChunk !== -1) {
+              sanityFailures.push(`${label}: perChunk[${badChunk}] has missing/zero metric fields`);
+            }
+            // Sanity: cumulative bytes should be dramatically lower than baseline (3.24MB).
+            // If it's within 50% of baseline, something is wrong (full re-renders instead of streaming).
+            if (t.bytesSent > REASONING_BASELINE_BYTES * 1.5) {
+              sanityFailures.push(
+                `${label}: cumulative bytes ${t.bytesSent} too close to baseline ${REASONING_BASELINE_BYTES} (expected dramatic reduction)`,
+              );
+            }
+          }
           if ((result.consoleErrors ?? []).length > 0 || pageErrors.length > 0) {
             sanityFailures.push(
               `${label}: console/page errors: ${[...(result.consoleErrors ?? []), ...pageErrors].join(' | ')}`,
@@ -305,8 +361,18 @@ async function main() {
     const runs = allRuns.filter((r) => r.path === benchPath && r.fixture === fixture);
     if (runs.length === 0) continue;
 
-    const latencyKey = benchPath === 'stream' ? 'sendToAppliedMs' : 'workerMs';
-    const domKey = benchPath === 'stream' ? 'patchMs' : 'domMs';
+    const latencyKey =
+      benchPath === 'stream'
+        ? 'sendToAppliedMs'
+        : benchPath === 'markdown-stream'
+          ? 'streamWorkerMs'
+          : 'workerMs';
+    const domKey =
+      benchPath === 'stream'
+        ? 'patchMs'
+        : benchPath === 'markdown-stream'
+          ? 'streamDomMs'
+          : 'domMs';
 
     // Per-run per-chunk aggregates
     const perRunMean = runs.map((r) => mean(r.perChunk.map((m) => m[latencyKey])));
@@ -402,6 +468,35 @@ async function main() {
             },
           }
         : {}),
+      ...(benchPath === 'markdown-stream'
+        ? {
+            // Streaming markdown specific: per-delta p50/p95 by third, plus
+            // the key comparison metrics (cumulative bytes, insert counts).
+            perThird: [0, 1, 2].map((ti) => {
+              const lo = ti * third;
+              const hi = ti === 2 ? runs[0].chunkCount : lo + third;
+              const lat = runs.flatMap((r) => r.perChunk.slice(lo, hi).map((m) => m[latencyKey]));
+              const dom = runs.flatMap((r) => r.perChunk.slice(lo, hi).map((m) => m[domKey]));
+              return {
+                third: ['first', 'middle', 'last'][ti],
+                deltaRange: [lo, hi - 1],
+                workerP50: round(percentile(lat, 50)),
+                workerP95: round(percentile(lat, 95)),
+                workerMean: round(mean(lat)),
+                domP50: round(percentile(dom, 50)),
+                domP95: round(percentile(dom, 95)),
+                domMean: round(mean(dom)),
+              };
+            }),
+            markdownStream: {
+              finalChars: runs[0].perChunk[runs[0].perChunk.length - 1].codeLen,
+              cumulativeBytesSentMedian: median(runs.map((r) => r.totals.bytesSent)),
+              domInsertCountMedian: median(runs.map((r) => r.totals.domInserts ?? 0)),
+              cumulativeWorkerMsMedian: round(median(runs.map((r) => r.totals.workerMs)), 1),
+              cumulativeDomMsMedian: round(median(runs.map((r) => r.totals.domMs)), 1),
+            },
+          }
+        : {}),
       sanity: runs.map((r) => r.sanity),
     };
 
@@ -434,6 +529,12 @@ async function main() {
     }
     if (s.markdown) {
       console.log(`  markdown baseline: final=${s.markdown.finalChars}chars/${s.markdown.finalUtf8Bytes}B cumulativeBytes=${s.markdown.cumulativeBytesSentMedian} domFullReplaces=${s.markdown.domFullReplaceCountMedian} cumulativeWorker=${s.markdown.cumulativeWorkerMsMedian}ms cumulativeDom=${s.markdown.cumulativeDomMsMedian}ms`);
+      for (const t of s.perThird) {
+        console.log(`    ${t.third} third (deltas ${t.deltaRange[0]}-${t.deltaRange[1]}): worker p50=${t.workerP50}ms p95=${t.workerP95}ms | dom p50=${t.domP50}ms p95=${t.domP95}ms`);
+      }
+    }
+    if (s.markdownStream) {
+      console.log(`  markdown-stream: final=${s.markdownStream.finalChars}chars cumulativeBytes=${s.markdownStream.cumulativeBytesSentMedian} domInserts=${s.markdownStream.domInsertCountMedian} cumulativeWorker=${s.markdownStream.cumulativeWorkerMsMedian}ms cumulativeDom=${s.markdownStream.cumulativeDomMsMedian}ms`);
       for (const t of s.perThird) {
         console.log(`    ${t.third} third (deltas ${t.deltaRange[0]}-${t.deltaRange[1]}): worker p50=${t.workerP50}ms p95=${t.workerP95}ms | dom p50=${t.domP50}ms p95=${t.domP95}ms`);
       }

@@ -53,14 +53,67 @@
  * Results are exposed as window.__benchResult / window.__benchDone for the
  * Playwright runner (scripts/qa/stream-bench.mjs).
  */
+import { ref } from 'vue';
 import { startRenderWorkerHtml } from '../utils/workerRenderer';
 import { startRenderWorkerStream } from '../utils/workerStream';
 import { createStreamPatcher } from '../utils/streamPatch';
 import { batchToRows } from '../utils/streamRows';
+import { useStreamingMarkdown } from '../composables/useStreamingMarkdown';
 import {
   REASONING_DELTAS,
   REASONING_FULL_TEXT,
 } from './fixtures/reasoning-sample';
+
+// ---------------------------------------------------------------------------
+// Scaled fixture generation for size-scaling analysis.
+// Repeats the reasoning text structure proportionally while preserving
+// fence proportions and generating deterministic deltas of similar size.
+// ---------------------------------------------------------------------------
+function buildScaledReasoning(multiplier: number): string {
+  if (multiplier <= 1) return REASONING_FULL_TEXT;
+  // Split the original into logical sections (paragraphs separated by blank lines)
+  const sections = REASONING_FULL_TEXT.split(/\n\n+/);
+  // Repeat sections to achieve target size
+  const repeated: string[] = [];
+  let totalLen = 0;
+  const targetLen = REASONING_FULL_TEXT.length * multiplier;
+  let sectionIdx = 0;
+  while (totalLen < targetLen) {
+    const section = sections[sectionIdx % sections.length];
+    repeated.push(section);
+    totalLen += section.length + 2; // +2 for blank line
+    sectionIdx++;
+  }
+  return repeated.join('\n\n');
+}
+
+function buildScaledDeltas(full: string): string[] {
+  // Use same PRNG seed and size distribution as the original fixture
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rand = mulberry32(0x5eed5);
+  const deltas: string[] = [];
+  let pos = 0;
+  while (pos < full.length) {
+    const r = rand();
+    let size: number;
+    if (r < 0.75) size = 2 + Math.floor(rand() * 5);
+    else if (r < 0.95) size = 7 + Math.floor(rand() * 8);
+    else size = 15 + Math.floor(rand() * 22);
+    size = Math.min(size, full.length - pos);
+    deltas.push(full.slice(pos, pos + size));
+    pos += size;
+  }
+  return deltas;
+}
 
 // ---------------------------------------------------------------------------
 // Fixture: realistic TypeScript, exactly 300 lines (10 varied 30-line blocks),
@@ -137,6 +190,20 @@ type ChunkMetric = {
   sendToAppliedMs?: number; // stream: sendChunk -> batch applied (incl. reflow)
   patchMs?: number; // stream: batchToRows + applyBatch
   reflowMs?: number; // stream: forced reflow after patch
+  // markdown-stream specific
+  streamWorkerMs?: number; // per-delta worker render time (this delta's render calls)
+  streamDomMs?: number; // DOM apply time for this delta (mutation-observed)
+  streamBytesThisDelta?: number; // bytes sent in render calls triggered by this delta
+  streamStableInserts?: number; // stable block DOM inserts this delta
+  streamTailInserts?: number; // tail DOM inserts this delta
+  streamCumulativeWorkerMs?: number; // cumulative worker render time up to this delta
+  streamCumulativeBytes?: number; // cumulative bytes sent up to this delta
+  // Cost breakdown instrumentation
+  streamTailTextLen?: number; // tail text length at this delta
+  streamTailHtmlLen?: number; // tail HTML length at this delta
+  streamRenderCount?: number; // number of render calls this delta
+  streamStableRenderCount?: number; // stable block renders this delta
+  streamTailRenderCount?: number; // tail render this delta (0 or 1)
 };
 
 type BenchResult = {
@@ -620,12 +687,271 @@ async function runMarkdown(deltas: string[]): Promise<BenchResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Path D — markdown-stream: uses useStreamingMarkdown composable to render
+// only new/changed segments incrementally. Each delta is fed serially
+// (awaiting the render callback + brief settling) so per-delta worker
+// round-trip and DOM apply time are individually attributable — same
+// serialized philosophy as the markdown baseline.
+//
+// Metrics tracked per delta:
+//   streamWorkerMs   — per-delta worker render time (this delta's render calls)
+//   streamDomMs      — time from text update to render settling
+//   streamBytesThisDelta — bytes sent in render() calls triggered by this delta
+//   streamStableInserts   — stable block DOM inserts this delta
+//   streamCumulativeWorkerMs — cumulative worker render time up to this delta
+//   streamCumulativeBytes    — cumulative bytes sent up to this delta
+//
+// Cumulative bytes sent to worker should drop from O(n·K/2) toward O(n) +
+// tail re-renders, since stable segments are rendered once and cached.
+// ---------------------------------------------------------------------------
+
+async function warmupMarkdownStream() {
+  // Steady-state warmup: stream ~55% of the fixture through the real
+  // useStreamingMarkdown composable so the worker pool, segment cache, and
+  // Vue watch machinery are all warm before the measured run.
+  const warmContainer = document.createElement('div');
+  const textRef = ref('');
+  const render = async (markdown: string, theme: string) =>
+    startRenderWorkerHtml({
+      id: `bench-ms-warm-${Math.random()}`,
+      code: markdown,
+      lang: MD_LANG,
+      theme,
+      gutterMode: 'none',
+    }).promise;
+  const streamMd = useStreamingMarkdown({
+    text: textRef,
+    theme: ref(MD_THEME),
+    enabled: ref(true),
+    render,
+    containerRef: ref(warmContainer),
+  });
+  const base = REASONING_FULL_TEXT.slice(0, Math.floor(REASONING_FULL_TEXT.length * 0.55));
+  textRef.value = base;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  streamMd.dispose();
+}
+
+async function runMarkdownStream(deltas: string[]): Promise<BenchResult> {
+  container.replaceChildren();
+  const churn = startChurnObserver(container);
+  const frames = startFrameCounter();
+  const perChunk: ChunkMetric[] = [];
+  const encoder = new TextEncoder();
+
+  const textRef = ref('');
+  let cumulativeWorkerMs = 0;
+  let code = '';
+  let cumulativeBytes = 0;
+
+  // Detailed instrumentation
+  let totalRenderCalls = 0;
+  let totalTailRenders = 0;
+  let totalStableRenders = 0;
+  let cumulativeTailBytes = 0;
+  let cumulativeStableBytes = 0;
+  const tailSizes: number[] = [];
+  const tailHtmlSizes: number[] = [];
+
+  // Track render promises for the current delta so we can await them all.
+  let currentDeltaRenders: Promise<unknown>[] = [];
+  let currentDeltaRenderCount = 0;
+  let currentDeltaTailRender = false;
+  let currentDeltaStableRenderCount = 0;
+  let currentDeltaTailTextLen = 0;
+  let currentDeltaTailHtmlLen = 0;
+
+  const render = async (markdown: string, theme: string): Promise<string> => {
+    const bytes = encoder.encode(markdown).length;
+    cumulativeBytes += bytes;
+    totalRenderCalls++;
+    currentDeltaRenderCount++;
+
+    // Detect if this is a tail render: tail is always a suffix of current code.
+    // We check if markdown is a suffix of code (the accumulated text).
+    const isTail = code.length > 0 && code.endsWith(markdown);
+
+    if (isTail) {
+      totalTailRenders++;
+      currentDeltaTailRender = true;
+      currentDeltaTailTextLen = markdown.length;
+      cumulativeTailBytes += bytes;
+    } else {
+      totalStableRenders++;
+      currentDeltaStableRenderCount++;
+      cumulativeStableBytes += bytes;
+    }
+
+    const t0 = performance.now();
+    const renderPromise = startRenderWorkerHtml({
+      id: `bench-ms-${Date.now()}-${Math.random()}`,
+      code: markdown,
+      lang: MD_LANG,
+      theme,
+      gutterMode: 'none',
+    }).promise;
+    currentDeltaRenders.push(renderPromise);
+    const html = await renderPromise;
+
+    if (isTail) {
+      currentDeltaTailHtmlLen = html.length;
+      tailSizes.push(markdown.length);
+      tailHtmlSizes.push(html.length);
+    }
+
+    const t1 = performance.now();
+    cumulativeWorkerMs += t1 - t0;
+    return html;
+  };
+
+  const streamMd = useStreamingMarkdown({
+    text: textRef,
+    theme: ref(MD_THEME),
+    enabled: ref(true),
+    render,
+    containerRef: ref(container),
+  });
+
+  for (let i = 0; i < deltas.length; i += 1) {
+    code += deltas[i];
+    const bytesSent = encoder.encode(code).length;
+    const workerBefore = cumulativeWorkerMs;
+    const mutationsBefore = churn.stats().mutationRecords;
+    currentDeltaRenders = [];
+    currentDeltaRenderCount = 0;
+    currentDeltaTailRender = false;
+    currentDeltaStableRenderCount = 0;
+    currentDeltaTailTextLen = 0;
+    currentDeltaTailHtmlLen = 0;
+    const t0 = performance.now();
+    textRef.value = code;
+    // Vue's watch fires synchronously and calls runLoop() (async, not awaited).
+    // runLoop's body is scheduled as a microtask, and inside it render() calls
+    // are also async. Yield enough times for the full chain to start.
+    for (let y = 0; y < 20; y++) await Promise.resolve();
+    // Now wait for all renders triggered by this text update.
+    await Promise.all(currentDeltaRenders);
+    const t1 = performance.now();
+    const domMs = t1 - t0;
+    const workerMsThisDelta = cumulativeWorkerMs - workerBefore;
+    const mutationsAfter = churn.stats().mutationRecords;
+    perChunk.push({
+      i,
+      codeLen: code.length,
+      bytesSent,
+      streamWorkerMs: workerMsThisDelta,
+      streamDomMs: domMs,
+      streamBytesThisDelta: bytesSent,
+      streamStableInserts: mutationsAfter - mutationsBefore > 0 ? 1 : 0,
+      streamTailInserts: 0,
+      streamCumulativeWorkerMs: cumulativeWorkerMs,
+      streamCumulativeBytes: cumulativeBytes,
+      // Cost breakdown
+      streamTailTextLen: currentDeltaTailTextLen,
+      streamTailHtmlLen: currentDeltaTailHtmlLen,
+      streamRenderCount: currentDeltaRenderCount,
+      streamStableRenderCount: currentDeltaStableRenderCount,
+      streamTailRenderCount: currentDeltaTailRender ? 1 : 0,
+    });
+  }
+
+  streamMd.dispose();
+  frames.stop();
+  churn.stop();
+
+  const totalDomMs = perChunk.reduce((s, m) => s + (m.streamDomMs ?? 0), 0);
+  const totalStableInserts = perChunk.reduce((s, m) => s + (m.streamStableInserts ?? 0), 0);
+
+  const result: BenchResult = {
+    path: 'markdown-stream',
+    fixture: 'reasoning',
+    lineCount: code.split('\n').length,
+    chunkCount: deltas.length,
+    perChunk,
+    totals: {
+      workerMs: cumulativeWorkerMs,
+      domMs: totalDomMs,
+      bytesSent: cumulativeBytes,
+      domReplaces: 0,
+      domInserts: totalStableInserts,
+    },
+    frames: frames.stats(),
+    churn: {
+      feedAdded: churn.stats().feedAdded,
+      feedRemoved: churn.stats().feedRemoved,
+      mutationRecords: churn.stats().mutationRecords,
+    },
+    sanity: {
+      finalTextComplete: code === REASONING_FULL_TEXT,
+    },
+    consoleErrors: [...consoleErrors],
+  };
+
+  // Add detailed instrumentation to totals
+  result.totals.totalRenderCalls = totalRenderCalls;
+  result.totals.totalTailRenders = totalTailRenders;
+  result.totals.totalStableRenders = totalStableRenders;
+  result.totals.cumulativeTailBytes = cumulativeTailBytes;
+  result.totals.cumulativeStableBytes = cumulativeStableBytes;
+  result.totals.avgTailSize = tailSizes.length > 0 ? tailSizes.reduce((a, b) => a + b, 0) / tailSizes.length : 0;
+  result.totals.avgTailHtmlSize = tailHtmlSizes.length > 0 ? tailHtmlSizes.reduce((a, b) => a + b, 0) / tailHtmlSizes.length : 0;
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Boot: run one (path, fixture) per page load, chosen via query params.
 // ---------------------------------------------------------------------------
 async function main() {
   const params = new URLSearchParams(window.location.search);
   const path = params.get('path') ?? 'stream';
+  const sizeMultiplier = parseInt(params.get('size') ?? '1', 10);
 
+  // Scaled fixtures: markdown and markdown-stream at 2x, 4x, 8x sizes
+  if (sizeMultiplier > 1) {
+    const scaledText = buildScaledReasoning(sizeMultiplier);
+    const scaledDeltas = buildScaledDeltas(scaledText);
+    const fixtureLabel = `reasoning-${sizeMultiplier}x`;
+
+    if (path === 'markdown') {
+      statusEl.textContent = `stream-bench | path=markdown size=${sizeMultiplier}x deltas=${scaledDeltas.length} | warming up…`;
+      await warmupMarkdownPool();
+      statusEl.textContent = `stream-bench | path=markdown size=${sizeMultiplier}x | running…`;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const result = await runMarkdown(scaledDeltas);
+      result.fixture = fixtureLabel;
+      statusEl.textContent = `stream-bench | path=markdown size=${sizeMultiplier}x | done`;
+      Object.assign(window, { __benchResult: result, __benchDone: true });
+      return;
+    }
+
+    if (path === 'markdown-stream') {
+      statusEl.textContent = `stream-bench | path=markdown-stream size=${sizeMultiplier}x deltas=${scaledDeltas.length} | warming up…`;
+      await warmupMarkdownStream();
+      statusEl.textContent = `stream-bench | path=markdown-stream size=${sizeMultiplier}x | running…`;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const result = await runMarkdownStream(scaledDeltas);
+      result.fixture = fixtureLabel;
+      statusEl.textContent = `stream-bench | path=markdown-stream size=${sizeMultiplier}x | done`;
+      Object.assign(window, { __benchResult: result, __benchDone: true });
+      return;
+    }
+
+    if (path === 'markdown-stream-detailed') {
+      statusEl.textContent = `stream-bench | path=markdown-stream-detailed size=${sizeMultiplier}x deltas=${scaledDeltas.length} | warming up…`;
+      await warmupMarkdownStream();
+      statusEl.textContent = `stream-bench | path=markdown-stream-detailed size=${sizeMultiplier}x | running…`;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      const result = await runMarkdownStream(scaledDeltas);
+      result.path = 'markdown-stream-detailed';
+      result.fixture = fixtureLabel;
+      statusEl.textContent = `stream-bench | path=markdown-stream-detailed size=${sizeMultiplier}x | done`;
+      Object.assign(window, { __benchResult: result, __benchDone: true });
+      return;
+    }
+  }
+
+  // 1x fixtures (default)
   if (path === 'markdown') {
     statusEl.textContent = `stream-bench | path=markdown deltas=${REASONING_DELTAS.length} | warming up…`;
     await warmupMarkdownPool();
@@ -633,6 +959,29 @@ async function main() {
     await new Promise((resolve) => setTimeout(resolve, 300));
     const result = await runMarkdown(REASONING_DELTAS);
     statusEl.textContent = 'stream-bench | path=markdown | done';
+    Object.assign(window, { __benchResult: result, __benchDone: true });
+    return;
+  }
+
+  if (path === 'markdown-stream') {
+    statusEl.textContent = `stream-bench | path=markdown-stream deltas=${REASONING_DELTAS.length} | warming up…`;
+    await warmupMarkdownStream();
+    statusEl.textContent = 'stream-bench | path=markdown-stream | running…';
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const result = await runMarkdownStream(REASONING_DELTAS);
+    statusEl.textContent = 'stream-bench | path=markdown-stream | done';
+    Object.assign(window, { __benchResult: result, __benchDone: true });
+    return;
+  }
+
+  if (path === 'markdown-stream-detailed') {
+    statusEl.textContent = `stream-bench | path=markdown-stream-detailed deltas=${REASONING_DELTAS.length} | warming up…`;
+    await warmupMarkdownStream();
+    statusEl.textContent = 'stream-bench | path=markdown-stream-detailed | running…';
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const result = await runMarkdownStream(REASONING_DELTAS);
+    result.path = 'markdown-stream-detailed';
+    statusEl.textContent = 'stream-bench | path=markdown-stream-detailed | done';
     Object.assign(window, { __benchResult: result, __benchDone: true });
     return;
   }
