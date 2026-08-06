@@ -41,6 +41,15 @@
  *   via ?path=legacy|stream&fixture=big|small. Warmup (excluded) primes the
  *   real worker(s) before the measured run.
  *
+ *   Path C (markdown):  per delta i, the full accumulated reasoning text goes
+ *                      through the SAME single-shot worker render with
+ *                      lang:'markdown' (renderMarkdownHtml in the worker:
+ *                      full markdown-it parse + shiki fence highlighting),
+ *                      and the result replaces the container via innerHTML —
+ *                      the exact mechanism MarkdownRenderer.vue uses for the
+ *                      live "thinking/working" floating windows. Fed
+ *                      SERIALLY so each delta's round-trip is attributable.
+ *
  * Results are exposed as window.__benchResult / window.__benchDone for the
  * Playwright runner (scripts/qa/stream-bench.mjs).
  */
@@ -48,6 +57,10 @@ import { startRenderWorkerHtml } from '../utils/workerRenderer';
 import { startRenderWorkerStream } from '../utils/workerStream';
 import { createStreamPatcher } from '../utils/streamPatch';
 import { batchToRows } from '../utils/streamRows';
+import {
+  REASONING_DELTAS,
+  REASONING_FULL_TEXT,
+} from './fixtures/reasoning-sample';
 
 // ---------------------------------------------------------------------------
 // Fixture: realistic TypeScript, exactly 300 lines (10 varied 30-line blocks),
@@ -118,8 +131,9 @@ const THEME = 'github-dark';
 type ChunkMetric = {
   i: number;
   codeLen: number;
-  workerMs?: number; // legacy: postMessage -> response
-  domMs?: number; // legacy: innerHTML replace + forced reflow
+  workerMs?: number; // legacy+markdown: postMessage -> response
+  domMs?: number; // legacy+markdown: innerHTML replace + forced reflow
+  bytesSent?: number; // markdown: UTF-8 bytes of the accumulated text sent this delta
   sendToAppliedMs?: number; // stream: sendChunk -> batch applied (incl. reflow)
   patchMs?: number; // stream: batchToRows + applyBatch
   reflowMs?: number; // stream: forced reflow after patch
@@ -145,6 +159,7 @@ type BenchResult = {
     batchPerChunk?: boolean;
     closeFlushBatches?: number;
     finalMatchesSingleShot?: boolean;
+    finalTextComplete?: boolean;
   };
   consoleErrors: string[];
 };
@@ -500,11 +515,128 @@ async function runStream(chunks: string[]): Promise<BenchResult> {
 }
 
 // ---------------------------------------------------------------------------
+// Path C — markdown baseline: per delta, FULL accumulated reasoning text goes
+// through startRenderWorkerHtml with lang:'markdown' (the exact mechanism
+// MarkdownRenderer.vue uses for live thinking/working windows: full
+// markdown-it parse + shiki fence highlighting in the worker, then a single
+// innerHTML replace on the main thread). Fed SERIALLY so each delta's
+// worker round-trip and DOM replace are individually attributable — this is
+// the optimistic floor for the current path (production additionally wastes
+// pool CPU on cancelled overlapping renders, which this bench does not
+// reproduce; see report limitations).
+// ---------------------------------------------------------------------------
+const MD_LANG = 'markdown';
+const MD_THEME = 'github-dark';
+
+async function warmupMarkdownPool() {
+  // Same steady-state philosophy as warmupLegacyPool: every pool worker gets
+  // REALISTIC markdown (~55% of the fixture, so markdown-it + the shiki
+  // fence highlighters and V8's optimizing tier are all warm), distinct
+  // texts to dodge the completed-html cache.
+  const base = REASONING_FULL_TEXT.slice(0, Math.floor(REASONING_FULL_TEXT.length * 0.55));
+  const codes = Array.from(
+    { length: 24 },
+    (_, k) => `<!-- warmup variant ${k} -->\n${base}\n\nwarm tail ${k}\n`,
+  );
+  await Promise.all(
+    codes.map(
+      (code, k) =>
+        startRenderWorkerHtml({
+          id: `bench-md-warm-${k}`,
+          code,
+          lang: MD_LANG,
+          theme: MD_THEME,
+          gutterMode: 'none',
+        }).promise,
+    ),
+  );
+}
+
+async function runMarkdown(deltas: string[]): Promise<BenchResult> {
+  container.replaceChildren();
+  const churn = startChurnObserver(container);
+  const frames = startFrameCounter();
+  const perChunk: ChunkMetric[] = [];
+  const encoder = new TextEncoder();
+  let code = '';
+  let cumulativeBytes = 0;
+
+  for (let i = 0; i < deltas.length; i += 1) {
+    code += deltas[i];
+    const bytesSent = encoder.encode(code).length;
+    cumulativeBytes += bytesSent;
+    const t0 = performance.now();
+    const task = startRenderWorkerHtml({
+      id: `bench-md-${i}-${Date.now()}`,
+      code,
+      lang: MD_LANG,
+      theme: MD_THEME,
+      gutterMode: 'none',
+    });
+    const html = await task.promise;
+    const t1 = performance.now();
+    container.innerHTML = html;
+    forceReflow();
+    const t2 = performance.now();
+    perChunk.push({
+      i,
+      codeLen: code.length,
+      bytesSent,
+      workerMs: t1 - t0,
+      domMs: t2 - t1,
+    });
+  }
+  frames.stop();
+  churn.stop();
+
+  return {
+    path: 'markdown',
+    fixture: 'reasoning',
+    lineCount: code.split('\n').length,
+    chunkCount: deltas.length,
+    perChunk,
+    totals: {
+      workerMs: perChunk.reduce((s, m) => s + (m.workerMs ?? 0), 0),
+      domMs: perChunk.reduce((s, m) => s + (m.domMs ?? 0), 0),
+      bytesSent: cumulativeBytes,
+      // One full innerHTML replace per delta — the O(K) full-tree swaps that
+      // a future streaming markdown path must eliminate.
+      domReplaces: deltas.length,
+    },
+    frames: frames.stats(),
+    churn: {
+      feedAdded: churn.stats().feedAdded,
+      feedRemoved: churn.stats().feedRemoved,
+      mutationRecords: churn.stats().mutationRecords,
+    },
+    sanity: {
+      // The last delta rendered the complete text; its HTML must equal a
+      // fresh single-shot render of REASONING_FULL_TEXT. This is trivially
+      // true here (same mechanism) but catches a broken accumulation loop.
+      finalTextComplete: code === REASONING_FULL_TEXT,
+    },
+    consoleErrors: [...consoleErrors],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Boot: run one (path, fixture) per page load, chosen via query params.
 // ---------------------------------------------------------------------------
 async function main() {
   const params = new URLSearchParams(window.location.search);
   const path = params.get('path') ?? 'stream';
+
+  if (path === 'markdown') {
+    statusEl.textContent = `stream-bench | path=markdown deltas=${REASONING_DELTAS.length} | warming up…`;
+    await warmupMarkdownPool();
+    statusEl.textContent = 'stream-bench | path=markdown | running…';
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const result = await runMarkdown(REASONING_DELTAS);
+    statusEl.textContent = 'stream-bench | path=markdown | done';
+    Object.assign(window, { __benchResult: result, __benchDone: true });
+    return;
+  }
+
   const fixture = params.get('fixture') ?? 'big';
   const lines = fixture === 'small' ? BIG_LINES.slice(0, 40) : BIG_LINES;
   const chunks = chunkLines(lines, 5);

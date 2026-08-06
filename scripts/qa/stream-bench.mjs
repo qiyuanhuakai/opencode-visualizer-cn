@@ -7,15 +7,24 @@
  * Each (path, fixture) combination runs 3 times, each in a FRESH page load;
  * the page self-executes the benchmark and exposes window.__benchResult.
  *
- * Combinations:
+ * Combinations (default scenario "code"):
  *   path    = legacy | stream
  *   fixture = big (300 lines / 60 chunks) | small (40 lines / 8 chunks)
  *
+ * Scenario "markdown" (growing-markdown baseline):
+ *   path    = markdown (full accumulated text -> worker full parse per delta)
+ *   fixture = reasoning (app/dev/fixtures/reasoning-sample.ts, ~800-1500 deltas)
+ *   Output: /tmp/stream-bench-markdown/ with per-delta p50/p95 by
+ *   fixture-third, cumulative worker ms / bytes sent, DOM full-replace count.
+ *   Smoke assertions fail loudly on missing/zero metric fields.
+ *
  * Usage:
  *   node scripts/qa/stream-bench.mjs [baseUrl]
+ *   node scripts/qa/stream-bench.mjs --scenario markdown [baseUrl]
  *   STREAM_BENCH_URL=http://127.0.0.1:5173 node scripts/qa/stream-bench.mjs
  *
- * Raw per-run JSON + aggregate summary are written to /tmp/stream-bench/.
+ * Raw per-run JSON + aggregate summary are written to /tmp/stream-bench/
+ * (code) or /tmp/stream-bench-markdown/ (markdown).
  * Exits non-zero on harness failure or sanity-check failure.
  */
 
@@ -92,12 +101,39 @@ const chromiumPath = resolveChromiumExecutable(chromium);
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
-const OUT_DIR = '/tmp/stream-bench';
-const BASE_URL = process.argv[2] || process.env.STREAM_BENCH_URL || 'http://127.0.0.1:5173';
+function parseArgs(argv) {
+  let scenario = 'code';
+  let baseUrl;
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === '--scenario') {
+      scenario = argv[i + 1];
+      i += 1;
+    } else if (arg.startsWith('--scenario=')) {
+      scenario = arg.slice('--scenario='.length);
+    } else if (!arg.startsWith('--')) {
+      baseUrl = arg;
+    }
+  }
+  if (!['code', 'markdown'].includes(scenario)) {
+    throw new Error(`unknown scenario "${scenario}" (expected code|markdown)`);
+  }
+  return { scenario, baseUrl };
+}
+
+const { scenario: SCENARIO, baseUrl: argUrl } = parseArgs(process.argv.slice(2));
+const OUT_DIR = SCENARIO === 'markdown' ? '/tmp/stream-bench-markdown' : '/tmp/stream-bench';
+const BASE_URL = argUrl || process.env.STREAM_BENCH_URL || 'http://127.0.0.1:5173';
 const BENCH_URL = `${BASE_URL}/dev/stream-bench.html`;
 const RUNS = 3;
-const PATHS = ['legacy', 'stream'];
-const FIXTURES = ['big', 'small'];
+// Ordered (fixture, path) combos, preserving the code scenario's original
+// iteration order (fixture outer, path inner).
+const COMBOS =
+  SCENARIO === 'markdown'
+    ? [{ fixture: 'reasoning', benchPath: 'markdown' }]
+    : ['big', 'small'].flatMap((fixture) =>
+        ['legacy', 'stream'].map((benchPath) => ({ fixture, benchPath })),
+      );
 
 fs.rmSync(OUT_DIR, { recursive: true, force: true });
 fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -159,55 +195,93 @@ async function main() {
   const sanityFailures = [];
 
   try {
-    for (const fixture of FIXTURES) {
-      for (const benchPath of PATHS) {
-        for (let run = 1; run <= RUNS; run += 1) {
-          const label = `${benchPath}/${fixture}/run${run}`;
-          const context = await browser.newContext({
-            viewport: { width: 1280, height: 900 },
+    for (const { fixture, benchPath } of COMBOS) {
+      for (let run = 1; run <= RUNS; run += 1) {
+        const label = `${benchPath}/${fixture}/run${run}`;
+        const context = await browser.newContext({
+          viewport: { width: 1280, height: 900 },
+        });
+        const page = await context.newPage();
+        const pageErrors = [];
+        page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
+        try {
+          const url = `${BENCH_URL}?path=${benchPath}&fixture=${fixture}&run=${run}`;
+          await page.goto(url, { waitUntil: 'load' });
+          await page.waitForFunction(() => window.__benchDone === true, null, {
+            timeout: 180000,
           });
-          const page = await context.newPage();
-          const pageErrors = [];
-          page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
-          try {
-            const url = `${BENCH_URL}?path=${benchPath}&fixture=${fixture}&run=${run}`;
-            await page.goto(url, { waitUntil: 'load' });
-            await page.waitForFunction(() => window.__benchDone === true, null, {
-              timeout: 180000,
-            });
-            const result = await page.evaluate(() => window.__benchResult);
-            result.runIndex = run;
-            result.pageErrors = pageErrors;
-            allRuns.push(result);
-            fs.writeFileSync(
-              path.join(OUT_DIR, `run-${benchPath}-${fixture}-${run}.json`),
-              JSON.stringify(result, null, 2),
-            );
-            if (result.fatal) {
-              sanityFailures.push(`${label}: fatal ${result.fatal}`);
-            }
-            if (benchPath === 'stream') {
-              if (result.sanity?.batchPerChunk !== true) {
-                sanityFailures.push(
-                  `${label}: batchPerChunk false (batches=${result.sanity?.batchCount}, chunks=${result.chunkCount})`,
-                );
-              }
-              if (result.sanity?.finalMatchesSingleShot !== true) {
-                sanityFailures.push(`${label}: final stream HTML != single-shot HTML`);
-              }
-            }
-            if ((result.consoleErrors ?? []).length > 0 || pageErrors.length > 0) {
+          const result = await page.evaluate(() => window.__benchResult);
+          result.runIndex = run;
+          result.pageErrors = pageErrors;
+          allRuns.push(result);
+          fs.writeFileSync(
+            path.join(OUT_DIR, `run-${benchPath}-${fixture}-${run}.json`),
+            JSON.stringify(result, null, 2),
+          );
+          if (result.fatal) {
+            sanityFailures.push(`${label}: fatal ${result.fatal}`);
+          }
+          if (benchPath === 'stream') {
+            if (result.sanity?.batchPerChunk !== true) {
               sanityFailures.push(
-                `${label}: console/page errors: ${[...(result.consoleErrors ?? []), ...pageErrors].join(' | ')}`,
+                `${label}: batchPerChunk false (batches=${result.sanity?.batchCount}, chunks=${result.chunkCount})`,
               );
             }
-            const tot = Object.entries(result.totals ?? {})
-              .map(([k, v]) => `${k}=${round(v, 1)}ms`)
-              .join(' ');
-            console.log(`[bench] ${label} done — ${tot}`);
-          } finally {
-            await context.close();
+            if (result.sanity?.finalMatchesSingleShot !== true) {
+              sanityFailures.push(`${label}: final stream HTML != single-shot HTML`);
+            }
           }
+          if (benchPath === 'markdown') {
+            // Smoke assertions: every metric field the baseline report relies
+            // on must be present and non-zero. Any failure here means the
+            // HARNESS is broken — fail loudly instead of writing a silently
+            // empty baseline.
+            const t = result.totals ?? {};
+            if (!(t.workerMs > 0)) sanityFailures.push(`${label}: totals.workerMs missing/zero (${t.workerMs})`);
+            if (!(t.domMs > 0)) sanityFailures.push(`${label}: totals.domMs missing/zero (${t.domMs})`);
+            if (!(t.bytesSent > 0)) sanityFailures.push(`${label}: totals.bytesSent missing/zero (${t.bytesSent})`);
+            if (!(t.domReplaces > 0)) {
+              sanityFailures.push(`${label}: totals.domReplaces missing/zero (${t.domReplaces})`);
+            } else if (t.domReplaces !== result.chunkCount) {
+              sanityFailures.push(
+                `${label}: domReplaces ${t.domReplaces} != chunkCount ${result.chunkCount} (expected one full replace per delta)`,
+              );
+            }
+            if (result.sanity?.finalTextComplete !== true) {
+              sanityFailures.push(`${label}: accumulated text != REASONING_FULL_TEXT (broken delta loop)`);
+            }
+            const perChunk = result.perChunk ?? [];
+            if (perChunk.length !== result.chunkCount || result.chunkCount < 800 || result.chunkCount > 1500) {
+              sanityFailures.push(
+                `${label}: perChunk length ${perChunk.length} / chunkCount ${result.chunkCount} invalid (expected 800-1500 deltas)`,
+              );
+            }
+            const badChunk = perChunk.findIndex(
+              (m) =>
+                !(typeof m.workerMs === 'number' && Number.isFinite(m.workerMs) && m.workerMs > 0) ||
+                !(typeof m.domMs === 'number' && Number.isFinite(m.domMs) && m.domMs >= 0) ||
+                !(typeof m.bytesSent === 'number' && m.bytesSent > 0) ||
+                !(typeof m.codeLen === 'number' && m.codeLen > 0),
+            );
+            if (badChunk !== -1) {
+              sanityFailures.push(`${label}: perChunk[${badChunk}] has missing/zero metric fields`);
+            }
+            const nonMonotonic = perChunk.findIndex((m, i) => i > 0 && m.bytesSent <= perChunk[i - 1].bytesSent);
+            if (nonMonotonic !== -1) {
+              sanityFailures.push(`${label}: bytesSent not strictly increasing at delta ${nonMonotonic}`);
+            }
+          }
+          if ((result.consoleErrors ?? []).length > 0 || pageErrors.length > 0) {
+            sanityFailures.push(
+              `${label}: console/page errors: ${[...(result.consoleErrors ?? []), ...pageErrors].join(' | ')}`,
+            );
+          }
+          const tot = Object.entries(result.totals ?? {})
+            .map(([k, v]) => `${k}=${round(v, 1)}${k.endsWith('Ms') ? 'ms' : ''}`)
+            .join(' ');
+          console.log(`[bench] ${label} done — ${tot}`);
+        } finally {
+          await context.close();
         }
       }
     }
@@ -218,82 +292,126 @@ async function main() {
   // -------------------------------------------------------------------------
   // Aggregate: per (path, fixture), per-run per-chunk stats, then median
   // across runs. Also pool all per-chunk samples across runs for p95.
-  // ---------------------------------------------------------------------------
-  const summary = { generatedAt: new Date().toISOString(), baseUrl: BENCH_URL, runs: RUNS, combos: {} };
+  // -------------------------------------------------------------------------
+  const summary = {
+    generatedAt: new Date().toISOString(),
+    scenario: SCENARIO,
+    baseUrl: BENCH_URL,
+    runs: RUNS,
+    combos: {},
+  };
 
-  for (const fixture of FIXTURES) {
-    for (const benchPath of PATHS) {
-      const runs = allRuns.filter((r) => r.path === benchPath && r.fixture === fixture);
-      if (runs.length === 0) continue;
+  for (const { fixture, benchPath } of COMBOS) {
+    const runs = allRuns.filter((r) => r.path === benchPath && r.fixture === fixture);
+    if (runs.length === 0) continue;
 
-      const latencyKey = benchPath === 'legacy' ? 'workerMs' : 'sendToAppliedMs';
-      const domKey = benchPath === 'legacy' ? 'domMs' : 'patchMs';
+    const latencyKey = benchPath === 'stream' ? 'sendToAppliedMs' : 'workerMs';
+    const domKey = benchPath === 'stream' ? 'patchMs' : 'domMs';
 
-      // Per-run per-chunk aggregates
-      const perRunMean = runs.map((r) => mean(r.perChunk.map((m) => m[latencyKey])));
-      const perRunP95 = runs.map((r) => percentile(r.perChunk.map((m) => m[latencyKey]), 95));
-      const domPerRunMean = runs.map((r) => mean(r.perChunk.map((m) => m[domKey])));
-      const domPerRunP95 = runs.map((r) => percentile(r.perChunk.map((m) => m[domKey]), 95));
+    // Per-run per-chunk aggregates
+    const perRunMean = runs.map((r) => mean(r.perChunk.map((m) => m[latencyKey])));
+    const perRunP95 = runs.map((r) => percentile(r.perChunk.map((m) => m[latencyKey]), 95));
+    const domPerRunMean = runs.map((r) => mean(r.perChunk.map((m) => m[domKey])));
+    const domPerRunP95 = runs.map((r) => percentile(r.perChunk.map((m) => m[domKey]), 95));
 
-      // Pooled samples across the 3 runs
-      const pooledLatency = runs.flatMap((r) => r.perChunk.map((m) => m[latencyKey]));
-      const pooledDom = runs.flatMap((r) => r.perChunk.map((m) => m[domKey]));
+    // Pooled samples across the 3 runs
+    const pooledLatency = runs.flatMap((r) => r.perChunk.map((m) => m[latencyKey]));
+    const pooledDom = runs.flatMap((r) => r.perChunk.map((m) => m[domKey]));
 
-      // Growth shape: latency of first third vs last third of chunks (pooled)
-      const third = Math.floor(runs[0].chunkCount / 3);
-      const firstThird = runs.flatMap((r) => r.perChunk.slice(0, third).map((m) => m[latencyKey]));
-      const lastThird = runs.flatMap((r) => r.perChunk.slice(-third).map((m) => m[latencyKey]));
+    // Growth shape: latency of first third vs last third of chunks (pooled)
+    const third = Math.floor(runs[0].chunkCount / 3);
+    const firstThird = runs.flatMap((r) => r.perChunk.slice(0, third).map((m) => m[latencyKey]));
+    const lastThird = runs.flatMap((r) => r.perChunk.slice(-third).map((m) => m[latencyKey]));
 
-      summary.combos[`${benchPath}/${fixture}`] = {
-        runs: runs.length,
-        chunkCount: runs[0].chunkCount,
-        lineCount: runs[0].lineCount,
-        latencyMetric: latencyKey,
-        latency: {
-          meanOfRunMeans: round(median(perRunMean)),
-          medianOfRunP95: round(median(perRunP95)),
-          pooledMean: round(mean(pooledLatency)),
-          pooledP95: round(percentile(pooledLatency, 95)),
-          firstThirdMean: round(mean(firstThird)),
-          lastThirdMean: round(mean(lastThird)),
-        },
-        domMetric: domKey,
-        domMainThread: {
-          meanOfRunMeans: round(median(domPerRunMean)),
-          medianOfRunP95: round(median(domPerRunP95)),
-          pooledMean: round(mean(pooledDom)),
-          pooledP95: round(percentile(pooledDom, 95)),
-          cumulativeMedianMs: round(median(runs.map((r) => r.totals[domKey] ?? 0)), 1),
-        },
-        cumulative: {
-          roundTripMedianMs: round(median(runs.map((r) => r.totals[latencyKey] ?? 0)), 1),
-          ...(benchPath === 'stream'
-            ? { reflowMedianMs: round(median(runs.map((r) => r.totals.reflowMs ?? 0)), 1) }
-            : {}),
-        },
-        frames: {
-          deliveredMedian: median(runs.map((r) => r.frames.frames)),
-          longestGapMedianMs: round(median(runs.map((r) => r.frames.maxGapMs)), 1),
-          longestGapMaxMs: round(Math.max(...runs.map((r) => r.frames.maxGapMs)), 1),
-          feedElapsedMedianMs: round(median(runs.map((r) => r.frames.elapsedMs)), 1),
-        },
-        churn: {
-          nodesAddedMedian: median(runs.map((r) => r.churn.feedAdded)),
-          nodesRemovedMedian: median(runs.map((r) => r.churn.feedRemoved)),
-          mutationRecordsMedian: median(runs.map((r) => r.churn.mutationRecords)),
-        },
+    summary.combos[`${benchPath}/${fixture}`] = {
+      runs: runs.length,
+      chunkCount: runs[0].chunkCount,
+      lineCount: runs[0].lineCount,
+      latencyMetric: latencyKey,
+      latency: {
+        meanOfRunMeans: round(median(perRunMean)),
+        medianOfRunP95: round(median(perRunP95)),
+        pooledMean: round(mean(pooledLatency)),
+        pooledP50: round(percentile(pooledLatency, 50)),
+        pooledP95: round(percentile(pooledLatency, 95)),
+        firstThirdMean: round(mean(firstThird)),
+        lastThirdMean: round(mean(lastThird)),
+      },
+      domMetric: domKey,
+      domMainThread: {
+        meanOfRunMeans: round(median(domPerRunMean)),
+        medianOfRunP95: round(median(domPerRunP95)),
+        pooledMean: round(mean(pooledDom)),
+        pooledP95: round(percentile(pooledDom, 95)),
+        cumulativeMedianMs: round(median(runs.map((r) => r.totals[domKey] ?? 0)), 1),
+      },
+      cumulative: {
+        roundTripMedianMs: round(median(runs.map((r) => r.totals[latencyKey] ?? 0)), 1),
         ...(benchPath === 'stream'
-          ? {
-              closeExcluded: {
-                workerMsMedian: round(median(runs.map((r) => r.close.workerMs)), 1),
-                domMsMedian: round(median(runs.map((r) => r.close.domMs)), 1),
-                churnAddedMedian: median(runs.map((r) => r.close.churnAdded)),
-                churnRemovedMedian: median(runs.map((r) => r.close.churnRemoved)),
-              },
-            }
+          ? { reflowMedianMs: round(median(runs.map((r) => r.totals.reflowMs ?? 0)), 1) }
           : {}),
-        sanity: runs.map((r) => r.sanity),
-      };
+      },
+      frames: {
+        deliveredMedian: median(runs.map((r) => r.frames.frames)),
+        longestGapMedianMs: round(median(runs.map((r) => r.frames.maxGapMs)), 1),
+        longestGapMaxMs: round(Math.max(...runs.map((r) => r.frames.maxGapMs)), 1),
+        feedElapsedMedianMs: round(median(runs.map((r) => r.frames.elapsedMs)), 1),
+      },
+      churn: {
+        nodesAddedMedian: median(runs.map((r) => r.churn.feedAdded)),
+        nodesRemovedMedian: median(runs.map((r) => r.churn.feedRemoved)),
+        mutationRecordsMedian: median(runs.map((r) => r.churn.mutationRecords)),
+      },
+      ...(benchPath === 'stream'
+        ? {
+            closeExcluded: {
+              workerMsMedian: round(median(runs.map((r) => r.close.workerMs)), 1),
+              domMsMedian: round(median(runs.map((r) => r.close.domMs)), 1),
+              churnAddedMedian: median(runs.map((r) => r.close.churnAdded)),
+              churnRemovedMedian: median(runs.map((r) => r.close.churnRemoved)),
+            },
+          }
+        : {}),
+      ...(benchPath === 'markdown'
+        ? {
+            // Baseline-specific: per-delta p50/p95 within each fixture third
+            // (pooled across runs), plus the O(n^2) evidence totals.
+            perThird: [0, 1, 2].map((ti) => {
+              const lo = ti * third;
+              const hi = ti === 2 ? runs[0].chunkCount : lo + third;
+              const lat = runs.flatMap((r) => r.perChunk.slice(lo, hi).map((m) => m[latencyKey]));
+              const dom = runs.flatMap((r) => r.perChunk.slice(lo, hi).map((m) => m[domKey]));
+              return {
+                third: ['first', 'middle', 'last'][ti],
+                deltaRange: [lo, hi - 1],
+                workerP50: round(percentile(lat, 50)),
+                workerP95: round(percentile(lat, 95)),
+                workerMean: round(mean(lat)),
+                domP50: round(percentile(dom, 50)),
+                domP95: round(percentile(dom, 95)),
+                domMean: round(mean(dom)),
+              };
+            }),
+            markdown: {
+              finalChars: runs[0].perChunk[runs[0].perChunk.length - 1].codeLen,
+              finalUtf8Bytes: runs[0].perChunk[runs[0].perChunk.length - 1].bytesSent,
+              cumulativeBytesSentMedian: median(runs.map((r) => r.totals.bytesSent)),
+              domFullReplaceCountMedian: median(runs.map((r) => r.totals.domReplaces)),
+              cumulativeWorkerMsMedian: round(median(runs.map((r) => r.totals.workerMs)), 1),
+              cumulativeDomMsMedian: round(median(runs.map((r) => r.totals.domMs)), 1),
+            },
+          }
+        : {}),
+      sanity: runs.map((r) => r.sanity),
+    };
+
+    // Growth sanity for the baseline: per-delta latency MUST grow with text
+    // size (full re-parse per delta). A flat curve means the harness is
+    // accidentally serving cached HTML or skipping renders.
+    if (benchPath === 'markdown' && !(mean(lastThird) > mean(firstThird))) {
+      sanityFailures.push(
+        `markdown/${fixture}: last-third worker latency ${round(mean(lastThird))}ms not greater than first-third ${round(mean(firstThird))}ms — harness bug suspected`,
+      );
     }
   }
 
@@ -313,6 +431,12 @@ async function main() {
     console.log(`  churn: added=${s.churn.nodesAddedMedian} removed=${s.churn.nodesRemovedMedian} records=${s.churn.mutationRecordsMedian}`);
     if (s.closeExcluded) {
       console.log(`  close (EXCLUDED from per-chunk): worker=${s.closeExcluded.workerMsMedian}ms dom=${s.closeExcluded.domMsMedian}ms churn +${s.closeExcluded.churnAddedMedian}/-${s.closeExcluded.churnRemovedMedian}`);
+    }
+    if (s.markdown) {
+      console.log(`  markdown baseline: final=${s.markdown.finalChars}chars/${s.markdown.finalUtf8Bytes}B cumulativeBytes=${s.markdown.cumulativeBytesSentMedian} domFullReplaces=${s.markdown.domFullReplaceCountMedian} cumulativeWorker=${s.markdown.cumulativeWorkerMsMedian}ms cumulativeDom=${s.markdown.cumulativeDomMsMedian}ms`);
+      for (const t of s.perThird) {
+        console.log(`    ${t.third} third (deltas ${t.deltaRange[0]}-${t.deltaRange[1]}): worker p50=${t.workerP50}ms p95=${t.workerP95}ms | dom p50=${t.domP50}ms p95=${t.domP95}ms`);
+      }
     }
   }
 
