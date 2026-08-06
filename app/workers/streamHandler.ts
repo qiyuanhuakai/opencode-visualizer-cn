@@ -55,6 +55,18 @@ type StreamState = {
   code: string;
 };
 
+/** Test-only introspection into the handler's internal bookkeeping sizes. */
+export type StreamDebugState = {
+  states: number;
+  chains: number;
+  cancelled: number;
+};
+
+export type StreamMessageHandler = {
+  (request: StreamWorkerRequest): Promise<void>;
+  _debugState: () => StreamDebugState;
+};
+
 /**
  * Creates a worker-side message handler for the streaming protocol, bound to a
  * StreamSessionManager and a dependency-injected final renderer. Pure module:
@@ -71,11 +83,29 @@ export function createStreamMessageHandler(deps: {
   manager: StreamSessionManager;
   renderFinal: StreamFinalRenderer;
   post: (message: StreamWorkerResponse) => void;
-}): (request: StreamWorkerRequest) => Promise<void> {
+}): StreamMessageHandler {
   const { manager, renderFinal, post } = deps;
   const states = new Map<string, StreamState>();
   const chains = new Map<string, Promise<void>>();
   const cancelled = new Set<string>();
+
+  // Bookkeeping prune: once a stream's op chain settles and stays the tail
+  // for one macrotask (no further ops arrived), its chain entry — and any
+  // cancelled tombstone, whose suppression duty ends with the queued work —
+  // are deleted so the long-lived worker does not accumulate dead entries.
+  // The macrotask delay keeps the tombstone alive for ops already awaiting
+  // the settling tail (cancel-then-queued-chunk must stay silent).
+  function schedulePrune(streamId: string, tail: Promise<void>) {
+    const prune = () => {
+      setTimeout(() => {
+        if (chains.get(streamId) === tail) {
+          chains.delete(streamId);
+          cancelled.delete(streamId);
+        }
+      }, 0);
+    };
+    void tail.then(prune, prune);
+  }
 
   function postError(id: string, streamId: string, error: string) {
     post({ kind: 'error', id, streamId, error });
@@ -165,7 +195,7 @@ export function createStreamMessageHandler(deps: {
     }
   }
 
-  return function handle(request: StreamWorkerRequest): Promise<void> {
+  function handle(request: StreamWorkerRequest): Promise<void> {
     if (request.op === 'cancel') {
       // Synchronous: no new messages for this streamId after this point.
       cancelled.add(request.streamId);
@@ -181,6 +211,15 @@ export function createStreamMessageHandler(deps: {
     const previous = chains.get(request.streamId) ?? Promise.resolve();
     const next = previous.then(() => runOp(request));
     chains.set(request.streamId, next);
+    schedulePrune(request.streamId, next);
     return next;
-  };
+  }
+
+  handle._debugState = () => ({
+    states: states.size,
+    chains: chains.size,
+    cancelled: cancelled.size,
+  });
+
+  return handle;
 }

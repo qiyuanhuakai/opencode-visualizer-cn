@@ -176,4 +176,60 @@ describe('createStreamMessageHandler', () => {
     expect(manager.has('s-mid')).toBe(false);
     expect(messages).toHaveLength(1);
   });
+
+  describe('bookkeeping cleanup (long-lived worker)', () => {
+    // Bookkeeping entries are pruned on a macrotask after the stream's op
+    // chain settles, so tests flush one timer turn before asserting.
+    const flushPrune = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it('frees all bookkeeping for a streamId after close completes and its chain settles', async () => {
+      // Given: a stream that opened, streamed, and closed cleanly
+      const { handle } = setup();
+      await handle(openRequest('s-free', makeParams()));
+      await handle(chunkRequest('s-free', 'const a = 1;\n'));
+      await handle(closeRequest('s-free'));
+
+      // When: the post-settle prune turn runs
+      await flushPrune();
+
+      // Then: no states/chains/cancelled entries remain for the streamId
+      expect(handle._debugState()).toEqual({ states: 0, chains: 0, cancelled: 0 });
+    });
+
+    it('frees all bookkeeping for a streamId after cancel once queued work settles', async () => {
+      // Given: an open stream cancelled mid-flight
+      const { handle } = setup();
+      await handle(openRequest('s-cfree', makeParams()));
+      await handle(chunkRequest('s-cfree', 'const a = 1;\n'));
+      await handle({ stream: true, op: 'cancel', id: 's-cfree-cancel', streamId: 's-cfree' });
+
+      // When: the queued chain has settled and the prune turn runs
+      await flushPrune();
+
+      // Then: the cancelled tombstone and chain entry are gone
+      expect(handle._debugState()).toEqual({ states: 0, chains: 0, cancelled: 0 });
+    });
+
+    it('cancel followed by reopen with the same id still streams and finalizes', async () => {
+      // Given: a cancelled stream whose bookkeeping was pruned
+      const { messages, handle } = setup();
+      await handle(openRequest('s-re', makeParams()));
+      await handle({ stream: true, op: 'cancel', id: 's-re-cancel', streamId: 's-re' });
+      await flushPrune();
+      expect(handle._debugState()).toEqual({ states: 0, chains: 0, cancelled: 0 });
+      messages.length = 0;
+
+      // When: the same id is reopened and driven to close
+      await handle(openRequest('s-re', makeParams()));
+      await handle(chunkRequest('s-re', 'const a = 1;\n'));
+      await handle(closeRequest('s-re'));
+
+      // Then: tokens and final html flow normally for the revived id
+      expect(messages.map((message) => message.kind)).toEqual(['tokens', 'final']);
+
+      // And: bookkeeping is freed again after this close settles
+      await flushPrune();
+      expect(handle._debugState()).toEqual({ states: 0, chains: 0, cancelled: 0 });
+    });
+  });
 });
