@@ -18,6 +18,8 @@ const REFERENCE_DEFINITION = /^ {0,3}\[[^\]\n]+\]:\s*\S/;
 const LIST_ITEM = /^ {0,3}([-*+]|\d{1,9}[.)])\s/;
 const HTML_BLOCK = /^ {0,3}</;
 const TABLE_DELIMITER = /^[|:\-\s]+$/;
+// CommonMark type-1 HTML blocks run to their closing tag, across blank lines.
+const HTML_BLOCK_OPEN = /^ {0,3}<(script|pre|style|textarea)(?=[\s/>])/i;
 
 function lineContent(text: string, end: number): string {
   return text.slice(0, end).replace(/\r$/, '');
@@ -37,7 +39,10 @@ function firstNonBlankLine(text: string, offset: number): string | undefined {
 }
 
 function candidateIsSafe(text: string, candidate: Candidate): boolean {
-  if (LIST_ITEM.test(candidate.predecessor) || HTML_BLOCK.test(candidate.predecessor)) return false;
+  // A closing-tag predecessor means the HTML block already ended inside the
+  // stable part, so splitting after it is safe; an opening tag is not.
+  const predecessorOpensHtml = HTML_BLOCK.test(candidate.predecessor) && !/^ {0,3}<\//.test(candidate.predecessor);
+  if (LIST_ITEM.test(candidate.predecessor) || predecessorOpensHtml) return false;
   const successor = firstNonBlankLine(text, candidate.offset);
   if (successor === undefined || /^\s/.test(successor) || LIST_ITEM.test(successor)) return false;
   return !(successor.includes('|') && successor.includes('-') && TABLE_DELIMITER.test(successor));
@@ -49,6 +54,7 @@ export function createMarkdownSegmenter(): Segmenter {
   let scanOffset = 0;
   let fenceChar = '';
   let fenceLength = 0;
+  let htmlBlockTag = '';
   let lastNonBlank = '';
   let disabled = false;
   let candidates: Candidate[] = [];
@@ -58,6 +64,7 @@ export function createMarkdownSegmenter(): Segmenter {
     scanOffset = 0;
     fenceChar = '';
     fenceLength = 0;
+    htmlBlockTag = '';
     lastNonBlank = '';
     disabled = false;
     candidates = [];
@@ -71,6 +78,23 @@ export function createMarkdownSegmenter(): Segmenter {
       const line = lineContent(text.slice(start), newline - start);
       // `[key]: value` inside a fence is literal text, not a reference definition.
       if (fenceChar === '' && REFERENCE_DEFINITION.test(line)) disabled = true;
+      if (htmlBlockTag !== '') {
+        if (line.toLowerCase().includes(`</${htmlBlockTag}`)) htmlBlockTag = '';
+        if (line.trim() !== '') lastNonBlank = line;
+        start = newline + 1;
+        continue;
+      }
+      if (fenceChar === '') {
+        // A type-1 HTML block open swallows everything until its closing tag,
+        // including what would otherwise look like a fence opener.
+        const htmlOpen = HTML_BLOCK_OPEN.exec(line);
+        if (htmlOpen && !line.toLowerCase().includes(`</${(htmlOpen[1] ?? '').toLowerCase()}`)) {
+          htmlBlockTag = (htmlOpen[1] ?? '').toLowerCase();
+          if (line.trim() !== '') lastNonBlank = line;
+          start = newline + 1;
+          continue;
+        }
+      }
       const fence = /^(?: {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
       if (fence) {
         const marker = fence[1] ?? '';

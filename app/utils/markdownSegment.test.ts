@@ -41,6 +41,19 @@ describe('markdownSegmenter', () => {
     expect(result[1]?.stable).toEqual([]);
   });
 
+  it('R3b suppresses splits inside multi-line raw HTML blocks', () => {
+    // CommonMark type-1 blocks (script/pre/style/textarea) run to the closing
+    // tag across blank lines; a split inside would change the interpretation.
+    const [partial, complete] = appendChunks([
+      '<script>\ncode1\n\ncode2\n</script>',
+      '<script>\ncode1\n\ncode2\n</script>\n\nafter',
+    ]);
+
+    expect(partial?.stable).toEqual([]);
+    expect(complete?.stable).toEqual(['<script>\ncode1\n\ncode2\n</script>\n\n']);
+    expect(complete?.tail).toBe('after');
+  });
+
   it('R4 rejects indented, list, and GFM-table successors', () => {
     const results = appendChunks(['first\n\n next', 'first\n\n- next', 'first\n\n|---|---|']);
 
