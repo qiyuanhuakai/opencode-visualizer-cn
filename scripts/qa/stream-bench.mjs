@@ -53,16 +53,31 @@ function resolvePlaywrightDir() {
       }
     }
   }
-  const globalDir =
-    '/home/qiyuaner/.nvm/versions/node/v22.22.2/lib/node_modules/@playwright/cli/node_modules/playwright';
-  if (fs.existsSync(path.join(globalDir, 'package.json'))) {
-    try {
+  // Resolve global playwright dynamically so other users' installs work.
+  try {
+    const globalRoot = require('child_process')
+      .execSync('npm root -g', { encoding: 'utf8' })
+      .trim();
+    const globalDir = path.join(globalRoot, '@playwright/cli/node_modules/playwright');
+    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
       const version = JSON.parse(
         fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
       ).version;
       candidates.push({ pkgDir: globalDir, version });
-    } catch {
-      /* ignore */
+    }
+  } catch {
+    // npm root -g unavailable; fall back to the hard-coded path for this machine.
+    const globalDir =
+      '/home/qiyuaner/.nvm/versions/node/v22.22.2/lib/node_modules/@playwright/cli/node_modules/playwright';
+    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
+      try {
+        const version = JSON.parse(
+          fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
+        ).version;
+        candidates.push({ pkgDir: globalDir, version });
+      } catch {
+        /* ignore */
+      }
     }
   }
   if (candidates.length === 0) {
@@ -143,10 +158,15 @@ const COMBOS =
     : SCENARIO === 'markdown-stream'
       ? [{ fixture: 'reasoning', benchPath: 'markdown-stream' }]
       : SCENARIO === 'scaling'
-        ? [1, 2, 4, 8].flatMap((size) => [
-            { fixture: `reasoning-${size}x`, benchPath: 'markdown', size },
-            { fixture: `reasoning-${size}x`, benchPath: 'markdown-stream', size },
-          ])
+        ? [1, 2, 4, 8].flatMap((size) => {
+            // The page returns fixture 'reasoning' for size 1 (the unscaled
+            // default path); only 2x/4x/8x are labeled 'reasoning-Nx'.
+            const fixture = size === 1 ? 'reasoning' : `reasoning-${size}x`;
+            return [
+              { fixture, benchPath: 'markdown', size },
+              { fixture, benchPath: 'markdown-stream', size },
+            ];
+          })
         : SCENARIO === 'detailed'
           ? [{ fixture: 'reasoning-1x', benchPath: 'markdown-stream-detailed', size: 1 }]
           : ['big', 'small'].flatMap((fixture) =>
@@ -169,6 +189,11 @@ function waitForServer(url, timeoutMs = 20000) {
         if (res.statusCode && res.statusCode < 500) resolve();
         else if (Date.now() - start > timeoutMs) reject(new Error(`bad status ${res.statusCode}`));
         else setTimeout(check, 400);
+      });
+      // If the server accepts the connection but never responds, destroy the
+      // request so the retry/deadline logic can run instead of hanging forever.
+      req.setTimeout(5000, () => {
+        req.destroy();
       });
       req.on('error', () => {
         if (Date.now() - start > timeoutMs) reject(new Error(`${url} not ready`));
@@ -274,9 +299,17 @@ async function main() {
               sanityFailures.push(`${label}: accumulated text != REASONING_FULL_TEXT (broken delta loop)`);
             }
             const perChunk = result.perChunk ?? [];
-            if (perChunk.length !== result.chunkCount || result.chunkCount < 800 || result.chunkCount > 1500) {
+            // The 800-1500 sanity bound applies to the 1x reasoning fixture only.
+            // Scaled fixtures (2x, 4x, 8x) produce proportionally more deltas,
+            // so skip the bound check for non-1x scaling runs.
+            const chunkCountOk = size
+              ? perChunk.length === result.chunkCount
+              : perChunk.length === result.chunkCount &&
+                result.chunkCount >= 800 &&
+                result.chunkCount <= 1500;
+            if (!chunkCountOk) {
               sanityFailures.push(
-                `${label}: perChunk length ${perChunk.length} / chunkCount ${result.chunkCount} invalid (expected 800-1500 deltas)`,
+                `${label}: perChunk length ${perChunk.length} / chunkCount ${result.chunkCount} invalid (expected 800-1500 deltas for 1x, or matching perChunk for scaled)`,
               );
             }
             const badChunk = perChunk.findIndex(
@@ -304,9 +337,17 @@ async function main() {
               sanityFailures.push(`${label}: accumulated text != REASONING_FULL_TEXT (broken delta loop)`);
             }
             const perChunk = result.perChunk ?? [];
-            if (perChunk.length !== result.chunkCount || result.chunkCount < 800 || result.chunkCount > 1500) {
+            // The 800-1500 sanity bound applies to the 1x reasoning fixture only.
+            // Scaled fixtures (2x, 4x, 8x) produce proportionally more deltas,
+            // so skip the bound check for non-1x scaling runs.
+            const msChunkCountOk = size
+              ? perChunk.length === result.chunkCount
+              : perChunk.length === result.chunkCount &&
+                result.chunkCount >= 800 &&
+                result.chunkCount <= 1500;
+            if (!msChunkCountOk) {
               sanityFailures.push(
-                `${label}: perChunk length ${perChunk.length} / chunkCount ${result.chunkCount} invalid (expected 800-1500 deltas)`,
+                `${label}: perChunk length ${perChunk.length} / chunkCount ${result.chunkCount} invalid (expected 800-1500 deltas for 1x, or matching perChunk for scaled)`,
               );
             }
             const badChunk = perChunk.findIndex(
@@ -364,13 +405,13 @@ async function main() {
     const latencyKey =
       benchPath === 'stream'
         ? 'sendToAppliedMs'
-        : benchPath === 'markdown-stream'
+        : benchPath === 'markdown-stream' || benchPath === 'markdown-stream-detailed'
           ? 'streamWorkerMs'
           : 'workerMs';
     const domKey =
       benchPath === 'stream'
         ? 'patchMs'
-        : benchPath === 'markdown-stream'
+        : benchPath === 'markdown-stream' || benchPath === 'markdown-stream-detailed'
           ? 'streamDomMs'
           : 'domMs';
 

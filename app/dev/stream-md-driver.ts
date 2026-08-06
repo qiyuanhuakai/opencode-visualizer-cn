@@ -33,6 +33,7 @@ import { FLOATING_WINDOW_KEY } from '../composables/useFloatingWindow';
 import { i18n } from '../i18n';
 import { getMarkdownSegmentHtml } from '../utils/markdownSegmentCache';
 import { startRenderWorkerHtml } from '../utils/workerRenderer';
+import { pendingWorkerRenders } from '../composables/useRenderState';
 import {
   REASONING_DELTAS,
   REASONING_FULL_TEXT,
@@ -569,7 +570,19 @@ const driver = {
       hasClosedFence: request.code.includes(CLOSED_FENCE),
       // Only stable-range renders are stored in the markdown segment cache
       // (useStreamingMarkdown.resolveStableBlocks); tail renders never are.
-      isSegCached: getMarkdownSegmentHtml(request.theme, request.code) !== undefined,
+      // Context must match MarkdownRenderer's renderContext (no files here).
+      isSegCached:
+        getMarkdownSegmentHtml(
+          request.theme,
+          [
+            '',
+            copyLabels.copyButtonLabel,
+            copyLabels.copiedLabel,
+            copyLabels.copyCodeAriaLabel,
+            copyLabels.copyMarkdownAriaLabel,
+          ].join(' '),
+          request.code,
+        ) !== undefined,
     }));
   },
 
@@ -590,13 +603,16 @@ const driver = {
   now,
 
   // Resolves when no mutation batch has been observed for `quietMs`
-  // (streaming loop caught up with the fed text), or rejects on timeout.
+  // AND there are no pending worker renders — quiescence requires both
+  // DOM quiet and the worker pool to have settled. Rejects on timeout.
   async waitForQuiescence(quietMs = 500, timeoutMs = 60000): Promise<boolean> {
     const start = Date.now();
     for (;;) {
       const marker = lastMutationT;
       await sleep(quietMs);
-      if (lastMutationT === marker) return true;
+      const domQuiet = lastMutationT === marker;
+      const workersIdle = pendingWorkerRenders.value === 0;
+      if (domQuiet && workersIdle) return true;
       if (Date.now() - start > timeoutMs) return false;
     }
   },

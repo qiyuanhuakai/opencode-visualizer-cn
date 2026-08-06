@@ -56,16 +56,31 @@ function resolvePlaywrightDir() {
       }
     }
   }
-  const globalDir =
-    '/home/qiyuaner/.nvm/versions/node/v22.22.2/lib/node_modules/@playwright/cli/node_modules/playwright';
-  if (fs.existsSync(path.join(globalDir, 'package.json'))) {
-    try {
+  // Resolve global playwright dynamically so other users' installs work.
+  try {
+    const globalRoot = require('child_process')
+      .execSync('npm root -g', { encoding: 'utf8' })
+      .trim();
+    const globalDir = path.join(globalRoot, '@playwright/cli/node_modules/playwright');
+    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
       const version = JSON.parse(
         fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
       ).version;
       candidates.push({ pkgDir: globalDir, version });
-    } catch {
-      /* ignore */
+    }
+  } catch {
+    // npm root -g unavailable; fall back to the hard-coded path for this machine.
+    const globalDir =
+      '/home/qiyuaner/.nvm/versions/node/v22.22.2/lib/node_modules/@playwright/cli/node_modules/playwright';
+    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
+      try {
+        const version = JSON.parse(
+          fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
+        ).version;
+        candidates.push({ pkgDir: globalDir, version });
+      } catch {
+        /* ignore */
+      }
     }
   }
   if (candidates.length === 0) {
@@ -83,7 +98,11 @@ function resolveChromiumExecutable(chromium) {
   const browsersPath = path.join(os.homedir(), '.cache/ms-playwright');
   const preferred = chromium.executablePath();
   if (fs.existsSync(preferred)) return preferred;
-  // Fall back to the newest available full chromium binary.
+  // Guard against a missing cache directory so we emit the intended
+  // 'No chromium binary found' error instead of a raw ENOENT from readdirSync.
+  if (!fs.existsSync(browsersPath)) {
+    throw new Error(`No chromium binary found under ${browsersPath}`);
+  }
   const revisions = fs
     .readdirSync(browsersPath)
     .filter((d) => /^chromium-\d+$/.test(d))
@@ -161,6 +180,11 @@ function waitForServer(url, timeoutMs = 20000) {
         if (res.statusCode && res.statusCode < 500) resolve();
         else if (Date.now() - start > timeoutMs) reject(new Error(`bad status ${res.statusCode}`));
         else setTimeout(check, 400);
+      });
+      // If the server accepts the connection but never responds, destroy the
+      // request so the retry/deadline logic can run instead of hanging forever.
+      req.setTimeout(5000, () => {
+        req.destroy();
       });
       req.on('error', () => {
         if (Date.now() - start > timeoutMs) reject(new Error(`${url} not ready`));

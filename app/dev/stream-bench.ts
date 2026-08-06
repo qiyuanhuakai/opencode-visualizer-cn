@@ -278,6 +278,13 @@ function startFrameCounter() {
   return {
     stop() {
       running = false;
+      // Record the pending gap between the last rAF tick and stop() so the
+      // idle period after the feed loop ends is counted in maxGap.
+      const stopTime = performance.now();
+      if (last !== 0) {
+        const gap = stopTime - last;
+        if (gap > maxGap) maxGap = gap;
+      }
     },
     stats() {
       return {
@@ -330,6 +337,9 @@ function startChurnObserver(target: HTMLElement) {
       phase = 'close';
     },
     stop() {
+      // Consume any pending mutation records before disconnecting so the
+      // final mutations (e.g. close-phase finalize swap) are counted.
+      observer.takeRecords();
       observer.disconnect();
     },
     stats() {
@@ -390,6 +400,9 @@ async function warmupStreamWorker() {
   for (const chunk of warmChunks) {
     const wait = new Promise<void>((resolve) => {
       resolveWait = resolve;
+      // If the stream errors or stalls, this timeout ensures we don't hang
+      // forever waiting for a batch that never arrives.
+      setTimeout(resolve, 10000);
     });
     stream.sendChunk(chunk);
     await wait;
@@ -783,25 +796,29 @@ async function runMarkdownStream(deltas: string[]): Promise<BenchResult> {
     }
 
     const t0 = performance.now();
-    const renderPromise = startRenderWorkerHtml({
-      id: `bench-ms-${Date.now()}-${Math.random()}`,
-      code: markdown,
-      lang: MD_LANG,
-      theme,
-      gutterMode: 'none',
-    }).promise;
-    currentDeltaRenders.push(renderPromise);
-    const html = await renderPromise;
-
-    if (isTail) {
-      currentDeltaTailHtmlLen = html.length;
-      tailSizes.push(markdown.length);
-      tailHtmlSizes.push(html.length);
-    }
-
-    const t1 = performance.now();
-    cumulativeWorkerMs += t1 - t0;
-    return html;
+    // Wrap the full render operation (worker promise + post-processing) in an
+    // IIFE so we can push the COMPLETE promise — not just the raw worker
+    // promise — to currentDeltaRenders. This ensures the bench loop awaits
+    // full render() settlement (E11).
+    const fullRender = (async () => {
+      const html = await startRenderWorkerHtml({
+        id: `bench-ms-${Date.now()}-${Math.random()}`,
+        code: markdown,
+        lang: MD_LANG,
+        theme,
+        gutterMode: 'none',
+      }).promise;
+      if (isTail) {
+        currentDeltaTailHtmlLen = html.length;
+        tailSizes.push(markdown.length);
+        tailHtmlSizes.push(html.length);
+      }
+      const t1 = performance.now();
+      cumulativeWorkerMs += t1 - t0;
+      return html;
+    })();
+    currentDeltaRenders.push(fullRender);
+    return fullRender;
   };
 
   const streamMd = useStreamingMarkdown({
@@ -814,9 +831,9 @@ async function runMarkdownStream(deltas: string[]): Promise<BenchResult> {
 
   for (let i = 0; i < deltas.length; i += 1) {
     code += deltas[i];
-    const bytesSent = encoder.encode(code).length;
     const workerBefore = cumulativeWorkerMs;
     const mutationsBefore = churn.stats().mutationRecords;
+    const bytesBefore = cumulativeBytes;
     currentDeltaRenders = [];
     currentDeltaRenderCount = 0;
     currentDeltaTailRender = false;
@@ -835,13 +852,16 @@ async function runMarkdownStream(deltas: string[]): Promise<BenchResult> {
     const domMs = t1 - t0;
     const workerMsThisDelta = cumulativeWorkerMs - workerBefore;
     const mutationsAfter = churn.stats().mutationRecords;
+    // streamBytesThisDelta: bytes actually sent in render() calls for this
+    // delta, derived from the render callback's cumulativeBytes delta (E12).
+    const streamBytesThisDelta = cumulativeBytes - bytesBefore;
     perChunk.push({
       i,
       codeLen: code.length,
-      bytesSent,
+      bytesSent: streamBytesThisDelta,
       streamWorkerMs: workerMsThisDelta,
       streamDomMs: domMs,
-      streamBytesThisDelta: bytesSent,
+      streamBytesThisDelta,
       streamStableInserts: mutationsAfter - mutationsBefore > 0 ? 1 : 0,
       streamTailInserts: 0,
       streamCumulativeWorkerMs: cumulativeWorkerMs,
