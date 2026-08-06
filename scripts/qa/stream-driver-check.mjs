@@ -184,7 +184,16 @@ async function main() {
   await waitForServer(DRIVER_URL);
   console.log('[stream-qa] dev server reachable');
 
-  const browser = await chromium.launch({ headless: true, executablePath: chromiumPath });
+  // --disable-gpu/--disable-software-rasterizer: with the fallback chromium
+  // builds in this environment (chromium-1223 vs playwright 1.62.1 wanting
+  // 1234), page.screenshot hangs in the GPU/swiftshader compositing path
+  // (fonts load, then capture never completes). DOM/worker behavior is
+  // unaffected; every assertion above is independent of compositing.
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: chromiumPath,
+    args: ['--disable-gpu', '--disable-software-rasterizer'],
+  });
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
 
