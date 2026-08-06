@@ -41,18 +41,21 @@ import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 
 const { t } = useI18n();
 
-const props = defineProps<{
-  path?: string;
-  absolutePath?: string;
-  rawHtml?: string;
-  fileContent?: string;
-  lang?: string;
-  gutterMode?: 'default' | 'none' | 'grep-source';
-  theme?: string;
-  lines?: string;
-  streaming?: boolean;
-  onRequestAddLineComment?: (payload: { path: string; startLine: number; endLine: number; text: string }) => void;
-}>();
+const props = withDefaults(
+  defineProps<{
+    path?: string;
+    absolutePath?: string;
+    rawHtml?: string;
+    fileContent?: string;
+    lang?: string;
+    gutterMode?: 'default' | 'none' | 'grep-source';
+    theme?: string;
+    lines?: string;
+    streaming?: boolean;
+    onRequestAddLineComment?: (payload: { path: string; startLine: number; endLine: number; text: string }) => void;
+  }>(),
+  { streaming: true },
+);
 
 const emit = defineEmits<{
   (event: 'rendered'): void;

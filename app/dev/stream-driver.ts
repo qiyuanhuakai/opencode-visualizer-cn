@@ -140,13 +140,14 @@ const app = createApp({
           `stream-driver | theme=${theme.value} | code=${code.value.length} chars`,
         ]),
         h('div', { id: 'renderer-host', ref: hostRef, class: 'renderer-host' }, [
-          h(CodeRenderer, {
-            fileContent: code.value,
-            lang: lang.value,
-            theme: theme.value,
-            streaming: true,
-            gutterMode: gutterMode.value,
-          }),
+        h(CodeRenderer, {
+          fileContent: code.value,
+          lang: lang.value,
+          theme: theme.value,
+          // streaming prop intentionally omitted: the driver exercises the
+          // default-on streaming path.
+          gutterMode: gutterMode.value,
+        }),
         ]),
       ]);
   },
