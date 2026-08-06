@@ -144,8 +144,7 @@ const app = createApp({
           fileContent: code.value,
           lang: lang.value,
           theme: theme.value,
-          // streaming prop intentionally omitted: the driver exercises the
-          // default-on streaming path.
+          streaming: true,
           gutterMode: gutterMode.value,
         }),
         ]),

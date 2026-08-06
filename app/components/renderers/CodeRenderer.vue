@@ -54,7 +54,7 @@ const props = withDefaults(
     streaming?: boolean;
     onRequestAddLineComment?: (payload: { path: string; startLine: number; endLine: number; text: string }) => void;
   }>(),
-  { streaming: true },
+  { streaming: false },
 );
 
 const emit = defineEmits<{
