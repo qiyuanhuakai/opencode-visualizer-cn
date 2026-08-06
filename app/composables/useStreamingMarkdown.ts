@@ -103,13 +103,6 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
     tailNodes = [];
   }
 
-  function clearAppliedState(): void {
-    options.containerRef.value?.replaceChildren();
-    stableBlocks = [];
-    tailNodes = [];
-    appliedStableOffset = 0;
-  }
-
   function parseHtml(html: string, container: HTMLElement): Node[] {
     const template = container.ownerDocument.createElement('template');
     template.innerHTML = html;
@@ -209,7 +202,13 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
         const result = segmenter.push(text);
         const stablePrefixLength = result.stable.join('').length;
         const shouldReset = forceReset || result.reset || stablePrefixLength < appliedStableOffset;
-        if (shouldReset) clearAppliedState();
+        if (shouldReset) {
+          // Bookkeeping resets now; the DOM is cleared only once replacement
+          // HTML is in hand, so a rejected render keeps the previous content.
+          stableBlocks = [];
+          appliedStableOffset = 0;
+          tailNodes = [];
+        }
 
         if (result.disabled) {
           const html = await options.render(text, theme);
@@ -226,6 +225,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
         const tailHtmlPromise = options.render(result.tail, theme);
         const [resolvedBlocks, tailHtml] = await Promise.all([stableHtmlPromise, tailHtmlPromise]);
         if (!isCurrent(iterationVersion, text, theme, context)) continue;
+        if (shouldReset) options.containerRef.value?.replaceChildren();
         applyStableBlocks(resolvedBlocks, end);
         if (appliedStableOffset !== end) {
           flushApplied();

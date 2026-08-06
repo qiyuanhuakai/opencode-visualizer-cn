@@ -132,6 +132,39 @@ describe('useStreamingMarkdown', () => {
     expect(onApplied).not.toHaveBeenCalled();
   });
 
+  it('keeps the previous DOM when a reset-triggering render rejects', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      let failNext = false;
+      const render = vi.fn(async (markdown: string, theme: string) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error('boom');
+        }
+        return `<article data-theme="${theme}">${markdown}</article>`;
+      });
+      const harness = createHarness(render, '# Title');
+      await settle();
+      const before = harness.container.value?.innerHTML ?? '';
+      expect(before).toContain('# Title');
+
+      // When: a theme change forces a reset but its render rejects
+      failNext = true;
+      harness.theme.value = 'dark';
+      await settle();
+
+      // Then: the previously rendered DOM is preserved, not cleared
+      expect(harness.container.value?.innerHTML).toBe(before);
+
+      harness.text.value = '# Title\n\nMore.';
+      await settle();
+      expect(harness.container.value?.innerHTML).toContain('More.');
+      harness.dispose();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('converges to the full markdown-it render across safe growing splits', async () => {
     const markdown = new MarkdownIt();
     const render = vi.fn(async (text: string) => markdown.render(text));
