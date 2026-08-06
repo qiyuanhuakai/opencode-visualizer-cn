@@ -1,15 +1,15 @@
 import MarkdownIt from 'markdown-it';
 import { fromHighlighter, type MarkdownItShikiSetupOptions } from '@shikijs/markdown-it/core';
-import { bundledLanguages, createHighlighter } from 'shiki/bundle/web';
-import { bundledLanguages as allBundledLanguages } from 'shiki/langs';
 import { transformerNotationDiff } from '@shikijs/transformers';
 import { compactUnifiedDiffPatch } from '../utils/diffCompression';
-import fastaGrammarRaw from '../grammars/fasta.tmLanguage.json?raw';
-import fastqGrammarRaw from '../grammars/fastq.tmLanguage.json?raw';
-import samGrammarRaw from '../grammars/sam.tmLanguage.json?raw';
-import vcfGrammarRaw from '../grammars/vcf.tmLanguage.json?raw';
-import bedGrammarRaw from '../grammars/bed.tmLanguage.json?raw';
-import gtfGrammarRaw from '../grammars/gtf.tmLanguage.json?raw';
+import {
+  createLanguageCacheState,
+  createThemedHighlighter,
+  languageCandidates,
+  resolveLanguage,
+  type Highlighter,
+  type LanguageCacheState,
+} from './highlightShared';
 
 type RenderRequest = {
   id: string;
@@ -40,7 +40,6 @@ type DiffRow = {
   rowClass?: string;
 };
 
-type Highlighter = Awaited<ReturnType<typeof createHighlighter>>;
 type MarkdownShikiOptions = MarkdownItShikiSetupOptions & { langAlias?: Record<string, string> };
 type MarkdownRenderEnv = {
   fileSet?: Set<string>;
@@ -72,19 +71,9 @@ function parseInlineFileRef(rawRef: string, fileSet: Set<string>): ParsedInlineF
   return { path, lines };
 }
 
-let highlighterPromise: Promise<Awaited<ReturnType<typeof createHighlighter>>> | null = null;
+let highlighterPromise: Promise<Highlighter> | null = null;
 let cachedTheme = '';
-let loadedLanguageCache = new Set<string>(['text']);
-let failedLanguageCache = new Set<string>();
-
-const customGrammars: Record<string, object> = {
-  fasta: { ...JSON.parse(fastaGrammarRaw), name: 'fasta' },
-  fastq: { ...JSON.parse(fastqGrammarRaw), name: 'fastq' },
-  sam: { ...JSON.parse(samGrammarRaw), name: 'sam' },
-  vcf: { ...JSON.parse(vcfGrammarRaw), name: 'vcf' },
-  bed: { ...JSON.parse(bedGrammarRaw), name: 'bed' },
-  gtf: { ...JSON.parse(gtfGrammarRaw), name: 'gtf' },
-};
+let languageState: LanguageCacheState = createLanguageCacheState();
 
 const HIGHLIGHT_CACHE_MAX = 512;
 let codeHtmlCache = new Map<string, string>();
@@ -102,80 +91,12 @@ function pruneHighlightCache(cache: Map<string, string>) {
 function getHighlighter(theme: string) {
   if (!highlighterPromise || cachedTheme !== theme) {
     cachedTheme = theme;
-    highlighterPromise = createHighlighter({ themes: [theme], langs: ['text'] });
-    loadedLanguageCache = new Set(['text']);
-    failedLanguageCache = new Set();
+    highlighterPromise = createThemedHighlighter(theme);
+    languageState = createLanguageCacheState();
     codeHtmlCache = new Map();
     mdHighlightCache = new Map();
   }
   return highlighterPromise;
-}
-
-function languageCandidates(lang: string) {
-  const trimmed = (lang || '').trim().toLowerCase();
-  if (!trimmed) return ['text'];
-  if (trimmed === 'shellscript') return ['bash', 'shellscript', 'sh', 'text'];
-  if (trimmed === 'tsx') return ['tsx', 'typescript', 'text'];
-  if (trimmed === 'jsx') return ['jsx', 'javascript', 'text'];
-  if (trimmed === 'md') return ['markdown', 'text'];
-  if (trimmed === 'yml') return ['yaml', 'text'];
-  return [trimmed, 'text'];
-}
-
-async function resolveLanguage(highlighter: Highlighter, lang: string) {
-  const loaded =
-    typeof highlighter.getLoadedLanguages === 'function' ? highlighter.getLoadedLanguages() : [];
-  for (const item of loaded) loadedLanguageCache.add(item);
-  for (const candidate of languageCandidates(lang)) {
-    if (loadedLanguageCache.has(candidate)) return candidate;
-    if (candidate === 'text') return 'text';
-    const loadedCandidate = await tryLoadLanguage(highlighter, candidate);
-    if (loadedCandidate) return candidate;
-  }
-  return 'text';
-}
-
-type LanguageLoader = () => Promise<{ default: unknown }>;
-
-async function tryLoadLanguage(highlighter: Highlighter, candidate: string) {
-  if (failedLanguageCache.has(candidate)) return false;
-  if (typeof highlighter.loadLanguage !== 'function') return false;
-
-  const customGrammar = customGrammars[candidate];
-  if (customGrammar) {
-    try {
-      await highlighter.loadLanguage(customGrammar as never);
-      loadedLanguageCache.add(candidate);
-      failedLanguageCache.delete(candidate);
-      return true;
-    } catch (error) {
-      console.warn('[render-worker] custom grammar load failed', candidate, error);
-      failedLanguageCache.add(candidate);
-      return false;
-    }
-  }
-
-  const loader =
-    (bundledLanguages as Record<string, unknown>)[candidate] ??
-    (allBundledLanguages as Record<string, unknown>)[candidate];
-  try {
-    if (typeof loader === 'function') {
-      const module = await (loader as LanguageLoader)();
-      const language = module?.default;
-      await highlighter.loadLanguage(language as never);
-    } else {
-      await highlighter.loadLanguage(candidate as never);
-    }
-    loadedLanguageCache.add(candidate);
-    failedLanguageCache.delete(candidate);
-    return true;
-  } catch (error) {
-    if (!failedLanguageCache.has(candidate)) {
-      console.warn('[render-worker] language load failed', candidate, error);
-    }
-    failedLanguageCache.add(candidate);
-    return false;
-  }
 }
 
 function safeCodeToHtml(
@@ -696,7 +617,7 @@ function buildDiffHtmlFromCode(
   mode: 'none' | 'single' | 'double',
 ) {
   return getHighlighter(theme).then(async (highlighter) => {
-    const resolvedLang = await resolveLanguage(highlighter, lang);
+    const resolvedLang = await resolveLanguage(highlighter, lang, languageState);
 
     let effectiveBefore = before;
     let effectiveAfter = after;
@@ -778,7 +699,7 @@ function buildDiffHtmlFromCode(
 
 async function renderCodeHtml(request: RenderRequest) {
   const highlighter = await getHighlighter(request.theme);
-  const resolvedLang = await resolveLanguage(highlighter, request.lang);
+  const resolvedLang = await resolveLanguage(highlighter, request.lang, languageState);
   const html = safeCodeToHtml(highlighter, request.code, resolvedLang, request.theme);
   let lines = extractShikiLines(html);
   const mode = request.gutterMode ?? 'single';
@@ -856,7 +777,7 @@ async function resolveMarkdownLangAliases(highlighter: Highlighter, markdown: st
   const langs = collectMarkdownFenceLanguages(markdown);
 
   for (const [raw, normalized] of langs.entries()) {
-    const resolved = await resolveLanguage(highlighter, normalized);
+    const resolved = await resolveLanguage(highlighter, normalized, languageState);
     aliases[raw] = resolved;
     aliases[normalized] = resolved;
     aliases[normalized.toLowerCase()] = resolved;
