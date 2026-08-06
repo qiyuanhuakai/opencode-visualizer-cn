@@ -21,6 +21,8 @@ export type StreamingMarkdownOptions = {
   // Identity of every render-affecting input besides text/theme (files, copy
   // labels). Segment cache entries are keyed by it and a change forces a reset.
   readonly renderContext?: WatchSource<string>;
+  // Fires after each committed DOM mutation; scroll-follow depends on it.
+  readonly onApplied?: () => void;
 };
 
 export type StreamingMarkdown = {
@@ -82,6 +84,17 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
   let stableBlocks: AppliedBlock[] = [];
   let tailNodes: Node[] = [];
   let stopWatch: (() => void) | null = null;
+  let domDirty = false;
+
+  function markDirty(): void {
+    domDirty = true;
+  }
+
+  function flushApplied(): void {
+    if (!domDirty) return;
+    domDirty = false;
+    options.onApplied?.();
+  }
 
   function removeTailNodes(): void {
     for (const node of tailNodes) {
@@ -116,6 +129,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
         for (const node of nodes) {
           container.insertBefore(node, before);
         }
+        markDirty();
       }
       stableBlocks.push({ ...block, nodes });
     }
@@ -130,6 +144,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
     for (const node of tailNodes) {
       container.append(node);
     }
+    markDirty();
   }
 
   function applyFullHtml(html: string): void {
@@ -142,6 +157,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
     for (const node of tailNodes) {
       container.append(node);
     }
+    markDirty();
   }
 
   function isCurrent(version: number, text: string, theme: string, context: string): boolean {
@@ -199,6 +215,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
           const html = await options.render(text, theme);
           if (!isCurrent(iterationVersion, text, theme, context)) continue;
           applyFullHtml(html);
+          flushApplied();
           forceReset = false;
           if (latestVersion === iterationVersion) break;
           continue;
@@ -210,8 +227,12 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
         const [resolvedBlocks, tailHtml] = await Promise.all([stableHtmlPromise, tailHtmlPromise]);
         if (!isCurrent(iterationVersion, text, theme, context)) continue;
         applyStableBlocks(resolvedBlocks, end);
-        if (appliedStableOffset !== end) continue;
+        if (appliedStableOffset !== end) {
+          flushApplied();
+          continue;
+        }
         applyTail(tailHtml);
+        flushApplied();
         forceReset = false;
         if (latestVersion === iterationVersion) break;
       }

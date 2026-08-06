@@ -227,6 +227,7 @@ describe('MarkdownRenderer streaming', () => {
     // slicing at a count.
     const streamingRequestIds = new Set(requestsSince(testStart).map((request) => request.id));
     expect(streamingRequestIds.size).toBeGreaterThan(1);
+    const renderedBeforeFlip = mounted.renderedCount();
 
     // When: the part completes (streaming flips off)
     mounted.props.streaming = false;
@@ -246,7 +247,8 @@ describe('MarkdownRenderer streaming', () => {
     // And: the resulting DOM is exactly that full render
     const content = mounted.target.querySelector('.message-content');
     expect(content?.innerHTML).toBe(htmlFor(finalText));
-    expect(mounted.renderedCount()).toBe(1);
+    // Streaming applies already emitted rendered; convergence adds exactly one.
+    expect(mounted.renderedCount()).toBe(renderedBeforeFlip + 1);
 
   });
 

@@ -77,6 +77,61 @@ describe('useStreamingMarkdown', () => {
     harness.dispose();
   });
 
+  it('notifies after each applied DOM update so scroll-follow can react', async () => {
+    const render = createRenderer();
+    const onApplied = vi.fn();
+    const text = ref('# Title');
+    const theme = ref('light');
+    const context = ref('');
+    const enabled = ref(true);
+    const container = ref<HTMLElement | null>(document.createElement('div'));
+    const { dispose } = useStreamingMarkdown({
+      text,
+      theme,
+      renderContext: context,
+      enabled,
+      render,
+      containerRef: container,
+      onApplied,
+    });
+
+    await settle();
+    const callsAfterFirst = onApplied.mock.calls.length;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    text.value = '# Title\n\nSecond paragraph.';
+    await settle();
+    expect(onApplied.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+    dispose();
+  });
+
+  it('does not notify after disposal', async () => {
+    const render = createRenderer();
+    const onApplied = vi.fn();
+    const text = ref('# Title');
+    const theme = ref('light');
+    const context = ref('');
+    const enabled = ref(true);
+    const container = ref<HTMLElement | null>(document.createElement('div'));
+    const { dispose } = useStreamingMarkdown({
+      text,
+      theme,
+      renderContext: context,
+      enabled,
+      render,
+      containerRef: container,
+      onApplied,
+    });
+
+    await settle();
+    dispose();
+    onApplied.mockClear();
+
+    text.value = '# Title\n\nMore.';
+    await settle();
+    expect(onApplied).not.toHaveBeenCalled();
+  });
+
   it('converges to the full markdown-it render across safe growing splits', async () => {
     const markdown = new MarkdownIt();
     const render = vi.fn(async (text: string) => markdown.render(text));
