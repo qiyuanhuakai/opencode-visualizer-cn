@@ -436,6 +436,12 @@ async function main() {
     const firstThird = runs.flatMap((r) => r.perChunk.slice(0, third).map((m) => m[latencyKey]));
     const lastThird = runs.flatMap((r) => r.perChunk.slice(-third).map((m) => m[latencyKey]));
 
+    // Per-chunk metrics use path-specific names, but totals always store
+    // cumulative worker/dom under workerMs/domMs (sendToAppliedMs/patchMs for
+    // the code stream path) — the totals lookup must not reuse the per-chunk key.
+    const totalsWorkerKey = benchPath === 'stream' ? 'sendToAppliedMs' : 'workerMs';
+    const totalsDomKey = benchPath === 'stream' ? 'patchMs' : 'domMs';
+
     summary.combos[`${benchPath}/${fixture}`] = {
       runs: runs.length,
       chunkCount: runs[0].chunkCount,
@@ -456,10 +462,10 @@ async function main() {
         medianOfRunP95: round(median(domPerRunP95)),
         pooledMean: round(mean(pooledDom)),
         pooledP95: round(percentile(pooledDom, 95)),
-        cumulativeMedianMs: round(median(runs.map((r) => r.totals[domKey] ?? 0)), 1),
+        cumulativeMedianMs: round(median(runs.map((r) => r.totals[totalsDomKey] ?? 0)), 1),
       },
       cumulative: {
-        roundTripMedianMs: round(median(runs.map((r) => r.totals[latencyKey] ?? 0)), 1),
+        roundTripMedianMs: round(median(runs.map((r) => r.totals[totalsWorkerKey] ?? 0)), 1),
         ...(benchPath === 'stream'
           ? { reflowMedianMs: round(median(runs.map((r) => r.totals.reflowMs ?? 0)), 1) }
           : {}),
