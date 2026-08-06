@@ -1,6 +1,7 @@
 <template>
   <div ref="rootEl" class="code-renderer-content">
     <div ref="viewerBodyEl" class="viewer-body" @mousedown="onMouseDown" @scroll="onScroll">
+      <div v-if="streamError" class="stream-error">{{ streamError }}</div>
       <div v-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
       <div v-else-if="props.streaming && streamingRenderParams && !streamDone" ref="streamContainerRef" class="code-scroll-content" />
       <div v-else-if="useVirtualScroll" class="code-scroll-content virtual-scroll">
@@ -132,6 +133,7 @@ const {
   containerRef: streamContainer,
   html: streamRenderedHtml,
   done: streamDone,
+  error: streamError,
 } = useStreamCodeRender(streamingRenderParams);
 
 watch(streamContainerRef, (el) => {
@@ -492,5 +494,12 @@ const showLoading = computed(() => {
   color: var(--theme-text-muted, #64748b);
   font-size: var(--app-monospace-font-size, 13px);
   user-select: none;
+}
+
+.stream-error {
+  padding: 8px 12px;
+  color: var(--theme-danger-text, #fca5a5);
+  font-size: var(--app-monospace-font-size, 13px);
+  background: rgba(148, 163, 184, 0.15);
 }
 </style>

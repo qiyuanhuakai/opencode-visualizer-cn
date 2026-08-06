@@ -131,6 +131,26 @@ afterEach(() => {
 });
 
 describe('CodeRenderer streaming', () => {
+  it('surfaces the stream error instead of a blank container when the stream fails', async () => {
+    // Given: a streaming renderer whose close rejects (worker-reported failure)
+    const { stream, close } = createMockStream();
+    close.mockRejectedValue(new Error('boom'));
+    mockStartStream.mockReturnValue(stream);
+    const mounted = mountCodeRenderer({
+      fileContent: 'line1\nline2',
+      lang: 'typescript',
+      streaming: true,
+    });
+    await settle();
+
+    // When: the debounced close fails
+    await vi.advanceTimersByTimeAsync(500);
+    await settle();
+
+    // Then: the failure is visible instead of an indefinitely blank container
+    expect(mounted.target.textContent).toContain('boom');
+  });
+
   it('re-runs line highlights and the rendered emit when the stream converges', async () => {
     // Given: a streaming code renderer with a line selection
     const finalHtml =
