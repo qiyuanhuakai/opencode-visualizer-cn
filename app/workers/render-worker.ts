@@ -10,6 +10,12 @@ import {
   type Highlighter,
   type LanguageCacheState,
 } from './highlightShared';
+import { StreamSessionManager } from './streamSession';
+import {
+  createStreamMessageHandler,
+  isStreamWorkerRequest,
+  type StreamWorkerRequest,
+} from './streamHandler';
 
 type RenderRequest = {
   id: string;
@@ -971,8 +977,21 @@ function renderRequest(request: RenderRequest): Promise<string> {
   return renderCodeHtml(request);
 }
 
-self.onmessage = (event: MessageEvent<RenderRequest>) => {
+const streamManager = new StreamSessionManager();
+const handleStreamMessage = createStreamMessageHandler({
+  manager: streamManager,
+  // D4: the converged final render goes through the exact single-shot
+  // renderCodeHtml path over the full accumulated code.
+  renderFinal: (code, params) => renderCodeHtml({ id: '', code, ...params }),
+  post: (message) => self.postMessage(message),
+});
+
+self.onmessage = (event: MessageEvent<RenderRequest | StreamWorkerRequest>) => {
   const request = event.data;
+  if (isStreamWorkerRequest(request)) {
+    void handleStreamMessage(request);
+    return;
+  }
   renderRequest(request)
     .then((html) => {
       const response: RenderResponse = { id: request.id, ok: true, html };

@@ -1,5 +1,17 @@
 import RenderWorker from '../workers/render-worker?worker';
 import { incrementPendingRenders, decrementPendingRenders } from '../composables/useRenderState';
+import { RenderCancelledError } from './renderErrors';
+
+export { RenderCancelledError } from './renderErrors';
+// Streaming client lives in ./workerStream; re-exported here so the public
+// worker-renderer API stays single-entry (additive protocol, D1/D4).
+export { startRenderWorkerStream } from './workerStream';
+export type {
+  RenderWorkerStream,
+  StreamBatchCallback,
+  StreamOpenParams,
+  StreamTokenBatch,
+} from './workerStream';
 
 export type RenderRequest = {
   id: string;
@@ -30,13 +42,6 @@ type PendingEntry = {
   reject: (reason: Error) => void;
   errorLabel?: string;
 };
-
-export class RenderCancelledError extends Error {
-  constructor() {
-    super('Render request cancelled');
-    this.name = 'RenderCancelledError';
-  }
-}
 
 type RenderTask = {
   promise: Promise<string>;
