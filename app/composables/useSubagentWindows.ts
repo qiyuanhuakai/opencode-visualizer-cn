@@ -107,6 +107,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
         if (resolvedSessionId === selectedSessionId.value) return;
 
         if (packet.info.time.completed || packet.info.error) {
+          manager.markSessionCompleted(resolvedSessionId);
           manager.scheduleClose(resolvedSessionId);
         }
       },
@@ -117,6 +118,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
 
   return {
     reset,
+    entriesBySession: manager.entriesBySession,
     bindScope: subscribe,
   };
 }

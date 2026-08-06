@@ -8,6 +8,7 @@ import { useStreamingMarkdown } from './useStreamingMarkdown';
 type Harness = {
   readonly text: Ref<string>;
   readonly theme: Ref<string>;
+  readonly context: Ref<string>;
   readonly enabled: Ref<boolean>;
   readonly container: Ref<HTMLElement | null>;
   readonly dispose: () => void;
@@ -32,22 +33,48 @@ function createHarness(
 ): Harness {
   const text = ref(initialText);
   const theme = ref('light');
+  const context = ref('');
   const enabled = ref(false);
   const container = ref<HTMLElement | null>(document.createElement('div'));
   const { dispose } = useStreamingMarkdown({
     text,
     theme,
+    renderContext: context,
     enabled,
     render,
     containerRef: container,
   });
   enabled.value = true;
-  return { text, theme, enabled, container, dispose };
+  return { text, theme, context, enabled, container, dispose };
 }
 
 describe('useStreamingMarkdown', () => {
   beforeEach(() => {
     clearMarkdownSegmentCache();
+  });
+
+  it('re-renders with fresh output when the render context changes mid-stream', async () => {
+    let label = 'COPY';
+    const render = vi.fn(
+      async (markdown: string, theme: string) =>
+        `<article data-theme="${theme}" data-label="${label}">${markdown}</article>`,
+    );
+    const harness = createHarness(render, '# Title');
+
+    await settle();
+    expect(harness.container.value?.innerHTML).toContain('data-label="COPY"');
+    const callsBefore = render.mock.calls.length;
+
+    // When the locale/files context changes, cached segment HTML from the old
+    // context must not be reused — everything re-renders with the new label.
+    label = '复制';
+    harness.context.value = 'zh';
+    await settle();
+
+    expect(harness.container.value?.innerHTML).toContain('data-label="复制"');
+    expect(harness.container.value?.innerHTML).not.toContain('data-label="COPY"');
+    expect(render.mock.calls.length).toBeGreaterThan(callsBefore);
+    harness.dispose();
   });
 
   it('converges to the full markdown-it render across safe growing splits', async () => {
@@ -197,6 +224,40 @@ describe('useStreamingMarkdown', () => {
 
     expect(harness.container.value?.innerHTML).toBe('<p>default-path</p>');
     harness.dispose();
+  });
+
+  it('recovers from a render rejection: keeps last good DOM, no unhandled rejection, next update renders', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const render = vi.fn(async (markdown: string) => {
+        if (markdown === 'good bad') throw new Error('render exploded');
+        return `<p>${markdown}</p>`;
+      });
+      const harness = createHarness(render, 'good');
+      await settle();
+      expect(harness.container.value?.innerHTML).toBe('<p>good</p>');
+
+      // When: a render rejects mid-stream, the last good DOM stays in place
+      harness.text.value = 'good bad';
+      await settle();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(harness.container.value?.innerHTML).toBe('<p>good</p>');
+      expect(unhandled).toEqual([]);
+
+      // And: the loop is not dead — the next watcher tick re-renders the latest text
+      harness.text.value = 'good better';
+      await settle();
+      expect(harness.container.value?.innerHTML).toBe('<p>good better</p>');
+      harness.dispose();
+    } finally {
+      consoleError.mockRestore();
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('reuses cached stable HTML for a new segmenter with the same theme and text', async () => {

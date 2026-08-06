@@ -183,6 +183,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
         const messageId = packet.info.id;
 
         if (packet.info.time.completed || packet.info.error) {
+          manager.markSessionCompleted(resolvedSessionId);
           markReasoningFinished(resolvedSessionId, messageId);
           scheduleReasoningClose(resolvedSessionId);
         }
@@ -204,6 +205,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     updateReasoningExpiry,
     scheduleReasoningClose,
     reset,
+    entriesBySession: manager.entriesBySession,
     bindScope: subscribe,
   };
 }

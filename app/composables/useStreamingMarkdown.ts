@@ -18,6 +18,9 @@ export type StreamingMarkdownOptions = {
   readonly enabled: WatchSource<boolean>;
   readonly render: (markdown: string, theme: string) => Promise<string>;
   readonly containerRef: Ref<HTMLElement | null>;
+  // Identity of every render-affecting input besides text/theme (files, copy
+  // labels). Segment cache entries are keyed by it and a change forces a reset.
+  readonly renderContext?: WatchSource<string>;
 };
 
 export type StreamingMarkdown = {
@@ -67,6 +70,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
   const segmenter = createMarkdownSegmenter();
   let latestText = '';
   let latestTheme = '';
+  let latestContext = '';
   let latestEnabled = false;
   let latestContainer: HTMLElement | null = null;
   let latestVersion = 0;
@@ -140,31 +144,33 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
     }
   }
 
-  function isCurrent(version: number, text: string, theme: string): boolean {
+  function isCurrent(version: number, text: string, theme: string, context: string): boolean {
     return (
       !disposed &&
       latestEnabled &&
       latestVersion === version &&
       latestText === text &&
-      latestTheme === theme
+      latestTheme === theme &&
+      latestContext === context
     );
   }
 
   async function resolveStableBlocks(
     ranges: readonly StableRange[],
     theme: string,
+    context: string,
   ): Promise<ResolvedBlock[]> {
     const inFlight = new Map<string, Promise<string>>();
     return Promise.all(
       ranges.map(async (range) => {
-        const cached = getMarkdownSegmentHtml(theme, range.markdown);
+        const cached = getMarkdownSegmentHtml(theme, context, range.markdown);
         if (cached !== undefined) return { ...range, html: cached };
 
-        const key = `${theme}\n${range.markdown}`;
+        const key = `${theme}\n${context}\n${range.markdown}`;
         let htmlPromise = inFlight.get(key);
         if (!htmlPromise) {
           htmlPromise = options.render(range.markdown, theme).then((html) => {
-            setMarkdownSegmentHtml(theme, range.markdown, html);
+            setMarkdownSegmentHtml(theme, context, range.markdown, html);
             return html;
           });
           inFlight.set(key, htmlPromise);
@@ -183,6 +189,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
         const iterationVersion = latestVersion;
         const text = latestText;
         const theme = latestTheme;
+        const context = latestContext;
         const result = segmenter.push(text);
         const stablePrefixLength = result.stable.join('').length;
         const shouldReset = forceReset || result.reset || stablePrefixLength < appliedStableOffset;
@@ -190,7 +197,7 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
 
         if (result.disabled) {
           const html = await options.render(text, theme);
-          if (!isCurrent(iterationVersion, text, theme)) continue;
+          if (!isCurrent(iterationVersion, text, theme, context)) continue;
           applyFullHtml(html);
           forceReset = false;
           if (latestVersion === iterationVersion) break;
@@ -198,16 +205,21 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
         }
 
         const { ranges, end } = getStableRanges(result.stable, appliedStableOffset);
-        const stableHtmlPromise = resolveStableBlocks(ranges, theme);
+        const stableHtmlPromise = resolveStableBlocks(ranges, theme, context);
         const tailHtmlPromise = options.render(result.tail, theme);
         const [resolvedBlocks, tailHtml] = await Promise.all([stableHtmlPromise, tailHtmlPromise]);
-        if (!isCurrent(iterationVersion, text, theme)) continue;
+        if (!isCurrent(iterationVersion, text, theme, context)) continue;
         applyStableBlocks(resolvedBlocks, end);
         if (appliedStableOffset !== end) continue;
         applyTail(tailHtml);
         forceReset = false;
         if (latestVersion === iterationVersion) break;
       }
+    } catch (error) {
+      // A failed render ends the iteration cleanly: the last good DOM stays in
+      // place and the next watcher tick re-runs the loop with the latest text.
+      // No hot retry — a persistently failing render is reported once per change.
+      console.error('[useStreamingMarkdown] render failed; keeping last rendered content', error);
     } finally {
       loopRunning = false;
     }
@@ -222,19 +234,24 @@ export function useStreamingMarkdown(options: StreamingMarkdownOptions): Streami
     stopWatch = null;
   }
 
+  const contextSource: WatchSource<string> = options.renderContext ?? (() => '');
+
   stopWatch = watch(
-    [options.text, options.theme, options.enabled, options.containerRef],
-    ([text, theme, enabled, container]) => {
+    [options.text, options.theme, contextSource, options.enabled, options.containerRef],
+    ([text, theme, context, enabled, container]) => {
       const themeChanged = observed && theme !== latestTheme;
+      const contextChanged = observed && context !== latestContext;
       const enabledChanged = observed && enabled !== latestEnabled;
       const containerChanged = observed && container !== latestContainer;
       latestText = text;
       latestTheme = theme;
+      latestContext = context;
       latestEnabled = enabled;
       latestContainer = container;
       latestVersion += 1;
 
-      if (themeChanged || (enabledChanged && enabled) || containerChanged) forceReset = true;
+      if (themeChanged || contextChanged || (enabledChanged && enabled) || containerChanged)
+        forceReset = true;
       observed = true;
       if (enabled) void runLoop();
     },

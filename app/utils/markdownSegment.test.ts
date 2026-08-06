@@ -112,14 +112,31 @@ describe('markdownSegmenter', () => {
     }
   });
 
-  it('preserves disabled state after a later edit', () => {
+  it('re-enables segmentation when a reset replaces a ref-def document', () => {
     const segmenter = createMarkdownSegmenter();
-    segmenter.push('[note]: value\n\ntext');
+    const disabled = segmenter.push('[note]: value\n\ntext');
+    expect(disabled.disabled).toBe(true);
 
-    const result = segmenter.push('edited');
+    const result = segmenter.push('clean\n\ntext');
 
-    expect(result.disabled).toBe(true);
     expect(result.reset).toBe(true);
+    expect(result.disabled).toBe(false);
+    expect(result.stable).toEqual(['clean\n\n']);
+    expect(result.tail).toBe('text');
+  });
+
+  it('does not disable segmentation for reference-definition lines inside fences', () => {
+    const [result] = appendChunks(['```md\n[key]: value\n```\n\nafter']);
+
+    expect(result?.disabled).toBe(false);
+    expect(result?.stable).toEqual(['```md\n[key]: value\n```\n\n']);
+    expect(result?.tail).toBe('after');
+  });
+
+  it('does not disable segmentation for a trailing partial ref-def line inside an open fence', () => {
+    const [result] = appendChunks(['```md\n[key]: val']);
+
+    expect(result?.disabled).toBe(false);
   });
 
   it('holds byte exactness over a fuzzed growing markdown fixture', () => {

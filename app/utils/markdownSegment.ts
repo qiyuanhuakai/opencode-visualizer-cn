@@ -59,6 +59,7 @@ export function createMarkdownSegmenter(): Segmenter {
     fenceChar = '';
     fenceLength = 0;
     lastNonBlank = '';
+    disabled = false;
     candidates = [];
   }
 
@@ -68,7 +69,8 @@ export function createMarkdownSegmenter(): Segmenter {
       const newline = text.indexOf('\n', start);
       if (newline < 0) break;
       const line = lineContent(text.slice(start), newline - start);
-      if (REFERENCE_DEFINITION.test(line)) disabled = true;
+      // `[key]: value` inside a fence is literal text, not a reference definition.
+      if (fenceChar === '' && REFERENCE_DEFINITION.test(line)) disabled = true;
       const fence = /^(?: {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
       if (fence) {
         const marker = fence[1] ?? '';
@@ -91,7 +93,7 @@ export function createMarkdownSegmenter(): Segmenter {
       start = newline + 1;
     }
     scanOffset = start;
-    if (REFERENCE_DEFINITION.test(text.slice(scanOffset))) disabled = true;
+    if (fenceChar === '' && REFERENCE_DEFINITION.test(text.slice(scanOffset))) disabled = true;
   }
 
   function push(text: string): SegmentResult {

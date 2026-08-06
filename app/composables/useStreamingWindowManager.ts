@@ -138,6 +138,15 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     closeTimers.clear();
   });
 
+  function markSessionCompleted(sessionId: string) {
+    const sessionEntries = entriesBySession.get(sessionId);
+    if (!sessionEntries) return;
+    for (let i = 0; i < sessionEntries.length; i++) {
+      const entry = sessionEntries[i];
+      if (!entry.completed) sessionEntries[i] = { ...entry, completed: true };
+    }
+  }
+
   return {
     acc,
     entriesBySession,
@@ -148,6 +157,7 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
     closeWindow,
     reset,
     upsertEntry,
+    markSessionCompleted,
     openWindow,
     subscribe,
   };
