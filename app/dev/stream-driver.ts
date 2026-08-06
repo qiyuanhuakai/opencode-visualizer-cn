@@ -119,6 +119,7 @@ const observer = new MutationObserver((records) => {
 const code = ref('');
 const theme = ref('github-dark');
 const lang = ref('typescript');
+const gutterMode = ref<'default' | 'none'>('none');
 const hostRef = ref<HTMLElement | null>(null);
 
 const app = createApp({
@@ -144,7 +145,7 @@ const app = createApp({
             lang: lang.value,
             theme: theme.value,
             streaming: true,
-            gutterMode: 'none',
+            gutterMode: gutterMode.value,
           }),
         ]),
       ]);
@@ -181,6 +182,10 @@ const driver = {
     theme.value = nextTheme;
   },
 
+  setGutterMode(nextMode: 'default' | 'none') {
+    gutterMode.value = nextMode;
+  },
+
   cancel() {
     // Empty code makes CodeRenderer's streamingRenderParams computed return
     // null, which triggers cancelActiveStream() in the composable — the same
@@ -192,6 +197,7 @@ const driver = {
     code.value = '';
     theme.value = 'github-dark';
     lang.value = 'typescript';
+    gutterMode.value = 'none';
     consoleErrors.length = 0;
     mutationLog.length = 0;
     mutationSeq = 0;
@@ -231,6 +237,12 @@ const driver = {
     return currentRowCount();
   },
 
+  getGutterTexts(): string[] {
+    return Array.from(document.querySelectorAll('#renderer-host .code-gutter')).map(
+      (el) => el.textContent ?? '',
+    );
+  },
+
   getMutationLog(): MutationEntry[] {
     return [...mutationLog];
   },
@@ -247,14 +259,18 @@ const driver = {
 
   extractHexColors,
 
-  async getSingleShotHTML(singleShotCode: string, singleShotTheme: string): Promise<string> {
+  async getSingleShotHTML(
+    singleShotCode: string,
+    singleShotTheme: string,
+    singleShotGutterMode: 'none' | 'single' | 'double' = 'none',
+  ): Promise<string> {
     const id = `qa-singleshot-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const task = startRenderWorkerHtml({
       id,
       code: singleShotCode,
       lang: lang.value,
       theme: singleShotTheme,
-      gutterMode: 'none',
+      gutterMode: singleShotGutterMode,
     });
     return task.promise;
   },

@@ -11,6 +11,9 @@
  *         after close the container's final HTML is byte-identical to the
  *         single-shot render of the same full code via the existing
  *         single-shot worker path (identical lang/theme/gutterMode).
+ *   S1g — gutter continuity: same 8 chunks with gutterMode 'single'; final
+ *         container HTML byte-identical to single-shot with identical params;
+ *         per-chunk gutter numbers strictly sequential (no batch restart).
  *   S2c — theme switch mid-stream (github-dark -> dark-plus): composable
  *         cancels + reopens; final HTML byte-identical to single-shot in
  *         dark-plus; no stale theme-A colors.
@@ -113,7 +116,7 @@ const DRIVER_URL = `${BASE_URL}/dev/stream-driver.html`;
 const SETTLE_MS = 250;
 
 fs.rmSync(ARTIFACTS_DIR, { recursive: true, force: true });
-for (const sub of ['s1', 's2c', 's2d', 'red']) {
+for (const sub of ['s1', 's1g', 's2c', 's2d', 'red']) {
   fs.mkdirSync(path.join(ARTIFACTS_DIR, sub), { recursive: true });
 }
 
@@ -292,6 +295,63 @@ async function main() {
     await page.screenshot({ path: path.join(ARTIFACTS_DIR, 's1/screenshot.png'), fullPage: true });
 
     // =====================================================================
+    // S1g — gutter continuity (gutterMode 'single' across batch boundaries)
+    // =====================================================================
+    console.log('--- S1g: gutter mode single ---');
+    await ev(() => window.__streamDriver.reset());
+    await ev(() => window.__streamDriver.setGutterMode('default'));
+    await sleep(300);
+
+    const gutterSnapshots = [];
+    for (let i = 0; i < CHUNKS.length; i++) {
+      await feedChunk(CHUNKS[i]);
+      const gutters = await ev(() => window.__streamDriver.getGutterTexts());
+      gutterSnapshots.push(gutters);
+      artifact('s1g', `chunk-${String(i + 1).padStart(2, '0')}-gutters.json`, JSON.stringify(gutters));
+      const snap = await ev(() => window.__streamDriver.getViewerHTML());
+      artifact('s1g', `chunk-${String(i + 1).padStart(2, '0')}.html`, snap);
+    }
+    artifact('s1g', 'gutter-snapshots.json', JSON.stringify(gutterSnapshots, null, 2));
+
+    // No restarted line number: within each per-chunk snapshot the gutter
+    // numbers in DOM order must be exactly 1..N (a batch-local restart would
+    // produce e.g. 1,2,1,2,3), and the visible maximum must never decrease.
+    let prevMax = 0;
+    let sequentialOk = true;
+    let monotonicMaxOk = true;
+    for (const gutters of gutterSnapshots) {
+      const nums = gutters.map(Number);
+      if (nums.some((n, idx) => !Number.isInteger(n) || n !== idx + 1)) sequentialOk = false;
+      const max = nums.length > 0 ? Math.max(...nums) : 0;
+      if (max < prevMax) monotonicMaxOk = false;
+      prevMax = Math.max(prevMax, max);
+    }
+    record('S1g', 'per-chunk gutter numbers strictly sequential (1..N, no restart)', sequentialOk,
+      gutterSnapshots.map((g) => g.join(',')).join(' | '));
+    record('S1g', 'max visible line number non-decreasing across chunks', monotonicMaxOk);
+
+    const s1gDone = await ev(() => window.__streamDriver.waitForDone(10000));
+    record('S1g', 'stream closed (done)', s1gDone);
+    await sleep(300);
+
+    const s1gFinal = await ev(() => window.__streamDriver.getPostDoneHTML());
+    const s1gSingle = await ev(
+      (code) => window.__streamDriver.getSingleShotHTML(code, 'github-dark', 'single'),
+      FULL_CODE,
+    );
+    const s1gCanonSingle = await ev((html) => window.__streamDriver.canonicalize(html), s1gSingle);
+
+    artifact('s1g', 'final-container.html', s1gFinal);
+    artifact('s1g', 'single-shot.html', s1gSingle);
+    artifact('s1g', 'single-shot-canonical.html', s1gCanonSingle);
+
+    const s1gDiff = computeDiff(s1gFinal, s1gCanonSingle);
+    artifact('s1g', 'diff.txt', s1gDiff);
+    record('S1g', 'final container HTML byte-identical to single-shot (gutter single)', s1gDiff === '');
+
+    await page.screenshot({ path: path.join(ARTIFACTS_DIR, 's1g/screenshot.png'), fullPage: true });
+
+    // =====================================================================
     // S2c — theme switch mid-stream (github-dark -> dark-plus)
     // =====================================================================
     console.log('--- S2c: theme switch mid-stream ---');
@@ -356,11 +416,15 @@ async function main() {
     }
 
     artifact('s2d', 'snapshot-before-cancel.html', await ev(() => window.__streamDriver.getViewerHTML()));
-    const mutationsAtCancel = await ev(() => window.__streamDriver.getMutationCount());
     await ev(() => window.__streamDriver.cancel());
     await sleep(500);
     const s2dSnap1 = await ev(() => window.__streamDriver.getViewerHTML());
     artifact('s2d', 'snapshot-after-cancel-0.5s.html', s2dSnap1);
+    // Baseline AFTER the cancel has fully settled: the composable's cancel
+    // path legitimately clears the container once (replaceChildren), and that
+    // mutation must not count — the check targets stream-driven mutations
+    // arriving after the cancel (late token batches, stray finalize).
+    const mutationsAfterCancelSettled = await ev(() => window.__streamDriver.getMutationCount());
     await sleep(1000);
     const s2dSnap2 = await ev(() => window.__streamDriver.getViewerHTML());
     artifact('s2d', 'snapshot-after-cancel-1.5s.html', s2dSnap2);
@@ -369,7 +433,7 @@ async function main() {
     artifact('s2d', 'mutation-log.json', JSON.stringify(s2dMutLog, null, 2));
 
     record('S2d', 'DOM snapshots 1s apart identical (no further mutations)', s2dSnap1 === s2dSnap2);
-    record('S2d', 'zero DOM mutation entries after cancel', mutationsAtEnd === mutationsAtCancel, `at cancel=${mutationsAtCancel}, end=${mutationsAtEnd}`);
+    record('S2d', 'zero DOM mutation entries after cancel settled', mutationsAtEnd === mutationsAfterCancelSettled, `after cancel settled=${mutationsAfterCancelSettled}, end=${mutationsAtEnd}`);
 
     const s2dDone = await ev(() => window.__streamDriver.isDone());
     record('S2d', 'stream never finalized after cancel', !s2dDone);
