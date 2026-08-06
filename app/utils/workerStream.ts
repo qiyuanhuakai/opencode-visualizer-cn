@@ -46,12 +46,19 @@ function createStreamWorker(): Worker {
         entry.settleClose?.resolve(data.html);
         break;
       case 'error':
+        entry.done = true;
+        streamEntries.delete(data.streamId);
         entry.settleClose?.reject(new Error(data.error));
+        entry.settleClose = null;
         break;
     }
   };
   worker.onerror = (error) => {
-    streamEntries.forEach((entry) => entry.settleClose?.reject(new Error(String(error))));
+    streamEntries.forEach((entry) => {
+      entry.done = true;
+      entry.settleClose?.reject(new Error(String(error)));
+      entry.settleClose = null;
+    });
     streamEntries.clear();
     streamWorker = null;
   };

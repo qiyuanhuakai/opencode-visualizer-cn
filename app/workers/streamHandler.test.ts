@@ -35,11 +35,15 @@ function closeRequest(streamId: string): StreamWorkerRequest {
   return { stream: true, op: 'close', id: `${streamId}-close`, streamId };
 }
 
-function setup() {
+function setup(options?: {
+  renderFinal?: (code: string, params: StreamOpenParams) => Promise<string>;
+}) {
   const manager = new StreamSessionManager();
   const messages: StreamWorkerResponse[] = [];
-  const renderFinal = vi.fn((code: string, params: StreamOpenParams) =>
-    Promise.resolve(`<final lang="${params.lang}">${code.length}</final>`),
+  const renderFinal = vi.fn(
+    options?.renderFinal ??
+      ((code: string, params: StreamOpenParams) =>
+        Promise.resolve(`<final lang="${params.lang}">${code.length}</final>`)),
   );
   const handle = createStreamMessageHandler({
     manager,
@@ -175,6 +179,48 @@ describe('createStreamMessageHandler', () => {
     // Then: the session is gone and no further messages were posted
     expect(manager.has('s-mid')).toBe(false);
     expect(messages).toHaveLength(1);
+  });
+
+  it('posts an error response when an op rejects inside the chain, and the chain stays usable', async () => {
+    // Given: a stream whose final renderer rejects
+    const { messages, handle } = setup({
+      renderFinal: () => Promise.reject(new Error('final render exploded')),
+    });
+    await handle(openRequest('s-err', makeParams()));
+    await handle(chunkRequest('s-err', 'const a = 1;\n'));
+
+    // When: the close op rejects inside the chain
+    await expect(handle(closeRequest('s-err'))).resolves.toBeUndefined();
+
+    // Then: an error response was posted for the close request
+    const error = messages.at(-1);
+    if (error?.kind !== 'error') throw new Error('not error');
+    expect(error.id).toBe('s-err-close');
+    expect(error.streamId).toBe('s-err');
+    expect(error.error).toContain('final render exploded');
+
+    // And: the chain is not poisoned — the same streamId still processes ops
+    messages.length = 0;
+    await handle(openRequest('s-err', makeParams()));
+    await handle(chunkRequest('s-err', 'const b = 2;\n'));
+    expect(messages.map((message) => message.kind)).toEqual(['tokens']);
+  });
+
+  it('preserves the accumulated code when open is reused for the same lang/theme', async () => {
+    // Given: an open stream with one chunk already accumulated
+    const { renderFinal, handle } = setup();
+    const params = makeParams();
+    await handle(openRequest('s-reuse', params));
+    await handle(chunkRequest('s-reuse', 'const a = 1;\n'));
+
+    // When: the same streamId is re-opened with identical lang/theme (manager reuses it)
+    await handle(openRequest('s-reuse', params));
+    await handle(chunkRequest('s-reuse', 'const b = 2;\n'));
+    await handle(closeRequest('s-reuse'));
+
+    // Then: the final render sees the full accumulated code, not just post-reopen chunks
+    expect(renderFinal).toHaveBeenCalledTimes(1);
+    expect(renderFinal).toHaveBeenCalledWith('const a = 1;\nconst b = 2;\n', params);
   });
 
   describe('bookkeeping cleanup (long-lived worker)', () => {

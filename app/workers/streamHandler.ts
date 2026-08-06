@@ -125,7 +125,10 @@ export function createStreamMessageHandler(deps: {
       postError(request.id, request.streamId, result.error);
       return;
     }
-    states.set(request.streamId, { params: request.params, code: '' });
+    states.set(request.streamId, {
+      params: request.params,
+      code: result.reused ? (states.get(request.streamId)?.code ?? '') : '',
+    });
   }
 
   async function runChunk(request: Extract<StreamWorkerRequest, { op: 'chunk' }>) {
@@ -209,7 +212,11 @@ export function createStreamMessageHandler(deps: {
       cancelled.delete(request.streamId);
     }
     const previous = chains.get(request.streamId) ?? Promise.resolve();
-    const next = previous.then(() => runOp(request));
+    const next = previous
+      .then(() => runOp(request))
+      .catch((error: unknown) => {
+        postError(request.id, request.streamId, error instanceof Error ? error.message : String(error));
+      });
     chains.set(request.streamId, next);
     schedulePrune(request.streamId, next);
     return next;
