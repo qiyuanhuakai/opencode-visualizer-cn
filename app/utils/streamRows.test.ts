@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import type { ThemedToken } from 'shiki/core';
 import type { StreamTokenBatch } from '../workers/streamHandler';
 import { batchToRows } from './streamRows';
+import { buildRows } from './tokenRows';
 
 function token(content: string, color = '#E1E4E8'): ThemedToken {
   return { content, offset: 0, color };
@@ -19,6 +20,22 @@ function token(content: string, color = '#E1E4E8'): ThemedToken {
 
 function newlineToken(): ThemedToken {
   return { content: '\n', offset: 0 };
+}
+
+/** Stable token array for the given complete lines (each with trailing '\n'). */
+function stableOf(...texts: string[]): ThemedToken[] {
+  return texts.flatMap((text) => [token(text), newlineToken()]);
+}
+
+/** Per-line token arrays (single-shot buildRows input shape) for the given lines. */
+function linesOf(...texts: string[]): ThemedToken[][] {
+  return texts.map((text) => [token(text)]);
+}
+
+function gutterOf(row: string): string {
+  const match = row.match(/<span class="code-gutter[^"]*">([^<]*)<\/span>/);
+  if (!match?.[1]) throw new Error(`no gutter in row: ${row}`);
+  return match[1];
 }
 
 describe('batchToRows', () => {
@@ -231,6 +248,159 @@ describe('batchToRows', () => {
 
       // Then: unstable row also has gutter
       expect(result.unstableRow).toContain('<span class="code-gutter span-2">2</span>');
+    });
+  });
+
+  describe('cumulative gutter numbering across batches', () => {
+    it('continues default single-mode numbering across two batches, matching single-shot', () => {
+      // Given: full code "aaa\nbbb\nccc\nddd\n" streamed as two batches
+      // (batch 2 completes the line batch 1 left unstable)
+      const batch1: StreamTokenBatch = {
+        recall: 0,
+        stable: stableOf('aaa', 'bbb'),
+        unstable: [token('cc')],
+      };
+      const batch2: StreamTokenBatch = {
+        recall: 1,
+        stable: stableOf('ccc', 'ddd'),
+        unstable: [],
+      };
+
+      // When: converting with the composable's cumulative-offset pattern
+      let lineOffset = 0;
+      const rows1 = batchToRows(batch1, 'single', undefined, lineOffset);
+      lineOffset += rows1.stableRows.length;
+      const rows2 = batchToRows(batch2, 'single', undefined, lineOffset);
+
+      // Then: gutter numbers are absolute and continuous (no restart at batch 2)
+      expect(rows1.stableRows.map(gutterOf)).toEqual(['1', '2']);
+      expect(gutterOf(rows1.unstableRow ?? '')).toBe('3');
+      expect(rows2.stableRows.map(gutterOf)).toEqual(['3', '4']);
+
+      // And: the accumulated stable rows equal the single-shot reference
+      const singleShot = buildRows(linesOf('aaa', 'bbb', 'ccc', 'ddd'), 'single');
+      expect([...rows1.stableRows, ...rows2.stableRows].join('\n')).toBe(singleShot);
+    });
+
+    it('continues custom gutterLines across three batches, matching single-shot', () => {
+      // Given: five lines with custom absolute gutter labels, streamed as
+      // three batches completing 2, 1, then 2 lines
+      const gutterLines = ['10', '20', '30', '40', '50'];
+      const batches: StreamTokenBatch[] = [
+        { recall: 0, stable: stableOf('l1', 'l2'), unstable: [token('l')] },
+        { recall: 1, stable: stableOf('l3'), unstable: [token('l4')] },
+        { recall: 1, stable: stableOf('l4', 'l5'), unstable: [] },
+      ];
+
+      // When
+      let lineOffset = 0;
+      const allRows: string[] = [];
+      for (const batch of batches) {
+        const result = batchToRows(batch, 'single', gutterLines, lineOffset);
+        lineOffset += result.stableRows.length;
+        allRows.push(...result.stableRows);
+      }
+
+      // Then: each batch's rows carry the absolute custom labels
+      expect(allRows.map(gutterOf)).toEqual(['10', '20', '30', '40', '50']);
+
+      // And: the accumulated rows equal the single-shot reference
+      const singleShot = buildRows(linesOf('l1', 'l2', 'l3', 'l4', 'l5'), 'single', gutterLines);
+      expect(allRows.join('\n')).toBe(singleShot);
+    });
+
+    it('continues double-mode numbering across two batches, matching single-shot', () => {
+      // Given: full code "aa\nbb\ncc\n" streamed as two batches
+      const batch1: StreamTokenBatch = {
+        recall: 0,
+        stable: stableOf('aa'),
+        unstable: [token('b')],
+      };
+      const batch2: StreamTokenBatch = {
+        recall: 1,
+        stable: stableOf('bb', 'cc'),
+        unstable: [],
+      };
+
+      // When
+      let lineOffset = 0;
+      const rows1 = batchToRows(batch1, 'double', undefined, lineOffset);
+      lineOffset += rows1.stableRows.length;
+      const rows2 = batchToRows(batch2, 'double', undefined, lineOffset);
+
+      // Then: left gutter continues across the batch boundary
+      expect(rows1.stableRows.map(gutterOf)).toEqual(['1']);
+      expect(rows2.stableRows.map(gutterOf)).toEqual(['2', '3']);
+
+      // And: the accumulated rows equal the single-shot reference
+      const singleShot = buildRows(linesOf('aa', 'bb', 'cc'), 'double');
+      expect([...rows1.stableRows, ...rows2.stableRows].join('\n')).toBe(singleShot);
+    });
+
+    it('numbers the unstable row by absolute line index across batches', () => {
+      // Given: batch 1 completes two lines; batch 2 completes one more and
+      // leaves a new unstable line
+      const batch1: StreamTokenBatch = {
+        recall: 0,
+        stable: stableOf('aaa', 'bbb'),
+        unstable: [token('cc')],
+      };
+      const batch2: StreamTokenBatch = {
+        recall: 1,
+        stable: stableOf('ccc'),
+        unstable: [token('dd')],
+      };
+
+      // When
+      let lineOffset = 0;
+      const rows1 = batchToRows(batch1, 'single', undefined, lineOffset);
+      lineOffset += rows1.stableRows.length;
+      const rows2 = batchToRows(batch2, 'single', undefined, lineOffset);
+
+      // Then: the batch-2 unstable row is line 4, not batch-local line 2
+      expect(gutterOf(rows2.unstableRow ?? '')).toBe('4');
+      expect(lineOffset + rows2.stableRows.length).toBe(3);
+    });
+
+    it('labels the unstable row from absolute custom gutterLines across batches', () => {
+      // Given: custom labels and a batch boundary before the unstable line
+      const gutterLines = ['10', '20', '30', '40'];
+      const batch1: StreamTokenBatch = {
+        recall: 0,
+        stable: stableOf('aaa', 'bbb'),
+        unstable: [],
+      };
+      const batch2: StreamTokenBatch = {
+        recall: 0,
+        stable: stableOf('ccc'),
+        unstable: [token('dd')],
+      };
+
+      // When
+      let lineOffset = 0;
+      const rows1 = batchToRows(batch1, 'single', gutterLines, lineOffset);
+      lineOffset += rows1.stableRows.length;
+      const rows2 = batchToRows(batch2, 'single', gutterLines, lineOffset);
+
+      // Then: rows use the absolute custom labels
+      expect(rows2.stableRows.map(gutterOf)).toEqual(['30']);
+      expect(gutterOf(rows2.unstableRow ?? '')).toBe('40');
+    });
+
+    it('defaults to a zero offset so single-batch calls keep prior behavior', () => {
+      // Given: a single batch converted without an offset argument
+      const batch: StreamTokenBatch = {
+        recall: 0,
+        stable: stableOf('line1', 'line2'),
+        unstable: [token('par')],
+      };
+
+      // When
+      const result = batchToRows(batch, 'single');
+
+      // Then: numbering starts at 1
+      expect(result.stableRows.map(gutterOf)).toEqual(['1', '2']);
+      expect(gutterOf(result.unstableRow ?? '')).toBe('3');
     });
   });
 

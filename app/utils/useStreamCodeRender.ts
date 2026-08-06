@@ -60,6 +60,7 @@ export function useStreamCodeRender(
   let lastParams: StreamCodeRenderParams | null = null;
   let closeTimer: ReturnType<typeof setTimeout> | null = null;
   let requestId = 0;
+  let lineOffset = 0;
 
   function cancelActiveStream() {
     if (closeTimer) {
@@ -86,6 +87,7 @@ export function useStreamCodeRender(
     html.value = '';
     lastCode = p.code;
     lastParams = { ...p };
+    lineOffset = 0;
 
     activeStream = startRenderWorkerStream({
       lang: p.lang,
@@ -105,7 +107,8 @@ export function useStreamCodeRender(
       if (!patcher) return;
       const mode = p.gutterMode ?? 'none';
       const gutterLines = p.gutterLines ? toRaw(p.gutterLines) : undefined;
-      const streamBatch = batchToRows(batch, mode, gutterLines);
+      const streamBatch = batchToRows(batch, mode, gutterLines, lineOffset);
+      lineOffset += streamBatch.stableRows.length;
       patcher.applyBatch(streamBatch);
     });
 
