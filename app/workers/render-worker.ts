@@ -77,9 +77,12 @@ function parseInlineFileRef(rawRef: string, fileSet: Set<string>): ParsedInlineF
   return { path, lines };
 }
 
-let highlighterPromise: Promise<Highlighter> | null = null;
-let cachedTheme = '';
-let languageState: LanguageCacheState = createLanguageCacheState();
+type HighlighterContext = {
+  highlighter: Highlighter;
+  languageState: LanguageCacheState;
+};
+
+const highlighterContexts = new Map<string, Promise<HighlighterContext>>();
 
 const HIGHLIGHT_CACHE_MAX = 512;
 let codeHtmlCache = new Map<string, string>();
@@ -95,14 +98,15 @@ function pruneHighlightCache(cache: Map<string, string>) {
 }
 
 function getHighlighter(theme: string) {
-  if (!highlighterPromise || cachedTheme !== theme) {
-    cachedTheme = theme;
-    highlighterPromise = createThemedHighlighter(theme);
-    languageState = createLanguageCacheState();
-    codeHtmlCache = new Map();
-    mdHighlightCache = new Map();
+  let context = highlighterContexts.get(theme);
+  if (!context) {
+    context = createThemedHighlighter(theme).then((highlighter) => ({
+      highlighter,
+      languageState: createLanguageCacheState(),
+    }));
+    highlighterContexts.set(theme, context);
   }
-  return highlighterPromise;
+  return context;
 }
 
 function safeCodeToHtml(
@@ -111,7 +115,7 @@ function safeCodeToHtml(
   lang: string,
   theme: string,
 ): string {
-  const cacheKey = `${lang}\0${code}`;
+  const cacheKey = `${theme}\0${lang}\0${code}`;
   const cached = codeHtmlCache.get(cacheKey);
   if (cached !== undefined) return cached;
   let result: string;
@@ -622,7 +626,7 @@ function buildDiffHtmlFromCode(
   theme: string,
   mode: 'none' | 'single' | 'double',
 ) {
-  return getHighlighter(theme).then(async (highlighter) => {
+  return getHighlighter(theme).then(async ({ highlighter, languageState }) => {
     const resolvedLang = await resolveLanguage(highlighter, lang, languageState);
 
     let effectiveBefore = before;
@@ -704,7 +708,7 @@ function buildDiffHtmlFromCode(
 }
 
 async function renderCodeHtml(request: RenderRequest) {
-  const highlighter = await getHighlighter(request.theme);
+  const { highlighter, languageState } = await getHighlighter(request.theme);
   const resolvedLang = await resolveLanguage(highlighter, request.lang, languageState);
   const html = safeCodeToHtml(highlighter, request.code, resolvedLang, request.theme);
   let lines = extractShikiLines(html);
@@ -778,7 +782,11 @@ function collectMarkdownFenceLanguages(markdown: string) {
   return langs;
 }
 
-async function resolveMarkdownLangAliases(highlighter: Highlighter, markdown: string) {
+async function resolveMarkdownLangAliases(
+  highlighter: Highlighter,
+  languageState: LanguageCacheState,
+  markdown: string,
+) {
   const aliases: Record<string, string> = {};
   const langs = collectMarkdownFenceLanguages(markdown);
 
@@ -886,7 +894,7 @@ function getMarkdownIt(highlighter: Highlighter, theme: string) {
 
     const shikiHighlight = cachedMd.options.highlight;
     cachedMd.options.highlight = function (code, lang, attrs) {
-      const cacheKey = `${lang}\0${code}`;
+      const cacheKey = `${theme}\0${lang}\0${code}`;
       const cached = mdHighlightCache.get(cacheKey);
       if (cached !== undefined) return cached;
       let result: string;
@@ -907,9 +915,13 @@ function getMarkdownIt(highlighter: Highlighter, theme: string) {
 }
 
 async function renderMarkdownHtml(request: RenderRequest): Promise<string> {
-  const highlighter = await getHighlighter(request.theme);
+  const { highlighter, languageState } = await getHighlighter(request.theme);
   const { md, shikiOptions } = getMarkdownIt(highlighter, request.theme);
-  shikiOptions.langAlias = await resolveMarkdownLangAliases(highlighter, request.code);
+  shikiOptions.langAlias = await resolveMarkdownLangAliases(
+    highlighter,
+    languageState,
+    request.code,
+  );
   const env: MarkdownRenderEnv = {};
   if (request.files?.length) env.fileSet = new Set(request.files);
   const rendered = md.render(request.code, env);
