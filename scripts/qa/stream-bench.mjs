@@ -236,7 +236,13 @@ async function main() {
   await waitForServer(BENCH_URL);
   console.log('[bench] dev server reachable');
 
-  const browser = await chromium.launch({ headless: true, executablePath: chromiumPath });
+  // Same compositor workaround as the QA runners: chromium-1223 under
+  // playwright 1.62.1 can stall rendering without these flags.
+  const browser = await chromium.launch({
+    headless: true,
+    executablePath: chromiumPath,
+    args: ['--disable-gpu', '--disable-software-rasterizer'],
+  });
 
   const allRuns = [];
   const sanityFailures = [];
