@@ -5,9 +5,15 @@ export function useLiveDescendantHistoryHydration(params: {
   activeBackendKind: Ref<BackendKind>;
   selectedSessionId: Ref<string>;
   allowedSessionIds: Ref<ReadonlySet<string>>;
-  hydrate: (rootSessionId: string, descendantSessionIds: string[]) => Promise<void>;
+  hydrate: (rootSessionId: string, descendantSessionIds: string[]) => Promise<boolean>;
 }) {
   const requested = new Set<string>();
+
+  function release(rootSessionId: string, descendantSessionIds: string[]) {
+    descendantSessionIds.forEach((sessionId) => {
+      requested.delete(`${rootSessionId}\u0000${sessionId}`);
+    });
+  }
 
   watch(
     [params.activeBackendKind, params.selectedSessionId, params.allowedSessionIds],
@@ -22,11 +28,14 @@ export function useLiveDescendantHistoryHydration(params: {
       descendantSessionIds.forEach((sessionId) => {
         requested.add(`${rootSessionId}\u0000${sessionId}`);
       });
-      void params.hydrate(rootSessionId, descendantSessionIds).catch(() => {
-        descendantSessionIds.forEach((sessionId) => {
-          requested.delete(`${rootSessionId}\u0000${sessionId}`);
+      void params
+        .hydrate(rootSessionId, descendantSessionIds)
+        .then((loaded) => {
+          if (!loaded) release(rootSessionId, descendantSessionIds);
+        })
+        .catch(() => {
+          release(rootSessionId, descendantSessionIds);
         });
-      });
     },
     { immediate: true },
   );

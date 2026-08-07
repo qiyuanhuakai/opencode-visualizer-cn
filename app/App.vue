@@ -663,7 +663,10 @@ import { applyPinHierarchyTransition, buildPinHierarchy } from './utils/pinHiera
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import { createBackendRequestFence } from './utils/backendRequestFence';
-import { resolveThreadSubagentSessions } from './utils/threadSubagents';
+import {
+  resolveThreadSubagentSessions,
+  type SessionHistoryMeta,
+} from './utils/threadSubagents';
 import { normalizeToolName } from './utils/toolNames';
 import {
   extractFileRead as extractToolFileRead,
@@ -1729,13 +1732,14 @@ function collectAllSessionsByProject() {
 const sessionsByProject = computed(() => collectAllSessionsByProject());
 
 const sessionHistoryMetaById = computed(() => {
-  const meta: Record<string, { parentID?: string; label: string }> = {};
+  const meta: Record<string, SessionHistoryMeta> = {};
   Object.values(sessionsByProject.value)
     .flat()
     .forEach((session) => {
       meta[session.id] = {
         parentID: session.parentID,
         label: sessionLabel(session),
+        status: session.status,
       };
     });
   return meta;
@@ -5090,7 +5094,7 @@ async function fetchHistory(
   rootSessionId?: string,
   incremental = false,
 ) {
-  if (!sessionId) return;
+  if (!sessionId) return false;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
   const requestedDirectory = getSelectedWorktreeDirectory();
   const expectedRootRequestId = isSubagentMessage ? (rootRequestId ?? 0) : requestId;
@@ -5107,10 +5111,10 @@ async function fetchHistory(
     if (activeBackendKind.value === 'acp') {
       await Promise.allSettled([fetchAgents(), fetchCommands()]);
     }
-    if (!Array.isArray(data)) return;
-    if (expectedRootRequestId !== primaryHistoryRequestId) return;
-    if (selectedSessionId.value !== expectedRootSessionId) return;
-    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
+    if (!Array.isArray(data)) return false;
+    if (expectedRootRequestId !== primaryHistoryRequestId) return false;
+    if (selectedSessionId.value !== expectedRootSessionId) return false;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
     // 全量加载，避免消息在加载过程中逐步显示导致未加载内容的卡片残留
     if (incremental) {
       await msg.loadHistoryIncrementally(data, {
@@ -5124,9 +5128,9 @@ async function fetchHistory(
       msg.loadHistory(data);
     }
 
-    if (expectedRootRequestId !== primaryHistoryRequestId) return;
-    if (selectedSessionId.value !== expectedRootSessionId) return;
-    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
+    if (expectedRootRequestId !== primaryHistoryRequestId) return false;
+    if (selectedSessionId.value !== expectedRootSessionId) return false;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
 
     data.forEach((message) => {
       const info = message.info as Record<string, unknown> | undefined;
@@ -5137,8 +5141,10 @@ async function fetchHistory(
       storeUserMessageMeta(id, meta);
       storeUserMessageTime(id, messageTime);
     });
+    return true;
   } catch (error) {
     log('History load failed', error);
+    return false;
   }
 }
 
@@ -5205,10 +5211,11 @@ async function fetchDescendantSessionHistories(
   const descendantSessionIds = Array.from(new Set(candidates)).filter(
     (id) => id !== rootSessionId && allowedSessionIds.value.has(id),
   );
-  if (descendantSessionIds.length === 0) return;
-  await Promise.all(
+  if (descendantSessionIds.length === 0) return true;
+  const results = await Promise.all(
     descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId, true)),
   );
+  return results.every(Boolean);
 }
 
 function scheduleDescendantSessionHistoryHydration(
@@ -5237,10 +5244,15 @@ useLiveDescendantHistoryHydration({
   allowedSessionIds,
   async hydrate(rootSessionId, descendantSessionIds) {
     const rootRequestId = primaryHistoryRequestId;
-    await fetchDescendantSessionHistories(rootSessionId, rootRequestId, descendantSessionIds);
-    if (selectedSessionId.value !== rootSessionId) return;
+    const loaded = await fetchDescendantSessionHistories(
+      rootSessionId,
+      rootRequestId,
+      descendantSessionIds,
+    );
+    if (!loaded || selectedSessionId.value !== rootSessionId) return false;
     hydratedDescendantSessionIds.add(rootSessionId);
     void reloadTodosForAllowedSessions();
+    return true;
   },
 });
 

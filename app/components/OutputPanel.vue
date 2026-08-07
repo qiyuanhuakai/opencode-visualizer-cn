@@ -157,7 +157,10 @@ const props = defineProps<{
   projectName?: string;
   projectColor?: string;
   currentSessionId?: string;
-  sessionHistoryMetaById?: Record<string, { parentID?: string; label: string }>;
+  sessionHistoryMetaById?: Record<
+    string,
+    { parentID?: string; label: string; status?: 'busy' | 'idle' | 'retry' | 'unknown' }
+  >;
   isLoading?: boolean;
   isAnchoring?: boolean;
   sessionRevert?: {

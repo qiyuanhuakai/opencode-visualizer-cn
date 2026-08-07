@@ -143,7 +143,10 @@ import type { MessageInfo, QuestionInfo, SubtaskPart, ToolPart } from '../types/
 import type { BackendKind } from '../backends/types';
 import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
-import { resolveThreadSubagentSessions } from '../utils/threadSubagents';
+import {
+  resolveThreadSubagentSessions,
+  type SessionHistoryMeta,
+} from '../utils/threadSubagents';
 import { isHistoryToolName } from '../utils/toolNames';
 
 const { t } = useI18n();
@@ -155,7 +158,7 @@ const props = defineProps<{
   filesWithBasenames: string[];
   isRevertedPreview: boolean;
   currentSessionId?: string;
-  sessionHistoryMetaById?: Record<string, { parentID?: string; label: string }>;
+  sessionHistoryMetaById?: Record<string, SessionHistoryMeta>;
   resolveAgentColor?: (agent?: string) => string;
   resolveModelMeta?: (modelPath?: string) => ModelMeta | undefined;
   computeContextPercent?: (
@@ -228,7 +231,17 @@ const subagentSessions = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();
   if (!currentSessionId) return [] as Array<{ sessionId: string; label: string }>;
   const threadParts = threadMessages.value.flatMap((message) => msg.getParts(message.id));
-  return resolveThreadSubagentSessions(threadParts, currentSessionId, props.sessionHistoryMetaById);
+  const liveChildSessionIds = props.isLatestRoot
+    ? Object.entries(props.sessionHistoryMetaById ?? {}).flatMap(([sessionId, meta]) =>
+        meta.parentID === currentSessionId && meta.status !== 'idle' ? [sessionId] : [],
+      )
+    : [];
+  return resolveThreadSubagentSessions(
+    threadParts,
+    currentSessionId,
+    props.sessionHistoryMetaById,
+    liveChildSessionIds,
+  );
 });
 
 function hasTextContent(message?: MessageInfo): boolean {

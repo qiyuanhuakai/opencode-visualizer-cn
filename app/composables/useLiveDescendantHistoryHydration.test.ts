@@ -7,7 +7,7 @@ describe('useLiveDescendantHistoryHydration', () => {
     const activeBackendKind = ref<'opencode' | 'codex' | 'acp'>('opencode');
     const selectedSessionId = ref('root');
     const allowedSessionIds = ref<ReadonlySet<string>>(new Set(['root']));
-    const hydrate = vi.fn(async () => undefined);
+    const hydrate = vi.fn(async () => true);
 
     useLiveDescendantHistoryHydration({
       activeBackendKind,
@@ -25,7 +25,7 @@ describe('useLiveDescendantHistoryHydration', () => {
     const activeBackendKind = ref<'opencode' | 'codex' | 'acp'>('opencode');
     const selectedSessionId = ref('root');
     const allowedSessionIds = ref<ReadonlySet<string>>(new Set(['root', 'child']));
-    const hydrate = vi.fn(async () => undefined);
+    const hydrate = vi.fn(async () => true);
 
     useLiveDescendantHistoryHydration({
       activeBackendKind,
@@ -42,5 +42,26 @@ describe('useLiveDescendantHistoryHydration', () => {
 
     expect(hydrate).toHaveBeenCalledTimes(1);
     expect(hydrate).toHaveBeenCalledWith('root', ['child']);
+  });
+
+  it('retries descendants when hydration reports failure', async () => {
+    const activeBackendKind = ref<'opencode' | 'codex' | 'acp'>('opencode');
+    const selectedSessionId = ref('root');
+    const allowedSessionIds = ref<ReadonlySet<string>>(new Set(['root', 'child']));
+    const hydrate = vi.fn().mockResolvedValue(false);
+
+    useLiveDescendantHistoryHydration({
+      activeBackendKind,
+      selectedSessionId,
+      allowedSessionIds,
+      hydrate,
+    });
+    await nextTick();
+    activeBackendKind.value = 'acp';
+    await nextTick();
+    activeBackendKind.value = 'opencode';
+    await nextTick();
+
+    expect(hydrate).toHaveBeenCalledTimes(2);
   });
 });

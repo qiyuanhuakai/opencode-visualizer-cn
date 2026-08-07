@@ -1,7 +1,12 @@
 import type { MessagePart } from '../types/sse';
+import type { SessionState } from '../types/worker-state';
 
 export type ThreadSubagentSession = { sessionId: string; label: string };
-export type SessionHistoryMeta = { parentID?: string; label: string };
+export type SessionHistoryMeta = {
+  parentID?: string;
+  label: string;
+  status?: SessionState['status'];
+};
 
 /**
  * Resolve the subagent sessions that were spawned by `task` tool calls inside
@@ -13,6 +18,7 @@ export function resolveThreadSubagentSessions(
   threadParts: MessagePart[],
   currentSessionId: string,
   metaById?: Record<string, SessionHistoryMeta>,
+  liveChildSessionIds: string[] = [],
 ): ThreadSubagentSession[] {
   const sessionId = currentSessionId.trim();
   if (!sessionId) return [];
@@ -28,6 +34,11 @@ export function resolveThreadSubagentSessions(
     const meta = metaById?.[childId];
     if (meta && meta.parentID !== sessionId) continue;
     if (!seen.has(childId)) seen.set(childId, meta?.label || childId);
+  }
+  for (const childId of liveChildSessionIds) {
+    const meta = metaById?.[childId];
+    if (meta?.parentID !== sessionId) continue;
+    if (!seen.has(childId)) seen.set(childId, meta.label || childId);
   }
   return Array.from(seen.entries()).map(([sessionId, label]) => ({ sessionId, label }));
 }
