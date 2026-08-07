@@ -130,31 +130,46 @@ export function createStateBuilder() {
     { projectId: string; status: SessionStatusType }
   >();
   const statusRevisionBySessionId = new Map<string, number>();
+  const activeStatusSnapshots = new Map<number, number>();
   let statusRevision = 0;
   const mutationRevisionBySessionId = new Map<string, number>();
+  const activeMutationSnapshots = new Map<number, number>();
   let mutationRevision = 0;
-  const MAX_REVISION_ENTRIES = 10_000;
   const MAX_PENDING_STATUSES = 2_000;
 
   function recordSessionMutation(sessionId: string) {
     mutationRevision += 1;
-    mutationRevisionBySessionId.delete(sessionId);
-    mutationRevisionBySessionId.set(sessionId, mutationRevision);
-    while (mutationRevisionBySessionId.size > MAX_REVISION_ENTRIES) {
-      const oldestSessionId = mutationRevisionBySessionId.keys().next().value;
-      if (!oldestSessionId) break;
-      mutationRevisionBySessionId.delete(oldestSessionId);
+    if (activeMutationSnapshots.size > 0) {
+      mutationRevisionBySessionId.set(sessionId, mutationRevision);
     }
   }
 
   function recordStatusRevision(sessionId: string) {
     statusRevision += 1;
-    statusRevisionBySessionId.delete(sessionId);
-    statusRevisionBySessionId.set(sessionId, statusRevision);
-    while (statusRevisionBySessionId.size > MAX_REVISION_ENTRIES) {
-      const oldestSessionId = statusRevisionBySessionId.keys().next().value;
-      if (!oldestSessionId) break;
-      statusRevisionBySessionId.delete(oldestSessionId);
+    if (activeStatusSnapshots.size > 0) {
+      statusRevisionBySessionId.set(sessionId, statusRevision);
+    }
+  }
+
+  function beginSnapshot(revision: number, activeSnapshots: Map<number, number>) {
+    activeSnapshots.set(revision, (activeSnapshots.get(revision) ?? 0) + 1);
+    return revision;
+  }
+
+  function completeSnapshot(
+    revision: number,
+    activeSnapshots: Map<number, number>,
+    revisionsBySessionId: Map<string, number>,
+  ) {
+    const remaining = (activeSnapshots.get(revision) ?? 0) - 1;
+    if (remaining > 0) activeSnapshots.set(revision, remaining);
+    else activeSnapshots.delete(revision);
+    let oldestActiveRevision = Number.POSITIVE_INFINITY;
+    for (const activeRevision of activeSnapshots.keys()) {
+      oldestActiveRevision = Math.min(oldestActiveRevision, activeRevision);
+    }
+    for (const [sessionId, sessionRevision] of revisionsBySessionId) {
+      if (sessionRevision <= oldestActiveRevision) revisionsBySessionId.delete(sessionId);
     }
   }
 
@@ -775,12 +790,20 @@ export function createStateBuilder() {
     return entry.projectId;
   }
 
-  function getStatusRevision() {
-    return statusRevision;
+  function beginStatusSnapshot() {
+    return beginSnapshot(statusRevision, activeStatusSnapshots);
   }
 
-  function getMutationRevision() {
-    return mutationRevision;
+  function completeStatusSnapshot(revision: number) {
+    completeSnapshot(revision, activeStatusSnapshots, statusRevisionBySessionId);
+  }
+
+  function beginMutationSnapshot() {
+    return beginSnapshot(mutationRevision, activeMutationSnapshots);
+  }
+
+  function completeMutationSnapshot(revision: number) {
+    completeSnapshot(revision, activeMutationSnapshots, mutationRevisionBySessionId);
   }
 
   function processProjectUpdated(project: ProjectInfo): string | null {
@@ -924,8 +947,10 @@ export function createStateBuilder() {
     applyAuthoritativeSessions,
     applyStatuses,
     applyStatusSnapshot,
-    getStatusRevision,
-    getMutationRevision,
+    beginStatusSnapshot,
+    completeStatusSnapshot,
+    beginMutationSnapshot,
+    completeMutationSnapshot,
     applyVcsInfo,
     processSessionCreated,
     processSessionUpdated,

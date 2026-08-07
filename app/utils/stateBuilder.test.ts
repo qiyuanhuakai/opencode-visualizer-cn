@@ -201,7 +201,7 @@ describe('createStateBuilder regression', () => {
         time: { created: 1, updated: 1 },
       },
     ]);
-    const olderRevision = builder.getStatusRevision();
+    const olderRevision = builder.beginStatusSnapshot();
 
     builder.applyStatusSnapshot(['root'], { root: { type: 'busy' } }, olderRevision);
     builder.applyStatusSnapshot(['root'], {}, olderRevision);
@@ -225,7 +225,7 @@ describe('createStateBuilder regression', () => {
         time: { created: 1, updated: 1 },
       },
     ]);
-    const olderRevision = builder.getStatusRevision();
+    const olderRevision = builder.beginStatusSnapshot();
 
     builder.applyStatusSnapshot(['root'], {}, olderRevision);
     builder.applyStatusSnapshot(['root'], { root: { type: 'busy' } }, olderRevision);
@@ -249,12 +249,70 @@ describe('createStateBuilder regression', () => {
         time: { created: 1, updated: 1 },
       },
     ]);
-    const snapshotRevision = builder.getStatusRevision();
+    const snapshotRevision = builder.beginStatusSnapshot();
 
     builder.processSessionStatus('root', 'busy', 'p1');
     builder.applyStatusSnapshot(['root'], {}, snapshotRevision);
 
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('busy');
+  });
+
+  it('retains deletion fences until an in-flight session snapshot finishes', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    const snapshotRevision = builder.beginMutationSnapshot();
+
+    builder.processSessionDeleted('victim', 'p1');
+    for (let index = 0; index < 10_001; index += 1) {
+      builder.processSessionDeleted(`other-${index}`, 'p1');
+    }
+    builder.applySessionSnapshot(
+      [
+        {
+          id: 'victim',
+          projectID: 'p1',
+          title: 'Victim',
+          slug: 'victim',
+          directory: '/repo',
+          version: '1',
+          time: { created: 1, updated: 1 },
+        },
+      ],
+      snapshotRevision,
+    );
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.victim).toBeUndefined();
+    builder.completeMutationSnapshot(snapshotRevision);
+  });
+
+  it('retains SSE status fences until an in-flight status snapshot finishes', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'victim',
+        projectID: 'p1',
+        title: 'Victim',
+        slug: 'victim',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+    const snapshotRevision = builder.beginStatusSnapshot();
+
+    builder.processSessionStatus('victim', 'busy', 'p1');
+    for (let index = 0; index < 10_001; index += 1) {
+      builder.processSessionStatus(`other-${index}`, 'busy', 'p1');
+    }
+    builder.applyStatusSnapshot(['victim'], { victim: { type: 'idle' } }, snapshotRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.victim?.status).toBe('busy');
+    builder.completeStatusSnapshot(snapshotRevision);
   });
 
   it('does not let an older directory snapshot resurrect a deleted session', () => {
@@ -272,7 +330,7 @@ describe('createStateBuilder regression', () => {
       time: { created: 1, updated: 1 },
     };
     builder.applySessions([session]);
-    const snapshotRevision = builder.getMutationRevision();
+    const snapshotRevision = builder.beginMutationSnapshot();
 
     builder.processSessionDeleted('root', 'p1');
     builder.applySessionSnapshot([session], snapshotRevision);
@@ -285,7 +343,7 @@ describe('createStateBuilder regression', () => {
     builder.applyProjects([
       { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
     ]);
-    const snapshotRevision = builder.getMutationRevision();
+    const snapshotRevision = builder.beginMutationSnapshot();
 
     builder.processSessionStatus('root', 'busy', 'p1');
     builder.applySessionSnapshot(

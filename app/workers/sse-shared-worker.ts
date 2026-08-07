@@ -749,8 +749,8 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
   }
 
   const generation = state.hydrationGeneration;
-  const statusRevision = state.stateBuilder.getStatusRevision();
-  const mutationRevision = state.stateBuilder.getMutationRevision();
+  const statusRevision = state.stateBuilder.beginStatusSnapshot();
+  const mutationRevision = state.stateBuilder.beginMutationSnapshot();
   emitDirectoryHydration(state, normalizedDirectory, { status: 'loading' });
   const promise = runOpencodeReadTask(state, async () => {
     const [rawSessions, rawStatuses] = await Promise.all([
@@ -795,11 +795,13 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
       throw error;
     })
     .finally(() => {
-    const active = state.sessionHydrationInFlightByDirectory.get(normalizedDirectory);
-    if (active === promise) {
-      state.sessionHydrationInFlightByDirectory.delete(normalizedDirectory);
-    }
-  });
+      state.stateBuilder.completeStatusSnapshot(statusRevision);
+      state.stateBuilder.completeMutationSnapshot(mutationRevision);
+      const active = state.sessionHydrationInFlightByDirectory.get(normalizedDirectory);
+      if (active === promise) {
+        state.sessionHydrationInFlightByDirectory.delete(normalizedDirectory);
+      }
+    });
 
   state.sessionHydrationInFlightByDirectory.set(normalizedDirectory, promise);
   await promise;
