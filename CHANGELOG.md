@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### 渲染管线升级：shiki v4 与流式高亮
+
+- [x] shiki 3.22 升级至 4.4.2 并引入 @shikijs/stream；升级前以 17 种语言 × 3 个实际主题完成 51/51 输出字节级一致验证（含 6 个自定义 TextMate grammar 与 markdown-it/diff transformer 链路），业务代码零适配改动。
+- [x] "思考中"/"Working" 浮窗的流式 markdown 渲染：围栏感知分块器按 R1–R8 规则识别安全切分点（围栏外空行才切分，列表/表格/缩进 continuation/HTML 块/引用定义防护），稳定块一次渲染入主题+上下文键 LRU 缓存，仅尾部随 delta 重渲染；part 完成或窗口关闭前翻转回默认路径做一次全量渲染收敛，终态与单发渲染逐字节一致。
+- [x] 流式期间每次实际 DOM 变更都会触发内容变更通知，修复长输出时滚动条不跟随、直到全部输出完才跳到底部的问题；消息级完成（无 part 级 time.end）同样触发收敛渲染。
+- [x] 渲染性能：5.2K 字符 reasoning 文本 848 个 delta 下，worker 解析字节量下降 9.2×、DOM churn 下降 4.1×、每 delta 延迟不随文本增长（基线为 O(n²) 增长）；约 8KB 后墙钟时间反超，41.8K 时快 6.05×。
+- [x] 独立 stream worker 协议与 CodeRenderer 可选流式路径：追加式 token 批次、尾行原位重绘、close 收敛为单发渲染等效输出；参数变更重开、挂载前批次缓冲、close/open 竞态与死 worker 悬挂等竞态均已修复并有回归测试。
+- [x] render-worker 高亮器状态与高亮缓存按主题隔离，修复主题切换窗口期并发请求跨主题串色与语言状态污染；多行原始 HTML 块（script/pre/style/textarea）在流式切分中保持完整，渲染失败保留已有内容并显示错误而非白屏。
+- [x] 新增真实表面 QA 设施：代码流式 21 项与 markdown 流式 41 项 Playwright 场景契约（真 worker + 真 DOM，含故意失败自证），以及流式/全量双路径基准对比 harness。
+
 ### Codex Panel 与浮窗修复
 
 - [x] Codex Panel 成功连接后仅持久化自动重连意图；页面刷新时由应用启动生命周期立即重建 transport，并通过真实 `account/read` 恢复账号状态，不再等到重新打开 Panel 才连接。
