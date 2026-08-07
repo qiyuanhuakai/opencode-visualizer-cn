@@ -159,7 +159,7 @@ const props = defineProps<{
   currentSessionId?: string;
   sessionHistoryMetaById?: Record<
     string,
-    { parentID?: string; label: string; status?: 'busy' | 'idle' | 'retry' | 'unknown' }
+    { parentID?: string; label: string; status?: 'busy' | 'idle' | 'retry' }
   >;
   isLoading?: boolean;
   isAnchoring?: boolean;
