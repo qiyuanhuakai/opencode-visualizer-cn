@@ -20,8 +20,13 @@
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
             <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
-                <template v-for="root in visibleThreadRoots" :key="root.id">
-                <ThreadBlock
+                <div
+                  v-for="root in visibleThreadRoots"
+                  :key="root.id"
+                  class="thread-card-item"
+                  :data-root-id="root.id"
+                >
+                  <ThreadBlock
                   v-show="!isLoading && shouldRenderRoot(root)"
                   :root="root"
                   :theme="theme"
@@ -46,8 +51,8 @@
                   @show-thread-history="emit('show-thread-history', $event)"
                   @show-subagent-history="emit('show-subagent-history', $event)"
                   @message-rendered="handleMessageRendered"
-                />
-              </template>
+                  />
+                </div>
             </div>
 
             <FileRefPopup ref="fileRefPopupRef" :files="files" @open-file="handlePopupOpenFile" />
@@ -96,6 +101,7 @@ import type {
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
 import { resolveChildOwners } from '../utils/threadSubagents';
+import { preserveProgressiveRootLimit } from '../utils/progressiveRoots';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -159,6 +165,7 @@ const visibleRoots = computed(() => {
 
 const THREAD_BATCH_SIZE = 20;
 const renderedRootLimit = ref(THREAD_BATCH_SIZE);
+let prependInProgress = false;
 const renderableRoots = computed(() => visibleRoots.value.filter(shouldRenderRoot));
 const visibleThreadRoots = computed(() =>
   renderableRoots.value.slice(-renderedRootLimit.value),
@@ -170,6 +177,15 @@ watch(
     renderedRootLimit.value = THREAD_BATCH_SIZE;
   },
 );
+
+watch(renderableRoots, (nextRoots, previousRoots) => {
+  if (props.isLoading) return;
+  renderedRootLimit.value = preserveProgressiveRootLimit(
+    previousRoots.map((root) => root.id),
+    nextRoots.map((root) => root.id),
+    renderedRootLimit.value,
+  );
+});
 
 const latestRootId = computed(() => visibleRoots.value.at(-1)?.id ?? '');
 const descriptionChildIdsByRoot = computed(() => {
@@ -279,7 +295,7 @@ let settleScrollToBottom: (() => void) | null = null;
 const shouldHideMessages = computed(() => Boolean(props.isAnchoring && !props.isLoading));
 
 const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
-  visibleRoots,
+  visibleRoots: visibleThreadRoots,
   theme: computed(() => props.theme),
   filesWithBasenames,
   getFinalAnswer,
@@ -294,14 +310,34 @@ async function onPanelScroll(event: Event) {
   emit('scroll');
   const panel = event.currentTarget;
   if (!(panel instanceof HTMLDivElement)) return;
-  if (panel.scrollTop > 80 || renderedRootLimit.value >= renderableRoots.value.length) return;
-  const previousScrollHeight = panel.scrollHeight;
+  if (
+    panel.scrollTop > 80 ||
+    prependInProgress ||
+    renderedRootLimit.value >= renderableRoots.value.length
+  ) {
+    return;
+  }
+  prependInProgress = true;
+  const anchorRootId = visibleThreadRoots.value[0]?.id;
+  const anchorBefore = contentEl.value?.querySelector<HTMLElement>(
+    `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
+  );
+  const anchorTopBefore = anchorBefore?.getBoundingClientRect().top;
   renderedRootLimit.value = Math.min(
     renderedRootLimit.value + THREAD_BATCH_SIZE,
     renderableRoots.value.length,
   );
-  await nextTick();
-  panel.scrollTop += panel.scrollHeight - previousScrollHeight;
+  for (const delayMs of [0, 32, 96]) {
+    if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    await nextTick();
+    const anchorAfter = contentEl.value?.querySelector<HTMLElement>(
+      `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
+    );
+    if (anchorTopBefore !== undefined && anchorAfter) {
+      panel.scrollTop += anchorAfter.getBoundingClientRect().top - anchorTopBefore;
+    }
+  }
+  prependInProgress = false;
 }
 
 function handleContentClick(event: MouseEvent) {

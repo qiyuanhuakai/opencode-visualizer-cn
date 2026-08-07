@@ -11,6 +11,7 @@
           :key="row.key"
           :html="row.html"
           :variant="viewerVariant"
+          :word-wrap="false"
           class="virtual-row"
         />
         <div :style="{ height: bottomPadding + 'px' }" />
