@@ -2,6 +2,7 @@ export type AcpSessionTurnMeta = {
   userText: string;
   userTime?: number;
   assistantTime?: number;
+  assistantCompletedTime?: number;
   model?: string;
   agent?: string;
 };

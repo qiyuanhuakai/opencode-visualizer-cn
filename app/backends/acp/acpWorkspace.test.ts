@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAcpAdapter } from './acpAdapter';
 import { MockAcpWebSocket } from './acpTestHarness';
+import { AcpWorkspaceClient } from './workspaceClient';
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -128,4 +129,29 @@ describe('ACP workspace adapter', () => {
     });
   });
 
+  it('preserves assistant completion time from the session metadata endpoint', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse([
+          {
+            userText: 'hello',
+            userTime: 1_000,
+            assistantTime: 2_000,
+            assistantCompletedTime: 7_500,
+          },
+        ]),
+      ),
+    );
+    const client = new AcpWorkspaceClient({ bridgeUrl: 'ws://bridge.test' });
+
+    await expect(client.getAcpSessionMeta('oh-my-pi', 'session-1')).resolves.toEqual([
+      {
+        userText: 'hello',
+        userTime: 1_000,
+        assistantTime: 2_000,
+        assistantCompletedTime: 7_500,
+      },
+    ]);
+  });
 });
