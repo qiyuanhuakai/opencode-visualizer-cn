@@ -11,9 +11,10 @@
 - [x] ACP 会话历史从 Pi、Oh My Pi 与 Kimi 的真实本地记录补齐 assistant 完成时间，恢复左下角持续时间，并保留旧 metadata provider 的兼容回退。
 - [x] 模型、提供商、Token 与 Status Monitor 请求按后端 identity 和 generation 隔离，切换后端时不再被迟到的 Codex/OpenCode 响应覆盖，同时保留独立 Codex Panel 连接。
 - [x] OpenCode 新建子代理在 `session.created` 时立即入树、显示入口并补水标题与历史；失败使用有界退避重试，历史任务引用仍按精确 session ID 恢复。
-- [x] OpenCode 会话状态同时处理 status-before-created、稀疏 idle snapshot 与 snapshot/SSE 竞态；会话树改由 Vue 精确依赖追踪，`busy ↔ idle` 不再等待切会话或缓存过期。
+- [x] OpenCode 会话状态同时处理 status-before-created、稀疏状态快照与 snapshot/SSE 竞态；未报告状态保持 unknown，会话树改由 Vue 精确依赖追踪，`busy ↔ idle` 不再等待切会话或缓存过期。
 - [x] 大文件评论在虚拟滚动后按绝对行号和实测行高命中，换行模式关闭固定行高虚拟化；可见行几何与超长选区计算均保持 O(可见行数)。
 - [x] 输入框上键历史仅保留根会话中用户可见的文本，排除子代理、synthetic、ignored 与独立或追加式 `<system-reminder>` 内容。
+- [x] 会话卡片改为无 spacer 的连续批次加载；子代理优先按 metadata/唯一 description 归属，未归属时暂挂最新卡片并在归属到达后迁移。
 
 ### 渲染管线升级：shiki v4 与流式高亮
 

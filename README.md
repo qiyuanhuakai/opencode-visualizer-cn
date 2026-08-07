@@ -45,7 +45,7 @@
 | **悬浮窗管理** | 全面覆盖的关闭/最小化按钮，底部 Dock 栏存放最小化窗口 | ✅ 已上线 |
 | **悬浮窗预览自动换行** | 在设置中开启/关闭，防止长行代码影响阅读（文件预览、diff 等） | ✅ 已上线 |
 | **快捷命令** | 支持 `@` 显式召唤代理 | ✅ 已上线 |
-| **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速、输出面板虚拟滚动、悬浮窗弹出性能优化 | ✅ 已上线 |
+| **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速、输出面板连续批次加载、悬浮窗弹出性能优化 | ✅ 已上线 |
 | **桌面应用** | Electron 桌面端打包，支持 Windows / macOS / Linux | ✅ 已上线 |
 | **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板；设置中开启实验性功能 | 🅰️ Alpha |
 | **ACP Agent 集成 (Alpha)** | ACP v1 作为第三后端复用主会话界面；状态监控中管理 Pi、Oh My Pi、Kimi Code 等 ACP Agent | 🅰️ Alpha |
@@ -337,7 +337,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Rename Session** | Rename Session. ✅ Available |
 | **Floating Window Management** | Close/minimize buttons for all popups, bottom Dock bar | ✅ Available |
 | **Quick Commands** | `@` shortcut to explicitly summon agents | ✅ Available |
-| **Performance** | Lazy loading for large sessions, background hydration, faster cold start, output panel virtual scrolling, floating window popup optimization | ✅ Available |
+| **Performance** | Lazy loading for large sessions, background hydration, faster cold start, continuous batched output loading, floating window popup optimization | ✅ Available |
 | **Desktop App** | Electron desktop packaging for Windows / macOS / Linux | ✅ Available |
 | **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel; experimental features toggle in settings | 🅰️ Alpha |
 | **ACP Agent Integration (Alpha)** | ACP v1 as a third backend using the shared main chat UI; manage Pi, Oh My Pi, Kimi Code, and other ACP agents in Status Monitor | 🅰️ Alpha |
