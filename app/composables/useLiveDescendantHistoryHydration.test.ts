@@ -87,6 +87,7 @@ describe('useLiveDescendantHistoryHydration', () => {
     allowedSessionIds.value = new Set(['root', 'child', 'other-child']);
     await nextTick();
     expect(hydrate).toHaveBeenCalledTimes(5);
+    expect(hydrate).toHaveBeenLastCalledWith('root', ['other-child']);
 
     selectedSessionId.value = 'other-root';
     allowedSessionIds.value = new Set(['other-root', 'child']);
