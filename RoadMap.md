@@ -5,6 +5,11 @@
 - [ ] 添加语音输入功能：实现语音输入和文字转写
 - [ ] 完善文件编辑器：快捷键支持，字体大小
 - [ ] 完善文本收藏功能，添加text transformer
+- [ ] 改善插件兼容性
+      - [ ] omo：尝试识别Sisyphus Junior的类别（category）
+      - [ ] omo：特殊处理工具lsp-*
+      - [ ] magic context：特殊处理子代理magic-context-compartment
+      - [ ] magic context：特殊处理工具ctx-*
 - [ ] 修复已知问题
     - [?] codex：edit工具悬浮窗在首次弹出时不显示内容
     - [ ] acp：会话不显示左下角的持续时间
