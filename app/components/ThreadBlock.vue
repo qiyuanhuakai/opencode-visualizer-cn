@@ -159,7 +159,6 @@ const props = defineProps<{
   isRevertedPreview: boolean;
   currentSessionId?: string;
   sessionHistoryMetaById?: Record<string, SessionHistoryMeta>;
-  liveChildSessionIds?: string[];
   resolveAgentColor?: (agent?: string) => string;
   resolveModelMeta?: (modelPath?: string) => ModelMeta | undefined;
   computeContextPercent?: (
@@ -236,7 +235,6 @@ const subagentSessions = computed(() => {
     threadParts,
     currentSessionId,
     props.sessionHistoryMetaById,
-    props.liveChildSessionIds,
   );
 });
 

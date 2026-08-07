@@ -80,14 +80,6 @@ describe('resolveThreadSubagentSessions', () => {
     expect(resolveThreadSubagentSessions(parts, CURRENT_SESSION, meta)).toEqual([]);
   });
 
-  it('surfaces an explicitly live child before its task part receives session metadata', () => {
-    const meta = { 'ses-child-1': { parentID: CURRENT_SESSION, label: 'starting child' } };
-
-    expect(
-      resolveThreadSubagentSessions([], CURRENT_SESSION, meta, ['ses-child-1']),
-    ).toEqual([{ sessionId: 'ses-child-1', label: 'starting child' }]);
-  });
-
   it('only attributes the subagent to the spawning thread when several threads exist', () => {
     const threadA: MessagePart[] = [makeTaskPart('c1', { sessionId: 'ses-child-1' })];
     const threadB: MessagePart[] = [makeNonTaskToolPart('c2', { sessionId: 'ses-child-1' })];

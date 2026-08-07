@@ -18,7 +18,6 @@ export function resolveThreadSubagentSessions(
   threadParts: MessagePart[],
   currentSessionId: string,
   metaById?: Record<string, SessionHistoryMeta>,
-  liveChildSessionIds: string[] = [],
 ): ThreadSubagentSession[] {
   const sessionId = currentSessionId.trim();
   if (!sessionId) return [];
@@ -34,11 +33,6 @@ export function resolveThreadSubagentSessions(
     const meta = metaById?.[childId];
     if (meta && meta.parentID !== sessionId) continue;
     if (!seen.has(childId)) seen.set(childId, meta?.label || childId);
-  }
-  for (const childId of liveChildSessionIds) {
-    const meta = metaById?.[childId];
-    if (meta?.parentID !== sessionId) continue;
-    if (!seen.has(childId)) seen.set(childId, meta.label || childId);
   }
   return Array.from(seen.entries()).map(([sessionId, label]) => ({ sessionId, label }));
 }

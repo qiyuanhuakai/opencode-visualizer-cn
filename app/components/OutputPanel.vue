@@ -20,6 +20,18 @@
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
             <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
+              <div v-if="unassignedLiveChildren.length" class="unassigned-live-children">
+                <button
+                  v-for="child in unassignedLiveChildren"
+                  :key="child.sessionId"
+                  type="button"
+                  class="unassigned-live-child"
+                  @click="emit('show-subagent-history', child)"
+                >
+                  <span>🤖 {{ child.label }}</span>
+                  <span>{{ t('threadBlock.viewSubagent') }}</span>
+                </button>
+              </div>
               <!-- Normal rendering for small sessions (≤20 threads) -->
               <template v-if="!shouldVirtualize">
                 <template v-for="root in visibleRoots" :key="root.id">
@@ -31,7 +43,6 @@
                     :is-reverted-preview="isRevertedPreview(root)"
                     :current-session-id="currentSessionId"
                     :session-history-meta-by-id="sessionHistoryMetaById"
-                    :live-child-session-ids="liveChildSessionIdsByRoot[root.id] ?? []"
                     :resolve-agent-color="resolveAgentColor"
                     :resolve-model-meta="resolveModelMeta"
                     :compute-context-percent="computeContextPercent"
@@ -69,7 +80,6 @@
                     :is-reverted-preview="isRevertedPreview(root)"
                     :current-session-id="currentSessionId"
                     :session-history-meta-by-id="sessionHistoryMetaById"
-                    :live-child-session-ids="liveChildSessionIdsByRoot[root.id] ?? []"
                     :resolve-agent-color="resolveAgentColor"
                     :resolve-model-meta="resolveModelMeta"
                     :compute-context-percent="computeContextPercent"
@@ -137,7 +147,11 @@ import type {
 } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
-import { discoverNewDirectChildren } from '../utils/liveChildSessions';
+import {
+  discoverNewDirectChildren,
+  resolveUnassignedLiveChildren,
+} from '../utils/liveChildSessions';
+import { resolveThreadSubagentSessions } from '../utils/threadSubagents';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -201,7 +215,29 @@ const visibleRoots = computed(() => {
 
 const latestRootId = computed(() => visibleRoots.value.at(-1)?.id ?? '');
 const knownChildIdsByRoot = new Map<string, ReadonlySet<string>>();
-const liveChildOwnerRootBySessionId = ref<Record<string, string>>({});
+const unassignedLiveChildIds = ref<string[]>([]);
+
+const exactReferencedChildIds = computed(() => {
+  const referenced = new Set<string>();
+  const rootSessionId = props.currentSessionId?.trim();
+  if (!rootSessionId) return referenced;
+  visibleRoots.value.forEach((root) => {
+    resolveThreadSubagentSessions(
+      msg.getParts(root.id),
+      rootSessionId,
+      props.sessionHistoryMetaById ?? {},
+    ).forEach(({ sessionId }) => referenced.add(sessionId));
+  });
+  return referenced;
+});
+
+const unassignedLiveChildren = computed(() =>
+  resolveUnassignedLiveChildren(
+    unassignedLiveChildIds.value,
+    exactReferencedChildIds.value,
+    props.sessionHistoryMetaById ?? {},
+  ),
+);
 
 watch(
   [() => props.currentSessionId, () => props.sessionHistoryMetaById],
@@ -214,23 +250,13 @@ watch(
       metaBySessionId ?? {},
     );
     knownChildIdsByRoot.set(normalizedRootId, discovered.currentIds);
-    const ownerRootId = latestRootId.value;
-    if (!ownerRootId || discovered.newIds.length === 0) return;
-    liveChildOwnerRootBySessionId.value = {
-      ...liveChildOwnerRootBySessionId.value,
-      ...Object.fromEntries(discovered.newIds.map((sessionId) => [sessionId, ownerRootId])),
-    };
+    if (discovered.newIds.length === 0) return;
+    unassignedLiveChildIds.value = [
+      ...new Set([...unassignedLiveChildIds.value, ...discovered.newIds]),
+    ];
   },
   { immediate: true },
 );
-
-const liveChildSessionIdsByRoot = computed(() => {
-  const grouped: Record<string, string[]> = {};
-  Object.entries(liveChildOwnerRootBySessionId.value).forEach(([sessionId, rootId]) => {
-    grouped[rootId] = [...(grouped[rootId] ?? []), sessionId];
-  });
-  return grouped;
-});
 
 const revertedPreviewRootId = computed(() => {
   const revert = props.sessionRevert;
@@ -814,6 +840,29 @@ defineExpose({ panelEl, scrollToBottom });
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.unassigned-live-children {
+  display: grid;
+  gap: 6px;
+}
+
+.unassigned-live-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--theme-text-primary, #e5e7eb);
+  background: var(--theme-bg-secondary, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--theme-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.unassigned-live-child:hover {
+  background: var(--theme-bg-hover, rgba(255, 255, 255, 0.08));
 }
 
 .output-panel-messages.is-anchor-pending {
