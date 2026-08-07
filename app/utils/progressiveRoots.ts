@@ -27,6 +27,7 @@ export function preserveProgressiveRootWindowOnAppend(
   nextRootIds: string[],
   window: ProgressiveRootWindow,
   maxSize: number,
+  advanceOnAppend = true,
 ) {
   const appended =
     nextRootIds.length >= previousRootIds.length &&
@@ -35,6 +36,7 @@ export function preserveProgressiveRootWindowOnAppend(
     const size = Math.min(maxSize, Math.max(1, window.end - window.start));
     return { start: Math.max(0, nextRootIds.length - size), end: nextRootIds.length };
   }
+  if (!advanceOnAppend) return window;
   if (window.end !== previousRootIds.length) return window;
   const end = nextRootIds.length;
   return { start: Math.max(window.start, end - maxSize), end };

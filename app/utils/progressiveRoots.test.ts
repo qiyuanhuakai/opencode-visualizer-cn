@@ -33,6 +33,20 @@ describe('progressive root window', () => {
     ).toEqual({ start: 1, end: 101 });
   });
 
+  it('keeps a full paused window stable when a new root appends', () => {
+    const previous = Array.from({ length: 100 }, (_, index) => `root-${index}`);
+
+    expect(
+      preserveProgressiveRootWindowOnAppend(
+        previous,
+        [...previous, 'root-100'],
+        { start: 0, end: 100 },
+        100,
+        false,
+      ),
+    ).toEqual({ start: 0, end: 100 });
+  });
+
   it('resets an out-of-range window after revert shrinks the renderable roots', () => {
     const previous = Array.from({ length: 250 }, (_, index) => `root-${index}`);
     const next = previous.slice(0, 101);

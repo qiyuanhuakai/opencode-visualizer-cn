@@ -198,6 +198,7 @@ watch(renderableRoots, (nextRoots, previousRoots) => {
     nextRoots.map((root) => root.id),
     rootWindow.value,
     THREAD_WINDOW_MAX,
+    props.isFollowing,
   );
 });
 
