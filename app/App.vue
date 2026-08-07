@@ -667,6 +667,7 @@ import {
   resolveThreadSubagentSessions,
   type SessionHistoryMeta,
 } from './utils/threadSubagents';
+import { retryReferencedSessionIds } from './utils/retryReferencedSessions';
 import { normalizeToolName } from './utils/toolNames';
 import {
   extractFileRead as extractToolFileRead,
@@ -1952,6 +1953,9 @@ const providerConfigRequestFence = createBackendRequestFence(() => activeBackend
 const providersRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const agentsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const commandsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+let providerLoadingOwner = 0;
+let agentLoadingOwner = 0;
+let commandLoadingOwner = 0;
 const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
 const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
@@ -4766,6 +4770,7 @@ async function bootstrapSelections() {
 async function fetchProviders(force = false) {
   if ((!force && providersLoading.value) || (!force && providersLoaded.value)) return;
   const request = providersRequestFence.start();
+  providerLoadingOwner = request.generation;
   const activeBackend = getBackendAdapter(request.backend);
   providersLoading.value = true;
   if (force) providersLoaded.value = false;
@@ -4854,12 +4859,13 @@ async function fetchProviders(force = false) {
   } catch (error) {
     if (providersRequestFence.isCurrent(request)) log('Provider load failed', error);
   } finally {
-    if (providersRequestFence.isCurrent(request)) providersLoading.value = false;
+    if (providerLoadingOwner === request.generation) providersLoading.value = false;
   }
 }
 
 async function fetchAgents() {
   const request = agentsRequestFence.start();
+  agentLoadingOwner = request.generation;
   agentsLoading.value = true;
   try {
     if (activeBackendKind.value === 'codex') {
@@ -4923,12 +4929,13 @@ async function fetchAgents() {
   } catch (error) {
     if (agentsRequestFence.isCurrent(request)) log('Agent load failed', error);
   } finally {
-    if (agentsRequestFence.isCurrent(request)) agentsLoading.value = false;
+    if (agentLoadingOwner === request.generation) agentsLoading.value = false;
   }
 }
 
 async function fetchCommands(directory?: string) {
   const request = commandsRequestFence.start();
+  commandLoadingOwner = request.generation;
   commandsLoading.value = true;
   try {
     const listCommands = requireBackendMethod(backend().listCommands, 'commands');
@@ -4940,7 +4947,7 @@ async function fetchCommands(directory?: string) {
   } catch (error) {
     if (commandsRequestFence.isCurrent(request)) log('Command load failed', error);
   } finally {
-    if (commandsRequestFence.isCurrent(request)) commandsLoading.value = false;
+    if (commandLoadingOwner === request.generation) commandsLoading.value = false;
   }
 }
 
@@ -5173,25 +5180,27 @@ function collectReferencedSubagentSessionIds(rootSessionId: string): string[] {
   return resolveThreadSubagentSessions(parts, rootSessionId).map(({ sessionId }) => sessionId);
 }
 
-function hydrateReferencedSubagents(
+async function hydrateReferencedSubagents(
   rootSessionId: string,
   reloadRequestId: number,
 ): Promise<string[]> {
-  if (activeBackendKind.value !== 'opencode') return Promise.resolve([]);
+  if (activeBackendKind.value !== 'opencode') return [];
   const directory = normalizeDirectory(activeDirectory.value);
   const sessionIds = collectReferencedSubagentSessionIds(rootSessionId);
-  if (!directory || sessionIds.length === 0) return Promise.resolve([]);
+  if (!directory || sessionIds.length === 0) return [];
 
-  referencedSubagentHydrationSequence += 1;
-  const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
-  return new Promise<string[]>((resolve) => {
-    pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
-    ge.sendToWorker({
-      type: 'hydrate-referenced-subagents',
-      requestId,
-      rootSessionId,
-      directory,
-      sessionIds,
+  return retryReferencedSessionIds(sessionIds, () => {
+    referencedSubagentHydrationSequence += 1;
+    const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
+    return new Promise<string[]>((resolve) => {
+      pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
+      ge.sendToWorker({
+        type: 'hydrate-referenced-subagents',
+        requestId,
+        rootSessionId,
+        directory,
+        sessionIds,
+      });
     });
   });
 }
