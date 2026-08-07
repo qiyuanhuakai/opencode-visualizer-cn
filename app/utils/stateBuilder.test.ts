@@ -140,7 +140,7 @@ describe('createStateBuilder regression', () => {
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child?.status).toBe('busy');
   });
 
-  it('treats sessions omitted from a directory status snapshot as idle', () => {
+  it('keeps sessions omitted from a sparse status snapshot unknown', () => {
     const builder = createStateBuilder();
     builder.applyProjects([
       { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
@@ -159,7 +159,7 @@ describe('createStateBuilder regression', () => {
 
     builder.applyStatusSnapshot(['root'], {});
 
-    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('idle');
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBeUndefined();
   });
 
   it('does not let an older status snapshot overwrite a newer SSE status', () => {
@@ -184,5 +184,28 @@ describe('createStateBuilder regression', () => {
     builder.applyStatusSnapshot(['root'], {}, snapshotRevision);
 
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('busy');
+  });
+
+  it('does not let an older directory snapshot resurrect a deleted session', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    const session: SessionInfo = {
+      id: 'root',
+      projectID: 'p1',
+      title: 'Root',
+      slug: 'root',
+      directory: '/repo',
+      version: '1',
+      time: { created: 1, updated: 1 },
+    };
+    builder.applySessions([session]);
+    const snapshotRevision = builder.getMutationRevision();
+
+    builder.processSessionDeleted('root', 'p1');
+    builder.applySessionSnapshot([session], snapshotRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root).toBeUndefined();
   });
 });

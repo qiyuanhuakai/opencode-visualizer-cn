@@ -131,6 +131,13 @@ export function createStateBuilder() {
   >();
   const statusRevisionBySessionId = new Map<string, number>();
   let statusRevision = 0;
+  const mutationRevisionBySessionId = new Map<string, number>();
+  let mutationRevision = 0;
+
+  function recordSessionMutation(sessionId: string) {
+    mutationRevision += 1;
+    mutationRevisionBySessionId.set(sessionId, mutationRevision);
+  }
 
   function getProject(projectId: string): ProjectState | undefined {
     return state.projects[projectId];
@@ -619,6 +626,18 @@ export function createStateBuilder() {
     });
   }
 
+  function applySessionSnapshot(
+    sessions: SessionInfo[],
+    maximumMutationRevision: number,
+  ) {
+    applySessions(
+      (Array.isArray(sessions) ? sessions : []).filter(
+        (session) =>
+          (mutationRevisionBySessionId.get(session.id) ?? 0) <= maximumMutationRevision,
+      ),
+    );
+  }
+
   function applyAuthoritativeSessions(sessions: SessionInfo[]) {
     const list = Array.isArray(sessions) ? sessions : [];
     list.forEach((session) => {
@@ -645,20 +664,13 @@ export function createStateBuilder() {
   }
 
   function applyStatusSnapshot(
-    sessionIds: string[],
+    _sessionIds: string[],
     statusMap: Record<string, { type?: string }>,
     maximumStatusRevision = Number.POSITIVE_INFINITY,
   ) {
-    const snapshot = { ...statusMap };
-    sessionIds.forEach((sessionId) => {
-      const type = snapshot[sessionId]?.type;
-      if (!type || !isSessionStatus(type)) {
-        snapshot[sessionId] = { type: 'idle' };
-      }
-    });
     applyStatuses(
       Object.fromEntries(
-        Object.entries(snapshot).filter(
+        Object.entries(statusMap).filter(
           ([sessionId]) =>
             (statusRevisionBySessionId.get(sessionId) ?? 0) <= maximumStatusRevision,
         ),
@@ -682,6 +694,7 @@ export function createStateBuilder() {
   }
 
   function processSessionCreated(info: SessionInfo): string | null {
+    recordSessionMutation(info.id);
     if (info.parentID?.trim()) authoritativeChildSessionIds.add(info.id);
     const changed = upsertSession({
       ...info,
@@ -692,6 +705,7 @@ export function createStateBuilder() {
   }
 
   function processSessionUpdated(info: SessionInfo): string | null {
+    recordSessionMutation(info.id);
     const changed = upsertSession({
       ...info,
       revert: info.revert,
@@ -701,6 +715,7 @@ export function createStateBuilder() {
   }
 
   function processSessionDeleted(sessionId: string, projectId?: string): string | null {
+    recordSessionMutation(sessionId);
     pendingStatusBySessionId.delete(sessionId);
     const changed = removeSession(sessionId, projectId);
     pruneEphemeralChildren();
@@ -713,6 +728,7 @@ export function createStateBuilder() {
     projectId?: string,
   ): string | null {
     if (!isSessionStatus(status)) return null;
+    recordSessionMutation(sessionId);
     statusRevision += 1;
     statusRevisionBySessionId.set(sessionId, statusRevision);
     const entry = findSessionEntry(sessionId, projectId);
@@ -734,6 +750,10 @@ export function createStateBuilder() {
 
   function getStatusRevision() {
     return statusRevision;
+  }
+
+  function getMutationRevision() {
+    return mutationRevision;
   }
 
   function processProjectUpdated(project: ProjectInfo): string | null {
@@ -873,10 +893,12 @@ export function createStateBuilder() {
   return {
     applyProjects,
     applySessions,
+    applySessionSnapshot,
     applyAuthoritativeSessions,
     applyStatuses,
     applyStatusSnapshot,
     getStatusRevision,
+    getMutationRevision,
     applyVcsInfo,
     processSessionCreated,
     processSessionUpdated,
