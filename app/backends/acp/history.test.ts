@@ -291,8 +291,22 @@ describe('applyAcpSessionMeta', () => {
     });
 
     applyAcpSessionMeta(state, [
-      { userText: 'kimi测试消息', userTime: 1000, assistantTime: 1005, model: 'kimi-code/k3', agent: 'plan' },
-      { userText: '第二轮', userTime: 2000, assistantTime: 2005, model: 'kimi-code/k2', agent: 'yolo' },
+      {
+        userText: 'kimi测试消息',
+        userTime: 1000,
+        assistantTime: 1005,
+        assistantCompletedTime: 1805,
+        model: 'kimi-code/k3',
+        agent: 'plan',
+      },
+      {
+        userText: '第二轮',
+        userTime: 2000,
+        assistantTime: 2005,
+        assistantCompletedTime: 3205,
+        model: 'kimi-code/k2',
+        agent: 'yolo',
+      },
     ], restored);
 
     const [user1, assistant1, user2, assistant2] = state.entries;
@@ -313,12 +327,13 @@ describe('applyAcpSessionMeta', () => {
     expect(assistant1.info.mode).toBe('plan');
     expect(assistant1.info.modelID).toBe('kimi-code/k3');
     expect(assistant1.info.time.created).toBe(1005);
-    expect(assistant1.info.time.completed).toBe(1005);
+    expect(assistant1.info.time.completed).toBe(1805);
     expect(user2.info.agent).toBe('yolo');
     expect(user2.info.model).toEqual({ providerID: 'acp', modelID: 'kimi-code/k2' });
     expect(user2.info.time.created).toBe(2000);
     expect(assistant2.info.agent).toBe('yolo');
     expect(assistant2.info.time.created).toBe(2005);
+    expect(assistant2.info.time.completed).toBe(3205);
   });
 
   it('skips turns that do not anchor to any replayed entry', () => {
@@ -364,4 +379,3 @@ describe('applyAcpSessionMeta', () => {
       expect(entry.info, `meta entry ${index}`).not.toBe(beforeMeta[index]);
     });
   });
-

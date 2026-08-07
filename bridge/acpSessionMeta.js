@@ -61,6 +61,7 @@ export function parseKimiWireLog(content) {
         userText: textFromBlocks(row.input),
         userTime: typeof row.time === 'number' ? row.time : undefined,
         assistantTime: undefined,
+        assistantCompletedTime: undefined,
         model: undefined,
         agent: agentAt(),
       });
@@ -68,10 +69,11 @@ export function parseKimiWireLog(content) {
     }
     if (row.type === 'usage.record' && row.usageScope === 'turn' && turns.length > 0) {
       const turn = turns[turns.length - 1];
-      if (turn.assistantTime === undefined) {
-        turn.assistantTime = typeof row.time === 'number' ? row.time : undefined;
-        turn.model = typeof row.model === 'string' ? row.model : undefined;
+      if (typeof row.time === 'number') {
+        if (turn.assistantTime === undefined) turn.assistantTime = row.time;
+        turn.assistantCompletedTime = row.time;
       }
+      if (typeof row.model === 'string') turn.model = row.model;
     }
   }
   return turns;
@@ -88,6 +90,7 @@ export function parseOmpSessionLog(content) {
         userText: textFromBlocks(message.content),
         userTime: typeof message.timestamp === 'number' ? message.timestamp : undefined,
         assistantTime: undefined,
+        assistantCompletedTime: undefined,
         model: undefined,
         agent: undefined,
       });
@@ -95,7 +98,13 @@ export function parseOmpSessionLog(content) {
     }
     if (message.role === 'assistant' && turns.length > 0) {
       const turn = turns[turns.length - 1];
-      if (typeof message.timestamp === 'number') turn.assistantTime = message.timestamp;
+      if (typeof message.timestamp === 'number') {
+        turn.assistantTime = message.timestamp;
+        turn.assistantCompletedTime =
+          typeof message.duration === 'number'
+            ? message.timestamp + message.duration
+            : message.timestamp;
+      }
       if (typeof message.provider === 'string' && typeof message.model === 'string') {
         turn.model = `${message.provider}/${message.model}`;
       }
