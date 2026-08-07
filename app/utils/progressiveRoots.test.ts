@@ -1,18 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { preserveProgressiveRootLimit } from './progressiveRoots';
+import {
+  initialProgressiveRootWindow,
+  preserveProgressiveRootWindowOnAppend,
+  shiftProgressiveRootWindow,
+} from './progressiveRoots';
 
-describe('preserveProgressiveRootLimit', () => {
-  it('keeps previously loaded roots when a live root appends', () => {
-    const previous = Array.from({ length: 40 }, (_, index) => `root-${index}`);
+describe('progressive root window', () => {
+  it('starts with the newest batch and shifts through older/newer bounded windows', () => {
+    let window = initialProgressiveRootWindow(250, 20);
+    expect(window).toEqual({ start: 230, end: 250 });
 
-    expect(
-      preserveProgressiveRootLimit(previous, [...previous, 'root-40'], 40),
-    ).toBe(41);
+    for (let index = 0; index < 6; index += 1) {
+      window = shiftProgressiveRootWindow(window, 250, 'older', 20, 100);
+    }
+    expect(window).toEqual({ start: 110, end: 210 });
+    expect(window.end - window.start).toBe(100);
+
+    window = shiftProgressiveRootWindow(window, 250, 'newer', 20, 100);
+    expect(window).toEqual({ start: 130, end: 230 });
   });
 
-  it('does not consume prepended history before the user reaches the top', () => {
+  it('preserves an appended live root while enforcing the hard window bound', () => {
+    const previous = Array.from({ length: 100 }, (_, index) => `root-${index}`);
+
     expect(
-      preserveProgressiveRootLimit(['root-20', 'root-21'], ['root-19', 'root-20', 'root-21'], 2),
-    ).toBe(2);
+      preserveProgressiveRootWindowOnAppend(
+        previous,
+        [...previous, 'root-100'],
+        { start: 0, end: 100 },
+        100,
+      ),
+    ).toEqual({ start: 1, end: 101 });
   });
 });

@@ -101,7 +101,11 @@ import type {
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
 import { resolveChildOwners } from '../utils/threadSubagents';
-import { preserveProgressiveRootLimit } from '../utils/progressiveRoots';
+import {
+  initialProgressiveRootWindow,
+  preserveProgressiveRootWindowOnAppend,
+  shiftProgressiveRootWindow,
+} from '../utils/progressiveRoots';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -164,26 +168,34 @@ const visibleRoots = computed(() => {
 });
 
 const THREAD_BATCH_SIZE = 20;
-const renderedRootLimit = ref(THREAD_BATCH_SIZE);
-let prependInProgress = false;
+const THREAD_WINDOW_MAX = 100;
 const renderableRoots = computed(() => visibleRoots.value.filter(shouldRenderRoot));
+const rootWindow = ref(initialProgressiveRootWindow(renderableRoots.value.length, THREAD_BATCH_SIZE));
+let windowShiftInProgress = false;
 const visibleThreadRoots = computed(() =>
-  renderableRoots.value.slice(-renderedRootLimit.value),
+  renderableRoots.value.slice(rootWindow.value.start, rootWindow.value.end),
 );
 
 watch(
   () => props.currentSessionId,
   () => {
-    renderedRootLimit.value = THREAD_BATCH_SIZE;
+    rootWindow.value = initialProgressiveRootWindow(
+      renderableRoots.value.length,
+      THREAD_BATCH_SIZE,
+    );
   },
 );
 
 watch(renderableRoots, (nextRoots, previousRoots) => {
-  if (props.isLoading) return;
-  renderedRootLimit.value = preserveProgressiveRootLimit(
+  if (props.isLoading || previousRoots.length === 0) {
+    rootWindow.value = initialProgressiveRootWindow(nextRoots.length, THREAD_BATCH_SIZE);
+    return;
+  }
+  rootWindow.value = preserveProgressiveRootWindowOnAppend(
     previousRoots.map((root) => root.id),
     nextRoots.map((root) => root.id),
-    renderedRootLimit.value,
+    rootWindow.value,
+    THREAD_WINDOW_MAX,
   );
 });
 
@@ -310,22 +322,27 @@ async function onPanelScroll(event: Event) {
   emit('scroll');
   const panel = event.currentTarget;
   if (!(panel instanceof HTMLDivElement)) return;
-  if (
-    panel.scrollTop > 80 ||
-    prependInProgress ||
-    renderedRootLimit.value >= renderableRoots.value.length
-  ) {
-    return;
-  }
-  prependInProgress = true;
-  const anchorRootId = visibleThreadRoots.value[0]?.id;
+  if (windowShiftInProgress) return;
+  const nearTop = panel.scrollTop <= 80 && rootWindow.value.start > 0;
+  const nearBottom =
+    panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 80 &&
+    rootWindow.value.end < renderableRoots.value.length;
+  if (!nearTop && !nearBottom) return;
+  windowShiftInProgress = true;
+  const direction = nearTop ? 'older' : 'newer';
+  const anchorRootId = nearTop
+    ? visibleThreadRoots.value[0]?.id
+    : visibleThreadRoots.value.at(-1)?.id;
   const anchorBefore = contentEl.value?.querySelector<HTMLElement>(
     `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
   );
   const anchorTopBefore = anchorBefore?.getBoundingClientRect().top;
-  renderedRootLimit.value = Math.min(
-    renderedRootLimit.value + THREAD_BATCH_SIZE,
+  rootWindow.value = shiftProgressiveRootWindow(
+    rootWindow.value,
     renderableRoots.value.length,
+    direction,
+    THREAD_BATCH_SIZE,
+    THREAD_WINDOW_MAX,
   );
   for (const delayMs of [0, 32, 96]) {
     if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
@@ -337,7 +354,7 @@ async function onPanelScroll(event: Event) {
       panel.scrollTop += anchorAfter.getBoundingClientRect().top - anchorTopBefore;
     }
   }
-  prependInProgress = false;
+  windowShiftInProgress = false;
 }
 
 function handleContentClick(event: MouseEvent) {
