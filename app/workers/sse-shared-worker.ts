@@ -749,6 +749,7 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
   }
 
   const generation = state.hydrationGeneration;
+  const statusRevision = state.stateBuilder.getStatusRevision();
   emitDirectoryHydration(state, normalizedDirectory, { status: 'loading' });
   const promise = runOpencodeReadTask(state, async () => {
     const [rawSessions, rawStatuses] = await Promise.all([
@@ -770,6 +771,7 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
     state.stateBuilder.applyStatusSnapshot(
       sessions.map((session) => session.id),
       asStatusMap(rawStatuses),
+      statusRevision,
     );
 
     const projectIds = new Set<string>();

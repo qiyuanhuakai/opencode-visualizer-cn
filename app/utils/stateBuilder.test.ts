@@ -161,4 +161,28 @@ describe('createStateBuilder regression', () => {
 
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('idle');
   });
+
+  it('does not let an older status snapshot overwrite a newer SSE status', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'root',
+        projectID: 'p1',
+        title: 'Root',
+        slug: 'root',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+    const snapshotRevision = builder.getStatusRevision();
+
+    builder.processSessionStatus('root', 'busy', 'p1');
+    builder.applyStatusSnapshot(['root'], {}, snapshotRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('busy');
+  });
 });

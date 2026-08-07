@@ -129,6 +129,8 @@ export function createStateBuilder() {
     string,
     { projectId: string; status: SessionStatusType }
   >();
+  const statusRevisionBySessionId = new Map<string, number>();
+  let statusRevision = 0;
 
   function getProject(projectId: string): ProjectState | undefined {
     return state.projects[projectId];
@@ -181,6 +183,11 @@ export function createStateBuilder() {
     });
     Array.from(authoritativeChildSessionIds).forEach((sessionId) => {
       if (!knownSessionIds.has(sessionId)) authoritativeChildSessionIds.delete(sessionId);
+    });
+    Array.from(statusRevisionBySessionId).forEach(([sessionId]) => {
+      if (!knownSessionIds.has(sessionId) && !pendingStatusBySessionId.has(sessionId)) {
+        statusRevisionBySessionId.delete(sessionId);
+      }
     });
   }
 
@@ -305,6 +312,7 @@ export function createStateBuilder() {
     ephemeralLastActiveAt.delete(sessionId);
     authoritativeChildSessionIds.delete(sessionId);
     pendingStatusBySessionId.delete(sessionId);
+    statusRevisionBySessionId.delete(sessionId);
     updateRootSessionOrder(sandbox);
     return entry.projectId;
   }
@@ -639,6 +647,7 @@ export function createStateBuilder() {
   function applyStatusSnapshot(
     sessionIds: string[],
     statusMap: Record<string, { type?: string }>,
+    maximumStatusRevision = Number.POSITIVE_INFINITY,
   ) {
     const snapshot = { ...statusMap };
     sessionIds.forEach((sessionId) => {
@@ -647,7 +656,14 @@ export function createStateBuilder() {
         snapshot[sessionId] = { type: 'idle' };
       }
     });
-    applyStatuses(snapshot);
+    applyStatuses(
+      Object.fromEntries(
+        Object.entries(snapshot).filter(
+          ([sessionId]) =>
+            (statusRevisionBySessionId.get(sessionId) ?? 0) <= maximumStatusRevision,
+        ),
+      ),
+    );
   }
 
   function applyVcsInfo(directory: string, info: { branch: string }) {
@@ -697,6 +713,8 @@ export function createStateBuilder() {
     projectId?: string,
   ): string | null {
     if (!isSessionStatus(status)) return null;
+    statusRevision += 1;
+    statusRevisionBySessionId.set(sessionId, statusRevision);
     const entry = findSessionEntry(sessionId, projectId);
     if (!entry) {
       if (projectId && state.projects[projectId]) {
@@ -712,6 +730,10 @@ export function createStateBuilder() {
     }
     pruneEphemeralChildren();
     return entry.projectId;
+  }
+
+  function getStatusRevision() {
+    return statusRevision;
   }
 
   function processProjectUpdated(project: ProjectInfo): string | null {
@@ -854,6 +876,7 @@ export function createStateBuilder() {
     applyAuthoritativeSessions,
     applyStatuses,
     applyStatusSnapshot,
+    getStatusRevision,
     applyVcsInfo,
     processSessionCreated,
     processSessionUpdated,
