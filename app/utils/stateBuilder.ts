@@ -643,6 +643,7 @@ export function createStateBuilder() {
   }
 
   function processSessionCreated(info: SessionInfo): string | null {
+    if (info.parentID?.trim()) authoritativeChildSessionIds.add(info.id);
     const changed = upsertSession({
       ...info,
       revert: info.revert,

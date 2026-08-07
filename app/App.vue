@@ -616,6 +616,7 @@ import { useBackendSelectionBootstrap } from './composables/useBackendSelectionB
 import { useCodexMessageBridge } from './composables/useCodexMessageBridge';
 import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
+import { useLiveDescendantHistoryHydration } from './composables/useLiveDescendantHistoryHydration';
 import { useMessages } from './composables/useMessages';
 import { useCodexWorkspaceSync } from './composables/useCodexWorkspaceSync';
 import { pendingWorkerRenders } from './composables/useRenderState';
@@ -5228,6 +5229,19 @@ function scheduleDescendantSessionHistoryHydration(
     );
   });
 }
+
+useLiveDescendantHistoryHydration({
+  activeBackendKind,
+  selectedSessionId,
+  allowedSessionIds,
+  async hydrate(rootSessionId, descendantSessionIds) {
+    const rootRequestId = primaryHistoryRequestId;
+    await fetchDescendantSessionHistories(rootSessionId, rootRequestId, descendantSessionIds);
+    if (selectedSessionId.value !== rootSessionId) return;
+    hydratedDescendantSessionIds.add(rootSessionId);
+    void reloadTodosForAllowedSessions();
+  },
+});
 
 function buildPtyWsUrl(path: string, directory?: string) {
   const createPtyWebSocketUrl = requireBackendMethod(

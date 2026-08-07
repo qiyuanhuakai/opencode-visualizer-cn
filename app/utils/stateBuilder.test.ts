@@ -92,4 +92,30 @@ describe('createStateBuilder regression', () => {
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child).toBeUndefined();
     now.mockRestore();
   });
+
+  it('keeps a child announced by session.created after the ephemeral TTL', () => {
+    const builder = createStateBuilder();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1);
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+
+    builder.processSessionCreated({
+      id: 'child',
+      projectID: 'p1',
+      parentID: 'root',
+      title: 'Live child',
+      slug: 'live-child',
+      directory: '/repo',
+      version: '1',
+      time: { created: 1, updated: 1 },
+    });
+    now.mockReturnValue(20 * 60 * 1000 + 2);
+    builder.applyStatuses({ child: { type: 'idle' } });
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child?.title).toBe(
+      'Live child',
+    );
+    now.mockRestore();
+  });
 });
