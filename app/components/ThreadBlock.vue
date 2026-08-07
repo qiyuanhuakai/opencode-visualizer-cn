@@ -159,6 +159,7 @@ const props = defineProps<{
   isRevertedPreview: boolean;
   currentSessionId?: string;
   sessionHistoryMetaById?: Record<string, SessionHistoryMeta>;
+  liveChildSessionIds?: string[];
   resolveAgentColor?: (agent?: string) => string;
   resolveModelMeta?: (modelPath?: string) => ModelMeta | undefined;
   computeContextPercent?: (
@@ -231,16 +232,11 @@ const subagentSessions = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();
   if (!currentSessionId) return [] as Array<{ sessionId: string; label: string }>;
   const threadParts = threadMessages.value.flatMap((message) => msg.getParts(message.id));
-  const liveChildSessionIds = props.isLatestRoot
-    ? Object.entries(props.sessionHistoryMetaById ?? {}).flatMap(([sessionId, meta]) =>
-        meta.parentID === currentSessionId && meta.status !== 'idle' ? [sessionId] : [],
-      )
-    : [];
   return resolveThreadSubagentSessions(
     threadParts,
     currentSessionId,
     props.sessionHistoryMetaById,
-    liveChildSessionIds,
+    props.liveChildSessionIds,
   );
 });
 

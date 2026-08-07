@@ -31,6 +31,7 @@
                     :is-reverted-preview="isRevertedPreview(root)"
                     :current-session-id="currentSessionId"
                     :session-history-meta-by-id="sessionHistoryMetaById"
+                    :live-child-session-ids="liveChildSessionIdsByRoot[root.id] ?? []"
                     :resolve-agent-color="resolveAgentColor"
                     :resolve-model-meta="resolveModelMeta"
                     :compute-context-percent="computeContextPercent"
@@ -68,6 +69,7 @@
                     :is-reverted-preview="isRevertedPreview(root)"
                     :current-session-id="currentSessionId"
                     :session-history-meta-by-id="sessionHistoryMetaById"
+                    :live-child-session-ids="liveChildSessionIdsByRoot[root.id] ?? []"
                     :resolve-agent-color="resolveAgentColor"
                     :resolve-model-meta="resolveModelMeta"
                     :compute-context-percent="computeContextPercent"
@@ -135,6 +137,7 @@ import type {
 } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
+import { discoverNewDirectChildren } from '../utils/liveChildSessions';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -197,6 +200,37 @@ const visibleRoots = computed(() => {
 });
 
 const latestRootId = computed(() => visibleRoots.value.at(-1)?.id ?? '');
+const knownChildIdsByRoot = new Map<string, ReadonlySet<string>>();
+const liveChildOwnerRootBySessionId = ref<Record<string, string>>({});
+
+watch(
+  [() => props.currentSessionId, () => props.sessionHistoryMetaById],
+  ([rootSessionId, metaBySessionId]) => {
+    const normalizedRootId = rootSessionId?.trim();
+    if (!normalizedRootId) return;
+    const discovered = discoverNewDirectChildren(
+      knownChildIdsByRoot.get(normalizedRootId),
+      normalizedRootId,
+      metaBySessionId ?? {},
+    );
+    knownChildIdsByRoot.set(normalizedRootId, discovered.currentIds);
+    const ownerRootId = latestRootId.value;
+    if (!ownerRootId || discovered.newIds.length === 0) return;
+    liveChildOwnerRootBySessionId.value = {
+      ...liveChildOwnerRootBySessionId.value,
+      ...Object.fromEntries(discovered.newIds.map((sessionId) => [sessionId, ownerRootId])),
+    };
+  },
+  { immediate: true },
+);
+
+const liveChildSessionIdsByRoot = computed(() => {
+  const grouped: Record<string, string[]> = {};
+  Object.entries(liveChildOwnerRootBySessionId.value).forEach(([sessionId, rootId]) => {
+    grouped[rootId] = [...(grouped[rootId] ?? []), sessionId];
+  });
+  return grouped;
+});
 
 const revertedPreviewRootId = computed(() => {
   const revert = props.sessionRevert;
