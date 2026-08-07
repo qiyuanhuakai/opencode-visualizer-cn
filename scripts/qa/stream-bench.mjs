@@ -366,11 +366,15 @@ async function main() {
             if (badChunk !== -1) {
               sanityFailures.push(`${label}: perChunk[${badChunk}] has missing/zero metric fields`);
             }
-            // Sanity: cumulative bytes should be dramatically lower than baseline (3.24MB).
-            // If it's within 50% of baseline, something is wrong (full re-renders instead of streaming).
-            if (t.bytesSent > REASONING_BASELINE_BYTES * 1.5) {
+            // Sanity: cumulative bytes should be dramatically lower than baseline.
+            // Baseline scales O(n·K) i.e. quadratically with size; streaming
+            // scales linearly, so the 50%-of-baseline bound holds at every scale
+            // (1x streaming is ~11% of baseline) while a full-render regression
+            // (~100% of baseline) fails.
+            const scaledBaseline = REASONING_BASELINE_BYTES * (size ?? 1) ** 2;
+            if (t.bytesSent >= scaledBaseline * 0.5) {
               sanityFailures.push(
-                `${label}: cumulative bytes ${t.bytesSent} too close to baseline ${REASONING_BASELINE_BYTES} (expected dramatic reduction)`,
+                `${label}: cumulative bytes ${t.bytesSent} too close to baseline ${scaledBaseline} (expected dramatic reduction)`,
               );
             }
           }
