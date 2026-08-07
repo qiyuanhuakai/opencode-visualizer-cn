@@ -133,10 +133,18 @@ export function createStateBuilder() {
   let statusRevision = 0;
   const mutationRevisionBySessionId = new Map<string, number>();
   let mutationRevision = 0;
+  const MAX_MUTATION_TOMBSTONES = 10_000;
+  const MAX_PENDING_STATUSES = 2_000;
 
   function recordSessionMutation(sessionId: string) {
     mutationRevision += 1;
     mutationRevisionBySessionId.set(sessionId, mutationRevision);
+    if (mutationRevisionBySessionId.size <= MAX_MUTATION_TOMBSTONES) return;
+    for (const knownSessionId of mutationRevisionBySessionId.keys()) {
+      if (sessionLocationById.has(knownSessionId)) continue;
+      mutationRevisionBySessionId.delete(knownSessionId);
+      if (mutationRevisionBySessionId.size <= MAX_MUTATION_TOMBSTONES) break;
+    }
   }
 
   function getProject(projectId: string): ProjectState | undefined {
@@ -664,7 +672,7 @@ export function createStateBuilder() {
   }
 
   function applyStatusSnapshot(
-    _sessionIds: string[],
+    sessionIds: string[],
     statusMap: Record<string, { type?: string }>,
     maximumStatusRevision = Number.POSITIVE_INFINITY,
   ) {
@@ -676,6 +684,14 @@ export function createStateBuilder() {
         ),
       ),
     );
+    for (const sessionId of sessionIds) {
+      if (sessionId in statusMap) continue;
+      if ((statusRevisionBySessionId.get(sessionId) ?? 0) > maximumStatusRevision) continue;
+      const entry = findSessionEntry(sessionId);
+      if (!entry?.session.status) continue;
+      const sandbox = state.projects[entry.projectId]?.sandboxes[entry.directory];
+      if (sandbox) sandbox.sessions[sessionId] = { ...entry.session, status: undefined };
+    }
   }
 
   function applyVcsInfo(directory: string, info: { branch: string }) {
@@ -734,6 +750,11 @@ export function createStateBuilder() {
     if (!entry) {
       if (projectId && state.projects[projectId]) {
         pendingStatusBySessionId.set(sessionId, { projectId, status });
+        while (pendingStatusBySessionId.size > MAX_PENDING_STATUSES) {
+          const oldestSessionId = pendingStatusBySessionId.keys().next().value;
+          if (!oldestSessionId) break;
+          pendingStatusBySessionId.delete(oldestSessionId);
+        }
       }
       return null;
     }

@@ -25,4 +25,19 @@ describe('retryReferencedSessionIds', () => {
     ).resolves.toEqual([]);
     expect(load).toHaveBeenCalledTimes(4);
   });
+
+  it('stops before a delayed retry after its continuation becomes stale', async () => {
+    let current = true;
+    const load = vi.fn().mockResolvedValue(['child-a']);
+
+    await expect(
+      retryReferencedSessionIds(['child-a', 'child-b'], load, {
+        shouldContinue: () => current,
+        wait: async () => {
+          current = false;
+        },
+      }),
+    ).resolves.toEqual([]);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
 });

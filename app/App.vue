@@ -5189,20 +5189,30 @@ async function hydrateReferencedSubagents(
   const sessionIds = collectReferencedSubagentSessionIds(rootSessionId);
   if (!directory || sessionIds.length === 0) return [];
 
-  return retryReferencedSessionIds(sessionIds, () => {
-    referencedSubagentHydrationSequence += 1;
-    const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
-    return new Promise<string[]>((resolve) => {
-      pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
-      ge.sendToWorker({
-        type: 'hydrate-referenced-subagents',
-        requestId,
-        rootSessionId,
-        directory,
-        sessionIds,
+  return retryReferencedSessionIds(
+    sessionIds,
+    () => {
+      referencedSubagentHydrationSequence += 1;
+      const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
+      return new Promise<string[]>((resolve) => {
+        pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
+        ge.sendToWorker({
+          type: 'hydrate-referenced-subagents',
+          requestId,
+          rootSessionId,
+          directory,
+          sessionIds,
+        });
       });
-    });
-  });
+    },
+    {
+      shouldContinue: () =>
+        activeBackendKind.value === 'opencode' &&
+        selectedSessionId.value === rootSessionId &&
+        sessionReloadRequestId.value === reloadRequestId &&
+        normalizeDirectory(activeDirectory.value) === directory,
+    },
+  );
 }
 
 function handleReferencedSubagentHydrationResult(
@@ -5226,8 +5236,8 @@ async function fetchDescendantSessionHistories(
     (id) => id !== rootSessionId && allowedSessionIds.value.has(id),
   );
   if (descendantSessionIds.length === 0) return true;
-  const results = await Promise.all(
-    descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId, true)),
+  const results = await mapWithConcurrency(descendantSessionIds, 2, (id) =>
+    fetchHistory(id, true, rootRequestId, rootSessionId, true),
   );
   return results.every(Boolean);
 }
