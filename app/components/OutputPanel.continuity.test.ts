@@ -58,6 +58,15 @@ describe('OutputPanel card continuity', () => {
 
     await nextTick();
 
+    expect(document.querySelectorAll('.thread-block')).toHaveLength(20);
+    expect(document.querySelector('.virtual-scroll-spacer')).toBeNull();
+
+    const panel = document.querySelector('.output-panel-scroll');
+    expect(panel).toBeInstanceOf(HTMLDivElement);
+    panel?.dispatchEvent(new Event('scroll'));
+    await nextTick();
+    await nextTick();
+
     expect(document.querySelectorAll('.thread-block')).toHaveLength(25);
     expect(document.querySelector('.virtual-scroll-spacer')).toBeNull();
     app.unmount();

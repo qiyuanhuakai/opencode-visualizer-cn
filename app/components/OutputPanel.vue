@@ -20,7 +20,7 @@
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
             <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
-              <template v-for="root in visibleRoots" :key="root.id">
+                <template v-for="root in visibleThreadRoots" :key="root.id">
                 <ThreadBlock
                   v-show="!isLoading && shouldRenderRoot(root)"
                   :root="root"
@@ -157,6 +157,20 @@ const visibleRoots = computed(() => {
   return msg.roots.value.filter((root) => root.sessionID === currentSessionId);
 });
 
+const THREAD_BATCH_SIZE = 20;
+const renderedRootLimit = ref(THREAD_BATCH_SIZE);
+const renderableRoots = computed(() => visibleRoots.value.filter(shouldRenderRoot));
+const visibleThreadRoots = computed(() =>
+  renderableRoots.value.slice(-renderedRootLimit.value),
+);
+
+watch(
+  () => props.currentSessionId,
+  () => {
+    renderedRootLimit.value = THREAD_BATCH_SIZE;
+  },
+);
+
 const latestRootId = computed(() => visibleRoots.value.at(-1)?.id ?? '');
 const descriptionChildIdsByRoot = computed(() => {
   const rootSessionId = props.currentSessionId?.trim();
@@ -276,8 +290,18 @@ const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
   onRendered: handleMessageRendered,
 });
 
-function onPanelScroll() {
+async function onPanelScroll(event: Event) {
   emit('scroll');
+  const panel = event.currentTarget;
+  if (!(panel instanceof HTMLDivElement)) return;
+  if (panel.scrollTop > 80 || renderedRootLimit.value >= renderableRoots.value.length) return;
+  const previousScrollHeight = panel.scrollHeight;
+  renderedRootLimit.value = Math.min(
+    renderedRootLimit.value + THREAD_BATCH_SIZE,
+    renderableRoots.value.length,
+  );
+  await nextTick();
+  panel.scrollTop += panel.scrollHeight - previousScrollHeight;
 }
 
 function handleContentClick(event: MouseEvent) {

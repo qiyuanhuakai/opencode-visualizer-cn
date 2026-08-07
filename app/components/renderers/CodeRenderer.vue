@@ -8,10 +8,9 @@
         <div :style="{ height: topPadding + 'px' }" />
         <CodeContent
           v-for="row in visibleRows"
-          :key="`${startRow}-${row.key}`"
+          :key="row.key"
           :html="row.html"
           :variant="viewerVariant"
-          :word-wrap="false"
           class="virtual-row"
         />
         <div :style="{ height: bottomPadding + 'px' }" />
