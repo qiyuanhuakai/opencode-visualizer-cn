@@ -115,6 +115,7 @@ describe('parseOmpSessionLog', () => {
     try {
       await mkdir(sessionDir, { recursive: true });
       await writeFile(path.join(sessionDir, `2026-08-07_${sessionId}.jsonl`), OMP_LOG);
+      await writeFile(path.join(sessionDir, `2026-08-08_${sessionId}-other.jsonl`), KIMI_WIRE);
 
       const turns = await loadAcpSessionTurnMeta('pi', sessionId, { homeDir });
 

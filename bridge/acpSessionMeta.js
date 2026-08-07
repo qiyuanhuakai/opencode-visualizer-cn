@@ -175,7 +175,10 @@ export async function loadAcpSessionTurnMeta(agentId, sessionId, options = {}) {
     const sessionsRoot = path.join(homeDir, agentHome, 'agent', 'sessions');
     const candidates = await findFileRecursive(
       sessionsRoot,
-      (file) => file.endsWith('.jsonl') && path.basename(file).includes(sessionId),
+      (file) => {
+        const name = path.basename(file);
+        return name === `${sessionId}.jsonl` || name.endsWith(`_${sessionId}.jsonl`);
+      },
       2,
     );
     const file = await newestFile(candidates);
