@@ -693,13 +693,14 @@ const userHistory = computed(() => {
   for (const msg of messageRoots.value) {
     if (msg.role !== 'user') continue;
     if (props.sessionParentById?.get(msg.sessionID)) continue;
-    const text = getPartsByType(msg.id, 'text')
-      .filter(
-        (part) =>
-          !part.synthetic && !part.ignored && !/^\s*<system-reminder>/u.test(part.text),
-      )
-      .map((part) => part.text)
-      .join('');
+    let visibleText = '';
+    for (const part of getPartsByType(msg.id, 'text')) {
+      if (part.synthetic || part.ignored) continue;
+      const reminderIndex = part.text.indexOf('<system-reminder>');
+      visibleText += reminderIndex >= 0 ? part.text.slice(0, reminderIndex) : part.text;
+      if (reminderIndex >= 0) break;
+    }
+    const text = visibleText.trim();
     if (!text) continue;
     const agent = 'agent' in msg ? (msg.agent as string | undefined) : undefined;
     const agentOption = agent ? props.agentOptions.find((a) => a.id === agent) : undefined;
