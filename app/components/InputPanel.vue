@@ -688,6 +688,17 @@ function hasHistoryEntryTarget(entry: HistoryEntry) {
 
 const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteMessages();
 
+function stripTerminalSystemReminder(text: string) {
+  const start = text.lastIndexOf('<system-reminder>');
+  if (start < 0) return text;
+  const closingTag = '</system-reminder>';
+  const end = text.indexOf(closingTag, start);
+  if (end < 0) return text;
+  const suffix = text.slice(end + closingTag.length);
+  if (!/^\s*(?:<!--\s*OMO_INTERNAL_[A-Z_]+\s*-->\s*)*$/u.test(suffix)) return text;
+  return text.slice(0, start);
+}
+
 const userHistory = computed(() => {
   const result: HistoryEntry[] = [];
   for (const msg of messageRoots.value) {
@@ -696,9 +707,9 @@ const userHistory = computed(() => {
     let visibleText = '';
     for (const part of getPartsByType(msg.id, 'text')) {
       if (part.synthetic || part.ignored) continue;
-      const reminderIndex = part.text.indexOf('<system-reminder>');
-      visibleText += reminderIndex >= 0 ? part.text.slice(0, reminderIndex) : part.text;
-      if (reminderIndex >= 0) break;
+      const visiblePart = stripTerminalSystemReminder(part.text);
+      visibleText += visiblePart;
+      if (visiblePart !== part.text) break;
     }
     const text = visibleText.trim();
     if (!text) continue;

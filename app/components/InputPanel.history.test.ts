@@ -100,12 +100,18 @@ describe('InputPanel prompt history', () => {
       userMessage(
         'user-4',
         'root',
-        '<system-reminder>\n[BACKGROUND TASK COMPLETED]\ninternal reminder',
+        '<system-reminder>\n[BACKGROUND TASK COMPLETED]\ninternal reminder\n</system-reminder>\n<!-- OMO_INTERNAL_NOREPLY -->',
       ),
       userMessage(
         'user-5',
         'root',
-        'visible before reminder<system-reminder>\ninternal appended reminder',
+        'visible before reminder<system-reminder>\ninternal appended reminder\n</system-reminder>',
+      ),
+      userMessage('user-6', 'root', 'literal <system-reminder> discussion stays visible'),
+      userMessage(
+        'user-7',
+        'root',
+        'balanced <system-reminder>example</system-reminder> with visible suffix',
       ),
     ]);
     const root = mountInputPanel();
@@ -121,5 +127,9 @@ describe('InputPanel prompt history', () => {
     expect(document.body.textContent).not.toContain('internal reminder');
     expect(document.body.textContent).toContain('visible before reminder');
     expect(document.body.textContent).not.toContain('internal appended reminder');
+    expect(document.body.textContent).toContain('literal <system-reminder> discussion stays visible');
+    expect(document.body.textContent).toContain(
+      'balanced <system-reminder>example</system-reminder> with visible suffix',
+    );
   });
 });
