@@ -19,5 +19,9 @@ export function createBackendRequestFence(getActiveBackend: () => BackendKind) {
     return token.generation === generation && token.backend === getActiveBackend();
   }
 
-  return { start, isCurrent };
+  function invalidate() {
+    generation += 1;
+  }
+
+  return { start, isCurrent, invalidate };
 }

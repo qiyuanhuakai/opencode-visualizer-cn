@@ -1953,6 +1953,16 @@ const providerConfigRequestFence = createBackendRequestFence(() => activeBackend
 const providersRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const agentsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const commandsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+watch(
+  activeBackendKind,
+  () => {
+    providerConfigRequestFence.invalidate();
+    providersRequestFence.invalidate();
+    agentsRequestFence.invalidate();
+    commandsRequestFence.invalidate();
+  },
+  { flush: 'sync' },
+);
 let providerLoadingOwner = 0;
 let agentLoadingOwner = 0;
 let commandLoadingOwner = 0;

@@ -25,4 +25,17 @@ describe('createBackendRequestFence', () => {
     await codex.promise;
     expect(fence.isCurrent(codexRequest)).toBe(false);
   });
+
+  it('rejects an original token after an ABA backend transition', () => {
+    let activeBackend: BackendKind = 'codex';
+    const fence = createBackendRequestFence(() => activeBackend);
+    const originalCodexRequest = fence.start();
+
+    activeBackend = 'opencode';
+    fence.invalidate();
+    activeBackend = 'codex';
+    fence.invalidate();
+
+    expect(fence.isCurrent(originalCodexRequest)).toBe(false);
+  });
 });
