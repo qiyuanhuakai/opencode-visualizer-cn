@@ -167,6 +167,7 @@
               ref="inputPanelRef"
               :disabled="connectionState !== 'ready'"
               :current-session-id="selectedSessionId"
+              :session-parent-by-id="sessionParentById"
               :can-send="canSend"
               :agent-options="agentOptions"
               :subagent-options="subagentOptions"

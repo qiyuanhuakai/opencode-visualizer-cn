@@ -556,6 +556,7 @@ const props = defineProps<{
     lineComment?: { path: string; startLine: number; endLine: number; text: string };
   }>;
   currentSessionId?: string;
+  sessionParentById?: ReadonlyMap<string, string | undefined>;
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
@@ -602,7 +603,7 @@ const acceptMime = computed(() => props.attachmentAccept ?? '*/*');
 const { enterToSend } = useSettings();
 
 // --- Input history navigation ---
-const { roots: messageRoots, getTextContent } = useMessages();
+const { roots: messageRoots, getPartsByType } = useMessages();
 const historyOpen = ref(false);
 const favoritesOpen = ref(false);
 
@@ -691,7 +692,11 @@ const userHistory = computed(() => {
   const result: HistoryEntry[] = [];
   for (const msg of messageRoots.value) {
     if (msg.role !== 'user') continue;
-    const text = getTextContent(msg.id);
+    if (props.sessionParentById?.get(msg.sessionID)) continue;
+    const text = getPartsByType(msg.id, 'text')
+      .filter((part) => !part.synthetic && !part.ignored)
+      .map((part) => part.text)
+      .join('');
     if (!text) continue;
     const agent = 'agent' in msg ? (msg.agent as string | undefined) : undefined;
     const agentOption = agent ? props.agentOptions.find((a) => a.id === agent) : undefined;
