@@ -310,8 +310,9 @@ export function applyAcpSessionMeta(
       if (typeof turn.assistantTime === 'number') {
         next.time.created = turn.assistantTime;
       }
-      if (typeof turn.assistantCompletedTime === 'number') {
-        next.time.completed = turn.assistantCompletedTime;
+      const completedTime = turn.assistantCompletedTime ?? turn.assistantTime;
+      if (typeof completedTime === 'number') {
+        next.time.completed = completedTime;
       }
       if (turn.agent) {
         next.agent = turn.agent;
