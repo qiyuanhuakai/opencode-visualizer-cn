@@ -5,8 +5,7 @@ import path from 'node:path';
 // Per-turn metadata recovered from an ACP agent's own session storage.
 // ACP v1 replays carry no per-message timestamps/agent/model, so vis falls
 // back to these files for sessions that predate the frontend's local
-// attribution records. Shape returned to the frontend:
-// { userText, userTime, assistantTime?, model?, agent? }
+// attribution records.
 
 function parseJsonLines(content) {
   const rows = [];
@@ -171,8 +170,9 @@ export async function loadAcpSessionTurnMeta(agentId, sessionId, options = {}) {
     return parseKimiWireLog(await readFile(file, 'utf8'));
   }
 
-  if (agentId === 'oh-my-pi') {
-    const sessionsRoot = path.join(homeDir, '.omp', 'agent', 'sessions');
+  if (agentId === 'pi' || agentId === 'oh-my-pi') {
+    const agentHome = agentId === 'pi' ? '.pi' : '.omp';
+    const sessionsRoot = path.join(homeDir, agentHome, 'agent', 'sessions');
     const candidates = await findFileRecursive(
       sessionsRoot,
       (file) => file.endsWith('.jsonl') && path.basename(file).includes(sessionId),

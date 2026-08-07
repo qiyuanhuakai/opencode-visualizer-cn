@@ -1,5 +1,12 @@
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseKimiWireLog, parseOmpSessionLog } from '../bridge/acpSessionMeta.js';
+import {
+  loadAcpSessionTurnMeta,
+  parseKimiWireLog,
+  parseOmpSessionLog,
+} from '../bridge/acpSessionMeta.js';
 
 // Real shapes captured from kimi-code 0.29.0 wire.jsonl and OMP 17.x session JSONL.
 const KIMI_WIRE = `
@@ -99,5 +106,21 @@ describe('parseOmpSessionLog', () => {
         agent: undefined,
       },
     ]);
+  });
+
+  it('loads Pi session metadata from its native session directory', async () => {
+    const homeDir = await mkdtemp(path.join(tmpdir(), 'vis-pi-meta-'));
+    const sessionId = '019f-pi-session';
+    const sessionDir = path.join(homeDir, '.pi', 'agent', 'sessions', '--repo--');
+    try {
+      await mkdir(sessionDir, { recursive: true });
+      await writeFile(path.join(sessionDir, `2026-08-07_${sessionId}.jsonl`), OMP_LOG);
+
+      const turns = await loadAcpSessionTurnMeta('pi', sessionId, { homeDir });
+
+      expect(turns?.[0]?.assistantCompletedTime).toBe(1784260650437);
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
   });
 });
