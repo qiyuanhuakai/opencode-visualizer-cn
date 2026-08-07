@@ -172,6 +172,8 @@ const THREAD_WINDOW_MAX = 100;
 const renderableRoots = computed(() => visibleRoots.value.filter(shouldRenderRoot));
 const rootWindow = ref(initialProgressiveRootWindow(renderableRoots.value.length, THREAD_BATCH_SIZE));
 let windowShiftInProgress = false;
+let windowShiftQueued = false;
+let windowShiftGeneration = 0;
 const visibleThreadRoots = computed(() =>
   renderableRoots.value.slice(rootWindow.value.start, rootWindow.value.end),
 );
@@ -322,13 +324,17 @@ async function onPanelScroll(event: Event) {
   emit('scroll');
   const panel = event.currentTarget;
   if (!(panel instanceof HTMLDivElement)) return;
-  if (windowShiftInProgress) return;
+  if (windowShiftInProgress) {
+    windowShiftQueued = true;
+    return;
+  }
   const nearTop = panel.scrollTop <= 80 && rootWindow.value.start > 0;
   const nearBottom =
     panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 80 &&
     rootWindow.value.end < renderableRoots.value.length;
   if (!nearTop && !nearBottom) return;
   windowShiftInProgress = true;
+  const shiftGeneration = ++windowShiftGeneration;
   const direction = nearTop ? 'older' : 'newer';
   const anchorRootId = nearTop
     ? visibleThreadRoots.value[0]?.id
@@ -346,6 +352,7 @@ async function onPanelScroll(event: Event) {
   );
   for (const delayMs of [0, 32, 96]) {
     if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    if (shiftGeneration !== windowShiftGeneration) return;
     await nextTick();
     const anchorAfter = contentEl.value?.querySelector<HTMLElement>(
       `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
@@ -355,6 +362,13 @@ async function onPanelScroll(event: Event) {
     }
   }
   windowShiftInProgress = false;
+  const replayQueuedScroll = windowShiftQueued;
+  windowShiftQueued = false;
+  if (props.isFollowing && rootWindow.value.end < renderableRoots.value.length) {
+    void scrollToBottom();
+  } else if (replayQueuedScroll) {
+    panel.dispatchEvent(new Event('scroll'));
+  }
 }
 
 function handleContentClick(event: MouseEvent) {
@@ -415,9 +429,17 @@ onBeforeUnmount(() => {
   fileRefPopupRef.value?.closeFilePopup();
 });
 
-function scrollToBottom(): Promise<void> {
+async function scrollToBottom(): Promise<void> {
+  windowShiftGeneration += 1;
+  windowShiftInProgress = false;
+  windowShiftQueued = false;
+  rootWindow.value = initialProgressiveRootWindow(
+    renderableRoots.value.length,
+    THREAD_WINDOW_MAX,
+  );
+  await nextTick();
   const panel = panelEl.value;
-  if (!panel) return Promise.resolve();
+  if (!panel) return;
 
   if (scrollToBottomFrameId !== null) {
     cancelAnimationFrame(scrollToBottomFrameId);
