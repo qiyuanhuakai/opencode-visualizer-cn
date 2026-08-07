@@ -97,6 +97,11 @@ describe('InputPanel prompt history', () => {
       userMessage('user-1', 'root', 'real user prompt'),
       userMessage('user-2', 'root', 'system injected prompt', true),
       userMessage('user-3', 'child', 'subagent prompt', true),
+      userMessage(
+        'user-4',
+        'root',
+        '<system-reminder>\n[BACKGROUND TASK COMPLETED]\ninternal reminder',
+      ),
     ]);
     const root = mountInputPanel();
 
@@ -108,5 +113,6 @@ describe('InputPanel prompt history', () => {
     expect(document.body.textContent).toContain('real user prompt');
     expect(document.body.textContent).not.toContain('system injected prompt');
     expect(document.body.textContent).not.toContain('subagent prompt');
+    expect(document.body.textContent).not.toContain('internal reminder');
   });
 });

@@ -694,7 +694,10 @@ const userHistory = computed(() => {
     if (msg.role !== 'user') continue;
     if (props.sessionParentById?.get(msg.sessionID)) continue;
     const text = getPartsByType(msg.id, 'text')
-      .filter((part) => !part.synthetic && !part.ignored)
+      .filter(
+        (part) =>
+          !part.synthetic && !part.ignored && !/^\s*<system-reminder>/u.test(part.text),
+      )
       .map((part) => part.text)
       .join('');
     if (!text) continue;
