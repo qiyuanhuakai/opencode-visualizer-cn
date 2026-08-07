@@ -39,6 +39,9 @@ function computeProjectsHash(
         if (!session) continue;
         hash += (session.timeUpdated ?? session.timeCreated ?? 0) & 0xffff;
         hash += (session.timePinned ?? 0) & 0xffff;
+        hash = mixStringIntoHash(hash, session.title ?? '');
+        hash = mixStringIntoHash(hash, session.slug ?? '');
+        hash = mixStringIntoHash(hash, session.status ?? '');
         hash = mixStringIntoHash(hash, String(session.timeArchived ?? ''));
         hash = mixStringIntoHash(hash, session.gitInfo?.root ?? '');
         hash = mixStringIntoHash(hash, session.gitInfo?.branch ?? '');

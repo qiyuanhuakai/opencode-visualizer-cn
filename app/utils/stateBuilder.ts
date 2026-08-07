@@ -636,6 +636,20 @@ export function createStateBuilder() {
     pruneEphemeralChildren();
   }
 
+  function applyStatusSnapshot(
+    sessionIds: string[],
+    statusMap: Record<string, { type?: string }>,
+  ) {
+    const snapshot = { ...statusMap };
+    sessionIds.forEach((sessionId) => {
+      const type = snapshot[sessionId]?.type;
+      if (!type || !isSessionStatus(type)) {
+        snapshot[sessionId] = { type: 'idle' };
+      }
+    });
+    applyStatuses(snapshot);
+  }
+
   function applyVcsInfo(directory: string, info: { branch: string }) {
     const branch = info?.branch?.trim();
     const normalizedDirectory = normalizeDirectory(directory);
@@ -839,6 +853,7 @@ export function createStateBuilder() {
     applySessions,
     applyAuthoritativeSessions,
     applyStatuses,
+    applyStatusSnapshot,
     applyVcsInfo,
     processSessionCreated,
     processSessionUpdated,

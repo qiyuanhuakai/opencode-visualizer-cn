@@ -139,4 +139,26 @@ describe('createStateBuilder regression', () => {
 
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child?.status).toBe('busy');
   });
+
+  it('treats sessions omitted from a directory status snapshot as idle', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'root',
+        projectID: 'p1',
+        title: 'Root',
+        slug: 'root',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+
+    builder.applyStatusSnapshot(['root'], {});
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('idle');
+  });
 });

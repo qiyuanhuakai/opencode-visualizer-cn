@@ -44,6 +44,47 @@ describe('useBackendSessionTrees archive cache invalidation', () => {
     expect(trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions[0]?.archivedAt).toBe(123);
   });
 
+  it('rebuilds TopPanel data immediately when a session returns to idle', async () => {
+    const projects = reactive<Record<string, ProjectState>>({
+      opencode: {
+        id: 'opencode',
+        name: 'OpenCode',
+        worktree: '/repo',
+        sandboxes: {
+          '/repo': {
+            directory: '/repo',
+            name: 'repo',
+            rootSessions: ['session-1'],
+            sessions: {
+              'session-1': {
+                id: 'session-1',
+                title: 'Session',
+                directory: '/repo',
+                status: 'busy',
+                timeUpdated: 1,
+              },
+            },
+          },
+        },
+      },
+    });
+    const trees = useBackendSessionTrees({
+      activeBackendKind: ref('opencode'),
+      projects,
+      pinnedStore: ref({}),
+      deletedSandboxStore: ref({}),
+      homePath: ref('/home/test'),
+      replaceHomePrefix: (path) => path,
+      resolveProjectColor: () => undefined,
+    });
+
+    expect(trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions[0]?.status).toBe('busy');
+    projects.opencode.sandboxes['/repo'].sessions['session-1'].status = 'idle';
+    await nextTick();
+
+    expect(trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions[0]?.status).toBe('idle');
+  });
+
   it('groups Git repositories by project and non-Git folders under Global', () => {
     const projects = reactive<Record<string, ProjectState>>({
       mixed: {

@@ -767,7 +767,10 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
       typeof state.stateBuilder.applySessions
     >[0];
     state.stateBuilder.applySessions(sessions);
-    state.stateBuilder.applyStatuses(asStatusMap(rawStatuses));
+    state.stateBuilder.applyStatusSnapshot(
+      sessions.map((session) => session.id),
+      asStatusMap(rawStatuses),
+    );
 
     const projectIds = new Set<string>();
     const resolvedProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
