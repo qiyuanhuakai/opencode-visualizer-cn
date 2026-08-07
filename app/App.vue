@@ -5228,7 +5228,8 @@ function scheduleDescendantSessionHistoryHydration(
     if (reloadRequestId !== sessionReloadRequestId.value) return;
     if (selectedSessionId.value !== rootSessionId) return;
     void fetchDescendantSessionHistories(rootSessionId, rootRequestId, referencedSessionIds).then(
-      () => {
+      (loaded) => {
+        if (!loaded) return;
         if (reloadRequestId !== sessionReloadRequestId.value) return;
         if (selectedSessionId.value !== rootSessionId) return;
         hydratedDescendantSessionIds.add(rootSessionId);

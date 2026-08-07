@@ -45,6 +45,7 @@ describe('useLiveDescendantHistoryHydration', () => {
   });
 
   it('retries descendants when hydration reports failure', async () => {
+    vi.useFakeTimers();
     const activeBackendKind = ref<'opencode' | 'codex' | 'acp'>('opencode');
     const selectedSessionId = ref('root');
     const allowedSessionIds = ref<ReadonlySet<string>>(new Set(['root', 'child']));
@@ -57,11 +58,9 @@ describe('useLiveDescendantHistoryHydration', () => {
       hydrate,
     });
     await nextTick();
-    activeBackendKind.value = 'acp';
-    await nextTick();
-    activeBackendKind.value = 'opencode';
-    await nextTick();
+    await vi.advanceTimersByTimeAsync(250);
 
     expect(hydrate).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });
