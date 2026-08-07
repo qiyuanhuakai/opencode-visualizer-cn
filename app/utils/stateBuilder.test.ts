@@ -208,4 +208,30 @@ describe('createStateBuilder regression', () => {
 
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root).toBeUndefined();
   });
+
+  it('materializes a session snapshot after an earlier status-only event', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    const snapshotRevision = builder.getMutationRevision();
+
+    builder.processSessionStatus('root', 'busy', 'p1');
+    builder.applySessionSnapshot(
+      [
+        {
+          id: 'root',
+          projectID: 'p1',
+          title: 'Root',
+          slug: 'root',
+          directory: '/repo',
+          version: '1',
+          time: { created: 1, updated: 1 },
+        },
+      ],
+      snapshotRevision,
+    );
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('busy');
+  });
 });

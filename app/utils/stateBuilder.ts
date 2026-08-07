@@ -728,7 +728,6 @@ export function createStateBuilder() {
     projectId?: string,
   ): string | null {
     if (!isSessionStatus(status)) return null;
-    recordSessionMutation(sessionId);
     statusRevision += 1;
     statusRevisionBySessionId.set(sessionId, statusRevision);
     const entry = findSessionEntry(sessionId, projectId);
