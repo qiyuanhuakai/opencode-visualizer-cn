@@ -54,7 +54,7 @@ describe('virtual code row geometry', () => {
     ]);
   });
 
-  it('uses measured row height and disables virtualization for wrapped code', () => {
+  it('uses measured row height and keeps large wrapped code bounded', () => {
     expect(
       calculateVirtualRowWindow({
         totalRows: 10_000,
@@ -64,7 +64,7 @@ describe('virtual code row geometry', () => {
         overscanRows: 10,
       }),
     ).toEqual({ start: 990, end: 1030 });
-    expect(shouldVirtualizeCodeRows(10_000, 500, true)).toBe(false);
+    expect(shouldVirtualizeCodeRows(10_000, 500, true)).toBe(true);
     expect(shouldVirtualizeCodeRows(10_000, 500, false)).toBe(true);
   });
 });

@@ -3,9 +3,9 @@ export type CodeRowRect = { top: number; height: number; right: number };
 export function shouldVirtualizeCodeRows(
   rowCount: number,
   threshold: number,
-  wraps: boolean,
+  _wraps: boolean,
 ) {
-  return rowCount > threshold && !wraps;
+  return rowCount > threshold;
 }
 
 export function calculateVirtualRowWindow(params: {

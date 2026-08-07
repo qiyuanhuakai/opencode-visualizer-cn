@@ -11,6 +11,7 @@
           :key="`${startRow}-${row.key}`"
           :html="row.html"
           :variant="viewerVariant"
+          :word-wrap="false"
           class="virtual-row"
         />
         <div :style="{ height: bottomPadding + 'px' }" />
@@ -82,6 +83,7 @@ const editingLine = ref<number | null>(null);
 const rowRects = ref<Map<number, CodeRowRect>>(new Map());
 const dragStartX = ref(0);
 const dragStartY = ref(0);
+let pendingSelectionNavigationLine: number | null = null;
 
 const selectedRange = computed<{ start: number; end: number } | null>(() => {
   if (anchorLine.value == null || selectedEndLine.value == null) return null;
@@ -238,6 +240,9 @@ function updateRowRects() {
     const measuredHeight = rows[0]?.getBoundingClientRect().height;
     if (measuredHeight && Math.abs(measuredHeight - rowHeight.value) > 0.5) {
       rowHeight.value = measuredHeight;
+      if (pendingSelectionNavigationLine != null) {
+        scrollToVirtualLine(pendingSelectionNavigationLine);
+      }
       void nextTick(updateRowRects);
       return;
     }
@@ -252,6 +257,8 @@ function updateRowRects() {
     };
   });
   rowRects.value = buildAbsoluteRowRects(firstRenderedLine, visibleRowRects);
+  applyVisibleLineHighlights();
+  pendingSelectionNavigationLine = null;
 }
 
 function getLineFromMouse(e: MouseEvent): number | null {
@@ -378,7 +385,7 @@ function parseLineSpecs(raw?: string): Array<{ start: number; end: number }> {
   return specs;
 }
 
-function applyLineSelection() {
+function applyVisibleLineHighlights() {
   const scrollContent = getScrollContentEl();
   if (!scrollContent) return;
   clearLineHighlights();
@@ -398,16 +405,39 @@ function applyLineSelection() {
     }
   }
 
+}
+
+function applyLineSelection() {
+  const specs = parseLineSpecs(props.lines);
   const firstStart = specs[0]?.start;
-  if (!firstStart) return;
-  if (useVirtualScroll.value && viewerBodyEl.value) {
-    viewerBodyEl.value.scrollTop = Math.max(
-      0,
-      (firstStart - 1) * rowHeight.value - viewerBodyEl.value.clientHeight / 2,
-    );
+  if (!firstStart) {
+    applyVisibleLineHighlights();
     return;
   }
+  if (useVirtualScroll.value && viewerBodyEl.value) {
+    pendingSelectionNavigationLine = firstStart;
+    scrollToVirtualLine(firstStart);
+    void nextTick(() => {
+      updateRowRects();
+      applyVisibleLineHighlights();
+    });
+    return;
+  }
+  applyVisibleLineHighlights();
+  const scrollContent = getScrollContentEl();
+  if (!scrollContent) return;
+  const rows = Array.from(scrollContent.querySelectorAll<HTMLElement>('.code-row'));
   rows[Math.min(firstStart, rows.length) - 1]?.scrollIntoView({ block: 'center', inline: 'nearest' });
+}
+
+function scrollToVirtualLine(line: number) {
+  if (!viewerBodyEl.value) return;
+  const targetScrollTop = Math.max(
+    0,
+    (line - 1) * rowHeight.value - viewerBodyEl.value.clientHeight / 2,
+  );
+  scrollTop.value = targetScrollTop;
+  viewerBodyEl.value.scrollTop = targetScrollTop;
 }
 
 watch(

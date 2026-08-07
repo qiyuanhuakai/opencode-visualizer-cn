@@ -19,8 +19,10 @@ const rootClass = computed(() => {
   const shouldWrapSoft =
     v === 'message' ||
     v === 'term' ||
-    props.wordWrap ||
-    (floatingPreviewWordWrap.value && (v === 'code' || v === 'diff'));
+    props.wordWrap === true ||
+    (props.wordWrap === undefined &&
+      floatingPreviewWordWrap.value &&
+      (v === 'code' || v === 'diff'));
   return {
     'is-diff': v === 'diff',
     'is-message': v === 'message',
