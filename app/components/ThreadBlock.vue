@@ -159,6 +159,7 @@ const props = defineProps<{
   isRevertedPreview: boolean;
   currentSessionId?: string;
   sessionHistoryMetaById?: Record<string, SessionHistoryMeta>;
+  descriptionChildSessionIds?: string[];
   resolveAgentColor?: (agent?: string) => string;
   resolveModelMeta?: (modelPath?: string) => ModelMeta | undefined;
   computeContextPercent?: (
@@ -231,11 +232,20 @@ const subagentSessions = computed(() => {
   const currentSessionId = props.currentSessionId?.trim();
   if (!currentSessionId) return [] as Array<{ sessionId: string; label: string }>;
   const threadParts = threadMessages.value.flatMap((message) => msg.getParts(message.id));
-  return resolveThreadSubagentSessions(
+  const exact = resolveThreadSubagentSessions(
     threadParts,
     currentSessionId,
     props.sessionHistoryMetaById,
   );
+  const seen = new Set(exact.map(({ sessionId }) => sessionId));
+  const described = (props.descriptionChildSessionIds ?? []).flatMap((sessionId) => {
+    if (seen.has(sessionId)) return [];
+    const meta = props.sessionHistoryMetaById?.[sessionId];
+    return meta?.parentID === currentSessionId
+      ? [{ sessionId, label: meta.label || sessionId }]
+      : [];
+  });
+  return [...exact, ...described];
 });
 
 function hasTextContent(message?: MessageInfo): boolean {
