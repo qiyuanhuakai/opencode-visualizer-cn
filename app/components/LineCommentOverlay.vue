@@ -39,6 +39,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { buildVisibleRangeHighlightStyles } from '../utils/virtualCodeRows';
 
 const { t } = useI18n();
 
@@ -80,18 +81,7 @@ const editRangeLabel = computed(() => {
 const rangeHighlightStyles = computed(() => {
   if (!props.selectedRange) return [];
   const { start, end } = props.selectedRange;
-  const styles: Array<Record<string, string>> = [];
-  for (let i = start; i <= end; i++) {
-    const rect = props.rowRects.get(i);
-    if (!rect) continue;
-    styles.push({
-      top: `${rect.top}px`,
-      left: '0',
-      right: '0',
-      height: `${rect.height}px`,
-    });
-  }
-  return styles;
+  return buildVisibleRangeHighlightStyles(props.rowRects, start, end);
 });
 
 const editCardStyle = computed(() => {
