@@ -133,17 +133,28 @@ export function createStateBuilder() {
   let statusRevision = 0;
   const mutationRevisionBySessionId = new Map<string, number>();
   let mutationRevision = 0;
-  const MAX_MUTATION_TOMBSTONES = 10_000;
+  const MAX_REVISION_ENTRIES = 10_000;
   const MAX_PENDING_STATUSES = 2_000;
 
   function recordSessionMutation(sessionId: string) {
     mutationRevision += 1;
+    mutationRevisionBySessionId.delete(sessionId);
     mutationRevisionBySessionId.set(sessionId, mutationRevision);
-    if (mutationRevisionBySessionId.size <= MAX_MUTATION_TOMBSTONES) return;
-    for (const knownSessionId of mutationRevisionBySessionId.keys()) {
-      if (sessionLocationById.has(knownSessionId)) continue;
-      mutationRevisionBySessionId.delete(knownSessionId);
-      if (mutationRevisionBySessionId.size <= MAX_MUTATION_TOMBSTONES) break;
+    while (mutationRevisionBySessionId.size > MAX_REVISION_ENTRIES) {
+      const oldestSessionId = mutationRevisionBySessionId.keys().next().value;
+      if (!oldestSessionId) break;
+      mutationRevisionBySessionId.delete(oldestSessionId);
+    }
+  }
+
+  function recordStatusRevision(sessionId: string) {
+    statusRevision += 1;
+    statusRevisionBySessionId.delete(sessionId);
+    statusRevisionBySessionId.set(sessionId, statusRevision);
+    while (statusRevisionBySessionId.size > MAX_REVISION_ENTRIES) {
+      const oldestSessionId = statusRevisionBySessionId.keys().next().value;
+      if (!oldestSessionId) break;
+      statusRevisionBySessionId.delete(oldestSessionId);
     }
   }
 
@@ -198,11 +209,6 @@ export function createStateBuilder() {
     });
     Array.from(authoritativeChildSessionIds).forEach((sessionId) => {
       if (!knownSessionIds.has(sessionId)) authoritativeChildSessionIds.delete(sessionId);
-    });
-    Array.from(statusRevisionBySessionId).forEach(([sessionId]) => {
-      if (!knownSessionIds.has(sessionId) && !pendingStatusBySessionId.has(sessionId)) {
-        statusRevisionBySessionId.delete(sessionId);
-      }
     });
   }
 
@@ -327,7 +333,6 @@ export function createStateBuilder() {
     ephemeralLastActiveAt.delete(sessionId);
     authoritativeChildSessionIds.delete(sessionId);
     pendingStatusBySessionId.delete(sessionId);
-    statusRevisionBySessionId.delete(sessionId);
     updateRootSessionOrder(sandbox);
     return entry.projectId;
   }
@@ -676,14 +681,14 @@ export function createStateBuilder() {
     statusMap: Record<string, { type?: string }>,
     maximumStatusRevision = Number.POSITIVE_INFINITY,
   ) {
-    applyStatuses(
-      Object.fromEntries(
-        Object.entries(statusMap).filter(
-          ([sessionId]) =>
-            (statusRevisionBySessionId.get(sessionId) ?? 0) <= maximumStatusRevision,
-        ),
+    const applicableStatuses = Object.fromEntries(
+      Object.entries(statusMap).filter(
+        ([sessionId]) =>
+          (statusRevisionBySessionId.get(sessionId) ?? 0) <= maximumStatusRevision,
       ),
     );
+    Object.keys(applicableStatuses).forEach(recordStatusRevision);
+    applyStatuses(applicableStatuses);
     for (const sessionId of sessionIds) {
       if (sessionId in statusMap) continue;
       if ((statusRevisionBySessionId.get(sessionId) ?? 0) > maximumStatusRevision) continue;
@@ -732,6 +737,7 @@ export function createStateBuilder() {
 
   function processSessionDeleted(sessionId: string, projectId?: string): string | null {
     recordSessionMutation(sessionId);
+    recordStatusRevision(sessionId);
     pendingStatusBySessionId.delete(sessionId);
     const changed = removeSession(sessionId, projectId);
     pruneEphemeralChildren();
@@ -744,11 +750,11 @@ export function createStateBuilder() {
     projectId?: string,
   ): string | null {
     if (!isSessionStatus(status)) return null;
-    statusRevision += 1;
-    statusRevisionBySessionId.set(sessionId, statusRevision);
+    recordStatusRevision(sessionId);
     const entry = findSessionEntry(sessionId, projectId);
     if (!entry) {
       if (projectId && state.projects[projectId]) {
+        pendingStatusBySessionId.delete(sessionId);
         pendingStatusBySessionId.set(sessionId, { projectId, status });
         while (pendingStatusBySessionId.size > MAX_PENDING_STATUSES) {
           const oldestSessionId = pendingStatusBySessionId.keys().next().value;
