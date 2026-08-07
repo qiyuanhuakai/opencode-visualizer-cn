@@ -32,4 +32,13 @@ describe('progressive root window', () => {
       ),
     ).toEqual({ start: 1, end: 101 });
   });
+
+  it('resets an out-of-range window after revert shrinks the renderable roots', () => {
+    const previous = Array.from({ length: 250 }, (_, index) => `root-${index}`);
+    const next = previous.slice(0, 101);
+
+    expect(
+      preserveProgressiveRootWindowOnAppend(previous, next, { start: 230, end: 250 }, 100),
+    ).toEqual({ start: 81, end: 101 });
+  });
 });

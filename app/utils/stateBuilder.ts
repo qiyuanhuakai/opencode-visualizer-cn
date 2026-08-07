@@ -692,6 +692,7 @@ export function createStateBuilder() {
     for (const sessionId of sessionIds) {
       if (sessionId in statusMap) continue;
       if ((statusRevisionBySessionId.get(sessionId) ?? 0) > maximumStatusRevision) continue;
+      recordStatusRevision(sessionId);
       const entry = findSessionEntry(sessionId);
       if (!entry?.session.status) continue;
       const sandbox = state.projects[entry.projectId]?.sandboxes[entry.directory];

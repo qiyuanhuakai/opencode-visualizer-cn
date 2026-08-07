@@ -31,7 +31,11 @@ export function preserveProgressiveRootWindowOnAppend(
   const appended =
     nextRootIds.length >= previousRootIds.length &&
     previousRootIds.every((rootId, index) => nextRootIds[index] === rootId);
-  if (!appended || window.end !== previousRootIds.length) return window;
+  if (!appended) {
+    const size = Math.min(maxSize, Math.max(1, window.end - window.start));
+    return { start: Math.max(0, nextRootIds.length - size), end: nextRootIds.length };
+  }
+  if (window.end !== previousRootIds.length) return window;
   const end = nextRootIds.length;
   return { start: Math.max(window.start, end - maxSize), end };
 }
