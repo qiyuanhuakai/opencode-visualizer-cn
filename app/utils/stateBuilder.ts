@@ -125,6 +125,10 @@ export function createStateBuilder() {
   const ephemeralLastSeenAt = new Map<string, number>();
   const ephemeralLastActiveAt = new Map<string, number>();
   const authoritativeChildSessionIds = new Set<string>();
+  const pendingStatusBySessionId = new Map<
+    string,
+    { projectId: string; status: SessionStatusType }
+  >();
 
   function getProject(projectId: string): ProjectState | undefined {
     return state.projects[projectId];
@@ -300,6 +304,7 @@ export function createStateBuilder() {
     ephemeralLastSeenAt.delete(sessionId);
     ephemeralLastActiveAt.delete(sessionId);
     authoritativeChildSessionIds.delete(sessionId);
+    pendingStatusBySessionId.delete(sessionId);
     updateRootSessionOrder(sandbox);
     return entry.projectId;
   }
@@ -418,6 +423,9 @@ export function createStateBuilder() {
     const incomingParentId = info.parentID?.trim() || undefined;
     const previous = existing?.session;
     const parentID = incomingParentId ?? previous?.parentID;
+    const pendingStatus = pendingStatusBySessionId.get(info.id);
+    const replayedStatus =
+      pendingStatus?.projectId === resolvedProjectId ? pendingStatus.status : undefined;
     const hasRevert = Object.prototype.hasOwnProperty.call(info, 'revert');
     const revert = hasRevert ? info.revert : previous?.revert;
 
@@ -441,7 +449,7 @@ export function createStateBuilder() {
       title: info.title ?? previous?.title,
       slug: info.slug ?? previous?.slug,
       parentID,
-      status: previous?.status,
+      status: replayedStatus ?? previous?.status,
       directory: sandbox.directory,
       timeCreated: info.time?.created ?? previous?.timeCreated,
       timeUpdated: info.time?.updated ?? previous?.timeUpdated,
@@ -481,6 +489,7 @@ export function createStateBuilder() {
       projectId: resolvedProjectId,
       directory: sandbox.directory,
     });
+    pendingStatusBySessionId.delete(info.id);
     updateRootSessionOrder(sandbox);
 
     if (next.parentID) {
@@ -662,6 +671,7 @@ export function createStateBuilder() {
   }
 
   function processSessionDeleted(sessionId: string, projectId?: string): string | null {
+    pendingStatusBySessionId.delete(sessionId);
     const changed = removeSession(sessionId, projectId);
     pruneEphemeralChildren();
     return changed;
@@ -674,7 +684,13 @@ export function createStateBuilder() {
   ): string | null {
     if (!isSessionStatus(status)) return null;
     const entry = findSessionEntry(sessionId, projectId);
-    if (!entry) return null;
+    if (!entry) {
+      if (projectId && state.projects[projectId]) {
+        pendingStatusBySessionId.set(sessionId, { projectId, status });
+      }
+      return null;
+    }
+    pendingStatusBySessionId.delete(sessionId);
     if (entry.session.status === status) return null;
     entry.session.status = status;
     if (status === 'busy' || status === 'retry') {

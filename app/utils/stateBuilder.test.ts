@@ -118,4 +118,25 @@ describe('createStateBuilder regression', () => {
     );
     now.mockRestore();
   });
+
+  it('replays a status event that arrives before session creation', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+
+    expect(builder.processSessionStatus('child', 'busy', 'p1')).toBeNull();
+    builder.processSessionCreated({
+      id: 'child',
+      projectID: 'p1',
+      parentID: 'root',
+      title: 'Running child',
+      slug: 'running-child',
+      directory: '/repo',
+      version: '1',
+      time: { created: 1, updated: 1 },
+    } satisfies SessionInfo);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child?.status).toBe('busy');
+  });
 });
