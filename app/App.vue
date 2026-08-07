@@ -668,6 +668,7 @@ import {
   type SessionHistoryMeta,
 } from './utils/threadSubagents';
 import { retryReferencedSessionIds } from './utils/retryReferencedSessions';
+import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
 import { normalizeToolName } from './utils/toolNames';
 import {
   extractFileRead as extractToolFileRead,
@@ -1390,7 +1391,6 @@ const {
   pauseTracking,
   resetFollow,
   resumeTracking,
-  resumeFollow,
   notifyContentChange,
 } = useAutoScroller(outputPanelContainerEl, outputPanelScrollMode, {
   bottomThresholdPx: FOLLOW_THRESHOLD_PX,
@@ -1399,8 +1399,13 @@ const {
   smoothOnInitialFollow: false,
 });
 
-function handleOutputPanelResumeFollow() {
-  resumeFollow();
+async function handleOutputPanelResumeFollow() {
+  await resumeOutputFollowing({
+    pauseTracking,
+    enableFollow,
+    scrollToBottom: () => outputPanelRef.value?.scrollToBottom(),
+    resumeTracking,
+  });
 }
 
 function handleOutputPanelMessageRendered() {
