@@ -6,7 +6,7 @@
       class="subagent-entry"
       :class="{ 'subagent-entry-separator': index > 0 }"
     >
-      <MessageViewer :code="entry.text" lang="markdown" :theme="theme" @rendered="handleRendered" />
+      <MessageViewer :code="entry.text" lang="markdown" :theme="theme" :streaming="isEntryStreaming(entry)" @rendered="handleRendered" />
     </div>
   </div>
 </template>
@@ -19,6 +19,7 @@ import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 export type SubagentEntry = {
   id: string;
   text: string;
+  completed?: boolean;
 };
 
 withDefaults(
@@ -35,6 +36,10 @@ const floatingWindow = useFloatingWindow();
 
 function handleRendered() {
   floatingWindow.notifyContentChange();
+}
+
+function isEntryStreaming(entry: SubagentEntry): boolean {
+  return !entry.completed;
 }
 </script>
 

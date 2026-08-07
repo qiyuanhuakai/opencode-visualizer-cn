@@ -63,7 +63,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
     manager.clearCloseTimer(resolvedSessionId);
     activeMessageIdBySession.set(resolvedSessionId, messageId);
 
-    manager.upsertEntry(resolvedSessionId, partId, messageText);
+    manager.upsertEntry(resolvedSessionId, partId, messageText, !!part.time?.end);
 
     const messageInfo = manager.acc.getMessage(messageId)?.info;
     let modelLabel: string | undefined;
@@ -107,6 +107,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
         if (resolvedSessionId === selectedSessionId.value) return;
 
         if (packet.info.time.completed || packet.info.error) {
+          manager.markSessionCompleted(resolvedSessionId);
           manager.scheduleClose(resolvedSessionId);
         }
       },
@@ -117,6 +118,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
 
   return {
     reset,
+    entriesBySession: manager.entriesBySession,
     bindScope: subscribe,
   };
 }

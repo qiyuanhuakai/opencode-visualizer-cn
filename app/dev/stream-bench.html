@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss:; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; media-src 'self' blob:;"
+    />
+    <title>Stream Bench (dev-only benchmark)</title>
+    <script type="module" src="./stream-bench.ts"></script>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0d1117;
+      }
+      #app {
+        padding: 12px;
+      }
+      .driver-status {
+        font-family: monospace;
+        font-size: 12px;
+        color: #8b949e;
+        padding: 6px 8px;
+        margin-bottom: 8px;
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+      }
+      .renderer-host {
+        height: 600px;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        overflow: hidden;
+        background: #0d1117;
+        color: #c9d1d9;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 13px;
+        line-height: 1.2;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+  </body>
+</html>

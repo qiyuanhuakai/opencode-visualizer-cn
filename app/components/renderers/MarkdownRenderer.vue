@@ -1,10 +1,17 @@
 <template>
   <div
-    v-if="state.html"
+    v-if="state.html || streamingActive"
     class="markdown-renderer message-viewer min-h-[1.2em] leading-[inherit] text-[inherit]"
     :class="{ 'no-copy': !copyButton }"
   >
     <div
+      v-if="streamingActive"
+      ref="streamingContainerEl"
+      class="message-content leading-[inherit] text-[inherit]"
+      @click="handleContentClick"
+    ></div>
+    <div
+      v-else
       class="message-content leading-[inherit] text-[inherit]"
       v-html="state.html"
       @click="handleContentClick"
@@ -13,12 +20,13 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, reactive, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import {
   RenderCancelledError,
   startRenderWorkerHtml,
 } from '../../utils/workerRenderer';
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
+import { useStreamingMarkdown } from '../../composables/useStreamingMarkdown';
 
 const props = defineProps<{
   code?: string;
@@ -31,6 +39,7 @@ const props = defineProps<{
   copiedLabel?: string;
   copyCodeAriaLabel?: string;
   copyMarkdownAriaLabel?: string;
+  streaming?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -44,6 +53,46 @@ const state = reactive({
 
 const copiedResetTimers = new Map<HTMLElement, number>();
 let cancelActiveRender: (() => void) | null = null;
+
+// Streaming is opt-in and only ever applies to the code-driven markdown path.
+// When active, useStreamingMarkdown owns the container node below; the v-html
+// branch is unmounted so the two never manage the same DOM.
+const streamingContainerEl = ref<HTMLElement | null>(null);
+const streamingActive = computed(
+  () => props.streaming === true && props.html == null && (props.lang ?? 'text') === 'markdown',
+);
+
+function renderStreamingMarkdown(markdown: string, theme: string): Promise<string> {
+  return startRenderWorkerHtml({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    code: markdown,
+    lang: 'markdown',
+    theme,
+    gutterMode: 'none',
+    files: props.files,
+    copyButtonLabel: props.copyButtonLabel,
+    copiedLabel: props.copiedLabel,
+    copyCodeAriaLabel: props.copyCodeAriaLabel,
+    copyMarkdownAriaLabel: props.copyMarkdownAriaLabel,
+  }).promise;
+}
+
+useStreamingMarkdown({
+  text: () => props.code ?? '',
+  theme: () => props.theme ?? DEFAULT_SYNTAX_THEME,
+  enabled: streamingActive,
+  render: renderStreamingMarkdown,
+  containerRef: streamingContainerEl,
+  onApplied: () => emit('rendered'),
+  renderContext: () =>
+    [
+      (props.files ?? []).join(''),
+      props.copyButtonLabel ?? '',
+      props.copiedLabel ?? '',
+      props.copyCodeAriaLabel ?? '',
+      props.copyMarkdownAriaLabel ?? '',
+    ].join('\u0000'),
+});
 
 function resetCopyButtonState(codeBlock: HTMLElement) {
   codeBlock.classList.remove('copied');
@@ -163,9 +212,18 @@ watch(
     props.copiedLabel,
     props.copyCodeAriaLabel,
     props.copyMarkdownAriaLabel,
+    props.streaming,
   ],
   () => {
     if (props.html != null) return;
+    if (streamingActive.value) {
+      // The streaming composable drives the container; make sure no in-flight
+      // default-path render can clobber it.
+      state.requestId += 1;
+      cancelActiveRender?.();
+      cancelActiveRender = null;
+      return;
+    }
     startRender();
   },
   { immediate: true },

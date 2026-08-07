@@ -135,7 +135,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     activeReasoningMessageIdByKey.set(reasoningKey, messageId);
     lastReasoningMessageIdByKey.set(reasoningKey, messageId);
 
-    manager.upsertEntry(resolvedSessionId, partId, messageText);
+    manager.upsertEntry(resolvedSessionId, partId, messageText, !!part.time?.end);
 
     const messageInfo = manager.acc.getMessage(messageId)?.info;
     const isSubagent = resolvedSessionId !== selectedSessionId.value;
@@ -183,6 +183,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
         const messageId = packet.info.id;
 
         if (packet.info.time.completed || packet.info.error) {
+          manager.markSessionCompleted(resolvedSessionId);
           markReasoningFinished(resolvedSessionId, messageId);
           scheduleReasoningClose(resolvedSessionId);
         }
@@ -204,6 +205,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     updateReasoningExpiry,
     scheduleReasoningClose,
     reset,
+    entriesBySession: manager.entriesBySession,
     bindScope: subscribe,
   };
 }

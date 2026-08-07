@@ -49,6 +49,7 @@ const props = defineProps<{
   copyButton?: boolean;
   mode?: MessageMode;
   allowModeToggle?: boolean;
+  streaming?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -98,6 +99,7 @@ const markdownProps = computed(() => ({
   copiedLabel: t('render.copied'),
   copyCodeAriaLabel: t('render.copyCodeAria'),
   copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
+  streaming: props.streaming,
 }));
 
 const codeProps = computed(() => ({

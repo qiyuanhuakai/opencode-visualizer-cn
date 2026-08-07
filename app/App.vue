@@ -8420,7 +8420,7 @@ function handleOpenHistoryReasoning(payload: { part: ReasoningPart }) {
   fw.open(key, {
     component: ReasoningContent,
     props: {
-      entries: [{ id: payload.part.id, text: payload.part.text }],
+      entries: [{ id: payload.part.id, text: payload.part.text, completed: !!payload.part.time?.end }],
       theme: DEFAULT_SYNTAX_THEME,
     },
     title: t('app.windowTitles.thought'),
