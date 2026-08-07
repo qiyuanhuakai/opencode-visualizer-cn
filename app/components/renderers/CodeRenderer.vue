@@ -39,6 +39,11 @@ import LineCommentOverlay from '../LineCommentOverlay.vue';
 import { type CodeRenderParams, useCodeRender } from '../../utils/useCodeRender';
 import { type StreamCodeRenderParams, useStreamCodeRender } from '../../utils/useStreamCodeRender';
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
+import {
+  buildAbsoluteRowRects,
+  findLineAtY,
+  type CodeRowRect,
+} from '../../utils/virtualCodeRows';
 
 const { t } = useI18n();
 
@@ -70,7 +75,7 @@ const anchorLine = ref<number | null>(null);
 const selectedEndLine = ref<number | null>(null);
 const isSelecting = ref(false);
 const editingLine = ref<number | null>(null);
-const rowRects = ref<Array<{ top: number; height: number; right: number }>>([]);
+const rowRects = ref<Array<CodeRowRect | undefined>>([]);
 const dragStartX = ref(0);
 const dragStartY = ref(0);
 
@@ -208,7 +213,8 @@ function updateRowRects() {
   }
   const containerRect = root.getBoundingClientRect();
   const rows = Array.from(scrollContent.querySelectorAll<HTMLElement>('.code-row'));
-  rowRects.value = rows.map((row) => {
+  const firstRenderedLine = useVirtualScroll.value ? startRow.value : 0;
+  const visibleRowRects = rows.map((row) => {
     const rect = row.getBoundingClientRect();
     return {
       top: rect.top - containerRect.top,
@@ -216,6 +222,7 @@ function updateRowRects() {
       right: rect.right - containerRect.left,
     };
   });
+  rowRects.value = buildAbsoluteRowRects(firstRenderedLine, visibleRowRects);
 }
 
 function getLineFromMouse(e: MouseEvent): number | null {
@@ -223,13 +230,7 @@ function getLineFromMouse(e: MouseEvent): number | null {
   if (!root) return null;
   const containerRect = root.getBoundingClientRect();
   const y = e.clientY - containerRect.top;
-  for (let i = 0; i < rowRects.value.length; i++) {
-    const rect = rowRects.value[i];
-    if (y >= rect.top && y < rect.top + rect.height) {
-      return useVirtualScroll.value ? startRow.value + i : i;
-    }
-  }
-  return null;
+  return findLineAtY(rowRects.value, y);
 }
 
 function isScrollbarClick(e: MouseEvent): boolean {
@@ -399,6 +400,8 @@ function onWindowResize() {
 function onScroll() {
   if (useVirtualScroll.value && viewerBodyEl.value) {
     scrollTop.value = viewerBodyEl.value.scrollTop;
+    void nextTick(updateRowRects);
+    return;
   }
   updateRowRects();
 }
@@ -409,7 +412,6 @@ onMounted(() => {
   window.addEventListener('resize', onWindowResize);
   const root = viewerBodyEl.value;
   if (root) {
-    root.addEventListener('scroll', onScroll, { passive: true });
     resizeObserver = new ResizeObserver(() => {
       updateRowRects();
       if (useVirtualScroll.value) {
@@ -430,10 +432,6 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', onWindowResize);
   document.removeEventListener('mousemove', onDocMouseMove);
   document.removeEventListener('mouseup', onDocMouseUp);
-  const root = viewerBodyEl.value;
-  if (root) {
-    root.removeEventListener('scroll', onScroll);
-  }
   if (resizeObserver) {
     resizeObserver.disconnect();
     resizeObserver = null;

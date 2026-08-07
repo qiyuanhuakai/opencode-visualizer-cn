@@ -45,7 +45,7 @@ const { t } = useI18n();
 const props = defineProps<{
   editingLine: number | null;
   selectedRange: { start: number; end: number } | null;
-  rowRects: Array<{ top: number; height: number; right: number }>;
+  rowRects: Array<{ top: number; height: number; right: number } | undefined>;
   containerWidth: number;
 }>();
 
