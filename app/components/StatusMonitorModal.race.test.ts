@@ -94,12 +94,16 @@ function clickTab(root: HTMLElement, label: string) {
   button?.click();
 }
 
-function mountStatusMonitor() {
+function mountStatusMonitor(options: {
+  backendKind?: 'codex' | 'opencode';
+  codexApi?: ReturnType<typeof useCodexApi>;
+} = {}) {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const open = ref(false);
   const sessionId = ref<string | undefined>('thread-1');
-  const backendKind = ref<'codex' | 'opencode'>('codex');
+  const backendKind = ref<'codex' | 'opencode'>(options.backendKind ?? 'codex');
+  const codexApi = options.codexApi ?? useCodexApi();
   const app = createApp(
     defineComponent({
       setup() {
@@ -109,7 +113,7 @@ function mountStatusMonitor() {
             preload: false,
             activeBackendKind: backendKind.value,
             sessionId: sessionId.value,
-            codexApi: useCodexApi(),
+            codexApi,
           });
       },
     }),
@@ -209,6 +213,49 @@ describe('StatusMonitorModal stale request isolation', () => {
     await vi.waitFor(() => expect(root.textContent).toContain('2.0.0'));
     expect(root.textContent).not.toContain('1.0.0');
     expect(root.textContent).not.toContain('Loading...');
+    app.unmount();
+  });
+
+  it('does not let a stale Codex connection replace OpenCode plugins', async () => {
+    const codexApi = {
+      status: ref('connected'),
+      plugins: ref([
+        {
+          id: 'codex-plugin',
+          name: 'Codex plugin',
+          isAccessible: true,
+          isEnabled: true,
+          state: 'installed',
+        },
+      ]),
+      accountRateLimits: ref(null),
+      pluginMarketplaceCount: ref(0),
+      refreshAccount: vi.fn(async () => undefined),
+      refreshAccountRateLimits: vi.fn(async () => undefined),
+      refreshPlugins: vi.fn(async () => undefined),
+    } as unknown as ReturnType<typeof useCodexApi>;
+    registryMock.getAdapter.mockReturnValue(
+      createBackend({
+        getPluginStatus: async () => [
+          {
+            id: 'opencode-plugin',
+            name: 'OpenCode plugin',
+            enabled: true,
+            installed: true,
+            accessible: true,
+          },
+        ],
+      }),
+    );
+
+    const { app, root } = mountStatusMonitor({ backendKind: 'opencode', codexApi });
+    await vi.waitFor(() => expect(root.textContent).toContain('0.145.0'));
+    clickTab(root, 'Plugins');
+    await nextTick();
+
+    expect(root.textContent).toContain('OpenCode plugin');
+    expect(root.textContent).not.toContain('Codex plugin');
+    expect(codexApi.refreshPlugins).not.toHaveBeenCalled();
     app.unmount();
   });
 });

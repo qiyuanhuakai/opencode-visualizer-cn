@@ -337,6 +337,7 @@ async function ensureLoaded() {
 }
 
 async function refreshCodexStatus(requestId?: number) {
+  if (props.activeBackendKind !== 'codex') return;
   if (codexApi.status.value !== 'connected') return;
   try {
     await Promise.allSettled([

@@ -173,6 +173,17 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
 }
 
 describe('useBackendActivation', () => {
+  it.each(['opencode', 'acp'] as const)(
+    'disconnects the reactive Codex client before activating %s',
+    async (backendKind) => {
+      const harness = createHarness(backendKind);
+
+      await harness.activation.startInitialization();
+
+      expect(harness.codexApi.disconnect).toHaveBeenCalledOnce();
+    },
+  );
+
   it('resets shared OpenCode state and runs the shared activation sequence', async () => {
     const harness = createHarness('opencode');
 
@@ -191,6 +202,7 @@ describe('useBackendActivation', () => {
     expect(harness.selectedModel.value).toBe('');
     expect(harness.calls).toEqual([
       'disconnectAcpBackend',
+      'codex.disconnect',
       'disconnectCodexBackend',
       'setActiveBackendKind:opencode',
       'ge.connect',
@@ -247,6 +259,7 @@ describe('useBackendActivation', () => {
     await vi.waitFor(() => expect(harness.calls).toContain('hydrateActiveWorktreeResources'));
     expect(harness.calls).toEqual([
       'ge.disconnect',
+      'codex.disconnect',
       'disconnectCodexBackend',
       'configureAcpBackend',
       'setActiveBackendKind:acp',

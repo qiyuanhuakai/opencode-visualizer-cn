@@ -171,6 +171,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
 
   async function activateOpenCode() {
     options.disconnectAcpBackend();
+    options.codexApi.disconnect();
     options.disconnectCodexBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
@@ -217,6 +218,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   async function activateAcp() {
     try {
       options.ge.disconnect();
+      options.codexApi.disconnect();
       options.disconnectCodexBackend();
       options.activeBackendKind.value = 'acp';
       options.configureAcpBackend({

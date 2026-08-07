@@ -660,6 +660,7 @@ import {
 import { applyPinHierarchyTransition, buildPinHierarchy } from './utils/pinHierarchy';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
+import { createBackendRequestFence } from './utils/backendRequestFence';
 import { resolveThreadSubagentSessions } from './utils/threadSubagents';
 import { normalizeToolName } from './utils/toolNames';
 import {
@@ -1941,6 +1942,8 @@ const loginUsername = ref('');
 const loginPassword = ref('');
 const loginRequiresAuth = ref(false);
 const activeBackendKind = ref<BackendKind>('opencode');
+const providerConfigRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+const providersRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
 const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
@@ -3887,18 +3890,21 @@ async function handleProvidersChanged() {
 }
 
 async function fetchGlobalProviderConfig() {
+  const request = providerConfigRequestFence.start();
+  const activeBackend = getBackendAdapter(request.backend);
   try {
-    const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
+    const getGlobalConfig = requireBackendMethod(activeBackend.getGlobalConfig, 'global config');
     const data = (await getGlobalConfig()) as ProviderConfigState;
+    if (!providerConfigRequestFence.isCurrent(request)) return;
     providerConfig.value = data ?? null;
     if (
-      activeBackendCapabilities.value.providerConfig &&
-      activeBackendCapabilities.value.imageAttachmentsOnly
+      activeBackend.capabilities.providerConfig &&
+      activeBackend.capabilities.imageAttachmentsOnly
     ) {
       await codexApi.refreshConfig();
     }
   } catch (error) {
-    log('Provider config load failed', error);
+    if (providerConfigRequestFence.isCurrent(request)) log('Provider config load failed', error);
   }
 }
 
@@ -4750,14 +4756,17 @@ async function bootstrapSelections() {
 }
 
 async function fetchProviders(force = false) {
-  if (providersLoading.value || (!force && providersLoaded.value)) return;
+  if ((!force && providersLoading.value) || (!force && providersLoaded.value)) return;
+  const request = providersRequestFence.start();
+  const activeBackend = getBackendAdapter(request.backend);
   providersLoading.value = true;
   if (force) providersLoaded.value = false;
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
+    const listProviders = requireBackendMethod(activeBackend.listProviders, 'providers');
     const data = (await listProviders()) as ProviderResponse;
+    if (!providersRequestFence.isCurrent(request)) return;
     providers.value = Array.isArray(data.all) ? data.all : [];
     connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
@@ -4835,9 +4844,9 @@ async function fetchProviders(force = false) {
     providersLoaded.value = true;
     log('providers fetch done');
   } catch (error) {
-    log('Provider load failed', error);
+    if (providersRequestFence.isCurrent(request)) log('Provider load failed', error);
   } finally {
-    providersLoading.value = false;
+    if (providersRequestFence.isCurrent(request)) providersLoading.value = false;
   }
 }
 
