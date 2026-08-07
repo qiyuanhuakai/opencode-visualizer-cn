@@ -1950,6 +1950,8 @@ const loginRequiresAuth = ref(false);
 const activeBackendKind = ref<BackendKind>('opencode');
 const providerConfigRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const providersRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+const agentsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+const commandsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
 const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
@@ -4857,13 +4859,14 @@ async function fetchProviders(force = false) {
 }
 
 async function fetchAgents() {
-  if (agentsLoading.value) return;
+  const request = agentsRequestFence.start();
   agentsLoading.value = true;
   try {
     if (activeBackendKind.value === 'codex') {
       if (codexApi.connected.value) {
         await codexApi.refreshCollaborationModes();
       }
+      if (!agentsRequestFence.isCurrent(request)) return;
       let options: typeof agentOptions.value = codexApi.collaborationModes.value.map((mode) => ({
         id: mode.mode,
         label: mode.name,
@@ -4890,6 +4893,7 @@ async function fetchAgents() {
     }
     const listAgents = requireBackendMethod(backend().listAgents, 'agents');
     const data = (await listAgents()) as AgentInfo[];
+    if (!agentsRequestFence.isCurrent(request)) return;
     agents.value = Array.isArray(data) ? data : [];
     const options = agents.value
       .filter((agent) => agent.mode === 'primary' || agent.mode === 'all')
@@ -4917,25 +4921,26 @@ async function fetchAgents() {
       }
     }
   } catch (error) {
-    log('Agent load failed', error);
+    if (agentsRequestFence.isCurrent(request)) log('Agent load failed', error);
   } finally {
-    agentsLoading.value = false;
+    if (agentsRequestFence.isCurrent(request)) agentsLoading.value = false;
   }
 }
 
 async function fetchCommands(directory?: string) {
-  if (commandsLoading.value) return;
+  const request = commandsRequestFence.start();
   commandsLoading.value = true;
   try {
     const listCommands = requireBackendMethod(backend().listCommands, 'commands');
     const data = (await listCommands(directory)) as CommandInfo[];
+    if (!commandsRequestFence.isCurrent(request)) return;
     const list = Array.isArray(data) ? data : [];
     list.sort((a, b) => a.name.localeCompare(b.name));
     commands.value = list;
   } catch (error) {
-    log('Command load failed', error);
+    if (commandsRequestFence.isCurrent(request)) log('Command load failed', error);
   } finally {
-    commandsLoading.value = false;
+    if (commandsRequestFence.isCurrent(request)) commandsLoading.value = false;
   }
 }
 
