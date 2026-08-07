@@ -45,7 +45,7 @@ const { t } = useI18n();
 const props = defineProps<{
   editingLine: number | null;
   selectedRange: { start: number; end: number } | null;
-  rowRects: Array<{ top: number; height: number; right: number } | undefined>;
+  rowRects: ReadonlyMap<number, { top: number; height: number; right: number }>;
   containerWidth: number;
 }>();
 
@@ -68,7 +68,7 @@ const editLine = computed(() => {
 const editRect = computed(() => {
   const line = editLine.value;
   if (line == null) return null;
-  return props.rowRects[line] ?? null;
+  return props.rowRects.get(line) ?? null;
 });
 
 const editRangeLabel = computed(() => {
@@ -82,7 +82,7 @@ const rangeHighlightStyles = computed(() => {
   const { start, end } = props.selectedRange;
   const styles: Array<Record<string, string>> = [];
   for (let i = start; i <= end; i++) {
-    const rect = props.rowRects[i];
+    const rect = props.rowRects.get(i);
     if (!rect) continue;
     styles.push({
       top: `${rect.top}px`,

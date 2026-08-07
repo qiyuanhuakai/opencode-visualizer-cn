@@ -3,21 +3,16 @@ export type CodeRowRect = { top: number; height: number; right: number };
 export function buildAbsoluteRowRects(
   firstRenderedLine: number,
   visibleRowRects: CodeRowRect[],
-): Array<CodeRowRect | undefined> {
-  const rows: Array<CodeRowRect | undefined> = [];
+): Map<number, CodeRowRect> {
+  const rows = new Map<number, CodeRowRect>();
   visibleRowRects.forEach((rect, index) => {
-    rows[firstRenderedLine + index] = rect;
+    rows.set(firstRenderedLine + index, rect);
   });
   return rows;
 }
 
-export function findLineAtY(
-  rowRects: Array<CodeRowRect | undefined>,
-  y: number,
-): number | null {
-  for (let line = 0; line < rowRects.length; line += 1) {
-    const rect = rowRects[line];
-    if (!rect) continue;
+export function findLineAtY(rowRects: ReadonlyMap<number, CodeRowRect>, y: number): number | null {
+  for (const [line, rect] of rowRects) {
     if (y >= rect.top && y < rect.top + rect.height) return line;
   }
   return null;

@@ -75,7 +75,7 @@ const anchorLine = ref<number | null>(null);
 const selectedEndLine = ref<number | null>(null);
 const isSelecting = ref(false);
 const editingLine = ref<number | null>(null);
-const rowRects = ref<Array<CodeRowRect | undefined>>([]);
+const rowRects = ref<Map<number, CodeRowRect>>(new Map());
 const dragStartX = ref(0);
 const dragStartY = ref(0);
 
@@ -208,7 +208,7 @@ function updateRowRects() {
   const root = rootEl.value;
   const scrollContent = getScrollContentEl();
   if (!root || !scrollContent) {
-    rowRects.value = [];
+    rowRects.value = new Map();
     return;
   }
   const containerRect = root.getBoundingClientRect();
