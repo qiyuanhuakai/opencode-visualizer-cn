@@ -1,12 +1,39 @@
 import { loadAcpSessionTurnMeta } from './acpSessionMeta.js';
 import { writeJsonHttpResponse } from './bridgeHttp.js';
 
-export function readJsonBody(request) {
+const JSON_BODY_LIMIT = 2 * 1024 * 1024;
+
+export function readJsonBody(request, limit = JSON_BODY_LIMIT) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    request.on('data', (chunk) => chunks.push(chunk));
-    request.on('error', reject);
-    request.on('end', () => {
+    let size = 0;
+    let settled = false;
+    const cleanup = () => {
+      request.off('data', onData);
+      request.off('error', onError);
+      request.off('end', onEnd);
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      request.destroy?.();
+      reject(error);
+    };
+    const onData = (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buffer.length;
+      if (size > limit) {
+        fail(new Error(`JSON request body exceeded ${limit} bytes.`));
+        return;
+      }
+      chunks.push(buffer);
+    };
+    const onError = (error) => fail(error);
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       const text = Buffer.concat(chunks).toString('utf8').trim();
       if (!text) {
         resolve({});
@@ -17,7 +44,10 @@ export function readJsonBody(request) {
       } catch (error) {
         reject(error);
       }
-    });
+    };
+    request.on('data', onData);
+    request.on('error', onError);
+    request.on('end', onEnd);
   });
 }
 
