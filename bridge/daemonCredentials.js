@@ -5,6 +5,14 @@ const SECRET_OPTIONS = new Map([
   ['--upstream-token', 'upstreamAuthorization'],
 ]);
 
+export function assertRequiredDaemonCredentials(requiredSecrets = [], credentials = {}) {
+  if (requiredSecrets.some((name) => typeof credentials[name] !== 'string')) {
+    throw new Error(
+      'vis_bridge restart requires the original direct token options; use token files or environment variables for unattended restarts.',
+    );
+  }
+}
+
 export function prepareDaemonLaunch(serverArgs, credentials = {}) {
   const launchArgs = [];
   const secrets = {};

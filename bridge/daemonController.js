@@ -4,6 +4,7 @@ import { request } from 'node:http';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import {
+  assertRequiredDaemonCredentials,
   fingerprintDaemonCredentials,
   prepareDaemonLaunch,
 } from './daemonCredentials.js';
@@ -249,11 +250,7 @@ export function createDaemonController(options = {}) {
     stop: () => withDaemonLock(paths, () => stopUnlocked()),
     restart: (serverArgs, credentials) => withDaemonLock(paths, async () => {
       const previous = await readDaemonState(paths);
-      if (serverArgs.length === 0 && (previous?.requiredSecrets?.length ?? 0) > 0) {
-        throw new Error(
-          'vis_bridge restart requires the original direct token options; use token files or environment variables for unattended restarts.',
-        );
-      }
+      assertRequiredDaemonCredentials(previous?.requiredSecrets, credentials);
       const launchArgs = serverArgs.length > 0 ? serverArgs : previous?.launchArgs ?? [];
       await stopUnlocked(previous);
       return startUnlocked(launchArgs, credentials);

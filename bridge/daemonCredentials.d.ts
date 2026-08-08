@@ -1,3 +1,11 @@
+export function assertRequiredDaemonCredentials(
+  requiredSecrets: readonly string[] | undefined,
+  credentials?: {
+    readonly bridgeToken?: string;
+    readonly upstreamAuthorization?: string;
+  },
+): void;
+
 export function prepareDaemonLaunch(
   serverArgs: readonly string[],
   credentials?: {

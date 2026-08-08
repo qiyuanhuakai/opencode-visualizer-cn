@@ -5,7 +5,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createDaemonController } from '../bridge/daemonController.js';
-import { createDaemonPaths } from '../bridge/daemonState.js';
+import { createDaemonPaths, writeDaemonState } from '../bridge/daemonState.js';
 
 class StuckDaemonChild extends EventEmitter {
   pid = 999_999;
@@ -112,6 +112,37 @@ describe('daemonController', () => {
       expect(outcome).toBe('rejected');
       expect(child.disconnect).toHaveBeenCalledOnce();
       expect(child.unref).toHaveBeenCalledOnce();
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects restart arguments that omit required credentials before stopping the daemon', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-daemon-controller-test-'));
+    const paths = createDaemonPaths({ VIS_BRIDGE_STATE_DIR: directory });
+    await writeDaemonState(paths, {
+      instanceId: 'required-credential-test',
+      pid: process.pid,
+      state: 'running',
+      controlPort: 1,
+      controlToken: 'control-token',
+      failures: [],
+      startedAt: new Date().toISOString(),
+      launchArgs: [],
+      requiredSecrets: ['VIS_BRIDGE_TOKEN'],
+      credentialFingerprint: 'fingerprint',
+      logPath: paths.logPath,
+    });
+    const controller = createDaemonController({
+      paths,
+      stdout: { write: vi.fn() },
+      stderr: { write: vi.fn() },
+    });
+
+    try {
+      await expect(controller.restart(['--port', '9000'])).rejects.toThrow(
+        'requires the original direct token options',
+      );
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
