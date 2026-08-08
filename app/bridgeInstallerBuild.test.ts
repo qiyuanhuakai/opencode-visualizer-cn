@@ -73,10 +73,13 @@ describe('vis_bridge installer packaging', () => {
   it('stops an existing daemon before native package upgrade or removal', () => {
     const linuxScript = createLinuxMaintainerScript();
     const macScript = createMacPreinstallScript();
-    expect(linuxScript).toContain('/usr/bin/vis_bridge stop');
-    expect(linuxScript).toContain("pkill -TERM -f '^/usr/bin/vis_bridge([[:space:]]|$)'");
-    expect(macScript).toContain('/usr/local/bin/vis_bridge stop');
-    expect(macScript).toContain("pkill -TERM -f '^/usr/local/bin/vis_bridge([[:space:]]|$)'");
+    expect(linuxScript).not.toContain('/usr/bin/vis_bridge stop');
+    expect(linuxScript).toContain('/usr/bin/readlink');
+    expect(linuxScript).toContain('/proc/[0-9]*/exe');
+    expect(linuxScript).toContain('/bin/kill -TERM');
+    expect(macScript).not.toContain('/usr/local/bin/vis_bridge stop');
+    expect(macScript).toContain('/usr/sbin/lsof');
+    expect(macScript).toContain('/bin/kill -TERM');
 
     const paths = createVisBridgeInstallerPaths('/workspace', {
       version: 'v1.2.3',
@@ -84,7 +87,13 @@ describe('vis_bridge installer packaging', () => {
       arch: 'x64',
     });
     const script = createWindowsInstallerScript(paths);
+    expect(script).toContain('!include "LogicLib.nsh"');
     const stopCommand = 'nsExec::ExecToStack \'"$INSTDIR\\vis_bridge.exe" stop\'';
+    expect(script).not.toContain('0 +6');
+    expect(script).toContain('stop_existing_install:');
+    expect(script).toContain('continue_install:');
+    expect(script).toContain('stop_existing_uninstall:');
+    expect(script).toContain('continue_uninstall:');
     expect(script.indexOf(stopCommand)).toBeGreaterThanOrEqual(0);
     expect(script.indexOf(stopCommand)).toBeLessThan(script.indexOf('File /oname=vis_bridge.exe'));
     expect(script.lastIndexOf(stopCommand)).toBeLessThan(script.indexOf('Delete "$INSTDIR\\vis_bridge.exe"'));

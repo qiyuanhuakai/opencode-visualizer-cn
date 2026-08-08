@@ -167,6 +167,7 @@ export function createWindowsInstallerScript(paths) {
   const removePathScript = path.join(paths.workspacePath, 'remove-path.ps1');
   return [
     '!include "MUI2.nsh"',
+    '!include "LogicLib.nsh"',
     '!include "WinMessages.nsh"',
     'Unicode True',
     'Name "Vis Bridge"',
@@ -179,7 +180,7 @@ export function createWindowsInstallerScript(paths) {
     '!insertmacro MUI_UNPAGE_INSTFILES',
     '!insertmacro MUI_LANGUAGE "English"',
     'Section "Install"',
-    ...windowsStopDaemonLines(),
+    ...windowsStopDaemonLines('install'),
     '  SetOutPath "$INSTDIR"',
     `  File /oname=vis_bridge.exe "${createNsiPath(paths.binaryPath)}"`,
     `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
@@ -194,7 +195,7 @@ export function createWindowsInstallerScript(paths) {
     '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
     'SectionEnd',
     'Section "Uninstall"',
-    ...windowsStopDaemonLines(),
+    ...windowsStopDaemonLines('uninstall'),
     '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\remove-path.ps1" "$INSTDIR"\'',
     '  Delete "$INSTDIR\\vis_bridge.exe"',
     '  Delete "$INSTDIR\\remove-path.ps1"',
