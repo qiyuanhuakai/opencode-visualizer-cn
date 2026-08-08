@@ -5,6 +5,10 @@ export function detachedProcessOptions() {
 }
 
 export function signalProcessTree(child, signal) {
+  if (process.platform === 'win32' && child.pid) {
+    void stopWindowsProcessTree(child.pid, signal === 'SIGKILL');
+    return true;
+  }
   if (process.platform !== 'win32' && child.pid) {
     try {
       process.kill(-child.pid, signal);
@@ -16,17 +20,23 @@ export function signalProcessTree(child, signal) {
 
 export async function forceStopProcessTree(pid) {
   if (process.platform === 'win32') {
-    await new Promise((resolve) => {
-      const killer = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-      killer.once('error', resolve);
-      killer.once('exit', resolve);
-    });
+    await stopWindowsProcessTree(pid, true);
     return;
   }
   try {
     process.kill(-pid, 'SIGKILL');
   } catch {}
+}
+
+function stopWindowsProcessTree(pid, force) {
+  return new Promise((resolve) => {
+    const args = ['/PID', String(pid), '/T'];
+    if (force) args.push('/F');
+    const killer = spawn('taskkill', args, {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    killer.once('error', resolve);
+    killer.once('exit', resolve);
+  });
 }
