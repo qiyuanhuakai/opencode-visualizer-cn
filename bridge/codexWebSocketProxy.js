@@ -9,6 +9,9 @@ import {
   writeHttpResponse,
 } from './bridgeHttp.js';
 
+const UPSTREAM_HANDSHAKE_TIMEOUT_MS = 10_000;
+const UPSTREAM_HEADER_LIMIT = 64 * 1024;
+
 function connectRawSocket(targetUrl) {
   const port = Number(targetUrl.port || (targetUrl.protocol === 'wss:' ? 443 : 80));
   const host = targetUrl.hostname;
@@ -35,13 +38,15 @@ function buildUpstreamHandshake(targetUrl, authorization) {
   ];
   if (authorization) headers.push(`Authorization: ${authorization}`);
   headers.push('', '');
-  return headers.join('\r\n');
+  return { text: headers.join('\r\n'), key };
 }
 
-function connectUpstreamWebSocket(target, authorization) {
+export function connectUpstreamWebSocket(target, authorization, options = {}) {
   const targetUrl = new URL(target);
   const upstream = connectRawSocket(targetUrl);
   const handshake = buildUpstreamHandshake(targetUrl, authorization);
+  const handshakeTimeoutMs = options.handshakeTimeoutMs ?? UPSTREAM_HANDSHAKE_TIMEOUT_MS;
+  const maxHeaderBytes = options.maxHeaderBytes ?? UPSTREAM_HEADER_LIMIT;
 
   return new Promise((resolve, reject) => {
     let buffer = Buffer.alloc(0);
@@ -51,34 +56,73 @@ function connectUpstreamWebSocket(target, authorization) {
     const fail = (error) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       upstream.destroy();
       reject(error instanceof Error ? error : new Error(String(error)));
     };
 
     const onData = (chunk) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      const headerEnd = buffer.indexOf('\r\n\r\n');
-      if (headerEnd === -1) return;
+      const prefixLength = Math.min(chunk.length, maxHeaderBytes + 4 - buffer.length);
+      const candidate = Buffer.concat([buffer, chunk.subarray(0, prefixLength)]);
+      const headerEnd = candidate.indexOf('\r\n\r\n');
+      if (headerEnd === -1) {
+        if (candidate.length > maxHeaderBytes) {
+          fail(new Error(`Codex upstream WebSocket headers exceeded ${maxHeaderBytes} bytes.`));
+          return;
+        }
+        buffer = candidate;
+        return;
+      }
 
-      const headerText = buffer.subarray(0, headerEnd).toString('utf8');
-      const firstLine = headerText.split('\r\n')[0] ?? '';
-      if (!firstLine.includes(' 101 ')) {
+      const headerLines = candidate.subarray(0, headerEnd).toString('utf8').split('\r\n');
+      const firstLine = headerLines.shift() ?? '';
+      if (!/^HTTP\/1\.1 101(?:\s|$)/u.test(firstLine)) {
         fail(new Error(`Codex upstream rejected WebSocket handshake: ${firstLine}`));
+        return;
+      }
+      const responseHeaders = new Map();
+      for (const line of headerLines) {
+        const separator = line.indexOf(':');
+        if (separator <= 0) continue;
+        responseHeaders.set(line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim());
+      }
+      const upgrade = responseHeaders.get('upgrade')?.toLowerCase();
+      const connection = responseHeaders
+        .get('connection')
+        ?.split(',')
+        .map((value) => value.trim().toLowerCase());
+      const accept = responseHeaders.get('sec-websocket-accept');
+      if (
+        upgrade !== 'websocket' ||
+        !connection?.includes('upgrade') ||
+        accept !== createWebSocketAccept(handshake.key)
+      ) {
+        fail(new Error('Codex upstream returned an invalid WebSocket handshake.'));
         return;
       }
 
       settled = true;
+      clearTimeout(timeout);
       upstream.off('data', onData);
       upstream.off('error', fail);
-      const head = buffer.subarray(headerEnd + 4);
+      const head = Buffer.concat([
+        candidate.subarray(headerEnd + 4),
+        chunk.subarray(prefixLength),
+      ]);
       resolve({ socket: upstream, head });
     };
 
     const sendHandshake = () => {
       if (handshakeSent) return;
       handshakeSent = true;
-      upstream.write(handshake);
+      upstream.write(handshake.text);
     };
+
+    const timeout = setTimeout(
+      () => fail(new Error('Codex upstream WebSocket handshake timed out.')),
+      handshakeTimeoutMs,
+    );
+    timeout.unref?.();
 
     upstream.once('connect', sendHandshake);
     upstream.once('secureConnect', sendHandshake);
