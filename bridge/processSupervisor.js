@@ -150,8 +150,14 @@ export function createProcessSupervisor(options = {}) {
       if (readinessIntervalMs > 0 && attempt + 1 < readinessAttempts) await delay(readinessIntervalMs);
     }
     if (status.state === 'starting') {
+      const readinessError = stderr.trim() || `${service.name} did not become ready.`;
       status.state = 'error';
-      status.error = stderr.trim() || `${service.name} did not become ready.`;
+      status.error = readinessError;
+      await stopProcessTree(child, { graceMs: STOP_GRACE_MS });
+      if (children.get(service.id) === child) children.delete(service.id);
+      status.owned = false;
+      delete status.pid;
+      status.error = readinessError;
     }
   }
 
