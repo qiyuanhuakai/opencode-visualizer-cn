@@ -1,11 +1,7 @@
 import { spawn } from 'node:child_process';
-import {
-  BRIDGE_CLIENT_METHODS,
-  createAcpProcessStatus,
-  formatAcpProcessError,
-  sameAcpLaunch,
-} from './acpProcessState.js';
+import { createAcpProcessStatus, formatAcpProcessError, sameAcpLaunch } from './acpProcessState.js';
 import { createAcpProcessEntry, stopAcpChild, waitForStableAcpStartup } from './acpProcessLifecycle.js';
+import { createAcpStdoutForwarder } from './acpProcessProtocol.js';
 import { detachedProcessOptions } from './processTree.js';
 
 export function createAcpProcessManager(options = {}) {
@@ -13,6 +9,8 @@ export function createAcpProcessManager(options = {}) {
   const handleClientRequest = options.handleClientRequest;
   const entries = new Map();
   const statuses = new Map();
+  const releases = new Map();
+  const forwardStdout = createAcpStdoutForwarder({ entries, handleClientRequest });
   let configuredAgents = [];
 
   function getStatus() {
@@ -30,71 +28,25 @@ export function createAcpProcessManager(options = {}) {
     entry.status.connected = false;
   }
 
-  async function handleStdoutMessage(entry, message, line) {
-    handleClientRequest?.observeAgentMessage?.(message, { agentId: entry.agent.id });
-    if (typeof message.method !== 'string' && message.id !== undefined && message.id !== null) {
-      const pending = entry.pendingAgentResponses.get(message.id);
-      if (pending) {
-        entry.pendingAgentResponses.delete(message.id);
-        if (pending.method === 'initialize' && message.result !== undefined) {
-          entry.initializeResult = message.result;
-        }
-        if (entry.client && pending.generation === entry.clientGeneration) {
-          entry.client.send(JSON.stringify({ ...message, id: pending.originalId }));
-        }
-        return;
-      }
-    }
-    if (
-      !handleClientRequest ||
-      typeof message.method !== 'string' ||
-      !('id' in message) ||
-      !BRIDGE_CLIENT_METHODS.has(message.method)
-    ) {
-      entry.client?.send(line);
-      return;
-    }
-    try {
-      const result = await handleClientRequest(message, { agentId: entry.agent.id });
-      entry.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result })}\n`);
-    } catch (error) {
-      entry.child.stdin.write(
-        `${JSON.stringify({
-          jsonrpc: '2.0',
-          id: message.id,
-          error: {
-            code: -32603,
-            message: error instanceof Error ? error.message : String(error),
-          },
-        })}\n`,
-      );
-    }
+  function releaseAgent(agentId) {
+    const pending = releases.get(agentId) ?? Promise.resolve();
+    const release = pending.then(() => handleClientRequest?.releaseAgent?.(agentId));
+    releases.set(agentId, release);
+    const clear = () => {
+      if (releases.get(agentId) === release) releases.delete(agentId);
+    };
+    void release.then(clear, clear);
+    return release;
   }
 
-  function forwardStdout(entry, chunk) {
-    entry.stdoutBuffer += String(chunk);
-    while (true) {
-      const newline = entry.stdoutBuffer.indexOf('\n');
-      if (newline < 0) return;
-      const line = entry.stdoutBuffer.slice(0, newline).replace(/\r$/u, '');
-      entry.stdoutBuffer = entry.stdoutBuffer.slice(newline + 1);
-      if (!line) continue;
-      let message;
-      try {
-        message = JSON.parse(line);
-      } catch {
-        entry.status.droppedFrames += 1;
-        continue;
-      }
-      entry.stdoutQueue = entry.stdoutQueue
-        .then(() => handleStdoutMessage(entry, message, line))
-        .catch(() => {
-          entry.status.droppedFrames += 1;
-        });
-    }
+  function releaseEntry(entry) {
+    entry.releasePromise ??= releaseAgent(entry.agent.id);
+    return entry.releasePromise;
   }
 
   async function startAgent(agent) {
+    await releases.get(agent.id);
+    handleClientRequest?.resumeAgent?.(agent.id);
     const status = statuses.get(agent.id) ?? createAcpProcessStatus(agent);
     statuses.set(agent.id, status);
     status.state = 'starting';
@@ -127,6 +79,7 @@ export function createAcpProcessManager(options = {}) {
       if (entries.get(agent.id) !== entry) return;
       entries.delete(agent.id);
       detach(entry, true);
+      void releaseEntry(entry);
       status.owned = false;
       delete status.pid;
       if (status.state === 'stopping') {
@@ -145,6 +98,7 @@ export function createAcpProcessManager(options = {}) {
       child.once('error', (error) => {
         if (entries.get(agent.id) !== entry) return;
         entries.delete(agent.id);
+        void releaseEntry(entry);
         status.state = 'error';
         status.owned = false;
         delete status.pid;
@@ -161,10 +115,9 @@ export function createAcpProcessManager(options = {}) {
   }
 
   async function stopEntry(entry, nextState = 'stopped') {
-    await options.handleClientRequest?.releaseAgent?.(entry.agent.id);
     entry.status.state = 'stopping';
     detach(entry, true);
-    await stopAcpChild(entry.child);
+    await Promise.all([releaseEntry(entry), stopAcpChild(entry.child)]);
     if (entries.get(entry.agent.id) !== entry) return;
     entries.delete(entry.agent.id);
     entry.status.state = nextState;
@@ -261,6 +214,7 @@ export function createAcpProcessManager(options = {}) {
 
   async function stopAll() {
     await Promise.all([...entries.values()].map((entry) => stopEntry(entry)));
+    await Promise.allSettled(releases.values());
   }
 
   return { reconcile, attach, getStatus, stopAll };
