@@ -74,4 +74,37 @@ describe('acpTerminalManager', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('escalates descendants after the terminal leader exits on SIGTERM', { timeout: 10_000 }, async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-terminal-leader-exit-'));
+    const pidPath = path.join(directory, 'descendant.pid');
+    const manager = createAcpTerminalManager();
+    const script = `
+      const { spawn } = require('node:child_process');
+      const { writeFileSync } = require('node:fs');
+      const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      writeFileSync(process.argv[1], String(child.pid));
+      setInterval(() => {}, 1000);
+    `;
+    let descendantPid: number | undefined;
+
+    try {
+      await manager.create({ command: process.execPath, args: ['-e', script, pidPath] });
+      await vi.waitFor(async () => {
+        descendantPid = Number.parseInt(await readFile(pidPath, 'utf8'), 10);
+        expect(descendantPid).toBeGreaterThan(0);
+      });
+      await manager.stopAll();
+
+      expect(() => process.kill(descendantPid!, 0)).toThrow();
+    } finally {
+      if (descendantPid) {
+        try {
+          process.kill(descendantPid, 'SIGKILL');
+        } catch {}
+      }
+      await manager.stopAll();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

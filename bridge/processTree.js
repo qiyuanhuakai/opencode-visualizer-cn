@@ -44,10 +44,53 @@ function waitForProcessExit(child, timeoutMs) {
   });
 }
 
+function isPosixProcessGroupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error && typeof error === 'object' && error.code === 'EPERM');
+  }
+}
+
+function waitForPosixProcessGroupExit(pid, timeoutMs) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+    const check = () => {
+      if (!isPosixProcessGroupAlive(pid)) {
+        resolve(true);
+        return;
+      }
+      if (Date.now() >= deadline) {
+        resolve(false);
+        return;
+      }
+      setTimeout(check, 25);
+    };
+    check();
+  });
+}
+
 export async function stopProcessTree(child, options = {}) {
   const graceMs = options.graceMs ?? 1_500;
   const forceMs = options.forceMs ?? 3_000;
-  signalProcessTree(child, 'SIGTERM');
+  if (process.platform === 'win32' && child.pid) {
+    await stopWindowsProcessTree(child.pid, false);
+  } else {
+    signalProcessTree(child, 'SIGTERM');
+  }
+  if (process.platform !== 'win32' && child.pid) {
+    if (await waitForPosixProcessGroupExit(child.pid, graceMs)) {
+      await waitForProcessExit(child, forceMs);
+      return;
+    }
+    await forceStopProcessTree(child.pid);
+    if (await waitForPosixProcessGroupExit(child.pid, forceMs)) {
+      await waitForProcessExit(child, forceMs);
+      return;
+    }
+    throw new Error(`Process tree did not stop (pid ${child.pid}).`);
+  }
   if (await waitForProcessExit(child, graceMs)) return;
   if (child.pid) await forceStopProcessTree(child.pid);
   else signalProcessTree(child, 'SIGKILL');
