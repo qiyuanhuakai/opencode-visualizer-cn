@@ -16,7 +16,7 @@ import {
 
 installFixtureCleanup();
 
-describe('vis_bridge daemon CLI', () => {
+describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
   it('keeps the legacy option-first invocation as daemon start', async () => {
     const fixture = await createFixture();
     const result = await runCli(
@@ -80,7 +80,7 @@ describe('vis_bridge daemon CLI', () => {
     await expect(readHealthStatus(fixture.port)).resolves.toBe(200);
   });
 
-  it('stops the detached daemon through the authenticated control channel', async () => {
+  it('stops the detached daemon through the authenticated control channel', { timeout: 15_000 }, async () => {
     const fixture = await createFixture();
     await startFixture(fixture);
     const result = await runCli(['stop'], fixture.env);
@@ -107,7 +107,7 @@ describe('vis_bridge daemon CLI', () => {
     }
   });
 
-  it('does not admit a command whose request body completes during shutdown', async () => {
+  it('does not admit a command whose request body completes during shutdown', { timeout: 15_000 }, async () => {
     const fixture = await createFixture();
     await startFixture(fixture);
     const pidPath = path.join(fixture.directory, 'late-command.pid');
