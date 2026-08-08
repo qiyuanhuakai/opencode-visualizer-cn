@@ -48,18 +48,22 @@ Sources: [vis_bridge.js](vis_bridge.js#L1-L703), [jsonRpcClient.ts](app/backends
 
 ## vis_bridge：本地桥接器进程
 
-`vis_bridge` 是一个独立的 Node.js 可执行脚本，位于仓库根目录，既可通过命令行直接运行，也可作为模块被导入使用。
+`vis_bridge` 是一个独立的 Node.js 可执行脚本，位于仓库根目录。命令行通过后台守护进程运行，也可作为模块被导入使用。
 
 ### 启动与配置
 
 桥接器支持命令行参数与环境变量两种配置方式，默认监听 `ws://127.0.0.1:23004/codex`，上游默认指向 `ws://127.0.0.1:4500`。
 
 ```bash
-# 命令行启动
-vis_bridge --target ws://127.0.0.1:4500 --port 23004 --path /codex
+# 启动后台守护进程
+vis_bridge start --target ws://127.0.0.1:4500 --port 23004 --path /codex
 
 # 环境变量等价形式
-VIS_BRIDGE_CODEX_WS_URL=ws://127.0.0.1:4500 VIS_BRIDGE_PORT=23004 vis_bridge
+VIS_BRIDGE_CODEX_WS_URL=ws://127.0.0.1:4500 VIS_BRIDGE_PORT=23004 vis_bridge start
+
+# 停止或重启
+vis_bridge stop
+vis_bridge restart
 ```
 
 | 参数 / 环境变量 | 说明 | 默认值 |
