@@ -1,5 +1,7 @@
 import { BRIDGE_CLIENT_METHODS } from './acpProcessState.js';
 
+import { StringDecoder } from 'node:string_decoder';
+
 const MAX_STDOUT_FRAME_CHARS = 2 * 1024 * 1024;
 
 export function createAcpStdoutForwarder(options) {
@@ -50,7 +52,8 @@ export function createAcpStdoutForwarder(options) {
   }
 
   return function forwardStdout(entry, chunk) {
-    let text = String(chunk);
+    entry.stdoutDecoder ??= new StringDecoder('utf8');
+    let text = entry.stdoutDecoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
     if (entry.discardingOversizedFrame) {
       const newline = text.indexOf('\n');
       if (newline < 0) return;
