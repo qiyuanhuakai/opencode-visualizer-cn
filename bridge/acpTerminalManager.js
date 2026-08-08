@@ -98,13 +98,13 @@ export function createAcpTerminalManager(options = {}) {
 
   async function kill(terminalId) {
     const entry = requireTerminal(terminalId);
-    if (!entry.exitStatus) await stopProcessTree(entry.child, { graceMs: STOP_GRACE_MS });
+    await stopProcessTree(entry.child, { graceMs: STOP_GRACE_MS });
     return {};
   }
 
   async function release(terminalId) {
-    const entry = requireTerminal(terminalId);
-    if (!entry.exitStatus) await kill(terminalId);
+    requireTerminal(terminalId);
+    await kill(terminalId);
     terminals.delete(terminalId);
     return {};
   }

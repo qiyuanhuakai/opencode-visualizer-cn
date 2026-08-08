@@ -107,4 +107,30 @@ describe('acpTerminalManager', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('releases descendants after the terminal leader already exited', { timeout: 10_000 }, async () => {
+    const manager = createAcpTerminalManager();
+    const script = `
+      const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      child.unref();
+      process.stdout.write(String(child.pid));
+    `;
+    const { terminalId } = await manager.create({
+      command: process.execPath,
+      args: ['-e', script],
+    });
+    await manager.waitForExit(terminalId);
+    const descendantPid = Number.parseInt(manager.output(terminalId).output, 10);
+
+    try {
+      await manager.release(terminalId);
+      await vi.waitFor(() => expect(() => process.kill(descendantPid, 0)).toThrow());
+    } finally {
+      try {
+        process.kill(descendantPid, 'SIGKILL');
+      } catch {}
+      await manager.stopAll();
+    }
+  });
 });
