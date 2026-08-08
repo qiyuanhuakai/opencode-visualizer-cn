@@ -107,6 +107,40 @@ describe('vis_bridge daemon CLI', () => {
     }
   });
 
+  it('does not admit a command whose request body completes during shutdown', async () => {
+    const fixture = await createFixture();
+    await startFixture(fixture);
+    const pidPath = path.join(fixture.directory, 'late-command.pid');
+    const payload = JSON.stringify({
+      command: process.execPath,
+      args: [
+        '-e',
+        "const fs=require('fs');fs.writeFileSync(process.argv[1],String(process.pid));process.on('SIGTERM',()=>{});setInterval(()=>{},1000)",
+        pidPath,
+      ],
+    });
+    const socket = connect(fixture.port, '127.0.0.1');
+    socket.on('error', () => {});
+    await new Promise<void>((resolve) => socket.once('connect', resolve));
+    socket.write(
+      `POST /command/exec HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload[0]}`,
+    );
+
+    try {
+      const stopping = runCli(['stop'], fixture.env);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (!socket.destroyed) socket.write(payload.slice(1));
+      await stopping;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      await expect(readFile(pidPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      socket.destroy();
+      const latePid = Number.parseInt(await readFile(pidPath, 'utf8').catch(() => ''), 10);
+      if (isAlive(latePid)) process.kill(latePid, 'SIGKILL');
+    }
+  });
+
   it('terminates a running workspace command tree during daemon stop', { timeout: 15_000 }, async () => {
     const fixture = await createFixture();
     await startFixture(fixture);
@@ -131,6 +165,31 @@ describe('vis_bridge daemon CLI', () => {
       await command;
     } finally {
       if (isAlive(commandPid)) process.kill(commandPid, 'SIGKILL');
+    }
+  });
+
+  it('reclaims resistant descendants after a workspace command leader exits', { timeout: 10_000 }, async () => {
+    const fixture = await createFixture();
+    await startFixture(fixture);
+    const pidPath = path.join(fixture.directory, 'command-descendant.pid');
+    const script = `
+      const { spawn } = require('node:child_process');
+      const { writeFileSync } = require('node:fs');
+      const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'], { stdio: 'ignore' });
+      child.unref();
+      writeFileSync(process.argv[1], String(child.pid));
+    `;
+    let descendantPid: number | undefined;
+
+    try {
+      await runCommandRequest(fixture.port, {
+        command: process.execPath,
+        args: ['-e', script, pidPath],
+      });
+      descendantPid = Number.parseInt(await readFile(pidPath, 'utf8'), 10);
+      expect(isAlive(descendantPid)).toBe(false);
+    } finally {
+      if (isAlive(descendantPid ?? 0)) process.kill(descendantPid!, 'SIGKILL');
     }
   });
 });
