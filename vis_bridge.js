@@ -12,11 +12,11 @@ import {
   decodeWebSocketFrames,
   encodeWebSocketFrame,
 } from './bridge/webSocketFrames.js';
-import { createBridgeConfigStore } from './bridge/bridgeConfig.js';
-import { createBridgeRuntime } from './bridge/bridgeRuntime.js';
 import { runWorkspaceCommand } from './bridge/workspaceCommand.js';
 import { createWorkspaceFsManager } from './bridge/workspaceFs.js';
 import { loadAcpSessionTurnMeta } from './bridge/acpSessionMeta.js';
+import { createDaemonController } from './bridge/daemonController.js';
+import { runDaemonProcess } from './bridge/daemonProcess.js';
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = 23004;
@@ -27,7 +27,9 @@ function usage() {
   return `vis_bridge - local supervisor and protocol bridge for OpenCode, Codex, and ACP agents
 
 Usage:
-  vis_bridge [--target ws://127.0.0.1:4500] [--host 127.0.0.1] [--port 23004] [--path /codex]
+  vis_bridge start [options]
+  vis_bridge stop
+  vis_bridge restart [options]
 
 Options:
   --target             Upstream Codex app-server WebSocket URL.
@@ -50,12 +52,18 @@ Environment:
   VIS_BRIDGE_CODEX_TOKEN_FILE       Same as --upstream-token-file.
   VIS_BRIDGE_CODEX_AUTHORIZATION    Raw Authorization header for upstream.
   VIS_BRIDGE_CONFIG                 Same as --config.
+  VIS_BRIDGE_STATE_DIR              Override the per-user daemon state directory.
 `;
 }
 
-function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
+export function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
+  const command = argv[0]?.startsWith('-') ? undefined : argv[0];
+  if (command && !['start', 'stop', 'restart', '__daemon'].includes(command)) {
+    throw new Error(`Unknown vis_bridge command: ${command}`);
+  }
+  const serverArgs = command ? argv.slice(1) : argv;
   const { values } = parseArgs({
-    args: argv,
+    args: serverArgs,
     options: {
       target: { type: 'string' },
       host: { type: 'string' },
@@ -70,6 +78,12 @@ function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
     allowPositionals: false,
   });
 
+  if (command === 'stop') {
+    const unexpectedOption = Object.keys(values).find((key) => key !== 'help');
+    if (unexpectedOption) throw new Error(`vis_bridge stop does not accept --${unexpectedOption}.`);
+    return { command, help: Boolean(values.help), serverArgs: [] };
+  }
+
   const tokenFile = values['upstream-token-file'] ?? env.VIS_BRIDGE_CODEX_TOKEN_FILE;
   const tokenFromFile = tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined;
   const portText = values.port ?? env.VIS_BRIDGE_PORT ?? String(DEFAULT_PORT);
@@ -79,7 +93,9 @@ function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
   }
 
   return {
+    command,
     help: Boolean(values.help),
+    serverArgs: values.help ? [] : serverArgs,
     host: values.host ?? env.VIS_BRIDGE_HOST ?? DEFAULT_HOST,
     port,
     path: normalizePath(values.path ?? env.VIS_BRIDGE_PATH ?? DEFAULT_PATH),
@@ -987,43 +1003,25 @@ export function createVisBridgeServer(options) {
   return server;
 }
 
-export function main() {
+export async function main() {
   const options = parseCliOptions();
-  if (options.help) {
+  if (options.help || !options.command) {
     console.log(usage());
     return;
   }
-
-  const configStore = createBridgeConfigStore({ configPath: options.configPath });
-  const runtime = createBridgeRuntime({ configStore });
-  const server = createVisBridgeServer({ ...options, runtime });
-  void runtime.start().catch((error) => {
-    console.error(
-      `vis_bridge supervisor failed: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  });
-  server.listen(options.port, options.host, () => {
-    console.log(`vis_bridge listening on ws://${options.host}:${options.port}${options.path}`);
-    console.log(`vis_bridge proxy target: ${options.target}`);
-  });
-
-  const shutdown = async () => {
-    await runtime.stop();
-    server.close(() => process.exit(0));
-  };
-  process.once('SIGINT', () => {
-    void shutdown();
-  });
-  process.once('SIGTERM', () => {
-    void shutdown();
-  });
+  if (options.command === '__daemon') {
+    await runDaemonProcess(options, createVisBridgeServer);
+    return;
+  }
+  const controller = createDaemonController();
+  if (options.command === 'start') await controller.start(options.serverArgs);
+  else if (options.command === 'stop') await controller.stop();
+  else await controller.restart(options.serverArgs);
 }
 
 if (process.argv[1]?.endsWith('vis_bridge.js')) {
-  try {
-    main();
-  } catch (error) {
+  void main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  }
+    process.exitCode = 1;
+  });
 }
