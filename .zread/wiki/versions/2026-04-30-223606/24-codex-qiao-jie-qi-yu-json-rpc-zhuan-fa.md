@@ -102,7 +102,7 @@ sequenceDiagram
 
 关键安全控制包括：
 
-- **Origin 校验**：仅允许 `localhost`、`127.0.0.1`、`::1` 以及 `file://`、`app://` 等本地协议，拒绝任何外部浏览器 Origin。
+- **Origin 校验**：未配置 bridge token 时，仅允许 `app://index.html`、`https://qiyuanhuakai.github.io`，以及端口 5173/23003 上的 `localhost`、`127.0.0.1`、`[::1]` 精确来源；不接受 `file://` 或泛化本地协议。
 - **双重 Token**：`bridgeToken` 保护桥接器本身，`upstreamAuthorization` 保护上游 Codex，二者独立。
 - **路径隔离**：WebSocket 仅在配置的 `path` 上升级，其他路径返回 404。
 
@@ -329,11 +329,11 @@ Sources: [useCodexApi.ts](app/composables/useCodexApi.ts#L1093-L1118)
 
 `vis_bridge` 实施三层安全控制：
 
-1. **Origin 白名单**：仅允许环回地址与本地协议，阻止 CSRF。
+1. **Origin 白名单**：仅允许应用自身、正式 GitHub Pages 与指定开发端口的精确来源，阻止 CSRF。
 2. **Bridge Token**：可选的 Bearer Token，通过 Header 或 Query 参数传递。
 3. **上游 Token**：独立的上游认证，桥接器在握手时注入 `Authorization` Header。
 
-当桥接器监听非环回地址（如 `0.0.0.0`）时，PTY 端点强制要求配置 `VIS_BRIDGE_TOKEN`，防止远程未授权访问终端。
+当桥接器监听非环回地址（如 `0.0.0.0`）时，PTY、文件、命令执行、supervisor、ACP 与 Codex WebSocket 转发全部强制要求配置 `VIS_BRIDGE_TOKEN`，防止远程未授权访问控制面。
 
 Sources: [vis_bridge.js](vis_bridge.js#L545-L556), [vis_bridge.js](vis_bridge.js#L108-L116)
 
