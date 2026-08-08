@@ -999,11 +999,11 @@ export function createVisBridgeServer(options) {
 
   server.on('close', () => {
     ptyManager.disposeAll();
-    void commandRunner.stopAll();
+    void commandRunner.close();
     void bridgeOptions.runtime?.stop();
   });
 
-  server.stopOwnedProcesses = () => commandRunner.stopAll();
+  server.stopOwnedProcesses = () => commandRunner.close();
 
   return server;
 }

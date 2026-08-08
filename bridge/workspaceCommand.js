@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { appendBoundedBuffer } from './boundedOutput.js';
 import { detachedProcessOptions, stopProcessTree } from './processTree.js';
 
 const OUTPUT_LIMIT = 2 * 1024 * 1024;
@@ -6,9 +7,13 @@ const TIMEOUT_MS = 30_000;
 
 export function createWorkspaceCommandRunner(options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
+  const outputLimit = options.outputLimit ?? OUTPUT_LIMIT;
   const activeChildren = new Set();
+  let accepting = true;
+  let closePromise;
 
   function run(payload) {
+    if (!accepting) return Promise.reject(new Error('Command runner is shutting down.'));
     if (!payload || typeof payload !== 'object') {
       return Promise.reject(new Error('Command payload must be an object.'));
     }
@@ -41,14 +46,19 @@ export function createWorkspaceCommandRunner(options = {}) {
       const failAndStop = (error) => {
         if (stopping) return;
         stopping = true;
-        void stopProcessTree(child).finally(() => finish(() => reject(error)));
+        const complete = () => {
+          activeChildren.delete(child);
+          finish(() => reject(error));
+        };
+        void stopProcessTree(child).then(complete, complete);
       };
       const append = (current, chunk) => {
-        const next = Buffer.concat([current, Buffer.from(chunk)]);
-        if (next.length > OUTPUT_LIMIT) {
+        if (stopping) return current;
+        const result = appendBoundedBuffer(current, chunk, outputLimit);
+        if (result.overflow) {
           failAndStop(new Error('Command output exceeded the 2 MiB limit.'));
         }
-        return next;
+        return result.buffer;
       };
       child.stdout.on('data', (chunk) => {
         stdout = append(stdout, chunk);
@@ -57,16 +67,24 @@ export function createWorkspaceCommandRunner(options = {}) {
         stderr = append(stderr, chunk);
       });
       child.once('error', (error) => {
+        stopping = true;
         activeChildren.delete(child);
         finish(() => reject(error));
       });
       child.once('close', (exitCode) => {
-        activeChildren.delete(child);
-        finish(() => resolve({
-          stdout: stdout.toString('utf8'),
-          stderr: stderr.toString('utf8'),
-          exitCode: typeof exitCode === 'number' ? exitCode : -1,
-        }));
+        if (stopping) return;
+        stopping = true;
+        void stopProcessTree(child).then(() => {
+          activeChildren.delete(child);
+          finish(() => resolve({
+            stdout: stdout.toString('utf8'),
+            stderr: stderr.toString('utf8'),
+            exitCode: typeof exitCode === 'number' ? exitCode : -1,
+          }));
+        }, (error) => {
+          activeChildren.delete(child);
+          finish(() => reject(error));
+        });
       });
       timer = setTimeout(
         () => failAndStop(new Error('Command timed out after 30 seconds.')),
@@ -82,7 +100,13 @@ export function createWorkspaceCommandRunner(options = {}) {
     for (const child of children) activeChildren.delete(child);
   }
 
-  return { run, stopAll };
+  function close() {
+    accepting = false;
+    closePromise ??= stopAll();
+    return closePromise;
+  }
+
+  return { run, close };
 }
 
 export function runWorkspaceCommand(payload, options = {}) {
