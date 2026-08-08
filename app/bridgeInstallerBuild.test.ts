@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createNsiPath,
+  createLinuxMaintainerScript,
+  createMacPreinstallScript,
   createVisBridgeInstallerAssetName,
   createVisBridgeInstallerPaths,
   createWindowsInstallerScript,
@@ -66,5 +68,27 @@ describe('vis_bridge installer packaging', () => {
     expect(script.indexOf('  InitPluginsDir')).toBeLessThan(
       script.indexOf('  SetOutPath "$PLUGINSDIR"'),
     );
+  });
+
+  it('stops an existing daemon before native package upgrade or removal', () => {
+    const linuxScript = createLinuxMaintainerScript();
+    const macScript = createMacPreinstallScript();
+    expect(linuxScript).toContain('/usr/bin/vis_bridge stop');
+    expect(linuxScript).toContain("pkill -TERM -f '^/usr/bin/vis_bridge([[:space:]]|$)'");
+    expect(macScript).toContain('/usr/local/bin/vis_bridge stop');
+    expect(macScript).toContain("pkill -TERM -f '^/usr/local/bin/vis_bridge([[:space:]]|$)'");
+
+    const paths = createVisBridgeInstallerPaths('/workspace', {
+      version: 'v1.2.3',
+      platform: 'win32',
+      arch: 'x64',
+    });
+    const script = createWindowsInstallerScript(paths);
+    const stopCommand = 'nsExec::ExecToStack \'"$INSTDIR\\vis_bridge.exe" stop\'';
+    expect(script.indexOf(stopCommand)).toBeGreaterThanOrEqual(0);
+    expect(script.indexOf(stopCommand)).toBeLessThan(script.indexOf('File /oname=vis_bridge.exe'));
+    expect(script.lastIndexOf(stopCommand)).toBeLessThan(script.indexOf('Delete "$INSTDIR\\vis_bridge.exe"'));
+    expect(script).toContain("$$_.Path");
+    expect(script).toContain('$INSTDIR\\vis_bridge.exe');
   });
 });
