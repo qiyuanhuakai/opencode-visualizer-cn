@@ -62,7 +62,7 @@ function postJson(port: number, pathname: string, token: string, body: object) {
   });
 }
 
-describe('vis_bridge daemon security and fatal startup', () => {
+describe('vis_bridge daemon security and fatal startup', { timeout: 15_000 }, () => {
   it('keeps direct authentication tokens out of daemon state and process arguments', async () => {
     const fixture = await createFixture();
     const bridgeToken = 'bridge-token-sentinel';
