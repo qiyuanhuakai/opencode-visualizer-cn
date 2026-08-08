@@ -51,7 +51,10 @@ export function createPtyManager(options = {}) {
     session.buffer = trimPtyBuffer(session.buffer + chunk);
     for (const socket of session.sockets) {
       if (socket.destroyed) continue;
-      socket.write(encodeWebSocketFrame(chunk, 1));
+      if (!socket.write(encodeWebSocketFrame(chunk, 1))) {
+        session.sockets.delete(socket);
+        socket.destroy();
+      }
     }
   }
 
@@ -152,6 +155,9 @@ export function createPtyManager(options = {}) {
     const session = sessions.get(id);
     if (!session) return false;
     let buffer = Buffer.alloc(0);
+    let fragments = [];
+    let fragmentBytes = 0;
+    let fragmentOpcode;
     session.sockets.add(socket);
     if (session.buffer) {
       socket.write(encodeWebSocketFrame(session.buffer, 1));
@@ -161,8 +167,11 @@ export function createPtyManager(options = {}) {
     };
     socket.on('data', (chunk) => {
       try {
+        if (buffer.length + chunk.length > PTY_BUFFER_LIMIT) {
+          throw new Error('WebSocket frame buffer too large.');
+        }
         buffer = Buffer.concat([buffer, chunk]);
-        const decoded = decodeWebSocketFrames(buffer);
+        const decoded = decodeWebSocketFrames(buffer, { maxPayloadBytes: PTY_BUFFER_LIMIT });
         buffer = decoded.remaining;
         for (const frame of decoded.frames) {
           if (frame.opcode === 8) {
@@ -173,8 +182,26 @@ export function createPtyManager(options = {}) {
             socket.write(encodeWebSocketFrame(frame.payload, 10));
             continue;
           }
-          if (frame.opcode === 1 || frame.opcode === 2)
-            session.pty.write(frame.payload.toString('utf8'));
+          if (frame.opcode === 0) {
+            if (fragmentOpcode === undefined) throw new Error('Unexpected continuation frame.');
+            fragmentBytes += frame.payload.length;
+            if (fragmentBytes > PTY_BUFFER_LIMIT) throw new Error('WebSocket message too large.');
+            fragments.push(frame.payload);
+            if (!frame.fin) continue;
+            session.pty.write(Buffer.concat(fragments).toString('utf8'));
+            fragments = [];
+            fragmentBytes = 0;
+            fragmentOpcode = undefined;
+            continue;
+          }
+          if (frame.opcode !== 1 && frame.opcode !== 2) continue;
+          if (!frame.fin) {
+            fragmentOpcode = frame.opcode;
+            fragments = [frame.payload];
+            fragmentBytes = frame.payload.length;
+            continue;
+          }
+          session.pty.write(frame.payload.toString('utf8'));
         }
       } catch {
         socket.destroy();
