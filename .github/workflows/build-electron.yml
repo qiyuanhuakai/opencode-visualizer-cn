@@ -146,6 +146,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify Windows process-tree cleanup
+        if: runner.os == 'Windows'
+        run: pnpm vitest run processTree.windows.test.ts acpTerminalManager.test.ts
+
       - name: Build vis_bridge binary payload
         run: pnpm bridge:build
 
