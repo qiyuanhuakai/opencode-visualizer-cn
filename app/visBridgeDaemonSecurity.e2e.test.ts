@@ -1,7 +1,8 @@
 import { readFile, writeFile } from 'node:fs/promises';
+import { request } from 'node:http';
 import { createServer } from 'node:net';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createFixture,
@@ -13,6 +14,53 @@ import {
 } from './visBridgeDaemonTestHarness';
 
 installFixtureCleanup();
+
+const credentialNames = [
+  'VIS_BRIDGE_DAEMON_CONTROL_TOKEN',
+  'VIS_BRIDGE_TOKEN',
+  'VIS_BRIDGE_CODEX_TOKEN',
+  'VIS_BRIDGE_CODEX_TOKEN_FILE',
+  'VIS_BRIDGE_CODEX_AUTHORIZATION',
+] as const;
+
+function credentialProbeScript(outputPath: string) {
+  return `require('node:fs').writeFileSync(${JSON.stringify(outputPath)}, JSON.stringify(${JSON.stringify(credentialNames)}.map((name) => process.env[name] ?? null)))`;
+}
+
+async function readCredentialProbe(outputPath: string) {
+  let values: unknown;
+  await vi.waitFor(async () => {
+    values = JSON.parse(await readFile(outputPath, 'utf8')) as unknown;
+    expect(values).toEqual(credentialNames.map(() => null));
+  });
+  return values;
+}
+
+function postJson(port: number, pathname: string, token: string, body: object) {
+  return new Promise<{ status: number | undefined; body: unknown }>((resolve, reject) => {
+    const payload = JSON.stringify(body);
+    const httpRequest = request({
+      host: '127.0.0.1',
+      port,
+      path: pathname,
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      response.once('end', () => resolve({
+        status: response.statusCode,
+        body: JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown,
+      }));
+    });
+    httpRequest.once('error', reject);
+    httpRequest.end(payload);
+  });
+}
 
 describe('vis_bridge daemon security and fatal startup', () => {
   it('keeps direct authentication tokens out of daemon state and process arguments', async () => {
@@ -45,6 +93,56 @@ describe('vis_bridge daemon security and fatal startup', () => {
       expect(commandLine).not.toContain(upstreamToken);
     }
   });
+
+  it('keeps bridge credentials out of command, PTY, and ACP child environments', async () => {
+    const fixture = await createFixture();
+    const bridgeToken = 'child-environment-bridge-secret';
+    const upstreamAuthorization = 'Bearer child-environment-upstream-secret';
+    const acpProbePath = path.join(fixture.directory, 'acp-environment.json');
+    const ptyProbePath = path.join(fixture.directory, 'pty-environment.json');
+    const tokenFilePath = path.join(fixture.directory, 'upstream-token.txt');
+    await writeFile(tokenFilePath, 'child-environment-token-file-secret', 'utf8');
+    await writeFile(fixture.configPath, JSON.stringify({
+      version: 1,
+      acpAgents: [{
+        id: 'environment-probe',
+        name: 'Environment probe',
+        command: process.execPath,
+        args: ['-e', credentialProbeScript(acpProbePath)],
+        enabled: true,
+      }],
+    }), 'utf8');
+    const environment = {
+      ...fixture.env,
+      VIS_BRIDGE_TOKEN: bridgeToken,
+      VIS_BRIDGE_CODEX_TOKEN: 'child-environment-codex-token',
+      VIS_BRIDGE_CODEX_TOKEN_FILE: tokenFilePath,
+      VIS_BRIDGE_CODEX_AUTHORIZATION: upstreamAuthorization,
+    };
+    await runCli(
+      ['start', '--port', String(fixture.port), '--config', fixture.configPath],
+      environment,
+    );
+    await expect(readHealthStatus(fixture.port, bridgeToken)).resolves.toBe(200);
+
+    const commandResponse = await postJson(fixture.port, '/command/exec', bridgeToken, {
+        command: process.execPath,
+        args: ['-e', `process.stdout.write(JSON.stringify(${JSON.stringify(credentialNames)}.map((name) => process.env[name] ?? null)))`],
+    });
+    expect(commandResponse.status).toBe(200);
+    const commandResult = commandResponse.body as { stdout?: string };
+    expect(JSON.parse(commandResult.stdout ?? '')).toEqual(credentialNames.map(() => null));
+
+    const ptyResponse = await postJson(fixture.port, '/pty', bridgeToken, {
+        command: process.execPath,
+        args: ['-e', credentialProbeScript(ptyProbePath)],
+    });
+    expect(ptyResponse.status).toBe(200);
+    await readCredentialProbe(ptyProbePath);
+    await readCredentialProbe(acpProbePath);
+
+    expect(upstreamAuthorization).toContain('child-environment-upstream-secret');
+  }, 15_000);
 
   it('rejects a second start when its effective bridge token changed', async () => {
     const fixture = await createFixture();

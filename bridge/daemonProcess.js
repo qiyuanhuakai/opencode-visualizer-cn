@@ -85,6 +85,8 @@ export async function runDaemonProcess(options, createBridgeServer) {
   delete process.env.VIS_BRIDGE_DAEMON_CONTROL_TOKEN;
   delete process.env.VIS_BRIDGE_TOKEN;
   delete process.env.VIS_BRIDGE_CODEX_TOKEN;
+  delete process.env.VIS_BRIDGE_CODEX_TOKEN_FILE;
+  delete process.env.VIS_BRIDGE_CODEX_AUTHORIZATION;
   const startOptions = await receiveStartOptions(instanceId);
   options = { ...options, ...startOptions.secrets };
   const paths = createDaemonPaths();
