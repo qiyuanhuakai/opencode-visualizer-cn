@@ -1,6 +1,5 @@
 import type { Server } from 'node:http';
 import type { BridgeRuntime } from './bridge/bridgeRuntime.js';
-import type { AcpAgentActions } from './bridge/acpAgentActions.js';
 
 export type VisBridgeServerOptions = {
   host?: string;
@@ -11,7 +10,6 @@ export type VisBridgeServerOptions = {
   upstreamAuthorization?: string;
   ptyModule?: unknown;
   runtime?: BridgeRuntime;
-  agentActions?: AcpAgentActions;
 };
 
 export type VisBridgeServer = Server & {
