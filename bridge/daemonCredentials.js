@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+
 const SECRET_OPTIONS = new Map([
   ['--bridge-token', 'bridgeToken'],
   ['--upstream-token', 'upstreamAuthorization'],
@@ -23,4 +25,15 @@ export function prepareDaemonLaunch(serverArgs, credentials = {}) {
     secrets[secretName] = credentials[secretName];
   }
   return { launchArgs, requiredSecrets, secrets };
+}
+
+export function fingerprintDaemonCredentials(controlToken, credentials = {}) {
+  return createHmac('sha256', controlToken)
+    .update(
+      JSON.stringify({
+        bridgeToken: credentials.bridgeToken ?? null,
+        upstreamAuthorization: credentials.upstreamAuthorization ?? null,
+      }),
+    )
+    .digest('hex');
 }

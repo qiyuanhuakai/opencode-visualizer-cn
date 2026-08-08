@@ -12,7 +12,7 @@ import {
   decodeWebSocketFrames,
   encodeWebSocketFrame,
 } from './bridge/webSocketFrames.js';
-import { runWorkspaceCommand } from './bridge/workspaceCommand.js';
+import { createWorkspaceCommandRunner } from './bridge/workspaceCommand.js';
 import { createWorkspaceFsManager } from './bridge/workspaceFs.js';
 import { loadAcpSessionTurnMeta } from './bridge/acpSessionMeta.js';
 import { createDaemonController } from './bridge/daemonController.js';
@@ -57,11 +57,12 @@ Environment:
 }
 
 export function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
-  const command = argv[0]?.startsWith('-') ? undefined : argv[0];
-  if (command && !['start', 'stop', 'restart', '__daemon'].includes(command)) {
-    throw new Error(`Unknown vis_bridge command: ${command}`);
+  const explicitCommand = argv[0]?.startsWith('-') ? undefined : argv[0];
+  if (explicitCommand && !['start', 'stop', 'restart', '__daemon'].includes(explicitCommand)) {
+    throw new Error(`Unknown vis_bridge command: ${explicitCommand}`);
   }
-  const serverArgs = command ? argv.slice(1) : argv;
+  const command = explicitCommand ?? 'start';
+  const serverArgs = explicitCommand ? argv.slice(1) : argv;
   const { values } = parseArgs({
     args: serverArgs,
     options: {
@@ -877,6 +878,7 @@ export function createVisBridgeServer(options) {
   const bridgeOptions = { host: DEFAULT_HOST, ...options };
   const ptyManager = createPtyManager(bridgeOptions);
   const fsManager = createWorkspaceFsManager();
+  const commandRunner = createWorkspaceCommandRunner();
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', 'http://localhost');
 
@@ -938,7 +940,7 @@ export function createVisBridgeServer(options) {
         return;
       }
       void readJsonBody(request)
-        .then((payload) => runWorkspaceCommand(payload))
+        .then((payload) => commandRunner.run(payload))
         .then((result) => writeJsonHttpResponse(response, 200, result))
         .catch((error) =>
           writeJsonHttpResponse(response, 400, {
@@ -997,8 +999,11 @@ export function createVisBridgeServer(options) {
 
   server.on('close', () => {
     ptyManager.disposeAll();
+    void commandRunner.stopAll();
     void bridgeOptions.runtime?.stop();
   });
+
+  server.stopOwnedProcesses = () => commandRunner.stopAll();
 
   return server;
 }

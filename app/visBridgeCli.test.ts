@@ -5,10 +5,22 @@ import {
   collectStartupFailures,
   createDaemonInvocation,
 } from '../bridge/daemonController.js';
-import { prepareDaemonLaunch } from '../bridge/daemonCredentials.js';
+import {
+  fingerprintDaemonCredentials,
+  prepareDaemonLaunch,
+} from '../bridge/daemonCredentials.js';
 import { parseCliOptions } from '../vis_bridge';
 
 describe('vis_bridge lifecycle commands', () => {
+  it('maps legacy no-command and option-first invocations to daemon start', () => {
+    expect(parseCliOptions([], {})).toMatchObject({ command: 'start', serverArgs: [] });
+    expect(parseCliOptions(['--port', '23120'], {})).toMatchObject({
+      command: 'start',
+      port: 23120,
+      serverArgs: ['--port', '23120'],
+    });
+  });
+
   it('separates direct secrets from persisted daemon launch arguments', () => {
     expect(
       prepareDaemonLaunch(
@@ -26,6 +38,24 @@ describe('vis_bridge lifecycle commands', () => {
         upstreamAuthorization: 'Bearer upstream-secret',
       },
     });
+  });
+
+  it('fingerprints both bridge and upstream credentials without persisting them', () => {
+    const controlToken = 'control-token';
+    const baseline = fingerprintDaemonCredentials(controlToken, {
+      bridgeToken: 'bridge-token',
+      upstreamAuthorization: 'Bearer upstream-token',
+    });
+    expect(fingerprintDaemonCredentials(controlToken, {
+      bridgeToken: 'different-bridge-token',
+      upstreamAuthorization: 'Bearer upstream-token',
+    })).not.toBe(baseline);
+    expect(fingerprintDaemonCredentials(controlToken, {
+      bridgeToken: 'bridge-token',
+      upstreamAuthorization: 'Bearer different-upstream-token',
+    })).not.toBe(baseline);
+    expect(baseline).not.toContain('bridge-token');
+    expect(baseline).not.toContain('upstream-token');
   });
 
   it('parses start options without treating the lifecycle command as a server argument', () => {

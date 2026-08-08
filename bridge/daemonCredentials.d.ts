@@ -9,3 +9,11 @@ export function prepareDaemonLaunch(
   readonly requiredSecrets: string[];
   readonly secrets: Record<string, string>;
 };
+
+export function fingerprintDaemonCredentials(
+  controlToken: string,
+  credentials?: {
+    readonly bridgeToken?: string;
+    readonly upstreamAuthorization?: string;
+  },
+): string;

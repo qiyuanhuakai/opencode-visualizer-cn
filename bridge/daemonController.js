@@ -3,7 +3,10 @@ import { open } from 'node:fs/promises';
 import { request } from 'node:http';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
-import { prepareDaemonLaunch } from './daemonCredentials.js';
+import {
+  fingerprintDaemonCredentials,
+  prepareDaemonLaunch,
+} from './daemonCredentials.js';
 import { forceStopProcessTree, signalProcessTree } from './processTree.js';
 import {
   createDaemonPaths,
@@ -89,6 +92,8 @@ function waitForStartup(child, startOptions, lifecycle) {
   return new Promise((resolve, reject) => {
     let startupError;
     let forceStopTimeout;
+    let finalTimeout;
+    let settled = false;
     const timeout = setTimeout(() => {
       startupError = new Error('vis_bridge daemon startup timed out.');
       try {
@@ -96,11 +101,18 @@ function waitForStartup(child, startOptions, lifecycle) {
       } catch {}
       forceStopTimeout = setTimeout(() => {
         if (child.pid) void lifecycle.forceStopProcessTree(child.pid);
+        finalTimeout = setTimeout(
+          () => finish(startupError),
+          lifecycle.forceStopTimeoutMs,
+        );
       }, lifecycle.stopTimeoutMs);
     }, lifecycle.startTimeoutMs);
     const finish = (error, message) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
       clearTimeout(forceStopTimeout);
+      clearTimeout(finalTimeout);
       child.off('message', onMessage);
       child.off('exit', onExit);
       child.off('error', onError);
@@ -110,9 +122,12 @@ function waitForStartup(child, startOptions, lifecycle) {
     const onMessage = (message) => {
       if (!message || typeof message !== 'object') return;
       if (message.type === 'awaiting-options') {
-        child.send({ type: 'start-options', ...startOptions });
-      } else if (message.type === 'ready') finish(startupError, message);
-      else if (message.type === 'error') finish(new Error(String(message.error)));
+        if (!startupError) child.send({ type: 'start-options', ...startOptions });
+      } else if (message.type === 'ready') {
+        if (!startupError) finish(undefined, message);
+      } else if (message.type === 'error') {
+        finish(startupError ?? new Error(String(message.error)));
+      }
     };
     const onExit = (code, signal) => {
       finish(
@@ -120,7 +135,7 @@ function waitForStartup(child, startOptions, lifecycle) {
           new Error(`vis_bridge daemon exited during startup (${signal ?? code ?? 'unknown'}).`),
       );
     };
-    const onError = (error) => finish(error);
+    const onError = (error) => finish(startupError ?? error);
     child.on('message', onMessage);
     child.once('exit', onExit);
     child.once('error', onError);
@@ -165,9 +180,13 @@ export function createDaemonController(options = {}) {
     if (previous && isProcessAlive(previous.pid)) {
       if (previous.state === 'running') {
         await requestDaemonControl(previous, 'status');
+        const credentialFingerprint = fingerprintDaemonCredentials(
+          previous.controlToken,
+          credentials,
+        );
         if (
           JSON.stringify(previous.launchArgs) === JSON.stringify(launch.launchArgs) &&
-          JSON.stringify(previous.requiredSecrets ?? []) === JSON.stringify(launch.requiredSecrets)
+          previous.credentialFingerprint === credentialFingerprint
         ) {
           stdout.write(`vis_bridge is already running (pid ${previous.pid}).\n`);
           return previous;
@@ -180,6 +199,7 @@ export function createDaemonController(options = {}) {
 
     const instanceId = randomUUID();
     const controlToken = randomBytes(32).toString('hex');
+    const credentialFingerprint = fingerprintDaemonCredentials(controlToken, credentials);
     const invocation = createDaemonInvocation({
       entryPath: process.argv[1],
       execPath: process.execPath,
@@ -187,6 +207,7 @@ export function createDaemonController(options = {}) {
     });
     const logHandle = await open(paths.logPath, 'a', 0o600);
     let child;
+    let startupPromise;
     try {
       child = spawnProcess(invocation.command, invocation.args, {
         detached: true,
@@ -199,19 +220,21 @@ export function createDaemonController(options = {}) {
         stdio: ['ignore', logHandle.fd, logHandle.fd, 'ipc'],
         windowsHide: true,
       });
+      if (!child.pid) throw new Error('vis_bridge daemon did not receive a process id.');
+      startupPromise = waitForStartup(
+        child,
+        {
+          instanceId,
+          credentialFingerprint,
+          requiredSecrets: launch.requiredSecrets,
+          secrets: launch.secrets,
+        },
+        lifecycle,
+      );
     } finally {
       await logHandle.close();
     }
-    if (!child.pid) throw new Error('vis_bridge daemon did not receive a process id.');
-    const message = await waitForStartup(
-      child,
-      {
-        instanceId,
-        requiredSecrets: launch.requiredSecrets,
-        secrets: launch.secrets,
-      },
-      lifecycle,
-    );
+    const message = await startupPromise;
     if (child.connected) child.disconnect();
     child.unref();
     stdout.write(`vis_bridge started (pid ${child.pid}) on ws://${message.host}:${message.port}${message.path}.\n`);

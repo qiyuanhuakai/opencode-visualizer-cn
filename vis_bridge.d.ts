@@ -14,9 +14,13 @@ export type VisBridgeServerOptions = {
   agentActions?: AcpAgentActions;
 };
 
-export function createVisBridgeServer(options: VisBridgeServerOptions): Server;
+export type VisBridgeServer = Server & {
+  stopOwnedProcesses(): Promise<void>;
+};
+
+export function createVisBridgeServer(options: VisBridgeServerOptions): VisBridgeServer;
 export type VisBridgeServerCliOptions = {
-  readonly command: 'start' | 'restart' | '__daemon' | undefined;
+  readonly command: 'start' | 'restart' | '__daemon';
   readonly help: boolean;
   readonly serverArgs: readonly string[];
   readonly host: string;

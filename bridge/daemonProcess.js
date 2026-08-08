@@ -103,6 +103,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
     state: 'starting',
     logPath: paths.logPath,
     launchArgs: [...options.serverArgs],
+    credentialFingerprint: startOptions.credentialFingerprint,
     requiredSecrets: [...startOptions.requiredSecrets],
     startedAt: new Date().toISOString(),
   });
@@ -111,6 +112,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = (async () => {
       await startupPromise?.catch(() => undefined);
+      await server.stopOwnedProcesses?.();
       await closeServer(server, serverSockets);
       await runtime.stop();
       if (controlServer) await closeServer(controlServer, controlSockets);
@@ -163,6 +165,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
       state: 'running',
       logPath: paths.logPath,
       launchArgs: [...options.serverArgs],
+      credentialFingerprint: startOptions.credentialFingerprint,
       requiredSecrets: [...startOptions.requiredSecrets],
       startedAt: new Date().toISOString(),
       host: options.host,
@@ -188,6 +191,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
       state: 'error',
       logPath: paths.logPath,
       launchArgs: [...options.serverArgs],
+      credentialFingerprint: startOptions.credentialFingerprint,
       requiredSecrets: [...startOptions.requiredSecrets],
       startedAt: new Date().toISOString(),
       error: message,
