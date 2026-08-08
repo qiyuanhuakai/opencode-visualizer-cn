@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createNsiPath,
+  createLinuxMaintainerScript,
+  createMacPreinstallScript,
+  createWindowsStopScript,
   createVisBridgeInstallerAssetName,
   createVisBridgeInstallerPaths,
   createWindowsInstallerScript,
@@ -66,5 +69,60 @@ describe('vis_bridge installer packaging', () => {
     expect(script.indexOf('  InitPluginsDir')).toBeLessThan(
       script.indexOf('  SetOutPath "$PLUGINSDIR"'),
     );
+  });
+
+  it('stops an existing daemon before native package upgrade or removal', () => {
+    const linuxScript = createLinuxMaintainerScript();
+    const macScript = createMacPreinstallScript();
+    expect(linuxScript).not.toContain('/usr/bin/vis_bridge stop');
+    expect(linuxScript).toContain('/usr/bin/readlink');
+    expect(linuxScript).toContain('/proc/[0-9]*/exe');
+    expect(linuxScript).toContain('/bin/kill -TERM');
+    expect(linuxScript).toContain('collect_process_tree');
+    expect(linuxScript).toContain('/usr/bin/pgrep -P');
+    expect(linuxScript).toContain('tree_pids');
+    expect(macScript).not.toContain('/usr/local/bin/vis_bridge stop');
+    expect(macScript).toContain('/usr/sbin/lsof');
+    expect(macScript).toContain('/bin/kill -TERM');
+    expect(macScript).toContain('collect_process_tree');
+
+    const paths = createVisBridgeInstallerPaths('/workspace', {
+      version: 'v1.2.3',
+      platform: 'win32',
+      arch: 'x64',
+    });
+    const script = createWindowsInstallerScript(paths);
+    expect(script).toContain('!include "LogicLib.nsh"');
+    const stopCommand = 'nsExec::ExecToStack \'"$INSTDIR\\vis_bridge.exe" stop\'';
+    expect(script).not.toContain('0 +6');
+    expect(script).toContain('stop_existing_install:');
+    expect(script).toContain('continue_install:');
+    expect(script).toContain('stop_existing_uninstall:');
+    expect(script).toContain('continue_uninstall:');
+    expect(script.indexOf(stopCommand)).toBeGreaterThanOrEqual(0);
+    expect(script.indexOf(stopCommand)).toBeLessThan(script.indexOf('File /oname=vis_bridge.exe'));
+    expect(script.lastIndexOf(stopCommand)).toBeLessThan(script.indexOf('Delete "$INSTDIR\\vis_bridge.exe"'));
+    expect(script).toContain('stop-daemon.ps1');
+    expect(script).toContain('StrCmp $0 "0" continue_install');
+    expect(script).toContain('StrCmp $0 "0" continue_uninstall');
+    expect(script).not.toContain('${If} $0 != 0');
+    expect(script).toContain('$INSTDIR\\vis_bridge.exe');
+  });
+
+  it('fails Windows package changes unless the installed executable tree is gone', () => {
+    const stopScript = createWindowsStopScript();
+    expect(stopScript).toContain('Get-CimInstance Win32_Process');
+    expect(stopScript).toContain('ExecutablePath');
+    expect(stopScript).toContain('taskkill.exe');
+    expect(stopScript).toContain('throw');
+
+    const paths = createVisBridgeInstallerPaths('/workspace', {
+      version: 'v1.2.3',
+      platform: 'win32',
+      arch: 'x64',
+    });
+    const installer = createWindowsInstallerScript(paths);
+    expect(installer).toContain('stop-daemon.ps1');
+    expect(installer).toContain('Abort');
   });
 });

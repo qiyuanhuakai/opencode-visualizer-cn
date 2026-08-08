@@ -91,4 +91,32 @@ describe('processSupervisor', () => {
       expect.objectContaining({ id: 'opencode', state: 'error', owned: false, error: expect.stringContaining('ENOENT') }),
     ]);
   });
+
+  it('reclaims each failed readiness generation before allowing a retry', async () => {
+    const spawnProcess = vi.fn(() => {
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+      spawnedChildren.push(child);
+      return child;
+    });
+    const supervisor = createProcessSupervisor({
+      services: [createNativeServiceDefinitions()[0]],
+      spawnProcess,
+      probeService: vi.fn().mockResolvedValue(false),
+      readinessAttempts: 1,
+      readinessIntervalMs: 0,
+    });
+
+    await supervisor.start();
+    const firstPid = spawnedChildren[0]?.pid;
+    expect(() => process.kill(firstPid ?? 0, 0)).toThrow();
+    await supervisor.start();
+    const secondPid = spawnedChildren[1]?.pid;
+
+    expect(spawnProcess).toHaveBeenCalledTimes(2);
+    expect(() => process.kill(firstPid ?? 0, 0)).toThrow();
+    expect(() => process.kill(secondPid ?? 0, 0)).toThrow();
+    await supervisor.stop();
+  });
 });

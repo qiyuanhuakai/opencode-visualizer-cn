@@ -3,6 +3,14 @@ import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promise
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import {
+  createLinuxMaintainerScript,
+  createMacPreinstallScript,
+  createWindowsStopScript,
+  windowsStopDaemonLines,
+} from './vis-bridge-installer-lifecycle.mjs';
+
+export { createLinuxMaintainerScript, createMacPreinstallScript, createWindowsStopScript };
 
 const execFileAsync = promisify(execFile);
 
@@ -89,6 +97,9 @@ async function packageLinuxInstaller(paths, target) {
     ].join('\n'),
     'utf8',
   );
+  const maintainerScript = createLinuxMaintainerScript();
+  await writeFile(path.join(metadataDirectory, 'preinst'), maintainerScript, { encoding: 'utf8', mode: 0o755 });
+  await writeFile(path.join(metadataDirectory, 'prerm'), maintainerScript, { encoding: 'utf8', mode: 0o755 });
   await execFileAsync('dpkg-deb', [
     '--build',
     '--root-owner-group',
@@ -103,6 +114,13 @@ async function packageMacInstaller(paths, target) {
   const installedBinary = path.join(binaryDirectory, 'vis_bridge');
   await copyFile(paths.binaryPath, installedBinary);
   await chmod(installedBinary, 0o755);
+  const scriptsDirectory = `${paths.workspacePath}-scripts`;
+  await rm(scriptsDirectory, { recursive: true, force: true });
+  await mkdir(scriptsDirectory, { recursive: true });
+  await writeFile(path.join(scriptsDirectory, 'preinstall'), createMacPreinstallScript(), {
+    encoding: 'utf8',
+    mode: 0o755,
+  });
   await execFileAsync('pkgbuild', [
     '--root',
     paths.workspacePath,
@@ -112,6 +130,8 @@ async function packageMacInstaller(paths, target) {
     normalizedVersion(target.version),
     '--install-location',
     '/',
+    '--scripts',
+    scriptsDirectory,
     paths.installerPath,
   ]);
 }
@@ -146,8 +166,10 @@ export function createNsiPath(filePath) {
 export function createWindowsInstallerScript(paths) {
   const addPathScript = path.join(paths.workspacePath, 'add-path.ps1');
   const removePathScript = path.join(paths.workspacePath, 'remove-path.ps1');
+  const stopDaemonScript = path.join(paths.workspacePath, 'stop-daemon.ps1');
   return [
     '!include "MUI2.nsh"',
+    '!include "LogicLib.nsh"',
     '!include "WinMessages.nsh"',
     'Unicode True',
     'Name "Vis Bridge"',
@@ -160,6 +182,7 @@ export function createWindowsInstallerScript(paths) {
     '!insertmacro MUI_UNPAGE_INSTFILES',
     '!insertmacro MUI_LANGUAGE "English"',
     'Section "Install"',
+    ...windowsStopDaemonLines('install', createNsiPath(stopDaemonScript)),
     '  SetOutPath "$INSTDIR"',
     `  File /oname=vis_bridge.exe "${createNsiPath(paths.binaryPath)}"`,
     `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
@@ -174,6 +197,7 @@ export function createWindowsInstallerScript(paths) {
     '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
     'SectionEnd',
     'Section "Uninstall"',
+    ...windowsStopDaemonLines('uninstall', createNsiPath(stopDaemonScript)),
     '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\remove-path.ps1" "$INSTDIR"\'',
     '  Delete "$INSTDIR\\vis_bridge.exe"',
     '  Delete "$INSTDIR\\remove-path.ps1"',
@@ -192,6 +216,7 @@ async function packageWindowsInstaller(paths) {
   await mkdir(paths.workspacePath, { recursive: true });
   await writeFile(addPathScript, windowsPathScript('add'), 'utf8');
   await writeFile(removePathScript, windowsPathScript('remove'), 'utf8');
+  await writeFile(path.join(paths.workspacePath, 'stop-daemon.ps1'), createWindowsStopScript(), 'utf8');
   await writeFile(nsiScript, createWindowsInstallerScript(paths), 'utf8');
   await execFileAsync('makensis', [nsiScript]);
 }

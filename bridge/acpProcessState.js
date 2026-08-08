@@ -1,4 +1,5 @@
 export const STOP_GRACE_MS = 1_500;
+export const STARTUP_GRACE_MS = 300;
 
 export const BRIDGE_CLIENT_METHODS = new Set([
   'fs/read_text_file',

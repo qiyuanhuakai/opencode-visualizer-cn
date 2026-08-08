@@ -25,7 +25,7 @@ export function encodeWebSocketFrame(data, opcode = 1) {
   return Buffer.concat([header, payload]);
 }
 
-export function decodeWebSocketFrames(buffer) {
+export function decodeWebSocketFrames(buffer, options = {}) {
   const frames = [];
   let offset = 0;
   while (buffer.length - offset >= 2) {
@@ -47,6 +47,9 @@ export function decodeWebSocketFrames(buffer) {
         throw new Error('WebSocket frame too large.');
       length = Number(bigLength);
       headerLength = 10;
+    }
+    if (options.maxPayloadBytes !== undefined && length > options.maxPayloadBytes) {
+      throw new Error('WebSocket frame too large.');
     }
     const maskLength = masked ? 4 : 0;
     const frameLength = headerLength + maskLength + length;

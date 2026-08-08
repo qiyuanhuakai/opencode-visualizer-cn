@@ -12,6 +12,8 @@ export type AcpClientMethodHandler = {
   (request: AcpClientRequest, context: AcpClientMethodContext): Promise<unknown>;
   observeClientMessage(message: AcpObservedMessage, context: AcpClientMethodContext): void;
   observeAgentMessage(message: AcpObservedMessage, context: AcpClientMethodContext): void;
+  releaseAgent(agentId: string): Promise<void>;
+  resumeAgent(agentId: string): void;
   stopAll(): Promise<void>;
 };
 
