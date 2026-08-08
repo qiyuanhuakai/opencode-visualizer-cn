@@ -5,7 +5,11 @@ import { createI18n } from 'vue-i18n';
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
 import AcpManagerPanel from './AcpManagerPanel.vue';
-import type { useAcpBridge } from '../composables/useAcpBridge';
+import type {
+  AcpAgentStatus,
+  BridgeServiceStatus,
+  useAcpBridge,
+} from '../composables/useAcpBridge';
 
 function createMessages() {
   return {
@@ -46,7 +50,7 @@ function createMessages() {
 }
 
 function createApi() {
-  const agents = ref([{
+  const agents = ref<AcpAgentStatus[]>([{
     id: 'oh-my-pi',
     name: 'Oh My Pi',
     command: 'omp',
@@ -59,7 +63,7 @@ function createApi() {
   }]);
   return {
     agents,
-    services: ref([{
+    services: ref<BridgeServiceStatus[]>([{
       id: 'opencode',
       name: 'OpenCode Server',
       command: 'opencode',
@@ -145,6 +149,30 @@ describe('AcpManagerPanel', () => {
       args: ['--acp'],
       enabled: false,
     });
+    app.unmount();
+  });
+
+  it('shows complete multiline startup errors for services and ACP agents', async () => {
+    const api = createApi();
+    api.services.value[0] = {
+      ...api.services.value[0],
+      state: 'error',
+      error: 'OpenCode failed\nport 4096 is unavailable',
+    };
+    api.agents.value[0] = {
+      ...api.agents.value[0],
+      state: 'error',
+      error: 'Oh My Pi failed\nexecutable not found',
+    };
+
+    const { app, root } = await mountPanel(api);
+
+    const serviceError = root.querySelector<HTMLElement>('[data-service-startup-error]');
+    const agentError = root.querySelector<HTMLElement>('[data-agent-startup-error]');
+    expect(serviceError?.textContent).toContain('port 4096 is unavailable');
+    expect(agentError?.textContent).toContain('executable not found');
+    expect(serviceError?.classList.contains('whitespace-pre-wrap')).toBe(true);
+    expect(agentError?.classList.contains('whitespace-pre-wrap')).toBe(true);
     app.unmount();
   });
 });
