@@ -1,4 +1,13 @@
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+export type WorkspaceCommandChild = {
+  readonly pid?: number;
+  readonly exitCode?: number | null;
+  readonly stdout: { on(event: 'data', listener: (chunk: unknown) => void): unknown };
+  readonly stderr: { on(event: 'data', listener: (chunk: unknown) => void): unknown };
+  kill(signal: NodeJS.Signals): boolean;
+  once(event: 'error', listener: (error: Error) => void): unknown;
+  once(event: 'close', listener: (exitCode: number | null) => void): unknown;
+  off(event: 'exit' | 'close', listener: () => void): unknown;
+};
 
 export type WorkspaceCommandResult = {
   stdout: string;
@@ -12,7 +21,8 @@ export type WorkspaceCommandRunner = {
 };
 
 export function createWorkspaceCommandRunner(options?: {
-  spawnProcess?: (command: string, args: string[], options: object) => ChildProcessWithoutNullStreams;
+  spawnProcess?: (command: string, args: string[], options: object) => WorkspaceCommandChild;
+  stopProcessTree?: (child: WorkspaceCommandChild) => Promise<void>;
   outputLimit?: number;
 }): WorkspaceCommandRunner;
 

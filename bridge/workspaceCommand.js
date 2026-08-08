@@ -7,6 +7,7 @@ const TIMEOUT_MS = 30_000;
 
 export function createWorkspaceCommandRunner(options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
+  const stopChild = options.stopProcessTree ?? stopProcessTree;
   const outputLimit = options.outputLimit ?? OUTPUT_LIMIT;
   const activeChildren = new Set();
   let accepting = true;
@@ -50,7 +51,7 @@ export function createWorkspaceCommandRunner(options = {}) {
           activeChildren.delete(child);
           finish(() => reject(error));
         };
-        void stopProcessTree(child).then(complete, complete);
+        void stopChild(child).then(complete, () => finish(() => reject(error)));
       };
       const append = (current, chunk) => {
         if (stopping) return current;
@@ -74,7 +75,7 @@ export function createWorkspaceCommandRunner(options = {}) {
       child.once('close', (exitCode) => {
         if (stopping) return;
         stopping = true;
-        void stopProcessTree(child).then(() => {
+        void stopChild(child).then(() => {
           activeChildren.delete(child);
           finish(() => resolve({
             stdout: stdout.toString('utf8'),
@@ -82,7 +83,6 @@ export function createWorkspaceCommandRunner(options = {}) {
             exitCode: typeof exitCode === 'number' ? exitCode : -1,
           }));
         }, (error) => {
-          activeChildren.delete(child);
           finish(() => reject(error));
         });
       });
@@ -96,13 +96,20 @@ export function createWorkspaceCommandRunner(options = {}) {
 
   async function stopAll() {
     const children = [...activeChildren];
-    await Promise.allSettled(children.map((child) => stopProcessTree(child)));
-    for (const child of children) activeChildren.delete(child);
+    const results = await Promise.allSettled(children.map((child) => stopChild(child)));
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled') activeChildren.delete(children[index]);
+    }
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') throw failure.reason;
   }
 
   function close() {
     accepting = false;
-    closePromise ??= stopAll();
+    closePromise ??= stopAll().catch((error) => {
+      closePromise = undefined;
+      throw error;
+    });
     return closePromise;
   }
 
