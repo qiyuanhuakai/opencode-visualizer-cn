@@ -77,9 +77,13 @@ describe('vis_bridge installer packaging', () => {
     expect(linuxScript).toContain('/usr/bin/readlink');
     expect(linuxScript).toContain('/proc/[0-9]*/exe');
     expect(linuxScript).toContain('/bin/kill -TERM');
+    expect(linuxScript).toContain('collect_process_tree');
+    expect(linuxScript).toContain('/usr/bin/pgrep -P');
+    expect(linuxScript).toContain('tree_pids');
     expect(macScript).not.toContain('/usr/local/bin/vis_bridge stop');
     expect(macScript).toContain('/usr/sbin/lsof');
     expect(macScript).toContain('/bin/kill -TERM');
+    expect(macScript).toContain('collect_process_tree');
 
     const paths = createVisBridgeInstallerPaths('/workspace', {
       version: 'v1.2.3',
@@ -98,6 +102,8 @@ describe('vis_bridge installer packaging', () => {
     expect(script.indexOf(stopCommand)).toBeLessThan(script.indexOf('File /oname=vis_bridge.exe'));
     expect(script.lastIndexOf(stopCommand)).toBeLessThan(script.indexOf('Delete "$INSTDIR\\vis_bridge.exe"'));
     expect(script).toContain("$$_.Path");
+    expect(script).toContain('taskkill.exe /PID $$_.Id /T /F');
+    expect(script).not.toContain('${If} $0 != 0');
     expect(script).toContain('$INSTDIR\\vis_bridge.exe');
   });
 });
