@@ -167,6 +167,7 @@
               ref="inputPanelRef"
               :disabled="connectionState !== 'ready'"
               :current-session-id="selectedSessionId"
+              :session-parent-by-id="sessionParentById"
               :can-send="canSend"
               :agent-options="agentOptions"
               :subagent-options="subagentOptions"
@@ -616,6 +617,7 @@ import { useBackendSelectionBootstrap } from './composables/useBackendSelectionB
 import { useCodexMessageBridge } from './composables/useCodexMessageBridge';
 import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
 import { useGlobalEvents } from './composables/useGlobalEvents';
+import { useLiveDescendantHistoryHydration } from './composables/useLiveDescendantHistoryHydration';
 import { useMessages } from './composables/useMessages';
 import { useCodexWorkspaceSync } from './composables/useCodexWorkspaceSync';
 import { pendingWorkerRenders } from './composables/useRenderState';
@@ -660,7 +662,13 @@ import {
 import { applyPinHierarchyTransition, buildPinHierarchy } from './utils/pinHierarchy';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
-import { resolveThreadSubagentSessions } from './utils/threadSubagents';
+import { createBackendRequestFence } from './utils/backendRequestFence';
+import {
+  resolveThreadSubagentSessions,
+  type SessionHistoryMeta,
+} from './utils/threadSubagents';
+import { retryReferencedSessionIds } from './utils/retryReferencedSessions';
+import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
 import { normalizeToolName } from './utils/toolNames';
 import {
   extractFileRead as extractToolFileRead,
@@ -1383,7 +1391,6 @@ const {
   pauseTracking,
   resetFollow,
   resumeTracking,
-  resumeFollow,
   notifyContentChange,
 } = useAutoScroller(outputPanelContainerEl, outputPanelScrollMode, {
   bottomThresholdPx: FOLLOW_THRESHOLD_PX,
@@ -1392,8 +1399,13 @@ const {
   smoothOnInitialFollow: false,
 });
 
-function handleOutputPanelResumeFollow() {
-  resumeFollow();
+async function handleOutputPanelResumeFollow() {
+  await resumeOutputFollowing({
+    pauseTracking,
+    enableFollow,
+    scrollToBottom: () => outputPanelRef.value?.scrollToBottom(),
+    resumeTracking,
+  });
 }
 
 function handleOutputPanelMessageRendered() {
@@ -1726,13 +1738,14 @@ function collectAllSessionsByProject() {
 const sessionsByProject = computed(() => collectAllSessionsByProject());
 
 const sessionHistoryMetaById = computed(() => {
-  const meta: Record<string, { parentID?: string; label: string }> = {};
+  const meta: Record<string, SessionHistoryMeta> = {};
   Object.values(sessionsByProject.value)
     .flat()
     .forEach((session) => {
       meta[session.id] = {
         parentID: session.parentID,
         label: sessionLabel(session),
+        status: session.status,
       };
     });
   return meta;
@@ -1941,6 +1954,23 @@ const loginUsername = ref('');
 const loginPassword = ref('');
 const loginRequiresAuth = ref(false);
 const activeBackendKind = ref<BackendKind>('opencode');
+const providerConfigRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+const providersRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+const agentsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+const commandsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
+watch(
+  activeBackendKind,
+  () => {
+    providerConfigRequestFence.invalidate();
+    providersRequestFence.invalidate();
+    agentsRequestFence.invalidate();
+    commandsRequestFence.invalidate();
+  },
+  { flush: 'sync' },
+);
+let providerLoadingOwner = 0;
+let agentLoadingOwner = 0;
+let commandLoadingOwner = 0;
 const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
 const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
@@ -3887,18 +3917,21 @@ async function handleProvidersChanged() {
 }
 
 async function fetchGlobalProviderConfig() {
+  const request = providerConfigRequestFence.start();
+  const activeBackend = getBackendAdapter(request.backend);
   try {
-    const getGlobalConfig = requireBackendMethod(backend().getGlobalConfig, 'global config');
+    const getGlobalConfig = requireBackendMethod(activeBackend.getGlobalConfig, 'global config');
     const data = (await getGlobalConfig()) as ProviderConfigState;
+    if (!providerConfigRequestFence.isCurrent(request)) return;
     providerConfig.value = data ?? null;
     if (
-      activeBackendCapabilities.value.providerConfig &&
-      activeBackendCapabilities.value.imageAttachmentsOnly
+      activeBackend.capabilities.providerConfig &&
+      activeBackend.capabilities.imageAttachmentsOnly
     ) {
       await codexApi.refreshConfig();
     }
   } catch (error) {
-    log('Provider config load failed', error);
+    if (providerConfigRequestFence.isCurrent(request)) log('Provider config load failed', error);
   }
 }
 
@@ -4750,14 +4783,18 @@ async function bootstrapSelections() {
 }
 
 async function fetchProviders(force = false) {
-  if (providersLoading.value || (!force && providersLoaded.value)) return;
+  if ((!force && providersLoading.value) || (!force && providersLoaded.value)) return;
+  const request = providersRequestFence.start();
+  providerLoadingOwner = request.generation;
+  const activeBackend = getBackendAdapter(request.backend);
   providersLoading.value = true;
   if (force) providersLoaded.value = false;
   providersFetchCount.value += 1;
   log('providers fetch start', providersFetchCount.value);
   try {
-    const listProviders = requireBackendMethod(backend().listProviders, 'providers');
+    const listProviders = requireBackendMethod(activeBackend.listProviders, 'providers');
     const data = (await listProviders()) as ProviderResponse;
+    if (!providersRequestFence.isCurrent(request)) return;
     providers.value = Array.isArray(data.all) ? data.all : [];
     connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
@@ -4835,20 +4872,22 @@ async function fetchProviders(force = false) {
     providersLoaded.value = true;
     log('providers fetch done');
   } catch (error) {
-    log('Provider load failed', error);
+    if (providersRequestFence.isCurrent(request)) log('Provider load failed', error);
   } finally {
-    providersLoading.value = false;
+    if (providerLoadingOwner === request.generation) providersLoading.value = false;
   }
 }
 
 async function fetchAgents() {
-  if (agentsLoading.value) return;
+  const request = agentsRequestFence.start();
+  agentLoadingOwner = request.generation;
   agentsLoading.value = true;
   try {
     if (activeBackendKind.value === 'codex') {
       if (codexApi.connected.value) {
         await codexApi.refreshCollaborationModes();
       }
+      if (!agentsRequestFence.isCurrent(request)) return;
       let options: typeof agentOptions.value = codexApi.collaborationModes.value.map((mode) => ({
         id: mode.mode,
         label: mode.name,
@@ -4875,6 +4914,7 @@ async function fetchAgents() {
     }
     const listAgents = requireBackendMethod(backend().listAgents, 'agents');
     const data = (await listAgents()) as AgentInfo[];
+    if (!agentsRequestFence.isCurrent(request)) return;
     agents.value = Array.isArray(data) ? data : [];
     const options = agents.value
       .filter((agent) => agent.mode === 'primary' || agent.mode === 'all')
@@ -4902,25 +4942,27 @@ async function fetchAgents() {
       }
     }
   } catch (error) {
-    log('Agent load failed', error);
+    if (agentsRequestFence.isCurrent(request)) log('Agent load failed', error);
   } finally {
-    agentsLoading.value = false;
+    if (agentLoadingOwner === request.generation) agentsLoading.value = false;
   }
 }
 
 async function fetchCommands(directory?: string) {
-  if (commandsLoading.value) return;
+  const request = commandsRequestFence.start();
+  commandLoadingOwner = request.generation;
   commandsLoading.value = true;
   try {
     const listCommands = requireBackendMethod(backend().listCommands, 'commands');
     const data = (await listCommands(directory)) as CommandInfo[];
+    if (!commandsRequestFence.isCurrent(request)) return;
     const list = Array.isArray(data) ? data : [];
     list.sort((a, b) => a.name.localeCompare(b.name));
     commands.value = list;
   } catch (error) {
-    log('Command load failed', error);
+    if (commandsRequestFence.isCurrent(request)) log('Command load failed', error);
   } finally {
-    commandsLoading.value = false;
+    if (commandLoadingOwner === request.generation) commandsLoading.value = false;
   }
 }
 
@@ -5079,7 +5121,7 @@ async function fetchHistory(
   rootSessionId?: string,
   incremental = false,
 ) {
-  if (!sessionId) return;
+  if (!sessionId) return false;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
   const requestedDirectory = getSelectedWorktreeDirectory();
   const expectedRootRequestId = isSubagentMessage ? (rootRequestId ?? 0) : requestId;
@@ -5096,10 +5138,10 @@ async function fetchHistory(
     if (activeBackendKind.value === 'acp') {
       await Promise.allSettled([fetchAgents(), fetchCommands()]);
     }
-    if (!Array.isArray(data)) return;
-    if (expectedRootRequestId !== primaryHistoryRequestId) return;
-    if (selectedSessionId.value !== expectedRootSessionId) return;
-    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
+    if (!Array.isArray(data)) return false;
+    if (expectedRootRequestId !== primaryHistoryRequestId) return false;
+    if (selectedSessionId.value !== expectedRootSessionId) return false;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
     // 全量加载，避免消息在加载过程中逐步显示导致未加载内容的卡片残留
     if (incremental) {
       await msg.loadHistoryIncrementally(data, {
@@ -5113,9 +5155,9 @@ async function fetchHistory(
       msg.loadHistory(data);
     }
 
-    if (expectedRootRequestId !== primaryHistoryRequestId) return;
-    if (selectedSessionId.value !== expectedRootSessionId) return;
-    if (getSelectedWorktreeDirectory() !== requestedDirectory) return;
+    if (expectedRootRequestId !== primaryHistoryRequestId) return false;
+    if (selectedSessionId.value !== expectedRootSessionId) return false;
+    if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
 
     data.forEach((message) => {
       const info = message.info as Record<string, unknown> | undefined;
@@ -5126,8 +5168,10 @@ async function fetchHistory(
       storeUserMessageMeta(id, meta);
       storeUserMessageTime(id, messageTime);
     });
+    return true;
   } catch (error) {
     log('History load failed', error);
+    return false;
   }
 }
 
@@ -5151,27 +5195,39 @@ function collectReferencedSubagentSessionIds(rootSessionId: string): string[] {
   return resolveThreadSubagentSessions(parts, rootSessionId).map(({ sessionId }) => sessionId);
 }
 
-function hydrateReferencedSubagents(
+async function hydrateReferencedSubagents(
   rootSessionId: string,
   reloadRequestId: number,
 ): Promise<string[]> {
-  if (activeBackendKind.value !== 'opencode') return Promise.resolve([]);
+  if (activeBackendKind.value !== 'opencode') return [];
   const directory = normalizeDirectory(activeDirectory.value);
   const sessionIds = collectReferencedSubagentSessionIds(rootSessionId);
-  if (!directory || sessionIds.length === 0) return Promise.resolve([]);
+  if (!directory || sessionIds.length === 0) return [];
 
-  referencedSubagentHydrationSequence += 1;
-  const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
-  return new Promise<string[]>((resolve) => {
-    pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
-    ge.sendToWorker({
-      type: 'hydrate-referenced-subagents',
-      requestId,
-      rootSessionId,
-      directory,
-      sessionIds,
-    });
-  });
+  return retryReferencedSessionIds(
+    sessionIds,
+    () => {
+      referencedSubagentHydrationSequence += 1;
+      const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
+      return new Promise<string[]>((resolve) => {
+        pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
+        ge.sendToWorker({
+          type: 'hydrate-referenced-subagents',
+          requestId,
+          rootSessionId,
+          directory,
+          sessionIds,
+        });
+      });
+    },
+    {
+      shouldContinue: () =>
+        activeBackendKind.value === 'opencode' &&
+        selectedSessionId.value === rootSessionId &&
+        sessionReloadRequestId.value === reloadRequestId &&
+        normalizeDirectory(activeDirectory.value) === directory,
+    },
+  );
 }
 
 function handleReferencedSubagentHydrationResult(
@@ -5194,10 +5250,11 @@ async function fetchDescendantSessionHistories(
   const descendantSessionIds = Array.from(new Set(candidates)).filter(
     (id) => id !== rootSessionId && allowedSessionIds.value.has(id),
   );
-  if (descendantSessionIds.length === 0) return;
-  await Promise.all(
-    descendantSessionIds.map((id) => fetchHistory(id, true, rootRequestId, rootSessionId, true)),
+  if (descendantSessionIds.length === 0) return true;
+  const results = await mapWithConcurrency(descendantSessionIds, 2, (id) =>
+    fetchHistory(id, true, rootRequestId, rootSessionId, true),
   );
+  return results.every(Boolean);
 }
 
 function scheduleDescendantSessionHistoryHydration(
@@ -5210,7 +5267,8 @@ function scheduleDescendantSessionHistoryHydration(
     if (reloadRequestId !== sessionReloadRequestId.value) return;
     if (selectedSessionId.value !== rootSessionId) return;
     void fetchDescendantSessionHistories(rootSessionId, rootRequestId, referencedSessionIds).then(
-      () => {
+      (loaded) => {
+        if (!loaded) return;
         if (reloadRequestId !== sessionReloadRequestId.value) return;
         if (selectedSessionId.value !== rootSessionId) return;
         hydratedDescendantSessionIds.add(rootSessionId);
@@ -5219,6 +5277,24 @@ function scheduleDescendantSessionHistoryHydration(
     );
   });
 }
+
+useLiveDescendantHistoryHydration({
+  activeBackendKind,
+  selectedSessionId,
+  allowedSessionIds,
+  async hydrate(rootSessionId, descendantSessionIds) {
+    const rootRequestId = primaryHistoryRequestId;
+    const loaded = await fetchDescendantSessionHistories(
+      rootSessionId,
+      rootRequestId,
+      descendantSessionIds,
+    );
+    if (!loaded || selectedSessionId.value !== rootSessionId) return false;
+    hydratedDescendantSessionIds.add(rootSessionId);
+    void reloadTodosForAllowedSessions();
+    return true;
+  },
+});
 
 function buildPtyWsUrl(path: string, directory?: string) {
   const createPtyWebSocketUrl = requireBackendMethod(

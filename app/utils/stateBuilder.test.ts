@@ -92,4 +92,275 @@ describe('createStateBuilder regression', () => {
     expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child).toBeUndefined();
     now.mockRestore();
   });
+
+  it('keeps a child announced by session.created after the ephemeral TTL', () => {
+    const builder = createStateBuilder();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1);
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+
+    builder.processSessionCreated({
+      id: 'child',
+      projectID: 'p1',
+      parentID: 'root',
+      title: 'Live child',
+      slug: 'live-child',
+      directory: '/repo',
+      version: '1',
+      time: { created: 1, updated: 1 },
+    });
+    now.mockReturnValue(20 * 60 * 1000 + 2);
+    builder.applyStatuses({ child: { type: 'idle' } });
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child?.title).toBe(
+      'Live child',
+    );
+    now.mockRestore();
+  });
+
+  it('replays a status event that arrives before session creation', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+
+    expect(builder.processSessionStatus('child', 'busy', 'p1')).toBeNull();
+    builder.processSessionCreated({
+      id: 'child',
+      projectID: 'p1',
+      parentID: 'root',
+      title: 'Running child',
+      slug: 'running-child',
+      directory: '/repo',
+      version: '1',
+      time: { created: 1, updated: 1 },
+    } satisfies SessionInfo);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.child?.status).toBe('busy');
+  });
+
+  it('keeps sessions omitted from a sparse status snapshot unknown', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'root',
+        projectID: 'p1',
+        title: 'Root',
+        slug: 'root',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+
+    builder.applyStatusSnapshot(['root'], {});
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBeUndefined();
+  });
+
+  it('clears an older busy status when an authoritative snapshot omits the session', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'root',
+        projectID: 'p1',
+        title: 'Root',
+        slug: 'root',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+    builder.applyStatuses({ root: { type: 'busy' } });
+
+    builder.applyStatusSnapshot(['root'], {});
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBeUndefined();
+  });
+
+  it('does not let an older omitted snapshot clear a newer snapshot status', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'root',
+        projectID: 'p1',
+        title: 'Root',
+        slug: 'root',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+    const olderRevision = builder.beginStatusSnapshot();
+
+    builder.applyStatusSnapshot(['root'], { root: { type: 'busy' } }, olderRevision);
+    builder.applyStatusSnapshot(['root'], {}, olderRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('busy');
+  });
+
+  it('does not let an older busy snapshot overwrite a newer omitted snapshot', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'root',
+        projectID: 'p1',
+        title: 'Root',
+        slug: 'root',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+    const olderRevision = builder.beginStatusSnapshot();
+
+    builder.applyStatusSnapshot(['root'], {}, olderRevision);
+    builder.applyStatusSnapshot(['root'], { root: { type: 'busy' } }, olderRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBeUndefined();
+  });
+
+  it('does not let an older status snapshot overwrite a newer SSE status', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'root',
+        projectID: 'p1',
+        title: 'Root',
+        slug: 'root',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+    const snapshotRevision = builder.beginStatusSnapshot();
+
+    builder.processSessionStatus('root', 'busy', 'p1');
+    builder.applyStatusSnapshot(['root'], {}, snapshotRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('busy');
+  });
+
+  it('retains deletion fences until an in-flight session snapshot finishes', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    const snapshotRevision = builder.beginMutationSnapshot();
+
+    builder.processSessionDeleted('victim', 'p1');
+    for (let index = 0; index < 10_001; index += 1) {
+      builder.processSessionDeleted(`other-${index}`, 'p1');
+    }
+    builder.applySessionSnapshot(
+      [
+        {
+          id: 'victim',
+          projectID: 'p1',
+          title: 'Victim',
+          slug: 'victim',
+          directory: '/repo',
+          version: '1',
+          time: { created: 1, updated: 1 },
+        },
+      ],
+      snapshotRevision,
+    );
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.victim).toBeUndefined();
+    builder.completeMutationSnapshot(snapshotRevision);
+  });
+
+  it('retains SSE status fences until an in-flight status snapshot finishes', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    builder.applySessions([
+      {
+        id: 'victim',
+        projectID: 'p1',
+        title: 'Victim',
+        slug: 'victim',
+        directory: '/repo',
+        version: '1',
+        time: { created: 1, updated: 1 },
+      },
+    ]);
+    const snapshotRevision = builder.beginStatusSnapshot();
+
+    builder.processSessionStatus('victim', 'busy', 'p1');
+    for (let index = 0; index < 10_001; index += 1) {
+      builder.processSessionStatus(`other-${index}`, 'busy', 'p1');
+    }
+    builder.applyStatusSnapshot(['victim'], { victim: { type: 'idle' } }, snapshotRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.victim?.status).toBe('busy');
+    builder.completeStatusSnapshot(snapshotRevision);
+  });
+
+  it('does not let an older directory snapshot resurrect a deleted session', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    const session: SessionInfo = {
+      id: 'root',
+      projectID: 'p1',
+      title: 'Root',
+      slug: 'root',
+      directory: '/repo',
+      version: '1',
+      time: { created: 1, updated: 1 },
+    };
+    builder.applySessions([session]);
+    const snapshotRevision = builder.beginMutationSnapshot();
+
+    builder.processSessionDeleted('root', 'p1');
+    builder.applySessionSnapshot([session], snapshotRevision);
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root).toBeUndefined();
+  });
+
+  it('materializes a session snapshot after an earlier status-only event', () => {
+    const builder = createStateBuilder();
+    builder.applyProjects([
+      { id: 'p1', worktree: '/repo', sandboxes: [], time: { created: 1, updated: 1 } },
+    ]);
+    const snapshotRevision = builder.beginMutationSnapshot();
+
+    builder.processSessionStatus('root', 'busy', 'p1');
+    builder.applySessionSnapshot(
+      [
+        {
+          id: 'root',
+          projectID: 'p1',
+          title: 'Root',
+          slug: 'root',
+          directory: '/repo',
+          version: '1',
+          time: { created: 1, updated: 1 },
+        },
+      ],
+      snapshotRevision,
+    );
+
+    expect(builder.getState().projects.p1.sandboxes['/repo'].sessions.root?.status).toBe('busy');
+  });
 });

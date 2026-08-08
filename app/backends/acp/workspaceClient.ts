@@ -100,6 +100,9 @@ export class AcpWorkspaceClient {
             userText: record.userText,
             ...(typeof record.userTime === 'number' ? { userTime: record.userTime } : {}),
             ...(typeof record.assistantTime === 'number' ? { assistantTime: record.assistantTime } : {}),
+            ...(typeof record.assistantCompletedTime === 'number'
+              ? { assistantCompletedTime: record.assistantCompletedTime }
+              : {}),
             ...(typeof record.model === 'string' ? { model: record.model } : {}),
             ...(typeof record.agent === 'string' ? { agent: record.agent } : {}),
           },

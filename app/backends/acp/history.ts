@@ -261,6 +261,7 @@ export type AcpSessionTurnMeta = {
   userText: string;
   userTime?: number;
   assistantTime?: number;
+  assistantCompletedTime?: number;
   model?: string;
   agent?: string;
 };
@@ -308,7 +309,10 @@ export function applyAcpSessionMeta(
       const next = { ...assistantEntry.info };
       if (typeof turn.assistantTime === 'number') {
         next.time.created = turn.assistantTime;
-        next.time.completed = turn.assistantTime;
+      }
+      const completedTime = turn.assistantCompletedTime ?? turn.assistantTime;
+      if (typeof completedTime === 'number') {
+        next.time.completed = completedTime;
       }
       if (turn.agent) {
         next.agent = turn.agent;

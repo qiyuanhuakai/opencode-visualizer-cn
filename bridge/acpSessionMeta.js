@@ -5,8 +5,7 @@ import path from 'node:path';
 // Per-turn metadata recovered from an ACP agent's own session storage.
 // ACP v1 replays carry no per-message timestamps/agent/model, so vis falls
 // back to these files for sessions that predate the frontend's local
-// attribution records. Shape returned to the frontend:
-// { userText, userTime, assistantTime?, model?, agent? }
+// attribution records.
 
 function parseJsonLines(content) {
   const rows = [];
@@ -61,6 +60,7 @@ export function parseKimiWireLog(content) {
         userText: textFromBlocks(row.input),
         userTime: typeof row.time === 'number' ? row.time : undefined,
         assistantTime: undefined,
+        assistantCompletedTime: undefined,
         model: undefined,
         agent: agentAt(),
       });
@@ -68,10 +68,11 @@ export function parseKimiWireLog(content) {
     }
     if (row.type === 'usage.record' && row.usageScope === 'turn' && turns.length > 0) {
       const turn = turns[turns.length - 1];
-      if (turn.assistantTime === undefined) {
-        turn.assistantTime = typeof row.time === 'number' ? row.time : undefined;
-        turn.model = typeof row.model === 'string' ? row.model : undefined;
+      if (typeof row.time === 'number') {
+        if (turn.assistantTime === undefined) turn.assistantTime = row.time;
+        turn.assistantCompletedTime = row.time;
       }
+      if (typeof row.model === 'string') turn.model = row.model;
     }
   }
   return turns;
@@ -88,6 +89,7 @@ export function parseOmpSessionLog(content) {
         userText: textFromBlocks(message.content),
         userTime: typeof message.timestamp === 'number' ? message.timestamp : undefined,
         assistantTime: undefined,
+        assistantCompletedTime: undefined,
         model: undefined,
         agent: undefined,
       });
@@ -95,7 +97,13 @@ export function parseOmpSessionLog(content) {
     }
     if (message.role === 'assistant' && turns.length > 0) {
       const turn = turns[turns.length - 1];
-      if (typeof message.timestamp === 'number') turn.assistantTime = message.timestamp;
+      if (typeof message.timestamp === 'number') {
+        turn.assistantTime = message.timestamp;
+        turn.assistantCompletedTime =
+          typeof message.duration === 'number'
+            ? message.timestamp + message.duration
+            : message.timestamp;
+      }
       if (typeof message.provider === 'string' && typeof message.model === 'string') {
         turn.model = `${message.provider}/${message.model}`;
       }
@@ -162,11 +170,15 @@ export async function loadAcpSessionTurnMeta(agentId, sessionId, options = {}) {
     return parseKimiWireLog(await readFile(file, 'utf8'));
   }
 
-  if (agentId === 'oh-my-pi') {
-    const sessionsRoot = path.join(homeDir, '.omp', 'agent', 'sessions');
+  if (agentId === 'pi' || agentId === 'oh-my-pi') {
+    const agentHome = agentId === 'pi' ? '.pi' : '.omp';
+    const sessionsRoot = path.join(homeDir, agentHome, 'agent', 'sessions');
     const candidates = await findFileRecursive(
       sessionsRoot,
-      (file) => file.endsWith('.jsonl') && path.basename(file).includes(sessionId),
+      (file) => {
+        const name = path.basename(file);
+        return name === `${sessionId}.jsonl` || name.endsWith(`_${sessionId}.jsonl`);
+      },
       2,
     );
     const file = await newestFile(candidates);

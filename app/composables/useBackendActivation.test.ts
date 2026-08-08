@@ -173,6 +173,17 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
 }
 
 describe('useBackendActivation', () => {
+  it.each(['opencode', 'acp'] as const)(
+    'keeps the independent Codex panel client connected while activating %s',
+    async (backendKind) => {
+      const harness = createHarness(backendKind);
+
+      await harness.activation.startInitialization();
+
+      expect(harness.codexApi.disconnect).not.toHaveBeenCalled();
+    },
+  );
+
   it('resets shared OpenCode state and runs the shared activation sequence', async () => {
     const harness = createHarness('opencode');
 

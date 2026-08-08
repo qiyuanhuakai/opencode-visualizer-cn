@@ -556,6 +556,7 @@ const props = defineProps<{
     lineComment?: { path: string; startLine: number; endLine: number; text: string };
   }>;
   currentSessionId?: string;
+  sessionParentById?: ReadonlyMap<string, string | undefined>;
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
@@ -602,7 +603,7 @@ const acceptMime = computed(() => props.attachmentAccept ?? '*/*');
 const { enterToSend } = useSettings();
 
 // --- Input history navigation ---
-const { roots: messageRoots, getTextContent } = useMessages();
+const { roots: messageRoots, getPartsByType } = useMessages();
 const historyOpen = ref(false);
 const favoritesOpen = ref(false);
 
@@ -687,11 +688,30 @@ function hasHistoryEntryTarget(entry: HistoryEntry) {
 
 const { favorites, addFavorite, removeFavorite, isFavorite } = useFavoriteMessages();
 
+function stripTerminalSystemReminder(text: string) {
+  const start = text.lastIndexOf('<system-reminder>');
+  if (start < 0) return text;
+  const closingTag = '</system-reminder>';
+  const end = text.indexOf(closingTag, start);
+  if (end < 0) return text;
+  const suffix = text.slice(end + closingTag.length);
+  if (!/^\s*(?:<!--\s*OMO_INTERNAL_[A-Z_]+\s*-->\s*)*$/u.test(suffix)) return text;
+  return text.slice(0, start);
+}
+
 const userHistory = computed(() => {
   const result: HistoryEntry[] = [];
   for (const msg of messageRoots.value) {
     if (msg.role !== 'user') continue;
-    const text = getTextContent(msg.id);
+    if (props.sessionParentById?.get(msg.sessionID)) continue;
+    let visibleText = '';
+    for (const part of getPartsByType(msg.id, 'text')) {
+      if (part.synthetic || part.ignored) continue;
+      const visiblePart = stripTerminalSystemReminder(part.text);
+      visibleText += visiblePart;
+      if (visiblePart !== part.text) break;
+    }
+    const text = visibleText.trim();
     if (!text) continue;
     const agent = 'agent' in msg ? (msg.agent as string | undefined) : undefined;
     const agentOption = agent ? props.agentOptions.find((a) => a.id === agent) : undefined;

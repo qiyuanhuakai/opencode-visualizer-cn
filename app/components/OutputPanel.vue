@@ -20,74 +20,39 @@
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
             <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
-              <!-- Normal rendering for small sessions (≤20 threads) -->
-              <template v-if="!shouldVirtualize">
-                <template v-for="root in visibleRoots" :key="root.id">
-                  <ThreadBlock
-                    v-show="!isLoading && shouldRenderRoot(root)"
-                    :root="root"
-                    :theme="theme"
-                    :files-with-basenames="filesWithBasenames"
-                    :is-reverted-preview="isRevertedPreview(root)"
-                    :current-session-id="currentSessionId"
-                    :session-history-meta-by-id="sessionHistoryMetaById"
-                    :resolve-agent-color="resolveAgentColor"
-                    :resolve-model-meta="resolveModelMeta"
-                    :compute-context-percent="computeContextPercent"
-                    :session-revert="sessionRevert"
-                    :backend-kind="backendKind"
-                    :is-latest-root="root.id === latestRootId"
-                    :assistant-html="getAssistantHtml(root.id)"
-                    :deferred-transition-key="getDeferredTransitionKey(root)"
-                    @fork-message="emit('fork-message', $event)"
-                    @revert-message="emit('revert-message', $event)"
-                    @undo-revert="emit('undo-revert')"
-                    @show-message-diff="emit('show-message-diff', $event)"
-                    @open-image="emit('open-image', $event)"
-                    @show-thread-history="emit('show-thread-history', $event)"
-                    @show-subagent-history="emit('show-subagent-history', $event)"
-                    @message-rendered="handleMessageRendered"
-                  />
-                </template>
-              </template>
-
-              <!-- Virtual scroll for large sessions (>20 threads) -->
-              <template v-else>
-                <div class="virtual-scroll-spacer" :style="{ height: `${virtualTopSpacerHeight}px` }"></div>
                 <div
                   v-for="root in visibleThreadRoots"
                   :key="root.id"
-                  class="virtual-scroll-item"
-                  :ref="(el) => setThreadRef(el as HTMLElement | null, root.id)"
+                  class="thread-card-item"
+                  :data-root-id="root.id"
                 >
                   <ThreadBlock
-                    v-show="!isLoading && shouldRenderRoot(root)"
-                    :root="root"
-                    :theme="theme"
-                    :files-with-basenames="filesWithBasenames"
-                    :is-reverted-preview="isRevertedPreview(root)"
-                    :current-session-id="currentSessionId"
-                    :session-history-meta-by-id="sessionHistoryMetaById"
-                    :resolve-agent-color="resolveAgentColor"
-                    :resolve-model-meta="resolveModelMeta"
-                    :compute-context-percent="computeContextPercent"
-                    :session-revert="sessionRevert"
-                    :backend-kind="backendKind"
-                    :is-latest-root="root.id === latestRootId"
-                    :assistant-html="getAssistantHtml(root.id)"
-                    :deferred-transition-key="getDeferredTransitionKey(root)"
-                    @fork-message="emit('fork-message', $event)"
-                    @revert-message="emit('revert-message', $event)"
-                    @undo-revert="emit('undo-revert')"
-                    @show-message-diff="emit('show-message-diff', $event)"
-                    @open-image="emit('open-image', $event)"
-                    @show-thread-history="emit('show-thread-history', $event)"
-                    @show-subagent-history="emit('show-subagent-history', $event)"
-                    @message-rendered="handleMessageRendered"
+                  v-show="!isLoading && shouldRenderRoot(root)"
+                  :root="root"
+                  :theme="theme"
+                  :files-with-basenames="filesWithBasenames"
+                  :is-reverted-preview="isRevertedPreview(root)"
+                  :current-session-id="currentSessionId"
+                  :session-history-meta-by-id="sessionHistoryMetaById"
+                  :description-child-session-ids="descriptionChildIdsByRoot[root.id] ?? []"
+                  :resolve-agent-color="resolveAgentColor"
+                  :resolve-model-meta="resolveModelMeta"
+                  :compute-context-percent="computeContextPercent"
+                  :session-revert="sessionRevert"
+                  :backend-kind="backendKind"
+                  :is-latest-root="root.id === latestRootId"
+                  :assistant-html="getAssistantHtml(root.id)"
+                  :deferred-transition-key="getDeferredTransitionKey(root)"
+                  @fork-message="emit('fork-message', $event)"
+                  @revert-message="emit('revert-message', $event)"
+                  @undo-revert="emit('undo-revert')"
+                  @show-message-diff="emit('show-message-diff', $event)"
+                  @open-image="emit('open-image', $event)"
+                  @show-thread-history="emit('show-thread-history', $event)"
+                  @show-subagent-history="emit('show-subagent-history', $event)"
+                  @message-rendered="handleMessageRendered"
                   />
                 </div>
-                <div class="virtual-scroll-spacer" :style="{ height: `${virtualBottomSpacerHeight}px` }"></div>
-              </template>
             </div>
 
             <FileRefPopup ref="fileRefPopupRef" :files="files" @open-file="handlePopupOpenFile" />
@@ -117,7 +82,7 @@
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import FileRefPopup from './FileRefPopup.vue';
 import StatusBar from './StatusBar.vue';
@@ -135,6 +100,12 @@ import type {
 } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
+import { resolveChildOwners } from '../utils/threadSubagents';
+import {
+  initialProgressiveRootWindow,
+  preserveProgressiveRootWindowOnAppend,
+  shiftProgressiveRootWindow,
+} from '../utils/progressiveRoots';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -157,7 +128,10 @@ const props = defineProps<{
   projectName?: string;
   projectColor?: string;
   currentSessionId?: string;
-  sessionHistoryMetaById?: Record<string, { parentID?: string; label: string }>;
+  sessionHistoryMetaById?: Record<
+    string,
+    { parentID?: string; label: string; status?: 'busy' | 'idle' | 'retry' }
+  >;
   isLoading?: boolean;
   isAnchoring?: boolean;
   sessionRevert?: {
@@ -193,7 +167,54 @@ const visibleRoots = computed(() => {
   return msg.roots.value.filter((root) => root.sessionID === currentSessionId);
 });
 
+const THREAD_BATCH_SIZE = 20;
+const THREAD_WINDOW_MAX = 100;
+const renderableRoots = computed(() => visibleRoots.value.filter(shouldRenderRoot));
+const rootWindow = ref(initialProgressiveRootWindow(renderableRoots.value.length, THREAD_BATCH_SIZE));
+let windowShiftInProgress = false;
+let windowShiftQueued = false;
+let windowShiftGeneration = 0;
+const visibleThreadRoots = computed(() =>
+  renderableRoots.value.slice(rootWindow.value.start, rootWindow.value.end),
+);
+
+watch(
+  () => props.currentSessionId,
+  () => {
+    rootWindow.value = initialProgressiveRootWindow(
+      renderableRoots.value.length,
+      THREAD_BATCH_SIZE,
+    );
+  },
+);
+
+watch(renderableRoots, (nextRoots, previousRoots) => {
+  if (props.isLoading || previousRoots.length === 0) {
+    rootWindow.value = initialProgressiveRootWindow(nextRoots.length, THREAD_BATCH_SIZE);
+    return;
+  }
+  rootWindow.value = preserveProgressiveRootWindowOnAppend(
+    previousRoots.map((root) => root.id),
+    nextRoots.map((root) => root.id),
+    rootWindow.value,
+    THREAD_WINDOW_MAX,
+    props.isFollowing,
+  );
+});
+
 const latestRootId = computed(() => visibleRoots.value.at(-1)?.id ?? '');
+const descriptionChildIdsByRoot = computed(() => {
+  const rootSessionId = props.currentSessionId?.trim();
+  if (!rootSessionId) return {};
+  return resolveChildOwners(
+    visibleRoots.value.map((root) => ({
+      rootId: root.id,
+      parts: msg.getThread(root.id).flatMap((message) => msg.getParts(message.id)),
+    })),
+    rootSessionId,
+    props.sessionHistoryMetaById ?? {},
+  );
+});
 
 const revertedPreviewRootId = computed(() => {
   const revert = props.sessionRevert;
@@ -286,101 +307,7 @@ let contentResizeObserver: ResizeObserver | undefined;
 let resizeNotifyFrameId: number | null = null;
 let scrollToBottomFrameId: number | null = null;
 let settleScrollToBottom: (() => void) | null = null;
-let restoreAnchorFrameId: number | null = null;
-let restoreAnchorToken = 0;
-
-// ── Virtual scroll ──────────────────────────────────────────────
-const THREAD_ESTIMATED_HEIGHT = 240;
-const OVERSCAN_COUNT = 2;
-
-const scrollTop = ref(0);
-const containerHeight = ref(0);
-const measuredHeights = shallowRef<Map<string, number>>(new Map());
-let pendingScrollTop = 0;
-let scrollFrameId: number | null = null;
-
-let containerHeightFrameId: number | null = null;
-let containerResizeObserver: ResizeObserver | undefined;
-
-let threadResizeObserver: ResizeObserver | undefined;
-const observedThreadElements = new Map<Element, string>();
-const threadElementsById = new Map<string, HTMLElement>();
-let heightUpdateFrameId: number | null = null;
-const pendingHeightUpdates = new Map<string, number>();
-
-const shouldVirtualize = computed(() => visibleRoots.value.length > 20);
 const shouldHideMessages = computed(() => Boolean(props.isAnchoring && !props.isLoading));
-
-function getThreadHeight(root: MessageInfo): number {
-  if (!shouldRenderRoot(root)) return 0;
-  return measuredHeights.value.get(root.id) ?? THREAD_ESTIMATED_HEIGHT;
-}
-
-const threadOffsets = computed(() => {
-  const map = new Map<string, number>();
-  const offsets: number[] = [];
-  let offset = 0;
-  for (const root of visibleRoots.value) {
-    map.set(root.id, offset);
-    offsets.push(offset);
-    offset += getThreadHeight(root);
-  }
-  return { map, offsets, totalHeight: offset };
-});
-
-const visibleThreadWindow = computed(() => {
-  const roots = visibleRoots.value;
-  if (roots.length <= 20) {
-    return {
-      roots,
-      startIdx: 0,
-      endIdx: roots.length,
-      topSpacerHeight: 0,
-      bottomSpacerHeight: 0,
-    };
-  }
-
-  const { offsets } = threadOffsets.value;
-
-  // Binary search for first visible item
-  let lo = 0;
-  let hi = roots.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    const itemBottom = offsets[mid] + getThreadHeight(roots[mid]);
-    if (itemBottom < scrollTop.value) {
-      lo = mid + 1;
-    } else {
-      hi = mid;
-    }
-  }
-
-  const startIdx = Math.max(0, lo - OVERSCAN_COUNT);
-
-  // Find last visible item
-  let endIdx = lo;
-  while (endIdx < roots.length && offsets[endIdx] < scrollTop.value + containerHeight.value) {
-    endIdx++;
-  }
-  endIdx = Math.min(roots.length, endIdx + OVERSCAN_COUNT);
-
-  let visibleHeight = 0;
-  for (let idx = startIdx; idx < endIdx; idx++) {
-    visibleHeight += getThreadHeight(roots[idx]);
-  }
-
-  return {
-    roots: roots.slice(startIdx, endIdx),
-    startIdx,
-    endIdx,
-    topSpacerHeight: offsets[startIdx] ?? 0,
-    bottomSpacerHeight: Math.max(0, threadOffsets.value.totalHeight - (offsets[startIdx] ?? 0) - visibleHeight),
-  };
-});
-
-const visibleThreadRoots = computed(() => visibleThreadWindow.value.roots);
-const virtualTopSpacerHeight = computed(() => visibleThreadWindow.value.topSpacerHeight);
-const virtualBottomSpacerHeight = computed(() => visibleThreadWindow.value.bottomSpacerHeight);
 
 const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
   visibleRoots: visibleThreadRoots,
@@ -394,162 +321,54 @@ const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
   onRendered: handleMessageRendered,
 });
 
-function onPanelScroll() {
-  const panel = panelEl.value;
-  if (!panel) return;
-
-  // RAF-throttled scroll tracking for virtual scroll
-  pendingScrollTop = panel.scrollTop;
-  if (scrollFrameId !== null) return;
-  scrollFrameId = requestAnimationFrame(() => {
-    scrollFrameId = null;
-    scrollTop.value = pendingScrollTop;
-  });
-}
-
-function updateContainerHeight() {
-  if (!panelEl.value) return;
-  const nextHeight = panelEl.value.clientHeight;
-  if (containerHeight.value === nextHeight) return;
-  containerHeight.value = nextHeight;
-}
-
-function scheduleContainerHeightUpdate() {
-  if (containerHeightFrameId !== null) return;
-  containerHeightFrameId = requestAnimationFrame(() => {
-    containerHeightFrameId = null;
-    updateContainerHeight();
-  });
-}
-
-function setupContainerResizeObserver() {
-  containerResizeObserver?.disconnect();
-  containerResizeObserver = undefined;
-  if (typeof ResizeObserver === 'undefined') return;
-  const target = panelEl.value;
-  if (!target) return;
-  containerResizeObserver = new ResizeObserver(() => {
-    scheduleContainerHeightUpdate();
-  });
-  containerResizeObserver.observe(target);
-}
-
-function setupThreadResizeObserver() {
-  threadResizeObserver?.disconnect();
-  observedThreadElements.clear();
-  threadResizeObserver = undefined;
-  if (typeof ResizeObserver === 'undefined') return;
-
-  threadResizeObserver = new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      const rootId = observedThreadElements.get(entry.target);
-      if (!rootId) continue;
-      pendingHeightUpdates.set(rootId, entry.contentRect.height);
-    }
-    if (heightUpdateFrameId !== null) return;
-    heightUpdateFrameId = requestAnimationFrame(() => {
-      heightUpdateFrameId = null;
-      if (pendingHeightUpdates.size === 0) return;
-      const anchor = captureViewportAnchor();
-      const newHeights = new Map(measuredHeights.value);
-      for (const [rootId, height] of pendingHeightUpdates) {
-        newHeights.set(rootId, height);
-      }
-      pendingHeightUpdates.clear();
-      measuredHeights.value = newHeights;
-      emit('content-resized');
-      if (anchor) {
-        restoreAnchorToken += 1;
-        const token = restoreAnchorToken;
-        nextTick(() => {
-          if (token !== restoreAnchorToken) return;
-          if (restoreAnchorFrameId !== null) {
-            cancelAnimationFrame(restoreAnchorFrameId);
-          }
-          restoreAnchorFrameId = requestAnimationFrame(() => {
-            restoreAnchorFrameId = null;
-            if (token !== restoreAnchorToken) return;
-            restoreViewportAnchor(anchor);
-          });
-        });
-      }
-    });
-  });
-}
-
-function observeThreadElement(el: HTMLElement | null, rootId: string) {
-  if (!el || !threadResizeObserver) return;
-  // Clean up any previous observation for this rootId
-  for (const [observedEl, observedId] of observedThreadElements) {
-    if (observedId === rootId && observedEl !== el) {
-      threadResizeObserver.unobserve(observedEl);
-      observedThreadElements.delete(observedEl);
-      if (threadElementsById.get(rootId) === observedEl) {
-        threadElementsById.delete(rootId);
-      }
+async function onPanelScroll(event: Event) {
+  emit('scroll');
+  const panel = event.currentTarget;
+  if (!(panel instanceof HTMLDivElement)) return;
+  if (windowShiftInProgress) {
+    windowShiftQueued = true;
+    return;
+  }
+  const nearTop = panel.scrollTop <= 80 && rootWindow.value.start > 0;
+  const nearBottom =
+    panel.scrollHeight - panel.scrollTop - panel.clientHeight <= 80 &&
+    rootWindow.value.end < renderableRoots.value.length;
+  if (!nearTop && !nearBottom) return;
+  windowShiftInProgress = true;
+  const shiftGeneration = ++windowShiftGeneration;
+  const direction = nearTop ? 'older' : 'newer';
+  const anchorRootId = nearTop
+    ? visibleThreadRoots.value[0]?.id
+    : visibleThreadRoots.value.at(-1)?.id;
+  const anchorBefore = contentEl.value?.querySelector<HTMLElement>(
+    `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
+  );
+  const anchorTopBefore = anchorBefore?.getBoundingClientRect().top;
+  rootWindow.value = shiftProgressiveRootWindow(
+    rootWindow.value,
+    renderableRoots.value.length,
+    direction,
+    THREAD_BATCH_SIZE,
+    THREAD_WINDOW_MAX,
+  );
+  for (const delayMs of [0, 32, 96]) {
+    if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    if (shiftGeneration !== windowShiftGeneration) return;
+    await nextTick();
+    const anchorAfter = contentEl.value?.querySelector<HTMLElement>(
+      `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
+    );
+    if (anchorTopBefore !== undefined && anchorAfter) {
+      panel.scrollTop += anchorAfter.getBoundingClientRect().top - anchorTopBefore;
     }
   }
-  observedThreadElements.set(el, rootId);
-  threadElementsById.set(rootId, el);
-  threadResizeObserver.observe(el);
-}
-
-function unobserveThreadElement(el: Element | null) {
-  if (!el || !threadResizeObserver) return;
-  const rootId = observedThreadElements.get(el);
-  if (rootId && threadElementsById.get(rootId) === el) {
-    threadElementsById.delete(rootId);
-  }
-  observedThreadElements.delete(el);
-  threadResizeObserver.unobserve(el);
-}
-
-type ViewportAnchor = {
-  rootId: string;
-  offsetTop: number;
-};
-
-function captureViewportAnchor(): ViewportAnchor | null {
-  if (!shouldVirtualize.value || props.isFollowing) return null;
-  const panel = panelEl.value;
-  if (!panel) return null;
-  const panelTop = panel.getBoundingClientRect().top;
-  for (const root of visibleThreadRoots.value) {
-    const el = threadElementsById.get(root.id);
-    if (!el) continue;
-    const rect = el.getBoundingClientRect();
-    if (rect.bottom <= panelTop) continue;
-    return {
-      rootId: root.id,
-      offsetTop: rect.top - panelTop,
-    };
-  }
-  return null;
-}
-
-function restoreViewportAnchor(anchor: ViewportAnchor) {
-  const panel = panelEl.value;
-  const el = threadElementsById.get(anchor.rootId);
-  if (!panel || !el) return;
-  const panelTop = panel.getBoundingClientRect().top;
-  const nextTop = el.getBoundingClientRect().top - panelTop;
-  const delta = nextTop - anchor.offsetTop;
-  if (Math.abs(delta) <= 0.5) return;
-  panel.scrollTop += delta;
-  pendingScrollTop = panel.scrollTop;
-  scrollTop.value = panel.scrollTop;
-}
-
-function setThreadRef(el: unknown, rootId: string) {
-  if (el instanceof HTMLElement) {
-    observeThreadElement(el, rootId);
-  } else if (el === null) {
-    for (const [observedEl, observedId] of observedThreadElements) {
-      if (observedId === rootId) {
-        unobserveThreadElement(observedEl);
-        break;
-      }
-    }
+  windowShiftInProgress = false;
+  const replayQueuedScroll = windowShiftQueued;
+  windowShiftQueued = false;
+  if (props.isFollowing && rootWindow.value.end < renderableRoots.value.length) {
+    void scrollToBottom();
+  } else if (replayQueuedScroll) {
+    panel.dispatchEvent(new Event('scroll'));
   }
 }
 
@@ -590,56 +409,38 @@ watch(contentEl, () => {
 
 onMounted(() => {
   setupContentResizeObserver();
-  setupContainerResizeObserver();
-  setupThreadResizeObserver();
   nextTick(() => {
     emit('content-resized');
-    updateContainerHeight();
   });
 });
 
 onBeforeUnmount(() => {
   contentResizeObserver?.disconnect();
   contentResizeObserver = undefined;
-  containerResizeObserver?.disconnect();
-  containerResizeObserver = undefined;
-  threadResizeObserver?.disconnect();
-  threadResizeObserver = undefined;
-  observedThreadElements.clear();
-  threadElementsById.clear();
   if (resizeNotifyFrameId !== null) {
     cancelAnimationFrame(resizeNotifyFrameId);
     resizeNotifyFrameId = null;
-  }
-  if (scrollFrameId !== null) {
-    cancelAnimationFrame(scrollFrameId);
-    scrollFrameId = null;
-  }
-  if (containerHeightFrameId !== null) {
-    cancelAnimationFrame(containerHeightFrameId);
-    containerHeightFrameId = null;
-  }
-  if (heightUpdateFrameId !== null) {
-    cancelAnimationFrame(heightUpdateFrameId);
-    heightUpdateFrameId = null;
   }
   if (scrollToBottomFrameId !== null) {
     cancelAnimationFrame(scrollToBottomFrameId);
     scrollToBottomFrameId = null;
   }
-  if (restoreAnchorFrameId !== null) {
-    cancelAnimationFrame(restoreAnchorFrameId);
-    restoreAnchorFrameId = null;
-  }
-  restoreAnchorToken += 1;
   settleScrollToBottom?.();
   settleScrollToBottom = null;
   fileRefPopupRef.value?.closeFilePopup();
 });
 
-function scrollToBottom(): Promise<void> {
+async function scrollToBottom(): Promise<void> {
+  windowShiftGeneration += 1;
+  windowShiftInProgress = false;
+  windowShiftQueued = false;
+  rootWindow.value = initialProgressiveRootWindow(
+    renderableRoots.value.length,
+    THREAD_WINDOW_MAX,
+  );
+  await nextTick();
   const panel = panelEl.value;
-  if (!panel) return Promise.resolve();
+  if (!panel) return;
 
   if (scrollToBottomFrameId !== null) {
     cancelAnimationFrame(scrollToBottomFrameId);

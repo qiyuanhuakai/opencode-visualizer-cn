@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { MessagePart, ToolPart } from '../types/sse';
-import { resolveThreadSubagentSessions } from './threadSubagents';
+import {
+  resolveChildOwners,
+  resolveThreadSubagentSessions,
+} from './threadSubagents';
 
 const CURRENT_SESSION = 'ses-parent';
 
@@ -9,6 +12,7 @@ function makeTaskPart(
   callId: string,
   metadata: Record<string, unknown> | undefined,
   status: 'pending' | 'running' | 'completed' | 'error' = 'completed',
+  input: Record<string, unknown> = {},
 ): ToolPart {
   const base = {
     id: `part-${callId}`,
@@ -19,22 +23,22 @@ function makeTaskPart(
     tool: 'task',
   };
   if (status === 'pending') {
-    return { ...base, state: { status, input: {}, raw: '' } };
+    return { ...base, state: { status, input, raw: '' } };
   }
   if (status === 'running') {
-    return { ...base, state: { status, input: {}, metadata, time: { start: 1 } } };
+    return { ...base, state: { status, input, metadata, time: { start: 1 } } };
   }
   if (status === 'error') {
     return {
       ...base,
-      state: { status, input: {}, error: 'boom', metadata, time: { start: 1, end: 2 } },
+      state: { status, input, error: 'boom', metadata, time: { start: 1, end: 2 } },
     };
   }
   return {
     ...base,
     state: {
       status,
-      input: {},
+      input,
       output: 'done',
       title: 'task',
       metadata: metadata ?? {},
@@ -78,6 +82,67 @@ describe('resolveThreadSubagentSessions', () => {
     const parts: MessagePart[] = [];
     const meta = { 'ses-child-1': { parentID: CURRENT_SESSION, label: 'child' } };
     expect(resolveThreadSubagentSessions(parts, CURRENT_SESSION, meta)).toEqual([]);
+  });
+
+  it('attributes a live child by a unique task description before metadata arrives', () => {
+    const pendingTask = makeTaskPart('task-description', undefined, 'pending', {
+      description: 'Trace status bugs',
+    });
+
+    expect(
+      resolveChildOwners(
+        [
+          { rootId: 'root-1', parts: [pendingTask] },
+          { rootId: 'root-2', parts: [] },
+        ],
+        CURRENT_SESSION,
+        { child: { parentID: CURRENT_SESSION, label: 'Trace status bugs' } },
+      ),
+    ).toEqual({ 'root-1': ['child'] });
+  });
+
+  it('places an ambiguous child on the latest thread until exact metadata arrives', () => {
+    const first = makeTaskPart('task-1', undefined, 'pending', {
+      description: 'Duplicate task',
+    });
+    const second = makeTaskPart('task-2', undefined, 'pending', {
+      description: 'Duplicate task',
+    });
+
+    expect(
+      resolveChildOwners(
+        [
+          { rootId: 'root-1', parts: [first] },
+          { rootId: 'root-2', parts: [second] },
+        ],
+        CURRENT_SESSION,
+        { child: { parentID: CURRENT_SESSION, label: 'Duplicate task' } },
+      ),
+    ).toEqual({ 'root-2': ['child'] });
+  });
+
+  it('removes the latest-thread fallback when exact metadata arrives', () => {
+    const exact = makeTaskPart('task-1', { sessionId: 'child' }, 'running', {
+      description: 'Duplicate task',
+    });
+    const ambiguous = makeTaskPart('task-2', undefined, 'pending', {
+      description: 'Duplicate task',
+    });
+    const meta = { child: { parentID: CURRENT_SESSION, label: 'Duplicate task' } };
+
+    expect(
+      resolveChildOwners(
+        [
+          { rootId: 'root-1', parts: [exact] },
+          { rootId: 'root-2', parts: [ambiguous] },
+        ],
+        CURRENT_SESSION,
+        meta,
+      ),
+    ).toEqual({});
+    expect(resolveThreadSubagentSessions([exact], CURRENT_SESSION, meta)).toEqual([
+      { sessionId: 'child', label: 'Duplicate task' },
+    ]);
   });
 
   it('only attributes the subagent to the spawning thread when several threads exist', () => {
