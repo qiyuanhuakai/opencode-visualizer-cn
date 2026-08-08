@@ -169,7 +169,7 @@ pnpm bridge:build
 ./dist-bridge/vis_bridge start
 ```
 
-vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 中 Kimi Code、Oh My Pi 与 Pi 默认启用，其余可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。守护进程的状态和日志保存在当前用户目录中（Linux：`~/.local/state/vis/bridge`，macOS：`~/Library/Application Support/vis/bridge`，Windows：`%LOCALAPPDATA%\vis\bridge`）。
+vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 中 Kimi Code、Oh My Pi 与 Pi 默认启用，其余可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。守护进程的状态和日志保存在当前用户目录中（Linux：`~/.local/state/vis/bridge`，macOS：`~/Library/Application Support/vis/bridge`，Windows：`%LOCALAPPDATA%\vis\bridge`）。直接通过 `--bridge-token` 或 `--upstream-token` 传入的密钥不会写入守护进程状态或长期保留在进程参数中；需要无参数 `restart` 时请改用环境变量或 token 文件。
 ### 使用 Codex Panel
 
 1. 进入 Vis 的"设置"
@@ -471,7 +471,7 @@ pnpm bridge:build
 ./dist-bridge/vis_bridge start
 ```
 
-vis_bridge automatically adopts or starts the default OpenCode and Codex services. Among ACP agents, Kimi Code, Oh My Pi, and Pi are enabled by default; others can be enabled under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required. Daemon state and logs are stored per user (Linux: `~/.local/state/vis/bridge`; macOS: `~/Library/Application Support/vis/bridge`; Windows: `%LOCALAPPDATA%\vis\bridge`).
+vis_bridge automatically adopts or starts the default OpenCode and Codex services. Among ACP agents, Kimi Code, Oh My Pi, and Pi are enabled by default; others can be enabled under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required. Daemon state and logs are stored per user (Linux: `~/.local/state/vis/bridge`; macOS: `~/Library/Application Support/vis/bridge`; Windows: `%LOCALAPPDATA%\vis\bridge`). Secrets passed directly through `--bridge-token` or `--upstream-token` are removed from the daemon command line and state; use environment variables or token files when unattended `restart` is required.
 
 ### Using Codex Panel
 
