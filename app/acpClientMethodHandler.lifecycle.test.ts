@@ -125,4 +125,39 @@ describe('ACP client generation lifecycle', () => {
     await expect(creating).rejects.toThrow('ACP agent is not active');
     expect(release).toHaveBeenCalledExactlyOnceWith('late-terminal');
   });
+
+  it('retains terminal ownership when release fails so the same agent can retry', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-acp-owner-'));
+    tempDirectories.push(directory);
+    const release = vi
+      .fn<() => Promise<object>>()
+      .mockRejectedValueOnce(new Error('terminal tree survived'))
+      .mockResolvedValueOnce({});
+    const handler = createAcpClientMethodHandler({
+      terminalManager: {
+        create: vi.fn(async () => ({ terminalId: 'terminal-1' })),
+        output: vi.fn(),
+        waitForExit: vi.fn(),
+        kill: vi.fn(),
+        release,
+        stopAll: vi.fn(),
+      },
+    });
+    registerSession(handler, 'agent', 'session', directory, 1);
+    await handler(
+      {
+        id: 2,
+        method: 'terminal/create',
+        params: { sessionId: 'session', command: process.execPath, args: ['-e', ''] },
+      },
+      { agentId: 'agent' },
+    );
+
+    await expect(handler.releaseAgent('agent')).rejects.toThrow('terminal tree survived');
+    await expect(handler.releaseAgent('agent')).resolves.toBeUndefined();
+
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenNthCalledWith(1, 'terminal-1');
+    expect(release).toHaveBeenNthCalledWith(2, 'terminal-1');
+  });
 });

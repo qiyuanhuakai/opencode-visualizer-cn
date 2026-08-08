@@ -240,15 +240,21 @@ export function createAcpClientMethodHandler(options = {}) {
     const ownedTerminalIds = [...terminalOwners.entries()]
       .filter(([, owner]) => owner.agentId === agentId)
       .map(([terminalId]) => terminalId);
-    await Promise.allSettled(
+    const releaseResults = await Promise.allSettled(
       ownedTerminalIds.map((terminalId) => terminalManager.release(terminalId)),
     );
-    for (const terminalId of ownedTerminalIds) terminalOwners.delete(terminalId);
+    for (const [index, result] of releaseResults.entries()) {
+      if (result.status === 'fulfilled') terminalOwners.delete(ownedTerminalIds[index]);
+    }
     for (const [requestId, pending] of pendingSessions.entries()) {
       if (pending.agentId === agentId) pendingSessions.delete(requestId);
     }
     for (const [sessionId, session] of sessionRoots.entries()) {
       if (session.agentId === agentId) sessionRoots.delete(sessionId);
+    }
+    const failure = releaseResults.find((result) => result.status === 'rejected');
+    if (failure?.status === 'rejected') {
+      throw failure.reason instanceof Error ? failure.reason : new Error(String(failure.reason));
     }
   };
   handler.resumeAgent = (agentId) => {
