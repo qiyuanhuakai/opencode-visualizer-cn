@@ -50,18 +50,31 @@ export function createAcpStdoutForwarder(options) {
   }
 
   return function forwardStdout(entry, chunk) {
-    entry.stdoutBuffer += String(chunk);
-    if (entry.stdoutBuffer.length > MAX_STDOUT_FRAME_CHARS) {
-      entry.stdoutBuffer = '';
-      entry.status.droppedFrames += 1;
-      return;
+    let text = String(chunk);
+    if (entry.discardingOversizedFrame) {
+      const newline = text.indexOf('\n');
+      if (newline < 0) return;
+      text = text.slice(newline + 1);
+      entry.discardingOversizedFrame = false;
     }
+    entry.stdoutBuffer += text;
     while (true) {
       const newline = entry.stdoutBuffer.indexOf('\n');
-      if (newline < 0) return;
+      if (newline < 0) {
+        if (entry.stdoutBuffer.length > MAX_STDOUT_FRAME_CHARS) {
+          entry.stdoutBuffer = '';
+          entry.discardingOversizedFrame = true;
+          entry.status.droppedFrames += 1;
+        }
+        return;
+      }
       const line = entry.stdoutBuffer.slice(0, newline).replace(/\r$/u, '');
       entry.stdoutBuffer = entry.stdoutBuffer.slice(newline + 1);
       if (!line) continue;
+      if (line.length > MAX_STDOUT_FRAME_CHARS) {
+        entry.status.droppedFrames += 1;
+        continue;
+      }
       let message;
       try {
         message = JSON.parse(line);
