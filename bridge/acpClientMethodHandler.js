@@ -44,13 +44,20 @@ export function createAcpClientMethodHandler(options = {}) {
   const terminalOwners = new Map();
   const pendingSessions = new Map();
   const sessionRoots = new Map();
+  const inactiveAgents = new Set();
 
   function observeClientMessage(message, context) {
+    if (inactiveAgents.has(context.agentId)) return;
     const params = toRecord(message.params);
     if (!params) return;
     if (message.method === 'session/new' && 'id' in message) {
       const roots = parseRoots(params);
-      if (roots) pendingSessions.set(requestKey(context.agentId, message.id), roots);
+      if (roots) {
+        pendingSessions.set(requestKey(context.agentId, message.id), {
+          agentId: context.agentId,
+          roots,
+        });
+      }
       return;
     }
     if (
@@ -58,19 +65,25 @@ export function createAcpClientMethodHandler(options = {}) {
       typeof params.sessionId === 'string'
     ) {
       const roots = parseRoots(params);
-      if (roots) sessionRoots.set(sessionKey(context.agentId, params.sessionId), roots);
+      if (roots) {
+        sessionRoots.set(sessionKey(context.agentId, params.sessionId), {
+          agentId: context.agentId,
+          roots,
+        });
+      }
     }
   }
 
   function observeAgentMessage(message, context) {
+    if (inactiveAgents.has(context.agentId)) return;
     if (!('id' in message)) return;
     const key = requestKey(context.agentId, message.id);
-    const roots = pendingSessions.get(key);
-    if (!roots) return;
+    const pending = pendingSessions.get(key);
+    if (!pending) return;
     pendingSessions.delete(key);
     const result = toRecord(message.result);
     if (typeof result?.sessionId === 'string') {
-      sessionRoots.set(sessionKey(context.agentId, result.sessionId), roots);
+      sessionRoots.set(sessionKey(context.agentId, result.sessionId), pending);
     }
   }
 
@@ -95,9 +108,9 @@ export function createAcpClientMethodHandler(options = {}) {
     if (typeof requestedPath !== 'string' || !path.isAbsolute(requestedPath)) {
       throw new Error('ACP filesystem paths must be absolute.');
     }
-    const registered = sessionRoots.get(sessionKey(agentId, sessionId));
-    if (!registered) throw new Error(`ACP session roots are unknown: ${sessionId}`);
-    const roots = [...registered, ...extraRoots(agentId)];
+    const session = sessionRoots.get(sessionKey(agentId, sessionId));
+    if (!session) throw new Error(`ACP session roots are unknown: ${sessionId}`);
+    const roots = [...session.roots, ...extraRoots(agentId)];
     const resolved = path.resolve(requestedPath);
     if (!roots.some((rootPath) => isWithin(path.resolve(rootPath), resolved))) {
       throw new Error(`Path is outside the ACP session roots: ${requestedPath}`);
@@ -123,6 +136,9 @@ export function createAcpClientMethodHandler(options = {}) {
     return extraRoots(agentId).some((dir) => isWithin(path.resolve(dir), resolved));
   }
   async function handler(request, context) {
+    if (inactiveAgents.has(context.agentId)) {
+      throw new Error(`ACP agent is not active: ${context.agentId}`);
+    }
     const params = requireParams(request);
     if (request.method === 'fs/read_text_file') {
       try {
@@ -173,20 +189,30 @@ export function createAcpClientMethodHandler(options = {}) {
       return {};
     }
     if (request.method === 'terminal/create') {
-      const roots = sessionRoots.get(sessionKey(context.agentId, params.sessionId));
-      if (!roots) throw new Error(`ACP session roots are unknown: ${params.sessionId}`);
+      const session = sessionRoots.get(sessionKey(context.agentId, params.sessionId));
+      if (!session) throw new Error(`ACP session roots are unknown: ${params.sessionId}`);
       const cwd =
         typeof params.cwd === 'string'
           ? await resolveSessionPath(context.agentId, params.sessionId, params.cwd)
-          : roots[0];
+          : session.roots[0];
       const created = await terminalManager.create({ ...params, cwd });
-      terminalOwners.set(created.terminalId, sessionKey(context.agentId, params.sessionId));
+      if (inactiveAgents.has(context.agentId)) {
+        await terminalManager.release(created.terminalId);
+        throw new Error(`ACP agent is not active: ${context.agentId}`);
+      }
+      terminalOwners.set(created.terminalId, {
+        agentId: context.agentId,
+        sessionId: params.sessionId,
+      });
       return created;
     }
     if (typeof params.terminalId !== 'string')
       throw new Error(`ACP ${request.method} requires terminalId.`);
     const terminalOwner = terminalOwners.get(params.terminalId);
-    if (terminalOwner && terminalOwner !== sessionKey(context.agentId, params.sessionId)) {
+    if (
+      terminalOwner &&
+      (terminalOwner.agentId !== context.agentId || terminalOwner.sessionId !== params.sessionId)
+    ) {
       throw new Error(`ACP terminal ${params.terminalId} does not belong to this ACP session.`);
     }
     if (request.method === 'terminal/output') return terminalManager.output(params.terminalId);
@@ -210,10 +236,13 @@ export function createAcpClientMethodHandler(options = {}) {
     sessionRoots.clear();
   };
   handler.releaseAgent = async (agentId) => {
+    inactiveAgents.add(agentId);
     const ownedTerminalIds = [...terminalOwners.entries()]
-      .filter(([, owner]) => owner === agentId)
+      .filter(([, owner]) => owner.agentId === agentId)
       .map(([terminalId]) => terminalId);
-    await Promise.all(ownedTerminalIds.map((terminalId) => terminalManager.release(terminalId)));
+    await Promise.allSettled(
+      ownedTerminalIds.map((terminalId) => terminalManager.release(terminalId)),
+    );
     for (const terminalId of ownedTerminalIds) terminalOwners.delete(terminalId);
     for (const [requestId, pending] of pendingSessions.entries()) {
       if (pending.agentId === agentId) pendingSessions.delete(requestId);
@@ -221,6 +250,9 @@ export function createAcpClientMethodHandler(options = {}) {
     for (const [sessionId, session] of sessionRoots.entries()) {
       if (session.agentId === agentId) sessionRoots.delete(sessionId);
     }
+  };
+  handler.resumeAgent = (agentId) => {
+    inactiveAgents.delete(agentId);
   };
   return handler;
 }
