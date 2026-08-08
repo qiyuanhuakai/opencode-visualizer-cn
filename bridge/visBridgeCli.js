@@ -77,7 +77,12 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
   }
 
   const tokenFile = values['upstream-token-file'] ?? env.VIS_BRIDGE_CODEX_TOKEN_FILE;
-  const tokenFromFile = tokenFile ? readFileSync(tokenFile, 'utf8').trim() : undefined;
+  const directAuthorization = env.VIS_BRIDGE_CODEX_AUTHORIZATION;
+  const directToken = values['upstream-token'] ?? env.VIS_BRIDGE_CODEX_TOKEN;
+  const tokenFromFile =
+    !values.help && !directAuthorization && !directToken && tokenFile
+      ? readFileSync(tokenFile, 'utf8').trim()
+      : undefined;
   const portText = values.port ?? env.VIS_BRIDGE_PORT ?? String(DEFAULT_PORT);
   const port = Number.parseInt(portText, 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
@@ -94,8 +99,7 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
     target: values.target ?? env.VIS_BRIDGE_CODEX_WS_URL ?? DEFAULT_CODEX_WS_URL,
     bridgeToken: values['bridge-token'] ?? env.VIS_BRIDGE_TOKEN,
     upstreamAuthorization:
-      env.VIS_BRIDGE_CODEX_AUTHORIZATION ??
-      bearerAuthorization(values['upstream-token'] ?? env.VIS_BRIDGE_CODEX_TOKEN ?? tokenFromFile),
+      directAuthorization ?? bearerAuthorization(directToken ?? tokenFromFile),
     configPath: values.config ?? env.VIS_BRIDGE_CONFIG,
   };
 }

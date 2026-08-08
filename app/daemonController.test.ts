@@ -110,6 +110,8 @@ describe('daemonController', () => {
         new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 100)),
       ]);
       expect(outcome).toBe('rejected');
+      expect(child.disconnect).toHaveBeenCalledOnce();
+      expect(child.unref).toHaveBeenCalledOnce();
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

@@ -23,7 +23,7 @@ const FORCE_STOP_TIMEOUT_MS = 2_000;
 export function createDaemonInvocation(options) {
   const { entryPath, execPath, serverArgs } = options;
   if (!entryPath) throw new Error('Unable to resolve the vis_bridge source entry path.');
-  if (path.resolve(entryPath) === path.resolve(execPath)) {
+  if ((options.isSea ?? Boolean(process.getBuiltinModule?.('node:sea')?.isSea())) || path.resolve(entryPath) === path.resolve(execPath)) {
     return { command: execPath, args: ['__daemon', ...serverArgs] };
   }
   return { command: execPath, args: [entryPath, '__daemon', ...serverArgs] };
@@ -234,9 +234,10 @@ export function createDaemonController(options = {}) {
     } finally {
       await logHandle.close();
     }
-    const message = await startupPromise;
-    if (child.connected) child.disconnect();
-    child.unref();
+    const message = await startupPromise.finally(() => {
+      if (child.connected) child.disconnect();
+      child.unref();
+    });
     stdout.write(`vis_bridge started (pid ${child.pid}) on ws://${message.host}:${message.port}${message.path}.\n`);
     for (const failure of message.failures) stderr.write(`${failure.name}: ${failure.error}\n`);
     return readDaemonState(paths);

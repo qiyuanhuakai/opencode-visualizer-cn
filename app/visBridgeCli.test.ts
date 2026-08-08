@@ -111,4 +111,34 @@ describe('vis_bridge lifecycle commands', () => {
       args: ['__daemon', '--port', '23120'],
     });
   });
+
+  it('does not read a stale token file when a higher-priority authorization is present', () => {
+    expect(
+      parseCliOptions(['start'], {
+        VIS_BRIDGE_CODEX_AUTHORIZATION: 'Basic dXNlcjpwYXNz',
+        VIS_BRIDGE_CODEX_TOKEN_FILE: '/missing/stale-token-file',
+      }),
+    ).toMatchObject({ upstreamAuthorization: 'Basic dXNlcjpwYXNz' });
+    expect(
+      parseCliOptions(['--help'], {
+        VIS_BRIDGE_CODEX_TOKEN_FILE: '/missing/stale-token-file',
+      }),
+    ).toMatchObject({ help: true, serverArgs: [] });
+  });
+
+  it('launches a SEA as itself even when argv uses a bare or differently-cased path', () => {
+    for (const entryPath of ['vis_bridge', String.raw`C:\Program Files\VIS\VIS_BRIDGE.EXE`]) {
+      expect(
+        createDaemonInvocation({
+          entryPath,
+          execPath: String.raw`c:\program files\vis\vis_bridge.exe`,
+          serverArgs: ['--port', '23120'],
+          isSea: true,
+        }),
+      ).toEqual({
+        command: String.raw`c:\program files\vis\vis_bridge.exe`,
+        args: ['__daemon', '--port', '23120'],
+      });
+    }
+  });
 });
