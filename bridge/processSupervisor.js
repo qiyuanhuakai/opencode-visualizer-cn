@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
-import { detachedProcessOptions, signalProcessTree } from './processTree.js';
+import { detachedProcessOptions, stopProcessTree } from './processTree.js';
 
 const DEFAULT_READINESS_ATTEMPTS = 20;
 const DEFAULT_READINESS_INTERVAL_MS = 250;
@@ -116,6 +116,7 @@ export function createProcessSupervisor(options = {}) {
       stderr = `${stderr}${String(chunk)}`.slice(-4_096);
     });
     child.once('exit', (code, signal) => {
+      if (children.get(service.id) !== child) return;
       children.delete(service.id);
       status.owned = false;
       delete status.pid;
@@ -131,6 +132,7 @@ export function createProcessSupervisor(options = {}) {
     const launched = await new Promise((resolve) => {
       child.once('spawn', () => resolve(true));
       child.once('error', (error) => {
+        if (children.get(service.id) !== child) return;
         children.delete(service.id);
         status.state = 'error';
         status.owned = false;
@@ -166,20 +168,8 @@ export function createProcessSupervisor(options = {}) {
       return;
     }
     status.state = 'stopping';
-    await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        try { signalProcessTree(child, 'SIGKILL'); } catch {}
-        resolve();
-      }, STOP_GRACE_MS);
-      child.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-      try { signalProcessTree(child, 'SIGTERM'); } catch {
-        clearTimeout(timeout);
-        resolve();
-      }
-    });
+    await stopProcessTree(child, { graceMs: STOP_GRACE_MS });
+    if (children.get(service.id) !== child) return;
     children.delete(service.id);
     status.state = 'stopped';
     status.owned = false;

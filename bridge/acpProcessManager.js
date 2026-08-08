@@ -124,6 +124,7 @@ export function createAcpProcessManager(options = {}) {
       entry.stderr = `${entry.stderr}${String(chunk)}`.slice(-8_192);
     });
     child.once('exit', (code, signal) => {
+      if (entries.get(agent.id) !== entry) return;
       entries.delete(agent.id);
       detach(entry, true);
       status.owned = false;
@@ -142,6 +143,7 @@ export function createAcpProcessManager(options = {}) {
     const launched = await new Promise((resolve) => {
       child.once('spawn', () => resolve(true));
       child.once('error', (error) => {
+        if (entries.get(agent.id) !== entry) return;
         entries.delete(agent.id);
         status.state = 'error';
         status.owned = false;
@@ -154,7 +156,7 @@ export function createAcpProcessManager(options = {}) {
     status.owned = true;
     status.pid = child.pid;
     await waitForStableAcpStartup(child, () => status.state === 'error');
-    if (status.state === 'error' || !entries.has(agent.id)) return;
+    if (status.state === 'error' || entries.get(agent.id) !== entry) return;
     status.state = 'running';
   }
 
@@ -163,6 +165,7 @@ export function createAcpProcessManager(options = {}) {
     entry.status.state = 'stopping';
     detach(entry, true);
     await stopAcpChild(entry.child);
+    if (entries.get(entry.agent.id) !== entry) return;
     entries.delete(entry.agent.id);
     entry.status.state = nextState;
     entry.status.owned = false;

@@ -1,5 +1,5 @@
-import { STARTUP_GRACE_MS, STOP_GRACE_MS } from './acpProcessState.js';
-import { signalProcessTree } from './processTree.js';
+import { STARTUP_GRACE_MS } from './acpProcessState.js';
+import { stopProcessTree } from './processTree.js';
 
 export function createAcpProcessEntry(agent, child, status) {
   return {
@@ -28,22 +28,5 @@ export async function waitForStableAcpStartup(child, hasFailed) {
 }
 
 export function stopAcpChild(child) {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      try {
-        signalProcessTree(child, 'SIGKILL');
-      } catch {}
-      resolve();
-    }, STOP_GRACE_MS);
-    child.once('exit', () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    try {
-      signalProcessTree(child, 'SIGTERM');
-    } catch {
-      clearTimeout(timeout);
-      resolve();
-    }
-  });
+  return stopProcessTree(child);
 }
