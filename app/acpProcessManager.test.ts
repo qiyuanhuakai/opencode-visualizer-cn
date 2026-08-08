@@ -49,6 +49,11 @@ const reverseRequestAgentScript = [
   '});',
 ].join('\n');
 
+const earlyExitAgentScript = [
+  "process.stderr.write('ACP init failed');",
+  'setTimeout(() => process.exit(23), 50);',
+].join('\n');
+
 describe('acpProcessManager', () => {
   it('starts enabled agents once and relays newline-delimited JSON-RPC bidirectionally', async () => {
     const manager = createAcpProcessManager();
@@ -144,6 +149,30 @@ describe('acpProcessManager', () => {
         state: 'error',
         owned: false,
         error: expect.stringContaining('ENOENT'),
+      }),
+    ]);
+    await manager.stopAll();
+  });
+
+  it('reports an ACP process that exits during its startup window', async () => {
+    const manager = createAcpProcessManager();
+
+    await manager.reconcile([
+      {
+        id: 'early-exit',
+        name: 'Early Exit ACP',
+        command: process.execPath,
+        args: ['-e', earlyExitAgentScript],
+        enabled: true,
+      },
+    ]);
+
+    expect(manager.getStatus()).toEqual([
+      expect.objectContaining({
+        id: 'early-exit',
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('ACP init failed'),
       }),
     ]);
     await manager.stopAll();

@@ -4,8 +4,9 @@ import {
   createAcpProcessStatus,
   formatAcpProcessError,
   sameAcpLaunch,
-  STOP_GRACE_MS,
 } from './acpProcessState.js';
+import { createAcpProcessEntry, stopAcpChild, waitForStableAcpStartup } from './acpProcessLifecycle.js';
+import { detachedProcessOptions } from './processTree.js';
 
 export function createAcpProcessManager(options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
@@ -108,6 +109,7 @@ export function createAcpProcessManager(options = {}) {
         env: { ...process.env, ...agent.env },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
+        ...detachedProcessOptions(),
       });
     } catch (error) {
       status.state = 'error';
@@ -115,18 +117,7 @@ export function createAcpProcessManager(options = {}) {
       return;
     }
 
-    const entry = {
-      agent,
-      child,
-      status,
-      stdoutBuffer: '',
-      stdoutQueue: Promise.resolve(),
-      stderr: '',
-      clientGeneration: 0,
-      nextAgentRequestId: 1,
-      pendingAgentResponses: new Map(),
-      initializeResult: undefined,
-    };
+    const entry = createAcpProcessEntry(agent, child, status);
     entries.set(agent.id, entry);
     child.stdout.on('data', (chunk) => forwardStdout(entry, chunk));
     child.stderr.on('data', (chunk) => {
@@ -160,33 +151,18 @@ export function createAcpProcessManager(options = {}) {
       });
     });
     if (!launched) return;
-    status.state = 'running';
     status.owned = true;
     status.pid = child.pid;
+    await waitForStableAcpStartup(child, () => status.state === 'error');
+    if (status.state === 'error' || !entries.has(agent.id)) return;
+    status.state = 'running';
   }
 
   async function stopEntry(entry, nextState = 'stopped') {
     await options.handleClientRequest?.releaseAgent?.(entry.agent.id);
     entry.status.state = 'stopping';
     detach(entry, true);
-    await new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        try {
-          entry.child.kill('SIGKILL');
-        } catch {}
-        resolve();
-      }, STOP_GRACE_MS);
-      entry.child.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-      try {
-        entry.child.kill('SIGTERM');
-      } catch {
-        clearTimeout(timeout);
-        resolve();
-      }
-    });
+    await stopAcpChild(entry.child);
     entries.delete(entry.agent.id);
     entry.status.state = nextState;
     entry.status.owned = false;
