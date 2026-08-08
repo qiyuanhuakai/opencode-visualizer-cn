@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { createServer } from 'node:net';
+import { connect, createServer } from 'node:net';
 import { request } from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -67,10 +67,16 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })));
 });
 
-function readHealthStatus(port: number) {
+function readHealthStatus(port: number, bridgeToken?: string) {
   return new Promise<number | undefined>((resolve, reject) => {
     const healthRequest = request(
-      { host: '127.0.0.1', port, path: '/healthz', method: 'GET' },
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/healthz',
+        method: 'GET',
+        ...(bridgeToken ? { headers: { Authorization: `Bearer ${bridgeToken}` } } : {}),
+      },
       (response) => {
         response.resume();
         response.once('end', () => resolve(response.statusCode));
@@ -111,6 +117,34 @@ describe('vis_bridge daemon CLI', () => {
     await runCli(['stop'], fixture.env);
   });
 
+  it('reports an ACP process that exits shortly after it spawns', async () => {
+    // Given
+    const fixture = await createFixture();
+    await writeFile(
+      fixture.configPath,
+      `${JSON.stringify({
+        version: 1,
+        acpAgents: [
+          {
+            id: 'early-exit',
+            name: 'Early Exit ACP',
+            command: process.execPath,
+            args: ['-e', "process.stderr.write('ACP boot failed'); setTimeout(() => process.exit(23), 50)"],
+            enabled: true,
+          },
+        ],
+      })}\n`,
+      'utf8',
+    );
+
+    // When
+    const result = await startFixture(fixture);
+
+    // Then
+    expect(result.stderr).toContain('Early Exit ACP: ACP boot failed');
+    await expect(readHealthStatus(fixture.port)).resolves.toBe(200);
+  });
+
   it('restarts with the persisted launch options and replaces the daemon process', { timeout: 15_000 }, async () => {
     // Given
     const fixture = await createFixture();
@@ -146,6 +180,95 @@ describe('vis_bridge daemon CLI', () => {
     // Then
     expect(result.stdout).toContain('vis_bridge stopped');
     await expect(readHealthStatus(fixture.port)).rejects.toThrow();
+  });
+
+  it('stops while a client keeps an incomplete HTTP request open', { timeout: 15_000 }, async () => {
+    // Given
+    const fixture = await createFixture();
+    await startFixture(fixture);
+    const socket = connect(fixture.port, '127.0.0.1');
+    await new Promise<void>((resolve) => socket.once('connect', resolve));
+    socket.write(
+      'POST /command/exec HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: 100000\r\n\r\n{',
+    );
+
+    try {
+      // When
+      const result = await runCli(['stop'], fixture.env);
+
+      // Then
+      expect(result.stdout).toContain('vis_bridge stopped');
+      await expect(readHealthStatus(fixture.port)).rejects.toThrow();
+    } finally {
+      socket.destroy();
+    }
+  });
+
+  it('keeps direct authentication tokens out of daemon state and process arguments', async () => {
+    // Given
+    const fixture = await createFixture();
+    const bridgeToken = 'bridge-token-sentinel';
+    const upstreamToken = 'upstream-token-sentinel';
+
+    // When
+    await runCli(
+      [
+        'start',
+        '--port',
+        String(fixture.port),
+        '--config',
+        fixture.configPath,
+        '--bridge-token',
+        bridgeToken,
+        '--upstream-token',
+        upstreamToken,
+      ],
+      fixture.env,
+    );
+
+    // Then
+    const stateText = await readFile(
+      path.join(fixture.directory, 'state', 'daemon.json'),
+      'utf8',
+    );
+    expect(stateText).not.toContain(bridgeToken);
+    expect(stateText).not.toContain(upstreamToken);
+    await expect(readHealthStatus(fixture.port, bridgeToken)).resolves.toBe(200);
+    if (process.platform === 'linux') {
+      const state: unknown = JSON.parse(stateText);
+      if (!state || typeof state !== 'object' || !('pid' in state) || typeof state.pid !== 'number') {
+        throw new Error('Expected a daemon PID in state.');
+      }
+      const commandLine = await readFile(`/proc/${state.pid}/cmdline`, 'utf8');
+      expect(commandLine).not.toContain(bridgeToken);
+      expect(commandLine).not.toContain(upstreamToken);
+    }
+  });
+
+  it('refuses unattended restart after direct token options were removed from state', async () => {
+    // Given
+    const fixture = await createFixture();
+    await runCli(
+      [
+        'start',
+        '--port',
+        String(fixture.port),
+        '--config',
+        fixture.configPath,
+        '--bridge-token',
+        'restart-token-sentinel',
+      ],
+      fixture.env,
+    );
+
+    // When
+    const restart = runCli(['restart'], fixture.env);
+
+    // Then
+    await expect(restart).rejects.toMatchObject({
+      stderr: expect.stringContaining('requires the original direct token options'),
+    });
+    await expect(readHealthStatus(fixture.port)).resolves.toBe(401);
   });
 
   it('rejects start with different options while the authenticated daemon is running', async () => {

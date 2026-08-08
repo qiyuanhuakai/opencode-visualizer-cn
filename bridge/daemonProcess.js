@@ -25,12 +25,55 @@ function listenServer(server, port, host) {
   });
 }
 
-function closeServer(server) {
+function trackConnections(server) {
+  const sockets = new Set();
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+  return sockets;
+}
+
+function closeServer(server, sockets) {
+  if (!server.listening) return Promise.resolve();
   return new Promise((resolve, reject) => {
+    const forceClose = setTimeout(() => {
+      for (const socket of sockets) socket.destroy();
+      server.closeAllConnections?.();
+    }, 500);
     server.close((error) => {
+      clearTimeout(forceClose);
       if (error) reject(error);
       else resolve();
     });
+    server.closeIdleConnections?.();
+  });
+}
+
+function receiveStartOptions(instanceId) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      process.off('message', onMessage);
+      reject(new Error('vis_bridge daemon did not receive startup options.'));
+    }, 5_000);
+    const onMessage = (message) => {
+      if (
+        !message ||
+        typeof message !== 'object' ||
+        message.type !== 'start-options' ||
+        message.instanceId !== instanceId ||
+        !message.secrets ||
+        typeof message.secrets !== 'object' ||
+        !Array.isArray(message.requiredSecrets)
+      ) {
+        return;
+      }
+      clearTimeout(timeout);
+      process.off('message', onMessage);
+      resolve(message);
+    };
+    process.on('message', onMessage);
+    process.send?.({ type: 'awaiting-options', instanceId });
   });
 }
 
@@ -38,11 +81,20 @@ export async function runDaemonProcess(options, createBridgeServer) {
   const instanceId = process.env.VIS_BRIDGE_DAEMON_INSTANCE_ID;
   const controlToken = process.env.VIS_BRIDGE_DAEMON_CONTROL_TOKEN;
   if (!instanceId || !controlToken) throw new Error('vis_bridge daemon credentials are missing.');
+  delete process.env.VIS_BRIDGE_DAEMON_INSTANCE_ID;
+  delete process.env.VIS_BRIDGE_DAEMON_CONTROL_TOKEN;
+  delete process.env.VIS_BRIDGE_TOKEN;
+  delete process.env.VIS_BRIDGE_CODEX_TOKEN;
+  const startOptions = await receiveStartOptions(instanceId);
+  options = { ...options, ...startOptions.secrets };
   const paths = createDaemonPaths();
   const configStore = createBridgeConfigStore({ configPath: options.configPath });
   const runtime = createBridgeRuntime({ configStore });
   const server = createBridgeServer({ ...options, runtime });
+  const serverSockets = trackConnections(server);
   let controlServer;
+  let controlSockets = new Set();
+  let startupPromise;
   let shutdownPromise;
 
   await writeDaemonState(paths, {
@@ -51,22 +103,35 @@ export async function runDaemonProcess(options, createBridgeServer) {
     state: 'starting',
     logPath: paths.logPath,
     launchArgs: [...options.serverArgs],
+    requiredSecrets: [...startOptions.requiredSecrets],
     startedAt: new Date().toISOString(),
   });
 
   const shutdown = () => {
     if (shutdownPromise) return shutdownPromise;
     shutdownPromise = (async () => {
-      await closeServer(server);
+      await startupPromise?.catch(() => undefined);
+      await closeServer(server, serverSockets);
       await runtime.stop();
-      if (controlServer) await closeServer(controlServer);
+      if (controlServer) await closeServer(controlServer, controlSockets);
       await removeDaemonState(paths, instanceId);
     })();
     return shutdownPromise;
   };
 
+  const exitAfterShutdown = () => {
+    void shutdown().then(() => process.exit(0));
+  };
+  process.once('SIGINT', exitAfterShutdown);
+  process.once('SIGTERM', exitAfterShutdown);
+
   try {
-    const status = await runtime.start();
+    startupPromise = runtime.start();
+    const status = await startupPromise;
+    if (shutdownPromise) {
+      await shutdownPromise;
+      return;
+    }
     controlServer = createServer((request, response) => {
       const authorized =
         request.headers.authorization === `Bearer ${controlToken}` &&
@@ -88,6 +153,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
         void shutdown().then(() => process.exit(0));
       });
     });
+    controlSockets = trackConnections(controlServer);
     const controlPort = await listenServer(controlServer, 0, '127.0.0.1');
     const port = await listenServer(server, options.port, options.host);
     const failures = collectStartupFailures(status);
@@ -97,6 +163,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
       state: 'running',
       logPath: paths.logPath,
       launchArgs: [...options.serverArgs],
+      requiredSecrets: [...startOptions.requiredSecrets],
       startedAt: new Date().toISOString(),
       host: options.host,
       port,
@@ -109,13 +176,11 @@ export async function runDaemonProcess(options, createBridgeServer) {
     process.disconnect?.();
     console.log(`vis_bridge listening on ws://${options.host}:${port}${options.path}`);
     console.log(`vis_bridge proxy target: ${options.target}`);
-    process.once('SIGINT', () => {
-      void shutdown().then(() => process.exit(0));
-    });
-    process.once('SIGTERM', () => {
-      void shutdown().then(() => process.exit(0));
-    });
   } catch (error) {
+    if (shutdownPromise) {
+      await shutdownPromise;
+      throw error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     await writeDaemonState(paths, {
       instanceId,
@@ -123,13 +188,14 @@ export async function runDaemonProcess(options, createBridgeServer) {
       state: 'error',
       logPath: paths.logPath,
       launchArgs: [...options.serverArgs],
+      requiredSecrets: [...startOptions.requiredSecrets],
       startedAt: new Date().toISOString(),
       error: message,
     });
-    process.send?.({ type: 'error', error: message });
-    if (controlServer?.listening) await closeServer(controlServer);
-    if (server.listening) await closeServer(server);
+    if (controlServer?.listening) await closeServer(controlServer, controlSockets);
+    if (server.listening) await closeServer(server, serverSockets);
     await runtime.stop();
+    process.send?.({ type: 'error', error: message });
     throw error;
   }
 }

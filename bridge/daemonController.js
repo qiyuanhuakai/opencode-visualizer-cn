@@ -3,6 +3,8 @@ import { open } from 'node:fs/promises';
 import { request } from 'node:http';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { prepareDaemonLaunch } from './daemonCredentials.js';
+import { forceStopProcessTree, signalProcessTree } from './processTree.js';
 import {
   createDaemonPaths,
   isProcessAlive,
@@ -11,8 +13,9 @@ import {
   withDaemonLock,
 } from './daemonState.js';
 
-const START_TIMEOUT_MS = 15_000;
+const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 8_000;
+const FORCE_STOP_TIMEOUT_MS = 2_000;
 
 export function createDaemonInvocation(options) {
   const { entryPath, execPath, serverArgs } = options;
@@ -65,22 +68,39 @@ function requestDaemonControl(state, action) {
   });
 }
 
-async function waitForExit(pid) {
-  const deadline = Date.now() + STOP_TIMEOUT_MS;
+async function waitUntilExited(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
   while (isProcessAlive(pid)) {
-    if (Date.now() >= deadline) throw new Error(`vis_bridge daemon did not stop (pid ${pid}).`);
+    if (Date.now() >= deadline) return false;
     await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return true;
+}
+
+async function waitForExit(pid, lifecycle) {
+  if (await waitUntilExited(pid, lifecycle.stopTimeoutMs)) return;
+  await lifecycle.forceStopProcessTree(pid);
+  if (!(await waitUntilExited(pid, lifecycle.forceStopTimeoutMs))) {
+    throw new Error(`vis_bridge daemon did not stop (pid ${pid}).`);
   }
 }
 
-function waitForStartup(child) {
+function waitForStartup(child, startOptions, lifecycle) {
   return new Promise((resolve, reject) => {
+    let startupError;
+    let forceStopTimeout;
     const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error('vis_bridge daemon startup timed out.'));
-    }, START_TIMEOUT_MS);
+      startupError = new Error('vis_bridge daemon startup timed out.');
+      try {
+        signalProcessTree(child, 'SIGTERM');
+      } catch {}
+      forceStopTimeout = setTimeout(() => {
+        if (child.pid) void lifecycle.forceStopProcessTree(child.pid);
+      }, lifecycle.stopTimeoutMs);
+    }, lifecycle.startTimeoutMs);
     const finish = (error, message) => {
       clearTimeout(timeout);
+      clearTimeout(forceStopTimeout);
       child.off('message', onMessage);
       child.off('exit', onExit);
       child.off('error', onError);
@@ -89,11 +109,16 @@ function waitForStartup(child) {
     };
     const onMessage = (message) => {
       if (!message || typeof message !== 'object') return;
-      if (message.type === 'ready') finish(undefined, message);
+      if (message.type === 'awaiting-options') {
+        child.send({ type: 'start-options', ...startOptions });
+      } else if (message.type === 'ready') finish(startupError, message);
       else if (message.type === 'error') finish(new Error(String(message.error)));
     };
     const onExit = (code, signal) => {
-      finish(new Error(`vis_bridge daemon exited during startup (${signal ?? code ?? 'unknown'}).`));
+      finish(
+        startupError ??
+          new Error(`vis_bridge daemon exited during startup (${signal ?? code ?? 'unknown'}).`),
+      );
     };
     const onError = (error) => finish(error);
     child.on('message', onMessage);
@@ -107,6 +132,12 @@ export function createDaemonController(options = {}) {
   const spawnProcess = options.spawnProcess ?? spawn;
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
+  const lifecycle = {
+    startTimeoutMs: options.startTimeoutMs ?? START_TIMEOUT_MS,
+    stopTimeoutMs: options.stopTimeoutMs ?? STOP_TIMEOUT_MS,
+    forceStopTimeoutMs: options.forceStopTimeoutMs ?? FORCE_STOP_TIMEOUT_MS,
+    forceStopProcessTree: options.forceStopProcessTree ?? forceStopProcessTree,
+  };
 
   async function stopUnlocked(requestedState) {
     const state = requestedState ?? (await readDaemonState(paths));
@@ -123,16 +154,21 @@ export function createDaemonController(options = {}) {
       throw new Error(`vis_bridge daemon is ${state.state}; see ${state.logPath}.`);
     }
     await requestDaemonControl(state, 'stop');
-    await waitForExit(state.pid);
+    await waitForExit(state.pid, lifecycle);
+    await removeDaemonState(paths, state.instanceId);
     stdout.write('vis_bridge stopped.\n');
   }
 
-  async function startUnlocked(serverArgs) {
+  async function startUnlocked(serverArgs, credentials = {}) {
+    const launch = prepareDaemonLaunch(serverArgs, credentials);
     const previous = await readDaemonState(paths);
     if (previous && isProcessAlive(previous.pid)) {
       if (previous.state === 'running') {
         await requestDaemonControl(previous, 'status');
-        if (JSON.stringify(previous.launchArgs) === JSON.stringify(serverArgs)) {
+        if (
+          JSON.stringify(previous.launchArgs) === JSON.stringify(launch.launchArgs) &&
+          JSON.stringify(previous.requiredSecrets ?? []) === JSON.stringify(launch.requiredSecrets)
+        ) {
           stdout.write(`vis_bridge is already running (pid ${previous.pid}).\n`);
           return previous;
         }
@@ -147,7 +183,7 @@ export function createDaemonController(options = {}) {
     const invocation = createDaemonInvocation({
       entryPath: process.argv[1],
       execPath: process.execPath,
-      serverArgs,
+      serverArgs: launch.launchArgs,
     });
     const logHandle = await open(paths.logPath, 'a', 0o600);
     let child;
@@ -167,7 +203,15 @@ export function createDaemonController(options = {}) {
       await logHandle.close();
     }
     if (!child.pid) throw new Error('vis_bridge daemon did not receive a process id.');
-    const message = await waitForStartup(child);
+    const message = await waitForStartup(
+      child,
+      {
+        instanceId,
+        requiredSecrets: launch.requiredSecrets,
+        secrets: launch.secrets,
+      },
+      lifecycle,
+    );
     if (child.connected) child.disconnect();
     child.unref();
     stdout.write(`vis_bridge started (pid ${child.pid}) on ws://${message.host}:${message.port}${message.path}.\n`);
@@ -176,13 +220,19 @@ export function createDaemonController(options = {}) {
   }
 
   return {
-    start: (serverArgs) => withDaemonLock(paths, () => startUnlocked(serverArgs)),
+    start: (serverArgs, credentials) =>
+      withDaemonLock(paths, () => startUnlocked(serverArgs, credentials)),
     stop: () => withDaemonLock(paths, () => stopUnlocked()),
-    restart: (serverArgs) => withDaemonLock(paths, async () => {
+    restart: (serverArgs, credentials) => withDaemonLock(paths, async () => {
       const previous = await readDaemonState(paths);
+      if (serverArgs.length === 0 && (previous?.requiredSecrets?.length ?? 0) > 0) {
+        throw new Error(
+          'vis_bridge restart requires the original direct token options; use token files or environment variables for unattended restarts.',
+        );
+      }
       const launchArgs = serverArgs.length > 0 ? serverArgs : previous?.launchArgs ?? [];
       await stopUnlocked(previous);
-      return startUnlocked(launchArgs);
+      return startUnlocked(launchArgs, credentials);
     }),
   };
 }

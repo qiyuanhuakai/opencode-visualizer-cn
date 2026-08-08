@@ -1014,9 +1014,13 @@ export async function main() {
     return;
   }
   const controller = createDaemonController();
-  if (options.command === 'start') await controller.start(options.serverArgs);
+  const credentials = {
+    bridgeToken: options.bridgeToken,
+    upstreamAuthorization: options.upstreamAuthorization,
+  };
+  if (options.command === 'start') await controller.start(options.serverArgs, credentials);
   else if (options.command === 'stop') await controller.stop();
-  else await controller.restart(options.serverArgs);
+  else await controller.restart(options.serverArgs, credentials);
 }
 
 if (process.argv[1]?.endsWith('vis_bridge.js')) {

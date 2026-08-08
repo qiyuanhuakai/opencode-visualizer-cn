@@ -17,9 +17,14 @@ export type DaemonRuntimeStatus = {
 };
 
 export type DaemonController = {
-  start(serverArgs: readonly string[]): Promise<unknown>;
+  start(serverArgs: readonly string[], credentials?: DaemonCredentials): Promise<unknown>;
   stop(): Promise<void>;
-  restart(serverArgs: readonly string[]): Promise<unknown>;
+  restart(serverArgs: readonly string[], credentials?: DaemonCredentials): Promise<unknown>;
+};
+
+export type DaemonCredentials = {
+  readonly bridgeToken?: string;
+  readonly upstreamAuthorization?: string;
 };
 
 export function collectStartupFailures(status: DaemonRuntimeStatus): DaemonStartupFailure[];

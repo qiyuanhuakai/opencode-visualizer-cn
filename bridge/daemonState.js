@@ -54,7 +54,10 @@ function parseDaemonState(value) {
     !['starting', 'running', 'error'].includes(value.state) ||
     typeof value.logPath !== 'string' ||
     !Array.isArray(value.launchArgs) ||
-    !value.launchArgs.every((argument) => typeof argument === 'string')
+    !value.launchArgs.every((argument) => typeof argument === 'string') ||
+    (value.requiredSecrets !== undefined &&
+      (!Array.isArray(value.requiredSecrets) ||
+        !value.requiredSecrets.every((secret) => typeof secret === 'string')))
   ) {
     throw new Error('Invalid vis_bridge daemon state file.');
   }
@@ -74,6 +77,9 @@ function parseDaemonState(value) {
     state: value.state,
     logPath: value.logPath,
     launchArgs: [...value.launchArgs],
+    ...(Array.isArray(value.requiredSecrets)
+      ? { requiredSecrets: [...value.requiredSecrets] }
+      : {}),
     ...(typeof value.startedAt === 'string' ? { startedAt: value.startedAt } : {}),
     ...(typeof value.host === 'string' ? { host: value.host } : {}),
     ...(typeof value.port === 'number' ? { port: value.port } : {}),

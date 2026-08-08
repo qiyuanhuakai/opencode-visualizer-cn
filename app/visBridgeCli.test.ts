@@ -5,9 +5,29 @@ import {
   collectStartupFailures,
   createDaemonInvocation,
 } from '../bridge/daemonController.js';
+import { prepareDaemonLaunch } from '../bridge/daemonCredentials.js';
 import { parseCliOptions } from '../vis_bridge';
 
 describe('vis_bridge lifecycle commands', () => {
+  it('separates direct secrets from persisted daemon launch arguments', () => {
+    expect(
+      prepareDaemonLaunch(
+        ['--port', '23004', '--bridge-token=bridge-secret', '--upstream-token', 'upstream-secret'],
+        {
+          bridgeToken: 'bridge-secret',
+          upstreamAuthorization: 'Bearer upstream-secret',
+        },
+      ),
+    ).toEqual({
+      launchArgs: ['--port', '23004'],
+      requiredSecrets: ['bridgeToken', 'upstreamAuthorization'],
+      secrets: {
+        bridgeToken: 'bridge-secret',
+        upstreamAuthorization: 'Bearer upstream-secret',
+      },
+    });
+  });
+
   it('parses start options without treating the lifecycle command as a server argument', () => {
     expect(parseCliOptions(['start', '--port', '23120'], {})).toMatchObject({
       command: 'start',
