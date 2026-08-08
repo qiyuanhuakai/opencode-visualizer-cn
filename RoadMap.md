@@ -18,7 +18,7 @@
     - [?] codex：edit工具悬浮窗在首次弹出时不显示内容
     - [ ] opencode：改善idel/busy切换：当主代理等待子代理时，opencode似乎发送idel，但此时子代理仍在工作，不应该切到idel 
 - [ ] vis-bridge 模块化本地桥接服务器：集成外部开发工具，扩展与第三方工具的联动能力。
-    - [ ] 将vis_bridge的功能改为后台守护进程，改善服务启动失败报错表现
+    - [x] 将vis_bridge的功能改为后台守护进程，改善服务启动失败报错表现
     - [ ] astrcodey
 	- [x] ACP v1 通用后端（Pi、Oh My Pi、Kimi Code；通过状态监控按需启用）
 		- [?] kimicode cli
