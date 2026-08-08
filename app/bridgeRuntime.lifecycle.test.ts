@@ -76,4 +76,41 @@ describe('bridge runtime lifecycle', () => {
     expect(events.indexOf('reconcile')).toBeLessThan(events.indexOf('acp-stop'));
     expect(events.indexOf('acp-stop')).toBeLessThan(events.indexOf('client-stop'));
   });
+
+  it('keeps mutation admission closed when startup fails', async () => {
+    const configStore = {
+      configPath: '/tmp/bridge-runtime-start-failure.json',
+      load: vi.fn(async () => ({ version: 1 as const, acpAgents: [] })),
+      save: vi.fn(),
+      getConfig: vi.fn(async () => ({ version: 1 as const, acpAgents: [] })),
+      upsertAgent: vi.fn(),
+      removeAgent: vi.fn(),
+    };
+    const nativeStop = vi.fn();
+    const acpStop = vi.fn();
+    const runtime = createBridgeRuntime({
+      configStore,
+      nativeSupervisor: {
+        start: vi.fn(async () => {
+          throw new Error('native startup failed');
+        }),
+        stop: nativeStop,
+        getStatus: vi.fn(() => []),
+      },
+      acpManager: {
+        reconcile: vi.fn(),
+        stopAll: acpStop,
+        getStatus: vi.fn(() => []),
+        attach: vi.fn(),
+      },
+    });
+
+    await expect(runtime.start()).rejects.toThrow('native startup failed');
+    await expect(runtime.upsertAgent(agent)).rejects.toThrow('shutting down');
+    await runtime.stop();
+
+    expect(configStore.upsertAgent).not.toHaveBeenCalled();
+    expect(nativeStop).toHaveBeenCalledOnce();
+    expect(acpStop).toHaveBeenCalledOnce();
+  });
 });

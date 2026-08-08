@@ -23,13 +23,18 @@ export function createBridgeRuntime(options = {}) {
     if (started) return getStatus();
     if (stopPromise) throw new Error('Bridge runtime is shutting down.');
     started = true;
-    acceptingMutations = true;
-    const config = await configStore.load();
-    await Promise.all([
-      nativeSupervisor.start(),
-      acpManager.reconcile(config.acpAgents),
-    ]);
-    return getStatus();
+    try {
+      const config = await configStore.load();
+      await Promise.all([
+        nativeSupervisor.start(),
+        acpManager.reconcile(config.acpAgents),
+      ]);
+      acceptingMutations = true;
+      return getStatus();
+    } catch (error) {
+      acceptingMutations = false;
+      throw error;
+    }
   }
 
   function getStatus() {
