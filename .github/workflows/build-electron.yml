@@ -160,7 +160,15 @@ jobs:
           sudo dpkg -i "${installer[0]}"
           test "$(command -v vis_bridge)" = '/usr/bin/vis_bridge'
           vis_bridge --help
+          export VIS_BRIDGE_STATE_DIR="$RUNNER_TEMP/vis-bridge-state"
+          vis_bridge start --port 23199
+          daemon_pid="$(node -p "JSON.parse(require('fs').readFileSync(process.env.VIS_BRIDGE_STATE_DIR + '/daemon.json')).pid")"
+          sudo dpkg -i "${installer[0]}"
+          ! kill -0 "$daemon_pid" 2>/dev/null
+          vis_bridge start --port 23199
+          daemon_pid="$(node -p "JSON.parse(require('fs').readFileSync(process.env.VIS_BRIDGE_STATE_DIR + '/daemon.json')).pid")"
           sudo dpkg -r vis-bridge
+          ! kill -0 "$daemon_pid" 2>/dev/null
 
       - name: Exercise macOS installer
         if: runner.os == 'macOS'
@@ -170,6 +178,11 @@ jobs:
           sudo installer -pkg "${package[0]}" -target /
           test "$(command -v vis_bridge)" = '/usr/local/bin/vis_bridge'
           vis_bridge --help
+          export VIS_BRIDGE_STATE_DIR="$RUNNER_TEMP/vis-bridge-state"
+          vis_bridge start --port 23199
+          daemon_pid="$(node -p "JSON.parse(require('fs').readFileSync(process.env.VIS_BRIDGE_STATE_DIR + '/daemon.json')).pid")"
+          sudo installer -pkg "${package[0]}" -target /
+          ! kill -0 "$daemon_pid" 2>/dev/null
           sudo rm /usr/local/bin/vis_bridge
 
       - name: Exercise Windows installer
@@ -187,9 +200,18 @@ jobs:
           if ($pathMatches.Count -ne 1) { throw "Installer added PATH entry $($pathMatches.Count) times" }
           $env:Path = "$env:Path;$userPath"
           vis_bridge --help
+          $env:VIS_BRIDGE_STATE_DIR = Join-Path $env:RUNNER_TEMP 'vis-bridge-state'
+          vis_bridge start --port 23199
+          $daemonPid = (Get-Content (Join-Path $env:VIS_BRIDGE_STATE_DIR 'daemon.json') | ConvertFrom-Json).pid
+          $secondInstall = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($secondInstall.ExitCode -ne 0) { throw "Daemon reinstall exited with $($secondInstall.ExitCode)" }
+          if (Get-Process -Id $daemonPid -ErrorAction SilentlyContinue) { throw 'Installer left the previous daemon running' }
+          vis_bridge start --port 23199
+          $daemonPid = (Get-Content (Join-Path $env:VIS_BRIDGE_STATE_DIR 'daemon.json') | ConvertFrom-Json).pid
           $uninstaller = Join-Path $installDirectory 'Uninstall.exe'
           $uninstall = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
           if ($uninstall.ExitCode -ne 0) { throw "Uninstaller exited with $($uninstall.ExitCode)" }
+          if (Get-Process -Id $daemonPid -ErrorAction SilentlyContinue) { throw 'Uninstaller left the daemon running' }
 
       - name: Upload vis_bridge installer
         uses: actions/upload-artifact@v4
