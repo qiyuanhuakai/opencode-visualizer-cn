@@ -55,14 +55,47 @@ export function createMacPreinstallScript() {
   ].join('\n');
 }
 
-export function windowsStopDaemonLines(label) {
+export function windowsStopDaemonLines(label, stopScriptPath) {
   return [
     `  IfFileExists "$INSTDIR\\vis_bridge.exe" stop_existing_${label} continue_${label}`,
     `stop_existing_${label}:`,
+    '  InitPluginsDir',
+    '  SetOutPath "$PLUGINSDIR"',
+    `  File /oname=stop-daemon.ps1 "${stopScriptPath}"`,
     '  nsExec::ExecToStack \'"$INSTDIR\\vis_bridge.exe" stop\'',
     '  Pop $0',
     '  Pop $1',
-    '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Process vis_bridge -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq $\\"$INSTDIR\\vis_bridge.exe$\\" } | ForEach-Object { & $$env:SystemRoot\\System32\\taskkill.exe /PID $$_.Id /T /F | Out-Null }"\'',
+    '  nsExec::ExecToStack \'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\\stop-daemon.ps1" "$INSTDIR\\vis_bridge.exe"\'',
+    '  Pop $0',
+    '  Pop $1',
+    `  StrCmp $0 "0" continue_${label}`,
+    '  DetailPrint "$1"',
+    '  Abort',
     `continue_${label}:`,
   ];
+}
+
+export function createWindowsStopScript() {
+  return [
+    'param([Parameter(Mandatory = $true)][string]$ExecutablePath)',
+    "$ErrorActionPreference = 'Stop'",
+    '$target = [IO.Path]::GetFullPath($ExecutablePath)',
+    '$comparer = [StringComparer]::OrdinalIgnoreCase',
+    'function MatchingProcesses {',
+    '  @(Get-CimInstance Win32_Process | Where-Object {',
+    '    $_.ExecutablePath -and $comparer.Equals([IO.Path]::GetFullPath($_.ExecutablePath), $target)',
+    '  })',
+    '}',
+    '$matches = @(MatchingProcesses)',
+    'foreach ($process in $matches) {',
+    '  & "$env:SystemRoot\\System32\\taskkill.exe" /PID $process.ProcessId /T /F | Out-Null',
+    '  if ($LASTEXITCODE -ne 0) { throw "Unable to stop vis_bridge process $($process.ProcessId)." }',
+    '}',
+    '$deadline = [DateTime]::UtcNow.AddSeconds(10)',
+    'while (@(MatchingProcesses).Count -gt 0 -and [DateTime]::UtcNow -lt $deadline) {',
+    '  Start-Sleep -Milliseconds 50',
+    '}',
+    'if (@(MatchingProcesses).Count -gt 0) { throw "Installed vis_bridge process tree is still running." }',
+    '',
+  ].join('\r\n');
 }

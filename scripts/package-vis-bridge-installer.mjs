@@ -6,10 +6,11 @@ import { promisify } from 'node:util';
 import {
   createLinuxMaintainerScript,
   createMacPreinstallScript,
+  createWindowsStopScript,
   windowsStopDaemonLines,
 } from './vis-bridge-installer-lifecycle.mjs';
 
-export { createLinuxMaintainerScript, createMacPreinstallScript };
+export { createLinuxMaintainerScript, createMacPreinstallScript, createWindowsStopScript };
 
 const execFileAsync = promisify(execFile);
 
@@ -165,6 +166,7 @@ export function createNsiPath(filePath) {
 export function createWindowsInstallerScript(paths) {
   const addPathScript = path.join(paths.workspacePath, 'add-path.ps1');
   const removePathScript = path.join(paths.workspacePath, 'remove-path.ps1');
+  const stopDaemonScript = path.join(paths.workspacePath, 'stop-daemon.ps1');
   return [
     '!include "MUI2.nsh"',
     '!include "LogicLib.nsh"',
@@ -180,7 +182,7 @@ export function createWindowsInstallerScript(paths) {
     '!insertmacro MUI_UNPAGE_INSTFILES',
     '!insertmacro MUI_LANGUAGE "English"',
     'Section "Install"',
-    ...windowsStopDaemonLines('install'),
+    ...windowsStopDaemonLines('install', createNsiPath(stopDaemonScript)),
     '  SetOutPath "$INSTDIR"',
     `  File /oname=vis_bridge.exe "${createNsiPath(paths.binaryPath)}"`,
     `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
@@ -195,7 +197,7 @@ export function createWindowsInstallerScript(paths) {
     '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
     'SectionEnd',
     'Section "Uninstall"',
-    ...windowsStopDaemonLines('uninstall'),
+    ...windowsStopDaemonLines('uninstall', createNsiPath(stopDaemonScript)),
     '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\remove-path.ps1" "$INSTDIR"\'',
     '  Delete "$INSTDIR\\vis_bridge.exe"',
     '  Delete "$INSTDIR\\remove-path.ps1"',
@@ -214,6 +216,7 @@ async function packageWindowsInstaller(paths) {
   await mkdir(paths.workspacePath, { recursive: true });
   await writeFile(addPathScript, windowsPathScript('add'), 'utf8');
   await writeFile(removePathScript, windowsPathScript('remove'), 'utf8');
+  await writeFile(path.join(paths.workspacePath, 'stop-daemon.ps1'), createWindowsStopScript(), 'utf8');
   await writeFile(nsiScript, createWindowsInstallerScript(paths), 'utf8');
   await execFileAsync('makensis', [nsiScript]);
 }
