@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
+import { detachedProcessOptions, signalProcessTree } from './processTree.js';
 
 const DEFAULT_READINESS_ATTEMPTS = 20;
 const DEFAULT_READINESS_INTERVAL_MS = 250;
@@ -99,6 +100,7 @@ export function createProcessSupervisor(options = {}) {
         env: process.env,
         stdio: ['ignore', 'ignore', 'pipe'],
         windowsHide: true,
+        ...detachedProcessOptions(),
       });
     } catch (error) {
       status.state = 'error';
@@ -166,14 +168,14 @@ export function createProcessSupervisor(options = {}) {
     status.state = 'stopping';
     await new Promise((resolve) => {
       const timeout = setTimeout(() => {
-        try { child.kill('SIGKILL'); } catch {}
+        try { signalProcessTree(child, 'SIGKILL'); } catch {}
         resolve();
       }, STOP_GRACE_MS);
       child.once('exit', () => {
         clearTimeout(timeout);
         resolve();
       });
-      try { child.kill('SIGTERM'); } catch {
+      try { signalProcessTree(child, 'SIGTERM'); } catch {
         clearTimeout(timeout);
         resolve();
       }
