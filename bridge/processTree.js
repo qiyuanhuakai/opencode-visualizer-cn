@@ -1,4 +1,6 @@
-import { spawn } from 'node:child_process';
+import { stopWindowsProcessTree } from './windowsProcessTree.js';
+
+export { stopWindowsProcessTree } from './windowsProcessTree.js';
 
 export function detachedProcessOptions() {
   return process.platform === 'win32' ? {} : { detached: true };
@@ -6,7 +8,7 @@ export function detachedProcessOptions() {
 
 export function signalProcessTree(child, signal) {
   if (process.platform === 'win32' && child.pid) {
-    void stopWindowsProcessTree(child.pid, signal === 'SIGKILL');
+    void stopWindowsProcessTree(child.pid, signal === 'SIGKILL').catch(() => child.kill(signal));
     return true;
   }
   if (process.platform !== 'win32' && child.pid) {
@@ -97,17 +99,4 @@ export async function stopProcessTree(child, options = {}) {
   if (!(await waitForProcessExit(child, forceMs))) {
     throw new Error(`Process tree did not stop (pid ${child.pid ?? 'unknown'}).`);
   }
-}
-
-function stopWindowsProcessTree(pid, force) {
-  return new Promise((resolve) => {
-    const args = ['/PID', String(pid), '/T'];
-    if (force) args.push('/F');
-    const killer = spawn('taskkill', args, {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    killer.once('error', resolve);
-    killer.once('exit', resolve);
-  });
 }
