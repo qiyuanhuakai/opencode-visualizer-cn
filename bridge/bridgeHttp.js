@@ -13,7 +13,7 @@ export function writeHttpResponse(socket, statusCode, statusText, body, headers 
       responseBody,
     ].join('\r\n'),
   );
-  socket.destroy();
+  socket.end();
 }
 
 export function isAuthorized(request, bridgeToken) {

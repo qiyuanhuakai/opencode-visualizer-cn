@@ -34,15 +34,16 @@ export function handlePtyUpgrade(request, clientSocket, head, options, manager) 
     return true;
   }
   let secWebSocketKey;
+  let id;
   try {
     secWebSocketKey = assertWebSocketRequest(request);
+    id = decodeURIComponent(match[1]);
   } catch (error) {
     writeHttpResponse(clientSocket, 400, 'Bad Request', {
       error: error instanceof Error ? error.message : String(error),
     });
     return true;
   }
-  const id = decodeURIComponent(match[1]);
   clientSocket.write(
     [
       'HTTP/1.1 101 Switching Protocols',
