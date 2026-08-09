@@ -1,16 +1,23 @@
 import { execFile } from 'node:child_process';
-import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import {
-  createLinuxMaintainerScript,
-  createMacPreinstallScript,
   createWindowsStopScript,
   windowsStopDaemonLines,
 } from './vis-bridge-installer-lifecycle.mjs';
+import {
+  packageLinuxInstaller,
+  packageMacInstaller,
+} from './vis-bridge-installer-posix.mjs';
+import { stageNodePtyRuntime } from './vis-bridge-node-pty.mjs';
 
-export { createLinuxMaintainerScript, createMacPreinstallScript, createWindowsStopScript };
+export {
+  createLinuxMaintainerScript,
+  createMacPreinstallScript,
+} from './vis-bridge-installer-lifecycle.mjs';
+export { createWindowsStopScript };
 
 const execFileAsync = promisify(execFile);
 
@@ -74,68 +81,6 @@ export function createVisBridgeInstallerPaths(rootDirectory, target) {
   };
 }
 
-async function packageLinuxInstaller(paths, target) {
-  const binaryDirectory = path.join(paths.workspacePath, 'usr', 'bin');
-  const metadataDirectory = path.join(paths.workspacePath, 'DEBIAN');
-  await mkdir(binaryDirectory, { recursive: true });
-  await mkdir(metadataDirectory, { recursive: true });
-  const installedBinary = path.join(binaryDirectory, 'vis_bridge');
-  await copyFile(paths.binaryPath, installedBinary);
-  await chmod(installedBinary, 0o755);
-  const architecture = target.arch === 'x64' ? 'amd64' : 'arm64';
-  await writeFile(
-    path.join(metadataDirectory, 'control'),
-    [
-      'Package: vis-bridge',
-      `Version: ${normalizedVersion(target.version)}`,
-      'Section: devel',
-      'Priority: optional',
-      `Architecture: ${architecture}`,
-      'Maintainer: qiyuanhuakai',
-      'Description: Local process supervisor and protocol bridge for Vis',
-      '',
-    ].join('\n'),
-    'utf8',
-  );
-  const maintainerScript = createLinuxMaintainerScript();
-  await writeFile(path.join(metadataDirectory, 'preinst'), maintainerScript, { encoding: 'utf8', mode: 0o755 });
-  await writeFile(path.join(metadataDirectory, 'prerm'), maintainerScript, { encoding: 'utf8', mode: 0o755 });
-  await execFileAsync('dpkg-deb', [
-    '--build',
-    '--root-owner-group',
-    paths.workspacePath,
-    paths.installerPath,
-  ]);
-}
-
-async function packageMacInstaller(paths, target) {
-  const binaryDirectory = path.join(paths.workspacePath, 'usr', 'local', 'bin');
-  await mkdir(binaryDirectory, { recursive: true });
-  const installedBinary = path.join(binaryDirectory, 'vis_bridge');
-  await copyFile(paths.binaryPath, installedBinary);
-  await chmod(installedBinary, 0o755);
-  const scriptsDirectory = `${paths.workspacePath}-scripts`;
-  await rm(scriptsDirectory, { recursive: true, force: true });
-  await mkdir(scriptsDirectory, { recursive: true });
-  await writeFile(path.join(scriptsDirectory, 'preinstall'), createMacPreinstallScript(), {
-    encoding: 'utf8',
-    mode: 0o755,
-  });
-  await execFileAsync('pkgbuild', [
-    '--root',
-    paths.workspacePath,
-    '--identifier',
-    'cn.qiyuanhuakai.vis-bridge',
-    '--version',
-    normalizedVersion(target.version),
-    '--install-location',
-    '/',
-    '--scripts',
-    scriptsDirectory,
-    paths.installerPath,
-  ]);
-}
-
 function windowsPathScript(operation) {
   const operationLines = {
     add: [
@@ -186,6 +131,8 @@ export function createWindowsInstallerScript(paths) {
     '  SetOutPath "$INSTDIR"',
     `  File /oname=vis_bridge.exe "${createNsiPath(paths.binaryPath)}"`,
     `  File /oname=remove-path.ps1 "${createNsiPath(removePathScript)}"`,
+    '  SetOutPath "$INSTDIR\\node_modules\\node-pty"',
+    `  File /r "${createNsiPath(path.join(paths.workspacePath, 'node_modules', 'node-pty', '*'))}"`,
     '  WriteUninstaller "$INSTDIR\\Uninstall.exe"',
     '  InitPluginsDir',
     '  SetOutPath "$PLUGINSDIR"',
@@ -201,6 +148,7 @@ export function createWindowsInstallerScript(paths) {
     '  nsExec::ExecToLog \'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\remove-path.ps1" "$INSTDIR"\'',
     '  Delete "$INSTDIR\\vis_bridge.exe"',
     '  Delete "$INSTDIR\\remove-path.ps1"',
+    '  RMDir /r "$INSTDIR\\node_modules"',
     '  Delete "$INSTDIR\\Uninstall.exe"',
     '  RMDir "$INSTDIR"',
     '  System::Call \'USER32::SendMessageTimeout(p 0xffff, i ${WM_SETTINGCHANGE}, p 0, t "Environment", i 0x2, i 5000, *p .r0)\'',
@@ -209,11 +157,17 @@ export function createWindowsInstallerScript(paths) {
   ].join('\r\n');
 }
 
-async function packageWindowsInstaller(paths) {
+async function packageWindowsInstaller(paths, target, rootDirectory) {
   const addPathScript = path.join(paths.workspacePath, 'add-path.ps1');
   const removePathScript = path.join(paths.workspacePath, 'remove-path.ps1');
   const nsiScript = path.join(paths.workspacePath, 'vis-bridge-installer.nsi');
   await mkdir(paths.workspacePath, { recursive: true });
+  await stageNodePtyRuntime(
+    rootDirectory,
+    path.join(paths.workspacePath, 'node_modules', 'node-pty'),
+    target.platform,
+    target.arch,
+  );
   await writeFile(addPathScript, windowsPathScript('add'), 'utf8');
   await writeFile(removePathScript, windowsPathScript('remove'), 'utf8');
   await writeFile(path.join(paths.workspacePath, 'stop-daemon.ps1'), createWindowsStopScript(), 'utf8');
@@ -227,13 +181,13 @@ export async function packageVisBridgeInstaller(rootDirectory, target) {
   await mkdir(paths.installerDirectory, { recursive: true });
   switch (target.platform) {
     case 'linux':
-      await packageLinuxInstaller(paths, target);
+      await packageLinuxInstaller(paths, target, rootDirectory, normalizedVersion);
       break;
     case 'darwin':
-      await packageMacInstaller(paths, target);
+      await packageMacInstaller(paths, target, rootDirectory, normalizedVersion);
       break;
     case 'win32':
-      await packageWindowsInstaller(paths);
+      await packageWindowsInstaller(paths, target, rootDirectory);
       break;
     default:
       throw new VisBridgeInstallerTargetError(

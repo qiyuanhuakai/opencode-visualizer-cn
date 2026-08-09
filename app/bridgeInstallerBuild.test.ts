@@ -107,6 +107,9 @@ describe('vis_bridge installer packaging', () => {
     expect(script).toContain('StrCmp $0 "0" continue_uninstall');
     expect(script).not.toContain('${If} $0 != 0');
     expect(script).toContain('$INSTDIR\\vis_bridge.exe');
+    expect(script).toContain('SetOutPath "$INSTDIR\\node_modules\\node-pty"');
+    expect(script).toContain('File /r');
+    expect(script).toContain('RMDir /r "$INSTDIR\\node_modules"');
   });
 
   it('fails Windows package changes unless the installed executable tree is gone', () => {
