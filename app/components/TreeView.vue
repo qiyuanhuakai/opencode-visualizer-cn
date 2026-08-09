@@ -220,7 +220,7 @@
           </DropdownItem>
           <DropdownItem value="git pull" class="tree-branch-cmd-danger">git pull</DropdownItem>
         </Dropdown>
-        <div class="tree-file-search">
+        <div class="tree-file-search" :style="{ minWidth: FILE_SEARCH_MIN_WIDTH }">
           <Icon icon="lucide:search" :width="11" :height="11" class="tree-file-search-icon" />
           <input
             v-model.trim="fileSearchQuery"
@@ -314,7 +314,7 @@
             type="button"
             class="tree-toggle"
             :aria-label="row.isExpanded ? $t('treeView.collapseDirectory') : $t('treeView.expandDirectory')"
-            @click.stop="emit('toggle-dir', row.node.path)"
+            @click.stop="toggleDirectory(row.node.path)"
           >
             <Icon
               :icon="row.isExpanded ? 'lucide:chevron-down' : 'lucide:chevron-right'"
@@ -323,7 +323,19 @@
             />
           </button>
           <span v-else class="tree-toggle tree-toggle-spacer"></span>
-          <span class="tree-icon">{{ row.node.type === 'directory' ? '📁' : '📄' }}</span>
+          <span
+            class="tree-icon"
+            :class="row.node.type === 'directory' ? 'tree-folder-icon' : 'tree-file-icon'"
+            aria-hidden="true"
+          >
+            <FolderIcon
+              v-if="row.node.type === 'directory'"
+              :foldername="row.node.name"
+              :width="16"
+              :height="16"
+            />
+            <FileIcon v-else :filename="row.node.name" :width="16" :height="16" />
+          </span>
           <span class="tree-name">
             <template v-for="(part, idx) in row.highlightParts" :key="idx">
               <mark v-if="part.match" class="tree-name-highlight">{{ part.text }}</mark>
@@ -365,6 +377,7 @@
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount, inject } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
+import { FileIcon, FolderIcon } from '@vue-symbols/icons';
 
 import type { BranchEntry } from '../types/git';
 import Dropdown from './Dropdown.vue';
@@ -472,12 +485,14 @@ const emit = defineEmits<{
 const ROW_HEIGHT = 24;
 const OVERSCAN = 5; // Number of extra rows to render above/below viewport
 const BRANCH_SEARCH_DEBOUNCE_MS = 120;
+const FILE_SEARCH_MIN_WIDTH = '128px';
 
 const viewMode = ref<TreeViewMode>('all');
 const branchMenuOpen = ref(false);
 const branchSearchQuery = ref('');
 const debouncedBranchSearchQuery = ref('');
 const fileSearchQuery = ref('');
+const searchCollapsedPaths = ref<ReadonlySet<string>>(new Set());
 const pushMenuOpen = ref(false);
 const pullMenuOpen = ref(false);
 const scrollContainerRef = ref<HTMLElement | null>(null);
@@ -576,6 +591,10 @@ watch(
   },
   { immediate: true },
 );
+
+watch(fileSearchQuery, () => {
+  searchCollapsedPaths.value = new Set();
+});
 
 watch(
   scrollContainerRef,
@@ -837,12 +856,9 @@ function getHighlightParts(name: string, query: string): HighlightPart[] {
   return parts;
 }
 
-// Optimized flattened rows with pre-computed properties.
-// In search mode directories are expanded ONLY when they contain a matched file
-// descendant (not when only the directory name itself matches).  This keeps the
-// tree compact while still revealing matched files, and because we never touch
-// expandedPaths the previous expansion state is restored automatically when the
-// query is cleared.
+// Optimized flattened rows with pre-computed properties. Search results expand
+// independently from the persisted tree state so clearing the query restores the
+// user's previous expansion choices.
 
 const flattenedRows = computed<VirtualRow[]>(() => {
   const rows: VirtualRow[] = [];
@@ -850,43 +866,16 @@ const flattenedRows = computed<VirtualRow[]>(() => {
   const query = fileSearchQuery.value.trim().toLowerCase();
   const isSearching = query.length > 0;
 
-  // Pass 1: bottom-up computation — for every directory record whether its
-  // subtree contains at least one file whose name matches the query.
-  const dirHasMatchedFile = new Map<string, boolean>();
-  function calcSubtree(nodes: TreeNode[]): boolean {
-    let hasMatch = false;
-    nodes.forEach((node) => {
-      if (node.type === 'directory' && node.children?.length) {
-        const childHasMatch = calcSubtree(node.children);
-        dirHasMatchedFile.set(node.path, childHasMatch);
-        if (childHasMatch || node.name.toLowerCase().includes(query)) {
-          hasMatch = true;
-        }
-      } else if (node.type === 'file') {
-        if (node.name.toLowerCase().includes(query)) hasMatch = true;
-      }
-    });
-    return hasMatch;
-  }
-  if (isSearching) calcSubtree(displayNodes.value);
-
-  // Pass 2: top-down row generation.
   const pushRows = (nodes: TreeNode[], depth: number) => {
     nodes.forEach((node) => {
       const displayStatus = getDisplayStatus(node.path);
       const isDirectory = node.type === 'directory';
-      const nameMatches = isSearching && node.name.toLowerCase().includes(query);
+      const pathMatches = isSearching && node.path.toLowerCase().split('/').some((segment) => segment.includes(query));
 
       if (isDirectory) {
-        const childHasMatchedFile = dirHasMatchedFile.get(node.path) ?? false;
-
-        // In search mode keep the directory row only when its own name matches
-        // or it has a matched-file descendant.
-        if (!isSearching || nameMatches || childHasMatchedFile) {
-          // Expand the directory only because it contains a matched file, not
-          // merely because its own name matches the query.
+        if (!isSearching || pathMatches || node.children?.length) {
           const isExpanded = isSearching
-            ? childHasMatchedFile
+            ? !searchCollapsedPaths.value.has(node.path)
             : expanded.value.has(node.path);
 
           const isSelected = props.selectedPath === node.path;
@@ -916,7 +905,7 @@ const flattenedRows = computed<VirtualRow[]>(() => {
         }
       } else {
         // File node
-        if (!isSearching || nameMatches) {
+        if (!isSearching || pathMatches) {
           const isSelected = props.selectedPath === node.path;
           const hasStatus = Boolean(props.gitStatusByPath?.[node.path]);
 
@@ -1169,7 +1158,7 @@ function onTreeScrollClick(event: MouseEvent) {
 
 function onRowClick(row: VirtualRow, event: MouseEvent) {
   if (row.node.type === 'directory') {
-    emit('toggle-dir', row.node.path);
+    toggleDirectory(row.node.path);
     return;
   }
   if (event.detail > 1) return;
@@ -1178,6 +1167,21 @@ function onRowClick(row: VirtualRow, event: MouseEvent) {
     return;
   }
   emit('select-file', row.node.path);
+}
+
+function toggleDirectory(path: string) {
+  if (!fileSearchQuery.value.trim()) {
+    emit('toggle-dir', path);
+    return;
+  }
+
+  const collapsed = new Set(searchCollapsedPaths.value);
+  if (collapsed.has(path)) {
+    collapsed.delete(path);
+  } else {
+    collapsed.add(path);
+  }
+  searchCollapsedPaths.value = collapsed;
 }
 
 function onRowDoubleClick(row: VirtualRow) {
@@ -1237,6 +1241,7 @@ function onRowDoubleClick(row: VirtualRow) {
   padding: 0;
   border-radius: 6px;
   cursor: pointer;
+  max-width: 100%;
 }
 
 .tree-branch-picker-trigger:hover {
@@ -1476,8 +1481,8 @@ function onRowDoubleClick(row: VirtualRow) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: 1;
-  min-width: 0;
+  flex: 1 0 128px;
+  min-width: 128px;
   margin-left: 4px;
   padding: 2px 6px;
   border-radius: 6px;
@@ -1643,8 +1648,18 @@ function onRowDoubleClick(row: VirtualRow) {
 }
 
 .tree-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
   width: 16px;
-  text-align: center;
+  height: 16px;
+}
+
+.tree-icon :deep(svg) {
+  display: block;
+  width: 16px;
+  height: 16px;
 }
 
 .tree-name {

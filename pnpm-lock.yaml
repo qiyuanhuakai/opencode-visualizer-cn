@@ -50,6 +50,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.19.9
         version: 1.19.9(hono@4.12.3)
+      '@vue-symbols/icons':
+        specifier: 1.2.0
+        version: 1.2.0(vue@3.5.28(typescript@6.0.3))
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1494,6 +1497,11 @@ packages:
 
   '@volar/typescript@2.4.27':
     resolution: {integrity: sha512-eWaYCcl/uAPInSK2Lze6IqVWaBu/itVqR5InXcHXFyles4zO++Mglt3oxdgj75BDcv1Knr9Y93nowS8U3wqhxg==}
+
+  '@vue-symbols/icons@1.2.0':
+    resolution: {integrity: sha512-ia7J37/O171SSOxpVMEu7u+xQ4XRGLPreZu514rT549IMfwBIGcQgwiEm438YllGe62T8CAhJSyktoKmwfpzpw==}
+    peerDependencies:
+      vue: ^3.3.0
 
   '@vue/compiler-core@3.5.27':
     resolution: {integrity: sha512-gnSBQjZA+//qDZen+6a2EdHqJ68Z7uybrMf3SPjEGgG4dicklwDVmMC1AeIHxtLVPT7sn6sH1KOO+tS6gwOUeQ==}
@@ -4357,6 +4365,10 @@ snapshots:
       '@volar/language-core': 2.4.27
       path-browserify: 1.0.1
       vscode-uri: 3.1.0
+
+  '@vue-symbols/icons@1.2.0(vue@3.5.28(typescript@6.0.3))':
+    dependencies:
+      vue: 3.5.28(typescript@6.0.3)
 
   '@vue/compiler-core@3.5.27':
     dependencies:
