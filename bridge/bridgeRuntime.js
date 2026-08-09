@@ -110,8 +110,15 @@ export function createBridgeRuntime(options = {}) {
     acceptingMutations = false;
     stopPromise = mutations
       .then(async () => {
-        await Promise.all([nativeSupervisor.stop(), acpManager.stopAll()]);
-        await clientMethodHandler.stopAll();
+        const supervisorResults = await Promise.allSettled([
+          nativeSupervisor.stop(),
+          acpManager.stopAll(),
+        ]);
+        const reverseResourceResults = await Promise.allSettled([clientMethodHandler.stopAll()]);
+        const failure = [...supervisorResults, ...reverseResourceResults].find(
+          (result) => result.status === 'rejected',
+        );
+        if (failure?.status === 'rejected') throw failure.reason;
       })
       .then(() => undefined);
     await stopPromise;

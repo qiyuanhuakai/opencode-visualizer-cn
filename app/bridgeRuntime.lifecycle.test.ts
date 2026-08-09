@@ -113,4 +113,46 @@ describe('bridge runtime lifecycle', () => {
     expect(nativeStop).toHaveBeenCalledOnce();
     expect(acpStop).toHaveBeenCalledOnce();
   });
+
+  it('releases reverse terminals even when a supervisor stop fails', async () => {
+    const nativeFailure = new Error('native stop failed');
+    const nativeStop = vi.fn().mockRejectedValue(nativeFailure);
+    const acpStop = vi.fn();
+    const reverseStop = vi.fn();
+    const runtime = createBridgeRuntime({
+      configStore: {
+        configPath: '/tmp/bridge-runtime-stop-failure.json',
+        load: vi.fn(async () => ({ version: 1 as const, acpAgents: [] })),
+        save: vi.fn(),
+        getConfig: vi.fn(async () => ({ version: 1 as const, acpAgents: [] })),
+        upsertAgent: vi.fn(),
+        removeAgent: vi.fn(),
+      },
+      nativeSupervisor: {
+        start: vi.fn(async () => []),
+        stop: nativeStop,
+        getStatus: vi.fn(() => []),
+      },
+      acpManager: {
+        reconcile: vi.fn(),
+        stopAll: acpStop,
+        getStatus: vi.fn(() => []),
+        attach: vi.fn(),
+      },
+      clientMethodHandler: Object.assign(vi.fn(async () => ({})), {
+        observeClientMessage: vi.fn(),
+        observeAgentMessage: vi.fn(),
+        releaseAgent: vi.fn(),
+        resumeAgent: vi.fn(),
+        stopAll: reverseStop,
+      }),
+    });
+    await runtime.start();
+
+    await expect(runtime.stop()).rejects.toBe(nativeFailure);
+
+    expect(nativeStop).toHaveBeenCalledOnce();
+    expect(acpStop).toHaveBeenCalledOnce();
+    expect(reverseStop).toHaveBeenCalledOnce();
+  });
 });
