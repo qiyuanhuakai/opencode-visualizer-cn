@@ -20,8 +20,9 @@ export function createBridgeRuntime(options = {}) {
   let mutations = Promise.resolve();
 
   async function start() {
-    if (started) return getStatus();
     if (stopPromise) throw new Error('Bridge runtime is shutting down.');
+    if (started && !acceptingMutations) await stop();
+    if (started) return getStatus();
     started = true;
     try {
       const config = await configStore.load();

@@ -114,6 +114,54 @@ describe('bridge runtime lifecycle', () => {
     expect(acpStop).toHaveBeenCalledOnce();
   });
 
+  it('cleans partial owners before retrying a failed start', async () => {
+    const nativeStart = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('native start failed'))
+      .mockResolvedValue(undefined);
+    const nativeStop = vi.fn();
+    const acpStop = vi.fn();
+    const reverseStop = vi.fn();
+    const reconcile = vi.fn();
+    const runtime = createBridgeRuntime({
+      configStore: {
+        configPath: '/tmp/bridge-runtime-start-retry.json',
+        load: vi.fn(async () => ({ version: 1 as const, acpAgents: [] })),
+        save: vi.fn(),
+        getConfig: vi.fn(async () => ({ version: 1 as const, acpAgents: [] })),
+        upsertAgent: vi.fn(),
+        removeAgent: vi.fn(),
+      },
+      nativeSupervisor: {
+        start: nativeStart,
+        stop: nativeStop,
+        getStatus: vi.fn(() => []),
+      },
+      acpManager: {
+        reconcile,
+        stopAll: acpStop,
+        getStatus: vi.fn(() => []),
+        attach: vi.fn(),
+      },
+      clientMethodHandler: Object.assign(vi.fn(async () => ({})), {
+        observeClientMessage: vi.fn(),
+        observeAgentMessage: vi.fn(),
+        releaseAgent: vi.fn(async () => {}),
+        resumeAgent: vi.fn(),
+        stopAll: reverseStop,
+      }),
+    });
+
+    await expect(runtime.start()).rejects.toThrow('native start failed');
+    await expect(runtime.start()).resolves.toEqual({ services: [], acpAgents: [] });
+
+    expect(nativeStart).toHaveBeenCalledTimes(2);
+    expect(nativeStop).toHaveBeenCalledOnce();
+    expect(acpStop).toHaveBeenCalledOnce();
+    expect(reverseStop).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledTimes(2);
+  });
+
   it('releases reverse terminals even when a supervisor stop fails', async () => {
     const nativeFailure = new Error('native stop failed');
     const nativeStop = vi.fn().mockRejectedValueOnce(nativeFailure).mockResolvedValue(undefined);
