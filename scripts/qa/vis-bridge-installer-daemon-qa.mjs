@@ -63,6 +63,46 @@ async function assertStopped() {
   }
 }
 
+function ptyRequest(method, requestPath, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? undefined : JSON.stringify(body);
+    const ptyRequest = request({
+      host: '127.0.0.1',
+      port: Number(portText),
+      path: requestPath,
+      method,
+      headers: {
+        ...(payload
+          ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+          : {}),
+        ...(process.env.VIS_BRIDGE_TOKEN
+          ? { Authorization: `Bearer ${process.env.VIS_BRIDGE_TOKEN}` }
+          : {}),
+      },
+    }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.once('end', () => {
+        const responseBody = Buffer.concat(chunks).toString('utf8');
+        if ((response.statusCode ?? 500) >= 400) {
+          reject(new Error(`PTY request failed (${response.statusCode}): ${responseBody}`));
+          return;
+        }
+        resolve(responseBody ? JSON.parse(responseBody) : {});
+      });
+    });
+    ptyRequest.once('error', reject);
+    ptyRequest.end(payload);
+  });
+}
+
+async function assertPty() {
+  const created = await ptyRequest('POST', '/pty', {});
+  if (!created || typeof created.id !== 'string') throw new Error('PTY creation returned no id.');
+  await ptyRequest('DELETE', `/pty/${encodeURIComponent(created.id)}`);
+}
+
 if (action === 'spawn') await spawnCommand();
 else if (action === 'assert-stopped') await assertStopped();
+else if (action === 'assert-pty') await assertPty();
 else throw new Error(`Unknown installer daemon QA action: ${action}`);
