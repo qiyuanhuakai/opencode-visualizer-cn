@@ -17,6 +17,8 @@ export type PtyManager = {
   attach(id: string, socket: PtySocket, head: Buffer): boolean;
 };
 
+export function packagedNodePtyEntries(execPath: string, platform: NodeJS.Platform): string[];
+
 export function createPtyManager(options?: {
   readonly ptyModule?: {
     spawn(command: string, args: readonly string[], options: object): unknown;

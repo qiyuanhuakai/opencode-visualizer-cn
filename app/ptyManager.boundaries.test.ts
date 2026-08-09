@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createPtyManager } from '../bridge/ptyManager.js';
+import { createPtyManager, packagedNodePtyEntries } from '../bridge/ptyManager.js';
 
 function clientFrame(payload: string, opcode: number, fin: boolean): Buffer {
   const data = Buffer.from(payload);
@@ -23,6 +23,18 @@ function createFixture() {
   const manager = createPtyManager({ ptyModule: { spawn: vi.fn(() => pty) } });
   return { manager, pty, output: (value: string) => onData?.(value) };
 }
+
+describe('packaged node-pty resolution', () => {
+  it('resolves runtime payloads relative to the installed executable', () => {
+    expect(packagedNodePtyEntries('/usr/bin/vis_bridge', 'linux')).toEqual([
+      '/usr/bin/node_modules/node-pty/lib/index.js',
+      '/usr/lib/vis_bridge/node_modules/node-pty/lib/index.js',
+    ]);
+    expect(
+      packagedNodePtyEntries(String.raw`C:\Program Files\vis_bridge\vis_bridge.exe`, 'win32'),
+    ).toEqual([String.raw`C:\Program Files\vis_bridge\node_modules\node-pty\lib\index.js`]);
+  });
+});
 
 function createSocket(writeResult = true) {
   return Object.assign(new EventEmitter(), {

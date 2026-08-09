@@ -1,11 +1,51 @@
 import { randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { decodeWebSocketFrames, encodeWebSocketFrame } from './webSocketFrames.js';
+
+export function packagedNodePtyEntries(execPath = process.execPath, platform = process.platform) {
+  const pathApi = platform === 'win32' ? path.win32 : path.posix;
+  const executableDirectory = pathApi.dirname(execPath);
+  const siblingEntry = pathApi.join(
+    executableDirectory,
+    'node_modules',
+    'node-pty',
+    'lib',
+    'index.js',
+  );
+  if (platform === 'win32') return [siblingEntry];
+  return [
+    siblingEntry,
+    pathApi.resolve(
+      executableDirectory,
+      '..',
+      'lib',
+      'vis_bridge',
+      'node_modules',
+      'node-pty',
+      'lib',
+      'index.js',
+    ),
+  ];
+}
 
 async function loadNodePty(ptyModule) {
   if (ptyModule) return ptyModule;
+  const runtimeImport = new Function('specifier', 'return import(specifier)');
   try {
-    const runtimeImport = new Function('specifier', 'return import(specifier)');
+    const sea = process.getBuiltinModule?.('node:sea');
+    if (sea?.isSea?.()) {
+      let packagedError;
+      for (const entry of packagedNodePtyEntries()) {
+        try {
+          return await runtimeImport(pathToFileURL(entry).href);
+        } catch (error) {
+          packagedError = error;
+        }
+      }
+      throw packagedError ?? new Error('Packaged node-pty runtime is missing.');
+    }
     return await runtimeImport('node-pty');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
