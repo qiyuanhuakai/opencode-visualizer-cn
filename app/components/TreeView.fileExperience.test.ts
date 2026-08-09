@@ -27,7 +27,7 @@ describe('TreeView file experience', () => {
 
     const search = tree.root.querySelector<HTMLElement>('.tree-file-search');
     expect(search).not.toBeNull();
-    expect(search?.style.minWidth).toBe('128px');
+    expect(search?.style.minWidth).toBe('96px');
     expect(tree.root.querySelector('.tree-branch-name')?.textContent).toBe(branchName);
 
     tree.unmount();
@@ -57,6 +57,36 @@ describe('TreeView file experience', () => {
     tree.root.querySelector<HTMLButtonElement>('.tree-toggle')?.click();
     await flushRender();
     expect(tree.root.textContent).toContain('Button.vue');
+
+    tree.unmount();
+  });
+
+  it('starts matching directories expanded when the tree changes under the same query', async () => {
+    const tree = await mountTreeView([
+      {
+        name: 'components',
+        path: 'components',
+        type: 'directory',
+        children: [{ name: 'Old.vue', path: 'components/Old.vue', type: 'file' }],
+      },
+    ]);
+
+    await searchFiles(tree.root, 'components');
+    tree.root.querySelector<HTMLButtonElement>('.tree-toggle')?.click();
+    await flushRender();
+
+    tree.props.rootNodes = [
+      {
+        name: 'components',
+        path: 'components',
+        type: 'directory',
+        children: [{ name: 'New.vue', path: 'components/New.vue', type: 'file' }],
+      },
+    ];
+    await flushRender();
+
+    expect(tree.root.textContent).toContain('New.vue');
+    expect(tree.root.querySelector('.tree-toggle')?.getAttribute('aria-label')).toBe('Collapse directory');
 
     tree.unmount();
   });

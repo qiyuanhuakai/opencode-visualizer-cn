@@ -485,7 +485,7 @@ const emit = defineEmits<{
 const ROW_HEIGHT = 24;
 const OVERSCAN = 5; // Number of extra rows to render above/below viewport
 const BRANCH_SEARCH_DEBOUNCE_MS = 120;
-const FILE_SEARCH_MIN_WIDTH = '128px';
+const FILE_SEARCH_MIN_WIDTH = '96px';
 
 const viewMode = ref<TreeViewMode>('all');
 const branchMenuOpen = ref(false);
@@ -592,7 +592,7 @@ watch(
   { immediate: true },
 );
 
-watch(fileSearchQuery, () => {
+watch([fileSearchQuery, () => props.rootNodes], () => {
   searchCollapsedPaths.value = new Set();
 });
 
@@ -1481,8 +1481,8 @@ function onRowDoubleClick(row: VirtualRow) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex: 1 0 128px;
-  min-width: 128px;
+  flex: 1 0 96px;
+  min-width: 96px;
   margin-left: 4px;
   padding: 2px 6px;
   border-radius: 6px;
