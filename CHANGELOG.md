@@ -4,6 +4,18 @@
 
 ---
 
+## [Unreleased]
+
+### 插件兼容性与状态监控
+
+- [x] `task(category)` 子代理卡片在保留完整任务标题的同时显示为 `Sisyphus-Junior(category)`，类别只作用于最终代理标记，不再改写标题正文。
+- [x] `lsp-*`、`codegraph-*` 与 `ctx-*` 工具输出支持实时和历史 Markdown 悬浮窗，并避免把前端卡片的“复制 / 已复制”控件混入工具内容。
+- [x] `magic-context-*` 子代理不再出现在普通线程卡片中，改为在“状态监控 → MC”页面展示当前项目、当前根会话下的真实 `Running / Idle / Retrying` 状态。
+- [x] 状态监控标签栏保持原有单行横向滚动样式，新增 MC 页不会影响其他页面的排版与可达性。
+- [x] 同一工具的 running/completed 并发 Markdown 渲染使用独立请求 ID，避免旧的运行中内容覆盖最终结果。
+
+---
+
 ## [v0.7.5 released]
 
 ### vis_bridge 守护进程
