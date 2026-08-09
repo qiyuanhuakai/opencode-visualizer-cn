@@ -127,7 +127,7 @@ describe('StatusMonitorModal Codex status isolation', () => {
     await nextTick();
 
     const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    expect(tabs).toHaveLength(7);
+    expect(tabs).toHaveLength(8);
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
     tabs[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     await nextTick();

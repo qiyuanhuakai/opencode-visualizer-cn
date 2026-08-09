@@ -281,6 +281,7 @@ export interface LocaleMessages {
       plugins: string;
       skills: string;
       token: string;
+      mc: string;
       acp: string;
       codex: string;
     };
@@ -351,6 +352,14 @@ export interface LocaleMessages {
       totalCost: string;
       createdTime: string;
       lastActivity: string;
+    };
+    mc: {
+      noData: string;
+      states: {
+        busy: string;
+        idle: string;
+        retry: string;
+      };
     };
     acp: {
       unavailable: string;

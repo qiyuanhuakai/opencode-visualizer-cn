@@ -1,4 +1,5 @@
 import { normalizeToolName } from './toolNames';
+import { isPluginToolName } from './pluginCompatibility';
 
 export function extractXmlTagContent(text: string, tag: string): string | null {
   const open = `<${tag}>`;
@@ -33,6 +34,7 @@ export type ToolRenderersHelpers = {
     copiedLabel?: string;
     copyCodeAriaLabel?: string;
     copyMarkdownAriaLabel?: string;
+    copyButtons?: boolean;
   }) => Promise<string>;
   renderReadHtmlFromApi: (args: {
     callId?: string;
@@ -78,6 +80,13 @@ function toolEmoji(tool: string): string {
 }
 
 type TranslateFunction = (key: string) => string;
+
+let pluginRenderRequestSequence = 0;
+
+function nextPluginRenderRequestId(callId?: string): string {
+  pluginRenderRequestSequence += 1;
+  return `plugin-${callId ?? 'tool'}-${pluginRenderRequestSequence.toString(36)}`;
+}
 
 function toolPrefix(tool: string, labelKey: string, t: TranslateFunction, detail?: string): string {
   const icon = toolEmoji(tool);
@@ -287,6 +296,26 @@ export function extractFileRead(
         : stateError !== undefined
           ? helpers.formatToolValue(stateError)
           : undefined;
+
+    if (isPluginToolName(rawTool)) {
+      const pluginCode = outputText ?? errorText ?? '';
+      return {
+        content: () =>
+          helpers.renderWorkerHtml({
+            id: nextPluginRenderRequestId(callId),
+            code: pluginCode,
+            lang: 'markdown',
+            theme: 'github-dark',
+            gutterMode: 'none',
+            copyButtons: false,
+          }),
+        variant: 'plain' as const,
+        callId,
+        toolName: rawTool,
+        toolStatus: status,
+        title: toolPrefix(rawTool, 'floatingWindow.tool', t, rawTool),
+      };
+    }
 
     switch (tool) {
       case 'bash': {

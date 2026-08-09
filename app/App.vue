@@ -451,6 +451,7 @@
       :session-id="selectedSessionId"
       :codex-api="codexApi"
       :active-backend-kind="activeBackendKind"
+      :magic-context-workers="magicContextWorkers"
       @close="isStatusMonitorOpen = false"
     />
     <ProjectSettingsDialog
@@ -670,6 +671,10 @@ import {
 import { retryReferencedSessionIds } from './utils/retryReferencedSessions';
 import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
 import { normalizeToolName } from './utils/toolNames';
+import {
+  collectMagicContextWorkers,
+  isPluginToolName,
+} from './utils/pluginCompatibility';
 import {
   extractFileRead as extractToolFileRead,
   extractPatch as extractToolPatch,
@@ -1738,18 +1743,27 @@ function collectAllSessionsByProject() {
 const sessionsByProject = computed(() => collectAllSessionsByProject());
 
 const sessionHistoryMetaById = computed(() => {
-  const meta: Record<string, SessionHistoryMeta> = {};
-  Object.values(sessionsByProject.value)
-    .flat()
-    .forEach((session) => {
+  const meta: Record<string, SessionHistoryMeta & { projectId: string }> = {};
+  Object.entries(sessionsByProject.value).forEach(([projectId, projectSessions]) => {
+    projectSessions.forEach((session) => {
       meta[session.id] = {
+        projectId,
         parentID: session.parentID,
         label: sessionLabel(session),
         status: session.status,
       };
     });
+  });
   return meta;
 });
+
+const magicContextWorkers = computed(() =>
+  collectMagicContextWorkers(
+    sessionHistoryMetaById.value,
+    selectedSessionId.value,
+    selectedProjectId.value,
+  ),
+);
 
 const sessions = computed<SessionInfo[]>(() => {
   const projectId = selectedProjectId.value.trim();
@@ -7930,6 +7944,7 @@ const TOOL_WINDOW_SUPPORTED = new Set([
 ]);
 
 function shouldRenderToolWindow(tool: string) {
+  if (isPluginToolName(tool)) return true;
   const normalizedTool = normalizeToolName(tool);
   return !TOOL_WINDOW_HIDDEN.has(normalizedTool) && TOOL_WINDOW_SUPPORTED.has(normalizedTool);
 }

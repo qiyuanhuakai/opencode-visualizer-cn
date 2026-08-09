@@ -287,6 +287,7 @@ const messages: LocaleMessages = {
       plugins: 'プラグイン',
       skills: 'スキル',
       token: 'Token',
+      mc: 'MC',
       acp: 'ACP',
       codex: 'Codex',
     },
@@ -357,6 +358,14 @@ const messages: LocaleMessages = {
       totalCost: '総コスト',
       createdTime: '作成日時',
       lastActivity: '最終活動',
+    },
+    mc: {
+      noData: 'Magic Context サブエージェントはありません。',
+      states: {
+        busy: '実行中',
+        idle: '待機中',
+        retry: '再試行中',
+      },
     },
     acp: {
       unavailable: 'VIS bridge を利用できません。',

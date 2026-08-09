@@ -1,3 +1,5 @@
+import { isPluginToolName } from './pluginCompatibility';
+
 const WEBSEARCH_TOOL_ALIASES = new Set(['websearch', 'websearch_web_search_exa']);
 
 const HISTORY_TOOL_NAMES = new Set([
@@ -19,5 +21,5 @@ export function normalizeToolName(tool: string): string {
 }
 
 export function isHistoryToolName(tool: string): boolean {
-  return HISTORY_TOOL_NAMES.has(normalizeToolName(tool));
+  return isPluginToolName(tool) || HISTORY_TOOL_NAMES.has(normalizeToolName(tool));
 }

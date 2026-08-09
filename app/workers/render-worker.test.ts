@@ -15,6 +15,7 @@ type RenderPayload = {
   lang: string;
   theme: string;
   gutterMode: 'none';
+  copyButtons?: boolean;
 };
 
 type WorkerHarness = {
@@ -34,7 +35,9 @@ function request(id: string, theme: string): RenderPayload {
   };
 }
 
-async function startWorker(moduleSuffix: 'dark-baseline' | 'light-baseline' | 'overlap') {
+async function startWorker(
+  moduleSuffix: 'dark-baseline' | 'light-baseline' | 'overlap' | 'copy-controls',
+) {
   const messages: WorkerResponse['data'][] = [];
   const waiters = new Map<string, (message: WorkerResponse['data']) => void>();
   const worker: WorkerHarness = {
@@ -85,5 +88,20 @@ describe('render worker theme isolation', () => {
     // Then: each response has the colors selected by its request's theme
     expect(darkHtml).toBe(darkAlone);
     expect(lightHtml).toBe(lightAlone);
+  });
+
+  it('omits markdown copy controls when the caller disables them', async () => {
+    const { render } = await startWorker('copy-controls');
+    const html = await render({
+      ...request('without-copy-controls', 'github-dark'),
+      code: '# Result\n\n```text\noutput\n```',
+      lang: 'markdown',
+      copyButtons: false,
+    });
+
+    expect(html).toContain('Result');
+    expect(html).not.toContain('md-copy-btn');
+    expect(html).not.toContain('COPY');
+    expect(html).not.toContain('Copied');
   });
 });

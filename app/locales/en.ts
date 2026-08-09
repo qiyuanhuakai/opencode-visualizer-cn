@@ -285,6 +285,7 @@ const messages: LocaleMessages = {
       plugins: 'Plugins',
       skills: 'Skills',
       token: 'Token',
+      mc: 'MC',
       acp: 'ACP',
       codex: 'Codex',
     },
@@ -355,6 +356,14 @@ const messages: LocaleMessages = {
       totalCost: 'Total cost',
       createdTime: 'Created',
       lastActivity: 'Last activity',
+    },
+    mc: {
+      noData: 'No Magic Context workers are active.',
+      states: {
+        busy: 'Running',
+        idle: 'Idle',
+        retry: 'Retrying',
+      },
     },
     acp: {
       unavailable: 'The VIS bridge is unavailable.',

@@ -191,6 +191,43 @@ describe('single-shot regression', () => {
     expect(poolWorker.posted).toHaveLength(1);
   });
 
+  it('separates cached Markdown renders with and without copy controls', async () => {
+    const mod = await import('../utils/workerRenderer');
+    const request = {
+      id: 'copy-controls-on',
+      code: '# Result',
+      lang: 'markdown',
+      theme: 'github-dark',
+    };
+
+    const withControls = mod.renderWorkerHtml(request);
+    const poolWorker = workerState.FakeWorker.instances[0];
+    if (!poolWorker) throw new Error('no pool worker');
+    poolWorker.emit({ id: request.id, ok: true, html: '<button>COPY</button>' });
+    await expect(withControls).resolves.toBe('<button>COPY</button>');
+
+    const withoutControls = mod.renderWorkerHtml({
+      ...request,
+      id: 'copy-controls-off',
+      copyButtons: false,
+    });
+    const posted = workerState.FakeWorker.instances.flatMap((worker) => worker.posted);
+    expect(posted).toHaveLength(2);
+    expect(posted[1]).toMatchObject({ copyButtons: false });
+    const secondWorker = workerState.FakeWorker.instances.find((worker) =>
+      worker.posted.some(
+        (message) =>
+          typeof message === 'object' &&
+          message !== null &&
+          'id' in message &&
+          message.id === 'copy-controls-off',
+      ),
+    );
+    if (!secondWorker) throw new Error('copy-controls-off request was not posted');
+    secondWorker.emit({ id: 'copy-controls-off', ok: true, html: '<h1>Result</h1>' });
+    await expect(withoutControls).resolves.toBe('<h1>Result</h1>');
+  });
+
   it('renderWorkerHtml rejects when the pool worker reports an error', async () => {
     // Given: a single-shot request in flight
     const mod = await import('../utils/workerRenderer');

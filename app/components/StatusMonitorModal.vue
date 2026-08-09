@@ -13,6 +13,7 @@ import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
+import type { MagicContextWorker } from '../utils/pluginCompatibility';
 import AcpManagerPanel from './AcpManagerPanel.vue';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
@@ -23,6 +24,7 @@ const props = defineProps<{
   codexApi: CodexApi;
   preload: boolean;
   activeBackendKind: BackendKind;
+  magicContextWorkers?: readonly MagicContextWorker[];
 }>();
 const emit = defineEmits<{ close: [] }>();
 
@@ -41,7 +43,7 @@ function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T
   return method;
 }
 
-type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'acp' | 'codex';
+type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp' | 'codex';
 const activeTab = ref<TabId>('server');
 const acpManagerRef = ref<{ refresh: () => Promise<void> } | null>(null);
 
@@ -666,6 +668,16 @@ function lspStatusClass(status: string) {
   return status === 'connected' ? 'status-dot-success' : 'status-dot-error';
 }
 
+function magicContextStatusClass(status: MagicContextWorker['status']) {
+  if (status === 'busy') return 'status-dot-success';
+  if (status === 'retry') return 'status-dot-warning';
+  return 'status-dot-muted';
+}
+
+function magicContextStatusText(status: MagicContextWorker['status']) {
+  return t(`statusMonitor.mc.states.${status}`);
+}
+
 const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
   const base: { id: TabId; labelKey: string }[] = [
     { id: 'server', labelKey: 'statusMonitor.tabs.server' },
@@ -674,6 +686,7 @@ const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
     { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
     { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
     { id: 'token', labelKey: 'statusMonitor.tabs.token' },
+    { id: 'mc', labelKey: 'statusMonitor.tabs.mc' },
     { id: 'acp', labelKey: 'statusMonitor.tabs.acp' },
   ];
   if (showCodexInStatusMonitor.value) {
@@ -728,6 +741,10 @@ const currentTotalInfo = computed(() => {
     case 'token':
       return tokenUsage.value
         ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
+        : null;
+    case 'mc':
+      return props.magicContextWorkers?.length
+        ? { label: t('statusMonitor.common.totalLabel'), count: props.magicContextWorkers.length }
         : null;
     case 'acp':
       return null;
@@ -1083,6 +1100,28 @@ function formatPercent(value: number, total: number): string {
 
         <div v-if="activeTab === 'acp'" class="status-monitor-content">
           <AcpManagerPanel ref="acpManagerRef" />
+        </div>
+
+        <!-- Magic Context Tab -->
+        <div v-if="activeTab === 'mc'" class="status-monitor-content">
+          <div v-if="!magicContextWorkers?.length" class="status-monitor-empty">
+            {{ $t('statusMonitor.mc.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div
+              v-for="worker in magicContextWorkers"
+              :key="worker.sessionId"
+              class="status-monitor-row"
+            >
+              <div class="status-monitor-row-main">
+                <span class="status-dot" :class="magicContextStatusClass(worker.status)" />
+                <span class="status-monitor-name">{{ worker.name }}</span>
+              </div>
+              <span class="status-monitor-meta">
+                {{ magicContextStatusText(worker.status) }}
+              </span>
+            </div>
+          </div>
         </div>
 
         <!-- Codex Tab -->
