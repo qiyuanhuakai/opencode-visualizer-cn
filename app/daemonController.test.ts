@@ -147,4 +147,83 @@ describe('daemonController', () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+
+  it('removes credentials and the control token from the daemon spawn environment', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-daemon-controller-test-'));
+    const child = new StuckDaemonChild();
+    let spawnedEnvironment: NodeJS.ProcessEnv | undefined;
+    const controller = createDaemonController({
+      paths: createDaemonPaths({ VIS_BRIDGE_STATE_DIR: directory }),
+      env: {
+        VIS_BRIDGE_STATE_DIR: directory,
+        VIS_BRIDGE_TOKEN: 'bridge-secret',
+        VIS_BRIDGE_CODEX_TOKEN: 'codex-secret',
+        VIS_BRIDGE_CODEX_TOKEN_FILE: '/secret/token-file',
+        VIS_BRIDGE_CODEX_AUTHORIZATION: 'Bearer authorization-secret',
+      },
+      spawnProcess: (_command: string, _args: readonly string[], options: { env?: NodeJS.ProcessEnv }) => {
+        spawnedEnvironment = options.env;
+        queueMicrotask(() => {
+          child.emit('message', { type: 'awaiting-options' });
+          child.emit('message', {
+            type: 'ready', host: '127.0.0.1', port: 23004, path: '/codex', failures: [],
+          });
+        });
+        return child;
+      },
+      stdout: { write: vi.fn() },
+      stderr: { write: vi.fn() },
+    });
+
+    try {
+      await controller.start([]);
+      expect(spawnedEnvironment).toMatchObject({
+        VIS_BRIDGE_STATE_DIR: directory,
+        VIS_BRIDGE_DAEMON_INSTANCE_ID: expect.any(String),
+      });
+      for (const name of [
+        'VIS_BRIDGE_DAEMON_CONTROL_TOKEN',
+        'VIS_BRIDGE_TOKEN',
+        'VIS_BRIDGE_CODEX_TOKEN',
+        'VIS_BRIDGE_CODEX_TOKEN_FILE',
+        'VIS_BRIDGE_CODEX_AUTHORIZATION',
+      ]) {
+        expect(spawnedEnvironment).not.toHaveProperty(name);
+      }
+      expect(child.send).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'start-options', controlToken: expect.any(String) }),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an unsafe persisted target before stopping the running daemon', async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-daemon-controller-test-'));
+    const paths = createDaemonPaths({ VIS_BRIDGE_STATE_DIR: directory });
+    await writeDaemonState(paths, {
+      instanceId: 'unsafe-target-test',
+      pid: process.pid,
+      state: 'running',
+      controlPort: 1,
+      controlToken: 'control-token',
+      failures: [],
+      startedAt: new Date().toISOString(),
+      launchArgs: ['--target=wss://example.test/codex?access_token=secret'],
+      logPath: paths.logPath,
+    });
+    const controller = createDaemonController({
+      paths,
+      stdout: { write: vi.fn() },
+      stderr: { write: vi.fn() },
+    });
+
+    try {
+      await expect(controller.restart([])).rejects.toThrow(
+        'must not include credentials, query parameters, or fragments',
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });

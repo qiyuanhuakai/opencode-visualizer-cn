@@ -124,6 +124,13 @@ describe('vis_bridge daemon security and fatal startup', { timeout: 15_000 }, ()
       environment,
     );
     await expect(readHealthStatus(fixture.port, bridgeToken)).resolves.toBe(200);
+    if (process.platform === 'linux') {
+      const state = JSON.parse(
+        await readFile(path.join(fixture.directory, 'state', 'daemon.json'), 'utf8'),
+      ) as { pid: number };
+      const daemonEnvironment = await readFile(`/proc/${state.pid}/environ`, 'utf8');
+      for (const name of credentialNames) expect(daemonEnvironment).not.toContain(`${name}=`);
+    }
 
     const commandResponse = await postJson(fixture.port, '/command/exec', bridgeToken, {
         command: process.execPath,
