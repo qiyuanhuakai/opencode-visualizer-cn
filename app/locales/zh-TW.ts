@@ -770,6 +770,23 @@ const messages: LocaleMessages = {
       label: '懸浮窗自動換行',
       description: '在有行號的懸浮窗（檔案預覽、編輯/寫入/修補）中啟用自動換行。',
     },
+    editor: {
+      label: '編輯器', description: '設定內建編輯器及鍵盤快捷鍵。', pageTitle: '編輯器設定',
+      pageDescription: '變更會立即套用到所有已開啟的檔案編輯器。',
+      fontSize: { label: '編輯器字型大小', description: 'CodeMirror 字型大小（像素）。', inherited: '繼承', inheritAction: '繼承程式碼字型' },
+      tabSize: { label: '縮排寬度', description: '每級縮排插入的空格數。' },
+      editInVis: { label: '在 Vis 中編輯', description: '啟用透過本地 vis_bridge 進行的內建檔案編輯。' },
+      shortcuts: {
+        label: '鍵盤快捷鍵', description: '點擊快捷鍵後直接按下新組合鍵。按 Esc 取消，按 Backspace 清除綁定。', reset: '恢復預設', recording: '請按快捷鍵…', unassigned: '未設定', recordAria: '錄製「{action}」快捷鍵', invalidError: '鍵名無效', duplicateError: '快捷鍵已被使用',
+        save: '儲存', undo: '復原', redo: '重做', find: '尋找', findNext: '尋找下一個', findPrevious: '尋找上一個', goToLine: '跳至行', selectLine: '選取整行', autocomplete: '自動完成',
+        indent: '增加縮排', outdent: '減少縮排', deleteLine: '刪除行', moveLineUp: '上移行', moveLineDown: '下移行', duplicateLineUp: '向上複製行', duplicateLineDown: '向下複製行',
+        toggleLineComment: '切換行註解', toggleBlockComment: '切換區塊註解', foldCode: '摺疊程式碼', unfoldCode: '展開程式碼',
+      },
+      localApplication: {
+        label: '本機應用程式', description: '以本機暫存副本開啟檔案，並將應用程式中的每次儲存同步寫回目前後端。',
+        placeholder: '/應用程式路徑', browse: '選擇應用程式', clear: '清除',
+      },
+    },
     experimentalFeatures: {
       label: '實驗性功能',
       description: '啟用仍在開發中的實驗性功能。',
@@ -786,10 +803,6 @@ const messages: LocaleMessages = {
       showCodexInStatusMonitor: {
         label: '在狀態監控中顯示 Codex',
         description: '在狀態監控懸浮窗中顯示獨立的 Codex 分頁。',
-      },
-      editInVis: {
-        label: '在 Vis 中編輯',
-        description: '啟用透過本地 vis_bridge 進行的實驗性內建檔案編輯。',
       },
     },
   },
@@ -870,6 +883,9 @@ const messages: LocaleMessages = {
     confirmDiscardEdit: '要捨棄此編輯器中的未儲存變更嗎？',
     editConflict: '你編輯期間磁碟上的檔案已變更。請先重新載入，再重新儲存。',
     openInEditor: '用編輯器開啟',
+    openInLocalApplication: '使用本機應用程式開啟',
+    localApplicationOpened: '已使用本機應用程式開啟',
+    localApplicationConflict: '後端檔案已經變更，本機應用程式中的儲存未寫回。',
     previousMatch: '上一個符合',
     nextMatch: '下一個符合',
     closeSearch: '關閉搜尋',

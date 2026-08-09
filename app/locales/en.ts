@@ -783,6 +783,26 @@ const messages: LocaleMessages = {
       description:
         'Enable automatic line wrapping in floating windows with line numbers (file preview, edit/write/patch).',
     },
+    editor: {
+      label: 'Editor',
+      description: 'Configure the built-in editor and keyboard shortcuts.',
+      pageTitle: 'Editor settings',
+      pageDescription: 'Changes apply immediately to every open file editor.',
+      fontSize: { label: 'Editor font size', description: 'CodeMirror font size in pixels.', inherited: 'Inherit', inheritAction: 'Inherit' },
+      tabSize: { label: 'Indent size', description: 'Number of spaces inserted for each indentation level.' },
+      editInVis: { label: 'Edit in Vis', description: 'Enable built-in file editing through the local vis_bridge.' },
+      shortcuts: {
+        label: 'Keyboard shortcuts', description: 'Click a shortcut to record it. Press Esc to cancel or Backspace to clear the binding.', reset: 'Restore defaults', recording: 'Press shortcut…', unassigned: 'Unassigned', recordAria: 'Record shortcut for {action}', invalidError: 'Invalid key name', duplicateError: 'Shortcut is already used',
+        save: 'Save', undo: 'Undo', redo: 'Redo', find: 'Find', findNext: 'Find next', findPrevious: 'Find previous', goToLine: 'Go to line', selectLine: 'Select line', autocomplete: 'Autocomplete',
+        indent: 'Indent', outdent: 'Outdent', deleteLine: 'Delete line', moveLineUp: 'Move line up', moveLineDown: 'Move line down', duplicateLineUp: 'Duplicate above', duplicateLineDown: 'Duplicate below',
+        toggleLineComment: 'Toggle line comment', toggleBlockComment: 'Toggle block comment', foldCode: 'Fold code', unfoldCode: 'Unfold code',
+      },
+      localApplication: {
+        label: 'Local application',
+        description: 'Open a temporary local copy and sync each application save back to the active backend.',
+        placeholder: '/path/to/application', browse: 'Browse', clear: 'Clear',
+      },
+    },
     experimentalFeatures: {
       label: 'Experimental features',
       description: 'Enable experimental features that are still in development.',
@@ -800,10 +820,6 @@ const messages: LocaleMessages = {
       showCodexInStatusMonitor: {
         label: 'Show Codex in status monitor',
         description: 'Display a dedicated Codex tab in the status monitor popover.',
-      },
-      editInVis: {
-        label: 'Edit in Vis',
-        description: 'Enable experimental in-app file editing through the local vis_bridge.',
       },
     },
   },
@@ -884,6 +900,9 @@ const messages: LocaleMessages = {
     confirmDiscardEdit: 'Discard unsaved changes in this editor?',
     editConflict: 'The file changed on disk while you were editing. Reload before saving again.',
     openInEditor: 'Open in editor',
+    openInLocalApplication: 'Open with local application',
+    localApplicationOpened: 'Opened with local application',
+    localApplicationConflict: 'The backend file changed. The local application save was not written back.',
     previousMatch: 'Previous match',
     nextMatch: 'Next match',
     closeSearch: 'Close search',

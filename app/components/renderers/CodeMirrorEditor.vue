@@ -7,6 +7,7 @@
       :dark="isDark"
       :lang="languageSupport"
       :extensions="extensions"
+      :style="editorStyle"
       :wrap="wordWrap"
       @update="handleUpdate"
     />
@@ -16,9 +17,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import CodeMirror from 'vue-codemirror6';
-import type { LanguageSupport } from '@codemirror/language';
-import type { Extension } from '@codemirror/state';
-import { EditorView, type ViewUpdate } from '@codemirror/view';
+import { indentUnit, type LanguageSupport } from '@codemirror/language';
+import { EditorState, Prec, type Extension } from '@codemirror/state';
+import { EditorView, keymap, type ViewUpdate } from '@codemirror/view';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
 import { markdown } from '@codemirror/lang-markdown';
@@ -28,6 +29,8 @@ import { css } from '@codemirror/lang-css';
 import { yaml } from '@codemirror/lang-yaml';
 import { xml } from '@codemirror/lang-xml';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { useSettings } from '../../composables/useSettings';
+import { createEditorKeyBindings } from '../../utils/editorShortcuts';
 
 const props = defineProps<{
   modelValue: string;
@@ -38,7 +41,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: string): void;
+  (event: 'save'): void;
 }>();
+
+const { editorFontSizePx, editorTabSize, editorShortcuts } = useSettings();
 
 const localValue = ref(props.modelValue);
 
@@ -48,6 +54,19 @@ watch(() => props.modelValue, (value) => {
 
 const isDark = computed(() => props.theme !== 'light');
 const wordWrap = computed(() => props.wordWrap === true);
+const inheritedEditorFontSize = 'var(--floating-font-size, var(--app-monospace-font-size, 13px))';
+const editorStyle = computed(() => {
+  const fontSize = typeof editorFontSizePx.value === 'number' && Number.isFinite(editorFontSizePx.value)
+    ? `${editorFontSizePx.value}px`
+    : inheritedEditorFontSize;
+  return { '--editor-font-size': fontSize, fontSize };
+});
+const effectiveTabSize = computed(() => {
+  const value = editorTabSize.value;
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(1, Math.min(8, Math.round(value)))
+    : 2;
+});
 
 const languageSupport = computed<LanguageSupport | undefined>(() => {
   switch (props.lang) {
@@ -86,7 +105,7 @@ const visualTheme = EditorView.theme({
   '&': {
     color: 'var(--floating-text, #e2e8f0)',
     backgroundColor: 'transparent',
-    fontSize: 'var(--floating-font-size, var(--app-monospace-font-size, 13px))',
+    fontSize: 'var(--editor-font-size, var(--floating-font-size, var(--app-monospace-font-size, 13px)))',
   },
   '.cm-scroller': {
     fontFamily: 'var(--floating-font-family, var(--app-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, monospace))',
@@ -96,7 +115,7 @@ const visualTheme = EditorView.theme({
   '.cm-content': {
     caretColor: 'var(--floating-accent, #76e4f7)',
     fontFamily: 'var(--floating-font-family, var(--app-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, monospace))',
-    fontSize: 'var(--floating-font-size, var(--app-monospace-font-size, 13px))',
+    fontSize: 'var(--editor-font-size, var(--floating-font-size, var(--app-monospace-font-size, 13px)))',
     lineHeight: 'var(--code-preview-line-height, 1.2)',
     selectionBackground: 'rgba(148, 163, 184, 0.22)',
   },
@@ -142,7 +161,13 @@ const visualTheme = EditorView.theme({
 }, { dark: true });
 
 const extensions = computed<Extension[]>(() => {
-  const base = [visualTheme];
+  const indentation = ' '.repeat(effectiveTabSize.value);
+  const base: Extension[] = [
+    visualTheme,
+    EditorState.tabSize.of(effectiveTabSize.value),
+    indentUnit.of(indentation),
+    Prec.highest(keymap.of(createEditorKeyBindings(editorShortcuts.value, () => emit('save')))),
+  ];
   if (isDark.value) base.unshift(oneDark);
   return base;
 });
@@ -171,7 +196,7 @@ function handleUpdate(update: ViewUpdate) {
   height: 100%;
   color: var(--floating-text, #e2e8f0);
   font-family: var(--app-monospace-font-family, monospace);
-  font-size: var(--app-monospace-font-size, 13px);
+  font-size: var(--editor-font-size, var(--floating-font-size, var(--app-monospace-font-size, 13px)));
   background: color-mix(in srgb, var(--floating-accent, #3a4150) 12%, var(--floating-surface-base, #1a1d24));
 }
 
@@ -195,7 +220,7 @@ function handleUpdate(update: ViewUpdate) {
 .code-mirror-editor :deep(.cm-tooltip),
 .code-mirror-editor :deep(.cm-panels) {
   font-family: var(--floating-font-family, var(--app-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, monospace));
-  font-size: var(--floating-font-size, var(--app-monospace-font-size, 13px));
+  font-size: var(--editor-font-size, var(--floating-font-size, var(--app-monospace-font-size, 13px)));
   line-height: var(--code-preview-line-height, 1.2);
 }
 

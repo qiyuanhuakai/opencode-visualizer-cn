@@ -53,6 +53,9 @@ describe('useSettings', () => {
     expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
     expect(settings.terminalFontSizePx.value).toBe(13);
     expect(settings.appFontSizePx.value).toBe(13);
+    expect(settings.editorFontSizePx.value).toBeNull();
+    expect(settings.editorTabSize.value).toBe(2);
+    expect(settings.editorShortcuts.value.indent).toBe('Tab');
   });
 
   it('reads persisted values from storage on load', async () => {
@@ -92,6 +95,41 @@ describe('useSettings', () => {
     settings.editInVis.value = true;
     await new Promise((r) => setTimeout(r, 10));
     expect(storage.getItem('opencode.settings.editInVis.v1')).toBe('true');
+  });
+
+  it('persists editor preferences and local application path', async () => {
+    const settings = await importFresh();
+
+    settings.editorFontSizePx.value = 16;
+    settings.editorTabSize.value = 4;
+    settings.editorShortcuts.value.moveLineUp = 'Alt-k';
+    settings.localApplicationPath.value = ' /usr/bin/code ';
+
+    expect(storage.getItem('opencode.settings.editorFontSizePx.v1')).toBe('16');
+    expect(storage.getItem('opencode.settings.editorTabSize.v1')).toBe('4');
+    expect(storage.getItem('opencode.settings.editorShortcuts.v1')).toContain('Alt-k');
+    expect(storage.getItem('opencode.settings.localApplicationPath.v1')).toBe('/usr/bin/code');
+  });
+
+  it('treats persisted shortcut JSON as untrusted and preserves disabled bindings', async () => {
+    storage.setItem('opencode.settings.editorShortcuts.v1', JSON.stringify({ indent: 42, outdent: '' }));
+
+    const settings = await importFresh();
+
+    expect(settings.editorShortcuts.value.indent).toBe('Tab');
+    expect(settings.editorShortcuts.value.outdent).toBe('');
+    settings.editorShortcuts.value.save = '';
+    expect(storage.getItem('opencode.settings.editorShortcuts.v1')).toContain('"save":""');
+  });
+
+  it('clears the editor font override to restore inherited sizing', async () => {
+    const settings = await importFresh();
+    settings.editorFontSizePx.value = 16;
+    expect(storage.getItem('opencode.settings.editorFontSizePx.v1')).toBe('16');
+
+    settings.editorFontSizePx.value = null;
+
+    expect(storage.getItem('opencode.settings.editorFontSizePx.v1')).toBeNull();
   });
 
   it('reads and writes showForgeButton setting', async () => {
@@ -231,6 +269,11 @@ describe('useSettings', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(settings.appFontSizePx.value).toBe(25);
     expect(storage.getItem('opencode.settings.appFontSizePx.v1')).toBe('25');
+
+    settings.editorFontSizePx.value = 1;
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settings.editorFontSizePx.value).toBe(1);
+    expect(storage.getItem('opencode.settings.editorFontSizePx.v1')).toBe('1');
   });
 
   it('normalizes out-of-bounds font sizes from external storage events', async () => {

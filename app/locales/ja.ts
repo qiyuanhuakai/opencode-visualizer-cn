@@ -787,6 +787,23 @@ const messages: LocaleMessages = {
       description:
         '行番号付きフローティングウィンドウ（ファイルプレビュー、編集/書き込み/パッチ）で自動改行を有効にします。',
     },
+    editor: {
+      label: 'エディター', description: '内蔵エディターとキーボードショートカットを設定します。', pageTitle: 'エディター設定',
+      pageDescription: '変更は開いているすべてのファイルエディターにすぐ反映されます。',
+      fontSize: { label: 'エディターの文字サイズ', description: 'CodeMirror の文字サイズ（ピクセル）。', inherited: '継承', inheritAction: 'コード文字サイズを継承' },
+      tabSize: { label: 'インデント幅', description: 'インデント一段あたりのスペース数。' },
+      editInVis: { label: 'Vis で編集', description: 'ローカル vis_bridge を通じた内蔵ファイル編集を有効にします。' },
+      shortcuts: {
+        label: 'キーボードショートカット', description: 'ショートカットをクリックして新しいキーを押します。Esc でキャンセル、Backspace で解除します。', reset: '初期設定に戻す', recording: 'キーを押してください…', unassigned: '未設定', recordAria: '「{action}」のショートカットを記録', invalidError: 'キー名が無効です', duplicateError: 'ショートカットが重複しています',
+        save: '保存', undo: '元に戻す', redo: 'やり直す', find: '検索', findNext: '次を検索', findPrevious: '前を検索', goToLine: '行へ移動', selectLine: '行を選択', autocomplete: '自動補完',
+        indent: 'インデント', outdent: 'インデント解除', deleteLine: '行を削除', moveLineUp: '行を上へ移動', moveLineDown: '行を下へ移動', duplicateLineUp: '上に行を複製', duplicateLineDown: '下に行を複製',
+        toggleLineComment: '行コメント切替', toggleBlockComment: 'ブロックコメント切替', foldCode: 'コードを折りたたむ', unfoldCode: 'コードを展開',
+      },
+      localApplication: {
+        label: 'ローカルアプリケーション', description: 'ローカルの一時コピーを開き、アプリで保存するたびに現在のバックエンドへ同期します。',
+        placeholder: '/アプリケーションへのパス', browse: '選択', clear: 'クリア',
+      },
+    },
     experimentalFeatures: {
       label: '実験的機能',
       description: '開発中の実験的機能を有効にします。',
@@ -803,10 +820,6 @@ const messages: LocaleMessages = {
       showCodexInStatusMonitor: {
         label: 'ステータスモニターに Codex を表示',
         description: 'ステータスモニターのポップオーバーに Codex 専用タブを表示します。',
-      },
-      editInVis: {
-        label: 'Vis で編集',
-        description: 'ローカル vis_bridge を通じた実験的な内蔵ファイル編集を有効にします。',
       },
     },
   },
@@ -888,6 +901,9 @@ const messages: LocaleMessages = {
     editConflict:
       '編集中にディスク上のファイルが変更されました。再保存する前に再読み込みしてください。',
     openInEditor: 'エディターで開く',
+    openInLocalApplication: 'ローカルアプリケーションで開く',
+    localApplicationOpened: 'ローカルアプリケーションで開きました',
+    localApplicationConflict: 'バックエンドのファイルが変更されたため、ローカルアプリの保存は書き戻されませんでした。',
     previousMatch: '前の一致',
     nextMatch: '次の一致',
     closeSearch: '検索を閉じる',

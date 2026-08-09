@@ -30,6 +30,7 @@
         :lang="lang"
         :theme="theme"
         :word-wrap="true"
+        @save="handleSave"
       />
       <ImageRenderer v-if="activeMode === 'image'" :src="effectiveImageSrc || ''" :alt="path" />
       <PdfRenderer v-else-if="activeMode === 'pdf'" :src="effectivePdfSrc || ''" @rendered="emit('rendered')" />
@@ -433,7 +434,7 @@ const activeMode = computed<ModeId>(() => {
 const showModeTabs = computed(() => availableModes.value.length > 1);
 
 async function handleSave() {
-  if (!props.onSaveEdit) return;
+  if (!props.onSaveEdit || props.isSaving || !isDirty.value) return;
   await props.onSaveEdit(editableContent.value);
 }
 

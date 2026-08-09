@@ -771,6 +771,23 @@ const messages: LocaleMessages = {
       label: '悬浮窗自动换行',
       description: '在有行号的悬浮窗（文件预览、编辑/写入/补丁）中启用自动换行。',
     },
+    editor: {
+      label: '编辑器', description: '配置内置编辑器及键盘快捷键。', pageTitle: '编辑器设置',
+      pageDescription: '修改会立即应用到所有已打开的文件编辑器。',
+      fontSize: { label: '编辑器字体大小', description: 'CodeMirror 字体大小（像素）。', inherited: '继承', inheritAction: '继承代码字体' },
+      tabSize: { label: '缩进宽度', description: '每级缩进插入的空格数。' },
+      editInVis: { label: '在 Vis 中编辑', description: '启用通过本地 vis_bridge 进行的内置文件编辑。' },
+      shortcuts: {
+        label: '键盘快捷键', description: '点击快捷键后直接按下新组合键。按 Esc 取消，按 Backspace 清除绑定。', reset: '恢复默认', recording: '请按快捷键…', unassigned: '未设置', recordAria: '录制“{action}”快捷键', invalidError: '键名无效', duplicateError: '快捷键已被占用',
+        save: '保存', undo: '撤销', redo: '重做', find: '查找', findNext: '查找下一个', findPrevious: '查找上一个', goToLine: '跳转到行', selectLine: '选择整行', autocomplete: '自动补全',
+        indent: '增加缩进', outdent: '减少缩进', deleteLine: '删除行', moveLineUp: '上移行', moveLineDown: '下移行', duplicateLineUp: '向上复制行', duplicateLineDown: '向下复制行',
+        toggleLineComment: '切换行注释', toggleBlockComment: '切换块注释', foldCode: '折叠代码', unfoldCode: '展开代码',
+      },
+      localApplication: {
+        label: '本地应用', description: '用本地临时副本打开文件，并将应用中的每次保存同步写回当前后端。',
+        placeholder: '/应用程序路径', browse: '选择应用', clear: '清除',
+      },
+    },
     experimentalFeatures: {
       label: '实验性功能',
       description: '启用仍在开发中的实验性功能。',
@@ -787,10 +804,6 @@ const messages: LocaleMessages = {
       showCodexInStatusMonitor: {
         label: '在状态监控中显示 Codex',
         description: '在状态监控悬浮窗中显示独立的 Codex 标签页。',
-      },
-      editInVis: {
-        label: '在 Vis 中编辑',
-        description: '启用通过本地 vis_bridge 进行的实验性内置文件编辑。',
       },
     },
   },
@@ -871,6 +884,9 @@ const messages: LocaleMessages = {
     confirmDiscardEdit: '要丢弃此编辑器中的未保存更改吗？',
     editConflict: '你编辑期间磁盘上的文件已变化。请先重新加载，再重新保存。',
     openInEditor: '用编辑器打开',
+    openInLocalApplication: '使用本地应用打开',
+    localApplicationOpened: '已使用本地应用打开',
+    localApplicationConflict: '后端文件已经变化，本地应用中的保存未写回。',
     previousMatch: '上一个匹配',
     nextMatch: '下一个匹配',
     closeSearch: '关闭搜索',
