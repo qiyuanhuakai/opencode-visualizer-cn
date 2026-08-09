@@ -22,7 +22,7 @@ export type RawWebSocketSocket = {
 
 export function createWebSocketAccept(secWebSocketKey: string): string;
 export function encodeWebSocketFrame(data: string | Buffer, opcode?: number): Buffer;
-export function decodeWebSocketFrames(buffer: Buffer): {
+export function decodeWebSocketFrames(buffer: Buffer, options?: { maxPayloadBytes?: number }): {
   frames: DecodedWebSocketFrame[];
   remaining: Buffer;
 };
