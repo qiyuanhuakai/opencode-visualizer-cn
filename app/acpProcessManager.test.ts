@@ -32,6 +32,8 @@ const echoAgentScript = [
   '});',
 ].join('\n');
 
+const resistantAgentScript = "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)";
+
 const reverseRequestAgentScript = [
   "const readline = require('node:readline');",
   'const input = readline.createInterface({ input: process.stdin });',
@@ -47,6 +49,11 @@ const reverseRequestAgentScript = [
   "    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: initializeId, result: { protocolVersion: 1, content: message.result.content } }) + '\\n');",
   '  }',
   '});',
+].join('\n');
+
+const earlyExitAgentScript = [
+  "process.stderr.write('ACP init failed');",
+  'setTimeout(() => process.exit(23), 50);',
 ].join('\n');
 
 describe('acpProcessManager', () => {
@@ -149,6 +156,30 @@ describe('acpProcessManager', () => {
     await manager.stopAll();
   });
 
+  it('reports an ACP process that exits during its startup window', async () => {
+    const manager = createAcpProcessManager();
+
+    await manager.reconcile([
+      {
+        id: 'early-exit',
+        name: 'Early Exit ACP',
+        command: process.execPath,
+        args: ['-e', earlyExitAgentScript],
+        enabled: true,
+      },
+    ]);
+
+    expect(manager.getStatus()).toEqual([
+      expect.objectContaining({
+        id: 'early-exit',
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('ACP init failed'),
+      }),
+    ]);
+    await manager.stopAll();
+  });
+
   it('stops a running agent when user settings disable it', async () => {
     const manager = createAcpProcessManager();
     const agent = {
@@ -171,6 +202,31 @@ describe('acpProcessManager', () => {
     expect(status?.pid).toBeUndefined();
     expect(() => process.kill(pid ?? 0, 0)).toThrow();
     await manager.stopAll();
+  });
+
+  it('keeps ownership of a replacement after the old ACP process exits late', { timeout: 10_000 }, async () => {
+    const manager = createAcpProcessManager();
+    const original = {
+      id: 'replacement',
+      name: 'Replacement ACP',
+      command: process.execPath,
+      args: ['-e', resistantAgentScript],
+      enabled: true,
+    };
+    await manager.reconcile([original]);
+    const originalPid = manager.getStatus()[0]?.pid;
+
+    await manager.reconcile([{ ...original, args: ['-e', echoAgentScript] }]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const replacementPid = manager.getStatus()[0]?.pid;
+
+    expect(replacementPid).toEqual(expect.any(Number));
+    expect(replacementPid).not.toBe(originalPid);
+    expect(manager.getStatus()[0]).toEqual(
+      expect.objectContaining({ state: 'running', owned: true }),
+    );
+    await manager.stopAll();
+    expect(() => process.kill(replacementPid ?? 0, 0)).toThrow();
   });
 
   it('rejects a second simultaneous client for the same ACP process', async () => {

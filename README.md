@@ -148,18 +148,28 @@ codex --version
 vis_bridge --help
 ```
 
-源码开发仍可直接运行或构建中间单文件：
+安装后使用守护进程命令启动、停止或重启：
+
+```bash
+vis_bridge start
+vis_bridge stop
+vis_bridge restart
+```
+
+`start` 会等待 bridge 完成监听和初次服务探测后再返回。OpenCode、Codex 或 ACP Agent 启动失败时，命令行会直接列出对应名称和错误；bridge 本身仍可用时会继续在后台运行，完整错误也会显示在“状态监控”→“ACP”中。配置损坏或端口被占用等 bridge 级错误会让 `start` 以失败退出，不会留下一个表面可用的服务。
+
+源码开发使用相同的守护进程命令：
 
 ```bash
 # 源码运行
-node vis_bridge.js
+node vis_bridge.js start
 
 # 构建并运行单文件可执行程序
 pnpm bridge:build
-./dist-bridge/vis_bridge
+./dist-bridge/vis_bridge start
 ```
 
-vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 中 Kimi Code、Oh My Pi 与 Pi 默认启用，其余可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。
+vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 中 Kimi Code、Oh My Pi 与 Pi 默认启用，其余可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。监听非环回地址时必须配置 bridge token，以保护 PTY、文件、命令、状态、ACP 与 Codex 转发接口。守护进程的状态和日志保存在当前用户目录中（Linux：`~/.local/state/vis/bridge`，macOS：`~/Library/Application Support/vis/bridge`，Windows：`%LOCALAPPDATA%\vis\bridge`）。直接通过 `--bridge-token` 或 `--upstream-token` 传入的密钥不会写入守护进程状态或长期保留在守护进程参数中；需要无参数 `restart` 时请改用环境变量或 token 文件。`--target` 必须是不带用户名、密码、查询参数或片段的 `ws://`/`wss://` 地址，上游认证请使用专用 token 选项。macOS 手动删除 `/usr/local/bin/vis_bridge` 前请先运行 `vis_bridge stop`。
 ### 使用 Codex Panel
 
 1. 进入 Vis 的"设置"
@@ -440,18 +450,28 @@ Download and run the installer for your platform from [GitHub Releases](https://
 vis_bridge --help
 ```
 
-For source development, the bridge can still be run directly or built as an intermediate standalone binary:
+After installation, control the background daemon with:
+
+```bash
+vis_bridge start
+vis_bridge stop
+vis_bridge restart
+```
+
+`start` waits until the bridge is listening and the initial service probe has completed. If OpenCode, Codex, or an ACP agent fails to start, the CLI prints the component name and error while keeping the usable bridge online; the full error also appears under **Status Monitor → ACP**. Bridge-level failures such as an invalid config or occupied listen port make `start` fail instead of publishing a superficially healthy service.
+
+Source development uses the same daemon commands:
 
 ```bash
 # Run from source
-node vis_bridge.js
+node vis_bridge.js start
 
 # Build and run the single-file executable
 pnpm bridge:build
-./dist-bridge/vis_bridge
+./dist-bridge/vis_bridge start
 ```
 
-vis_bridge automatically adopts or starts the default OpenCode and Codex services. Among ACP agents, Kimi Code, Oh My Pi, and Pi are enabled by default; others can be enabled under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required.
+vis_bridge automatically adopts or starts the default OpenCode and Codex services. Among ACP agents, Kimi Code, Oh My Pi, and Pi are enabled by default; others can be enabled under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required for the PTY, filesystem, command, supervisor, ACP, and Codex proxy surfaces. Daemon state and logs are stored per user (Linux: `~/.local/state/vis/bridge`; macOS: `~/Library/Application Support/vis/bridge`; Windows: `%LOCALAPPDATA%\vis\bridge`). Secrets passed directly through `--bridge-token` or `--upstream-token` are removed from the daemon command line and state; use environment variables or token files when unattended `restart` is required. `--target` must be a `ws://` or `wss://` URL without userinfo, query parameters, or fragments; use the dedicated token options for upstream authentication. On macOS, run `vis_bridge stop` before manually removing `/usr/local/bin/vis_bridge`.
 
 ### Using Codex Panel
 

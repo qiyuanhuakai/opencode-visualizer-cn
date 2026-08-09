@@ -53,7 +53,7 @@ describe('ACP final blocker regressions', () => {
     expect(handlerSource).toContain('pendingSessions.clear()');
     expect(handlerSource).toContain('sessionRoots.clear()');
     expect(processManagerSource).toContain(
-      'await options.handleClientRequest?.releaseAgent?.(entry.agent.id);',
+      'await Promise.all([releaseEntry(entry), stopAcpChild(entry.child)]);',
     );
   });
 });

@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { build } from 'esbuild';
 import { inject } from 'postject';
+import { stageNodePtyRuntime } from './vis-bridge-node-pty.mjs';
 
 const execFileAsync = promisify(execFile);
 const SEA_SENTINEL_FUSE = 'NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2';
@@ -72,6 +73,12 @@ export async function buildVisBridgeBinary(rootDirectory) {
     machoSegmentName: 'NODE_SEA',
   });
   await signExecutable(paths.binaryPath);
+  await stageNodePtyRuntime(
+    rootDirectory,
+    path.join(paths.outputDirectory, 'node_modules', 'node-pty'),
+    process.platform,
+    process.arch,
+  );
   return paths.binaryPath;
 }
 

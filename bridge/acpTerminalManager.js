@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { STOP_GRACE_MS } from './acpProcessState.js';
+import { detachedProcessOptions, stopProcessTree } from './processTree.js';
 
 function parseEnvironment(value) {
   if (value === undefined) return {};
@@ -41,6 +43,7 @@ export function createAcpTerminalManager(options = {}) {
       env: { ...process.env, ...parseEnvironment(params.env) },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
+      ...detachedProcessOptions(),
     });
     const terminalId = randomUUID();
     let resolveExit;
@@ -95,16 +98,13 @@ export function createAcpTerminalManager(options = {}) {
 
   async function kill(terminalId) {
     const entry = requireTerminal(terminalId);
-    if (!entry.exitStatus) {
-      entry.child.kill('SIGTERM');
-      await entry.exit;
-    }
+    await stopProcessTree(entry.child, { graceMs: STOP_GRACE_MS });
     return {};
   }
 
   async function release(terminalId) {
-    const entry = requireTerminal(terminalId);
-    if (!entry.exitStatus) await kill(terminalId);
+    requireTerminal(terminalId);
+    await kill(terminalId);
     terminals.delete(terminalId);
     return {};
   }

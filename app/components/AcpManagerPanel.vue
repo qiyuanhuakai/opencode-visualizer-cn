@@ -134,7 +134,7 @@ defineExpose({ refresh: api.refresh });
             <div class="truncate font-mono text-[11px] text-[var(--theme-text-secondary,#94a3b8)]" :title="formatCommand(service.command, service.args)">
               {{ formatCommand(service.command, service.args) }}
             </div>
-            <div v-if="service.error" class="truncate text-[11px] text-[var(--theme-status-danger)]" :title="service.error">{{ service.error }}</div>
+            <div v-if="service.error" data-service-startup-error class="whitespace-pre-wrap break-words text-[11px] text-[var(--theme-status-danger)]">{{ service.error }}</div>
           </div>
         </div>
       </section>
@@ -181,7 +181,7 @@ defineExpose({ refresh: api.refresh });
               <span>{{ $t(agent.connected ? 'statusMonitor.acp.connected' : 'statusMonitor.acp.disconnected') }}</span>
               <span v-if="agent.droppedFrames > 0">{{ $t('statusMonitor.acp.droppedFrames', { count: agent.droppedFrames }) }}</span>
             </div>
-            <div v-if="agent.error" class="truncate text-[11px] text-[var(--theme-status-danger)]" :title="agent.error">{{ agent.error }}</div>
+            <div v-if="agent.error" data-agent-startup-error class="whitespace-pre-wrap break-words text-[11px] text-[var(--theme-status-danger)]">{{ agent.error }}</div>
           </div>
           <button
             v-if="!presetIds.has(agent.id)"

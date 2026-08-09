@@ -16,16 +16,26 @@ export function createBridgeRuntime(options = {}) {
   });
   let started = false;
   let stopPromise;
+  let acceptingMutations = false;
+  let mutations = Promise.resolve();
 
   async function start() {
+    if (stopPromise) throw new Error('Bridge runtime is shutting down.');
+    if (started && !acceptingMutations) await stop();
     if (started) return getStatus();
     started = true;
-    const config = await configStore.load();
-    await Promise.all([
-      nativeSupervisor.start(),
-      acpManager.reconcile(config.acpAgents),
-    ]);
-    return getStatus();
+    try {
+      const config = await configStore.load();
+      await Promise.all([
+        nativeSupervisor.start(),
+        acpManager.reconcile(config.acpAgents),
+      ]);
+      acceptingMutations = true;
+      return getStatus();
+    } catch (error) {
+      acceptingMutations = false;
+      throw error;
+    }
   }
 
   function getStatus() {
@@ -49,44 +59,75 @@ export function createBridgeRuntime(options = {}) {
     return acpManager.getStatus();
   }
 
-  async function upsertAgent(input) {
+  function enqueueMutation(operation) {
+    if (!acceptingMutations) {
+      return Promise.reject(new Error('Bridge runtime is shutting down.'));
+    }
+    const result = mutations.then(operation);
+    mutations = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async function upsertAgentNow(input) {
     if (!isRecord(input)) throw new Error('ACP agent payload must be an object.');
     const config = await configStore.upsertAgent(input);
     await reconcileConfig(config);
     return acpManager.getStatus().find((agent) => agent.id === input.id);
   }
 
-  async function updateAgent(id, patch) {
-    if (!isRecord(patch)) throw new Error('ACP agent patch must be an object.');
-    const config = await configStore.getConfig();
-    const current = config.acpAgents.find((agent) => agent.id === id);
-    if (!current) return undefined;
-    return upsertAgent({ ...current, ...patch, id });
+  function upsertAgent(input) {
+    return enqueueMutation(() => upsertAgentNow(input));
   }
 
-  async function removeAgent(id) {
-    const config = await configStore.getConfig();
-    if (!config.acpAgents.some((agent) => agent.id === id)) return false;
-    const next = await configStore.removeAgent(id);
-    await reconcileConfig(next);
-    return true;
+  function updateAgent(id, patch) {
+    return enqueueMutation(async () => {
+      if (!isRecord(patch)) throw new Error('ACP agent patch must be an object.');
+      const config = await configStore.getConfig();
+      const current = config.acpAgents.find((agent) => agent.id === id);
+      if (!current) return undefined;
+      return upsertAgentNow({ ...current, ...patch, id });
+    });
+  }
+
+  function removeAgent(id) {
+    return enqueueMutation(async () => {
+      const config = await configStore.getConfig();
+      if (!config.acpAgents.some((agent) => agent.id === id)) return false;
+      const next = await configStore.removeAgent(id);
+      await reconcileConfig(next);
+      return true;
+    });
   }
 
   function attachAgent(id, client) {
+    if (!acceptingMutations) throw new Error('Bridge runtime is shutting down.');
     acpManager.attach(id, client);
   }
 
   async function stop() {
     if (stopPromise) return stopPromise;
     if (!started) return undefined;
-    started = false;
-    stopPromise = Promise.all([
-      nativeSupervisor.stop(),
-      acpManager.stopAll(),
-      clientMethodHandler.stopAll(),
-    ]).then(() => undefined);
-    await stopPromise;
-    stopPromise = undefined;
+    acceptingMutations = false;
+    stopPromise = mutations
+      .then(async () => {
+        const supervisorResults = await Promise.allSettled([
+          nativeSupervisor.stop(),
+          acpManager.stopAll(),
+        ]);
+        const reverseResourceResults = await Promise.allSettled([clientMethodHandler.stopAll()]);
+        const failure = [...supervisorResults, ...reverseResourceResults].find(
+          (result) => result.status === 'rejected',
+        );
+        if (failure?.status === 'rejected') throw failure.reason;
+      })
+      .then(() => {
+        started = false;
+      });
+    try {
+      await stopPromise;
+    } finally {
+      stopPromise = undefined;
+    }
     return undefined;
   }
 
