@@ -11,11 +11,11 @@
     - [ ] 分支名不再过度压缩搜索框
     - [ ] 搜索命中的文件夹完全展开 
 
-- [ ] 改善插件兼容性
-	- [ ] omo：尝试识别Sisyphus Junior的类别（category）
-	- [ ] omo：特殊处理工具lsp-*
-    - [ ] magic context：特殊处理子代理magic-context-*
-    - [ ] magic context：特殊处理工具ctx-*
+- [x] 改善插件兼容性
+	- [x] omo：尝试识别Sisyphus Junior的类别（category）
+	- [x] omo：特殊处理工具lsp-*、codegraph-*
+    - [x] magic context：特殊处理子代理magic-context-*
+    - [x] magic context：特殊处理工具ctx-*
 
 - [ ] 修复已知问题
     - [?] codex：edit工具悬浮窗在首次弹出时不显示内容

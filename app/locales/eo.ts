@@ -285,6 +285,7 @@ const messages: LocaleMessages = {
       plugins: 'Kromaĵoj',
       skills: 'Kapablecoj',
       token: 'Token',
+      mc: 'MC',
       acp: 'ACP',
       codex: 'Codex',
     },
@@ -355,6 +356,14 @@ const messages: LocaleMessages = {
       totalCost: 'Entuta kosto',
       createdTime: 'Kreita',
       lastActivity: 'Lasta aktiveco',
+    },
+    mc: {
+      noData: 'Neniu Magic Context-subagento disponeblas.',
+      states: {
+        busy: 'Rulas',
+        idle: 'Senokupa',
+        retry: 'Reprovas',
+      },
     },
     acp: {
       unavailable: 'VIS bridge ne estas disponebla.',

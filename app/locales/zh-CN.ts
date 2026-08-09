@@ -283,6 +283,7 @@ const messages: LocaleMessages = {
       plugins: '插件',
       skills: '技能',
       token: 'Token',
+      mc: 'MC',
       acp: 'ACP',
       codex: 'Codex',
     },
@@ -353,6 +354,14 @@ const messages: LocaleMessages = {
       totalCost: '总成本',
       createdTime: '创建时间',
       lastActivity: '最后活动',
+    },
+    mc: {
+      noData: '当前没有 Magic Context 子代理。',
+      states: {
+        busy: '运行中',
+        idle: '空闲',
+        retry: '重试中',
+      },
     },
     acp: {
       unavailable: 'VIS bridge 当前不可用。',

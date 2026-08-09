@@ -13,6 +13,7 @@ import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
+import type { MagicContextWorker } from '../utils/pluginCompatibility';
 import AcpManagerPanel from './AcpManagerPanel.vue';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
@@ -23,6 +24,7 @@ const props = defineProps<{
   codexApi: CodexApi;
   preload: boolean;
   activeBackendKind: BackendKind;
+  magicContextWorkers?: readonly MagicContextWorker[];
 }>();
 const emit = defineEmits<{ close: [] }>();
 
@@ -41,7 +43,7 @@ function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T
   return method;
 }
 
-type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'acp' | 'codex';
+type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp' | 'codex';
 const activeTab = ref<TabId>('server');
 const acpManagerRef = ref<{ refresh: () => Promise<void> } | null>(null);
 
@@ -666,6 +668,16 @@ function lspStatusClass(status: string) {
   return status === 'connected' ? 'status-dot-success' : 'status-dot-error';
 }
 
+function magicContextStatusClass(status: MagicContextWorker['status']) {
+  if (status === 'busy') return 'status-dot-success';
+  if (status === 'retry') return 'status-dot-warning';
+  return 'status-dot-muted';
+}
+
+function magicContextStatusText(status: MagicContextWorker['status']) {
+  return t(`statusMonitor.mc.states.${status}`);
+}
+
 const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
   const base: { id: TabId; labelKey: string }[] = [
     { id: 'server', labelKey: 'statusMonitor.tabs.server' },
@@ -674,6 +686,7 @@ const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
     { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
     { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
     { id: 'token', labelKey: 'statusMonitor.tabs.token' },
+    { id: 'mc', labelKey: 'statusMonitor.tabs.mc' },
     { id: 'acp', labelKey: 'statusMonitor.tabs.acp' },
   ];
   if (showCodexInStatusMonitor.value) {
@@ -728,6 +741,10 @@ const currentTotalInfo = computed(() => {
     case 'token':
       return tokenUsage.value
         ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
+        : null;
+    case 'mc':
+      return props.magicContextWorkers?.length
+        ? { label: t('statusMonitor.common.totalLabel'), count: props.magicContextWorkers.length }
         : null;
     case 'acp':
       return null;
@@ -1085,6 +1102,28 @@ function formatPercent(value: number, total: number): string {
           <AcpManagerPanel ref="acpManagerRef" />
         </div>
 
+        <!-- Magic Context Tab -->
+        <div v-if="activeTab === 'mc'" class="status-monitor-content">
+          <div v-if="!magicContextWorkers?.length" class="status-monitor-empty">
+            {{ $t('statusMonitor.mc.noData') }}
+          </div>
+          <div v-else class="status-monitor-list">
+            <div
+              v-for="worker in magicContextWorkers"
+              :key="worker.sessionId"
+              class="status-monitor-row"
+            >
+              <div class="status-monitor-row-main">
+                <span class="status-dot" :class="magicContextStatusClass(worker.status)" />
+                <span class="status-monitor-name">{{ worker.name }}</span>
+              </div>
+              <span class="status-monitor-meta">
+                {{ magicContextStatusText(worker.status) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- Codex Tab -->
         <div v-if="activeTab === 'codex'" class="status-monitor-content">
           <div v-if="codexApi.status.value !== 'connected'" class="status-monitor-empty">
@@ -1256,9 +1295,10 @@ function formatPercent(value: number, total: number): string {
 }
 
 .status-monitor-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   padding: 4px;
   margin: 12px 16px 0;
   background: var(--theme-card-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
@@ -1267,29 +1307,12 @@ function formatPercent(value: number, total: number): string {
   width: calc(100% - 32px);
   box-sizing: border-box;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
-  scrollbar-color: var(--theme-modal-border, rgba(148, 163, 184, 0.3)) transparent;
   flex-shrink: 0;
 }
 
-.status-monitor-tabs::-webkit-scrollbar {
-  height: 4px;
-}
-
-.status-monitor-tabs::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.status-monitor-tabs::-webkit-scrollbar-thumb {
-  background: var(--theme-modal-border, rgba(148, 163, 184, 0.3));
-  border-radius: 999px;
-}
-
 .status-monitor-tab {
-  flex: 0 0 auto;
-  padding: 6px 10px;
+  min-width: 0;
+  padding: 6px 4px;
   font-size: 12px;
   font-weight: 500;
   color: var(--theme-tab-text, var(--theme-modal-text-muted, #94a3b8));

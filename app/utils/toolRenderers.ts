@@ -1,4 +1,5 @@
 import { normalizeToolName } from './toolNames';
+import { isPluginToolName } from './pluginCompatibility';
 
 export function extractXmlTagContent(text: string, tag: string): string | null {
   const open = `<${tag}>`;
@@ -287,6 +288,25 @@ export function extractFileRead(
         : stateError !== undefined
           ? helpers.formatToolValue(stateError)
           : undefined;
+
+    if (isPluginToolName(rawTool)) {
+      const pluginCode = outputText ?? errorText ?? '';
+      return {
+        content: () =>
+          helpers.renderWorkerHtml({
+            id: `plugin-${callId ?? Date.now().toString(36)}`,
+            code: pluginCode,
+            lang: 'markdown',
+            theme: 'github-dark',
+            gutterMode: 'none',
+          }),
+        variant: 'plain' as const,
+        callId,
+        toolName: rawTool,
+        toolStatus: status,
+        title: toolPrefix(rawTool, 'floatingWindow.tool', t, rawTool),
+      };
+    }
 
     switch (tool) {
       case 'bash': {

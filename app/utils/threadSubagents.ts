@@ -1,5 +1,9 @@
 import type { MessagePart } from '../types/sse';
 import type { SessionState } from '../types/worker-state';
+import {
+  isMagicContextWorkerName,
+  resolveTaskWorkerLabel,
+} from './pluginCompatibility';
 
 export type ThreadSubagentSession = { sessionId: string; label: string };
 export type ThreadParts = { rootId: string; parts: MessagePart[] };
@@ -33,7 +37,9 @@ export function resolveThreadSubagentSessions(
     if (!childId) continue;
     const meta = metaById?.[childId];
     if (meta && meta.parentID !== sessionId) continue;
-    if (!seen.has(childId)) seen.set(childId, meta?.label || childId);
+    const fallbackLabel = meta?.label || childId;
+    if (isMagicContextWorkerName(fallbackLabel)) continue;
+    if (!seen.has(childId)) seen.set(childId, resolveTaskWorkerLabel(part, fallbackLabel));
   }
   return Array.from(seen.entries()).map(([sessionId, label]) => ({ sessionId, label }));
 }
@@ -71,7 +77,11 @@ export function resolveChildOwners(
   const byRoot: Record<string, string[]> = {};
   const assignedIds = new Set<string>();
   Object.entries(metaById).forEach(([sessionId, meta]) => {
-    if (meta.parentID !== currentSessionId || exactIds.has(sessionId)) return;
+    if (
+      meta.parentID !== currentSessionId
+      || exactIds.has(sessionId)
+      || isMagicContextWorkerName(meta.label)
+    ) return;
     const owners = ownersByDescription.get(meta.label.trim().toLocaleLowerCase());
     if (owners?.size !== 1) return;
     const ownerRootId = [...owners][0];
@@ -84,7 +94,8 @@ export function resolveChildOwners(
       if (
         meta.parentID !== currentSessionId ||
         exactIds.has(sessionId) ||
-        assignedIds.has(sessionId)
+        assignedIds.has(sessionId) ||
+        isMagicContextWorkerName(meta.label)
       ) {
         return;
       }
