@@ -4,7 +4,16 @@ export function assertRequiredDaemonCredentials(
     readonly bridgeToken?: string;
     readonly upstreamAuthorization?: string;
   },
+  requestedArgs?: readonly string[],
 ): void;
+
+export function assertSafeDaemonTarget(target: string): void;
+export function assertSafeDaemonLaunchArgs(serverArgs: readonly string[]): void;
+export function mergeDaemonRestartArgs(
+  previousArgs: readonly string[],
+  requestedArgs: readonly string[],
+  requiredSecrets?: readonly string[],
+): string[];
 
 export function prepareDaemonLaunch(
   serverArgs: readonly string[],

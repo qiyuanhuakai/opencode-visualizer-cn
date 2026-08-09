@@ -79,15 +79,17 @@ function receiveStartOptions(instanceId) {
 
 export async function runDaemonProcess(options, createBridgeServer) {
   const instanceId = process.env.VIS_BRIDGE_DAEMON_INSTANCE_ID;
-  const controlToken = process.env.VIS_BRIDGE_DAEMON_CONTROL_TOKEN;
-  if (!instanceId || !controlToken) throw new Error('vis_bridge daemon credentials are missing.');
+  if (!instanceId) throw new Error('vis_bridge daemon identity is missing.');
   delete process.env.VIS_BRIDGE_DAEMON_INSTANCE_ID;
-  delete process.env.VIS_BRIDGE_DAEMON_CONTROL_TOKEN;
   delete process.env.VIS_BRIDGE_TOKEN;
   delete process.env.VIS_BRIDGE_CODEX_TOKEN;
   delete process.env.VIS_BRIDGE_CODEX_TOKEN_FILE;
   delete process.env.VIS_BRIDGE_CODEX_AUTHORIZATION;
   const startOptions = await receiveStartOptions(instanceId);
+  const controlToken = startOptions.controlToken;
+  if (typeof controlToken !== 'string' || !controlToken) {
+    throw new Error('vis_bridge daemon control credentials are missing.');
+  }
   options = { ...options, ...startOptions.secrets };
   const paths = createDaemonPaths();
   const configStore = createBridgeConfigStore({ configPath: options.configPath });

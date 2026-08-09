@@ -2,12 +2,15 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { request } from 'node:http';
 import { spawn } from 'node:child_process';
-import path from 'node:path';
 import {
   assertRequiredDaemonCredentials,
+  assertSafeDaemonLaunchArgs,
   fingerprintDaemonCredentials,
+  mergeDaemonRestartArgs,
   prepareDaemonLaunch,
 } from './daemonCredentials.js';
+import { createDaemonSpawnOptions } from './daemonEnvironment.js';
+import { createDaemonInvocation } from './daemonInvocation.js';
 import { forceStopProcessTree, signalProcessTree } from './processTree.js';
 import {
   createDaemonPaths,
@@ -21,14 +24,7 @@ const START_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 8_000;
 const FORCE_STOP_TIMEOUT_MS = 2_000;
 
-export function createDaemonInvocation(options) {
-  const { entryPath, execPath, serverArgs } = options;
-  if (!entryPath) throw new Error('Unable to resolve the vis_bridge source entry path.');
-  if ((options.isSea ?? Boolean(process.getBuiltinModule?.('node:sea')?.isSea())) || path.resolve(entryPath) === path.resolve(execPath)) {
-    return { command: execPath, args: ['__daemon', ...serverArgs] };
-  }
-  return { command: execPath, args: [entryPath, '__daemon', ...serverArgs] };
-}
+export { createDaemonInvocation } from './daemonInvocation.js';
 
 export function collectStartupFailures(status) {
   return [...status.services, ...status.acpAgents]
@@ -146,6 +142,7 @@ function waitForStartup(child, startOptions, lifecycle) {
 export function createDaemonController(options = {}) {
   const paths = options.paths ?? createDaemonPaths(options.env);
   const spawnProcess = options.spawnProcess ?? spawn;
+  const environment = options.env ?? process.env;
   const stdout = options.stdout ?? process.stdout;
   const stderr = options.stderr ?? process.stderr;
   const lifecycle = {
@@ -210,22 +207,20 @@ export function createDaemonController(options = {}) {
     let child;
     let startupPromise;
     try {
-      child = spawnProcess(invocation.command, invocation.args, {
-        detached: true,
-        env: {
-          ...process.env,
+      child = spawnProcess(invocation.command, invocation.args, createDaemonSpawnOptions(
+        environment,
+        {
           VIS_BRIDGE_STATE_DIR: paths.stateDirectory,
           VIS_BRIDGE_DAEMON_INSTANCE_ID: instanceId,
-          VIS_BRIDGE_DAEMON_CONTROL_TOKEN: controlToken,
         },
-        stdio: ['ignore', logHandle.fd, logHandle.fd, 'ipc'],
-        windowsHide: true,
-      });
+        logHandle.fd,
+      ));
       if (!child.pid) throw new Error('vis_bridge daemon did not receive a process id.');
       startupPromise = waitForStartup(
         child,
         {
           instanceId,
+          controlToken,
           credentialFingerprint,
           requiredSecrets: launch.requiredSecrets,
           secrets: launch.secrets,
@@ -250,8 +245,13 @@ export function createDaemonController(options = {}) {
     stop: () => withDaemonLock(paths, () => stopUnlocked()),
     restart: (serverArgs, credentials) => withDaemonLock(paths, async () => {
       const previous = await readDaemonState(paths);
-      assertRequiredDaemonCredentials(previous?.requiredSecrets, credentials);
-      const launchArgs = serverArgs.length > 0 ? serverArgs : previous?.launchArgs ?? [];
+      assertRequiredDaemonCredentials(previous?.requiredSecrets, credentials, serverArgs);
+      const launchArgs = mergeDaemonRestartArgs(
+        previous?.launchArgs ?? [],
+        serverArgs,
+        previous?.requiredSecrets,
+      );
+      assertSafeDaemonLaunchArgs(launchArgs);
       await stopUnlocked(previous);
       return startUnlocked(launchArgs, credentials);
     }),

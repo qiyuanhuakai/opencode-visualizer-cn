@@ -21,6 +21,8 @@ export type VisBridgeServerCliOptions = {
   readonly command: 'start' | 'restart' | '__daemon';
   readonly help: boolean;
   readonly serverArgs: readonly string[];
+  readonly daemonArgs: readonly string[];
+  readonly hasDaemonConfiguration: boolean;
   readonly host: string;
   readonly port: number;
   readonly path: string;
