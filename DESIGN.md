@@ -97,6 +97,11 @@ All spacing derives from a 4px base.
 - **Accessibility**: every icon-only button has a translated title or aria-label.
 - **Motion**: color/background transition only.
 
+### File Tree Toolbar
+- **Structure**: branch selector yields horizontal space to the file search control before any toolbar overflow occurs.
+- **Spacing**: file search keeps a 128px minimum inline size; long branch names truncate with an ellipsis.
+- **States**: search-result directories start expanded and remain independently collapsible without changing the non-search tree state.
+
 ## 6. Motion & Interaction
 
 | Type | Duration | Easing | Usage |
