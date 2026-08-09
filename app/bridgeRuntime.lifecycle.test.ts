@@ -116,7 +116,7 @@ describe('bridge runtime lifecycle', () => {
 
   it('releases reverse terminals even when a supervisor stop fails', async () => {
     const nativeFailure = new Error('native stop failed');
-    const nativeStop = vi.fn().mockRejectedValue(nativeFailure);
+    const nativeStop = vi.fn().mockRejectedValueOnce(nativeFailure).mockResolvedValue(undefined);
     const acpStop = vi.fn();
     const reverseStop = vi.fn();
     const runtime = createBridgeRuntime({
@@ -154,5 +154,10 @@ describe('bridge runtime lifecycle', () => {
     expect(nativeStop).toHaveBeenCalledOnce();
     expect(acpStop).toHaveBeenCalledOnce();
     expect(reverseStop).toHaveBeenCalledOnce();
+
+    await expect(runtime.stop()).resolves.toBeUndefined();
+    expect(nativeStop).toHaveBeenCalledTimes(2);
+    expect(acpStop).toHaveBeenCalledTimes(2);
+    expect(reverseStop).toHaveBeenCalledTimes(2);
   });
 });

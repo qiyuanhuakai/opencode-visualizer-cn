@@ -106,7 +106,6 @@ export function createBridgeRuntime(options = {}) {
   async function stop() {
     if (stopPromise) return stopPromise;
     if (!started) return undefined;
-    started = false;
     acceptingMutations = false;
     stopPromise = mutations
       .then(async () => {
@@ -120,9 +119,14 @@ export function createBridgeRuntime(options = {}) {
         );
         if (failure?.status === 'rejected') throw failure.reason;
       })
-      .then(() => undefined);
-    await stopPromise;
-    stopPromise = undefined;
+      .then(() => {
+        started = false;
+      });
+    try {
+      await stopPromise;
+    } finally {
+      stopPromise = undefined;
+    }
     return undefined;
   }
 
