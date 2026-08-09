@@ -1295,10 +1295,9 @@ function formatPercent(value: number, total: number): string {
 }
 
 .status-monitor-tabs {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   padding: 4px;
   margin: 12px 16px 0;
   background: var(--theme-card-bg, var(--theme-modal-control-bg, rgba(30, 41, 59, 0.55)));
@@ -1307,12 +1306,29 @@ function formatPercent(value: number, total: number): string {
   width: calc(100% - 32px);
   box-sizing: border-box;
   min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--theme-modal-border, rgba(148, 163, 184, 0.3)) transparent;
   flex-shrink: 0;
 }
 
+.status-monitor-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+
+.status-monitor-tabs::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.status-monitor-tabs::-webkit-scrollbar-thumb {
+  background: var(--theme-modal-border, rgba(148, 163, 184, 0.3));
+  border-radius: 999px;
+}
+
 .status-monitor-tab {
-  min-width: 0;
-  padding: 6px 4px;
+  flex: 0 0 auto;
+  padding: 6px 10px;
   font-size: 12px;
   font-weight: 500;
   color: var(--theme-tab-text, var(--theme-modal-text-muted, #94a3b8));

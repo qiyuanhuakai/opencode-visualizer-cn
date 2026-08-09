@@ -29,9 +29,15 @@ export function isMagicContextWorkerName(name: string): boolean {
 
 export function resolveTaskWorkerLabel(part: ToolPart, fallback: string): string {
   const category = part.state.input?.category;
-  return typeof category === 'string' && category.trim()
-    ? `Sisyphus-Junior(${category.trim()})`
-    : fallback;
+  if (typeof category !== 'string' || !category.trim()) return fallback;
+  const workerLabel = `Sisyphus-Junior(${category.trim()})`;
+  const existingWorkerLabel = /Sisyphus-Junior/i.exec(fallback)?.[0];
+  if (existingWorkerLabel) return fallback.replace(existingWorkerLabel, workerLabel);
+  const childSessionId = 'metadata' in part.state ? part.state.metadata?.sessionId : undefined;
+  if (typeof childSessionId === 'string' && fallback.trim() === childSessionId.trim()) {
+    return workerLabel;
+  }
+  return fallback.trim() ? `${fallback.trim()} (${workerLabel})` : workerLabel;
 }
 
 export function collectMagicContextWorkers(

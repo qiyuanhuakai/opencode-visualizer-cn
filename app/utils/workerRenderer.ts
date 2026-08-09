@@ -30,6 +30,7 @@ export type RenderRequest = {
   copiedLabel?: string;
   copyCodeAriaLabel?: string;
   copyMarkdownAriaLabel?: string;
+  copyButtons?: boolean;
   errorLabel?: string;
 };
 
@@ -83,6 +84,7 @@ function getCacheKey(payload: RenderRequest) {
     payload.copiedLabel ?? '',
     payload.copyCodeAriaLabel ?? '',
     payload.copyMarkdownAriaLabel ?? '',
+    String(payload.copyButtons ?? true),
   ].join('\u0000');
 }
 

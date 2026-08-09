@@ -34,6 +34,7 @@ export type ToolRenderersHelpers = {
     copiedLabel?: string;
     copyCodeAriaLabel?: string;
     copyMarkdownAriaLabel?: string;
+    copyButtons?: boolean;
   }) => Promise<string>;
   renderReadHtmlFromApi: (args: {
     callId?: string;
@@ -299,6 +300,7 @@ export function extractFileRead(
             lang: 'markdown',
             theme: 'github-dark',
             gutterMode: 'none',
+            copyButtons: false,
           }),
         variant: 'plain' as const,
         callId,

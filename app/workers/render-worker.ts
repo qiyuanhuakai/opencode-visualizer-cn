@@ -35,6 +35,7 @@ type RenderRequest = {
   copiedLabel?: string;
   copyCodeAriaLabel?: string;
   copyMarkdownAriaLabel?: string;
+  copyButtons?: boolean;
 };
 
 type RenderResponse =
@@ -925,6 +926,10 @@ async function renderMarkdownHtml(request: RenderRequest): Promise<string> {
   const env: MarkdownRenderEnv = {};
   if (request.files?.length) env.fileSet = new Set(request.files);
   const rendered = md.render(request.code, env);
+
+  if (request.copyButtons === false) {
+    return `<div class="markdown-host">${rendered}</div>`;
+  }
 
   // Use localized strings or defaults
   const copyButtonLabel = request.copyButtonLabel ?? 'COPY';

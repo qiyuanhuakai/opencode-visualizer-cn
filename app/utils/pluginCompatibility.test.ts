@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ToolPart } from '../types/sse';
 import { extractFileRead } from './toolRenderers';
@@ -37,7 +37,7 @@ const rendererHelpers = {
   shouldRenderToolWindow: () => true,
   extractToolOutputText: (value: unknown) => (typeof value === 'string' ? value : undefined),
   formatToolValue: (value: unknown) => String(value ?? ''),
-  renderWorkerHtml: async () => '<pre>rendered</pre>',
+  renderWorkerHtml: vi.fn(async () => '<pre>rendered</pre>'),
   renderReadHtmlFromApi: async () => '<pre>read</pre>',
   resolveReadWritePath: () => '',
   guessLanguageFromPath: () => 'text',
@@ -54,18 +54,24 @@ const rendererHelpers = {
 };
 
 describe('plugin subagent compatibility', () => {
-  it('labels category-routed workers as Sisyphus-Junior(category)', () => {
+  it('preserves the task title while adding the category to Sisyphus-Junior', () => {
     const task = makeTaskPart(
-      { category: 'visual-engineering' },
+      { category: 'quick', description: 'Browser QA category worker' },
       { sessionId: 'ses-category-worker' },
     );
 
     expect(
       resolveThreadSubagentSessions([task], PARENT_SESSION_ID, {
-        'ses-category-worker': { parentID: PARENT_SESSION_ID, label: 'Sisyphus-Junior' },
+        'ses-category-worker': {
+          parentID: PARENT_SESSION_ID,
+          label: 'Browser QA category worker (@Sisyphus-Junior subagent)',
+        },
       }),
     ).toEqual([
-      { sessionId: 'ses-category-worker', label: 'Sisyphus-Junior(visual-engineering)' },
+      {
+        sessionId: 'ses-category-worker',
+        label: 'Browser QA category worker (@Sisyphus-Junior(quick) subagent)',
+      },
     ]);
   });
 
@@ -107,6 +113,10 @@ describe.each([
   'codegraph_codegraph_explore',
   'ctx_search',
 ])('plugin tool compatibility: %s', (tool) => {
+  beforeEach(() => {
+    vi.mocked(rendererHelpers.renderWorkerHtml).mockClear();
+  });
+
   it('keeps the tool available from thread history', () => {
     expect(isHistoryToolName(tool)).toBe(true);
   });
@@ -142,5 +152,8 @@ describe.each([
     expect(typeof result.content).toBe('function');
     if (typeof result.content !== 'function') throw new Error('Expected rendered content');
     await expect(result.content()).resolves.toBe('<pre>rendered</pre>');
+    expect(rendererHelpers.renderWorkerHtml).toHaveBeenCalledWith(
+      expect.objectContaining({ copyButtons: false }),
+    );
   });
 });
