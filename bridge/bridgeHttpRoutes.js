@@ -3,6 +3,18 @@ import { writeJsonHttpResponse } from './bridgeHttp.js';
 
 const JSON_BODY_LIMIT = 2 * 1024 * 1024;
 
+export class JsonBodyTooLargeError extends Error {
+  constructor(limit) {
+    super(`JSON request body exceeded ${limit} bytes.`);
+    this.name = 'JsonBodyTooLargeError';
+  }
+}
+
+export function jsonBodyErrorStatus(error, fallbackStatus) {
+  if (error instanceof JsonBodyTooLargeError) return 413;
+  return error instanceof SyntaxError ? 400 : fallbackStatus;
+}
+
 export function readJsonBody(request, limit = JSON_BODY_LIMIT) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -17,14 +29,14 @@ export function readJsonBody(request, limit = JSON_BODY_LIMIT) {
       if (settled) return;
       settled = true;
       cleanup();
-      request.destroy?.();
+      request.pause?.();
       reject(error);
     };
     const onData = (chunk) => {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       size += buffer.length;
       if (size > limit) {
-        fail(new Error(`JSON request body exceeded ${limit} bytes.`));
+        fail(new JsonBodyTooLargeError(limit));
         return;
       }
       chunks.push(buffer);
@@ -83,7 +95,7 @@ export async function handlePtyHttpRequest(request, response, requestUrl, manage
     }
     return false;
   } catch (error) {
-    writeJsonHttpResponse(response, 500, {
+    writeJsonHttpResponse(response, jsonBodyErrorStatus(error, 500), {
       error: error instanceof Error ? error.message : String(error),
     });
     return true;
@@ -121,7 +133,7 @@ export async function handleFsHttpRequest(request, response, requestUrl, manager
     }
     return false;
   } catch (error) {
-    writeJsonHttpResponse(response, 500, {
+    writeJsonHttpResponse(response, jsonBodyErrorStatus(error, 500), {
       error: error instanceof Error ? error.message : String(error),
     });
     return true;

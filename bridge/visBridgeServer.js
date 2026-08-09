@@ -15,6 +15,7 @@ import {
   handleFsHttpRequest,
   handlePtyHttpRequest,
   handleSupervisorHttpRequest,
+  jsonBodyErrorStatus,
   readJsonBody,
 } from './bridgeHttpRoutes.js';
 import { proxyWebSocket } from './codexWebSocketProxy.js';
@@ -94,7 +95,7 @@ export function createVisBridgeServer(options) {
         .then((payload) => commandRunner.run(payload))
         .then((result) => writeJsonHttpResponse(response, 200, result))
         .catch((error) =>
-          writeJsonHttpResponse(response, 400, {
+          writeJsonHttpResponse(response, jsonBodyErrorStatus(error, 400), {
             error: error instanceof Error ? error.message : String(error),
           }),
         );
@@ -121,7 +122,7 @@ export function createVisBridgeServer(options) {
           if (!handled) writeJsonHttpResponse(response, 404, { error: 'Not found' });
         })
         .catch((error) => {
-          writeJsonHttpResponse(response, 400, {
+          writeJsonHttpResponse(response, jsonBodyErrorStatus(error, 400), {
             error: error instanceof Error ? error.message : String(error),
           });
         });
