@@ -75,6 +75,27 @@ describe('plugin subagent compatibility', () => {
     ]);
   });
 
+  it('updates only the final subagent marker when the title also mentions Sisyphus-Junior', () => {
+    const task = makeTaskPart(
+      { category: 'quick', description: 'Investigate Sisyphus-Junior failures' },
+      { sessionId: 'ses-category-worker' },
+    );
+
+    expect(
+      resolveThreadSubagentSessions([task], PARENT_SESSION_ID, {
+        'ses-category-worker': {
+          parentID: PARENT_SESSION_ID,
+          label: 'Investigate Sisyphus-Junior failures (@Sisyphus-Junior(old) subagent)',
+        },
+      }),
+    ).toEqual([
+      {
+        sessionId: 'ses-category-worker',
+        label: 'Investigate Sisyphus-Junior failures (@Sisyphus-Junior(quick) subagent)',
+      },
+    ]);
+  });
+
   it('excludes magic-context workers from exact and fallback thread cards', () => {
     const exactTask = makeTaskPart({}, { sessionId: 'ses-mc-exact' });
     const meta = {
@@ -92,14 +113,32 @@ describe('plugin subagent compatibility', () => {
     ).toEqual({});
   });
 
-  it('collects canonical session states for the MC monitor', () => {
+  it('collects known canonical states only from the selected root session', () => {
+    const meta = {
+      root: { label: 'Root session', status: 'idle' as const },
+      nestedParent: {
+        parentID: 'root',
+        label: 'Sisyphus-Junior',
+        status: 'idle' as const,
+      },
+      unknown: { parentID: 'root', label: 'magic-context-unknown' },
+      idle: { parentID: 'root', label: 'magic-context-historian', status: 'idle' as const },
+      retry: {
+        parentID: 'nestedParent',
+        label: 'magic-context-recomp',
+        status: 'retry' as const,
+      },
+      busy: { parentID: 'root', label: 'magic-context-reviewer', status: 'busy' as const },
+      otherRoot: { label: 'Other root', status: 'idle' as const },
+      unrelated: {
+        parentID: 'otherRoot',
+        label: 'magic-context-unrelated',
+        status: 'busy' as const,
+      },
+    };
+
     expect(
-      collectMagicContextWorkers({
-        regular: { label: 'Sisyphus-Junior', status: 'busy' },
-        idle: { label: 'magic-context-historian', status: 'idle' },
-        retry: { label: 'magic-context-recomp', status: 'retry' },
-        busy: { label: 'magic-context-reviewer', status: 'busy' },
-      }),
+      collectMagicContextWorkers(meta, 'root'),
     ).toEqual([
       { sessionId: 'busy', name: 'magic-context-reviewer', status: 'busy' },
       { sessionId: 'retry', name: 'magic-context-recomp', status: 'retry' },

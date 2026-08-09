@@ -31,8 +31,11 @@ export function resolveTaskWorkerLabel(part: ToolPart, fallback: string): string
   const category = part.state.input?.category;
   if (typeof category !== 'string' || !category.trim()) return fallback;
   const workerLabel = `Sisyphus-Junior(${category.trim()})`;
-  const existingWorkerLabel = /Sisyphus-Junior/i.exec(fallback)?.[0];
-  if (existingWorkerLabel) return fallback.replace(existingWorkerLabel, workerLabel);
+  const subagentMarker = /(@)Sisyphus-Junior(?:\([^)]*\))?(?=\s+subagent\)\s*$)/i;
+  if (subagentMarker.test(fallback)) {
+    return fallback.replace(subagentMarker, `$1${workerLabel}`);
+  }
+  if (/^Sisyphus-Junior(?:\([^)]*\))?$/i.test(fallback.trim())) return workerLabel;
   const childSessionId = 'metadata' in part.state ? part.state.metadata?.sessionId : undefined;
   if (typeof childSessionId === 'string' && fallback.trim() === childSessionId.trim()) {
     return workerLabel;
@@ -43,21 +46,33 @@ export function resolveTaskWorkerLabel(part: ToolPart, fallback: string): string
 export function collectMagicContextWorkers(
   metaById: Record<
     string,
-    { readonly label: string; readonly status?: SessionState['status'] }
+    {
+      readonly parentID?: string;
+      readonly label: string;
+      readonly status?: SessionState['status'];
+    }
   >,
+  rootSessionId: string,
 ): MagicContextWorker[] {
+  const rootId = rootSessionId.trim();
+  if (!rootId) return [];
   const priority: Record<MagicContextWorker['status'], number> = {
     busy: 0,
     retry: 1,
     idle: 2,
   };
   return Object.entries(metaById)
-    .filter(([, meta]) => isMagicContextWorkerName(meta.label))
-    .map(([sessionId, meta]) => ({
-      sessionId,
-      name: meta.label,
-      status: meta.status ?? 'idle',
-    }))
+    .flatMap(([sessionId, meta]) => {
+      if (!isMagicContextWorkerName(meta.label) || !meta.status) return [];
+      const visited = new Set([sessionId]);
+      let ancestorId = meta.parentID;
+      while (ancestorId && ancestorId !== rootId && !visited.has(ancestorId)) {
+        visited.add(ancestorId);
+        ancestorId = metaById[ancestorId]?.parentID;
+      }
+      if (sessionId !== rootId && ancestorId !== rootId) return [];
+      return [{ sessionId, name: meta.label, status: meta.status }];
+    })
     .sort(
       (left, right) =>
         priority[left.status] - priority[right.status] || left.name.localeCompare(right.name),

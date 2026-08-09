@@ -1757,7 +1757,7 @@ const sessionHistoryMetaById = computed(() => {
 });
 
 const magicContextWorkers = computed(() =>
-  collectMagicContextWorkers(sessionHistoryMetaById.value),
+  collectMagicContextWorkers(sessionHistoryMetaById.value, selectedSessionId.value),
 );
 
 const sessions = computed<SessionInfo[]>(() => {
