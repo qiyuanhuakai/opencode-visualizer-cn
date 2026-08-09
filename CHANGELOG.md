@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.7.5 released]
 
 ### vis_bridge 守护进程
 
