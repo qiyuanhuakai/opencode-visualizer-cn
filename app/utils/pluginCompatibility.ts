@@ -47,15 +47,24 @@ export function collectMagicContextWorkers(
   metaById: Record<
     string,
     {
+      readonly projectId?: string;
       readonly parentID?: string;
       readonly label: string;
       readonly status?: SessionState['status'];
     }
   >,
   rootSessionId: string,
+  projectId: string,
 ): MagicContextWorker[] {
   const rootId = rootSessionId.trim();
-  if (!rootId) return [];
+  const selectedProjectId = projectId.trim();
+  if (
+    !rootId ||
+    !selectedProjectId ||
+    metaById[rootId]?.projectId !== selectedProjectId
+  ) {
+    return [];
+  }
   const priority: Record<MagicContextWorker['status'], number> = {
     busy: 0,
     retry: 1,
@@ -63,12 +72,20 @@ export function collectMagicContextWorkers(
   };
   return Object.entries(metaById)
     .flatMap(([sessionId, meta]) => {
-      if (!isMagicContextWorkerName(meta.label) || !meta.status) return [];
+      if (
+        meta.projectId !== selectedProjectId ||
+        !isMagicContextWorkerName(meta.label) ||
+        !meta.status
+      ) {
+        return [];
+      }
       const visited = new Set([sessionId]);
       let ancestorId = meta.parentID;
       while (ancestorId && ancestorId !== rootId && !visited.has(ancestorId)) {
         visited.add(ancestorId);
-        ancestorId = metaById[ancestorId]?.parentID;
+        const ancestor = metaById[ancestorId];
+        if (ancestor?.projectId !== selectedProjectId) return [];
+        ancestorId = ancestor.parentID;
       }
       if (sessionId !== rootId && ancestorId !== rootId) return [];
       return [{ sessionId, name: meta.label, status: meta.status }];

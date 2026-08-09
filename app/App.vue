@@ -1743,21 +1743,26 @@ function collectAllSessionsByProject() {
 const sessionsByProject = computed(() => collectAllSessionsByProject());
 
 const sessionHistoryMetaById = computed(() => {
-  const meta: Record<string, SessionHistoryMeta> = {};
-  Object.values(sessionsByProject.value)
-    .flat()
-    .forEach((session) => {
+  const meta: Record<string, SessionHistoryMeta & { projectId: string }> = {};
+  Object.entries(sessionsByProject.value).forEach(([projectId, projectSessions]) => {
+    projectSessions.forEach((session) => {
       meta[session.id] = {
+        projectId,
         parentID: session.parentID,
         label: sessionLabel(session),
         status: session.status,
       };
     });
+  });
   return meta;
 });
 
 const magicContextWorkers = computed(() =>
-  collectMagicContextWorkers(sessionHistoryMetaById.value, selectedSessionId.value),
+  collectMagicContextWorkers(
+    sessionHistoryMetaById.value,
+    selectedSessionId.value,
+    selectedProjectId.value,
+  ),
 );
 
 const sessions = computed<SessionInfo[]>(() => {

@@ -115,22 +115,49 @@ describe('plugin subagent compatibility', () => {
 
   it('collects known canonical states only from the selected root session', () => {
     const meta = {
-      root: { label: 'Root session', status: 'idle' as const },
+      root: { projectId: 'project-a', label: 'Root session', status: 'idle' as const },
       nestedParent: {
+        projectId: 'project-a',
         parentID: 'root',
         label: 'Sisyphus-Junior',
         status: 'idle' as const,
       },
-      unknown: { parentID: 'root', label: 'magic-context-unknown' },
-      idle: { parentID: 'root', label: 'magic-context-historian', status: 'idle' as const },
+      unknown: {
+        projectId: 'project-a',
+        parentID: 'root',
+        label: 'magic-context-unknown',
+      },
+      idle: {
+        projectId: 'project-a',
+        parentID: 'root',
+        label: 'magic-context-historian',
+        status: 'idle' as const,
+      },
       retry: {
+        projectId: 'project-a',
         parentID: 'nestedParent',
         label: 'magic-context-recomp',
         status: 'retry' as const,
       },
-      busy: { parentID: 'root', label: 'magic-context-reviewer', status: 'busy' as const },
-      otherRoot: { label: 'Other root', status: 'idle' as const },
+      busy: {
+        projectId: 'project-a',
+        parentID: 'root',
+        label: 'magic-context-reviewer',
+        status: 'busy' as const,
+      },
+      forgedCrossProject: {
+        projectId: 'project-b',
+        parentID: 'root',
+        label: 'magic-context-forged',
+        status: 'busy' as const,
+      },
+      otherRoot: {
+        projectId: 'project-b',
+        label: 'Other root',
+        status: 'idle' as const,
+      },
       unrelated: {
+        projectId: 'project-b',
         parentID: 'otherRoot',
         label: 'magic-context-unrelated',
         status: 'busy' as const,
@@ -138,7 +165,7 @@ describe('plugin subagent compatibility', () => {
     };
 
     expect(
-      collectMagicContextWorkers(meta, 'root'),
+      collectMagicContextWorkers(meta, 'root', 'project-a'),
     ).toEqual([
       { sessionId: 'busy', name: 'magic-context-reviewer', status: 'busy' },
       { sessionId: 'retry', name: 'magic-context-recomp', status: 'retry' },
