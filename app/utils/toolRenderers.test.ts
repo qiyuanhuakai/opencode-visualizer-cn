@@ -430,6 +430,65 @@ describe('extractFileRead for edit/multiedit', () => {
     });
   });
 
+  it('uses distinct render request IDs for concurrent plugin tool updates', async () => {
+    const requests: Record<string, unknown>[] = [];
+    const resolvers: Array<(html: string) => void> = [];
+    const helpersWithDeferredRender = {
+      ...helpers,
+      renderWorkerHtml: (args: Record<string, unknown>) => {
+        requests.push(args);
+        return new Promise<string>((resolve) => resolvers.push(resolve));
+      },
+    };
+    const payload = (status: 'running' | 'completed', output: string) => ({
+      payload: {
+        properties: {
+          part: {
+            type: 'tool',
+            id: 'ctx-update-1',
+            callID: 'ctx-update-1',
+            tool: 'ctx_search',
+            state: {
+              status,
+              input: { query: 'plugin compatibility' },
+              output,
+              metadata: {},
+            },
+          },
+        },
+      },
+    });
+
+    const running = extractFileRead(
+      payload('running', 'partial'),
+      'message.part.updated',
+      helpersWithDeferredRender,
+      (key: string) => key,
+    );
+    const completed = extractFileRead(
+      payload('completed', 'final'),
+      'message.part.updated',
+      helpersWithDeferredRender,
+      (key: string) => key,
+    );
+    if (!running || Array.isArray(running) || typeof running.content !== 'function') {
+      throw new Error('Expected running plugin renderer');
+    }
+    if (!completed || Array.isArray(completed) || typeof completed.content !== 'function') {
+      throw new Error('Expected completed plugin renderer');
+    }
+
+    const runningHtml = running.content();
+    const completedHtml = completed.content();
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.id).not.toBe(requests[1]?.id);
+
+    resolvers[0]?.('<p>partial</p>');
+    resolvers[1]?.('<p>final</p>');
+    await expect(runningHtml).resolves.toBe('<p>partial</p>');
+    await expect(completedHtml).resolves.toBe('<p>final</p>');
+  });
+
   it('renders webfetch markdown without copy-button chrome labels in the payload', async () => {
     let receivedArgs: Record<string, unknown> | null = null;
     const helpersWithCapture = {

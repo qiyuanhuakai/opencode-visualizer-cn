@@ -81,6 +81,13 @@ function toolEmoji(tool: string): string {
 
 type TranslateFunction = (key: string) => string;
 
+let pluginRenderRequestSequence = 0;
+
+function nextPluginRenderRequestId(callId?: string): string {
+  pluginRenderRequestSequence += 1;
+  return `plugin-${callId ?? 'tool'}-${pluginRenderRequestSequence.toString(36)}`;
+}
+
 function toolPrefix(tool: string, labelKey: string, t: TranslateFunction, detail?: string): string {
   const icon = toolEmoji(tool);
   const label = t(labelKey);
@@ -295,7 +302,7 @@ export function extractFileRead(
       return {
         content: () =>
           helpers.renderWorkerHtml({
-            id: `plugin-${callId ?? Date.now().toString(36)}`,
+            id: nextPluginRenderRequestId(callId),
             code: pluginCode,
             lang: 'markdown',
             theme: 'github-dark',
