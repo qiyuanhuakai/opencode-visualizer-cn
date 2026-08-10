@@ -732,9 +732,13 @@ const messages: LocaleMessages = {
       label: 'Message font size',
       description: 'Font size in pixels for chat messages and thread history.',
     },
+    sidebarFontSizePx: {
+      label: 'Sidebar font size',
+      description: 'Font size in pixels for file trees, session trees, and todo text.',
+    },
     uiFontSizePx: {
       label: 'UI font size',
-      description: 'Font size in pixels for sidebar, top panel, modals, and dropdowns.',
+      description: 'Font size in pixels for the top panel, modals, and dropdowns.',
     },
     fontSettings: {
       label: 'Font settings',

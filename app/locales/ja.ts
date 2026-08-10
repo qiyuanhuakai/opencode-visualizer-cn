@@ -734,10 +734,13 @@ const messages: LocaleMessages = {
       label: 'メッセージフォントサイズ',
       description: 'チャットメッセージとスレッド履歴のフォントサイズ（ピクセル）。',
     },
+    sidebarFontSizePx: {
+      label: 'サイドバーのフォントサイズ',
+      description: 'ファイルツリー、セッションツリー、TODO テキストのフォントサイズ（ピクセル）。',
+    },
     uiFontSizePx: {
       label: 'UIフォントサイズ',
-      description:
-        'サイドバー、トップパネル、モーダル、ドロップダウンのフォントサイズ（ピクセル）。',
+      description: 'トップパネル、モーダル、ドロップダウンのフォントサイズ（ピクセル）。',
     },
     fontSettings: {
       label: 'フォント設定',

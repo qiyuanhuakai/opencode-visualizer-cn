@@ -653,6 +653,10 @@ export interface LocaleMessages {
       label: string;
       description: string;
     };
+    sidebarFontSizePx: {
+      label: string;
+      description: string;
+    };
     uiFontSizePx: {
       label: string;
       description: string;

@@ -255,7 +255,7 @@ const {
   border-radius: 6px;
   background: var(--theme-tab-bg, var(--theme-side-bg, rgba(15, 23, 42, 0.7)));
   color: var(--theme-tab-text, var(--theme-side-text, #94a3b8));
-  font-size: 11px;
+  font-size: var(--sidebar-font-size, 12px);
   font-weight: 600;
   letter-spacing: 0.08em;
   padding: 5px 0;
@@ -289,7 +289,7 @@ const {
 }
 
 .session-title {
-  font-size: var(--ui-font-size, 12px);
+  font-size: var(--sidebar-font-size, 12px);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--theme-side-text, #e2e8f0);

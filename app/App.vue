@@ -767,6 +767,7 @@ const {
   terminalFontSizePx,
   appFontSizePx,
   messageFontSizePx,
+  sidebarFontSizePx,
   uiFontSizePx,
   localApplicationPath,
 } = useSettings();
@@ -4128,6 +4129,7 @@ function syncAppMonospaceMetrics() {
     app.style.setProperty('--app-monospace-font-family', appMonospaceFontFamily.value);
     app.style.setProperty('--app-monospace-font-size', `${appFontSizePx.value}px`);
     app.style.setProperty('--message-font-size', `${messageFontSizePx.value}px`);
+    app.style.setProperty('--sidebar-font-size', `${sidebarFontSizePx.value}px`);
     app.style.setProperty('--ui-font-size', `${uiFontSizePx.value}px`);
   }
   if (typeof document !== 'undefined') {
@@ -4142,6 +4144,10 @@ function syncAppMonospaceMetrics() {
     document.documentElement.style.setProperty(
       '--message-font-size',
       `${messageFontSizePx.value}px`,
+    );
+    document.documentElement.style.setProperty(
+      '--sidebar-font-size',
+      `${sidebarFontSizePx.value}px`,
     );
     document.documentElement.style.setProperty('--ui-font-size', `${uiFontSizePx.value}px`);
   }
@@ -7149,6 +7155,14 @@ watch(
 
 watch(
   messageFontSizePx,
+  () => {
+    syncAppMonospaceMetrics();
+  },
+  { immediate: true },
+);
+
+watch(
+  sidebarFontSizePx,
   () => {
     syncAppMonospaceMetrics();
   },

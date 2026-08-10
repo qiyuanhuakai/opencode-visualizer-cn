@@ -731,10 +731,13 @@ const messages: LocaleMessages = {
       label: 'Mesaĝa tipargrandeco',
       description: 'Tipargrandeco en rastrumeroj por babilaj mesaĝoj kaj fadenhistorio.',
     },
+    sidebarFontSizePx: {
+      label: 'Tipara grandeco de la flanka breto',
+      description: 'Tipara grandeco en rastrumeroj por dosierarboj, seancaj arboj kaj farendaĵoj.',
+    },
     uiFontSizePx: {
       label: 'UI-tipargrandeco',
-      description:
-        'Tipargrandeco en rastrumeroj por flanka strio, supra panelo, modaloj, kaj falmenuoj.',
+      description: 'Tipargrandeco en rastrumeroj por supra panelo, modaloj, kaj falmenuoj.',
     },
     fontSettings: {
       label: 'Tiparaj agordoj',

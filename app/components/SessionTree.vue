@@ -327,7 +327,7 @@ function sessionStatusIcon(status: 'busy' | 'idle' | 'retry' | 'unknown'): strin
 .session-tree-label {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--sidebar-font-size, 12px);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

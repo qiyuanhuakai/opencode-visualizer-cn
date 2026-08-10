@@ -53,6 +53,7 @@ describe('useSettings', () => {
     expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
     expect(settings.terminalFontSizePx.value).toBe(13);
     expect(settings.appFontSizePx.value).toBe(13);
+    expect(settings.sidebarFontSizePx.value).toBe(12);
     expect(settings.editorFontSizePx.value).toBeNull();
     expect(settings.editorTabSize.value).toBe(2);
     expect(settings.editorShortcuts.value.indent).toBe('Tab');
@@ -319,6 +320,25 @@ describe('useSettings', () => {
     expect(settings.appFontSizePx.value).toBe(12);
   });
 
+  it('persists and synchronizes sidebar font size independently from general UI text', async () => {
+    storage.setItem('opencode.settings.sidebarFontSizePx.v1', '14');
+    const settings = await importFresh();
+
+    expect(settings.sidebarFontSizePx.value).toBe(14);
+    expect(settings.uiFontSizePx.value).toBe(12);
+
+    settings.sidebarFontSizePx.value = 16;
+    expect(storage.getItem('opencode.settings.sidebarFontSizePx.v1')).toBe('16');
+
+    const event = {
+      key: 'opencode.settings.sidebarFontSizePx.v1',
+      newValue: '99',
+    } as unknown as StorageEvent;
+    for (const listener of storageListeners) listener(event);
+
+    expect(settings.sidebarFontSizePx.value).toBe(20);
+    expect(settings.uiFontSizePx.value).toBe(12);
+  });
 
   it('uses default font sizes when storage event clears the keys', async () => {
     const settings = await importFresh();
@@ -330,10 +350,16 @@ describe('useSettings', () => {
       key: 'opencode.settings.appFontSizePx.v1',
       newValue: null,
     } as unknown as StorageEvent;
+    const sidebarEvent = {
+      key: 'opencode.settings.sidebarFontSizePx.v1',
+      newValue: null,
+    } as unknown as StorageEvent;
     for (const listener of storageListeners) listener(terminalEvent);
     for (const listener of storageListeners) listener(appEvent);
+    for (const listener of storageListeners) listener(sidebarEvent);
     expect(settings.terminalFontSizePx.value).toBe(13);
     expect(settings.appFontSizePx.value).toBe(13);
+    expect(settings.sidebarFontSizePx.value).toBe(12);
   });
 
   it('persists and syncs external themes', async () => {
