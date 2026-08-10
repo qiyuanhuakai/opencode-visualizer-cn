@@ -151,7 +151,7 @@ export function expandTextTransformers(
   );
   if (entries.length === 0) return input;
   const alternatives = entries.map((item) => escapeRegularExpression(item.trigger)).join('|');
-  const pattern = new RegExp(`\\\\(${alternatives})(?=$|[\\s.,!?;:，。！？；：])`, 'giu');
+  const pattern = new RegExp(`\\\\(${alternatives})(?![\\p{L}\\p{M}\\p{N}\\p{Pc}])`, 'giu');
   return input.replace(pattern, (match, trigger: string) => {
     return transformerByTrigger(entries, trigger)?.replacement ?? match;
   });

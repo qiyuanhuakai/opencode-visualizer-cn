@@ -26,6 +26,24 @@ describe('text transformers', () => {
     expect(result).toBe(String.raw`Say 你好, then 千万不要这样做 but keep \unknown`);
   });
 
+  it('expands before Unicode punctuation without matching identifier continuations', () => {
+    // Given: configured sequences precede punctuation, letters, and connector punctuation.
+    const input = String.raw`(\hi) "\hi" \hi- \hi。 \hi） but keep \high \hi_suffix \hi‿suffix`;
+
+    // When: the prompt crosses the send boundary.
+    const result = expandTextTransformers(input, transformers);
+
+    // Then: punctuation delimits exact sequences while every identifier continuation stays unchanged.
+    expect(result).toBe(
+      String.raw`(你好) "你好" 你好- 你好。 你好） but keep \high \hi_suffix \hi‿suffix`,
+    );
+    expect(
+      expandTextTransformers(String.raw`\hi_ \hi_suffix`, [
+        { trigger: 'hi_', replacement: '下划线' },
+      ]),
+    ).toBe(String.raw`下划线 \hi_suffix`);
+  });
+
   it('replaces only the exact sequence immediately before the cursor', () => {
     // Given: the cursor follows a configured sequence in the middle of a prompt.
     const input = String.raw`Before \hi after`;
