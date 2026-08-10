@@ -887,6 +887,7 @@ const messages: LocaleMessages = {
     openInLocalApplication: '使用本地应用打开',
     localApplicationOpened: '已使用本地应用打开',
     localApplicationConflict: '后端文件已经变化，本地应用中的保存未写回。',
+    localApplicationSavedRefreshFailed: '文件已保存，但视图刷新失败；下次保存将重试刷新。',
     previousMatch: '上一个匹配',
     nextMatch: '下一个匹配',
     closeSearch: '关闭搜索',

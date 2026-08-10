@@ -903,6 +903,8 @@ const messages: LocaleMessages = {
     openInLocalApplication: 'Open with local application',
     localApplicationOpened: 'Opened with local application',
     localApplicationConflict: 'The backend file changed. The local application save was not written back.',
+    localApplicationSavedRefreshFailed:
+      'The file was saved, but the view could not refresh. The next save will retry.',
     previousMatch: 'Previous match',
     nextMatch: 'Next match',
     closeSearch: 'Close search',

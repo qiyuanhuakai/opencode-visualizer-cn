@@ -9,7 +9,7 @@ import FloatingWindow from './FloatingWindow.vue';
 const mountedApps: Array<() => void> = [];
 const TestContent = defineComponent(() => () => h('div', 'content'));
 
-async function mountFileViewer() {
+async function mountFileViewer(fileProps: Record<string, unknown> = {}) {
   const onOpenLocal = vi.fn();
   const target = document.createElement('div');
   document.body.appendChild(target);
@@ -19,7 +19,15 @@ async function mountFileViewer() {
         const manager = useFloatingWindows();
         void manager.open('file-viewer:test.ts', {
           component: TestContent,
-          props: { fileContent: 'content', fileSizeBytes: 7, canEditInVis: true },
+          props: {
+            fileContent: 'content',
+            fileSizeBytes: 7,
+            canEditInVis: true,
+            fileDirectory: '/workspace',
+            filePath: 'test.ts',
+            absolutePath: '/workspace/test.ts',
+            ...fileProps,
+          },
           expiry: Infinity,
         });
         return () =>
@@ -131,5 +139,28 @@ describe('FloatingWindow local application action', () => {
 
     expect(mounted.target.querySelector('[title="Open locally"]')).not.toBeNull();
     expect(mounted.target.querySelector('[title="Edit in Vis"]')).toBeNull();
+  });
+
+  it('hides the action when required file data is unavailable', async () => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        localFile: {
+          selectApplication: vi.fn(),
+          clearApplication: vi.fn(),
+          open: vi.fn(),
+          close: vi.fn(),
+          onChanged: vi.fn(),
+          offChanged: vi.fn(),
+          onError: vi.fn(),
+          offError: vi.fn(),
+        },
+      },
+    });
+    useSettings().localApplicationPath.value = '/bin/true';
+
+    const mounted = await mountFileViewer({ fileContent: undefined });
+
+    expect(mounted.target.querySelector('[title="Open locally"]')).toBeNull();
   });
 });

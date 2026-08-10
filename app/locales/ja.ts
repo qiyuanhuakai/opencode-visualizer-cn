@@ -904,6 +904,8 @@ const messages: LocaleMessages = {
     openInLocalApplication: 'ローカルアプリケーションで開く',
     localApplicationOpened: 'ローカルアプリケーションで開きました',
     localApplicationConflict: 'バックエンドのファイルが変更されたため、ローカルアプリの保存は書き戻されませんでした。',
+    localApplicationSavedRefreshFailed:
+      'ファイルは保存されましたが、ビューを更新できませんでした。次回の保存で再試行します。',
     previousMatch: '前の一致',
     nextMatch: '次の一致',
     closeSearch: '検索を閉じる',

@@ -743,6 +743,7 @@ import {
   persistExternalFileChange,
   type ExternalFileSyncTarget,
 } from './utils/externalFileSync';
+import { closeTrackedLocalFileSession } from './utils/localFileSessionTracking';
 import { createKeyedTaskQueue } from './utils/keyedTaskQueue';
 
 const { t } = useI18n();
@@ -5658,9 +5659,14 @@ async function handleFloatingWindowOpenLocal(key: string) {
 }
 
 async function closeLocalApplicationSession(sessionId: string) {
-  localApplicationEditTargets.delete(sessionId);
+  const localFile = window.electronAPI?.localFile;
+  if (!localFile) return;
   try {
-    await window.electronAPI?.localFile?.close(sessionId);
+    await closeTrackedLocalFileSession(
+      localApplicationEditTargets,
+      sessionId,
+      (currentSessionId) => localFile.close(currentSessionId),
+    );
   } catch (error) {
     log('Local application session cleanup failed', error);
   }
@@ -5731,6 +5737,8 @@ async function syncLocalApplicationChange(change: { sessionId: string; content: 
     });
     if (result === 'conflict') {
       setSendStatusText(t('floatingWindow.localApplicationConflict'));
+    } else if (result === 'saved-refresh-failed') {
+      setSendStatusText(t('floatingWindow.localApplicationSavedRefreshFailed'));
     } else if (result === 'saved') {
       setSendStatusText(`${t('floatingWindow.openInLocalApplication')} · ${t('viewers.content.save')}`);
     }

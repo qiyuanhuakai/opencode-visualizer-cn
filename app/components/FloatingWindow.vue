@@ -204,14 +204,24 @@ const canEditInVis = computed(() => {
 });
 
 const canOpenInLocalApplication = computed(() => {
+  const fileProps = props.entry.props;
   if (
-    props.entry.props?.canEditInVis !== true ||
+    fileProps?.canEditInVis !== true ||
     !window.electronAPI?.localFile ||
     localApplicationPath.value.trim().length === 0
   ) return false;
   if (!props.entry.key.startsWith('file-viewer:')) return false;
-  if (props.entry.props?.binaryBase64 != null) return false;
-  const size = typeof props.entry.props?.fileSizeBytes === 'number' ? props.entry.props.fileSizeBytes : 0;
+  if (
+    fileProps.binaryBase64 != null ||
+    typeof fileProps.fileContent !== 'string' ||
+    typeof fileProps.fileDirectory !== 'string' ||
+    fileProps.fileDirectory.length === 0 ||
+    typeof fileProps.filePath !== 'string' ||
+    fileProps.filePath.length === 0 ||
+    typeof fileProps.absolutePath !== 'string' ||
+    fileProps.absolutePath.length === 0
+  ) return false;
+  const size = typeof fileProps.fileSizeBytes === 'number' ? fileProps.fileSizeBytes : 0;
   return size <= openInEditorMaxSizeMb.value * 1024 * 1024;
 });
 

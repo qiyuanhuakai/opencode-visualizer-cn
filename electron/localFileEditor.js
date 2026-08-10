@@ -29,11 +29,14 @@ export function createLocalFileEditor(options) {
   async function closeSession(sessionId) {
     const session = sessions.get(sessionId);
     if (!session) return;
-    sessions.delete(sessionId);
-    session.watcher.close();
+    if (session.watcher && !session.watcherClosed) {
+      session.watcher.close();
+      session.watcherClosed = true;
+    }
     if (session.debounceTimer) clearTimeout(session.debounceTimer);
     await session.readChain.catch(() => undefined);
     await fs.promises.rm(session.directory, { recursive: true, force: true });
+    if (sessions.get(sessionId) === session) sessions.delete(sessionId);
   }
 
   async function openSession(payload) {
@@ -59,44 +62,44 @@ export function createLocalFileEditor(options) {
     const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'vis-edit-'));
     const safeName = path.basename(fileName.trim()) || 'untitled.txt';
     const localPath = path.join(directory, safeName);
-    await fs.promises.writeFile(localPath, content, { encoding: 'utf8', mode: 0o600 });
 
     const session = {
       directory,
       localPath,
       watcher: null,
+      watcherClosed: false,
       debounceTimer: null,
       readChain: Promise.resolve(),
     };
-
-    const readChange = async () => {
-      try {
-        const nextContent = await fs.promises.readFile(localPath, 'utf8');
-        if (Buffer.byteLength(nextContent, 'utf8') > maxContentBytes) {
-          onError({ sessionId, message: 'Local file content exceeds the configured size limit' });
-          return;
-        }
-        onChange({ sessionId, content: nextContent });
-      } catch (error) {
-        if (sessions.has(sessionId)) console.error('[electron] Failed to read local edit:', error);
-      }
-    };
-
-    session.watcher = fs.watch(directory, { persistent: false }, (_eventType, changedName) => {
-      if (changedName && changedName.toString() !== safeName) return;
-      if (session.debounceTimer) clearTimeout(session.debounceTimer);
-      session.debounceTimer = setTimeout(() => {
-        session.debounceTimer = null;
-        session.readChain = session.readChain.then(readChange, readChange);
-      }, watchDelayMs);
-    });
     sessions.set(sessionId, session);
-    if (closingSessions.has(sessionId)) {
-      await closeSession(sessionId);
-      throw new Error('Local file session closed during opening');
-    }
 
     try {
+      await fs.promises.writeFile(localPath, content, { encoding: 'utf8', mode: 0o600 });
+      if (closingSessions.has(sessionId)) throw new Error('Local file session closed during opening');
+
+      const readChange = async () => {
+        try {
+          const nextContent = await fs.promises.readFile(localPath, 'utf8');
+          if (Buffer.byteLength(nextContent, 'utf8') > maxContentBytes) {
+            onError({ sessionId, message: 'Local file content exceeds the configured size limit' });
+            return;
+          }
+          onChange({ sessionId, content: nextContent });
+        } catch (error) {
+          if (sessions.has(sessionId)) console.error('[electron] Failed to read local edit:', error);
+        }
+      };
+
+      session.watcher = fs.watch(directory, { persistent: false }, (_eventType, changedName) => {
+        if (changedName && changedName.toString() !== safeName) return;
+        if (session.debounceTimer) clearTimeout(session.debounceTimer);
+        session.debounceTimer = setTimeout(() => {
+          session.debounceTimer = null;
+          session.readChain = session.readChain.then(readChange, readChange);
+        }, watchDelayMs);
+      });
+      if (closingSessions.has(sessionId)) throw new Error('Local file session closed during opening');
+
       const child = launchApplication(applicationPath, localPath);
       await new Promise((resolve, reject) => {
         child.once('spawn', resolve);
@@ -107,7 +110,11 @@ export function createLocalFileEditor(options) {
         throw new Error('Local file session closed during opening');
       }
     } catch (error) {
-      await closeSession(sessionId);
+      try {
+        await closeSession(sessionId);
+      } catch (cleanupError) {
+        throw new AggregateError([error, cleanupError], 'Failed to open and clean local file session');
+      }
       throw error;
     }
 
@@ -131,10 +138,13 @@ export function createLocalFileEditor(options) {
 
   async function close(sessionId) {
     closingSessions.add(sessionId);
-    await closeSession(sessionId);
-    const pending = pendingOpens.get(sessionId);
-    if (pending) await pending.catch(() => undefined);
-    closingSessions.delete(sessionId);
+    try {
+      const pending = pendingOpens.get(sessionId);
+      if (pending) await pending.catch(() => undefined);
+      await closeSession(sessionId);
+    } finally {
+      closingSessions.delete(sessionId);
+    }
   }
 
   async function closeAll() {

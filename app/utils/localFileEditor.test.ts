@@ -13,6 +13,7 @@ async function replaceFile(localPath: string, content: string): Promise<void> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(editors.splice(0).map((editor) => editor.closeAll()));
 });
 
@@ -100,5 +101,63 @@ describe('Electron local file editor', () => {
     await editor.close('close-during-open');
 
     await expect(opening).rejects.toThrow('closed during opening');
+  });
+
+  it('removes the temporary directory when staging fails after it is created', async () => {
+    let temporaryDirectory = '';
+    const originalMkdtemp = fs.mkdtemp.bind(fs);
+    const mkdtemp = vi.spyOn(fs, 'mkdtemp').mockImplementationOnce(async (prefix) => {
+      temporaryDirectory = await originalMkdtemp(prefix);
+      return temporaryDirectory;
+    });
+    const writeFile = vi
+      .spyOn(fs, 'writeFile')
+      .mockRejectedValueOnce(new Error('staging failed'));
+    const editor = createLocalFileEditor({ onChange: vi.fn() });
+    editors.push(editor);
+
+    await expect(
+      editor.open({
+        sessionId: 'staging-failure',
+        applicationPath: process.execPath,
+        fileName: 'notes.txt',
+        content: 'original',
+      }),
+    ).rejects.toThrow('staging failed');
+    expect(temporaryDirectory).not.toBe('');
+    await expect(fs.access(temporaryDirectory)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    mkdtemp.mockRestore();
+    writeFile.mockRestore();
+  });
+
+  it('retains a failed cleanup for retry and clears the closing marker', async () => {
+    const editor = createLocalFileEditor({ onChange: vi.fn() });
+    editors.push(editor);
+    const opened = await editor.open({
+      sessionId: 'retry-cleanup',
+      applicationPath: process.execPath,
+      fileName: 'notes.txt',
+      content: '',
+    });
+    const rm = vi
+      .spyOn(fs, 'rm')
+      .mockRejectedValueOnce(new Error('cleanup failed'));
+
+    await expect(editor.close('retry-cleanup')).rejects.toThrow('cleanup failed');
+    await expect(fs.access(opened.localPath)).resolves.toBeUndefined();
+
+    rm.mockRestore();
+    await editor.close('retry-cleanup');
+    await expect(fs.access(opened.localPath)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const reopened = await editor.open({
+      sessionId: 'retry-cleanup',
+      applicationPath: process.execPath,
+      fileName: 'notes.txt',
+      content: '',
+    });
+    await editor.close('retry-cleanup');
+    await expect(fs.access(reopened.localPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

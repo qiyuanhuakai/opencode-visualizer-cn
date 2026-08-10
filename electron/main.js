@@ -2,7 +2,14 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell } from 
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { installAsyncQuitCleanup } from './asyncQuitCleanup.js';
+import {
+  clearApprovedLocalApplication,
+  loadApprovedLocalApplication,
+  persistApprovedLocalApplication,
+} from './localApplicationApproval.js';
 import { createLocalFileEditor } from './localFileEditor.js';
+import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -54,24 +61,6 @@ function persistentStorageFilePath() {
 
 function localApplicationApprovalFilePath() {
   return path.join(app.getPath('userData'), LOCAL_APPLICATION_APPROVAL_FILE);
-}
-
-function loadApprovedLocalApplicationPath() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(localApplicationApprovalFilePath(), 'utf8'));
-    return typeof parsed?.path === 'string' && path.isAbsolute(parsed.path) ? parsed.path : null;
-  } catch {
-    return null;
-  }
-}
-
-function persistApprovedLocalApplicationPath(applicationPath) {
-  const filePath = localApplicationApprovalFilePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify({ path: applicationPath }, null, 2), {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
 }
 
 function loadPersistentStorage() {
@@ -249,7 +238,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   loadPersistentStorage();
-  approvedLocalApplicationPath = loadApprovedLocalApplicationPath();
+  approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
   protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
@@ -303,10 +292,8 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
-  void localFileEditor.closeAll().catch((error) => {
-    console.error('[electron] Failed to clean local edit sessions:', error);
-  });
+installAsyncQuitCleanup(app, () => localFileEditor.closeAll(), (error) => {
+  console.error('[electron] Failed to clean local edit sessions before quit:', error);
 });
 
 app.on('web-contents-created', (_event, contents) => {
@@ -350,8 +337,8 @@ ipcMain.handle('local-file-select-application', async (event) => {
   const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
   if (!selectedPath) return null;
   await fs.promises.access(selectedPath, fs.constants.X_OK);
+  persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
   approvedLocalApplicationPath = selectedPath;
-  persistApprovedLocalApplicationPath(selectedPath);
   const oldValue = setPersistentStorageItem(LOCAL_APPLICATION_PATH_KEY, selectedPath);
   broadcastPersistentStorageChange(
     { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
@@ -362,12 +349,8 @@ ipcMain.handle('local-file-select-application', async (event) => {
 
 ipcMain.handle('local-file-clear-application', (event) => {
   assertTrustedRenderer(event);
+  clearApprovedLocalApplication(localApplicationApprovalFilePath());
   approvedLocalApplicationPath = null;
-  try {
-    fs.rmSync(localApplicationApprovalFilePath(), { force: true });
-  } catch (error) {
-    console.error('[electron] Failed to clear local application approval:', error);
-  }
   const oldValue = removePersistentStorageItem(LOCAL_APPLICATION_PATH_KEY);
   if (oldValue !== null) {
     broadcastPersistentStorageChange(
@@ -403,9 +386,12 @@ ipcMain.handle('local-file-open', async (event, payload) => {
 ipcMain.handle('local-file-close', async (event, sessionId) => {
   assertTrustedRenderer(event);
   if (typeof sessionId !== 'string') throw new Error('Invalid local file session ID');
-  if (localFileSessionOwners.get(sessionId) !== event.sender.id) return;
-  localFileSessionOwners.delete(sessionId);
-  await localFileEditor.close(sessionId);
+  await closeOwnedLocalFileSession(
+    localFileSessionOwners,
+    localFileEditor,
+    event.sender.id,
+    sessionId,
+  );
 });
 
 ipcMain.on('persistent-storage-get', (event, key) => {

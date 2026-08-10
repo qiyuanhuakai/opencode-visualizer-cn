@@ -902,6 +902,8 @@ const messages: LocaleMessages = {
     openInLocalApplication: 'Malfermi per loka aplikaĵo',
     localApplicationOpened: 'Malfermita per loka aplikaĵo',
     localApplicationConflict: 'La servila dosiero ŝanĝiĝis. La loka konservado ne estis reskribita.',
+    localApplicationSavedRefreshFailed:
+      'La dosiero estas konservita, sed la vido ne refreŝiĝis. La sekva konservado reprovos.',
     previousMatch: 'Antaŭa kongruo',
     nextMatch: 'Sekva kongruo',
     closeSearch: 'Fermi serĉon',

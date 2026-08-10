@@ -903,6 +903,7 @@ export interface LocaleMessages {
     openInLocalApplication: string;
     localApplicationOpened: string;
     localApplicationConflict: string;
+    localApplicationSavedRefreshFailed: string;
     previousMatch: string;
     nextMatch: string;
     closeSearch: string;

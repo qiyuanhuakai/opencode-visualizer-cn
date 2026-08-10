@@ -886,6 +886,7 @@ const messages: LocaleMessages = {
     openInLocalApplication: '使用本機應用程式開啟',
     localApplicationOpened: '已使用本機應用程式開啟',
     localApplicationConflict: '後端檔案已經變更，本機應用程式中的儲存未寫回。',
+    localApplicationSavedRefreshFailed: '檔案已儲存，但檢視重新整理失敗；下次儲存將重試。',
     previousMatch: '上一個符合',
     nextMatch: '下一個符合',
     closeSearch: '關閉搜尋',

@@ -48,4 +48,29 @@ describe('external file synchronization', () => {
     expect(result).toBe('unchanged');
     expect(readLatest).not.toHaveBeenCalled();
   });
+
+  it('reports a saved file separately from a failed refresh and retries that refresh', async () => {
+    const target = { baseContent: 'before' };
+    const write = vi.fn().mockResolvedValue(undefined);
+    const onPersisted = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('refresh failed'))
+      .mockResolvedValue(undefined);
+    const dependencies = {
+      readLatest: vi.fn().mockResolvedValue('before'),
+      write,
+      onPersisted,
+    };
+
+    await expect(persistExternalFileChange(target, 'after', dependencies)).resolves.toBe(
+      'saved-refresh-failed',
+    );
+    expect(target).toEqual({ baseContent: 'after', refreshPending: true });
+    expect(write).toHaveBeenCalledOnce();
+
+    await expect(persistExternalFileChange(target, 'after', dependencies)).resolves.toBe('saved');
+    expect(target).toEqual({ baseContent: 'after', refreshPending: false });
+    expect(write).toHaveBeenCalledOnce();
+    expect(onPersisted).toHaveBeenCalledTimes(2);
+  });
 });

@@ -407,33 +407,6 @@
 
           <div class="setting-row setting-row-font">
             <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.editor.fontSize.label') }}</div>
-              <div class="setting-description">{{ $t('settings.editor.fontSize.description') }}</div>
-            </div>
-            <div class="font-setting-controls">
-              <div class="font-setting-section">
-                <div class="editor-number-control">
-                  <input
-                    v-model.number="editorFontSizePx"
-                    type="number"
-                    class="number-input"
-                    :min="minEditorFontSizePx"
-                    :max="maxEditorFontSizePx"
-                    :placeholder="$t('settings.editor.fontSize.inherited')"
-                    step="1"
-                    @blur="clampEditorFontSize"
-                    @keydown.enter="clampEditorFontSize"
-                  />
-                  <button type="button" class="font-system-button" @click="inheritEditorFontSize">
-                    {{ $t('settings.editor.fontSize.inheritAction') }}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="setting-row setting-row-font">
-            <div class="setting-info">
               <div class="setting-label">{{ $t('settings.terminalFontFamily.label') }}</div>
               <div class="setting-description">{{ $t('settings.terminalFontFamily.description') }}</div>
             </div>
@@ -599,6 +572,28 @@
                   />
                 </div>
                 <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.uiFontSizePx.description') }}</div>
+              </div>
+              <div class="font-setting-section font-setting-suboption">
+                <label class="font-setting-section-label">{{ $t('settings.editor.fontSize.label') }}</label>
+                <div class="editor-number-control">
+                  <input
+                    v-model.number="editorFontSizePx"
+                    type="number"
+                    class="number-input"
+                    :min="minEditorFontSizePx"
+                    :max="maxEditorFontSizePx"
+                    :placeholder="$t('settings.editor.fontSize.inherited')"
+                    step="1"
+                    @blur="clampEditorFontSize"
+                    @keydown.enter="clampEditorFontSize"
+                  />
+                  <button type="button" class="font-system-button" @click="inheritEditorFontSize">
+                    {{ $t('settings.editor.fontSize.inheritAction') }}
+                  </button>
+                </div>
+                <div class="setting-description" style="margin-top: 2px;">
+                  {{ $t('settings.editor.fontSize.description') }}
+                </div>
               </div>
               <div class="font-setting-section">
                 <div :id="appPresetLabelId" class="font-setting-section-label">{{ $t('settings.fontPresetsLabel') }}</div>
@@ -1755,6 +1750,12 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.font-setting-suboption {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.35)));
 }
 
 .font-setting-section-label {
