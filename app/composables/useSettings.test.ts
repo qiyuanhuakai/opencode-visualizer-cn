@@ -98,6 +98,47 @@ describe('useSettings', () => {
     expect(storage.getItem('opencode.settings.editInVis.v1')).toBe('true');
   });
 
+  it('keeps text transformers disabled with no mappings by default', async () => {
+    // Given: no text transformer settings have been persisted.
+    const settings = await importFresh();
+
+    // When: settings initialize.
+    // Then: existing composer input behavior remains unchanged.
+    expect(settings.textTransformersEnabled.value).toBe(false);
+    expect(settings.textTransformers.value).toEqual([]);
+  });
+
+  it('persists and synchronizes normalized text transformer settings', async () => {
+    // Given: storage contains enabled transformer settings with duplicate and malformed rows.
+    storage.setItem('opencode.settings.textTransformersEnabled.v1', 'true');
+    storage.setItem(
+      'opencode.settings.textTransformers.v1',
+      JSON.stringify([
+        { trigger: String.raw`\hi`, replacement: 'first' },
+        { trigger: 'hi', replacement: '你好' },
+        { trigger: 'bad key', replacement: 'ignored' },
+      ]),
+    );
+    const settings = await importFresh();
+
+    // When: a mapping is edited and another window disables the feature.
+    expect(settings.textTransformersEnabled.value).toBe(true);
+    expect(settings.textTransformers.value).toEqual([{ trigger: 'hi', replacement: '你好' }]);
+    settings.textTransformers.value = [{ trigger: 'never', replacement: '千万不要这样做' }];
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.settings.textTransformersEnabled.v1',
+        newValue: 'false',
+      } as unknown as StorageEvent);
+    }
+
+    // Then: edits are canonicalized in storage and the external toggle is applied immediately.
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(
+      JSON.stringify([{ trigger: 'never', replacement: '千万不要这样做' }]),
+    );
+    expect(settings.textTransformersEnabled.value).toBe(false);
+  });
+
   it('persists editor preferences and local application path', async () => {
     const settings = await importFresh();
 

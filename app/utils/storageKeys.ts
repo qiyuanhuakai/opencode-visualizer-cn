@@ -68,6 +68,8 @@ export const StorageKeys = {
     editorFontSizePx: 'settings.editorFontSizePx.v1',
     editorTabSize: 'settings.editorTabSize.v1',
     editorShortcuts: 'settings.editorShortcuts.v1',
+    textTransformersEnabled: 'settings.textTransformersEnabled.v1',
+    textTransformers: 'settings.textTransformers.v1',
     localApplicationPath: 'settings.localApplicationPath.v1',
     regionTheme: 'settings.regionTheme.v1',
     themeTokens: 'settings.themeTokens.v2',
