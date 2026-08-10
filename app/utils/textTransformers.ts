@@ -41,8 +41,7 @@ function transformerByTrigger(
   transformers: readonly TextTransformer[],
   trigger: string,
 ): TextTransformer | undefined {
-  const normalized = trigger.toLocaleLowerCase();
-  return transformers.find((item) => item.trigger.toLocaleLowerCase() === normalized);
+  return transformers.find((item) => hasSameTrigger(item.trigger, trigger));
 }
 
 function applyTransformerAtContext(
@@ -65,9 +64,17 @@ function escapeRegularExpression(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
+function hasSameTrigger(left: string, right: string): boolean {
+  return new RegExp(`^${escapeRegularExpression(left)}$`, 'iu').test(right);
+}
+
+function triggerStartsWithQuery(trigger: string, query: string): boolean {
+  return new RegExp(`^${escapeRegularExpression(query)}`, 'iu').test(trigger);
+}
+
 export function normalizeTextTransformers(value: unknown): TextTransformer[] {
   if (!Array.isArray(value)) return [];
-  const normalized = new Map<string, TextTransformer>();
+  const normalized: TextTransformer[] = [];
   for (const item of value) {
     if (typeof item !== 'object' || item === null) continue;
     const rawTrigger = Reflect.get(item, 'trigger');
@@ -75,11 +82,11 @@ export function normalizeTextTransformers(value: unknown): TextTransformer[] {
     if (typeof rawTrigger !== 'string' || typeof replacement !== 'string') continue;
     const trigger = normalizeTrigger(rawTrigger);
     if (!isValidTrigger(trigger)) continue;
-    const key = trigger.toLocaleLowerCase();
-    normalized.delete(key);
-    normalized.set(key, { trigger, replacement });
+    const duplicateIndex = normalized.findIndex((entry) => hasSameTrigger(entry.trigger, trigger));
+    if (duplicateIndex >= 0) normalized.splice(duplicateIndex, 1);
+    normalized.push({ trigger, replacement });
   }
-  return Array.from(normalized.values());
+  return normalized;
 }
 
 export function getTextTransformerTriggerIssue(
@@ -89,10 +96,7 @@ export function getTextTransformerTriggerIssue(
   const trigger = transformers[index]?.trigger.trim() ?? '';
   if (!trigger) return null;
   if (/[\s\\]/u.test(trigger)) return 'invalid';
-  const normalized = trigger.toLocaleLowerCase();
-  const matches = transformers.filter(
-    (item) => item.trigger.trim().toLocaleLowerCase() === normalized,
-  );
+  const matches = transformers.filter((item) => hasSameTrigger(item.trigger.trim(), trigger));
   return matches.length > 1 ? 'duplicate' : null;
 }
 
@@ -103,8 +107,7 @@ export function findTextTransformerMatches(
 ): TextTransformer[] {
   const context = transformerContext(input, cursor);
   if (!context) return [];
-  const query = context.query.toLocaleLowerCase();
-  return transformers.filter((item) => item.trigger.toLocaleLowerCase().startsWith(query));
+  return transformers.filter((item) => triggerStartsWithQuery(item.trigger, context.query));
 }
 
 export function applyTextTransformerAtCursor(
@@ -130,10 +133,9 @@ export function applyTextTransformerSelectionAtCursor(
   if (!context) return { text: input, cursor, replaced: false };
   const triggerSuffix = transformer.trigger.slice(context.query.length);
   const inputSuffix = input.slice(context.end, context.end + triggerSuffix.length);
-  const consumedSuffixLength =
-    inputSuffix.toLocaleLowerCase() === triggerSuffix.toLocaleLowerCase()
-      ? triggerSuffix.length
-      : 0;
+  const consumedSuffixLength = hasSameTrigger(inputSuffix, triggerSuffix)
+    ? triggerSuffix.length
+    : 0;
   return applyTransformerAtContext(
     input,
     { ...context, end: context.end + consumedSuffixLength },

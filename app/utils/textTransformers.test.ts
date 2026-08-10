@@ -44,6 +44,21 @@ describe('text transformers', () => {
     ).toBe(String.raw`下划线 \hi_suffix`);
   });
 
+  it('uses the regex case fold result without a locale-sensitive lookup', () => {
+    // Given: configured triggers have locale-sensitive and Unicode simple-fold variants.
+    const caseFoldTransformers = [
+      { trigger: 'I', replacement: 'latin-i' },
+      { trigger: 's', replacement: 'first-s' },
+      { trigger: 'ſ', replacement: 'latin-s' },
+    ];
+
+    // When: the prompt uses the lowercase I and long-s forms accepted by the /iu regex.
+    const result = expandTextTransformers(String.raw`\i \s \ſ`, caseFoldTransformers);
+
+    // Then: both matched regex branches resolve to their configured replacements.
+    expect(result).toBe('latin-i latin-s latin-s');
+  });
+
   it('replaces only the exact sequence immediately before the cursor', () => {
     // Given: the cursor follows a configured sequence in the middle of a prompt.
     const input = String.raw`Before \hi after`;
