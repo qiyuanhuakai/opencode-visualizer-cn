@@ -119,7 +119,11 @@
         :aria-activedescendant="mentionOpen ? activeMentionOptionId || undefined : undefined"
         :disabled="false"
         :placeholder="$t('inputPanel.placeholder')"
+        @input="syncTextCursor"
         @keydown="handleKeydown"
+        @keyup="syncTextCursor"
+        @click="syncTextCursor"
+        @select="syncTextCursor"
         @paste="handlePaste"
         @drop="handleDrop"
         @dragover.prevent
@@ -637,6 +641,7 @@ const permissionModeValue = computed({
 });
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const textCursor = ref<number | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const modelDropdownRef = ref<HTMLElement | null>(null);
 const modelSearchQuery = ref('');
@@ -897,32 +902,42 @@ const filePopupDismissed = ref(false);
 const skillPopupDismissed = ref(false);
 const transformerPopupDismissed = ref(false);
 
-const normalizedTextTransformers = computed(() => normalizeTextTransformers(textTransformers.value));
+const normalizedTextTransformers = computed(() =>
+  normalizeTextTransformers(textTransformers.value),
+);
 const textTransformerMatches = computed(() => {
   if (!textTransformersEnabled.value) return [];
-  const cursor = textareaRef.value?.selectionStart ?? messageValue.value.length;
   return findTextTransformerMatches(
     messageValue.value,
-    cursor,
+    textCursor.value ?? messageValue.value.length,
     normalizedTextTransformers.value,
   );
 });
 
+function syncTextCursor(event: Event) {
+  if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
+  textCursor.value = event.currentTarget.selectionStart;
+}
+
+function syncTextCursorFromTextarea() {
+  textCursor.value = textareaRef.value?.selectionStart ?? messageValue.value.length;
+}
+
 // --- Unified mention popup (command / agent / skill) ---
 // Priority: $skill > @agent > /command (most specific first)
-const activeMentionType = computed<
-  'command' | 'agent' | 'file' | 'skill' | 'transformer' | null
->(() => {
-  if (textTransformerMatches.value.length > 0 && !transformerPopupDismissed.value)
-    return 'transformer';
-  if (skillMatches.value.length > 0 && !skillPopupDismissed.value) return 'skill';
-  if (props.preferFileMentions && fileMatches.value.length > 0 && !filePopupDismissed.value)
-    return 'file';
-  if (agentMatches.value.length > 0 && !agentPopupDismissed.value) return 'agent';
-  if (fileMatches.value.length > 0 && !filePopupDismissed.value) return 'file';
-  if (commandMatches.value.length > 0 && !commandPopupDismissed.value) return 'command';
-  return null;
-});
+const activeMentionType = computed<'command' | 'agent' | 'file' | 'skill' | 'transformer' | null>(
+  () => {
+    if (textTransformerMatches.value.length > 0 && !transformerPopupDismissed.value)
+      return 'transformer';
+    if (skillMatches.value.length > 0 && !skillPopupDismissed.value) return 'skill';
+    if (props.preferFileMentions && fileMatches.value.length > 0 && !filePopupDismissed.value)
+      return 'file';
+    if (agentMatches.value.length > 0 && !agentPopupDismissed.value) return 'agent';
+    if (fileMatches.value.length > 0 && !filePopupDismissed.value) return 'file';
+    if (commandMatches.value.length > 0 && !commandPopupDismissed.value) return 'command';
+    return null;
+  },
+);
 
 const mentionOpen = computed(() => activeMentionType.value !== null);
 
@@ -1054,6 +1069,7 @@ watch(
     filePopupDismissed.value = false;
     skillPopupDismissed.value = false;
     transformerPopupDismissed.value = false;
+    nextTick(syncTextCursorFromTextarea);
   },
 );
 
@@ -1074,6 +1090,7 @@ function commitTextTransformerApplication(result: {
 }) {
   if (!result.replaced) return false;
   messageValue.value = result.text;
+  textCursor.value = result.cursor;
   nextTick(() => {
     textareaRef.value?.setSelectionRange(result.cursor, result.cursor);
     textareaRef.value?.focus();
@@ -1096,12 +1113,7 @@ function applyExactTextTransformer() {
   if (!textTransformersEnabled.value) return false;
   const cursor = textareaRef.value?.selectionStart ?? messageValue.value.length;
   return commitTextTransformerApplication(
-    applyTextTransformerAtCursor(
-      messageValue.value,
-      cursor,
-      normalizedTextTransformers.value,
-      ' ',
-    ),
+    applyTextTransformerAtCursor(messageValue.value, cursor, normalizedTextTransformers.value, ' '),
   );
 }
 
@@ -1272,6 +1284,7 @@ function handleModelDropdownOpenChange(open: boolean) {
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.isComposing) return;
+  syncTextCursor(event);
   const isTransformerDelimiter =
     (event.key === ' ' || event.key === 'Tab' || event.key === 'Enter') &&
     !event.ctrlKey &&
