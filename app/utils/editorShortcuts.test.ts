@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_EDITOR_SHORTCUTS,
   createEditorKeyBindings,
+  formatShortcutForDisplay,
   normalizeEditorShortcutMap,
   shortcutFromKeyboardEvent,
   validateEditorShortcutMap,
@@ -126,9 +127,15 @@ describe('editor shortcuts', () => {
   });
 
   it('records browser key events in CodeMirror key syntax', () => {
-    expect(shortcutFromKeyboardEvent({ key: 'k', ctrlKey: true, metaKey: false, altKey: false, shiftKey: true })).toBe('Mod-Shift-k');
+    expect(shortcutFromKeyboardEvent({ key: 'k', ctrlKey: true, metaKey: false, altKey: false, shiftKey: true }, 'other')).toBe('Mod-Shift-k');
+    expect(shortcutFromKeyboardEvent({ key: 'k', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false }, 'mac')).toBe('Ctrl-k');
+    expect(shortcutFromKeyboardEvent({ key: 'k', ctrlKey: false, metaKey: true, altKey: false, shiftKey: false }, 'mac')).toBe('Mod-k');
+    expect(shortcutFromKeyboardEvent({ key: 'k', ctrlKey: false, metaKey: true, altKey: false, shiftKey: false }, 'other')).toBe('Meta-k');
     expect(shortcutFromKeyboardEvent({ key: 'ArrowUp', ctrlKey: false, metaKey: false, altKey: true, shiftKey: false })).toBe('Alt-ArrowUp');
     expect(shortcutFromKeyboardEvent({ key: 'Tab', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false })).toBe('Tab');
     expect(shortcutFromKeyboardEvent({ key: 'Control', ctrlKey: true, metaKey: false, altKey: false, shiftKey: false })).toBeNull();
+    expect(formatShortcutForDisplay('Mod-Shift-k', 'other')).toBe('Ctrl-Shift-k');
+    expect(formatShortcutForDisplay('Mod-Shift-k', 'mac')).toBe('⌘-Shift-k');
+    expect(formatShortcutForDisplay('Ctrl-Space', 'mac')).toBe('Ctrl-Space');
   });
 });

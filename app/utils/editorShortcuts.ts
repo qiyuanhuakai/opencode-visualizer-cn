@@ -153,14 +153,35 @@ interface KeyboardShortcutEvent {
   shiftKey: boolean;
 }
 
-export function shortcutFromKeyboardEvent(event: KeyboardShortcutEvent): string | null {
+export type ShortcutPlatform = 'mac' | 'other';
+
+export function detectShortcutPlatform(): ShortcutPlatform {
+  if (typeof navigator === 'undefined') return 'other';
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'mac' : 'other';
+}
+
+export function shortcutFromKeyboardEvent(
+  event: KeyboardShortcutEvent,
+  platform = detectShortcutPlatform(),
+): string | null {
   if (MODIFIER_KEYS.has(event.key)) return null;
   const key = event.key === ' ' ? 'Space' : event.key.length === 1 ? event.key.toLowerCase() : event.key;
   const modifiers: string[] = [];
-  if (event.ctrlKey || event.metaKey) modifiers.push('Mod');
+  if (event.ctrlKey) modifiers.push(platform === 'mac' ? 'Ctrl' : 'Mod');
+  if (event.metaKey) modifiers.push(platform === 'mac' ? 'Mod' : 'Meta');
   if (event.altKey) modifiers.push('Alt');
   if (event.shiftKey) modifiers.push('Shift');
   return [...modifiers, key].join('-');
+}
+
+export function formatShortcutForDisplay(
+  shortcut: string,
+  platform = detectShortcutPlatform(),
+): string {
+  return shortcut
+    .split('-')
+    .map((part) => part === 'Mod' ? (platform === 'mac' ? '⌘' : 'Ctrl') : part)
+    .join('-');
 }
 
 export function createEditorKeyBindings(

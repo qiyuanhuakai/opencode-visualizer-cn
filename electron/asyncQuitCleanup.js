@@ -14,8 +14,13 @@ export function installAsyncQuitCleanup(app, cleanup, onError = () => {}) {
         app.quit();
       })
       .catch((error) => {
-        cleanupPromise = null;
-        onError(error);
+        quittingAfterCleanup = true;
+        try {
+          onError(error);
+        } catch {
+        } finally {
+          app.quit();
+        }
       });
   });
 }

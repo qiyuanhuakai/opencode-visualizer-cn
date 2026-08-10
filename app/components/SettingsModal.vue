@@ -697,7 +697,11 @@ import { useI18n } from 'vue-i18n';
 import { getLocale, setLocale } from '../i18n';
 import type { Locale } from '../i18n/types';
 import { downloadJsonFile } from '../utils/fileExport';
-import { shortcutFromKeyboardEvent, validateEditorShortcutMap } from '../utils/editorShortcuts';
+import {
+  formatShortcutForDisplay,
+  shortcutFromKeyboardEvent,
+  validateEditorShortcutMap,
+} from '../utils/editorShortcuts';
 import {
   inspectFontStack,
   loadLocalFontFamilies,
@@ -1169,7 +1173,10 @@ function recordShortcut(key: EditorShortcutKey, event: KeyboardEvent) {
 
 function shortcutButtonLabel(key: EditorShortcutKey) {
   if (recordingShortcut.value === key) return t('settings.editor.shortcuts.recording');
-  return editorShortcuts.value[key] || t('settings.editor.shortcuts.unassigned');
+  const shortcut = editorShortcuts.value[key];
+  return shortcut
+    ? formatShortcutForDisplay(shortcut)
+    : t('settings.editor.shortcuts.unassigned');
 }
 
 async function browseLocalApplication() {

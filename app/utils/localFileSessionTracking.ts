@@ -7,3 +7,12 @@ export async function closeTrackedLocalFileSession<T>(
   await closeSession(sessionId);
   targets.delete(sessionId);
 }
+
+export function captureTrackedLocalFileChange<T>(
+  targets: Map<string, T>,
+  sessionId: string,
+  content: string,
+): { target: T; content: string } | null {
+  const target = targets.get(sessionId);
+  return target ? { target, content } : null;
+}

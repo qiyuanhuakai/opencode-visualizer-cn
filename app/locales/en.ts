@@ -792,7 +792,7 @@ const messages: LocaleMessages = {
       tabSize: { label: 'Indent size', description: 'Number of spaces inserted for each indentation level.' },
       editInVis: { label: 'Edit in Vis', description: 'Enable built-in file editing through the local vis_bridge.' },
       shortcuts: {
-        label: 'Keyboard shortcuts', description: 'Click a shortcut to record it. Press Esc to cancel or Backspace to clear the binding.', reset: 'Restore defaults', recording: 'Press shortcut…', unassigned: 'Unassigned', recordAria: 'Record shortcut for {action}', invalidError: 'Invalid key name', duplicateError: 'Shortcut is already used',
+        label: 'Keyboard shortcuts', description: 'The primary modifier appears as Ctrl on Windows/Linux or ⌘ on macOS. Click a shortcut to record; Esc cancels and Backspace clears.', reset: 'Restore defaults', recording: 'Press shortcut…', unassigned: 'Unassigned', recordAria: 'Record shortcut for {action}', invalidError: 'Invalid key name', duplicateError: 'Shortcut is already used',
         save: 'Save', undo: 'Undo', redo: 'Redo', find: 'Find', findNext: 'Find next', findPrevious: 'Find previous', goToLine: 'Go to line', selectLine: 'Select line', autocomplete: 'Autocomplete',
         indent: 'Indent', outdent: 'Outdent', deleteLine: 'Delete line', moveLineUp: 'Move line up', moveLineDown: 'Move line down', duplicateLineUp: 'Duplicate above', duplicateLineDown: 'Duplicate below',
         toggleLineComment: 'Toggle line comment', toggleBlockComment: 'Toggle block comment', foldCode: 'Fold code', unfoldCode: 'Unfold code',

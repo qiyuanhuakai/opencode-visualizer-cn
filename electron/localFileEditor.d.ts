@@ -17,6 +17,8 @@ export type LocalFileEditor = {
 
 export function createLocalFileEditor(options: {
   onChange(change: LocalFileChange): void;
-  onError?(error: { sessionId: string; message: string }): void;
+  onError?(error: { sessionId: string; message: string; closed?: boolean }): void;
+  onClosed?(sessionId: string): void;
   watchDelayMs?: number;
+  launchApplication?(applicationPath: string, localPath: string): void | Promise<void>;
 }): LocalFileEditor;

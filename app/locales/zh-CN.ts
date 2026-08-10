@@ -778,7 +778,7 @@ const messages: LocaleMessages = {
       tabSize: { label: '缩进宽度', description: '每级缩进插入的空格数。' },
       editInVis: { label: '在 Vis 中编辑', description: '启用通过本地 vis_bridge 进行的内置文件编辑。' },
       shortcuts: {
-        label: '键盘快捷键', description: '点击快捷键后直接按下新组合键。按 Esc 取消，按 Backspace 清除绑定。', reset: '恢复默认', recording: '请按快捷键…', unassigned: '未设置', recordAria: '录制“{action}”快捷键', invalidError: '键名无效', duplicateError: '快捷键已被占用',
+        label: '键盘快捷键', description: '主修饰键按系统显示为 Ctrl（Windows/Linux）或 ⌘（macOS）。点击快捷键后直接录制；Esc 取消，Backspace 清除。', reset: '恢复默认', recording: '请按快捷键…', unassigned: '未设置', recordAria: '录制“{action}”快捷键', invalidError: '键名无效', duplicateError: '快捷键已被占用',
         save: '保存', undo: '撤销', redo: '重做', find: '查找', findNext: '查找下一个', findPrevious: '查找上一个', goToLine: '跳转到行', selectLine: '选择整行', autocomplete: '自动补全',
         indent: '增加缩进', outdent: '减少缩进', deleteLine: '删除行', moveLineUp: '上移行', moveLineDown: '下移行', duplicateLineUp: '向上复制行', duplicateLineDown: '向下复制行',
         toggleLineComment: '切换行注释', toggleBlockComment: '切换块注释', foldCode: '折叠代码', unfoldCode: '展开代码',

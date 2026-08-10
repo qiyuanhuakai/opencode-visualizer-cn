@@ -53,6 +53,9 @@ const localFileEditor = createLocalFileEditor({
     );
     ownerWindow?.webContents.send('local-file-error', error);
   },
+  onClosed: (sessionId) => {
+    localFileSessionOwners.delete(sessionId);
+  },
 });
 
 function persistentStorageFilePath() {
@@ -334,24 +337,24 @@ ipcMain.handle('local-file-select-application', async (event) => {
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
     : await dialog.showOpenDialog(options);
-  const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
-  if (!selectedPath) return null;
-  await fs.promises.access(selectedPath, fs.constants.X_OK);
-  persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
-  approvedLocalApplicationPath = selectedPath;
-  const oldValue = setPersistentStorageItem(LOCAL_APPLICATION_PATH_KEY, selectedPath);
-  broadcastPersistentStorageChange(
-    { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
-    event.sender.id,
+    const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
+    if (!selectedPath) return null;
+    await fs.promises.access(selectedPath, fs.constants.X_OK);
+    const oldValue = approvedLocalApplicationPath;
+    persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
+    approvedLocalApplicationPath = selectedPath;
+    broadcastPersistentStorageChange(
+      { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
+      event.sender.id,
   );
   return selectedPath;
 });
 
 ipcMain.handle('local-file-clear-application', (event) => {
   assertTrustedRenderer(event);
+  const oldValue = approvedLocalApplicationPath;
   clearApprovedLocalApplication(localApplicationApprovalFilePath());
   approvedLocalApplicationPath = null;
-  const oldValue = removePersistentStorageItem(LOCAL_APPLICATION_PATH_KEY);
   if (oldValue !== null) {
     broadcastPersistentStorageChange(
       { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: null },
@@ -399,6 +402,10 @@ ipcMain.on('persistent-storage-get', (event, key) => {
     event.returnValue = null;
     return;
   }
+  if (key === LOCAL_APPLICATION_PATH_KEY) {
+    event.returnValue = approvedLocalApplicationPath;
+    return;
+  }
   event.returnValue = getPersistentStorageItem(key);
 });
 
@@ -407,6 +414,10 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
   const value = payload?.value;
   if (typeof key !== 'string' || typeof value !== 'string') {
     event.returnValue = false;
+    return;
+  }
+  if (key === LOCAL_APPLICATION_PATH_KEY) {
+    event.returnValue = true;
     return;
   }
 
@@ -423,6 +434,10 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
 ipcMain.on('persistent-storage-remove', (event, key) => {
   if (typeof key !== 'string') {
     event.returnValue = false;
+    return;
+  }
+  if (key === LOCAL_APPLICATION_PATH_KEY) {
+    event.returnValue = true;
     return;
   }
 

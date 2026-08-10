@@ -791,7 +791,7 @@ const messages: LocaleMessages = {
       tabSize: { label: 'Deŝova larĝo', description: 'Nombro de spacetoj por ĉiu deŝova nivelo.' },
       editInVis: { label: 'Redakti en Vis', description: 'Ebligu enan dosier-redaktadon tra la loka vis_bridge.' },
       shortcuts: {
-        label: 'Klavaraj fulmoklavoj', description: 'Alklaku fulmoklavon kaj premu novan kombinaĵon. Esc nuligas; Backspace forigas la ligon.', reset: 'Restarigi apriorajn', recording: 'Premu fulmoklavon…', unassigned: 'Neagordita', recordAria: 'Registri fulmoklavon por {action}', invalidError: 'Nevalida klavnomo', duplicateError: 'Fulmoklavo jam estas uzata',
+        label: 'Klavaraj fulmoklavoj', description: 'La ĉefa modifilo aperas kiel Ctrl en Windows/Linux aŭ ⌘ en macOS. Alklaku por registri; Esc nuligas kaj Backspace forigas.', reset: 'Restarigi apriorajn', recording: 'Premu fulmoklavon…', unassigned: 'Neagordita', recordAria: 'Registri fulmoklavon por {action}', invalidError: 'Nevalida klavnomo', duplicateError: 'Fulmoklavo jam estas uzata',
         save: 'Konservi', undo: 'Malfari', redo: 'Refari', find: 'Serĉi', findNext: 'Serĉi sekvan', findPrevious: 'Serĉi antaŭan', goToLine: 'Iri al linio', selectLine: 'Elekti linion', autocomplete: 'Aŭtomata kompletigo',
         indent: 'Deŝovi', outdent: 'Maldeŝovi', deleteLine: 'Forigi linion', moveLineUp: 'Movi linion supren', moveLineDown: 'Movi linion malsupren', duplicateLineUp: 'Duobligi supren', duplicateLineDown: 'Duobligi malsupren',
         toggleLineComment: 'Baskuligi linikomenton', toggleBlockComment: 'Baskuligi blokkomenton', foldCode: 'Faldi kodon', unfoldCode: 'Malfaldi kodon',

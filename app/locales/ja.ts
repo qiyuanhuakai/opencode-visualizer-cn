@@ -794,7 +794,7 @@ const messages: LocaleMessages = {
       tabSize: { label: 'インデント幅', description: 'インデント一段あたりのスペース数。' },
       editInVis: { label: 'Vis で編集', description: 'ローカル vis_bridge を通じた内蔵ファイル編集を有効にします。' },
       shortcuts: {
-        label: 'キーボードショートカット', description: 'ショートカットをクリックして新しいキーを押します。Esc でキャンセル、Backspace で解除します。', reset: '初期設定に戻す', recording: 'キーを押してください…', unassigned: '未設定', recordAria: '「{action}」のショートカットを記録', invalidError: 'キー名が無効です', duplicateError: 'ショートカットが重複しています',
+        label: 'キーボードショートカット', description: '主修飾キーは Windows/Linux では Ctrl、macOS では ⌘ と表示されます。クリックして記録し、Esc で取消、Backspace で解除します。', reset: '初期設定に戻す', recording: 'キーを押してください…', unassigned: '未設定', recordAria: '「{action}」のショートカットを記録', invalidError: 'キー名が無効です', duplicateError: 'ショートカットが重複しています',
         save: '保存', undo: '元に戻す', redo: 'やり直す', find: '検索', findNext: '次を検索', findPrevious: '前を検索', goToLine: '行へ移動', selectLine: '行を選択', autocomplete: '自動補完',
         indent: 'インデント', outdent: 'インデント解除', deleteLine: '行を削除', moveLineUp: '行を上へ移動', moveLineDown: '行を下へ移動', duplicateLineUp: '上に行を複製', duplicateLineDown: '下に行を複製',
         toggleLineComment: '行コメント切替', toggleBlockComment: 'ブロックコメント切替', foldCode: 'コードを折りたたむ', unfoldCode: 'コードを展開',

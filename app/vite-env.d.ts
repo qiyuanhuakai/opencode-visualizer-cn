@@ -37,8 +37,8 @@ interface Window {
       close: (sessionId: string) => Promise<void>,
       onChanged: (listener: (change: { sessionId: string; content: string }) => void) => void,
       offChanged: (listener: (change: { sessionId: string; content: string }) => void) => void,
-      onError: (listener: (error: { sessionId: string; message: string }) => void) => void,
-      offError: (listener: (error: { sessionId: string; message: string }) => void) => void,
+      onError: (listener: (error: { sessionId: string; message: string; closed?: boolean }) => void) => void,
+      offError: (listener: (error: { sessionId: string; message: string; closed?: boolean }) => void) => void,
     },
   };
   queryLocalFonts?: (options?: QueryLocalFontsOptions) => Promise<FontData[]>;

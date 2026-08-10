@@ -743,7 +743,10 @@ import {
   persistExternalFileChange,
   type ExternalFileSyncTarget,
 } from './utils/externalFileSync';
-import { closeTrackedLocalFileSession } from './utils/localFileSessionTracking';
+import {
+  captureTrackedLocalFileChange,
+  closeTrackedLocalFileSession,
+} from './utils/localFileSessionTracking';
 import { createKeyedTaskQueue } from './utils/keyedTaskQueue';
 
 const { t } = useI18n();
@@ -5683,8 +5686,9 @@ async function closeAllLocalApplicationSessions() {
   await Promise.all(Array.from(localApplicationEditTargets.keys(), closeLocalApplicationSession));
 }
 
-function handleLocalApplicationError(error: { sessionId: string; message: string }) {
+function handleLocalApplicationError(error: { sessionId: string; message: string; closed?: boolean }) {
   if (!localApplicationEditTargets.has(error.sessionId)) return;
+  if (error.closed) localApplicationEditTargets.delete(error.sessionId);
   setSendStatusKey('app.error.fileLoadFailed', { message: error.message });
 }
 
@@ -5697,9 +5701,10 @@ async function enqueueFileWrite<T>(
   return fileWriteQueue.run(queueKey, write);
 }
 
-async function syncLocalApplicationChange(change: { sessionId: string; content: string }) {
-  const target = localApplicationEditTargets.get(change.sessionId);
-  if (!target) return;
+async function syncLocalApplicationChange(
+  change: { sessionId: string; content: string },
+  target: LocalApplicationEditTarget,
+) {
   if (target.backendIdentity !== currentBackendIdentity()) {
     setSendStatusText(t('floatingWindow.localApplicationConflict'));
     return;
@@ -5748,9 +5753,19 @@ async function syncLocalApplicationChange(change: { sessionId: string; content: 
 }
 
 function handleLocalApplicationChange(change: { sessionId: string; content: string }) {
-  const target = localApplicationEditTargets.get(change.sessionId);
-  if (!target) return;
-  void enqueueFileWrite(target.backendIdentity, target.absolutePath, () => syncLocalApplicationChange(change));
+  const captured = captureTrackedLocalFileChange(
+    localApplicationEditTargets,
+    change.sessionId,
+    change.content,
+  );
+  if (!captured) return;
+  const { target } = captured;
+  void enqueueFileWrite(target.backendIdentity, target.absolutePath, () =>
+    syncLocalApplicationChange(
+      { sessionId: change.sessionId, content: captured.content },
+      target,
+    ),
+  );
 }
 
 function cancelFileViewerEdit(key: string) {

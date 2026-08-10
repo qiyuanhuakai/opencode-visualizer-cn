@@ -10,33 +10,93 @@ function launchApplication(applicationPath, localPath) {
     process.platform === 'darwin' && applicationPath.endsWith('.app')
       ? { command: '/usr/bin/open', args: ['-a', applicationPath, localPath] }
       : { command: applicationPath, args: [localPath] };
-  return spawn(launch.command, launch.args, {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
+  return new Promise((resolve, reject) => {
+    const child = spawn(launch.command, launch.args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.once('spawn', () => {
+      child.unref();
+      resolve();
+    });
+    child.once('error', reject);
   });
+}
+
+async function readUtf8Bounded(localPath, maxContentBytes) {
+  const handle = await fs.promises.open(localPath, 'r');
+  const chunks = [];
+  let totalBytes = 0;
+  const chunkSize = Math.min(64 * 1024, maxContentBytes + 1);
+  try {
+    while (totalBytes <= maxContentBytes) {
+      const remaining = maxContentBytes + 1 - totalBytes;
+      const buffer = Buffer.allocUnsafe(Math.min(chunkSize, remaining));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) break;
+      totalBytes += bytesRead;
+      if (totalBytes > maxContentBytes) return null;
+      chunks.push(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    await handle.close();
+  }
+  return Buffer.concat(chunks, totalBytes).toString('utf8');
 }
 
 export function createLocalFileEditor(options) {
   const onChange = options?.onChange;
   if (typeof onChange !== 'function') throw new Error('onChange must be a function');
   const onError = typeof options?.onError === 'function' ? options.onError : () => {};
+  const onClosed = typeof options?.onClosed === 'function' ? options.onClosed : () => {};
+  const launch = options?.launchApplication ?? launchApplication;
   const watchDelayMs = options.watchDelayMs ?? 120;
   const sessions = new Map();
   const pendingOpens = new Map();
   const closingSessions = new Set();
 
-  async function closeSession(sessionId) {
-    const session = sessions.get(sessionId);
-    if (!session) return;
-    if (session.watcher && !session.watcherClosed) {
-      session.watcher.close();
-      session.watcherClosed = true;
+  function reportError(error) {
+    try {
+      onError(error);
+    } catch (reportFailure) {
+      console.error('[electron] Failed to report local file error:', reportFailure);
     }
-    if (session.debounceTimer) clearTimeout(session.debounceTimer);
-    await session.readChain.catch(() => undefined);
-    await fs.promises.rm(session.directory, { recursive: true, force: true });
-    if (sessions.get(sessionId) === session) sessions.delete(sessionId);
+  }
+
+  function closeSession(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session) return Promise.resolve();
+    session.terminal = true;
+    if (session.closePromise) return session.closePromise;
+    const cleanup = (async () => {
+      if (session.watcher && !session.watcherClosed) {
+        session.watcher.close();
+        session.watcherClosed = true;
+      }
+      if (session.debounceTimer) {
+        clearTimeout(session.debounceTimer);
+        session.debounceTimer = null;
+      }
+      await session.readChain.catch(() => undefined);
+      await fs.promises.rm(session.directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 100,
+      });
+      if (sessions.get(sessionId) === session) sessions.delete(sessionId);
+      try {
+        onClosed(sessionId);
+      } catch (error) {
+        console.error('[electron] Failed to report local file closure:', error);
+      }
+    })();
+    session.closePromise = cleanup.catch((error) => {
+      session.closePromise = null;
+      throw error;
+    });
+    return session.closePromise;
   }
 
   async function openSession(payload) {
@@ -68,6 +128,8 @@ export function createLocalFileEditor(options) {
       localPath,
       watcher: null,
       watcherClosed: false,
+      terminal: false,
+      closePromise: null,
       debounceTimer: null,
       readChain: Promise.resolve(),
     };
@@ -79,9 +141,17 @@ export function createLocalFileEditor(options) {
 
       const readChange = async () => {
         try {
-          const nextContent = await fs.promises.readFile(localPath, 'utf8');
-          if (Buffer.byteLength(nextContent, 'utf8') > maxContentBytes) {
-            onError({ sessionId, message: 'Local file content exceeds the configured size limit' });
+          const fileStat = await fs.promises.stat(localPath);
+          if (fileStat.size > maxContentBytes) {
+            reportError({
+              sessionId,
+              message: 'Local file content exceeds the configured size limit',
+            });
+            return;
+          }
+          const nextContent = await readUtf8Bounded(localPath, maxContentBytes);
+          if (nextContent === null) {
+            reportError({ sessionId, message: 'Local file content exceeds the configured size limit' });
             return;
           }
           onChange({ sessionId, content: nextContent });
@@ -98,15 +168,27 @@ export function createLocalFileEditor(options) {
           session.readChain = session.readChain.then(readChange, readChange);
         }, watchDelayMs);
       });
-      if (closingSessions.has(sessionId)) throw new Error('Local file session closed during opening');
-
-      const child = launchApplication(applicationPath, localPath);
-      await new Promise((resolve, reject) => {
-        child.once('spawn', resolve);
-        child.once('error', reject);
+      session.watcher.on('error', (error) => {
+        session.terminal = true;
+        reportError({
+          sessionId,
+          message: `Local file watcher failed: ${error.message}`,
+          closed: true,
+        });
+        void closeSession(sessionId).catch((cleanupError) => {
+          reportError({
+            sessionId,
+            message: `Local file watcher cleanup failed: ${cleanupError.message}`,
+            closed: true,
+          });
+        });
       });
-      child.unref();
-      if (closingSessions.has(sessionId) || !sessions.has(sessionId)) {
+      if (closingSessions.has(sessionId) || session.terminal) {
+        throw new Error('Local file session closed during opening');
+      }
+
+      await launch(applicationPath, localPath);
+      if (closingSessions.has(sessionId) || session.terminal || !sessions.has(sessionId)) {
         throw new Error('Local file session closed during opening');
       }
     } catch (error) {
