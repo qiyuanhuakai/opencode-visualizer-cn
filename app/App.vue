@@ -219,6 +219,7 @@
               @minimize="handleFloatingWindowMinimize(entry.key)"
               @close="handleFloatingWindowClose(entry.key)"
               @edit="handleFloatingWindowEdit(entry.key)"
+              @open-local="handleFloatingWindowOpenLocal(entry.key)"
               @open="handleFloatingWindowOpen(entry.key)"
             />
           </TransitionGroup>
@@ -738,6 +739,15 @@ import {
   type DeletedSandboxStore,
 } from './utils/deletedSandboxes';
 import { shouldSkipAutoOpenWebTool } from './utils/codexToolWindows';
+import {
+  persistExternalFileChange,
+  type ExternalFileSyncTarget,
+} from './utils/externalFileSync';
+import {
+  captureTrackedLocalFileChange,
+  closeTrackedLocalFileSession,
+} from './utils/localFileSessionTracking';
+import { createKeyedTaskQueue } from './utils/keyedTaskQueue';
 
 const { t } = useI18n();
 
@@ -758,6 +768,7 @@ const {
   appFontSizePx,
   messageFontSizePx,
   uiFontSizePx,
+  localApplicationPath,
 } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
@@ -778,6 +789,15 @@ const SHELL_LINGER_MS = 1000;
 const editingFileDrafts = reactive<Record<string, string>>({});
 const editingFileBaseContent = reactive<Record<string, string>>({});
 const editingFileSaving = reactive<Record<string, boolean>>({});
+type LocalApplicationEditTarget = ExternalFileSyncTarget & {
+  key: string;
+  directory: string;
+  path: string;
+  absolutePath: string;
+  backendIdentity: string;
+};
+const localApplicationEditTargets = new Map<string, LocalApplicationEditTarget>();
+const fileWriteQueue = createKeyedTaskQueue();
 const bridgeFsWritable = ref(false);
 const COMMIT_SNAPSHOT_SCRIPT = [
   'stty -opost -echo 2>/dev/null',
@@ -2489,6 +2509,7 @@ const codexQuestionDialogIds = ref<Set<string>>(new Set());
 const codexDynamicQuestionDialogIds = ref<Set<string>>(new Set());
 
 watch(activeBackendKind, () => {
+  void closeAllLocalApplicationSessions();
   promptDialogRef.value?.close();
   promptResolve?.(null);
   promptResolve = null;
@@ -5475,14 +5496,13 @@ function updateFileViewerEditProps(key: string, extraProps: Record<string, unkno
   });
 }
 
-function canCurrentBackendEditInVis() {
-  if (!editInVis.value) return false;
+function canCurrentBackendWriteFiles() {
   if (typeof backend().writeFileContent === 'function') return true;
   return bridgeFsWritable.value;
 }
 
 function refreshAllFileViewerEditCapabilities() {
-  const canEdit = canCurrentBackendEditInVis();
+  const canEdit = canCurrentBackendWriteFiles();
   for (const entry of fw.entries.value) {
     if (!entry.key.startsWith('file-viewer:')) continue;
     fw.updateOptions(entry.key, {
@@ -5596,6 +5616,158 @@ function handleFloatingWindowEdit(key: string) {
   updateFileViewerEditProps(key);
 }
 
+function currentBackendIdentity() {
+  switch (activeBackendKind.value) {
+    case 'codex':
+      return `codex:${credentials.codexBridgeUrl.value}`;
+    case 'acp':
+      return `acp:${credentials.acpBridgeUrl.value}:${credentials.acpAgentId.value}`;
+    case 'opencode':
+      return `opencode:${credentials.url.value}`;
+  }
+}
+
+async function handleFloatingWindowOpenLocal(key: string) {
+  const localFile = window.electronAPI?.localFile;
+  const entry = fw.get(key);
+  const applicationPath = localApplicationPath.value.trim();
+  if (!localFile || !entry || !applicationPath || !key.startsWith('file-viewer:')) return;
+  const content = typeof entry.props?.fileContent === 'string' ? entry.props.fileContent : null;
+  const directory = typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
+  const filePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
+  const absolutePath = typeof entry.props?.absolutePath === 'string' ? entry.props.absolutePath : '';
+  if (content === null || !directory || !filePath || !absolutePath) return;
+
+  await closeLocalApplicationSessionsForKey(key);
+  const sessionId = crypto.randomUUID();
+  localApplicationEditTargets.set(sessionId, {
+    key,
+    directory,
+    path: filePath,
+    absolutePath,
+    baseContent: content,
+    backendIdentity: currentBackendIdentity(),
+  });
+  try {
+    await localFile.open({
+      sessionId,
+      fileName: filePath.split(/[\\/]/).pop() || 'untitled.txt',
+      content,
+    });
+    setSendStatusText(t('floatingWindow.localApplicationOpened'));
+  } catch (error) {
+    localApplicationEditTargets.delete(sessionId);
+    setSendStatusKey('app.error.fileLoadFailed', { message: toErrorMessage(error) });
+  }
+}
+
+async function closeLocalApplicationSession(sessionId: string) {
+  const localFile = window.electronAPI?.localFile;
+  if (!localFile) return;
+  try {
+    await closeTrackedLocalFileSession(
+      localApplicationEditTargets,
+      sessionId,
+      (currentSessionId) => localFile.close(currentSessionId),
+    );
+  } catch (error) {
+    log('Local application session cleanup failed', error);
+  }
+}
+
+async function closeLocalApplicationSessionsForKey(key: string) {
+  const sessionIds = Array.from(localApplicationEditTargets.entries())
+    .filter(([, target]) => target.key === key)
+    .map(([sessionId]) => sessionId);
+  await Promise.all(sessionIds.map(closeLocalApplicationSession));
+}
+
+async function closeAllLocalApplicationSessions() {
+  await Promise.all(Array.from(localApplicationEditTargets.keys(), closeLocalApplicationSession));
+}
+
+function handleLocalApplicationError(error: { sessionId: string; message: string; closed?: boolean }) {
+  if (!localApplicationEditTargets.has(error.sessionId)) return;
+  if (error.closed) localApplicationEditTargets.delete(error.sessionId);
+  setSendStatusKey('app.error.fileLoadFailed', { message: error.message });
+}
+
+async function enqueueFileWrite<T>(
+  backendIdentity: string,
+  absolutePath: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  const queueKey = `${backendIdentity}\u0000${absolutePath}`;
+  return fileWriteQueue.run(queueKey, write);
+}
+
+async function syncLocalApplicationChange(
+  change: { sessionId: string; content: string },
+  target: LocalApplicationEditTarget,
+) {
+  if (target.backendIdentity !== currentBackendIdentity()) {
+    setSendStatusText(t('floatingWindow.localApplicationConflict'));
+    return;
+  }
+
+  try {
+    const result = await persistExternalFileChange(target, change.content, {
+      async readLatest() {
+        const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+        const latest = (await readFileContent({
+          directory: target.directory,
+          path: target.path,
+        })) as FileContentResponse;
+        if (latest?.type === 'binary' || latest?.encoding === 'base64') {
+          throw new Error('The backend file is no longer text.');
+        }
+        return typeof latest?.content === 'string' ? latest.content : '';
+      },
+      async write(content) {
+        if (target.backendIdentity !== currentBackendIdentity()) {
+          throw new Error('The active backend changed while synchronizing the local edit.');
+        }
+        await writeFileForVisEdit({
+          directory: target.directory,
+          path: target.path,
+          absolutePath: target.absolutePath,
+          content,
+        });
+      },
+      async onPersisted() {
+        await refreshOpenFileViewersForPath(target.absolutePath);
+        await refreshOpenGitDiffWindowsForPath(target.absolutePath);
+        feed({ file: target.absolutePath, event: 'change' });
+      },
+    });
+    if (result === 'conflict') {
+      setSendStatusText(t('floatingWindow.localApplicationConflict'));
+    } else if (result === 'saved-refresh-failed') {
+      setSendStatusText(t('floatingWindow.localApplicationSavedRefreshFailed'));
+    } else if (result === 'saved') {
+      setSendStatusText(`${t('floatingWindow.openInLocalApplication')} · ${t('viewers.content.save')}`);
+    }
+  } catch (error) {
+    setSendStatusKey('app.error.fileLoadFailed', { message: toErrorMessage(error) });
+  }
+}
+
+function handleLocalApplicationChange(change: { sessionId: string; content: string }) {
+  const captured = captureTrackedLocalFileChange(
+    localApplicationEditTargets,
+    change.sessionId,
+    change.content,
+  );
+  if (!captured) return;
+  const { target } = captured;
+  void enqueueFileWrite(target.backendIdentity, target.absolutePath, () =>
+    syncLocalApplicationChange(
+      { sessionId: change.sessionId, content: captured.content },
+      target,
+    ),
+  );
+}
+
 function cancelFileViewerEdit(key: string) {
   clearFileViewerEditState(key);
   updateFileViewerEditProps(key);
@@ -5615,19 +5787,25 @@ async function saveFileViewerEdit(key: string, content: string) {
   try {
     editingFileSaving[key] = true;
     updateFileViewerEditProps(key, { editableContent: content });
-    const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
-    const latest = (await readFileContent({
-      directory: fileDirectory,
-      path: filePath,
-    })) as FileContentResponse;
-    const latestContent = typeof latest?.content === 'string' ? latest.content : '';
-    if (latestContent !== (editingFileBaseContent[key] ?? '')) {
+    const backendIdentity = currentBackendIdentity();
+    const saved = await enqueueFileWrite(backendIdentity, absolutePath, async () => {
+      if (backendIdentity !== currentBackendIdentity()) return false;
+      const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
+      const latest = (await readFileContent({
+        directory: fileDirectory,
+        path: filePath,
+      })) as FileContentResponse;
+      const latestContent = typeof latest?.content === 'string' ? latest.content : '';
+      if (latestContent !== (editingFileBaseContent[key] ?? '')) return false;
+      await writeFileForVisEdit({ directory: fileDirectory, path: filePath, absolutePath, content });
+      return true;
+    });
+    if (!saved) {
       editingFileSaving[key] = false;
       updateFileViewerEditProps(key);
       setSendStatusText(t('floatingWindow.editConflict'));
       return;
     }
-    await writeFileForVisEdit({ directory: fileDirectory, path: filePath, absolutePath, content });
     editingFileDrafts[key] = content;
     editingFileBaseContent[key] = content;
     clearFileViewerEditState(key);
@@ -6052,12 +6230,14 @@ function handleFloatingWindowClose(key: string) {
       void showConfirm(t('floatingWindow.confirmDiscardEdit')).then((shouldDiscard) => {
         if (!shouldDiscard) return;
         clearFileViewerEditState(key);
+        void closeLocalApplicationSessionsForKey(key);
         void fw.close(key);
       });
       return;
     }
   }
   clearFileViewerEditState(key);
+  void closeLocalApplicationSessionsForKey(key);
   void fw.close(key);
 }
 
@@ -6699,6 +6879,9 @@ const DOUBLE_ESC_THRESHOLD = 500;
 const DOUBLE_CTRL_G_THRESHOLD = 500;
 
 function handleGlobalKeydown(event: KeyboardEvent) {
+  const isCodeMirrorEvent =
+    event.target instanceof Element && event.target.closest('.cm-editor') !== null;
+  if (isCodeMirrorEvent) return;
   // Ctrl-A: select all content in focused div (floating window body)
   if (
     event.ctrlKey &&
@@ -6765,6 +6948,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
     event.altKey &&
     !event.ctrlKey &&
     !event.metaKey &&
+    !isCodeMirrorEvent &&
     (event.key === 'ArrowLeft' || event.key === 'ArrowRight')
   ) {
     event.preventDefault();
@@ -6777,6 +6961,7 @@ function handleGlobalKeydown(event: KeyboardEvent) {
     event.altKey &&
     !event.ctrlKey &&
     !event.metaKey &&
+    !isCodeMirrorEvent &&
     (event.key === 'ArrowUp' || event.key === 'ArrowDown')
   ) {
     event.preventDefault();
@@ -8734,7 +8919,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         ...entry.props,
         path,
         backendKind: activeBackendKind.value,
-        canEditInVis: canCurrentBackendEditInVis(),
+        canEditInVis: canCurrentBackendWriteFiles(),
         rawHtml: t('app.read.noActiveDirectorySelected'),
         lines,
         gutterMode: 'none',
@@ -8767,7 +8952,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
             ...entry.props,
             path,
             backendKind: activeBackendKind.value,
-            canEditInVis: canCurrentBackendEditInVis(),
+            canEditInVis: canCurrentBackendWriteFiles(),
             fileDirectory: directory,
             filePath,
             rawHtml: t('app.read.binaryContentNotIncluded'),
@@ -8812,7 +8997,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
           ...entry.props,
           path,
           backendKind: activeBackendKind.value,
-          canEditInVis: canCurrentBackendEditInVis(),
+          canEditInVis: canCurrentBackendWriteFiles(),
           fileDirectory: directory,
           filePath,
           rawHtml: undefined,
@@ -8844,7 +9029,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         ...entry.props,
         path,
         backendKind: activeBackendKind.value,
-        canEditInVis: canCurrentBackendEditInVis(),
+        canEditInVis: canCurrentBackendWriteFiles(),
         fileDirectory: directory,
         filePath,
         rawHtml: undefined,
@@ -8864,7 +9049,7 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         ...entry.props,
         path,
         backendKind: activeBackendKind.value,
-        canEditInVis: canCurrentBackendEditInVis(),
+        canEditInVis: canCurrentBackendWriteFiles(),
         fileDirectory: directory,
         filePath,
         rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
@@ -8945,7 +9130,7 @@ async function openFileViewer(path: string, lines?: string) {
       path,
       absolutePath,
       backendKind: activeBackendKind.value,
-      canEditInVis: canCurrentBackendEditInVis(),
+      canEditInVis: canCurrentBackendWriteFiles(),
       fileDirectory: requestPath.directory,
       filePath: requestPath.path,
       lang,
@@ -9180,6 +9365,8 @@ function handleLogout() {
 onMounted(() => {
   ensureBrowserNotificationPermission();
   window.addEventListener('keydown', handleGlobalKeydown);
+  window.electronAPI?.localFile?.onChanged(handleLocalApplicationChange);
+  window.electronAPI?.localFile?.onError(handleLocalApplicationError);
   handleWindowResize();
   if (typeof document !== 'undefined' && 'fonts' in document) {
     void document.fonts.ready.then(() => {
@@ -9393,6 +9580,9 @@ onBeforeUnmount(() => {
   acpMessageBridge.stop();
   disconnectAcpBackend();
   window.removeEventListener('keydown', handleGlobalKeydown);
+  window.electronAPI?.localFile?.offChanged(handleLocalApplicationChange);
+  window.electronAPI?.localFile?.offError(handleLocalApplicationError);
+  void closeAllLocalApplicationSessions();
   window.removeEventListener('pointermove', handlePointerMove);
   window.removeEventListener('pointerup', handlePointerUp);
   window.removeEventListener('resize', handleWindowResize);

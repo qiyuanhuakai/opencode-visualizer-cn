@@ -784,6 +784,23 @@ const messages: LocaleMessages = {
       description:
         'Ŝalti aŭtomatan liniorompigon en flosantaj fenestroj kun lininumeroj (dosiera antaŭrigardo, redakto/skribo/ fliko).',
     },
+    editor: {
+      label: 'Redaktilo', description: 'Agordi la enkonstruitan redaktilon kaj klavarajn fulmoklavojn.', pageTitle: 'Agordoj de redaktilo',
+      pageDescription: 'Ŝanĝoj tuj aplikiĝas al ĉiuj malfermitaj dosierredaktiloj.',
+      fontSize: { label: 'Tipargrando de redaktilo', description: 'Tipargrando de CodeMirror en rastrumeroj.', inherited: 'Heredi', inheritAction: 'Heredi kodtiparon' },
+      tabSize: { label: 'Deŝova larĝo', description: 'Nombro de spacetoj por ĉiu deŝova nivelo.' },
+      editInVis: { label: 'Redakti en Vis', description: 'Ebligu enan dosier-redaktadon tra la loka vis_bridge.' },
+      shortcuts: {
+        label: 'Klavaraj fulmoklavoj', description: 'La ĉefa modifilo aperas kiel Ctrl en Windows/Linux aŭ ⌘ en macOS. Alklaku por registri; Esc nuligas kaj Backspace forigas.', reset: 'Restarigi apriorajn', recording: 'Premu fulmoklavon…', unassigned: 'Neagordita', recordAria: 'Registri fulmoklavon por {action}', invalidError: 'Nevalida klavnomo', duplicateError: 'Fulmoklavo jam estas uzata',
+        save: 'Konservi', undo: 'Malfari', redo: 'Refari', find: 'Serĉi', findNext: 'Serĉi sekvan', findPrevious: 'Serĉi antaŭan', goToLine: 'Iri al linio', selectLine: 'Elekti linion', autocomplete: 'Aŭtomata kompletigo',
+        indent: 'Deŝovi', outdent: 'Maldeŝovi', deleteLine: 'Forigi linion', moveLineUp: 'Movi linion supren', moveLineDown: 'Movi linion malsupren', duplicateLineUp: 'Duobligi supren', duplicateLineDown: 'Duobligi malsupren',
+        toggleLineComment: 'Baskuligi linikomenton', toggleBlockComment: 'Baskuligi blokkomenton', foldCode: 'Faldi kodon', unfoldCode: 'Malfaldi kodon',
+      },
+      localApplication: {
+        label: 'Loka aplikaĵo', description: 'Malfermi lokan provizoran kopion kaj sinkronigi ĉiun konservon al la aktiva servilo.',
+        placeholder: '/vojo/al/aplikaĵo', browse: 'Elekti', clear: 'Forigi',
+      },
+    },
     experimentalFeatures: {
       label: 'Eksperimentaj trajtoj',
       description: 'Ebligi eksperimentajn trajtojn kiuj ankoraŭ estas en evoluo.',
@@ -801,10 +818,6 @@ const messages: LocaleMessages = {
       showCodexInStatusMonitor: {
         label: 'Montri Codex en stato-monitoro',
         description: 'Montri apartan Codex-langeton en la stato-monitoro.',
-      },
-      editInVis: {
-        label: 'Redakti en Vis',
-        description: 'Ebligu eksperimentan enan dosier-redaktadon tra la loka vis_bridge.',
       },
     },
   },
@@ -886,6 +899,11 @@ const messages: LocaleMessages = {
     editConflict:
       'La dosiero ŝanĝiĝis sur disko dum vi redaktis. Reŝargu antaŭ ol konservi denove.',
     openInEditor: 'Malfermi en redaktilo',
+    openInLocalApplication: 'Malfermi per loka aplikaĵo',
+    localApplicationOpened: 'Malfermita per loka aplikaĵo',
+    localApplicationConflict: 'La servila dosiero ŝanĝiĝis. La loka konservado ne estis reskribita.',
+    localApplicationSavedRefreshFailed:
+      'La dosiero estas konservita, sed la vido ne refreŝiĝis. La sekva konservado reprovos.',
     previousMatch: 'Antaŭa kongruo',
     nextMatch: 'Sekva kongruo',
     closeSearch: 'Fermi serĉon',

@@ -28,7 +28,7 @@
           <Icon icon="lucide:x" :width="14" :height="14" />
         </button>
       </header>
-      <div class="modal-body">
+      <div ref="modalBody" class="modal-body">
         <template v-if="activePage === 'root'">
           <div class="setting-row">
             <div class="setting-info">
@@ -125,6 +125,19 @@
               <span class="toggle-track" />
             </label>
           </div>
+
+          <button
+            type="button"
+            class="setting-row setting-link-row"
+            :aria-label="$t('settings.editor.label')"
+            @click="activePage = 'editor'"
+          >
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.editor.label') }}</div>
+              <div class="setting-description">{{ $t('settings.editor.description') }}</div>
+            </div>
+            <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
+          </button>
 
           <button
             type="button"
@@ -253,6 +266,104 @@
 
         </template>
 
+        <template v-else-if="activePage === 'editor'">
+          <div class="setting-page-description">{{ $t('settings.editor.pageDescription') }}</div>
+
+          <label class="setting-row setting-row-stack">
+            <span class="setting-info">
+              <span class="setting-label">{{ $t('settings.editor.tabSize.label') }}</span>
+              <span class="setting-description">{{ $t('settings.editor.tabSize.description') }}</span>
+            </span>
+            <input
+              v-model.number="editorTabSize"
+              type="number"
+              class="number-input"
+              :min="minEditorTabSize"
+              :max="maxEditorTabSize"
+              step="1"
+              @blur="clampEditorTabSize"
+              @keydown.enter="clampEditorTabSize"
+            />
+          </label>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.editor.editInVis.label') }}</div>
+              <div class="setting-description">{{ $t('settings.editor.editInVis.description') }}</div>
+            </div>
+            <label class="toggle-switch">
+              <input v-model="editInVis" type="checkbox" class="toggle-input" />
+              <span class="toggle-track" />
+            </label>
+          </div>
+
+          <div class="setting-row setting-row-stack editor-shortcut-section">
+            <div class="editor-shortcut-heading">
+              <div class="setting-label">{{ $t('settings.editor.shortcuts.label') }}</div>
+              <button type="button" class="font-system-button" @click="resetEditorShortcuts">
+                {{ $t('settings.editor.shortcuts.reset') }}
+              </button>
+            </div>
+            <div class="setting-description editor-shortcut-description">
+              {{ $t('settings.editor.shortcuts.description') }}
+            </div>
+            <div class="editor-shortcut-grid">
+              <div v-for="field in editorShortcutFields" :key="field.key" class="editor-shortcut-field">
+                <span class="editor-shortcut-label">{{ field.label }}</span>
+                <button
+                  type="button"
+                  class="editor-shortcut-recorder"
+                  :class="{
+                    'is-recording': recordingShortcut === field.key,
+                    'is-invalid': editorShortcutErrors[field.key],
+                  }"
+                  :aria-label="$t('settings.editor.shortcuts.recordAria', { action: field.label })"
+                  :aria-pressed="recordingShortcut === field.key"
+                  :aria-invalid="Boolean(editorShortcutErrors[field.key])"
+                  @click="beginShortcutRecording(field.key)"
+                  @keydown.capture="recordShortcut(field.key, $event)"
+                  @blur="cancelShortcutRecording(field.key)"
+                >
+                  <kbd>{{ shortcutButtonLabel(field.key) }}</kbd>
+                </button>
+                <span v-if="editorShortcutErrors[field.key]" class="editor-shortcut-error">
+                  {{ $t(`settings.editor.shortcuts.${editorShortcutErrors[field.key]}Error`) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="isElectron" class="setting-row setting-row-stack">
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.editor.localApplication.label') }}</div>
+              <div class="setting-description">{{ $t('settings.editor.localApplication.description') }}</div>
+            </div>
+            <div class="local-application-controls">
+              <input
+                :value="localApplicationPath"
+                type="text"
+                class="font-stack-input"
+                readonly
+                spellcheck="false"
+                autocomplete="off"
+                :placeholder="$t('settings.editor.localApplication.placeholder')"
+              />
+              <button type="button" class="font-system-button" @click="browseLocalApplication">
+                {{ $t('settings.editor.localApplication.browse') }}
+              </button>
+              <button
+                v-if="localApplicationPath"
+                type="button"
+                class="font-system-button"
+                @click="clearLocalApplication"
+              >
+                {{ $t('settings.editor.localApplication.clear') }}
+              </button>
+            </div>
+            <div v-if="localApplicationError" class="theme-import-error">{{ localApplicationError }}</div>
+          </div>
+        </template>
+
         <template v-else-if="activePage === 'experimental'">
           <div class="setting-page-description">{{ $t('settings.experimentalFeatures.pageDescription') }}</div>
 
@@ -289,16 +400,6 @@
             </label>
           </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.experimentalFeatures.editInVis.label') }}</div>
-              <div class="setting-description">{{ $t('settings.experimentalFeatures.editInVis.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="editInVis" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
         </template>
 
         <template v-else>
@@ -472,6 +573,28 @@
                 </div>
                 <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.uiFontSizePx.description') }}</div>
               </div>
+              <div class="font-setting-section font-setting-suboption">
+                <label class="font-setting-section-label">{{ $t('settings.editor.fontSize.label') }}</label>
+                <div class="editor-number-control">
+                  <input
+                    v-model.number="editorFontSizePx"
+                    type="number"
+                    class="number-input"
+                    :min="minEditorFontSizePx"
+                    :max="maxEditorFontSizePx"
+                    :placeholder="$t('settings.editor.fontSize.inherited')"
+                    step="1"
+                    @blur="clampEditorFontSize"
+                    @keydown.enter="clampEditorFontSize"
+                  />
+                  <button type="button" class="font-system-button" @click="inheritEditorFontSize">
+                    {{ $t('settings.editor.fontSize.inheritAction') }}
+                  </button>
+                </div>
+                <div class="setting-description" style="margin-top: 2px;">
+                  {{ $t('settings.editor.fontSize.description') }}
+                </div>
+              </div>
               <div class="font-setting-section">
                 <div :id="appPresetLabelId" class="font-setting-section-label">{{ $t('settings.fontPresetsLabel') }}</div>
                 <div class="font-preset-row" role="group" :aria-labelledby="appPresetLabelId">
@@ -567,13 +690,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, watchEffect } from 'vue';
+import { computed, nextTick, onMounted, ref, watch, watchEffect } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useSettings } from '../composables/useSettings';
 import { useI18n } from 'vue-i18n';
 import { getLocale, setLocale } from '../i18n';
 import type { Locale } from '../i18n/types';
 import { downloadJsonFile } from '../utils/fileExport';
+import {
+  formatShortcutForDisplay,
+  shortcutFromKeyboardEvent,
+  validateEditorShortcutMap,
+} from '../utils/editorShortcuts';
 import {
   inspectFontStack,
   loadLocalFontFamilies,
@@ -608,7 +736,7 @@ type FontPreset = {
   value: string;
 };
 
-type SettingsPage = 'root' | 'fonts' | 'theme' | 'experimental';
+type SettingsPage = 'root' | 'editor' | 'fonts' | 'theme' | 'experimental';
 type ThemePresetCard = {
   id: string;
   label: string;
@@ -630,6 +758,11 @@ defineEmits<{
 const { t } = useI18n();
 const dialogRef = ref<HTMLDialogElement | null>(null);
 const activePage = ref<SettingsPage>('root');
+const modalBody = ref<HTMLElement | null>(null);
+watch(activePage, async () => {
+  await nextTick();
+  if (modalBody.value) modalBody.value.scrollTop = 0;
+});
 const terminalPresetLabelId = 'settings-terminal-font-presets';
 const terminalInputLabelId = 'settings-terminal-font-input-label';
 const terminalTextareaId = 'settings-terminal-font-input';
@@ -648,6 +781,8 @@ const isTerminalFontDiscoveryOpen = ref(false);
 const isAppFontDiscoveryOpen = ref(false);
 const themeImportError = ref('');
 const isImportingTheme = ref(false);
+const isElectron = computed(() => Boolean(window.electronAPI?.localFile));
+const localApplicationError = ref('');
 const {
   enterToSend,
   showMinimizeButtons,
@@ -679,7 +814,41 @@ const {
   minOpenInEditorMaxSizeMb,
   maxOpenInEditorMaxSizeMb,
   floatingPreviewWordWrap,
+  editorFontSizePx,
+  editorTabSize,
+  editorShortcuts,
+  localApplicationPath,
+  defaultEditorShortcuts,
+  minEditorFontSizePx,
+  maxEditorFontSizePx,
+  minEditorTabSize,
+  maxEditorTabSize,
 } = useSettings();
+type EditorShortcutKey = keyof typeof defaultEditorShortcuts;
+const editorShortcutFields = computed<Array<{ key: EditorShortcutKey; label: string }>>(() => [
+  { key: 'save', label: t('settings.editor.shortcuts.save') },
+  { key: 'undo', label: t('settings.editor.shortcuts.undo') },
+  { key: 'redo', label: t('settings.editor.shortcuts.redo') },
+  { key: 'find', label: t('settings.editor.shortcuts.find') },
+  { key: 'findNext', label: t('settings.editor.shortcuts.findNext') },
+  { key: 'findPrevious', label: t('settings.editor.shortcuts.findPrevious') },
+  { key: 'goToLine', label: t('settings.editor.shortcuts.goToLine') },
+  { key: 'selectLine', label: t('settings.editor.shortcuts.selectLine') },
+  { key: 'autocomplete', label: t('settings.editor.shortcuts.autocomplete') },
+  { key: 'indent', label: t('settings.editor.shortcuts.indent') },
+  { key: 'outdent', label: t('settings.editor.shortcuts.outdent') },
+  { key: 'deleteLine', label: t('settings.editor.shortcuts.deleteLine') },
+  { key: 'moveLineUp', label: t('settings.editor.shortcuts.moveLineUp') },
+  { key: 'moveLineDown', label: t('settings.editor.shortcuts.moveLineDown') },
+  { key: 'duplicateLineUp', label: t('settings.editor.shortcuts.duplicateLineUp') },
+  { key: 'duplicateLineDown', label: t('settings.editor.shortcuts.duplicateLineDown') },
+  { key: 'toggleLineComment', label: t('settings.editor.shortcuts.toggleLineComment') },
+  { key: 'toggleBlockComment', label: t('settings.editor.shortcuts.toggleBlockComment') },
+  { key: 'foldCode', label: t('settings.editor.shortcuts.foldCode') },
+  { key: 'unfoldCode', label: t('settings.editor.shortcuts.unfoldCode') },
+]);
+const editorShortcutErrors = computed(() => validateEditorShortcutMap(editorShortcuts.value));
+const recordingShortcut = ref<EditorShortcutKey | null>(null);
 const activeThemeStorage = themeStorage;
 const selectedPreset = ref<string>('default');
 let isSyncingThemeEditorState = false;
@@ -945,8 +1114,90 @@ function clampOpenInEditorMaxSizeMb() {
   );
 }
 
+function clampEditorFontSize() {
+  if (editorFontSizePx.value === null) return;
+  editorFontSizePx.value = Math.max(
+    minEditorFontSizePx,
+    Math.min(maxEditorFontSizePx, editorFontSizePx.value),
+  );
+}
 
+function inheritEditorFontSize() {
+  editorFontSizePx.value = null;
+}
 
+function clampEditorTabSize() {
+  editorTabSize.value = Math.max(
+    minEditorTabSize,
+    Math.min(maxEditorTabSize, editorTabSize.value),
+  );
+}
+
+function resetEditorShortcuts() {
+  recordingShortcut.value = null;
+  editorShortcuts.value = { ...defaultEditorShortcuts };
+}
+
+function beginShortcutRecording(key: EditorShortcutKey) {
+  recordingShortcut.value = recordingShortcut.value === key ? null : key;
+}
+
+function cancelShortcutRecording(key: EditorShortcutKey) {
+  if (recordingShortcut.value === key) recordingShortcut.value = null;
+}
+
+function recordShortcut(key: EditorShortcutKey, event: KeyboardEvent) {
+  if (recordingShortcut.value !== key) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.key === 'Escape') {
+    recordingShortcut.value = null;
+    return;
+  }
+  if (
+    event.key === 'Backspace' &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey &&
+    !event.shiftKey
+  ) {
+    editorShortcuts.value = { ...editorShortcuts.value, [key]: '' };
+    recordingShortcut.value = null;
+    return;
+  }
+  const shortcut = shortcutFromKeyboardEvent(event);
+  if (!shortcut) return;
+  editorShortcuts.value = { ...editorShortcuts.value, [key]: shortcut };
+  recordingShortcut.value = null;
+}
+
+function shortcutButtonLabel(key: EditorShortcutKey) {
+  if (recordingShortcut.value === key) return t('settings.editor.shortcuts.recording');
+  const shortcut = editorShortcuts.value[key];
+  return shortcut
+    ? formatShortcutForDisplay(shortcut)
+    : t('settings.editor.shortcuts.unassigned');
+}
+
+async function browseLocalApplication() {
+  localApplicationError.value = '';
+  try {
+    const selectedPath = await window.electronAPI?.localFile?.selectApplication();
+    if (selectedPath) localApplicationPath.value = selectedPath;
+  } catch (error) {
+    localApplicationError.value = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function clearLocalApplication() {
+  localApplicationError.value = '';
+  try {
+    await window.electronAPI?.localFile?.clearApplication();
+    localApplicationPath.value = '';
+  } catch (error) {
+    localApplicationError.value = error instanceof Error ? error.message : String(error);
+  }
+}
 async function loadLocalFonts() {
   if (!supportsLocalFontsApi || isLoadingLocalFonts.value) return;
   isLoadingLocalFonts.value = true;
@@ -985,6 +1236,7 @@ const pageTitle = computed(() => {
   switch (activePage.value) {
     case 'root': return t('settings.title');
     case 'fonts': return t('settings.fontsPageTitle');
+    case 'editor': return t('settings.editor.pageTitle');
     case 'theme': return t('settings.themePageTitle');
     case 'experimental': return t('settings.experimentalFeatures.pageTitle');
     default: return t('settings.title');
@@ -1094,6 +1346,129 @@ watch(
   gap: 12px;
   overflow-y: auto;
   padding-right: 4px;
+}
+
+.editor-number-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.editor-number-control .number-input {
+  min-width: 0;
+}
+
+.editor-shortcut-heading,
+.local-application-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.editor-shortcut-heading {
+  width: 100%;
+}
+
+.editor-shortcut-section {
+  flex-direction: column;
+}
+
+.editor-shortcut-description {
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+}
+
+.editor-shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+  width: 100%;
+}
+
+.editor-shortcut-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px 4px;
+  min-width: 0;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 11px;
+}
+
+.editor-shortcut-label {
+  line-height: 1.25;
+}
+
+.editor-shortcut-recorder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 140px;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border-radius: 6px;
+  background: var(--theme-modal-control-bg, var(--theme-surface-panel, #0f172a));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  cursor: pointer;
+  font-family: var(--app-monospace-font-family, ui-monospace, monospace);
+  font-size: 10.5px;
+}
+
+.editor-shortcut-recorder:hover,
+.editor-shortcut-recorder:focus-visible,
+.editor-shortcut-recorder.is-recording {
+  border-color: var(--theme-accent, var(--theme-text-accent, #60a5fa));
+  outline: none;
+}
+
+.editor-shortcut-recorder.is-recording {
+  background: color-mix(in srgb, var(--theme-accent, #60a5fa) 12%, transparent);
+}
+
+.editor-shortcut-recorder.is-invalid {
+  border-color: var(--theme-status-error, #f87171);
+}
+
+.editor-shortcut-recorder kbd {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.local-application-controls .font-stack-input {
+  min-width: 0;
+  width: 100%;
+}
+
+.local-application-controls .font-system-button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.editor-shortcut-error {
+  grid-column: 1 / -1;
+  color: var(--theme-status-error, #f87171);
+  font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  .editor-shortcut-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .editor-shortcut-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .local-application-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .setting-row {
@@ -1382,6 +1757,12 @@ watch(
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.font-setting-suboption {
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.35)));
 }
 
 .font-setting-section-label {

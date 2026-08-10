@@ -1,4 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const localFileListeners = new Set();
+const localFileErrorListeners = new Set();
 
 ipcRenderer.on('persistent-storage-changed', (_event, change) => {
   if (!change || typeof change.key !== 'string') {
@@ -11,6 +13,16 @@ ipcRenderer.on('persistent-storage-changed', (_event, change) => {
     newValue: typeof change.newValue === 'string' ? change.newValue : null,
     url: window.location.href,
   }));
+});
+
+ipcRenderer.on('local-file-changed', (_event, change) => {
+  if (!change || typeof change.sessionId !== 'string' || typeof change.content !== 'string') return;
+  for (const listener of localFileListeners) listener(change);
+});
+
+ipcRenderer.on('local-file-error', (_event, error) => {
+  if (!error || typeof error.sessionId !== 'string' || typeof error.message !== 'string') return;
+  for (const listener of localFileErrorListeners) listener(error);
 });
 
 /**
@@ -42,10 +54,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
     writeText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
   },
 
+  localFile: {
+    selectApplication: () => ipcRenderer.invoke('local-file-select-application'),
+    clearApplication: () => ipcRenderer.invoke('local-file-clear-application'),
+    open: (payload) => ipcRenderer.invoke('local-file-open', payload),
+    close: (sessionId) => ipcRenderer.invoke('local-file-close', sessionId),
+    onChanged: (listener) => {
+      if (typeof listener === 'function') localFileListeners.add(listener);
+    },
+    offChanged: (listener) => {
+      localFileListeners.delete(listener);
+    },
+    onError: (listener) => {
+      if (typeof listener === 'function') localFileErrorListeners.add(listener);
+    },
+    offError: (listener) => {
+      localFileErrorListeners.delete(listener);
+    },
+  },
+
   persistentStorage: {
     getItem: (key) => ipcRenderer.sendSync('persistent-storage-get', key),
     setItem: (key, value) => ipcRenderer.sendSync('persistent-storage-set', { key, value }),
     removeItem: (key) => ipcRenderer.sendSync('persistent-storage-remove', key),
   },
 });
-

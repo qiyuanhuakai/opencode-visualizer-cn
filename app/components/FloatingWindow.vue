@@ -14,7 +14,14 @@ import { useSettings } from '../composables/useSettings';
 import { resolveFloatingWindowThemeType } from '../utils/floatingWindowTheme';
 import { Icon } from '@iconify/vue';
 
-const { showMinimizeButtons, showOpenInEditorButton, openInEditorMaxSizeMb, floatingPreviewWordWrap, editInVis } = useSettings();
+const {
+  showMinimizeButtons,
+  showOpenInEditorButton,
+  openInEditorMaxSizeMb,
+  floatingPreviewWordWrap,
+  editInVis,
+  localApplicationPath,
+} = useSettings();
 
 const { t } = useI18n();
 
@@ -29,6 +36,7 @@ const emit = defineEmits<{
   minimize: [key: string];
   edit: [key: string];
   open: [key: string];
+  openLocal: [key: string];
 }>();
 
 const windowEl = ref<HTMLElement>();
@@ -193,6 +201,28 @@ const canEditInVis = computed(() => {
   if (!props.entry.key.startsWith('file-viewer:')) return false;
   if (props.entry.props?.canEditInVis !== true) return false;
   return props.entry.props?.binaryBase64 == null;
+});
+
+const canOpenInLocalApplication = computed(() => {
+  const fileProps = props.entry.props;
+  if (
+    fileProps?.canEditInVis !== true ||
+    !window.electronAPI?.localFile ||
+    localApplicationPath.value.trim().length === 0
+  ) return false;
+  if (!props.entry.key.startsWith('file-viewer:')) return false;
+  if (
+    fileProps.binaryBase64 != null ||
+    typeof fileProps.fileContent !== 'string' ||
+    typeof fileProps.fileDirectory !== 'string' ||
+    fileProps.fileDirectory.length === 0 ||
+    typeof fileProps.filePath !== 'string' ||
+    fileProps.filePath.length === 0 ||
+    typeof fileProps.absolutePath !== 'string' ||
+    fileProps.absolutePath.length === 0
+  ) return false;
+  const size = typeof fileProps.fileSizeBytes === 'number' ? fileProps.fileSizeBytes : 0;
+  return size <= openInEditorMaxSizeMb.value * 1024 * 1024;
 });
 
 const scrollClass = computed(() => {
@@ -515,6 +545,15 @@ function onResizeEnd(e: PointerEvent) {
     <div class="floating-window-titlebar" @pointerdown="onDragStart">
       <span class="title">{{ entry.title || t('floatingWindow.tool') }}</span>
       <div class="window-actions">
+        <button
+          v-if="canOpenInLocalApplication"
+          class="open-btn"
+          :aria-label="t('floatingWindow.openInLocalApplication')"
+          :title="t('floatingWindow.openInLocalApplication')"
+          @click.stop="emit('openLocal', entry.key)"
+        >
+          <Icon icon="lucide:app-window" :width="14" :height="14" />
+        </button>
         <button
           v-if="canEditInVis"
           class="open-btn"

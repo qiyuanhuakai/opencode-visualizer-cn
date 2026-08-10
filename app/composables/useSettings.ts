@@ -9,6 +9,11 @@ import {
   normalizeStoredExternalThemes,
   type ExternalThemeDefinition,
 } from '../utils/themeRegistry';
+import {
+  DEFAULT_EDITOR_SHORTCUTS,
+  normalizeEditorShortcutMap,
+  type EditorShortcutMap,
+} from '../utils/editorShortcuts';
 
 function isSerializedEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -29,6 +34,11 @@ const MAX_MESSAGE_FONT_SIZE_PX = 20;
 const DEFAULT_UI_FONT_SIZE_PX = 12;
 const MIN_UI_FONT_SIZE_PX = 10;
 const MAX_UI_FONT_SIZE_PX = 16;
+const MIN_EDITOR_FONT_SIZE_PX = 10;
+const MAX_EDITOR_FONT_SIZE_PX = 28;
+const DEFAULT_EDITOR_TAB_SIZE = 2;
+const MIN_EDITOR_TAB_SIZE = 1;
+const MAX_EDITOR_TAB_SIZE = 8;
 const DEFAULT_TERMINAL_FONT_FAMILY =
   "'FiraCode Nerd Font Mono', 'FiraCode Nerd Font Mono Med', 'CaskaydiaCove Nerd Font Mono', 'CaskaydiaCove NFM', 'IosevkaTerm Nerd Font', 'Iosevka Term', 'Iosevka Fixed', 'JetBrains Mono', 'Cascadia Mono', 'SFMono-Regular', 'Menlo', 'Consolas', 'Liberation Mono', monospace";
 const DEFAULT_APP_MONOSPACE_FONT_FAMILY =
@@ -122,6 +132,30 @@ function readUiFontSizePx() {
   return normalizeUiFontSizePx(parsed);
 }
 
+function normalizeEditorFontSizePx(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return Math.max(MIN_EDITOR_FONT_SIZE_PX, Math.min(MAX_EDITOR_FONT_SIZE_PX, Math.round(value)));
+}
+
+function normalizeEditorTabSize(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_EDITOR_TAB_SIZE;
+  return Math.max(MIN_EDITOR_TAB_SIZE, Math.min(MAX_EDITOR_TAB_SIZE, Math.round(value)));
+}
+
+function readEditorFontSizePx() {
+  const raw = storageGet(StorageKeys.settings.editorFontSizePx);
+  return raw === null ? null : normalizeEditorFontSizePx(Number(raw));
+}
+
+function readEditorTabSize() {
+  const raw = storageGet(StorageKeys.settings.editorTabSize);
+  return raw === null ? DEFAULT_EDITOR_TAB_SIZE : normalizeEditorTabSize(Number(raw));
+}
+
+function readEditorShortcuts() {
+  return normalizeEditorShortcutMap(storageGetJSON(StorageKeys.settings.editorShortcuts));
+}
+
 function readThemeStorage(): ThemeStorageV2 | null {
   const current = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
   if (current) {
@@ -178,6 +212,10 @@ const uiFontSizePx = ref(readUiFontSizePx());
 const showOpenInEditorButton = ref(storageGet(StorageKeys.settings.showOpenInEditorButton) !== 'false');
 const openInEditorMaxSizeMb = ref(readOpenInEditorMaxSizeMb());
 const floatingPreviewWordWrap = ref(storageGet(StorageKeys.settings.floatingPreviewWordWrap) === 'true');
+const editorFontSizePx = ref(readEditorFontSizePx());
+const editorTabSize = ref(readEditorTabSize());
+const editorShortcuts = ref<EditorShortcutMap>(readEditorShortcuts());
+const localApplicationPath = ref(storageGet(StorageKeys.settings.localApplicationPath) ?? '');
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
 
@@ -267,6 +305,37 @@ watch(floatingPreviewWordWrap, (value) => {
   storageSet(StorageKeys.settings.floatingPreviewWordWrap, String(value));
 }, syncWatchOptions);
 
+watch(editorFontSizePx, (value) => {
+  if (value === null) {
+    storageRemove(StorageKeys.settings.editorFontSizePx);
+    return;
+  }
+  storageSet(StorageKeys.settings.editorFontSizePx, String(value));
+}, syncWatchOptions);
+
+watch(editorTabSize, (value) => {
+  storageSet(StorageKeys.settings.editorTabSize, String(value));
+}, syncWatchOptions);
+
+watch(editorShortcuts, (value) => {
+  const normalized = normalizeEditorShortcutMap(value);
+  if (!isSerializedEqual(value, normalized)) {
+    editorShortcuts.value = normalized;
+    return;
+  }
+  if (isSerializedEqual(storageGetJSON(StorageKeys.settings.editorShortcuts), normalized)) return;
+  storageSetJSON(StorageKeys.settings.editorShortcuts, normalized);
+}, { deep: true, flush: 'sync' });
+
+watch(localApplicationPath, (value) => {
+  const normalized = value.trim();
+  if (normalized === '') {
+    storageRemove(StorageKeys.settings.localApplicationPath);
+    return;
+  }
+  storageSet(StorageKeys.settings.localApplicationPath, normalized);
+}, syncWatchOptions);
+
 watch(externalThemes, (value) => {
   if (value.length === 0) {
     if (storageGet(StorageKeys.settings.themeRegistry) === null) return;
@@ -343,6 +412,25 @@ if (typeof window !== 'undefined') {
     if (event.key === storageKey(StorageKeys.settings.floatingPreviewWordWrap)) {
       floatingPreviewWordWrap.value = event.newValue === 'true';
     }
+    if (event.key === storageKey(StorageKeys.settings.editorFontSizePx)) {
+      editorFontSizePx.value = event.newValue === null
+        ? null
+        : normalizeEditorFontSizePx(Number(event.newValue));
+    }
+    if (event.key === storageKey(StorageKeys.settings.editorTabSize)) {
+      editorTabSize.value = event.newValue === null
+        ? DEFAULT_EDITOR_TAB_SIZE
+        : normalizeEditorTabSize(Number(event.newValue));
+    }
+    if (event.key === storageKey(StorageKeys.settings.editorShortcuts)) {
+      const nextShortcuts = readEditorShortcuts();
+      if (!isSerializedEqual(editorShortcuts.value, nextShortcuts)) {
+        editorShortcuts.value = nextShortcuts;
+      }
+    }
+    if (event.key === storageKey(StorageKeys.settings.localApplicationPath)) {
+      localApplicationPath.value = event.newValue ?? '';
+    }
     if (event.key === storageKey(StorageKeys.settings.themeTokens)) {
       const nextThemeStorage = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
       if (!isSerializedEqual(themeStorage.value, nextThemeStorage)) {
@@ -376,6 +464,15 @@ export function useSettings() {
     showOpenInEditorButton,
     openInEditorMaxSizeMb,
     floatingPreviewWordWrap,
+    editorFontSizePx,
+    editorTabSize,
+    editorShortcuts,
+    localApplicationPath,
+    defaultEditorShortcuts: DEFAULT_EDITOR_SHORTCUTS,
+    minEditorFontSizePx: MIN_EDITOR_FONT_SIZE_PX,
+    maxEditorFontSizePx: MAX_EDITOR_FONT_SIZE_PX,
+    minEditorTabSize: MIN_EDITOR_TAB_SIZE,
+    maxEditorTabSize: MAX_EDITOR_TAB_SIZE,
     defaultOpenInEditorMaxSizeMb: DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB,
     minOpenInEditorMaxSizeMb: MIN_OPEN_IN_EDITOR_MAX_SIZE_MB,
     maxOpenInEditorMaxSizeMb: MAX_OPEN_IN_EDITOR_MAX_SIZE_MB,

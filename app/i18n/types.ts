@@ -701,6 +701,52 @@ export interface LocaleMessages {
       label: string;
       description: string;
     };
+    editor: {
+      label: string;
+      description: string;
+      pageTitle: string;
+      pageDescription: string;
+      fontSize: { label: string; description: string; inherited: string; inheritAction: string };
+      tabSize: { label: string; description: string };
+      editInVis: { label: string; description: string };
+      shortcuts: {
+        label: string;
+        description: string;
+        reset: string;
+        recording: string;
+        unassigned: string;
+        recordAria: string;
+        invalidError: string;
+        duplicateError: string;
+        save: string;
+        undo: string;
+        redo: string;
+        find: string;
+        findNext: string;
+        findPrevious: string;
+        goToLine: string;
+        selectLine: string;
+        autocomplete: string;
+        indent: string;
+        outdent: string;
+        deleteLine: string;
+        moveLineUp: string;
+        moveLineDown: string;
+        duplicateLineUp: string;
+        duplicateLineDown: string;
+        toggleLineComment: string;
+        toggleBlockComment: string;
+        foldCode: string;
+        unfoldCode: string;
+      };
+      localApplication: {
+        label: string;
+        description: string;
+        placeholder: string;
+        browse: string;
+        clear: string;
+      };
+    };
     theme: {
       label: string;
       description: string;
@@ -772,10 +818,6 @@ export interface LocaleMessages {
         description: string;
       };
       showCodexInStatusMonitor: {
-        label: string;
-        description: string;
-      };
-      editInVis: {
         label: string;
         description: string;
       };
@@ -858,6 +900,10 @@ export interface LocaleMessages {
     confirmDiscardEdit: string;
     editConflict: string;
     openInEditor: string;
+    openInLocalApplication: string;
+    localApplicationOpened: string;
+    localApplicationConflict: string;
+    localApplicationSavedRefreshFailed: string;
     previousMatch: string;
     nextMatch: string;
     closeSearch: string;

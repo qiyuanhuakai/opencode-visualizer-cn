@@ -1,12 +1,24 @@
-import { app, BrowserWindow, clipboard, ipcMain, protocol, shell } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell } from 'electron';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { installAsyncQuitCleanup } from './asyncQuitCleanup.js';
+import {
+  clearApprovedLocalApplication,
+  loadApprovedLocalApplication,
+  persistApprovedLocalApplication,
+} from './localApplicationApproval.js';
+import { createLocalFileEditor } from './localFileEditor.js';
+import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
 const PERSISTENT_STORAGE_FILE = 'renderer-storage.json';
+const LOCAL_APPLICATION_APPROVAL_FILE = 'local-application.json';
 const DEV_SERVER_URL = 'http://127.0.0.1:5173';
+const LOCAL_APPLICATION_PATH_KEY = 'opencode.settings.localApplicationPath.v1';
+const OPEN_IN_EDITOR_MAX_SIZE_KEY = 'opencode.settings.openInEditorMaxSizeMb.v1';
+const DEFAULT_MAX_LOCAL_FILE_BYTES = 20 * 1024 * 1024;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -22,9 +34,36 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow = null;
 let persistentStorageCache = null;
+let approvedLocalApplicationPath = null;
+const localFileSessionOwners = new Map();
+const localFileEditor = createLocalFileEditor({
+  onChange(change) {
+    const ownerId = localFileSessionOwners.get(change.sessionId);
+    if (typeof ownerId !== 'number') return;
+    const ownerWindow = BrowserWindow.getAllWindows().find(
+      (window) => window.webContents.id === ownerId && !window.webContents.isDestroyed(),
+    );
+    ownerWindow?.webContents.send('local-file-changed', change);
+  },
+  onError(error) {
+    const ownerId = localFileSessionOwners.get(error.sessionId);
+    if (typeof ownerId !== 'number') return;
+    const ownerWindow = BrowserWindow.getAllWindows().find(
+      (window) => window.webContents.id === ownerId && !window.webContents.isDestroyed(),
+    );
+    ownerWindow?.webContents.send('local-file-error', error);
+  },
+  onClosed: (sessionId) => {
+    localFileSessionOwners.delete(sessionId);
+  },
+});
 
 function persistentStorageFilePath() {
   return path.join(app.getPath('userData'), PERSISTENT_STORAGE_FILE);
+}
+
+function localApplicationApprovalFilePath() {
+  return path.join(app.getPath('userData'), LOCAL_APPLICATION_APPROVAL_FILE);
 }
 
 function loadPersistentStorage() {
@@ -87,6 +126,27 @@ function broadcastPersistentStorageChange(change, sourceWebContentsId) {
     }
     webContents.send('persistent-storage-changed', change);
   }
+}
+
+function assertTrustedRenderer(event) {
+  if (!mainWindow || mainWindow.webContents.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+    throw new Error('Untrusted renderer');
+  }
+}
+
+function configuredMaxLocalFileBytes() {
+  const raw = getPersistentStorageItem(OPEN_IN_EDITOR_MAX_SIZE_KEY);
+  const megabytes = Number(raw);
+  if (!Number.isFinite(megabytes) || megabytes <= 0) return DEFAULT_MAX_LOCAL_FILE_BYTES;
+  return Math.min(Math.round(megabytes), 100) * 1024 * 1024;
+}
+
+async function closeLocalFileSessionsForOwner(ownerId) {
+  const sessionIds = Array.from(localFileSessionOwners.entries())
+    .filter(([, candidateOwnerId]) => candidateOwnerId === ownerId)
+    .map(([sessionId]) => sessionId);
+  for (const sessionId of sessionIds) localFileSessionOwners.delete(sessionId);
+  await Promise.all(sessionIds.map((sessionId) => localFileEditor.close(sessionId)));
 }
 
 function createWindow() {
@@ -181,6 +241,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   loadPersistentStorage();
+  approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
   protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
@@ -234,7 +295,16 @@ app.on('window-all-closed', () => {
   }
 });
 
+installAsyncQuitCleanup(app, () => localFileEditor.closeAll(), (error) => {
+  console.error('[electron] Failed to clean local edit sessions before quit:', error);
+});
+
 app.on('web-contents-created', (_event, contents) => {
+  contents.once('destroyed', () => {
+    void closeLocalFileSessionsForOwner(contents.id).catch((error) => {
+      console.error('[electron] Failed to clean renderer local edit sessions:', error);
+    });
+  });
   contents.session.setPermissionRequestHandler(
     (_webContents, permission, callback) => {
       const allowedPermissions = new Set(['notifications']);
@@ -258,9 +328,82 @@ ipcMain.handle('clipboard-write-text', (_event, text) => {
   clipboard.writeText(text);
 });
 
+ipcMain.handle('local-file-select-application', async (event) => {
+  assertTrustedRenderer(event);
+  const options = {
+    title: 'Select application',
+    properties: ['openFile'],
+  };
+  const result = mainWindow
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+    const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
+    if (!selectedPath) return null;
+    await fs.promises.access(selectedPath, fs.constants.X_OK);
+    const oldValue = approvedLocalApplicationPath;
+    persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
+    approvedLocalApplicationPath = selectedPath;
+    broadcastPersistentStorageChange(
+      { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
+      event.sender.id,
+  );
+  return selectedPath;
+});
+
+ipcMain.handle('local-file-clear-application', (event) => {
+  assertTrustedRenderer(event);
+  const oldValue = approvedLocalApplicationPath;
+  clearApprovedLocalApplication(localApplicationApprovalFilePath());
+  approvedLocalApplicationPath = null;
+  if (oldValue !== null) {
+    broadcastPersistentStorageChange(
+      { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: null },
+      event.sender.id,
+    );
+  }
+});
+
+ipcMain.handle('local-file-open', async (event, payload) => {
+  assertTrustedRenderer(event);
+  const sessionId = payload?.sessionId;
+  if (typeof sessionId !== 'string') throw new Error('Invalid local file session ID');
+  if (typeof approvedLocalApplicationPath !== 'string' || approvedLocalApplicationPath.length === 0) {
+    throw new Error('No local application has been approved');
+  }
+  localFileSessionOwners.set(sessionId, event.sender.id);
+  try {
+    const opened = await localFileEditor.open({
+      sessionId,
+      applicationPath: approvedLocalApplicationPath,
+      fileName: payload?.fileName,
+      content: payload?.content,
+      maxContentBytes: configuredMaxLocalFileBytes(),
+    });
+    return { sessionId: opened.sessionId };
+  } catch (error) {
+    localFileSessionOwners.delete(sessionId);
+    throw error;
+  }
+});
+
+ipcMain.handle('local-file-close', async (event, sessionId) => {
+  assertTrustedRenderer(event);
+  if (typeof sessionId !== 'string') throw new Error('Invalid local file session ID');
+  await closeOwnedLocalFileSession(
+    localFileSessionOwners,
+    localFileEditor,
+    event.sender.id,
+    sessionId,
+  );
+});
+
 ipcMain.on('persistent-storage-get', (event, key) => {
   if (typeof key !== 'string') {
     event.returnValue = null;
+    return;
+  }
+  if (key === LOCAL_APPLICATION_PATH_KEY) {
+    event.returnValue = approvedLocalApplicationPath;
     return;
   }
   event.returnValue = getPersistentStorageItem(key);
@@ -273,7 +416,16 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
     event.returnValue = false;
     return;
   }
+  if (key === LOCAL_APPLICATION_PATH_KEY) {
+    event.returnValue = true;
+    return;
+  }
 
+  const currentValue = getPersistentStorageItem(key);
+  if (currentValue === value) {
+    event.returnValue = true;
+    return;
+  }
   const oldValue = setPersistentStorageItem(key, value);
   broadcastPersistentStorageChange({ key, oldValue, newValue: value }, event.sender.id);
   event.returnValue = true;
@@ -282,6 +434,10 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
 ipcMain.on('persistent-storage-remove', (event, key) => {
   if (typeof key !== 'string') {
     event.returnValue = false;
+    return;
+  }
+  if (key === LOCAL_APPLICATION_PATH_KEY) {
+    event.returnValue = true;
     return;
   }
 
