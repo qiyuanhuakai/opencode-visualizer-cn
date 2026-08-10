@@ -705,6 +705,26 @@ const messages: LocaleMessages = {
       label: 'Enter to send',
       description: 'Send messages by pressing Enter. When off, use Ctrl+Enter.',
     },
+    textTransformers: {
+      label: 'Text transformers',
+      description: 'Expand custom backslash sequences while composing prompts.',
+      pageTitle: 'Text transformers',
+      pageDescription:
+        'Type a configured \\sequence and press Space, Tab, or Enter to replace it. Unknown sequences stay unchanged.',
+      enabledLabel: 'Enable text transformers',
+      enabledDescription: 'Show completions and expand configured backslash sequences in the composer.',
+      mappingLabel: 'Custom sequences',
+      mappingDescription: 'Sequence names cannot contain whitespace or another backslash.',
+      sequenceLabel: 'Sequence',
+      replacementLabel: 'Replacement',
+      sequencePlaceholder: 'hi',
+      replacementPlaceholder: 'Hello',
+      add: 'Add sequence',
+      remove: 'Remove sequence',
+      empty: 'No custom sequences yet.',
+      invalidTrigger: 'Use a non-empty name without whitespace or backslashes.',
+      duplicateTrigger: 'This sequence is already defined.',
+    },
     showMinimizeButtons: {
       label: 'Show minimize button',
       description:
