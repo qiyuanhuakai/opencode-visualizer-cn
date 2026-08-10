@@ -142,6 +142,19 @@
           <button
             type="button"
             class="setting-row setting-link-row"
+            :aria-label="$t('settings.textTransformers.label')"
+            @click="activePage = 'transformers'"
+          >
+            <div class="setting-info">
+              <div class="setting-label">{{ $t('settings.textTransformers.label') }}</div>
+              <div class="setting-description">{{ $t('settings.textTransformers.description') }}</div>
+            </div>
+            <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
+          </button>
+
+          <button
+            type="button"
+            class="setting-row setting-link-row"
             :aria-label="$t('settings.fontSettings.label')"
             @click="activePage = 'fonts'"
           >
@@ -177,6 +190,111 @@
             </div>
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
           </button>
+        </template>
+
+        <template v-else-if="activePage === 'transformers'">
+          <div class="setting-page-description">
+            {{ $t('settings.textTransformers.pageDescription') }}
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <div :id="textTransformerToggleLabelId" class="setting-label">
+                {{ $t('settings.textTransformers.enabledLabel') }}
+              </div>
+              <div :id="textTransformerToggleDescriptionId" class="setting-description">
+                {{ $t('settings.textTransformers.enabledDescription') }}
+              </div>
+            </div>
+            <label class="toggle-switch">
+              <input
+                v-model="textTransformersEnabled"
+                type="checkbox"
+                class="toggle-input"
+                :aria-labelledby="textTransformerToggleLabelId"
+                :aria-describedby="textTransformerToggleDescriptionId"
+              />
+              <span class="toggle-track" />
+            </label>
+          </div>
+
+          <div class="setting-row setting-row-stack transformer-settings-section">
+            <div class="transformer-heading">
+              <div class="setting-info">
+                <div class="setting-label">{{ $t('settings.textTransformers.mappingLabel') }}</div>
+                <div class="setting-description">
+                  {{ $t('settings.textTransformers.mappingDescription') }}
+                </div>
+              </div>
+              <button type="button" class="font-system-button" @click="addTextTransformer">
+                {{ $t('settings.textTransformers.add') }}
+              </button>
+            </div>
+
+            <div v-if="textTransformers.length === 0" class="transformer-empty">
+              {{ $t('settings.textTransformers.empty') }}
+            </div>
+            <div v-else class="transformer-list">
+              <div
+                v-for="(transformer, index) in textTransformers"
+                :key="index"
+                class="transformer-row"
+              >
+                <label class="transformer-field">
+                  <span class="transformer-field-label">
+                    {{ $t('settings.textTransformers.sequenceLabel') }}
+                  </span>
+                  <span class="transformer-sequence-control">
+                    <span class="transformer-prefix">\</span>
+                    <input
+                      :id="textTransformerTriggerInputId(index)"
+                      :value="transformer.trigger"
+                      type="text"
+                      class="transformer-input transformer-sequence-input"
+                      spellcheck="false"
+                      autocomplete="off"
+                      :placeholder="$t('settings.textTransformers.sequencePlaceholder')"
+                      :aria-invalid="Boolean(textTransformerTriggerError(index))"
+                      :aria-describedby="
+                        textTransformerTriggerError(index)
+                          ? textTransformerTriggerErrorId(index)
+                          : undefined
+                      "
+                      @input="updateTextTransformer(index, 'trigger', $event)"
+                    />
+                  </span>
+                  <span
+                    v-if="textTransformerTriggerError(index)"
+                    :id="textTransformerTriggerErrorId(index)"
+                    class="transformer-error"
+                  >
+                    {{ textTransformerTriggerError(index) }}
+                  </span>
+                </label>
+                <label class="transformer-field">
+                  <span class="transformer-field-label">
+                    {{ $t('settings.textTransformers.replacementLabel') }}
+                  </span>
+                  <input
+                    :value="transformer.replacement"
+                    type="text"
+                    class="transformer-input"
+                    :placeholder="$t('settings.textTransformers.replacementPlaceholder')"
+                    @input="updateTextTransformer(index, 'replacement', $event)"
+                  />
+                </label>
+                <button
+                  type="button"
+                  class="transformer-remove"
+                  :aria-label="$t('settings.textTransformers.remove')"
+                  :title="$t('settings.textTransformers.remove')"
+                  @click="removeTextTransformer(index)"
+                >
+                  <Icon icon="lucide:trash-2" :width="14" :height="14" />
+                </button>
+              </div>
+            </div>
+          </div>
         </template>
 
         <template v-else-if="activePage === 'theme'">
@@ -710,6 +828,7 @@
 import { computed, nextTick, onMounted, ref, watch, watchEffect } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useSettings } from '../composables/useSettings';
+import { getTextTransformerTriggerIssue } from '../utils/textTransformers';
 import { useI18n } from 'vue-i18n';
 import { getLocale, setLocale } from '../i18n';
 import type { Locale } from '../i18n/types';
@@ -753,7 +872,7 @@ type FontPreset = {
   value: string;
 };
 
-type SettingsPage = 'root' | 'editor' | 'fonts' | 'theme' | 'experimental';
+type SettingsPage = 'root' | 'editor' | 'fonts' | 'theme' | 'transformers' | 'experimental';
 type ThemePresetCard = {
   id: string;
   label: string;
@@ -791,6 +910,8 @@ const appSizeInputId = 'settings-app-font-size';
 const messageSizeInputId = 'settings-message-font-size';
 const sidebarSizeInputId = 'settings-sidebar-font-size';
 const uiSizeInputId = 'settings-ui-font-size';
+const textTransformerToggleLabelId = 'settings-text-transformers-enabled-label';
+const textTransformerToggleDescriptionId = 'settings-text-transformers-enabled-description';
 const supportsLocalFontsApi = supportsLocalFontAccess();
 const isLoadingLocalFonts = ref(false);
 const localFontsError = ref('');
@@ -838,6 +959,8 @@ const {
   editorFontSizePx,
   editorTabSize,
   editorShortcuts,
+  textTransformersEnabled,
+  textTransformers,
   localApplicationPath,
   defaultEditorShortcuts,
   minEditorFontSizePx,
@@ -1166,6 +1289,44 @@ function resetEditorShortcuts() {
   editorShortcuts.value = { ...defaultEditorShortcuts };
 }
 
+function addTextTransformer() {
+  textTransformers.value = [...textTransformers.value, { trigger: '', replacement: '' }];
+}
+
+function removeTextTransformer(index: number) {
+  textTransformers.value = textTransformers.value.filter((_, itemIndex) => itemIndex !== index);
+}
+
+function updateTextTransformer(
+  index: number,
+  field: 'trigger' | 'replacement',
+  event: Event,
+) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  const current = textTransformers.value[index];
+  if (!current) return;
+  const value = field === 'trigger' ? input.value.replace(/^\\+/u, '') : input.value;
+  textTransformers.value = textTransformers.value.map((item, itemIndex) =>
+    itemIndex === index ? { ...item, [field]: value } : item,
+  );
+}
+
+function textTransformerTriggerError(index: number) {
+  const issue = getTextTransformerTriggerIssue(textTransformers.value, index);
+  if (issue === 'invalid') return t('settings.textTransformers.invalidTrigger');
+  if (issue === 'duplicate') return t('settings.textTransformers.duplicateTrigger');
+  return '';
+}
+
+function textTransformerTriggerInputId(index: number) {
+  return `settings-text-transformer-trigger-${index}`;
+}
+
+function textTransformerTriggerErrorId(index: number) {
+  return `settings-text-transformer-trigger-error-${index}`;
+}
+
 function beginShortcutRecording(key: EditorShortcutKey) {
   recordingShortcut.value = recordingShortcut.value === key ? null : key;
 }
@@ -1265,6 +1426,7 @@ const pageTitle = computed(() => {
     case 'root': return t('settings.title');
     case 'fonts': return t('settings.fontsPageTitle');
     case 'editor': return t('settings.editor.pageTitle');
+    case 'transformers': return t('settings.textTransformers.pageTitle');
     case 'theme': return t('settings.themePageTitle');
     case 'experimental': return t('settings.experimentalFeatures.pageTitle');
     default: return t('settings.title');
@@ -1395,6 +1557,125 @@ watch(
   gap: 12px;
 }
 
+.transformer-settings-section {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.transformer-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  align-self: stretch;
+  width: 100%;
+}
+
+.transformer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.transformer-row {
+  display: grid;
+  grid-template-columns: minmax(130px, 0.75fr) minmax(180px, 1.25fr) 30px;
+  align-items: start;
+  gap: 8px;
+}
+
+.transformer-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.transformer-field-label {
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.transformer-sequence-control {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.transformer-prefix {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--ui-form-control-border);
+  border-right: 0;
+  border-radius: 6px 0 0 6px;
+  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 12px;
+}
+
+.transformer-input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--ui-form-control-border);
+  border-radius: 6px;
+  background: var(--ui-form-control-bg);
+  color: var(--ui-form-control-text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.transformer-sequence-input {
+  border-radius: 0 6px 6px 0;
+}
+
+.transformer-input:focus {
+  position: relative;
+  outline: none;
+  border-color: var(--ui-form-control-focus-border);
+  box-shadow: var(--ui-form-control-focus-ring);
+}
+
+.transformer-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 18px;
+  border: 1px solid var(--ui-form-button-border);
+  border-radius: 6px;
+  background: var(--ui-form-button-bg);
+  color: var(--theme-text-danger, #fca5a5);
+  cursor: pointer;
+}
+
+.transformer-remove:hover {
+  border-color: var(--ui-form-control-focus-border);
+  background: var(--ui-form-button-hover-bg);
+}
+
+.transformer-empty,
+.transformer-error {
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
+  font-size: 11px;
+}
+
+.transformer-empty {
+  padding: 8px 0 2px;
+}
+
+.transformer-error {
+  color: var(--theme-status-error, #f87171);
+  font-size: 10px;
+}
+
 .editor-shortcut-heading {
   width: 100%;
 }
@@ -1496,6 +1777,24 @@ watch(
   .local-application-controls {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .transformer-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .transformer-row {
+    grid-template-columns: minmax(0, 1fr) 30px;
+  }
+
+  .transformer-field:nth-child(2) {
+    grid-column: 1 / -1;
+  }
+
+  .transformer-remove {
+    grid-column: 2;
+    grid-row: 1;
   }
 }
 
@@ -2073,6 +2372,11 @@ watch(
   opacity: 0;
   width: 0;
   height: 0;
+}
+
+.toggle-input:focus-visible + .toggle-track {
+  outline: 2px solid var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6));
+  outline-offset: 2px;
 }
 
 .toggle-track {
