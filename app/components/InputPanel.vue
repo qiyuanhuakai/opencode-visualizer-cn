@@ -1272,18 +1272,12 @@ function handleModelDropdownOpenChange(open: boolean) {
 
 function handleKeydown(event: KeyboardEvent) {
   if (event.isComposing) return;
-  if (
+  const isTransformerDelimiter =
     (event.key === ' ' || event.key === 'Tab' || event.key === 'Enter') &&
     !event.ctrlKey &&
     !event.metaKey &&
     !event.shiftKey &&
-    !event.altKey &&
-    applyExactTextTransformer()
-  ) {
-    event.preventDefault();
-    return;
-  }
-  // --- Unified mention popup (command / agent / skill) ---
+    !event.altKey;
   if (mentionOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -1300,27 +1294,23 @@ function handleKeydown(event: KeyboardEvent) {
       mentionDropdownRef.value?.moveHighlight('up');
       return;
     }
-    if (
-      event.key === 'Tab' &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
+    if (event.key === 'Tab' && isTransformerDelimiter) {
       event.preventDefault();
       mentionDropdownRef.value?.selectHighlighted();
       return;
     }
-    if (
-      event.key === 'Enter' &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
+    if (event.key === 'Enter' && isTransformerDelimiter) {
       event.preventDefault();
       mentionDropdownRef.value?.selectHighlighted();
+      return;
     }
+    if (event.key === ' ' && isTransformerDelimiter && applyExactTextTransformer()) {
+      event.preventDefault();
+    }
+    return;
+  }
+  if (isTransformerDelimiter && applyExactTextTransformer()) {
+    event.preventDefault();
     return;
   }
   // --- Input history: open dropdown when ArrowUp on empty input ---

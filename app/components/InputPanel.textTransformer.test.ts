@@ -163,6 +163,30 @@ describe('InputPanel text transformers', () => {
     expect(message.value).toBe('你好 ');
   });
 
+  it.each(['Tab', 'Enter'])(
+    'prefers the highlighted completion over an exact shorter trigger with %s',
+    async (key) => {
+      // Given: an exact short trigger and a longer completion both match the current input.
+      settings.textTransformers.value = [
+        { trigger: 'foo', replacement: 'short' },
+        { trigger: 'foobar', replacement: 'long' },
+      ];
+      const { root, message, send } = mountInputPanel();
+      const textarea = root.querySelector('textarea')!;
+      await typeInto(textarea, String.raw`\foo`);
+      await nextTick();
+      press(textarea, 'ArrowDown');
+
+      // When: the delimiter accepts the highlighted longer completion.
+      press(textarea, key);
+      await nextTick();
+
+      // Then: the highlighted mapping wins without sending the message.
+      expect(message.value).toBe('long ');
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
   it('expands on Enter before a subsequent Enter sends', async () => {
     // Given: Enter-to-send is enabled and the input ends with an exact sequence.
     const { root, message, send } = mountInputPanel();
