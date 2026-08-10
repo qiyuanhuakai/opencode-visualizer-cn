@@ -8,7 +8,11 @@ import type { MessageInfo, TextPart } from '../types/sse';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 vi.mock('../composables/useSettings', () => ({
-  useSettings: () => ({ enterToSend: { value: true, __v_isRef: true } }),
+  useSettings: () => ({
+    enterToSend: { value: true, __v_isRef: true },
+    textTransformersEnabled: { value: false, __v_isRef: true },
+    textTransformers: { value: [], __v_isRef: true },
+  }),
 }));
 
 const mountedApps: Array<() => void> = [];

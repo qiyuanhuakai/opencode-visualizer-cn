@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useBackendMessageSend } from './useBackendMessageSend';
 import type { ComposerAttachment } from '../types/composer';
+import type { TextTransformer } from '../utils/textTransformers';
 
 function createBaseParams() {
   return {
@@ -12,6 +13,8 @@ function createBaseParams() {
     selectedThinking: ref<string | undefined>('high'),
     activeDirectory: ref('/repo'),
     messageInput: ref('hello world'),
+    textTransformersEnabled: ref(false),
+    textTransformers: ref<TextTransformer[]>([]),
     attachments: ref<ComposerAttachment[]>([]),
     recentUserInputs: [] as Array<{ text: string; time: number }>,
     filteredSessions: ref([{ id: 'session-1' }]),
@@ -178,6 +181,35 @@ describe('useBackendMessageSend', () => {
       agent: 'build',
       model: { providerID: 'provider', modelID: 'model-1' },
     });
+  });
+
+  it('expands configured text transformers at the backend send boundary', async () => {
+    // Given: transformer expansion is enabled for a prompt containing known and unknown sequences.
+    const base = createBaseParams();
+    base.messageInput.value = String.raw`Say \hi and keep \unknown`;
+    base.textTransformersEnabled.value = true;
+    base.textTransformers.value = [{ trigger: 'hi', replacement: '你好' }];
+    const sendPromptAsync = vi.fn().mockResolvedValue(undefined);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('opencode'),
+      openCodeApi: { sendPromptAsync },
+      codexApi: {
+        activeThreadId: ref(''),
+        threads: ref([]),
+        collaborationModes: ref([]),
+        sendPrompt: vi.fn(),
+        refreshThreads: vi.fn(),
+        selectModel: vi.fn(),
+      },
+    });
+
+    // When: the prompt is sent without a prior keyboard delimiter.
+    await runtime.sendMessage();
+
+    // Then: the backend receives expanded text while unmatched input remains unchanged.
+    const payload = sendPromptAsync.mock.calls[0]?.[1] as { parts: Array<{ text?: string }> };
+    expect(payload.parts).toContainEqual({ type: 'text', text: String.raw`Say 你好 and keep \unknown` });
   });
 
   it('adds bounded file context parts for ACP @ mentions', async () => {

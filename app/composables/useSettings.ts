@@ -14,6 +14,10 @@ import {
   normalizeEditorShortcutMap,
   type EditorShortcutMap,
 } from '../utils/editorShortcuts';
+import {
+  normalizeTextTransformers,
+  type TextTransformer,
+} from '../utils/textTransformers';
 
 function isSerializedEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -173,6 +177,19 @@ function readEditorShortcuts() {
   return normalizeEditorShortcutMap(storageGetJSON(StorageKeys.settings.editorShortcuts));
 }
 
+function parseTextTransformers(value: string | null): TextTransformer[] {
+  if (!value) return [];
+  try {
+    return normalizeTextTransformers(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
+
+function readTextTransformers() {
+  return normalizeTextTransformers(storageGetJSON(StorageKeys.settings.textTransformers));
+}
+
 function readThemeStorage(): ThemeStorageV2 | null {
   const current = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
   if (current) {
@@ -233,6 +250,10 @@ const floatingPreviewWordWrap = ref(storageGet(StorageKeys.settings.floatingPrev
 const editorFontSizePx = ref(readEditorFontSizePx());
 const editorTabSize = ref(readEditorTabSize());
 const editorShortcuts = ref<EditorShortcutMap>(readEditorShortcuts());
+const textTransformersEnabled = ref(
+  storageGet(StorageKeys.settings.textTransformersEnabled) === 'true',
+);
+const textTransformers = ref<TextTransformer[]>(readTextTransformers());
 const localApplicationPath = ref(storageGet(StorageKeys.settings.localApplicationPath) ?? '');
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
@@ -349,6 +370,16 @@ watch(editorShortcuts, (value) => {
   storageSetJSON(StorageKeys.settings.editorShortcuts, normalized);
 }, { deep: true, flush: 'sync' });
 
+watch(textTransformersEnabled, (value) => {
+  storageSet(StorageKeys.settings.textTransformersEnabled, String(value));
+}, syncWatchOptions);
+
+watch(textTransformers, (value) => {
+  const normalized = normalizeTextTransformers(value);
+  if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized)) return;
+  storageSetJSON(StorageKeys.settings.textTransformers, normalized);
+}, { deep: true, flush: 'sync' });
+
 watch(localApplicationPath, (value) => {
   const normalized = value.trim();
   if (normalized === '') {
@@ -454,6 +485,15 @@ if (typeof window !== 'undefined') {
         editorShortcuts.value = nextShortcuts;
       }
     }
+    if (event.key === storageKey(StorageKeys.settings.textTransformersEnabled)) {
+      textTransformersEnabled.value = event.newValue === 'true';
+    }
+    if (event.key === storageKey(StorageKeys.settings.textTransformers)) {
+      const nextTextTransformers = parseTextTransformers(event.newValue);
+      if (!isSerializedEqual(textTransformers.value, nextTextTransformers)) {
+        textTransformers.value = nextTextTransformers;
+      }
+    }
     if (event.key === storageKey(StorageKeys.settings.localApplicationPath)) {
       localApplicationPath.value = event.newValue ?? '';
     }
@@ -493,6 +533,8 @@ export function useSettings() {
     editorFontSizePx,
     editorTabSize,
     editorShortcuts,
+    textTransformersEnabled,
+    textTransformers,
     localApplicationPath,
     defaultEditorShortcuts: DEFAULT_EDITOR_SHORTCUTS,
     minEditorFontSizePx: MIN_EDITOR_FONT_SIZE_PX,

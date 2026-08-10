@@ -7,6 +7,10 @@ import type {
   CodexTurnInputItem,
 } from '../backends/codex/codexAdapter';
 import type { ParsedSkill } from '../utils/parseSkill';
+import {
+  expandTextTransformers,
+  type TextTransformer,
+} from '../utils/textTransformers';
 
 type ModelOption = {
   id: string;
@@ -72,6 +76,8 @@ export function useBackendMessageSend(params: {
   selectedThinking: Ref<string | undefined>;
   activeDirectory: Ref<string>;
   messageInput: Ref<string>;
+  textTransformersEnabled: Ref<boolean>;
+  textTransformers: Ref<TextTransformer[]>;
   attachments: Ref<ComposerAttachment[]>;
   recentUserInputs: { text: string; time: number }[];
   filteredSessions: Ref<FilteredSession[]>;
@@ -121,11 +127,45 @@ export function useBackendMessageSend(params: {
     while (params.recentUserInputs.length > 20) params.recentUserInputs.shift();
   }
 
+  function beginSend(text: string) {
+    appendRecentInput(text);
+    params.messageInput.value = '';
+    params.enableFollow();
+    params.isSending.value = true;
+    params.setSendStatusKey('app.status.sending');
+  }
+
+  async function handleLocalSlashCommand(
+    slash: { name: string; arguments: string } | null,
+    transformText: (value: string) => string,
+  ) {
+    if (!slash) return false;
+    if (slash.name.toLowerCase() === 'shell') {
+      if (await params.openShellFromInput(transformText(slash.arguments ?? ''))) {
+        params.setSendStatusKey('app.status.shellReady');
+        params.clearComposerDraftForCurrentContext();
+      }
+      return true;
+    }
+    if (slash.name.toLowerCase() === 'debug') {
+      const debugResult = params.runDebugCommand(transformText(slash.arguments ?? ''));
+      params.setSendStatusText(debugResult.message);
+      params.clearComposerDraftForCurrentContext();
+      return true;
+    }
+    return false;
+  }
+
   async function sendMessage() {
     if (!params.ensureConnectionReady(params.translate('app.actions.sending'))) return;
     if (!params.canSend.value) return;
 
     const text = params.messageInput.value.trim();
+    const transformText = (value: string) =>
+      params.textTransformersEnabled.value
+        ? expandTextTransformers(value, params.textTransformers.value)
+        : value;
+    const transformedText = transformText(text);
     const hasText = text.length > 0;
     const hasAttachments = params.attachments.value.length > 0;
     let sessionId = params.selectedSessionId.value;
@@ -151,27 +191,12 @@ export function useBackendMessageSend(params: {
       const codexDirectory = params.normalizeProjectDirectoryForActiveBackend(
         params.activeDirectory.value.trim(),
       );
-      appendRecentInput(hasText ? text : '');
-      params.messageInput.value = '';
-      params.enableFollow();
-      params.isSending.value = true;
-      params.setSendStatusKey('app.status.sending');
+      beginSend(hasText ? transformedText : '');
       try {
-        if (slash && slash.name.toLowerCase() === 'shell') {
-          if (!(await params.openShellFromInput(slash.arguments ?? ''))) return;
-          params.setSendStatusKey('app.status.shellReady');
-          params.clearComposerDraftForCurrentContext();
-          return;
-        }
-        if (slash && slash.name.toLowerCase() === 'debug') {
-          const debugResult = params.runDebugCommand(slash.arguments ?? '');
-          params.setSendStatusText(debugResult.message);
-          params.clearComposerDraftForCurrentContext();
-          return;
-        }
+        if (await handleLocalSlashCommand(slash, transformText)) return;
 
         const atAgent = hasText ? params.parseAtAgent(text) : null;
-        const messageText = atAgent ? atAgent.text : text;
+        const messageText = transformText(atAgent ? atAgent.text : text);
         const codexInput: CodexTurnInputItem[] = [];
         if (hasText) {
           const parsedSkills = params.parseSkill?.(text, params.availableSkills?.value ?? []) ?? [];
@@ -288,26 +313,11 @@ export function useBackendMessageSend(params: {
       return;
     }
 
-    appendRecentInput(hasText ? text : '');
-    params.messageInput.value = '';
-    params.enableFollow();
-    params.isSending.value = true;
-    params.setSendStatusKey('app.status.sending');
+    beginSend(hasText ? transformedText : '');
     try {
-      if (slash && slash.name.toLowerCase() === 'shell') {
-        if (!(await params.openShellFromInput(slash.arguments ?? ''))) return;
-        params.setSendStatusKey('app.status.shellReady');
-        params.clearComposerDraftForCurrentContext();
-        return;
-      }
-      if (slash && slash.name.toLowerCase() === 'debug') {
-        const debugResult = params.runDebugCommand(slash.arguments ?? '');
-        params.setSendStatusText(debugResult.message);
-        params.clearComposerDraftForCurrentContext();
-        return;
-      }
+      if (await handleLocalSlashCommand(slash, transformText)) return;
       if (slash && commandMatch) {
-        await params.sendCommand(sessionId, commandMatch, slash.arguments ?? '');
+        await params.sendCommand(sessionId, commandMatch, transformText(slash.arguments ?? ''));
         params.setSendStatusKey('app.status.sent');
         params.clearComposerDraftForCurrentContext();
         return;
@@ -319,7 +329,7 @@ export function useBackendMessageSend(params: {
       const directory = params.requireSelectedWorktree('send');
       if (!directory) return;
       const parts: Array<Record<string, unknown>> = [];
-      const messageText = atAgent ? atAgent.text : text;
+      const messageText = transformText(atAgent ? atAgent.text : text);
       if (hasText && messageText) parts.push({ type: 'text', text: messageText });
       if (params.activeBackendKind.value === 'acp' && messageText) {
         parts.push(...(await params.buildAcpMentionContextParts(messageText)));

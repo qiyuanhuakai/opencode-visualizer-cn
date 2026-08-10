@@ -629,6 +629,25 @@ export interface LocaleMessages {
       label: string;
       description: string;
     };
+    textTransformers: {
+      label: string;
+      description: string;
+      pageTitle: string;
+      pageDescription: string;
+      enabledLabel: string;
+      enabledDescription: string;
+      mappingLabel: string;
+      mappingDescription: string;
+      sequenceLabel: string;
+      replacementLabel: string;
+      sequencePlaceholder: string;
+      replacementPlaceholder: string;
+      add: string;
+      remove: string;
+      empty: string;
+      invalidTrigger: string;
+      duplicateTrigger: string;
+    };
     showMinimizeButtons: {
       label: string;
       description: string;

@@ -770,6 +770,8 @@ const {
   sidebarFontSizePx,
   uiFontSizePx,
   localApplicationPath,
+  textTransformersEnabled,
+  textTransformers,
 } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
@@ -7889,6 +7891,8 @@ const backendMessageSend = useBackendMessageSend({
   selectedThinking,
   activeDirectory,
   messageInput,
+  textTransformersEnabled,
+  textTransformers,
   attachments,
   recentUserInputs,
   filteredSessions,

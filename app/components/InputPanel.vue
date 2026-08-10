@@ -112,9 +112,18 @@
         ref="textareaRef"
         v-model="messageValue"
         class="input-textarea"
+        role="combobox"
+        aria-autocomplete="list"
+        :aria-expanded="mentionOpen"
+        :aria-controls="mentionOpen ? mentionListboxId : undefined"
+        :aria-activedescendant="mentionOpen ? activeMentionOptionId || undefined : undefined"
         :disabled="false"
         :placeholder="$t('inputPanel.placeholder')"
+        @input="syncTextCursor"
         @keydown="handleKeydown"
+        @keyup="syncTextCursor"
+        @click="syncTextCursor"
+        @select="syncTextCursor"
         @paste="handlePaste"
         @drop="handleDrop"
         @dragover.prevent
@@ -188,15 +197,18 @@
           :auto-close="false"
           :auto-focus="false"
           :auto-highlight="true"
+          :menu-id="mentionListboxId"
           popup-class="input-dropdown-popup mention-popup"
           @select="handleMentionSelect"
+          @highlight-change="handleMentionHighlightChange"
         >
           <template #trigger><span /></template>
           <template #default>
             <div v-if="activeMentionType === 'command'" class="dropdown-list">
               <DropdownItem
-                v-for="command in commandMatches"
+                v-for="(command, index) in commandMatches"
                 :key="command.name"
+                :id="mentionOptionId(index)"
                 :value="command.name"
               >
                 <div class="command-dropdown-item">
@@ -207,8 +219,26 @@
                 </div>
               </DropdownItem>
             </div>
+            <div v-else-if="activeMentionType === 'transformer'" class="dropdown-list">
+              <DropdownItem
+                v-for="(transformer, index) in textTransformerMatches"
+                :key="transformer.trigger"
+                :id="mentionOptionId(index)"
+                :value="transformer.trigger"
+              >
+                <div class="command-dropdown-item">
+                  <div class="command-name">\{{ transformer.trigger }}</div>
+                  <div class="command-desc">{{ transformer.replacement }}</div>
+                </div>
+              </DropdownItem>
+            </div>
             <div v-else-if="activeMentionType === 'agent'" class="dropdown-list">
-              <DropdownItem v-for="agent in agentMatches" :key="agent.id" :value="agent.id">
+              <DropdownItem
+                v-for="(agent, index) in agentMatches"
+                :id="mentionOptionId(index)"
+                :key="agent.id"
+                :value="agent.id"
+              >
                 <div class="agent-dropdown-item">
                   <div class="agent-popup-name">
                     @{{ agent.label }}
@@ -221,14 +251,24 @@
               </DropdownItem>
             </div>
             <div v-else-if="activeMentionType === 'file'" class="dropdown-list">
-              <DropdownItem v-for="file in fileMatches" :key="file" :value="file">
+              <DropdownItem
+                v-for="(file, index) in fileMatches"
+                :id="mentionOptionId(index)"
+                :key="file"
+                :value="file"
+              >
                 <div class="command-dropdown-item">
                   <div class="command-name">@{{ file }}</div>
                 </div>
               </DropdownItem>
             </div>
             <div v-else-if="activeMentionType === 'skill'" class="dropdown-list">
-              <DropdownItem v-for="skill in skillMatches" :key="skill.name" :value="skill.name">
+              <DropdownItem
+                v-for="(skill, index) in skillMatches"
+                :id="mentionOptionId(index)"
+                :key="skill.name"
+                :value="skill.name"
+              >
                 <div class="skill-dropdown-item">
                   <div class="skill-popup-name">
                     ${{ skill.name }}
@@ -501,6 +541,12 @@ import { useMessages } from '../composables/useMessages';
 import { useFavoriteMessages } from '../composables/useFavoriteMessages';
 import { getMessageVariant } from '../types/sse';
 import { useSettings } from '../composables/useSettings';
+import {
+  applyTextTransformerAtCursor,
+  applyTextTransformerSelectionAtCursor,
+  findTextTransformerMatches,
+  normalizeTextTransformers,
+} from '../utils/textTransformers';
 import type { CodexSkill } from '../backends/codex/codexAdapter';
 type ModelOption = {
   id: string;
@@ -595,12 +641,13 @@ const permissionModeValue = computed({
 });
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const textCursor = ref<number | null>(null);
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const modelDropdownRef = ref<HTMLElement | null>(null);
 const modelSearchQuery = ref('');
 const acceptMime = computed(() => props.attachmentAccept ?? '*/*');
 
-const { enterToSend } = useSettings();
+const { enterToSend, textTransformersEnabled, textTransformers } = useSettings();
 
 // --- Input history navigation ---
 const { roots: messageRoots, getPartsByType } = useMessages();
@@ -616,6 +663,16 @@ type DropdownRef = {
 const historyDropdownRef = ref<DropdownRef | null>(null);
 const favoritesDropdownRef = ref<DropdownRef | null>(null);
 const mentionDropdownRef = ref<DropdownRef | null>(null);
+const mentionListboxId = 'input-mention-listbox';
+const activeMentionOptionId = ref<string | null>(null);
+
+function mentionOptionId(index: number) {
+  return `input-mention-option-${index}`;
+}
+
+function handleMentionHighlightChange(optionId: string | null) {
+  activeMentionOptionId.value = optionId;
+}
 
 type HistoryEntry = {
   text: string;
@@ -843,24 +900,51 @@ const commandPopupDismissed = ref(false);
 const agentPopupDismissed = ref(false);
 const filePopupDismissed = ref(false);
 const skillPopupDismissed = ref(false);
+const transformerPopupDismissed = ref(false);
+
+const normalizedTextTransformers = computed(() =>
+  normalizeTextTransformers(textTransformers.value),
+);
+const textTransformerMatches = computed(() => {
+  if (!textTransformersEnabled.value) return [];
+  return findTextTransformerMatches(
+    messageValue.value,
+    textCursor.value ?? messageValue.value.length,
+    normalizedTextTransformers.value,
+  );
+});
+
+function syncTextCursor(event: Event) {
+  if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
+  textCursor.value = event.currentTarget.selectionStart;
+}
+
+function syncTextCursorFromTextarea() {
+  textCursor.value = textareaRef.value?.selectionStart ?? messageValue.value.length;
+}
 
 // --- Unified mention popup (command / agent / skill) ---
 // Priority: $skill > @agent > /command (most specific first)
-const activeMentionType = computed<'command' | 'agent' | 'file' | 'skill' | null>(() => {
-  if (skillMatches.value.length > 0 && !skillPopupDismissed.value) return 'skill';
-  if (props.preferFileMentions && fileMatches.value.length > 0 && !filePopupDismissed.value)
-    return 'file';
-  if (agentMatches.value.length > 0 && !agentPopupDismissed.value) return 'agent';
-  if (fileMatches.value.length > 0 && !filePopupDismissed.value) return 'file';
-  if (commandMatches.value.length > 0 && !commandPopupDismissed.value) return 'command';
-  return null;
-});
+const activeMentionType = computed<'command' | 'agent' | 'file' | 'skill' | 'transformer' | null>(
+  () => {
+    if (textTransformerMatches.value.length > 0 && !transformerPopupDismissed.value)
+      return 'transformer';
+    if (skillMatches.value.length > 0 && !skillPopupDismissed.value) return 'skill';
+    if (props.preferFileMentions && fileMatches.value.length > 0 && !filePopupDismissed.value)
+      return 'file';
+    if (agentMatches.value.length > 0 && !agentPopupDismissed.value) return 'agent';
+    if (fileMatches.value.length > 0 && !filePopupDismissed.value) return 'file';
+    if (commandMatches.value.length > 0 && !commandPopupDismissed.value) return 'command';
+    return null;
+  },
+);
 
 const mentionOpen = computed(() => activeMentionType.value !== null);
 
 function dismissActiveMention() {
   const type = activeMentionType.value;
   if (type === 'skill') skillPopupDismissed.value = true;
+  else if (type === 'transformer') transformerPopupDismissed.value = true;
   else if (type === 'agent') agentPopupDismissed.value = true;
   else if (type === 'file') filePopupDismissed.value = true;
   else if (type === 'command') commandPopupDismissed.value = true;
@@ -984,6 +1068,8 @@ watch(
     agentPopupDismissed.value = false;
     filePopupDismissed.value = false;
     skillPopupDismissed.value = false;
+    transformerPopupDismissed.value = false;
+    nextTick(syncTextCursorFromTextarea);
   },
 );
 
@@ -991,9 +1077,44 @@ function handleMentionSelect(value: unknown) {
   if (typeof value !== 'string') return;
   const type = activeMentionType.value;
   if (type === 'command') applyCommandSelection(value);
+  else if (type === 'transformer') applyTextTransformerSelection(value);
   else if (type === 'agent') applyAgentSelection(value);
   else if (type === 'file') applyFileSelection(value);
   else if (type === 'skill') applySkillSelection(value);
+}
+
+function commitTextTransformerApplication(result: {
+  readonly text: string;
+  readonly cursor: number;
+  readonly replaced: boolean;
+}) {
+  if (!result.replaced) return false;
+  messageValue.value = result.text;
+  textCursor.value = result.cursor;
+  nextTick(() => {
+    textareaRef.value?.setSelectionRange(result.cursor, result.cursor);
+    textareaRef.value?.focus();
+  });
+  return true;
+}
+
+function applyTextTransformerSelection(trigger: string) {
+  const transformer = normalizedTextTransformers.value.find(
+    (item) => item.trigger.toLocaleLowerCase() === trigger.toLocaleLowerCase(),
+  );
+  if (!transformer) return;
+  const cursor = textareaRef.value?.selectionStart ?? messageValue.value.length;
+  commitTextTransformerApplication(
+    applyTextTransformerSelectionAtCursor(messageValue.value, cursor, transformer, ' '),
+  );
+}
+
+function applyExactTextTransformer() {
+  if (!textTransformersEnabled.value) return false;
+  const cursor = textareaRef.value?.selectionStart ?? messageValue.value.length;
+  return commitTextTransformerApplication(
+    applyTextTransformerAtCursor(messageValue.value, cursor, normalizedTextTransformers.value, ' '),
+  );
 }
 
 function applyFileSelection(path: string) {
@@ -1162,7 +1283,14 @@ function handleModelDropdownOpenChange(open: boolean) {
 }
 
 function handleKeydown(event: KeyboardEvent) {
-  // --- Unified mention popup (command / agent / skill) ---
+  if (event.isComposing) return;
+  syncTextCursor(event);
+  const isTransformerDelimiter =
+    (event.key === ' ' || event.key === 'Tab' || event.key === 'Enter') &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    !event.altKey;
   if (mentionOpen.value) {
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -1179,27 +1307,23 @@ function handleKeydown(event: KeyboardEvent) {
       mentionDropdownRef.value?.moveHighlight('up');
       return;
     }
-    if (
-      event.key === 'Tab' &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
+    if (event.key === 'Tab' && isTransformerDelimiter) {
       event.preventDefault();
       mentionDropdownRef.value?.selectHighlighted();
       return;
     }
-    if (
-      event.key === 'Enter' &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      !event.shiftKey &&
-      !event.altKey
-    ) {
+    if (event.key === 'Enter' && isTransformerDelimiter) {
       event.preventDefault();
       mentionDropdownRef.value?.selectHighlighted();
+      return;
     }
+    if (event.key === ' ' && isTransformerDelimiter && applyExactTextTransformer()) {
+      event.preventDefault();
+    }
+    return;
+  }
+  if (isTransformerDelimiter && applyExactTextTransformer()) {
+    event.preventDefault();
     return;
   }
   // --- Input history: open dropdown when ArrowUp on empty input ---
@@ -1882,6 +2006,10 @@ const inputMessageStyle = computed(() => {
     var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2))
   );
   border: 1px solid var(--theme-input-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
+}
+
+:deep(.mention-popup) .ui-dropdown-item[aria-selected='true'] .command-desc {
+  color: var(--theme-input-text, var(--theme-text-primary, #e2e8f0));
 }
 
 .command-dropdown-item {
