@@ -39,6 +39,7 @@
     </slot>
     <div
       ref="menu"
+      :id="props.menuId"
       class="ui-dropdown-menu"
       :class="[{ 'is-open': isActive }, props.popupClass]"
       :style="[props.popupStyle, menuStyle]"
@@ -96,6 +97,7 @@ const props = withDefaults(
     searchDebounce?: number;
     autoFocus?: boolean;
     autoHighlight?: boolean;
+    menuId?: string;
   }>(),
   {
     autoFocus: true,
@@ -107,6 +109,7 @@ const emit = defineEmits<{
   select: [T];
   'update:modelValue': [T];
   'update:open': [boolean];
+  'highlight-change': [string | null];
 }>();
 
 const root = ref<HTMLElement | null>(null);
@@ -200,6 +203,7 @@ function clearHighlight() {
   menu.value.querySelectorAll('.ui-input-candidate-item[aria-selected="true"]').forEach((el) => {
     el.setAttribute('aria-selected', 'false');
   });
+  emit('highlight-change', null);
 }
 
 function highlightItem(el: HTMLElement | undefined) {
@@ -207,6 +211,7 @@ function highlightItem(el: HTMLElement | undefined) {
   if (!el) return;
   el.setAttribute('aria-selected', 'true');
   el.scrollIntoView({ block: 'nearest' });
+  emit('highlight-change', el.id || null);
 }
 
 function highlightSelected() {
