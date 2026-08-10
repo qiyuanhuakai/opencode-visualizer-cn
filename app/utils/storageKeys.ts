@@ -55,6 +55,7 @@ export const StorageKeys = {
     terminalFontSizePx: 'settings.terminalFontSizePx.v1',
     appFontSizePx: 'settings.appFontSizePx.v1',
     messageFontSizePx: 'settings.messageFontSizePx.v1',
+    sidebarFontSizePx: 'settings.sidebarFontSizePx.v1',
     uiFontSizePx: 'settings.uiFontSizePx.v1',
     showOpenInEditorButton: 'settings.showOpenInEditorButton.v1',
     openInEditorMaxSizeMb: 'settings.openInEditorMaxSizeMb.v1',

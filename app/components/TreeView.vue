@@ -1196,6 +1196,7 @@ function onRowDoubleClick(row: VirtualRow) {
 
 <style scoped>
 .tree-view {
+  --tree-icon-size: clamp(18px, calc(var(--sidebar-font-size, 12px) + 6px), 20px);
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -1651,21 +1652,21 @@ function onRowDoubleClick(row: VirtualRow) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 16px;
-  width: 16px;
-  height: 16px;
+  flex: 0 0 var(--tree-icon-size);
+  width: var(--tree-icon-size);
+  height: var(--tree-icon-size);
 }
 
 .tree-icon :deep(svg) {
   display: block;
-  width: 16px;
-  height: 16px;
+  width: var(--tree-icon-size);
+  height: var(--tree-icon-size);
 }
 
 .tree-name {
   flex: 1;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--sidebar-font-size, 12px);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

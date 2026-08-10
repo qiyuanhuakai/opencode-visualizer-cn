@@ -721,9 +721,13 @@ const messages: LocaleMessages = {
       label: '訊息字型大小',
       description: '聊天訊息和執行緒歷史中使用的字型大小（像素）。',
     },
+    sidebarFontSizePx: {
+      label: '側邊欄字型大小',
+      description: '檔案樹、工作階段樹和待辦區域文字的字型大小（像素）。',
+    },
     uiFontSizePx: {
       label: '介面字型大小',
-      description: '側邊欄、頂部面板、彈窗和下拉選單中使用的字型大小（像素）。',
+      description: '頂部面板、彈窗和下拉選單中使用的字型大小（像素）。',
     },
     fontSettings: {
       label: '字型設定',

@@ -96,7 +96,7 @@ function priorityLabel(priority: string): string {
 }
 
 .todo-title {
-  font-size: 12px;
+  font-size: var(--sidebar-font-size, 12px);
   font-weight: 700;
   letter-spacing: 0.08em;
   color: var(--theme-side-text, #e2e8f0);
@@ -209,6 +209,7 @@ function priorityLabel(priority: string): string {
 .todo-text {
   flex: 1;
   min-width: 0;
+  font-size: var(--sidebar-font-size, 12px);
   overflow-wrap: anywhere;
 }
 

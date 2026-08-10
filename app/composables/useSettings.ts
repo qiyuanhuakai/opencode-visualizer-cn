@@ -31,6 +31,9 @@ const MAX_APP_FONT_SIZE_PX = 20;
 const DEFAULT_MESSAGE_FONT_SIZE_PX = 13;
 const MIN_MESSAGE_FONT_SIZE_PX = 10;
 const MAX_MESSAGE_FONT_SIZE_PX = 20;
+const DEFAULT_SIDEBAR_FONT_SIZE_PX = 12;
+const MIN_SIDEBAR_FONT_SIZE_PX = 10;
+const MAX_SIDEBAR_FONT_SIZE_PX = 20;
 const DEFAULT_UI_FONT_SIZE_PX = 12;
 const MIN_UI_FONT_SIZE_PX = 10;
 const MAX_UI_FONT_SIZE_PX = 16;
@@ -96,6 +99,14 @@ function normalizeMessageFontSizePx(value: unknown) {
   return rounded;
 }
 
+function normalizeSidebarFontSizePx(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_SIDEBAR_FONT_SIZE_PX;
+  const rounded = Math.round(value);
+  if (rounded < MIN_SIDEBAR_FONT_SIZE_PX) return MIN_SIDEBAR_FONT_SIZE_PX;
+  if (rounded > MAX_SIDEBAR_FONT_SIZE_PX) return MAX_SIDEBAR_FONT_SIZE_PX;
+  return rounded;
+}
+
 function normalizeUiFontSizePx(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_UI_FONT_SIZE_PX;
   const rounded = Math.round(value);
@@ -123,6 +134,12 @@ function readMessageFontSizePx() {
   if (!raw) return DEFAULT_MESSAGE_FONT_SIZE_PX;
   const parsed = Number(raw);
   return normalizeMessageFontSizePx(parsed);
+}
+
+function readSidebarFontSizePx() {
+  const raw = storageGet(StorageKeys.settings.sidebarFontSizePx);
+  if (!raw) return DEFAULT_SIDEBAR_FONT_SIZE_PX;
+  return normalizeSidebarFontSizePx(Number(raw));
 }
 
 function readUiFontSizePx() {
@@ -208,6 +225,7 @@ const appMonospaceFontFamily = ref(readAppMonospaceFontFamily());
 const terminalFontSizePx = ref(readTerminalFontSizePx());
 const appFontSizePx = ref(readAppFontSizePx());
 const messageFontSizePx = ref(readMessageFontSizePx());
+const sidebarFontSizePx = ref(readSidebarFontSizePx());
 const uiFontSizePx = ref(readUiFontSizePx());
 const showOpenInEditorButton = ref(storageGet(StorageKeys.settings.showOpenInEditorButton) !== 'false');
 const openInEditorMaxSizeMb = ref(readOpenInEditorMaxSizeMb());
@@ -287,6 +305,10 @@ watch(appFontSizePx, (value) => {
 
 watch(messageFontSizePx, (value) => {
   storageSet(StorageKeys.settings.messageFontSizePx, String(value));
+}, syncWatchOptions);
+
+watch(sidebarFontSizePx, (value) => {
+  storageSet(StorageKeys.settings.sidebarFontSizePx, String(value));
 }, syncWatchOptions);
 
 watch(uiFontSizePx, (value) => {
@@ -398,6 +420,10 @@ if (typeof window !== 'undefined') {
       const parsed = event.newValue === null ? DEFAULT_MESSAGE_FONT_SIZE_PX : Number(event.newValue);
       messageFontSizePx.value = normalizeMessageFontSizePx(parsed);
     }
+    if (event.key === storageKey(StorageKeys.settings.sidebarFontSizePx)) {
+      const parsed = event.newValue === null ? DEFAULT_SIDEBAR_FONT_SIZE_PX : Number(event.newValue);
+      sidebarFontSizePx.value = normalizeSidebarFontSizePx(parsed);
+    }
     if (event.key === storageKey(StorageKeys.settings.uiFontSizePx)) {
       const parsed = event.newValue === null ? DEFAULT_UI_FONT_SIZE_PX : Number(event.newValue);
       uiFontSizePx.value = normalizeUiFontSizePx(parsed);
@@ -481,6 +507,7 @@ export function useSettings() {
     terminalFontSizePx,
     appFontSizePx,
     messageFontSizePx,
+    sidebarFontSizePx,
     uiFontSizePx,
     defaultTerminalFontSizePx: DEFAULT_TERMINAL_FONT_SIZE_PX,
     minTerminalFontSizePx: MIN_TERMINAL_FONT_SIZE_PX,
@@ -491,6 +518,9 @@ export function useSettings() {
     defaultMessageFontSizePx: DEFAULT_MESSAGE_FONT_SIZE_PX,
     minMessageFontSizePx: MIN_MESSAGE_FONT_SIZE_PX,
     maxMessageFontSizePx: MAX_MESSAGE_FONT_SIZE_PX,
+    defaultSidebarFontSizePx: DEFAULT_SIDEBAR_FONT_SIZE_PX,
+    minSidebarFontSizePx: MIN_SIDEBAR_FONT_SIZE_PX,
+    maxSidebarFontSizePx: MAX_SIDEBAR_FONT_SIZE_PX,
     defaultUiFontSizePx: DEFAULT_UI_FONT_SIZE_PX,
     minUiFontSizePx: MIN_UI_FONT_SIZE_PX,
     maxUiFontSizePx: MAX_UI_FONT_SIZE_PX,

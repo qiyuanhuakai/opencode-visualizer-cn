@@ -557,6 +557,23 @@
                 <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.messageFontSizePx.description') }}</div>
               </div>
               <div class="font-setting-section">
+                <label :for="sidebarSizeInputId" class="font-setting-section-label">{{ $t('settings.sidebarFontSizePx.label') }}</label>
+                <div class="number-setting-group">
+                  <input
+                    :id="sidebarSizeInputId"
+                    v-model.number="sidebarFontSizePx"
+                    type="number"
+                    class="number-input"
+                    :min="minSidebarFontSizePx"
+                    :max="maxSidebarFontSizePx"
+                    step="1"
+                    @blur="clampSidebarFontSize"
+                    @keydown.enter="clampSidebarFontSize"
+                  />
+                </div>
+                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.sidebarFontSizePx.description') }}</div>
+              </div>
+              <div class="font-setting-section">
                 <label :for="uiSizeInputId" class="font-setting-section-label">{{ $t('settings.uiFontSizePx.label') }}</label>
                 <div class="number-setting-group">
                   <input
@@ -772,6 +789,7 @@ const appInputLabelId = 'settings-app-font-input-label';
 const appTextareaId = 'settings-app-font-input';
 const appSizeInputId = 'settings-app-font-size';
 const messageSizeInputId = 'settings-message-font-size';
+const sidebarSizeInputId = 'settings-sidebar-font-size';
 const uiSizeInputId = 'settings-ui-font-size';
 const supportsLocalFontsApi = supportsLocalFontAccess();
 const isLoadingLocalFonts = ref(false);
@@ -796,6 +814,7 @@ const {
   terminalFontSizePx,
   appFontSizePx,
   messageFontSizePx,
+  sidebarFontSizePx,
   uiFontSizePx,
   themeStorage,
   externalThemes,
@@ -807,6 +826,8 @@ const {
   maxAppFontSizePx,
   minMessageFontSizePx,
   maxMessageFontSizePx,
+  minSidebarFontSizePx,
+  maxSidebarFontSizePx,
   minUiFontSizePx,
   maxUiFontSizePx,
   showOpenInEditorButton,
@@ -1097,6 +1118,13 @@ function clampMessageFontSize() {
   messageFontSizePx.value = Math.max(
     minMessageFontSizePx,
     Math.min(maxMessageFontSizePx, messageFontSizePx.value),
+  );
+}
+
+function clampSidebarFontSize() {
+  sidebarFontSizePx.value = Math.max(
+    minSidebarFontSizePx,
+    Math.min(maxSidebarFontSizePx, sidebarFontSizePx.value),
   );
 }
 
