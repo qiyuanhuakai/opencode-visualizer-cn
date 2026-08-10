@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyTextTransformerAtCursor,
+  applyTextTransformerSelectionAtCursor,
   expandTextTransformers,
   findTextTransformerMatches,
   getTextTransformerTriggerIssue,
@@ -34,7 +35,11 @@ describe('text transformers', () => {
     const result = applyTextTransformerAtCursor(input, cursor, transformers, ' ');
 
     // Then: the replacement and delimiter are inserted without disturbing the suffix.
-    expect(result).toEqual({ text: 'Before 你好  after', cursor: 'Before 你好 '.length, replaced: true });
+    expect(result).toEqual({
+      text: 'Before 你好  after',
+      cursor: 'Before 你好 '.length,
+      replaced: true,
+    });
   });
 
   it('leaves unmatched sequences unchanged at the cursor', () => {
@@ -46,6 +51,22 @@ describe('text transformers', () => {
 
     // Then: no replacement or delimiter is synthesized by the transformer.
     expect(result).toEqual({ text: input, cursor: input.length, replaced: false });
+  });
+
+  it('replaces the complete current token when a completion is selected mid-token', () => {
+    // Given: the cursor sits inside a partially typed transformer token followed by punctuation.
+    const input = String.raw`Before \ne|ver, after`.replace('|', '');
+    const cursor = String.raw`Before \ne`.length;
+
+    // When: the matching completion is selected.
+    const result = applyTextTransformerSelectionAtCursor(input, cursor, transformers[1], ' ');
+
+    // Then: the whole trigger is replaced without deleting the punctuation delimiter.
+    expect(result).toEqual({
+      text: 'Before 千万不要这样做 , after',
+      cursor: 'Before 千万不要这样做 '.length,
+      replaced: true,
+    });
   });
 
   it('returns case-insensitive prefix matches for completion', () => {
@@ -73,6 +94,25 @@ describe('text transformers', () => {
 
     // Then: only a canonical, unambiguous mapping remains.
     expect(result).toEqual([{ trigger: 'hi', replacement: 'second' }]);
+  });
+
+  it('normalizes editable mappings before expanding at the send boundary', () => {
+    // Given: live settings contain an empty draft, an invalid trigger, and duplicate rows.
+    const editableTransformers = [
+      { trigger: '', replacement: 'removed' },
+      { trigger: 'bad key', replacement: 'invalid' },
+      { trigger: 'dup', replacement: 'first' },
+      { trigger: 'dup', replacement: 'last' },
+    ];
+
+    // When: a prompt crosses the send boundary before the editor is reloaded.
+    const result = expandTextTransformers(
+      String.raw`keep \ and \bad key but expand \dup`,
+      editableTransformers,
+    );
+
+    // Then: drafts and invalid rows stay inert while the final duplicate wins.
+    expect(result).toBe(String.raw`keep \ and \bad key but expand last`);
   });
 
   it('classifies invalid and duplicate transformer triggers', () => {

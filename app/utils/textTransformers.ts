@@ -128,14 +128,27 @@ export function applyTextTransformerSelectionAtCursor(
 ): TextTransformerApplication {
   const context = transformerContext(input, cursor);
   if (!context) return { text: input, cursor, replaced: false };
-  return applyTransformerAtContext(input, context, transformer, trailingText);
+  const triggerSuffix = transformer.trigger.slice(context.query.length);
+  const inputSuffix = input.slice(context.end, context.end + triggerSuffix.length);
+  const consumedSuffixLength =
+    inputSuffix.toLocaleLowerCase() === triggerSuffix.toLocaleLowerCase()
+      ? triggerSuffix.length
+      : 0;
+  return applyTransformerAtContext(
+    input,
+    { ...context, end: context.end + consumedSuffixLength },
+    transformer,
+    trailingText,
+  );
 }
 
 export function expandTextTransformers(
   input: string,
   transformers: readonly TextTransformer[],
 ): string {
-  const entries = [...transformers].sort((left, right) => right.trigger.length - left.trigger.length);
+  const entries = normalizeTextTransformers(transformers).sort(
+    (left, right) => right.trigger.length - left.trigger.length,
+  );
   if (entries.length === 0) return input;
   const alternatives = entries.map((item) => escapeRegularExpression(item.trigger)).join('|');
   const pattern = new RegExp(`\\\\(${alternatives})(?=$|[\\s.,!?;:，。！？；：])`, 'giu');
