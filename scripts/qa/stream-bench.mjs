@@ -29,89 +29,32 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
-// Playwright resolution (same approach as stream-driver-check.mjs)
+// Playwright resolution (repo-root node_modules ONLY — the pinned dev
+// dependency. No npx cache, no global install, no hardcoded paths; the
+// browser is the explicitly provisioned chromium from `pnpm exec playwright
+// install chromium`).
 // ---------------------------------------------------------------------------
-function resolvePlaywrightDir() {
-  const candidates = [];
-  const npxRoot = path.join(os.homedir(), '.npm/_npx');
-  if (fs.existsSync(npxRoot)) {
-    for (const dir of fs.readdirSync(npxRoot)) {
-      const pkgDir = path.join(npxRoot, dir, 'node_modules/playwright');
-      const pkgJson = path.join(pkgDir, 'package.json');
-      if (fs.existsSync(pkgJson)) {
-        try {
-          const version = JSON.parse(fs.readFileSync(pkgJson, 'utf8')).version;
-          candidates.push({ pkgDir, version });
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  }
-  // Resolve global playwright dynamically so other users' installs work.
-  try {
-    const globalRoot = require('child_process')
-      .execSync('npm root -g', { encoding: 'utf8' })
-      .trim();
-    const globalDir = path.join(globalRoot, '@playwright/cli/node_modules/playwright');
-    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
-      const version = JSON.parse(
-        fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
-      ).version;
-      candidates.push({ pkgDir: globalDir, version });
-    }
-  } catch {
-    // npm root -g unavailable; fall back to the hard-coded path for this machine.
-    const globalDir =
-      '/home/qiyuaner/.nvm/versions/node/v22.22.2/lib/node_modules/@playwright/cli/node_modules/playwright';
-    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
-      try {
-        const version = JSON.parse(
-          fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
-        ).version;
-        candidates.push({ pkgDir: globalDir, version });
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-  if (candidates.length === 0) {
-    throw new Error('playwright not found in npx cache or global @playwright/cli');
-  }
-  candidates.sort((a, b) => {
-    if (a.version === '1.62.1') return -1;
-    if (b.version === '1.62.1') return 1;
-    return b.version.localeCompare(a.version, undefined, { numeric: true });
-  });
-  return candidates[0];
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const PW_PKG_PATH = path.join(REPO_ROOT, 'node_modules/playwright/package.json');
+if (!fs.existsSync(PW_PKG_PATH)) {
+  throw new Error(`playwright not found at ${PW_PKG_PATH} — run pnpm install first`);
 }
-
-function resolveChromiumExecutable(chromium) {
-  const browsersPath = path.join(os.homedir(), '.cache/ms-playwright');
-  const preferred = chromium.executablePath();
-  if (fs.existsSync(preferred)) return preferred;
-  const revisions = fs
-    .readdirSync(browsersPath)
-    .filter((d) => /^chromium-\d+$/.test(d))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
-  for (const rev of revisions) {
-    const bin = path.join(browsersPath, rev, 'chrome-linux64/chrome');
-    if (fs.existsSync(bin)) return bin;
-  }
-  throw new Error(`No chromium binary found under ${browsersPath}`);
-}
-
-const pwInfo = resolvePlaywrightDir();
-const playwright = await import(`${pwInfo.pkgDir}/index.mjs`).catch(() =>
-  import(`${pwInfo.pkgDir}/index.js`),
+const playwrightVersion = JSON.parse(fs.readFileSync(PW_PKG_PATH, 'utf8')).version;
+const playwright = await import(path.join(REPO_ROOT, 'node_modules/playwright/index.mjs')).catch(
+  () => import(path.join(REPO_ROOT, 'node_modules/playwright/index.js')),
 );
 const chromium = playwright.chromium ?? playwright.default?.chromium;
-const chromiumPath = resolveChromiumExecutable(chromium);
+const chromiumPath = chromium.executablePath();
+if (!fs.existsSync(chromiumPath)) {
+  throw new Error(
+    `No chromium binary found at ${chromiumPath} — run "pnpm exec playwright install chromium" first`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Config
@@ -229,7 +172,7 @@ function mean(values) {
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
-  console.log(`[bench] playwright ${pwInfo.version}`);
+  console.log(`[bench] playwright ${playwrightVersion}`);
   console.log(`[bench] chromium: ${chromiumPath}`);
   console.log(`[bench] page: ${BENCH_URL}`);
 
@@ -243,6 +186,8 @@ async function main() {
     executablePath: chromiumPath,
     args: ['--disable-gpu', '--disable-software-rasterizer'],
   });
+  const chromiumVersion = await browser.version();
+  console.log(`[bench] chromium version: ${chromiumVersion}`);
 
   const allRuns = [];
   const sanityFailures = [];
@@ -404,6 +349,9 @@ async function main() {
     generatedAt: new Date().toISOString(),
     scenario: SCENARIO,
     baseUrl: BENCH_URL,
+    playwright: playwrightVersion,
+    chromium: chromiumPath,
+    chromiumVersion,
     runs: RUNS,
     combos: {},
   };
