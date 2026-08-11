@@ -1,6 +1,8 @@
-ignoredBuiltDependencies:
-  - electron-winstaller
-
-onlyBuiltDependencies:
-  - esbuild
-  - electron
+# pnpm 11 default-deny build policy. Classification (resolved versions, scripts, why)
+# recorded in .omo/evidence/electron-major-upgrade/task-1/versions.json.
+allowBuilds:
+  electron: true
+  esbuild: true
+  node-pty: true
+  vue-demi: true
+  electron-winstaller: false

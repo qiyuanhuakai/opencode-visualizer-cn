@@ -79,8 +79,8 @@
 
 | 依赖 | 版本要求 | 说明 |
 |---|---|---|
-| [Node.js](https://nodejs.org/) | ≥ 20 | 运行时与构建环境 |
-| [pnpm](https://pnpm.io/) | 10.29.3 (推荐) | 包管理器，本项目使用 `packageManager` 锁定 |
+| [Node.js](https://nodejs.org/) | ≥ 24 | 运行时与构建环境 |
+| [pnpm](https://pnpm.io/) | 11.21.0 (推荐) | 包管理器，本项目使用 `packageManager` 锁定 |
 | [OpenCode Server](https://github.com/sst/opencode) | 最新版 | 后端服务，提供 API 与智能体能力 |
 | ACP Agent CLI | 可选 | 如 `pi-acp`、`omp --mode acp`、`kimi acp`；在状态监控中按需启用 |
 | 系统 `$EDITOR` | 可选 | 用于"用编辑器打开"功能（如 VS Code、Neovim 等） |
@@ -381,8 +381,8 @@ Before getting started, ensure your environment meets the following criteria:
 
 | Dependency | Version | Description |
 |---|---|---|
-| [Node.js](https://nodejs.org/) | ≥ 20 | Runtime and build environment |
-| [pnpm](https://pnpm.io/) | 10.29.3 (recommended) | Package manager, locked via `packageManager` |
+| [Node.js](https://nodejs.org/) | ≥ 24 | Runtime and build environment |
+| [pnpm](https://pnpm.io/) | 11.21.0 (recommended) | Package manager, locked via `packageManager` |
 | [OpenCode Server](https://github.com/sst/opencode) | Latest | Backend service providing API and agent capabilities |
 | ACP Agent CLI | Optional | For example `pi-acp`, `omp --mode acp`, or `kimi acp`; enable agents as needed in Status Monitor |
 | System `$EDITOR` | Optional | For "Open in Editor" feature (e.g., VS Code, Neovim) |

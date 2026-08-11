@@ -27,6 +27,9 @@
     "electron"
   ],
   "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "prepack": "vite build",
     "format": "oxfmt",
@@ -83,7 +86,7 @@
     "@tailwindcss/postcss": "^4.1.18",
     "@tailwindcss/typography": "^0.5.19",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^25.2.3",
+    "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.4",
     "@xterm/xterm": "^6.0.0",
     "autoprefixer": "^10.4.24",
@@ -105,5 +108,5 @@
     "vue": "^3.5.28",
     "vue-tsc": "^3.2.4"
   },
-  "packageManager": "pnpm@10.29.3"
+  "packageManager": "pnpm@11.21.0"
 }
