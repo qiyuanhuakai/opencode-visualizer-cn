@@ -254,11 +254,19 @@ app.whenReady().then(() => {
       return new Response('Not Found', { status: 404 });
     }
     // Support both unpacked (dev/preview) and asar-packed (production) layouts
-    const candidates = [
-      path.join(__dirname, '..', 'dist', relativePath),
-      path.join(process.resourcesPath, 'app.asar.unpacked', 'dist', relativePath),
+    const roots = [
+      path.join(__dirname, '..', 'dist'),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'dist'),
     ];
-    for (const filePath of candidates) {
+    for (const root of roots) {
+      const filePath = path.join(root, relativePath);
+      // Final containment check: the resolved path must stay beneath the
+      // resolved dist root (defense-in-depth behind resolveAppRelativePath).
+      const resolvedRoot = path.resolve(root);
+      const resolvedPath = path.resolve(filePath);
+      if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(resolvedRoot + path.sep)) {
+        continue;
+      }
       try {
         const data = await fs.promises.readFile(filePath);
         return new Response(data, {

@@ -34,6 +34,57 @@ describe('electron-runtime-policy', () => {
       expect(resolveAppRelativePath('/..')).toBeNull();
       expect(resolveAppRelativePath('/a/b/../../../x')).toBeNull();
     });
+
+    it('rejects backslash traversal that escapes Windows-native path joins', () => {
+      expect(resolveAppRelativePath('/assets\\..\\..\\outside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets\\..\\secret.txt')).toBeNull();
+      expect(resolveAppRelativePath('\\..\\outside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets\\sub\\app.js')).toBeNull();
+    });
+
+    it('rejects mixed forward/backslash separator traversal', () => {
+      expect(resolveAppRelativePath('/assets\\/../outside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets/..\\..\\outside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets\\..\\/outside.txt')).toBeNull();
+    });
+
+    it('rejects percent-encoded separators and dot segments', () => {
+      expect(resolveAppRelativePath('/assets%5c..%5c..%5coutside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets%5C..%5Csecret.txt')).toBeNull();
+      expect(resolveAppRelativePath('/%2e%2e/%2e%2e/outside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets/%2e%2e%5csecret.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets%2f..%2fsecret.txt')).toBeNull();
+    });
+
+    it('rejects malformed percent-encoding instead of passing it through', () => {
+      expect(resolveAppRelativePath('/assets/%zz/app.js')).toBeNull();
+      expect(resolveAppRelativePath('/assets/%e0%a4%a')).toBeNull();
+    });
+
+    it('rejects trailing-dot and dot-space segments Windows folds into dot segments', () => {
+      expect(resolveAppRelativePath('/assets/.../outside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets/.. /../outside.txt')).toBeNull();
+      expect(resolveAppRelativePath('/assets/..%20/../outside.txt')).toBeNull();
+    });
+
+    it('never returns a path with backslashes or surviving dot-dot segments', () => {
+      const inputs = [
+        '/',
+        '',
+        '/assets/app.js',
+        '/assets/../app.js',
+        '/a/./b/c.css',
+        '/assets\\..\\x',
+        '/%2e%2e/x',
+        '/assets/.../x',
+      ];
+      for (const input of inputs) {
+        const result = resolveAppRelativePath(input);
+        if (result === null) continue;
+        expect(result).not.toContain('\\');
+        expect(result.split('/')).not.toContain('..');
+      }
+    });
   });
 
   describe('classifyMime', () => {

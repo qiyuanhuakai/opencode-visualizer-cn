@@ -24,6 +24,11 @@ const ALLOWED_PERMISSIONS = new Set(['notifications']);
  * Returns `null` when the path escapes above the root (deny: 404).
  * Both `''` and `'/'` (the two serializations of the app entry URL) map to
  * `index.html`.
+ *
+ * The result feeds platform-native `path.join`, so containment must hold on
+ * every platform — including Windows, where `\` is a separator and trailing
+ * dots/spaces are stripped (`...` folds to `..`). The returned string is
+ * guaranteed to contain no backslash and no `..` segment.
  */
 export function resolveAppRelativePath(pathname) {
   const segments = String(pathname ?? '').split('/');
@@ -35,9 +40,28 @@ export function resolveAppRelativePath(pathname) {
       stack.pop();
       continue;
     }
+    // `\` is a separator for Windows-native joins — never let it through.
+    if (segment.includes('\\')) return null;
+    // Windows strips trailing dots/spaces, folding segments like `...` or
+    // `.. ` into `..` on disk — reject anything made only of dots/spaces.
+    if (/^[. ]+$/.test(segment)) return null;
+    // Percent-encoded separators or dot segments bypass the split above;
+    // reject any segment whose decoded form would re-introduce them, and
+    // reject malformed encodings outright.
+    let decoded;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return null;
+    }
+    if (decoded.includes('/') || decoded.includes('\\') || /^[. ]+$/.test(decoded)) return null;
     stack.push(segment);
   }
-  return stack.length === 0 ? 'index.html' : stack.join('/');
+  const joined = stack.length === 0 ? 'index.html' : stack.join('/');
+  // Defensive guarantee: no `..` segment and no backslash survives, so the
+  // joined result cannot escape the dist root under any native path API.
+  if (joined.includes('\\') || joined.split('/').includes('..')) return null;
+  return joined;
 }
 
 /** Classify an `app://` relative path by extension; unknown types never widen beyond octet-stream. */
