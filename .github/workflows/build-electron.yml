@@ -88,6 +88,17 @@ jobs:
         shell: bash
         run: bash scripts/qa/electron-installer-unix.sh --platform macos --arch x64 --artifacts-dir dist-electron --smoke-out-dir "$RUNNER_TEMP/smoke-installer"
 
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          ELECTRON_BIN="$(node -e "process.stdout.write(require('electron'))")"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron \
+            --electron-executable "$ELECTRON_BIN" \
+            --out-dir "$VIS_PTY_OUT_DIR"
+
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
@@ -136,6 +147,17 @@ jobs:
       - name: Exercise installer (DMG and ZIP)
         shell: bash
         run: bash scripts/qa/electron-installer-unix.sh --platform macos --arch arm64 --artifacts-dir dist-electron --smoke-out-dir "$RUNNER_TEMP/smoke-installer"
+
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          ELECTRON_BIN="$(node -e "process.stdout.write(require('electron'))")"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron \
+            --electron-executable "$ELECTRON_BIN" \
+            --out-dir "$VIS_PTY_OUT_DIR"
 
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
@@ -194,6 +216,15 @@ jobs:
         shell: pwsh
         run: ./scripts/qa/electron-installer-windows.ps1 -Arch x64
 
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: pwsh
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          $electronBin = node -e "process.stdout.write(require('electron'))"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron --electron-executable $electronBin --out-dir $env:VIS_PTY_OUT_DIR
+
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
@@ -250,6 +281,15 @@ jobs:
         shell: pwsh
         run: ./scripts/qa/electron-installer-windows.ps1 -Arch arm64
 
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: pwsh
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          $electronBin = node -e "process.stdout.write(require('electron'))"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron --electron-executable $electronBin --out-dir $env:VIS_PTY_OUT_DIR
+
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
@@ -297,6 +337,17 @@ jobs:
       - name: Exercise installer (deb and AppImage)
         shell: bash
         run: bash scripts/qa/electron-installer-unix.sh --platform linux --arch x64 --artifacts-dir dist-electron --smoke-out-dir "$RUNNER_TEMP/smoke-installer"
+
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          ELECTRON_BIN="$(node -e "process.stdout.write(require('electron'))")"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron \
+            --electron-executable "$ELECTRON_BIN" \
+            --out-dir "$VIS_PTY_OUT_DIR"
 
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
@@ -395,6 +446,17 @@ jobs:
           sudo dpkg -r vis-bridge
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
 
+      - name: Verify node-pty across runtimes (VIS_PTY_OK)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes node,sea \
+            --bridge-binary "$(command -v vis_bridge)" \
+            --state-dir "$RUNNER_TEMP/pty-dual-runtime-state" \
+            --port 23201 --out-dir "$VIS_PTY_OUT_DIR"
+
       - name: Exercise macOS installer
         if: runner.os == 'macOS'
         shell: bash
@@ -415,10 +477,32 @@ jobs:
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
           sudo rm /usr/local/bin/vis_bridge
 
+      - name: Verify node-pty across runtimes (VIS_PTY_OK)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes node,sea \
+            --bridge-binary "$(command -v vis_bridge)" \
+            --state-dir "$RUNNER_TEMP/pty-dual-runtime-state" \
+            --port 23201 --out-dir "$VIS_PTY_OUT_DIR"
+
       - name: Exercise Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/qa/vis-bridge-installer-windows.ps1
+
+      - name: Verify node-pty across runtimes (VIS_PTY_OK)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes node,sea `
+            --bridge-binary "$(Get-Command vis_bridge).Source" `
+            --state-dir (Join-Path $env:RUNNER_TEMP 'pty-dual-runtime-state') `
+            --port 23201 --out-dir $env:VIS_PTY_OUT_DIR
 
       - name: Upload vis_bridge installer
         uses: actions/upload-artifact@v4

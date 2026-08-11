@@ -41,6 +41,7 @@
     "electron:build": "vite build && electron-builder",
     "electron:preview": "vite build && electron-builder --dir",
     "qa:electron": "node scripts/qa/electron-smoke.mjs",
+    "qa:pty": "node scripts/qa/node-pty-dual-runtime.mjs",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
