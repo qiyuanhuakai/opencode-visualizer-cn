@@ -51,12 +51,24 @@ describe('build artifact contract', () => {
 
   it('wires a check script that measures dist against the frozen budget', () => {
     const src = readFileSync(CHECK_SCRIPT, 'utf8');
+    const helperSrc = readFileSync(path.join(REPO_ROOT, 'scripts/qa/ensure-production-dist.mjs'), 'utf8');
+    const serverLiveSrc = readFileSync(path.join(REPO_ROOT, 'app/serverLive.integration.test.ts'), 'utf8');
     expect(src).toMatch(/^#!\/usr\/bin\/env node/);
     expect(src).toContain('artifact-budget.json');
-    expect(src).toContain('pnpm build');
+    expect(src).toMatch(/ensure-production-dist\.mjs/); // auto-build path
     expect(src).toMatch(/\/assets\//); // absolute-ref detection
     expect(src).toMatch(/criticalAssets/);
     expect(src).toMatch(/totalBytes/);
+    // The auto-build must produce the REAL production artifact: NODE_ENV=test
+    // (vitest) poisons `vite build` into a different bundle that can break the
+    // frozen budget (task 12 regression); the helper forces production and
+    // lock-serializes concurrent builders on clean checkouts.
+    expect(helperSrc).toContain('pnpm build');
+    expect(helperSrc).toMatch(/NODE_ENV:\s*'production'/);
+    expect(helperSrc).toContain('.ensure-dist.lock');
+    // The live server contract serves real dist artifacts; on a clean checkout
+    // (test before build, CI validate order) it must ensure dist first.
+    expect(serverLiveSrc).toContain('ensure-production-dist.mjs');
   });
 
   it('produces a GREEN artifact report (index.html relative, chunks present, budget respected)', {

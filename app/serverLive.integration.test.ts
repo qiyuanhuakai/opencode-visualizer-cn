@@ -1,14 +1,28 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { get as httpGet, createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { connect } from 'node:net';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 const serverScript = join(process.cwd(), 'server.js');
 const distDir = join(process.cwd(), 'dist');
 const listeningLine = /Listening on http:\/\/([0-9.]+):(\d+)/;
+
+// server.js serves REAL built artifacts from dist/. On a clean checkout where
+// `pnpm test` runs before `pnpm build` (CI validate job order) dist does not
+// exist yet — ensure it first (production env, lock-serialized with the
+// artifact-budget auto-build) so the live contract measures the same artifact
+// CI ships, never a test-env build.
+beforeAll(() => {
+  const res = spawnSync(
+    process.execPath,
+    [join(process.cwd(), 'scripts/qa/ensure-production-dist.mjs')],
+    { cwd: process.cwd(), stdio: 'inherit', timeout: 180_000 },
+  );
+  expect(res.status, 'ensure-production-dist must produce dist/index.html').toBe(0);
+});
 
 interface HttpResponse {
   status: number;

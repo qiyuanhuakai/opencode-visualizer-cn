@@ -25,10 +25,11 @@
  * failed check.
  */
 
-import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { ensureProductionDist } from './ensure-production-dist.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '../..');
@@ -64,14 +65,17 @@ function globToRegex(glob) {
   return new RegExp(`^${glob.replace(/\./g, '\\.').replace(/\*/g, '[^/]*')}$`);
 }
 
-function main() {
+async function main() {
   if (!fs.existsSync(INDEX_PATH)) {
     if (noBuild) {
       console.error('[build-artifact-check] dist/index.html missing and --no-build given');
       process.exit(2);
     }
-    console.log('[build-artifact-check] dist missing — running pnpm build');
-    execSync('pnpm build', { cwd: REPO_ROOT, stdio: 'inherit' });
+    console.log('[build-artifact-check] dist missing — ensuring production dist');
+    // ensureProductionDist forces NODE_ENV=production and lock-serializes the
+    // build so concurrent vitest forks (clean-checkout `pnpm test` before
+    // `pnpm build`, CI validate order) never measure a test-env artifact.
+    await ensureProductionDist(REPO_ROOT);
   }
 
   if (!fs.existsSync(BUDGET_PATH)) {
@@ -155,4 +159,4 @@ function main() {
   process.exit(failed.length === 0 ? 0 : 1);
 }
 
-main();
+await main();
