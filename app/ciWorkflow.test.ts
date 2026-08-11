@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -21,6 +22,51 @@ function readOptional(relativePath: string): string {
 
 const unixQa = () => readOptional('scripts/qa/electron-installer-unix.sh');
 const windowsQa = () => readOptional('scripts/qa/electron-installer-windows.ps1');
+
+// js-yaml is only a transitive dep (hoisted into the pnpm store), not declared
+// directly; load it from the store instead of adding a dependency.
+const requireFromRepo = createRequire(path.join(repoRoot, 'ci-workflow-test.cjs'));
+const jsYaml = requireFromRepo('./node_modules/.pnpm/node_modules/js-yaml') as {
+  load(text: string): unknown;
+};
+
+interface WorkflowStep {
+  name?: string;
+  if?: string;
+  run?: string;
+}
+interface WorkflowJob {
+  steps?: WorkflowStep[];
+  needs?: string | string[];
+  strategy?: { matrix?: { include?: Array<Record<string, string>> } };
+}
+interface WorkflowDoc {
+  jobs?: Record<string, WorkflowJob>;
+}
+
+/** Parsed workflow structure — ordering assertions read this, never raw text. */
+const doc = jsYaml.load(workflow) as WorkflowDoc;
+
+function jobSteps(job: WorkflowJob | undefined): WorkflowStep[] {
+  return Array.isArray(job?.steps) ? job.steps : [];
+}
+
+function stepIndexOf(job: WorkflowJob | undefined, match: (step: WorkflowStep) => boolean, label: string): number {
+  const index = jobSteps(job).findIndex(match);
+  expect(index, `${label} step must exist`).toBeGreaterThanOrEqual(0);
+  return index;
+}
+
+const PTY_STEP = 'Verify node-pty across runtimes (VIS_PTY_OK)';
+const BRIDGE_LANE_OS: Record<string, string> = { linux: 'Linux', macos: 'macOS', windows: 'Windows' };
+
+/** The step that removes the bridge binary on this lane (Windows: the script that runs the uninstaller). */
+function isBridgeRemovalStep(step: WorkflowStep, os: string): boolean {
+  const run = step.run ?? '';
+  if (os === 'Linux') return run.includes('dpkg -r');
+  if (os === 'macOS') return run.includes('rm /usr/local/bin/vis_bridge');
+  return run.includes('vis-bridge-installer-windows.ps1');
+}
 
 /** Slice the workflow text of one job block (from `<name>:` up to the next 2-space-indented job key). */
 function laneBlock(jobName: string): string {
@@ -222,5 +268,58 @@ describe('electron installer QA scripts', () => {
     // After the smoke driver quits the app, no child processes may remain.
     expect(script).toContain('Get-Process');
     expect(script).toContain('throw');
+  });
+});
+
+describe('workflow step ordering (parsed YAML)', () => {
+  // allow: SIZE_OK — mandated two-file fix scope (f3-1/f3-11) forbids extracting these helpers to a new file.
+  it('runs node-pty verification before removing the bridge binary in every bridge lane', () => {
+    const job = doc.jobs?.['bridge-installers'];
+    const lanes = job?.strategy?.matrix?.include ?? [];
+    for (const lane of lanes) {
+      const os = BRIDGE_LANE_OS[lane.platform];
+      if (os === undefined) throw new Error(`bridge lane platform ${lane.platform} is not linux/macos/windows`);
+      const ptyIndex = stepIndexOf(
+        job,
+        (s) => s.name === PTY_STEP && (s.if ?? '').includes(`runner.os == '${os}'`),
+        `bridge ${os} pty-verify`,
+      );
+      const removalIndex = stepIndexOf(job, (s) => isBridgeRemovalStep(s, os), `bridge ${os} removal`);
+      expect(ptyIndex, `bridge ${os}: pty verification must precede binary removal`).toBeLessThan(removalIndex);
+    }
+  });
+
+  it('runs bridge binary removal as a guaranteed cleanup step (if: always())', () => {
+    const job = doc.jobs?.['bridge-installers'];
+    const removals = jobSteps(job).filter((s) => isBridgeRemovalStep(s, 'Linux') || isBridgeRemovalStep(s, 'macOS'));
+    expect(removals, 'linux and macOS lanes must each have a dedicated removal step').toHaveLength(2);
+    for (const removal of removals) {
+      expect(removal.if ?? '', 'removal step must run even after earlier steps fail').toContain('always()');
+    }
+  });
+
+  it('runs the electron smoke before uploading artifacts in every electron lane', () => {
+    for (const lane of ELECTRON_LANES) {
+      const job = doc.jobs?.[lane.job];
+      const smokeIndex = stepIndexOf(job, (s) => (s.run ?? '').includes('electron-smoke.mjs'), `${lane.job} smoke`);
+      const uploadIndex = stepIndexOf(job, (s) => s.name === 'Upload VIS installers', `${lane.job} upload`);
+      expect(smokeIndex, `${lane.job}: smoke must run before upload`).toBeLessThan(uploadIndex);
+    }
+  });
+
+  it('complete-ci needs exactly the lane set', () => {
+    const job = doc.jobs?.['complete-ci'];
+    const needs = Array.isArray(job?.needs) ? job.needs : typeof job?.needs === 'string' ? job.needs.split(/,\s*/) : [];
+    const laneSet = [
+      'validate',
+      'build-macos-x64',
+      'build-macos-arm64',
+      'build-windows-x64',
+      'build-windows-arm64',
+      'build-linux-x64',
+      'bridge-installers',
+    ];
+    expect([...needs].sort()).toEqual([...laneSet].sort());
+    expect(needs.length, 'needs must contain no extras').toBe(laneSet.length);
   });
 });

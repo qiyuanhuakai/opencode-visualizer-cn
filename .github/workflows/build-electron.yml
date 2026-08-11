@@ -443,8 +443,6 @@ jobs:
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-lifecycle.json"
           vis_bridge start --port 23199
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs spawn "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
-          sudo dpkg -r vis-bridge
-          node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
 
       - name: Verify node-pty across runtimes (VIS_PTY_OK)
         if: runner.os == 'Linux'
@@ -456,6 +454,13 @@ jobs:
             --bridge-binary "$(command -v vis_bridge)" \
             --state-dir "$RUNNER_TEMP/pty-dual-runtime-state" \
             --port 23201 --out-dir "$VIS_PTY_OUT_DIR"
+
+      - name: Uninstall vis_bridge (cleanup)
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo dpkg -r vis-bridge
+          node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$RUNNER_TEMP/vis-bridge-state" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
 
       - name: Exercise macOS installer
         if: runner.os == 'macOS'
@@ -475,7 +480,6 @@ jobs:
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs spawn "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
           vis_bridge stop
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
-          sudo rm /usr/local/bin/vis_bridge
 
       - name: Verify node-pty across runtimes (VIS_PTY_OK)
         if: runner.os == 'macOS'
@@ -488,10 +492,11 @@ jobs:
             --state-dir "$RUNNER_TEMP/pty-dual-runtime-state" \
             --port 23201 --out-dir "$VIS_PTY_OUT_DIR"
 
-      - name: Exercise Windows installer
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/qa/vis-bridge-installer-windows.ps1
+      - name: Uninstall vis_bridge (cleanup)
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo rm /usr/local/bin/vis_bridge
 
       - name: Verify node-pty across runtimes (VIS_PTY_OK)
         if: runner.os == 'Windows'
@@ -500,9 +505,14 @@ jobs:
           VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
         run: |
           node scripts/qa/node-pty-dual-runtime.mjs --runtimes node,sea `
-            --bridge-binary "$(Get-Command vis_bridge).Source" `
+            --bridge-binary "$(Resolve-Path 'dist-bridge/vis_bridge.exe')" `
             --state-dir (Join-Path $env:RUNNER_TEMP 'pty-dual-runtime-state') `
             --port 23201 --out-dir $env:VIS_PTY_OUT_DIR
+
+      - name: Exercise Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/qa/vis-bridge-installer-windows.ps1
 
       - name: Upload vis_bridge installer
         uses: actions/upload-artifact@v4
