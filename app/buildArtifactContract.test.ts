@@ -1,12 +1,23 @@
-import { spawnSync } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
+import { once } from 'node:events';
+import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const BUDGET_PATH = path.join(REPO_ROOT, 'artifact-budget.json');
-const CHECK_SCRIPT = path.join(REPO_ROOT, 'scripts/qa/build-artifact-check.mjs');
+const ENSURE_SCRIPT = path.join(REPO_ROOT, 'scripts/qa/ensure-production-dist.mjs');
 const QA_SCRIPTS = [
   'scripts/qa/stream-driver-check.mjs',
   'scripts/qa/stream-md-check.mjs',
@@ -15,16 +26,165 @@ const QA_SCRIPTS = [
 
 const ceilKiB = (bytes: number) => Math.ceil(bytes / 1024) * 1024;
 
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ---------------------------------------------------------------------------
+// ensure-production-dist behavioral harness
+//
+// A REAL `vite build` is far too slow for serialization tests, so each test
+// builds a throwaway project in os.tmpdir() whose `pnpm build` runs a FAKE
+// builder that mimics the production build's dangerous properties:
+//   - wipes dist/ recursively at the start (vite `emptyOutDir: true`) —
+//     a lock living INSIDE dist/ is deleted by its own owner's build, which
+//     is exactly the F3 #3 defect;
+//   - optionally sleeps before writing the marker (so a concurrent caller
+//     arrives mid-build);
+//   - records NODE_ENV into dist/index.html (the production-env guarantee)
+//     and appends a line to .build-count per invocation (build counting).
+// The fake builder is written into the throwaway project, NOT into the repo.
+// ---------------------------------------------------------------------------
+
+const FAKE_BUILDER_SRC = `
+import fs from 'node:fs';
+import path from 'node:path';
+const dist = path.join(process.cwd(), 'dist');
+fs.appendFileSync(path.join(process.cwd(), '.build-count'), 'x\\n');
+fs.rmSync(dist, { recursive: true, force: true });
+fs.mkdirSync(path.join(dist, 'assets'), { recursive: true });
+fs.writeFileSync(path.join(process.cwd(), '.wipe-done'), '1');
+await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_BUILD_SLEEP_MS ?? 0)));
+fs.writeFileSync(
+  path.join(dist, 'index.html'),
+  '<!doctype html><html><body data-env="' + process.env.NODE_ENV + '"></body></html>',
+);
+fs.writeFileSync(path.join(dist, 'assets', 'entry.js'), 'console.log(1)');
+`;
+
+async function makeFakeProject(): Promise<string> {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'vis-ensure-dist-proj-'));
+  writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify(
+      { name: 'fake-dist-project', private: true, scripts: { build: 'node fake-builder.mjs' } },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(path.join(dir, 'fake-builder.mjs'), FAKE_BUILDER_SRC);
+  return dir;
+}
+
+/** Lock path outside dist/ — mirrors scripts/qa/ensure-production-dist.mjs lockPathFor. */
+function tmpLockPathFor(projDir: string): string {
+  const key = createHash('sha1').update(path.resolve(projDir)).digest('hex').slice(0, 16);
+  return path.join(os.tmpdir(), 'vis-ensure-dist', `${key}.lock`);
+}
+
+/** Returns a PID that is guaranteed dead (spawned, then SIGKILLed and reaped). */
+async function deadPid(): Promise<number> {
+  const sleeper = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)']);
+  await once(sleeper, 'spawn');
+  if (sleeper.pid === undefined) throw new Error('sleeper spawn produced no pid');
+  const pid = sleeper.pid;
+  sleeper.kill('SIGKILL');
+  await once(sleeper, 'exit');
+  return pid;
+}
+
+const runningChildren = new Set<ReturnType<typeof spawn>>();
+afterEach(() => {
+  for (const child of runningChildren) {
+    if (child.exitCode !== null || child.signalCode !== null) continue;
+    if (child.pid === undefined) continue;
+    try {
+      process.kill(-child.pid, 'SIGKILL'); // detached: true → whole process group
+    } catch {
+      child.kill('SIGKILL');
+    }
+  }
+  runningChildren.clear();
+});
+
+function spawnEnsureCli(projDir: string, extraEnv: Record<string, string> = {}) {
+  const child = spawn(
+    process.execPath,
+    [ENSURE_SCRIPT, '--cwd', projDir],
+    {
+      cwd: REPO_ROOT,
+      env: { ...process.env, ...extraEnv },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    },
+  );
+  runningChildren.add(child);
+  return child;
+}
+
+async function exitOf(
+  child: ReturnType<typeof spawn>,
+  timeoutMs: number,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  let stdout = '';
+  let stderr = '';
+  child.stdout?.on('data', (d: Buffer) => {
+    stdout += d.toString();
+  });
+  child.stderr?.on('data', (d: Buffer) => {
+    stderr += d.toString();
+  });
+  const code = await Promise.race([
+    once(child, 'exit').then(([code]) => (typeof code === 'number' ? code : 1)),
+    delay(timeoutMs).then(() => {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          child.kill('SIGKILL');
+        }
+      }
+      return -1;
+    }),
+  ]);
+  return { code, stdout, stderr };
+}
+
+function buildCount(projDir: string): number {
+  try {
+    return readFileSync(path.join(projDir, '.build-count'), 'utf8').trim().split('\n').filter(Boolean)
+      .length;
+  } catch {
+    return 0;
+  }
+}
+
+function readIndexEnv(projDir: string): string {
+  const html = readFileSync(path.join(projDir, 'dist', 'index.html'), 'utf8');
+  const match = html.match(/data-env="([^"]+)"/);
+  return match?.[1] ?? '';
+}
+
+function indexComplete(projDir: string): boolean {
+  try {
+    if (statSync(path.join(projDir, 'dist', 'index.html')).size === 0) return false;
+    return readdirSync(path.join(projDir, 'dist', 'assets')).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 // Build artifact contract (Task 7, Vite 8 migration):
 //  1. artifact-budget.json is FROZEN — its caps are the pre-upgrade formula
 //     (per asset: ceil(oldBytes*1.20/1024)*1024; total: ceil(old*1.10/1024)*1024)
 //     applied to the recorded pre-upgrade bytes, and are NEVER recomputed.
 //  2. scripts/qa/build-artifact-check.mjs measures a real build against that
-//     budget (no absolute /assets in index.html, relative app://-loadable
-//     refs, critical chunks present, per-asset + total caps respected).
-//  3. the three stream QA scripts resolve Playwright/Chromium ONLY from the
-//     repo-root node_modules and print both versions into their receipts —
-//     no hardcoded Node 22 install paths, no npx cache, no global fallback.
+//     budget (no absolute /assets in index.html, ≥1 relative app://-loadable
+//     ref and every ref resolvable, critical chunks present, per-asset +
+//     total caps respected).
+//  3. scripts/qa/ensure-production-dist.mjs serializes concurrent builders
+//     on a clean checkout with a lock OUTSIDE dist/ (survives the owner's
+//     own emptyOutDir wipe), recovers a stale lock left by a crashed owner
+//     (dead PID → take over), rebuilds partial/corrupt markers, and always
+//     builds with NODE_ENV=production.
 describe('build artifact contract', () => {
   it('freezes a valid artifact budget with the pre-upgrade formula', () => {
     const budget = JSON.parse(readFileSync(BUDGET_PATH, 'utf8')) as {
@@ -49,28 +209,6 @@ describe('build artifact contract', () => {
     expect(budget.totalBytes.cap).toBe(ceilKiB(budget.totalBytes.oldBytes * 1.1));
   });
 
-  it('wires a check script that measures dist against the frozen budget', () => {
-    const src = readFileSync(CHECK_SCRIPT, 'utf8');
-    const helperSrc = readFileSync(path.join(REPO_ROOT, 'scripts/qa/ensure-production-dist.mjs'), 'utf8');
-    const serverLiveSrc = readFileSync(path.join(REPO_ROOT, 'app/serverLive.integration.test.ts'), 'utf8');
-    expect(src).toMatch(/^#!\/usr\/bin\/env node/);
-    expect(src).toContain('artifact-budget.json');
-    expect(src).toMatch(/ensure-production-dist\.mjs/); // auto-build path
-    expect(src).toMatch(/\/assets\//); // absolute-ref detection
-    expect(src).toMatch(/criticalAssets/);
-    expect(src).toMatch(/totalBytes/);
-    // The auto-build must produce the REAL production artifact: NODE_ENV=test
-    // (vitest) poisons `vite build` into a different bundle that can break the
-    // frozen budget (task 12 regression); the helper forces production and
-    // lock-serializes concurrent builders on clean checkouts.
-    expect(helperSrc).toContain('pnpm build');
-    expect(helperSrc).toMatch(/NODE_ENV:\s*'production'/);
-    expect(helperSrc).toContain('.ensure-dist.lock');
-    // The live server contract serves real dist artifacts; on a clean checkout
-    // (test before build, CI validate order) it must ensure dist first.
-    expect(serverLiveSrc).toContain('ensure-production-dist.mjs');
-  });
-
   it('produces a GREEN artifact report (index.html relative, chunks present, budget respected)', {
     timeout: 180000,
   }, () => {
@@ -93,11 +231,158 @@ describe('build artifact contract', () => {
       expect(report.passCount).toBe(report.checks.length);
       const names = report.checks.map((c) => c.name).join('|');
       expect(names).toContain('no absolute /assets references');
+      expect(names).toContain('at least one relative asset');
       expect(names).toContain('every relative asset reference exists on disk');
       expect(names).toContain('within cap');
       expect(names).toContain('within total cap');
     } finally {
       rmSync(reportPath, { force: true });
+    }
+  });
+});
+
+// F3 #3: the lock must survive the owner's own build (vite emptyOutDir wipes
+// dist/), stale locks from crashed owners must be taken over, and partial or
+// corrupt markers must trigger a rebuild — all while forcing NODE_ENV=
+// production regardless of the caller's environment (vitest NODE_ENV=test).
+describe('ensure-production-dist build serialization', () => {
+  it('serializes concurrent callers on a wiped dist (exactly one build, both succeed)', {
+    timeout: 60000,
+  }, async () => {
+    const projDir = await makeFakeProject();
+    const outputs: Record<string, string> = {};
+    try {
+      const first = spawnEnsureCli(projDir, { FAKE_BUILD_SLEEP_MS: '2000' });
+      // Wait until the fake builder has performed its emptyOutDir wipe —
+      // the concurrent caller must arrive AFTER the wipe (when a lock inside
+      // dist/ has just been deleted by its owner) but BEFORE the marker write.
+      const wipeDeadline = Date.now() + 15000;
+      while (!existsSync(path.join(projDir, '.wipe-done'))) {
+        if (Date.now() > wipeDeadline) {
+          throw new Error('fake builder never reached its wipe marker');
+        }
+        await delay(50);
+      }
+      const second = spawnEnsureCli(projDir, { FAKE_BUILD_SLEEP_MS: '2000' });
+
+      const [firstRes, secondRes] = await Promise.all([
+        exitOf(first, 45000),
+        exitOf(second, 45000),
+      ]);
+      outputs.first = firstRes.stdout + firstRes.stderr;
+      outputs.second = secondRes.stdout + secondRes.stderr;
+      expect(firstRes.code, `first caller: ${outputs.first}`).toBe(0);
+      expect(secondRes.code, `second caller: ${outputs.second}`).toBe(0);
+      // RED (pre-fix): the owner's emptyOutDir wipe deletes its own lock, so
+      // the second caller re-acquires it and builds again → 2 builds.
+      expect(buildCount(projDir), outputs.first + outputs.second).toBe(1);
+      // The serialized build must be the REAL production artifact.
+      expect(indexComplete(projDir)).toBe(true);
+      expect(readIndexEnv(projDir)).toBe('production');
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
+    }
+  });
+
+  it('takes over a stale lock left by a crashed owner (dead PID)', {
+    timeout: 60000,
+  }, async () => {
+    const projDir = await makeFakeProject();
+    const pid = await deadPid();
+    // A crashed owner leaves its lock dir + owner.pid (dead PID) behind.
+    // Create it at BOTH known locations so the RED phase (lock inside dist/)
+    // and the fixed phase (lock outside dist/) both see a stale lock.
+    const staleLocks = [
+      path.join(projDir, 'dist', '.ensure-dist.lock'),
+      tmpLockPathFor(projDir),
+    ];
+    for (const lock of staleLocks) {
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(path.join(lock, 'owner.pid'), `${pid}\n`);
+    }
+    try {
+      const child = spawnEnsureCli(projDir, { VIS_DIST_POLL_TIMEOUT_MS: '300' });
+      const res = await exitOf(child, 30000);
+      // RED (pre-fix): stale locks are never removed — the caller waits
+      // through the full poll budget and fails. Fixed: the dead owner is
+      // detected, its lock removed, and the build proceeds.
+      expect(res.code, res.stdout + res.stderr).toBe(0);
+      expect(indexComplete(projDir)).toBe(true);
+      expect(readIndexEnv(projDir)).toBe('production');
+      expect(buildCount(projDir)).toBe(1);
+    } finally {
+      for (const lock of staleLocks) {
+        rmSync(lock, { recursive: true, force: true });
+      }
+      rmSync(projDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rebuilds when the dist marker is missing', {
+    timeout: 30000,
+  }, async () => {
+    const projDir = await makeFakeProject();
+    try {
+      mkdirSync(path.join(projDir, 'dist'), { recursive: true });
+      writeFileSync(path.join(projDir, 'dist', 'stray.txt'), 'leftover');
+      const res = await exitOf(spawnEnsureCli(projDir), 20000);
+      expect(res.code, res.stdout + res.stderr).toBe(0);
+      expect(buildCount(projDir)).toBe(1);
+      expect(indexComplete(projDir)).toBe(true);
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rebuilds when the marker is corrupt (empty index.html)', {
+    timeout: 30000,
+  }, async () => {
+    const projDir = await makeFakeProject();
+    try {
+      mkdirSync(path.join(projDir, 'dist'), { recursive: true });
+      writeFileSync(path.join(projDir, 'dist', 'index.html'), '');
+      const res = await exitOf(spawnEnsureCli(projDir), 20000);
+      expect(res.code, res.stdout + res.stderr).toBe(0);
+      // RED (pre-fix): an existing (but empty) index.html satisfies the
+      // existence fast path → no rebuild, unusable artifact left behind.
+      expect(buildCount(projDir)).toBeGreaterThanOrEqual(1);
+      expect(indexComplete(projDir)).toBe(true);
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rebuilds when the build is partial (index.html without assets)', {
+    timeout: 30000,
+  }, async () => {
+    const projDir = await makeFakeProject();
+    try {
+      mkdirSync(path.join(projDir, 'dist'), { recursive: true });
+      writeFileSync(path.join(projDir, 'dist', 'index.html'), '<html></html>');
+      const res = await exitOf(spawnEnsureCli(projDir), 20000);
+      expect(res.code, res.stdout + res.stderr).toBe(0);
+      // RED (pre-fix): an existing non-empty index.html short-circuits even
+      // though every referenced asset is missing.
+      expect(buildCount(projDir)).toBeGreaterThanOrEqual(1);
+      expect(indexComplete(projDir)).toBe(true);
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not rebuild an already-complete dist', {
+    timeout: 30000,
+  }, async () => {
+    const projDir = await makeFakeProject();
+    try {
+      mkdirSync(path.join(projDir, 'dist', 'assets'), { recursive: true });
+      writeFileSync(path.join(projDir, 'dist', 'index.html'), '<html></html>');
+      writeFileSync(path.join(projDir, 'dist', 'assets', 'entry.js'), 'x');
+      const res = await exitOf(spawnEnsureCli(projDir), 20000);
+      expect(res.code, res.stdout + res.stderr).toBe(0);
+      expect(buildCount(projDir)).toBe(0);
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
     }
   });
 });

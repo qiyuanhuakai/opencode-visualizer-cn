@@ -113,6 +113,10 @@ async function main() {
   check('index.html has no absolute /assets references', absoluteRefs.length === 0,
     absoluteRefs.length ? absoluteRefs.join(', ') : 'all refs relative');
   const relativeRefs = indexHtml.match(/(?:src|href)="(\.\/assets\/[^"]+)"/g) ?? [];
+  // F3 #10: an index.html with ZERO relative asset references is an unusable
+  // entry page (nothing app:// could load) — vacuous-pass proof is not a pass.
+  check('index.html references at least one relative asset', relativeRefs.length >= 1,
+    `${relativeRefs.length} relative refs`);
   const missingRefs = [];
   for (const ref of relativeRefs) {
     const file = ref.match(/(?:src|href)="(\.\/assets\/[^"]+)"/)[1];
