@@ -272,6 +272,9 @@ pnpm dev
 - 安全沙箱（`contextIsolation` + `sandbox`），外部链接通过系统浏览器打开
 - 开发模式下自动处理 CORS，便于本地调试
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
+- 运行时基线：Electron **43.3.0**（Chromium 150 / Node 24.18.1），Chromium 沙箱全程开启
+
+**macOS 签名状态（重要）：** macOS 安装包为 **ad-hoc 签名**（`codesign --verify --deep --strict` 通过；无 Developer ID、无 TeamIdentifier、无 notarization）。Gatekeeper 会显示"无法验证开发者"的常规提示，需要右键 → 打开；macOS 上 **Notifications 不可用**，notarization 亦未配置。这些限制为本版本接受的明确决策，详见 `CHANGELOG.md`。
 
 ```bash
 # 启动 Electron 开发模式（会自动复用或拉起 5173 上的 Vite）

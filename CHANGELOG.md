@@ -6,6 +6,19 @@
 
 ## [Unreleased]
 
+### 依赖与 Electron 43 大版本升级（2026-08-11，计划 electron-major-upgrade 收口）
+
+- [x] 运行时与构建基线升级为 **Node 24 LTS + pnpm 11**（`engines.node >=24 <25`、`packageManager pnpm@11.21.0`、全部 workflow 与 SEA 构建同步），构建脚本白名单迁移为 pnpm 11 `allowBuilds` 默认拒绝策略，仅保留实际需要生命周期脚本的包（`electron-winstaller` 明确拒绝）。
+- [x] 桌面运行时升级为 **Electron 43.3.0**（Chromium 150 / Node 24.18.1，ABI 148），electron-builder 26.15.3；36→43 全部 breaking changes 逐条核对，应用代码零改动（ledger 见 `.omo/evidence/electron-major-upgrade/task-4/`）；Chromium 沙箱、contextIsolation、preload 契约与 app:// 协议边界由专项测试与真实进程 smoke 锁定。
+- [x] **macOS 保持 unsigned（ad-hoc）**：无 Developer ID、无 TeamIdentifier、无 notarization，显式 `mac.identity: "-"`；x64/arm64 产物均须通过 `codesign --verify --deep --strict`（runner 执行）。**限制（本版本接受）**：Gatekeeper 显示"无法验证开发者"常规提示；macOS Notifications 不可用；notarization 未配置。发布说明不声称以上已解决。
+- [x] 构建/测试栈升级：Vite 8.2.1（rolldown）、Vitest 4.1.10、happy-dom 20.11.2（消除 critical RCE 公告）、@vitejs/plugin-vue 6.0.8、TypeScript 6.0.3、vue-tsc 3.3.9；产物预算冻结并全量通过（20/20）。
+- [x] 服务端/渲染层稳定线升级：Hono 4.13.1 + @hono/node-server 2.1.0（live HTTP 契约 8/8）、Vue 3.5.41、vue-i18n 11.4.8、markdown-it 15、Shiki 4.4.3、CodeMirror 6.x 全家桶、Tailwind 4.3.3、oxlint 1.78 + oxlint-tsgolint 7.0.2001 + oxfmt 0.63（`format:check` 限定任务文件）。
+- [x] **安全收口（audit gate PASS）**：0 critical / 1 high（受控 residual）/ 0 moderate。electron-builder 工具链 25 项公告（tar critical、xmldom×4、brace-expansion×9、js-yaml×3、tmp×2、form-data）通过 `pnpm-workspace.yaml` convergence/parent-scoped overrides 以同 major 内 patch 线消除；唯一 residual 为 `pdfjs-dist`（vue-pdf-embed 依赖），上游仅 6.x 修复、5.x 无补丁且 vue-pdf-embed 声明 `^5.7.284`，无 in-scope 修复，已逐项记录 dependency path / runtime 可达性 / upstream 状态（`.omo/evidence/electron-major-upgrade/final/audit-classification.md`）。
+- [x] 测试基线 **1396 通过**（升级过程中逐任务递增，从未减少）；`pnpm lint`（oxlint + vue-tsc）、`pnpm build`、`pnpm bridge:build`、`pnpm electron:build`、clean frozen install、`pnpm dedupe --check` 全绿。
+- [x] node-pty 双运行时（系统 Node 24 / SEA bridge / Electron 43）sentinel 探针 3/3；桥接六平台与桌面五平台原生 lane 已接线，runner 结果待执行（本次仅本地 Linux x64 实证）。
+- [x] 桌面完整生命周期手工 QA 26/26（隔离 userData：首启→设置持久化→连接→新建/加载会话→流式 Markdown→复制→本地应用选择→外链→恶意导航/Origin 边界→重启），证据 `.omo/evidence/electron-major-upgrade/final/manual-qa/`。
+- [x] **发布前仍待 runner 执行的 gate**：macOS x64/arm64、Windows x64/arm64 原生构建/安装器/签名验证；六平台 bridge 安装器 QA；真实 **GNOME Wayland** 启动检查（本机为 WSL2 X11，已记录 blocker 证据，不以 Xvfb 代替）。这些 gate 全部通过前 RoadMap 对应项保持未勾选。
+
 ### 文本转换器
 
 - [x] 设置中新增可开关的文本转换器，支持自定义 `\序列 → 替换内容`；配置会持久化并跨窗口同步，无效或重复序列会即时提示，且已覆盖英文、简体中文、繁体中文、日文和世界语界面。
