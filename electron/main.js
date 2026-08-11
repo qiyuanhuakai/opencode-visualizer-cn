@@ -10,6 +10,14 @@ import {
 } from './localApplicationApproval.js';
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
+import {
+  classifyMime,
+  classifyNavigation,
+  classifyWindowOpen,
+  isPermissionAllowed,
+  isTrustedSender,
+  resolveAppRelativePath,
+} from './runtimePolicy.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = !app.isPackaged;
@@ -129,7 +137,13 @@ function broadcastPersistentStorageChange(change, sourceWebContentsId) {
 }
 
 function assertTrustedRenderer(event) {
-  if (!mainWindow || mainWindow.webContents.isDestroyed() || event.sender.id !== mainWindow.webContents.id) {
+  if (
+    !isTrustedSender({
+      senderId: event.sender.id,
+      mainWebContentsId: mainWindow ? mainWindow.webContents.id : null,
+      mainWebContentsDestroyed: mainWindow ? mainWindow.webContents.isDestroyed() : true,
+    })
+  ) {
     throw new Error('Untrusted renderer');
   }
 }
@@ -209,27 +223,17 @@ function createWindow() {
   }
 
   mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
-    if (navigationUrl !== appUrl) {
-      event.preventDefault();
-      try {
-        const parsed = new URL(navigationUrl);
-        if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-          shell.openExternal(navigationUrl);
-        }
-      } catch {
-        return;
-      }
+    const decision = classifyNavigation(navigationUrl, appUrl);
+    if (decision === 'allow') return;
+    event.preventDefault();
+    if (decision === 'open-external') {
+      shell.openExternal(navigationUrl);
     }
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    try {
-      const parsed = new URL(url);
-      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        shell.openExternal(url);
-      }
-    } catch {
-      return { action: 'deny' };
+    if (classifyWindowOpen(url) === 'open-external') {
+      shell.openExternal(url);
     }
     return { action: 'deny' };
   });
@@ -245,7 +249,10 @@ app.whenReady().then(() => {
 
   protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
-    const relativePath = pathname === '/' ? 'index.html' : pathname;
+    const relativePath = resolveAppRelativePath(pathname);
+    if (relativePath === null) {
+      return new Response('Not Found', { status: 404 });
+    }
     // Support both unpacked (dev/preview) and asar-packed (production) layouts
     const candidates = [
       path.join(__dirname, '..', 'dist', relativePath),
@@ -254,24 +261,8 @@ app.whenReady().then(() => {
     for (const filePath of candidates) {
       try {
         const data = await fs.promises.readFile(filePath);
-        const ext = path.extname(relativePath).toLowerCase();
-        const mimeTypes = {
-          '.html': 'text/html',
-          '.js': 'application/javascript',
-          '.css': 'text/css',
-          '.json': 'application/json',
-          '.svg': 'image/svg+xml',
-          '.png': 'image/png',
-          '.jpg': 'image/jpeg',
-          '.jpeg': 'image/jpeg',
-          '.gif': 'image/gif',
-          '.woff': 'font/woff',
-          '.woff2': 'font/woff2',
-          '.ttf': 'font/ttf',
-          '.otf': 'font/otf',
-        };
         return new Response(data, {
-          headers: { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' },
+          headers: { 'Content-Type': classifyMime(relativePath) },
         });
       } catch {
         // try next candidate
@@ -307,8 +298,7 @@ app.on('web-contents-created', (_event, contents) => {
   });
   contents.session.setPermissionRequestHandler(
     (_webContents, permission, callback) => {
-      const allowedPermissions = new Set(['notifications']);
-      callback(allowedPermissions.has(permission));
+      callback(isPermissionAllowed(permission));
     }
   );
 });
