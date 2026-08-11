@@ -146,32 +146,35 @@ async function main() {
   await waitForServer(DRIVER_URL);
   console.log('[stream-qa] dev server reachable');
 
-  // --disable-gpu/--disable-software-rasterizer: with the fallback chromium
-  // builds in this environment (chromium-1223 vs playwright 1.62.1 wanting
-  // 1234), page.screenshot hangs in the GPU/swiftshader compositing path
-  // (fonts load, then capture never completes). DOM/worker behavior is
-  // unaffected; every assertion above is independent of compositing.
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: chromiumPath,
-    args: ['--disable-gpu', '--disable-software-rasterizer'],
-  });
-  const chromiumVersion = await browser.version();
-  console.log(`[stream-qa] chromium version: ${chromiumVersion}`);
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
-
   const consoleLog = [];
   const pageErrors = [];
-  page.on('console', (msg) => {
-    consoleLog.push({ type: msg.type(), text: msg.text() });
-    if (msg.type() === 'error') pageErrors.push(msg.text());
-  });
-  page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
-
-  const ev = (fn, arg) => page.evaluate(fn, arg);
+  let browser = null;
+  let chromiumVersion = 'unknown';
 
   try {
+    // --disable-gpu/--disable-software-rasterizer: with the fallback chromium
+    // builds in this environment (chromium-1223 vs playwright 1.62.1 wanting
+    // 1234), page.screenshot hangs in the GPU/swiftshader compositing path
+    // (fonts load, then capture never completes). DOM/worker behavior is
+    // unaffected; every assertion above is independent of compositing.
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: chromiumPath,
+      args: ['--disable-gpu', '--disable-software-rasterizer'],
+    });
+    chromiumVersion = await browser.version();
+    console.log(`[stream-qa] chromium version: ${chromiumVersion}`);
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+
+    page.on('console', (msg) => {
+      consoleLog.push({ type: msg.type(), text: msg.text() });
+      if (msg.type() === 'error') pageErrors.push(msg.text());
+    });
+    page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
+
+    const ev = (fn, arg) => page.evaluate(fn, arg);
+
     await page.goto(DRIVER_URL, { waitUntil: 'load' });
     await page.waitForFunction(() => !!window.__streamDriver, null, { timeout: 15000 });
     console.log('[stream-qa] driver page mounted (window.__streamDriver ready)');
@@ -445,6 +448,15 @@ async function main() {
   } catch (err) {
     record('HARNESS', 'unexpected runner error', false, String(err?.stack ?? err));
   } finally {
+    // Close the browser BEFORE writing evidence: a write failure must never
+    // skip teardown (and a browser failure must never block evidence).
+    if (browser) {
+      try {
+        await browser.close();
+      } catch {
+        // teardown is best-effort
+      }
+    }
     artifact('.', 'console-log.json', JSON.stringify(consoleLog, null, 2));
     const summary = {
       driverUrl: DRIVER_URL,
@@ -456,7 +468,6 @@ async function main() {
       failed: results.filter((r) => !r.ok).length,
     };
     fs.writeFileSync(path.join(ARTIFACTS_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
-    await browser.close();
   }
 
   console.log('=================================================');

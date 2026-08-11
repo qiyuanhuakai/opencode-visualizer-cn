@@ -183,33 +183,16 @@ async function main() {
   await waitForServer(DRIVER_URL);
   console.log('[stream-md-qa] dev server reachable');
 
-  // --disable-gpu/--disable-software-rasterizer: with the fallback chromium
-  // builds in this environment, page.screenshot hangs in the GPU/swiftshader
-  // compositing path (fonts load, then capture never completes). DOM/worker
-  // behavior is unaffected; every DOM assertion above is independent of it.
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: chromiumPath,
-    args: ['--disable-gpu', '--disable-software-rasterizer'],
-  });
-  const chromiumVersion = await browser.version();
-  console.log(`[stream-md-qa] chromium version: ${chromiumVersion}`);
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
-
   const consoleLog = [];
   const pageErrors = [];
-  page.on('console', (msg) => {
-    consoleLog.push({ type: msg.type(), text: msg.text() });
-    if (msg.type() === 'error') pageErrors.push(msg.text());
-  });
-  page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
-
-  const ev = (fn, arg) => page.evaluate(fn, arg);
+  let browser = null;
+  let chromiumVersion = 'unknown';
 
   // Fresh page state per scenario session: reloads reset module-level caches
   // (workerRenderer completedCache, markdown segment cache) so request-count
-  // assertions are exact. Worker processes stay warm across reloads.
+  // assertions are exact. Worker processes stay warm across reloads. Declared
+  // at the function-body root (only ever CALLED after `page` exists inside
+  // the try below).
   async function freshDriverPage() {
     await page.goto(DRIVER_URL, { waitUntil: 'load' });
     await page.waitForFunction(() => !!window.__mdDriver, null, { timeout: 20000 });
@@ -219,6 +202,28 @@ async function main() {
   }
 
   try {
+    // --disable-gpu/--disable-software-rasterizer: with the fallback chromium
+    // builds in this environment, page.screenshot hangs in the GPU/swiftshader
+    // compositing path (fonts load, then capture never completes). DOM/worker
+    // behavior is unaffected; every DOM assertion above is independent of it.
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: chromiumPath,
+      args: ['--disable-gpu', '--disable-software-rasterizer'],
+    });
+    chromiumVersion = await browser.version();
+    console.log(`[stream-md-qa] chromium version: ${chromiumVersion}`);
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+
+    page.on('console', (msg) => {
+      consoleLog.push({ type: msg.type(), text: msg.text() });
+      if (msg.type() === 'error') pageErrors.push(msg.text());
+    });
+    page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
+
+    const ev = (fn, arg) => page.evaluate(fn, arg);
+
     // =====================================================================
     // Session A: S-MD-1 happy path (+ RED reuses its captures)
     // =====================================================================
@@ -513,6 +518,15 @@ async function main() {
   } catch (err) {
     record('HARNESS', 'unexpected runner error', false, String(err?.stack ?? err));
   } finally {
+    // Close the browser BEFORE writing evidence: a write failure must never
+    // skip teardown (and a browser failure must never block evidence).
+    if (browser) {
+      try {
+        await browser.close();
+      } catch {
+        // teardown is best-effort
+      }
+    }
     artifact('.', 'console-log.json', consoleLog);
     const summary = {
       driverUrl: DRIVER_URL,
@@ -524,7 +538,6 @@ async function main() {
       failed: results.filter((r) => !r.ok).length,
     };
     fs.writeFileSync(path.join(ARTIFACTS_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
-    await browser.close();
   }
 
   console.log('=================================================');

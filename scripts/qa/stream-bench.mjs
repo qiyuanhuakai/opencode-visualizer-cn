@@ -199,10 +199,12 @@ async function main() {
         const context = await browser.newContext({
           viewport: { width: 1280, height: 900 },
         });
-        const page = await context.newPage();
         const pageErrors = [];
-        page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
         try {
+          // newPage INSIDE the cleanup try: a failed page creation must still
+          // close the context — no leak.
+          const page = await context.newPage();
+          page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
           const sizeParam = size ? `&size=${size}` : '';
           const url = `${BENCH_URL}?path=${benchPath}&fixture=${fixture}${sizeParam}&run=${run}`;
           await page.goto(url, { waitUntil: 'load' });

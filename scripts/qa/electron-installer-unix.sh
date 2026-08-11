@@ -71,15 +71,66 @@ SMOKE_OUT_DIR="${SMOKE_OUT_DIR:-${RUNNER_TEMP:-/tmp}/smoke-installer-$PLATFORM-$
 WORK_DIRS=()        # temp dirs to remove on exit
 DMG_DEVICE=""       # mounted dmg device to detach on exit
 LAUNCHED_EXES=()    # executable paths launched, for the leftover-process sweep
+DEB_PKG_NAME=""     # deb package installed system-wide (uninstalled on exit)
+DEB_INSTALLED_SYSTEM=0
+
+# PID-based sweep of processes whose cmdline contains the executable path
+# (never pkill/pgrep -f: a -f pattern present in the invoking wrapper's own
+# command line kills the wrapper — issues.md rule; kill by PID only). The
+# match runs in the shell, so no helper process carries the pattern in its
+# own cmdline.
+launched_pids() {
+  local exe="$1" pid args
+  ps -eo pid=,args= |
+    while read -r pid args; do
+      if [[ -n "$pid" && "$args" == *"$exe"* ]]; then
+        echo "$pid"
+      fi
+    done
+}
+
+kill_launched_exes() {
+  local exe pid i
+  for exe in "${LAUNCHED_EXES[@]}"; do
+    # Two passes: after SIGKILL of the main process, Chromium helpers may
+    # linger briefly; a second sweep catches them.
+    for i in 1 2; do
+      while read -r pid; do
+        kill -9 "$pid" 2>/dev/null || true
+      done < <(launched_pids "$exe")
+      if [[ $i -eq 1 ]]; then
+        sleep 0.2
+      fi
+    done
+  done
+}
+
+# Best-effort uninstall of the system-installed .deb, gated on non-interactive
+# sudo so a dev box without passwordless sudo gets a clear message instead of
+# a hung prompt.
+uninstall_system_deb() {
+  if [[ "$DEB_INSTALLED_SYSTEM" != "1" || -z "$DEB_PKG_NAME" ]]; then
+    return
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    echo "cleanup: sudo not found — leaving system .deb installed (remove manually: sudo dpkg -r $DEB_PKG_NAME)" >&2
+    return
+  fi
+  if ! sudo -n true 2>/dev/null; then
+    echo "cleanup: non-interactive sudo unavailable — leaving system .deb installed (remove manually: sudo dpkg -r $DEB_PKG_NAME)" >&2
+    return
+  fi
+  echo "cleanup: uninstalling system .deb ($DEB_PKG_NAME, best-effort)"
+  sudo -n dpkg -r "$DEB_PKG_NAME" >/dev/null 2>&1 ||
+    echo "cleanup: dpkg -r $DEB_PKG_NAME failed (best-effort)" >&2
+}
 
 cleanup() {
-  local exe
-  for exe in "${LAUNCHED_EXES[@]}"; do
-    pkill -f "$exe" >/dev/null 2>&1 || true
-  done
+  kill_launched_exes
   if [[ -n "$DMG_DEVICE" ]]; then
     hdiutil detach "$DMG_DEVICE" -quiet || true
   fi
+  uninstall_system_deb
   local dir
   for dir in "${WORK_DIRS[@]}"; do
     rm -rf "$dir"
@@ -95,6 +146,10 @@ run_smoke() {
   local name="$1"
   local exe="$2"
   local launcher=()
+  # Register BEFORE launching: the exit trap must be able to sweep this
+  # executable even when the smoke driver dies mid-launch (watchdog kill,
+  # assertion failure before its own quit).
+  LAUNCHED_EXES+=("$exe")
   [[ "$PLATFORM" == "linux" ]] && launcher=(xvfb-run -a)
   export VIS_ELECTRON_EXECUTABLE="$exe"
   export VIS_SMOKE_OUT_DIR="$SMOKE_OUT_DIR/$name"
@@ -111,10 +166,9 @@ run_smoke() {
       process.exit(1);
     }
   " || die "smoke receipt arch/platform mismatch"
-  if pgrep -f "$exe" >/dev/null 2>&1; then
+  if [[ -n "$(launched_pids "$exe")" ]]; then
     die "app still running after smoke quit: $exe"
   fi
-  LAUNCHED_EXES+=("$exe")
 }
 
 # verify_mac_signature <Vis.app> — unsigned-but-adhoc contract: strict deep
@@ -159,6 +213,8 @@ if [[ "$PLATFORM" == "linux" ]]; then
     echo "note: system-wide dpkg install skipped (VIS_QA_DEB_INSTALL_ROOT set); verifying installed layout at $INSTALLED_EXE"
   else
     sudo dpkg -i "$deb"
+    DEB_INSTALLED_SYSTEM=1
+    DEB_PKG_NAME="$(dpkg-deb -f "$deb" Package)"
     INSTALLED_EXE="/opt/Vis/$EXECUTABLE_NAME"
   fi
   [[ -x "$INSTALLED_EXE" ]] || die "installed executable missing: $INSTALLED_EXE"

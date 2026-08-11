@@ -40,10 +40,18 @@ const INDEX_PATH = path.join(DIST_DIR, 'index.html');
 
 const argv = process.argv.slice(2);
 const noBuild = argv.includes('--no-build');
-const reportArg = argv.find((a) => a.startsWith('--report='));
-const REPORT_PATH = reportArg
-  ? path.resolve(reportArg.slice('--report='.length))
-  : path.join(REPO_ROOT, 'artifact-report.json');
+let reportArg = null;
+for (let index = 0; index < argv.length; index += 1) {
+  const arg = argv[index];
+  if (arg === '--report') {
+    reportArg = argv[index + 1];
+    if (reportArg === undefined) throw new Error('--report requires a path argument');
+    index += 1;
+  } else if (arg.startsWith('--report=')) {
+    reportArg = arg.slice('--report='.length);
+  }
+}
+const REPORT_PATH = reportArg !== null ? path.resolve(reportArg) : path.join(REPO_ROOT, 'artifact-report.json');
 
 const checks = [];
 function check(name, ok, detail = '') {

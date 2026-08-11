@@ -57,9 +57,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Restore the ORIGINAL global `self` captured in beforeAll — never reset
+  // priorSelf to undefined, or the next afterEach would DELETE the original
+  // instead of restoring it.
   if (priorSelf === undefined) Reflect.deleteProperty(globalThis, 'self');
   else Object.defineProperty(globalThis, 'self', { configurable: true, value: priorSelf });
-  priorSelf = undefined;
 });
 
 async function renderMarkdown(code: string, files?: string[]): Promise<string> {
