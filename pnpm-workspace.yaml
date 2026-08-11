@@ -6,3 +6,10 @@ allowBuilds:
   node-pty: true
   vue-demi: true
   electron-winstaller: false
+
+# Task 4 (electron 43): node-abi@4.28.0 (bundled via @electron/rebuild) cannot
+# detect the ABI of electron 43.3.0 ("Could not detect abi for version 43.3.0");
+# node-abi@4.33.0 maps electron 43.3.0 -> ABI 148 (verified, see task-4 ledger).
+# Satisfies @electron/rebuild@4.2.0's ^4.2.0 range.
+overrides:
+  node-abi: ^4.33.0
