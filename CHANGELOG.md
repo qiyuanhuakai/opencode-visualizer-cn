@@ -38,6 +38,20 @@
 - [x] 文件搜索框保留 96px 最小宽度；空间不足时优先省略过长的分支名，不再把搜索框压缩到不可用。
 - [x] 搜索命中的目录默认完整展开，并可在搜索结果中独立折叠或重新展开；修改查询或切换文件树时会恢复默认展开状态，不影响普通浏览时保存的目录开闭状态。
 
+### 依赖稳定兼容收口（Electron 43 升级计划 Task 10）
+
+- [x] `vue-tsc` 3.2.4 → 3.3.9（同 3.x major 内最新 stable；`pnpm lint` 中 `vue-tsc --noEmit` 全绿，lockfile 净减 60 行并消除重复 `jiti`/`@babel/*` 解析节点）。其余全部直接依赖经同日 registry 快照核验均已处于批准 major 内的最新 stable，无需变更。
+- [x] 以下依赖保持当前精确/预发布 pin，不盲升，原因与复查条件记录于下方 deferred 表（证据见 `.omo/evidence/electron-major-upgrade/task-10/deferred.md`）。
+
+#### 依赖 deferred 表（保持当前版本，逐项记录原因）
+
+| 依赖 | 当前版本 | 用途 | 保留原因 | 复查条件 |
+|---|---|---|---|---|
+| `@vue-symbols/icons` | 1.2.0（精确） | 会话/文件树 SVG 图标（TreeView 等 30+ 组件） | 1.2.0 即最新 stable，无更新可采纳 | 发布新的 1.x patch/minor 或 2.x stable 时复查 |
+| `@kikuchan/hexdump` | 0.1.0-alpha.9（精确） | 十六进制查看器（HexRenderer） | 仅存在 pre-release 线，alpha.10 非已验证 stable 替代 | 发布 stable（非 alpha）时复查 |
+| `postject` | 1.0.0-alpha.6（精确） | SEA 单文件注入（build-vis-bridge） | 仅 pre-release；alpha.6 已是该包最新发布版本 | 发布 stable 时复查 |
+| `node-pty` | ^1.2.0-beta.12 | PTY 运行时（bridge/Electron/Forge） | 最新仍为 beta.15 pre-release；NAPI prebuild 已在 Electron 43 + Node 24 双运行时验证；Task 11 负责该 pin 的双运行时验收 | Task 11 执行 + 发布 stable 1.x 时复查 |
+
 ---
 
 ## [v0.7.5 released]
