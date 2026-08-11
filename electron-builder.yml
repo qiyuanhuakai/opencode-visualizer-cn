@@ -29,9 +29,12 @@ asar: true
 asarUnpack:
   - "**/*.node"
 
-# macOS 配置
+# macOS 配置 — unsigned but ad-hoc (approved decision): explicit ad-hoc identity
+# "-" and notarization disabled; no Developer ID, no TeamIdentifier, no secrets.
 mac:
   category: public.app-category.developer-tools
+  identity: "-"
+  notarize: false
   target:
     - target: dmg
       arch:

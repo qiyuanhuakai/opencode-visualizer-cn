@@ -24,7 +24,10 @@ describe('runtime-baseline', () => {
   });
 
   it('runs every CI workflow step on node 24', () => {
-    expect(buildWorkflow.match(/node-version: '24'/g)).toHaveLength(3);
+    // Every setup-node step (one per job: validate, five electron lanes, bridge)
+    // must pin node 24 — count-agnostic so adding lanes cannot silently downgrade.
+    expect(buildWorkflow.match(/uses: actions\/setup-node@v4/g)).toHaveLength(7);
+    expect(buildWorkflow.match(/node-version: '24'/g)).toHaveLength(7);
     expect(deployWorkflow.match(/node-version: '24'/g)).toHaveLength(1);
     expect(buildWorkflow).not.toContain("node-version: '22'");
     expect(deployWorkflow).not.toContain("node-version: '22'");
