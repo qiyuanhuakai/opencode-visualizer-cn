@@ -1,4 +1,4 @@
-import MarkdownIt from 'markdown-it';
+import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from 'markdown-it';
 import { fromHighlighter, type MarkdownItShikiSetupOptions } from '@shikijs/markdown-it/core';
 import { transformerNotationDiff } from '@shikijs/transformers';
 import { compactUnifiedDiffPatch } from '../utils/diffCompression';
@@ -737,7 +737,7 @@ async function renderCodeHtml(request: RenderRequest) {
   return buildHtmlFromRows(buildCodeRows(lines, mode, gutterLines));
 }
 
-let cachedMd: MarkdownIt | null = null;
+let cachedMd: MarkdownItInstance | null = null;
 let cachedMdTheme = '';
 let cachedMdHighlighter: Highlighter | null = null;
 let cachedMdShikiOptions: MarkdownShikiOptions | null = null;
@@ -804,7 +804,7 @@ async function resolveMarkdownLangAliases(
 /**
  * Tiny markdown-it plugin that replaces task list markers ([ ] / [x]) with emoji.
  */
-function taskListEmojiPlugin(md: MarkdownIt) {
+function taskListEmojiPlugin(md: MarkdownItInstance) {
   md.core.ruler.after('inline', 'task-list-emoji', (state) => {
     const tokens = state.tokens;
     for (let i = 2; i < tokens.length; i++) {
