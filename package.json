@@ -12,7 +12,6 @@
   "repository": {
     "url": "https://github.com/qiyuanhuakai/opencode-visualizer-cn"
   },
-  "main": "electron/main.js",
   "bin": {
     "vis": "server.js",
     "vis_bridge": "vis_bridge.js"
@@ -27,12 +26,11 @@
     "electron"
   ],
   "type": "module",
-  "engines": {
-    "node": ">=24 <25"
-  },
+  "main": "electron/main.js",
   "scripts": {
     "prepack": "vite build",
     "format": "oxfmt",
+    "format:check": "oxfmt --check package.json postcss.config.mjs .oxlintrc.json .oxfmtrc.json app/styles/tailwind.css app/toolingConfig.test.ts",
     "bridge:build": "node scripts/build-vis-bridge.mjs",
     "bridge:package-installer": "node scripts/package-vis-bridge-installer.mjs",
     "lint": "oxlint && vue-tsc --noEmit",
@@ -75,17 +73,14 @@
     "vue-i18n": "^11.4.8",
     "vue-pdf-embed": "^2.1.5"
   },
-  "optionalDependencies": {
-    "node-pty": "^1.2.0-beta.12"
-  },
   "devDependencies": {
     "@iconify/vue": "^5.0.1",
     "@kikuchan/hexdump": "0.1.0-alpha.9",
     "@shikijs/markdown-it": "^4.4.3",
     "@shikijs/stream": "^4.4.3",
     "@shikijs/transformers": "^4.4.3",
-    "@tailwindcss/postcss": "^4.1.18",
-    "@tailwindcss/typography": "^0.5.19",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@tailwindcss/typography": "^0.5.20",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.13.3",
     "@vitejs/plugin-vue": "^6.0.8",
@@ -96,19 +91,25 @@
     "esbuild": "^0.28.2",
     "happy-dom": "^20.11.2",
     "markdown-it": "^15.0.0",
-    "oxfmt": "^0.32.0",
-    "oxlint": "^1.47.0",
-    "oxlint-tsgolint": "^0.12.2",
+    "oxfmt": "^0.63.0",
+    "oxlint": "^1.78.0",
+    "oxlint-tsgolint": "^7.0.2001",
     "playwright": "1.62.1",
     "postcss": "^8.5.26",
     "postject": "1.0.0-alpha.6",
     "shiki": "^4.4.3",
-    "tailwindcss": "^4.1.18",
+    "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
     "vite": "^8.2.1",
     "vitest": "^4.1.10",
     "vue": "^3.5.41",
     "vue-tsc": "^3.2.4"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.2.0-beta.12"
+  },
+  "engines": {
+    "node": ">=24 <25"
   },
   "packageManager": "pnpm@11.21.0"
 }

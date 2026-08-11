@@ -7,6 +7,48 @@ allowBuilds:
   vue-demi: true
   electron-winstaller: false
 
+minimumReleaseAgeExclude:
+  - '@oxfmt/binding-android-arm-eabi@0.63.0'
+  - '@oxfmt/binding-android-arm64@0.63.0'
+  - '@oxfmt/binding-darwin-arm64@0.63.0'
+  - '@oxfmt/binding-darwin-x64@0.63.0'
+  - '@oxfmt/binding-freebsd-x64@0.63.0'
+  - '@oxfmt/binding-linux-arm-gnueabihf@0.63.0'
+  - '@oxfmt/binding-linux-arm-musleabihf@0.63.0'
+  - '@oxfmt/binding-linux-arm64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-arm64-musl@0.63.0'
+  - '@oxfmt/binding-linux-ppc64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-riscv64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-riscv64-musl@0.63.0'
+  - '@oxfmt/binding-linux-s390x-gnu@0.63.0'
+  - '@oxfmt/binding-linux-x64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-x64-musl@0.63.0'
+  - '@oxfmt/binding-openharmony-arm64@0.63.0'
+  - '@oxfmt/binding-win32-arm64-msvc@0.63.0'
+  - '@oxfmt/binding-win32-ia32-msvc@0.63.0'
+  - '@oxfmt/binding-win32-x64-msvc@0.63.0'
+  - '@oxlint/binding-android-arm-eabi@1.78.0'
+  - '@oxlint/binding-android-arm64@1.78.0'
+  - '@oxlint/binding-darwin-arm64@1.78.0'
+  - '@oxlint/binding-darwin-x64@1.78.0'
+  - '@oxlint/binding-freebsd-x64@1.78.0'
+  - '@oxlint/binding-linux-arm-gnueabihf@1.78.0'
+  - '@oxlint/binding-linux-arm-musleabihf@1.78.0'
+  - '@oxlint/binding-linux-arm64-gnu@1.78.0'
+  - '@oxlint/binding-linux-arm64-musl@1.78.0'
+  - '@oxlint/binding-linux-ppc64-gnu@1.78.0'
+  - '@oxlint/binding-linux-riscv64-gnu@1.78.0'
+  - '@oxlint/binding-linux-riscv64-musl@1.78.0'
+  - '@oxlint/binding-linux-s390x-gnu@1.78.0'
+  - '@oxlint/binding-linux-x64-gnu@1.78.0'
+  - '@oxlint/binding-linux-x64-musl@1.78.0'
+  - '@oxlint/binding-openharmony-arm64@1.78.0'
+  - '@oxlint/binding-win32-arm64-msvc@1.78.0'
+  - '@oxlint/binding-win32-ia32-msvc@1.78.0'
+  - '@oxlint/binding-win32-x64-msvc@1.78.0'
+  - oxfmt@0.63.0
+  - oxlint@1.78.0
+
 # Task 4 (electron 43): node-abi@4.28.0 (bundled via @electron/rebuild) cannot
 # detect the ABI of electron 43.3.0 ("Could not detect abi for version 43.3.0");
 # node-abi@4.33.0 maps electron 43.3.0 -> ABI 148 (verified, see task-4 ledger).
