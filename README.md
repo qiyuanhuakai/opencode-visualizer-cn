@@ -79,7 +79,7 @@
 
 | 依赖 | 版本要求 | 说明 |
 |---|---|---|
-| [Node.js](https://nodejs.org/) | ≥ 24 | 运行时与构建环境 |
+| [Node.js](https://nodejs.org/) | ≥ 24 且 < 25 | 运行时与构建环境 |
 | [pnpm](https://pnpm.io/) | 11.21.0 (推荐) | 包管理器，本项目使用 `packageManager` 锁定 |
 | [OpenCode Server](https://github.com/sst/opencode) | 最新版 | 后端服务，提供 API 与智能体能力 |
 | ACP Agent CLI | 可选 | 如 `pi-acp`、`omp --mode acp`、`kimi acp`；在状态监控中按需启用 |
@@ -274,7 +274,7 @@ pnpm dev
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
 - 运行时基线：Electron **43.3.0**（Chromium 150 / Node 24.18.1），Chromium 沙箱全程开启
 
-**macOS 签名状态（重要）：** macOS 安装包为 **ad-hoc 签名**（`codesign --verify --deep --strict` 通过；无 Developer ID、无 TeamIdentifier、无 notarization）。Gatekeeper 会显示"无法验证开发者"的常规提示，需要右键 → 打开；macOS 上 **Notifications 不可用**，notarization 亦未配置。这些限制为本版本接受的明确决策，详见 `CHANGELOG.md`。
+**macOS 签名状态（重要）：** macOS 安装包为 **ad-hoc 签名**（无 Developer ID、无 TeamIdentifier、无 notarization，`mac.identity: "-"`、`mac.notarize: false`）。`codesign --verify --deep --strict` **必须通过**——DMG 挂载与 ZIP 解压两种产物均需验证——该命令仅在 macOS runner 上执行，当前仍为 **runner 待执行（pending）**，尚未在本机跑通，因此本说明**不声称其已通过**。Gatekeeper 会显示"无法验证开发者"的常规提示，需要右键 → 打开；macOS 上 **Notifications 不可用**，notarization 亦未配置。这些限制为本版本接受的明确决策，详见 `CHANGELOG.md`。
 
 ```bash
 # 启动 Electron 开发模式（会自动复用或拉起 5173 上的 Vite）
@@ -384,7 +384,7 @@ Before getting started, ensure your environment meets the following criteria:
 
 | Dependency | Version | Description |
 |---|---|---|
-| [Node.js](https://nodejs.org/) | ≥ 24 | Runtime and build environment |
+| [Node.js](https://nodejs.org/) | >= 24 and < 25 | Runtime and build environment |
 | [pnpm](https://pnpm.io/) | 11.21.0 (recommended) | Package manager, locked via `packageManager` |
 | [OpenCode Server](https://github.com/sst/opencode) | Latest | Backend service providing API and agent capabilities |
 | ACP Agent CLI | Optional | For example `pi-acp`, `omp --mode acp`, or `kimi acp`; enable agents as needed in Status Monitor |
@@ -531,6 +531,9 @@ This project supports packaging the Web UI as a native desktop application using
 - Secure sandbox (`contextIsolation` + `sandbox`); external links open in system browser
 - Auto CORS handling in development mode for local debugging
 - Supports NSIS / AppImage / deb / dmg installers for each platform
+- Runtime baseline: Electron **43.3.0** (Chromium 150 / Node 24.18.1), Chromium sandbox always enabled
+
+**macOS Signing Status (Important):** macOS builds are **ad-hoc signed** (no Developer ID, no TeamIdentifier, no notarization; `mac.identity: "-"`, `mac.notarize: false`). `codesign --verify --deep --strict` **must pass** — both the DMG-mounted and ZIP-extracted app bundles are verified — but the command only runs on the macOS runners and is currently **runner-pending** (not yet executed locally), so this document does **not** claim it has passed. Gatekeeper shows the standard "cannot verify the developer" warning; right-click → Open is required. macOS **Notifications are unavailable** and notarization is not configured. These limits are accepted decisions for this release — see `CHANGELOG.md`.
 
 ```bash
 # Desktop dev mode (hot reload)
