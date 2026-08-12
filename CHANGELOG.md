@@ -17,7 +17,7 @@
 - [x] **安全收口（audit gate PASS）**：0 critical / 1 high（受控 residual）/ 0 moderate。electron-builder 工具链 26 项公告（tar×6 含 critical、xmldom×4、brace-expansion×10、js-yaml×3、tmp×2、form-data）通过 `pnpm-workspace.yaml` convergence/parent-scoped overrides 以同 major 内 patch 线消除（25 项为基线，另 1 项 tmp 1120729 为本任务执行期间新增、由同一 override 覆盖）；唯一 residual 为 `pdfjs-dist`（vue-pdf-embed 依赖），上游仅 6.x 修复、5.x 无补丁且 vue-pdf-embed 声明 `^5.7.284`，无 in-scope 修复，已逐项记录 dependency path / runtime 可达性 / upstream 状态（`.omo/evidence/electron-major-upgrade/final/audit-classification.md`）。
 - [x] 测试基线 **1396 通过**（升级过程中逐任务递增，从未减少）；`pnpm lint`（oxlint + vue-tsc）、`pnpm build`、`pnpm bridge:build`、`pnpm electron:build`、clean frozen install、`pnpm dedupe --check` 全绿。
 - [x] node-pty 双运行时（系统 Node 24 / SEA bridge / Electron 43）sentinel 探针 3/3；桥接六平台与桌面五平台原生 lane 已接线，runner 结果待执行（本次仅本地 Linux x64 实证）。
-- [x] 桌面完整生命周期手工 QA 26/26（隔离 userData：首启→设置持久化→连接→新建/加载会话→流式 Markdown→复制→本地应用选择→外链→恶意导航/Origin 边界→重启），证据 `.omo/evidence/electron-major-upgrade/final/manual-qa/`。
+- [x] 桌面完整生命周期手工 QA 29/29（隔离 userData：首启→设置持久化→连接→新建/加载会话→流式 Markdown→复制→本地应用选择→外链→恶意导航/Origin 边界→重启），证据 `.omo/evidence/electron-major-upgrade/final/manual-qa/`。
 - [x] **发布前仍待 runner 执行的 gate**（本地仅 Linux x64 实证，runner 结果未回填前不得声称通过）：**5 条 Electron 原生 lane**（macOS x64/arm64、Windows x64/arm64、**Linux x64 亦须在 runner 上执行**）的原生构建/安装器/签名验证；**6 条 bridge 安装器 lane** QA；**macOS codesign 严格验证**（`codesign --verify --deep --strict`，DMG 挂载与 ZIP 解压两种产物均验证）；**Windows/macOS 原生手工 QA**；**GitHub Pages deploy 构建**；真实 **GNOME Wayland** 启动检查（本机为 WSL2 X11，已记录 blocker 证据，不以 Xvfb 代替）。这些 gate 全部通过前 RoadMap 对应项保持未勾选。
 
 ### 文本转换器
