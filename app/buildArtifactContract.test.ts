@@ -321,6 +321,42 @@ describe('ensure-production-dist build serialization', () => {
     }
   });
 
+  it('takes over a stale lock whose owner identity is unidentifiable (no owner.json)', {
+    timeout: 30000,
+  }, async () => {
+    // An owner that crashed between mkdir and the atomic owner.json publish
+    // leaves a lock dir with NO identity. The caller must treat the dir as
+    // stale only after a full poll budget of persisted absence, then take it
+    // over — and must AWAIT the takeover before re-acquiring (F5 #3: a
+    // fire-and-forget takeover runs detached from the caller and can race
+    // the caller's own mkdir). Asserts the full contract after the CLI exits
+    // 0: exactly one build, complete production artifact, lock dir gone.
+    const projDir = await makeFakeProject();
+    const lockPath = tmpLockPathFor(projDir);
+    mkdirSync(lockPath, { recursive: true }); // no owner.json, no owner.pid
+    try {
+      const child = spawnEnsureCli(projDir, {
+        VIS_DIST_POLL_TIMEOUT_MS: '300',
+        VIS_DIST_POLL_STEP_MS: '50',
+        FAKE_BUILD_SLEEP_MS: '500',
+      });
+      const res = await exitOf(child, 20000);
+      expect(res.code, res.stdout + res.stderr).toBe(0);
+      expect(buildCount(projDir)).toBe(1);
+      expect(indexComplete(projDir)).toBe(true);
+      expect(readIndexEnv(projDir)).toBe('production');
+      expect(existsSync(lockPath)).toBe(false);
+      const key = createHash('sha1').update(path.resolve(projDir)).digest('hex').slice(0, 16);
+      const leftovers = readdirSync(path.join(os.tmpdir(), 'vis-ensure-dist')).filter(
+        (f) => f.startsWith(`${key}.lock`),
+      );
+      expect(leftovers, JSON.stringify(leftovers)).toEqual([]);
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
+      rmSync(lockPath, { recursive: true, force: true });
+    }
+  });
+
   it('takes over a stale lock race-free under N concurrent waiters (one build, all succeed)', {
     timeout: 180000,
   }, async () => {

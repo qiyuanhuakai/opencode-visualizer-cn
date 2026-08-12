@@ -311,7 +311,10 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
         stale = true;
       }
       if (stale) {
-        if (takeOverStaleLock(lockDir, observed, pollStepMs)) break; // stale removed → re-acquire
+        // Await the takeover: a stale dir whose removal is still in flight
+        // must not be re-acquired concurrently (and the takeover's work must
+        // not run detached from this caller).
+        if (await takeOverStaleLock(lockDir, observed, pollStepMs)) break; // stale removed → re-acquire
         await sleep(pollStepMs); // lost to another takeover agent → re-poll
         continue;
       }
