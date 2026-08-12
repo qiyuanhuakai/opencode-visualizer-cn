@@ -9,24 +9,36 @@
  *   - Complete artifact (non-empty index.html plus ≥1 file under
  *     dist/assets) → fast path. Corrupt/partial markers are rebuilt.
  *   - Otherwise run `pnpm build` with NODE_ENV=production.
- *   - Concurrent callers are serialized with an atomic mkdir lock OUTSIDE
- *     dist/ (F3 #3): the lock lives in the OS temp dir keyed by the project
- *     path, so the owner's own emptyOutDir wipe of dist/ cannot remove it.
+ *   - Concurrent callers are serialized with an atomic lock OUTSIDE dist/
+ *     (F3 #3): the lock lives in the OS temp dir keyed by the project path,
+ *     so the owner's own emptyOutDir wipe of dist/ cannot remove it.
  *     Exactly one caller builds; the rest wait for the artifact.
- *   - Stale-lock recovery (F3 #3 round 2): the lock holds owner.json
- *     {pid, token} (process-unique token, published atomically via tmp
- *     write + rename). A live owner gets unbounded wait time (no attempt
- *     budget — a budget would fail callers while a live owner still builds);
- *     a dead owner is taken over under a wx marker that serializes takeover
- *     agents: the stale dir is re-verified dead UNDER the marker before
- *     removal, so of N waiters exactly one deletes a stale lock and no live
- *     owner's lock is ever deleted. A marker left by a crashed agent is
+ *   - Acquisition is atomic WITH identity (F3 round-3): the complete lock
+ *     dir (owner.json {pid, token}) is prepared in a unique sibling temp
+ *     dir and acquired by a single rename() into place. rename() onto an
+ *     existing non-empty dir fails atomically (ENOTEMPTY/EEXIST), so exactly
+ *     one contender wins, and the winner's identity is visible from the
+ *     first instant the lock path exists — there is no mkdir→publish window
+ *     a waiter could exploit. Losers remove their temp dir and become
+ *     waiters. A legacy EMPTY lock dir (a crashed pre-token owner) is
+ *     replaced by the rename; a legacy owner.pid-only dir is taken over as
+ *     stale.
+ *   - Stale-lock recovery (F3 #3 round 2): a live owner gets unbounded wait
+ *     time (no attempt budget — a budget would fail callers while a live
+ *     owner still builds); a dead owner is taken over under a wx marker that
+ *     serializes takeover agents: the stale dir is re-verified dead UNDER
+ *     the marker before removal, so of N waiters exactly one deletes a stale
+ *     lock and no live owner's lock is ever deleted. Markers carry the
+ *     claimant's token (F3 round-3): a holder removes only a marker whose
+ *     token matches its own, and a marker left by a crashed agent is
  *     reclaimed via atomic rename (single winner) after re-verifying the
- *     moved instance names a dead holder; a live holder's marker is renamed
- *     back, never deleted. Owner cleanup is token-verified.
+ *     moved instance still names a dead holder; a live holder's marker is
+ *     renamed back, never deleted. Owner cleanup is token-verified.
  *
  * Usage: node scripts/qa/ensure-production-dist.mjs [--cwd <path>]
  * Poll tuning for tests: VIS_DIST_POLL_TIMEOUT_MS / VIS_DIST_POLL_STEP_MS.
+ * Contention seam for tests: VIS_DIST_ACQUIRE_PAUSE_MS (pause after
+ * acquiring, before the build; 0 = disabled).
  * Exits 0 when dist is (or becomes) present; non-zero on build failure.
  */
 
@@ -94,8 +106,8 @@ function isCompleteDist(indexHtml) {
  * Owner identity of a lock dir: {pid, token} from owner.json (token: the
  * process-unique value an owner must match before anyone deletes the dir),
  * or a legacy {pid} lock naming only its owner.pid. null when the dir has
- * no identifiable owner — lock gone, owner inside its µs mkdir→publish
- * window, or crashed inside that window.
+ * no identifiable owner — only legacy artifacts look like this, since the
+ * atomic acquire makes identity visible from the lock's first instant.
  */
 function readOwner(lockDir) {
   try {
@@ -124,12 +136,10 @@ function pidAlive(pid) {
   }
 }
 
-/** Atomic owner.json publication — waiters never observe a partial file. */
-function publishOwner(lockDir, token) {
-  const ownerJson = path.join(lockDir, OWNER_FILE);
-  const tmp = `${ownerJson}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, token }));
-  fs.renameSync(tmp, ownerJson);
+/** A marker token `${pid}-${uuid}` names its holder's pid. */
+function tokenAlive(token) {
+  const pid = Number.parseInt(token, 10);
+  return Number.isInteger(pid) && pid > 0 && pidAlive(pid);
 }
 
 /**
@@ -144,45 +154,67 @@ function removeOwnLock(lockDir, token) {
   }
 }
 
+/** Remove the takeover marker only while it still carries OUR token. */
+function removeOwnMarker(lockDir, myToken) {
+  const markerPath = path.join(lockDir, TAKEOVER_FILE);
+  let holderToken = null;
+  try {
+    holderToken = fs.readFileSync(markerPath, 'utf8').trim();
+  } catch {
+    return; // marker already gone
+  }
+  if (holderToken === myToken) {
+    fs.rmSync(markerPath, { force: true });
+  }
+  // A marker that is not ours belongs to a concurrent claimant — a holder
+  // never deletes another holder's marker.
+}
+
 /**
  * wx-acquire the takeover marker inside the lock dir: one takeover agent at
  * a time per dir instance, so a re-verify done under the marker cannot race
- * another agent's takeover. A marker left by a crashed agent (dead holder
- * pid) is reclaimed atomically — rename() moves the marker instance away, a
- * single winner among concurrent reclaimants — and the moved instance is
- * discarded only after re-verifying it still names a dead holder; a live
- * holder's marker is renamed back, never deleted.
+ * another agent's takeover. The marker carries the claimant's token; a
+ * marker left by a crashed agent (dead holder pid) is reclaimed atomically —
+ * rename() moves the marker instance away, a single winner among concurrent
+ * reclaimants — and the moved instance is discarded only after re-verifying
+ * it still names a dead holder; a live holder's marker is renamed back,
+ * never deleted.
  */
-function acquireTakeoverMarker(markerPath) {
+function acquireTakeoverMarker(lockDir, myToken) {
+  const markerPath = path.join(lockDir, TAKEOVER_FILE);
   for (let attempt = 0; attempt < MARKER_RECLAIM_ATTEMPTS; attempt++) {
     try {
-      fs.writeFileSync(markerPath, `${process.pid}\n`, { flag: 'wx' });
+      fs.writeFileSync(markerPath, `${myToken}\n`, { flag: 'wx' });
       return true;
     } catch (err) {
       if (err.code !== 'EEXIST') return false; // lock dir vanished — re-poll
     }
+    // Held by another claimant. Reclaim only a provably dead holder: rename
+    // the marker instance away (a single winner), then discard it only if
+    // the moved instance still names a dead holder.
     const deadPath = `${markerPath}.dead-${randomUUID()}`;
     try {
       fs.renameSync(markerPath, deadPath);
     } catch {
       return false; // another reclaimant won (or the dir vanished) — re-poll
     }
-    let holderPid = null;
+    let holderToken = null;
     try {
-      holderPid = Number.parseInt(fs.readFileSync(deadPath, 'utf8'), 10);
+      holderToken = fs.readFileSync(deadPath, 'utf8').trim();
     } catch {
-      holderPid = null;
+      holderToken = null;
     }
-    if (Number.isInteger(holderPid) && holderPid > 0 && pidAlive(holderPid)) {
-      try {
-        fs.renameSync(deadPath, markerPath);
-      } catch {
-        // a fresh instance appeared — ours stays at deadPath, never deleted
-      }
-      return false; // live holder mid-takeover — re-poll
+    if (holderToken === null || !tokenAlive(holderToken)) {
+      fs.rmSync(deadPath, { force: true }); // dead/unknown holder — reclaimed
+      continue; // retry the wx
     }
-    fs.rmSync(deadPath, { force: true }); // dead/unknown holder — reclaimed
-    // retry the wx
+    // Live holder's marker — restore it, never delete.
+    try {
+      fs.renameSync(deadPath, markerPath);
+    } catch {
+      // a fresh instance appeared — ours stays at deadPath, never deleted
+    }
+    return false; // live holder mid-takeover — re-poll
   }
   return false;
 }
@@ -197,15 +229,15 @@ function acquireTakeoverMarker(markerPath) {
  * Returns true when the stale dir was removed (the next attempt acquires),
  * false when the race was lost or the dir was left alone (re-poll instead).
  */
-async function takeOverStaleLock(lockDir, observed, pollStepMs) {
-  const markerPath = path.join(lockDir, TAKEOVER_FILE);
-  if (!acquireTakeoverMarker(markerPath)) return false; // another takeover in flight
+async function takeOverStaleLock(lockDir, observed, pollStepMs, myToken) {
+  if (!acquireTakeoverMarker(lockDir, myToken)) return false; // another takeover in flight
   try {
     let current = fs.existsSync(lockDir) ? readOwner(lockDir) : null;
     if (current === null && fs.existsSync(lockDir)) {
-      // Unidentifiable dir: a crashed owner (died before publishing) or a
-      // live owner inside its µs publish window. One poll step later the
-      // live owner's identity exists — only a persisted absence is stale.
+      // No identifiable owner: with atomic acquire this can only be a legacy
+      // artifact (a pre-token owner crashed before publishing). Give any
+      // in-flight publish one poll step, then treat a persisted absence as
+      // stale.
       await sleep(pollStepMs);
       current = fs.existsSync(lockDir) ? readOwner(lockDir) : null;
       if (current === null && !fs.existsSync(lockDir)) return false; // owner finished
@@ -236,7 +268,7 @@ async function takeOverStaleLock(lockDir, observed, pollStepMs) {
     }
     return false; // stranded at the claim path (inert) rather than destroyed
   } finally {
-    fs.rmSync(markerPath, { force: true });
+    removeOwnMarker(lockDir, myToken);
   }
 }
 
@@ -255,37 +287,49 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
   fs.mkdirSync(distDir, { recursive: true });
   fs.mkdirSync(lockRoot, { recursive: true });
   const lockDir = lockPathFor(cwd, lockRoot);
+  const myToken = `${process.pid}-${randomUUID()}`;
 
-  // Serialize with the mkdir lock, then wait for the owner's build or take
-  // over a stale lock. The loop is UNBOUNDED on purpose: a live owner may
-  // legitimately build for minutes, and a stale lock is always takeable (a
-  // marker left by a crashed agent is reclaimed on sight), so there is no
-  // dead end that a fixed attempt budget would need to bound — a budget
-  // would instead let a caller fail while a live owner is still building
-  // (F3 #3 round 3 regression). Non-EEXIST mkdir failures are real fs
-  // errors and propagate immediately.
+  // Acquire the lock WITH identity in one atomic step: prepare the complete
+  // lock dir (owner.json) in a unique sibling temp dir, then rename it into
+  // place. rename() onto an existing non-empty dir fails atomically
+  // (ENOTEMPTY/EEXIST), so exactly one contender wins and the winner's
+  // identity is visible from the first instant the lock path exists — there
+  // is no mkdir→publish window (F3 round-3). The loop is UNBOUNDED: a live
+  // owner may legitimately build for minutes and a stale lock is always
+  // takeable (a crashed agent's marker is reclaimed on sight), so no fixed
+  // attempt budget is needed — a budget would let a caller fail while a
+  // live owner is still building (F3 #3 round 3 regression).
   for (;;) {
     if (isCompleteDist(indexHtml)) return false; // never rebuild a completed dist
     let owner = false;
+    const prepDir = `${lockDir}.prep-${randomUUID()}`;
     try {
-      fs.mkdirSync(lockDir);
+      fs.mkdirSync(prepDir);
+      fs.writeFileSync(
+        path.join(prepDir, OWNER_FILE),
+        JSON.stringify({ pid: process.pid, token: myToken }),
+      );
+      fs.renameSync(prepDir, lockDir); // atomic acquire-with-identity
       owner = true;
     } catch (err) {
-      if (err.code !== 'EEXIST') throw err; // fs error, not lock contention
+      fs.rmSync(prepDir, { recursive: true, force: true });
+      if (err.code !== 'EEXIST' && err.code !== 'ENOTEMPTY') throw err; // real fs error
       owner = false; // someone else holds the lock (or a stale one)
     }
 
     if (owner) {
-      const token = `${process.pid}-${randomUUID()}`;
+      // Contention seam for tests: pause after acquiring (identity already
+      // published), before the build.
+      const pauseMs = envMs('VIS_DIST_ACQUIRE_PAUSE_MS', 0);
+      if (pauseMs > 0) await sleep(pauseMs);
       try {
-        publishOwner(lockDir, token);
         execSync(buildCommand, {
           cwd,
           env: { ...process.env, NODE_ENV: 'production' },
           stdio: 'inherit',
         });
       } finally {
-        removeOwnLock(lockDir, token);
+        removeOwnLock(lockDir, myToken);
       }
       if (!isCompleteDist(indexHtml)) {
         throw new Error(`${buildCommand} finished but dist artifact is incomplete`);
@@ -304,8 +348,9 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
       const observed = readOwner(lockDir);
       let stale = false;
       if (observed === null) {
-        // Owner inside its µs mkdir→publish window, or it crashed before
-        // publishing: after a full poll budget of absence, take it over.
+        // Identity-less dir: with atomic acquire this is a legacy artifact
+        // (a pre-token owner crashed before publishing). After a full poll
+        // budget of persisted absence, take it over.
         stale = Date.now() - waitStart >= pollTimeoutMs;
       } else if (!pidAlive(observed.pid)) {
         stale = true;
@@ -314,7 +359,7 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
         // Await the takeover: a stale dir whose removal is still in flight
         // must not be re-acquired concurrently (and the takeover's work must
         // not run detached from this caller).
-        if (await takeOverStaleLock(lockDir, observed, pollStepMs)) break; // stale removed → re-acquire
+        if (await takeOverStaleLock(lockDir, observed, pollStepMs, myToken)) break; // stale removed → re-acquire
         await sleep(pollStepMs); // lost to another takeover agent → re-poll
         continue;
       }

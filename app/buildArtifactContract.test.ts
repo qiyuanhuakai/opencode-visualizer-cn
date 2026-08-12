@@ -321,16 +321,16 @@ describe('ensure-production-dist build serialization', () => {
     }
   });
 
-  it('takes over a stale lock whose owner identity is unidentifiable (no owner.json)', {
+  it('acquires over a lock dir whose owner identity is unidentifiable (no owner.json)', {
     timeout: 30000,
   }, async () => {
     // An owner that crashed between mkdir and the atomic owner.json publish
-    // leaves a lock dir with NO identity. The caller must treat the dir as
-    // stale only after a full poll budget of persisted absence, then take it
-    // over — and must AWAIT the takeover before re-acquiring (F5 #3: a
-    // fire-and-forget takeover runs detached from the caller and can race
-    // the caller's own mkdir). Asserts the full contract after the CLI exits
-    // 0: exactly one build, complete production artifact, lock dir gone.
+    // (pre-token code) leaves a lock dir with NO identity. With the atomic
+    // acquire-with-identity (F3 round-3), an EMPTY lock dir is replaced by
+    // the acquire's rename itself — the winner's identity is visible from
+    // the lock's first instant, so an identity-less dir can never be a live
+    // owner's. Asserts the full contract after the CLI exits 0: exactly one
+    // build, complete production artifact, lock dir gone.
     const projDir = await makeFakeProject();
     const lockPath = tmpLockPathFor(projDir);
     mkdirSync(lockPath, { recursive: true }); // no owner.json, no owner.pid
@@ -354,6 +354,42 @@ describe('ensure-production-dist build serialization', () => {
     } finally {
       rmSync(projDir, { recursive: true, force: true });
       rmSync(lockPath, { recursive: true, force: true });
+    }
+  });
+
+  it('builds exactly once when a caller is slowed after acquiring (no publish window)', {
+    timeout: 60000,
+  }, async () => {
+    // F3 round-3 deterministic repro: acquisition (mkdir) and identity
+    // publication (owner.json) were separate operations. A caller paused
+    // after its mkdir left an ownerless lock dir; a waiter with a short
+    // ownerless timeout took it over, deleted the live-but-unpublished
+    // owner's lock, and BOTH callers built (duplicate builds, both exit 0).
+    // The slowed caller here pauses VIS_DIST_ACQUIRE_PAUSE_MS after
+    // acquiring; the contender uses a 100ms ownerless timeout so it ages
+    // out the window while the slow caller is still paused.
+    const projDir = await makeFakeProject();
+    try {
+      const slow = spawnEnsureCli(projDir, {
+        VIS_DIST_ACQUIRE_PAUSE_MS: '3000',
+        FAKE_BUILD_SLEEP_MS: '500',
+      });
+      // Arrive after the slow caller has acquired but long before it
+      // resumes from its pause.
+      await delay(500);
+      const fast = spawnEnsureCli(projDir, {
+        VIS_DIST_POLL_TIMEOUT_MS: '100',
+        VIS_DIST_POLL_STEP_MS: '50',
+        FAKE_BUILD_SLEEP_MS: '500',
+      });
+      const [slowRes, fastRes] = await Promise.all([exitOf(slow, 30000), exitOf(fast, 30000)]);
+      expect(slowRes.code, slowRes.stdout + slowRes.stderr).toBe(0);
+      expect(fastRes.code, fastRes.stdout + fastRes.stderr).toBe(0);
+      expect(buildCount(projDir), slowRes.stdout + fastRes.stderr).toBe(1);
+      expect(indexComplete(projDir)).toBe(true);
+      expect(readIndexEnv(projDir)).toBe('production');
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
     }
   });
 
