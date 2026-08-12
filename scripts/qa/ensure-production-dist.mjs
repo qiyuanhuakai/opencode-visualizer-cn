@@ -15,14 +15,15 @@
  *     Exactly one caller builds; the rest wait for the artifact.
  *   - Stale-lock recovery (F3 #3 round 2): the lock holds owner.json
  *     {pid, token} (process-unique token, published atomically via tmp
- *     write + rename). A live owner gets unbounded wait time; a dead owner
- *     is taken over under a wx marker that serializes takeover agents: the
- *     stale dir is re-verified dead UNDER the marker before removal, so of N
- *     waiters exactly one deletes a stale lock and no live owner's lock is
- *     ever deleted. A marker left by a crashed agent is reclaimed via atomic
- *     rename (single winner) after re-verifying the moved instance names a
- *     dead holder; a live holder's marker is renamed back, never deleted.
- *     Owner cleanup is token-verified.
+ *     write + rename). A live owner gets unbounded wait time (no attempt
+ *     budget — a budget would fail callers while a live owner still builds);
+ *     a dead owner is taken over under a wx marker that serializes takeover
+ *     agents: the stale dir is re-verified dead UNDER the marker before
+ *     removal, so of N waiters exactly one deletes a stale lock and no live
+ *     owner's lock is ever deleted. A marker left by a crashed agent is
+ *     reclaimed via atomic rename (single winner) after re-verifying the
+ *     moved instance names a dead holder; a live holder's marker is renamed
+ *     back, never deleted. Owner cleanup is token-verified.
  *
  * Usage: node scripts/qa/ensure-production-dist.mjs [--cwd <path>]
  * Poll tuning for tests: VIS_DIST_POLL_TIMEOUT_MS / VIS_DIST_POLL_STEP_MS.
@@ -43,7 +44,6 @@ const OWNER_FILE = 'owner.json';
 const TAKEOVER_FILE = '.takeover'; // wx marker serializing takeover agents
 const POLL_TIMEOUT_MS = 120_000;
 const POLL_STEP_MS = 200;
-const MAX_ATTEMPTS = 3;
 const MARKER_RECLAIM_ATTEMPTS = 3;
 const RESTORE_ATTEMPTS = 5;
 const RESTORE_RETRY_MS = 20;
@@ -256,12 +256,22 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
   fs.mkdirSync(lockRoot, { recursive: true });
   const lockDir = lockPathFor(cwd, lockRoot);
 
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+  // Serialize with the mkdir lock, then wait for the owner's build or take
+  // over a stale lock. The loop is UNBOUNDED on purpose: a live owner may
+  // legitimately build for minutes, and a stale lock is always takeable (a
+  // marker left by a crashed agent is reclaimed on sight), so there is no
+  // dead end that a fixed attempt budget would need to bound — a budget
+  // would instead let a caller fail while a live owner is still building
+  // (F3 #3 round 3 regression). Non-EEXIST mkdir failures are real fs
+  // errors and propagate immediately.
+  for (;;) {
+    if (isCompleteDist(indexHtml)) return false; // never rebuild a completed dist
     let owner = false;
     try {
       fs.mkdirSync(lockDir);
       owner = true;
-    } catch {
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err; // fs error, not lock contention
       owner = false; // someone else holds the lock (or a stale one)
     }
 
@@ -283,15 +293,14 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
       return true;
     }
 
-    // Not the owner: wait for the owner's build. Waiting on a LIVE owner is
-    // unbounded — a real build may legitimately run minutes. A stale lock is
-    // taken over INSIDE this loop, so a takeover that loses to a concurrent
-    // agent (or a winner preempted mid-takeover) re-polls without consuming
-    // the attempt budget — MAX_ATTEMPTS bounds only acquire cycles.
+    // Not the owner: wait for the owner's build. A stale lock is taken over
+    // INSIDE this loop, so a takeover that loses to a concurrent agent (or
+    // a winner preempted mid-takeover) re-polls without any budget being
+    // consumed — races with concurrent acquirers are the norm.
     const waitStart = Date.now();
     for (;;) {
       if (isCompleteDist(indexHtml)) return false;
-      if (!fs.existsSync(lockDir)) break; // owner finished and cleaned up → acquire
+      if (!fs.existsSync(lockDir)) break; // owner finished and cleaned up → re-acquire
       const observed = readOwner(lockDir);
       let stale = false;
       if (observed === null) {
@@ -302,15 +311,13 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
         stale = true;
       }
       if (stale) {
-        if (takeOverStaleLock(lockDir, observed, pollStepMs)) break; // stale removed → acquire
+        if (takeOverStaleLock(lockDir, observed, pollStepMs)) break; // stale removed → re-acquire
         await sleep(pollStepMs); // lost to another takeover agent → re-poll
         continue;
       }
       await sleep(pollStepMs);
     }
   }
-
-  throw new Error(`could not ensure a production dist after ${MAX_ATTEMPTS} attempts`);
 }
 
 // CLI entry — runnable so test files can spawn it without importing ESM.
