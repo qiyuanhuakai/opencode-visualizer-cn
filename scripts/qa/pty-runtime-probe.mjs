@@ -4,9 +4,11 @@
 // entry point; a packaged executable always runs its own asar main).
 //
 // Spawns the platform shell through node-pty, proves a sentinel round-trip
-// (VIS_PTY_OK_42, produced by shell expansion so terminal echo cannot fake
-// it), resizes (verified via `stty size` on POSIX), kills, and proves
-// child-tree cleanup from a ps snapshot: no survivors, no zombies.
+// (VIS_PTY_OK_42, produced by a COMPUTED token per platform — shell
+// expansion at execution time, so the echoed input line never contains the
+// marker and a terminal that only echoes input cannot satisfy the
+// assertion), resizes (verified via `stty size` on POSIX), kills, and
+// proves child-tree cleanup from a ps snapshot: no survivors, no zombies.
 //
 // argv: [moduleDir, receiptPath, workDir]
 //   moduleDir  — the node-pty package directory to load (the RED contract
@@ -19,6 +21,7 @@
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 
 const [moduleDir, receiptPath, workDir] = process.argv.slice(2);
 const result = {
@@ -105,10 +108,32 @@ async function waitForOutput(getText, marker, timeoutMs, label) {
       output += String(data);
     });
     const exited = new Promise((resolve) => terminal.onExit((event) => resolve(event ?? {})));
-    const marker = isWindows ? 'VIS_PTY_OK' : 'VIS_PTY_OK_42';
-    terminal.write('echo ' + marker + '\n');
+    // Computed sentinel (same approach as the SEA path in
+    // node-pty-dual-runtime.mjs sentinelCommand): the expected marker
+    // VIS_PTY_OK_42 never appears in the echoed input lines — only shell
+    // expansion at execution time produces it, so terminal echo alone can
+    // never satisfy the assertion:
+    //   bash        echo VIS_PTY_OK_$((7*6))   — arithmetic expands at
+    //               execution; the echoed line holds `$((7*6))` verbatim
+    //   cmd.exe     value set on a PRIOR line   — %VIS_SENT% expands at
+    //               parse time of each line, so the value must come from an
+    //               earlier line; the echoed `set` lines hold no marker
+    //   powershell  $VIS_MARK built at runtime  — echoed assignment holds
+    //               only the prefix `VIS_PTY_OK_`
+    const marker = 'VIS_PTY_OK_42';
+    const shellBase = path.basename(command).toLowerCase();
+    const isPwsh = shellBase === 'powershell.exe' || shellBase === 'pwsh.exe';
+    let sentinelInput;
+    if (isPwsh) {
+      sentinelInput = "$VIS_SENT = 6 * 7\r\n$VIS_MARK = 'VIS_PTY_OK_' + $VIS_SENT\r\necho $VIS_MARK";
+    } else if (isWindows) {
+      sentinelInput = 'set VIS_SENT=42\r\nset VIS_MARK=VIS_PTY_OK_%VIS_SENT%\r\necho %VIS_MARK%';
+    } else {
+      sentinelInput = 'echo VIS_PTY_OK_$((7*6))';
+    }
+    terminal.write(sentinelInput + (isWindows ? '\r\n' : '\n'));
     await waitForOutput(() => output, marker, 15000, 'sentinel');
-    result.sentinel = { ok: true, marker };
+    result.sentinel = { ok: true, marker, producedBy: 'computed token; terminal echo cannot satisfy' };
     terminal.resize(100, 40);
     if (isWindows) {
       result.resize = {
