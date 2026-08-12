@@ -1,30 +1,28 @@
 #!/usr/bin/env node
 /**
  * Ensure a REAL production build exists at <repo>/dist before dist-dependent
- * gates (build-artifact-check, serverLive integration tests) measure or serve
- * it — even when `pnpm test` runs before `pnpm build` on a clean checkout
- * (CI validate job order) and even when the test runner's own environment
- * carries NODE_ENV=test (vitest), which would poison a bare `vite build`
- * into a NON-production artifact (task 12 regression: vendor-vue-i18n chunk
- * 69486B under NODE_ENV=test vs 56001B production, budget 65536B).
+ * gates measure or serve it — even when `pnpm test` runs before `pnpm build`
+ * on a clean checkout and even under NODE_ENV=test (vitest), which would
+ * poison a bare `vite build` into a NON-production artifact.
  *
  * Contract:
- *   - If dist/ already holds a COMPLETE artifact (non-empty index.html plus
- *     at least one file under dist/assets): return immediately (fast path).
- *     An empty index.html or an index.html without assets is a corrupt or
- *     partial build and is rebuilt.
- *   - Otherwise run `pnpm build` with NODE_ENV=production so the produced
- *     artifact is byte-identical to a standalone production build.
- *   - Concurrent callers (multiple vitest forks on a clean checkout) are
- *     serialized with an atomic mkdir lock OUTSIDE dist/ (F3 #3): the lock
- *     lives in the OS temp dir keyed by the project path, so vite's
- *     `emptyOutDir: true` wipe of dist/ — which would delete a lock living
- *     inside the output — can never remove it. Exactly one caller builds,
- *     the rest wait for the artifact (bounded poll), then proceed.
- *   - Stale-lock recovery: if the lock holder never produces an artifact
- *     within the poll budget, its recorded PID is checked for liveness. A
- *     dead owner (SIGKILL/crash) leaves a stale lock — it is removed and the
- *     lock re-acquired (takeover). A live owner gets another poll round.
+ *   - Complete artifact (non-empty index.html plus ≥1 file under
+ *     dist/assets) → fast path. Corrupt/partial markers are rebuilt.
+ *   - Otherwise run `pnpm build` with NODE_ENV=production.
+ *   - Concurrent callers are serialized with an atomic mkdir lock OUTSIDE
+ *     dist/ (F3 #3): the lock lives in the OS temp dir keyed by the project
+ *     path, so the owner's own emptyOutDir wipe of dist/ cannot remove it.
+ *     Exactly one caller builds; the rest wait for the artifact.
+ *   - Stale-lock recovery (F3 #3 round 2): the lock holds owner.json
+ *     {pid, token} (process-unique token, published atomically via tmp
+ *     write + rename). A live owner gets unbounded wait time; a dead owner
+ *     is taken over under a wx marker that serializes takeover agents: the
+ *     stale dir is re-verified dead UNDER the marker before removal, so of N
+ *     waiters exactly one deletes a stale lock and no live owner's lock is
+ *     ever deleted. A marker left by a crashed agent is reclaimed via atomic
+ *     rename (single winner) after re-verifying the moved instance names a
+ *     dead holder; a live holder's marker is renamed back, never deleted.
+ *     Owner cleanup is token-verified.
  *
  * Usage: node scripts/qa/ensure-production-dist.mjs [--cwd <path>]
  * Poll tuning for tests: VIS_DIST_POLL_TIMEOUT_MS / VIS_DIST_POLL_STEP_MS.
@@ -32,7 +30,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,10 +38,15 @@ import { fileURLToPath } from 'node:url';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '../..');
-const PID_FILE = 'owner.pid';
+const PID_FILE = 'owner.pid'; // legacy owner identity (pre-token locks)
+const OWNER_FILE = 'owner.json';
+const TAKEOVER_FILE = '.takeover'; // wx marker serializing takeover agents
 const POLL_TIMEOUT_MS = 120_000;
 const POLL_STEP_MS = 200;
 const MAX_ATTEMPTS = 3;
+const MARKER_RECLAIM_ATTEMPTS = 3;
+const RESTORE_ATTEMPTS = 5;
+const RESTORE_RETRY_MS = 20;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -88,23 +91,152 @@ function isCompleteDist(indexHtml) {
 }
 
 /**
- * Stale-lock detection: the holder is alive iff its owner.pid names a live
- * process. A missing pid file means the owner died between mkdir and the pid
- * write — the only plausible explanation after a full poll timeout.
+ * Owner identity of a lock dir: {pid, token} from owner.json (token: the
+ * process-unique value an owner must match before anyone deletes the dir),
+ * or a legacy {pid} lock naming only its owner.pid. null when the dir has
+ * no identifiable owner — lock gone, owner inside its µs mkdir→publish
+ * window, or crashed inside that window.
  */
-function ownerPidAlive(lockDir) {
+function readOwner(lockDir) {
+  try {
+    const owner = JSON.parse(fs.readFileSync(path.join(lockDir, OWNER_FILE), 'utf8'));
+    if (Number.isInteger(owner.pid) && owner.pid > 0 && typeof owner.token === 'string') {
+      return { pid: owner.pid, token: owner.token };
+    }
+  } catch {
+    // no/invalid owner.json — fall through to the legacy pid file
+  }
   let pid;
   try {
     pid = Number.parseInt(fs.readFileSync(path.join(lockDir, PID_FILE), 'utf8'), 10);
   } catch {
-    return false;
+    return null;
   }
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  return Number.isInteger(pid) && pid > 0 ? { pid, token: undefined } : null;
+}
+
+function pidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
     return err.code === 'EPERM'; // EPERM: exists but owned by another user
+  }
+}
+
+/** Atomic owner.json publication — waiters never observe a partial file. */
+function publishOwner(lockDir, token) {
+  const ownerJson = path.join(lockDir, OWNER_FILE);
+  const tmp = `${ownerJson}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify({ pid: process.pid, token }));
+  fs.renameSync(tmp, ownerJson);
+}
+
+/**
+ * Owner cleanup: remove the lock dir ONLY while it still carries our token.
+ * A dir whose token is not ours was taken over while we built (or already
+ * removed) — a live owner's lock is never deleted by anyone but its owner.
+ */
+function removeOwnLock(lockDir, token) {
+  const owner = readOwner(lockDir);
+  if (owner?.token === token) {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * wx-acquire the takeover marker inside the lock dir: one takeover agent at
+ * a time per dir instance, so a re-verify done under the marker cannot race
+ * another agent's takeover. A marker left by a crashed agent (dead holder
+ * pid) is reclaimed atomically — rename() moves the marker instance away, a
+ * single winner among concurrent reclaimants — and the moved instance is
+ * discarded only after re-verifying it still names a dead holder; a live
+ * holder's marker is renamed back, never deleted.
+ */
+function acquireTakeoverMarker(markerPath) {
+  for (let attempt = 0; attempt < MARKER_RECLAIM_ATTEMPTS; attempt++) {
+    try {
+      fs.writeFileSync(markerPath, `${process.pid}\n`, { flag: 'wx' });
+      return true;
+    } catch (err) {
+      if (err.code !== 'EEXIST') return false; // lock dir vanished — re-poll
+    }
+    const deadPath = `${markerPath}.dead-${randomUUID()}`;
+    try {
+      fs.renameSync(markerPath, deadPath);
+    } catch {
+      return false; // another reclaimant won (or the dir vanished) — re-poll
+    }
+    let holderPid = null;
+    try {
+      holderPid = Number.parseInt(fs.readFileSync(deadPath, 'utf8'), 10);
+    } catch {
+      holderPid = null;
+    }
+    if (Number.isInteger(holderPid) && holderPid > 0 && pidAlive(holderPid)) {
+      try {
+        fs.renameSync(deadPath, markerPath);
+      } catch {
+        // a fresh instance appeared — ours stays at deadPath, never deleted
+      }
+      return false; // live holder mid-takeover — re-poll
+    }
+    fs.rmSync(deadPath, { force: true }); // dead/unknown holder — reclaimed
+    // retry the wx
+  }
+  return false;
+}
+
+/**
+ * Stale-lock takeover (F3 #3 round 2). Under the wx marker, re-verify the
+ * lock dir still holds a dead (or unidentifiable-after-grace) owner, then
+ * remove it. The final identity check runs AFTER the dir is moved to a
+ * claimant-unique path: a dir replaced in the check→rename window (only a
+ * broken marker reclaim can allow) is renamed back, never deleted.
+ *
+ * Returns true when the stale dir was removed (the next attempt acquires),
+ * false when the race was lost or the dir was left alone (re-poll instead).
+ */
+async function takeOverStaleLock(lockDir, observed, pollStepMs) {
+  const markerPath = path.join(lockDir, TAKEOVER_FILE);
+  if (!acquireTakeoverMarker(markerPath)) return false; // another takeover in flight
+  try {
+    let current = fs.existsSync(lockDir) ? readOwner(lockDir) : null;
+    if (current === null && fs.existsSync(lockDir)) {
+      // Unidentifiable dir: a crashed owner (died before publishing) or a
+      // live owner inside its µs publish window. One poll step later the
+      // live owner's identity exists — only a persisted absence is stale.
+      await sleep(pollStepMs);
+      current = fs.existsSync(lockDir) ? readOwner(lockDir) : null;
+      if (current === null && !fs.existsSync(lockDir)) return false; // owner finished
+    }
+    if (current !== null && pidAlive(current.pid)) return false; // live owner — back off
+    const claimPath = `${lockDir}.takeover-${randomUUID()}`;
+    try {
+      fs.renameSync(lockDir, claimPath);
+    } catch {
+      return false; // lock dir vanished — re-poll
+    }
+    const moved = readOwner(claimPath);
+    const sameStaleOwner =
+      (moved?.token ?? null) === (observed?.token ?? null) &&
+      (moved?.pid ?? null) === (observed?.pid ?? null);
+    if (sameStaleOwner) {
+      fs.rmSync(claimPath, { recursive: true, force: true });
+      return true;
+    }
+    // The moved dir is not the stale owner's — restore it, never delete.
+    for (let attempt = 0; attempt < RESTORE_ATTEMPTS; attempt++) {
+      try {
+        fs.renameSync(claimPath, lockDir);
+        return false;
+      } catch {
+        await sleep(RESTORE_RETRY_MS);
+      }
+    }
+    return false; // stranded at the claim path (inert) rather than destroyed
+  } finally {
+    fs.rmSync(markerPath, { force: true });
   }
 }
 
@@ -134,15 +266,16 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
     }
 
     if (owner) {
+      const token = `${process.pid}-${randomUUID()}`;
       try {
-        fs.writeFileSync(path.join(lockDir, PID_FILE), `${process.pid}\n`);
+        publishOwner(lockDir, token);
         execSync(buildCommand, {
           cwd,
           env: { ...process.env, NODE_ENV: 'production' },
           stdio: 'inherit',
         });
       } finally {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+        removeOwnLock(lockDir, token);
       }
       if (!isCompleteDist(indexHtml)) {
         throw new Error(`${buildCommand} finished but dist artifact is incomplete`);
@@ -150,18 +283,30 @@ export async function ensureProductionDist(cwd = REPO_ROOT, options = {}) {
       return true;
     }
 
-    // Not the owner: wait for the owner's build (bounded).
-    const deadline = Date.now() + pollTimeoutMs;
-    while (Date.now() < deadline) {
+    // Not the owner: wait for the owner's build. Waiting on a LIVE owner is
+    // unbounded — a real build may legitimately run minutes. A stale lock is
+    // taken over INSIDE this loop, so a takeover that loses to a concurrent
+    // agent (or a winner preempted mid-takeover) re-polls without consuming
+    // the attempt budget — MAX_ATTEMPTS bounds only acquire cycles.
+    const waitStart = Date.now();
+    for (;;) {
       if (isCompleteDist(indexHtml)) return false;
+      if (!fs.existsSync(lockDir)) break; // owner finished and cleaned up → acquire
+      const observed = readOwner(lockDir);
+      let stale = false;
+      if (observed === null) {
+        // Owner inside its µs mkdir→publish window, or it crashed before
+        // publishing: after a full poll budget of absence, take it over.
+        stale = Date.now() - waitStart >= pollTimeoutMs;
+      } else if (!pidAlive(observed.pid)) {
+        stale = true;
+      }
+      if (stale) {
+        if (takeOverStaleLock(lockDir, observed, pollStepMs)) break; // stale removed → acquire
+        await sleep(pollStepMs); // lost to another takeover agent → re-poll
+        continue;
+      }
       await sleep(pollStepMs);
-    }
-    if (isCompleteDist(indexHtml)) return false;
-    // The lock holder never produced an artifact. If its PID is gone the
-    // lock is stale (owner crashed mid-build) — remove it and take over on
-    // the next attempt. If the owner is still alive, give it another round.
-    if (!ownerPidAlive(lockDir)) {
-      fs.rmSync(lockDir, { recursive: true, force: true });
     }
   }
 

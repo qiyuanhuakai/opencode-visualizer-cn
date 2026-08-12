@@ -298,7 +298,10 @@ describe('ensure-production-dist build serialization', () => {
     ];
     for (const lock of staleLocks) {
       mkdirSync(lock, { recursive: true });
-      writeFileSync(path.join(lock, 'owner.pid'), `${pid}\n`);
+      writeFileSync(
+        path.join(lock, 'owner.json'),
+        JSON.stringify({ pid, token: 'stale-test-owner' }),
+      );
     }
     try {
       const child = spawnEnsureCli(projDir, { VIS_DIST_POLL_TIMEOUT_MS: '300' });
@@ -315,6 +318,65 @@ describe('ensure-production-dist build serialization', () => {
         rmSync(lock, { recursive: true, force: true });
       }
       rmSync(projDir, { recursive: true, force: true });
+    }
+  });
+
+  it('takes over a stale lock race-free under N concurrent waiters (one build, all succeed)', {
+    timeout: 180000,
+  }, async () => {
+    // Round-2 reviewer reproduction: 8 concurrent callers against ONE stale
+    // lock (dead owner PID) produced caller failures AND duplicate builds —
+    // every waiter polled the dead owner, then each rmSync'd the lock based
+    // on its stale observation; a waiter whose rmSync landed after the new
+    // owner's mkdir deleted the LIVE owner's lock and a third caller rebuilt.
+    // The fix must make the takeover atomic: exactly one builder invocation,
+    // every caller exits 0, and no live owner's lock is ever deleted. The
+    // race is probabilistic, so the scenario repeats CONSECUTIVE_ROUNDS with
+    // a fresh project and a freshly killed owner PID each time.
+    const rounds = 5;
+    for (let round = 0; round < rounds; round++) {
+      const projDir = await makeFakeProject();
+      const pid = await deadPid();
+      const lockPath = tmpLockPathFor(projDir);
+      mkdirSync(lockPath, { recursive: true });
+      writeFileSync(
+        path.join(lockPath, 'owner.json'),
+        JSON.stringify({ pid, token: `stale-${round}` }),
+      );
+      try {
+        const children = Array.from({ length: 8 }, () =>
+          spawnEnsureCli(projDir, {
+            VIS_DIST_POLL_TIMEOUT_MS: '500',
+            VIS_DIST_POLL_STEP_MS: '50',
+            FAKE_BUILD_SLEEP_MS: '2000',
+          }),
+        );
+        const results = await Promise.all(children.map((c) => exitOf(c, 30000)));
+        for (let i = 0; i < results.length; i++) {
+          const res = results[i];
+          expect(
+            res.code,
+            `caller ${i} of round ${round}: ${res.stdout + res.stderr}`,
+          ).toBe(0);
+        }
+        // Exactly one builder invocation. A second build means a waiter
+        // deleted the new owner's lock from a stale observation and a third
+        // caller re-acquired — the RED pre-fix symptom.
+        expect(buildCount(projDir), `round ${round}`).toBe(1);
+        expect(indexComplete(projDir)).toBe(true);
+        expect(readIndexEnv(projDir)).toBe('production');
+        // The winner cleaned up its own lock; a takeover that displaced a
+        // live lock would have left it (or a `.takeover-*` claim dir) behind.
+        expect(existsSync(lockPath), `round ${round}`).toBe(false);
+        const key = createHash('sha1').update(path.resolve(projDir)).digest('hex').slice(0, 16);
+        const leftovers = readdirSync(path.join(os.tmpdir(), 'vis-ensure-dist')).filter(
+          (f) => f.startsWith(`${key}.lock`),
+        );
+        expect(leftovers, `round ${round}: ${JSON.stringify(leftovers)}`).toEqual([]);
+      } finally {
+        rmSync(projDir, { recursive: true, force: true });
+        rmSync(lockPath, { recursive: true, force: true });
+      }
     }
   });
 
