@@ -3,8 +3,6 @@
 ## [In Progress] 
 
 - [ ] chore：升级相关依赖，改善安全性和功能
-- [ ] 添加内置浏览器：基于floatingwindow显示+内嵌webview，实现在visui上连接开发服务器/访问网页
-- [-] 添加语音输入功能：实现语音输入和文字转写
 - [ ] 完善text transformer
   - [ ] 添加多行支持
   - [ ] 不再劫持tab和空格
@@ -33,8 +31,10 @@
     - [?] codex：edit工具悬浮窗在首次弹出时不显示内容
     - [ ] opencode：改善idel/busy切换：当主代理等待子代理时，opencode似乎发送idel，但此时子代理仍在工作，不应该切到idel 
     - [ ] opencode：同步会话加载阻塞其他操作（包括操作设置，会话管理，拖动窗口），直到会话加载完成
-    - [ ] all：长会话加载过于缓慢，但会话懒加载又导致滚动查看历史不顺畅（因为卡片的高度在未加载时未知，懒加载时滚动会导致加载跳动）。很难确认合理的方案
-    - [ ] all/filetree：调查在关闭自动换行时，部分文件缺失横向滚动条的问题
+    - [ ] all：长会话加载过于缓慢，但会话懒加载又导致滚动查看历史不顺畅（因为卡片的高度在未加载时未知，懒加载时滚动会导致加载跳动）。很难确认合理的方案。考虑懒加载线程历史和子代理？
+    - [ ] all/filetree：调查“自动换行”开关对文件树上的文件失效的问题
+    - [ ] “暂存区”似乎始终没有功能
+    - [ ] 流式加载的thinking/output markdown的加载速度似乎远远慢于输入速度，导致还在流式加载就出发了输出结束的从头滚动
 
 - [ ] vis-bridge 模块化本地桥接服务器：集成外部开发工具，扩展与第三方工具的联动能力。
 	- [x] ACP v1 通用后端（Pi、Oh My Pi、Kimi Code；通过状态监控按需启用）
@@ -49,4 +49,6 @@
 	- [ ] [coding_agent_usage_tracker](https://github.com/Dicklesworthstone/coding_agent_usage_tracker)
 
 ## [Paused for difficulties]
+- [ ] 添加内置浏览器：基于floatingwindow显示+内嵌webview，实现在visui上连接开发服务器/访问网页
+- [ ] 添加语音输入功能：实现语音输入和文字转写
 > 如需查看详细的版本变更记录，请参阅 [CHANGELOG.md](./CHANGELOG.md)。
