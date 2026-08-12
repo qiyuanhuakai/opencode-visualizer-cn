@@ -64,5 +64,8 @@ export default defineConfig({
     environment: 'happy-dom',
     globals: false,
     include: ['**/*.test.ts'],
+    pool: 'forks',
+    maxWorkers: 6,
+    execArgv: ['--max-old-space-size=2048'],
   },
 });
