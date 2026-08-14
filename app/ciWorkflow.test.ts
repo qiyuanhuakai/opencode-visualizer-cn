@@ -6,10 +6,14 @@ import { describe, expect, it } from 'vitest';
 const repoRoot = path.resolve(__dirname, '..');
 const workflowPath = path.join(repoRoot, '.github/workflows/build-electron.yml');
 const builderPath = path.join(repoRoot, 'electron-builder.yml');
+const packagePath = path.join(repoRoot, 'package.json');
 const entitlementsPath = path.join(repoRoot, 'build/entitlements.mac.plist');
 const microscopeIgnorePath = path.join(repoRoot, '.microscope/ignore.md');
 const workflow = readFileSync(workflowPath, 'utf8');
 const builder = readFileSync(builderPath, 'utf8');
+const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as {
+  devDependencies?: Record<string, string>;
+};
 const entitlements = readFileSync(entitlementsPath, 'utf8');
 const microscopeIgnore = readFileSync(microscopeIgnorePath, 'utf8');
 
@@ -120,6 +124,10 @@ const ELECTRON_LANES = [
 ] as const;
 
 describe('complete CI workflow', () => {
+  it('uses the electron-builder release that fixes ARM64 NSIS payload extraction', () => {
+    expect(packageJson.devDependencies?.['electron-builder']).toBe('^26.15.7');
+  });
+
   it('runs the complete validation and packaging pipeline for every pull request', () => {
     expect(workflow).toMatch(/\n  pull_request:\s*\n/);
     expect(workflow).toContain('run: pnpm lint');
@@ -351,6 +359,7 @@ describe('electron installer QA scripts', () => {
     expect(script).toContain('codesign -dv');
     expect(script).toMatch(/Signature=adhoc/);
     expect(script).toMatch(/TeamIdentifier/);
+    expect(script).toContain('TeamIdentifier=not set');
     expect(script).toContain('exit 1');
   });
 
@@ -368,8 +377,12 @@ describe('electron installer QA scripts', () => {
 
   it('windows script discovers the installed Vis executable and bounds uninstall', () => {
     const script = windowsQa();
-    expect(script).toContain("$programsDir = Join-Path $env:LOCALAPPDATA 'Programs'");
-    expect(script).toContain("Get-ChildItem $programsDir -Filter 'Vis.exe' -File -Recurse");
+    expect(script).toContain('[Guid]::NewGuid()');
+    expect(script).toContain("Get-ChildItem $installDir -Filter 'Vis.exe' -File -Recurse");
+    expect(script).not.toContain("Get-ChildItem $programsDir -Filter 'Vis.exe'");
+    expect(script).toContain('$installationOwned = $false');
+    expect(script).toContain('$installationOwned = $true');
+    expect(script).toContain('if ($installationOwned)');
     expect(script).toContain('$uninstallDeadline');
     expect(script).not.toMatch(/Start-Process[^\n]+Uninstall[^\n]+-Wait/);
   });

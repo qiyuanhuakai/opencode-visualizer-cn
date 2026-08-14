@@ -88,7 +88,7 @@
     "@xterm/xterm": "^6.0.0",
     "autoprefixer": "^10.5.4",
     "electron": "^43.3.0",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "^26.15.7",
     "esbuild": "^0.28.2",
     "happy-dom": "^20.11.2",
     "markdown-it": "^15.0.0",

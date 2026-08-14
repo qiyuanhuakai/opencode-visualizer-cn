@@ -24,11 +24,14 @@ $ErrorActionPreference = 'Stop'
 $installer = Get-ChildItem "dist-electron/Vis-*-$Arch-Windows.exe" | Select-Object -First 1
 if (-not $installer) { throw "No NSIS installer for arch $Arch under dist-electron" }
 
-$programsDir = Join-Path $env:LOCALAPPDATA 'Programs'
-$installDir = Join-Path $programsDir 'Vis'
-$smokeOut = Join-Path $env:RUNNER_TEMP "smoke-installer-$Arch"
+$tempRoot = if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { [IO.Path]::GetTempPath() } else { $env:RUNNER_TEMP }
+$runId = [Guid]::NewGuid().ToString('N')
+$installDir = Join-Path $tempRoot "vis-installer-$Arch-$runId"
+$smokeOut = Join-Path $tempRoot "smoke-installer-$Arch-$runId"
 $failures = @()
 $installerProcess = $null
+$installedExePath = $null
+$installationOwned = $false
 
 try {
   # Bounded installer wait: poll HasExited up to 600s; on timeout tree-kill
@@ -46,18 +49,19 @@ try {
   }
   if ($installerProcess.ExitCode -ne 0) { throw "NSIS install exited with $($installerProcess.ExitCode)" }
 
-  # The ARM64 NSIS bootstrapper can return before its child process publishes
-  # the final install directory. Discover the exact executable with a bounded
-  # wait instead of assuming the requested /D path is already materialized.
+  # The NSIS bootstrapper can return before its child process publishes the
+  # final install directory. Search only this run's unique /D path so an
+  # existing Vis installation can never be mistaken for QA output.
   $installedExe = $null
   $discoveryDeadline = (Get-Date).AddSeconds(120)
   while (-not $installedExe -and (Get-Date) -lt $discoveryDeadline) {
-    $installedExe = Get-ChildItem $programsDir -Filter 'Vis.exe' -File -Recurse -ErrorAction SilentlyContinue |
+    $installedExe = Get-ChildItem $installDir -Filter 'Vis.exe' -File -Recurse -ErrorAction SilentlyContinue |
       Select-Object -First 1
     if (-not $installedExe) { Start-Sleep -Seconds 2 }
   }
-  if (-not $installedExe) { throw "Installed Vis.exe not found under $programsDir within 120s" }
-  $installDir = $installedExe.DirectoryName
+  if (-not $installedExe) { throw "Installed Vis.exe not found under $installDir within 120s" }
+  $installedExePath = $installedExe.FullName
+  $installationOwned = $true
   Write-Host "Installed Vis at $($installedExe.FullName)"
 
   $env:VIS_ELECTRON_EXECUTABLE = $installedExe.FullName
@@ -76,16 +80,23 @@ try {
   Remove-Item Env:VIS_ELECTRON_EXECUTABLE, Env:VIS_SMOKE_OUT_DIR -ErrorAction SilentlyContinue
 
   # Final residue check — ALWAYS runs: the smoke driver must have quit the app.
-  $residue = Get-Process -Name 'Vis' -ErrorAction SilentlyContinue
+  $residue = @()
+  if ($installationOwned -and $installedExePath) {
+    $residue = @(Get-Process -Name 'Vis' -ErrorAction SilentlyContinue |
+      Where-Object { $_.Path -eq $installedExePath })
+  }
   if ($residue) { $failures += "Vis still running after smoke quit: $($residue.Id -join ', ')" }
 
   # Process-tree cleanup: sweep whatever is left (by PID tree) so the
   # uninstaller can run and the lane leaves no stragglers.
   foreach ($p in $residue) { taskkill /PID $p.Id /T /F 2>$null | Out-Null }
 
-  # Uninstall the installed app (both paths).
-  $uninstaller = Get-ChildItem $installDir -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue |
-    Select-Object -First 1
+  # Uninstall only an app whose executable this invocation discovered inside
+  # its unique install directory.
+  $uninstaller = if ($installationOwned) {
+    Get-ChildItem $installDir -Filter 'Uninstall*.exe' -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+  } else { $null }
   if ($uninstaller) {
     try {
       $u = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -ErrorAction Stop
@@ -103,7 +114,10 @@ try {
     } catch {
       $failures += "Uninstall failed: $($_.Exception.Message)"
     }
+  } elseif ($installationOwned) {
+    $failures += "Owned installation has no uninstaller under $installDir"
   }
+  Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 if ($failures.Count -gt 0) { throw ($failures -join '; ') }

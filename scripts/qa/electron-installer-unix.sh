@@ -188,17 +188,18 @@ run_smoke() {
 }
 
 # verify_mac_signature <Vis.app> — unsigned-but-adhoc contract: strict deep
-# verify passes, Signature=adhoc, and there is NO TeamIdentifier.
+# verify passes, Signature=adhoc, and there is no assigned TeamIdentifier.
 verify_mac_signature() {
   local app="$1"
   codesign --verify --deep --strict "$app" || die "codesign --verify --deep --strict failed for $app"
   local info
   info="$(codesign -dv "$app" 2>&1 || true)"
   echo "$info" | grep -q 'Signature=adhoc' || die "expected Signature=adhoc for $app"
-  if echo "$info" | grep -q 'TeamIdentifier='; then
+  if echo "$info" | grep -q '^TeamIdentifier=' &&
+    ! echo "$info" | grep -q '^TeamIdentifier=not set$'; then
     die "unexpected TeamIdentifier in ad-hoc signature of $app"
   fi
-  echo "codesign OK (adhoc, no TeamIdentifier): $app"
+  echo "codesign OK (adhoc, no assigned TeamIdentifier): $app"
 }
 
 if [[ "$PLATFORM" == "linux" ]]; then
