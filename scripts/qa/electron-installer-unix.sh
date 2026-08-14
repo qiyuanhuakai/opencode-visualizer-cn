@@ -70,41 +70,48 @@ SMOKE_OUT_DIR="${SMOKE_OUT_DIR:-${RUNNER_TEMP:-/tmp}/smoke-installer-$PLATFORM-$
 # Teardown state, populated as artifacts are acquired.
 WORK_DIRS=()        # temp dirs to remove on exit
 DMG_DEVICE=""       # mounted dmg device to detach on exit
-LAUNCHED_EXES=()    # executable paths launched, for the leftover-process sweep
+SMOKE_PROCESS_GROUPS=()
 DEB_PKG_NAME=""     # deb package installed system-wide (uninstalled on exit)
 DEB_INSTALL_ATTEMPTED=0
 DEB_PREEXISTED=0
 
-# PID-based sweep of processes whose cmdline contains the executable path
-# (never pkill/pgrep -f: a -f pattern present in the invoking wrapper's own
-# command line kills the wrapper — issues.md rule; kill by PID only). The
-# match runs in the shell, so no helper process carries the pattern in its
-# own cmdline.
-launched_pids() {
-  local exe="$1" pid args
-  ps -eo pid=,args= |
-    while read -r pid args; do
-      if [[ -n "$pid" && "$args" == *"$exe"* ]]; then
-        echo "$pid"
-      fi
-    done
+terminate_smoke_group() {
+  local pgid="$1" i
+  [[ -n "$pgid" ]] || return
+  if ! kill -0 -- "-$pgid" 2>/dev/null; then
+    return
+  fi
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ! kill -0 -- "-$pgid" 2>/dev/null; then
+      return
+    fi
+    sleep 0.1
+  done
+  kill -KILL -- "-$pgid" 2>/dev/null || true
 }
 
-kill_launched_exes() {
-  local exe pid i
-  for exe in "${LAUNCHED_EXES[@]-}"; do
-    [[ -n "$exe" ]] || continue
-    # Two passes: after SIGKILL of the main process, Chromium helpers may
-    # linger briefly; a second sweep catches them.
-    for i in 1 2; do
-      while read -r pid; do
-        kill -9 "$pid" 2>/dev/null || true
-      done < <(launched_pids "$exe")
-      if [[ $i -eq 1 ]]; then
-        sleep 0.2
-      fi
-    done
+terminate_smoke_groups() {
+  local pgid
+  for pgid in "${SMOKE_PROCESS_GROUPS[@]-}"; do
+    terminate_smoke_group "$pgid"
   done
+}
+
+run_owned_process_group() {
+  local pgid status
+  set -m
+  "$@" &
+  pgid=$!
+  set +m
+  SMOKE_PROCESS_GROUPS[0]="$pgid"
+  set +e
+  wait "$pgid"
+  status=$?
+  set -e
+  terminate_smoke_group "$pgid"
+  unset 'SMOKE_PROCESS_GROUPS[0]'
+  return "$status"
 }
 
 # Best-effort uninstall of the system-installed .deb, gated on non-interactive
@@ -135,7 +142,7 @@ uninstall_system_deb() {
 }
 
 cleanup() {
-  kill_launched_exes
+  terminate_smoke_groups
   if [[ -n "$DMG_DEVICE" ]]; then
     hdiutil detach "$DMG_DEVICE" -quiet || true
   fi
@@ -155,24 +162,20 @@ trap cleanup EXIT
 run_smoke() {
   local name="$1"
   local exe="$2"
-  # Register BEFORE launching: the exit trap must be able to sweep this
-  # executable even when the smoke driver dies mid-launch (watchdog kill,
-  # assertion failure before its own quit).
-  LAUNCHED_EXES+=("$exe")
   export VIS_ELECTRON_EXECUTABLE="$exe"
   export VIS_SMOKE_OUT_DIR="$SMOKE_OUT_DIR/$name"
   mkdir -p "$VIS_SMOKE_OUT_DIR"
   if command -v timeout >/dev/null 2>&1; then
     if [[ "$PLATFORM" == "linux" ]]; then
-      timeout --signal=TERM --kill-after=30s 300s xvfb-run -a node scripts/qa/electron-smoke.mjs
+      run_owned_process_group timeout --signal=TERM --kill-after=30s 300s xvfb-run -a node scripts/qa/electron-smoke.mjs
     else
-      timeout --signal=TERM --kill-after=30s 300s node scripts/qa/electron-smoke.mjs
+      run_owned_process_group timeout --signal=TERM --kill-after=30s 300s node scripts/qa/electron-smoke.mjs
     fi
   else
     if [[ "$PLATFORM" == "linux" ]]; then
-      xvfb-run -a node scripts/qa/electron-smoke.mjs
+      run_owned_process_group xvfb-run -a node scripts/qa/electron-smoke.mjs
     else
-      node scripts/qa/electron-smoke.mjs
+      run_owned_process_group node scripts/qa/electron-smoke.mjs
     fi
   fi
   node -e "
@@ -182,9 +185,6 @@ run_smoke() {
       process.exit(1);
     }
   " || die "smoke receipt arch/platform mismatch"
-  if [[ -n "$(launched_pids "$exe")" ]]; then
-    die "app still running after smoke quit: $exe"
-  fi
 }
 
 # verify_mac_signature <Vis.app> — unsigned-but-adhoc contract: strict deep

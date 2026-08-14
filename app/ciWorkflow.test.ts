@@ -317,7 +317,7 @@ describe('electron installer QA scripts', () => {
     expect(script).toMatch(/die/);
   });
 
-  it('unix script bounds the launch and tears down processes, mounts and temp dirs', () => {
+  it('unix script bounds launch and tears down only its owned process groups', () => {
     const script = unixQa();
     // A hung app launch must be bounded (driver watchdog plus a timeout wrapper when available).
     expect(script).toContain('timeout');
@@ -328,7 +328,10 @@ describe('electron installer QA scripts', () => {
     expect(script).toContain('rm -rf');
     expect(script).toContain('hdiutil detach');
     expect(script).toContain('squashfs-root');
-    expect(script).toContain('"${LAUNCHED_EXES[@]-}"');
+    expect(script).toContain('"${SMOKE_PROCESS_GROUPS[@]-}"');
+    expect(script).toContain('kill -TERM -- "-$pgid"');
+    expect(script).not.toContain('LAUNCHED_EXES');
+    expect(script).not.toContain('launched_pids');
     expect(script).toContain('"${WORK_DIRS[@]-}"');
   });
 
