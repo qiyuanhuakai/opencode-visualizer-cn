@@ -258,7 +258,8 @@ describe('complete CI workflow', () => {
     expect(unixQa()).toContain('hdiutil attach');
     expect(unixQa()).toContain('hdiutil detach');
     expect(unixQa()).toContain('unzip');
-    expect(unixQa()).toContain('dpkg -i');
+    expect(unixQa()).toContain('sudo apt-get install -y "$deb"');
+    expect(unixQa()).not.toContain('sudo dpkg -i');
     expect(unixQa()).toContain('--appimage-extract');
     // Every artifact's executable goes through the smoke driver, which enforces
     // the isolated --user-data-dir profile (electron-smoke.mjs launch args).
@@ -329,6 +330,7 @@ describe('electron installer QA scripts', () => {
     const script = windowsQa();
     expect(script).toContain("$ErrorActionPreference = 'Stop'");
     expect(script).toContain('Start-Process');
+    expect(script).toContain("@('/S', '/currentuser', \"/D=$installDir\")");
     expect(script).toContain('ExitCode');
     expect(script).toContain('electron-smoke.mjs');
     // After the smoke driver quits the app, no child processes may remain.

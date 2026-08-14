@@ -28,7 +28,7 @@
  *   VIS_ELECTRON_EXECUTABLE=dist-electron/linux-unpacked/vis pnpm qa:electron
  */
 import { _electron } from 'playwright';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -153,13 +153,14 @@ async function main() {
       mainState.argv.every((arg) => !arg.startsWith(SANDBOX_DISABLE_SWITCH)) && !mainState.noSandboxSwitch,
       `argv ${JSON.stringify(mainState.argv)}`,
     );
+    const profileMatches = realpathSync(mainState.userData) === realpathSync(profileDir);
     record(
       'user-data-dir-isolated-profile',
-      mainState.userData === profileDir,
+      profileMatches,
       `expected ${profileDir}, actual ${mainState.userData}`,
     );
-    receipt.userData = { expected: profileDir, actual: mainState.userData, match: mainState.userData === profileDir };
-    if (mainState.userData !== profileDir) {
+    receipt.userData = { expected: profileDir, actual: mainState.userData, match: profileMatches };
+    if (!profileMatches) {
       // The lane cannot honor an isolated profile — report blocked, never relax.
       receipt.blocked = true;
     }

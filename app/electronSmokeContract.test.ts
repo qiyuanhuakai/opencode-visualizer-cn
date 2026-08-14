@@ -109,6 +109,12 @@ describe('electron smoke driver contract', () => {
     expect(driverSurface).toContain('isVisible()');
   });
 
+  it('compares the isolated userData profile by canonical filesystem path', () => {
+    expect(driverSource).toMatch(
+      /realpathSync\(mainState\.userData\)\s*===\s*realpathSync\(profileDir\)/,
+    );
+  });
+
   it('asserts exactly one window on the final app:// URL', () => {
     expect(driverSurface).toContain('getAllWindows');
     expect(driverSurface).toContain('app://index.html');

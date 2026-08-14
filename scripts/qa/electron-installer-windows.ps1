@@ -32,7 +32,8 @@ $installerProcess = $null
 try {
   # Bounded installer wait: poll HasExited up to 600s; on timeout tree-kill
   # the installer so the lane cannot hang or leave a zombie setup process.
-  $installerProcess = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru
+  $installArgs = @('/S', '/currentuser', "/D=$installDir")
+  $installerProcess = Start-Process -FilePath $installer.FullName -ArgumentList $installArgs -PassThru
   $deadline = (Get-Date).AddSeconds(600)
   while (-not $installerProcess.HasExited -and (Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 2

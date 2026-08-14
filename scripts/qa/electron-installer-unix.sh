@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Electron installer QA for the Linux and macOS lanes (Scenario S5/S6).
 #
-# Linux  (--platform linux): installs the .deb with `dpkg -i` and launches the
+# Linux  (--platform linux): installs the .deb with `apt-get` and launches the
 #   installed executable with an isolated userData profile; then extracts the
 #   AppImage with `--appimage-extract` and launches the extracted binary — the
 #   extract-and-run path deliberately avoids FUSE, covering FUSE-less hosts.
@@ -24,7 +24,7 @@
 # Constrained-host override (never set on CI runners):
 #   VIS_QA_DEB_INSTALL_ROOT=<dir>  extract the deb with `dpkg-deb -x` into <dir>
 #     and launch the installed layout from there instead of a system-wide
-#     `sudo dpkg -i` (e.g. a dev box without passwordless sudo). CI lanes use
+#     `sudo apt-get install` (e.g. a dev box without passwordless sudo). CI lanes use
 #     the real system install.
 set -euo pipefail
 
@@ -203,7 +203,7 @@ if [[ "$PLATFORM" == "linux" ]]; then
 
   if [[ -n "${VIS_QA_DEB_INSTALL_ROOT:-}" ]]; then
     # Constrained-host mode (documented in the header): extract-and-run of the
-    # installed layout. CI lanes never set this variable and use `sudo dpkg -i`.
+    # installed layout. CI lanes never set this variable and use `sudo apt-get install`.
     DEB_ROOT="$VIS_QA_DEB_INSTALL_ROOT"
     rm -rf "$DEB_ROOT"
     mkdir -p "$DEB_ROOT"
@@ -212,9 +212,9 @@ if [[ "$PLATFORM" == "linux" ]]; then
     INSTALLED_EXE="$DEB_ROOT/opt/Vis/$EXECUTABLE_NAME"
     echo "note: system-wide dpkg install skipped (VIS_QA_DEB_INSTALL_ROOT set); verifying installed layout at $INSTALLED_EXE"
   else
-    sudo dpkg -i "$deb"
-    DEB_INSTALLED_SYSTEM=1
     DEB_PKG_NAME="$(dpkg-deb -f "$deb" Package)"
+    DEB_INSTALLED_SYSTEM=1
+    sudo apt-get install -y "$deb"
     INSTALLED_EXE="/opt/Vis/$EXECUTABLE_NAME"
   fi
   [[ -x "$INSTALLED_EXE" ]] || die "installed executable missing: $INSTALLED_EXE"
