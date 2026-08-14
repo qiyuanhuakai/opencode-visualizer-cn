@@ -274,7 +274,7 @@ pnpm dev
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
 - 运行时基线：Electron **43.3.0**（Chromium 150 / Node 24.18.1），Chromium 沙箱全程开启
 
-**macOS 签名状态（重要）：** macOS 安装包为 **ad-hoc 签名**（无 Developer ID、无 TeamIdentifier、无 notarization，`mac.identity: "-"`、`mac.notarize: false`）。`codesign --verify --deep --strict` **必须通过**——DMG 挂载与 ZIP 解压两种产物均需验证——该命令仅在 macOS runner 上执行，当前仍为 **runner 待执行（pending）**，尚未在本机跑通，因此本说明**不声称其已通过**。Gatekeeper 会显示"无法验证开发者"的常规提示，需要右键 → 打开；macOS 上 **Notifications 不可用**，notarization 亦未配置。这些限制为本版本接受的明确决策，详见 `CHANGELOG.md`。
+**macOS 签名状态（重要）：** macOS 安装包为 **ad-hoc 签名**（无 Developer ID、未分配 TeamIdentifier、无 notarization，`mac.identity: "-"`、`mac.notarize: false`）。Intel 与 Apple Silicon 产物均已在 macOS runner 上通过 `codesign --verify --deep --strict`，并分别验证 DMG 挂载与 ZIP 解压后的应用。Gatekeeper 仍会显示"无法验证开发者"的常规提示，需要右键 → 打开；macOS 上 **Notifications 不可用**，notarization 亦未配置。这些限制为本版本接受的明确决策，详见 `CHANGELOG.md`。
 
 ```bash
 # 启动 Electron 开发模式（会自动复用或拉起 5173 上的 Vite）
@@ -533,7 +533,7 @@ This project supports packaging the Web UI as a native desktop application using
 - Supports NSIS / AppImage / deb / dmg installers for each platform
 - Runtime baseline: Electron **43.3.0** (Chromium 150 / Node 24.18.1), Chromium sandbox always enabled
 
-**macOS Signing Status (Important):** macOS builds are **ad-hoc signed** (no Developer ID, no TeamIdentifier, no notarization; `mac.identity: "-"`, `mac.notarize: false`). `codesign --verify --deep --strict` **must pass** — both the DMG-mounted and ZIP-extracted app bundles are verified — but the command only runs on the macOS runners and is currently **runner-pending** (not yet executed locally), so this document does **not** claim it has passed. Gatekeeper shows the standard "cannot verify the developer" warning; right-click → Open is required. macOS **Notifications are unavailable** and notarization is not configured. These limits are accepted decisions for this release — see `CHANGELOG.md`.
+**macOS Signing Status (Important):** macOS builds are **ad-hoc signed** (no Developer ID, no assigned TeamIdentifier, no notarization; `mac.identity: "-"`, `mac.notarize: false`). Both Intel and Apple Silicon artifacts have passed `codesign --verify --deep --strict` on macOS runners, with checks against the app bundles mounted from DMG and extracted from ZIP. Gatekeeper still shows the standard "cannot verify the developer" warning; right-click → Open is required. macOS **Notifications are unavailable** and notarization is not configured. These limits are accepted decisions for this release — see `CHANGELOG.md`.
 
 ```bash
 # Desktop dev mode (hot reload)
