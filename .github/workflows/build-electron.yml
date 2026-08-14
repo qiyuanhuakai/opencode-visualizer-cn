@@ -72,6 +72,8 @@ jobs:
         run: test "$(node -p process.arch)" = "x64"
 
       - name: Build Electron app for x64
+        env:
+          CSC_FOR_PULL_REQUEST: true
         run: pnpm build && pnpm exec electron-builder --publish never --mac --x64
 
       - name: Smoke unpacked app
@@ -130,6 +132,8 @@ jobs:
         run: test "$(node -p process.arch)" = "arm64"
 
       - name: Build Electron app for arm64
+        env:
+          CSC_FOR_PULL_REQUEST: true
         run: pnpm build && pnpm exec electron-builder --publish never --mac --arm64
 
       - name: Smoke unpacked app

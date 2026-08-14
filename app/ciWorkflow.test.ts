@@ -7,9 +7,11 @@ const repoRoot = path.resolve(__dirname, '..');
 const workflowPath = path.join(repoRoot, '.github/workflows/build-electron.yml');
 const builderPath = path.join(repoRoot, 'electron-builder.yml');
 const entitlementsPath = path.join(repoRoot, 'build/entitlements.mac.plist');
+const microscopeIgnorePath = path.join(repoRoot, '.microscope/ignore.md');
 const workflow = readFileSync(workflowPath, 'utf8');
 const builder = readFileSync(builderPath, 'utf8');
 const entitlements = readFileSync(entitlementsPath, 'utf8');
+const microscopeIgnore = readFileSync(microscopeIgnorePath, 'utf8');
 
 /** Read a QA script that may not exist yet (RED phase); missing -> '' so assertions fail on content, not on IO. */
 function readOptional(relativePath: string): string {
@@ -288,6 +290,9 @@ describe('complete CI workflow', () => {
       expect(text).not.toContain('notarize: true');
       expect(text).not.toMatch(/identity: "Developer/);
     }
+    for (const lane of ELECTRON_LANES.filter(({ platform }) => platform === 'mac')) {
+      expect(laneBlock(lane.job)).toContain('CSC_FOR_PULL_REQUEST: true');
+    }
   });
 });
 
@@ -315,6 +320,29 @@ describe('electron installer QA scripts', () => {
     expect(script).toContain('rm -rf');
     expect(script).toContain('hdiutil detach');
     expect(script).toContain('squashfs-root');
+    expect(script).toContain('"${LAUNCHED_EXES[@]-}"');
+    expect(script).toContain('"${WORK_DIRS[@]-}"');
+  });
+
+  it('unix smoke launch never expands an empty macOS launcher argument', () => {
+    const script = unixQa();
+    expect(script).not.toContain('"${launcher[@]-}"');
+    expect(script).toContain('timeout --signal=TERM --kill-after=30s 300s xvfb-run -a node');
+    expect(script).toContain('timeout --signal=TERM --kill-after=30s 300s node');
+  });
+
+  it('unix constrained-host cleanup removes only a generated child directory', () => {
+    const script = unixQa();
+    expect(script).toContain('DEB_PARENT="$VIS_QA_DEB_INSTALL_ROOT"');
+    expect(script).toContain('mktemp -d "${DEB_PARENT%/}/vis-deb-qa-XXXXXX"');
+    expect(script).not.toContain('rm -rf "$DEB_ROOT"');
+  });
+
+  it('unix system cleanup never removes a package that predated the QA run', () => {
+    const script = unixQa();
+    expect(script).toContain('DEB_PREEXISTED=0');
+    expect(script).toContain('DEB_PREEXISTED=1');
+    expect(script).toMatch(/DEB_PREEXISTED[^\n]*==[^\n]*1[\s\S]*?return/);
   });
 
   it('unix script verifies ad-hoc macOS signatures with no TeamIdentifier', () => {
@@ -336,6 +364,26 @@ describe('electron installer QA scripts', () => {
     // After the smoke driver quits the app, no child processes may remain.
     expect(script).toContain('Get-Process');
     expect(script).toContain('throw');
+  });
+
+  it('windows script discovers the installed Vis executable and bounds uninstall', () => {
+    const script = windowsQa();
+    expect(script).toContain("$programsDir = Join-Path $env:LOCALAPPDATA 'Programs'");
+    expect(script).toContain("Get-ChildItem $programsDir -Filter 'Vis.exe' -File -Recurse");
+    expect(script).toContain('$uninstallDeadline');
+    expect(script).not.toMatch(/Start-Process[^\n]+Uninstall[^\n]+-Wait/);
+  });
+});
+
+describe('review coverage configuration', () => {
+  it('keeps production scripts, tests and package manifests visible to code review', () => {
+    const rules = microscopeIgnore
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line !== '' && !line.startsWith('#'));
+    expect(rules).not.toContain('scripts/**');
+    expect(rules).not.toContain('**/package.json');
+    expect(rules).not.toContain('**/*.test.ts');
   });
 });
 

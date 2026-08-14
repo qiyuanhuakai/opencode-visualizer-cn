@@ -24,7 +24,8 @@ $ErrorActionPreference = 'Stop'
 $installer = Get-ChildItem "dist-electron/Vis-*-$Arch-Windows.exe" | Select-Object -First 1
 if (-not $installer) { throw "No NSIS installer for arch $Arch under dist-electron" }
 
-$installDir = Join-Path $env:LOCALAPPDATA 'Programs\Vis'
+$programsDir = Join-Path $env:LOCALAPPDATA 'Programs'
+$installDir = Join-Path $programsDir 'Vis'
 $smokeOut = Join-Path $env:RUNNER_TEMP "smoke-installer-$Arch"
 $failures = @()
 $installerProcess = $null
@@ -45,10 +46,18 @@ try {
   }
   if ($installerProcess.ExitCode -ne 0) { throw "NSIS install exited with $($installerProcess.ExitCode)" }
 
-  $installedExe = Get-ChildItem $installDir -Filter '*.exe' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -notlike 'Uninstall*' } |
-    Select-Object -First 1
-  if (-not $installedExe) { throw "Installed executable not found under $installDir" }
+  # The ARM64 NSIS bootstrapper can return before its child process publishes
+  # the final install directory. Discover the exact executable with a bounded
+  # wait instead of assuming the requested /D path is already materialized.
+  $installedExe = $null
+  $discoveryDeadline = (Get-Date).AddSeconds(120)
+  while (-not $installedExe -and (Get-Date) -lt $discoveryDeadline) {
+    $installedExe = Get-ChildItem $programsDir -Filter 'Vis.exe' -File -Recurse -ErrorAction SilentlyContinue |
+      Select-Object -First 1
+    if (-not $installedExe) { Start-Sleep -Seconds 2 }
+  }
+  if (-not $installedExe) { throw "Installed Vis.exe not found under $programsDir within 120s" }
+  $installDir = $installedExe.DirectoryName
   Write-Host "Installed Vis at $($installedExe.FullName)"
 
   $env:VIS_ELECTRON_EXECUTABLE = $installedExe.FullName
@@ -79,8 +88,18 @@ try {
     Select-Object -First 1
   if ($uninstaller) {
     try {
-      $u = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru -ErrorAction Stop
-      if ($u.ExitCode -ne 0) { $failures += "Uninstall exited with $($u.ExitCode)" }
+      $u = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -ErrorAction Stop
+      $uninstallDeadline = (Get-Date).AddSeconds(600)
+      while (-not $u.HasExited -and (Get-Date) -lt $uninstallDeadline) {
+        Start-Sleep -Seconds 2
+        $u.Refresh()
+      }
+      if (-not $u.HasExited) {
+        taskkill /PID $u.Id /T /F 2>$null | Out-Null
+        $failures += "Uninstall did not finish within 600s (pid $($u.Id) tree-killed)"
+      } elseif ($u.ExitCode -ne 0) {
+        $failures += "Uninstall exited with $($u.ExitCode)"
+      }
     } catch {
       $failures += "Uninstall failed: $($_.Exception.Message)"
     }

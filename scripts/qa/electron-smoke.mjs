@@ -105,7 +105,19 @@ async function main() {
     console.log(`${pass ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`);
   };
 
-  const attachListeners = (electronApp, page) => {
+  const observedPages = new WeakSet();
+  const attachPageListeners = (page) => {
+    if (observedPages.has(page)) return;
+    observedPages.add(page);
+    page.on('console', (msg) => {
+      const text = msg.text();
+      consoleLines.push(`[page:console:${msg.type()}] ${text}`);
+      if (msg.type() === 'error' && UNCAUGHT_RE.test(text)) pageErrors.push(text);
+    });
+    page.on('pageerror', (error) => pageErrors.push(String(error)));
+  };
+
+  const attachAppListeners = (electronApp) => {
     electronApp.on('console', (msg) => {
       const text = msg.text();
       consoleLines.push(`[main:console:${msg.type()}] ${text}`);
@@ -121,12 +133,8 @@ async function main() {
         if (UNCAUGHT_RE.test(line)) mainErrors.push(line);
       }
     });
-    page.on('console', (msg) => {
-      const text = msg.text();
-      consoleLines.push(`[page:console:${msg.type()}] ${text}`);
-      if (msg.type() === 'error' && UNCAUGHT_RE.test(text)) pageErrors.push(text);
-    });
-    page.on('pageerror', (error) => pageErrors.push(String(error)));
+    electronApp.on('window', attachPageListeners);
+    for (const page of electronApp.windows()) attachPageListeners(page);
   };
 
   async function launchAndProbe() {
@@ -138,8 +146,9 @@ async function main() {
       timeout: LAUNCH_TIMEOUT_MS,
     });
     appRef.current = electronApp;
+    attachAppListeners(electronApp);
     const page = await electronApp.firstWindow();
-    attachListeners(electronApp, page);
+    attachPageListeners(page);
     await page.waitForLoadState('load');
     return { app: electronApp, page };
   }
@@ -290,6 +299,7 @@ async function main() {
       const { writeFileSync } = await import('node:fs');
       writeFileSync(RECEIPT_PATH, JSON.stringify(receipt, null, 2), 'utf8');
     } catch {
+      receipt.pass = false;
       // receipt write failure is reported through the exit code
     }
   }

@@ -72,7 +72,8 @@ WORK_DIRS=()        # temp dirs to remove on exit
 DMG_DEVICE=""       # mounted dmg device to detach on exit
 LAUNCHED_EXES=()    # executable paths launched, for the leftover-process sweep
 DEB_PKG_NAME=""     # deb package installed system-wide (uninstalled on exit)
-DEB_INSTALLED_SYSTEM=0
+DEB_INSTALL_ATTEMPTED=0
+DEB_PREEXISTED=0
 
 # PID-based sweep of processes whose cmdline contains the executable path
 # (never pkill/pgrep -f: a -f pattern present in the invoking wrapper's own
@@ -91,7 +92,8 @@ launched_pids() {
 
 kill_launched_exes() {
   local exe pid i
-  for exe in "${LAUNCHED_EXES[@]}"; do
+  for exe in "${LAUNCHED_EXES[@]-}"; do
+    [[ -n "$exe" ]] || continue
     # Two passes: after SIGKILL of the main process, Chromium helpers may
     # linger briefly; a second sweep catches them.
     for i in 1 2; do
@@ -109,7 +111,14 @@ kill_launched_exes() {
 # sudo so a dev box without passwordless sudo gets a clear message instead of
 # a hung prompt.
 uninstall_system_deb() {
-  if [[ "$DEB_INSTALLED_SYSTEM" != "1" || -z "$DEB_PKG_NAME" ]]; then
+  if [[ "$DEB_INSTALL_ATTEMPTED" != "1" || -z "$DEB_PKG_NAME" ]]; then
+    return
+  fi
+  if [[ "$DEB_PREEXISTED" == "1" ]]; then
+    echo "cleanup: $DEB_PKG_NAME predated this QA run — leaving it installed" >&2
+    return
+  fi
+  if ! dpkg-query -W -f='${db:Status-Abbrev}' "$DEB_PKG_NAME" 2>/dev/null | grep -q '^ii '; then
     return
   fi
   if ! command -v sudo >/dev/null 2>&1; then
@@ -132,7 +141,8 @@ cleanup() {
   fi
   uninstall_system_deb
   local dir
-  for dir in "${WORK_DIRS[@]}"; do
+  for dir in "${WORK_DIRS[@]-}"; do
+    [[ -n "$dir" ]] || continue
     rm -rf "$dir"
   done
 }
@@ -145,19 +155,25 @@ trap cleanup EXIT
 run_smoke() {
   local name="$1"
   local exe="$2"
-  local launcher=()
   # Register BEFORE launching: the exit trap must be able to sweep this
   # executable even when the smoke driver dies mid-launch (watchdog kill,
   # assertion failure before its own quit).
   LAUNCHED_EXES+=("$exe")
-  [[ "$PLATFORM" == "linux" ]] && launcher=(xvfb-run -a)
   export VIS_ELECTRON_EXECUTABLE="$exe"
   export VIS_SMOKE_OUT_DIR="$SMOKE_OUT_DIR/$name"
   mkdir -p "$VIS_SMOKE_OUT_DIR"
   if command -v timeout >/dev/null 2>&1; then
-    timeout --signal=TERM --kill-after=30s 300s "${launcher[@]}" node scripts/qa/electron-smoke.mjs
+    if [[ "$PLATFORM" == "linux" ]]; then
+      timeout --signal=TERM --kill-after=30s 300s xvfb-run -a node scripts/qa/electron-smoke.mjs
+    else
+      timeout --signal=TERM --kill-after=30s 300s node scripts/qa/electron-smoke.mjs
+    fi
   else
-    "${launcher[@]}" node scripts/qa/electron-smoke.mjs
+    if [[ "$PLATFORM" == "linux" ]]; then
+      xvfb-run -a node scripts/qa/electron-smoke.mjs
+    else
+      node scripts/qa/electron-smoke.mjs
+    fi
   fi
   node -e "
     const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json');
@@ -204,16 +220,19 @@ if [[ "$PLATFORM" == "linux" ]]; then
   if [[ -n "${VIS_QA_DEB_INSTALL_ROOT:-}" ]]; then
     # Constrained-host mode (documented in the header): extract-and-run of the
     # installed layout. CI lanes never set this variable and use `sudo apt-get install`.
-    DEB_ROOT="$VIS_QA_DEB_INSTALL_ROOT"
-    rm -rf "$DEB_ROOT"
-    mkdir -p "$DEB_ROOT"
+    DEB_PARENT="$VIS_QA_DEB_INSTALL_ROOT"
+    [[ -d "$DEB_PARENT" ]] || die "deb install root '$DEB_PARENT' does not exist"
+    DEB_ROOT="$(mktemp -d "${DEB_PARENT%/}/vis-deb-qa-XXXXXX")"
     dpkg-deb -x "$deb" "$DEB_ROOT"
     WORK_DIRS+=("$DEB_ROOT")
     INSTALLED_EXE="$DEB_ROOT/opt/Vis/$EXECUTABLE_NAME"
     echo "note: system-wide dpkg install skipped (VIS_QA_DEB_INSTALL_ROOT set); verifying installed layout at $INSTALLED_EXE"
   else
     DEB_PKG_NAME="$(dpkg-deb -f "$deb" Package)"
-    DEB_INSTALLED_SYSTEM=1
+    if dpkg-query -W -f='${db:Status-Abbrev}' "$DEB_PKG_NAME" 2>/dev/null | grep -q '^ii '; then
+      DEB_PREEXISTED=1
+    fi
+    DEB_INSTALL_ATTEMPTED=1
     sudo apt-get install -y "$deb"
     INSTALLED_EXE="/opt/Vis/$EXECUTABLE_NAME"
   fi

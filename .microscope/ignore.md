@@ -59,7 +59,6 @@ ENV/**
 
 # === Package manager files ===
 **/go.mod
-**/package.json
 **/*.pbxproj
 **/*.xcstrings
 **/*.strings
@@ -174,7 +173,3 @@ ENV/**
 **/*.csv
 **/*.grpc.reflection
 **/*.js.map
-
-
-
-scripts/**

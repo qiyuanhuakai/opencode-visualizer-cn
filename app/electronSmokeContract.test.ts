@@ -141,6 +141,19 @@ describe('electron smoke driver contract', () => {
     expect(driverSurface).toMatch(/electronApp\.on\(['"]console['"]/);
   });
 
+  it('attaches process and renderer listeners before firstWindow resolves', () => {
+    const launchStart = driverSource.indexOf('async function launchAndProbe');
+    const appListeners = driverSource.indexOf('attachAppListeners(electronApp)', launchStart);
+    const firstWindow = driverSource.indexOf('electronApp.firstWindow()', launchStart);
+    expect(appListeners).toBeGreaterThan(launchStart);
+    expect(appListeners).toBeLessThan(firstWindow);
+    expect(driverSource).toContain("electronApp.on('window', attachPageListeners)");
+  });
+
+  it('fails the smoke when the required receipt cannot be written', () => {
+    expect(driverSource).toMatch(/writeFileSync\(RECEIPT_PATH[\s\S]*?catch \{\s*receipt\.pass = false;/);
+  });
+
   it('tears down the app and the temp profile even on failure', () => {
     expect(driverSurface).toMatch(/finally/);
     expect(driverSurface).toMatch(/close\(\)/);
