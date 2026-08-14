@@ -77,18 +77,19 @@ DEB_PREEXISTED=0
 
 terminate_smoke_group() {
   local pgid="$1" i
-  [[ -n "$pgid" ]] || return
+  [[ -n "$pgid" ]] || return 0
   if ! kill -0 -- "-$pgid" 2>/dev/null; then
-    return
+    return 0
   fi
   kill -TERM -- "-$pgid" 2>/dev/null || true
   for i in 1 2 3 4 5 6 7 8 9 10; do
     if ! kill -0 -- "-$pgid" 2>/dev/null; then
-      return
+      return 0
     fi
     sleep 0.1
   done
   kill -KILL -- "-$pgid" 2>/dev/null || true
+  return 0
 }
 
 terminate_smoke_groups() {
@@ -96,6 +97,7 @@ terminate_smoke_groups() {
   for pgid in "${SMOKE_PROCESS_GROUPS[@]-}"; do
     terminate_smoke_group "$pgid"
   done
+  return 0
 }
 
 run_owned_process_group() {
@@ -152,6 +154,7 @@ cleanup() {
     [[ -n "$dir" ]] || continue
     rm -rf "$dir"
   done
+  return 0
 }
 trap cleanup EXIT
 

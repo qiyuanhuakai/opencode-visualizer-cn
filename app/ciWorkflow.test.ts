@@ -333,6 +333,7 @@ describe('electron installer QA scripts', () => {
     expect(script).not.toContain('LAUNCHED_EXES');
     expect(script).not.toContain('launched_pids');
     expect(script).toContain('"${WORK_DIRS[@]-}"');
+    expect(script).toMatch(/cleanup\(\) \{[\s\S]*?return 0\s*\n\}/);
   });
 
   it('unix smoke launch never expands an empty macOS launcher argument', () => {
