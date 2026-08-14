@@ -20,3 +20,4 @@ cc-switch/
 .codex
 .omo/
 /.cortexkit/
+/artifact-report.json

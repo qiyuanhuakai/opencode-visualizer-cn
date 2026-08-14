@@ -61,7 +61,7 @@ export async function buildVisBridgeBinary(rootDirectory) {
     minify: true,
     platform: 'node',
     format: 'cjs',
-    target: 'node22',
+    target: 'node24',
     external: ['node-pty'],
     legalComments: 'none',
   });

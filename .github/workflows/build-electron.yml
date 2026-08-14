@@ -25,7 +25,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: pnpm
 
       - name: Install dependencies
@@ -40,14 +40,18 @@ jobs:
       - name: Build web app
         run: pnpm build
 
-  build:
-    name: Build (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15-intel, windows-2022, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+  # Electron native lanes: one job per platform/arch pair (macOS x64/arm64,
+  # Windows x64/arm64, Linux x64). Each lane passes explicit platform/arch
+  # flags to electron-builder (no fat/universal builds), runs the unpacked-app
+  # qa:electron smoke BEFORE uploading, exercises the lane's own installers,
+  # and uploads only arch-scoped artifacts. macOS is unsigned but ad-hoc:
+  # electron-builder.yml pins mac.identity "-" and mac.notarize false, and the
+  # unix installer QA runs codesign --verify --deep --strict plus an adhoc/no-
+  # TeamIdentifier check — no signing credentials live anywhere in CI.
 
+  build-macos-x64:
+    name: Electron mac x64
+    runs-on: macos-15-intel
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -58,11 +62,130 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify runner architecture
+        run: test "$(node -p process.arch)" = "x64"
+
+      - name: Build Electron app for x64
+        env:
+          CSC_FOR_PULL_REQUEST: true
+        run: pnpm build && pnpm exec electron-builder --publish never --mac --x64
+
+      - name: Smoke unpacked app
+        env:
+          VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
+        shell: bash
+        run: |
+          VIS_ELECTRON_EXECUTABLE="dist-electron/mac/Vis.app/Contents/MacOS/Vis" node scripts/qa/electron-smoke.mjs
+          node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'darwin' || r.platform.arch !== 'x64') process.exit(1)"
+
+      - name: Exercise installer (DMG and ZIP)
+        shell: bash
+        run: bash scripts/qa/electron-installer-unix.sh --platform macos --arch x64 --artifacts-dir dist-electron --smoke-out-dir "$RUNNER_TEMP/smoke-installer"
+
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          ELECTRON_BIN="$(node -e "process.stdout.write(require('electron'))")"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron \
+            --electron-executable "$ELECTRON_BIN" \
+            --out-dir "$VIS_PTY_OUT_DIR"
+
+      - name: Upload VIS installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-macos-x64-artifacts
+          path: |
+            dist-electron/Vis-*-x64-MacOS.dmg
+            dist-electron/Vis-*-x64-MacOS.zip
+          retention-days: 7
+          if-no-files-found: error
+
+  build-macos-arm64:
+    name: Electron mac arm64
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify runner architecture
+        run: test "$(node -p process.arch)" = "arm64"
+
+      - name: Build Electron app for arm64
+        env:
+          CSC_FOR_PULL_REQUEST: true
+        run: pnpm build && pnpm exec electron-builder --publish never --mac --arm64
+
+      - name: Smoke unpacked app
+        env:
+          VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
+        shell: bash
+        run: |
+          VIS_ELECTRON_EXECUTABLE="dist-electron/mac-arm64/Vis.app/Contents/MacOS/Vis" node scripts/qa/electron-smoke.mjs
+          node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'darwin' || r.platform.arch !== 'arm64') process.exit(1)"
+
+      - name: Exercise installer (DMG and ZIP)
+        shell: bash
+        run: bash scripts/qa/electron-installer-unix.sh --platform macos --arch arm64 --artifacts-dir dist-electron --smoke-out-dir "$RUNNER_TEMP/smoke-installer"
+
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          ELECTRON_BIN="$(node -e "process.stdout.write(require('electron'))")"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron \
+            --electron-executable "$ELECTRON_BIN" \
+            --out-dir "$VIS_PTY_OUT_DIR"
+
+      - name: Upload VIS installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-macos-arm64-artifacts
+          path: |
+            dist-electron/Vis-*-arm64-MacOS.dmg
+            dist-electron/Vis-*-arm64-MacOS.zip
+          retention-days: 7
+          if-no-files-found: error
+
+  build-windows-x64:
+    name: Electron win x64
+    runs-on: windows-2022
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
           cache: pnpm
 
       - name: Setup MSVC toolchain
-        if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
@@ -70,21 +193,165 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Electron app
-        run: pnpm build && pnpm exec electron-builder --publish never
+      - name: Verify runner architecture
+        run: node -e "if (process.arch !== 'x64') process.exit(1)"
+
+      - name: Build Electron app for x64
+        run: pnpm build && pnpm exec electron-builder --publish never --win --x64
+
+      - name: Smoke unpacked app
+        env:
+          VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
+        shell: pwsh
+        run: |
+          $env:VIS_ELECTRON_EXECUTABLE = Join-Path 'dist-electron/win-unpacked' 'Vis.exe'
+          node scripts/qa/electron-smoke.mjs
+          node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'win32' || r.platform.arch !== 'x64') process.exit(1)"
+
+      - name: Exercise installer
+        shell: pwsh
+        run: ./scripts/qa/electron-installer-windows.ps1 -Arch x64
+
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: pwsh
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          $electronBin = node -e "process.stdout.write(require('electron'))"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron --electron-executable $electronBin --out-dir $env:VIS_PTY_OUT_DIR
 
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
-          name: electron-${{ matrix.os }}-artifacts
+          name: electron-windows-x64-artifacts
           path: |
-            dist-electron/*.dmg
-            dist-electron/*.zip
-            dist-electron/*.exe
-            dist-electron/*.AppImage
-            dist-electron/*.deb
-            dist-electron/*.blockmap
-            dist-electron/*.yml
+            dist-electron/Vis-*-x64-Windows.exe
+          retention-days: 7
+          if-no-files-found: error
+
+  build-windows-arm64:
+    name: Electron win arm64
+    runs-on: windows-11-arm
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Setup MSVC toolchain
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify runner architecture
+        run: node -e "if (process.arch !== 'arm64') process.exit(1)"
+
+      - name: Build Electron app for arm64
+        run: pnpm build && pnpm exec electron-builder --publish never --win --arm64
+
+      - name: Smoke unpacked app
+        env:
+          VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
+        shell: pwsh
+        run: |
+          $env:VIS_ELECTRON_EXECUTABLE = Join-Path 'dist-electron/win-arm64-unpacked' 'Vis.exe'
+          node scripts/qa/electron-smoke.mjs
+          node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'win32' || r.platform.arch !== 'arm64') process.exit(1)"
+
+      - name: Exercise installer
+        shell: pwsh
+        run: ./scripts/qa/electron-installer-windows.ps1 -Arch arm64
+
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: pwsh
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          $electronBin = node -e "process.stdout.write(require('electron'))"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron --electron-executable $electronBin --out-dir $env:VIS_PTY_OUT_DIR
+
+      - name: Upload VIS installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-windows-arm64-artifacts
+          path: |
+            dist-electron/Vis-*-arm64-Windows.exe
+          retention-days: 7
+          if-no-files-found: error
+
+  build-linux-x64:
+    name: Electron linux x64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify runner architecture
+        run: test "$(node -p process.arch)" = "x64"
+
+      - name: Build Electron app for x64
+        run: pnpm build && pnpm exec electron-builder --publish never --linux --x64
+
+      # ubuntu-24.04 AppArmor blocks Chromium's unprivileged user namespace by
+      # default. This enables the namespace sandbox on the ephemeral runner;
+      # it does not pass --no-sandbox or disable Chromium's sandbox.
+      - name: Allow Chromium user namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Smoke unpacked app
+        env:
+          VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
+        shell: bash
+        run: |
+          xvfb-run -a env VIS_ELECTRON_EXECUTABLE="dist-electron/linux-unpacked/vis" node scripts/qa/electron-smoke.mjs
+          node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'linux' || r.platform.arch !== 'x64') process.exit(1)"
+
+      - name: Exercise installer (deb and AppImage)
+        shell: bash
+        run: bash scripts/qa/electron-installer-unix.sh --platform linux --arch x64 --artifacts-dir dist-electron --smoke-out-dir "$RUNNER_TEMP/smoke-installer"
+
+      - name: Verify node-pty in Electron runtime (VIS_PTY_OK)
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          pnpm exec electron --version
+          ELECTRON_BIN="$(node -e "process.stdout.write(require('electron'))")"
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron \
+            --electron-executable "$ELECTRON_BIN" \
+            --out-dir "$VIS_PTY_OUT_DIR"
+
+      - name: Upload VIS installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-linux-x64-artifacts
+          path: |
+            dist-electron/Vis-*-x86_64-Linux.AppImage
+            dist-electron/Vis-*-amd64-Linux.deb
           retention-days: 7
           if-no-files-found: error
 
@@ -130,7 +397,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: pnpm
 
       - name: Setup MSVC toolchain
@@ -172,8 +439,24 @@ jobs:
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-lifecycle.json"
           vis_bridge start --port 23199
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs spawn "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
+
+      - name: Verify node-pty across runtimes (VIS_PTY_OK)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes node,sea \
+            --bridge-binary "$(command -v vis_bridge)" \
+            --state-dir "$RUNNER_TEMP/pty-dual-runtime-state" \
+            --port 23201 --out-dir "$VIS_PTY_OUT_DIR"
+
+      - name: Uninstall vis_bridge (cleanup)
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
           sudo dpkg -r vis-bridge
-          node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
+          node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$RUNNER_TEMP/vis-bridge-state" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
 
       - name: Exercise macOS installer
         if: runner.os == 'macOS'
@@ -193,7 +476,34 @@ jobs:
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs spawn "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
           vis_bridge stop
           node scripts/qa/vis-bridge-installer-daemon-qa.mjs assert-stopped "$VIS_BRIDGE_STATE_DIR" 23199 "$RUNNER_TEMP/bridge-remove-lifecycle.json"
+
+      - name: Verify node-pty across runtimes (VIS_PTY_OK)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes node,sea \
+            --bridge-binary "$(command -v vis_bridge)" \
+            --state-dir "$RUNNER_TEMP/pty-dual-runtime-state" \
+            --port 23201 --out-dir "$VIS_PTY_OUT_DIR"
+
+      - name: Uninstall vis_bridge (cleanup)
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
           sudo rm /usr/local/bin/vis_bridge
+
+      - name: Verify node-pty across runtimes (VIS_PTY_OK)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VIS_PTY_OUT_DIR: ${{ runner.temp }}/pty-dual-runtime
+        run: |
+          node scripts/qa/node-pty-dual-runtime.mjs --runtimes node,sea `
+            --bridge-binary "$(Resolve-Path 'dist-bridge/vis_bridge.exe')" `
+            --state-dir (Join-Path $env:RUNNER_TEMP 'pty-dual-runtime-state') `
+            --port 23201 --out-dir $env:VIS_PTY_OUT_DIR
 
       - name: Exercise Windows installer
         if: runner.os == 'Windows'
@@ -214,22 +524,34 @@ jobs:
   complete-ci:
     name: Complete CI
     if: always()
-    needs: [validate, build, bridge-installers]
+    needs: [validate, build-macos-x64, build-macos-arm64, build-windows-x64, build-windows-arm64, build-linux-x64, bridge-installers]
     runs-on: ubuntu-latest
     steps:
-      - name: Require every CI job to pass
+      - name: Require every CI job and lane to pass
         env:
           VALIDATE_RESULT: ${{ needs.validate.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
+          LANE_BUILD_MACOS_X64: ${{ needs.build-macos-x64.result }}
+          LANE_BUILD_MACOS_ARM64: ${{ needs.build-macos-arm64.result }}
+          LANE_BUILD_WINDOWS_X64: ${{ needs.build-windows-x64.result }}
+          LANE_BUILD_WINDOWS_ARM64: ${{ needs.build-windows-arm64.result }}
+          LANE_BUILD_LINUX_X64: ${{ needs.build-linux-x64.result }}
           BRIDGE_INSTALLERS_RESULT: ${{ needs.bridge-installers.result }}
         run: |
-          if [ "$VALIDATE_RESULT" != 'success' ] || [ "$BUILD_RESULT" != 'success' ] || [ "$BRIDGE_INSTALLERS_RESULT" != 'success' ]; then
-            exit 1
-          fi
+          for result in \
+            "$VALIDATE_RESULT" \
+            "$LANE_BUILD_MACOS_X64" "$LANE_BUILD_MACOS_ARM64" \
+            "$LANE_BUILD_WINDOWS_X64" "$LANE_BUILD_WINDOWS_ARM64" \
+            "$LANE_BUILD_LINUX_X64" \
+            "$BRIDGE_INSTALLERS_RESULT"; do
+            if [ "$result" != 'success' ]; then
+              echo "job result '$result' is not success"
+              exit 1
+            fi
+          done
 
   release:
     name: Publish draft release
-    needs: [build, bridge-installers, complete-ci]
+    needs: [build-macos-x64, build-macos-arm64, build-windows-x64, build-windows-arm64, build-linux-x64, bridge-installers, complete-ci]
     if: startsWith(github.ref, 'refs/tags/v') && needs.complete-ci.result == 'success'
     runs-on: ubuntu-latest
     permissions:

@@ -1,6 +1,78 @@
-ignoredBuiltDependencies:
-  - electron-winstaller
+# pnpm 11 default-deny build policy. Classification (resolved versions, scripts, why)
+# recorded in .omo/evidence/electron-major-upgrade/task-1/versions.json.
+allowBuilds:
+  electron: true
+  esbuild: true
+  node-pty: true
+  vue-demi: true
+  electron-winstaller: false
 
-onlyBuiltDependencies:
-  - esbuild
-  - electron
+minimumReleaseAgeExclude:
+  - '@oxfmt/binding-android-arm-eabi@0.63.0'
+  - '@oxfmt/binding-android-arm64@0.63.0'
+  - '@oxfmt/binding-darwin-arm64@0.63.0'
+  - '@oxfmt/binding-darwin-x64@0.63.0'
+  - '@oxfmt/binding-freebsd-x64@0.63.0'
+  - '@oxfmt/binding-linux-arm-gnueabihf@0.63.0'
+  - '@oxfmt/binding-linux-arm-musleabihf@0.63.0'
+  - '@oxfmt/binding-linux-arm64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-arm64-musl@0.63.0'
+  - '@oxfmt/binding-linux-ppc64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-riscv64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-riscv64-musl@0.63.0'
+  - '@oxfmt/binding-linux-s390x-gnu@0.63.0'
+  - '@oxfmt/binding-linux-x64-gnu@0.63.0'
+  - '@oxfmt/binding-linux-x64-musl@0.63.0'
+  - '@oxfmt/binding-openharmony-arm64@0.63.0'
+  - '@oxfmt/binding-win32-arm64-msvc@0.63.0'
+  - '@oxfmt/binding-win32-ia32-msvc@0.63.0'
+  - '@oxfmt/binding-win32-x64-msvc@0.63.0'
+  - '@oxlint/binding-android-arm-eabi@1.78.0'
+  - '@oxlint/binding-android-arm64@1.78.0'
+  - '@oxlint/binding-darwin-arm64@1.78.0'
+  - '@oxlint/binding-darwin-x64@1.78.0'
+  - '@oxlint/binding-freebsd-x64@1.78.0'
+  - '@oxlint/binding-linux-arm-gnueabihf@1.78.0'
+  - '@oxlint/binding-linux-arm-musleabihf@1.78.0'
+  - '@oxlint/binding-linux-arm64-gnu@1.78.0'
+  - '@oxlint/binding-linux-arm64-musl@1.78.0'
+  - '@oxlint/binding-linux-ppc64-gnu@1.78.0'
+  - '@oxlint/binding-linux-riscv64-gnu@1.78.0'
+  - '@oxlint/binding-linux-riscv64-musl@1.78.0'
+  - '@oxlint/binding-linux-s390x-gnu@1.78.0'
+  - '@oxlint/binding-linux-x64-gnu@1.78.0'
+  - '@oxlint/binding-linux-x64-musl@1.78.0'
+  - '@oxlint/binding-openharmony-arm64@1.78.0'
+  - '@oxlint/binding-win32-arm64-msvc@1.78.0'
+  - '@oxlint/binding-win32-ia32-msvc@1.78.0'
+  - '@oxlint/binding-win32-x64-msvc@1.78.0'
+  - oxfmt@0.63.0
+  - oxlint@1.78.0
+
+# Task 4 (electron 43): node-abi@4.28.0 (bundled via @electron/rebuild) cannot
+# detect the ABI of electron 43.3.0 ("Could not detect abi for version 43.3.0");
+# node-abi@4.33.0 maps electron 43.3.0 -> ABI 148 (verified, see task-4 ledger).
+# Satisfies @electron/rebuild@4.2.0's ^4.2.0 range.
+overrides:
+  node-abi: ^4.33.0
+  # Task 12 (audit gate): convergence overrides (pnpm >=11.13) pin the patched
+  # line for each electron-builder dev-toolchain advisory — the edge is
+  # rewritten ONLY when its declared range admits the exact version, so a
+  # future parent range that no longer admits it keeps its own resolution.
+  # tar 7.5.22 (GHSA-23hp-3jrh-7fpw critical + 1120782/1123939/1123941/
+  # 1123942/1124287; parents app-builder-lib ^7.5.7, node-gyp ^7.5.4),
+  # @xmldom/xmldom 0.8.13 (1117894/1117897/1117900/1117903 via plist),
+  # tmp 0.2.7 (1120654/1120729 via tmp-promise), form-data 4.0.6 (1120743 via
+  # electron-publish), js-yaml 4.3.1 (1121860/1123911/1138115 via
+  # builder-util). brace-expansion needs per-minimatch-major parent-scoped
+  # overrides (1123896/1123897/1123898/1130588/1130589/1130591/1130734/
+  # 1130736/1130737): 3.x -> 1.1.18, 5.x/9.x -> 2.1.4, 10.x -> 5.0.9.
+  'tar@': 7.5.22
+  '@xmldom/xmldom@': 0.8.13
+  'tmp@': 0.2.7
+  'form-data@': 4.0.6
+  'js-yaml@': 4.3.1
+  'minimatch@3>brace-expansion': ^1.1.18
+  'minimatch@5>brace-expansion': ^2.1.4
+  'minimatch@9>brace-expansion': ^2.1.4
+  'minimatch@10>brace-expansion': ^5.0.9

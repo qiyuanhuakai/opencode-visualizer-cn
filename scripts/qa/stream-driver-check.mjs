@@ -32,94 +32,32 @@
  */
 
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
-// Playwright resolution (no repo dependency; use npx cache or global install)
+// Playwright resolution (repo-root node_modules ONLY — the pinned dev
+// dependency. No npx cache, no global install, no hardcoded paths; the
+// browser is the explicitly provisioned chromium from `pnpm exec playwright
+// install chromium`).
 // ---------------------------------------------------------------------------
-function resolvePlaywrightDir() {
-  const candidates = [];
-  const npxRoot = path.join(os.homedir(), '.npm/_npx');
-  if (fs.existsSync(npxRoot)) {
-    for (const dir of fs.readdirSync(npxRoot)) {
-      const pkgDir = path.join(npxRoot, dir, 'node_modules/playwright');
-      const pkgJson = path.join(pkgDir, 'package.json');
-      if (fs.existsSync(pkgJson)) {
-        try {
-          const version = JSON.parse(fs.readFileSync(pkgJson, 'utf8')).version;
-          candidates.push({ pkgDir, version });
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  }
-  // Resolve global playwright dynamically so other users' installs work.
-  try {
-    const globalRoot = require('child_process')
-      .execSync('npm root -g', { encoding: 'utf8' })
-      .trim();
-    const globalDir = path.join(globalRoot, '@playwright/cli/node_modules/playwright');
-    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
-      const version = JSON.parse(
-        fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
-      ).version;
-      candidates.push({ pkgDir: globalDir, version });
-    }
-  } catch {
-    // npm root -g unavailable; fall back to the hard-coded path for this machine.
-    const globalDir =
-      '/home/qiyuaner/.nvm/versions/node/v22.22.2/lib/node_modules/@playwright/cli/node_modules/playwright';
-    if (fs.existsSync(path.join(globalDir, 'package.json'))) {
-      try {
-        const version = JSON.parse(
-          fs.readFileSync(path.join(globalDir, 'package.json'), 'utf8'),
-        ).version;
-        candidates.push({ pkgDir: globalDir, version });
-      } catch {
-        /* ignore */
-      }
-    }
-  }
-  if (candidates.length === 0) {
-    throw new Error('playwright not found in npx cache or global @playwright/cli');
-  }
-  candidates.sort((a, b) => {
-    if (a.version === '1.62.1') return -1;
-    if (b.version === '1.62.1') return 1;
-    return b.version.localeCompare(a.version, undefined, { numeric: true });
-  });
-  return candidates[0];
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const PW_PKG_PATH = path.join(REPO_ROOT, 'node_modules/playwright/package.json');
+if (!fs.existsSync(PW_PKG_PATH)) {
+  throw new Error(`playwright not found at ${PW_PKG_PATH} — run pnpm install first`);
 }
-
-function resolveChromiumExecutable(chromium) {
-  const browsersPath = path.join(os.homedir(), '.cache/ms-playwright');
-  const preferred = chromium.executablePath();
-  if (fs.existsSync(preferred)) return preferred;
-  // Guard against a missing cache directory so we emit the intended
-  // 'No chromium binary found' error instead of a raw ENOENT from readdirSync.
-  if (!fs.existsSync(browsersPath)) {
-    throw new Error(`No chromium binary found under ${browsersPath}`);
-  }
-  const revisions = fs
-    .readdirSync(browsersPath)
-    .filter((d) => /^chromium-\d+$/.test(d))
-    .sort((a, b) => Number(b.split('-')[1]) - Number(a.split('-')[1]));
-  for (const rev of revisions) {
-    const bin = path.join(browsersPath, rev, 'chrome-linux64/chrome');
-    if (fs.existsSync(bin)) return bin;
-  }
-  throw new Error(`No chromium binary found under ${browsersPath}`);
-}
-
-const pwInfo = resolvePlaywrightDir();
-const playwright = await import(`${pwInfo.pkgDir}/index.mjs`).catch(() =>
-  import(`${pwInfo.pkgDir}/index.js`),
+const playwrightVersion = JSON.parse(fs.readFileSync(PW_PKG_PATH, 'utf8')).version;
+const playwright = await import(path.join(REPO_ROOT, 'node_modules/playwright/index.mjs')).catch(
+  () => import(path.join(REPO_ROOT, 'node_modules/playwright/index.js')),
 );
 const chromium = playwright.chromium ?? playwright.default?.chromium;
-const chromiumPath = resolveChromiumExecutable(chromium);
+const chromiumPath = chromium.executablePath();
+if (!fs.existsSync(chromiumPath)) {
+  throw new Error(
+    `No chromium binary found at ${chromiumPath} — run "pnpm exec playwright install chromium" first`,
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Config / artifacts
@@ -201,37 +139,42 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Main
 // ---------------------------------------------------------------------------
 async function main() {
-  console.log(`[stream-qa] playwright ${pwInfo.version} (${pwInfo.pkgDir})`);
+  console.log(`[stream-qa] playwright ${playwrightVersion}`);
   console.log(`[stream-qa] chromium: ${chromiumPath}`);
   console.log(`[stream-qa] driver: ${DRIVER_URL}`);
 
   await waitForServer(DRIVER_URL);
   console.log('[stream-qa] dev server reachable');
 
-  // --disable-gpu/--disable-software-rasterizer: with the fallback chromium
-  // builds in this environment (chromium-1223 vs playwright 1.62.1 wanting
-  // 1234), page.screenshot hangs in the GPU/swiftshader compositing path
-  // (fonts load, then capture never completes). DOM/worker behavior is
-  // unaffected; every assertion above is independent of compositing.
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: chromiumPath,
-    args: ['--disable-gpu', '--disable-software-rasterizer'],
-  });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
-
   const consoleLog = [];
   const pageErrors = [];
-  page.on('console', (msg) => {
-    consoleLog.push({ type: msg.type(), text: msg.text() });
-    if (msg.type() === 'error') pageErrors.push(msg.text());
-  });
-  page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
-
-  const ev = (fn, arg) => page.evaluate(fn, arg);
+  let browser = null;
+  let chromiumVersion = 'unknown';
 
   try {
+    // --disable-gpu/--disable-software-rasterizer: with the fallback chromium
+    // builds in this environment (chromium-1223 vs playwright 1.62.1 wanting
+    // 1234), page.screenshot hangs in the GPU/swiftshader compositing path
+    // (fonts load, then capture never completes). DOM/worker behavior is
+    // unaffected; every assertion above is independent of compositing.
+    browser = await chromium.launch({
+      headless: true,
+      executablePath: chromiumPath,
+      args: ['--disable-gpu', '--disable-software-rasterizer'],
+    });
+    chromiumVersion = await browser.version();
+    console.log(`[stream-qa] chromium version: ${chromiumVersion}`);
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+
+    page.on('console', (msg) => {
+      consoleLog.push({ type: msg.type(), text: msg.text() });
+      if (msg.type() === 'error') pageErrors.push(msg.text());
+    });
+    page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
+
+    const ev = (fn, arg) => page.evaluate(fn, arg);
+
     await page.goto(DRIVER_URL, { waitUntil: 'load' });
     await page.waitForFunction(() => !!window.__streamDriver, null, { timeout: 15000 });
     console.log('[stream-qa] driver page mounted (window.__streamDriver ready)');
@@ -505,17 +448,26 @@ async function main() {
   } catch (err) {
     record('HARNESS', 'unexpected runner error', false, String(err?.stack ?? err));
   } finally {
+    // Close the browser BEFORE writing evidence: a write failure must never
+    // skip teardown (and a browser failure must never block evidence).
+    if (browser) {
+      try {
+        await browser.close();
+      } catch {
+        // teardown is best-effort
+      }
+    }
     artifact('.', 'console-log.json', JSON.stringify(consoleLog, null, 2));
     const summary = {
       driverUrl: DRIVER_URL,
-      playwright: pwInfo.version,
+      playwright: playwrightVersion,
       chromium: chromiumPath,
+      chromiumVersion,
       results,
       passed: results.filter((r) => r.ok).length,
       failed: results.filter((r) => !r.ok).length,
     };
     fs.writeFileSync(path.join(ARTIFACTS_DIR, 'summary.json'), JSON.stringify(summary, null, 2));
-    await browser.close();
   }
 
   console.log('=================================================');

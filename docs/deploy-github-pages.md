@@ -11,8 +11,8 @@
 | 依赖 | 版本 / 备注 |
 |---|---|
 | GitHub 账号 | 公开仓库即可（Private 仓库的 Pages 仅付费计划可用） |
-| Node.js | ≥ 20 |
-| pnpm | 10.29.3（仓库 `packageManager` 字段已锁定） |
+| Node.js | ≥ 24（24.x LTS） |
+| pnpm | 11.21.0（仓库 `packageManager` 字段已锁定） |
 | [OpenCode CLI](https://github.com/sst/opencode) | 最新版，提供 `opencode serve` 命令 |
 
 ---
