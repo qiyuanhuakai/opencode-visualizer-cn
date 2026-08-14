@@ -80,11 +80,41 @@ function laneBlock(jobName: string): string {
 
 // The five native Electron lanes and what each must do on its own runner.
 const ELECTRON_LANES = [
-  { job: 'build-macos-x64', runner: 'macos-15-intel', platform: 'mac', arch: 'x64' },
-  { job: 'build-macos-arm64', runner: 'macos-latest', platform: 'mac', arch: 'arm64' },
-  { job: 'build-windows-x64', runner: 'windows-2022', platform: 'win', arch: 'x64' },
-  { job: 'build-windows-arm64', runner: 'windows-11-arm', platform: 'win', arch: 'arm64' },
-  { job: 'build-linux-x64', runner: 'ubuntu-24.04', platform: 'linux', arch: 'x64' },
+  {
+    job: 'build-macos-x64',
+    runner: 'macos-15-intel',
+    platform: 'mac',
+    arch: 'x64',
+    unpackedDir: 'dist-electron/mac',
+  },
+  {
+    job: 'build-macos-arm64',
+    runner: 'macos-latest',
+    platform: 'mac',
+    arch: 'arm64',
+    unpackedDir: 'dist-electron/mac-arm64',
+  },
+  {
+    job: 'build-windows-x64',
+    runner: 'windows-2022',
+    platform: 'win',
+    arch: 'x64',
+    unpackedDir: 'dist-electron/win-unpacked',
+  },
+  {
+    job: 'build-windows-arm64',
+    runner: 'windows-11-arm',
+    platform: 'win',
+    arch: 'arm64',
+    unpackedDir: 'dist-electron/win-arm64-unpacked',
+  },
+  {
+    job: 'build-linux-x64',
+    runner: 'ubuntu-24.04',
+    platform: 'linux',
+    arch: 'x64',
+    unpackedDir: 'dist-electron/linux-unpacked',
+  },
 ] as const;
 
 describe('complete CI workflow', () => {
@@ -152,6 +182,42 @@ describe('complete CI workflow', () => {
     }
     // No bare dist-electron/*.dmg-style fat uploads may survive anywhere.
     expect(workflow).not.toContain('dist-electron/*.dmg');
+  });
+
+  it('lets each CI lane select exactly one architecture instead of rebuilding config-wide arch lists', () => {
+    expect(builder).not.toMatch(/^\s+arch:\s*$/m);
+    for (const lane of ELECTRON_LANES) {
+      expect(laneBlock(lane.job)).toContain(
+        `electron-builder --publish never --${lane.platform} --${lane.arch}`,
+      );
+    }
+  });
+
+  it('launches the exact unpacked directory produced for each lane architecture', () => {
+    for (const lane of ELECTRON_LANES) {
+      const block = laneBlock(lane.job);
+      expect(block, `${lane.job} must select ${lane.unpackedDir}`).toContain(lane.unpackedDir);
+      expect(
+        block,
+        `${lane.job} must not select the first arbitrary unpacked directory`,
+      ).not.toContain('Select-Object -First 1');
+      expect(
+        block,
+        `${lane.job} must not assume every platform uses a *-unpacked directory`,
+      ).not.toContain("-name '*-unpacked'");
+    }
+  });
+
+  it('keeps the Chromium sandbox enabled on Ubuntu 24.04 by allowing user namespaces on the ephemeral runner', () => {
+    const block = laneBlock('build-linux-x64');
+    const commands = jobSteps(doc.jobs?.['build-linux-x64'])
+      .map((step) => step.run ?? '')
+      .join('\n');
+    const usernsIndex = block.indexOf('kernel.apparmor_restrict_unprivileged_userns=0');
+    const smokeIndex = block.indexOf('electron-smoke.mjs');
+    expect(usernsIndex).toBeGreaterThan(-1);
+    expect(usernsIndex).toBeLessThan(smokeIndex);
+    expect(commands).not.toContain('--no-sandbox');
   });
 
   it('runs the qa:electron smoke on the unpacked app before uploading lane artifacts', () => {

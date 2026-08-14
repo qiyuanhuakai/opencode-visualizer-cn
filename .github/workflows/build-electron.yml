@@ -79,9 +79,7 @@ jobs:
           VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
         shell: bash
         run: |
-          UNPACKED_DIR="$(find dist-electron -maxdepth 1 -type d -name '*-unpacked' -print -quit)"
-          test -n "$UNPACKED_DIR"
-          VIS_ELECTRON_EXECUTABLE="$UNPACKED_DIR/Vis.app/Contents/MacOS/Vis" node scripts/qa/electron-smoke.mjs
+          VIS_ELECTRON_EXECUTABLE="dist-electron/mac/Vis.app/Contents/MacOS/Vis" node scripts/qa/electron-smoke.mjs
           node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'darwin' || r.platform.arch !== 'x64') process.exit(1)"
 
       - name: Exercise installer (DMG and ZIP)
@@ -139,9 +137,7 @@ jobs:
           VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
         shell: bash
         run: |
-          UNPACKED_DIR="$(find dist-electron -maxdepth 1 -type d -name '*-unpacked' -print -quit)"
-          test -n "$UNPACKED_DIR"
-          VIS_ELECTRON_EXECUTABLE="$UNPACKED_DIR/Vis.app/Contents/MacOS/Vis" node scripts/qa/electron-smoke.mjs
+          VIS_ELECTRON_EXECUTABLE="dist-electron/mac-arm64/Vis.app/Contents/MacOS/Vis" node scripts/qa/electron-smoke.mjs
           node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'darwin' || r.platform.arch !== 'arm64') process.exit(1)"
 
       - name: Exercise installer (DMG and ZIP)
@@ -204,11 +200,7 @@ jobs:
           VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
         shell: pwsh
         run: |
-          $unpackedDir = Get-ChildItem dist-electron -Directory -Filter '*-unpacked' | Select-Object -First 1
-          if (-not $unpackedDir) { throw 'no unpacked app dir' }
-          $exe = Get-ChildItem $unpackedDir.FullName -Filter '*.exe' | Select-Object -First 1
-          if (-not $exe) { throw 'no unpacked exe' }
-          $env:VIS_ELECTRON_EXECUTABLE = $exe.FullName
+          $env:VIS_ELECTRON_EXECUTABLE = Join-Path 'dist-electron/win-unpacked' 'Vis.exe'
           node scripts/qa/electron-smoke.mjs
           node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'win32' || r.platform.arch !== 'x64') process.exit(1)"
 
@@ -269,11 +261,7 @@ jobs:
           VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
         shell: pwsh
         run: |
-          $unpackedDir = Get-ChildItem dist-electron -Directory -Filter '*-unpacked' | Select-Object -First 1
-          if (-not $unpackedDir) { throw 'no unpacked app dir' }
-          $exe = Get-ChildItem $unpackedDir.FullName -Filter '*.exe' | Select-Object -First 1
-          if (-not $exe) { throw 'no unpacked exe' }
-          $env:VIS_ELECTRON_EXECUTABLE = $exe.FullName
+          $env:VIS_ELECTRON_EXECUTABLE = Join-Path 'dist-electron/win-arm64-unpacked' 'Vis.exe'
           node scripts/qa/electron-smoke.mjs
           node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'win32' || r.platform.arch !== 'arm64') process.exit(1)"
 
@@ -324,14 +312,18 @@ jobs:
       - name: Build Electron app for x64
         run: pnpm build && pnpm exec electron-builder --publish never --linux --x64
 
+      # ubuntu-24.04 AppArmor blocks Chromium's unprivileged user namespace by
+      # default. This enables the namespace sandbox on the ephemeral runner;
+      # it does not pass --no-sandbox or disable Chromium's sandbox.
+      - name: Allow Chromium user namespace sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Smoke unpacked app
         env:
           VIS_SMOKE_OUT_DIR: ${{ runner.temp }}/smoke-unpacked
         shell: bash
         run: |
-          UNPACKED_DIR="$(find dist-electron -maxdepth 1 -type d -name '*-unpacked' -print -quit)"
-          test -n "$UNPACKED_DIR"
-          xvfb-run -a env VIS_ELECTRON_EXECUTABLE="$UNPACKED_DIR/vis" node scripts/qa/electron-smoke.mjs
+          xvfb-run -a env VIS_ELECTRON_EXECUTABLE="dist-electron/linux-unpacked/vis" node scripts/qa/electron-smoke.mjs
           node -e "const r = require(process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'); if (r.platform.platform !== 'linux' || r.platform.arch !== 'x64') process.exit(1)"
 
       - name: Exercise installer (deb and AppImage)
