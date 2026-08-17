@@ -203,7 +203,12 @@ export function reconcilePinnedSessionStore(
 
         const localPinnedAt = normalizePinnedAt(localOverride);
         const serverPinnedAt = normalizePinnedAt(session.timePinned);
-        if (localPinnedAt === serverPinnedAt) {
+        const projectOverride = nextStore[projectPinKey(project.id)];
+        const sandboxOverride = nextStore[sandboxPinKey(project.id, sandbox.directory)];
+        const belongsToPersistedHierarchy = [projectOverride, sandboxOverride].some(
+          (value) => typeof value === 'number' && Number.isFinite(value) && normalizePinnedAt(value) > 0,
+        );
+        if (localPinnedAt === serverPinnedAt && !belongsToPersistedHierarchy) {
           delete nextStore[key];
         }
       }
