@@ -1,10 +1,9 @@
+import type { BackendRequestOptions } from '../backends/types';
+
 type QueryValue = string | number | boolean | undefined;
 
 type JsonBody = Record<string, unknown> | Array<unknown>;
-type RequestOptions = {
-  instanceDirectory?: string;
-  signal?: AbortSignal;
-};
+type RequestOptions = BackendRequestOptions;
 
 let configuredBaseUrl = '';
 let configuredAuthorization: string | undefined;
@@ -178,12 +177,12 @@ export function getSessionDiff(payload: { sessionID: string; directory?: string 
   }) as Promise<unknown>;
 }
 
-export function listProjects(directory?: string) {
-  return getJson('/project', { directory }) as Promise<unknown>;
+export function listProjects(directory?: string, options?: RequestOptions) {
+  return getJson('/project', { directory }, options) as Promise<unknown>;
 }
 
-export function getCurrentProject(directory?: string) {
-  return getJson('/project/current', { directory }) as Promise<unknown>;
+export function getCurrentProject(directory?: string, options?: BackendRequestOptions) {
+  return getJson('/project/current', { directory }, options) as Promise<unknown>;
 }
 
 export function listSessions(
@@ -193,6 +192,7 @@ export function listSessions(
     search?: string;
     limit?: number;
     instanceDirectory?: string;
+    signal?: AbortSignal;
   } = {},
 ) {
   return getJson(
@@ -205,6 +205,7 @@ export function listSessions(
     },
     {
       instanceDirectory: options.instanceDirectory,
+      signal: options.signal,
     },
   ) as Promise<unknown>;
 }
@@ -231,8 +232,8 @@ export function listWorktrees(directory: string) {
   return getJson('/experimental/worktree', { directory }) as Promise<unknown>;
 }
 
-export function getVcsInfo(directory: string) {
-  return getJson('/vcs', { directory }) as Promise<unknown>;
+export function getVcsInfo(directory: string, request?: RequestOptions) {
+  return getJson('/vcs', { directory }, request) as Promise<unknown>;
 }
 
 export function createWorktree(directory: string) {
