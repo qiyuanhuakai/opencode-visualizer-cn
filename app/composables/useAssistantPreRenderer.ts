@@ -19,11 +19,24 @@ type UseAssistantPreRendererOptions = {
   onRendered: (renderKey: string) => void;
 };
 
+type AssistantRenderInput = {
+  answerId: string;
+  content: string;
+  theme: string;
+  locale: string;
+};
+
+type ActiveAssistantRender = {
+  task: ReturnType<typeof startRenderWorkerHtml>;
+  seq: number;
+};
+
 export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions) {
   const { t, locale } = useI18n();
   const assistantHtmlCache = reactive(new Map<string, string>());
   const deferredKeyCache = reactive(new Map<string, string>());
-  const cancelRenderByRootId = new Map<string, () => void>();
+  const activeRenderByRootId = new Map<string, ActiveAssistantRender>();
+  const queuedRenderByRootId = new Map<string, AssistantRenderInput>();
   let deferredRenderBatchId: number | null = null;
 
   const submitSeqMap = new Map<string, number>();
@@ -45,18 +58,16 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
     lastSubmitted.clear();
   }
 
-  function submitAssistantRender(rootId: string, answerId: string, content: string) {
+  function startAssistantRender(rootId: string, input: AssistantRenderInput) {
     const seq = (submitSeqMap.get(rootId) ?? 0) + 1;
     submitSeqMap.set(rootId, seq);
-    cancelRenderByRootId.get(rootId)?.();
-    cancelRenderByRootId.delete(rootId);
 
     const requestId = `assistant-${rootId}-${seq}`;
     const task = startRenderWorkerHtml({
       id: requestId,
-      code: content,
+      code: input.content,
       lang: 'markdown',
-      theme: options.theme.value,
+      theme: input.theme,
       gutterMode: 'none',
       files: options.filesWithBasenames.value,
       copyButtonLabel: t('render.copyCode'),
@@ -64,21 +75,44 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
       copyCodeAriaLabel: t('render.copyCodeAria'),
       copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
     });
-    cancelRenderByRootId.set(rootId, task.cancel);
+    activeRenderByRootId.set(rootId, { task, seq });
     void task.promise
       .then((html) => {
-        cancelRenderByRootId.delete(rootId);
+        if (activeRenderByRootId.get(rootId)?.task !== task) return;
+        activeRenderByRootId.delete(rootId);
+        const queued = queuedRenderByRootId.get(rootId);
+        if (queued) {
+          queuedRenderByRootId.delete(rootId);
+          startAssistantRender(rootId, queued);
+          return;
+        }
         const applied = appliedSeqMap.get(rootId) ?? 0;
         if (seq <= applied) return;
         appliedSeqMap.set(rootId, seq);
         assistantHtmlCache.set(rootId, html);
-        deferredKeyCache.set(rootId, answerId);
-        options.onRendered(options.getThreadAssistantRenderKeyById(rootId, answerId));
+        deferredKeyCache.set(rootId, input.answerId);
+        options.onRendered(options.getThreadAssistantRenderKeyById(rootId, input.answerId));
       })
       .catch((error) => {
-        cancelRenderByRootId.delete(rootId);
+        if (activeRenderByRootId.get(rootId)?.task !== task) return;
+        activeRenderByRootId.delete(rootId);
+        const queued = queuedRenderByRootId.get(rootId);
+        if (queued) {
+          queuedRenderByRootId.delete(rootId);
+          startAssistantRender(rootId, queued);
+          return;
+        }
         if (error instanceof RenderCancelledError) return;
       });
+  }
+
+  function submitAssistantRender(rootId: string, answerId: string, content: string, theme: string, localeKey: string) {
+    const input = { answerId, content, theme, locale: localeKey };
+    if (activeRenderByRootId.has(rootId)) {
+      queuedRenderByRootId.set(rootId, input);
+      return;
+    }
+    startAssistantRender(rootId, input);
   }
 
   function getAssistantHtml(rootId: string): string | undefined {
@@ -106,7 +140,7 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
         theme,
         locale: localeKey,
       });
-      submitAssistantRender(entry.root.id, entry.answerId, entry.content);
+      submitAssistantRender(entry.root.id, entry.answerId, entry.content, theme, localeKey);
     };
 
     for (const entry of immediate) {
@@ -164,8 +198,9 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
       cancelAnimationFrame(deferredRenderBatchId);
       deferredRenderBatchId = null;
     }
-    cancelRenderByRootId.forEach((cancel) => cancel());
-    cancelRenderByRootId.clear();
+    queuedRenderByRootId.clear();
+    activeRenderByRootId.forEach(({ task }) => task.cancel());
+    activeRenderByRootId.clear();
   });
 
   return {
