@@ -32,7 +32,7 @@
  *   S-MD-5 part end convergence: after completeEntry flips streaming off,
  *     the DOM is RAW byte-identical (browser-canonicalized) to the
  *     single-shot render of the final text, the streaming container element
- *     is swapped for the v-html container, and exactly one full worker
+ *     is preserved while its HTML is atomically replaced, and exactly one full worker
  *     render carries the final text.
  *   S-MD-6 theme switch mid-stream (github-dark -> dark-plus at 40%): final
  *     content byte-identical to dark-plus single-shot; zero stale
@@ -187,6 +187,8 @@ async function main() {
   const pageErrors = [];
   let browser = null;
   let chromiumVersion = 'unknown';
+  let page = null;
+  let ev = null;
 
   // Fresh page state per scenario session: reloads reset module-level caches
   // (workerRenderer completedCache, markdown segment cache) so request-count
@@ -194,6 +196,7 @@ async function main() {
   // at the function-body root (only ever CALLED after `page` exists inside
   // the try below).
   async function freshDriverPage() {
+    if (!page || !ev) throw new Error('Markdown stream driver page is not initialized.');
     await page.goto(DRIVER_URL, { waitUntil: 'load' });
     await page.waitForFunction(() => !!window.__mdDriver, null, { timeout: 20000 });
     await ev(() => window.__mdDriver.warmup());
@@ -214,7 +217,7 @@ async function main() {
     chromiumVersion = await browser.version();
     console.log(`[stream-md-qa] chromium version: ${chromiumVersion}`);
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    const page = await context.newPage();
+    page = await context.newPage();
 
     page.on('console', (msg) => {
       consoleLog.push({ type: msg.type(), text: msg.text() });
@@ -222,7 +225,7 @@ async function main() {
     });
     page.on('pageerror', (err) => pageErrors.push(`PAGE_ERROR: ${err.message}`));
 
-    const ev = (fn, arg) => page.evaluate(fn, arg);
+    ev = (fn, arg) => page.evaluate(fn, arg);
 
     // =====================================================================
     // Session A: S-MD-1 happy path (+ RED reuses its captures)
@@ -426,7 +429,7 @@ async function main() {
     record('S-MD-5', 'post-completion render settled', s5Quiesced);
 
     const s5TokenAfter = await ev(() => window.__mdDriver.getEntryContainerToken(0));
-    record('S-MD-5', 'streaming container swapped for v-html container on completion', s5TokenBefore !== s5TokenAfter && s5TokenAfter > 0, `token ${s5TokenBefore} -> ${s5TokenAfter}`);
+    record('S-MD-5', 'streaming container preserved through final HTML replacement', s5TokenBefore === s5TokenAfter && s5TokenAfter > 0, `token ${s5TokenBefore} -> ${s5TokenAfter}`);
 
     const s5FullCount = await ev((since) => window.__mdDriver.countRequestsExact(window.__mdDriver.FULL_TEXT, since), s5TComplete);
     record('S-MD-5', 'exactly one full worker render for the final text', s5FullCount === 1, `${s5FullCount}`);
