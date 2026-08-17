@@ -540,6 +540,7 @@ import {
   onMounted,
   reactive,
   ref,
+  shallowRef,
   type Component,
   watch,
   watchEffect,
@@ -669,7 +670,10 @@ import {
   resolveThreadSubagentSessions,
   type SessionHistoryMeta,
 } from './utils/threadSubagents';
-import { retryReferencedSessionIds } from './utils/retryReferencedSessions';
+import {
+  requestWorkerResult,
+  retryReferencedSessionIds,
+} from './utils/retryReferencedSessions';
 import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
 import { normalizeToolName } from './utils/toolNames';
 import {
@@ -682,7 +686,12 @@ import {
 } from './utils/toolRenderers';
 import { toMessageDiffViewerEntry } from './utils/messageDiff';
 import { buildLineCommentFileUrl, formatCommentNote } from './utils/lineComment';
-import { resolveModelMetaForPath as resolveModelMetaForPathUtil } from './utils/resolveModelMeta';
+import {
+  buildModelMetaIndex,
+  resolveModelMetaForPath as resolveModelMetaForPathUtil,
+  type ModelMeta,
+  type ModelOption,
+} from './utils/resolveModelMeta';
 import {
   configureAcpBackend,
   disconnectAcpBackend,
@@ -739,6 +748,7 @@ import {
   type DeletedSandboxStore,
 } from './utils/deletedSandboxes';
 import { shouldSkipAutoOpenWebTool } from './utils/codexToolWindows';
+import { cloneNullPrototypeRecord } from './utils/historyMaps';
 import {
   persistExternalFileChange,
   type ExternalFileSyncTarget,
@@ -1518,10 +1528,11 @@ const pendingReferencedSubagentHydrations = new Map<
   string,
   {
     rootSessionId: string;
-    resolve: (sessionIds: string[]) => void;
+    resolve: (sessionIds: string[] | undefined) => void;
   }
 >();
 let referencedSubagentHydrationSequence = 0;
+const REFERENCED_SUBAGENT_HYDRATION_TIMEOUT_MS = 30_000;
 const hydratedDescendantSessionIds = new Set<string>();
 const recentUserInputs: { text: string; time: number }[] = [];
 const composerDraftRevisionByContext = new Map<string, number>();
@@ -1604,18 +1615,8 @@ const providers = ref<ProviderInfo[]>([]);
 const connectedProviderIds = ref<string[]>([]);
 const agents = ref<AgentInfo[]>([]);
 const commands = ref<CommandInfo[]>([]);
-const modelOptions = ref<
-  Array<{
-    id: string;
-    modelID: string;
-    label: string;
-    displayName: string;
-    providerID?: string;
-    providerLabel?: string;
-    variants?: Record<string, unknown>;
-    attachmentCapable?: boolean;
-  }>
->([]);
+const modelOptions = ref<ModelOption[]>([]);
+const modelMetaByPath = shallowRef<ReadonlyMap<string, ModelMeta>>(new Map());
 const agentOptions = ref<
   Array<{ id: string; label: string; description?: string; color?: string }>
 >([]);
@@ -3009,7 +3010,7 @@ function resolveAgentColorForName(agentName?: string) {
 }
 
 function resolveModelMetaForPath(modelPath?: string) {
-  return resolveModelMetaForPathUtil(modelPath, modelOptions.value);
+  return resolveModelMetaForPathUtil(modelPath, modelMetaByPath.value);
 }
 
 const currentAgentColor = computed(() => resolveAgentColorForName(selectedMode.value));
@@ -4882,6 +4883,7 @@ async function fetchProviders(force = false) {
       models.every((model, index) => model.id === modelOptions.value[index]?.id);
     if (!sameModels) {
       modelOptions.value = models;
+      modelMetaByPath.value = buildModelMetaIndex(models);
       log('providers models updated', models.length);
     }
 
@@ -5147,22 +5149,11 @@ function computeContextPercent(tokens: MessageTokens, providerId?: string, model
   return Math.round((total / contextLimit) * 100);
 }
 
-function storeUserMessageMeta(messageId: string | undefined, meta: UserMessageMeta | null) {
-  if (!messageId || !meta) return;
-  userMessageMetaById.value = { ...userMessageMetaById.value, [messageId]: meta };
-}
-
-function storeUserMessageTime(messageId: string | undefined, messageTime?: number) {
-  if (!messageId || typeof messageTime !== 'number') return;
-  userMessageTimeById.value = { ...userMessageTimeById.value, [messageId]: messageTime };
-}
-
 async function fetchHistory(
   sessionId: string,
   isSubagentMessage = false,
   rootRequestId?: number,
   rootSessionId?: string,
-  incremental = false,
 ) {
   if (!sessionId) return false;
   const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
@@ -5185,32 +5176,33 @@ async function fetchHistory(
     if (expectedRootRequestId !== primaryHistoryRequestId) return false;
     if (selectedSessionId.value !== expectedRootSessionId) return false;
     if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
-    // 全量加载，避免消息在加载过程中逐步显示导致未加载内容的卡片残留
-    if (incremental) {
-      await msg.loadHistoryIncrementally(data, {
-        shouldContinue: () => {
-          if (expectedRootRequestId !== primaryHistoryRequestId) return false;
-          if (selectedSessionId.value !== expectedRootSessionId) return false;
-          return getSelectedWorktreeDirectory() === requestedDirectory;
-        },
-      });
-    } else {
-      msg.loadHistory(data);
-    }
+    // The loading mask keeps partial cards hidden while chunking yields the
+    // renderer task queue so settings, session actions, and window drag remain responsive.
+    await msg.loadHistoryIncrementally(data, {
+      shouldContinue: () => {
+        if (expectedRootRequestId !== primaryHistoryRequestId) return false;
+        if (selectedSessionId.value !== expectedRootSessionId) return false;
+        return getSelectedWorktreeDirectory() === requestedDirectory;
+      },
+    });
 
     if (expectedRootRequestId !== primaryHistoryRequestId) return false;
     if (selectedSessionId.value !== expectedRootSessionId) return false;
     if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
 
+    const nextUserMessageMetaById = cloneNullPrototypeRecord(userMessageMetaById.value);
+    const nextUserMessageTimeById = cloneNullPrototypeRecord(userMessageTimeById.value);
     data.forEach((message) => {
       const info = message.info as Record<string, unknown> | undefined;
       const id = typeof info?.id === 'string' ? info.id : undefined;
       if (!id) return;
       const meta = parseUserMessageMeta(info);
       const messageTime = parseMessageTime(info);
-      storeUserMessageMeta(id, meta);
-      storeUserMessageTime(id, messageTime);
+      if (meta) nextUserMessageMetaById[id] = meta;
+      if (typeof messageTime === 'number') nextUserMessageTimeById[id] = messageTime;
     });
+    userMessageMetaById.value = nextUserMessageMetaById;
+    userMessageTimeById.value = nextUserMessageTimeById;
     return true;
   } catch (error) {
     log('History load failed', error);
@@ -5241,7 +5233,7 @@ function collectReferencedSubagentSessionIds(rootSessionId: string): string[] {
 async function hydrateReferencedSubagents(
   rootSessionId: string,
   reloadRequestId: number,
-): Promise<string[]> {
+): Promise<string[] | undefined> {
   if (activeBackendKind.value !== 'opencode') return [];
   const directory = normalizeDirectory(activeDirectory.value);
   const sessionIds = collectReferencedSubagentSessionIds(rootSessionId);
@@ -5249,18 +5241,28 @@ async function hydrateReferencedSubagents(
 
   return retryReferencedSessionIds(
     sessionIds,
-    () => {
+    (requestedSessionIds) => {
       referencedSubagentHydrationSequence += 1;
       const requestId = `referenced-subagents:${reloadRequestId}:${referencedSubagentHydrationSequence}`;
-      return new Promise<string[]>((resolve) => {
-        pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
-        ge.sendToWorker({
-          type: 'hydrate-referenced-subagents',
-          requestId,
-          rootSessionId,
-          directory,
-          sessionIds,
-        });
+      return requestWorkerResult<string[]>({
+        register: (resolve) => {
+          pendingReferencedSubagentHydrations.set(requestId, { rootSessionId, resolve });
+          return () => {
+            const pending = pendingReferencedSubagentHydrations.get(requestId);
+            if (pending?.resolve === resolve) {
+              pendingReferencedSubagentHydrations.delete(requestId);
+            }
+          };
+        },
+        send: () =>
+          ge.sendToWorker({
+            type: 'hydrate-referenced-subagents',
+            requestId,
+            rootSessionId,
+            directory,
+            sessionIds: requestedSessionIds,
+          }),
+        timeoutMs: REFERENCED_SUBAGENT_HYDRATION_TIMEOUT_MS,
       });
     },
     {
@@ -5278,9 +5280,8 @@ function handleReferencedSubagentHydrationResult(
 ): boolean {
   const pending = pendingReferencedSubagentHydrations.get(message.requestId);
   if (!pending) return true;
-  pendingReferencedSubagentHydrations.delete(message.requestId);
   const matchesRoot = pending.rootSessionId === message.rootSessionId;
-  pending.resolve(message.cancelled || !matchesRoot ? [] : message.sessionIds);
+  pending.resolve(message.cancelled || !matchesRoot ? undefined : message.sessionIds);
   return true;
 }
 
@@ -5295,7 +5296,7 @@ async function fetchDescendantSessionHistories(
   );
   if (descendantSessionIds.length === 0) return true;
   const results = await mapWithConcurrency(descendantSessionIds, 2, (id) =>
-    fetchHistory(id, true, rootRequestId, rootSessionId, true),
+    fetchHistory(id, true, rootRequestId, rootSessionId),
   );
   return results.every(Boolean);
 }
@@ -9595,6 +9596,10 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  for (const pending of Array.from(pendingReferencedSubagentHydrations.values())) {
+    pending.resolve(undefined);
+  }
+  pendingReferencedSubagentHydrations.clear();
   acpMessageBridge.stop();
   disconnectAcpBackend();
   window.removeEventListener('keydown', handleGlobalKeydown);
