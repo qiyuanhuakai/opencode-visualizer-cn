@@ -11,6 +11,8 @@ function buildProjects(options: {
   directory?: string;
   sandboxName?: string;
   timePinned?: number;
+  rootStatus?: 'busy' | 'idle' | 'retry';
+  childStatus?: 'busy' | 'idle' | 'retry';
 } = {}): Record<string, ProjectState> {
   const directory = options.directory ?? DIRECTORY;
   return {
@@ -29,7 +31,19 @@ function buildProjects(options: {
               title: 'Pinned session',
               directory,
               timePinned: options.timePinned ?? 0,
+              status: options.rootStatus,
             },
+            ...(options.childStatus
+              ? {
+                  'child-1': {
+                    id: 'child-1',
+                    title: 'Child session',
+                    directory,
+                    parentID: SESSION_ID,
+                    status: options.childStatus,
+                  },
+                }
+              : {}),
           },
         },
       },
@@ -105,5 +119,15 @@ describe('buildOpenCodeSessionTreeData', () => {
 
     // Then
     expect(tree[0]?.sandboxes[0]?.name).toBe('vis.thirdend');
+  });
+
+  it('reports an idle pinned root as busy while a descendant session is busy', () => {
+    const tree = buildOpenCodeSessionTreeData({
+      projects: buildProjects({ timePinned: 300, rootStatus: 'idle', childStatus: 'busy' }),
+      pinnedStore: {},
+      resolveProjectColor: () => undefined,
+    });
+
+    expect(tree[0]?.sandboxes[0]?.sessions[0]?.status).toBe('busy');
   });
 });
