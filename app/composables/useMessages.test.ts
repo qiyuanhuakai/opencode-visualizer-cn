@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MessageInfo } from '../types/sse';
 import { useMessages } from './useMessages';
@@ -6,6 +6,10 @@ import { useMessages } from './useMessages';
 describe('useMessages getDiffs', () => {
   beforeEach(() => {
     useMessages().reset();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('preserves per-file patches from user message summary diffs', () => {
@@ -381,5 +385,52 @@ describe('useMessages getDiffs', () => {
     if (!latestAssistantPart || latestAssistantPart.type !== 'text') throw new Error('Expected latest assistant text part');
     expect(firstUserPart.text).toBe('first question');
     expect(latestAssistantPart.text).toBe('latest answer updated');
+  });
+
+  it('yields to a browser task between history chunks', async () => {
+    const messages = useMessages();
+    const yieldControl = vi.fn().mockResolvedValue(undefined);
+
+    await messages.loadHistoryIncrementally([null, null], { chunkSize: 1, yieldControl });
+
+    expect(yieldControl).toHaveBeenCalledOnce();
+  });
+
+  it('uses background browser-task priority for default history yields when available', async () => {
+    const postTask = vi.fn(
+      async (callback: () => void, _options: { priority: 'background' }) => callback(),
+    );
+    vi.stubGlobal('scheduler', { postTask });
+
+    await useMessages().loadHistoryIncrementally([null, null], { chunkSize: 1 });
+
+    expect(postTask).toHaveBeenCalledOnce();
+    expect(postTask.mock.calls[0]?.[1]).toEqual({ priority: 'background' });
+  });
+
+  it('publishes each history chunk before yielding to the next browser task', async () => {
+    const messages = useMessages();
+    expect(messages.roots.value).toHaveLength(0);
+    const entries = [1, 2].map((created) => ({
+      info: {
+        id: `user-${created}`,
+        sessionID: 'session-1',
+        role: 'user',
+        time: { created },
+        agent: 'build',
+        model: { providerID: 'test', modelID: 'test-model' },
+      },
+      parts: [],
+    }));
+    const yieldControl = vi.fn(async () => {
+      await Promise.resolve();
+      expect(messages.roots.value).toHaveLength(1);
+      expect(messages.roots.value[0]?.id).toBe('user-2');
+    });
+
+    await messages.loadHistoryIncrementally(entries, { chunkSize: 1, yieldControl });
+
+    expect(yieldControl).toHaveBeenCalledOnce();
+    expect(messages.roots.value).toHaveLength(2);
   });
 });
