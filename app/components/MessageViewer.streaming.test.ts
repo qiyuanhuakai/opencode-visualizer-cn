@@ -113,7 +113,10 @@ type MountedViewer = {
 
 const mountedApps: Array<() => void> = [];
 
-function mountMessageViewer(initialProps: Record<string, unknown>): MountedViewer {
+function mountMessageViewer(
+  initialProps: Record<string, unknown>,
+  onWarning?: (message: string) => void,
+): MountedViewer {
   const target = document.createElement('div');
   document.body.appendChild(target);
   const props = reactive({ ...initialProps });
@@ -124,6 +127,9 @@ function mountMessageViewer(initialProps: Record<string, unknown>): MountedViewe
       },
     }),
   );
+  if (onWarning) {
+    app.config.warnHandler = (message) => onWarning(message);
+  }
   app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
   app.mount(target);
   mountedApps.push(() => {
@@ -147,6 +153,27 @@ afterEach(() => {
 });
 
 describe('MessageViewer characterization (default path, no streaming)', () => {
+  it('applies context classes without forwarding them as renderer event handlers', async () => {
+    const warnings: string[] = [];
+    const mounted = mountMessageViewer(
+      {
+        code: '# Context',
+        lang: 'markdown',
+        class: 'message-viewer-context-history',
+      },
+      (message) => warnings.push(message),
+    );
+
+    await flushRenders();
+
+    expect(
+      mounted.target
+        .querySelector('.message-viewer-shell')
+        ?.classList.contains('message-viewer-context-history'),
+    ).toBe(true);
+    expect(warnings.filter((message) => message.includes('onClass'))).toEqual([]);
+  });
+
   it('routes markdown lang to MarkdownRenderer with localized copy labels', async () => {
     // Given: a markdown message without the streaming prop
     const code = '# Zeta\n\nText.';
