@@ -158,6 +158,17 @@ function updateCandidateValues() {
   candidateValues.value = results;
 }
 
+let candidateUpdatePromise: Promise<void> | null = null;
+
+function scheduleCandidateUpdate(): Promise<void> {
+  if (candidateUpdatePromise) return candidateUpdatePromise;
+  candidateUpdatePromise = nextTick().then(() => {
+    candidateUpdatePromise = null;
+    updateCandidateValues();
+  });
+  return candidateUpdatePromise;
+}
+
 function toggle() {
   if (props.disabled) return;
   isActive.value = !isActive.value;
@@ -180,7 +191,7 @@ watch(isActive, (active) => {
       highlightSelected();
     });
   }
-  updateCandidateValues();
+  void scheduleCandidateUpdate();
 });
 
 watch(
@@ -352,8 +363,7 @@ watch(isActive, (active) => {
 
 onMounted(() => {
   window.addEventListener('pointerdown', handlePointerDown);
-  nextTick(() => {
-    updateCandidateValues();
+  void scheduleCandidateUpdate().then(() => {
     // When the dropdown is created with open=true, the isActive watchers
     // never fire (no change from initial value). Start the observer here.
     if (isActive.value) {
@@ -407,9 +417,8 @@ const api = reactive({
   },
   close,
   selected: computed(() => props.modelValue),
-  async update() {
-    await nextTick();
-    updateCandidateValues();
+  update() {
+    return scheduleCandidateUpdate();
   },
   moveHighlight,
   selectHighlighted,
