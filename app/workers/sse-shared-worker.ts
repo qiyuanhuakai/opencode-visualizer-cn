@@ -3,21 +3,24 @@ import type {
   TabToWorkerMessage,
   WorkerToTabMessage,
 } from '../types/sse-worker';
-import type {
-  ProjectInfo,
-  SessionInfo,
-  SessionStatusInfo,
-  SsePacket,
-  WorkerStateEventMap,
-  WorkerStateEventType,
-  WorkerStatePacket,
-} from '../types/sse';
+import type { SessionInfo, SsePacket } from '../types/sse';
+import {
+  asObjectArray,
+  asRecord,
+  asStatusMap,
+  asString,
+  isProjectInfo,
+  isSessionInfo,
+  parseWorkerStatePacket,
+} from './sse-state-packet';
 import { normalizeDirectory } from '../utils/path';
 import { createNotificationManager } from '../utils/notificationManager';
-import { createOpenCodeAdapter } from '../backends/openCodeAdapter';
+import { createOpenCodeWorkerAdapter } from '../backends/openCodeAdapter';
 import { createSseConnection, type SseConnection } from '../utils/sseConnection';
 import { createStateBuilder } from '../utils/stateBuilder';
 import { mapWithConcurrency } from '../utils/mapWithConcurrency';
+import { createOpencodeReadRunner, OpencodeReadAbortedError } from './opencode-read-runner';
+import { bufferStatePacket, clearBufferedStatePackets, type BufferedStatePacket } from './sse-state-buffer';
 
 type SharedWorkerSelf = {
   onconnect: ((event: MessageEvent) => void) | null;
@@ -28,6 +31,18 @@ type ReferencedSubagentHydration = {
   rootSessionId: string;
   generation: number;
   controller: AbortController;
+};
+
+type PendingUnknownSession = {
+  info: SessionInfo;
+  mutationSnapshot: ReturnType<ReturnType<typeof createStateBuilder>['beginMutationSnapshot']>;
+};
+
+type UnknownSessionResolution = {
+  directory: string;
+  generation: number;
+  controller: AbortController;
+  pendingBySessionId: Map<string, PendingUnknownSession>;
 };
 
 declare const self: SharedWorkerSelf;
@@ -42,6 +57,8 @@ type ConnectionState = {
   stateBuilder: ReturnType<typeof createStateBuilder>;
   notificationManager: ReturnType<typeof createNotificationManager>;
   bootstrapPromise?: Promise<void>;
+  bootstrapController?: AbortController;
+  bootstrapToken?: symbol;
   activeSelection: {
     port: MessagePort;
     projectId: string;
@@ -49,11 +66,29 @@ type ConnectionState = {
   } | null;
   sessionHydrationByDirectory: Map<string, DirectorySessionHydration>;
   sessionHydrationInFlightByDirectory: Map<string, Promise<void>>;
+  sessionHydrationRequestByDirectory: Map<string, symbol>;
+  sessionHydrationControllerByDirectory: Map<string, AbortController>;
   vcsHydratedDirectories: Set<string>;
   vcsHydrationInFlightByDirectory: Map<string, Promise<void>>;
+  vcsHydrationRequestByDirectory: Map<string, symbol>;
+  vcsHydrationControllerByDirectory: Map<string, AbortController>;
   isBootstrappingState: boolean;
-  bufferedStatePackets: SsePacket[];
+  bufferedStatePackets: BufferedStatePacket[];
+  bufferedStatePacketBytes: number;
+  bufferedStateOverflowed: boolean;
+  bootstrapResyncQueued: boolean;
+  authoritativeResyncRequested: boolean;
+  bootstrapRetryTimer?: ReturnType<typeof setTimeout>;
+  bootstrapRetryAttempt: number;
+  knownSessionDirectories: Set<string>;
+  unknownSessionResolutionsByDirectory: Map<string, UnknownSessionResolution>;
+  pendingUnknownSessionsById: Map<
+    string,
+    { resolution: UnknownSessionResolution; pending: PendingUnknownSession }
+  >;
+  pendingUnknownSessionCount: number;
   pendingSelectedDirectory: string | null;
+  pendingDirectSessionHydrationDirectories: Set<string>;
   topologyReady: boolean;
   hydrationGeneration: number;
   backgroundHydrationRequested: boolean;
@@ -64,51 +99,31 @@ type ConnectionState = {
 
 const connections = new Map<string, ConnectionState>();
 const portToKey = new Map<MessagePort, string>();
-const OPENCODE_READ_CONCURRENCY = 12;
-const opencodeBackend = createOpenCodeAdapter();
-let activeOpencodeReadTasks = 0;
-const pendingOpencodeReadResolvers: Array<() => void> = [];
-
-async function acquireOpencodeReadSlot() {
-  if (activeOpencodeReadTasks < OPENCODE_READ_CONCURRENCY) {
-    activeOpencodeReadTasks += 1;
-    return;
-  }
-
-  await new Promise<void>((resolve) => {
-    pendingOpencodeReadResolvers.push(resolve);
-  });
-}
-
-function releaseOpencodeReadSlot() {
-  activeOpencodeReadTasks = Math.max(0, activeOpencodeReadTasks - 1);
-  const next = pendingOpencodeReadResolvers.shift();
-  if (!next) return;
-  activeOpencodeReadTasks += 1;
-  next();
-}
+const MAX_UNKNOWN_SESSION_DIRECTORIES = 32;
+const MAX_PENDING_UNKNOWN_SESSIONS = 2_000;
+const MAX_PENDING_DIRECT_HYDRATIONS = 128;
+const MAX_REFERENCED_SUBAGENT_IDS = 128;
+const INITIAL_BOOTSTRAP_RETRY_MS = 50;
+const MAX_BOOTSTRAP_RETRY_MS = 2_000;
+const opencodeBackend = createOpenCodeWorkerAdapter();
 
 function toKey(baseUrl: string, authorization?: string) {
   return `${baseUrl.replace(/\/+$/, '')}\u0000${authorization ?? ''}`;
 }
 
-function send(port: MessagePort, message: WorkerToTabMessage) {
-  port.postMessage(message);
-}
+function send(port: MessagePort, message: WorkerToTabMessage) { port.postMessage(message); }
 
-function broadcast(state: ConnectionState, message: WorkerToTabMessage) {
-  for (const port of state.ports) {
-    send(port, message);
-  }
-}
+function broadcast(state: ConnectionState, message: WorkerToTabMessage) { for (const port of state.ports) send(port, message); }
 
-function isCurrentConnection(state: ConnectionState) {
-  return connections.get(state.key) === state;
-}
+function isCurrentConnection(state: ConnectionState) { return connections.get(state.key) === state; }
 
-function getSessionHydrationSnapshot(state: ConnectionState) {
-  return Object.fromEntries(state.sessionHydrationByDirectory);
-}
+const runOpencodeReadTask = createOpencodeReadRunner<ConnectionState>({
+  isCurrent: isCurrentConnection,
+  getGeneration: (state) => state.hydrationGeneration,
+  configure: (state) => {
+    opencodeBackend.configure?.({ baseUrl: state.baseUrl, authorization: state.authorization });
+  },
+});
 
 function emitDirectoryHydration(
   state: ConnectionState,
@@ -119,504 +134,51 @@ function emitDirectoryHydration(
   broadcast(state, { type: 'state.directory-hydration-updated', directory, hydration });
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
+function removeDirectoryHydration(state: ConnectionState, directory: string): void {
+  if (!state.sessionHydrationByDirectory.delete(directory)) return;
+  broadcast(state, { type: 'state.directory-hydration-removed', directory });
 }
 
-function asString(value: unknown): string | undefined {
-  return typeof value === 'string' ? value : undefined;
+function abortDirectoryHydrations(state: ConnectionState, directory: string): void {
+  state.sessionHydrationControllerByDirectory.get(directory)?.abort();
+  state.vcsHydrationControllerByDirectory.get(directory)?.abort();
+  state.sessionHydrationControllerByDirectory.delete(directory);
+  state.vcsHydrationControllerByDirectory.delete(directory);
+  state.sessionHydrationInFlightByDirectory.delete(directory);
+  state.sessionHydrationRequestByDirectory.delete(directory);
+  state.vcsHydrationInFlightByDirectory.delete(directory);
+  state.vcsHydrationRequestByDirectory.delete(directory);
+  state.vcsHydratedDirectories.delete(directory);
 }
 
-function asObjectArray<T>(value: unknown): T[] {
-  if (!Array.isArray(value)) return [];
-  return value as T[];
+function abortAllDirectoryHydrations(state: ConnectionState): void {
+  const directories = new Set([
+    ...state.sessionHydrationByDirectory.keys(),
+    ...state.sessionHydrationInFlightByDirectory.keys(),
+    ...state.sessionHydrationControllerByDirectory.keys(),
+    ...state.vcsHydrationInFlightByDirectory.keys(),
+    ...state.vcsHydrationRequestByDirectory.keys(),
+    ...state.vcsHydrationControllerByDirectory.keys(),
+    ...state.vcsHydratedDirectories,
+  ]);
+  for (const directory of directories) abortDirectoryHydrations(state, directory);
 }
 
-function asStatusMap(value: unknown): Record<string, { type?: string }> {
-  const record = asRecord(value);
-  if (!record) return {};
-  return record as Record<string, { type?: string }>;
+function replaceHydrationGeneration(state: ConnectionState): number {
+  abortAllDirectoryHydrations(state);
+  state.hydrationGeneration += 1;
+  return state.hydrationGeneration;
 }
 
-function asNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+function abortCurrentBootstrap(state: ConnectionState): void {
+  state.bootstrapController?.abort();
+  state.bootstrapController = undefined;
+  state.bootstrapToken = undefined;
+  state.bootstrapPromise = undefined;
 }
 
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === 'boolean' ? value : undefined;
-}
-
-function asStringArray(value: unknown): string[] | null {
-  if (!Array.isArray(value)) return null;
-  const values: string[] = [];
-  for (const item of value) {
-    if (typeof item !== 'string') return null;
-    values.push(item);
-  }
-  return values;
-}
-
-function asStringMatrix(value: unknown): string[][] | null {
-  if (!Array.isArray(value)) return null;
-  const rows: string[][] = [];
-  for (const row of value) {
-    const parsed = asStringArray(row);
-    if (!parsed) return null;
-    rows.push(parsed);
-  }
-  return rows;
-}
-
-function isPermissionRule(value: unknown): boolean {
-  const record = asRecord(value);
-  if (!record) return false;
-  const action = asString(record.action);
-  return (
-    Boolean(asString(record.permission)) &&
-    Boolean(asString(record.pattern)) &&
-    (action === 'allow' || action === 'deny' || action === 'ask')
-  );
-}
-
-function isFileDiff(value: unknown): boolean {
-  const record = asRecord(value);
-  if (!record) return false;
-  const hasFile = Boolean(asString(record.file));
-  const hasAdditions = asNumber(record.additions) !== undefined;
-  const hasDeletions = asNumber(record.deletions) !== undefined;
-  if (!hasFile || !hasAdditions || !hasDeletions) return false;
-  // Support legacy format (before + after) and new format (patch only)
-  const hasLegacyContent = typeof record.before === 'string' && typeof record.after === 'string';
-  const hasPatchContent = typeof record.patch === 'string';
-  return hasLegacyContent || hasPatchContent;
-}
-
-function isSessionInfo(value: unknown): value is SessionInfo {
-  const record = asRecord(value);
-  if (!record) return false;
-
-  if (
-    !asString(record.id) ||
-    !asString(record.slug) ||
-    !asString(record.projectID) ||
-    !asString(record.directory) ||
-    asString(record.title) === undefined ||
-    !asString(record.version)
-  ) {
-    return false;
-  }
-
-  const time = asRecord(record.time);
-  if (!time || asNumber(time.created) === undefined || asNumber(time.updated) === undefined) {
-    return false;
-  }
-  if (time.compacting !== undefined && asNumber(time.compacting) === undefined) {
-    return false;
-  }
-  if (time.archived !== undefined && asNumber(time.archived) === undefined) {
-    return false;
-  }
-  if (time.pinned !== undefined && asNumber(time.pinned) === undefined) {
-    return false;
-  }
-
-  if (record.parentID !== undefined && asString(record.parentID) === undefined) {
-    return false;
-  }
-
-  if (record.summary !== undefined) {
-    const summary = asRecord(record.summary);
-    if (!summary) return false;
-    if (
-      asNumber(summary.additions) === undefined ||
-      asNumber(summary.deletions) === undefined ||
-      asNumber(summary.files) === undefined
-    ) {
-      return false;
-    }
-    if (summary.diffs !== undefined) {
-      if (!Array.isArray(summary.diffs)) return false;
-      if (!summary.diffs.every((diff) => isFileDiff(diff))) return false;
-    }
-  }
-
-  if (record.share !== undefined) {
-    const share = asRecord(record.share);
-    if (!share || !asString(share.url)) return false;
-  }
-
-  if (record.permission !== undefined) {
-    if (!Array.isArray(record.permission)) return false;
-    if (!record.permission.every((entry) => isPermissionRule(entry))) return false;
-  }
-
-  if (record.revert !== undefined) {
-    const revert = asRecord(record.revert);
-    if (!revert || !asString(revert.messageID)) return false;
-    if (revert.partID !== undefined && asString(revert.partID) === undefined) return false;
-    if (revert.snapshot !== undefined && asString(revert.snapshot) === undefined) return false;
-    if (revert.diff !== undefined && asString(revert.diff) === undefined) return false;
-  }
-
-  return true;
-}
-
-function isSessionEventProperties(value: unknown): value is WorkerStateEventMap['session.created'] {
-  const record = asRecord(value);
-  if (!record) return false;
-  return isSessionInfo(record.info);
-}
-
-function isSessionStatusInfo(value: unknown): value is SessionStatusInfo {
-  const record = asRecord(value);
-  if (!record) return false;
-  const type = asString(record.type);
-  if (type === 'idle' || type === 'busy') return true;
-  if (type !== 'retry') return false;
-  return (
-    asNumber(record.attempt) !== undefined &&
-    asString(record.message) !== undefined &&
-    asNumber(record.next) !== undefined
-  );
-}
-
-function isSessionStatusProperties(value: unknown): value is WorkerStateEventMap['session.status'] {
-  const record = asRecord(value);
-  if (!record) return false;
-  return asString(record.sessionID) !== undefined && isSessionStatusInfo(record.status);
-}
-
-function isProjectInfo(value: unknown): value is ProjectInfo {
-  const record = asRecord(value);
-  if (!record) return false;
-
-  if (!asString(record.id) || !asString(record.worktree)) {
-    return false;
-  }
-
-  if (record.vcs !== undefined && record.vcs !== 'git') {
-    return false;
-  }
-
-  if (record.name !== undefined && typeof record.name !== 'string') {
-    return false;
-  }
-
-  const time = asRecord(record.time);
-  if (!time || asNumber(time.created) === undefined || asNumber(time.updated) === undefined) {
-    return false;
-  }
-  if (time.initialized !== undefined && asNumber(time.initialized) === undefined) {
-    return false;
-  }
-
-  const sandboxes = asStringArray(record.sandboxes);
-  if (!sandboxes) return false;
-
-  if (record.icon !== undefined) {
-    const icon = asRecord(record.icon);
-    if (!icon) return false;
-    if (icon.url !== undefined && typeof icon.url !== 'string') return false;
-    if (icon.override !== undefined && typeof icon.override !== 'string') return false;
-    if (icon.color !== undefined && typeof icon.color !== 'string') return false;
-  }
-
-  if (record.commands !== undefined) {
-    const commands = asRecord(record.commands);
-    if (!commands) return false;
-    if (commands.start !== undefined && typeof commands.start !== 'string') return false;
-  }
-
-  return true;
-}
-
-function isVcsBranchUpdatedProperties(
-  value: unknown,
-): value is WorkerStateEventMap['vcs.branch.updated'] {
-  const record = asRecord(value);
-  if (!record) return false;
-  return record.branch === undefined || asString(record.branch) !== undefined;
-}
-
-function isPermissionAskedProperties(
-  value: unknown,
-): value is WorkerStateEventMap['permission.asked'] {
-  const record = asRecord(value);
-  if (!record) return false;
-
-  if (
-    !asString(record.id) ||
-    !asString(record.sessionID) ||
-    !asString(record.permission) ||
-    !asStringArray(record.patterns) ||
-    !asRecord(record.metadata) ||
-    !asStringArray(record.always)
-  ) {
-    return false;
-  }
-
-  if (record.tool !== undefined) {
-    const tool = asRecord(record.tool);
-    if (!tool) return false;
-    if (!asString(tool.messageID) || !asString(tool.callID)) return false;
-  }
-
-  return true;
-}
-
-function isQuestionOption(value: unknown): boolean {
-  const record = asRecord(value);
-  if (!record) return false;
-  return Boolean(asString(record.label) && asString(record.description));
-}
-
-function isQuestionInfo(value: unknown): boolean {
-  const record = asRecord(value);
-  if (!record) return false;
-
-  if (!asString(record.question) || !asString(record.header)) {
-    return false;
-  }
-
-  if (
-    !Array.isArray(record.options) ||
-    !record.options.every((option) => isQuestionOption(option))
-  ) {
-    return false;
-  }
-
-  if (record.multiple !== undefined && asBoolean(record.multiple) === undefined) {
-    return false;
-  }
-  if (record.custom !== undefined && asBoolean(record.custom) === undefined) {
-    return false;
-  }
-
-  return true;
-}
-
-function isQuestionAskedProperties(value: unknown): value is WorkerStateEventMap['question.asked'] {
-  const record = asRecord(value);
-  if (!record) return false;
-
-  if (!asString(record.id) || !asString(record.sessionID)) {
-    return false;
-  }
-
-  if (
-    !Array.isArray(record.questions) ||
-    !record.questions.every((question) => isQuestionInfo(question))
-  ) {
-    return false;
-  }
-
-  if (record.tool !== undefined) {
-    const tool = asRecord(record.tool);
-    if (!tool) return false;
-    if (!asString(tool.messageID) || !asString(tool.callID)) return false;
-  }
-
-  return true;
-}
-
-function isPermissionRepliedProperties(
-  value: unknown,
-): value is WorkerStateEventMap['permission.replied'] {
-  const record = asRecord(value);
-  if (!record) return false;
-  const reply = asString(record.reply);
-  return (
-    asString(record.sessionID) !== undefined &&
-    asString(record.requestID) !== undefined &&
-    (reply === 'once' || reply === 'always' || reply === 'reject')
-  );
-}
-
-function isQuestionRepliedProperties(
-  value: unknown,
-): value is WorkerStateEventMap['question.replied'] {
-  const record = asRecord(value);
-  if (!record) return false;
-  return (
-    asString(record.sessionID) !== undefined &&
-    asString(record.requestID) !== undefined &&
-    asStringMatrix(record.answers) !== null
-  );
-}
-
-function isQuestionRejectedProperties(
-  value: unknown,
-): value is WorkerStateEventMap['question.rejected'] {
-  const record = asRecord(value);
-  if (!record) return false;
-  return asString(record.sessionID) !== undefined && asString(record.requestID) !== undefined;
-}
-
-function isWorktreeReadyProperties(value: unknown): value is WorkerStateEventMap['worktree.ready'] {
-  const record = asRecord(value);
-  if (!record) return false;
-  return asString(record.name) !== undefined && asString(record.branch) !== undefined;
-}
-
-const WORKER_STATE_EVENT_TYPES = [
-  'session.created',
-  'session.updated',
-  'session.deleted',
-  'session.status',
-  'project.updated',
-  'vcs.branch.updated',
-  'permission.asked',
-  'question.asked',
-  'permission.replied',
-  'question.replied',
-  'question.rejected',
-  'worktree.ready',
-] as const satisfies readonly WorkerStateEventType[];
-
-const WORKER_STATE_EVENT_TYPE_SET = new Set<string>(WORKER_STATE_EVENT_TYPES);
-
-function isWorkerStateEventType(value: string): value is WorkerStateEventType {
-  return WORKER_STATE_EVENT_TYPE_SET.has(value);
-}
-
-function parseWorkerStatePacket(packet: SsePacket): WorkerStatePacket | null {
-  const packetType = packet.payload.type;
-  if (!isWorkerStateEventType(packetType)) return null;
-
-  const properties = packet.payload.properties;
-  switch (packetType) {
-    case 'session.created': {
-      if (!isSessionEventProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'session.created',
-          properties,
-        },
-      };
-    }
-    case 'session.updated': {
-      if (!isSessionEventProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'session.updated',
-          properties,
-        },
-      };
-    }
-    case 'session.deleted': {
-      if (!isSessionEventProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'session.deleted',
-          properties,
-        },
-      };
-    }
-    case 'session.status': {
-      if (!isSessionStatusProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'session.status',
-          properties,
-        },
-      };
-    }
-    case 'project.updated': {
-      if (!isProjectInfo(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'project.updated',
-          properties,
-        },
-      };
-    }
-    case 'vcs.branch.updated': {
-      if (!isVcsBranchUpdatedProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'vcs.branch.updated',
-          properties,
-        },
-      };
-    }
-    case 'permission.asked': {
-      if (!isPermissionAskedProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'permission.asked',
-          properties,
-        },
-      };
-    }
-    case 'question.asked': {
-      if (!isQuestionAskedProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'question.asked',
-          properties,
-        },
-      };
-    }
-    case 'permission.replied': {
-      if (!isPermissionRepliedProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'permission.replied',
-          properties,
-        },
-      };
-    }
-    case 'question.replied': {
-      if (!isQuestionRepliedProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'question.replied',
-          properties,
-        },
-      };
-    }
-    case 'question.rejected': {
-      if (!isQuestionRejectedProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'question.rejected',
-          properties,
-        },
-      };
-    }
-    case 'worktree.ready': {
-      if (!isWorktreeReadyProperties(properties)) return null;
-      return {
-        directory: packet.directory,
-        payload: {
-          type: 'worktree.ready',
-          properties,
-        },
-      };
-    }
-  }
-}
-
-async function runOpencodeReadTask<T>(state: ConnectionState, task: () => Promise<T>): Promise<T> {
-  await acquireOpencodeReadSlot();
-  try {
-    opencodeBackend.configure?.({ baseUrl: state.baseUrl, authorization: state.authorization });
-    return await task();
-  } finally {
-    releaseOpencodeReadSlot();
-  }
+function ownsBootstrap(state: ConnectionState, token: symbol): boolean {
+  return isCurrentConnection(state) && state.bootstrapToken === token;
 }
 
 function sendReferencedSubagentHydrationResult(
@@ -659,7 +221,12 @@ async function hydrateReferencedSubagents(
   const rootSessionId = request.rootSessionId.trim();
   const directory = normalizeDirectory(request.directory);
   const sessionIds = Array.from(
-    new Set(request.sessionIds.map((sessionId) => sessionId.trim()).filter(Boolean)),
+    new Set(
+      request.sessionIds
+        .slice(0, MAX_REFERENCED_SUBAGENT_IDS)
+        .map((sessionId) => sessionId.trim())
+        .filter(Boolean),
+    ),
   ).filter((sessionId) => sessionId !== rootSessionId);
   const hydration: ReferencedSubagentHydration = {
     requestId,
@@ -678,6 +245,7 @@ async function hydrateReferencedSubagents(
   const results = await mapWithConcurrency(sessionIds, 2, async (sessionId) => {
     const rawSession = await runOpencodeReadTask(state, () =>
       getSession(sessionId, directory, { signal: hydration.controller.signal }),
+      { signal: hydration.controller.signal, generation: hydration.generation },
     );
     if (!isSessionInfo(rawSession)) return null;
     if (rawSession.id !== sessionId || rawSession.parentID?.trim() !== rootSessionId) return null;
@@ -712,33 +280,118 @@ async function hydrateReferencedSubagents(
   );
 }
 
-function collectProjectDirectories(projects: Array<Record<string, unknown>>) {
-  const directories: string[] = [];
-  const seen = new Set<string>();
-
-  projects.forEach((project) => {
-    const worktree = normalizeDirectory(asString(project.worktree) ?? '');
-    if (worktree && !seen.has(worktree)) {
-      seen.add(worktree);
-      directories.push(worktree);
+function rebuildKnownSessionDirectories(
+  state: ConnectionState,
+  broadcastNewHydration = true,
+): void {
+  const directories = new Set<string>();
+  for (const project of Object.values(state.stateBuilder.getState().projects)) {
+    const worktree = normalizeDirectory(project.worktree);
+    if (worktree) directories.add(worktree);
+    for (const directory of Object.keys(project.sandboxes)) {
+      const normalizedDirectory = normalizeDirectory(directory);
+      if (normalizedDirectory) directories.add(normalizedDirectory);
     }
+  }
 
-    const sandboxes = asStringArray(project.sandboxes) ?? [];
-    sandboxes.forEach((sandbox) => {
-      const directory = normalizeDirectory(sandbox);
-      if (!directory || seen.has(directory)) return;
-      seen.add(directory);
-      directories.push(directory);
-    });
-  });
+  state.knownSessionDirectories.clear();
+  for (const directory of directories) state.knownSessionDirectories.add(directory);
 
-  return directories;
+  const trackedDirectories = new Set([
+    ...state.knownSessionDirectories,
+    ...state.sessionHydrationByDirectory.keys(),
+    ...state.sessionHydrationInFlightByDirectory.keys(),
+    ...state.sessionHydrationControllerByDirectory.keys(),
+    ...state.vcsHydrationInFlightByDirectory.keys(),
+    ...state.vcsHydrationRequestByDirectory.keys(),
+    ...state.vcsHydrationControllerByDirectory.keys(),
+    ...state.vcsHydratedDirectories,
+  ]);
+  for (const directory of trackedDirectories) {
+    if (directories.has(directory)) continue;
+    removeDirectoryHydration(state, directory);
+    abortDirectoryHydrations(state, directory);
+  }
+
+  for (const directory of directories) {
+    if (state.sessionHydrationByDirectory.has(directory)) continue;
+    state.sessionHydrationByDirectory.set(directory, { status: 'unloaded' });
+    if (broadcastNewHydration) {
+      broadcast(state, {
+        type: 'state.directory-hydration-updated',
+        directory,
+        hydration: { status: 'unloaded' },
+      });
+    }
+  }
+}
+
+function isActiveDirectoryHydration(
+  state: ConnectionState,
+  directory: string,
+  generation: number,
+  requestToken: symbol,
+  requests: Map<string, symbol>,
+  controllers: Map<string, AbortController>,
+  requireSessionHydration = false,
+): boolean {
+  if (
+    !isCurrentConnection(state) ||
+    state.hydrationGeneration !== generation ||
+    !state.knownSessionDirectories.has(directory) ||
+    (requireSessionHydration && !state.sessionHydrationByDirectory.has(directory)) ||
+    requests.get(directory) !== requestToken
+  )
+    return false;
+  const controller = controllers.get(directory);
+  if (!controller || controller.signal.aborted) return false;
+
+  const projectId = state.stateBuilder.resolveProjectIdForDirectory(directory);
+  const project = projectId ? state.stateBuilder.getProject(projectId) : undefined;
+  return Boolean(project?.sandboxes[directory]);
+}
+
+function isActiveDirectorySessionHydration(
+  state: ConnectionState,
+  directory: string,
+  generation: number,
+  requestToken: symbol,
+): boolean {
+  return isActiveDirectoryHydration(
+    state,
+    directory,
+    generation,
+    requestToken,
+    state.sessionHydrationRequestByDirectory,
+    state.sessionHydrationControllerByDirectory,
+    true,
+  );
+}
+
+function isActiveDirectoryVcsHydration(
+  state: ConnectionState,
+  directory: string,
+  generation: number,
+  requestToken: symbol,
+): boolean {
+  return isActiveDirectoryHydration(
+    state,
+    directory,
+    generation,
+    requestToken,
+    state.vcsHydrationRequestByDirectory,
+    state.vcsHydrationControllerByDirectory,
+  );
 }
 
 async function loadDirectorySessions(state: ConnectionState, directory: string) {
   const normalizedDirectory = normalizeDirectory(directory);
   const hydration = state.sessionHydrationByDirectory.get(normalizedDirectory);
-  if (!hydration || hydration.status === 'loaded') {
+  if (
+    !hydration ||
+    hydration.status === 'loaded' ||
+    !state.knownSessionDirectories.has(normalizedDirectory)
+  ) {
     return;
   }
 
@@ -749,31 +402,44 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
   }
 
   const generation = state.hydrationGeneration;
-  const statusRevision = state.stateBuilder.beginStatusSnapshot();
-  const mutationRevision = state.stateBuilder.beginMutationSnapshot();
+  const requestToken = Symbol(normalizedDirectory);
+  const controller = new AbortController();
+  const snapshotBuilder = state.stateBuilder;
+  const statusSnapshot = snapshotBuilder.beginStatusSnapshot();
+  const mutationSnapshot = snapshotBuilder.beginMutationSnapshot();
+  state.sessionHydrationRequestByDirectory.set(normalizedDirectory, requestToken);
+  state.sessionHydrationControllerByDirectory.set(normalizedDirectory, controller);
   emitDirectoryHydration(state, normalizedDirectory, { status: 'loading' });
   const promise = runOpencodeReadTask(state, async () => {
     const [rawSessions, rawStatuses] = await Promise.all([
-      opencodeBackend.listSessions({ directory: normalizedDirectory, roots: true }),
-      opencodeBackend.getSessionStatusMap?.(normalizedDirectory),
+      opencodeBackend.listSessions({
+        directory: normalizedDirectory,
+        roots: true,
+        signal: controller.signal,
+      }),
+      opencodeBackend.getSessionStatusMap?.(normalizedDirectory, { signal: controller.signal }),
     ]);
-    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) return;
+    if (
+      !isActiveDirectorySessionHydration(
+        state,
+        normalizedDirectory,
+        generation,
+        requestToken,
+      )
+    )
+      return;
 
-    // Guard against resurrecting a deleted worktree: if the sandbox no longer
-    // exists in the current state builder, skip applying stale session data.
-    const liveProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
-    const liveProject = liveProjectId ? state.stateBuilder.getProject(liveProjectId) : undefined;
-    if (!liveProject?.sandboxes[normalizedDirectory]) return;
-
-    const sessions = asObjectArray(rawSessions) as Parameters<
-      typeof state.stateBuilder.applySessions
-    >[0];
-    state.stateBuilder.applySessionSnapshot(sessions, mutationRevision);
-    state.stateBuilder.applyStatusSnapshot(
+    const sessions = asObjectArray(rawSessions) as Parameters<typeof snapshotBuilder.applySessions>[0];
+    snapshotBuilder.applySessionSnapshot(sessions, mutationSnapshot);
+    snapshotBuilder.applyStatusSnapshot(
       sessions.map((session) => session.id),
       asStatusMap(rawStatuses),
-      statusRevision,
+      statusSnapshot,
     );
+    if (snapshotBuilder.consumeSnapshotOverflow()) {
+      requestAuthoritativeBootstrap(state);
+      return;
+    }
 
     const projectIds = new Set<string>();
     const resolvedProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
@@ -784,9 +450,17 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
     }
     for (const projectId of projectIds) emitProjectUpdated(state, projectId);
     emitDirectoryHydration(state, normalizedDirectory, { status: 'loaded' });
-  })
+  }, { generation, signal: controller.signal })
     .catch((error: unknown) => {
-      if (isCurrentConnection(state) && state.hydrationGeneration === generation) {
+      if (controller.signal.aborted || error instanceof OpencodeReadAbortedError) return;
+      if (
+        isActiveDirectorySessionHydration(
+          state,
+          normalizedDirectory,
+          generation,
+          requestToken,
+        )
+      ) {
         emitDirectoryHydration(state, normalizedDirectory, {
           status: 'error',
           error: error instanceof Error ? error.message : 'Failed to load directory sessions.',
@@ -795,11 +469,17 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
       throw error;
     })
     .finally(() => {
-      state.stateBuilder.completeStatusSnapshot(statusRevision);
-      state.stateBuilder.completeMutationSnapshot(mutationRevision);
+      snapshotBuilder.completeStatusSnapshot(statusSnapshot);
+      snapshotBuilder.completeMutationSnapshot(mutationSnapshot);
       const active = state.sessionHydrationInFlightByDirectory.get(normalizedDirectory);
       if (active === promise) {
         state.sessionHydrationInFlightByDirectory.delete(normalizedDirectory);
+      }
+      if (state.sessionHydrationRequestByDirectory.get(normalizedDirectory) === requestToken) {
+        state.sessionHydrationRequestByDirectory.delete(normalizedDirectory);
+      }
+      if (state.sessionHydrationControllerByDirectory.get(normalizedDirectory) === controller) {
+        state.sessionHydrationControllerByDirectory.delete(normalizedDirectory);
       }
     });
 
@@ -809,6 +489,10 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
 
 async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   const normalizedDirectory = normalizeDirectory(directory);
+  if (!state.knownSessionDirectories.has(normalizedDirectory)) return;
+  const liveProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
+  const liveProject = liveProjectId ? state.stateBuilder.getProject(liveProjectId) : undefined;
+  if (!liveProject?.sandboxes[normalizedDirectory]) return;
   if (state.vcsHydratedDirectories.has(normalizedDirectory)) {
     return;
   }
@@ -820,18 +504,19 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   }
 
   const generation = state.hydrationGeneration;
+  const requestToken = Symbol(normalizedDirectory);
+  const controller = new AbortController();
+  state.vcsHydrationRequestByDirectory.set(normalizedDirectory, requestToken);
+  state.vcsHydrationControllerByDirectory.set(normalizedDirectory, controller);
   const promise = runOpencodeReadTask(state, async () => {
-    const raw = await opencodeBackend.getVcsInfo?.(normalizedDirectory).catch(() => null);
-    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) return;
+    const raw = opencodeBackend.getVcsInfo
+      ? await opencodeBackend
+          .getVcsInfo(normalizedDirectory, { signal: controller.signal })
+          .catch(() => null)
+      : null;
+    if (!isActiveDirectoryVcsHydration(state, normalizedDirectory, generation, requestToken)) return;
     const vcsInfo = asRecord(raw);
     if (!vcsInfo) {
-      state.vcsHydratedDirectories.add(normalizedDirectory);
-      return;
-    }
-
-    const liveProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
-    const liveProject = liveProjectId ? state.stateBuilder.getProject(liveProjectId) : undefined;
-    if (!liveProject?.sandboxes[normalizedDirectory]) {
       state.vcsHydratedDirectories.add(normalizedDirectory);
       return;
     }
@@ -845,11 +530,24 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
       );
     }
 
-    state.vcsHydratedDirectories.add(normalizedDirectory);
-  }).finally(() => {
+    if (isActiveDirectoryVcsHydration(state, normalizedDirectory, generation, requestToken)) {
+      state.vcsHydratedDirectories.add(normalizedDirectory);
+    }
+  }, { generation, signal: controller.signal })
+    .catch((error: unknown) => {
+      if (controller.signal.aborted || error instanceof OpencodeReadAbortedError) return;
+      throw error;
+    })
+    .finally(() => {
     const active = state.vcsHydrationInFlightByDirectory.get(normalizedDirectory);
     if (active === promise) {
       state.vcsHydrationInFlightByDirectory.delete(normalizedDirectory);
+    }
+    if (state.vcsHydrationRequestByDirectory.get(normalizedDirectory) === requestToken) {
+      state.vcsHydrationRequestByDirectory.delete(normalizedDirectory);
+    }
+    if (state.vcsHydrationControllerByDirectory.get(normalizedDirectory) === controller) {
+      state.vcsHydrationControllerByDirectory.delete(normalizedDirectory);
     }
   });
 
@@ -863,9 +561,7 @@ function startBackgroundHydration(state: ConnectionState) {
   if (!state.topologyReady || state.backgroundHydrationStarted) return;
   state.backgroundHydrationStarted = true;
   const generation = state.hydrationGeneration;
-  const directories = [...state.sessionHydrationByDirectory].flatMap(([directory, hydration]) =>
-    hydration.status === 'loaded' ? [] : [directory],
-  );
+  const directories = [...state.knownSessionDirectories];
   void (async () => {
     await mapWithConcurrency(directories, BACKGROUND_HYDRATION_CONCURRENCY, async (directory) => {
       if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) return;
@@ -888,8 +584,8 @@ function startBackgroundHydration(state: ConnectionState) {
 function flushBufferedStatePackets(state: ConnectionState) {
   if (state.bufferedStatePackets.length === 0) return;
   const buffered = [...state.bufferedStatePackets];
-  state.bufferedStatePackets = [];
-  for (const packet of buffered) {
+  clearBufferedStatePackets(state);
+  for (const { packet } of buffered) {
     handleStatePacket(state, packet);
   }
 }
@@ -899,13 +595,48 @@ function requestPriorityHydration(state: ConnectionState, directory?: string) {
   if (!normalizedDirectory) return;
   state.pendingSelectedDirectory = normalizedDirectory;
   if (!state.topologyReady) return;
-  void loadDirectorySessions(state, normalizedDirectory)
-    .catch(() => {})
+  const generation = state.hydrationGeneration;
+  void Promise.allSettled([
+    loadDirectorySessions(state, normalizedDirectory),
+    loadDirectoryVcs(state, normalizedDirectory),
+  ])
     .finally(() => {
-      if (state.pendingSelectedDirectory === normalizedDirectory) {
+      if (
+        state.hydrationGeneration === generation &&
+        state.pendingSelectedDirectory === normalizedDirectory
+      ) {
         state.pendingSelectedDirectory = null;
       }
     });
+}
+
+function requestDirectSessionHydration(state: ConnectionState, directory: string): void {
+  const normalizedDirectory = normalizeDirectory(directory);
+  if (!normalizedDirectory) return;
+  if (!state.topologyReady) {
+    if (
+      state.pendingDirectSessionHydrationDirectories.size < MAX_PENDING_DIRECT_HYDRATIONS ||
+      state.pendingDirectSessionHydrationDirectories.has(normalizedDirectory)
+    ) {
+      state.pendingDirectSessionHydrationDirectories.add(normalizedDirectory);
+    }
+    return;
+  }
+  void loadDirectorySessions(state, normalizedDirectory).catch(() => {});
+}
+
+function drainPendingHydrationRequests(state: ConnectionState): void {
+  const directDirectories = [...state.pendingDirectSessionHydrationDirectories];
+  state.pendingDirectSessionHydrationDirectories.clear();
+  for (const directory of directDirectories) {
+    void loadDirectorySessions(state, directory).catch(() => {});
+  }
+  if (state.pendingSelectedDirectory) {
+    requestPriorityHydration(state, state.pendingSelectedDirectory);
+  }
+  if (state.backgroundHydrationRequested) {
+    startBackgroundHydration(state);
+  }
 }
 
 function emitProjectUpdated(state: ConnectionState, projectId: string | null) {
@@ -942,6 +673,30 @@ function shouldSuppressIdleNotification(
   return activeRootSessionId === rootSessionId;
 }
 
+function reconcileIdleNotification(
+  state: ConnectionState,
+  projectId: string | null,
+  sessionId: string,
+): boolean {
+  if (!projectId) return false;
+  const rootSessionId = state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId);
+  if (!rootSessionId) return false;
+
+  const idleRequestId = `idle:${projectId}:${rootSessionId}`;
+  if (!state.stateBuilder.isSessionTreeIdle(projectId, rootSessionId)) {
+    return state.notificationManager.removeNotification(idleRequestId);
+  }
+  if (shouldSuppressIdleNotification(state, projectId, rootSessionId)) return false;
+
+  const added = state.notificationManager.addNotification(
+    projectId,
+    rootSessionId,
+    idleRequestId,
+  );
+  if (added) emitNotificationShow(state, projectId, rootSessionId, 'idle');
+  return added;
+}
+
 function emitNotificationShow(
   state: ConnectionState,
   projectId: string,
@@ -957,47 +712,196 @@ function emitNotificationShow(
   });
 }
 
-async function resolveUnknownSessionDirectory(state: ConnectionState, info: SessionInfo) {
+function hasKnownSessionDirectory(state: ConnectionState, info: SessionInfo): boolean {
   const directory = normalizeDirectory(info.directory);
-  if (!directory) return;
+  if (!directory) return false;
+  if (state.unknownSessionResolutionsByDirectory.has(directory)) return false;
+  if (!state.knownSessionDirectories.has(directory)) return false;
+  const projectId = state.stateBuilder.resolveProjectIdForDirectory(directory);
+  if (!projectId) return false;
+  const project = state.stateBuilder.getProject(projectId);
+  return Boolean(project?.sandboxes[directory]);
+}
 
-  const projectInfo = await runOpencodeReadTask(state, async () => {
-    const raw = await opencodeBackend.getCurrentProject?.(directory);
-    return isProjectInfo(raw) ? raw : null;
-  }).catch(() => null);
-  if (!projectInfo) return;
+function emitResolvedSession(
+  state: ConnectionState,
+  info: SessionInfo,
+  directory: string,
+  mutationSnapshot: ReturnType<ReturnType<typeof createStateBuilder>['beginMutationSnapshot']>,
+) {
+  state.stateBuilder.applySessionSnapshot([info], mutationSnapshot);
+  const projectId =
+    state.stateBuilder.resolveProjectIdForDirectory(directory) || info.projectID.trim();
+  emitProjectUpdated(state, projectId);
+  if (reconcileIdleNotification(state, projectId, info.id)) {
+    emitNotificationsUpdated(state);
+  }
+}
 
-  const worktree = normalizeDirectory(projectInfo.worktree);
-  if (!worktree) return;
+function isActiveUnknownSessionResolution(
+  state: ConnectionState,
+  resolution: UnknownSessionResolution,
+): boolean {
+  return (
+    state.unknownSessionResolutionsByDirectory.get(resolution.directory) === resolution &&
+    resolution.generation === state.hydrationGeneration &&
+    !resolution.controller.signal.aborted &&
+    isCurrentConnection(state)
+  );
+}
 
-  const knownProjectId = state.stateBuilder.resolveProjectIdForDirectory(worktree);
-  if (knownProjectId) {
-    const changedProjectId = state.stateBuilder.registerSandboxDirectory(knownProjectId, directory);
+function completePendingUnknownSession(
+  state: ConnectionState,
+  sessionId: string,
+  expected?: { resolution: UnknownSessionResolution; pending: PendingUnknownSession },
+): void {
+  const current = state.pendingUnknownSessionsById.get(sessionId);
+  if (
+    !current ||
+    (expected &&
+      (current.resolution !== expected.resolution || current.pending !== expected.pending))
+  )
+    return;
+
+  state.pendingUnknownSessionsById.delete(sessionId);
+  current.resolution.pendingBySessionId.delete(sessionId);
+  state.pendingUnknownSessionCount = Math.max(0, state.pendingUnknownSessionCount - 1);
+  state.stateBuilder.completeMutationSnapshot(current.pending.mutationSnapshot);
+
+  if (
+    current.resolution.pendingBySessionId.size === 0 &&
+    state.unknownSessionResolutionsByDirectory.get(current.resolution.directory) ===
+      current.resolution
+  ) {
+    state.unknownSessionResolutionsByDirectory.delete(current.resolution.directory);
+    current.resolution.controller.abort();
+  }
+}
+
+function abortUnknownSessionResolution(
+  state: ConnectionState,
+  resolution: UnknownSessionResolution,
+): void {
+  if (state.unknownSessionResolutionsByDirectory.get(resolution.directory) !== resolution) return;
+  state.unknownSessionResolutionsByDirectory.delete(resolution.directory);
+  resolution.controller.abort();
+  for (const [sessionId, pending] of resolution.pendingBySessionId) {
+    completePendingUnknownSession(state, sessionId, { resolution, pending });
+  }
+  resolution.pendingBySessionId.clear();
+}
+
+function abortAllUnknownSessionResolutions(state: ConnectionState): void {
+  while (state.unknownSessionResolutionsByDirectory.size > 0) {
+    const resolution = state.unknownSessionResolutionsByDirectory.values().next().value;
+    if (!resolution) return;
+    abortUnknownSessionResolution(state, resolution);
+  }
+}
+
+function removePendingUnknownSession(state: ConnectionState, sessionId: string): void {
+  const pending = state.pendingUnknownSessionsById.get(sessionId);
+  if (!pending) return;
+  completePendingUnknownSession(state, sessionId, pending);
+}
+
+async function resolveUnknownSessionDirectory(
+  state: ConnectionState,
+  resolution: UnknownSessionResolution,
+) {
+  try {
+    const getCurrentProject = opencodeBackend.getCurrentProject;
+    if (!getCurrentProject || !isActiveUnknownSessionResolution(state, resolution)) return;
+
+    let raw: unknown;
+    try {
+      raw = await runOpencodeReadTask(
+        state,
+        () => getCurrentProject(resolution.directory, { signal: resolution.controller.signal }),
+        { signal: resolution.controller.signal, generation: resolution.generation },
+      );
+    } catch (error) {
+      if (error instanceof Error) return;
+      throw error;
+    }
+
+    const projectInfo = isProjectInfo(raw) ? raw : null;
+    if (!projectInfo || !isActiveUnknownSessionResolution(state, resolution)) return;
+
+    const worktree = normalizeDirectory(projectInfo.worktree);
+    if (!worktree) return;
+
+    const knownProjectId = state.stateBuilder.resolveProjectIdForDirectory(worktree);
+    let changedProjectId: string | null = null;
+    if (knownProjectId) {
+      changedProjectId = state.stateBuilder.registerSandboxDirectory(
+        knownProjectId,
+        resolution.directory,
+      );
+      changedProjectId ??= knownProjectId;
+    } else {
+      if (resolution.directory !== worktree) return;
+      changedProjectId = state.stateBuilder.processProjectUpdated(projectInfo);
+    }
+    rebuildKnownSessionDirectories(state);
     emitProjectUpdated(state, changedProjectId);
-    const changedSessionProjectId = state.stateBuilder.applySessionMutated(info);
-    emitProjectUpdated(state, changedSessionProjectId);
+
+    for (const [sessionId, pending] of resolution.pendingBySessionId) {
+      const current = state.pendingUnknownSessionsById.get(sessionId);
+      if (!current || current.resolution !== resolution || current.pending !== pending) continue;
+       emitResolvedSession(state, pending.info, resolution.directory, pending.mutationSnapshot);
+      completePendingUnknownSession(state, sessionId, current);
+    }
+  } finally {
+    abortUnknownSessionResolution(state, resolution);
+  }
+}
+
+function startUnknownSessionDirectoryResolution(state: ConnectionState, info: SessionInfo) {
+  const directory = normalizeDirectory(info.directory);
+  if (!directory || !isCurrentConnection(state)) return;
+
+  removePendingUnknownSession(state, info.id);
+  const existing = state.unknownSessionResolutionsByDirectory.get(directory);
+  if (
+    state.pendingUnknownSessionCount >= MAX_PENDING_UNKNOWN_SESSIONS ||
+    (!existing &&
+      state.unknownSessionResolutionsByDirectory.size >= MAX_UNKNOWN_SESSION_DIRECTORIES)
+  ) {
+    requestAuthoritativeBootstrap(state);
     return;
   }
 
-  if (directory !== worktree) {
-    return;
-  }
-
-  const changedProjectId = state.stateBuilder.processProjectUpdated(projectInfo);
-  emitProjectUpdated(state, changedProjectId);
-
-  const changedSessionProjectId = state.stateBuilder.applySessionMutated(info);
-  emitProjectUpdated(state, changedSessionProjectId);
+  const resolution =
+    existing ??
+    (() => {
+      const next: UnknownSessionResolution = {
+        directory,
+        generation: state.hydrationGeneration,
+        controller: new AbortController(),
+        pendingBySessionId: new Map(),
+      };
+      state.unknownSessionResolutionsByDirectory.set(directory, next);
+      return next;
+    })();
+  const pending: PendingUnknownSession = {
+    info,
+    mutationSnapshot: state.stateBuilder.beginMutationSnapshot(),
+  };
+  resolution.pendingBySessionId.set(info.id, pending);
+  state.pendingUnknownSessionsById.set(info.id, { resolution, pending });
+  state.pendingUnknownSessionCount += 1;
+  if (!existing) void resolveUnknownSessionDirectory(state, resolution);
 }
 
 function handleStatePacket(state: ConnectionState, packet: SsePacket) {
-  if (state.isBootstrappingState) {
-    state.bufferedStatePackets.push(packet);
-    return;
-  }
-
   const parsedPacket = parseWorkerStatePacket(packet);
   if (!parsedPacket) return;
+
+  if (state.isBootstrappingState) {
+    bufferStatePacket(state, parsedPacket);
+    return;
+  }
 
   const packetType = parsedPacket.payload.type;
   const packetDirectory = normalizeDirectory(parsedPacket.directory);
@@ -1007,18 +911,20 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
   switch (packetType) {
     case 'session.created': {
       const info = parsedPacket.payload.properties.info;
+      const needsResolution = !hasKnownSessionDirectory(state, info);
       projectId = state.stateBuilder.processSessionCreated(info);
-      if (!projectId) {
-        void resolveUnknownSessionDirectory(state, info);
-      }
+      notificationsChanged =
+        reconcileIdleNotification(state, projectId, info.id) || notificationsChanged;
+      if (needsResolution) startUnknownSessionDirectoryResolution(state, info);
       break;
     }
     case 'session.updated': {
       const info = parsedPacket.payload.properties.info;
+      const needsResolution = !hasKnownSessionDirectory(state, info);
       projectId = state.stateBuilder.processSessionUpdated(info);
-      if (!projectId) {
-        void resolveUnknownSessionDirectory(state, info);
-      }
+      notificationsChanged =
+        reconcileIdleNotification(state, projectId, info.id) || notificationsChanged;
+      if (needsResolution) startUnknownSessionDirectoryResolution(state, info);
       break;
     }
     case 'session.deleted': {
@@ -1026,10 +932,34 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
       const sessionId = info.id;
       const deletedDirectory = normalizeDirectory(info.directory);
       const deletedProjectId = state.stateBuilder.resolveProjectIdForDirectory(deletedDirectory);
+      const formerRootSessionId = deletedProjectId
+        ? state.stateBuilder.resolveRootSessionIdForProject(deletedProjectId, sessionId)
+        : '';
+      const isRootSession = formerRootSessionId === sessionId;
+      if (deletedProjectId && !isRootSession) {
+        notificationsChanged =
+          state.notificationManager.clearRequestsForSession(deletedProjectId, sessionId) ||
+          notificationsChanged;
+      }
       projectId = state.stateBuilder.processSessionDeleted(sessionId, deletedProjectId);
+      removePendingUnknownSession(state, sessionId);
       if (deletedProjectId) {
-        const cleared = state.notificationManager.clearSession(deletedProjectId, sessionId);
-        notificationsChanged = cleared || notificationsChanged;
+        if (isRootSession) {
+          notificationsChanged =
+            state.notificationManager.clearSession(deletedProjectId, sessionId) ||
+            notificationsChanged;
+        } else {
+          const notificationSessionId = formerRootSessionId || sessionId;
+          const idleRequestId = `idle:${deletedProjectId}:${notificationSessionId}`;
+          notificationsChanged =
+            state.notificationManager.removeNotification(idleRequestId) || notificationsChanged;
+          notificationsChanged =
+            reconcileIdleNotification(
+              state,
+              deletedProjectId,
+              notificationSessionId,
+            ) || notificationsChanged;
+        }
       }
       break;
     }
@@ -1037,36 +967,19 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
       const sessionId = parsedPacket.payload.properties.sessionID;
       const status = parsedPacket.payload.properties.status.type;
       const statusProjectId = state.stateBuilder.resolveProjectIdForDirectory(packetDirectory);
-      if (statusProjectId) {
-        projectId = state.stateBuilder.processSessionStatus(sessionId, status, statusProjectId);
-        const rootSessionId = state.stateBuilder.resolveRootSessionIdForProject(
-          statusProjectId,
-          sessionId,
-        );
-        if (rootSessionId) {
-          const idleRequestId = `idle:${statusProjectId}:${rootSessionId}`;
-          const treeIdle = state.stateBuilder.isSessionTreeIdle(statusProjectId, rootSessionId);
-
-          if (!treeIdle) {
-            notificationsChanged =
-              state.notificationManager.removeNotification(idleRequestId) || notificationsChanged;
-          } else if (!shouldSuppressIdleNotification(state, statusProjectId, rootSessionId)) {
-            const added = state.notificationManager.addNotification(
-              statusProjectId,
-              rootSessionId,
-              idleRequestId,
-            );
-            notificationsChanged = added || notificationsChanged;
-            if (added) {
-              emitNotificationShow(state, statusProjectId, rootSessionId, 'idle');
-            }
-          }
-        }
-      }
+      projectId = state.stateBuilder.processSessionStatus(
+        sessionId,
+        status,
+        statusProjectId || undefined,
+      );
+      notificationsChanged =
+        reconcileIdleNotification(state, statusProjectId || projectId, sessionId) ||
+        notificationsChanged;
       break;
     }
     case 'project.updated': {
       projectId = state.stateBuilder.processProjectUpdated(parsedPacket.payload.properties);
+      rebuildKnownSessionDirectories(state);
       break;
     }
     case 'vcs.branch.updated': {
@@ -1130,6 +1043,68 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
   if (notificationsChanged) {
     emitNotificationsUpdated(state);
   }
+  if (state.stateBuilder.consumeSnapshotOverflow()) {
+    requestAuthoritativeBootstrap(state);
+  }
+}
+
+function requestAuthoritativeBootstrap(state: ConnectionState): void {
+  if (!isCurrentConnection(state)) return;
+  if (state.authoritativeResyncRequested) return;
+  state.authoritativeResyncRequested = true;
+  cancelAllReferencedSubagentHydrations(state);
+  abortAllUnknownSessionResolutions(state);
+  replaceHydrationGeneration(state);
+  scheduleAuthoritativeBootstrap(state);
+}
+
+function scheduleAuthoritativeBootstrap(state: ConnectionState): void {
+  if (state.bootstrapResyncQueued || !isCurrentConnection(state)) return;
+  state.bootstrapResyncQueued = true;
+  queueMicrotask(() => {
+    state.bootstrapResyncQueued = false;
+    if (
+      !isCurrentConnection(state) ||
+      state.bootstrapPromise ||
+      (!state.bufferedStateOverflowed && !state.authoritativeResyncRequested)
+    )
+      return;
+    state.bufferedStateOverflowed = false;
+    state.authoritativeResyncRequested = false;
+    void bootstrapState(state).catch((error: unknown) => {
+      const message =
+        error instanceof Error ? error.message : 'Failed to bootstrap worker state.';
+      broadcast(state, { type: 'connection.error', message });
+    });
+  });
+}
+
+function clearBootstrapRetry(state: ConnectionState, resetAttempt = false): void {
+  if (state.bootstrapRetryTimer !== undefined) {
+    clearTimeout(state.bootstrapRetryTimer);
+    state.bootstrapRetryTimer = undefined;
+  }
+  if (resetAttempt) state.bootstrapRetryAttempt = 0;
+}
+
+function scheduleBootstrapRetry(state: ConnectionState): void {
+  if (
+    state.bootstrapRetryTimer !== undefined ||
+    !state.connected ||
+    !isCurrentConnection(state)
+  )
+    return;
+  const delay = Math.min(
+    INITIAL_BOOTSTRAP_RETRY_MS * 2 ** state.bootstrapRetryAttempt,
+    MAX_BOOTSTRAP_RETRY_MS,
+  );
+  state.bootstrapRetryAttempt += 1;
+  state.bootstrapRetryTimer = setTimeout(() => {
+    state.bootstrapRetryTimer = undefined;
+    if (!state.connected || !isCurrentConnection(state)) return;
+    state.authoritativeResyncRequested = true;
+    scheduleAuthoritativeBootstrap(state);
+  }, delay);
 }
 
 async function bootstrapState(state: ConnectionState, forceRestart = false): Promise<void> {
@@ -1137,37 +1112,49 @@ async function bootstrapState(state: ConnectionState, forceRestart = false): Pro
     if (!forceRestart) {
       return state.bootstrapPromise;
     }
-    // The reconnect already bumped hydrationGeneration, so the pending run
-    // aborts at its post-await guard; detach it so the fresh run can start.
-    state.bootstrapPromise = undefined;
+    abortCurrentBootstrap(state);
   }
 
+  state.topologyReady = false;
+  clearBootstrapRetry(state);
+  const generation = replaceHydrationGeneration(state);
   const builder = createStateBuilder();
-  let aborted = false;
+  const bootstrapToken = Symbol('bootstrap');
+  const bootstrapController = new AbortController();
+  state.bootstrapToken = bootstrapToken;
+  state.bootstrapController = bootstrapController;
+  state.isBootstrappingState = true;
+  let bootstrapSucceeded = false;
   const run = (async () => {
-    state.isBootstrappingState = true;
-    const generation = state.hydrationGeneration;
+    abortAllUnknownSessionResolutions(state);
+    clearBufferedStatePackets(state);
+    state.bufferedStateOverflowed = false;
     const projects = asObjectArray<Record<string, unknown>>(
       await runOpencodeReadTask(
         state,
-        () => opencodeBackend.listProjects?.() ?? Promise.resolve([]),
+        () =>
+          opencodeBackend.listProjects?.(undefined, { signal: bootstrapController.signal }) ??
+          Promise.resolve([]),
+        {
+          generation,
+          signal: bootstrapController.signal,
+          cancelOnAbort: true,
+          priority: 'bootstrap',
+        },
       ),
     );
-    if (!isCurrentConnection(state) || state.hydrationGeneration !== generation) {
-      aborted = true;
+    if (
+      !ownsBootstrap(state, bootstrapToken) ||
+      state.hydrationGeneration !== generation ||
+      bootstrapController.signal.aborted
+    )
       return;
-    }
     builder.applyProjects(projects as Parameters<typeof builder.applyProjects>[0]);
     builder.getDefaultProjectId();
     state.stateBuilder = builder;
-    state.hydrationGeneration += 1;
     state.sessionHydrationByDirectory.clear();
-    for (const directory of collectProjectDirectories(projects)) {
-      state.sessionHydrationByDirectory.set(directory, { status: 'unloaded' });
-    }
-    state.sessionHydrationInFlightByDirectory.clear();
-    state.vcsHydratedDirectories.clear();
-    state.vcsHydrationInFlightByDirectory.clear();
+    state.knownSessionDirectories.clear();
+    rebuildKnownSessionDirectories(state, false);
     state.backgroundHydrationStarted = false;
     state.backgroundHydrationCompleteSent = false;
     state.topologyReady = true;
@@ -1176,27 +1163,33 @@ async function bootstrapState(state: ConnectionState, forceRestart = false): Pro
       type: 'state.bootstrap',
       projects: state.stateBuilder.getState().projects,
       notifications: state.notificationManager.getState(),
-      sessionHydrationByDirectory: getSessionHydrationSnapshot(state),
+      sessionHydrationByDirectory: Object.fromEntries(state.sessionHydrationByDirectory),
     });
 
     state.isBootstrappingState = false;
     flushBufferedStatePackets(state);
-
-    if (state.pendingSelectedDirectory) {
-      requestPriorityHydration(state, state.pendingSelectedDirectory);
-    }
-    if (state.backgroundHydrationRequested) {
-      startBackgroundHydration(state);
-    }
+    drainPendingHydrationRequests(state);
+    bootstrapSucceeded = true;
   })();
 
-  const bootstrapPromise = run.finally(() => {
-    if (!aborted) {
-      state.isBootstrappingState = false;
+  let bootstrapPromise: Promise<void>;
+  bootstrapPromise = run.finally(() => {
+    if (!ownsBootstrap(state, bootstrapToken) || state.bootstrapPromise !== bootstrapPromise) return;
+    const shouldResync =
+      state.bufferedStateOverflowed || state.authoritativeResyncRequested;
+    state.isBootstrappingState = !bootstrapSucceeded;
+    state.bootstrapPromise = undefined;
+    state.bootstrapController = undefined;
+    state.bootstrapToken = undefined;
+    if (bootstrapSucceeded) {
+      state.bootstrapRetryAttempt = 0;
+      if (shouldResync) scheduleAuthoritativeBootstrap(state);
+      return;
     }
-    if (state.bootstrapPromise === bootstrapPromise) {
-      state.bootstrapPromise = undefined;
-    }
+    clearBufferedStatePackets(state);
+    state.bufferedStateOverflowed = false;
+    state.authoritativeResyncRequested = true;
+    scheduleBootstrapRetry(state);
   });
   state.bootstrapPromise = bootstrapPromise;
   return bootstrapPromise;
@@ -1204,6 +1197,12 @@ async function bootstrapState(state: ConnectionState, forceRestart = false): Pro
 
 function cleanupIfUnused(state: ConnectionState) {
   if (state.ports.size > 0) return;
+  abortAllUnknownSessionResolutions(state);
+  state.pendingDirectSessionHydrationDirectories.clear();
+  replaceHydrationGeneration(state);
+  abortCurrentBootstrap(state);
+  clearBootstrapRetry(state, true);
+  state.isBootstrappingState = false;
   state.client.disconnect();
   connections.delete(state.key);
 }
@@ -1248,11 +1247,25 @@ function createConnectionState(
     activeSelection: null,
     sessionHydrationByDirectory: new Map(),
     sessionHydrationInFlightByDirectory: new Map(),
+    sessionHydrationRequestByDirectory: new Map(),
+    sessionHydrationControllerByDirectory: new Map(),
     vcsHydratedDirectories: new Set(),
     vcsHydrationInFlightByDirectory: new Map(),
+    vcsHydrationRequestByDirectory: new Map(),
+    vcsHydrationControllerByDirectory: new Map(),
     isBootstrappingState: false,
     bufferedStatePackets: [],
+    bufferedStatePacketBytes: 0,
+    bufferedStateOverflowed: false,
+    bootstrapResyncQueued: false,
+    authoritativeResyncRequested: false,
+    bootstrapRetryAttempt: 0,
+    knownSessionDirectories: new Set(),
+    unknownSessionResolutionsByDirectory: new Map(),
+    pendingUnknownSessionsById: new Map(),
+    pendingUnknownSessionCount: 0,
     pendingSelectedDirectory: null,
+    pendingDirectSessionHydrationDirectories: new Set(),
     topologyReady: false,
     hydrationGeneration: 0,
     backgroundHydrationRequested: false,
@@ -1266,10 +1279,14 @@ function createConnectionState(
       },
       onOpen(isReconnect) {
         state.connected = true;
+        clearBootstrapRetry(state, true);
         broadcast(state, { type: 'connection.open' });
         if (isReconnect) {
           cancelAllReferencedSubagentHydrations(state);
-          state.hydrationGeneration += 1;
+          abortAllUnknownSessionResolutions(state);
+          abortCurrentBootstrap(state);
+          state.topologyReady = false;
+          replaceHydrationGeneration(state);
           broadcast(state, { type: 'connection.reconnected' });
         }
         void bootstrapState(state, isReconnect).catch((error) => {
@@ -1317,7 +1334,7 @@ function attachPort(
         type: 'state.bootstrap',
         projects: state.stateBuilder.getState().projects,
         notifications: state.notificationManager.getState(),
-        sessionHydrationByDirectory: getSessionHydrationSnapshot(state),
+    sessionHydrationByDirectory: Object.fromEntries(state.sessionHydrationByDirectory),
       });
     }
   }
@@ -1350,10 +1367,7 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
   if (!state) return;
 
   if (message.type === 'load-sessions') {
-    const directory = normalizeDirectory(message.directory);
-    if (!directory) return;
-
-    void loadDirectorySessions(state, directory).catch(() => {});
+    requestDirectSessionHydration(state, message.directory);
     return;
   }
 
@@ -1389,16 +1403,18 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
       sessionId,
     };
 
-    const rootSessionId = state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId);
-    const idleRequestId = `idle:${projectId}:${rootSessionId || sessionId}`;
-    const cleared = state.notificationManager.removeNotification(idleRequestId);
-    if (cleared) {
-      emitNotificationsUpdated(state);
+    if (state.topologyReady) {
+      const rootSessionId = state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId);
+      const idleRequestId = `idle:${projectId}:${rootSessionId || sessionId}`;
+      const cleared = state.notificationManager.removeNotification(idleRequestId);
+      if (cleared) {
+        emitNotificationsUpdated(state);
+      }
     }
 
     if (directory) {
       requestPriorityHydration(state, directory);
-    } else {
+    } else if (state.topologyReady) {
       const project = state.stateBuilder.getProject(projectId);
       if (project) {
         for (const sandbox of Object.values(project.sandboxes)) {
@@ -1426,10 +1442,8 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
       emitNotificationsUpdated(state);
     }
     const changedProjectId = state.stateBuilder.removeSandboxDirectory(projectId, directory);
+    rebuildKnownSessionDirectories(state);
     emitProjectUpdated(state, changedProjectId);
-    if (state.sessionHydrationByDirectory.has(directory)) {
-      emitDirectoryHydration(state, directory, { status: 'error', error: 'Sandbox deleted.' });
-    }
   }
 }
 
