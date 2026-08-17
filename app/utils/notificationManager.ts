@@ -7,6 +7,7 @@ type NotificationEntry = {
   projectId: string;
   sessionId: string;
   requestIds: Set<string>;
+  requestOrigins: Map<string, string>;
 };
 
 export type NotificationSnapshotEntry = {
@@ -37,8 +38,10 @@ export function createNotificationManager(
       projectId: resolvedRoot.projectId,
       sessionId: resolvedRoot.sessionId,
       requestIds: new Set(existing?.requestIds ?? []),
+      requestOrigins: new Map(existing?.requestOrigins ?? []),
     };
     entry.requestIds.add(requestId);
+    entry.requestOrigins.set(requestId, trimmedSessionId);
     next.set(key, entry);
     state = next;
 
@@ -61,10 +64,13 @@ export function createNotificationManager(
         next.delete(key);
         sessionOrder = sessionOrder.filter((id) => id !== key);
       } else {
+        const updatedOrigins = new Map(entry.requestOrigins);
+        updatedOrigins.delete(requestId);
         next.set(key, {
           projectId: entry.projectId,
           sessionId: entry.sessionId,
           requestIds: updatedSet,
+          requestOrigins: updatedOrigins,
         });
       }
       state = next;
@@ -85,6 +91,43 @@ export function createNotificationManager(
     next.delete(key);
     state = next;
     sessionOrder = sessionOrder.filter((id) => id !== key);
+    return true;
+  }
+
+  function clearRequestsForSession(projectId: string, originSessionId: string): boolean {
+    const trimmedProjectId = projectId.trim();
+    const trimmedOriginSessionId = originSessionId.trim();
+    if (!trimmedProjectId || !trimmedOriginSessionId) return false;
+
+    const root = resolveRoot(trimmedProjectId, trimmedOriginSessionId);
+    const key = root.sessionId.trim();
+    const entry = key ? state.get(key) : undefined;
+    if (!entry) return false;
+
+    const next = new Map(state);
+    const updatedSet = new Set(entry.requestIds);
+    const updatedOrigins = new Map(entry.requestOrigins);
+    let removed = false;
+    for (const [requestId, origin] of entry.requestOrigins) {
+      if (origin !== trimmedOriginSessionId) continue;
+      updatedSet.delete(requestId);
+      updatedOrigins.delete(requestId);
+      removed = true;
+    }
+    if (!removed) return false;
+
+    if (updatedSet.size === 0) {
+      next.delete(key);
+      sessionOrder = sessionOrder.filter((id) => id !== key);
+    } else {
+      next.set(key, {
+        projectId: entry.projectId,
+        sessionId: entry.sessionId,
+        requestIds: updatedSet,
+        requestOrigins: updatedOrigins,
+      });
+    }
+    state = next;
     return true;
   }
 
@@ -125,6 +168,9 @@ export function createNotificationManager(
         projectId: trimmedProjectId,
         sessionId: trimmedSessionId,
         requestIds: new Set(entry.requestIds),
+        requestOrigins: new Map(
+          entry.requestIds.map((requestId) => [requestId, trimmedSessionId]),
+        ),
       });
       order.push(key);
     }
@@ -136,6 +182,7 @@ export function createNotificationManager(
     addNotification,
     removeNotification,
     clearSession,
+    clearRequestsForSession,
     getState,
     hasAny,
     getSessionKeys,
