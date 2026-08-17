@@ -1,4 +1,4 @@
-import { ref, computed, watch, onUnmounted, type Ref } from 'vue';
+import { ref, computed, watch, onBeforeUnmount, type Ref } from 'vue';
 
 export type ScrollMode = 'follow' | 'force' | 'manual' | 'none';
 
@@ -8,6 +8,7 @@ const INTERVENTION_TOLERANCE_PX = 2;
 const MAX_FRAME_DT_MS = 50;
 const NATIVE_SMOOTH_TIMEOUT_MS = 1_500;
 const USER_SCROLL_INTENT_WINDOW_MS = 240;
+const AUTO_SCROLL_FRAME_TIMEOUT_MS = 50;
 
 type SmoothEngine = 'raf' | 'native';
 
@@ -32,6 +33,7 @@ export function useAutoScroller(
 
   let rafId: number | null = null;
   let contentChangeRafId: number | null = null;
+  let contentChangeTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let popupTimerId: ReturnType<typeof setTimeout> | null = null;
   let animating = false;
   let lastSetScrollTop = -1;
@@ -41,6 +43,7 @@ export function useAutoScroller(
   let nativeSmoothCleanup: (() => void) | null = null;
   let lastUserScrollIntentAt = 0;
   let pointerInteracting = false;
+  let installedElement: HTMLElement | undefined;
 
   function nowMs() {
     return typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -71,12 +74,20 @@ export function useAutoScroller(
     }
   }
 
-  function pauseTracking() {
+  function cancelScheduledContentChange() {
     if (contentChangeRafId !== null) {
       cancelAnimationFrame(contentChangeRafId);
       contentChangeRafId = null;
     }
+    if (contentChangeTimeoutId !== null) {
+      clearTimeout(contentChangeTimeoutId);
+      contentChangeTimeoutId = null;
+    }
     contentChangeScheduled = false;
+  }
+
+  function pauseTracking() {
+    cancelScheduledContentChange();
     clearNativeSmoothMonitor();
     cancelAnimation();
     isTrackingPaused.value = true;
@@ -239,17 +250,28 @@ export function useAutoScroller(
       return;
     }
     contentChangeScheduled = true;
-    contentChangeRafId = requestAnimationFrame(() => {
-      contentChangeRafId = null;
-      contentChangeScheduled = false;
+    const runScheduledScroll = () => {
+      if (!contentChangeScheduled) return;
+      cancelScheduledContentChange();
       if (isTrackingPaused.value) return;
       const m = scrollMode.value;
+      const el = containerEl.value;
+      const target = el ? el.scrollHeight - el.clientHeight : 0;
+      const distance = el ? Math.abs(target - el.scrollTop) : 0;
+      const smoothContentFollow = smooth && !!el && distance <= Math.max(el.clientHeight, 240);
       if (m === 'force') {
-        scrollToBottom(smooth);
+        scrollToBottom(smoothContentFollow);
       } else if (m === 'follow' && isFollowing.value) {
-        scrollToBottom(smooth);
+        scrollToBottom(smoothContentFollow);
       }
-    });
+    };
+    contentChangeTimeoutId = setTimeout(runScheduledScroll, AUTO_SCROLL_FRAME_TIMEOUT_MS);
+    const nextRafId = requestAnimationFrame(runScheduledScroll);
+    if (contentChangeScheduled) {
+      contentChangeRafId = nextRafId;
+    } else {
+      cancelAnimationFrame(nextRafId);
+    }
   }
 
   function onScroll() {
@@ -315,6 +337,7 @@ export function useAutoScroller(
   }
 
   function setup(el: HTMLElement) {
+    installedElement = el;
     lastObservedScrollTop = el.scrollTop;
     el.addEventListener('scroll', onScroll, { passive: true });
     el.addEventListener('scrollend', onScrollEnd, { passive: true });
@@ -402,8 +425,10 @@ export function useAutoScroller(
       clearTimeout(popupTimerId);
       popupTimerId = null;
     }
+    cancelScheduledContentChange();
     clearNativeSmoothMonitor();
     cancelAnimation();
+    if (installedElement === el) installedElement = undefined;
   }
 
   watch(containerEl, (newEl, oldEl) => {
@@ -415,8 +440,13 @@ export function useAutoScroller(
     isFollowing.value = m === 'follow' || m === 'force';
   });
 
-  onUnmounted(() => {
-    if (containerEl.value) teardown(containerEl.value);
+  onBeforeUnmount(() => {
+    const element = installedElement ?? containerEl.value;
+    if (element) {
+      teardown(element);
+      return;
+    }
+    cancelScheduledContentChange();
     clearNativeSmoothMonitor();
     cancelAnimation();
   });
