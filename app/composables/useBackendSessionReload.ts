@@ -40,7 +40,10 @@ export function useBackendSessionReload(params: {
     reloadRequestId: number,
     referencedSessionIds?: string[],
   ) => void;
-  hydrateReferencedSubagents?: (sessionId: string, reloadRequestId: number) => Promise<string[]>;
+  hydrateReferencedSubagents?: (
+    sessionId: string,
+    reloadRequestId: number,
+  ) => Promise<string[] | undefined>;
   anchorOutputToBottom: () => Promise<void>;
   restoreShellSessions: () => Promise<void>;
   reloadTodosForAllowedSessions: () => Promise<void> | void;
