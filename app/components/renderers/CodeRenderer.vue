@@ -11,7 +11,7 @@
           :key="row.key"
           :html="row.html"
           :variant="viewerVariant"
-          :word-wrap="false"
+          :word-wrap="wrapsCode"
           class="virtual-row"
         />
         <div :style="{ height: bottomPadding + 'px' }" />
@@ -33,7 +33,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useSettings } from '../../composables/useSettings';
 import CodeContent from '../CodeContent.vue';
@@ -43,10 +43,24 @@ import { type StreamCodeRenderParams, useStreamCodeRender } from '../../utils/us
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 import {
   buildAbsoluteRowRects,
+  captureFixedRowAnchor,
+  captureRenderedRowAnchor,
+  captureVariableRowAnchor,
+  calculateVariableRowWindow,
   calculateVirtualRowWindow,
+  createVariableRowGeometry,
   findLineAtY,
+  getVariableRowOffset,
+  getVariableTotalHeight,
+  measureInnerVirtualRowHeights,
+  measureOuterVirtualRowHeights,
+  restoreFixedRowAnchor,
+  restoreVariableRowAnchor,
   shouldVirtualizeCodeRows,
   type CodeRowRect,
+  type VariableRowGeometry,
+  type VirtualRowAnchor,
+  updateVariableRowHeight,
 } from '../../utils/virtualCodeRows';
 
 const { t } = useI18n();
@@ -162,6 +176,12 @@ const OVERSCAN_ROWS = 10;
 const scrollTop = ref(0);
 const containerHeight = ref(600);
 const rowHeight = ref(DEFAULT_ROW_HEIGHT);
+const variableRowGeometry = shallowRef<VariableRowGeometry>(
+  createVariableRowGeometry(0, DEFAULT_ROW_HEIGHT),
+);
+let variableGeometryWidth = 0;
+let pendingRowAnchor: VirtualRowAnchor | null = null;
+let pendingRowAnchorNeedsLayoutPass = false;
 
 function extractCodeRows(html: string) {
   const matches = html.match(/<div class="code-row[^"]*">[\s\S]*?<\/div>/g);
@@ -189,42 +209,121 @@ const useVirtualScroll = computed(() =>
 
 const totalRows = computed(() => allRows.value.length);
 
-const startRow = computed(() => {
-  if (!useVirtualScroll.value) return 0;
+const virtualWindow = computed(() => {
+  if (!useVirtualScroll.value) return { start: 0, end: totalRows.value };
+  if (wrapsCode.value) {
+    return calculateVariableRowWindow(variableRowGeometry.value, {
+      scrollTop: scrollTop.value,
+      containerHeight: containerHeight.value,
+      overscanRows: OVERSCAN_ROWS,
+    });
+  }
   return calculateVirtualRowWindow({
     totalRows: totalRows.value,
     scrollTop: scrollTop.value,
     containerHeight: containerHeight.value,
     rowHeight: rowHeight.value,
     overscanRows: OVERSCAN_ROWS,
-  }).start;
+  });
 });
-
-const endRow = computed(() => {
-  if (!useVirtualScroll.value) return totalRows.value;
-  return calculateVirtualRowWindow({
-    totalRows: totalRows.value,
-    scrollTop: scrollTop.value,
-    containerHeight: containerHeight.value,
-    rowHeight: rowHeight.value,
-    overscanRows: OVERSCAN_ROWS,
-  }).end;
-});
+const startRow = computed(() => virtualWindow.value.start);
+const endRow = computed(() => virtualWindow.value.end);
 
 const visibleRows = computed(() => {
   if (!useVirtualScroll.value) return allRows.value;
   return allRows.value.slice(startRow.value, endRow.value);
 });
 
-const topPadding = computed(() => startRow.value * rowHeight.value);
+const topPadding = computed(() => {
+  if (wrapsCode.value && useVirtualScroll.value) {
+    return getVariableRowOffset(variableRowGeometry.value, startRow.value);
+  }
+  return startRow.value * rowHeight.value;
+});
 
 const bottomPadding = computed(() => {
+  if (wrapsCode.value && useVirtualScroll.value) {
+    return Math.max(
+      0,
+      getVariableTotalHeight(variableRowGeometry.value) -
+        getVariableRowOffset(variableRowGeometry.value, endRow.value),
+    );
+  }
   const remainingRows = totalRows.value - endRow.value;
   return Math.max(0, remainingRows * rowHeight.value);
 });
 
+function captureCurrentRowAnchor(
+  wrapped: boolean,
+  preferRenderedRow = false,
+): VirtualRowAnchor | null {
+  if (!useVirtualScroll.value || totalRows.value === 0) return null;
+  const body = viewerBodyEl.value;
+  const scrollContent = getScrollContentEl();
+  if (preferRenderedRow && body && scrollContent) {
+    const renderedAnchor = captureRenderedRowAnchor({
+      viewportTop: body.getBoundingClientRect().top,
+      firstRenderedRow: startRow.value,
+      rowRects: Array.from(scrollContent.querySelectorAll<HTMLElement>('.virtual-row')).map(
+        (row) => row.getBoundingClientRect(),
+      ),
+    });
+    if (renderedAnchor) return renderedAnchor;
+  }
+  const currentScrollTop = body?.scrollTop ?? scrollTop.value;
+  if (wrapped) {
+    return captureVariableRowAnchor({
+      scrollTop: currentScrollTop,
+      geometry: variableRowGeometry.value,
+    });
+  }
+  return captureFixedRowAnchor({
+    scrollTop: currentScrollTop,
+    rowHeight: rowHeight.value,
+    totalRows: totalRows.value,
+  });
+}
+
+function resetVariableRowGeometry(anchor: VirtualRowAnchor | null = null): void {
+  variableRowGeometry.value = createVariableRowGeometry(totalRows.value, DEFAULT_ROW_HEIGHT);
+  variableGeometryWidth = viewerBodyEl.value?.clientWidth ?? 0;
+  pendingRowAnchor = anchor;
+  pendingRowAnchorNeedsLayoutPass = anchor !== null;
+}
+
+watch(
+  [() => effectiveHtml.value || props.rawHtml || '', wrapsCode, appFontSizePx],
+  ([contentKey, wrapped, fontSize], previous) => {
+    const contentChanged = previous ? contentKey !== previous[0] : true;
+    const geometryChanged = previous
+      ? wrapped !== previous[1] || fontSize !== previous[2]
+      : false;
+    const previousWrapped = previous?.[1];
+    const anchor =
+      geometryChanged && !contentChanged && previousWrapped !== undefined
+        ? captureCurrentRowAnchor(previousWrapped, true)
+        : null;
+    resetVariableRowGeometry(anchor);
+  },
+  { immediate: true, flush: 'sync' },
+);
+
 function getScrollContentEl(): HTMLElement | null {
   return viewerBodyEl.value?.querySelector('.code-scroll-content') ?? null;
+}
+
+function restorePendingRowAnchor(): boolean {
+  const body = viewerBodyEl.value;
+  const anchor = pendingRowAnchor;
+  if (!body || !anchor) return false;
+  const nextScrollTop = wrapsCode.value
+    ? restoreVariableRowAnchor({ anchor, geometry: variableRowGeometry.value })
+    : restoreFixedRowAnchor({ anchor, rowHeight: rowHeight.value, totalRows: totalRows.value });
+  pendingRowAnchor = null;
+  pendingRowAnchorNeedsLayoutPass = false;
+  body.scrollTop = nextScrollTop;
+  scrollTop.value = nextScrollTop;
+  return true;
 }
 
 function updateRowRects() {
@@ -236,17 +335,47 @@ function updateRowRects() {
   }
   const containerRect = root.getBoundingClientRect();
   const rows = Array.from(scrollContent.querySelectorAll<HTMLElement>('.code-row'));
-  if (useVirtualScroll.value) {
-    const measuredHeight = rows[0]?.getBoundingClientRect().height;
+  const measuredRowHeights = useVirtualScroll.value
+    ? wrapsCode.value
+      ? measureOuterVirtualRowHeights(scrollContent, startRow.value)
+      : measureInnerVirtualRowHeights(scrollContent, startRow.value)
+    : new Map<number, number>();
+  const deferAnchorRestore = pendingRowAnchor !== null && pendingRowAnchorNeedsLayoutPass;
+  if (deferAnchorRestore) pendingRowAnchorNeedsLayoutPass = false;
+  let followUpScheduled = false;
+  const scheduleFollowUp = () => {
+    if (followUpScheduled) return;
+    followUpScheduled = true;
+    void nextTick(updateRowRects);
+  };
+  if (useVirtualScroll.value && wrapsCode.value) {
+    const anchor = pendingRowAnchor ?? captureCurrentRowAnchor(true);
+    const geometry = variableRowGeometry.value;
+    let geometryChanged = false;
+    measuredRowHeights.forEach((height, rowIndex) => {
+      geometryChanged =
+        updateVariableRowHeight(geometry, rowIndex, height) || geometryChanged;
+    });
+    if (geometryChanged) {
+      variableRowGeometry.value = { ...geometry };
+      pendingRowAnchor = anchor;
+      if (!deferAnchorRestore) restorePendingRowAnchor();
+      scheduleFollowUp();
+    }
+  } else if (useVirtualScroll.value) {
+    const measuredHeight = measuredRowHeights.get(startRow.value);
     if (measuredHeight && Math.abs(measuredHeight - rowHeight.value) > 0.5) {
       rowHeight.value = measuredHeight;
       if (pendingSelectionNavigationLine != null) {
         scrollToVirtualLine(pendingSelectionNavigationLine);
       }
-      void nextTick(updateRowRects);
+      if (!deferAnchorRestore) restorePendingRowAnchor();
+      scheduleFollowUp();
       return;
     }
   }
+  const restoredAnchor = deferAnchorRestore ? false : restorePendingRowAnchor();
+  if (deferAnchorRestore || restoredAnchor) scheduleFollowUp();
   const firstRenderedLine = useVirtualScroll.value ? startRow.value : 0;
   const visibleRowRects = rows.map((row) => {
     const rect = row.getBoundingClientRect();
@@ -432,12 +561,25 @@ function applyLineSelection() {
 
 function scrollToVirtualLine(line: number) {
   if (!viewerBodyEl.value) return;
+  const rowOffset = wrapsCode.value
+    ? getVariableRowOffset(variableRowGeometry.value, line - 1)
+    : (line - 1) * rowHeight.value;
   const targetScrollTop = Math.max(
     0,
-    (line - 1) * rowHeight.value - viewerBodyEl.value.clientHeight / 2,
+    rowOffset - viewerBodyEl.value.clientHeight / 2,
   );
   scrollTop.value = targetScrollTop;
   viewerBodyEl.value.scrollTop = targetScrollTop;
+}
+
+const rowRectTimerIds = new Set<ReturnType<typeof setTimeout>>();
+
+function scheduleRowRectUpdate(delay: number): void {
+  const timerId = setTimeout(() => {
+    rowRectTimerIds.delete(timerId);
+    updateRowRects();
+  }, delay);
+  rowRectTimerIds.add(timerId);
 }
 
 watch(
@@ -456,9 +598,7 @@ watch(
       updateRowRects();
       emit('rendered');
     });
-    setTimeout(() => {
-      updateRowRects();
-    }, 50);
+    scheduleRowRectUpdate(50);
   },
   { immediate: true },
 );
@@ -483,9 +623,15 @@ onMounted(() => {
   const root = viewerBodyEl.value;
   if (root) {
     resizeObserver = new ResizeObserver(() => {
+      const widthChanged = wrapsCode.value && variableGeometryWidth !== root.clientWidth;
+      const anchor = widthChanged ? captureCurrentRowAnchor(true) : null;
       updateRowRects();
       if (useVirtualScroll.value) {
         containerHeight.value = root.clientHeight;
+      }
+      if (widthChanged) {
+        resetVariableRowGeometry(anchor);
+        void nextTick(updateRowRects);
       }
     });
     resizeObserver.observe(root);
@@ -494,8 +640,8 @@ onMounted(() => {
     }
   }
   updateRowRects();
-  setTimeout(() => updateRowRects(), 50);
-  setTimeout(() => updateRowRects(), 300);
+  scheduleRowRectUpdate(50);
+  scheduleRowRectUpdate(300);
 });
 
 onBeforeUnmount(() => {
@@ -506,6 +652,8 @@ onBeforeUnmount(() => {
     resizeObserver.disconnect();
     resizeObserver = null;
   }
+  for (const timerId of rowRectTimerIds) clearTimeout(timerId);
+  rowRectTimerIds.clear();
 });
 
 const showLoading = computed(() => {
@@ -548,6 +696,7 @@ const showLoading = computed(() => {
 .virtual-row {
   min-height: v-bind('rowHeight + "px"');
   overflow: hidden;
+  width: 100%;
 }
 
 .code-renderer-content :deep(.code-row.line-highlight) {

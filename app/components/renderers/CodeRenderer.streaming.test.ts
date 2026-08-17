@@ -1,8 +1,9 @@
-import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
+import { createApp, defineComponent, h, nextTick, reactive, watch } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { RenderWorkerStream } from '../../utils/workerStream';
 import type { StreamTokenBatch } from '../../workers/streamHandler';
+import { useSettings } from '../../composables/useSettings';
 
 const workerState = vi.hoisted(() => {
   class FakeWorker {
@@ -85,6 +86,14 @@ type MountedRenderer = {
   readonly target: HTMLElement;
   readonly props: Record<string, unknown>;
   readonly renderedCount: () => number;
+  readonly readState: (key: string) => unknown;
+  readonly unmount: () => void;
+};
+
+type ElementWithVueInstance = HTMLElement & {
+  __vueParentComponent?: {
+    setupState?: Record<string, unknown>;
+  };
 };
 
 const mountedApps: Array<() => void> = [];
@@ -108,20 +117,29 @@ function mountCodeRenderer(initialProps: Record<string, unknown>): MountedRender
     }),
   );
   app.mount(target);
-  mountedApps.push(() => {
+  let mounted = true;
+  const unmount = () => {
+    if (!mounted) return;
+    mounted = false;
     app.unmount();
     target.remove();
-  });
+  };
+  mountedApps.push(unmount);
   return {
     target,
     props,
     renderedCount: () => rendered,
+    readState: (key) =>
+      (target.querySelector('.code-renderer-content') as ElementWithVueInstance | null)
+        ?.__vueParentComponent?.setupState?.[key],
+    unmount,
   };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
+  useSettings().floatingPreviewWordWrap.value = false;
 });
 
 afterEach(() => {
@@ -131,6 +149,22 @@ afterEach(() => {
 });
 
 describe('CodeRenderer streaming', () => {
+  it('clears delayed row measurements when the renderer unmounts', async () => {
+    const mounted = mountCodeRenderer({
+      rawHtml: '<div class="code-row">line</div>',
+      fileContent: 'line',
+      lang: 'text',
+    });
+    await settle();
+    const rowRectTimerIds = mounted.readState('rowRectTimerIds');
+    if (!(rowRectTimerIds instanceof Set)) throw new Error('Expected row measurement timers');
+    expect(rowRectTimerIds.size).toBeGreaterThan(0);
+
+    mounted.unmount();
+
+    expect(rowRectTimerIds.size).toBe(0);
+  });
+
   it('surfaces the stream error instead of a blank container when the stream fails', async () => {
     // Given: a streaming renderer whose close rejects (worker-reported failure)
     const { stream, close } = createMockStream();
@@ -202,5 +236,162 @@ describe('CodeRenderer streaming', () => {
     // Then: the loading indicator is shown instead of a blank viewer
     expect(mockStartStream).not.toHaveBeenCalled();
     expect(mounted.target.querySelector('.viewer-loading')).not.toBeNull();
+  });
+
+  it('keeps the viewport row anchored when a taller overscan row is measured above it', async () => {
+    const settings = useSettings();
+    settings.floatingPreviewWordWrap.value = true;
+    const rawHtml = Array.from(
+      { length: 1_200 },
+      (_, index) => `<div class="code-row"><span>${index}</span></div>`,
+    ).join('');
+    const mounted = mountCodeRenderer({
+      rawHtml,
+      fileContent: 'placeholder',
+      lang: 'text',
+    });
+    await settle();
+
+    const body = mounted.target.querySelector<HTMLElement>('.viewer-body');
+    if (!body) throw new Error('Expected a code viewer body');
+    expect(mounted.target.querySelectorAll('.virtual-row').length).toBeGreaterThan(0);
+    Object.defineProperty(body, 'scrollTop', { configurable: true, value: 2_000, writable: true });
+    body.dispatchEvent(new Event('scroll'));
+    await settle();
+
+    const rows = [...mounted.target.querySelectorAll<HTMLElement>('.virtual-row')];
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach((row, index) => {
+      vi.spyOn(row, 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(0, index === 0 ? 0 : 20, 100, index === 0 ? 60 : 20),
+      );
+    });
+
+    body.dispatchEvent(new Event('scroll'));
+    await settle(20);
+
+    expect(body.scrollTop).toBe(2_040);
+  });
+
+  it('captures the rendered viewport anchor before the app applies a new font size', async () => {
+    const settings = useSettings();
+    const previousFontSize = settings.appFontSizePx.value;
+    settings.floatingPreviewWordWrap.value = true;
+    let layout: 'old' | 'new' = 'old';
+    const stopAppFontWatcher = watch(settings.appFontSizePx, () => {
+      layout = 'new';
+    });
+    const rawHtml = Array.from(
+      { length: 1_200 },
+      (_, index) => `<div class="code-row"><span>${index}</span></div>`,
+    ).join('');
+    const mounted = mountCodeRenderer({ rawHtml, fileContent: 'placeholder', lang: 'text' });
+    try {
+      await settle();
+      const body = mounted.target.querySelector<HTMLElement>('.viewer-body');
+      if (!body) throw new Error('Expected a code viewer body');
+      Object.defineProperty(body, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => new DOMRect(0, 0, 400, 600),
+      });
+      Object.defineProperty(body, 'scrollTop', { configurable: true, value: 2_000, writable: true });
+      body.dispatchEvent(new Event('scroll'));
+      await settle();
+
+      const rows = [...mounted.target.querySelectorAll<HTMLElement>('.virtual-row')];
+      rows.forEach((row, index) => {
+        Object.defineProperty(row, 'getBoundingClientRect', {
+          configurable: true,
+          value: () => new DOMRect(0, (index - (layout === 'old' ? 10 : 8)) * 20, 400, 20),
+        });
+      });
+
+      settings.appFontSizePx.value = Math.min(20, previousFontSize + 1);
+      window.dispatchEvent(new Event('resize'));
+      expect(mounted.readState('pendingRowAnchor')).toEqual({
+        rowIndex: 100,
+        offsetWithinRow: 0,
+      });
+      await settle(20);
+
+      expect(body.scrollTop).toBe(2_000);
+    } finally {
+      stopAppFontWatcher();
+      settings.appFontSizePx.value = previousFontSize;
+    }
+  });
+
+  it('measures fixed virtual rows from inner code rows so font-size shrink removes spacer gaps', async () => {
+    const settings = useSettings();
+    const previousFontSize = settings.appFontSizePx.value;
+    const rawHtml = Array.from(
+      { length: 1_200 },
+      (_, index) => `<div class="code-row"><span>${index}</span></div>`,
+    ).join('');
+    const mounted = mountCodeRenderer({
+      rawHtml,
+      fileContent: 'placeholder',
+      lang: 'text',
+      path: '/large-file.ts',
+      onRequestAddLineComment: vi.fn(),
+    });
+    try {
+      await settle();
+
+      const root = mounted.target.querySelector<HTMLElement>('.code-renderer-content');
+      const body = mounted.target.querySelector<HTMLElement>('.viewer-body');
+      const scrollContent = mounted.target.querySelector<HTMLElement>('.code-scroll-content');
+      if (!root || !body || !scrollContent) throw new Error('Expected a virtual code viewer');
+      Object.defineProperty(root, 'getBoundingClientRect', {
+        configurable: true,
+        value: () => new DOMRect(0, 0, 400, 600),
+      });
+
+      const setMeasuredHeight = (innerHeight: number, outerHeight: number) => {
+        const innerRows = [...scrollContent.querySelectorAll<HTMLElement>('.code-row')];
+        innerRows.forEach((row, index) => {
+          Object.defineProperty(row, 'getBoundingClientRect', {
+            configurable: true,
+            value: () => new DOMRect(0, index * innerHeight, 400, innerHeight),
+          });
+          const outerRow = row.closest<HTMLElement>('.virtual-row');
+          if (!outerRow) throw new Error('Expected an outer virtual row');
+          Object.defineProperty(outerRow, 'getBoundingClientRect', {
+            configurable: true,
+            value: () => new DOMRect(0, index * innerHeight, 400, outerHeight),
+          });
+        });
+      };
+      const bottomSpacer = () =>
+        Number(scrollContent.lastElementChild?.getAttribute('style')?.match(/height:\s*([\d.]+)px/)?.[1]);
+
+      setMeasuredHeight(48, 48);
+      settings.appFontSizePx.value = Math.min(20, previousFontSize + 1);
+      body.dispatchEvent(new Event('scroll'));
+      await settle(20);
+      const grownBottomSpacer = bottomSpacer();
+      expect(grownBottomSpacer).toBeGreaterThan(0);
+
+      setMeasuredHeight(16, 48);
+      settings.appFontSizePx.value = Math.max(10, previousFontSize - 1);
+      body.dispatchEvent(new Event('scroll'));
+      await settle(20);
+      const shrunkBottomSpacer = bottomSpacer();
+      expect(shrunkBottomSpacer).toBeLessThan(grownBottomSpacer);
+
+      const innerRows = [...scrollContent.querySelectorAll<HTMLElement>('.code-row')];
+      expect(innerRows.length).toBeGreaterThan(1);
+      body.dispatchEvent(
+        new MouseEvent('mousedown', { bubbles: true, button: 0, clientX: 10, clientY: 23 }),
+      );
+      document.dispatchEvent(
+        new MouseEvent('mouseup', { bubbles: true, button: 0, clientX: 10, clientY: 30 }),
+      );
+      await nextTick();
+
+      expect(mounted.target.querySelector<HTMLElement>('.comment-editor')?.style.top).toBe('40px');
+    } finally {
+      settings.appFontSizePx.value = previousFontSize;
+    }
   });
 });
