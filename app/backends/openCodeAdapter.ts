@@ -1,6 +1,45 @@
 import * as opencodeApi from '../utils/opencode';
 import type { BackendAdapter } from './types';
 
+type OpenCodeWorkerAdapter = Pick<
+  BackendAdapter,
+  | 'configure'
+  | 'listProjects'
+  | 'listSessions'
+  | 'getCurrentProject'
+  | 'getSession'
+  | 'getVcsInfo'
+  | 'getSessionStatusMap'
+>;
+
+function createOpenCodeConfigure(): NonNullable<BackendAdapter['configure']> {
+  let configuredBaseUrl: string | undefined;
+  return (options) => {
+    const baseUrlChanged =
+      options.baseUrl !== undefined && options.baseUrl !== configuredBaseUrl;
+    if (options.baseUrl !== undefined) {
+      configuredBaseUrl = options.baseUrl;
+      opencodeApi.setBaseUrl(options.baseUrl);
+    }
+    if ('authorization' in options || baseUrlChanged) {
+      opencodeApi.setAuthorization(options.authorization);
+    }
+  };
+}
+
+export function createOpenCodeWorkerAdapter(): OpenCodeWorkerAdapter {
+  return {
+    configure: createOpenCodeConfigure(),
+    listProjects: (directory, options) => opencodeApi.listProjects(directory, options),
+    listSessions: (options) => opencodeApi.listSessions(options),
+    getCurrentProject: (directory, options) => opencodeApi.getCurrentProject(directory, options),
+    getSession: (sessionId, directory, options) =>
+      opencodeApi.getSession(sessionId, directory, options),
+    getVcsInfo: (directory, options) => opencodeApi.getVcsInfo(directory, options),
+    getSessionStatusMap: (directory, options) => opencodeApi.getSessionStatusMap(directory, options),
+  };
+}
+
 export function createOpenCodeAdapter(): BackendAdapter {
   return {
     kind: 'opencode',
@@ -32,10 +71,7 @@ export function createOpenCodeAdapter(): BackendAdapter {
       strictSandboxPaths: false,
       sessionManagementMode: 'standard',
     },
-    configure: (options) => {
-      if (options.baseUrl !== undefined) opencodeApi.setBaseUrl(options.baseUrl);
-      if (options.authorization !== undefined) opencodeApi.setAuthorization(options.authorization);
-    },
+    configure: createOpenCodeConfigure(),
     createSession: (directory) => opencodeApi.createSession(directory),
     forkSession: (sessionId, messageId, directory) =>
       opencodeApi.forkSession(sessionId, messageId, directory),
@@ -57,12 +93,12 @@ export function createOpenCodeAdapter(): BackendAdapter {
     readFileContent: (payload, options) => opencodeApi.readFileContent(payload, options),
     readFileContentBytes: (payload, options) => opencodeApi.readFileContentBytes(payload, options),
     getSessionDiff: (payload) => opencodeApi.getSessionDiff(payload),
-    listProjects: (directory) => opencodeApi.listProjects(directory),
-    getCurrentProject: (directory) => opencodeApi.getCurrentProject(directory),
+    listProjects: (directory, options) => opencodeApi.listProjects(directory, options),
+    getCurrentProject: (directory, options) => opencodeApi.getCurrentProject(directory, options),
     getSession: (sessionId, directory, options) => opencodeApi.getSession(sessionId, directory, options),
     getSessionChildren: (sessionId, directory, options) => opencodeApi.getSessionChildren(sessionId, directory, options),
     listWorktrees: (directory) => opencodeApi.listWorktrees(directory),
-    getVcsInfo: (directory) => opencodeApi.getVcsInfo(directory),
+    getVcsInfo: (directory, options) => opencodeApi.getVcsInfo(directory, options),
     listProviders: () => opencodeApi.listProviders(),
     listProviderAuthMethods: (options) => opencodeApi.listProviderAuthMethods(options),
     authorizeProviderOAuth: (providerId, payload) => opencodeApi.authorizeProviderOAuth(providerId, payload),
