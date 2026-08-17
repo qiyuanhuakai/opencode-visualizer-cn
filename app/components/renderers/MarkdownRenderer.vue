@@ -1,19 +1,12 @@
 <template>
   <div
-    v-if="state.html || streamingActive"
+    v-if="state.html || streamingActive || state.finalizingStreaming"
     class="markdown-renderer message-viewer min-h-[1.2em] leading-[inherit] text-[inherit]"
     :class="{ 'no-copy': !copyButton }"
   >
     <div
-      v-if="streamingActive"
-      ref="streamingContainerEl"
+      ref="contentContainerEl"
       class="message-content leading-[inherit] text-[inherit]"
-      @click="handleContentClick"
-    ></div>
-    <div
-      v-else
-      class="message-content leading-[inherit] text-[inherit]"
-      v-html="state.html"
       @click="handleContentClick"
     ></div>
   </div>
@@ -49,15 +42,18 @@ const emit = defineEmits<{
 const state = reactive({
   html: '',
   requestId: 0,
+  finalizingStreaming: false,
 });
 
 const copiedResetTimers = new Map<HTMLElement, number>();
 let cancelActiveRender: (() => void) | null = null;
+let isUnmounted = false;
+let previousStreamingActive = false;
 
 // Streaming is opt-in and only ever applies to the code-driven markdown path.
 // When active, useStreamingMarkdown owns the container node below; the v-html
 // branch is unmounted so the two never manage the same DOM.
-const streamingContainerEl = ref<HTMLElement | null>(null);
+const contentContainerEl = ref<HTMLElement | null>(null);
 const streamingActive = computed(
   () => props.streaming === true && props.html == null && (props.lang ?? 'text') === 'markdown',
 );
@@ -82,7 +78,7 @@ useStreamingMarkdown({
   theme: () => props.theme ?? DEFAULT_SYNTAX_THEME,
   enabled: streamingActive,
   render: renderStreamingMarkdown,
-  containerRef: streamingContainerEl,
+  containerRef: contentContainerEl,
   onApplied: () => emit('rendered'),
   renderContext: () =>
     [
@@ -110,6 +106,11 @@ function scheduleCopyButtonReset(codeBlock: HTMLElement) {
   copiedResetTimers.set(codeBlock, nextTimerId);
 }
 
+function commitRenderedHtml(html: string): void {
+  const container = contentContainerEl.value;
+  if (container) container.innerHTML = html;
+}
+
 async function writeClipboard(text: string): Promise<void> {
   const electronAPI = (window as unknown as Record<string, unknown>).electronAPI as
     | { clipboard?: { writeText: (text: string) => Promise<void> } }
@@ -132,6 +133,7 @@ async function handleContentClick(event: MouseEvent) {
     const pre = codeBlock.querySelector('pre');
     if (!pre) return;
     await writeClipboard(pre.textContent ?? '');
+    if (isUnmounted || !codeBlock.isConnected) return;
     codeBlock.classList.add('copied');
     scheduleCopyButtonReset(codeBlock);
     return;
@@ -142,6 +144,7 @@ async function handleContentClick(event: MouseEvent) {
   const rawSource = markdownHost.querySelector('template.md-raw-source');
   if (!(rawSource instanceof HTMLTemplateElement)) return;
   await writeClipboard(rawSource.content.textContent ?? '');
+  if (isUnmounted || !markdownHost.isConnected) return;
   markdownHost.classList.add('copied');
   scheduleCopyButtonReset(markdownHost);
 }
@@ -176,6 +179,10 @@ async function startRender() {
       state.html = html;
       await nextTick();
       if (current !== state.requestId) return;
+      commitRenderedHtml(html);
+      state.finalizingStreaming = false;
+      await nextTick();
+      if (current !== state.requestId) return;
       emit('rendered');
     })
     .catch(async (error) => {
@@ -197,6 +204,9 @@ watch(
     cancelActiveRender = null;
     state.html = newHtml;
     await nextTick();
+    commitRenderedHtml(newHtml);
+    state.finalizingStreaming = false;
+    await nextTick();
     emit('rendered');
   },
   { immediate: true },
@@ -215,8 +225,11 @@ watch(
     props.streaming,
   ],
   () => {
+    const wasStreamingActive = previousStreamingActive;
+    previousStreamingActive = streamingActive.value;
     if (props.html != null) return;
     if (streamingActive.value) {
+      state.finalizingStreaming = false;
       // The streaming composable drives the container; make sure no in-flight
       // default-path render can clobber it.
       state.requestId += 1;
@@ -224,12 +237,14 @@ watch(
       cancelActiveRender = null;
       return;
     }
+    if (wasStreamingActive) state.finalizingStreaming = true;
     startRender();
   },
   { immediate: true },
 );
 
 onBeforeUnmount(() => {
+  isUnmounted = true;
   state.requestId += 1;
   cancelActiveRender?.();
   cancelActiveRender = null;

@@ -136,6 +136,43 @@ afterEach(() => {
 });
 
 describe('MarkdownRenderer characterization (default path, no streaming)', () => {
+  it('does not schedule copy-state cleanup after unmount while clipboard write is pending', async () => {
+    let resolveClipboard: () => void = () => {};
+    const writeText = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveClipboard = resolve;
+        }),
+    );
+    const browserWindow = window as unknown as {
+      electronAPI?: { clipboard?: { writeText: (text: string) => Promise<void> } };
+    };
+    const previousElectronApi = browserWindow.electronAPI;
+    browserWindow.electronAPI = { clipboard: { writeText } };
+    try {
+      const mounted = mountMarkdownRenderer({ html: '<p>given</p>', lang: 'markdown' });
+      await settle();
+      const content = mounted.target.querySelector<HTMLElement>('.message-content');
+      if (!content) throw new Error('Expected markdown content');
+      content.innerHTML =
+        '<div class="md-code-block"><button class="md-copy-btn"></button><pre>copy me</pre></div>';
+      const codeBlock = content.querySelector<HTMLElement>('.md-code-block');
+      const button = content.querySelector<HTMLElement>('.md-copy-btn');
+      if (!codeBlock || !button) throw new Error('Expected copy fixture');
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+      expect(writeText).toHaveBeenCalledWith('copy me');
+
+      mountedApps.pop()?.();
+      resolveClipboard();
+      await settle();
+
+      expect(codeBlock.classList.contains('copied')).toBe(false);
+    } finally {
+      browserWindow.electronAPI = previousElectronApi;
+    }
+  });
+
   it('renders the full document through the worker and re-renders fully on code changes', async () => {
     // Given: a markdown renderer without the streaming prop
     const code = '# Alpha\n\nBody text.';
@@ -250,6 +287,44 @@ describe('MarkdownRenderer streaming', () => {
     // Streaming applies already emitted rendered; convergence adds exactly one.
     expect(mounted.renderedCount()).toBe(renderedBeforeFlip + 1);
 
+  });
+
+  it('keeps streamed DOM visible until the final full render resolves', async () => {
+    // Given: streamed markdown has already produced visible content
+    const finalText = '# Held\n\nExisting streamed content.';
+    const mounted = mountMarkdownRenderer({ code: finalText, lang: 'markdown', streaming: true });
+    await flushRenders();
+    const content = mounted.target.querySelector('.message-content');
+    const streamedHtml = content?.innerHTML;
+    expect(streamedHtml).toContain('Existing streamed content.');
+
+    // When: streaming ends but the final full-render worker is held
+    mounted.props.streaming = false;
+    await settle();
+    const finalRequest = postedRequests().find(
+      (request) => request.code === finalText && !respondedIds.has(request.id),
+    );
+    if (!finalRequest) throw new Error('final full render was not posted');
+
+    // Then: the old DOM and its layout shell remain until the final html exists
+    expect(mounted.target.querySelector('.markdown-renderer')).toBeTruthy();
+    expect(mounted.target.querySelector('.message-content')).toBe(content);
+    expect(content?.innerHTML).toBe(streamedHtml);
+
+    // When: the final worker completes
+    const worker = workerState.FakeWorker.instances.find((candidate) =>
+      candidate.posted.some((message) => (message as PostedRequest).id === finalRequest.id),
+    );
+    if (!worker) throw new Error('final render worker was not found');
+    respondedIds.add(finalRequest.id);
+    worker.emit({ id: finalRequest.id, ok: true, html: htmlFor(finalText) });
+    await settle();
+
+    // Then: the full html replaces the streamed DOM in place, preserving the
+    // browser's scroll anchor instead of swapping the content element.
+    const finalizedContent = mounted.target.querySelector('.message-content');
+    expect(finalizedContent).toBe(content);
+    expect(finalizedContent?.innerHTML).toBe(htmlFor(finalText));
   });
 
   it('ignores streaming for non-markdown languages', async () => {
