@@ -256,6 +256,21 @@ describe('createStreamMessageHandler', () => {
       expect(handle._debugState()).toEqual({ states: 0, chains: 0, cancelled: 0 });
     });
 
+    it('does not retain a cancellation tombstone after the stream chain was pruned', async () => {
+      // Given: an open stream whose settled chain has already been pruned
+      const { handle } = setup();
+      await handle(openRequest('s-pruned', makeParams()));
+      await flushPrune();
+      expect(handle._debugState()).toEqual({ states: 1, chains: 0, cancelled: 0 });
+
+      // When: cancellation arrives after the chain is gone
+      await handle({ stream: true, op: 'cancel', id: 's-pruned-cancel', streamId: 's-pruned' });
+      await flushPrune();
+
+      // Then: cancellation clears the state without leaking a tombstone
+      expect(handle._debugState()).toEqual({ states: 0, chains: 0, cancelled: 0 });
+    });
+
     it('cancel followed by reopen with the same id still streams and finalizes', async () => {
       // Given: a cancelled stream whose bookkeeping was pruned
       const { messages, handle } = setup();
