@@ -49,6 +49,7 @@ export type ConfigMergeStrategy = 'replace' | 'upsert';
 export type ListSessionsOptions = {
   directory?: string;
   instanceDirectory?: string;
+  signal?: AbortSignal;
   roots?: boolean;
   search?: string;
   limit?: number;
@@ -123,8 +124,8 @@ export type BackendAdapter = {
     options?: BackendRequestOptions,
   ): Promise<unknown>;
   getSessionDiff?(payload: { sessionID: string; directory?: string }): Promise<unknown>;
-  listProjects?(directory?: string): Promise<unknown>;
-  getCurrentProject?(directory?: string): Promise<unknown>;
+  listProjects?(directory?: string, options?: BackendRequestOptions): Promise<unknown>;
+  getCurrentProject?(directory?: string, options?: BackendRequestOptions): Promise<unknown>;
   getSession?(
     sessionId: string,
     directory?: string,
@@ -136,7 +137,7 @@ export type BackendAdapter = {
     options?: BackendRequestOptions,
   ): Promise<unknown>;
   listWorktrees?(directory: string): Promise<unknown>;
-  getVcsInfo?(directory: string): Promise<unknown>;
+  getVcsInfo?(directory: string, options?: BackendRequestOptions): Promise<unknown>;
   listProviders?(): Promise<unknown>;
   listProviderAuthMethods?(options?: { directory?: string; workspace?: string }): Promise<unknown>;
   authorizeProviderOAuth?(
