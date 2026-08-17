@@ -1,8 +1,8 @@
 <template>
-  <div class="history-content">
+  <div ref="rootEl" class="history-content">
     <div class="history-list">
-      <template v-for="entry in props.entries" :key="entry.key">
-        <div v-if="entry.kind === 'message'" class="history-item">
+      <template v-for="entry in visibleEntries" :key="entry.key">
+        <div v-if="entry.kind === 'message'" class="history-item" :data-history-key="entry.key">
           <div class="history-meta">
             <span class="history-index">💬</span>
             <span v-if="entry.isSubagent" class="history-session-badge">
@@ -25,6 +25,7 @@
         <div
           v-else-if="entry.kind === 'reasoning'"
           class="history-item history-item-reasoning"
+          :data-history-key="entry.key"
           @click="handleReasoningClick(entry.part)"
         >
           <div class="history-meta">
@@ -33,7 +34,11 @@
             <span class="history-time">{{ formatMessageTime(entry.time) }}</span>
           </div>
         </div>
-        <div v-else-if="entry.kind === 'question'" class="history-item history-item-question">
+        <div
+          v-else-if="entry.kind === 'question'"
+          class="history-item history-item-question"
+          :data-history-key="entry.key"
+        >
           <div class="history-meta history-meta-question">
             <span class="history-index">❓</span>
             <span class="history-question-badge">{{ t('threadHistory.question') }}</span>
@@ -70,7 +75,11 @@
             </div>
           </div>
         </div>
-        <div v-else-if="entry.kind === 'subtask'" class="history-item history-item-subtask">
+        <div
+          v-else-if="entry.kind === 'subtask'"
+          class="history-item history-item-subtask"
+          :data-history-key="entry.key"
+        >
           <div class="history-meta">
             <span class="history-index">🤖</span>
             <span class="history-subtask-badge">{{ t('threadHistory.delegation') }}</span>
@@ -87,6 +96,7 @@
         <div
           v-else
           class="history-item history-item-tool"
+          :data-history-key="entry.key"
           :style="{ '--tool-color': toolHeaderColor(entry.part.tool) }"
           @click="handleToolClick(entry.part)"
         >
@@ -110,10 +120,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import MessageViewer from './MessageViewer.vue';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
+import { pendingWorkerRenders } from '../composables/useRenderState';
 import type { QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from '../types/sse';
+import { settleScrollAnchor } from '../utils/scrollAnchor';
 import { resolveToolAccentColor } from '../utils/theme';
 import { normalizeToolName } from '../utils/toolNames';
 
@@ -157,6 +170,98 @@ const props = withDefaults(
 );
 
 const floatingWindow = useFloatingWindow();
+const rootEl = ref<HTMLElement | null>(null);
+const HISTORY_WINDOW_SIZE = 100;
+const HISTORY_WINDOW_SHIFT = 20;
+const windowStart = ref(Math.max(0, props.entries.length - HISTORY_WINDOW_SIZE));
+const windowEnd = ref(props.entries.length);
+const visibleEntries = computed(() => props.entries.slice(windowStart.value, windowEnd.value));
+let scrollHost: HTMLElement | null = null;
+let shiftInProgress = false;
+
+function resetHistoryWindow(): void {
+  windowEnd.value = props.entries.length;
+  windowStart.value = Math.max(0, windowEnd.value - HISTORY_WINDOW_SIZE);
+}
+
+function isTrueAppend(previousKeys: readonly string[], nextKeys: readonly string[]): boolean {
+  if (nextKeys.length <= previousKeys.length) return false;
+  return previousKeys.every((key, index) => nextKeys[index] === key);
+}
+
+watch(
+  [() => props.entries, () => props.entries.map((entry) => entry.key)],
+  ([, nextKeys], previous) => {
+    if (!previous) return;
+    const previousKeys = previous[1];
+    if (isTrueAppend(previousKeys, nextKeys)) {
+      if (windowEnd.value >= previousKeys.length) {
+        resetHistoryWindow();
+      }
+      return;
+    }
+    const keysUnchanged =
+      nextKeys.length === previousKeys.length &&
+      previousKeys.every((key, index) => nextKeys[index] === key);
+    if (!keysUnchanged) {
+      resetHistoryWindow();
+    }
+  },
+);
+
+function historyEntryElement(key: string): HTMLElement | null {
+  const escapedKey = CSS.escape(key);
+  return rootEl.value?.querySelector<HTMLElement>(`[data-history-key="${escapedKey}"]`) ?? null;
+}
+
+async function shiftHistoryWindow(nextStart: number): Promise<void> {
+  if (!scrollHost || shiftInProgress || nextStart === windowStart.value) return;
+  const retainedIndex = Math.max(nextStart, windowStart.value);
+  const anchor = props.entries[retainedIndex];
+  const anchorElement = anchor ? historyEntryElement(anchor.key) : null;
+  if (!anchor || !anchorElement) return;
+  const anchorTop = anchorElement.getBoundingClientRect().top;
+  shiftInProgress = true;
+  windowStart.value = nextStart;
+  windowEnd.value = Math.min(props.entries.length, nextStart + HISTORY_WINDOW_SIZE);
+  await nextTick();
+  await settleScrollAnchor({
+    measureDelta: () => {
+      const current = historyEntryElement(anchor.key);
+      return current ? current.getBoundingClientRect().top - anchorTop : null;
+    },
+    applyDelta: (delta) => {
+      if (scrollHost) scrollHost.scrollTop += delta;
+    },
+    hasPendingWork: () => pendingWorkerRenders.value > 0,
+    waitForFrame: () => new Promise((resolve) => requestAnimationFrame(() => resolve())),
+  });
+  shiftInProgress = false;
+}
+
+function onHistoryScroll(): void {
+  if (!scrollHost || shiftInProgress) return;
+  if (scrollHost.scrollTop <= 120 && windowStart.value > 0) {
+    void shiftHistoryWindow(Math.max(0, windowStart.value - HISTORY_WINDOW_SHIFT));
+    return;
+  }
+  const distanceToBottom = scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight;
+  if (distanceToBottom <= 120 && windowEnd.value < props.entries.length) {
+    void shiftHistoryWindow(
+      Math.min(props.entries.length - HISTORY_WINDOW_SIZE, windowStart.value + HISTORY_WINDOW_SHIFT),
+    );
+  }
+}
+
+onMounted(() => {
+  scrollHost = rootEl.value?.closest<HTMLElement>('.floating-window-body') ?? null;
+  scrollHost?.addEventListener('scroll', onHistoryScroll, { passive: true });
+});
+
+onBeforeUnmount(() => {
+  scrollHost?.removeEventListener('scroll', onHistoryScroll);
+  scrollHost = null;
+});
 
 function handleRendered() {
   floatingWindow.notifyContentChange();
