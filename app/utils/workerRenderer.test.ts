@@ -3,10 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const workerState = vi.hoisted(() => {
   class FakeWorker {
     static instances: FakeWorker[] = [];
+    static failNextConstruction = false;
     onmessage: ((event: { data: unknown }) => void) | null = null;
     onerror: ((error: unknown) => void) | null = null;
     posted: unknown[] = [];
+    terminated = false;
     constructor() {
+      if (FakeWorker.failNextConstruction) {
+        FakeWorker.failNextConstruction = false;
+        throw new Error('worker construction failed');
+      }
       FakeWorker.instances.push(this);
     }
     postMessage(message: unknown) {
@@ -14,6 +20,9 @@ const workerState = vi.hoisted(() => {
     }
     emit(data: unknown) {
       this.onmessage?.({ data });
+    }
+    terminate() {
+      this.terminated = true;
     }
   }
   return { FakeWorker };
@@ -44,6 +53,7 @@ function postedStreamMessages(worker: FakeWorker): unknown[] {
 beforeEach(() => {
   vi.resetModules();
   workerState.FakeWorker.instances = [];
+  workerState.FakeWorker.failNextConstruction = false;
 });
 
 describe('startRenderWorkerStream', () => {
@@ -164,6 +174,130 @@ describe('startRenderWorkerStream', () => {
 });
 
 describe('single-shot regression', () => {
+  it('rejects asynchronously and restores counters when worker construction fails', async () => {
+    const mod = await import('../utils/workerRenderer');
+    const renderState = await import('../composables/useRenderState');
+    workerState.FakeWorker.failNextConstruction = true;
+
+    const task = mod.startRenderWorkerHtml({
+      id: 'constructor-failure',
+      code: 'failure',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+
+    await expect(task.promise).rejects.toThrow('worker construction failed');
+    expect(renderState.pendingWorkerRenders.value).toBe(0);
+  });
+
+  it('settles concurrent render counters once across message, error, and cancel paths', async () => {
+    const mod = await import('../utils/workerRenderer');
+    const renderState = await import('../composables/useRenderState');
+    const first = mod.startRenderWorkerHtml({
+      id: 'counter-message',
+      code: 'message path',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+    const second = mod.startRenderWorkerHtml({
+      id: 'counter-error',
+      code: 'error path',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+    const firstWorker = workerState.FakeWorker.instances[0];
+    const secondWorker = workerState.FakeWorker.instances[1];
+    if (!firstWorker || !secondWorker) throw new Error('expected two render workers');
+
+    expect(renderState.pendingWorkerRenders.value).toBe(2);
+    firstWorker.emit({ id: 'counter-message', ok: true, html: '<first />' });
+    await expect(first.promise).resolves.toBe('<first />');
+    expect(renderState.pendingWorkerRenders.value).toBe(1);
+
+    const workerRejection = second.promise.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    secondWorker.onerror?.('worker failed');
+    const workerError = await workerRejection;
+    expect(workerError).toBeInstanceOf(Error);
+    expect(workerError).toMatchObject({ message: 'worker failed' });
+    expect(renderState.pendingWorkerRenders.value).toBe(0);
+
+    const cancelled = mod.startRenderWorkerHtml({
+      id: 'counter-cancel',
+      code: 'cancel path',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+    expect(renderState.pendingWorkerRenders.value).toBe(1);
+    const cancelledRejection = cancelled.promise.then(
+      () => null,
+      (error: unknown) => error,
+    );
+    cancelled.cancel();
+    const cancellationError = await cancelledRejection;
+    expect(cancellationError).toBeInstanceOf(mod.RenderCancelledError);
+    expect(renderState.pendingWorkerRenders.value).toBe(0);
+  });
+
+  it('replaces a crashed pool worker without rejecting healthy worker requests', async () => {
+    const mod = await import('../utils/workerRenderer');
+    const failed = mod.startRenderWorkerHtml({
+      id: 'failed-worker',
+      code: 'failed',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+    const healthy = mod.startRenderWorkerHtml({
+      id: 'healthy-worker',
+      code: 'healthy',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+    const failedWorker = workerState.FakeWorker.instances[0];
+    const healthyWorker = workerState.FakeWorker.instances[1];
+    if (!failedWorker || !healthyWorker) throw new Error('expected two render workers');
+    const initialPoolSize = workerState.FakeWorker.instances.length;
+    expect(failedWorker.posted).toContainEqual(expect.objectContaining({ id: 'failed-worker' }));
+    expect(healthyWorker.posted).toContainEqual(expect.objectContaining({ id: 'healthy-worker' }));
+    failedWorker.onerror?.('worker failed');
+
+    await expect(failed.promise).rejects.toThrow('worker failed');
+    expect(failedWorker.terminated).toBe(true);
+    expect(workerState.FakeWorker.instances).toHaveLength(initialPoolSize + 1);
+
+    healthyWorker.emit({ id: 'healthy-worker', ok: true, html: '<healthy />' });
+    await expect(healthy.promise).resolves.toBe('<healthy />');
+
+    for (let index = 2; index < initialPoolSize; index += 1) {
+      const requestId = `healthy-${index}`;
+      const task = mod.startRenderWorkerHtml({
+        id: requestId,
+        code: requestId,
+        lang: 'text',
+        theme: 'github-dark',
+      });
+      workerState.FakeWorker.instances[index]?.emit({
+        id: requestId,
+        ok: true,
+        html: `<${requestId} />`,
+      });
+      await expect(task.promise).resolves.toBe(`<${requestId} />`);
+    }
+
+    const replacement = mod.startRenderWorkerHtml({
+      id: 'replacement-worker',
+      code: 'replacement',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+    const replacementWorker = workerState.FakeWorker.instances[initialPoolSize];
+    if (!replacementWorker) throw new Error('expected a replacement worker');
+    replacementWorker.emit({ id: 'replacement-worker', ok: true, html: '<replacement />' });
+    await expect(replacement.promise).resolves.toBe('<replacement />');
+  });
+
   it('renderWorkerHtml resolves pool html and serves repeats from completedCache', async () => {
     // Given: the module with a fresh pool
     const mod = await import('../utils/workerRenderer');

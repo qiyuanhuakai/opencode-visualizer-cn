@@ -379,6 +379,21 @@ describe('useStreamCodeRender', () => {
     expect(cancel).toHaveBeenCalled();
   });
 
+  it('cancels a stream that is already waiting for finalization on unmount', async () => {
+    const params = ref({ code: 'const x = 1;', lang: 'typescript', theme: 'github-dark' });
+    const { stream, close, cancel } = createMockStream();
+    close.mockReturnValue(new Promise<string>(() => {}));
+    mockStartStream.mockReturnValue(stream);
+    const { unmount } = useStreamCodeRender(params);
+    await nextTick();
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(close).toHaveBeenCalledTimes(1);
+    unmount();
+
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('sets error ref when close() rejects', async () => {
     // Given: a stream that will fail on close
     const params = ref({ code: 'const x = 1;', lang: 'typescript', theme: 'github-dark' });

@@ -56,6 +56,7 @@ export function useStreamCodeRender(
   const { t } = useI18n();
 
   let activeStream: RenderWorkerStream | null = null;
+  let closingStream: RenderWorkerStream | null = null;
   let patcher: StreamPatcher | null = null;
   let lastCode = '';
   let lastParams: StreamCodeRenderParams | null = null;
@@ -69,10 +70,11 @@ export function useStreamCodeRender(
       clearTimeout(closeTimer);
       closeTimer = null;
     }
-    if (activeStream) {
-      activeStream.cancel();
-      activeStream = null;
-    }
+    const stream = activeStream;
+    activeStream = null;
+    stream?.cancel();
+    if (closingStream && closingStream !== stream) closingStream.cancel();
+    closingStream = null;
     patcher = null;
     pendingBatches = [];
     // A cancelled session's rows are invalid for the next session; a fresh
@@ -153,6 +155,7 @@ export function useStreamCodeRender(
     const stream = activeStream;
     const closingRequestId = requestId;
     activeStream = null;
+    closingStream = stream;
 
     try {
       const finalHtml = await stream.close();
@@ -172,6 +175,8 @@ export function useStreamCodeRender(
       patcher = null;
       if (err instanceof RenderCancelledError) return;
       error.value = err instanceof Error ? err.message : t('render.renderFailed');
+    } finally {
+      if (closingStream === stream) closingStream = null;
     }
   }
 
@@ -184,6 +189,7 @@ export function useStreamCodeRender(
     params,
     (p) => {
       if (!p) {
+        requestId += 1;
         cancelActiveStream();
         html.value = '';
         error.value = '';
@@ -221,10 +227,12 @@ export function useStreamCodeRender(
   );
 
   function unmount() {
+    requestId += 1;
     cancelActiveStream();
   }
 
   onBeforeUnmount(() => {
+    requestId += 1;
     cancelActiveStream();
   });
 

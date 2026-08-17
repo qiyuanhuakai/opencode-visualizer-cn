@@ -41,6 +41,7 @@ type RenderResponse =
 type PendingEntry = {
   resolve: (value: string) => void;
   reject: (reason: Error) => void;
+  worker: Worker;
   errorLabel?: string;
 };
 
@@ -98,24 +99,42 @@ function cacheRenderedHtml(key: string, html: string) {
   if (oldestKey) completedCache.delete(oldestKey);
 }
 
-function createWorker(): Worker {
+function errorFromWorkerEvent(error: unknown): Error {
+  if (error instanceof Error) return error;
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
+    return new Error(error.message);
+  }
+  return new Error(String(error));
+}
+
+function createWorker(slotIndex: number): Worker {
   const worker = new RenderWorker();
   worker.onmessage = (event: MessageEvent<RenderResponse>) => {
     const data = event.data;
     const entry = pending.get(data.id);
-    if (!entry) return;
+    if (!entry || entry.worker !== worker) return;
     pending.delete(data.id);
     decrementPendingRenders();
     if (data.ok) entry.resolve(data.html);
     else entry.reject(new Error(data.error || entry.errorLabel || 'Render failed'));
   };
   worker.onerror = (error) => {
-    const count = pending.size;
-    pending.forEach((entry) => entry.reject(new Error(String(error))));
-    pending.clear();
-    for (let i = 0; i < count; i++) {
+    if (workers[slotIndex] !== worker) return;
+    const renderError = errorFromWorkerEvent(error);
+    for (const [requestId, entry] of pending) {
+      if (entry.worker !== worker) continue;
+      pending.delete(requestId);
+      entry.reject(renderError);
       decrementPendingRenders();
     }
+    const replacement = createWorker(slotIndex);
+    workers[slotIndex] = replacement;
+    worker.terminate();
   };
   return worker;
 }
@@ -123,7 +142,7 @@ function createWorker(): Worker {
 function getWorker(): Worker {
   if (workers.length === 0) {
     for (let i = 0; i < WORKER_POOL_SIZE; i++) {
-      workers.push(createWorker());
+      workers.push(createWorker(i));
     }
   }
   const worker = workers[workerIndex];
@@ -140,15 +159,24 @@ export function renderWorkerHtml(payload: RenderRequest) {
   const id = payload.id;
   incrementPendingRenders();
   return new Promise<string>((resolve, reject) => {
+    let worker: Worker;
+    try {
+      worker = getWorker();
+    } catch (error) {
+      decrementPendingRenders();
+      reject(errorFromWorkerEvent(error));
+      return;
+    }
     pending.set(id, {
       resolve: (html) => {
         cacheRenderedHtml(cacheKey, html);
         resolve(html);
       },
       reject,
+      worker,
       errorLabel: payload.errorLabel,
     });
-    getWorker().postMessage(payload);
+    worker.postMessage(payload);
   });
 }
 
@@ -167,23 +195,31 @@ export function startRenderWorkerHtml(payload: RenderRequest): RenderTask {
   incrementPendingRenders();
 
   const promise = new Promise<string>((resolve, reject) => {
+    let worker: Worker;
+    try {
+      worker = getWorker();
+    } catch (error) {
+      settled = true;
+      decrementPendingRenders();
+      reject(errorFromWorkerEvent(error));
+      return;
+    }
     pending.set(id, {
       resolve: (html) => {
         if (settled) return;
         settled = true;
-        decrementPendingRenders();
         cacheRenderedHtml(cacheKey, html);
         resolve(html);
       },
       reject: (error) => {
         if (settled) return;
         settled = true;
-        decrementPendingRenders();
         reject(error);
       },
+      worker,
       errorLabel: payload.errorLabel,
     });
-    getWorker().postMessage(payload);
+    worker.postMessage(payload);
   });
 
   return {
@@ -193,7 +229,6 @@ export function startRenderWorkerHtml(payload: RenderRequest): RenderTask {
       const entry = pending.get(id);
       if (!entry) return;
       pending.delete(id);
-      settled = true;
       decrementPendingRenders();
       entry.reject(new RenderCancelledError());
     },
