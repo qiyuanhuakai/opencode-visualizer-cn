@@ -10,7 +10,7 @@
       >
         <template #trigger><span /></template>
         <template #default>
-          <div class="dropdown-list">
+          <div v-if="historyOpen" class="dropdown-list">
             <DropdownItem
               v-for="(entry, i) in userHistory"
               :key="`${entry.text}:${entry.agent}:${entry.model}:${entry.variant}:${i}`"
