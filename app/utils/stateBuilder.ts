@@ -13,6 +13,7 @@ const PROJECT_COLOR_HEX: Record<string, string> = {
 
 const CHILD_SESSION_PRUNE_TTL_MS = 20 * 60 * 1000;
 const GLOBAL_PROJECT_NAME = 'global';
+const RESERVED_RECORD_KEYS = new Set([...Object.getOwnPropertyNames(Object.prototype), 'prototype']);
 
 type SessionStatusType = Exclude<SessionState['status'], undefined>;
 
@@ -43,6 +44,17 @@ type SessionEntry = {
   session: SessionState;
 };
 
+type SnapshotToken = {
+  readonly id: symbol;
+  readonly baseline: number;
+  readonly sequence: number;
+  invalidated?: boolean;
+};
+
+type SnapshotRegistry = Set<SnapshotToken>;
+
+const MAX_SNAPSHOT_REVISION_TRACKERS = 2_000;
+
 export function resolveProjectColorHex(raw?: string): string | undefined {
   if (!raw) return undefined;
   const trimmed = raw.trim();
@@ -70,6 +82,16 @@ function isSessionStatus(value: string): value is SessionStatusType {
   return value === 'busy' || value === 'idle' || value === 'retry';
 }
 
+function isSafeRecordKey(value: string): boolean {
+  const normalized = value.trim();
+  return normalized.length > 0 && !RESERVED_RECORD_KEYS.has(normalized);
+}
+
+function normalizeSafeDirectory(value?: string): string {
+  const normalized = normalizeDirectory(value);
+  return normalized && isSafeRecordKey(normalized) ? normalized : '';
+}
+
 function resolveProjectName(projectId: string, name?: string) {
   const trimmed = name?.trim();
   if (trimmed) return trimmed;
@@ -78,7 +100,7 @@ function resolveProjectName(projectId: string, name?: string) {
 }
 
 function createDefaultProject(id: string, worktree: string): ProjectState {
-  const normalizedWorktree = normalizeDirectory(worktree) || '/';
+  const normalizedWorktree = normalizeSafeDirectory(worktree) || '/';
   return {
     id,
     name: resolveProjectName(id),
@@ -99,7 +121,7 @@ function sanitizeDirectoryList(value: unknown): string[] {
   const result = new Set<string>();
   value.forEach((entry) => {
     if (typeof entry !== 'string') return;
-    const normalized = normalizeDirectory(entry);
+    const normalized = normalizeSafeDirectory(entry);
     if (!normalized) return;
     result.add(normalized);
   });
@@ -125,48 +147,114 @@ export function createStateBuilder() {
   const ephemeralLastSeenAt = new Map<string, number>();
   const ephemeralLastActiveAt = new Map<string, number>();
   const authoritativeChildSessionIds = new Set<string>();
-  const pendingStatusBySessionId = new Map<
-    string,
-    { projectId: string; status: SessionStatusType }
-  >();
+  const pendingStatusBySessionId = new Map<string, SessionStatusType>();
   const statusRevisionBySessionId = new Map<string, number>();
-  const activeStatusSnapshots = new Map<number, number>();
+  const statusSnapshotFenceBySessionId = new Map<string, number>();
+  const activeStatusSnapshots: SnapshotRegistry = new Set();
   let statusRevision = 0;
+  let snapshotSequence = 0;
   const mutationRevisionBySessionId = new Map<string, number>();
-  const activeMutationSnapshots = new Map<number, number>();
+  const activeMutationSnapshots: SnapshotRegistry = new Set();
   let mutationRevision = 0;
   const MAX_PENDING_STATUSES = 2_000;
+  let snapshotOverflowed = false;
+  const deferredRootSessionOrder = new Set<SandboxState>();
+  let deferRootSessionSorting = false;
 
   function recordSessionMutation(sessionId: string) {
+    if (!isSafeRecordKey(sessionId)) return;
     mutationRevision += 1;
-    if (activeMutationSnapshots.size > 0) {
-      mutationRevisionBySessionId.set(sessionId, mutationRevision);
+    if (!hasValidActiveSnapshot(activeMutationSnapshots)) return;
+    if (
+      !mutationRevisionBySessionId.has(sessionId) &&
+      mutationRevisionBySessionId.size >= MAX_SNAPSHOT_REVISION_TRACKERS
+    ) {
+      invalidateAllSnapshots();
+      return;
     }
+    mutationRevisionBySessionId.set(sessionId, mutationRevision);
   }
 
   function recordStatusRevision(sessionId: string) {
+    if (!isSafeRecordKey(sessionId)) return;
     statusRevision += 1;
-    if (activeStatusSnapshots.size > 0) {
-      statusRevisionBySessionId.set(sessionId, statusRevision);
+    if (!hasValidActiveSnapshot(activeStatusSnapshots)) return;
+    if (
+      !statusRevisionBySessionId.has(sessionId) &&
+      statusRevisionBySessionId.size >= MAX_SNAPSHOT_REVISION_TRACKERS
+    ) {
+      invalidateAllSnapshots();
+      return;
+    }
+    statusRevisionBySessionId.set(sessionId, statusRevision);
+  }
+
+  function bufferPendingStatus(sessionId: string, status: SessionStatusType) {
+    pendingStatusBySessionId.delete(sessionId);
+    pendingStatusBySessionId.set(sessionId, status);
+    while (pendingStatusBySessionId.size > MAX_PENDING_STATUSES) {
+      const oldestSessionId = pendingStatusBySessionId.keys().next().value;
+      if (!oldestSessionId) break;
+      pendingStatusBySessionId.delete(oldestSessionId);
     }
   }
 
-  function beginSnapshot(revision: number, activeSnapshots: Map<number, number>) {
-    activeSnapshots.set(revision, (activeSnapshots.get(revision) ?? 0) + 1);
-    return revision;
+  function hasValidActiveSnapshot(activeSnapshots: SnapshotRegistry): boolean {
+    for (const snapshot of activeSnapshots) {
+      if (!snapshot.invalidated) return true;
+    }
+    return false;
+  }
+
+  function invalidateAllSnapshots(): void {
+    for (const snapshot of activeMutationSnapshots) snapshot.invalidated = true;
+    for (const snapshot of activeStatusSnapshots) snapshot.invalidated = true;
+    mutationRevisionBySessionId.clear();
+    statusRevisionBySessionId.clear();
+    snapshotOverflowed = true;
+  }
+
+  function beginSnapshot(revision: number, activeSnapshots: SnapshotRegistry): SnapshotToken {
+    const token: SnapshotToken = {
+      id: Symbol('snapshot'),
+      baseline: revision,
+      sequence: ++snapshotSequence,
+      invalidated: false,
+    };
+    activeSnapshots.add(token);
+    return token;
+  }
+
+  function getActiveSnapshot(
+    token: SnapshotToken,
+    activeSnapshots: SnapshotRegistry,
+  ): SnapshotToken | undefined {
+    return activeSnapshots.has(token) ? token : undefined;
+  }
+
+  function isUsableSnapshot(token: SnapshotToken, activeSnapshots: SnapshotRegistry): boolean {
+    const activeSnapshot = getActiveSnapshot(token, activeSnapshots);
+    return Boolean(activeSnapshot && !activeSnapshot.invalidated);
   }
 
   function completeSnapshot(
-    revision: number,
-    activeSnapshots: Map<number, number>,
+    token: SnapshotToken,
+    activeSnapshots: SnapshotRegistry,
     revisionsBySessionId: Map<string, number>,
-  ) {
-    const remaining = (activeSnapshots.get(revision) ?? 0) - 1;
-    if (remaining > 0) activeSnapshots.set(revision, remaining);
-    else activeSnapshots.delete(revision);
+  ): void {
+    const activeSnapshot = getActiveSnapshot(token, activeSnapshots);
+    if (!activeSnapshot) return;
+    activeSnapshots.delete(token);
+
     let oldestActiveRevision = Number.POSITIVE_INFINITY;
-    for (const activeRevision of activeSnapshots.keys()) {
-      oldestActiveRevision = Math.min(oldestActiveRevision, activeRevision);
+    for (const snapshot of activeSnapshots) {
+      if (!snapshot.invalidated) {
+        oldestActiveRevision = Math.min(oldestActiveRevision, snapshot.baseline);
+      }
+    }
+    if (oldestActiveRevision === Number.POSITIVE_INFINITY) {
+      revisionsBySessionId.clear();
+      return;
     }
     for (const [sessionId, sessionRevision] of revisionsBySessionId) {
       if (sessionRevision <= oldestActiveRevision) revisionsBySessionId.delete(sessionId);
@@ -174,6 +262,7 @@ export function createStateBuilder() {
   }
 
   function getProject(projectId: string): ProjectState | undefined {
+    if (!isSafeRecordKey(projectId)) return undefined;
     return state.projects[projectId];
   }
 
@@ -187,10 +276,10 @@ export function createStateBuilder() {
       }
     }
 
-    const root = normalizeDirectory(project.worktree);
+    const root = normalizeSafeDirectory(project.worktree);
     if (root) projectIdByDirectory.set(root, projectId);
     Object.keys(project.sandboxes).forEach((directory) => {
-      const normalized = normalizeDirectory(directory);
+       const normalized = normalizeSafeDirectory(directory);
       if (!normalized) return;
       projectIdByDirectory.set(normalized, projectId);
     });
@@ -204,7 +293,7 @@ export function createStateBuilder() {
     Object.values(state.projects).forEach((project) => {
       indexProjectDirectories(project);
       Object.entries(project.sandboxes).forEach(([directory, sandbox]) => {
-        const normalizedDirectory = normalizeDirectory(directory);
+        const normalizedDirectory = normalizeSafeDirectory(directory);
         if (!normalizedDirectory) return;
         Object.keys(sandbox.sessions).forEach((sessionId) => {
           knownSessionIds.add(sessionId);
@@ -229,13 +318,13 @@ export function createStateBuilder() {
 
   function ensureProject(projectId: string, worktreeHint?: string): ProjectState {
     const normalizedProjectId = projectId.trim();
-    const worktree = normalizeDirectory(worktreeHint) || '/';
+    const worktree = normalizeSafeDirectory(worktreeHint) || '/';
     const existing = state.projects[normalizedProjectId];
     if (existing) {
-      if (!normalizeDirectory(existing.worktree)) {
+      if (!normalizeSafeDirectory(existing.worktree)) {
         existing.worktree = worktree;
       }
-      const normalizedWorktree = normalizeDirectory(existing.worktree) || worktree;
+      const normalizedWorktree = normalizeSafeDirectory(existing.worktree) || worktree;
       existing.worktree = normalizedWorktree;
       if (!existing.sandboxes[normalizedWorktree]) {
         existing.sandboxes[normalizedWorktree] = {
@@ -256,8 +345,8 @@ export function createStateBuilder() {
   }
 
   function ensureSandbox(project: ProjectState, directoryHint?: string): SandboxState {
-    const fallback = normalizeDirectory(project.worktree) || '/';
-    const normalizedDirectory = normalizeDirectory(directoryHint) || fallback;
+    const fallback = normalizeSafeDirectory(project.worktree) || '/';
+    const normalizedDirectory = normalizeSafeDirectory(directoryHint) || fallback;
     const existing = project.sandboxes[normalizedDirectory];
     if (existing) return existing;
     const created: SandboxState = {
@@ -272,7 +361,7 @@ export function createStateBuilder() {
   }
 
   function resolveProjectIdForDirectory(directory?: string) {
-    const normalized = normalizeDirectory(directory);
+    const normalized = normalizeSafeDirectory(directory);
     if (!normalized) return '';
     return projectIdByDirectory.get(normalized) ?? '';
   }
@@ -287,12 +376,26 @@ export function createStateBuilder() {
     sandbox.rootSessions = roots;
   }
 
+  function updateRootSessionOrderOrDefer(sandbox: SandboxState): void {
+    if (deferRootSessionSorting) {
+      deferredRootSessionOrder.add(sandbox);
+      return;
+    }
+    updateRootSessionOrder(sandbox);
+  }
+
+  function flushDeferredRootSessionOrder(): void {
+    for (const sandbox of deferredRootSessionOrder) updateRootSessionOrder(sandbox);
+    deferredRootSessionOrder.clear();
+  }
+
   function findSessionEntry(
     sessionId: string,
     preferredProjectId?: string,
   ): SessionEntry | undefined {
-    if (!sessionId) return undefined;
+    if (!sessionId || !isSafeRecordKey(sessionId)) return undefined;
     const preferred = preferredProjectId?.trim();
+    if (preferred && !isSafeRecordKey(preferred)) return undefined;
     if (preferred) {
       const project = state.projects[preferred];
       if (project) {
@@ -337,6 +440,9 @@ export function createStateBuilder() {
   }
 
   function removeSession(sessionId: string, preferredProjectId?: string): string | null {
+    if (!isSafeRecordKey(sessionId)) return null;
+    const preferred = preferredProjectId?.trim();
+    if (preferred && !isSafeRecordKey(preferred)) return null;
     const entry = findSessionEntry(sessionId, preferredProjectId);
     if (!entry) return null;
     const project = state.projects[entry.projectId];
@@ -348,7 +454,7 @@ export function createStateBuilder() {
     ephemeralLastActiveAt.delete(sessionId);
     authoritativeChildSessionIds.delete(sessionId);
     pendingStatusBySessionId.delete(sessionId);
-    updateRootSessionOrder(sandbox);
+    updateRootSessionOrderOrDefer(sandbox);
     return entry.projectId;
   }
 
@@ -410,8 +516,8 @@ export function createStateBuilder() {
     delete source.sessions[sessionId];
     target.sessions[sessionId] = nextSession;
     sessionLocationById.set(sessionId, { projectId, directory: target.directory });
-    updateRootSessionOrder(source);
-    updateRootSessionOrder(target);
+    updateRootSessionOrderOrDefer(source);
+    updateRootSessionOrderOrDefer(target);
   }
 
   function moveRootDescendantsToRootSandbox(
@@ -453,10 +559,12 @@ export function createStateBuilder() {
   }
 
   function upsertSession(info: SessionMutationInfo): string | null {
-    if (!info?.id) return null;
+    if (!info?.id || !isSafeRecordKey(info.id)) return null;
+    const incomingDirectory = normalizeDirectory(info.directory);
+    if (incomingDirectory && !isSafeRecordKey(incomingDirectory)) return null;
     const existing = findSessionEntry(info.id);
     const resolvedProjectId = info.projectID?.trim();
-    if (!resolvedProjectId) return null;
+    if (!resolvedProjectId || !isSafeRecordKey(resolvedProjectId)) return null;
 
     let project = state.projects[resolvedProjectId];
     if (!project) {
@@ -466,23 +574,21 @@ export function createStateBuilder() {
     const incomingParentId = info.parentID?.trim() || undefined;
     const previous = existing?.session;
     const parentID = incomingParentId ?? previous?.parentID;
-    const pendingStatus = pendingStatusBySessionId.get(info.id);
-    const replayedStatus =
-      pendingStatus?.projectId === resolvedProjectId ? pendingStatus.status : undefined;
+    const replayedStatus = pendingStatusBySessionId.get(info.id);
     const hasRevert = Object.prototype.hasOwnProperty.call(info, 'revert');
     const revert = hasRevert ? info.revert : previous?.revert;
 
     let targetDirectory =
-      normalizeDirectory(info.directory) ||
-      normalizeDirectory(existing?.directory) ||
-      normalizeDirectory(project.worktree) ||
+      normalizeSafeDirectory(info.directory) ||
+      normalizeSafeDirectory(existing?.directory) ||
+      normalizeSafeDirectory(project.worktree) ||
       '/';
 
     if (parentID) {
       const rootId = resolveRootSessionIdInProject(parentID, resolvedProjectId);
       const rootEntry = findSessionEntry(rootId, resolvedProjectId);
       if (rootEntry?.directory) {
-        targetDirectory = normalizeDirectory(rootEntry.directory) || targetDirectory;
+        targetDirectory = normalizeSafeDirectory(rootEntry.directory) || targetDirectory;
       }
     }
 
@@ -523,7 +629,7 @@ export function createStateBuilder() {
       const existingSandbox = existingProject?.sandboxes[existing.directory];
       if (existingSandbox) {
         delete existingSandbox.sessions[info.id];
-        updateRootSessionOrder(existingSandbox);
+        updateRootSessionOrderOrDefer(existingSandbox);
       }
     }
 
@@ -533,7 +639,7 @@ export function createStateBuilder() {
       directory: sandbox.directory,
     });
     pendingStatusBySessionId.delete(info.id);
-    updateRootSessionOrder(sandbox);
+    updateRootSessionOrderOrDefer(sandbox);
 
     if (next.parentID) {
       const now = Date.now();
@@ -551,9 +657,11 @@ export function createStateBuilder() {
   }
 
   function applyProject(project: ProjectInfo): boolean {
-    if (!project?.id) return false;
+    if (!project?.id || !isSafeRecordKey(project.id)) return false;
     const existed = Boolean(state.projects[project.id]);
-    const worktree = normalizeDirectory(project.worktree) || (project.id === 'global' ? '/' : '/');
+    const incomingWorktree = normalizeDirectory(project.worktree);
+    if (incomingWorktree && !isSafeRecordKey(incomingWorktree)) return false;
+    const worktree = normalizeSafeDirectory(project.worktree) || '/';
     const target = ensureProject(project.id, worktree);
 
     let changed = !existed;
@@ -646,22 +754,30 @@ export function createStateBuilder() {
 
   function applySessions(sessions: SessionInfo[]) {
     const list = Array.isArray(sessions) ? sessions : [];
-    list.forEach((session) => {
-      upsertSession({
-        ...session,
-        revert: session.revert,
+    const wasDeferred = deferRootSessionSorting;
+    deferRootSessionSorting = true;
+    try {
+      list.forEach((session) => {
+        upsertSession({
+          ...session,
+          revert: session.revert,
+        });
       });
-    });
+    } finally {
+      deferRootSessionSorting = wasDeferred;
+      if (!wasDeferred) flushDeferredRootSessionOrder();
+    }
   }
 
   function applySessionSnapshot(
     sessions: SessionInfo[],
-    maximumMutationRevision: number,
-  ) {
+    snapshotToken: SnapshotToken,
+  ): void {
+    if (!isUsableSnapshot(snapshotToken, activeMutationSnapshots)) return;
     applySessions(
       (Array.isArray(sessions) ? sessions : []).filter(
         (session) =>
-          (mutationRevisionBySessionId.get(session.id) ?? 0) <= maximumMutationRevision,
+          (mutationRevisionBySessionId.get(session.id) ?? 0) <= snapshotToken.baseline,
       ),
     );
   }
@@ -669,7 +785,7 @@ export function createStateBuilder() {
   function applyAuthoritativeSessions(sessions: SessionInfo[]) {
     const list = Array.isArray(sessions) ? sessions : [];
     list.forEach((session) => {
-      if (session.parentID?.trim()) {
+      if (isSafeRecordKey(session.id) && session.parentID?.trim()) {
         authoritativeChildSessionIds.add(session.id);
       }
     });
@@ -678,10 +794,14 @@ export function createStateBuilder() {
 
   function applyStatuses(statusMap: Record<string, { type?: string }>) {
     Object.entries(statusMap ?? {}).forEach(([sessionId, info]) => {
+      if (!isSafeRecordKey(sessionId)) return;
       const type = info?.type;
       if (!type || !isSessionStatus(type)) return;
       const entry = findSessionEntry(sessionId);
-      if (!entry) return;
+      if (!entry) {
+        bufferPendingStatus(sessionId, type);
+        return;
+      }
       if (entry.session.status === type) return;
       entry.session.status = type;
       if (type === 'busy' || type === 'retry') {
@@ -694,20 +814,44 @@ export function createStateBuilder() {
   function applyStatusSnapshot(
     sessionIds: string[],
     statusMap: Record<string, { type?: string }>,
-    maximumStatusRevision = Number.POSITIVE_INFINITY,
-  ) {
+    snapshotToken?: SnapshotToken,
+  ): void {
+    if (
+      snapshotToken &&
+      !isUsableSnapshot(snapshotToken, activeStatusSnapshots)
+    )
+      return;
+    const maximumStatusRevision = snapshotToken?.baseline ?? Number.POSITIVE_INFINITY;
     const applicableStatuses = Object.fromEntries(
       Object.entries(statusMap).filter(
         ([sessionId]) =>
+          isSafeRecordKey(sessionId) &&
+          (!snapshotToken ||
+            (statusSnapshotFenceBySessionId.get(sessionId) ?? 0) < snapshotToken.sequence) &&
           (statusRevisionBySessionId.get(sessionId) ?? 0) <= maximumStatusRevision,
       ),
     );
-    Object.keys(applicableStatuses).forEach(recordStatusRevision);
+    if (snapshotToken && !isUsableSnapshot(snapshotToken, activeStatusSnapshots)) return;
+    if (!snapshotToken) Object.keys(applicableStatuses).forEach(recordStatusRevision);
     applyStatuses(applicableStatuses);
+    if (snapshotToken) {
+      Object.keys(applicableStatuses).forEach((sessionId) => {
+        statusSnapshotFenceBySessionId.set(sessionId, snapshotToken.sequence);
+      });
+    }
     for (const sessionId of sessionIds) {
+      if (!isSafeRecordKey(sessionId)) continue;
       if (sessionId in statusMap) continue;
+      if (
+        snapshotToken &&
+        (statusSnapshotFenceBySessionId.get(sessionId) ?? 0) >= snapshotToken.sequence
+      )
+        continue;
       if ((statusRevisionBySessionId.get(sessionId) ?? 0) > maximumStatusRevision) continue;
-      recordStatusRevision(sessionId);
+      if (snapshotToken && !isUsableSnapshot(snapshotToken, activeStatusSnapshots)) return;
+      if (!snapshotToken) recordStatusRevision(sessionId);
+      if (snapshotToken) statusSnapshotFenceBySessionId.set(sessionId, snapshotToken.sequence);
+      pendingStatusBySessionId.delete(sessionId);
       const entry = findSessionEntry(sessionId);
       if (!entry?.session.status) continue;
       const sandbox = state.projects[entry.projectId]?.sandboxes[entry.directory];
@@ -717,7 +861,7 @@ export function createStateBuilder() {
 
   function applyVcsInfo(directory: string, info: { branch: string }) {
     const branch = info?.branch?.trim();
-    const normalizedDirectory = normalizeDirectory(directory);
+    const normalizedDirectory = normalizeSafeDirectory(directory);
     if (!branch || !normalizedDirectory) return;
 
     let projectId = resolveProjectIdForDirectory(normalizedDirectory);
@@ -731,6 +875,8 @@ export function createStateBuilder() {
   }
 
   function processSessionCreated(info: SessionInfo): string | null {
+    const directory = normalizeDirectory(info.directory);
+    if (directory && !isSafeRecordKey(directory)) return null;
     recordSessionMutation(info.id);
     if (info.parentID?.trim()) authoritativeChildSessionIds.add(info.id);
     const changed = upsertSession({
@@ -742,6 +888,8 @@ export function createStateBuilder() {
   }
 
   function processSessionUpdated(info: SessionInfo): string | null {
+    const directory = normalizeDirectory(info.directory);
+    if (directory && !isSafeRecordKey(directory)) return null;
     recordSessionMutation(info.id);
     const changed = upsertSession({
       ...info,
@@ -752,6 +900,12 @@ export function createStateBuilder() {
   }
 
   function processSessionDeleted(sessionId: string, projectId?: string): string | null {
+    const normalizedProjectId = projectId?.trim();
+    if (
+      !isSafeRecordKey(sessionId) ||
+      (normalizedProjectId !== undefined && !isSafeRecordKey(normalizedProjectId))
+    )
+      return null;
     recordSessionMutation(sessionId);
     recordStatusRevision(sessionId);
     pendingStatusBySessionId.delete(sessionId);
@@ -765,19 +919,17 @@ export function createStateBuilder() {
     status: string,
     projectId?: string,
   ): string | null {
-    if (!isSessionStatus(status)) return null;
+    const normalizedProjectId = projectId?.trim();
+    if (
+      !isSafeRecordKey(sessionId) ||
+      (normalizedProjectId !== undefined && !isSafeRecordKey(normalizedProjectId)) ||
+      !isSessionStatus(status)
+    )
+      return null;
     recordStatusRevision(sessionId);
     const entry = findSessionEntry(sessionId, projectId);
     if (!entry) {
-      if (projectId && state.projects[projectId]) {
-        pendingStatusBySessionId.delete(sessionId);
-        pendingStatusBySessionId.set(sessionId, { projectId, status });
-        while (pendingStatusBySessionId.size > MAX_PENDING_STATUSES) {
-          const oldestSessionId = pendingStatusBySessionId.keys().next().value;
-          if (!oldestSessionId) break;
-          pendingStatusBySessionId.delete(oldestSessionId);
-        }
-      }
+      bufferPendingStatus(sessionId, status);
       return null;
     }
     pendingStatusBySessionId.delete(sessionId);
@@ -794,16 +946,35 @@ export function createStateBuilder() {
     return beginSnapshot(statusRevision, activeStatusSnapshots);
   }
 
-  function completeStatusSnapshot(revision: number) {
-    completeSnapshot(revision, activeStatusSnapshots, statusRevisionBySessionId);
+  function completeStatusSnapshot(token: SnapshotToken) {
+    completeSnapshot(token, activeStatusSnapshots, statusRevisionBySessionId);
+    let oldestActiveSequence = Number.POSITIVE_INFINITY;
+    for (const snapshot of activeStatusSnapshots) {
+      if (!snapshot.invalidated) {
+        oldestActiveSequence = Math.min(oldestActiveSequence, snapshot.sequence);
+      }
+    }
+    if (oldestActiveSequence === Number.POSITIVE_INFINITY) {
+      statusSnapshotFenceBySessionId.clear();
+      return;
+    }
+    for (const [sessionId, sequence] of statusSnapshotFenceBySessionId) {
+      if (sequence < oldestActiveSequence) statusSnapshotFenceBySessionId.delete(sessionId);
+    }
   }
 
   function beginMutationSnapshot() {
     return beginSnapshot(mutationRevision, activeMutationSnapshots);
   }
 
-  function completeMutationSnapshot(revision: number) {
-    completeSnapshot(revision, activeMutationSnapshots, mutationRevisionBySessionId);
+  function completeMutationSnapshot(token: SnapshotToken) {
+    completeSnapshot(token, activeMutationSnapshots, mutationRevisionBySessionId);
+  }
+
+  function consumeSnapshotOverflow(): boolean {
+    if (!snapshotOverflowed) return false;
+    snapshotOverflowed = false;
+    return true;
   }
 
   function processProjectUpdated(project: ProjectInfo): string | null {
@@ -812,7 +983,7 @@ export function createStateBuilder() {
   }
 
   function processVcsBranchUpdated(directory: string, branch: string): string | null {
-    const normalizedDirectory = normalizeDirectory(directory);
+    const normalizedDirectory = normalizeSafeDirectory(directory);
     const normalizedBranch = branch?.trim();
     if (!normalizedDirectory || !normalizedBranch) return null;
 
@@ -829,8 +1000,13 @@ export function createStateBuilder() {
 
   function registerSandboxDirectory(projectId: string, directory: string): string | null {
     const normalizedProjectId = projectId.trim();
-    const normalizedDirectory = normalizeDirectory(directory);
-    if (!normalizedProjectId || !normalizedDirectory) return null;
+    const normalizedDirectory = normalizeSafeDirectory(directory);
+    if (
+      !normalizedProjectId ||
+      !isSafeRecordKey(normalizedProjectId) ||
+      !normalizedDirectory
+    )
+      return null;
     const project = state.projects[normalizedProjectId];
     if (!project) return null;
     if (project.sandboxes[normalizedDirectory]) {
@@ -844,13 +1020,18 @@ export function createStateBuilder() {
 
   function removeSandboxDirectory(projectId: string, directory: string): string | null {
     const normalizedProjectId = projectId.trim();
-    const normalizedDirectory = normalizeDirectory(directory);
-    if (!normalizedProjectId || !normalizedDirectory) return null;
+    const normalizedDirectory = normalizeSafeDirectory(directory);
+    if (
+      !normalizedProjectId ||
+      !isSafeRecordKey(normalizedProjectId) ||
+      !normalizedDirectory
+    )
+      return null;
 
     const project = state.projects[normalizedProjectId];
     if (!project) return null;
 
-    const worktreeDirectory = normalizeDirectory(project.worktree);
+    const worktreeDirectory = normalizeSafeDirectory(project.worktree);
     if (!worktreeDirectory || normalizedDirectory === worktreeDirectory) {
       return null;
     }
@@ -877,6 +1058,12 @@ export function createStateBuilder() {
   }
 
   function applySessionRemoved(sessionId: string, projectId?: string): string | null {
+    const normalizedProjectId = projectId?.trim();
+    if (
+      !isSafeRecordKey(sessionId) ||
+      (normalizedProjectId !== undefined && !isSafeRecordKey(normalizedProjectId))
+    )
+      return null;
     const changed = removeSession(sessionId, projectId);
     pruneEphemeralChildren();
     return changed;
@@ -901,14 +1088,26 @@ export function createStateBuilder() {
   function resolveRootSessionIdForProject(projectId: string, sessionId: string): string {
     const normalizedProjectId = projectId.trim();
     const normalizedSessionId = sessionId.trim();
-    if (!normalizedProjectId || !normalizedSessionId) return normalizedSessionId;
+    if (
+      !normalizedProjectId ||
+      !normalizedSessionId ||
+      !isSafeRecordKey(normalizedProjectId) ||
+      !isSafeRecordKey(normalizedSessionId)
+    )
+      return '';
     return resolveRootSessionIdInProject(normalizedSessionId, normalizedProjectId);
   }
 
   function isSessionTreeIdle(projectId: string, sessionId: string): boolean {
     const normalizedProjectId = projectId.trim();
     const normalizedSessionId = sessionId.trim();
-    if (!normalizedProjectId || !normalizedSessionId) return false;
+    if (
+      !normalizedProjectId ||
+      !normalizedSessionId ||
+      !isSafeRecordKey(normalizedProjectId) ||
+      !isSafeRecordKey(normalizedSessionId)
+    )
+      return false;
 
     const rootSessionId = resolveRootSessionIdInProject(normalizedSessionId, normalizedProjectId);
     if (!rootSessionId) return false;
@@ -916,11 +1115,24 @@ export function createStateBuilder() {
     const project = state.projects[normalizedProjectId];
     if (!project) return false;
 
+    const childrenByParent = new Map<string, string[]>();
+    for (const sandbox of Object.values(project.sandboxes)) {
+      for (const session of Object.values(sandbox.sessions)) {
+        const parentId = session.parentID?.trim();
+        if (!parentId || !isSafeRecordKey(session.id)) continue;
+        const children = childrenByParent.get(parentId) ?? [];
+        children.push(session.id);
+        childrenByParent.set(parentId, children);
+      }
+    }
+
     const queue = [rootSessionId];
     const visited = new Set<string>();
+    let queueIndex = 0;
 
-    while (queue.length > 0) {
-      const currentId = queue.shift();
+    while (queueIndex < queue.length) {
+      const currentId = queue[queueIndex];
+      queueIndex += 1;
       if (!currentId || visited.has(currentId)) continue;
       visited.add(currentId);
 
@@ -928,13 +1140,9 @@ export function createStateBuilder() {
       if (!entry) return false;
       if (entry.session.status !== 'idle') return false;
 
-      Object.values(project.sandboxes).forEach((sandbox) => {
-        Object.values(sandbox.sessions).forEach((session) => {
-          if (session.parentID !== currentId) return;
-          if (visited.has(session.id)) return;
-          queue.push(session.id);
-        });
-      });
+      for (const childId of childrenByParent.get(currentId) ?? []) {
+        if (!visited.has(childId)) queue.push(childId);
+      }
     }
 
     return true;
@@ -949,6 +1157,7 @@ export function createStateBuilder() {
     applyStatusSnapshot,
     beginStatusSnapshot,
     completeStatusSnapshot,
+    consumeSnapshotOverflow,
     beginMutationSnapshot,
     completeMutationSnapshot,
     applyVcsInfo,
