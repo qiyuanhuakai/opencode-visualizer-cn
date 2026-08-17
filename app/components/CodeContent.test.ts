@@ -30,4 +30,34 @@ describe('CodeContent word wrapping', () => {
 
     expect(root.querySelector('.code-content')?.classList.contains('wrap-soft')).toBe(false);
   });
+
+  it('constrains wrapped code rows to the preview width', async () => {
+    const { floatingPreviewWordWrap } = useSettings();
+    const previous = floatingPreviewWordWrap.value;
+    floatingPreviewWordWrap.value = true;
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const html = [
+      '<pre class="shiki"><code>',
+      '<div class="code-row">',
+      '<span class="code-gutter">1</span><span class="code-gutter"></span>',
+      '<span class="line">a-very-long-line-without-a-natural-break</span>',
+      '</div>',
+      '</code></pre>',
+    ].join('');
+    const app = createApp({
+      render: () => h(CodeContent, { html, variant: 'code' }),
+    });
+    app.mount(root);
+    cleanup = () => {
+      app.unmount();
+      root.remove();
+      floatingPreviewWordWrap.value = previous;
+    };
+    await nextTick();
+
+    const content = root.querySelector<HTMLElement>('.code-content');
+    expect(floatingPreviewWordWrap.value).toBe(true);
+    expect(content?.classList.contains('wrap-soft')).toBe(true);
+  });
 });

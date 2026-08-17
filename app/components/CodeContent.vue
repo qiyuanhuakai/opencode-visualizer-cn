@@ -6,11 +6,14 @@
 import { computed } from 'vue';
 import { useSettings } from '../composables/useSettings';
 
-const props = defineProps<{
-  html: string;
-  variant?: 'code' | 'diff' | 'message' | 'binary' | 'term' | 'plain';
-  wordWrap?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    html: string;
+    variant?: 'code' | 'diff' | 'message' | 'binary' | 'term' | 'plain';
+    wordWrap?: boolean;
+  }>(),
+  { wordWrap: undefined },
+);
 
 const { floatingPreviewWordWrap } = useSettings();
 
@@ -117,7 +120,20 @@ const rootClass = computed(() => {
 
 /* wrap-soft */
 
+.code-content.wrap-soft,
+.code-content.wrap-soft :deep(pre),
+.code-content.wrap-soft :deep(code),
+.code-content.wrap-soft :deep(.code-row) {
+  width: 100%;
+  min-width: 0;
+}
+
+.code-content.wrap-soft :deep(.code-row) {
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+}
+
 .code-content.wrap-soft :deep(.line) {
+  min-width: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
