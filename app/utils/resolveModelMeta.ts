@@ -14,18 +14,27 @@ export type ModelMeta = {
   providerLabel?: string;
 };
 
+export function buildModelMetaIndex(
+  modelOptions: ReadonlyArray<ModelOption>,
+): ReadonlyMap<string, ModelMeta> {
+  return new Map(
+    modelOptions.map((model) => [
+      model.id,
+      {
+        displayName: model.displayName,
+        providerLabel: model.providerLabel,
+      },
+    ]),
+  );
+}
+
 export function resolveModelMetaForPath(
   modelPath: string | undefined,
-  modelOptions: ReadonlyArray<ModelOption>,
+  modelMetaByPath: ReadonlyMap<string, ModelMeta>,
 ): ModelMeta | undefined {
   if (!modelPath) return undefined;
-  const matched = modelOptions.find((model) => model.id === modelPath);
-  if (matched) {
-    return {
-      displayName: matched.displayName,
-      providerLabel: matched.providerLabel,
-    };
-  }
+  const matched = modelMetaByPath.get(modelPath);
+  if (matched) return matched;
   const lastSegment = modelPath.split('/').pop()?.trim();
   return {
     displayName: lastSegment || modelPath,
