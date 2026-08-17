@@ -1050,7 +1050,7 @@ const messages: LocaleMessages = {
     createBranchTitle: '從此引用建立分支',
     noGit: '無 git',
     treeMode: '樹模式',
-    staged: '暫存區',
+    staged: '索引區',
     changes: '變更',
     allFiles: '所有檔案',
     noFiles: '沒有檔案。',

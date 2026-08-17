@@ -1051,7 +1051,7 @@ const messages: LocaleMessages = {
     createBranchTitle: '从此引用创建分支',
     noGit: '无 git',
     treeMode: '树模式',
-    staged: '暂存区',
+    staged: '索引区',
     changes: '更改',
     allFiles: '所有文件',
     noFiles: '没有文件。',

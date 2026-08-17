@@ -1066,7 +1066,7 @@ const messages: LocaleMessages = {
     createBranchTitle: 'Krei branĉon el ĉi tiu referenco',
     noGit: 'neniu git',
     treeMode: 'Arba reĝimo',
-    staged: 'Preparita',
+    staged: 'Indekso',
     changes: 'Ŝanĝoj',
     allFiles: 'Ĉiuj dosieroj',
     noFiles: 'Neniu dosiero.',

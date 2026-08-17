@@ -87,7 +87,7 @@ function createMessages() {
         noBranches: 'No branches',
         searchFiles: 'Search files',
         treeMode: 'Tree mode',
-        staged: 'Staged',
+        staged: 'Index',
         changes: 'Changes',
         allFiles: 'All files',
         noFiles: 'No files',
