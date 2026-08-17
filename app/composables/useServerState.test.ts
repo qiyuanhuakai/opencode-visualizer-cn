@@ -102,6 +102,38 @@ describe('useServerState session hydration', () => {
     });
   });
 
+  it('removes only the requested directory hydration entry', () => {
+    const state = useServerState();
+    state.handleStateMessage(
+      createBootstrap({
+        sessionHydrationByDirectory: {
+          '/repo/a': { status: 'loaded' },
+          '/repo/b': { status: 'loading' },
+        },
+      }),
+    );
+
+    expect(
+      state.handleStateMessage({
+        type: 'state.directory-hydration-removed',
+        directory: '/repo/a',
+      }),
+    ).toBe(true);
+    expect(state.sessionHydrationByDirectory).toEqual({
+      '/repo/b': { status: 'loading' },
+    });
+
+    expect(
+      state.handleStateMessage({
+        type: 'state.directory-hydration-removed',
+        directory: '/repo/unknown',
+      }),
+    ).toBe(true);
+    expect(state.sessionHydrationByDirectory).toEqual({
+      '/repo/b': { status: 'loading' },
+    });
+  });
+
   it('sets fullTreeHydrated when background hydration completes', () => {
     // Given: a bootstrapped state that has not finished background hydration
     const state = useServerState();

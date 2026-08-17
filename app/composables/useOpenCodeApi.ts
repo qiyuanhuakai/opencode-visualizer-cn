@@ -39,6 +39,7 @@ type ProjectUpdatePayload = {
 type ListSessionsOptions = {
   directory?: string;
   instanceDirectory?: string;
+  signal?: AbortSignal;
   roots?: boolean;
   search?: string;
   limit?: number;
