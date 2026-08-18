@@ -60,6 +60,39 @@ function createToolEntries(count: number, prefix: string, commandPrefix = prefix
   }));
 }
 
+function mountHistory(initialEntries: ReturnType<typeof createToolEntries>) {
+  const i18n = createI18n({ legacy: false, locale: 'en', messages: createMessages() });
+  const root = document.createElement('div');
+  root.className = 'floating-window-body';
+  document.body.appendChild(root);
+  const state = reactive({ entries: initialEntries });
+  const app = createApp(defineComponent({
+    setup() {
+      return () => h(ThreadHistoryContent, { entries: state.entries });
+    },
+  }));
+  app.use(i18n);
+  app.provide(FLOATING_WINDOW_KEY, {
+    key: 'test-floating-window',
+    content: ref(''),
+    html: ref(''),
+    title: ref(''),
+    status: ref('completed'),
+    notifyContentChange: () => {},
+    setContent: () => {},
+    appendContent: () => {},
+    setTitle: () => {},
+    setStatus: () => {},
+    setColor: () => {},
+    bringToFront: () => {},
+    minimize: () => {},
+    close: () => {},
+    onResize: () => {},
+  });
+  app.mount(root);
+  return { app, root, state };
+}
+
 describe('ThreadHistoryContent', () => {
   afterEach(() => {
     document.body.innerHTML = '';
@@ -357,5 +390,75 @@ describe('ThreadHistoryContent', () => {
 
     app.unmount();
     root.remove();
+  });
+
+  it('preserves an away window on append and follows again when near the bottom', async () => {
+    const mounted = mountHistory(createToolEntries(3_000, 'original'));
+    await flushRender();
+    Object.defineProperties(mounted.root, {
+      scrollTop: { configurable: true, writable: true, value: 1_000 },
+      scrollHeight: { configurable: true, value: 3_000 },
+      clientHeight: { configurable: true, value: 600 },
+    });
+
+    mounted.state.entries = [
+      ...mounted.state.entries,
+      ...createToolEntries(1, 'appended-a'),
+    ];
+    await flushRender();
+    let rendered = mounted.root.querySelectorAll('.history-item');
+    expect(rendered[0]?.getAttribute('data-history-key')).toBe('original-2900');
+    expect(rendered[99]?.getAttribute('data-history-key')).toBe('original-2999');
+
+    mounted.root.scrollTop = 2_400;
+    mounted.state.entries = [
+      ...mounted.state.entries,
+      ...createToolEntries(1, 'appended-b'),
+    ];
+    await flushRender();
+    rendered = mounted.root.querySelectorAll('.history-item');
+    expect(rendered[0]?.getAttribute('data-history-key')).toBe('original-2900');
+    expect(rendered[99]?.getAttribute('data-history-key')).toBe('original-2999');
+
+    mounted.root.dispatchEvent(new Event('scroll'));
+    await flushRender();
+    mounted.state.entries = [
+      ...mounted.state.entries,
+      ...createToolEntries(1, 'appended-c'),
+    ];
+    await flushRender();
+    rendered = mounted.root.querySelectorAll('.history-item');
+    expect(rendered[0]?.getAttribute('data-history-key')).toBe('original-2903');
+    expect(rendered[99]?.getAttribute('data-history-key')).toBe('appended-c-0');
+
+    mounted.app.unmount();
+    mounted.root.remove();
+  });
+
+  it('extends a short history at the bottom without a negative window start', async () => {
+    const mounted = mountHistory(createToolEntries(50, 'short'));
+    await flushRender();
+    Object.defineProperties(mounted.root, {
+      scrollTop: { configurable: true, writable: true, value: 0 },
+      scrollHeight: { configurable: true, value: 1_000 },
+      clientHeight: { configurable: true, value: 100 },
+    });
+    mounted.state.entries = [
+      ...mounted.state.entries,
+      ...createToolEntries(1, 'appended'),
+    ];
+    await flushRender();
+
+    mounted.root.scrollTop = 900;
+    mounted.root.dispatchEvent(new Event('scroll'));
+    await flushRender();
+
+    const rendered = mounted.root.querySelectorAll('.history-item');
+    expect(rendered).toHaveLength(51);
+    expect(rendered[0]?.getAttribute('data-history-key')).toBe('short-0');
+    expect(rendered[50]?.getAttribute('data-history-key')).toBe('appended-0');
+
+    mounted.app.unmount();
+    mounted.root.remove();
   });
 });

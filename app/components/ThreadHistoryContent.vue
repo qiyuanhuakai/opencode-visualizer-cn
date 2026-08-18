@@ -173,6 +173,7 @@ const floatingWindow = useFloatingWindow();
 const rootEl = ref<HTMLElement | null>(null);
 const HISTORY_WINDOW_SIZE = 100;
 const HISTORY_WINDOW_SHIFT = 20;
+const HISTORY_SCROLL_EDGE_PX = 120;
 const windowStart = ref(Math.max(0, props.entries.length - HISTORY_WINDOW_SIZE));
 const windowEnd = ref(props.entries.length);
 const visibleEntries = computed(() => props.entries.slice(windowStart.value, windowEnd.value));
@@ -189,13 +190,19 @@ function isTrueAppend(previousKeys: readonly string[], nextKeys: readonly string
   return previousKeys.every((key, index) => nextKeys[index] === key);
 }
 
+function isScrollHostNearBottom(): boolean {
+  if (!scrollHost) return false;
+  return scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight
+    <= HISTORY_SCROLL_EDGE_PX;
+}
+
 watch(
   [() => props.entries, () => props.entries.map((entry) => entry.key)],
   ([, nextKeys], previous) => {
     if (!previous) return;
     const previousKeys = previous[1];
     if (isTrueAppend(previousKeys, nextKeys)) {
-      if (windowEnd.value >= previousKeys.length) {
+      if (windowEnd.value >= previousKeys.length && isScrollHostNearBottom()) {
         resetHistoryWindow();
       }
       return;
@@ -241,15 +248,18 @@ async function shiftHistoryWindow(nextStart: number): Promise<void> {
 
 function onHistoryScroll(): void {
   if (!scrollHost || shiftInProgress) return;
-  if (scrollHost.scrollTop <= 120 && windowStart.value > 0) {
+  if (scrollHost.scrollTop <= HISTORY_SCROLL_EDGE_PX && windowStart.value > 0) {
     void shiftHistoryWindow(Math.max(0, windowStart.value - HISTORY_WINDOW_SHIFT));
     return;
   }
-  const distanceToBottom = scrollHost.scrollHeight - scrollHost.scrollTop - scrollHost.clientHeight;
-  if (distanceToBottom <= 120 && windowEnd.value < props.entries.length) {
-    void shiftHistoryWindow(
-      Math.min(props.entries.length - HISTORY_WINDOW_SIZE, windowStart.value + HISTORY_WINDOW_SHIFT),
-    );
+  if (isScrollHostNearBottom() && windowEnd.value < props.entries.length) {
+    const maxStart = Math.max(0, props.entries.length - HISTORY_WINDOW_SIZE);
+    const nextStart = Math.min(maxStart, windowStart.value + HISTORY_WINDOW_SHIFT);
+    if (nextStart === windowStart.value) {
+      windowEnd.value = props.entries.length;
+      return;
+    }
+    void shiftHistoryWindow(nextStart);
   }
 }
 
