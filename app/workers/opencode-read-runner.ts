@@ -121,20 +121,30 @@ function createSlotAcquirer() {
   return { acquire, release };
 }
 
-function runOpencodeTaskWithCancellation<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) return task();
+function runOpencodeTaskWithCancellation<T>(
+  task: () => Promise<T>,
+  signal: AbortSignal | undefined,
+  onTaskSettled: () => void,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
-    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    let taskSettled = false;
+    const releaseTask = () => {
+      if (taskSettled) return;
+      taskSettled = true;
+      onTaskSettled();
+    };
+    const cleanup = () => signal?.removeEventListener('abort', onAbort);
     const onAbort = () => {
       if (settled) return;
       settled = true;
       cleanup();
       reject(new OpencodeReadAbortedError());
     };
-    signal.addEventListener('abort', onAbort, { once: true });
-    if (signal.aborted) {
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) {
       onAbort();
+      releaseTask();
       return;
     }
 
@@ -142,6 +152,7 @@ function runOpencodeTaskWithCancellation<T>(task: () => Promise<T>, signal?: Abo
     try {
       pending = task();
     } catch (error) {
+      releaseTask();
       if (settled) return;
       settled = true;
       cleanup();
@@ -150,12 +161,14 @@ function runOpencodeTaskWithCancellation<T>(task: () => Promise<T>, signal?: Abo
     }
     pending.then(
       (value) => {
+        releaseTask();
         if (settled) return;
         settled = true;
         cleanup();
         resolve(value);
       },
       (error: unknown) => {
+        releaseTask();
         if (settled) return;
         settled = true;
         cleanup();
@@ -189,15 +202,19 @@ export function createOpencodeReadRunner<State>(dependencies: ReadRunnerDependen
       if (acquired.reason === 'aborted') throw new OpencodeReadAbortedError();
       throw new OpencodeReadCapacityError();
     }
+    let releaseInFinally = true;
     try {
       assertActive(state, options);
       dependencies.configure(state);
       assertActive(state, options);
-      return options.cancelOnAbort
-        ? await runOpencodeTaskWithCancellation(task, options.signal)
-        : await task();
+      if (options.cancelOnAbort) {
+        const pending = runOpencodeTaskWithCancellation(task, options.signal, slots.release);
+        releaseInFinally = false;
+        return await pending;
+      }
+      return await task();
     } finally {
-      slots.release();
+      if (releaseInFinally) slots.release();
     }
   };
 }

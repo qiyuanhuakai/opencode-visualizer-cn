@@ -750,13 +750,18 @@ describe('SSE SharedWorker hydration', () => {
     const worker = await connectWorker();
     await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(1));
 
-    for (let index = 0; index < 12; index += 1) {
+    for (let index = 0; index < 11; index += 1) {
       latestCallbacks().onOpen(true);
       await vi.waitFor(() =>
         expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(index + 2),
       );
     }
-    expect(signals.slice(0, -1).every((signal) => signal?.aborted)).toBe(true);
+    latestCallbacks().onOpen(true);
+    await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(12));
+    expect(signals.every((signal) => signal?.aborted)).toBe(true);
+
+    reads[0]?.resolve([]);
+    await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(13));
     expect(signals.at(-1)?.aborted).toBe(false);
 
     worker.messages.splice(0);
@@ -767,6 +772,7 @@ describe('SSE SharedWorker hydration', () => {
     if (!replacement) throw new Error('Expected the replacement bootstrap read');
     replacement.resolve([project(['/a'])]);
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    expect(messagesOf(worker.messages, 'connection.error')).toHaveLength(0);
     expect(
       messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']?.sessions[
         'buffered-during-reconnect'
