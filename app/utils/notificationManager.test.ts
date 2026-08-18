@@ -73,8 +73,26 @@ describe('createNotificationManager', () => {
         projectId: 'p1',
         sessionId: 'root',
         requestIds: ['permission-root', 'question-sibling'],
+        requestOrigins: [['question-sibling', 'sibling']],
       },
     });
+  });
+
+  it('preserves child request origins across a snapshot round trip', () => {
+    const resolveAggregateRoot = (_projectId: string, sessionId: string) => ({
+      projectId: 'p1',
+      sessionId: sessionId === 'child' ? 'root' : sessionId,
+    });
+    const source = createNotificationManager(resolveAggregateRoot);
+    source.addNotification('p1', 'root', 'permission-root');
+    source.addNotification('p1', 'child', 'permission-child');
+    source.addNotification('p1', 'child', 'question-child');
+    const restored = createNotificationManager(resolveAggregateRoot);
+
+    restored.importState(source.getState());
+
+    expect(restored.clearRequestsForSession('p1', 'child')).toBe(true);
+    expect(restored.getState().root.requestIds).toEqual(['permission-root']);
   });
 
   it('returns false when clearing non-existent session', () => {

@@ -14,6 +14,7 @@ export type NotificationSnapshotEntry = {
   projectId: string;
   sessionId: string;
   requestIds: string[];
+  requestOrigins?: Array<[requestId: string, originSessionId: string]>;
 };
 
 export function createNotificationManager(
@@ -134,10 +135,14 @@ export function createNotificationManager(
   function getState(): Record<string, NotificationSnapshotEntry> {
     const out: Record<string, NotificationSnapshotEntry> = {};
     for (const [key, entry] of state.entries()) {
+      const requestOrigins = Array.from(entry.requestOrigins).filter(
+        ([, originSessionId]) => originSessionId !== entry.sessionId,
+      );
       out[key] = {
         projectId: entry.projectId,
         sessionId: entry.sessionId,
         requestIds: [...entry.requestIds],
+        ...(requestOrigins.length > 0 ? { requestOrigins } : {}),
       };
     }
     return out;
@@ -164,13 +169,24 @@ export function createNotificationManager(
         entry.requestIds.length === 0
       )
         continue;
+      const importedOrigins = new Map<string, string>();
+      if (Array.isArray(entry.requestOrigins)) {
+        for (const pair of entry.requestOrigins) {
+          if (!Array.isArray(pair) || pair.length !== 2) continue;
+          const requestId = pair[0];
+          const originSessionId = pair[1].trim();
+          if (!entry.requestIds.includes(requestId) || !originSessionId) continue;
+          importedOrigins.set(requestId, originSessionId);
+        }
+      }
       next.set(key, {
         projectId: trimmedProjectId,
         sessionId: trimmedSessionId,
         requestIds: new Set(entry.requestIds),
-        requestOrigins: new Map(
-          entry.requestIds.map((requestId) => [requestId, trimmedSessionId]),
-        ),
+        requestOrigins: new Map(entry.requestIds.map((requestId) => [
+          requestId,
+          importedOrigins.get(requestId) ?? trimmedSessionId,
+        ])),
       });
       order.push(key);
     }
