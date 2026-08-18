@@ -3573,6 +3573,10 @@ function reconcileLocalPinnedSessionStore() {
     serverState.projects,
     10000,
     sessionHydration,
+    {
+      gitInfoByDirectory: acpGitInfoByDirectory.value,
+      homePath: homePath.value,
+    },
   );
 
   if (isSamePinnedSessionStore(currentStore, nextStore)) return;
@@ -7211,9 +7215,17 @@ watch(
   { immediate: true },
 );
 
-watch([pinnedSessionReconciliationDeps, pinnedSessionHydrationDeps], () => {
-  reconcileLocalPinnedSessionStore();
-});
+watch(
+  [
+    pinnedSessionReconciliationDeps,
+    pinnedSessionHydrationDeps,
+    acpGitInfoByDirectory,
+    homePath,
+  ],
+  () => {
+    reconcileLocalPinnedSessionStore();
+  },
+);
 
 watch(
   allowedSessionIds,
