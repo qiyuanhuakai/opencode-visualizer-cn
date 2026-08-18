@@ -201,7 +201,13 @@ export function createStreamMessageHandler(deps: {
   function handle(request: StreamWorkerRequest): Promise<void> {
     if (request.op === 'cancel') {
       // Synchronous: no new messages for this streamId after this point.
-      cancelled.add(request.streamId);
+      const tail = chains.get(request.streamId);
+      if (tail) {
+        cancelled.add(request.streamId);
+        schedulePrune(request.streamId, tail);
+      } else {
+        cancelled.delete(request.streamId);
+      }
       states.delete(request.streamId);
       manager.cancel(request.streamId);
       return Promise.resolve();

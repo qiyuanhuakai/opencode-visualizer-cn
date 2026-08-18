@@ -1,7 +1,13 @@
-import type { ProjectState, SandboxState } from '../types/worker-state';
+import type { ProjectState, SandboxState, SessionState } from '../types/worker-state';
 import type { DirectorySessionHydration } from '../types/sse-worker';
+import { normalizeMetadataPath } from './path';
 
 export type LocalPinnedSessionStore = Record<string, number>;
+
+export type ReconcilePinnedSessionMetadata = {
+  gitInfoByDirectory?: Readonly<Record<string, NonNullable<SessionState['gitInfo']>>>;
+  homePath?: string;
+};
 
 const PIN_HIERARCHY_MIGRATION_PREFIX = 'migration:pin-hierarchy:v1:';
 
@@ -122,6 +128,7 @@ export function reconcilePinnedSessionStore(
   projects: Record<string, ProjectState>,
   limit: number,
   sessionHydrationByDirectory?: Readonly<Record<string, DirectorySessionHydration>>,
+  metadata?: ReconcilePinnedSessionMetadata,
 ): LocalPinnedSessionStore {
   if (Object.keys(currentStore).length === 0) return currentStore;
 
@@ -203,7 +210,51 @@ export function reconcilePinnedSessionStore(
 
         const localPinnedAt = normalizePinnedAt(localOverride);
         const serverPinnedAt = normalizePinnedAt(session.timePinned);
-        if (localPinnedAt === serverPinnedAt) {
+        const directory = session.directory || sandbox.directory;
+        const normalizedDirectory = normalizeMetadataPath(directory, metadata?.homePath ?? '');
+        const gitInfo = session.gitInfo
+          ?? metadata?.gitInfoByDirectory?.[directory]
+          ?? metadata?.gitInfoByDirectory?.[normalizedDirectory]
+          ?? metadata?.gitInfoByDirectory?.[sandbox.directory];
+        const repoRoot = normalizeMetadataPath(
+          gitInfo?.commonRoot || gitInfo?.root || '',
+          metadata?.homePath ?? '',
+        );
+        const worktreeRoot = normalizeMetadataPath(
+          gitInfo?.worktreeRoot || gitInfo?.root || sandbox.directory,
+          metadata?.homePath ?? '',
+        );
+        const normalizedSandboxDirectory = normalizeMetadataPath(
+          sandbox.directory,
+          metadata?.homePath ?? '',
+        );
+        const hierarchyParentKeys = [
+          projectPinKey(project.id),
+          sandboxPinKey(project.id, sandbox.directory),
+          sandboxPinKey(project.id, normalizedSandboxDirectory),
+          repoRoot ? repoPinKey(project.id, repoRoot) : '',
+          worktreeRoot ? sandboxPinKey(project.id, worktreeRoot) : '',
+        ].filter(Boolean);
+        const belongsToPersistedHierarchy = hierarchyParentKeys.some(
+          (parentKey) => normalizePinnedAt(nextStore[parentKey]) > 0,
+        );
+        const repoPrefix = `repo:${project.id}:`;
+        const sandboxPrefix = `sandbox:${project.id}:`;
+        const hierarchyMetadataPending =
+          metadata !== undefined &&
+          !gitInfo &&
+          Object.entries(nextStore).some(
+            ([parentKey, pinnedAt]) =>
+              normalizePinnedAt(pinnedAt) > 0 &&
+              (parentKey.startsWith(repoPrefix) ||
+                (parentKey.startsWith(sandboxPrefix) &&
+                  !hierarchyParentKeys.includes(parentKey))),
+          );
+        if (
+          localPinnedAt === serverPinnedAt &&
+          !belongsToPersistedHierarchy &&
+          !hierarchyMetadataPending
+        ) {
           delete nextStore[key];
         }
       }

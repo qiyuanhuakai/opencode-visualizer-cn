@@ -10,6 +10,31 @@ import {
   type LocalPinnedSessionStore,
 } from '../utils/pinnedSessions';
 
+type OpenCodeSessionStatus = 'busy' | 'idle' | 'retry' | 'unknown';
+
+function buildEffectiveSessionStatuses(project: ProjectState): ReadonlyMap<string, OpenCodeSessionStatus> {
+  const sessionsById = new Map<string, SessionState>();
+  const statuses = new Map<string, OpenCodeSessionStatus>();
+  Object.values(project.sandboxes).forEach((sandbox) => {
+    Object.values(sandbox.sessions).forEach((session) => {
+      sessionsById.set(session.id, session);
+      statuses.set(session.id, (session.status ?? 'unknown') as OpenCodeSessionStatus);
+    });
+  });
+
+  const propagatedActive = new Set<string>();
+  for (const session of sessionsById.values()) {
+    if (session.status !== 'busy' && session.status !== 'retry') continue;
+    let parentId = session.parentID?.trim();
+    while (parentId && !propagatedActive.has(parentId)) {
+      propagatedActive.add(parentId);
+      if (statuses.get(parentId) !== 'retry') statuses.set(parentId, 'busy');
+      parentId = sessionsById.get(parentId)?.parentID?.trim();
+    }
+  }
+  return statuses;
+}
+
 export function buildNativeOpenCodeTopPanelTreeData(params: {
   projects: Record<string, ProjectState>;
   pinnedStore: LocalPinnedSessionStore;
@@ -28,6 +53,7 @@ export function buildNativeOpenCodeTopPanelTreeData(params: {
   } = params;
   return Object.values(projects).map((project) => {
     const projectPinnedAt = normalizePinnedAt(pinnedStore[projectPinKey(project.id)]);
+    const effectiveStatuses = buildEffectiveSessionStatuses(project);
     const sandboxes = (Object.values(project.sandboxes) as SandboxState[])
       .filter((sandbox) => sandbox.directory === project.worktree
         || !isSandboxMarkedDeleted(deletedSandboxStore, project.id, sandbox.directory))
@@ -46,7 +72,7 @@ export function buildNativeOpenCodeTopPanelTreeData(params: {
               id: session.id,
               title: session.title,
               slug: session.slug,
-              status: (session.status ?? 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
+              status: effectiveStatuses.get(session.id) ?? 'unknown',
               timeCreated: session.timeCreated,
               timeUpdated: session.timeUpdated,
               archivedAt: session.timeArchived,
@@ -78,6 +104,7 @@ export function buildOpenCodeSessionTreeData(params: {
   const { projects, pinnedStore, resolveProjectColor } = params;
   const result: SessionTreeProject[] = [];
   for (const project of Object.values(projects)) {
+    const effectiveStatuses = buildEffectiveSessionStatuses(project);
     const projectName = project.name?.trim() || project.worktree.replace(/\/+$/, '').split('/').pop() || project.id;
     const projectLocal = pinnedStore[projectPinKey(project.id)];
     const isProjectPinned = typeof projectLocal === 'number' && projectLocal > 0;
@@ -111,7 +138,7 @@ export function buildOpenCodeSessionTreeData(params: {
           projectId: project.id,
           directory: sandbox.directory,
           title: session.title || session.slug || session.id,
-          status: (session.status ?? 'unknown') as 'busy' | 'idle' | 'retry' | 'unknown',
+          status: effectiveStatuses.get(session.id) ?? 'unknown',
           pinnedAt,
           isPinned: isSessionPinned,
           isImplicitlyPinned: isSessionImplicitlyPinned,

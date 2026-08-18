@@ -88,6 +88,10 @@ export type WorkerToTabMessage =
       hydration: DirectorySessionHydration;
     }
   | {
+      type: 'state.directory-hydration-removed';
+      directory: string;
+    }
+  | {
       type: 'state.background-hydration-complete';
     }
   | {

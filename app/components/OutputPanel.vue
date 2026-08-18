@@ -26,8 +26,8 @@
                   class="thread-card-item"
                   :data-root-id="root.id"
                 >
-                  <ThreadBlock
-                  v-show="!isLoading && shouldRenderRoot(root)"
+                   <ThreadBlock
+                   v-if="shouldRenderRoot(root)"
                   :root="root"
                   :theme="theme"
                   :files-with-basenames="filesWithBasenames"
@@ -91,6 +91,7 @@ import { useFileTree } from '../composables/useFileTree';
 
 import { useMessages } from '../composables/useMessages';
 import { useAssistantPreRenderer } from '../composables/useAssistantPreRenderer';
+import { pendingWorkerRenders } from '../composables/useRenderState';
 import { useThinkingAnimation } from '../composables/useThinkingAnimation';
 import type {
   HistoryWindowEntry,
@@ -106,6 +107,7 @@ import {
   preserveProgressiveRootWindowOnAppend,
   shiftProgressiveRootWindow,
 } from '../utils/progressiveRoots';
+import { settleScrollAnchor } from '../utils/scrollAnchor';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -174,9 +176,10 @@ const rootWindow = ref(initialProgressiveRootWindow(renderableRoots.value.length
 let windowShiftInProgress = false;
 let windowShiftQueued = false;
 let windowShiftGeneration = 0;
-const visibleThreadRoots = computed(() =>
-  renderableRoots.value.slice(rootWindow.value.start, rootWindow.value.end),
-);
+const visibleThreadRoots = computed(() => {
+  if (props.isLoading) return renderableRoots.value.slice(-THREAD_BATCH_SIZE);
+  return renderableRoots.value.slice(rootWindow.value.start, rootWindow.value.end);
+});
 
 watch(
   () => props.currentSessionId,
@@ -351,17 +354,22 @@ async function onPanelScroll(event: Event) {
     THREAD_BATCH_SIZE,
     THREAD_WINDOW_MAX,
   );
-  for (const delayMs of [0, 32, 96]) {
-    if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-    if (shiftGeneration !== windowShiftGeneration) return;
-    await nextTick();
-    const anchorAfter = contentEl.value?.querySelector<HTMLElement>(
-      `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
-    );
-    if (anchorTopBefore !== undefined && anchorAfter) {
-      panel.scrollTop += anchorAfter.getBoundingClientRect().top - anchorTopBefore;
-    }
-  }
+  await nextTick();
+  await settleScrollAnchor({
+    waitForFrame: () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    measureDelta: () => {
+      if (shiftGeneration !== windowShiftGeneration || anchorTopBefore === undefined) return null;
+      const anchorAfter = contentEl.value?.querySelector<HTMLElement>(
+        `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
+      );
+      return anchorAfter ? anchorAfter.getBoundingClientRect().top - anchorTopBefore : null;
+    },
+    applyDelta: (delta) => {
+      panel.scrollTop += delta;
+    },
+    hasPendingWork: () => pendingWorkerRenders.value > 0,
+  });
+  if (shiftGeneration !== windowShiftGeneration) return;
   windowShiftInProgress = false;
   const replayQueuedScroll = windowShiftQueued;
   windowShiftQueued = false;

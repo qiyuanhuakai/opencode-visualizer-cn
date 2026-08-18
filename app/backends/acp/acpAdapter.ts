@@ -197,7 +197,7 @@ export class AcpAdapter implements BackendAdapter {
     return this.acp.abortSession(sessionId);
   }
 
-  getSessionStatusMap() {
+  getSessionStatusMap(_directory?: string, _options?: BackendRequestOptions) {
     return Promise.resolve(this.acp.getSessionStatusMap());
   }
 

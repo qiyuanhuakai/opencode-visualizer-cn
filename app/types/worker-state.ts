@@ -90,6 +90,7 @@ export type WorkerNotificationEntry = {
   projectId: string;
   sessionId: string;
   requestIds: string[];
+  requestOrigins?: Array<[requestId: string, originSessionId: string]>;
 };
 
 export type NotificationState = Record<string, WorkerNotificationEntry>;

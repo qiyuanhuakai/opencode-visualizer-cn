@@ -39,6 +39,25 @@ type MessageCacheEntry = {
 
 const sessionCache = new Map<string, MessageCacheEntry>();
 
+type BackgroundTaskScheduler = {
+  postTask: (
+    callback: () => void,
+    options: { priority: 'background' },
+  ) => Promise<unknown>;
+};
+
+function yieldToBrowserTask(): Promise<void> {
+  const browserScheduler = (
+    globalThis as typeof globalThis & { scheduler?: BackgroundTaskScheduler }
+  ).scheduler;
+  if (browserScheduler?.postTask) {
+    return browserScheduler
+      .postTask(() => undefined, { priority: 'background' })
+      .then(() => undefined);
+  }
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function scheduleFlush() {
   if (flushScheduled) return;
   flushScheduled = true;
@@ -494,17 +513,16 @@ async function loadHistoryIncrementally(
   options?: {
     chunkSize?: number;
     shouldContinue?: () => boolean;
+    yieldControl?: () => Promise<void>;
   },
 ) {
   const chunkSize = Math.max(1, options?.chunkSize ?? HISTORY_CHUNK_SIZE);
-  for (let offset = 0; offset < entries.length; offset += chunkSize) {
+  const yieldControl = options?.yieldControl ?? yieldToBrowserTask;
+  for (let end = entries.length; end > 0; end -= chunkSize) {
     if (options?.shouldContinue && !options.shouldContinue()) return;
-    loadHistory(entries.slice(offset, offset + chunkSize));
-     if (offset + chunkSize < entries.length) {
-       await new Promise<void>((resolve) => {
-         queueMicrotask(resolve);
-       });
-     }
+    const start = Math.max(0, end - chunkSize);
+    loadHistory(entries.slice(start, end));
+    if (start > 0) await yieldControl();
   }
 }
 

@@ -1,5 +1,7 @@
 import type { SsePacket } from '../types/sse';
 
+const MAX_SSE_EVENT_BUFFER_BYTES = 1 * 1024 * 1024;
+
 export type SseConnectionOptions = {
   baseUrl: string;
   authorization?: string;
@@ -22,6 +24,15 @@ export type SseConnectionCallbacks = {
   onError: (message: string, statusCode?: number) => void;
 };
 
+export type SseEventParserInstrumentation = {
+  readonly onScan?: (scannedBytes: number) => void;
+  readonly onBlockEncoded?: (encodedBytes: number) => void;
+};
+
+export type SseEventParser = {
+  readonly push: (chunk: Uint8Array) => void;
+};
+
 export type SseConnection = {
   connect: (options: SseConnectionOptions) => void;
   disconnect: () => void;
@@ -30,6 +41,82 @@ export type SseConnection = {
 
 function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, '');
+}
+
+export function createSseEventParser(
+  onBlock: (block: string) => void,
+  instrumentation?: SseEventParserInstrumentation,
+): SseEventParser {
+  let pending = new Uint8Array(0);
+  let pendingLength = 0;
+  const decoder = new TextDecoder();
+
+  function ensureCapacity(requiredLength: number): void {
+    if (requiredLength <= pending.byteLength) return;
+    const doubledLength = pending.byteLength > 0 ? pending.byteLength * 2 : 64;
+    const nextLength = Math.min(
+      MAX_SSE_EVENT_BUFFER_BYTES + 2,
+      Math.max(requiredLength, doubledLength),
+    );
+    const next = new Uint8Array(nextLength);
+    next.set(pending.subarray(0, pendingLength));
+    pending = next;
+  }
+
+  function pushSegment(chunk: Uint8Array): void {
+    const oldLength = pendingLength;
+    ensureCapacity(oldLength + chunk.byteLength);
+    pending.set(chunk, oldLength);
+    pendingLength += chunk.byteLength;
+
+    let consumedBytes = 0;
+    let blockStart = 0;
+    let scannedBytes = 0;
+    for (
+      let index = Math.max(0, oldLength - 1);
+      index + 1 < pendingLength;
+      index += 1
+    ) {
+      scannedBytes += 1;
+      if (pending[index] !== 10 || pending[index + 1] !== 10) continue;
+
+      const block = pending.subarray(blockStart, index);
+      const decodedBlock = decoder.decode(block);
+      instrumentation?.onBlockEncoded?.(block.byteLength);
+      if (block.byteLength > MAX_SSE_EVENT_BUFFER_BYTES) {
+        throw new Error('SSE event buffer exceeded 1 MiB.');
+      }
+      onBlock(decodedBlock);
+
+      consumedBytes = index + 2;
+      blockStart = consumedBytes;
+      index += 1;
+    }
+    instrumentation?.onScan?.(scannedBytes);
+
+    if (consumedBytes > 0) {
+      pending.copyWithin(0, consumedBytes, pendingLength);
+      pendingLength -= consumedBytes;
+    }
+    if (pendingLength > MAX_SSE_EVENT_BUFFER_BYTES) {
+      throw new Error('SSE event buffer exceeded 1 MiB.');
+    }
+  }
+
+  function push(chunk: Uint8Array): void {
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      const availableBeforeLimit = MAX_SSE_EVENT_BUFFER_BYTES + 2 - pendingLength;
+      if (availableBeforeLimit <= 0) {
+        throw new Error('SSE event buffer exceeded 1 MiB.');
+      }
+      const segmentLength = Math.min(chunk.byteLength - offset, availableBeforeLimit);
+      pushSegment(chunk.subarray(offset, offset + segmentLength));
+      offset += segmentLength;
+    }
+  }
+
+  return { push };
 }
 
 export function parsePacket(raw: string): SsePacket | null {
@@ -77,36 +164,44 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
     reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      connect(target!);
+      const nextTarget = target;
+      if (nextTarget) connect(nextTarget);
     }, 1000);
   }
 
-  function handleStream(reader: ReadableStreamDefaultReader<Uint8Array>) {
-    const decoder = new TextDecoder();
-    let buffer = '';
+  function handleStream(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    controller: AbortController,
+  ) {
+    const ownsStream = () => !controller.signal.aborted && abortController === controller;
+    const parser = createSseEventParser((block) => {
+      if (!ownsStream()) return;
+      if (!block.trim()) return;
+      const prefix = 'data: ';
+      if (!block.startsWith(prefix)) {
+        console.warn('Invalid SSE packet?', block);
+        return;
+      }
+      const packet = parsePacket(block.slice(prefix.length));
+      if (packet && ownsStream()) callbacks.onPacket(packet);
+    });
 
     const loop = async () => {
       try {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const blocks = buffer.split('\n\n');
-          buffer = blocks.pop() || '';
-
-          for (const block of blocks) {
-            if (!block.trim()) continue;
-            const prefix = 'data: ';
-            if (!block.startsWith(prefix)) {
-              console.warn('Invalid SSE packet?', block);
-              continue;
-            }
-            const packet = parsePacket(block.slice(prefix.length));
-            if (packet) callbacks.onPacket(packet);
+          if (!ownsStream()) {
+            await Promise.allSettled([reader.cancel()]);
+            return;
           }
+          if (done) break;
+          parser.push(value);
         }
       } catch (error) {
-        if (abortController?.signal.aborted) return;
+        if (controller.signal.aborted || abortController !== controller) return;
+        await Promise.allSettled([reader.cancel()]);
+        controller.abort();
+        if (abortController !== controller) return;
         callbacks.onError(String(error));
         abortController = undefined;
         connected = false;
@@ -114,6 +209,7 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
         return;
       }
 
+      if (controller.signal.aborted || abortController !== controller) return;
       callbacks.onError(target?.errorMessages?.streamClosed ?? 'SSE stream closed.');
       abortController = undefined;
       connected = false;
@@ -123,7 +219,11 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
     void loop();
   }
 
-  function startFetch(options: SseConnectionOptions, isReconnect: boolean) {
+  function startFetch(
+    options: SseConnectionOptions,
+    isReconnect: boolean,
+    controller: AbortController,
+  ) {
     const effectiveBaseUrl = normalizeBaseUrl(options.baseUrl);
     const headers: Record<string, string> = {
       Accept: 'text/event-stream',
@@ -135,11 +235,14 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
     void (async () => {
       try {
         const response = await fetch(`${effectiveBaseUrl}/global/event`, {
-          signal: abortController!.signal,
+          signal: controller.signal,
           headers,
         });
 
+        if (controller.signal.aborted || abortController !== controller) return;
+
         if (response.status === 401) {
+          controller.abort();
           abortController = undefined;
           connected = false;
           callbacks.onError(target?.errorMessages?.authenticationFailed ?? 'Authentication failed.', 401);
@@ -147,6 +250,7 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
         }
 
         if (!response.ok || !response.body) {
+          controller.abort();
           abortController = undefined;
           connected = false;
           callbacks.onError(`HTTP ${response.status}`);
@@ -157,8 +261,9 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
         reconnectAttempt = 0;
         connected = true;
         callbacks.onOpen(isReconnect);
-        handleStream(response.body.getReader());
+        handleStream(response.body.getReader(), controller);
       } catch (error) {
+        if (controller.signal.aborted || abortController !== controller) return;
         abortController = undefined;
         connected = false;
 
@@ -199,15 +304,17 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
     if (abortController) return;
 
     const isReconnect = reconnectAttempt > 0;
-    abortController = new AbortController();
+    const controller = new AbortController();
+    abortController = controller;
     connected = false;
-    startFetch(normalized, isReconnect);
+    startFetch(normalized, isReconnect, controller);
   }
 
   function disconnect() {
     disconnectRequested = true;
     clearReconnectTimer();
-    abortController?.abort();
+    const controller = abortController;
+    controller?.abort();
     abortController = undefined;
     connected = false;
     reconnectAttempt = 0;

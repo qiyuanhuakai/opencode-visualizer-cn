@@ -2111,7 +2111,7 @@ export class CodexAdapter implements BackendAdapter {
     };
   }
 
-  async getSessionStatusMap(directory?: string) {
+  async getSessionStatusMap(directory?: string, _options?: BackendRequestOptions) {
     const result = await this.listThreads({ cwd: directory, limit: 100, sortKey: 'updated_at', modelProviders: null });
     return Object.fromEntries(
       result.data.map((thread) => [thread.id, normalizeCodexStatus(thread.status)]),
@@ -2170,7 +2170,7 @@ export class CodexAdapter implements BackendAdapter {
     });
   }
 
-  async getVcsInfo(directory: string) {
+  async getVcsInfo(directory: string, _options?: BackendRequestOptions) {
     let root = '';
     let branch = '';
     let commonRoot = '';

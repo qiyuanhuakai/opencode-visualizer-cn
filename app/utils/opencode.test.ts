@@ -63,6 +63,23 @@ describe('opencode utilities', () => {
       );
     });
 
+    it('passes cancellation to the project read', async () => {
+      const mockFetch = vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: async () => '[]',
+      } as Response);
+      const controller = new AbortController();
+
+      await listProjects(undefined, { signal: controller.signal });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/project',
+        expect.objectContaining({ signal: controller.signal }),
+      );
+    });
+
     it('throws on non-OK response', async () => {
       vi.mocked(fetch).mockResolvedValue({
         ok: false,
@@ -190,6 +207,24 @@ describe('opencode utilities', () => {
       expect(mockFetch).toHaveBeenCalledWith(
         'http://localhost:8080/session?directory=%2Fdir',
         expect.anything(),
+      );
+    });
+
+    it('listSessions forwards cancellation to the fetch request', async () => {
+      const mockFetch = vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ([]),
+        text: async () => '[]',
+      } as Response);
+      const controller = new AbortController();
+
+      await listSessions({ directory: '/dir', signal: controller.signal });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/session?directory=%2Fdir',
+        expect.objectContaining({ signal: controller.signal }),
       );
     });
 

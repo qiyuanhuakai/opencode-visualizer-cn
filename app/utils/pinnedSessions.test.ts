@@ -79,11 +79,111 @@ describe('pinned session optimistic overrides', () => {
     expect(next).toEqual({});
   });
 
+  it('retains confirmed leaf state that belongs to a persisted pin hierarchy', () => {
+    const store: LocalPinnedSessionStore = {
+      'project:p1': 555,
+      'sandbox:p1:/': 555,
+      'p1:s1': 555,
+    };
+
+    const confirmed = reconcilePinnedSessionStore(store, createProjects(555), 10, {
+      '/': { status: 'loaded' },
+    });
+    const lazyReload = reconcilePinnedSessionStore(
+      confirmed,
+      { p1: { id: 'p1', worktree: '/', sandboxes: {} } },
+      10,
+      { '/': { status: 'loading' } },
+    );
+
+    expect(confirmed).toMatchObject(store);
+    expect(lazyReload).toMatchObject(store);
+  });
+
+  it('retains confirmed leaf state under repo and worktree hierarchy keys', () => {
+    const store: LocalPinnedSessionStore = {
+      'repo:p1:/home/user/repo': 555,
+      'sandbox:p1:/home/user/repo': 555,
+      'p1:s1': 555,
+      'p1:s2': 555,
+    };
+    const projects = {
+      p1: {
+        id: 'p1',
+        worktree: '/workspace',
+        sandboxes: {
+          '/workspace': {
+            directory: '/workspace',
+            name: 'main',
+            rootSessions: ['s1', 's2'],
+            sessions: {
+              s1: {
+                id: 's1',
+                timeCreated: 1,
+                timeUpdated: 1,
+                timePinned: 555,
+                gitInfo: {
+                  root: '~/repo',
+                  commonRoot: '~/repo',
+                  worktreeRoot: '~/repo',
+                  branch: 'main',
+                },
+              },
+              s2: {
+                id: 's2',
+                directory: '/workspace',
+                timeCreated: 1,
+                timeUpdated: 1,
+                timePinned: 555,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const hydration = {
+      '/workspace': { status: 'loaded' },
+    } as const;
+    const pendingMetadata = reconcilePinnedSessionStore(store, projects, 10, hydration, {
+      homePath: '/home/user',
+      gitInfoByDirectory: {},
+    });
+    const confirmed = reconcilePinnedSessionStore(pendingMetadata, projects, 10, hydration, {
+      homePath: '/home/user',
+      gitInfoByDirectory: {
+        '/workspace': {
+          root: '~/repo',
+          commonRoot: '~/repo',
+          worktreeRoot: '~/repo',
+          branch: 'main',
+        },
+      },
+    });
+
+    expect(pendingMetadata).toMatchObject(store);
+    expect(confirmed).toMatchObject(store);
+  });
+
   it('drops optimistic unpin overrides once the server confirms the session is unpinned', () => {
     const store: LocalPinnedSessionStore = { 'p1:s1': -123 };
     const next = reconcilePinnedSessionStore(store, createProjects(0), 10);
 
     expect(next).toEqual({});
+  });
+
+  it('does not retain a confirmed leaf solely for negative hierarchy overrides', () => {
+    const next = reconcilePinnedSessionStore(
+      {
+        'project:p1': -555,
+        'sandbox:p1:/': -555,
+        'p1:s1': -123,
+      },
+      createProjects(0),
+      10,
+    );
+
+    expect(next['p1:s1']).toBeUndefined();
   });
 
   it('limits positive pins but preserves negative unpin overrides', () => {

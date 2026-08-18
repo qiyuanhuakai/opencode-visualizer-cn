@@ -7,12 +7,14 @@ type NotificationEntry = {
   projectId: string;
   sessionId: string;
   requestIds: Set<string>;
+  requestOrigins: Map<string, string>;
 };
 
 export type NotificationSnapshotEntry = {
   projectId: string;
   sessionId: string;
   requestIds: string[];
+  requestOrigins?: Array<[requestId: string, originSessionId: string]>;
 };
 
 export function createNotificationManager(
@@ -37,8 +39,10 @@ export function createNotificationManager(
       projectId: resolvedRoot.projectId,
       sessionId: resolvedRoot.sessionId,
       requestIds: new Set(existing?.requestIds ?? []),
+      requestOrigins: new Map(existing?.requestOrigins ?? []),
     };
     entry.requestIds.add(requestId);
+    entry.requestOrigins.set(requestId, trimmedSessionId);
     next.set(key, entry);
     state = next;
 
@@ -61,10 +65,13 @@ export function createNotificationManager(
         next.delete(key);
         sessionOrder = sessionOrder.filter((id) => id !== key);
       } else {
+        const updatedOrigins = new Map(entry.requestOrigins);
+        updatedOrigins.delete(requestId);
         next.set(key, {
           projectId: entry.projectId,
           sessionId: entry.sessionId,
           requestIds: updatedSet,
+          requestOrigins: updatedOrigins,
         });
       }
       state = next;
@@ -88,13 +95,54 @@ export function createNotificationManager(
     return true;
   }
 
+  function clearRequestsForSession(projectId: string, originSessionId: string): boolean {
+    const trimmedProjectId = projectId.trim();
+    const trimmedOriginSessionId = originSessionId.trim();
+    if (!trimmedProjectId || !trimmedOriginSessionId) return false;
+
+    const root = resolveRoot(trimmedProjectId, trimmedOriginSessionId);
+    const key = root.sessionId.trim();
+    const entry = key ? state.get(key) : undefined;
+    if (!entry) return false;
+
+    const next = new Map(state);
+    const updatedSet = new Set(entry.requestIds);
+    const updatedOrigins = new Map(entry.requestOrigins);
+    let removed = false;
+    for (const [requestId, origin] of entry.requestOrigins) {
+      if (origin !== trimmedOriginSessionId) continue;
+      updatedSet.delete(requestId);
+      updatedOrigins.delete(requestId);
+      removed = true;
+    }
+    if (!removed) return false;
+
+    if (updatedSet.size === 0) {
+      next.delete(key);
+      sessionOrder = sessionOrder.filter((id) => id !== key);
+    } else {
+      next.set(key, {
+        projectId: entry.projectId,
+        sessionId: entry.sessionId,
+        requestIds: updatedSet,
+        requestOrigins: updatedOrigins,
+      });
+    }
+    state = next;
+    return true;
+  }
+
   function getState(): Record<string, NotificationSnapshotEntry> {
     const out: Record<string, NotificationSnapshotEntry> = {};
     for (const [key, entry] of state.entries()) {
+      const requestOrigins = Array.from(entry.requestOrigins).filter(
+        ([, originSessionId]) => originSessionId !== entry.sessionId,
+      );
       out[key] = {
         projectId: entry.projectId,
         sessionId: entry.sessionId,
         requestIds: [...entry.requestIds],
+        ...(requestOrigins.length > 0 ? { requestOrigins } : {}),
       };
     }
     return out;
@@ -121,10 +169,24 @@ export function createNotificationManager(
         entry.requestIds.length === 0
       )
         continue;
+      const importedOrigins = new Map<string, string>();
+      if (Array.isArray(entry.requestOrigins)) {
+        for (const pair of entry.requestOrigins) {
+          if (!Array.isArray(pair) || pair.length !== 2) continue;
+          const requestId = pair[0];
+          const originSessionId = pair[1].trim();
+          if (!entry.requestIds.includes(requestId) || !originSessionId) continue;
+          importedOrigins.set(requestId, originSessionId);
+        }
+      }
       next.set(key, {
         projectId: trimmedProjectId,
         sessionId: trimmedSessionId,
         requestIds: new Set(entry.requestIds),
+        requestOrigins: new Map(entry.requestIds.map((requestId) => [
+          requestId,
+          importedOrigins.get(requestId) ?? trimmedSessionId,
+        ])),
       });
       order.push(key);
     }
@@ -136,6 +198,7 @@ export function createNotificationManager(
     addNotification,
     removeNotification,
     clearSession,
+    clearRequestsForSession,
     getState,
     hasAny,
     getSessionKeys,

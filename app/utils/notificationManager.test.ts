@@ -57,6 +57,44 @@ describe('createNotificationManager', () => {
     expect(manager.getState()).toEqual({});
   });
 
+  it('clears only requests originating from a child in the resolved-root aggregate', () => {
+    const aggregateManager = createNotificationManager((_projectId, sessionId) => ({
+      projectId: 'p1',
+      sessionId: sessionId === 'child' || sessionId === 'sibling' ? 'root' : sessionId,
+    }));
+    aggregateManager.addNotification('p1', 'root', 'permission-root');
+    aggregateManager.addNotification('p1', 'sibling', 'question-sibling');
+    aggregateManager.addNotification('p1', 'child', 'permission-child');
+    aggregateManager.addNotification('p1', 'child', 'question-child');
+
+    expect(aggregateManager.clearRequestsForSession('p1', 'child')).toBe(true);
+    expect(aggregateManager.getState()).toEqual({
+      root: {
+        projectId: 'p1',
+        sessionId: 'root',
+        requestIds: ['permission-root', 'question-sibling'],
+        requestOrigins: [['question-sibling', 'sibling']],
+      },
+    });
+  });
+
+  it('preserves child request origins across a snapshot round trip', () => {
+    const resolveAggregateRoot = (_projectId: string, sessionId: string) => ({
+      projectId: 'p1',
+      sessionId: sessionId === 'child' ? 'root' : sessionId,
+    });
+    const source = createNotificationManager(resolveAggregateRoot);
+    source.addNotification('p1', 'root', 'permission-root');
+    source.addNotification('p1', 'child', 'permission-child');
+    source.addNotification('p1', 'child', 'question-child');
+    const restored = createNotificationManager(resolveAggregateRoot);
+
+    restored.importState(source.getState());
+
+    expect(restored.clearRequestsForSession('p1', 'child')).toBe(true);
+    expect(restored.getState().root.requestIds).toEqual(['permission-root']);
+  });
+
   it('returns false when clearing non-existent session', () => {
     expect(manager.clearSession('p1', 's1')).toBe(false);
   });

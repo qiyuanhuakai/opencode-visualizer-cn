@@ -94,6 +94,26 @@ afterEach(() => {
 });
 
 describe('InputPanel prompt history', () => {
+  it('does not mount history rows until the closed dropdown opens', async () => {
+    const messages = useMessages();
+    messages.loadHistory([
+      userMessage('user-1', 'root', 'first prompt'),
+      userMessage('user-2', 'root', 'second prompt'),
+    ]);
+
+    const root = mountInputPanel();
+    await nextTick();
+
+    expect(root.querySelectorAll('.history-item')).toHaveLength(0);
+
+    root
+      .querySelector('textarea')
+      ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+    await nextTick();
+
+    expect(root.querySelectorAll('.history-item')).toHaveLength(2);
+  });
+
   it('shows only non-synthetic user input from root sessions', async () => {
     const messages = useMessages();
     messages.reset();

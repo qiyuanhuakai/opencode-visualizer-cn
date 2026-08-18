@@ -59,6 +59,10 @@ export function useServerState() {
       sessionHydrationByDirectory[message.directory] = message.hydration;
       return true;
     }
+    if (message.type === 'state.directory-hydration-removed') {
+      delete sessionHydrationByDirectory[message.directory];
+      return true;
+    }
     if (message.type === 'state.background-hydration-complete') {
       fullTreeHydrated.value = true;
       return true;

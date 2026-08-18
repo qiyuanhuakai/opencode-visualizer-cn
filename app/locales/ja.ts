@@ -1068,7 +1068,7 @@ const messages: LocaleMessages = {
     createBranchTitle: 'このリファレンスからブランチを作成',
     noGit: 'gitなし',
     treeMode: 'ツリーモード',
-    staged: 'ステージ済み',
+    staged: 'インデックス',
     changes: '変更',
     allFiles: 'すべてのファイル',
     noFiles: 'ファイルがありません。',

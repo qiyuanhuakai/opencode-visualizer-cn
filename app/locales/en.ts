@@ -1069,7 +1069,7 @@ const messages: LocaleMessages = {
     createBranchTitle: 'Create branch from this ref',
     noGit: 'no git',
     treeMode: 'Tree mode',
-    staged: 'Staged',
+    staged: 'Index',
     changes: 'Changes',
     allFiles: 'All files',
     noFiles: 'No files.',

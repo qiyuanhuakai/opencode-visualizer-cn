@@ -16,21 +16,19 @@
       v-if="shouldMountMarkdownRenderer"
       v-show="showMarkdownRenderer"
       v-bind="markdownProps"
-      v-on="attrs"
       @rendered="handleRendered('markdown')"
     />
     <CodeRenderer
       v-if="shouldMountCodeRenderer"
       v-show="showCodeRenderer"
       v-bind="codeProps"
-      v-on="attrs"
       @rendered="handleRendered('code')"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, useAttrs, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import CodeRenderer from './renderers/CodeRenderer.vue';
 import MarkdownRenderer from './renderers/MarkdownRenderer.vue';
@@ -56,7 +54,6 @@ const emit = defineEmits<{
   (event: 'rendered'): void;
 }>();
 
-const attrs = useAttrs();
 const activeMode = ref<ActiveMode>('markdown');
 
 const availableModes = computed<Array<{ id: ActiveMode; label: string }>>(() => {
