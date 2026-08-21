@@ -41,8 +41,12 @@ import ThreadHistoryContent from './ThreadHistoryContent.vue';
 import { useMessages } from '../composables/useMessages';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
 import type { HistoryEntry, HistoryWindowEntry } from '../types/message';
-import type { QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from '../types/sse';
-import { isHistoryToolName } from '../utils/toolNames';
+import type { ReasoningPart, ToolPart } from '../types/sse';
+import {
+  buildHistoryEntries,
+  selectSubagentMessages,
+  toHistoryWindowEntry,
+} from '../utils/historyEntries';
 
 const { t } = useI18n();
 
@@ -75,144 +79,27 @@ function getMessageContent(message: { id: string }): string {
   return msg.getTextContent(message.id);
 }
 
-function getToolPartTime(part: ToolPart): number {
-  const state = part.state;
-  if (state.status === 'running' || state.status === 'completed' || state.status === 'error') {
-    return state.time.start;
-  }
-  return 0;
-}
+const subagentMessages = computed(() =>
+  selectSubagentMessages(msg.roots.value, (rootId) => msg.getThread(rootId), props.parentThreadId),
+);
 
-function getSubtaskPartTime(_part: SubtaskPart, fallbackTime: number): number {
-  return fallbackTime;
-}
-
-function extractQuestionInfos(part: ToolPart): QuestionInfo[] {
-  const raw = part.state.input?.questions;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (q): q is QuestionInfo =>
-      q &&
-      typeof q === 'object' &&
-      typeof q.question === 'string' &&
-      typeof q.header === 'string' &&
-      Array.isArray(q.options),
-  );
-}
-
-function resolveQuestionStatus(part: ToolPart): 'pending' | 'replied' | 'rejected' {
-  if (part.state.status === 'completed') return 'replied';
-  if (part.state.status === 'error') return 'rejected';
-  return 'pending';
-}
-
-function extractQuestionAnswers(part: ToolPart): string[][] | undefined {
-  if (part.state.status !== 'completed') return undefined;
-  const answers = part.state.metadata?.answers;
-  if (!Array.isArray(answers)) return undefined;
-  return answers as string[][];
-}
-
-function getHistoryEntryKey(entry: HistoryEntry): string {
-  if (entry.kind === 'message') return `msg:${entry.message.id}`;
-  if (entry.kind === 'reasoning') return `reasoning:${entry.part.id}`;
-  if (entry.kind === 'question') return `question:${entry.part.callID}`;
-  if (entry.kind === 'subtask') return `subtask:${entry.part.id}`;
-  return `tool:${entry.part.callID}`;
-}
-
-const subagentRoots = computed(() => {
-  const target = props.parentThreadId.trim();
-  if (!target) return [] as ReturnType<typeof msg.getThread>;
-  return msg.roots.value
-    .filter((root) => root.sessionID === target)
-    .filter((root) => root.role === 'user');
-});
-
-const subagentMessages = computed(() => {
-  return subagentRoots.value.flatMap((root) => msg.getThread(root.id));
-});
-
-const internalEntries = computed<HistoryEntry[]>(() => {
-  const entries: HistoryEntry[] = [];
-  for (const msgInfo of subagentMessages.value) {
-    if (msgInfo.role === 'assistant' && hasTextContent(msgInfo)) {
-      entries.push({ kind: 'message', message: msgInfo, time: msgInfo.time.created });
-    }
-    const parts = msg.getParts(msgInfo.id);
-    for (const part of parts) {
-      if (part.type === 'reasoning') {
-        if (part.text) {
-          entries.push({ kind: 'reasoning', part, time: part.time.start });
-        }
-        continue;
-      }
-      if (part.type === 'subtask') {
-        entries.push({
-          kind: 'subtask',
-          part,
-          time: getSubtaskPartTime(part, msgInfo.time.created),
-        });
-        continue;
-      }
-      if (part.type !== 'tool') continue;
-      if (part.state.status === 'pending') continue;
-      if (part.tool === 'question') {
-        entries.push({ kind: 'question', part, time: getToolPartTime(part) });
-        continue;
-      }
-      if (!isHistoryToolName(part.tool)) continue;
-      entries.push({ kind: 'tool', part, time: getToolPartTime(part) });
-    }
-  }
-  return entries.sort((a, b) => a.time - b.time);
-});
+const internalEntries = computed<HistoryEntry[]>(() =>
+  buildHistoryEntries({
+    messages: subagentMessages.value,
+    hasTextContent,
+    getParts: (messageId) => msg.getParts(messageId),
+  }),
+);
 
 const entries = computed<HistoryWindowEntry[]>(() =>
-  internalEntries.value.map((entry) => {
-    if (entry.kind === 'message') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'message',
-        content: getMessageContent(entry.message),
-        time: entry.time,
-        sessionId: entry.message.sessionID,
-        isSubagent: true,
-      } satisfies HistoryWindowEntry;
-    }
-    if (entry.kind === 'reasoning') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'reasoning',
-        part: entry.part,
-        time: entry.time,
-      } satisfies HistoryWindowEntry;
-    }
-    if (entry.kind === 'question') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'question',
-        questions: extractQuestionInfos(entry.part),
-        status: resolveQuestionStatus(entry.part),
-        answers: extractQuestionAnswers(entry.part),
-        time: entry.time,
-      } satisfies HistoryWindowEntry;
-    }
-    if (entry.kind === 'subtask') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'subtask',
-        part: entry.part,
-        time: entry.time,
-      } satisfies HistoryWindowEntry;
-    }
-    return {
-      key: getHistoryEntryKey(entry),
-      kind: 'tool',
-      part: entry.part,
-      time: entry.time,
-    } satisfies HistoryWindowEntry;
-  }),
+  internalEntries.value.map((entry) =>
+    toHistoryWindowEntry(
+      entry,
+      entry.kind === 'message'
+        ? { content: getMessageContent(entry.message), isSubagent: true }
+        : undefined,
+    ),
+  ),
 );
 
 function handleClose() {
