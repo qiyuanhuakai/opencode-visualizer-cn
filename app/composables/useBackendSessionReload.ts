@@ -61,6 +61,31 @@ export function useBackendSessionReload(params: {
 }) {
   let loadedMessageCacheContext: LoadedMessageCacheContext | null = null;
 
+  async function hydrateAndScheduleDescendantHistory(
+    sessionId: string,
+    rootHistoryRequestId: number,
+    reloadRequestId: number,
+  ) {
+    const referencedSessionIds = params.hydrateReferencedSubagents
+      ? await params.hydrateReferencedSubagents(sessionId, reloadRequestId)
+      : undefined;
+    if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+    if (referencedSessionIds) {
+      params.scheduleDescendantSessionHistoryHydration(
+        sessionId,
+        rootHistoryRequestId,
+        reloadRequestId,
+        referencedSessionIds,
+      );
+      return;
+    }
+    params.scheduleDescendantSessionHistoryHydration(
+      sessionId,
+      rootHistoryRequestId,
+      reloadRequestId,
+    );
+  }
+
   async function reloadSelectedSessionState(newId?: string, oldId?: string) {
     const reloadRequestId = ++params.sessionReloadRequestId.value;
     const previousCacheContext = loadedMessageCacheContext;
@@ -142,30 +167,17 @@ export function useBackendSessionReload(params: {
         let rootHistoryRequestId = 0;
         try {
           rootHistoryRequestId = await params.fetchRootSessionHistory(sessionId);
+          if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+          if (loadedMessageCacheContext === nextCacheContext && nextCacheContext) {
+            nextCacheContext.cacheable = true;
+          }
           await new Promise((resolve) => requestAnimationFrame(resolve));
           await params.waitForPendingRenders();
-          const referencedSessionIds = params.hydrateReferencedSubagents
-            ? await params.hydrateReferencedSubagents(sessionId, reloadRequestId)
-            : undefined;
-          if (reloadRequestId === params.sessionReloadRequestId.value) {
-            if (loadedMessageCacheContext === nextCacheContext && nextCacheContext) {
-              nextCacheContext.cacheable = true;
-            }
-            if (referencedSessionIds) {
-              params.scheduleDescendantSessionHistoryHydration(
-                sessionId,
-                rootHistoryRequestId,
-                reloadRequestId,
-                referencedSessionIds,
-              );
-            } else {
-              params.scheduleDescendantSessionHistoryHydration(
-                sessionId,
-                rootHistoryRequestId,
-                reloadRequestId,
-              );
-            }
-          }
+          await hydrateAndScheduleDescendantHistory(
+            sessionId,
+            rootHistoryRequestId,
+            reloadRequestId,
+          );
         } catch {
           // Keep partial history if hydration/rendering fails.
         } finally {
@@ -175,25 +187,11 @@ export function useBackendSessionReload(params: {
         }
       } else if (!descendantsHydrated) {
         const rootHistoryRequestId = params.reserveRootHistoryRequestId();
-        const referencedSessionIds = params.hydrateReferencedSubagents
-          ? await params.hydrateReferencedSubagents(sessionId, reloadRequestId)
-          : undefined;
-        if (reloadRequestId === params.sessionReloadRequestId.value) {
-          if (referencedSessionIds) {
-            params.scheduleDescendantSessionHistoryHydration(
-              sessionId,
-              rootHistoryRequestId,
-              reloadRequestId,
-              referencedSessionIds,
-            );
-          } else {
-            params.scheduleDescendantSessionHistoryHydration(
-              sessionId,
-              rootHistoryRequestId,
-              reloadRequestId,
-            );
-          }
-        }
+        await hydrateAndScheduleDescendantHistory(
+          sessionId,
+          rootHistoryRequestId,
+          reloadRequestId,
+        );
       }
 
       if (reloadRequestId !== params.sessionReloadRequestId.value) return;

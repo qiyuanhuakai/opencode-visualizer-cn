@@ -3,6 +3,92 @@ import { ref } from 'vue';
 import { useBackendSessionReload } from './useBackendSessionReload';
 
 describe('useBackendSessionReload', () => {
+  it('keeps a completed root snapshot cacheable when child hydration fails', async () => {
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
+    const activeBackendKind = ref('opencode');
+    const activeDirectory = ref('/repo');
+    const sessionReloadRequestId = ref(0);
+    const deferredSessionReloadId = ref<string>();
+    const hydrateReferencedSubagents = vi
+      .fn()
+      .mockRejectedValue(new Error('child hydration failed'));
+    const fetchRootSessionHistory = vi.fn().mockResolvedValue(42);
+    const reportError = vi.fn();
+    const msg = {
+      saveSessionState: vi.fn(),
+      reset: vi.fn(),
+      tryLoadFromCache: vi.fn().mockReturnValue(false),
+    };
+
+    const { reloadSelectedSessionState } = useBackendSessionReload({
+      activeBackendKind,
+      activeDirectory,
+      getMessageCacheNamespace: () => 'opencode:primary:/repo',
+      sessionReloadRequestId,
+      isBootstrapping: ref(false),
+      deferredSessionReloadId,
+      selectedProject: ref(null),
+      persistSelectionState: vi.fn(),
+      invokeBackendSelectionAfterBootstrap: vi.fn(),
+      fwCloseAll: vi.fn(),
+      msg,
+      resetFollow: vi.fn(),
+      reasoningReset: vi.fn(),
+      subagentWindowsReset: vi.fn(),
+      clearRetryStatus: vi.fn(),
+      codexApi: {
+        loadThreadHistory: vi.fn(),
+      },
+      loadCodeReviewComments: vi.fn(),
+      reportError,
+      oc: null,
+      acp: null,
+      providerModels: ref([]),
+      selectedModel: ref(''),
+      acpSessionModels: new Map(),
+      acpSessionAgents: new Map(),
+      selectionReasoningEfforts: ref({}),
+      fetchRootSessionHistory,
+      hydratedDescendantSessionIds: new Set(),
+      waitForPendingRenders: vi.fn(),
+      hydrateReferencedSubagents,
+      scheduleDescendantSessionHistoryHydration: vi.fn(),
+      isLoadingHistory: ref(false),
+      activeSessionStarted: ref(false),
+      renderTick: ref(0),
+      anchorOutputToBottom: vi.fn(),
+      uiInitState: ref('idle'),
+      reloadTodosForAllowedSessions: vi.fn(),
+      fetchPendingPermissions: vi.fn(),
+      fetchPendingQuestions: vi.fn(),
+      focusInput: vi.fn(),
+      sessionHasStarted: vi.fn().mockReturnValue(true),
+      setActiveSessionStarted: vi.fn(),
+      windowSetTimeout: (callback: () => void) => {
+        callback();
+        return 0;
+      },
+    } as unknown as Parameters<typeof useBackendSessionReload>[0]);
+
+    try {
+      await reloadSelectedSessionState('session-1');
+      expect(hydrateReferencedSubagents).toHaveBeenCalledWith('session-1', 1);
+      expect(msg.saveSessionState).not.toHaveBeenCalled();
+
+      await reloadSelectedSessionState('session-2', 'session-1');
+
+      expect(msg.saveSessionState).toHaveBeenCalledWith({
+        namespace: 'opencode:primary:/repo',
+        sessionId: 'session-1',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reloads Codex session history through unified reload runtime', async () => {
     const msg = {
       saveSessionState: vi.fn(),
