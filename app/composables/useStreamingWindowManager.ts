@@ -8,7 +8,7 @@ import type { SessionScope } from './useGlobalEvents';
 import type { useFloatingWindows } from './useFloatingWindows';
 import { useDeltaAccumulator } from './useDeltaAccumulator';
 
-export type StreamingWindowEntry = {
+type StreamingWindowEntry = {
   id: string;
   text: string;
   completed?: boolean;
@@ -31,7 +31,6 @@ export function useStreamingWindowManager(config: StreamingWindowConfig) {
   const acc = useDeltaAccumulator();
   const entriesBySession = reactive(new Map<string, StreamingWindowEntry[]>());
   const closeTimers = new Map<string, number>();
-
 
   function getWindowKey(sessionId: string) {
     return `${config.prefix}${sessionId}`;

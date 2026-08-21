@@ -35,28 +35,6 @@ export type MessageDiffEntry = {
 
 export type MessageStatus = 'streaming' | 'complete' | 'error';
 
-export type Message = {
-  id: string;
-  parentId?: string;
-  sessionId: string;
-  role: 'user' | 'assistant';
-  content: string;
-  status: MessageStatus;
-
-  agent?: string;
-  model?: string;
-  providerId?: string;
-  modelId?: string;
-  variant?: string;
-
-  time?: number;
-  usage?: MessageUsage;
-  attachments?: MessageAttachment[];
-  diffs?: MessageDiffEntry[];
-  error?: { name: string; message: string } | null;
-  classification?: 'real_user' | 'system_injection' | 'unknown';
-};
-
 export type HistoryEntry =
   | { kind: 'message'; message: MessageInfo; time: number }
   | { kind: 'tool'; part: ToolPart; time: number }
@@ -86,11 +64,6 @@ export type HistoryWindowEntry =
       answers?: string[][];
       time: number;
     };
-
-export type ModelMeta = {
-  displayName: string;
-  providerLabel?: string;
-};
 
 export type ThreadTarget = {
   agent?: string;

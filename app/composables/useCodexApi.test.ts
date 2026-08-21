@@ -2,7 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
 import type { CodexAdapter, CodexPromptResult } from '../backends/codex/codexAdapter';
 import type { CodexJsonRpcId, CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
-import { StorageKeys, storageGet, storageGetJSON, storageKey, storageSet } from '../utils/storageKeys';
+import type { ToolStatePending } from '../types/sse';
+import {
+  StorageKeys,
+  storageGet,
+  storageGetJSON,
+  storageKey,
+  storageSet,
+} from '../utils/storageKeys';
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
@@ -14,7 +21,9 @@ function deferred<T>() {
 
 function createAdapterMock() {
   let notificationHandler: ((notification: CodexJsonRpcNotification) => void) | null = null;
-  let serverRequestHandler: ((request: { id: CodexJsonRpcId; method: string; params?: unknown }) => void) | null = null;
+  let serverRequestHandler:
+    | ((request: { id: CodexJsonRpcId; method: string; params?: unknown }) => void)
+    | null = null;
   const adapter = {
     initialize: vi.fn().mockResolvedValue({ userAgent: 'codex-test' }),
     disconnect: vi.fn(),
@@ -24,39 +33,51 @@ function createAdapterMock() {
         notificationHandler = null;
       });
     }),
-    onServerRequest: vi.fn((handler: (request: { id: CodexJsonRpcId; method: string; params?: unknown }) => void) => {
-      serverRequestHandler = handler;
-      return vi.fn(() => {
-        serverRequestHandler = null;
-      });
-    }),
+    onServerRequest: vi.fn(
+      (handler: (request: { id: CodexJsonRpcId; method: string; params?: unknown }) => void) => {
+        serverRequestHandler = handler;
+        return vi.fn(() => {
+          serverRequestHandler = null;
+        });
+      },
+    ),
     listThreads: vi.fn().mockResolvedValue({
       data: [{ id: 'thr_existing', preview: 'Existing thread' }],
       nextCursor: null,
     }),
     startThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } }),
-    readThread: vi.fn((params: { threadId: string }) => Promise.resolve({
-      thread: {
-        id: params.threadId,
-        name: params.threadId === 'thr_fork' ? 'Forked thread' : 'Existing named thread',
-        turns: [
-          {
-            id: 'turn_old',
-            items: [
-              { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: `${params.threadId} prompt` }] },
-              { type: 'agentMessage', id: 'a1', text: `${params.threadId} answer` },
-            ],
-          },
-        ],
-      },
-    })),
-    resumeThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
+    readThread: vi.fn((params: { threadId: string }) =>
+      Promise.resolve({
+        thread: {
+          id: params.threadId,
+          name: params.threadId === 'thr_fork' ? 'Forked thread' : 'Existing named thread',
+          turns: [
+            {
+              id: 'turn_old',
+              items: [
+                {
+                  type: 'userMessage',
+                  id: 'u1',
+                  content: [{ type: 'text', text: `${params.threadId} prompt` }],
+                },
+                { type: 'agentMessage', id: 'a1', text: `${params.threadId} answer` },
+              ],
+            },
+          ],
+        },
+      }),
+    ),
+    resumeThread: vi
+      .fn()
+      .mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     setThreadName: vi.fn().mockResolvedValue({}),
     archiveThread: vi.fn().mockResolvedValue({}),
     unsubscribeThread: vi.fn().mockResolvedValue({}),
     interruptTurn: vi.fn().mockResolvedValue({}),
     forkThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_fork', preview: '' } }),
-    rollbackThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
+    rollbackThread: vi
+      .fn()
+      .mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing named thread' } }),
     readDirectory: vi.fn().mockResolvedValue({ entries: [{ name: 'file.txt', type: 'file' }] }),
     readFile: vi.fn().mockResolvedValue({ dataBase64: 'aGVsbG8=' }),
     listCollaborationModes: vi.fn().mockResolvedValue({ data: [] }),
@@ -265,22 +286,22 @@ describe('useCodexApi', () => {
         updatedAt: number;
       };
     }>();
-    mock.adapter.getThreadGoal = vi.fn((params: { threadId: string }) => (
+    mock.adapter.getThreadGoal = vi.fn((params: { threadId: string }) =>
       params.threadId === 'thr_existing'
         ? staleGoal.promise
         : Promise.resolve({
-          goal: {
-            threadId: params.threadId,
-            objective: 'Current goal',
-            status: 'active' as const,
-            tokenBudget: null,
-            tokensUsed: 0,
-            timeUsedSeconds: 0,
-            createdAt: 1,
-            updatedAt: 1,
-          },
-        })
-    ));
+            goal: {
+              threadId: params.threadId,
+              objective: 'Current goal',
+              status: 'active' as const,
+              tokenBudget: null,
+              tokensUsed: 0,
+              timeUsedSeconds: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          }),
+    );
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
 
@@ -310,7 +331,8 @@ describe('useCodexApi', () => {
   it('keeps the newest goal refresh for the selected thread', async () => {
     const mock = createAdapterMock();
     const staleGoal = deferred<{ goal: null }>();
-    mock.adapter.getThreadGoal = vi.fn()
+    mock.adapter.getThreadGoal = vi
+      .fn()
       .mockImplementationOnce(() => staleGoal.promise)
       .mockResolvedValueOnce({
         goal: {
@@ -363,22 +385,34 @@ describe('useCodexApi', () => {
   it('preserves each plugin marketplace locator when flattening plugin lists', async () => {
     const mock = createAdapterMock();
     mock.adapter.listPlugins = vi.fn().mockResolvedValue({
-      marketplaces: [{
-        name: 'local-marketplace',
-        path: '/repo/.agents/plugins/marketplace.json',
-        plugins: [{ id: 'demo', name: 'demo', isAccessible: true, isEnabled: false, source: { type: 'local', path: '/repo/plugins/demo' } }],
-      }],
+      marketplaces: [
+        {
+          name: 'local-marketplace',
+          path: '/repo/.agents/plugins/marketplace.json',
+          plugins: [
+            {
+              id: 'demo',
+              name: 'demo',
+              isAccessible: true,
+              isEnabled: false,
+              source: { type: 'local', path: '/repo/plugins/demo' },
+            },
+          ],
+        },
+      ],
     });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
 
     await api.refreshPlugins();
 
-    expect(api.plugins.value).toEqual([expect.objectContaining({
-      id: 'demo',
-      marketplaceName: 'local-marketplace',
-      marketplacePath: '/repo/.agents/plugins/marketplace.json',
-    })]);
+    expect(api.plugins.value).toEqual([
+      expect.objectContaining({
+        id: 'demo',
+        marketplaceName: 'local-marketplace',
+        marketplacePath: '/repo/.agents/plugins/marketplace.json',
+      }),
+    ]);
   });
 
   it('keeps the newest plugin refresh when an older request resolves last', async () => {
@@ -398,24 +432,45 @@ describe('useCodexApi', () => {
     }>();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
-    mock.adapter.listPlugins = vi.fn()
+    mock.adapter.listPlugins = vi
+      .fn()
       .mockImplementationOnce(() => stalePlugins.promise)
       .mockResolvedValueOnce({
-        marketplaces: [{
-          name: 'current-marketplace',
-          path: '/current/marketplace.json',
-          plugins: [{ id: 'current', name: 'current', isAccessible: true, isEnabled: true, source: { type: 'local', path: '/current' } }],
-        }],
+        marketplaces: [
+          {
+            name: 'current-marketplace',
+            path: '/current/marketplace.json',
+            plugins: [
+              {
+                id: 'current',
+                name: 'current',
+                isAccessible: true,
+                isEnabled: true,
+                source: { type: 'local', path: '/current' },
+              },
+            ],
+          },
+        ],
       });
 
     const staleRefresh = api.refreshPlugins();
     await api.refreshPlugins();
     stalePlugins.resolve({
-      marketplaces: [{
-        name: 'stale-marketplace',
-        path: '/stale/marketplace.json',
-        plugins: [{ id: 'stale', name: 'stale', isAccessible: true, isEnabled: false, source: { type: 'local', path: '/stale' } }],
-      }],
+      marketplaces: [
+        {
+          name: 'stale-marketplace',
+          path: '/stale/marketplace.json',
+          plugins: [
+            {
+              id: 'stale',
+              name: 'stale',
+              isAccessible: true,
+              isEnabled: false,
+              source: { type: 'local', path: '/stale' },
+            },
+          ],
+        },
+      ],
     });
     await staleRefresh;
 
@@ -425,9 +480,12 @@ describe('useCodexApi', () => {
   it('resolves connection once threads are ready without waiting for panel catalog hydration', async () => {
     const mock = createAdapterMock();
     let resolveModels: ((value: { data: []; nextCursor: null }) => void) | undefined;
-    mock.adapter.listModels = vi.fn(() => new Promise<{ data: []; nextCursor: null }>((resolve) => {
-      resolveModels = resolve;
-    }));
+    mock.adapter.listModels = vi.fn(
+      () =>
+        new Promise<{ data: []; nextCursor: null }>((resolve) => {
+          resolveModels = resolve;
+        }),
+    );
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     let connected = false;
 
@@ -464,7 +522,8 @@ describe('useCodexApi', () => {
   it('keeps the newest account refresh when an older preload resolves last', async () => {
     const mock = createAdapterMock();
     const staleAccount = deferred<{ account: null }>();
-    mock.adapter.readAccount = vi.fn()
+    mock.adapter.readAccount = vi
+      .fn()
       .mockImplementationOnce(() => staleAccount.promise)
       .mockResolvedValueOnce({ account: { type: 'chatgpt', email: 'current@example.com' } });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -499,7 +558,9 @@ describe('useCodexApi', () => {
     await api.connect();
     await vi.waitFor(() => expect(firstMock.adapter.listModels).toHaveBeenCalled());
     await api.connect();
-    await vi.waitFor(() => expect(api.models.value.map((model) => model.id)).toEqual(['current-model']));
+    await vi.waitFor(() =>
+      expect(api.models.value.map((model) => model.id)).toEqual(['current-model']),
+    );
 
     staleModels.resolve({
       data: [{ id: 'stale-model', model: 'stale-model', displayName: 'Stale model' }],
@@ -514,12 +575,15 @@ describe('useCodexApi', () => {
     const mock = createAdapterMock();
     const staleHome = deferred<Response>();
     const originalFetch = globalThis.fetch;
-    const fetchMock = vi.fn()
+    const fetchMock = vi
+      .fn()
       .mockImplementationOnce(() => staleHome.promise)
-      .mockResolvedValueOnce(new Response(JSON.stringify({ home: '/current-home' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }));
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ home: '/current-home' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
     vi.stubGlobal('fetch', fetchMock);
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
@@ -529,10 +593,12 @@ describe('useCodexApi', () => {
       await api.connect();
       expect(api.homeDir.value).toBe('/current-home');
 
-      staleHome.resolve(new Response(JSON.stringify({ home: '/stale-home' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }));
+      staleHome.resolve(
+        new Response(JSON.stringify({ home: '/stale-home' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      );
       await staleConnection;
 
       expect(api.homeDir.value).toBe('/current-home');
@@ -629,16 +695,34 @@ describe('useCodexApi', () => {
         model_providers: { omniroute: { name: 'OmniRoute' } },
       },
     });
-    mock.adapter.listThreads = vi.fn()
-      .mockResolvedValueOnce({ data: [{ id: 'custom-null', preview: 'Null custom', modelProvider: 'omniroute', updatedAt: 2 }], nextCursor: null })
-      .mockResolvedValueOnce({ data: [{ id: 'official', preview: 'OpenAI', modelProvider: 'openai', updatedAt: 3 }], nextCursor: null })
-      .mockResolvedValueOnce({ data: [{ id: 'custom-explicit', preview: 'Custom', modelProvider: 'omniroute', updatedAt: 1 }], nextCursor: null });
+    mock.adapter.listThreads = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: [
+          { id: 'custom-null', preview: 'Null custom', modelProvider: 'omniroute', updatedAt: 2 },
+        ],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'official', preview: 'OpenAI', modelProvider: 'openai', updatedAt: 3 }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [
+          { id: 'custom-explicit', preview: 'Custom', modelProvider: 'omniroute', updatedAt: 1 },
+        ],
+        nextCursor: null,
+      });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
 
     await vi.waitFor(() => {
-      expect(api.threads.value.map((thread) => thread.id)).toEqual(['official', 'custom-null', 'custom-explicit']);
+      expect(api.threads.value.map((thread) => thread.id)).toEqual([
+        'official',
+        'custom-null',
+        'custom-explicit',
+      ]);
     });
     expect(mock.adapter.listThreads).toHaveBeenNthCalledWith(1, {
       limit: 50,
@@ -667,7 +751,8 @@ describe('useCodexApi', () => {
         model_providers: { current: { name: 'Current' } },
       },
     };
-    mock.adapter.readConfig = vi.fn()
+    mock.adapter.readConfig = vi
+      .fn()
       .mockImplementationOnce(() => staleProviderConfig.promise)
       .mockImplementationOnce(() => stalePanelConfig.promise)
       .mockResolvedValue(currentConfig);
@@ -714,10 +799,12 @@ describe('useCodexApi', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const staleVcs = deferred<Awaited<ReturnType<CodexAdapter['getVcsInfo']>>>();
-    mock.adapter.getVcsInfo = vi.fn()
+    mock.adapter.getVcsInfo = vi
+      .fn()
       .mockImplementationOnce(() => staleVcs.promise)
       .mockResolvedValue({ root: '/current', branch: 'main' });
-    mock.adapter.listThreads = vi.fn()
+    mock.adapter.listThreads = vi
+      .fn()
       .mockResolvedValueOnce({
         data: [{ id: 'stale-thread', preview: 'Stale', cwd: '/repo' }],
         nextCursor: null,
@@ -745,16 +832,18 @@ describe('useCodexApi', () => {
   it('strips raw git remote URLs from loaded thread metadata', async () => {
     const mock = createAdapterMock();
     mock.adapter.listThreads = vi.fn().mockResolvedValue({
-      data: [{
-        id: 'thr_repo',
-        preview: 'Repo',
-        cwd: '/repo',
-        gitInfo: {
-          root: '/repo',
-          branch: 'main',
-          originUrl: 'https://token@example.com/org/repo.git',
+      data: [
+        {
+          id: 'thr_repo',
+          preview: 'Repo',
+          cwd: '/repo',
+          gitInfo: {
+            root: '/repo',
+            branch: 'main',
+            originUrl: 'https://token@example.com/org/repo.git',
+          },
         },
-      }],
+      ],
       nextCursor: null,
     });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -778,21 +867,35 @@ describe('useCodexApi', () => {
 
     await api.connect();
 
-    expect(api.threads.value.map((thread) => thread.cwd)).toEqual(['/home/codex', '/home/codex/repo']);
+    expect(api.threads.value.map((thread) => thread.cwd)).toEqual([
+      '/home/codex',
+      '/home/codex/repo',
+    ]);
   });
 
   it('falls back to reading unmaterialized threads without turns', async () => {
     const mock = createAdapterMock();
-    mock.adapter.readThread = vi.fn()
-      .mockRejectedValueOnce(new Error('thread thr_empty is not materialized yet; includeTurns is unavailable before first user message'))
+    mock.adapter.readThread = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'thread thr_empty is not materialized yet; includeTurns is unavailable before first user message',
+        ),
+      )
       .mockResolvedValueOnce({ thread: { id: 'thr_empty', preview: 'Empty thread' } });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
     await api.selectThread('thr_empty');
 
-    expect(mock.adapter.readThread).toHaveBeenNthCalledWith(1, { threadId: 'thr_empty', includeTurns: true });
-    expect(mock.adapter.readThread).toHaveBeenNthCalledWith(2, { threadId: 'thr_empty', includeTurns: false });
+    expect(mock.adapter.readThread).toHaveBeenNthCalledWith(1, {
+      threadId: 'thr_empty',
+      includeTurns: true,
+    });
+    expect(mock.adapter.readThread).toHaveBeenNthCalledWith(2, {
+      threadId: 'thr_empty',
+      includeTurns: false,
+    });
     expect(api.activeThreadId.value).toBe('thr_empty');
     expect(api.canonicalHistory.value).toEqual([]);
     expect(api.errorMessage.value).toBe('');
@@ -806,45 +909,201 @@ describe('useCodexApi', () => {
       return Promise.resolve({
         thread: {
           id: params.threadId,
-          turns: [{
-            id: `${params.threadId}:turn`,
-            items: [
-              { type: 'userMessage', id: `${params.threadId}:user`, content: [{ type: 'text', text: `${params.threadId} prompt` }] },
-              { type: 'agentMessage', id: `${params.threadId}:assistant`, text: `${params.threadId} answer` },
-            ],
-          }],
+          turns: [
+            {
+              id: `${params.threadId}:turn`,
+              items: [
+                {
+                  type: 'userMessage',
+                  id: `${params.threadId}:user`,
+                  content: [{ type: 'text', text: `${params.threadId} prompt` }],
+                },
+                {
+                  type: 'agentMessage',
+                  id: `${params.threadId}:assistant`,
+                  text: `${params.threadId} answer`,
+                },
+              ],
+            },
+          ],
         },
       });
     });
-    mock.adapter.resumeThread = vi.fn((params: { threadId: string }) => Promise.resolve({
-      thread: { id: params.threadId },
-    }));
+    mock.adapter.resumeThread = vi.fn((params: { threadId: string }) =>
+      Promise.resolve({
+        thread: { id: params.threadId },
+      }),
+    );
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
 
     const selectingA = api.selectThread('thread-a');
-    await vi.waitFor(() => expect(mock.adapter.readThread).toHaveBeenCalledWith({
-      threadId: 'thread-a',
-      includeTurns: true,
-    }));
+    await vi.waitFor(() =>
+      expect(mock.adapter.readThread).toHaveBeenCalledWith({
+        threadId: 'thread-a',
+        includeTurns: true,
+      }),
+    );
     await api.selectThread('thread-b');
 
     threadA.resolve({
       thread: {
         id: 'thread-a',
-        turns: [{
-          id: 'thread-a:turn',
-          items: [
-            { type: 'userMessage', id: 'thread-a:user', content: [{ type: 'text', text: 'thread-a prompt' }] },
-            { type: 'agentMessage', id: 'thread-a:assistant', text: 'thread-a answer' },
-          ],
-        }],
+        turns: [
+          {
+            id: 'thread-a:turn',
+            items: [
+              {
+                type: 'userMessage',
+                id: 'thread-a:user',
+                content: [{ type: 'text', text: 'thread-a prompt' }],
+              },
+              { type: 'agentMessage', id: 'thread-a:assistant', text: 'thread-a answer' },
+            ],
+          },
+        ],
       },
     });
     await selectingA;
 
     expect(api.activeThreadId.value).toBe('thread-b');
-    expect(api.transcript.value.map((entry) => entry.text)).toEqual(['thread-b prompt', 'thread-b answer']);
+    expect(api.transcript.value.map((entry) => entry.text)).toEqual([
+      'thread-b prompt',
+      'thread-b answer',
+    ]);
+  });
+
+  it('maps every supported history item through the public transcript path', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({
+      thread: {
+        id: 'thr_variants',
+        turns: [
+          {
+            id: 'turn_variants',
+            items: [
+              {
+                type: 'userMessage',
+                content: [{ type: 'text', text: 'user prompt' }],
+              },
+              { type: 'agentMessage', text: 'agent answer' },
+              { type: 'plan', text: 'plan text' },
+              {
+                type: 'commandExecution',
+                command: ['pnpm', 'test'],
+                cwd: '/repo',
+                status: 'completed',
+                exitCode: 0,
+                aggregatedOutput: 'passed',
+              },
+              {
+                type: 'fileChange',
+                changes: [{ path: 'src/a.ts' }, { path: 'src/b.ts' }],
+                status: 'completed',
+              },
+              { type: 'reasoning', summary: 'reasoning text' },
+              { type: 'enteredReviewMode' },
+              { type: 'exitedReviewMode', review: 'current changes' },
+              {
+                type: 'webSearch',
+                query: 'codex',
+                action: { type: 'open', query: 'docs', url: 'https://example.test' },
+              },
+              { type: 'imageView', path: '/tmp/image.png' },
+              {
+                type: 'mcpToolCall',
+                server: 'docs',
+                tool: 'search',
+                arguments: { query: 'codex' },
+                status: 'completed',
+              },
+              { type: 'dynamicToolCall', tool: 'lookup', status: 'completed' },
+              { type: 'collabToolCall', tool: 'delegate', status: 'completed' },
+              { type: 'contextCompaction' },
+              { type: 'reasoning', summary: '' },
+              { type: 'exitedReviewMode' },
+              { type: 'imageView' },
+              { type: 'unknownItem', text: 'ignored' },
+              null,
+            ],
+          },
+        ],
+      },
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.selectThread('thr_variants');
+
+    expect(api.transcript.value.map(({ role, text }) => ({ role, text }))).toEqual([
+      { role: 'user', text: 'user prompt' },
+      { role: 'assistant', text: 'agent answer' },
+      { role: 'system', text: 'plan text' },
+      {
+        role: 'system',
+        text: '$ pnpm test\ncwd: /repo\nstatus: completed\nexit code: 0\n\npassed',
+      },
+      {
+        role: 'system',
+        text: 'File changes (2):\n  src/a.ts\n  src/b.ts\nstatus: completed',
+      },
+      { role: 'system', text: 'Reasoning: reasoning text' },
+      { role: 'system', text: 'Entered review mode: current changes' },
+      { role: 'system', text: 'Review: current changes' },
+      {
+        role: 'system',
+        text: 'Web search: codex\naction: open\nquery: docs\nurl: https://example.test',
+      },
+      { role: 'system', text: 'Image: /tmp/image.png' },
+      {
+        role: 'system',
+        text: 'Tool call: docs.search\narguments:\n{\n  "query": "codex"\n}\nstatus: completed',
+      },
+      { role: 'system', text: 'Tool call: lookup\nstatus: completed' },
+      { role: 'system', text: 'Tool call: delegate\nstatus: completed' },
+      { role: 'system', text: 'Context compaction completed' },
+    ]);
+  });
+
+  it('preserves item fallbacks when history fields are missing or malformed', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({
+      thread: {
+        id: 'thr_fallbacks',
+        turns: [
+          {
+            id: 'turn_fallbacks',
+            items: [
+              null,
+              {},
+              { type: 'unknownItem' },
+              { type: 'userMessage', content: [{ type: 'image', path: '/tmp/image.png' }] },
+              { type: 'agentMessage', text: '' },
+              { type: 'plan', text: '' },
+              { type: 'commandExecution' },
+              { type: 'fileChange', changes: [] },
+              { type: 'reasoning', summary: 42 },
+              { type: 'enteredReviewMode', review: 42 },
+              { type: 'exitedReviewMode' },
+              { type: 'webSearch', action: {} },
+              { type: 'imageView' },
+              { type: 'mcpToolCall' },
+              { type: 'dynamicToolCall' },
+              { type: 'collabToolCall' },
+            ],
+          },
+        ],
+      },
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.selectThread('thr_fallbacks');
+
+    expect(api.transcript.value.map(({ role, text }) => ({ role, text }))).toEqual([
+      { role: 'system', text: 'File changes' },
+      { role: 'system', text: 'Entered review mode: current changes' },
+    ]);
   });
 
   it('persists a delayed completed item under its notification thread instead of the active thread', async () => {
@@ -872,20 +1131,24 @@ describe('useCodexApi', () => {
     const threadAKey = `${StorageKeys.state.codexAuxiliaryHistory}.${encodeURIComponent('thread-a')}`;
     const threadBKey = `${StorageKeys.state.codexAuxiliaryHistory}.${encodeURIComponent('thread-b')}`;
     await vi.waitFor(() => {
-      const snapshot = storageGetJSON<{ entries?: Array<{ parts?: Array<{ id?: string }> }> }>(threadAKey);
-      expect(snapshot?.entries?.flatMap((entry) => entry.parts ?? []).map((part) => part.id)).toContain(
-        'thread-a:command',
+      const snapshot = storageGetJSON<{ entries?: Array<{ parts?: Array<{ id?: string }> }> }>(
+        threadAKey,
       );
+      expect(
+        snapshot?.entries?.flatMap((entry) => entry.parts ?? []).map((part) => part.id),
+      ).toContain('thread-a:command');
     });
     expect(storageGetJSON(threadBKey)).toBeNull();
-    expect(api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id)).not.toContain(
-      'thread-a:command',
-    );
+    expect(
+      api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id),
+    ).not.toContain('thread-a:command');
   });
 
   it('keeps the requested cwd when a newly started thread omits cwd', async () => {
     const mock = createAdapterMock();
-    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
+    mock.adapter.startThread = vi
+      .fn()
+      .mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     api.homeDir.value = '/home/codex';
 
@@ -899,7 +1162,9 @@ describe('useCodexApi', () => {
 
   it('starts threads with the bare Codex model id from the selected UI key', async () => {
     const mock = createAdapterMock();
-    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
+    mock.adapter.startThread = vi
+      .fn()
+      .mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     api.homeDir.value = '/home/codex';
 
@@ -915,7 +1180,9 @@ describe('useCodexApi', () => {
 
   it('preserves known cwd and git info when later thread reads omit them', async () => {
     const mock = createAdapterMock();
-    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
+    mock.adapter.startThread = vi
+      .fn()
+      .mockResolvedValue({ thread: { id: 'thr_new', preview: '' } });
     mock.adapter.getVcsInfo = vi.fn().mockResolvedValue({ root: '/repo', branch: 'main' });
     mock.adapter.readThread = vi.fn().mockResolvedValue({
       thread: {
@@ -938,9 +1205,16 @@ describe('useCodexApi', () => {
 
   it('preserves known cwd when refreshThreads returns a thinner thread payload', async () => {
     const mock = createAdapterMock();
-    mock.adapter.listThreads = vi.fn()
-      .mockResolvedValueOnce({ data: [{ id: 'thr_existing', preview: 'Existing thread', cwd: '/repo/subdir' }], nextCursor: null })
-      .mockResolvedValueOnce({ data: [{ id: 'thr_existing', preview: 'Existing thread' }], nextCursor: null });
+    mock.adapter.listThreads = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_existing', preview: 'Existing thread', cwd: '/repo/subdir' }],
+        nextCursor: null,
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'thr_existing', preview: 'Existing thread' }],
+        nextCursor: null,
+      });
     mock.adapter.getVcsInfo = vi.fn().mockResolvedValue({ root: '/repo', branch: 'main' });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
@@ -954,7 +1228,9 @@ describe('useCodexApi', () => {
 
   it('enriches newly started threads with git root metadata', async () => {
     const mock = createAdapterMock();
-    mock.adapter.startThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_new', cwd: '/repo/subdir', preview: '' } });
+    mock.adapter.startThread = vi
+      .fn()
+      .mockResolvedValue({ thread: { id: 'thr_new', cwd: '/repo/subdir', preview: '' } });
     mock.adapter.getVcsInfo = vi.fn().mockResolvedValue({ root: '/repo', branch: 'main' });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
@@ -963,7 +1239,10 @@ describe('useCodexApi', () => {
 
     expect(mock.adapter.getVcsInfo).toHaveBeenCalledWith('/repo/subdir');
     expect(thread.gitInfo).toEqual({ root: '/repo', branch: 'main' });
-    expect(api.threads.value.find((item) => item.id === 'thr_new')?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+    expect(api.threads.value.find((item) => item.id === 'thr_new')?.gitInfo).toEqual({
+      root: '/repo',
+      branch: 'main',
+    });
   });
 
   it('waits for git metadata before inserting thread-started notifications', async () => {
@@ -979,7 +1258,10 @@ describe('useCodexApi', () => {
 
     expect(api.threads.value.find((item) => item.id === 'thr_notify')).toBeUndefined();
     await vi.waitFor(() => {
-      expect(api.threads.value.find((item) => item.id === 'thr_notify')?.gitInfo).toEqual({ root: '/repo', branch: 'main' });
+      expect(api.threads.value.find((item) => item.id === 'thr_notify')?.gitInfo).toEqual({
+        root: '/repo',
+        branch: 'main',
+      });
     });
   });
 
@@ -1041,7 +1323,8 @@ describe('useCodexApi', () => {
       thread: { id: 'thr_materialized', preview: 'New prompt', cwd: '/repo' },
       turn: { id: 'turn_2', status: 'inProgress' },
     } satisfies CodexPromptResult);
-    mock.adapter.listThreads = vi.fn()
+    mock.adapter.listThreads = vi
+      .fn()
       .mockResolvedValueOnce({
         data: [{ id: 'thr_existing', preview: 'Existing thread', cwd: '/repo' }],
         nextCursor: null,
@@ -1123,15 +1406,20 @@ describe('useCodexApi', () => {
       includeTurns: true,
     });
     expect(mock.adapter.resumeThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
-    expect(api.threads.value[0]).toEqual(expect.objectContaining({
-      id: 'thr_existing',
-      name: 'Existing named thread',
-    }));
+    expect(api.threads.value[0]).toEqual(
+      expect.objectContaining({
+        id: 'thr_existing',
+        name: 'Existing named thread',
+      }),
+    );
     expect(api.transcript.value).toEqual([
       expect.objectContaining({ role: 'user', text: 'thr_existing prompt' }),
       expect.objectContaining({ role: 'assistant', text: 'thr_existing answer' }),
     ]);
-    expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual(['user', 'assistant']);
+    expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
   });
 
   it('keeps all turns in canonicalHistory when readThread returns multi-turn history (page refresh regression)', async () => {
@@ -1144,21 +1432,33 @@ describe('useCodexApi', () => {
           {
             id: 'turn_1',
             items: [
-              { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'First user prompt' }] },
+              {
+                type: 'userMessage',
+                id: 'u1',
+                content: [{ type: 'text', text: 'First user prompt' }],
+              },
               { type: 'agentMessage', id: 'a1', text: 'First agent answer' },
             ],
           },
           {
             id: 'turn_2',
             items: [
-              { type: 'userMessage', id: 'u2', content: [{ type: 'text', text: 'Second user prompt' }] },
+              {
+                type: 'userMessage',
+                id: 'u2',
+                content: [{ type: 'text', text: 'Second user prompt' }],
+              },
               { type: 'agentMessage', id: 'a2', text: 'Second agent answer' },
             ],
           },
           {
             id: 'turn_3',
             items: [
-              { type: 'userMessage', id: 'u3', content: [{ type: 'text', text: 'Third user prompt' }] },
+              {
+                type: 'userMessage',
+                id: 'u3',
+                content: [{ type: 'text', text: 'Third user prompt' }],
+              },
               { type: 'agentMessage', id: 'a3', text: 'Third agent answer' },
             ],
           },
@@ -1176,16 +1476,23 @@ describe('useCodexApi', () => {
     });
     expect(api.canonicalHistory.value.length).toBeGreaterThanOrEqual(6);
     expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual([
-      'user', 'assistant',
-      'user', 'assistant',
-      'user', 'assistant',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
+      'assistant',
     ]);
   });
 
   it('keeps selecting an empty thread when resume reports no rollout', async () => {
     const mock = createAdapterMock();
-    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_empty', preview: 'Empty', turns: [] } });
-    mock.adapter.resumeThread = vi.fn().mockRejectedValue(new Error('no rollout found for thread id thr_empty'));
+    mock.adapter.readThread = vi
+      .fn()
+      .mockResolvedValue({ thread: { id: 'thr_empty', preview: 'Empty', turns: [] } });
+    mock.adapter.resumeThread = vi
+      .fn()
+      .mockRejectedValue(new Error('no rollout found for thread id thr_empty'));
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
@@ -1202,12 +1509,17 @@ describe('useCodexApi', () => {
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
-    mock.emit({ method: 'thread/name/updated', params: { threadId: 'thr_existing', name: 'Renamed' } });
+    mock.emit({
+      method: 'thread/name/updated',
+      params: { threadId: 'thr_existing', name: 'Renamed' },
+    });
 
-    expect(api.threads.value[0]).toEqual(expect.objectContaining({
-      id: 'thr_existing',
-      name: 'Renamed',
-    }));
+    expect(api.threads.value[0]).toEqual(
+      expect.objectContaining({
+        id: 'thr_existing',
+        name: 'Renamed',
+      }),
+    );
     await vi.waitFor(() => {
       expect(mock.adapter.listThreads).toHaveBeenCalledTimes(2);
     });
@@ -1224,8 +1536,14 @@ describe('useCodexApi', () => {
     await api.unsubscribeThread('thr_existing');
     await api.archiveThread('thr_existing');
 
-    expect(mock.adapter.setThreadName).toHaveBeenCalledWith({ threadId: 'thr_existing', name: 'Renamed by user' });
-    expect(mock.adapter.interruptTurn).toHaveBeenCalledWith({ threadId: 'thr_existing', turnId: 'turn_1' });
+    expect(mock.adapter.setThreadName).toHaveBeenCalledWith({
+      threadId: 'thr_existing',
+      name: 'Renamed by user',
+    });
+    expect(mock.adapter.interruptTurn).toHaveBeenCalledWith({
+      threadId: 'thr_existing',
+      turnId: 'turn_1',
+    });
     expect(mock.adapter.unsubscribeThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
     expect(mock.adapter.archiveThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
     expect(api.activeThreadId.value).toBe('');
@@ -1234,7 +1552,9 @@ describe('useCodexApi', () => {
 
   it('hides empty no-rollout threads when archive is rejected by Codex', async () => {
     const mock = createAdapterMock();
-    mock.adapter.archiveThread = vi.fn().mockRejectedValue(new Error('no rollout found for thread id thr_existing'));
+    mock.adapter.archiveThread = vi
+      .fn()
+      .mockRejectedValue(new Error('no rollout found for thread id thr_existing'));
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
@@ -1378,7 +1698,10 @@ describe('useCodexApi', () => {
     await api.rollbackThread('thr_existing', 1);
 
     expect(mock.adapter.forkThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
-    expect(mock.adapter.rollbackThread).toHaveBeenCalledWith({ threadId: 'thr_existing', numTurns: 1 });
+    expect(mock.adapter.rollbackThread).toHaveBeenCalledWith({
+      threadId: 'thr_existing',
+      numTurns: 1,
+    });
     expect(api.transcript.value).toEqual([
       expect.objectContaining({ role: 'user', text: 'thr_existing prompt' }),
       expect.objectContaining({ role: 'assistant', text: 'thr_existing answer' }),
@@ -1410,9 +1733,9 @@ describe('useCodexApi', () => {
     await api.rollbackThread('thr_existing', 1);
 
     expect(storageGet(cacheKey)).toBeNull();
-    expect(api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id)).not.toContain(
-      'rollback-command',
-    );
+    expect(
+      api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id),
+    ).not.toContain('rollback-command');
 
     mock.emit({
       method: 'item/completed',
@@ -1430,9 +1753,9 @@ describe('useCodexApi', () => {
     });
 
     expect(storageGet(cacheKey)).toBeNull();
-    expect(api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id)).not.toContain(
-      'rollback-command-late',
-    );
+    expect(
+      api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts).map((part) => part.id),
+    ).not.toContain('rollback-command-late');
   });
 
   it('ignores delayed items after rollback even when no turn notification arrived', async () => {
@@ -1516,9 +1839,15 @@ describe('useCodexApi', () => {
       },
     });
 
-    const assistantEntries = api.realtimeHistoryQueue.value.filter((e) => e.info.role === 'assistant');
+    const assistantEntries = api.realtimeHistoryQueue.value.filter(
+      (e) => e.info.role === 'assistant',
+    );
     expect(assistantEntries.length).toBeGreaterThan(0);
-    expect(assistantEntries.some((e) => e.parts.some((p) => p.type === 'text' && 'text' in p && p.text === 'Realtime answer'))).toBe(true);
+    expect(
+      assistantEntries.some((e) =>
+        e.parts.some((p) => p.type === 'text' && 'text' in p && p.text === 'Realtime answer'),
+      ),
+    ).toBe(true);
   });
 
   it('pushes user message to realtimeHistoryQueue immediately on sendPrompt', async () => {
@@ -1536,7 +1865,9 @@ describe('useCodexApi', () => {
     expect(userEntries[0]?.info.id).toContain(':user:0');
     expect(userEntries[0]?.info.id).toBe('turn_1:user:0');
     expect(userEntries.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
-    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.includes('pending-turn:'))).toBe(true);
+    expect(
+      Object.keys(api.realtimeMessageAliases.value).some((key) => key.includes('pending-turn:')),
+    ).toBe(true);
     expect(Object.values(api.realtimeMessageAliases.value)).toContain('turn_1:user:0');
     expect(userEntries[0]?.parts).toHaveLength(1);
     expect(userEntries[0]?.parts[0]).toMatchObject({ type: 'text', text: 'Hello immediately.' });
@@ -1555,9 +1886,15 @@ describe('useCodexApi', () => {
 
     await api.sendPrompt('Fresh turn please.');
 
-    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.startsWith('turn_old:'))).toBe(false);
-    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.startsWith('pending-turn:'))).toBe(true);
-    expect(api.realtimeHistoryQueue.value.find((entry) => entry.info.role === 'user')?.info.id).toBe('turn_2:user:0');
+    expect(
+      Object.keys(api.realtimeMessageAliases.value).some((key) => key.startsWith('turn_old:')),
+    ).toBe(false);
+    expect(
+      Object.keys(api.realtimeMessageAliases.value).some((key) => key.startsWith('pending-turn:')),
+    ).toBe(true);
+    expect(
+      api.realtimeHistoryQueue.value.find((entry) => entry.info.role === 'user')?.info.id,
+    ).toBe('turn_2:user:0');
   });
 
   it('removes provisional realtime user history if sendPrompt fails', async () => {
@@ -1574,9 +1911,12 @@ describe('useCodexApi', () => {
   it('finalizes the provisional user entry even if another realtime entry lands before sendPrompt resolves', async () => {
     const mock = createAdapterMock();
     let resolveSend: ((result: CodexPromptResult) => void) | null = null;
-    mock.adapter.sendPrompt = vi.fn().mockImplementation(() => new Promise<CodexPromptResult>((resolve) => {
-      resolveSend = resolve;
-    }));
+    mock.adapter.sendPrompt = vi.fn().mockImplementation(
+      () =>
+        new Promise<CodexPromptResult>((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
@@ -1589,10 +1929,15 @@ describe('useCodexApi', () => {
     });
     await pendingSend;
 
-    const userEntries = api.realtimeHistoryQueue.value.filter((entry) => entry.info.role === 'user');
+    const userEntries = api.realtimeHistoryQueue.value.filter(
+      (entry) => entry.info.role === 'user',
+    );
     expect(userEntries).toHaveLength(1);
     expect(userEntries[0]?.info.id).toBe('turn_race:user:0');
-    expect(userEntries[0]?.parts[0]).toMatchObject({ id: 'turn_race:user:0:text', text: 'Race test.' });
+    expect(userEntries[0]?.parts[0]).toMatchObject({
+      id: 'turn_race:user:0:text',
+      text: 'Race test.',
+    });
     expect(userEntries.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
     expect(Object.values(api.realtimeMessageAliases.value)).toContain('turn_race:user:0');
   });
@@ -1646,7 +1991,9 @@ describe('useCodexApi', () => {
       params: { item: { id: 'agent-1', type: 'agentMessage', text: 'Hello, world!' } },
     });
 
-    const assistantEntries = api.realtimeHistoryQueue.value.filter((entry) => entry.info.role === 'assistant');
+    const assistantEntries = api.realtimeHistoryQueue.value.filter(
+      (entry) => entry.info.role === 'assistant',
+    );
     expect(assistantEntries).toHaveLength(1);
     const textParts = assistantEntries[0]?.parts.filter((part) => part.type === 'text') ?? [];
     expect(textParts).toHaveLength(1);
@@ -1667,17 +2014,31 @@ describe('useCodexApi', () => {
     });
     mock.emit({
       method: 'item/completed',
-      params: { item: { id: 'cmd-1', type: 'commandExecution', command: ['ls'], cwd: '/repo', aggregatedOutput: 'file.txt' } },
+      params: {
+        item: {
+          id: 'cmd-1',
+          type: 'commandExecution',
+          command: ['ls'],
+          cwd: '/repo',
+          aggregatedOutput: 'file.txt',
+        },
+      },
     });
     mock.emit({
       method: 'item/completed',
       params: { item: { id: 'agent-1', type: 'agentMessage', text: 'Done' } },
     });
 
-    const assistantEntries = api.realtimeHistoryQueue.value.filter((entry) => entry.info.role === 'assistant');
+    const assistantEntries = api.realtimeHistoryQueue.value.filter(
+      (entry) => entry.info.role === 'assistant',
+    );
     expect(assistantEntries).toHaveLength(1);
     expect(assistantEntries[0]?.parts.some((part) => part.type === 'tool')).toBe(true);
-    expect(assistantEntries[0]?.parts.some((part) => part.type === 'text' && 'text' in part && part.text === 'Done')).toBe(true);
+    expect(
+      assistantEntries[0]?.parts.some(
+        (part) => part.type === 'text' && 'text' in part && part.text === 'Done',
+      ),
+    ).toBe(true);
   });
 
   it('updates realtimeReasoningPart on reasoning deltas', async () => {
@@ -1702,6 +2063,77 @@ describe('useCodexApi', () => {
       params: { itemId: 'reasoning-1', delta: ' more thoughts' },
     });
     expect(api.realtimeReasoningPart.value?.part.text).toBe('Thinking... more thoughts');
+  });
+
+  it('interleaves summary and raw reasoning deltas while preserving separators and metadata', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Interleave reasoning.');
+
+    mock.emit({
+      method: 'item/reasoning/summaryTextDelta',
+      params: { itemId: 'reasoning-interleaved', delta: 'summary one' },
+    });
+    mock.emit({
+      method: 'item/reasoning/textDelta',
+      params: { itemId: 'reasoning-interleaved', delta: 'raw one' },
+    });
+    mock.emit({
+      method: 'item/reasoning/summaryPartAdded',
+      params: { itemId: 'reasoning-interleaved' },
+    });
+    mock.emit({
+      method: 'item/reasoning/textDelta',
+      params: { itemId: 'reasoning-interleaved', delta: 'raw two' },
+    });
+    mock.emit({
+      method: 'item/reasoning/summaryTextDelta',
+      params: { itemId: 'reasoning-interleaved', delta: 'summary two' },
+    });
+
+    expect(api.reasoningStreams.value['reasoning-interleaved']).toEqual({
+      summary: 'summary one\n---\nsummary two',
+      raw: 'raw oneraw two',
+    });
+    expect(api.realtimeReasoningPart.value?.part).toMatchObject({
+      id: 'reasoning-interleaved:reasoning',
+      text: 'summary oneraw one\n---\nraw twosummary two',
+      sessionID: 'thr_existing',
+      type: 'reasoning',
+    });
+    expect(api.realtimeReasoningPart.value?.info.role).toBe('assistant');
+  });
+
+  it('keeps thread-goal set and clear as distinct guarded mutations and results', async () => {
+    const mock = createAdapterMock();
+    const goal = {
+      threadId: 'thr_existing',
+      objective: 'Ship the change',
+      status: 'active' as const,
+      tokenBudget: null,
+      tokensUsed: 1,
+      timeUsedSeconds: 2,
+      createdAt: 3,
+      updatedAt: 4,
+    };
+    mock.adapter.getThreadGoal = vi.fn().mockResolvedValue({ goal });
+    mock.adapter.setThreadGoal = vi.fn().mockResolvedValue({ goal });
+    mock.adapter.clearThreadGoal = vi.fn().mockResolvedValue({ cleared: true });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.refreshThreadGoal();
+    await expect(api.setThreadGoal({ objective: 'Ship the change' })).resolves.toEqual({ goal });
+    await expect(api.clearThreadGoal()).resolves.toEqual({ cleared: true });
+
+    expect(mock.adapter.setThreadGoal).toHaveBeenCalledWith({
+      threadId: 'thr_existing',
+      objective: 'Ship the change',
+    });
+    expect(mock.adapter.clearThreadGoal).toHaveBeenCalledWith({ threadId: 'thr_existing' });
+    expect(api.threadGoal.value).toBeNull();
   });
 
   it('tracks tool parts from item/started notifications', async () => {
@@ -1747,7 +2179,10 @@ describe('useCodexApi', () => {
       },
     });
 
-    mock.emit({ method: 'command/exec/outputDelta', params: { callId: 'cmd-1', delta: 'running output' } });
+    mock.emit({
+      method: 'command/exec/outputDelta',
+      params: { callId: 'cmd-1', delta: 'running output' },
+    });
     mock.emit({
       method: 'item/completed',
       params: {
@@ -1762,11 +2197,609 @@ describe('useCodexApi', () => {
     });
 
     expect(api.realtimeToolParts.value).toHaveLength(0);
-    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'cmd-1'));
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) =>
+      entry.parts.some((part) => part.id === 'cmd-1'),
+    );
     expect(toolEntry).toBeDefined();
     const toolPart = toolEntry?.parts.find((part) => part.id === 'cmd-1');
     expect(toolPart).toMatchObject({ type: 'tool', state: { status: 'completed' } });
-    expect(toolPart).toMatchObject({ type: 'tool', state: { output: 'running outputfinal output' } });
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      state: { output: 'running outputfinal output' },
+    });
+  });
+
+  it('falls back to running output while preserving finalized title and metadata', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Complete a tool with streamed output.');
+
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'cmd-fallback',
+          type: 'commandExecution',
+          command: ['printf', 'ok'],
+          cwd: '/repo',
+        },
+      },
+    });
+    mock.emit({
+      method: 'command/exec/outputDelta',
+      params: { callId: 'cmd-fallback', delta: 'streamed output' },
+    });
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'cmd-fallback',
+          type: 'commandExecution',
+          command: ['printf', 'ok'],
+          cwd: '/repo',
+          status: 'completed',
+        },
+      },
+    });
+
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'cmd-fallback');
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        output: 'streamed output',
+        title: 'printf ok',
+        metadata: { source: 'codex', codexStatus: 'completed' },
+      },
+    });
+  });
+
+  it('uses running title and metadata when a completed item has no canonical tool part', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Complete a forward-compatible tool.');
+
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'future-tool',
+          type: 'commandExecution',
+          command: ['echo', 'fallback'],
+          cwd: '/repo',
+        },
+      },
+    });
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'future-tool',
+          type: 'futureTool',
+          status: 'completed',
+          aggregatedOutput: 'future output',
+        },
+      },
+    });
+
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'future-tool');
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      state: {
+        status: 'completed',
+        output: 'future output',
+        title: 'echo fallback',
+        metadata: { source: 'codex', codexStatus: 'completed' },
+      },
+    });
+  });
+
+  it('preserves failed and declined status when completion has no canonical tool part', async () => {
+    // Given: both tools are running, but completion uses an unknown item type.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Complete tools without canonical parts.');
+
+    for (const id of ['future-failed', 'future-declined'] as const) {
+      mock.emit({
+        method: 'item/started',
+        params: {
+          item: { id, type: 'commandExecution', command: ['echo', id], cwd: '/repo' },
+        },
+      });
+    }
+
+    // When: the server reports terminal failures that the normalizer does not know yet.
+    for (const [id, status] of [
+      ['future-failed', 'failed'],
+      ['future-declined', 'declined'],
+    ] as const) {
+      mock.emit({
+        method: 'item/completed',
+        params: { item: { id, type: 'futureTool', status } },
+      });
+    }
+
+    // Then: the running record still becomes an error with the wire status preserved.
+    for (const [id, status] of [
+      ['future-failed', 'failed'],
+      ['future-declined', 'declined'],
+    ] as const) {
+      const toolPart = api.realtimeHistoryQueue.value
+        .flatMap((entry) => entry.parts)
+        .find((part) => part.id === id);
+      expect(toolPart).toMatchObject({
+        type: 'tool',
+        state: { status: 'error', error: status, metadata: { codexStatus: status } },
+      });
+    }
+  });
+
+  it('keeps default error and live-completed metadata fallbacks on the public path', async () => {
+    // Given: a live completed record without metadata and a live error record without metadata.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Exercise terminal fallbacks.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'live-completed',
+          type: 'commandExecution',
+          command: ['echo', 'live'],
+          cwd: '/repo',
+        },
+      },
+    });
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'live-error',
+          type: 'commandExecution',
+          command: ['echo', 'error'],
+          cwd: '/repo',
+        },
+      },
+    });
+
+    const liveCompleted = api.realtimeToolParts.value.find(
+      (entry) => entry.part.id === 'live-completed',
+    );
+    const liveError = api.realtimeToolParts.value.find((entry) => entry.part.id === 'live-error');
+    if (!liveCompleted || !liveError) throw new Error('Expected live tool records');
+    const completedState = {
+      status: 'completed',
+      input: {},
+      output: 'live output',
+      title: 'live title',
+      metadata: { source: 'codex' },
+      time: { start: 1, end: 2 },
+    } satisfies Extract<typeof liveCompleted.part.state, { status: 'completed' }>;
+    const errorState = {
+      status: 'error',
+      input: {},
+      error: '',
+      metadata: { source: 'codex' },
+      time: { start: 1, end: 2 },
+    } satisfies Extract<typeof liveError.part.state, { status: 'error' }>;
+    Reflect.deleteProperty(completedState, 'metadata');
+    Reflect.deleteProperty(errorState, 'metadata');
+    api.realtimeToolParts.value = [
+      { ...liveCompleted, part: { ...liveCompleted.part, state: completedState } },
+      { ...liveError, part: { ...liveError.part, state: errorState } },
+    ];
+
+    // When: completion arrives without a canonical part, output, or wire status.
+    for (const id of ['live-completed', 'live-error'] as const) {
+      mock.emit({ method: 'item/completed', params: { item: { id, type: 'futureTool' } } });
+    }
+
+    // Then: completed metadata uses the source fallback and errors use the default message.
+    const parts = api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts);
+    expect(parts.find((part) => part.id === 'live-completed')).toMatchObject({
+      state: {
+        status: 'completed',
+        output: 'live output',
+        title: 'live title',
+        metadata: { source: 'codex' },
+      },
+    });
+    expect(parts.find((part) => part.id === 'live-error')).toMatchObject({
+      state: { status: 'error', error: 'Codex tool failed', metadata: { source: 'codex' } },
+    });
+  });
+
+  it('uses safe public completion fallbacks for absent and malformed running metadata', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Exercise running metadata fallbacks.');
+
+    for (const id of ['missing-running-metadata', 'malformed-running-metadata'] as const) {
+      mock.emit({
+        method: 'item/started',
+        params: { item: { id, type: 'commandExecution', command: ['echo', id], cwd: '/repo' } },
+      });
+    }
+    const missing = api.realtimeToolParts.value.find(
+      (entry) => entry.part.id === 'missing-running-metadata',
+    );
+    const malformed = api.realtimeToolParts.value.find(
+      (entry) => entry.part.id === 'malformed-running-metadata',
+    );
+    if (
+      !missing ||
+      !malformed ||
+      missing.part.state.status !== 'running' ||
+      malformed.part.state.status !== 'running'
+    ) {
+      throw new Error('Expected running tool records');
+    }
+    const missingState = { ...missing.part.state };
+    Reflect.deleteProperty(missingState, 'metadata');
+    api.realtimeToolParts.value = api.realtimeToolParts.value.map((entry) =>
+      entry.part.id === missing.part.id
+        ? { ...entry, part: { ...entry.part, state: missingState } }
+        : entry.part.id === malformed.part.id
+          ? {
+              ...entry,
+              part: {
+                ...entry.part,
+                state: {
+                  ...entry.part.state,
+                  metadata: { output: 42, codexStatus: { bad: true } },
+                },
+              },
+            }
+          : entry,
+    );
+
+    for (const id of ['missing-running-metadata', 'malformed-running-metadata'] as const) {
+      mock.emit({ method: 'item/completed', params: { item: { id, type: 'futureTool' } } });
+    }
+
+    const parts = api.realtimeHistoryQueue.value.flatMap((entry) => entry.parts);
+    expect(parts.find((part) => part.id === 'missing-running-metadata')).toMatchObject({
+      state: { status: 'completed', output: '', metadata: { source: 'codex' } },
+    });
+    expect(parts.find((part) => part.id === 'malformed-running-metadata')).toMatchObject({
+      state: {
+        status: 'completed',
+        output: '',
+        metadata: { output: 42, codexStatus: { bad: true } },
+      },
+    });
+  });
+
+  it('falls back to completion time and empty output for pending public tool state', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Exercise pending completion fallback.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: { id: 'pending-tool', type: 'commandExecution', command: ['echo', 'pending'] },
+      },
+    });
+    const pending = api.realtimeToolParts.value.find((entry) => entry.part.id === 'pending-tool');
+    if (!pending) throw new Error('Expected pending tool record');
+    const pendingState = {
+      status: 'pending',
+      input: pending.part.state.input,
+      raw: 'pending',
+    } satisfies ToolStatePending;
+    api.realtimeToolParts.value = api.realtimeToolParts.value.map((entry) =>
+      entry.part.id === 'pending-tool'
+        ? { ...entry, part: { ...entry.part, state: pendingState } }
+        : entry,
+    );
+
+    mock.emit({
+      method: 'item/completed',
+      params: { item: { id: 'pending-tool', type: 'futureTool' } },
+    });
+
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'pending-tool');
+    expect(toolPart).toMatchObject({
+      state: {
+        status: 'completed',
+        output: '',
+        title: 'bash',
+        time: { start: expect.any(Number) },
+      },
+    });
+  });
+
+  it('replaces streamed command output with finalized output from the alternate delta method', async () => {
+    // Given: a command is running and streams through item/commandExecution/outputDelta.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Finalize command output.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'command-delta',
+          type: 'commandExecution',
+          command: ['echo', 'ok'],
+          cwd: '/repo',
+        },
+      },
+    });
+    mock.emit({
+      method: 'item/commandExecution/outputDelta',
+      params: { itemId: 'command-delta', delta: 'streamed command output' },
+    });
+
+    // When: the finalized item supplies canonical output without aggregatedOutput.
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'command-delta',
+          type: 'commandExecution',
+          command: ['echo', 'ok'],
+          cwd: '/repo',
+          status: 'completed',
+          output: 'canonical command output',
+        },
+      },
+    });
+
+    // Then: canonical output replaces the streamed fallback.
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'command-delta');
+    expect(toolPart).toMatchObject({
+      state: { status: 'completed', output: 'canonical command output' },
+    });
+  });
+
+  it('replaces streamed file output from item/fileChange/outputDelta', async () => {
+    // Given: a file change is running and streams through its item-specific delta method.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Finalize file output.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'file-delta',
+          type: 'fileChange',
+          changes: [{ path: 'example.ts', diff: '' }],
+        },
+      },
+    });
+    mock.emit({
+      method: 'item/fileChange/outputDelta',
+      params: { itemId: 'file-delta', delta: 'streamed file output' },
+    });
+
+    // When: the finalized file change supplies its canonical diff.
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'file-delta',
+          type: 'fileChange',
+          status: 'completed',
+          changes: [{ path: 'example.ts', diff: 'canonical file output' }],
+        },
+      },
+    });
+
+    // Then: canonical file output replaces streamed output and metadata follows it.
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'file-delta');
+    expect(toolPart).toMatchObject({
+      state: {
+        status: 'completed',
+        output: 'canonical file output',
+        metadata: { filediff: { patch: 'canonical file output' } },
+      },
+    });
+  });
+
+  it('prefers finalized title over the running title', async () => {
+    // Given: a running command has an initial title.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Finalize the command title.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'title-final',
+          type: 'commandExecution',
+          command: ['echo', 'running'],
+          cwd: '/repo',
+        },
+      },
+    });
+
+    // When: completion supplies a different canonical command title.
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'title-final',
+          type: 'commandExecution',
+          command: ['echo', 'finalized'],
+          cwd: '/repo',
+          status: 'completed',
+        },
+      },
+    });
+
+    // Then: the finalized title wins.
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'title-final');
+    expect(toolPart).toMatchObject({ state: { status: 'completed', title: 'echo finalized' } });
+  });
+
+  it('uses finalized input in the error branch', async () => {
+    // Given: a file change is running with an initial input path.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Fail a file change.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'input-error',
+          type: 'fileChange',
+          changes: [{ path: 'started.ts', diff: '' }],
+        },
+      },
+    });
+
+    // When: the failed completion supplies its final input path.
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'input-error',
+          type: 'fileChange',
+          status: 'failed',
+          changes: [{ path: 'final.ts', diff: '' }],
+        },
+      },
+    });
+
+    // Then: error state input comes from the finalized part.
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'input-error');
+    expect(toolPart).toMatchObject({
+      state: { status: 'error', input: { files: ['final.ts'], filePath: 'final.ts' } },
+    });
+  });
+
+  it('concatenates streamed and finalized output before applying error status', async () => {
+    // Given: streamed output is attached to a running command with a failed wire status.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Fail after streamed output.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'output-error',
+          type: 'commandExecution',
+          command: ['echo', 'error'],
+          cwd: '/repo',
+        },
+      },
+    });
+    mock.emit({
+      method: 'command/exec/outputDelta',
+      params: { callId: 'output-error', delta: 'streamed error output' },
+    });
+    const running = api.realtimeToolParts.value.find((entry) => entry.part.id === 'output-error');
+    if (!running || running.part.state.status !== 'running')
+      throw new Error('Expected running tool');
+    const runningState = running.part.state;
+    api.realtimeToolParts.value = api.realtimeToolParts.value.map((entry) =>
+      entry.part.id === 'output-error'
+        ? {
+            ...entry,
+            part: {
+              ...entry.part,
+              state: {
+                ...runningState,
+                metadata: { ...runningState.metadata, codexStatus: 'failed' },
+              },
+            },
+          }
+        : entry,
+    );
+
+    // When: completion supplies finalized output without a status field.
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'output-error',
+          type: 'commandExecution',
+          command: ['echo', 'error'],
+          cwd: '/repo',
+          aggregatedOutput: 'finalized error output',
+        },
+      },
+    });
+
+    // Then: the error message preserves the same output precedence as success.
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'output-error');
+    expect(toolPart).toMatchObject({
+      state: { status: 'error', error: 'streamed error outputfinalized error output' },
+    });
+  });
+
+  it('preserves the running time.start through completion', async () => {
+    // Given: a running command with an observable start time.
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Preserve tool timing.');
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'time-start',
+          type: 'commandExecution',
+          command: ['echo', 'time'],
+          cwd: '/repo',
+        },
+      },
+    });
+    const running = api.realtimeToolParts.value.find((entry) => entry.part.id === 'time-start');
+    if (!running || running.part.state.status !== 'running')
+      throw new Error('Expected running tool');
+    const start = running.part.state.time.start;
+
+    // When: the command completes normally.
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'time-start',
+          type: 'commandExecution',
+          command: ['echo', 'time'],
+          cwd: '/repo',
+          status: 'completed',
+        },
+      },
+    });
+
+    // Then: completion keeps the original start timestamp.
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'time-start');
+    expect(toolPart).toMatchObject({ state: { status: 'completed', time: { start } } });
   });
 
   it('restores persisted reasoning and non-web tool parts when server history omits them', async () => {
@@ -1814,7 +2847,9 @@ describe('useCodexApi', () => {
 
     const cacheKey = 'state.codexAuxiliaryHistory.v1.thr_existing';
     await vi.waitFor(() => {
-      const cached = storageGetJSON<{ entries?: Array<{ parts?: Array<{ id?: string }> }> }>(cacheKey);
+      const cached = storageGetJSON<{ entries?: Array<{ parts?: Array<{ id?: string }> }> }>(
+        cacheKey,
+      );
       expect(cached?.entries?.flatMap((entry) => entry.parts ?? []).map((part) => part.id)).toEqual(
         expect.arrayContaining(['reasoning-persisted', 'command-persisted']),
       );
@@ -1851,9 +2886,63 @@ describe('useCodexApi', () => {
       params: { item: { id: 'web-1', type: 'webSearch', query: 'vite docs', status: 'failed' } },
     });
 
-    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'web-1'));
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) =>
+      entry.parts.some((part) => part.id === 'web-1'),
+    );
     const toolPart = toolEntry?.parts.find((part) => part.id === 'web-1');
-    expect(toolPart).toMatchObject({ type: 'tool', state: { status: 'error' } });
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      state: {
+        status: 'error',
+        error: 'Query: vite docs',
+        metadata: { source: 'codex', codexStatus: 'failed' },
+      },
+    });
+    expect(api.realtimeToolParts.value).toHaveLength(0);
+  });
+
+  it('maps declined tool completion to error state with the wire status metadata', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.sendPrompt('Decline a tool.');
+
+    mock.emit({
+      method: 'item/started',
+      params: {
+        item: {
+          id: 'cmd-declined',
+          type: 'commandExecution',
+          command: ['rm', '-rf', '/tmp/example'],
+          cwd: '/repo',
+        },
+      },
+    });
+    mock.emit({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'cmd-declined',
+          type: 'commandExecution',
+          command: ['rm', '-rf', '/tmp/example'],
+          cwd: '/repo',
+          status: 'declined',
+        },
+      },
+    });
+
+    const toolPart = api.realtimeHistoryQueue.value
+      .flatMap((entry) => entry.parts)
+      .find((part) => part.id === 'cmd-declined');
+    expect(toolPart).toMatchObject({
+      type: 'tool',
+      state: {
+        status: 'error',
+        error: 'declined',
+        metadata: { source: 'codex', codexStatus: 'declined' },
+      },
+    });
     expect(api.realtimeToolParts.value).toHaveLength(0);
   });
 
@@ -1893,9 +2982,12 @@ describe('useCodexApi', () => {
       },
     });
 
-    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'edit-started-1'));
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) =>
+      entry.parts.some((part) => part.id === 'edit-started-1'),
+    );
     const toolPart = toolEntry?.parts.find((part) => part.id === 'edit-started-1');
-    const expectedPatch = '## File changed\n\nPath: empty.ts\n\nStatus: completed\n\n(Codex did not provide a unified diff.)';
+    const expectedPatch =
+      '## File changed\n\nPath: empty.ts\n\nStatus: completed\n\n(Codex did not provide a unified diff.)';
     expect(toolPart).toMatchObject({
       type: 'tool',
       tool: 'edit',
@@ -1945,7 +3037,9 @@ describe('useCodexApi', () => {
       },
     });
 
-    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'web-started-1'));
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) =>
+      entry.parts.some((part) => part.id === 'web-started-1'),
+    );
     const toolPart = toolEntry?.parts.find((part) => part.id === 'web-started-1');
     expect(toolPart).toMatchObject({
       type: 'tool',
@@ -1977,7 +3071,9 @@ describe('useCodexApi', () => {
       },
     });
 
-    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'edit-1'));
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) =>
+      entry.parts.some((part) => part.id === 'edit-1'),
+    );
     const toolPart = toolEntry?.parts.find((part) => part.id === 'edit-1');
     expect(toolPart).toMatchObject({
       type: 'tool',
@@ -2012,7 +3108,9 @@ describe('useCodexApi', () => {
       },
     });
 
-    const toolEntry = api.realtimeHistoryQueue.value.find((entry) => entry.parts.some((part) => part.id === 'edit-2'));
+    const toolEntry = api.realtimeHistoryQueue.value.find((entry) =>
+      entry.parts.some((part) => part.id === 'edit-2'),
+    );
     const toolPart = toolEntry?.parts.find((part) => part.id === 'edit-2');
     expect(toolPart).toMatchObject({
       type: 'tool',
@@ -2056,20 +3154,29 @@ describe('useCodexApi', () => {
   it('clears provisional realtime aliases and history when selecting a different thread', async () => {
     const mock = createAdapterMock();
     let resolveSend: ((result: CodexPromptResult) => void) | null = null;
-    mock.adapter.sendPrompt = vi.fn().mockImplementation(() => new Promise<CodexPromptResult>((resolve) => {
-      resolveSend = resolve;
-    }));
+    mock.adapter.sendPrompt = vi.fn().mockImplementation(
+      () =>
+        new Promise<CodexPromptResult>((resolve) => {
+          resolveSend = resolve;
+        }),
+    );
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
     const pendingSend = api.sendPrompt('Pending thread switch');
 
-    expect(api.realtimeHistoryQueue.value.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(true);
+    expect(
+      api.realtimeHistoryQueue.value.some((entry) => entry.info.id.includes('pending-turn:')),
+    ).toBe(true);
 
     await api.selectThread('thr_existing');
 
-    expect(api.realtimeHistoryQueue.value.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
-    expect(Object.keys(api.realtimeMessageAliases.value).some((key) => key.includes('pending-turn:'))).toBe(false);
+    expect(
+      api.realtimeHistoryQueue.value.some((entry) => entry.info.id.includes('pending-turn:')),
+    ).toBe(false);
+    expect(
+      Object.keys(api.realtimeMessageAliases.value).some((key) => key.includes('pending-turn:')),
+    ).toBe(false);
 
     expect(resolveSend).not.toBeNull();
     resolveSend!({
@@ -2078,7 +3185,9 @@ describe('useCodexApi', () => {
     });
     await pendingSend;
 
-    expect(api.realtimeHistoryQueue.value.some((entry) => entry.info.id === 'turn_after_switch:user:0')).toBe(false);
+    expect(
+      api.realtimeHistoryQueue.value.some((entry) => entry.info.id === 'turn_after_switch:user:0'),
+    ).toBe(false);
   });
 
   it('returns empty list and warns when collaborationMode/list throws (experimental API not enabled)', async () => {
@@ -2128,7 +3237,8 @@ describe('useCodexApi', () => {
   describe('monotonic timestamp protection', () => {
     it('preserves existing createdAt/updatedAt when upsertThread receives older values', async () => {
       const mock = createAdapterMock();
-      mock.adapter.listThreads = vi.fn()
+      mock.adapter.listThreads = vi
+        .fn()
         .mockResolvedValueOnce({
           data: [{ id: 'thr_stale', preview: 'Stale', createdAt: 1000, updatedAt: 2000 }],
           nextCursor: null,
@@ -2157,7 +3267,8 @@ describe('useCodexApi', () => {
 
     it('accepts incoming createdAt/updatedAt when they are larger than existing', async () => {
       const mock = createAdapterMock();
-      mock.adapter.listThreads = vi.fn()
+      mock.adapter.listThreads = vi
+        .fn()
         .mockResolvedValueOnce({
           data: [{ id: 'thr_growing', preview: 'Growing', createdAt: 100, updatedAt: 200 }],
           nextCursor: null,
@@ -2197,7 +3308,8 @@ describe('useCodexApi', () => {
 
     it('handles undefined existing timestamps without regressing incoming values', async () => {
       const mock = createAdapterMock();
-      mock.adapter.listThreads = vi.fn()
+      mock.adapter.listThreads = vi
+        .fn()
         .mockResolvedValueOnce({
           data: [{ id: 'thr_mixed', preview: 'Mixed' }],
           nextCursor: null,
@@ -2237,7 +3349,8 @@ describe('useCodexApi', () => {
 
     it('integration: refreshThreads does not regress previous session timestamps when the latest fetch returns older data for a known thread', async () => {
       const mock = createAdapterMock();
-      mock.adapter.listThreads = vi.fn()
+      mock.adapter.listThreads = vi
+        .fn()
         .mockResolvedValueOnce({
           data: [
             { id: 'thr_latest', preview: 'Latest', createdAt: 1000, updatedAt: 5000 },
@@ -2275,17 +3388,42 @@ describe('useCodexApi', () => {
           model_providers: { omniroute: { name: 'OmniRoute' } },
         },
       });
-      mock.adapter.listThreads = vi.fn()
+      mock.adapter.listThreads = vi
+        .fn()
         .mockResolvedValueOnce({
-          data: [{ id: 'thr_shared', preview: 'Shared', modelProvider: 'openai', createdAt: 900, updatedAt: 950 }],
+          data: [
+            {
+              id: 'thr_shared',
+              preview: 'Shared',
+              modelProvider: 'openai',
+              createdAt: 900,
+              updatedAt: 950,
+            },
+          ],
           nextCursor: null,
         })
         .mockResolvedValueOnce({
-          data: [{ id: 'thr_shared', preview: 'Shared', modelProvider: 'openai', createdAt: 1, updatedAt: 2 }],
+          data: [
+            {
+              id: 'thr_shared',
+              preview: 'Shared',
+              modelProvider: 'openai',
+              createdAt: 1,
+              updatedAt: 2,
+            },
+          ],
           nextCursor: null,
         })
         .mockResolvedValueOnce({
-          data: [{ id: 'thr_shared', preview: 'Shared', modelProvider: 'omniroute', createdAt: 100, updatedAt: 200 }],
+          data: [
+            {
+              id: 'thr_shared',
+              preview: 'Shared',
+              modelProvider: 'omniroute',
+              createdAt: 100,
+              updatedAt: 200,
+            },
+          ],
           nextCursor: null,
         });
       const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -2361,7 +3499,9 @@ describe('useCodexApi', () => {
         fields: [{ key: 'region', type: 'select', required: true }],
       });
 
-      api.replyElicitationRequest('codex-elicitation:string:elicitation-1', 'accept', { region: 'eu' });
+      api.replyElicitationRequest('codex-elicitation:string:elicitation-1', 'accept', {
+        region: 'eu',
+      });
 
       expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith('elicitation-1', {
         action: 'accept',
@@ -2425,7 +3565,10 @@ describe('useCodexApi', () => {
       });
 
       mock.emit({ method: 'serverRequest/resolved', params: { requestId: 8 } });
-      mock.emit({ method: 'serverRequest/resolved', params: { requestId: 'elicitation-resolved' } });
+      mock.emit({
+        method: 'serverRequest/resolved',
+        params: { requestId: 'elicitation-resolved' },
+      });
 
       expect(api.permissionRequests.value).toEqual([]);
       expect(api.elicitationRequests.value).toEqual([]);
@@ -2480,33 +3623,41 @@ describe('useCodexApi', () => {
           threadId: 'thr_existing',
           turnId: 'turn_1',
           itemId: 'item-1',
-          questions: [{
-            id: 'target',
-            header: 'Deployment target',
-            question: 'Where should this deploy?',
-            isOther: true,
-            isSecret: true,
-            options: [{ label: 'staging', description: 'Staging environment' }],
-          }],
+          questions: [
+            {
+              id: 'target',
+              header: 'Deployment target',
+              question: 'Where should this deploy?',
+              isOther: true,
+              isSecret: true,
+              options: [{ label: 'staging', description: 'Staging environment' }],
+            },
+          ],
         },
       });
 
-      expect(api.toolUserInputRequests.value).toEqual([{
-        requestId: 'tool-input',
-        itemId: 'item-1',
-        threadId: 'thr_existing',
-        turnId: 'turn_1',
-        questions: [{
-          id: 'target',
-          header: 'Deployment target',
-          text: 'Where should this deploy?',
-          isOther: true,
-          isSecret: true,
-          options: [{ label: 'staging', description: 'Staging environment' }],
-        }],
-      }]);
+      expect(api.toolUserInputRequests.value).toEqual([
+        {
+          requestId: 'tool-input',
+          itemId: 'item-1',
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+          questions: [
+            {
+              id: 'target',
+              header: 'Deployment target',
+              text: 'Where should this deploy?',
+              isOther: true,
+              isSecret: true,
+              options: [{ label: 'staging', description: 'Staging environment' }],
+            },
+          ],
+        },
+      ]);
 
-      await api.respondToToolUserInput('tool-input', [{ questionId: 'target', response: 'staging' }]);
+      await api.respondToToolUserInput('tool-input', [
+        { questionId: 'target', response: 'staging' },
+      ]);
 
       expect(mock.adapter.respondToServerRequest).toHaveBeenCalledWith('tool-input', {
         answers: { target: { answers: ['staging'] } },
@@ -2531,15 +3682,17 @@ describe('useCodexApi', () => {
         },
       });
 
-      expect(api.dynamicToolCalls.value).toEqual([{
-        requestId: 9,
-        callId: 'call-1',
-        namespace: 'vis',
-        toolName: 'deploy',
-        arguments: { target: 'staging' },
-        threadId: 'thr_existing',
-        turnId: 'turn_1',
-      }]);
+      expect(api.dynamicToolCalls.value).toEqual([
+        {
+          requestId: 9,
+          callId: 'call-1',
+          namespace: 'vis',
+          toolName: 'deploy',
+          arguments: { target: 'staging' },
+          threadId: 'thr_existing',
+          turnId: 'turn_1',
+        },
+      ]);
 
       await api.respondToDynamicToolCall(9, [{ type: 'inputText', text: 'deployed' }]);
 

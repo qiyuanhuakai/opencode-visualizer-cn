@@ -32,10 +32,6 @@ export function getPersistedAcpBridgeToken() {
   return storageGet(StorageKeys.auth.backendKind) === 'acp' ? getPersistedCodexBridgeToken() : '';
 }
 
-export function getPersistedAcpAgentId() {
-  return storageGet(StorageKeys.auth.acpAgentId)?.trim() ?? '';
-}
-
 let acpAdapter: ReturnType<typeof createAcpAdapter> | undefined;
 let acpAdapterKey = '';
 const initialCodexBridgeUrl = getPersistedCodexBridgeUrl();
@@ -53,7 +49,6 @@ let adapters: Record<BackendKind, BackendAdapter | undefined> = {
 };
 
 let activeBackendKind: BackendKind = 'opencode';
-const listeners = new Set<(kind: BackendKind) => void>();
 
 export function getActiveBackendKind() {
   return activeBackendKind;
@@ -64,14 +59,6 @@ export function setActiveBackendKind(kind: BackendKind) {
     throw new Error(`Backend adapter is not registered: ${kind}`);
   }
   activeBackendKind = kind;
-  listeners.forEach((listener) => listener(kind));
-}
-
-export function onActiveBackendKindChange(listener: (kind: BackendKind) => void) {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
 }
 
 export function configureOpenCodeBackend(options: { baseUrl?: string; authorization?: string }) {

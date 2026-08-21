@@ -1,5 +1,84 @@
 import { resolveToolAccentColor } from '../../utils/theme';
 
+const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
+  ts: 'typescript',
+  tsx: 'tsx',
+  js: 'javascript',
+  cjs: 'javascript',
+  mjs: 'javascript',
+  jsx: 'jsx',
+  vue: 'vue',
+  svelte: 'svelte',
+  astro: 'astro',
+  json: 'json',
+  json5: 'json',
+  jsonc: 'json',
+  yml: 'yaml',
+  yaml: 'yaml',
+  toml: 'toml',
+  md: 'markdown',
+  mdc: 'markdown',
+  mdx: 'markdown',
+  html: 'html',
+  htm: 'html',
+  xml: 'xml',
+  svg: 'xml',
+  css: 'css',
+  scss: 'scss',
+  sass: 'sass',
+  less: 'less',
+  sh: 'shellscript',
+  bash: 'shellscript',
+  zsh: 'shellscript',
+  py: 'python',
+  pyw: 'python',
+  c: 'c',
+  cpp: 'cpp',
+  cc: 'cpp',
+  cxx: 'cpp',
+  h: 'cpp',
+  hpp: 'cpp',
+  hh: 'cpp',
+  java: 'java',
+  cs: 'csharp',
+  go: 'go',
+  rs: 'rust',
+  rb: 'ruby',
+  erb: 'ruby',
+  php: 'php',
+  pl: 'perl',
+  pm: 'perl',
+  lua: 'lua',
+  sql: 'sql',
+  dockerfile: 'dockerfile',
+  mk: 'makefile',
+  mak: 'makefile',
+  diff: 'diff',
+  patch: 'diff',
+  gql: 'graphql',
+  graphql: 'graphql',
+  regex: 'regex',
+  regexp: 'regex',
+  coffee: 'coffee',
+  coffeescript: 'coffee',
+  r: 'r',
+  jl: 'julia',
+  wasm: 'wasm',
+  wgsl: 'wgsl',
+  fasta: 'fasta',
+  fa: 'fasta',
+  fna: 'fasta',
+  faa: 'fasta',
+  fastq: 'fastq',
+  fq: 'fastq',
+  sam: 'sam',
+  vcf: 'vcf',
+  bed: 'bed',
+  gtf: 'gtf',
+  gff: 'gtf',
+  gff3: 'gtf',
+};
+
 export function formatGlobToolTitle(
   input: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -12,15 +91,6 @@ export function formatGlobToolTitle(
   if (include) segments.push(`include ${include}`);
   const title = segments.join(' ');
   return title || undefined;
-}
-
-export function formatReadLikeToolTitle(
-  input: Record<string, unknown> | undefined,
-): string | undefined {
-  const filePath = typeof input?.filePath === 'string' ? input.filePath.trim() : '';
-  if (filePath) return filePath;
-  const path = typeof input?.path === 'string' ? input.path.trim() : '';
-  return path || undefined;
 }
 
 export function resolveReadWritePath(
@@ -82,133 +152,13 @@ export function toolColor(tool: string): string {
 
 export function guessLanguageFromPath(path?: string): string {
   if (!path) return 'text';
-  const ext = path.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'ts':
-      return 'typescript';
-    case 'tsx':
-      return 'tsx';
-    case 'js':
-    case 'cjs':
-    case 'mjs':
-      return 'javascript';
-    case 'jsx':
-      return 'jsx';
-    case 'vue':
-      return 'vue';
-    case 'svelte':
-      return 'svelte';
-    case 'astro':
-      return 'astro';
-    case 'json':
-    case 'json5':
-    case 'jsonc':
-      return 'json';
-    case 'yml':
-    case 'yaml':
-      return 'yaml';
-    case 'toml':
-      return 'toml';
-    case 'md':
-    case 'mdc':
-    case 'mdx':
-      return 'markdown';
-    case 'html':
-    case 'htm':
-      return 'html';
-    case 'xml':
-    case 'svg':
-      return 'xml';
-    case 'css':
-      return 'css';
-    case 'scss':
-      return 'scss';
-    case 'sass':
-      return 'sass';
-    case 'less':
-      return 'less';
-    case 'sh':
-    case 'bash':
-    case 'zsh':
-      return 'shellscript';
-    case 'py':
-    case 'pyw':
-      return 'python';
-    case 'c':
-      return 'c';
-    case 'cpp':
-    case 'cc':
-    case 'cxx':
-    case 'h':
-    case 'hpp':
-    case 'hh':
-      return 'cpp';
-    case 'java':
-      return 'java';
-    case 'cs':
-      return 'csharp';
-    case 'go':
-      return 'go';
-    case 'rs':
-      return 'rust';
-    case 'rb':
-    case 'erb':
-      return 'ruby';
-    case 'php':
-      return 'php';
-    case 'pl':
-    case 'pm':
-      return 'perl';
-    case 'lua':
-      return 'lua';
-    case 'sql':
-      return 'sql';
-    case 'dockerfile':
-      return 'dockerfile';
-    case 'mk':
-    case 'mak':
-      return 'makefile';
-    case 'diff':
-    case 'patch':
-      return 'diff';
-    case 'gql':
-    case 'graphql':
-      return 'graphql';
-    case 'regex':
-    case 'regexp':
-      return 'regex';
-    case 'coffee':
-    case 'coffeescript':
-      return 'coffee';
-    case 'r':
-      return 'r';
-    case 'jl':
-      return 'julia';
-    case 'wasm':
-      return 'wasm';
-    case 'wgsl':
-      return 'wgsl';
-    case 'fasta':
-    case 'fa':
-    case 'fna':
-    case 'faa':
-      return 'fasta';
-    case 'fastq':
-    case 'fq':
-      return 'fastq';
-    case 'sam':
-      return 'sam';
-    case 'vcf':
-      return 'vcf';
-    case 'bed':
-      return 'bed';
-    case 'gtf':
-    case 'gff':
-    case 'gff3':
-      return 'gtf';
-    default:
-      if (path.toLowerCase().endsWith('makefile')) return 'makefile';
-      if (path.toLowerCase().endsWith('dockerfile')) return 'dockerfile';
-      return 'text';
+  const normalizedPath = path.toLowerCase();
+  const extension = normalizedPath.split('.').pop();
+  if (extension) {
+    const language = LANGUAGE_BY_EXTENSION[extension];
+    if (language) return language;
   }
+  if (normalizedPath.endsWith('makefile')) return 'makefile';
+  if (normalizedPath.endsWith('dockerfile')) return 'dockerfile';
+  return 'text';
 }

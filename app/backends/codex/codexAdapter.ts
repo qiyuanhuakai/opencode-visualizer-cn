@@ -15,16 +15,11 @@ import type {
   SessionUpdatePayload,
 } from '../types';
 import { CODEX_PROJECT_ID, codexBridgeHttpUrl } from './bridgeUrl';
-import {
-  CODEX_IDEMPOTENT_RETRY_OPTIONS,
-  type CodexIdempotentMethod,
-} from './jsonRpcRetry';
+import { isUnmaterializedThreadError } from './errors';
+import { CODEX_IDEMPOTENT_RETRY_OPTIONS, type CodexIdempotentMethod } from './jsonRpcRetry';
 import { normalizeCodexTurnsToHistory } from './normalize';
 import { normalizeCodexPluginListResult } from './pluginProtocol';
-import {
-  buildDynamicToolCallResponse,
-  buildToolUserInputResponse,
-} from './toolServerRequests';
+import { buildDynamicToolCallResponse, buildToolUserInputResponse } from './toolServerRequests';
 
 export type CodexClientInfo = {
   name: string;
@@ -40,7 +35,7 @@ export type CodexInitializeParams = {
   };
 };
 
-export type CodexInitializeResult = {
+type CodexInitializeResult = {
   userAgent?: string;
   platformFamily?: string;
   platformOs?: string;
@@ -115,7 +110,7 @@ export type CodexThreadStartParams = {
   serviceName?: string;
 };
 
-export type CodexThreadStartResult = {
+type CodexThreadStartResult = {
   thread: CodexThread;
 };
 
@@ -128,7 +123,7 @@ export type CodexThreadResumeParams = {
   personality?: string;
 };
 
-export type CodexThreadResumeResult = {
+type CodexThreadResumeResult = {
   thread: CodexThread;
 };
 
@@ -145,7 +140,7 @@ export type CodexThreadForkParams = {
   threadId: string;
 };
 
-export type CodexThreadForkResult = {
+type CodexThreadForkResult = {
   thread: CodexThread;
 };
 
@@ -154,7 +149,7 @@ export type CodexThreadRollbackParams = {
   numTurns: number;
 };
 
-export type CodexThreadRollbackResult = {
+type CodexThreadRollbackResult = {
   thread: CodexThread;
 };
 
@@ -168,7 +163,7 @@ export type CodexFsDirectoryEntry = {
   isFile: boolean;
 };
 
-export type CodexFsReadDirectoryResult = {
+type CodexFsReadDirectoryResult = {
   entries: CodexFsDirectoryEntry[];
 };
 
@@ -188,18 +183,13 @@ export type CodexFsWriteFileParams = {
   content: string;
 };
 
-export type CodexFsWriteFileResult = {};
+type CodexFsWriteFileResult = {};
 
 export type CodexFsCreateDirectoryParams = {
   path: string;
 };
 
-export type CodexFsCreateDirectoryResult = {};
-
-export type CodexFsChangedNotificationParams = {
-  watchId: string;
-  changedPaths: string[];
-};
+type CodexFsCreateDirectoryResult = {};
 
 export type CodexThreadUnsubscribeParams = {
   threadId: string;
@@ -259,13 +249,13 @@ export type CodexThreadTurnsListParams = {
   sortDirection?: 'asc' | 'desc';
 };
 
-export type CodexThreadTurnsListResult = {
+type CodexThreadTurnsListResult = {
   data: CodexTurn[];
   nextCursor?: string | null;
   backwardsCursor?: string | null;
 };
 
-export type CodexTurnStartResult = {
+type CodexTurnStartResult = {
   turn: CodexTurn;
 };
 
@@ -299,7 +289,7 @@ export type CodexReviewStartParams = {
   target: CodexReviewTarget;
 };
 
-export type CodexReviewStartResult = {
+type CodexReviewStartResult = {
   turn: CodexTurn;
   reviewThreadId: string;
 };
@@ -313,7 +303,7 @@ export type CodexCommandExecParams = {
   streamStdoutStderr?: boolean;
 };
 
-export type CodexCommandExecResult = {
+type CodexCommandExecResult = {
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -330,7 +320,7 @@ export type CodexAccountReadParams = {
   refreshToken?: boolean;
 };
 
-export type CodexAccountReadResult = {
+type CodexAccountReadResult = {
   account: CodexAccount;
   requiresOpenaiAuth: boolean;
 };
@@ -339,13 +329,18 @@ export type CodexAccountLoginType =
   | { type: 'apiKey'; apiKey: string }
   | { type: 'chatgpt' }
   | { type: 'chatgptDeviceCode' }
-  | { type: 'chatgptAuthTokens'; accessToken: string; chatgptAccountId: string; chatgptPlanType?: string };
+  | {
+      type: 'chatgptAuthTokens';
+      accessToken: string;
+      chatgptAccountId: string;
+      chatgptPlanType?: string;
+    };
 
 export type CodexAccountLoginStartParams = CodexAccountLoginType & {
   loginId?: string;
 };
 
-export type CodexAccountLoginStartResult = {
+type CodexAccountLoginStartResult = {
   type: string;
   loginId?: string;
   authUrl?: string;
@@ -378,12 +373,15 @@ export function getCodexWeeklyRateLimitWindow(
 ): CodexAccountRateLimitWindow | null {
   if (!bucket) return null;
   const weeklyMinutes = 7 * 24 * 60;
-  return [bucket.primary, bucket.secondary].find(
-    (window): window is CodexAccountRateLimitWindow => window?.windowDurationMins === weeklyMinutes,
-  ) ?? null;
+  return (
+    [bucket.primary, bucket.secondary].find(
+      (window): window is CodexAccountRateLimitWindow =>
+        window?.windowDurationMins === weeklyMinutes,
+    ) ?? null
+  );
 }
 
-export type CodexAccountRateLimitsReadResult = {
+type CodexAccountRateLimitsReadResult = {
   rateLimits: CodexAccountRateLimitBucket;
   rateLimitsByLimitId?: Record<string, CodexAccountRateLimitBucket>;
 };
@@ -392,7 +390,7 @@ export type CodexAccountSendNudgeParams = {
   creditType: 'credits' | 'usage_limit';
 };
 
-export type CodexAccountSendNudgeResult = {
+type CodexAccountSendNudgeResult = {
   status: string;
 };
 
@@ -429,16 +427,16 @@ export type CodexThreadGoal = {
 };
 
 export type CodexThreadGoalGetParams = { threadId: string };
-export type CodexThreadGoalGetResult = { goal: CodexThreadGoal | null };
+type CodexThreadGoalGetResult = { goal: CodexThreadGoal | null };
 export type CodexThreadGoalSetParams = {
   threadId: string;
   objective?: string | null;
   status?: CodexThreadGoalStatus | null;
   tokenBudget?: number | null;
 };
-export type CodexThreadGoalSetResult = { goal: CodexThreadGoal };
+type CodexThreadGoalSetResult = { goal: CodexThreadGoal };
 export type CodexThreadGoalClearParams = { threadId: string };
-export type CodexThreadGoalClearResult = { cleared: boolean };
+type CodexThreadGoalClearResult = { cleared: boolean };
 
 export type CodexModelProviderCapabilitiesResult = {
   namespaceTools: boolean;
@@ -452,7 +450,7 @@ export type CodexPermissionProfileListParams = {
   limit?: number | null;
   cwd?: string | null;
 };
-export type CodexPermissionProfileListResult = {
+type CodexPermissionProfileListResult = {
   data: CodexPermissionProfile[];
   nextCursor: string | null;
 };
@@ -482,7 +480,7 @@ export type CodexModelListParams = {
   includeHidden?: boolean;
 };
 
-export type CodexModelListResult = {
+type CodexModelListResult = {
   data: CodexModel[];
   nextCursor: string | null;
 };
@@ -534,7 +532,7 @@ export type CodexSkill = {
   path?: string; // SKILL.md 的绝对路径,来自 codex-rs SkillMetadata
 };
 
-export type CodexSkillsListCwdEntry = {
+type CodexSkillsListCwdEntry = {
   cwd: string;
   skills: CodexSkill[];
   errors?: unknown[];
@@ -546,7 +544,7 @@ export type CodexSkillsListParams = {
   perCwdExtraUserRoots?: Array<{ cwd: string; extraUserRoots: string[] }>;
 };
 
-export type CodexSkillsListResult = {
+type CodexSkillsListResult = {
   data: CodexSkillsListCwdEntry[];
 };
 
@@ -555,9 +553,7 @@ export type CodexSkillsConfigWriteParams = {
   enabled: boolean;
 };
 
-export type CodexSkillsConfigWriteResult = {};
-
-export type CodexSkillsChangedNotificationParams = unknown;
+type CodexSkillsConfigWriteResult = {};
 
 // marketplace/* types
 export type PluginMarketplaceEntry = {
@@ -569,11 +565,17 @@ export type CodexMarketplaceAddParams = {
   marketplace: PluginMarketplaceEntry;
 };
 
-export type CodexMarketplaceAddResult = unknown;
+type CodexMarketplaceAddResult = unknown;
 
 // plugin/* types
 export type CodexPluginSourceLocal = { type: 'local'; path: string };
-export type CodexPluginSourceGit = { type: 'git'; url: string; path: string; refName: string; sha: string };
+export type CodexPluginSourceGit = {
+  type: 'git';
+  url: string;
+  path: string;
+  refName: string;
+  sha: string;
+};
 export type CodexPluginSourceRemote = { type: 'remote' };
 export type CodexPluginSourceNpm = {
   type: 'npm';
@@ -640,7 +642,7 @@ export type CodexPluginInstallParams = {
   pluginName: string;
 };
 
-export type CodexPluginInstallResult = unknown;
+type CodexPluginInstallResult = unknown;
 
 export type CodexPluginUninstallParams = {
   marketplacePath?: string;
@@ -648,24 +650,18 @@ export type CodexPluginUninstallParams = {
   pluginName: string;
 };
 
-export type CodexPluginUninstallResult = unknown;
+type CodexPluginUninstallResult = unknown;
 
 // mcpServer/* types
 export type CodexMcpServerOauthLoginParams = {
   serverName: string;
 };
 
-export type CodexMcpServerOauthLoginResult = {
+type CodexMcpServerOauthLoginResult = {
   authUrl: string;
   verificationUrl?: string;
   userCode?: string;
   loginId?: string;
-};
-
-export type CodexMcpServerStartupStatusUpdatedNotificationParams = {
-  name: string;
-  status: string;
-  error?: string;
 };
 
 export type CodexMcpServerAuth = {
@@ -708,7 +704,7 @@ export type CodexMcpServerStatusListParams = {
   detail?: 'full' | 'toolsAndAuthOnly';
 };
 
-export type CodexMcpServerStatusListResult = {
+type CodexMcpServerStatusListResult = {
   data: CodexMcpServerStatus[];
   nextCursor: string | null;
 };
@@ -718,7 +714,7 @@ export type CodexMcpServerResourceReadParams = {
   uri: string;
 };
 
-export type CodexMcpServerResourceReadResult = {
+type CodexMcpServerResourceReadResult = {
   contents: Array<{ uri: string; mimeType?: string; text?: string; blob?: string }>;
 };
 
@@ -729,13 +725,13 @@ export type CodexMcpServerToolCallParams = {
   arguments?: Record<string, unknown>;
 };
 
-export type CodexMcpServerToolCallResult = {
+type CodexMcpServerToolCallResult = {
   content: Array<{ type: 'text' | 'image'; text?: string; image?: unknown }>;
   isError?: boolean;
 };
 
 export type CodexConfigMcpServerReloadParams = {};
-export type CodexConfigMcpServerReloadResult = {};
+type CodexConfigMcpServerReloadResult = {};
 
 // turn/* types
 export type CodexTurnSteerParams = {
@@ -744,7 +740,7 @@ export type CodexTurnSteerParams = {
   expectedTurnId: string;
 };
 
-export type CodexTurnSteerResult = {
+type CodexTurnSteerResult = {
   turnId: string;
 };
 
@@ -754,7 +750,7 @@ export type CodexThreadMetadataUpdateParams = {
   gitInfo?: CodexGitInfo;
 };
 
-export type CodexThreadMetadataUpdateResult = {
+type CodexThreadMetadataUpdateResult = {
   thread: CodexThread;
 };
 
@@ -762,23 +758,23 @@ export type CodexThreadCompactStartParams = {
   threadId: string;
 };
 
-export type CodexThreadCompactStartResult = {};
+type CodexThreadCompactStartResult = {};
 
 export type CodexThreadShellCommandParams = {
   threadId: string;
   command: string;
 };
 
-export type CodexThreadShellCommandResult = {};
+type CodexThreadShellCommandResult = {};
 
 export type CodexThreadInjectItemsParams = {
   threadId: string;
   items: unknown[];
 };
 
-export type CodexThreadInjectItemsResult = {};
+type CodexThreadInjectItemsResult = {};
 
-export type CodexThreadLoadedListResult = {
+type CodexThreadLoadedListResult = {
   data: string[];
 };
 
@@ -787,14 +783,14 @@ export type CodexFsRemoveParams = {
   path: string;
 };
 
-export type CodexFsRemoveResult = {};
+type CodexFsRemoveResult = {};
 
 export type CodexFsWatchParams = {
   watchId: string;
   path: string;
 };
 
-export type CodexFsWatchResult = {
+type CodexFsWatchResult = {
   path: string;
 };
 
@@ -802,13 +798,13 @@ export type CodexFsUnwatchParams = {
   watchId: string;
 };
 
-export type CodexFsUnwatchResult = {};
+type CodexFsUnwatchResult = {};
 
 export type CodexFsGetMetadataParams = {
   path: string;
 };
 
-export type CodexFsGetMetadataResult = {
+type CodexFsGetMetadataResult = {
   isDirectory: boolean;
   isFile: boolean;
   isSymlink?: boolean;
@@ -822,7 +818,7 @@ export type CodexFsCopyParams = {
   recursive?: boolean;
 };
 
-export type CodexFsCopyResult = {};
+type CodexFsCopyResult = {};
 
 // command/* types
 export type CodexCommandExecWriteParams = {
@@ -831,13 +827,13 @@ export type CodexCommandExecWriteParams = {
   closeStdin?: boolean;
 };
 
-export type CodexCommandExecWriteResult = {};
+type CodexCommandExecWriteResult = {};
 
 export type CodexCommandExecTerminateParams = {
   processId: string;
 };
 
-export type CodexCommandExecTerminateResult = {};
+type CodexCommandExecTerminateResult = {};
 
 // config/* types
 export type CodexConfigLayer = {
@@ -887,13 +883,13 @@ export type CodexConfigValueWriteParams = {
   mergeStrategy?: ConfigMergeStrategy;
 };
 
-export type CodexConfigValueWriteResult = {};
+type CodexConfigValueWriteResult = {};
 
 export type CodexConfigBatchWriteParams = {
   edits: Array<{ keyPath: string; value: unknown; mergeStrategy?: ConfigMergeStrategy }>;
 };
 
-export type CodexConfigBatchWriteResult = {};
+type CodexConfigBatchWriteResult = {};
 
 export type CodexConfigRequirementsReadParams = {};
 
@@ -933,20 +929,20 @@ export type CodexExternalAgentConfigImportParams = {
   migrationItems: Array<{ itemType: string; description: string; cwd: string | null }>;
 };
 
-export type CodexExternalAgentConfigImportResult = {};
+type CodexExternalAgentConfigImportResult = {};
 
 export type CodexCommandExecResizeParams = {
   processId: string;
   size: { rows: number; cols: number };
 };
 
-export type CodexCommandExecResizeResult = {};
+type CodexCommandExecResizeResult = {};
 
 export type CodexThreadBackgroundTerminalsCleanParams = {
   threadId: string;
 };
 
-export type CodexThreadBackgroundTerminalsCleanResult = {};
+type CodexThreadBackgroundTerminalsCleanResult = {};
 
 export type CodexExperimentalFeature = {
   name: string;
@@ -973,7 +969,7 @@ export type CodexExperimentalFeatureEnablementSetParams = {
   enabled: boolean;
 };
 
-export type CodexExperimentalFeatureEnablementSetResult = {};
+type CodexExperimentalFeatureEnablementSetResult = {};
 
 export type CodexCollaborationMode = {
   mode: string;
@@ -1002,7 +998,7 @@ export type CodexFeedbackUploadParams = {
   extraLogFiles?: Array<{ name: string; contentBase64: string }>;
 };
 
-export type CodexFeedbackUploadResult = {};
+type CodexFeedbackUploadResult = {};
 
 export type CodexAdapterOptions = CodexJsonRpcClientOptions & {
   clientInfo?: CodexClientInfo;
@@ -1010,7 +1006,7 @@ export type CodexAdapterOptions = CodexJsonRpcClientOptions & {
   mcpStatusTimeoutMs?: number;
 };
 
-type NormalizedCodexSession = {
+export type NormalizedCodexSession = {
   id: string;
   projectID: string;
   title?: string;
@@ -1038,7 +1034,8 @@ export function extractStatusType(status: unknown): string | undefined {
 
 export function normalizeCodexStatus(status: unknown): NormalizedCodexSession['status'] {
   const type = extractStatusType(status);
-  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy') return 'busy';
+  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy')
+    return 'busy';
   if (type === 'systemError' || type === 'retry') return 'retry';
   return 'unknown';
 }
@@ -1092,10 +1089,7 @@ function configuredCodexMcpStatuses(config: CodexConfigReadResult | null) {
 function codexModelVariants(model: CodexModel) {
   const efforts = model.supportedReasoningEfforts ?? [];
   return Object.fromEntries(
-    efforts.map((effort) => [
-      effort.reasoningEffort,
-      { description: effort.description },
-    ]),
+    efforts.map((effort) => [effort.reasoningEffort, { description: effort.description }]),
   );
 }
 
@@ -1168,7 +1162,7 @@ function configWithLayeredVisModelProviders(
   const configProviders = isRecord(configVis.model_providers) ? configVis.model_providers : {};
   Object.assign(layeredModelProviders, configProviders);
   if (Object.keys(layeredModelProviders).length === 0) return config;
-    return {
+  return {
     ...config,
     vis: {
       ...configVis,
@@ -1182,7 +1176,8 @@ function expandCodexHomePath(path: string | undefined, homeDirectory?: string) {
   if (!raw) return undefined;
   const home = homeDirectory?.trim();
   if (raw === '~') return home || '/';
-  if (raw.startsWith('~/')) return home ? `${home.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}` : raw;
+  if (raw.startsWith('~/'))
+    return home ? `${home.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}` : raw;
   return raw;
 }
 
@@ -1215,20 +1210,28 @@ function normalizePathSeparators(path: string) {
 }
 
 function hasParentSegment(path: string) {
-  return normalizePathSeparators(path).split('/').some((segment) => segment === '..');
+  return normalizePathSeparators(path)
+    .split('/')
+    .some((segment) => segment === '..');
 }
 
 function normalizeAbsoluteCodexPath(path: string) {
   const normalized = normalizePathSeparators(path.trim()).replace(/\/+/gu, '/');
   if (/^[A-Za-z]:\//u.test(normalized)) {
     const [drive = '', ...rest] = normalized.split('/');
-    return `${drive}/${rest.filter((segment) => segment && segment !== '.').join('/')}`.replace(/\/+$/u, '') || `${drive}/`;
+    return (
+      `${drive}/${rest.filter((segment) => segment && segment !== '.').join('/')}`.replace(
+        /\/+$/u,
+        '',
+      ) || `${drive}/`
+    );
   }
   const segments: string[] = [];
   for (const segment of normalized.split('/')) {
     if (!segment || segment === '.') continue;
     if (segment === '..') {
-      if (segments.length === 0) throw new Error('Codex file paths cannot escape the active directory.');
+      if (segments.length === 0)
+        throw new Error('Codex file paths cannot escape the active directory.');
       segments.pop();
       continue;
     }
@@ -1241,8 +1244,12 @@ function isWithinCodexRoot(root: string, target: string) {
   const normalizedRoot = normalizeAbsoluteCodexPath(root);
   const normalizedTarget = normalizeAbsoluteCodexPath(target);
   if (normalizedRoot === '/') return true;
-  const comparableRoot = /^[A-Za-z]:\//u.test(normalizedRoot) ? normalizedRoot.toLowerCase() : normalizedRoot;
-  const comparableTarget = /^[A-Za-z]:\//u.test(normalizedTarget) ? normalizedTarget.toLowerCase() : normalizedTarget;
+  const comparableRoot = /^[A-Za-z]:\//u.test(normalizedRoot)
+    ? normalizedRoot.toLowerCase()
+    : normalizedRoot;
+  const comparableTarget = /^[A-Za-z]:\//u.test(normalizedTarget)
+    ? normalizedTarget.toLowerCase()
+    : normalizedTarget;
   return comparableTarget === comparableRoot || comparableTarget.startsWith(`${comparableRoot}/`);
 }
 
@@ -1289,13 +1296,6 @@ function decodeBase64Bytes(dataBase64: string) {
   return bytes;
 }
 
-function isUnmaterializedThreadError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /not materialized/i.test(message) ||
-    /includeTurns is unavailable/i.test(message) ||
-    /no rollout found/i.test(message);
-}
-
 function codexReadFileBytes(result: CodexFsReadFileResult) {
   if (typeof result.dataBase64 === 'string') return decodeBase64Bytes(result.dataBase64);
   if (typeof result.content === 'string') {
@@ -1310,7 +1310,11 @@ function codexReadFileText(result: CodexFsReadFileResult) {
   return new TextDecoder().decode(codexReadFileBytes(result));
 }
 
-function codexBridgeWebSocketUrl(bridgeUrl: string, endpoint: `/${string}`, params: Record<string, BackendQueryValue> = {}) {
+function codexBridgeWebSocketUrl(
+  bridgeUrl: string,
+  endpoint: `/${string}`,
+  params: Record<string, BackendQueryValue> = {},
+) {
   const parsed = new URL(bridgeUrl);
   if (parsed.protocol === 'http:') parsed.protocol = 'ws:';
   else if (parsed.protocol === 'https:') parsed.protocol = 'wss:';
@@ -1371,11 +1375,11 @@ function parseCodexToolQuestionRequest(requestId: string): {
   }
   try {
     const parsed: unknown = JSON.parse(requestId.slice(prefix.length));
-    if (!parsed || typeof parsed !== 'object') return { id: requestId, questionIds: [], dynamic: false };
+    if (!parsed || typeof parsed !== 'object')
+      return { id: requestId, questionIds: [], dynamic: false };
     const record = parsed as Record<string, unknown>;
-    const id = typeof record.id === 'string' || typeof record.id === 'number'
-      ? record.id
-      : requestId;
+    const id =
+      typeof record.id === 'string' || typeof record.id === 'number' ? record.id : requestId;
     const questionIds = Array.isArray(record.questionIds)
       ? record.questionIds.filter((value): value is string => typeof value === 'string')
       : [];
@@ -1480,10 +1484,6 @@ export class CodexAdapter implements BackendAdapter {
     this.updateProject = this.updateProject.bind(this);
     this.createWorktree = this.createWorktree.bind(this);
     this.deleteWorktree = this.deleteWorktree.bind(this);
-  }
-
-  isConnected() {
-    return this.client.isConnected();
   }
 
   connect() {
@@ -1625,7 +1625,7 @@ export class CodexAdapter implements BackendAdapter {
     return this.client.request<{}>('turn/interrupt', params);
   }
 
-   async sendPrompt(input: CodexPromptInput): Promise<CodexPromptResult> {
+  async sendPrompt(input: CodexPromptInput): Promise<CodexPromptResult> {
     await this.ensureInitialized();
     let startedThread = input.threadId
       ? undefined
@@ -1661,9 +1661,10 @@ export class CodexAdapter implements BackendAdapter {
       }
     }
 
-    const turnInput = input.input && input.input.length > 0
-      ? input.input
-      : [{ type: 'text', text: input.text } satisfies CodexTurnInputItem];
+    const turnInput =
+      input.input && input.input.length > 0
+        ? input.input
+        : [{ type: 'text', text: input.text } satisfies CodexTurnInputItem];
     const turn = await this.startTurn({
       threadId,
       input: turnInput,
@@ -1690,7 +1691,7 @@ export class CodexAdapter implements BackendAdapter {
       const httpUrl = codexBridgeHttpUrl(this.bridgeUrl, '/homedir');
       const response = await fetch(httpUrl, { method: 'GET' });
       if (!response.ok) return '';
-      const data = await response.json() as { home?: unknown };
+      const data = (await response.json()) as { home?: unknown };
       return typeof data.home === 'string' ? data.home : '';
     } catch {
       return '';
@@ -1739,7 +1740,10 @@ export class CodexAdapter implements BackendAdapter {
 
   async sendAddCreditsNudge(params: CodexAccountSendNudgeParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexAccountSendNudgeResult>('account/sendAddCreditsNudgeEmail', params);
+    return this.client.request<CodexAccountSendNudgeResult>(
+      'account/sendAddCreditsNudgeEmail',
+      params,
+    );
   }
 
   // fs/* methods
@@ -1918,7 +1922,10 @@ export class CodexAdapter implements BackendAdapter {
 
   async cleanThreadBackgroundTerminals(params: CodexThreadBackgroundTerminalsCleanParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadBackgroundTerminalsCleanResult>('thread/backgroundTerminals/clean', params);
+    return this.client.request<CodexThreadBackgroundTerminalsCleanResult>(
+      'thread/backgroundTerminals/clean',
+      params,
+    );
   }
 
   async listApps(params: CodexAppListParams = {}) {
@@ -1943,12 +1950,18 @@ export class CodexAdapter implements BackendAdapter {
 
   async detectExternalAgentConfig(params: CodexExternalAgentConfigDetectParams = {}) {
     await this.ensureInitialized();
-    return this.requestRead<CodexExternalAgentConfigDetectResult>('externalAgentConfig/detect', params);
+    return this.requestRead<CodexExternalAgentConfigDetectResult>(
+      'externalAgentConfig/detect',
+      params,
+    );
   }
 
   async importExternalAgentConfig(params: CodexExternalAgentConfigImportParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexExternalAgentConfigImportResult>('externalAgentConfig/import', params);
+    return this.client.request<CodexExternalAgentConfigImportResult>(
+      'externalAgentConfig/import',
+      params,
+    );
   }
 
   async listExperimentalFeatures(params: CodexExperimentalFeatureListParams = {}) {
@@ -1958,7 +1971,10 @@ export class CodexAdapter implements BackendAdapter {
 
   async setExperimentalFeatureEnablement(params: CodexExperimentalFeatureEnablementSetParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexExperimentalFeatureEnablementSetResult>('experimentalFeature/enablement/set', params);
+    return this.client.request<CodexExperimentalFeatureEnablementSetResult>(
+      'experimentalFeature/enablement/set',
+      params,
+    );
   }
 
   async listCollaborationModes() {
@@ -1968,7 +1984,10 @@ export class CodexAdapter implements BackendAdapter {
 
   async startWindowsSandboxSetup(params: CodexWindowsSandboxSetupStartParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexWindowsSandboxSetupStartResult>('windowsSandbox/setupStart', params);
+    return this.client.request<CodexWindowsSandboxSetupStartResult>(
+      'windowsSandbox/setupStart',
+      params,
+    );
   }
 
   async uploadFeedback(params: CodexFeedbackUploadParams) {
@@ -1993,10 +2012,11 @@ export class CodexAdapter implements BackendAdapter {
     if (payload.time?.archived && payload.time.archived > 0) {
       await this.archiveThread({ threadId: sessionId });
     }
-    if (payload.title !== undefined) await this.setThreadName({
-      threadId: sessionId,
-      name: payload.title || null,
-    });
+    if (payload.title !== undefined)
+      await this.setThreadName({
+        threadId: sessionId,
+        name: payload.title || null,
+      });
     const result = await this.readThread({ threadId: sessionId });
     return normalizeCodexThread(result.thread, await this.fetchBridgeHomeDir());
   }
@@ -2028,7 +2048,9 @@ export class CodexAdapter implements BackendAdapter {
   async listProviders() {
     const result = await this.listModels({ includeHidden: true });
     const configResult = await this.readConfig({ includeLayers: true }).catch(() => null);
-    const config = configResult ? configWithLayeredVisModelProviders(configResult.config ?? {}, configResult.layers) : {};
+    const config = configResult
+      ? configWithLayeredVisModelProviders(configResult.config ?? {}, configResult.layers)
+      : {};
     const allModels = result.data;
     const models = Object.fromEntries(
       allModels.map((model) => {
@@ -2054,10 +2076,15 @@ export class CodexAdapter implements BackendAdapter {
       source: 'codex-app-server',
       models,
     };
-    const defaultModel = allModels.find((model) => model.isDefault) ?? allModels.find((model) => !model.hidden) ?? allModels[0];
+    const defaultModel =
+      allModels.find((model) => model.isDefault) ??
+      allModels.find((model) => !model.hidden) ??
+      allModels[0];
     const providers = [provider];
     const connected = new Set([CODEX_PROJECT_ID]);
-    const defaults: Record<string, string> = defaultModel ? { [CODEX_PROJECT_ID]: defaultModel.id } : {};
+    const defaults: Record<string, string> = defaultModel
+      ? { [CODEX_PROJECT_ID]: defaultModel.id }
+      : {};
     const configuredProviders = isRecord(config.model_providers) ? config.model_providers : {};
     Object.entries(configuredProviders).forEach(([providerID, rawProviderConfig]) => {
       const id = providerID.trim();
@@ -2112,7 +2139,12 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async getSessionStatusMap(directory?: string, _options?: BackendRequestOptions) {
-    const result = await this.listThreads({ cwd: directory, limit: 100, sortKey: 'updated_at', modelProviders: null });
+    const result = await this.listThreads({
+      cwd: directory,
+      limit: 100,
+      sortKey: 'updated_at',
+      modelProviders: null,
+    });
     return Object.fromEntries(
       result.data.map((thread) => [thread.id, normalizeCodexStatus(thread.status)]),
     );
@@ -2144,7 +2176,9 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async readFileContent(payload: { directory: string; path: string }) {
-    const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
+    const result = await this.readFile({
+      path: resolveCodexFsPath(payload.directory, payload.path),
+    });
     return {
       content: codexReadFileText(result),
       encoding: 'utf-8',
@@ -2153,7 +2187,9 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async readFileContentBytes(payload: { directory: string; path: string }) {
-    const result = await this.readFile({ path: resolveCodexFsPath(payload.directory, payload.path) });
+    const result = await this.readFile({
+      path: resolveCodexFsPath(payload.directory, payload.path),
+    });
     return codexReadFileBytes(result);
   }
 
@@ -2228,7 +2264,7 @@ export class CodexAdapter implements BackendAdapter {
     if (!response.ok) {
       let message = `Codex bridge request failed (${response.status})`;
       try {
-        const data = await response.json() as { error?: unknown };
+        const data = (await response.json()) as { error?: unknown };
         if (typeof data.error === 'string') message = data.error;
       } catch {}
       throw new Error(message);
@@ -2241,7 +2277,13 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async createPty(
-    payload: { directory?: string; cwd?: string; command?: string; args?: string[]; title?: string },
+    payload: {
+      directory?: string;
+      cwd?: string;
+      command?: string;
+      args?: string[];
+      title?: string;
+    },
     options?: BackendRequestOptions,
   ) {
     return this.bridgeJson('/pty', {
@@ -2261,7 +2303,9 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async deletePty(ptyId: string) {
-    return this.bridgeJson(`/pty/${encodeURIComponent(ptyId)}` as `/${string}`, { method: 'DELETE' });
+    return this.bridgeJson(`/pty/${encodeURIComponent(ptyId)}` as `/${string}`, {
+      method: 'DELETE',
+    });
   }
 
   createPtyWebSocketUrl(path: string, params?: Record<string, BackendQueryValue>) {
@@ -2285,12 +2329,17 @@ export class CodexAdapter implements BackendAdapter {
 
   async sendPromptAsync(
     sessionId: string,
-    payload: { directory: string; model: { providerID?: string; modelID: string }; parts: Array<Record<string, unknown>> },
+    payload: {
+      directory: string;
+      model: { providerID?: string; modelID: string };
+      parts: Array<Record<string, unknown>>;
+    },
   ) {
     const text = payload.parts
       .map((part) => {
         if (part.type === 'text' && typeof part.text === 'string') return part.text;
-        if (part.type === 'file' && typeof part.filename === 'string') return `[file: ${part.filename}]`;
+        if (part.type === 'file' && typeof part.filename === 'string')
+          return `[file: ${part.filename}]`;
         return '';
       })
       .filter(Boolean)
@@ -2321,11 +2370,12 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async replyPermission(requestId: string, payload: { reply: string }) {
-    const decision = payload.reply === 'always'
-      ? 'acceptForSession'
-      : payload.reply === 'reject'
-        ? 'decline'
-        : 'accept';
+    const decision =
+      payload.reply === 'always'
+        ? 'acceptForSession'
+        : payload.reply === 'reject'
+          ? 'decline'
+          : 'accept';
     this.respondToServerRequest(parseCodexDialogRequestId(requestId), { decision });
   }
 
@@ -2338,21 +2388,22 @@ export class CodexAdapter implements BackendAdapter {
       this.respondToServerRequest(request.id, buildDynamicToolCallResponse(contentItems, true));
       return;
     }
-    this.respondToServerRequest(request.id, buildToolUserInputResponse(
-      payload.answers.map((answers, index) => ({
-        questionId: request.questionIds[index] ?? String(index),
-        answers,
-      })),
-    ));
+    this.respondToServerRequest(
+      request.id,
+      buildToolUserInputResponse(
+        payload.answers.map((answers, index) => ({
+          questionId: request.questionIds[index] ?? String(index),
+          answers,
+        })),
+      ),
+    );
   }
 
   async rejectQuestion(requestId: string) {
     const request = parseCodexToolQuestionRequest(requestId);
     this.respondToServerRequest(
       request.id,
-      request.dynamic
-        ? buildDynamicToolCallResponse([], false)
-        : buildToolUserInputResponse([]),
+      request.dynamic ? buildDynamicToolCallResponse([], false) : buildToolUserInputResponse([]),
     );
   }
 
@@ -2413,7 +2464,7 @@ export class CodexAdapter implements BackendAdapter {
         keyPath,
         value,
         mergeStrategy: 'replace' as const,
-    }));
+      }));
     await this.batchWriteConfig({ edits });
     const result = await this.readConfig();
     return result.config;
@@ -2435,7 +2486,9 @@ export class CodexAdapter implements BackendAdapter {
 
   async updateSkill(payload: { path: string; name?: string; enabled: boolean }) {
     if (!payload?.path) {
-      throw new Error('updateSkill requires a skill path; Codex skills/config/write is keyed by path.');
+      throw new Error(
+        'updateSkill requires a skill path; Codex skills/config/write is keyed by path.',
+      );
     }
     await this.writeSkillConfig({ path: payload.path, enabled: payload.enabled });
     return { path: payload.path, enabled: payload.enabled };

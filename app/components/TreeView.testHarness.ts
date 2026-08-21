@@ -64,15 +64,7 @@ vi.mock('./Dropdown/Search.vue', () => ({
 }));
 
 import TreeView from './TreeView.vue';
-
-export type TreeNode = {
-  name: string;
-  path: string;
-  type: 'directory' | 'file';
-  children?: TreeNode[];
-  ignored?: boolean;
-  synthetic?: boolean;
-};
+import type { TreeNode } from '../types/tree';
 
 function createMessages() {
   return {

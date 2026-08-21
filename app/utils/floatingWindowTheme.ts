@@ -13,7 +13,7 @@ export const FLOATING_WINDOW_THEME_TYPES = [
   'debug',
 ] as const;
 
-export const FLOATING_WINDOW_THEME_TYPES_WITH_DEFAULT = [
+const FLOATING_WINDOW_THEME_TYPES_WITH_DEFAULT = [
   'default',
   ...FLOATING_WINDOW_THEME_TYPES,
 ] as const;

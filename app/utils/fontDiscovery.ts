@@ -71,7 +71,7 @@ export async function loadLocalFontFamilies(): Promise<LocalFontFamily[]> {
   );
 }
 
-export function parseFontStack(stack: string) {
+function parseFontStack(stack: string) {
   const families: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
@@ -115,7 +115,7 @@ export function prependFontFamilyToStack(stack: string, family: string) {
     .join(', ');
 }
 
-export function formatFontFamilyForStack(family: string) {
+function formatFontFamilyForStack(family: string) {
   const normalized = normalizeFontFamilyToken(family);
   if (!normalized) return '';
   if (isGenericFontFamily(normalized)) return normalized;
@@ -130,11 +130,11 @@ export function inspectFontStack(stack: string) {
   }));
 }
 
-export function isGenericFontFamily(family: string) {
+function isGenericFontFamily(family: string) {
   return GENERIC_FONT_FAMILIES.has(normalizeFontFamilyToken(family).toLocaleLowerCase());
 }
 
-export function detectFontFamilyAvailability(family: string): FontAvailabilityStatus {
+function detectFontFamilyAvailability(family: string): FontAvailabilityStatus {
   const normalized = normalizeFontFamilyToken(family);
   if (!normalized) return 'missing';
   if (isGenericFontFamily(normalized)) return 'generic';

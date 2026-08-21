@@ -66,7 +66,7 @@ app/components/renderers/
 
 ### HexRenderer
 
-- Props: `rawHtml`
+- Props: `bytes`
 - Thin wrapper around `CodeContent` with `variant="binary"`
 
 ---
@@ -100,12 +100,12 @@ ContentViewer
 
 | Condition                 | Available modes         | Default  |
 | ------------------------- | ----------------------- | -------- |
-| `imageSrc` provided       | Image, Hex (if rawHtml) | Image    |
+| `imageSrc` provided       | Image, Hex              | Image    |
 | Binary or image extension | Hex                     | Hex      |
 | Markdown file w/ content  | Rendered, Source        | Rendered |
 | Other text file           | Source                  | Source   |
 
-Props: `path`, `rawHtml`, `fileContent`, `lang`, `isBinary`, `gutterMode`,
+Props: `path`, `fileContent`, `lang`, `isBinary`, `gutterMode`,
 `theme`, `lines`, `imageSrc`, `imageAlt`
 
 ### DiffViewer

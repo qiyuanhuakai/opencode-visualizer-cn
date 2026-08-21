@@ -11,7 +11,7 @@ const LOCALE_STORAGE_KEY = 'settings.locale.v1';
 const DEFAULT_LOCALE: Locale = 'en';
 const VALID_LOCALES: Locale[] = ['en', 'zh-CN', 'zh-TW', 'ja', 'eo'];
 
-export function getStoredLocale(): Locale {
+function getStoredLocale(): Locale {
   const stored = storageGet(LOCALE_STORAGE_KEY);
   if (stored && (VALID_LOCALES as string[]).includes(stored)) {
     return stored as Locale;
@@ -19,7 +19,7 @@ export function getStoredLocale(): Locale {
   return DEFAULT_LOCALE;
 }
 
-export function setStoredLocale(locale: Locale) {
+function setStoredLocale(locale: Locale) {
   storageSet(LOCALE_STORAGE_KEY, locale);
 }
 

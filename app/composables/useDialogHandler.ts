@@ -7,7 +7,7 @@ export type DialogRequestBase = {
   sessionID: string;
 };
 
-export type DialogWindowOptions = {
+type DialogWindowOptions = {
   component: Component;
   props: Record<string, unknown>;
   title: string;

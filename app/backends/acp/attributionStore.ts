@@ -16,7 +16,7 @@ export type AcpAttributionData = {
   sessions: Record<string, { entries: Record<string, AcpEntryAttribution>; updatedAt: number }>;
 };
 
-export const ACP_ATTRIBUTION_STORAGE_KEY = StorageKeys.state.acpMessageAttribution;
+const ACP_ATTRIBUTION_STORAGE_KEY = StorageKeys.state.acpMessageAttribution;
 const MAX_SESSIONS = 30;
 const MAX_ENTRIES_PER_SESSION = 500;
 
@@ -26,8 +26,7 @@ export function createAcpAttributionStore(options?: {
   now?: () => number;
 }): AcpAttributionStore {
   const read =
-    options?.read ??
-    (() => storageGetJSON<AcpAttributionData>(ACP_ATTRIBUTION_STORAGE_KEY));
+    options?.read ?? (() => storageGetJSON<AcpAttributionData>(ACP_ATTRIBUTION_STORAGE_KEY));
   const write =
     options?.write ??
     ((data: AcpAttributionData) => storageSetJSON(ACP_ATTRIBUTION_STORAGE_KEY, data));

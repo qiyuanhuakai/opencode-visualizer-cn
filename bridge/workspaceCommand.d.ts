@@ -25,8 +25,3 @@ export function createWorkspaceCommandRunner(options?: {
   stopProcessTree?: (child: WorkspaceCommandChild) => Promise<void>;
   outputLimit?: number;
 }): WorkspaceCommandRunner;
-
-export function runWorkspaceCommand(
-  payload: unknown,
-  options?: Parameters<typeof createWorkspaceCommandRunner>[0],
-): Promise<WorkspaceCommandResult>;

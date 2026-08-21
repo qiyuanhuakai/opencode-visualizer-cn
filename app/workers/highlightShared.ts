@@ -9,7 +9,7 @@ import gtfGrammarRaw from '../grammars/gtf.tmLanguage.json?raw';
 
 export type Highlighter = Awaited<ReturnType<typeof createHighlighter>>;
 
-export const customGrammars: Record<string, object> = {
+const customGrammars: Record<string, object> = {
   fasta: { ...JSON.parse(fastaGrammarRaw), name: 'fasta' },
   fastq: { ...JSON.parse(fastqGrammarRaw), name: 'fastq' },
   sam: { ...JSON.parse(samGrammarRaw), name: 'sam' },

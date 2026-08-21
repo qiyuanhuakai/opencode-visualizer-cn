@@ -42,16 +42,16 @@
           :projects="sessionTreeData"
           :expanded-paths="sessionTreeExpandedPaths"
           :selected-session-id="selectedSessionId"
-        @toggle-expand="(path) => emit('toggle-expand', path)"
-        @select-session="(payload) => emit('select-session', payload)"
-        @pin-project="(projectId) => emit('pin-project', projectId)"
-        @unpin-project="(projectId) => emit('unpin-project', projectId)"
-        @pin-sandbox="(payload) => emit('pin-sandbox', payload)"
-        @unpin-sandbox="(payload) => emit('unpin-sandbox', payload)"
-        @pin-session="(payload) => emit('pin-session', payload)"
-        @unpin-session="(payload) => emit('unpin-session', payload)"
-        @reload="emit('reload')"
-      />
+          @toggle-expand="(path) => emit('toggle-expand', path)"
+          @select-session="(payload) => emit('select-session', payload)"
+          @pin-project="(projectId) => emit('pin-project', projectId)"
+          @unpin-project="(projectId) => emit('unpin-project', projectId)"
+          @pin-sandbox="(payload) => emit('pin-sandbox', payload)"
+          @unpin-sandbox="(payload) => emit('unpin-sandbox', payload)"
+          @pin-session="(payload) => emit('pin-session', payload)"
+          @unpin-session="(payload) => emit('unpin-session', payload)"
+          @reload="emit('reload')"
+        />
       </div>
       <TreeView
         v-show="activeTab === 'tree'"
@@ -84,15 +84,11 @@ import { computed, toRefs } from 'vue';
 import { Icon } from '@iconify/vue';
 import TodoList from './TodoList.vue';
 import SessionTree from './SessionTree.vue';
-import type { BranchEntry } from '../types/git';
+import type { BranchEntry, GitBranchInfo, GitDiffStats, GitFileStatus } from '../types/git';
 import type { ContainerPinPayload } from '../types/pin';
 import type { SessionTreeData } from '../types/session-tree';
-import TreeView, {
-  type GitBranchInfo,
-  type GitDiffStats,
-  type GitFileStatus,
-  type TreeNode,
-} from './TreeView.vue';
+import type { TreeNode } from '../types/tree';
+import TreeView from './TreeView.vue';
 
 type TodoItem = {
   content: string;
@@ -166,11 +162,7 @@ const tabs = computed(() => [
 const sessionTreeSessionCount = computed(() => {
   return props.sessionTreeData.reduce(
     (count, project) =>
-      count +
-      project.sandboxes.reduce(
-        (sCount, sandbox) => sCount + sandbox.sessions.length,
-        0,
-      ),
+      count + project.sandboxes.reduce((sCount, sandbox) => sCount + sandbox.sessions.length, 0),
     0,
   );
 });

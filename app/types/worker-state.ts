@@ -92,5 +92,3 @@ export type WorkerNotificationEntry = {
   requestIds: string[];
   requestOrigins?: Array<[requestId: string, originSessionId: string]>;
 };
-
-export type NotificationState = Record<string, WorkerNotificationEntry>;

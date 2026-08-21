@@ -5,7 +5,7 @@ export type CodexPlanEntry = {
   plan: Array<{ step: string; status: string }>;
 };
 
-export type CodexPlanTodoSession = {
+type CodexPlanTodoSession = {
   sessionId: string;
   title: string;
   description?: string;

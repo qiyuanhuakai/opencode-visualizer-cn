@@ -9,7 +9,7 @@ import type { SessionScope } from './useGlobalEvents';
 import type { useFloatingWindows } from './useFloatingWindows';
 import { useStreamingWindowManager } from './useStreamingWindowManager';
 
-export type ReasoningFinish = {
+type ReasoningFinish = {
   id: string;
   time: number;
 };
@@ -209,5 +209,3 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     bindScope: subscribe,
   };
 }
-
-export type UseReasoningWindowsReturn = ReturnType<typeof useReasoningWindows>;

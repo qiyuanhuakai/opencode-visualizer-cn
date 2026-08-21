@@ -136,18 +136,21 @@ import type {
   MessageDiffEntry,
   MessageTokens,
   MessageUsage,
-  ModelMeta,
   ThreadTarget as ThreadTargetType,
 } from '../types/message';
-import type { MessageInfo, QuestionInfo, SubtaskPart, ToolPart } from '../types/sse';
+import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
 import { getMessageVariant } from '../types/sse';
 import { formatElapsedTime, formatMessageError, formatMessageTime } from '../utils/formatters';
+import type { ModelMeta } from '../utils/resolveModelMeta';
+import { resolveThreadSubagentSessions, type SessionHistoryMeta } from '../utils/threadSubagents';
 import {
-  resolveThreadSubagentSessions,
-  type SessionHistoryMeta,
-} from '../utils/threadSubagents';
-import { isHistoryToolName } from '../utils/toolNames';
+  buildHistoryEntries,
+  getMessageHistoryAgent,
+  resolveMessageIsSubagent,
+  selectSubagentMessages,
+  toHistoryWindowEntry,
+} from '../utils/historyEntries';
 
 const { t } = useI18n();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
@@ -288,184 +291,39 @@ function getMessageTime(message?: MessageInfo): number | undefined {
   return msg.getTime(message.id);
 }
 
-function getToolPartTime(part: ToolPart): number {
-  const state = part.state;
-  if (state.status === 'running' || state.status === 'completed' || state.status === 'error') {
-    return state.time.start;
-  }
-  return 0;
-}
-
-function getSubtaskPartTime(part: SubtaskPart, fallbackTime: number): number {
-  void part;
-  return fallbackTime;
-}
-
-function extractQuestionInfos(part: ToolPart): QuestionInfo[] {
-  const raw = part.state.input?.questions;
-  if (!Array.isArray(raw)) return [];
-  return raw.filter(
-    (q): q is QuestionInfo =>
-      q &&
-      typeof q === 'object' &&
-      typeof q.question === 'string' &&
-      typeof q.header === 'string' &&
-      Array.isArray(q.options),
-  );
-}
-
-function resolveQuestionStatus(part: ToolPart): 'pending' | 'replied' | 'rejected' {
-  if (part.state.status === 'completed') return 'replied';
-  if (part.state.status === 'error') return 'rejected';
-  return 'pending';
-}
-
-function extractQuestionAnswers(part: ToolPart): string[][] | undefined {
-  if (part.state.status !== 'completed') return undefined;
-  const answers = part.state.metadata?.answers;
-  if (!Array.isArray(answers)) return undefined;
-  return answers as string[][];
-}
-
 function getHistoryEntries(): HistoryEntry[] {
-  const entries: HistoryEntry[] = [];
-  // Bug #1 fix: filter out subagent messages from main history view.
-  // Subagent sessions are exposed via the "View subagent" button on the
-  // main thread block, opening them in a separate floating window.
-  const allHistoryMessages = [...threadMessages.value];
-  for (const msgInfo of allHistoryMessages) {
-    if (msgInfo.role === 'assistant' && hasTextContent(msgInfo)) {
-      entries.push({ kind: 'message', message: msgInfo, time: msgInfo.time.created });
-    }
-    const parts = msg.getParts(msgInfo.id);
-    for (const part of parts) {
-      if (part.type === 'reasoning') {
-        if (part.text) {
-          entries.push({ kind: 'reasoning', part, time: part.time.start });
-        }
-        continue;
-      }
-      if (part.type === 'subtask') {
-        entries.push({
-          kind: 'subtask',
-          part,
-          time: getSubtaskPartTime(part, msgInfo.time.created),
-        });
-        continue;
-      }
-      if (part.type !== 'tool') continue;
-      if (part.state.status === 'pending') continue;
-      if (part.tool === 'question') {
-        entries.push({ kind: 'question', part, time: getToolPartTime(part) });
-        continue;
-      }
-      if (!isHistoryToolName(part.tool)) continue;
-      entries.push({ kind: 'tool', part, time: getToolPartTime(part) });
-    }
-  }
-  return entries.sort((a, b) => a.time - b.time);
+  return buildHistoryEntries({
+    messages: [...threadMessages.value],
+    hasTextContent,
+    getParts: (messageId) => msg.getParts(messageId),
+  });
 }
 
 function getSubagentHistoryEntries(parentThreadId: string): HistoryEntry[] {
-  const target = parentThreadId.trim();
-  if (!target) return [];
-  const subagentRoots = msg.roots.value
-    .filter((root) => root.role === 'user')
-    .filter((root) => root.sessionID === target);
-  const messages = subagentRoots.flatMap((root) => msg.getThread(root.id));
-  const entries: HistoryEntry[] = [];
-  for (const msgInfo of messages) {
-    if (msgInfo.role === 'assistant' && hasTextContent(msgInfo)) {
-      entries.push({ kind: 'message', message: msgInfo, time: msgInfo.time.created });
-    }
-    const parts = msg.getParts(msgInfo.id);
-    for (const part of parts) {
-      if (part.type === 'reasoning') {
-        if (part.text) {
-          entries.push({ kind: 'reasoning', part, time: part.time.start });
-        }
-        continue;
-      }
-      if (part.type === 'subtask') {
-        entries.push({
-          kind: 'subtask',
-          part,
-          time: getSubtaskPartTime(part, msgInfo.time.created),
-        });
-        continue;
-      }
-      if (part.type !== 'tool') continue;
-      if (part.state.status === 'pending') continue;
-      if (part.tool === 'question') {
-        entries.push({ kind: 'question', part, time: getToolPartTime(part) });
-        continue;
-      }
-      if (!isHistoryToolName(part.tool)) continue;
-      entries.push({ kind: 'tool', part, time: getToolPartTime(part) });
-    }
-  }
-  return entries.sort((a, b) => a.time - b.time);
-}
-
-function getHistoryEntryKey(entry: HistoryEntry): string {
-  if (entry.kind === 'message') return `msg:${entry.message.id}`;
-  if (entry.kind === 'reasoning') return `reasoning:${entry.part.id}`;
-  if (entry.kind === 'question') return `question:${entry.part.callID}`;
-  if (entry.kind === 'subtask') return `subtask:${entry.part.id}`;
-  return `tool:${entry.part.callID}`;
+  return buildHistoryEntries({
+    messages: selectSubagentMessages(
+      msg.roots.value,
+      (rootId) => msg.getThread(rootId),
+      parentThreadId,
+    ),
+    hasTextContent,
+    getParts: (messageId) => msg.getParts(messageId),
+  });
 }
 
 function showThreadHistory() {
-  const entries = historyEntries.value.map((entry) => {
-    if (entry.kind === 'message') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'message',
-        content: getMessageContent(entry.message),
-        time: entry.time,
-        sessionId: entry.message.sessionID,
-        isSubagent: Boolean(
-          props.currentSessionId && entry.message.sessionID !== props.currentSessionId,
-        ),
-        agent:
-          entry.message.role === 'assistant' && 'agent' in entry.message && entry.message.agent
-            ? entry.message.agent
-            : undefined,
-      } satisfies HistoryWindowEntry;
-    }
-    if (entry.kind === 'reasoning') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'reasoning',
-        part: entry.part,
-        time: entry.time,
-      } satisfies HistoryWindowEntry;
-    }
-    if (entry.kind === 'question') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'question',
-        questions: extractQuestionInfos(entry.part),
-        status: resolveQuestionStatus(entry.part),
-        answers: extractQuestionAnswers(entry.part),
-        time: entry.time,
-      } satisfies HistoryWindowEntry;
-    }
-    if (entry.kind === 'subtask') {
-      return {
-        key: getHistoryEntryKey(entry),
-        kind: 'subtask',
-        part: entry.part,
-        time: entry.time,
-      } satisfies HistoryWindowEntry;
-    }
-    return {
-      key: getHistoryEntryKey(entry),
-      kind: 'tool',
-      part: entry.part,
-      time: entry.time,
-    } satisfies HistoryWindowEntry;
-  });
+  const entries = historyEntries.value.map((entry) =>
+    toHistoryWindowEntry(
+      entry,
+      entry.kind === 'message'
+        ? {
+            content: getMessageContent(entry.message),
+            isSubagent: resolveMessageIsSubagent(entry.message, props.currentSessionId),
+            agent: getMessageHistoryAgent(entry.message),
+          }
+        : undefined,
+    ),
+  );
   emit('show-thread-history', { entries });
 }
 

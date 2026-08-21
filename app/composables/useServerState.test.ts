@@ -9,9 +9,7 @@ function createProject(id: string): ProjectState {
   return { id, worktree: `/repo/${id}`, sandboxes: {} };
 }
 
-function createBootstrap(
-  overrides: Partial<BootstrapMessage> = {},
-): BootstrapMessage {
+function createBootstrap(overrides: Partial<BootstrapMessage> = {}): BootstrapMessage {
   return {
     type: 'state.bootstrap',
     projects: {},

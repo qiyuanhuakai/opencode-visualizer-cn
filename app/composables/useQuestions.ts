@@ -2,33 +2,10 @@ import { useI18n } from 'vue-i18n';
 import type { ComputedRef, Ref } from 'vue';
 import QuestionContent from '../components/ToolWindow/Question.vue';
 import { getActiveBackendAdapter } from '../backends/registry';
+import type { QuestionInfo, QuestionOption, QuestionRequest } from '../types/sse';
 import { uniqueBy } from '../utils/array';
 import type { useFloatingWindows } from './useFloatingWindows';
 import { useDialogHandler } from './useDialogHandler';
-
-export type QuestionOption = {
-  label: string;
-  description: string;
-};
-
-export type QuestionInfo = {
-  question: string;
-  header: string;
-  options: QuestionOption[];
-  multiple?: boolean;
-  custom?: boolean;
-  secret?: boolean;
-};
-
-export type QuestionRequest = {
-  id: string;
-  sessionID: string;
-  questions: QuestionInfo[];
-  tool?: {
-    messageID: string;
-    callID: string;
-  };
-};
 
 export type QuestionAnswer = string[];
 
@@ -172,7 +149,7 @@ export function useQuestions(options: {
       const cleaned = answer
         .map((value) => (typeof value === 'string' ? value.trim() : ''))
         .filter((value) => value.length > 0);
-      return uniqueBy(cleaned, x => x);
+      return uniqueBy(cleaned, (x) => x);
     });
   }
 

@@ -170,6 +170,7 @@ export type QuestionInfo = {
   options: QuestionOption[];
   multiple?: boolean;
   custom?: boolean;
+  secret?: boolean;
 };
 
 /** Question.Request */
@@ -541,10 +542,6 @@ type SsePacketByType<K extends keyof GlobalEventMap> = {
     properties: GlobalEventMap[K];
   };
 };
-
-export type KnownSsePacket = {
-  [K in keyof GlobalEventMap]: SsePacketByType<K>;
-}[keyof GlobalEventMap];
 
 export type WorkerStateEventMap = Pick<
   GlobalEventMap,

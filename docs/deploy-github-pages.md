@@ -210,7 +210,7 @@ A：在 GitHub Actions 页面找到历史 workflow run，点 **Re-run jobs** 即
 |---|---|
 | `app/index.html` | CSP 配置（决定浏览器允许的目标） |
 | `app/utils/constants.ts` | `DEFAULT_OPENCODE_URL = 'http://localhost:4096'` |
-| `app/utils/opencode.ts` | `setBaseUrl()` / `getBaseUrl()` API base URL 管理 |
+| `app/utils/opencode.ts` | `setBaseUrl()` API base URL 管理 |
 | `app/composables/useCredentials.ts` | URL 持久化与恢复 |
 | `vite.config.ts` | `base: './'` 已配置为 GitHub Pages 兼容的相对路径 |
 | `.github/workflows/deploy.yml` | 自动部署到 GitHub Pages |

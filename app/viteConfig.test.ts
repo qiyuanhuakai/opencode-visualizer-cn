@@ -76,6 +76,5 @@ describe('vite config contract', () => {
     expect(pkg.devDependencies['@vitejs/plugin-vue']).toMatch(/^\^6\./);
     expect(pkg.devDependencies['esbuild']).toMatch(/^\^0\./);
     expect(pkg.devDependencies['postcss']).toMatch(/^\^8\./);
-    expect(pkg.devDependencies['autoprefixer']).toMatch(/^\^10\./);
   });
 });

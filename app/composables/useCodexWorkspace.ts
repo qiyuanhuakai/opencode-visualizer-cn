@@ -4,12 +4,16 @@ import { CODEX_PROJECT_ID } from '../backends/codex/bridgeUrl';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import type { ProjectState, SessionState } from '../types/worker-state';
 import { normalizeAbsolutePathNoParent } from '../utils/path';
-import { normalizePinnedAt, pinnedSessionStoreKey, type LocalPinnedSessionStore } from '../utils/pinnedSessions';
+import {
+  normalizePinnedAt,
+  pinnedSessionStoreKey,
+  type LocalPinnedSessionStore,
+} from '../utils/pinnedSessions';
 
 export { CODEX_PROJECT_ID };
-export const CODEX_SANDBOX_NAME = 'Codex';
-export const CODEX_GLOBAL_SANDBOX_NAME = 'Global';
-export const CODEX_DEFAULT_DIRECTORY = '/';
+const CODEX_SANDBOX_NAME = 'Codex';
+const CODEX_GLOBAL_SANDBOX_NAME = 'Global';
+const CODEX_DEFAULT_DIRECTORY = '/';
 
 export type CodexWorkspaceApi = {
   visibleThreads: ComputedRef<CodexThread[]>;
@@ -21,7 +25,10 @@ export type CodexWorkspaceApi = {
   hiddenThreadIds?: Ref<Set<string>>;
 };
 
-function isCodexThreadPinned(pinnedStore: LocalPinnedSessionStore | undefined, threadId: string): boolean {
+function isCodexThreadPinned(
+  pinnedStore: LocalPinnedSessionStore | undefined,
+  threadId: string,
+): boolean {
   if (!pinnedStore) return false;
   const key = pinnedSessionStoreKey(CODEX_PROJECT_ID, threadId);
   if (!key) return false;
@@ -36,9 +43,14 @@ function threadTimestamp(value: unknown) {
 function expandHomePath(path: string, homeDirectory: string) {
   const raw = path.trim();
   const home = homeDirectory.trim() || CODEX_DEFAULT_DIRECTORY;
-  const normalizedHome = home.startsWith('/') ? normalizeAbsolutePathNoParent(home) : CODEX_DEFAULT_DIRECTORY;
+  const normalizedHome = home.startsWith('/')
+    ? normalizeAbsolutePathNoParent(home)
+    : CODEX_DEFAULT_DIRECTORY;
   if (raw === '~') return normalizedHome;
-  if (raw.startsWith('~/')) return normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}`);
+  if (raw.startsWith('~/'))
+    return normalizeAbsolutePathNoParent(
+      `${normalizedHome.replace(/\/+$/u, '')}/${raw.slice(2).replace(/^\/+/, '')}`,
+    );
   if (raw.startsWith('/')) return normalizeAbsolutePathNoParent(raw);
   if (!raw) return CODEX_DEFAULT_DIRECTORY;
   return normalizeAbsolutePathNoParent(`${normalizedHome.replace(/\/+$/u, '')}/${raw}`);
@@ -48,7 +60,10 @@ function basename(path: string) {
   return path.replace(/\/+$/u, '').split('/').filter(Boolean).at(-1) || path || CODEX_SANDBOX_NAME;
 }
 
-function threadSandboxDirectory(thread: CodexThread | undefined, fallbackDirectory = CODEX_DEFAULT_DIRECTORY) {
+function threadSandboxDirectory(
+  thread: CodexThread | undefined,
+  fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
+) {
   const cwd = thread?.cwd?.trim();
   if (cwd) {
     const expanded = expandHomePath(cwd, fallbackDirectory);
@@ -72,12 +87,13 @@ function threadTitle(thread: CodexThread) {
 
 function threadStatus(thread: CodexThread): SessionState['status'] {
   const type = extractStatusType(thread.status);
-  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy') return 'busy';
+  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy')
+    return 'busy';
   if (type === 'systemError' || type === 'retry') return 'retry';
   return 'unknown' as SessionState['status'];
 }
 
-export function codexThreadToSession(
+function codexThreadToSession(
   thread: CodexThread,
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedStore: LocalPinnedSessionStore = {},
@@ -158,20 +174,25 @@ export function useCodexWorkspace(
   options: { pinnedStore?: Ref<LocalPinnedSessionStore> } = {},
 ) {
   const fallbackDirectory = computed(() => api.homeDir?.value || CODEX_DEFAULT_DIRECTORY);
-  const project = computed(() => createCodexProjectState(
-    api.threads.value,
-    fallbackDirectory.value,
-    api.pinnedStore?.value ?? options.pinnedStore?.value,
-    api.hiddenThreadIds?.value,
-  ));
+  const project = computed(() =>
+    createCodexProjectState(
+      api.threads.value,
+      fallbackDirectory.value,
+      api.pinnedStore?.value ?? options.pinnedStore?.value,
+      api.hiddenThreadIds?.value,
+    ),
+  );
   const projects = computed<Record<string, ProjectState>>(() => ({
     [CODEX_PROJECT_ID]: project.value,
   }));
-  const activeThread = computed(() => (
-    api.threads.value.find((thread) => thread.id === api.activeThreadId.value)
-    ?? api.visibleThreads.value[0]
-  ));
-  const activeDirectory = computed(() => threadSandboxDirectory(activeThread.value, fallbackDirectory.value));
+  const activeThread = computed(
+    () =>
+      api.threads.value.find((thread) => thread.id === api.activeThreadId.value) ??
+      api.visibleThreads.value[0],
+  );
+  const activeDirectory = computed(() =>
+    threadSandboxDirectory(activeThread.value, fallbackDirectory.value),
+  );
   const activeSessionId = computed(() => activeThread.value?.id ?? '');
   const history = computed(() => api.canonicalHistory.value);
 

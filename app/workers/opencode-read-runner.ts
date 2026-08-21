@@ -1,4 +1,4 @@
-export type OpencodeReadPriority = 'normal' | 'bootstrap';
+type OpencodeReadPriority = 'normal' | 'bootstrap';
 
 type OpencodeReadTaskOptions = {
   signal?: AbortSignal;
@@ -88,9 +88,7 @@ function createSlotAcquirer() {
         resolve({ acquired: false, reason: 'aborted' });
       };
       pending.onAbort = onAbort;
-      const firstNormalIndex = pendingResolvers.findIndex(
-        (queued) => queued.priority === 'normal',
-      );
+      const firstNormalIndex = pendingResolvers.findIndex((queued) => queued.priority === 'normal');
       if (priority === 'bootstrap' && firstNormalIndex >= 0) {
         pendingResolvers.splice(firstNormalIndex, 0, pending);
       } else {

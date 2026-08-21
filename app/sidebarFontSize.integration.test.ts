@@ -22,7 +22,7 @@ describe('sidebar font size integration', () => {
     const app = source('app/App.vue');
 
     expect(settingsModal).toContain('settings-sidebar-font-size');
-    expect(settingsModal).toContain('v-model.number="sidebarFontSizePx"');
+    expect(settingsModal).toContain('model: sidebarFontSizePx');
     expect(app).toContain("'--sidebar-font-size'");
   });
 

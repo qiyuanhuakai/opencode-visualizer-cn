@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { MessageDiffEntry } from '../types/message';
-import { hasCompleteBeforeAfter, reconstructSourcesFromDiff, toMessageDiffViewerEntry } from './messageDiff';
+import { hasCompleteBeforeAfter, toMessageDiffViewerEntry } from './messageDiff';
+import { reconstructSourcesFromDiff } from './unifiedDiff';
 
 describe('messageDiff viewer mapping', () => {
   it('prefers local before/after diff generation when both sides exist', () => {
@@ -40,8 +41,7 @@ describe('messageDiff viewer mapping', () => {
   it('reconstructs both sides from patch-only diffs for split view tabs', () => {
     const diff: MessageDiffEntry = {
       file: 'scripts/electron-start.mjs',
-      diff:
-        '@@ -1,2 +1,3 @@\n import { spawn } from \'node:child_process\';\n import http from \'node:http\';\n+import net from \'node:net\';',
+      diff: "@@ -1,2 +1,3 @@\n import { spawn } from 'node:child_process';\n import http from 'node:http';\n+import net from 'node:net';",
     };
 
     expect(toMessageDiffViewerEntry(diff)).toEqual({
@@ -54,11 +54,7 @@ describe('messageDiff viewer mapping', () => {
   });
 
   it('reconstructSourcesFromDiff preserves line positions for mixed hunks', () => {
-    expect(
-      reconstructSourcesFromDiff(
-        '@@ -2,3 +2,4 @@\n keep\n-old\n+new\n stay\n+tail',
-      ),
-    ).toEqual({
+    expect(reconstructSourcesFromDiff('@@ -2,3 +2,4 @@\n keep\n-old\n+new\n stay\n+tail')).toEqual({
       before: '\nkeep\nold\nstay',
       after: '\nkeep\nnew\nstay\ntail',
     });

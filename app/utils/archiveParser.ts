@@ -23,33 +23,37 @@ export interface ArchiveParseResult {
 
 let libarchiveInstance: Awaited<ReturnType<typeof libarchiveWasm>> | null = null;
 
+interface ArchiveSignature {
+  kind: ArchiveKind;
+  bytes: readonly number[];
+  offset?: number;
+  minLength?: number;
+}
+
+const ARCHIVE_SIGNATURES: readonly ArchiveSignature[] = [
+  { kind: 'zip', bytes: [0x50, 0x4b, 0x03, 0x04] },
+  { kind: 'rar', bytes: [0x52, 0x61, 0x72, 0x21] },
+  { kind: '7z', bytes: [0x37, 0x7a, 0xbc, 0xaf] },
+  { kind: 'xz', bytes: [0xfd, 0x37, 0x7a, 0x58] },
+  { kind: 'bzip2', bytes: [0x42, 0x5a, 0x68] },
+  { kind: 'gzip', bytes: [0x1f, 0x8b] },
+  { kind: 'tar', bytes: [0x75, 0x73, 0x74, 0x61, 0x72], offset: 257, minLength: 265 },
+];
+
 function detectArchiveKind(bytes: Uint8Array): ArchiveKind {
-  if (bytes.length >= 4) {
-    if (bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
-      return 'zip';
-    }
-    if (bytes[0] === 0x52 && bytes[1] === 0x61 && bytes[2] === 0x72 && bytes[3] === 0x21) {
-      return 'rar';
-    }
-    if (bytes[0] === 0x37 && bytes[1] === 0x7a && bytes[2] === 0xbc && bytes[3] === 0xaf) {
-      return '7z';
-    }
-    if (bytes[0] === 0xfd && bytes[1] === 0x37 && bytes[2] === 0x7a && bytes[3] === 0x58) {
-      return 'xz';
-    }
-  }
+  for (const signature of ARCHIVE_SIGNATURES) {
+    const start = signature.offset ?? 0;
+    const requiredLength = signature.minLength ?? start + signature.bytes.length;
+    if (bytes.length < requiredLength) continue;
 
-  if (bytes.length >= 3 && bytes[0] === 0x42 && bytes[1] === 0x5a && bytes[2] === 0x68) {
-    return 'bzip2';
-  }
-
-  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-    return 'gzip';
-  }
-
-  if (bytes.length >= 265) {
-    const ustar = new TextDecoder('ascii').decode(bytes.slice(257, 262));
-    if (ustar === 'ustar') return 'tar';
+    let matches = true;
+    for (let i = 0; i < signature.bytes.length; i++) {
+      if (bytes[start + i] !== signature.bytes[i]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return signature.kind;
   }
 
   return 'unknown';
@@ -151,7 +155,7 @@ async function getLibarchiveInstance(): Promise<Awaited<ReturnType<typeof libarc
   return libarchiveInstance;
 }
 
-export async function parseZip(bytes: Uint8Array): Promise<ArchiveParseResult> {
+async function parseZip(bytes: Uint8Array): Promise<ArchiveParseResult> {
   try {
     const zip = await JSZip.loadAsync(bytes);
     const entries: ArchiveEntry[] = [];
@@ -176,7 +180,7 @@ export async function parseZip(bytes: Uint8Array): Promise<ArchiveParseResult> {
   }
 }
 
-export function parseTarArchive(bytes: Uint8Array): ArchiveParseResult {
+function parseTarArchive(bytes: Uint8Array): ArchiveParseResult {
   try {
     const entries = parseTar(bytes);
     const archiveEntries: ArchiveEntry[] = entries.map((entry) => ({
@@ -196,15 +200,17 @@ export function parseTarArchive(bytes: Uint8Array): ArchiveParseResult {
   }
 }
 
-export async function parseGzip(bytes: Uint8Array): Promise<ArchiveParseResult> {
+async function parseGzip(bytes: Uint8Array): Promise<ArchiveParseResult> {
   try {
     const decompressed = gunzipSync(bytes);
     return {
-      entries: [{
-        name: 'decompressed',
-        size: decompressed.length,
-        isDirectory: false,
-      }],
+      entries: [
+        {
+          name: 'decompressed',
+          size: decompressed.length,
+          isDirectory: false,
+        },
+      ],
       format: 'GZIP',
     };
   } catch (err) {
@@ -216,7 +222,7 @@ export async function parseGzip(bytes: Uint8Array): Promise<ArchiveParseResult> 
   }
 }
 
-export async function parseLibarchiveFormats(bytes: Uint8Array): Promise<ArchiveParseResult> {
+async function parseLibarchiveFormats(bytes: Uint8Array): Promise<ArchiveParseResult> {
   try {
     const libarchive = await getLibarchiveInstance();
     const reader = new ArchiveReader(libarchive, new Int8Array(bytes));
@@ -243,7 +249,7 @@ export async function parseLibarchiveFormats(bytes: Uint8Array): Promise<Archive
   }
 }
 
-export async function parseTarGz(bytes: Uint8Array): Promise<ArchiveParseResult> {
+async function parseTarGz(bytes: Uint8Array): Promise<ArchiveParseResult> {
   try {
     const decompressed = gunzipSync(bytes);
     const result = parseTarArchive(decompressed);

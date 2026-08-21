@@ -1,6 +1,6 @@
 {
   "frozenFrom": {
-    "stack": "vite 7.3.1 / vitest 4.1.2 / happy-dom 17.6.3 / @vitejs/plugin-vue 6.0.4 / esbuild 0.28.1 / postcss 8.5.6 / autoprefixer 10.4.24",
+    "stack": "vite 7.3.1 / vitest 4.1.2 / happy-dom 17.6.3 / @vitejs/plugin-vue 6.0.4 / esbuild 0.28.1 / postcss 8.5.6",
     "gitHead": "4df81be4c",
     "builtAt": "2026-08-11T06:47:23.800Z"
   },
@@ -12,66 +12,49 @@
   "criticalAssets": {
     "entry-js": {
       "glob": "index-*.js",
-      "files": [
-        "index-Bi1Pmqxw.js"
-      ],
+      "files": ["index-Bi1Pmqxw.js"],
       "oldBytes": 1710554,
       "cap": 2053120
     },
     "entry-css": {
       "glob": "index-*.css",
-      "files": [
-        "index-CS_GF887.css"
-      ],
+      "files": ["index-CS_GF887.css"],
       "oldBytes": 320964,
       "cap": 386048
     },
     "render-worker": {
       "glob": "render-worker-*.js",
-      "files": [
-        "render-worker-DtuXvjmb.js"
-      ],
+      "files": ["render-worker-DtuXvjmb.js"],
       "oldBytes": 292128,
       "cap": 351232
     },
     "sse-shared-worker": {
       "glob": "sse-shared-worker-*.js",
-      "files": [
-        "sse-shared-worker-o2UOmqBJ.js"
-      ],
+      "files": ["sse-shared-worker-o2UOmqBJ.js"],
       "oldBytes": 41611,
       "cap": 50176
     },
     "vendor-vue": {
       "glob": "vendor-vue-*.js",
-      "files": [
-        "vendor-vue-CK9alTse.js",
-        "vendor-vue-i18n-CZGMTikz.js"
-      ],
+      "files": ["vendor-vue-CK9alTse.js", "vendor-vue-i18n-CZGMTikz.js"],
       "oldBytes": 4382546,
       "cap": 5259264
     },
     "vendor-vue-i18n": {
       "glob": "vendor-vue-i18n-*.js",
-      "files": [
-        "vendor-vue-i18n-CZGMTikz.js"
-      ],
+      "files": ["vendor-vue-i18n-CZGMTikz.js"],
       "oldBytes": 54130,
       "cap": 65536
     },
     "vendor-terminal-js": {
       "glob": "vendor-terminal-*.js",
-      "files": [
-        "vendor-terminal-dsX4PNT0.js"
-      ],
+      "files": ["vendor-terminal-dsX4PNT0.js"],
       "oldBytes": 329310,
       "cap": 395264
     },
     "vendor-terminal-css": {
       "glob": "vendor-terminal-*.css",
-      "files": [
-        "vendor-terminal-DDGTF8rc.css"
-      ],
+      "files": ["vendor-terminal-DDGTF8rc.css"],
       "oldBytes": 3621,
       "cap": 5120
     }

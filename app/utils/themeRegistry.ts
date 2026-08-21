@@ -13,7 +13,7 @@ import {
   type RegionName,
   type RegionThemeConfig,
 } from './regionTheme';
-import { StorageKeys, storageGetJSON, storageRemove, storageSetJSON } from './storageKeys';
+import { StorageKeys, storageGetJSON } from './storageKeys';
 
 export type ThemeRegistrySource = 'builtin' | 'external';
 
@@ -298,7 +298,7 @@ const BUILTIN_THEME_ENTRIES: ThemeRegistryEntry[] = [
   },
 ];
 
-export function listBuiltinThemeRegistryEntries(): ThemeRegistryEntry[] {
+function listBuiltinThemeRegistryEntries(): ThemeRegistryEntry[] {
   return BUILTIN_THEME_ENTRIES.map((entry) => ({
     ...entry,
     theme: {
@@ -366,20 +366,8 @@ export function normalizeStoredExternalThemes(input: unknown): ExternalThemeDefi
   });
 }
 
-export function readStoredExternalThemes(): ExternalThemeDefinition[] {
+function readStoredExternalThemes(): ExternalThemeDefinition[] {
   return normalizeStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
-}
-
-export function writeStoredExternalThemes(themes: ExternalThemeDefinition[]): void {
-  if (themes.length === 0) {
-    storageRemove(StorageKeys.settings.themeRegistry);
-    return;
-  }
-
-  storageSetJSON(StorageKeys.settings.themeRegistry, {
-    version: 1,
-    themes,
-  } satisfies StoredExternalThemeRegistry);
 }
 
 export function parseExternalThemeFile(input: unknown): ExternalThemeDefinition {
@@ -422,7 +410,7 @@ export function removeStoredExternalTheme(themes: ExternalThemeDefinition[], id:
   return themes.filter((theme) => theme.id !== id);
 }
 
-export function createExternalThemeRegistryEntry(theme: ExternalThemeDefinition): ThemeRegistryEntry {
+function createExternalThemeRegistryEntry(theme: ExternalThemeDefinition): ThemeRegistryEntry {
   return {
     id: theme.id,
     source: 'external',

@@ -36,7 +36,7 @@ export type AcpAgentStatus = {
   error?: string;
 };
 
-export type AcpAgentInput = Pick<AcpAgentStatus, 'id' | 'name' | 'command' | 'args' | 'enabled'> & {
+type AcpAgentInput = Pick<AcpAgentStatus, 'id' | 'name' | 'command' | 'args' | 'enabled'> & {
   env?: Record<string, string>;
 };
 

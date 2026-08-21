@@ -1,4 +1,4 @@
-export type SegmentResult = {
+type SegmentResult = {
   readonly stable: string[];
   readonly tail: string;
   readonly disabled: boolean;
@@ -41,7 +41,8 @@ function firstNonBlankLine(text: string, offset: number): string | undefined {
 function candidateIsSafe(text: string, candidate: Candidate): boolean {
   // A closing-tag predecessor means the HTML block already ended inside the
   // stable part, so splitting after it is safe; an opening tag is not.
-  const predecessorOpensHtml = HTML_BLOCK.test(candidate.predecessor) && !/^ {0,3}<\//.test(candidate.predecessor);
+  const predecessorOpensHtml =
+    HTML_BLOCK.test(candidate.predecessor) && !/^ {0,3}<\//.test(candidate.predecessor);
   if (LIST_ITEM.test(candidate.predecessor) || predecessorOpensHtml) return false;
   const successor = firstNonBlankLine(text, candidate.offset);
   if (successor === undefined || /^\s/.test(successor) || LIST_ITEM.test(successor)) return false;
@@ -102,11 +103,7 @@ export function createMarkdownSegmenter(): Segmenter {
         if (fenceChar === '') {
           fenceChar = marker[0] ?? '';
           fenceLength = marker.length;
-        } else if (
-          marker[0] === fenceChar &&
-          marker.length >= fenceLength &&
-          /^\s*$/.test(info)
-        ) {
+        } else if (marker[0] === fenceChar && marker.length >= fenceLength && /^\s*$/.test(info)) {
           fenceChar = '';
           fenceLength = 0;
         }
