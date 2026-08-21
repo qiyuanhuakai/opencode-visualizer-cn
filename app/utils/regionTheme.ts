@@ -705,7 +705,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
   },
 };
 
-export const REGION_THEME_PRESETS = {
+const REGION_THEME_PRESETS = {
   default: DEFAULT_REGION_THEME,
   ocean: OCEAN_PRESET,
   forest: FOREST_PRESET,
