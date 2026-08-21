@@ -12,16 +12,8 @@ export function setBaseUrl(baseUrl: string) {
   configuredBaseUrl = baseUrl.replace(/\/+$/, '');
 }
 
-export function getBaseUrl() {
-  return configuredBaseUrl;
-}
-
 export function setAuthorization(authorization: string | undefined) {
   configuredAuthorization = authorization;
-}
-
-export function getAuthorization() {
-  return configuredAuthorization;
 }
 
 function getBaseUrlOrThrow(errorMessage?: string) {
@@ -313,7 +305,12 @@ export function listProviderAuthMethods(options: { directory?: string; workspace
 
 export function authorizeProviderOAuth(
   providerId: string,
-  payload: { method: number; directory?: string; workspace?: string; inputs?: Record<string, string> },
+  payload: {
+    method: number;
+    directory?: string;
+    workspace?: string;
+    inputs?: Record<string, string>;
+  },
 ) {
   return sendJson(`/provider/${providerId}/oauth/authorize`, 'POST', {
     params: { directory: payload.directory, workspace: payload.workspace },
@@ -390,13 +387,16 @@ export function listPtys(directory?: string) {
   return getJson('/pty', { directory }) as Promise<unknown>;
 }
 
-export function createPty(payload: {
-  directory?: string;
-  cwd?: string;
-  command?: string;
-  args?: string[];
-  title?: string;
-}, request?: RequestOptions) {
+export function createPty(
+  payload: {
+    directory?: string;
+    cwd?: string;
+    command?: string;
+    args?: string[];
+    title?: string;
+  },
+  request?: RequestOptions,
+) {
   return sendJson('/pty', 'POST', {
     params: { directory: payload.directory },
     body: {
