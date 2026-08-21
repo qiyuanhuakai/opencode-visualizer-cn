@@ -4,7 +4,6 @@ import {
   REGION_COLOR_FIELDS,
   REGION_NAMES,
   REGION_VAR_PREFIXES,
-  REGION_THEME_EDITOR_FALLBACKS,
   THEME_COMPONENT_FIELDS,
   type ChipThemeColors,
   type DockThemeColors,
@@ -403,19 +402,19 @@ const BASE_SEMANTIC_THEME_TOKENS = [
   'floating-background-image',
 ] as const satisfies readonly BaseSemanticThemeToken[];
 
-export const FLOATING_THEME_TOKENS = FLOATING_WINDOW_THEME_TYPES.flatMap((type) =>
+const FLOATING_THEME_TOKENS = FLOATING_WINDOW_THEME_TYPES.flatMap((type) =>
   FLOATING_THEME_TOKEN_FIELDS.map(
     (field) => `floating-${type}-${field}` as FloatingThemeToken,
   ),
 ) as readonly FloatingThemeToken[];
 
-export const REGION_THEME_TOKENS = REGION_NAMES.flatMap((regionName) =>
+const REGION_THEME_TOKENS = REGION_NAMES.flatMap((regionName) =>
   REGION_THEME_TOKEN_FIELDS.map(
     (field) => `${REGION_VAR_PREFIXES[regionName]}-${field}` as RegionThemeToken,
   ),
 ) as readonly RegionThemeToken[];
 
-export const COMPONENT_THEME_TOKENS = Object.entries(COMPONENT_THEME_TOKEN_FIELDS).flatMap(
+const COMPONENT_THEME_TOKENS = Object.entries(COMPONENT_THEME_TOKEN_FIELDS).flatMap(
   ([prefix, fields]) => fields.map((field) => `${prefix}-${field}` as ComponentThemeToken),
 ) as readonly ComponentThemeToken[];
 
@@ -1343,16 +1342,12 @@ function normalizeStoredRegions(value: unknown): Record<RegionName, Partial<Regi
   ) as Record<RegionName, Partial<RegionColors>>;
 }
 
-export function createDefaultSemanticThemeTokens(): SemanticTokenMap {
+function createDefaultSemanticThemeTokens(): SemanticTokenMap {
   return { ...DEFAULT_SEMANTIC_TOKENS };
 }
 
 export function semanticTokenCssVariable(token: SemanticThemeToken): string {
   return `--theme-${token}`;
-}
-
-export function regionThemeCssVariable(regionName: RegionName, field: keyof RegionColors): string {
-  return semanticTokenCssVariable(regionThemeToken(regionName, field));
 }
 
 export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null | undefined): SemanticTokenOverrides {
@@ -1897,55 +1892,6 @@ export function migrateLegacyRegionThemeStorage(input: unknown): ThemeStorageV2 
   return regionThemeToStorage(record as RegionThemeConfig);
 }
 
-export function resolveThemeStorageLabel(storage: ThemeStorageV2 | null | undefined): string {
-  if (!storage) return DEFAULT_REGION_THEME.label;
-  if (storage.label) return storage.label;
-  const preset = resolveThemeRegistryTheme(storage.preset ?? null);
-  return preset?.label ?? 'Custom';
-}
-
-export function createThemeStorageFromEditor(overrides: SemanticTokenOverrides, preset: string | null, label?: string): ThemeStorageV2 {
-  const normalizedOverrides = Object.fromEntries(
-    Object.entries(overrides).flatMap(([token, value]) => {
-      if (!SEMANTIC_THEME_TOKENS.includes(token as SemanticThemeToken)) return [];
-      const normalized = normalizeColorValue(value);
-      if (!normalized) return [];
-      return [[token, normalized]];
-    }),
-  ) as SemanticTokenOverrides;
-
-  return {
-    version: 2,
-    preset,
-    label,
-    regions: undefined,
-    overrides: normalizedOverrides,
-  };
-}
-
-export function createEditorFallbackSemanticTokens(): SemanticTokenOverrides {
-  return {
-    'surface-page': REGION_THEME_EDITOR_FALLBACKS.bg,
-    'surface-page-elevated': REGION_THEME_EDITOR_FALLBACKS.controlBg,
-    'surface-panel': REGION_THEME_EDITOR_FALLBACKS.bg,
-    'surface-panel-muted': REGION_THEME_EDITOR_FALLBACKS.controlBg,
-    'surface-panel-elevated': REGION_THEME_EDITOR_FALLBACKS.bg,
-    'surface-panel-hover': REGION_THEME_EDITOR_FALLBACKS.controlBg,
-    'surface-panel-active': REGION_THEME_EDITOR_FALLBACKS.activeBg,
-    'surface-overlay': REGION_THEME_EDITOR_FALLBACKS.activeBg,
-    'text-primary': REGION_THEME_EDITOR_FALLBACKS.text,
-    'text-secondary': REGION_THEME_EDITOR_FALLBACKS.text,
-    'text-muted': REGION_THEME_EDITOR_FALLBACKS.textMuted,
-    'text-inverse': REGION_THEME_EDITOR_FALLBACKS.activeText,
-    'border-default': REGION_THEME_EDITOR_FALLBACKS.border,
-    'border-muted': REGION_THEME_EDITOR_FALLBACKS.border,
-    'border-strong': REGION_THEME_EDITOR_FALLBACKS.border,
-    'border-accent': REGION_THEME_EDITOR_FALLBACKS.accent,
-    'accent-primary': REGION_THEME_EDITOR_FALLBACKS.accent,
-    'accent-soft': REGION_THEME_EDITOR_FALLBACKS.activeBg,
-  };
-}
-
 export function buildRegionCompatibilityCss(): string {
   const rootLines = SEMANTIC_THEME_TOKENS.map((token) => `  ${semanticTokenCssVariable(token)}: ${DEFAULT_SEMANTIC_TOKENS[token]};`);
   const presetBlocks = Object.entries(buildPresetTokenOverrides())
@@ -1965,7 +1911,7 @@ export function buildRegionCompatibilityCss(): string {
   ].join('\n');
 }
 
-export function buildPresetTokenOverrides(): Record<string, SemanticTokenOverrides> {
+function buildPresetTokenOverrides(): Record<string, SemanticTokenOverrides> {
   const result: Record<string, SemanticTokenOverrides> = {};
   for (const entry of listThemeRegistryEntries([])) {
     result[entry.id] = regionThemeToStorage(entry.theme)?.overrides ?? {};
@@ -1987,40 +1933,4 @@ export function createSemanticTokenSnapshot(overrides?: SemanticTokenOverrides):
 
 export function extractSemanticTokenOverrides(storage: ThemeStorageV2 | null | undefined): SemanticTokenOverrides {
   return storage?.overrides ?? {};
-}
-
-export function extractRegionTokenOverrides(
-  theme: Record<RegionName, Partial<RegionColors>> | RegionThemeConfig | null | undefined,
-): Record<string, string> {
-  if (!theme) {
-    return {};
-  }
-
-  const regions = 'regions' in theme ? theme.regions : theme;
-
-  return Object.fromEntries(
-    REGION_NAMES.flatMap((regionName) => {
-      const region = regions[regionName] ?? {};
-      return REGION_COLOR_FIELDS.flatMap((field) => {
-        const value = normalizeColorValue(region[field]);
-        if (!value) return [];
-        return [[regionThemeCssVariable(regionName, field), value]];
-      });
-    }),
-  );
-}
-
-export function isCustomThemeStorage(storage: ThemeStorageV2 | null | undefined): boolean {
-  if (!storage) return false;
-  return storage.preset == null || storage.preset === 'custom';
-}
-
-export function getRegionEditorFields(regionName: RegionName): Array<keyof RegionColors> {
-  if (regionName === 'pageBackground') {
-    return ['bg'];
-  }
-  if (regionName === 'chatCard') {
-    return ['bg', 'border', 'textMuted'];
-  }
-  return [...REGION_COLOR_FIELDS];
 }

@@ -12,7 +12,7 @@ export type ThemeJson = {
   };
 };
 
-export const TOOL_ACCENT_COLORS = {
+const TOOL_ACCENT_COLORS = {
   bash: '#a855f7',
   read: '#60a5fa',
   grep: '#facc15',
