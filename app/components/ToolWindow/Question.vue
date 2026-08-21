@@ -2,7 +2,9 @@
   <div class="question-window">
     <div class="question-header">
       <div class="question-title">{{ $t('toolWindow.question.title') }}</div>
-      <div class="question-type">{{ $t('toolWindow.question.itemCount', { count: request.questions.length }) }}</div>
+      <div class="question-type">
+        {{ $t('toolWindow.question.itemCount', { count: request.questions.length }) }}
+      </div>
     </div>
 
     <div class="question-summary">
@@ -32,7 +34,13 @@
       >
         <div class="section-head">
           <div class="section-title">{{ item.header }}</div>
-          <div class="section-mode">{{ item.multiple ? $t('toolWindow.question.modeMultiple') : $t('toolWindow.question.modeSingle') }}</div>
+          <div class="section-mode">
+            {{
+              item.multiple
+                ? $t('toolWindow.question.modeMultiple')
+                : $t('toolWindow.question.modeSingle')
+            }}
+          </div>
         </div>
         <div class="section-question">{{ item.question }}</div>
 
@@ -104,30 +112,7 @@ import MessageViewer from '../MessageViewer.vue';
 import { StorageKeys, storageGetJSON, storageSetJSON } from '../../utils/storageKeys';
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 import { uniqueBy } from '../../utils/array';
-
-type QuestionOption = {
-  label: string;
-  description: string;
-};
-
-type QuestionInfo = {
-  question: string;
-  header: string;
-  options: QuestionOption[];
-  multiple?: boolean;
-  custom?: boolean;
-  secret?: boolean;
-};
-
-type QuestionRequest = {
-  id: string;
-  sessionID: string;
-  questions: QuestionInfo[];
-  tool?: {
-    messageID: string;
-    callID: string;
-  };
-};
+import type { QuestionRequest } from '../../types/sse';
 
 type QuestionDraft = {
   selectedAnswers: string[][];
@@ -162,12 +147,12 @@ function loadAllDrafts(): Record<string, QuestionDraft> {
 function saveDraft() {
   const all = loadAllDrafts();
   all[props.request.id] = {
-    selectedAnswers: selectedAnswers.value.map((answers, index) => (
-      props.request.questions[index]?.secret ? [] : answers
-    )),
-    customAnswers: customAnswers.value.map((answer, index) => (
-      props.request.questions[index]?.secret ? '' : answer
-    )),
+    selectedAnswers: selectedAnswers.value.map((answers, index) =>
+      props.request.questions[index]?.secret ? [] : answers,
+    ),
+    customAnswers: customAnswers.value.map((answer, index) =>
+      props.request.questions[index]?.secret ? '' : answer,
+    ),
   };
   storageSetJSON(draftStorageKey(), all);
 }
@@ -267,7 +252,7 @@ function buildAnswers() {
     const selected = selectedAnswers.value[index] ?? [];
     const custom = item.custom === false ? '' : (customAnswers.value[index] ?? '').trim();
     const values = custom ? [...selected, custom] : [...selected];
-    return uniqueBy(values, x => x);
+    return uniqueBy(values, (x) => x);
   });
 }
 
@@ -366,7 +351,11 @@ function emitReject() {
   border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 24%, transparent);
   border-radius: 8px;
   padding: 8px;
-  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 55%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 55%,
+    transparent
+  );
   font-size: 12px;
   line-height: 1.4;
 }
@@ -378,7 +367,11 @@ function emitReject() {
   border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 30%, transparent);
   border-radius: 8px;
   padding: 8px;
-  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 70%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 70%,
+    transparent
+  );
 }
 
 .section-head {
@@ -416,7 +409,11 @@ function emitReject() {
 .option-item {
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 34%, transparent);
-  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 60%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 60%,
+    transparent
+  );
   color: var(--theme-text-primary, #d1fae5);
   padding: 6px 8px;
   text-align: left;
@@ -454,7 +451,11 @@ function emitReject() {
   width: 100%;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 40%, transparent);
-  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 78%, transparent);
+  background: color-mix(
+    in srgb,
+    var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 78%,
+    transparent
+  );
   color: var(--theme-text-primary, #d1fae5);
   font-size: 11px;
   padding: 6px 8px;
@@ -487,7 +488,11 @@ function emitReject() {
   border-radius: 8px;
   padding: 6px 10px;
   border: 1px solid color-mix(in srgb, var(--theme-status-success, #86efac) 45%, transparent);
-  background: color-mix(in srgb, var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 90%, #042f2e);
+  background: color-mix(
+    in srgb,
+    var(--theme-surface-success-soft, rgba(34, 197, 94, 0.18)) 90%,
+    #042f2e
+  );
   color: var(--theme-text-primary, #d1fae5);
   font-size: 11px;
   cursor: pointer;
