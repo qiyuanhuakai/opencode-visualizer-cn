@@ -207,9 +207,12 @@ describe('ProviderManagerModal events', () => {
     const sendRuntimeSource = readSource(
       resolve(__dirname, '../composables/useBackendMessageSend.ts'),
     );
+    const codexExecutorSource = readSource(
+      resolve(__dirname, '../composables/backendMessageSend.codex.ts'),
+    );
 
     expect(appSource).toContain(
-      'async function syncCodexActiveProviderModel(providerID: string, modelID: string)',
+      'async function syncCodexActiveProviderModel(\n  providerID: string,\n  modelID: string,\n): Promise<ProviderConfigState | null>',
     );
     expect(appSource).toContain("const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';");
     expect(appSource).toContain('function codexAppServerProviderId(providerID: string)');
@@ -229,15 +232,17 @@ describe('ProviderManagerModal events', () => {
     );
     expect(appSource).not.toContain('configStringValue(');
     expect(appSource).not.toContain("mergeStrategy: 'remove'");
-    expect(sendRuntimeSource).toContain('const startNewCodexThread = selectedCodexProvider');
-    expect(sendRuntimeSource).toContain('forceNewThread: startNewCodexThread');
-    expect(sendRuntimeSource).toContain(
-      'await params.syncCodexActiveProviderModel(selectedCodexProvider, selectedCodexModel);',
+    expect(codexExecutorSource).toContain('const startNewThread = selection.selectedCodexProvider');
+    expect(codexExecutorSource).toContain('forceNewThread: startNewThread');
+    expect(codexExecutorSource).toContain(
+      'providerConfig = await params.syncCodexActiveProviderModel(',
     );
-    expect(sendRuntimeSource).toContain(
-      'if (selectedCodexModelKey) params.codexApi.selectModel(selectedCodexModelKey);',
+    expect(codexExecutorSource).toContain('commitProviderConfig(providerConfig);');
+    expect(codexExecutorSource).toContain(
+      'if (selection.selectedCodexModelKey) params.codexApi.selectModel(selection.selectedCodexModelKey);',
     );
-    expect(sendRuntimeSource).not.toContain('codexApi.selectModel(selectedCodexModel);');
+    expect(sendRuntimeSource).toContain('params.providerConfig.value = providerConfig;');
+    expect(codexExecutorSource).not.toContain('codexApi.selectModel(selectedCodexModel);');
   });
 
   it('renders all providers as compact two-column rows instead of card grid items', () => {
