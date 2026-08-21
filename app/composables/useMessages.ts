@@ -665,6 +665,10 @@ function tryLoadFromCache(identity: MessageCacheIdentity): boolean {
   return true;
 }
 
+function clearSessionCache() {
+  sessionCache.clear();
+}
+
 export function useMessages() {
   return {
     messages: readonly(messages),
@@ -696,6 +700,7 @@ export function useMessages() {
     reset,
     saveSessionState,
     tryLoadFromCache,
+    clearSessionCache,
     dispose,
     bindScope,
   };

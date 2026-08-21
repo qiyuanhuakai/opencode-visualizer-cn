@@ -39,7 +39,9 @@ export function useBackendSessionReload(params: {
   codexApi: CodexApiLike;
   codexHistory: Ref<unknown[]>;
   codexReapplyBackfill: () => void;
-  fetchRootSessionHistory: (rootSessionId: string) => Promise<number>;
+  fetchRootSessionHistory: (
+    rootSessionId: string,
+  ) => Promise<{ requestId: number; loaded: boolean }>;
   waitForPendingRenders: () => Promise<void>;
   reserveRootHistoryRequestId: () => number;
   scheduleDescendantSessionHistoryHydration: (
@@ -164,20 +166,20 @@ export function useBackendSessionReload(params: {
       if (!cacheHit) {
         params.hydratedDescendantSessionIds.delete(sessionId);
         params.isLoadingHistory.value = true;
-        let rootHistoryRequestId = 0;
         try {
-          rootHistoryRequestId = await params.fetchRootSessionHistory(sessionId);
-          if (reloadRequestId !== params.sessionReloadRequestId.value) return;
-          if (loadedMessageCacheContext === nextCacheContext && nextCacheContext) {
-            nextCacheContext.cacheable = true;
+          const rootHistory = await params.fetchRootSessionHistory(sessionId);
+          if (rootHistory.loaded && reloadRequestId === params.sessionReloadRequestId.value) {
+            if (loadedMessageCacheContext === nextCacheContext && nextCacheContext) {
+              nextCacheContext.cacheable = true;
+            }
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+            await params.waitForPendingRenders();
+            await hydrateAndScheduleDescendantHistory(
+              sessionId,
+              rootHistory.requestId,
+              reloadRequestId,
+            );
           }
-          await new Promise((resolve) => requestAnimationFrame(resolve));
-          await params.waitForPendingRenders();
-          await hydrateAndScheduleDescendantHistory(
-            sessionId,
-            rootHistoryRequestId,
-            reloadRequestId,
-          );
         } catch {
           // Keep partial history if hydration/rendering fails.
         } finally {
@@ -210,7 +212,12 @@ export function useBackendSessionReload(params: {
     params.focusInput();
   }
 
+  function invalidateMessageCacheContext() {
+    loadedMessageCacheContext = null;
+  }
+
   return {
     reloadSelectedSessionState,
+    invalidateMessageCacheContext,
   };
 }

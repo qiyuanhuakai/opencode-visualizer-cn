@@ -15,7 +15,7 @@ describe('useBackendSessionReload', () => {
     const hydrateReferencedSubagents = vi
       .fn()
       .mockRejectedValue(new Error('child hydration failed'));
-    const fetchRootSessionHistory = vi.fn().mockResolvedValue(42);
+    const fetchRootSessionHistory = vi.fn().mockResolvedValue({ requestId: 42, loaded: true });
     const reportError = vi.fn();
     const msg = {
       saveSessionState: vi.fn(),
@@ -84,6 +84,14 @@ describe('useBackendSessionReload', () => {
         namespace: 'opencode:primary:/repo',
         sessionId: 'session-1',
       });
+
+      fetchRootSessionHistory.mockResolvedValue({ requestId: 43, loaded: false });
+      await reloadSelectedSessionState('session-failed', 'session-2');
+      msg.saveSessionState.mockClear();
+
+      await reloadSelectedSessionState('session-3', 'session-failed');
+
+      expect(msg.saveSessionState).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }

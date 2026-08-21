@@ -5211,8 +5211,9 @@ async function fetchHistory(
 }
 
 async function fetchRootSessionHistory(rootSessionId: string) {
-  await fetchHistory(rootSessionId);
-  return primaryHistoryRequestId;
+  const requestId = ++primaryHistoryRequestId;
+  const loaded = await fetchHistory(rootSessionId, false, requestId);
+  return { requestId, loaded };
 }
 
 function reserveRootHistoryRequestId() {
@@ -5938,7 +5939,6 @@ async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {})
       void waitForTerminalFontsReady().then(() => {
         if (shellSessionsByPtyId.get(pty.id)?.terminal !== terminal) {
           terminal.dispose();
-          fw.close(key);
           return;
         }
         const host = toolWindowCanvasEl.value?.querySelector(
@@ -7431,6 +7431,7 @@ const deltaAccumulator = useDeltaAccumulator();
 deltaAccumulator.listen(ge);
 const sessionScope = ge.session(selectedSessionId, sessionParentRecord);
 const msg = useMessages();
+const messageCacheAuthGeneration = ref(0);
 msg.bindScope(sessionScope);
 reasoning.bindScope(sessionScope);
 subagentWindows.bindScope(sessionScope);
@@ -7836,7 +7837,11 @@ const backendSessionReload = useBackendSessionReload({
   activeBackendKind,
   activeDirectory,
   getMessageCacheNamespace: () =>
-    JSON.stringify([currentBackendIdentity(), activeDirectory.value]),
+    JSON.stringify([
+      currentBackendIdentity(),
+      activeDirectory.value,
+      messageCacheAuthGeneration.value,
+    ]),
   uiInitState,
   isBootstrapping,
   isLoadingHistory,
@@ -7872,6 +7877,20 @@ const backendSessionReload = useBackendSessionReload({
   fetchPendingQuestions,
   focusInput,
 });
+
+watch(
+  [
+    () => credentials.authHeader.value,
+    () => credentials.codexBridgeToken.value,
+    () => credentials.acpBridgeToken.value,
+  ],
+  () => {
+    messageCacheAuthGeneration.value += 1;
+    msg.clearSessionCache();
+    backendSessionReload.invalidateMessageCacheContext();
+  },
+  { flush: 'sync' },
+);
 
 async function reloadSelectedSessionAndAcpOptions(newId?: string, oldId?: string) {
   await backendSessionReload.reloadSelectedSessionState(newId, oldId);
