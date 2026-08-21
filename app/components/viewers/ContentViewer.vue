@@ -67,7 +67,6 @@
         v-else
         :path="path"
         :absolute-path="absolutePath"
-        :raw-html="undefined"
         :file-content="effectiveFileContent ?? ''"
         :lang="lang"
         :gutter-mode="gutterMode"
@@ -99,7 +98,6 @@ type ModeId = 'rendered' | 'source' | 'edit' | 'image' | 'hex' | 'info' | 'archi
 const props = defineProps<{
   path?: string;
   absolutePath?: string;
-  rawHtml?: string;
   fileContent?: string;
   binaryBase64?: string;
   lang?: string;
