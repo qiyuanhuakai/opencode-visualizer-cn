@@ -1,11 +1,12 @@
 import { nextTick, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
+import type { MessageCacheIdentity } from './useMessages';
 
 type MessageStoreLike = {
-  saveSessionState: (sessionId: string) => void;
+  saveSessionState: (identity: MessageCacheIdentity) => void;
   reset: () => void;
   loadHistory: (history: unknown[]) => void;
-  tryLoadFromCache: (sessionId: string) => boolean;
+  tryLoadFromCache: (identity: MessageCacheIdentity) => boolean;
 };
 
 type CodexApiLike = {
@@ -13,9 +14,16 @@ type CodexApiLike = {
   selectThread: (sessionId: string) => Promise<unknown>;
 };
 
+type LoadedMessageCacheContext = {
+  backend: BackendKind;
+  namespace: string;
+  cacheable: boolean;
+};
+
 export function useBackendSessionReload(params: {
   activeBackendKind: Ref<BackendKind>;
   activeDirectory: Ref<string>;
+  getMessageCacheNamespace: () => string;
   uiInitState: Ref<'loading' | 'ready' | 'error' | 'login'>;
   isBootstrapping: Ref<boolean>;
   isLoadingHistory: Ref<boolean>;
@@ -51,8 +59,18 @@ export function useBackendSessionReload(params: {
   fetchPendingQuestions: (directory?: string) => Promise<void> | void;
   focusInput: () => void;
 }) {
+  let loadedMessageCacheContext: LoadedMessageCacheContext | null = null;
+
   async function reloadSelectedSessionState(newId?: string, oldId?: string) {
     const reloadRequestId = ++params.sessionReloadRequestId.value;
+    const previousCacheContext = loadedMessageCacheContext;
+    const nextCacheContext: LoadedMessageCacheContext | null = newId
+      ? {
+          backend: params.activeBackendKind.value,
+          namespace: params.getMessageCacheNamespace(),
+          cacheable: false,
+        }
+      : null;
     if (newId && params.isBootstrapping.value && !params.activeDirectory.value) {
       params.deferredSessionReloadId.value = newId;
       return;
@@ -61,7 +79,14 @@ export function useBackendSessionReload(params: {
 
     params.fwCloseAll();
     await nextTick();
-    if (oldId) params.msg.saveSessionState(oldId);
+    if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+    if (oldId && previousCacheContext?.cacheable && previousCacheContext.backend !== 'codex') {
+      params.msg.saveSessionState({
+        namespace: previousCacheContext.namespace,
+        sessionId: oldId,
+      });
+    }
+    loadedMessageCacheContext = nextCacheContext;
 
     if (newId) {
       const sessionId = newId;
@@ -103,7 +128,13 @@ export function useBackendSessionReload(params: {
       params.clearRetryStatus();
       await nextTick();
 
-      const cacheHit = params.msg.tryLoadFromCache(sessionId);
+      const cacheHit = params.msg.tryLoadFromCache({
+        namespace: nextCacheContext?.namespace ?? params.getMessageCacheNamespace(),
+        sessionId,
+      });
+      if (cacheHit && loadedMessageCacheContext === nextCacheContext && nextCacheContext) {
+        nextCacheContext.cacheable = true;
+      }
       const descendantsHydrated = params.hydratedDescendantSessionIds.has(sessionId);
       if (!cacheHit) {
         params.hydratedDescendantSessionIds.delete(sessionId);
@@ -117,6 +148,9 @@ export function useBackendSessionReload(params: {
             ? await params.hydrateReferencedSubagents(sessionId, reloadRequestId)
             : undefined;
           if (reloadRequestId === params.sessionReloadRequestId.value) {
+            if (loadedMessageCacheContext === nextCacheContext && nextCacheContext) {
+              nextCacheContext.cacheable = true;
+            }
             if (referencedSessionIds) {
               params.scheduleDescendantSessionHistoryHydration(
                 sessionId,

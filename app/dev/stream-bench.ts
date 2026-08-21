@@ -362,7 +362,7 @@ function canonicalize(html: string): string {
 // Warmup (excluded from measurements)
 // ---------------------------------------------------------------------------
 async function warmupLegacyPool() {
-  // The pool has min(8, max(4, cores)) workers. Warm every worker with
+  // The pool has min(4, max(2, cores)) workers. Warm every worker with
   // REALISTIC ~150-line code, 3 rounds each: a tiny snippet compiles shiki
   // but leaves V8's optimizing tier cold, which confounds per-chunk latency
   // (observed: cold workers mask the code-size growth curve). Codes are

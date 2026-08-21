@@ -19,11 +19,56 @@ export function createAcpTerminalManager(options = {}) {
   const terminals = new Map();
 
   function appendOutput(entry, chunk) {
-    entry.output = Buffer.concat([entry.output, Buffer.from(chunk)]);
-    if (entry.outputByteLimit !== null && entry.output.length > entry.outputByteLimit) {
-      entry.output = entry.output.subarray(entry.output.length - entry.outputByteLimit);
+    const buffer = Buffer.from(chunk);
+    if (buffer.length === 0) return;
+    if (entry.outputByteLimit === null) {
+      entry.outputChunks.push(buffer);
+      entry.outputByteLength += buffer.length;
+      return;
+    }
+    if (buffer.length >= entry.outputByteLimit) {
+      entry.outputChunks = entry.outputByteLimit === 0
+        ? []
+        : [buffer.subarray(buffer.length - entry.outputByteLimit)];
+      entry.outputByteLength = entry.outputByteLimit;
+      entry.truncated = true;
+      return;
+    }
+    entry.outputChunks.push(buffer);
+    entry.outputByteLength += buffer.length;
+    while (entry.outputByteLength > entry.outputByteLimit) {
+      const first = entry.outputChunks[0];
+      const remove = Math.min(first.length, entry.outputByteLength - entry.outputByteLimit);
+      if (remove === first.length) entry.outputChunks.shift();
+      else entry.outputChunks[0] = first.subarray(remove);
+      entry.outputByteLength -= remove;
       entry.truncated = true;
     }
+  }
+
+  function utf8SequenceWidth(byte) {
+    if (byte <= 0x7f) return 1;
+    if (byte >= 0xc2 && byte <= 0xdf) return 2;
+    if (byte >= 0xe0 && byte <= 0xef) return 3;
+    if (byte >= 0xf0 && byte <= 0xf4) return 4;
+    return 0;
+  }
+
+  function hasCompleteUtf8Sequence(buffer, start, width) {
+    if (start + width > buffer.length) return false;
+    return buffer
+      .subarray(start + 1, start + width)
+      .every((byte) => (byte & 0xc0) === 0x80);
+  }
+
+  function utf8SafeTail(buffer) {
+    for (let start = 0; start < buffer.length; start += 1) {
+      const width = utf8SequenceWidth(buffer[start]);
+      if (width > 0 && hasCompleteUtf8Sequence(buffer, start, width)) {
+        return buffer.subarray(start);
+      }
+    }
+    return Buffer.alloc(0);
   }
 
   async function create(params) {
@@ -52,7 +97,8 @@ export function createAcpTerminalManager(options = {}) {
     });
     const entry = {
       child,
-      output: Buffer.alloc(0),
+      outputChunks: [],
+      outputByteLength: 0,
       outputByteLimit,
       truncated: false,
       exitStatus: null,
@@ -71,6 +117,9 @@ export function createAcpTerminalManager(options = {}) {
     if (!launched) throw new Error('ACP terminal failed to start.');
     child.once('exit', (exitCode, signal) => {
       entry.exitStatus = { exitCode, signal };
+    });
+    child.once('close', (exitCode, signal) => {
+      entry.exitStatus ??= { exitCode, signal };
       resolveExit(entry.exitStatus);
     });
     return { terminalId };
@@ -85,7 +134,7 @@ export function createAcpTerminalManager(options = {}) {
   function output(terminalId) {
     const entry = requireTerminal(terminalId);
     return {
-      output: entry.output.toString('utf8'),
+      output: utf8SafeTail(Buffer.concat(entry.outputChunks)).toString('utf8'),
       truncated: entry.truncated,
       ...(entry.exitStatus ? { exitStatus: entry.exitStatus } : {}),
     };

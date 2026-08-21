@@ -408,6 +408,63 @@ describe('useMessages getDiffs', () => {
     expect(postTask.mock.calls[0]?.[1]).toEqual({ priority: 'background' });
   });
 
+  it('does not retain a session larger than the warm-cache byte budget', () => {
+    const messages = useMessages();
+    messages.loadHistory([{
+      info: {
+        id: 'oversized-cache-message',
+        sessionID: 'oversized-cache-session',
+        role: 'user',
+        time: { created: 1 },
+        agent: 'build',
+        model: { providerID: 'test', modelID: 'test-model' },
+      },
+      parts: [{
+        id: 'oversized-cache-part',
+        sessionID: 'oversized-cache-session',
+        messageID: 'oversized-cache-message',
+        type: 'text',
+        text: 'x'.repeat(17 * 1024 * 1024),
+        time: { start: 1, end: 1 },
+      }],
+    }]);
+
+    messages.saveSessionState({ namespace: 'opencode:a', sessionId: 'oversized-cache-session' });
+    messages.reset();
+
+    expect(messages.tryLoadFromCache({ namespace: 'opencode:a', sessionId: 'oversized-cache-session' })).toBe(false);
+  });
+
+  it('isolates warm entries by backend and directory identity', () => {
+    const messages = useMessages();
+    messages.loadHistory([{
+      info: {
+        id: 'scoped-cache-message',
+        sessionID: 'scoped-cache-session',
+        role: 'user',
+        time: { created: 1 },
+        agent: 'build',
+        model: { providerID: 'test', modelID: 'test-model' },
+      },
+      parts: [],
+    }]);
+
+    messages.saveSessionState({
+      namespace: 'opencode:endpoint-a:/repo-a',
+      sessionId: 'scoped-cache-session',
+    });
+    messages.reset();
+
+    expect(messages.tryLoadFromCache({
+      namespace: 'opencode:endpoint-b:/repo-a',
+      sessionId: 'scoped-cache-session',
+    })).toBe(false);
+    expect(messages.tryLoadFromCache({
+      namespace: 'opencode:endpoint-a:/repo-a',
+      sessionId: 'scoped-cache-session',
+    })).toBe(true);
+  });
+
   it('publishes each history chunk before yielding to the next browser task', async () => {
     const messages = useMessages();
     expect(messages.roots.value).toHaveLength(0);

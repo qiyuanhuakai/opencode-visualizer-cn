@@ -133,4 +133,42 @@ describe('acpTerminalManager', () => {
       await manager.stopAll();
     }
   });
+
+  it('keeps outputByteLimit tails valid UTF-8 when a chunk ends mid-character', async () => {
+    const child = new TestChild();
+    const manager = createAcpTerminalManager({ spawnProcess: () => child });
+    const creation = manager.create({ command: 'utf8-terminal', outputByteLimit: 3 });
+    child.emit('spawn');
+    const { terminalId } = await creation;
+
+    child.stdout.emit('data', Buffer.from('😊b'));
+
+    expect(manager.output(terminalId)).toMatchObject({ output: 'b', truncated: true });
+  });
+
+  it('waits for close before completing after exit so late output remains readable', async () => {
+    const child = new TestChild();
+    const manager = createAcpTerminalManager({ spawnProcess: () => child });
+    const creation = manager.create({ command: 'draining-terminal' });
+    child.emit('spawn');
+    const { terminalId } = await creation;
+
+    child.stdout.emit('data', Buffer.from('before'));
+    let settled = false;
+    const waiting = manager.waitForExit(terminalId).then(() => { settled = true; });
+    child.emit('exit', 0, null);
+    child.stdout.emit('data', Buffer.from('-after'));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(manager.output(terminalId)).toMatchObject({ output: 'before-after' });
+
+    child.emit('close', 0, null);
+    await waiting;
+    expect(manager.output(terminalId)).toMatchObject({
+      output: 'before-after',
+      exitStatus: { exitCode: 0, signal: null },
+    });
+  });
 });

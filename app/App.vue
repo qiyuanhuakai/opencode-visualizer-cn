@@ -747,6 +747,7 @@ import {
   closeTrackedLocalFileSession,
 } from './utils/localFileSessionTracking';
 import { createKeyedTaskQueue } from './utils/keyedTaskQueue';
+import { createPendingPtyCreateRegistry, isCurrentPtySocket } from './utils/ptyLifecycle';
 
 const { t } = useI18n();
 
@@ -1534,6 +1535,7 @@ const composerDraftTabId =
     ? crypto.randomUUID()
     : `tab-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const shellSessionsByPtyId = new Map<string, ShellSession>();
+const pendingShellWindowCreates = createPendingPtyCreateRegistry<void>();
 const pendingShellFits = new Set<string>();
 const shellExitWaiters = new Map<string, (exitCode: number) => void>();
 const shellExitCallbacks = new Map<string, (exitCode: number) => void | Promise<void>>();
@@ -5870,72 +5872,83 @@ type ShellWindowOptions = {
 
 async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {}) {
   if (shellSessionsByPtyId.has(pty.id)) return;
-  if (options.onExit) shellExitCallbacks.set(pty.id, options.onExit);
-  const key = `shell:${pty.id}`;
-  if (options.minWidth !== undefined || options.minHeight !== undefined) {
-    shellWindowMinimums.set(key, {
-      width: options.minWidth ?? 0,
-      height: options.minHeight ?? 0,
+  await pendingShellWindowCreates.getOrCreate(pty.id, async (isCurrent) => {
+    if (shellSessionsByPtyId.has(pty.id)) return;
+    const key = `shell:${pty.id}`;
+
+    const { Terminal } = await import('@xterm/xterm');
+    if (!isCurrent()) return;
+
+    if (options.onExit) shellExitCallbacks.set(pty.id, options.onExit);
+    if (options.minWidth !== undefined || options.minHeight !== undefined) {
+      shellWindowMinimums.set(key, {
+        width: options.minWidth ?? 0,
+        height: options.minHeight ?? 0,
+      });
+    }
+    const { width, height } = getTerminalWindowSize();
+    const randomPosition = getRandomWindowPosition({ width, height });
+
+    fw.open(key, {
+      component: options.component ?? ShellContent,
+      props: options.props ?? { shellId: pty.id },
+      closable: true,
+      resizable: true,
+      scroll: 'none',
+      title:
+        options.title ??
+        (pty.title === 'One-shot PTY'
+          ? t('app.windowTitles.oneShotPty')
+          : pty.title || t('app.windowTitles.shell')),
+      color: options.color,
+      width,
+      height,
+      x: randomPosition.x,
+      y: randomPosition.y,
+      expiry: Infinity,
+      onResize: () => scheduleShellFit(pty.id),
     });
-  }
-  const { width, height } = getTerminalWindowSize();
-  const randomPosition = getRandomWindowPosition({ width, height });
-  fw.open(key, {
-    component: options.component ?? ShellContent,
-    props: options.props ?? { shellId: pty.id },
-    closable: true,
-    resizable: true,
-    scroll: 'none',
-    title:
-      options.title ??
-      (pty.title === 'One-shot PTY'
-        ? t('app.windowTitles.oneShotPty')
-        : pty.title || t('app.windowTitles.shell')),
-    color: options.color,
-    width,
-    height,
-    x: randomPosition.x,
-    y: randomPosition.y,
-    expiry: Infinity,
-    onResize: () => scheduleShellFit(pty.id),
-  });
 
-  // Dynamic import of Terminal for code splitting
-  const { Terminal } = await import('@xterm/xterm');
-
-  const terminal = new Terminal({
-    cols: TERM_COLUMNS,
-    rows: TERM_ROWS,
-    fontFamily: terminalFontFamily.value,
-    fontSize: TERM_FONT_SIZE_PX.value,
-    lineHeight: TERM_LINE_HEIGHT,
-    cursorBlink: true,
-    allowTransparency: true,
-    theme: {
-      background: TRANSPARENT_TERMINAL_BACKGROUND,
-      foreground: '#e2e8f0',
-      cursor: '#e2e8f0',
-      selectionBackground: 'rgba(148, 163, 184, 0.3)',
-    },
-  });
-  shellSessionsByPtyId.set(pty.id, {
-    pty,
-    terminal,
-  });
-  // Connect WebSocket immediately so the server's buffer replay arrives
-  // before a fast-exiting command deletes the session.
-  // xterm.js buffers write() calls made before open(), so data is not lost.
-  connectShellSocket(pty.id);
-  nextTick(() => {
-    void waitForTerminalFontsReady().then(() => {
-      const host = toolWindowCanvasEl.value?.querySelector(
-        `[data-shell-id="${pty.id}"]`,
-      ) as HTMLElement | null;
-      if (!host) return;
-      terminal.open(host);
-      // Wait for first paint so xterm has rendered cell dimensions
-      requestAnimationFrame(() => {
-        resizeWindowToFitTerminal(key, terminal, host);
+    const terminal = new Terminal({
+      cols: TERM_COLUMNS,
+      rows: TERM_ROWS,
+      fontFamily: terminalFontFamily.value,
+      fontSize: TERM_FONT_SIZE_PX.value,
+      lineHeight: TERM_LINE_HEIGHT,
+      cursorBlink: true,
+      allowTransparency: true,
+      theme: {
+        background: TRANSPARENT_TERMINAL_BACKGROUND,
+        foreground: '#e2e8f0',
+        cursor: '#e2e8f0',
+        selectionBackground: 'rgba(148, 163, 184, 0.3)',
+      },
+    });
+    if (!isCurrent()) {
+      terminal.dispose();
+      fw.close(key);
+      return;
+    }
+    shellSessionsByPtyId.set(pty.id, {
+      pty,
+      terminal,
+    });
+    connectShellSocket(pty.id);
+    nextTick(() => {
+      void waitForTerminalFontsReady().then(() => {
+        if (shellSessionsByPtyId.get(pty.id)?.terminal !== terminal) {
+          terminal.dispose();
+          fw.close(key);
+          return;
+        }
+        const host = toolWindowCanvasEl.value?.querySelector(
+          `[data-shell-id="${pty.id}"]`,
+        ) as HTMLElement | null;
+        if (!host) return;
+        terminal.open(host);
+        requestAnimationFrame(() => {
+          resizeWindowToFitTerminal(key, terminal, host);
+        });
       });
     });
   });
@@ -6107,8 +6120,11 @@ function connectShellSocket(ptyId: string) {
   const url = buildPtyWsUrl(`/pty/${ptyId}/connect`, directory);
   const socket = new WebSocket(url);
   session.socket = socket;
+  const isCurrentSocket = () =>
+    isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
   socket.binaryType = 'arraybuffer';
   socket.addEventListener('message', (event) => {
+    if (!isCurrentSocket()) return;
     if (event.data instanceof ArrayBuffer) {
       const bytes = new Uint8Array(event.data);
       if (bytes.length > 0 && bytes[0] === 0) {
@@ -6170,6 +6186,7 @@ function connectShellSocket(ptyId: string) {
     }
   });
   socket.addEventListener('open', () => {
+    if (!isCurrentSocket()) return;
     // focus() requires the terminal to be mounted; defer if not yet attached.
     if (session.terminal.element) {
       session.terminal.focus();
@@ -6178,9 +6195,11 @@ function connectShellSocket(ptyId: string) {
     }
   });
   session.terminal.onData((data) => {
+    if (!isCurrentSocket()) return;
     if (socket.readyState === WebSocket.OPEN) socket.send(data);
   });
   socket.addEventListener('close', () => {
+    if (!isCurrentSocket()) return;
     if (session.exiting) {
       setTimeout(() => removeShellWindow(ptyId), SHELL_LINGER_MS);
       return;
@@ -6198,6 +6217,7 @@ function connectShellSocket(ptyId: string) {
 }
 
 function removeShellWindow(ptyId: string, options?: { kill?: boolean }) {
+  pendingShellWindowCreates.invalidate(ptyId);
   const session = shellSessionsByPtyId.get(ptyId);
   if (!session) return;
   pendingShellFits.delete(ptyId);
@@ -7815,6 +7835,8 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
 const backendSessionReload = useBackendSessionReload({
   activeBackendKind,
   activeDirectory,
+  getMessageCacheNamespace: () =>
+    JSON.stringify([currentBackendIdentity(), activeDirectory.value]),
   uiInitState,
   isBootstrapping,
   isLoadingHistory,
@@ -9606,6 +9628,7 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  pendingShellWindowCreates.invalidateAll();
   for (const pending of Array.from(pendingReferencedSubagentHydrations.values())) {
     pending.resolve(undefined);
   }

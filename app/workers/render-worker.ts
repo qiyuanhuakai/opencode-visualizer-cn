@@ -17,6 +17,7 @@ import {
   isStreamWorkerRequest,
   type StreamWorkerRequest,
 } from './streamHandler';
+import { ByteWeightedLruCache } from '../utils/byteWeightedLru';
 
 type RenderRequest = {
   id: string;
@@ -86,17 +87,14 @@ type HighlighterContext = {
 
 const highlighterContexts = new Map<string, Promise<HighlighterContext>>();
 
-const HIGHLIGHT_CACHE_MAX = 512;
-let codeHtmlCache = new Map<string, string>();
-let mdHighlightCache = new Map<string, string>();
+const HIGHLIGHT_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+const highlightCache = new ByteWeightedLruCache<string, string>({
+  maxBytes: HIGHLIGHT_CACHE_MAX_BYTES,
+  weigh: (key, html) => (key.length + html.length) * 2,
+});
 
-function pruneHighlightCache(cache: Map<string, string>) {
-  if (cache.size <= HIGHLIGHT_CACHE_MAX) return;
-  const target = Math.floor(HIGHLIGHT_CACHE_MAX / 2);
-  for (const key of cache.keys()) {
-    if (cache.size <= target) break;
-    cache.delete(key);
-  }
+if (import.meta.env.MODE === 'test') {
+  Reflect.set(globalThis, '__visRenderWorkerCacheForTests', highlightCache);
 }
 
 function getHighlighter(theme: string) {
@@ -118,7 +116,7 @@ function safeCodeToHtml(
   theme: string,
 ): string {
   const cacheKey = `${theme}\0${lang}\0${code}`;
-  const cached = codeHtmlCache.get(cacheKey);
+  const cached = highlightCache.get(`code:${cacheKey}`);
   if (cached !== undefined) return cached;
   let result: string;
   try {
@@ -126,8 +124,7 @@ function safeCodeToHtml(
   } catch {
     result = highlighter.codeToHtml(code, { lang: 'text', theme });
   }
-  codeHtmlCache.set(cacheKey, result);
-  pruneHighlightCache(codeHtmlCache);
+  highlightCache.set(`code:${cacheKey}`, result);
   return result;
 }
 
@@ -746,7 +743,7 @@ function getMarkdownIt(highlighter: Highlighter, theme: string) {
     const shikiHighlight = cachedMd.options.highlight;
     cachedMd.options.highlight = function (code, lang, attrs) {
       const cacheKey = `${theme}\0${lang}\0${code}`;
-      const cached = mdHighlightCache.get(cacheKey);
+      const cached = highlightCache.get(`markdown:${cacheKey}`);
       if (cached !== undefined) return cached;
       let result: string;
       try {
@@ -754,8 +751,7 @@ function getMarkdownIt(highlighter: Highlighter, theme: string) {
       } catch {
         result = safeCodeToHtml(highlighter, code, lang || 'text', theme);
       }
-      mdHighlightCache.set(cacheKey, result);
-      pruneHighlightCache(mdHighlightCache);
+      highlightCache.set(`markdown:${cacheKey}`, result);
       return result;
     };
   }
