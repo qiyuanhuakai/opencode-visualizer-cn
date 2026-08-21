@@ -88,5 +88,3 @@ export function useServerState() {
     setNotificationShowHandler,
   };
 }
-
-export type UseServerState = ReturnType<typeof useServerState>;

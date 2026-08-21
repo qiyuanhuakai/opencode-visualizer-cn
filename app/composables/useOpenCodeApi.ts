@@ -74,10 +74,7 @@ function hasSandbox(project: ProjectState | undefined, directory: string): boole
   return Boolean(project.sandboxes[directory]);
 }
 
-export function useOpenCodeApi(
-  projects: ProjectsMap | Ref<ProjectsMap>,
-  translate?: TranslateFn,
-) {
+export function useOpenCodeApi(projects: ProjectsMap | Ref<ProjectsMap>, translate?: TranslateFn) {
   const t = translate ?? ((key: string) => key);
   const pendingCount = ref(0);
   const pending = computed(() => pendingCount.value > 0);
@@ -216,7 +213,11 @@ export function useOpenCodeApi(
     requireProjectId(payload.projectId);
     const pinnedAt = payload.pinnedAt ?? Date.now();
     const session = (await withPending(() =>
-      getBackend().updateSession(payload.sessionId, { time: { pinned: pinnedAt } }, payload.directory),
+      getBackend().updateSession(
+        payload.sessionId,
+        { time: { pinned: pinnedAt } },
+        payload.directory,
+      ),
     )) as SessionInfo;
     if (!session?.id) {
       throw new Error(t('errors.sessionPinInvalidResponse'));
@@ -382,13 +383,13 @@ export function useOpenCodeApi(
       const roots = sessions
         .filter((session) => !session.parentID && !session.time?.archived)
         .slice()
-        .sort(
-          (a, b) => {
-            const pinDiff = (b.time?.pinned ?? 0) - (a.time?.pinned ?? 0);
-            if (pinDiff !== 0) return pinDiff;
-            return (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0);
-          },
-        );
+        .sort((a, b) => {
+          const pinDiff = (b.time?.pinned ?? 0) - (a.time?.pinned ?? 0);
+          if (pinDiff !== 0) return pinDiff;
+          return (
+            (b.time?.updated ?? b.time?.created ?? 0) - (a.time?.updated ?? a.time?.created ?? 0)
+          );
+        });
       const preferred = roots[0];
       if (preferred) {
         return {
@@ -427,5 +428,3 @@ export function useOpenCodeApi(
     openProject,
   };
 }
-
-export type UseOpenCodeApi = ReturnType<typeof useOpenCodeApi>;
