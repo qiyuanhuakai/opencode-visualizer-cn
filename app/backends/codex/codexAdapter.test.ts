@@ -6,6 +6,7 @@ import {
   normalizeCodexMcpServerInfo,
   normalizeCodexStatus,
 } from './codexAdapter';
+import { isUnmaterializedThreadError } from './errors';
 
 type ListenerMap = {
   open: Array<() => void>;
@@ -78,6 +79,19 @@ async function waitForSent(socket: MockWebSocket, count: number) {
 }
 
 describe('CodexAdapter', () => {
+  it.each([
+    'thread is not materialized',
+    'includeTurns is unavailable for this thread',
+    'no rollout found for thread id thr_1',
+  ])('recognizes recoverable unmaterialized-thread error: %s', (message) => {
+    expect(isUnmaterializedThreadError(new Error(message))).toBe(true);
+  });
+
+  it('does not classify unrelated or non-error values as unmaterialized-thread failures', () => {
+    expect(isUnmaterializedThreadError('network unavailable')).toBe(false);
+    expect(isUnmaterializedThreadError({ message: 'no rollout found' })).toBe(false);
+  });
+
   it('selects only the weekly rate-limit window when a removed short window is still present', () => {
     const weekly = {
       usedPercent: 42,
@@ -85,15 +99,17 @@ describe('CodexAdapter', () => {
       resetsAt: 1_730_947_200,
     };
 
-    expect(getCodexWeeklyRateLimitWindow({
-      limitId: 'codex',
-      primary: {
-        usedPercent: 25,
-        windowDurationMins: 300,
-        resetsAt: 1_730_900_000,
-      },
-      secondary: weekly,
-    })).toEqual(weekly);
+    expect(
+      getCodexWeeklyRateLimitWindow({
+        limitId: 'codex',
+        primary: {
+          usedPercent: 25,
+          windowDurationMins: 300,
+          resetsAt: 1_730_900_000,
+        },
+        secondary: weekly,
+      }),
+    ).toEqual(weekly);
   });
 
   it('does not label a longer rate-limit window as weekly', () => {
@@ -103,15 +119,17 @@ describe('CodexAdapter', () => {
       resetsAt: 1_730_947_200,
     };
 
-    expect(getCodexWeeklyRateLimitWindow({
-      limitId: 'codex',
-      primary: {
-        usedPercent: 7,
-        windowDurationMins: 43_200,
-        resetsAt: 1_733_539_200,
-      },
-      secondary: weekly,
-    })).toEqual(weekly);
+    expect(
+      getCodexWeeklyRateLimitWindow({
+        limitId: 'codex',
+        primary: {
+          usedPercent: 7,
+          windowDurationMins: 43_200,
+          resetsAt: 1_733_539_200,
+        },
+        secondary: weekly,
+      }),
+    ).toEqual(weekly);
   });
 
   it('initializes with client metadata and sends initialized notification', async () => {
@@ -156,10 +174,12 @@ describe('CodexAdapter', () => {
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
     await waitForSent(socket, 1);
-    socket.emitMessage(JSON.stringify({
-      id: 1,
-      error: { code: -32600, message: 'Already initialized' },
-    }));
+    socket.emitMessage(
+      JSON.stringify({
+        id: 1,
+        error: { code: -32600, message: 'Already initialized' },
+      }),
+    );
     await expect(initialized).resolves.toEqual({});
 
     const list = adapter.listThreads({ limit: 1 });
@@ -270,7 +290,11 @@ describe('CodexAdapter', () => {
       webSocketCtor: MockWebSocket,
     });
 
-    const prompt = adapter.sendPrompt({ text: 'Summarize this repo.', cwd: '/repo', model: 'gpt-5.4' });
+    const prompt = adapter.sendPrompt({
+      text: 'Summarize this repo.',
+      cwd: '/repo',
+      model: 'gpt-5.4',
+    });
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
     await waitForSent(socket, 1);
@@ -332,7 +356,8 @@ describe('CodexAdapter', () => {
       thread: undefined,
       turn: { id: 'turn_collab', status: 'inProgress' },
     });
-    const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> }).params;
+    const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> })
+      .params;
     expect(sentParams).toMatchObject({
       threadId: 'thr_collab',
       collaborationMode: {
@@ -367,7 +392,8 @@ describe('CodexAdapter', () => {
       thread: undefined,
       turn: { id: 'turn_nomode', status: 'inProgress' },
     });
-    const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> }).params;
+    const sentParams = (JSON.parse(socket.sent[3] ?? '{}') as { params?: Record<string, unknown> })
+      .params;
     expect(sentParams).not.toHaveProperty('collaborationMode');
   });
 
@@ -423,7 +449,11 @@ describe('CodexAdapter', () => {
 
     const update = adapter.updateGlobalConfig({
       model_provider: 'proxy',
-      'model_providers.proxy': { name: 'Proxy', base_url: 'https://proxy.example.com/v1', wire_api: 'responses' },
+      'model_providers.proxy': {
+        name: 'Proxy',
+        base_url: 'https://proxy.example.com/v1',
+        wire_api: 'responses',
+      },
     });
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
@@ -438,7 +468,11 @@ describe('CodexAdapter', () => {
           { keyPath: 'model_provider', value: 'proxy', mergeStrategy: 'replace' },
           {
             keyPath: 'model_providers.proxy',
-            value: { name: 'Proxy', base_url: 'https://proxy.example.com/v1', wire_api: 'responses' },
+            value: {
+              name: 'Proxy',
+              base_url: 'https://proxy.example.com/v1',
+              wire_api: 'responses',
+            },
             mergeStrategy: 'replace',
           },
         ],
@@ -446,7 +480,11 @@ describe('CodexAdapter', () => {
     });
     socket.respond(2, {});
     await waitForSent(socket, 4);
-    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 3, method: 'config/read', params: {} });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 3,
+      method: 'config/read',
+      params: {},
+    });
     socket.respond(3, { config: { model_provider: 'proxy' } });
 
     await expect(update).resolves.toEqual({ model_provider: 'proxy' });
@@ -494,16 +532,21 @@ describe('CodexAdapter', () => {
 
     await adapter.replyPermission('codex:42', { reply: 'always' });
     await adapter.replyPermission('codex:"req-1"', { reply: 'reject' });
-    await adapter.replyQuestion(
-      'codex-tool:{"id":43,"questionIds":["question-a"]}',
-      { answers: [['Use this value']] },
-    );
+    await adapter.replyQuestion('codex-tool:{"id":43,"questionIds":["question-a"]}', {
+      answers: [['Use this value']],
+    });
     await adapter.replyQuestion('codex-dynamic:44', { answers: [['Dynamic result']] });
     await adapter.rejectQuestion('codex-tool:{"id":45,"questionIds":["question-b"]}');
     await adapter.rejectQuestion('codex-dynamic:46');
 
-    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({ id: 42, result: { decision: 'acceptForSession' } });
-    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 'req-1', result: { decision: 'decline' } });
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 42,
+      result: { decision: 'acceptForSession' },
+    });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 'req-1',
+      result: { decision: 'decline' },
+    });
     expect(JSON.parse(socket.sent[4] ?? '{}')).toEqual({
       id: 43,
       result: { answers: { 'question-a': { answers: ['Use this value'] } } },
@@ -658,7 +701,12 @@ describe('CodexAdapter', () => {
       webSocketCtor: MockWebSocket,
     });
 
-    const prompt = adapter.sendPrompt({ threadId: 'thr_empty', text: 'Start now.', cwd: '/repo', model: 'gpt-5.4' });
+    const prompt = adapter.sendPrompt({
+      threadId: 'thr_empty',
+      text: 'Start now.',
+      cwd: '/repo',
+      model: 'gpt-5.4',
+    });
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
     await waitForSent(socket, 1);
@@ -855,18 +903,26 @@ describe('CodexAdapter', () => {
     await expect(listFiles({ directory: '/repo', path: '../secret' })).rejects.toThrow(
       'Codex file paths cannot contain parent-directory segments.',
     );
-    await expect(adapter.readFileContent({ directory: '/repo', path: '/etc/passwd' })).rejects.toThrow(
-      'Codex file path is outside the active directory.',
-    );
+    await expect(
+      adapter.readFileContent({ directory: '/repo', path: '/etc/passwd' }),
+    ).rejects.toThrow('Codex file path is outside the active directory.');
     const readFileContent = adapter.readFileContent({ directory: '/repo', path: 'README.md' });
     await waitForSent(socket, 7);
     socket.respond(6, { dataBase64: 'aGVsbG8=' });
-    await expect(readFileContent).resolves.toEqual({ content: 'hello', encoding: 'utf-8', type: 'text' });
+    await expect(readFileContent).resolves.toEqual({
+      content: 'hello',
+      encoding: 'utf-8',
+      type: 'text',
+    });
 
     const readPlainContent = adapter.readFileContent({ directory: '/repo', path: 'plain.txt' });
     await waitForSent(socket, 8);
     socket.respond(7, { content: 'plain text' });
-    await expect(readPlainContent).resolves.toEqual({ content: 'plain text', encoding: 'utf-8', type: 'text' });
+    await expect(readPlainContent).resolves.toEqual({
+      content: 'plain text',
+      encoding: 'utf-8',
+      type: 'text',
+    });
     const fetchCalls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
     const fetchMock = async (input: RequestInfo | URL, init?: RequestInit) => {
       fetchCalls.push({ input, init });
@@ -878,7 +934,9 @@ describe('CodexAdapter', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fetchMock as typeof fetch;
     try {
-      await expect(adapter.writeFileContent({ directory: '/repo', path: 'README.md', content: 'updated' })).resolves.toEqual({});
+      await expect(
+        adapter.writeFileContent({ directory: '/repo', path: 'README.md', content: 'updated' }),
+      ).resolves.toEqual({});
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -948,14 +1006,23 @@ describe('CodexAdapter', () => {
       nextCursor: null,
     });
     await waitForSent(socket, 4);
-    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({ id: 3, method: 'config/read', params: { includeLayers: true } });
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 3,
+      method: 'config/read',
+      params: { includeLayers: true },
+    });
     socket.respond(3, {
       config: {
         model_provider: 'proxy',
         model: 'proxy-model',
         model_providers: {
           proxy: { name: 'Proxy', base_url: 'https://proxy.example.com/v1', wire_api: 'responses' },
-          omniroute: { name: 'omniroute', base_url: 'http://localhost:20128/v1', wire_api: 'responses', env_key: 'OPENAI_API_KEY' },
+          omniroute: {
+            name: 'omniroute',
+            base_url: 'http://localhost:20128/v1',
+            wire_api: 'responses',
+            env_key: 'OPENAI_API_KEY',
+          },
         },
         vis: {
           model_providers: {
@@ -1058,283 +1125,283 @@ describe('CodexAdapter', () => {
     await expect(adapter.listProviderAuthMethods()).resolves.toEqual({ codex: [] });
   });
 
- describe('CodexAdapter extended APIs', () => {
-   it('starts a review for a thread', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+  describe('CodexAdapter extended APIs', () => {
+    it('starts a review for a thread', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const review = adapter.reviewStart({
-       threadId: 'thr_1',
-       delivery: 'inline',
-       target: { type: 'uncommittedChanges' },
-     });
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {
-       turn: { id: 'turn_review', status: 'inProgress' },
-       reviewThreadId: 'thr_1',
-     });
+      const review = adapter.reviewStart({
+        threadId: 'thr_1',
+        delivery: 'inline',
+        target: { type: 'uncommittedChanges' },
+      });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {
+        turn: { id: 'turn_review', status: 'inProgress' },
+        reviewThreadId: 'thr_1',
+      });
 
-     await expect(review).resolves.toEqual({
-       turn: { id: 'turn_review', status: 'inProgress' },
-       reviewThreadId: 'thr_1',
-     });
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'review/start',
-       params: {
-         threadId: 'thr_1',
-         delivery: 'inline',
-         target: { type: 'uncommittedChanges' },
-       },
-     });
-   });
+      await expect(review).resolves.toEqual({
+        turn: { id: 'turn_review', status: 'inProgress' },
+        reviewThreadId: 'thr_1',
+      });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'review/start',
+        params: {
+          threadId: 'thr_1',
+          delivery: 'inline',
+          target: { type: 'uncommittedChanges' },
+        },
+      });
+    });
 
-   it('executes a standalone command', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+    it('executes a standalone command', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const command = adapter.commandExec({
-       command: ['ls', '-la'],
-       cwd: '/tmp',
-     });
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {
-       exitCode: 0,
-       stdout: 'file1\nfile2',
-       stderr: '',
-     });
+      const command = adapter.commandExec({
+        command: ['ls', '-la'],
+        cwd: '/tmp',
+      });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {
+        exitCode: 0,
+        stdout: 'file1\nfile2',
+        stderr: '',
+      });
 
-     await expect(command).resolves.toEqual({
-       exitCode: 0,
-       stdout: 'file1\nfile2',
-       stderr: '',
-     });
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'command/exec',
-       params: { command: ['ls', '-la'], cwd: '/tmp' },
-     });
-   });
+      await expect(command).resolves.toEqual({
+        exitCode: 0,
+        stdout: 'file1\nfile2',
+        stderr: '',
+      });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'command/exec',
+        params: { command: ['ls', '-la'], cwd: '/tmp' },
+      });
+    });
 
-   it('reads account info', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+    it('reads account info', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const account = adapter.readAccount({ refreshToken: false });
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {
-       account: { type: 'chatgpt', email: 'user@example.com', planType: 'pro' },
-       requiresOpenaiAuth: true,
-     });
+      const account = adapter.readAccount({ refreshToken: false });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {
+        account: { type: 'chatgpt', email: 'user@example.com', planType: 'pro' },
+        requiresOpenaiAuth: true,
+      });
 
-     await expect(account).resolves.toEqual({
-       account: { type: 'chatgpt', email: 'user@example.com', planType: 'pro' },
-       requiresOpenaiAuth: true,
-     });
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'account/read',
-       params: { refreshToken: false },
-     });
-   });
+      await expect(account).resolves.toEqual({
+        account: { type: 'chatgpt', email: 'user@example.com', planType: 'pro' },
+        requiresOpenaiAuth: true,
+      });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'account/read',
+        params: { refreshToken: false },
+      });
+    });
 
-   it('starts account login with API key', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+    it('starts account login with API key', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const login = adapter.startAccountLogin({
-       type: 'apiKey',
-       apiKey: 'sk-test123',
-     });
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, { type: 'apiKey' });
+      const login = adapter.startAccountLogin({
+        type: 'apiKey',
+        apiKey: 'sk-test123',
+      });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, { type: 'apiKey' });
 
-     await expect(login).resolves.toEqual({ type: 'apiKey' });
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'account/login/start',
-       params: { type: 'apiKey', apiKey: 'sk-test123' },
-     });
-   });
+      await expect(login).resolves.toEqual({ type: 'apiKey' });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'account/login/start',
+        params: { type: 'apiKey', apiKey: 'sk-test123' },
+      });
+    });
 
-   it('starts account login with ChatGPT browser flow', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+    it('starts account login with ChatGPT browser flow', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const login = adapter.startAccountLogin({ type: 'chatgpt' });
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {
-       type: 'chatgpt',
-       loginId: 'login-123',
-       authUrl: 'https://chatgpt.com/auth?...',
-     });
+      const login = adapter.startAccountLogin({ type: 'chatgpt' });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {
+        type: 'chatgpt',
+        loginId: 'login-123',
+        authUrl: 'https://chatgpt.com/auth?...',
+      });
 
-     await expect(login).resolves.toEqual({
-       type: 'chatgpt',
-       loginId: 'login-123',
-       authUrl: 'https://chatgpt.com/auth?...',
-     });
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'account/login/start',
-       params: { type: 'chatgpt' },
-     });
-   });
+      await expect(login).resolves.toEqual({
+        type: 'chatgpt',
+        loginId: 'login-123',
+        authUrl: 'https://chatgpt.com/auth?...',
+      });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'account/login/start',
+        params: { type: 'chatgpt' },
+      });
+    });
 
-   it('starts account login with device code', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+    it('starts account login with device code', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const login = adapter.startAccountLogin({
-       type: 'chatgptDeviceCode',
-     });
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {
-       type: 'chatgptDeviceCode',
-       loginId: 'login-456',
-       verificationUrl: 'https://auth.openai.com/codex/device',
-       userCode: 'ABCD-1234',
-     });
+      const login = adapter.startAccountLogin({
+        type: 'chatgptDeviceCode',
+      });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {
+        type: 'chatgptDeviceCode',
+        loginId: 'login-456',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        userCode: 'ABCD-1234',
+      });
 
-     await expect(login).resolves.toEqual({
-       type: 'chatgptDeviceCode',
-       loginId: 'login-456',
-       verificationUrl: 'https://auth.openai.com/codex/device',
-       userCode: 'ABCD-1234',
-     });
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'account/login/start',
-       params: { type: 'chatgptDeviceCode' },
-     });
-   });
+      await expect(login).resolves.toEqual({
+        type: 'chatgptDeviceCode',
+        loginId: 'login-456',
+        verificationUrl: 'https://auth.openai.com/codex/device',
+        userCode: 'ABCD-1234',
+      });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'account/login/start',
+        params: { type: 'chatgptDeviceCode' },
+      });
+    });
 
-   it('cancels a pending login', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+    it('cancels a pending login', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const cancel = adapter.cancelAccountLogin({ loginId: 'login-123' });
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {});
+      const cancel = adapter.cancelAccountLogin({ loginId: 'login-123' });
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {});
 
-     await expect(cancel).resolves.toEqual({});
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'account/login/cancel',
-       params: { loginId: 'login-123' },
-     });
-   });
+      await expect(cancel).resolves.toEqual({});
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'account/login/cancel',
+        params: { loginId: 'login-123' },
+      });
+    });
 
-   it('logs out', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+    it('logs out', async () => {
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const logout = adapter.logoutAccount();
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {});
+      const logout = adapter.logoutAccount();
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {});
 
-     await expect(logout).resolves.toEqual({});
-     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
-       id: 2,
-       method: 'account/logout',
-       params: {},
-     });
-   });
+      await expect(logout).resolves.toEqual({});
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'account/logout',
+        params: {},
+      });
+    });
 
     it('reads account rate limits', async () => {
-     MockWebSocket.instances = [];
-     const adapter = createCodexAdapter({
-       url: 'ws://localhost:4500',
-       webSocketCtor: MockWebSocket,
-     });
+      MockWebSocket.instances = [];
+      const adapter = createCodexAdapter({
+        url: 'ws://localhost:4500',
+        webSocketCtor: MockWebSocket,
+      });
 
-     const rateLimits = adapter.readAccountRateLimits();
-     const socket = MockWebSocket.instances[0]!;
-     socket.emitOpen();
-     await waitForSent(socket, 1);
-     socket.respond(1, {});
-     await waitForSent(socket, 3);
-     socket.respond(2, {
-       rateLimits: {
-         limitId: 'codex',
-         primary: {
-           usedPercent: 25,
-           windowDurationMins: 15,
-           resetsAt: 1730947200,
-         },
-         secondary: null,
-         rateLimitReachedType: null,
-       },
-     });
+      const rateLimits = adapter.readAccountRateLimits();
+      const socket = MockWebSocket.instances[0]!;
+      socket.emitOpen();
+      await waitForSent(socket, 1);
+      socket.respond(1, {});
+      await waitForSent(socket, 3);
+      socket.respond(2, {
+        rateLimits: {
+          limitId: 'codex',
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 15,
+            resetsAt: 1730947200,
+          },
+          secondary: null,
+          rateLimitReachedType: null,
+        },
+      });
 
-     await expect(rateLimits).resolves.toEqual({
-       rateLimits: {
-         limitId: 'codex',
-         primary: {
-           usedPercent: 25,
-           windowDurationMins: 15,
-           resetsAt: 1730947200,
-         },
-         secondary: null,
-         rateLimitReachedType: null,
-       },
-     });
+      await expect(rateLimits).resolves.toEqual({
+        rateLimits: {
+          limitId: 'codex',
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 15,
+            resetsAt: 1730947200,
+          },
+          secondary: null,
+          rateLimitReachedType: null,
+        },
+      });
       expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
         id: 2,
         method: 'account/rateLimits/read',
@@ -1422,9 +1489,7 @@ describe('CodexAdapter', () => {
         webSocketCtor: MockWebSocket,
       });
 
-      await expect(
-        adapter.updateSkill({ path: '', enabled: true })
-      ).rejects.toThrow(/path/);
+      await expect(adapter.updateSkill({ path: '', enabled: true })).rejects.toThrow(/path/);
     });
   });
 
@@ -1655,7 +1720,10 @@ describe('CodexAdapter', () => {
 
   it('normalizes the current plugin/list wire fields at the adapter boundary', async () => {
     MockWebSocket.instances = [];
-    const adapter = createCodexAdapter({ url: 'ws://localhost:4500', webSocketCtor: MockWebSocket });
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
     const plugins = adapter.listPlugins();
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
@@ -1663,31 +1731,100 @@ describe('CodexAdapter', () => {
     socket.respond(1, {});
     await waitForSent(socket, 2);
     socket.respond(2, {
-      marketplaces: [{ name: 'sisyphuslabs', path: '/home/test/.codex/plugins/cache/sisyphuslabs/marketplace.json', interface: null, plugins: [
-        { id: 'omo@sisyphuslabs', remotePluginId: null, version: null, localVersion: '4.19.1', name: 'omo', source: { type: 'local', path: '/home/test/.codex/plugins/omo/4.19.1' }, installed: true, enabled: true, availability: 'AVAILABLE', interface: { displayName: 'OMO', shortDescription: 'Unified local Codex components', logoUrl: 'https://example.test/omo.png' }, keywords: ['codex', 'mcp'] },
-        { id: 'admin-disabled@sisyphuslabs', name: 'admin-disabled', source: { type: 'remote' }, installed: true, enabled: true, availability: 'DISABLED_BY_ADMIN', interface: { shortDescription: 'Disabled by policy' }, keywords: [] },
-      ] }, { name: 'openai-curated-remote', path: null, interface: null, plugins: [] }],
-      marketplaceLoadErrors: [{ marketplaceName: 'broken-marketplace', error: 'unavailable' }], featuredPluginIds: ['omo@sisyphuslabs'],
+      marketplaces: [
+        {
+          name: 'sisyphuslabs',
+          path: '/home/test/.codex/plugins/cache/sisyphuslabs/marketplace.json',
+          interface: null,
+          plugins: [
+            {
+              id: 'omo@sisyphuslabs',
+              remotePluginId: null,
+              version: null,
+              localVersion: '4.19.1',
+              name: 'omo',
+              source: { type: 'local', path: '/home/test/.codex/plugins/omo/4.19.1' },
+              installed: true,
+              enabled: true,
+              availability: 'AVAILABLE',
+              interface: {
+                displayName: 'OMO',
+                shortDescription: 'Unified local Codex components',
+                logoUrl: 'https://example.test/omo.png',
+              },
+              keywords: ['codex', 'mcp'],
+            },
+            {
+              id: 'admin-disabled@sisyphuslabs',
+              name: 'admin-disabled',
+              source: { type: 'remote' },
+              installed: true,
+              enabled: true,
+              availability: 'DISABLED_BY_ADMIN',
+              interface: { shortDescription: 'Disabled by policy' },
+              keywords: [],
+            },
+          ],
+        },
+        { name: 'openai-curated-remote', path: null, interface: null, plugins: [] },
+      ],
+      marketplaceLoadErrors: [{ marketplaceName: 'broken-marketplace', error: 'unavailable' }],
+      featuredPluginIds: ['omo@sisyphuslabs'],
     });
     await expect(plugins).resolves.toEqual({
-      marketplaces: [{ name: 'sisyphuslabs', path: '/home/test/.codex/plugins/cache/sisyphuslabs/marketplace.json', plugins: [
-        expect.objectContaining({ id: 'omo@sisyphuslabs', name: 'omo', description: 'Unified local Codex components', logoUrl: 'https://example.test/omo.png', isAccessible: true, isEnabled: true, state: 'installed' }),
-        expect.objectContaining({ id: 'admin-disabled@sisyphuslabs', isAccessible: false, isEnabled: false, state: 'installed' }),
-      ] }, { name: 'openai-curated-remote', path: null, plugins: [] }],
-      errors: [{ marketplaceName: 'broken-marketplace', error: 'unavailable' }], featured: ['omo@sisyphuslabs'],
+      marketplaces: [
+        {
+          name: 'sisyphuslabs',
+          path: '/home/test/.codex/plugins/cache/sisyphuslabs/marketplace.json',
+          plugins: [
+            expect.objectContaining({
+              id: 'omo@sisyphuslabs',
+              name: 'omo',
+              description: 'Unified local Codex components',
+              logoUrl: 'https://example.test/omo.png',
+              isAccessible: true,
+              isEnabled: true,
+              state: 'installed',
+            }),
+            expect.objectContaining({
+              id: 'admin-disabled@sisyphuslabs',
+              isAccessible: false,
+              isEnabled: false,
+              state: 'installed',
+            }),
+          ],
+        },
+        { name: 'openai-curated-remote', path: null, plugins: [] },
+      ],
+      errors: [{ marketplaceName: 'broken-marketplace', error: 'unavailable' }],
+      featured: ['omo@sisyphuslabs'],
     });
   });
 
   it('writes MCP config under the live mcp_servers key', async () => {
     MockWebSocket.instances = [];
-    const adapter = createCodexAdapter({ url: 'ws://localhost:4500', webSocketCtor: MockWebSocket });
-    const update = adapter.updateMcp({ name: 'officecli', config: { command: 'officecli', enabled: false } });
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+    const update = adapter.updateMcp({
+      name: 'officecli',
+      config: { command: 'officecli', enabled: false },
+    });
     const socket = MockWebSocket.instances[0]!;
     socket.emitOpen();
     await waitForSent(socket, 1);
     socket.respond(1, {});
     await waitForSent(socket, 3);
-    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({ id: 2, method: 'config/value/write', params: { keyPath: 'mcp_servers.officecli', value: { command: 'officecli', enabled: false }, mergeStrategy: 'replace' } });
+    expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+      id: 2,
+      method: 'config/value/write',
+      params: {
+        keyPath: 'mcp_servers.officecli',
+        value: { command: 'officecli', enabled: false },
+        mergeStrategy: 'replace',
+      },
+    });
     socket.respond(2, {});
     await waitForSent(socket, 4);
     socket.respond(3, {});
