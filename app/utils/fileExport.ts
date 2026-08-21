@@ -1,4 +1,4 @@
-export function downloadTextFile(content: string, filename: string, mimeType = 'text/plain;charset=utf-8') {
+function downloadTextFile(content: string, filename: string, mimeType = 'text/plain;charset=utf-8') {
   if (typeof document === 'undefined' || typeof URL === 'undefined') return;
   const blob = new Blob([content], { type: mimeType });
   const url = URL.createObjectURL(blob);

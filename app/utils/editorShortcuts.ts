@@ -93,11 +93,12 @@ export function normalizeEditorShortcutMap(value: unknown): EditorShortcutMap {
   const record = isRecord(value) ? value : {};
   return Object.fromEntries(
     Object.entries(DEFAULT_EDITOR_SHORTCUTS).map(([name, fallback]) => {
-      const legacyName = name === 'duplicateLineDown'
-        ? 'duplicateLine'
-        : name === 'toggleLineComment'
-          ? 'toggleComment'
-          : null;
+      const legacyName =
+        name === 'duplicateLineDown'
+          ? 'duplicateLine'
+          : name === 'toggleLineComment'
+            ? 'toggleComment'
+            : null;
       const candidate = record[name] ?? (legacyName ? record[legacyName] : undefined);
       return [name, typeof candidate === 'string' ? candidate.trim() : fallback];
     }),
@@ -153,9 +154,9 @@ interface KeyboardShortcutEvent {
   shiftKey: boolean;
 }
 
-export type ShortcutPlatform = 'mac' | 'other';
+type ShortcutPlatform = 'mac' | 'other';
 
-export function detectShortcutPlatform(): ShortcutPlatform {
+function detectShortcutPlatform(): ShortcutPlatform {
   if (typeof navigator === 'undefined') return 'other';
   return /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? 'mac' : 'other';
 }
@@ -165,7 +166,8 @@ export function shortcutFromKeyboardEvent(
   platform = detectShortcutPlatform(),
 ): string | null {
   if (MODIFIER_KEYS.has(event.key)) return null;
-  const key = event.key === ' ' ? 'Space' : event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  const key =
+    event.key === ' ' ? 'Space' : event.key.length === 1 ? event.key.toLowerCase() : event.key;
   const modifiers: string[] = [];
   if (event.ctrlKey) modifiers.push(platform === 'mac' ? 'Ctrl' : 'Mod');
   if (event.metaKey) modifiers.push(platform === 'mac' ? 'Mod' : 'Meta');
@@ -180,7 +182,7 @@ export function formatShortcutForDisplay(
 ): string {
   return shortcut
     .split('-')
-    .map((part) => part === 'Mod' ? (platform === 'mac' ? '⌘' : 'Ctrl') : part)
+    .map((part) => (part === 'Mod' ? (platform === 'mac' ? '⌘' : 'Ctrl') : part))
     .join('-');
 }
 
