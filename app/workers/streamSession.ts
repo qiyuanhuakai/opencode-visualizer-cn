@@ -8,7 +8,7 @@ import {
   type LanguageCacheState,
 } from './highlightShared';
 
-export type StreamSession = {
+type StreamSession = {
   tokenizer: ShikiStreamTokenizer;
   lang: string;
   theme: string;
