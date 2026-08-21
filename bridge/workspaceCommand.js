@@ -21,9 +21,10 @@ export function createWorkspaceCommandRunner(options = {}) {
     const command = typeof payload.command === 'string' ? payload.command.trim() : '';
     if (!command) return Promise.reject(new Error('Command is required.'));
     const args = Array.isArray(payload.args) ? payload.args.map(String) : [];
-    const cwd = typeof payload.directory === 'string' && payload.directory.trim()
-      ? payload.directory.trim()
-      : undefined;
+    const cwd =
+      typeof payload.directory === 'string' && payload.directory.trim()
+        ? payload.directory.trim()
+        : undefined;
     return new Promise((resolve, reject) => {
       const child = spawnProcess(command, args, {
         cwd,
@@ -75,16 +76,21 @@ export function createWorkspaceCommandRunner(options = {}) {
       child.once('close', (exitCode) => {
         if (stopping) return;
         stopping = true;
-        void stopChild(child).then(() => {
-          activeChildren.delete(child);
-          finish(() => resolve({
-            stdout: stdout.toString('utf8'),
-            stderr: stderr.toString('utf8'),
-            exitCode: typeof exitCode === 'number' ? exitCode : -1,
-          }));
-        }, (error) => {
-          finish(() => reject(error));
-        });
+        void stopChild(child).then(
+          () => {
+            activeChildren.delete(child);
+            finish(() =>
+              resolve({
+                stdout: stdout.toString('utf8'),
+                stderr: stderr.toString('utf8'),
+                exitCode: typeof exitCode === 'number' ? exitCode : -1,
+              }),
+            );
+          },
+          (error) => {
+            finish(() => reject(error));
+          },
+        );
       });
       timer = setTimeout(
         () => failAndStop(new Error('Command timed out after 30 seconds.')),
@@ -114,8 +120,4 @@ export function createWorkspaceCommandRunner(options = {}) {
   }
 
   return { run, close };
-}
-
-export function runWorkspaceCommand(payload, options = {}) {
-  return createWorkspaceCommandRunner(options).run(payload);
 }
