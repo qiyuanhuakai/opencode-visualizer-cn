@@ -10,7 +10,7 @@ import type { LocalPinnedSessionStore } from '../utils/pinnedSessions';
 import { mapWithConcurrency } from '../utils/mapWithConcurrency';
 import { isBatchSessionAction, normalizeBatchSessionTargets } from '../utils/batchSessionTargets';
 
-type OpenCodeApiLike = {
+export type OpenCodeApiLike = {
   deleteSession: (payload: {
     sessionId: string;
     projectId: string;
@@ -57,7 +57,7 @@ type OpenCodeApiLike = {
   }) => Promise<void>;
 };
 
-type CodexApiLike = {
+export type CodexApiLike = {
   hiddenThreadIds: Ref<Set<string>>;
   visibleThreads: Ref<Array<{ id: string }>>;
   activeThreadId: Ref<string>;
@@ -122,158 +122,209 @@ export function useBackendSessionActions(params: {
     directory?: string,
   ) => Promise<unknown>;
 }) {
-  async function deleteSession(
-    sessionId: string,
-    hints?: { projectId?: string; directory?: string },
-  ) {
-    if (!params.ensureConnectionReady(params.translate('app.actions.deletingSession'))) return;
+  type MutationRollback = () => void;
+  type SessionOperationHints = { projectId?: string; directory?: string };
+  type OpenCodeSessionPayload = { sessionId: string; projectId: string; directory?: string };
+
+  async function runSessionMutation(options: {
+    sessionId: string;
+    actionLabel: string;
+    errorKey: string;
+    apply: (scope: { registerRollback: (rollback: MutationRollback) => void }) => Promise<void>;
+  }): Promise<void> {
+    if (!params.ensureConnectionReady(params.translate(options.actionLabel))) return;
     params.clearSessionError();
-    if (!sessionId) return;
-    let optimisticProjectId = '';
-    let previousOverride: number | undefined;
+    if (!options.sessionId) return;
+    let rollback: MutationRollback | undefined;
+    const scope = {
+      registerRollback: (fn: MutationRollback) => {
+        rollback = fn;
+      },
+    };
     try {
-      if (params.activeBackendKind.value === 'codex') {
-        await params.codexApi.archiveThread(sessionId);
-        if (params.selectedSessionId.value === sessionId) {
-          params.selectedSessionId.value =
-            params.codexApi.activeThreadId.value ||
-            params.codexApi.visibleThreads.value[0]?.id ||
-            '';
-        }
-        return;
-      }
-      if (params.activeBackendKind.value === 'acp') {
-        const { directory } = params.resolveSessionOperationPayload(
-          sessionId,
-          hints?.projectId,
-          hints?.directory,
-        );
-        await params.backendDeleteSession(sessionId, directory);
-        return;
-      }
-      const { projectId, directory } = params.resolveSessionOperationPayload(
-        sessionId,
-        hints?.projectId,
-        hints?.directory,
-      );
-      optimisticProjectId = projectId;
-      previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
-      params.clearLocalPinnedSessionOverride(projectId, sessionId);
-      await params.openCodeApi.deleteSession({ sessionId, projectId, directory });
+      await options.apply(scope);
     } catch (error) {
-      if (optimisticProjectId)
-        params.restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
+      rollback?.();
       params.setSessionError(
-        params.translate('app.error.sessionDeleteFailed', {
-          message: params.toErrorMessage(error),
-        }),
+        params.translate(options.errorKey, { message: params.toErrorMessage(error) }),
       );
     }
   }
 
-  async function archiveSession(
-    sessionId: string,
-    hints?: { projectId?: string; directory?: string },
-  ) {
-    if (!params.ensureConnectionReady(params.translate('app.actions.archivingSession'))) return;
-    params.clearSessionError();
-    if (!sessionId) return;
-    let optimisticProjectId = '';
-    let previousOverride: number | undefined;
-    try {
-      if (params.activeBackendKind.value === 'acp') {
-        const { directory } = params.resolveSessionOperationPayload(
-          sessionId,
-          hints?.projectId,
-          hints?.directory,
-        );
-        params.setSendStatusKey('app.status.archiving');
-        const archivedAt = Date.now();
-        await params.backendUpdateSession(sessionId, { time: { archived: archivedAt } }, directory);
-        params.setLocalSessionArchived(sessionId, archivedAt);
-        params.setSendStatusKey('app.status.archived');
-        return;
-      }
-      if (params.activeBackendKind.value === 'codex') {
-        params.codexApi.hideThread(sessionId);
-        if (params.selectedSessionId.value === sessionId) {
-          params.selectedSessionId.value =
-            params.codexApi.activeThreadId.value ||
-            params.codexApi.visibleThreads.value[0]?.id ||
-            '';
-        }
-        return;
-      }
-      const { projectId, directory } = params.resolveSessionOperationPayload(
-        sessionId,
-        hints?.projectId,
-        hints?.directory,
-      );
-      optimisticProjectId = projectId;
-      previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
-      params.clearLocalPinnedSessionOverride(projectId, sessionId);
-      await params.openCodeApi.archiveSession({ sessionId, projectId, directory });
-    } catch (error) {
-      if (optimisticProjectId)
-        params.restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-      params.setSessionError(
-        params.translate('app.error.sessionArchiveFailed', {
-          message: params.toErrorMessage(error),
-        }),
-      );
+  function fallbackSelectedSessionId() {
+    return (
+      params.codexApi.activeThreadId.value || params.codexApi.visibleThreads.value[0]?.id || ''
+    );
+  }
+
+  async function deleteCodexSession(sessionId: string) {
+    await params.codexApi.archiveThread(sessionId);
+    if (params.selectedSessionId.value === sessionId) {
+      params.selectedSessionId.value = fallbackSelectedSessionId();
     }
   }
 
-  async function unarchiveSession(
+  async function deleteAcpSession(
     sessionId: string,
     hints?: { projectId?: string; directory?: string },
   ) {
-    if (!params.ensureConnectionReady(params.translate('app.actions.unarchivingSession'))) return;
-    params.clearSessionError();
-    if (!sessionId) return;
-    let optimisticProjectId = '';
-    let previousOverride: number | undefined;
-    try {
-      if (params.activeBackendKind.value === 'acp') {
-        const { directory } = params.resolveSessionOperationPayload(
-          sessionId,
-          hints?.projectId,
-          hints?.directory,
-        );
-        params.setSendStatusKey('app.status.unarchiving');
-        await params.backendUpdateSession(sessionId, { time: { archived: 0 } }, directory);
-        params.setLocalSessionArchived(sessionId, undefined);
-        params.setSendStatusKey('app.status.unarchived');
-        return;
-      }
-      if (params.activeBackendKind.value === 'codex') {
-        if (!params.codexApi.hiddenThreadIds.value.has(sessionId)) {
-          throw new Error('Codex recoverable archive not found.');
+    const { directory } = params.resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
+    await params.backendDeleteSession(sessionId, directory);
+  }
+
+  function prepareOpenCodeSessionMutation(
+    sessionId: string,
+    hints: SessionOperationHints | undefined,
+    registerRollback: (rollback: MutationRollback) => void,
+  ): OpenCodeSessionPayload {
+    const { projectId, directory } = params.resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
+    const previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
+    registerRollback(() =>
+      params.restoreLocalPinnedSessionOverride(projectId, sessionId, previousOverride),
+    );
+    return { sessionId, projectId, directory };
+  }
+
+  async function runOpenCodeSessionMutation(
+    sessionId: string,
+    hints: SessionOperationHints | undefined,
+    registerRollback: (rollback: MutationRollback) => void,
+    mutate: (payload: OpenCodeSessionPayload) => Promise<unknown>,
+  ) {
+    const payload = prepareOpenCodeSessionMutation(sessionId, hints, registerRollback);
+    params.clearLocalPinnedSessionOverride(payload.projectId, payload.sessionId);
+    await mutate(payload);
+  }
+
+  async function deleteSession(sessionId: string, hints?: SessionOperationHints) {
+    await runSessionMutation({
+      sessionId,
+      actionLabel: 'app.actions.deletingSession',
+      errorKey: 'app.error.sessionDeleteFailed',
+      apply: async ({ registerRollback }) => {
+        const backendKind = params.activeBackendKind.value;
+        if (backendKind === 'codex') {
+          await deleteCodexSession(sessionId);
+          return;
         }
-        params.codexApi.unhideThread(sessionId);
-        params.selectedProjectId.value = params.codexProjectId;
-        params.selectedSessionId.value = sessionId;
-        await params.codexApi.selectThread(sessionId);
-        return;
-      }
-      const { projectId, directory } = params.resolveSessionOperationPayload(
-        sessionId,
-        hints?.projectId,
-        hints?.directory,
-      );
-      optimisticProjectId = projectId;
-      previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
-      params.clearLocalPinnedSessionOverride(projectId, sessionId);
-      await params.openCodeApi.unarchiveSession({ sessionId, projectId, directory });
-    } catch (error) {
-      if (optimisticProjectId)
-        params.restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-      params.setSessionError(
-        params.translate('app.error.sessionUnarchiveFailed', {
-          message: params.toErrorMessage(error),
-        }),
-      );
+        if (backendKind === 'acp') {
+          await deleteAcpSession(sessionId, hints);
+          return;
+        }
+        await runOpenCodeSessionMutation(
+          sessionId,
+          hints,
+          registerRollback,
+          params.openCodeApi.deleteSession,
+        );
+      },
+    });
+  }
+
+  async function archiveAcpSession(
+    sessionId: string,
+    hints?: { projectId?: string; directory?: string },
+  ) {
+    const { directory } = params.resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
+    params.setSendStatusKey('app.status.archiving');
+    const archivedAt = Date.now();
+    await params.backendUpdateSession(sessionId, { time: { archived: archivedAt } }, directory);
+    params.setLocalSessionArchived(sessionId, archivedAt);
+    params.setSendStatusKey('app.status.archived');
+  }
+
+  async function archiveCodexSession(sessionId: string) {
+    params.codexApi.hideThread(sessionId);
+    if (params.selectedSessionId.value === sessionId) {
+      params.selectedSessionId.value = fallbackSelectedSessionId();
     }
+  }
+
+  async function archiveSession(sessionId: string, hints?: SessionOperationHints) {
+    await runSessionMutation({
+      sessionId,
+      actionLabel: 'app.actions.archivingSession',
+      errorKey: 'app.error.sessionArchiveFailed',
+      apply: async ({ registerRollback }) => {
+        const backendKind = params.activeBackendKind.value;
+        if (backendKind === 'acp') {
+          await archiveAcpSession(sessionId, hints);
+          return;
+        }
+        if (backendKind === 'codex') {
+          await archiveCodexSession(sessionId);
+          return;
+        }
+        await runOpenCodeSessionMutation(
+          sessionId,
+          hints,
+          registerRollback,
+          params.openCodeApi.archiveSession,
+        );
+      },
+    });
+  }
+
+  async function unarchiveAcpSession(
+    sessionId: string,
+    hints?: { projectId?: string; directory?: string },
+  ) {
+    const { directory } = params.resolveSessionOperationPayload(
+      sessionId,
+      hints?.projectId,
+      hints?.directory,
+    );
+    params.setSendStatusKey('app.status.unarchiving');
+    await params.backendUpdateSession(sessionId, { time: { archived: 0 } }, directory);
+    params.setLocalSessionArchived(sessionId, undefined);
+    params.setSendStatusKey('app.status.unarchived');
+  }
+
+  async function unarchiveCodexSession(sessionId: string) {
+    if (!params.codexApi.hiddenThreadIds.value.has(sessionId)) {
+      throw new Error('Codex recoverable archive not found.');
+    }
+    params.codexApi.unhideThread(sessionId);
+    params.selectedProjectId.value = params.codexProjectId;
+    params.selectedSessionId.value = sessionId;
+    await params.codexApi.selectThread(sessionId);
+  }
+
+  async function unarchiveSession(sessionId: string, hints?: SessionOperationHints) {
+    await runSessionMutation({
+      sessionId,
+      actionLabel: 'app.actions.unarchivingSession',
+      errorKey: 'app.error.sessionUnarchiveFailed',
+      apply: async ({ registerRollback }) => {
+        const backendKind = params.activeBackendKind.value;
+        if (backendKind === 'acp') {
+          await unarchiveAcpSession(sessionId, hints);
+          return;
+        }
+        if (backendKind === 'codex') {
+          await unarchiveCodexSession(sessionId);
+          return;
+        }
+        await runOpenCodeSessionMutation(
+          sessionId,
+          hints,
+          registerRollback,
+          params.openCodeApi.unarchiveSession,
+        );
+      },
+    });
   }
 
   async function renameSession(
@@ -323,39 +374,30 @@ export function useBackendSessionActions(params: {
     }
   }
 
-  async function pinSession(sessionId: string, hints?: { projectId?: string; directory?: string }) {
-    if (!params.ensureConnectionReady(params.translate('app.actions.pinningSession'))) return;
-    params.clearSessionError();
-    if (!sessionId) return;
-    let optimisticProjectId = '';
-    let previousOverride: number | undefined;
-    try {
-      const { projectId, directory } = params.resolveSessionOperationPayload(
-        sessionId,
-        hints?.projectId,
-        hints?.directory,
-      );
-      optimisticProjectId = projectId;
-      previousOverride = params.getSessionPinnedOverride(projectId, sessionId);
-      const pinnedAt = Date.now();
-      params.setLocalPinnedSession(projectId, sessionId, pinnedAt);
-      if (params.activeBackendKind.value !== 'opencode') {
-        return;
-      }
-      await params.openCodeApi.pinSession({ sessionId, projectId, directory, pinnedAt });
-    } catch (error) {
-      if (optimisticProjectId)
-        params.restoreLocalPinnedSessionOverride(optimisticProjectId, sessionId, previousOverride);
-      params.setSessionError(
-        params.translate('app.error.sessionPinFailed', { message: params.toErrorMessage(error) }),
-      );
-    }
+  async function pinOpenCodeSession(
+    sessionId: string,
+    hints: SessionOperationHints | undefined,
+    registerRollback: (rollback: MutationRollback) => void,
+  ) {
+    const payload = prepareOpenCodeSessionMutation(sessionId, hints, registerRollback);
+    const pinnedAt = Date.now();
+    params.setLocalPinnedSession(payload.projectId, payload.sessionId, pinnedAt);
+    if (params.activeBackendKind.value !== 'opencode') return;
+    await params.openCodeApi.pinSession({ ...payload, pinnedAt });
   }
 
-  async function unpinSession(
-    sessionId: string,
-    hints?: { projectId?: string; directory?: string },
-  ) {
+  async function pinSession(sessionId: string, hints?: SessionOperationHints) {
+    await runSessionMutation({
+      sessionId,
+      actionLabel: 'app.actions.pinningSession',
+      errorKey: 'app.error.sessionPinFailed',
+      apply: async ({ registerRollback }) => {
+        await pinOpenCodeSession(sessionId, hints, registerRollback);
+      },
+    });
+  }
+
+  async function unpinSession(sessionId: string, hints?: SessionOperationHints) {
     if (!sessionId) return;
     const { projectId, directory } = params.resolveSessionOperationPayload(
       sessionId,
@@ -522,19 +564,6 @@ export function useBackendSessionActions(params: {
     }
   }
 
-  async function compactSession(sessionId: string) {
-    if (params.activeBackendKind.value !== 'codex' || !sessionId) return;
-    const confirmed = await params.showConfirm(params.translate('codexPanel.compactThreadConfirm'));
-    if (params.activeBackendKind.value !== 'codex') return;
-    if (!confirmed) return;
-    params.clearSessionError();
-    try {
-      await params.codexApi.startThreadCompaction(sessionId);
-    } catch (error) {
-      params.setSessionError(params.toErrorMessage(error));
-    }
-  }
-
   return {
     deleteSession,
     archiveSession,
@@ -545,6 +574,5 @@ export function useBackendSessionActions(params: {
     handleTopPanelBatchSessionAction,
     handleForkMessage,
     handleRevertMessage,
-    compactSession,
   };
 }
