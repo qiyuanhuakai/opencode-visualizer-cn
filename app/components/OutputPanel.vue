@@ -20,14 +20,14 @@
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
             <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
-                <div
-                  v-for="root in visibleThreadRoots"
-                  :key="root.id"
-                  class="thread-card-item"
-                  :data-root-id="root.id"
-                >
-                   <ThreadBlock
-                   v-if="shouldRenderRoot(root)"
+              <div
+                v-for="root in visibleThreadRoots"
+                :key="root.id"
+                class="thread-card-item"
+                :data-root-id="root.id"
+              >
+                <ThreadBlock
+                  v-if="shouldRenderRoot(root)"
                   :root="root"
                   :theme="theme"
                   :files-with-basenames="filesWithBasenames"
@@ -51,8 +51,8 @@
                   @show-thread-history="emit('show-thread-history', $event)"
                   @show-subagent-history="emit('show-subagent-history', $event)"
                   @message-rendered="handleMessageRendered"
-                  />
-                </div>
+                />
+              </div>
             </div>
 
             <FileRefPopup ref="fileRefPopupRef" :files="files" @open-file="handlePopupOpenFile" />
@@ -93,15 +93,11 @@ import { useMessages } from '../composables/useMessages';
 import { useAssistantPreRenderer } from '../composables/useAssistantPreRenderer';
 import { pendingWorkerRenders } from '../composables/useRenderState';
 import { useThinkingAnimation } from '../composables/useThinkingAnimation';
-import type {
-  HistoryWindowEntry,
-  MessageDiffEntry,
-  MessageTokens,
-  ModelMeta,
-} from '../types/message';
+import type { HistoryWindowEntry, MessageDiffEntry, MessageTokens } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 import type { BackendKind } from '../backends/types';
 import { resolveChildOwners } from '../utils/threadSubagents';
+import type { ModelMeta } from '../utils/resolveModelMeta';
 import {
   initialProgressiveRootWindow,
   preserveProgressiveRootWindowOnAppend,
@@ -172,7 +168,9 @@ const visibleRoots = computed(() => {
 const THREAD_BATCH_SIZE = 20;
 const THREAD_WINDOW_MAX = 100;
 const renderableRoots = computed(() => visibleRoots.value.filter(shouldRenderRoot));
-const rootWindow = ref(initialProgressiveRootWindow(renderableRoots.value.length, THREAD_BATCH_SIZE));
+const rootWindow = ref(
+  initialProgressiveRootWindow(renderableRoots.value.length, THREAD_BATCH_SIZE),
+);
 let windowShiftInProgress = false;
 let windowShiftQueued = false;
 let windowShiftGeneration = 0;
@@ -442,10 +440,7 @@ async function scrollToBottom(): Promise<void> {
   windowShiftGeneration += 1;
   windowShiftInProgress = false;
   windowShiftQueued = false;
-  rootWindow.value = initialProgressiveRootWindow(
-    renderableRoots.value.length,
-    THREAD_WINDOW_MAX,
-  );
+  rootWindow.value = initialProgressiveRootWindow(renderableRoots.value.length, THREAD_WINDOW_MAX);
   await nextTick();
   const panel = panelEl.value;
   if (!panel) return;
@@ -490,7 +485,10 @@ async function scrollToBottom(): Promise<void> {
       }
       lastTarget = target;
 
-      const gap = Math.max(0, currentPanel.scrollHeight - currentPanel.clientHeight - currentPanel.scrollTop);
+      const gap = Math.max(
+        0,
+        currentPanel.scrollHeight - currentPanel.clientHeight - currentPanel.scrollTop,
+      );
       stableFrames = gap <= 0.5 ? stableFrames + 1 : 0;
       if (stableFrames >= 2 || attempts >= maxAttempts) {
         finish();
@@ -637,7 +635,11 @@ defineExpose({ panelEl, scrollToBottom });
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.03em;
-  color: color-mix(in srgb, var(--project-tint, var(--theme-output-text, #94a3b8)) 60%, var(--theme-output-text, #94a3b8));
+  color: color-mix(
+    in srgb,
+    var(--project-tint, var(--theme-output-text, #94a3b8)) 60%,
+    var(--theme-output-text, #94a3b8)
+  );
   padding: 12px 12px 0;
   user-select: none;
 }
@@ -659,7 +661,8 @@ defineExpose({ panelEl, scrollToBottom });
   line-height: 1;
   display: grid;
   place-items: center;
-  box-shadow: 0 10px 24px color-mix(in srgb, var(--theme-output-bg, rgba(2, 6, 23, 0.45)) 55%, transparent);
+  box-shadow: 0 10px 24px
+    color-mix(in srgb, var(--theme-output-bg, rgba(2, 6, 23, 0.45)) 55%, transparent);
   cursor: pointer;
   z-index: 3;
 }
