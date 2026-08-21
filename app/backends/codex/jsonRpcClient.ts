@@ -28,7 +28,7 @@ type PendingRequest = {
   timeoutId: ReturnType<typeof setTimeout>;
 };
 
-export type { CodexWebSocket, CodexWebSocketConstructor } from './jsonRpcProtocol';
+export type { CodexWebSocketConstructor } from './jsonRpcProtocol';
 
 export type CodexJsonRpcClientOptions = {
   url: string;
@@ -146,7 +146,11 @@ export class CodexJsonRpcClient {
     };
   }
 
-  request<T = unknown>(method: string, params?: unknown, options?: CodexRequestOptions): Promise<T> {
+  request<T = unknown>(
+    method: string,
+    params?: unknown,
+    options?: CodexRequestOptions,
+  ): Promise<T> {
     const policy = options?.retryOverloaded;
     if (!policy) return this.sendRequest<T>(method, params, options?.timeoutMs);
     const generation = this.connectionGeneration;
@@ -167,13 +171,19 @@ export class CodexJsonRpcClient {
         if (!isCodexOverload(error) || attempt >= policy.maxAttempts) throw error;
         await waitForRetry(overloadRetryDelayMs(error, attempt, policy));
         if (generation !== this.connectionGeneration) {
-          throw new Error(`${this.connectionLabel} JSON-RPC connection changed before retry: ${method}`);
+          throw new Error(
+            `${this.connectionLabel} JSON-RPC connection changed before retry: ${method}`,
+          );
         }
       }
     }
   }
 
-  private sendRequest<T>(method: string, params?: unknown, timeoutMs = this.requestTimeoutMs): Promise<T> {
+  private sendRequest<T>(
+    method: string,
+    params?: unknown,
+    timeoutMs = this.requestTimeoutMs,
+  ): Promise<T> {
     const socket = this.requireOpenSocket();
     const id = this.nextId;
     this.nextId += 1;
