@@ -1,10 +1,5 @@
 <template>
-  <dialog
-    ref="dialogRef"
-    class="modal-backdrop"
-    @close="$emit('close')"
-    @cancel.prevent
-  >
+  <dialog ref="dialogRef" class="modal-backdrop" @close="$emit('close')" @cancel.prevent>
     <div class="modal">
       <header class="modal-header">
         <div class="modal-header-main">
@@ -30,11 +25,10 @@
       </header>
       <div ref="modalBody" class="modal-body">
         <template v-if="activePage === 'root'">
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.language.label') }}</div>
-              <div class="setting-description">{{ $t('settings.language.description') }}</div>
-            </div>
+          <SettingRow
+            :label="$t('settings.language.label')"
+            :description="$t('settings.language.description')"
+          >
             <select v-model="locale" class="language-select">
               <option value="en">{{ $t('settings.language.en') }}</option>
               <option value="zh-CN">{{ $t('settings.language.zhCN') }}</option>
@@ -42,65 +36,44 @@
               <option value="ja">{{ $t('settings.language.ja') }}</option>
               <option value="eo">{{ $t('settings.language.eo') }}</option>
             </select>
-          </div>
+          </SettingRow>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.enterToSend.label') }}</div>
-              <div class="setting-description">{{ $t('settings.enterToSend.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="enterToSend" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="enterToSend"
+            :label="$t('settings.enterToSend.label')"
+            :description="$t('settings.enterToSend.description')"
+          />
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.showMinimizeButtons.label') }}</div>
-              <div class="setting-description">{{ $t('settings.showMinimizeButtons.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="showMinimizeButtons" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="showMinimizeButtons"
+            :label="$t('settings.showMinimizeButtons.label')"
+            :description="$t('settings.showMinimizeButtons.description')"
+          />
 
-          <div class="setting-row" :class="{ 'setting-row-disabled': !showMinimizeButtons }">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.dockAlwaysOpen.label') }}</div>
-              <div class="setting-description">{{ $t('settings.dockAlwaysOpen.description') }}</div>
-            </div>
-            <label
-              class="toggle-switch"
-              :title="showMinimizeButtons ? $t('settings.dockAlwaysOpen.label') : $t('settings.showMinimizeButtons.label')"
-            >
-              <input
-                v-model="dockAlwaysOpen"
-                type="checkbox"
-                class="toggle-input"
-                :disabled="!showMinimizeButtons"
-              />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="dockAlwaysOpen"
+            :label="$t('settings.dockAlwaysOpen.label')"
+            :description="$t('settings.dockAlwaysOpen.description')"
+            :class="{ 'setting-row-disabled': !showMinimizeButtons }"
+            :title="
+              showMinimizeButtons
+                ? $t('settings.dockAlwaysOpen.label')
+                : $t('settings.showMinimizeButtons.label')
+            "
+            :disabled="!showMinimizeButtons"
+          />
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.showOpenInEditorButton.label') }}</div>
-              <div class="setting-description">{{ $t('settings.showOpenInEditorButton.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="showOpenInEditorButton" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="showOpenInEditorButton"
+            :label="$t('settings.showOpenInEditorButton.label')"
+            :description="$t('settings.showOpenInEditorButton.description')"
+          />
 
-          <div class="setting-row setting-row-stack">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.openInEditorMaxSizeMb.label') }}</div>
-              <div class="setting-description">{{ $t('settings.openInEditorMaxSizeMb.description') }}</div>
-            </div>
+          <SettingRow
+            :label="$t('settings.openInEditorMaxSizeMb.label')"
+            :description="$t('settings.openInEditorMaxSizeMb.description')"
+            class="setting-row-stack"
+          >
             <div class="number-setting-group">
               <input
                 v-model.number="openInEditorMaxSizeMb"
@@ -113,83 +86,73 @@
                 @keydown.enter="clampOpenInEditorMaxSizeMb"
               />
             </div>
-          </div>
+          </SettingRow>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.floatingPreviewWordWrap.label') }}</div>
-              <div class="setting-description">{{ $t('settings.floatingPreviewWordWrap.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="floatingPreviewWordWrap" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="floatingPreviewWordWrap"
+            :label="$t('settings.floatingPreviewWordWrap.label')"
+            :description="$t('settings.floatingPreviewWordWrap.description')"
+          />
 
-          <button
+          <SettingRow
+            tag="button"
             type="button"
-            class="setting-row setting-link-row"
+            class="setting-link-row"
+            :label="$t('settings.editor.label')"
+            :description="$t('settings.editor.description')"
             :aria-label="$t('settings.editor.label')"
             @click="activePage = 'editor'"
           >
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.editor.label') }}</div>
-              <div class="setting-description">{{ $t('settings.editor.description') }}</div>
-            </div>
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
-          </button>
+          </SettingRow>
 
-          <button
+          <SettingRow
+            tag="button"
             type="button"
-            class="setting-row setting-link-row"
+            class="setting-link-row"
+            :label="$t('settings.textTransformers.label')"
+            :description="$t('settings.textTransformers.description')"
             :aria-label="$t('settings.textTransformers.label')"
             @click="activePage = 'transformers'"
           >
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.textTransformers.label') }}</div>
-              <div class="setting-description">{{ $t('settings.textTransformers.description') }}</div>
-            </div>
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
-          </button>
+          </SettingRow>
 
-          <button
+          <SettingRow
+            tag="button"
             type="button"
-            class="setting-row setting-link-row"
+            class="setting-link-row"
+            :label="$t('settings.fontSettings.label')"
+            :description="$t('settings.fontSettings.description')"
             :aria-label="$t('settings.fontSettings.label')"
             @click="activePage = 'fonts'"
           >
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.fontSettings.label') }}</div>
-              <div class="setting-description">{{ $t('settings.fontSettings.description') }}</div>
-            </div>
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
-          </button>
+          </SettingRow>
 
-          <button
+          <SettingRow
+            tag="button"
             type="button"
-            class="setting-row setting-link-row"
+            class="setting-link-row"
+            :label="$t('settings.experimentalFeatures.label')"
+            :description="$t('settings.experimentalFeatures.description')"
             :aria-label="$t('settings.experimentalFeatures.label')"
             @click="activePage = 'experimental'"
           >
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.experimentalFeatures.label') }}</div>
-              <div class="setting-description">{{ $t('settings.experimentalFeatures.description') }}</div>
-            </div>
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
-          </button>
+          </SettingRow>
 
-          <button
+          <SettingRow
+            tag="button"
             type="button"
-            class="setting-row setting-link-row"
+            class="setting-link-row"
+            :label="$t('settings.theme.label')"
+            :description="$t('settings.theme.description')"
             :aria-label="$t('settings.theme.label')"
             @click="activePage = 'theme'"
           >
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.theme.label') }}</div>
-              <div class="setting-description">{{ $t('settings.theme.description') }}</div>
-            </div>
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
-          </button>
+          </SettingRow>
         </template>
 
         <template v-else-if="activePage === 'transformers'">
@@ -197,26 +160,15 @@
             {{ $t('settings.textTransformers.pageDescription') }}
           </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div :id="textTransformerToggleLabelId" class="setting-label">
-                {{ $t('settings.textTransformers.enabledLabel') }}
-              </div>
-              <div :id="textTransformerToggleDescriptionId" class="setting-description">
-                {{ $t('settings.textTransformers.enabledDescription') }}
-              </div>
-            </div>
-            <label class="toggle-switch">
-              <input
-                v-model="textTransformersEnabled"
-                type="checkbox"
-                class="toggle-input"
-                :aria-labelledby="textTransformerToggleLabelId"
-                :aria-describedby="textTransformerToggleDescriptionId"
-              />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="textTransformersEnabled"
+            :label="$t('settings.textTransformers.enabledLabel')"
+            :description="$t('settings.textTransformers.enabledDescription')"
+            :label-id="textTransformerToggleLabelId"
+            :description-id="textTransformerToggleDescriptionId"
+            :aria-labelledby="textTransformerToggleLabelId"
+            :aria-describedby="textTransformerToggleDescriptionId"
+          />
 
           <div class="setting-row setting-row-stack transformer-settings-section">
             <div class="transformer-heading">
@@ -300,11 +252,11 @@
         <template v-else-if="activePage === 'theme'">
           <div class="setting-page-description">{{ $t('settings.theme.description') }}</div>
 
-          <div class="setting-row setting-row-stack theme-settings-section">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.theme.presetLabel') }}</div>
-              <div class="setting-description">{{ $t('settings.theme.presetDescription') }}</div>
-            </div>
+          <SettingRow
+            :label="$t('settings.theme.presetLabel')"
+            :description="$t('settings.theme.presetDescription')"
+            class="setting-row-stack theme-settings-section"
+          >
             <div class="theme-preset-grid" role="list">
               <button
                 v-for="preset in themePresetCards"
@@ -338,31 +290,38 @@
                 </button>
               </button>
             </div>
-          </div>
+          </SettingRow>
 
-          <div class="setting-row setting-row-stack theme-settings-section">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.theme.managementLabel') }}</div>
-              <div class="setting-description">
-                {{ $t('settings.theme.managementDescription') }}
-              </div>
-            </div>
+          <SettingRow
+            :label="$t('settings.theme.managementLabel')"
+            :description="$t('settings.theme.managementDescription')"
+            class="setting-row-stack theme-settings-section"
+          >
             <div class="theme-management-area">
               <div class="theme-management-top">
                 <div class="theme-current-profile">
-                  <span class="theme-current-label">{{ $t('settings.theme.currentProfileLabel') }}</span>
+                  <span class="theme-current-label">{{
+                    $t('settings.theme.currentProfileLabel')
+                  }}</span>
                   <span class="theme-current-value">{{ activeThemeSummary }}</span>
                 </div>
                 <div class="theme-action-bar">
-                  <label class="font-system-button theme-import-button" :class="{ 'is-disabled': isImportingTheme }">
+                  <label
+                    class="font-system-button theme-import-button"
+                    :class="{ 'is-disabled': isImportingTheme }"
+                  >
                     <input
                       class="theme-import-input"
                       type="file"
                       accept="application/json"
                       :disabled="isImportingTheme"
                       @change="importThemeFile"
-                    >
-                    {{ isImportingTheme ? $t('settings.theme.importing') : $t('settings.theme.importAction') }}
+                    />
+                    {{
+                      isImportingTheme
+                        ? $t('settings.theme.importing')
+                        : $t('settings.theme.importAction')
+                    }}
                   </label>
                   <button type="button" class="font-system-button" @click="exportCurrentTheme">
                     {{ $t('settings.theme.exportCurrentAction') }}
@@ -374,14 +333,18 @@
               </div>
               <div class="theme-action-meta">
                 <span class="theme-import-hint">{{ $t('settings.theme.importHint') }}</span>
-                <a class="theme-schema-link" :href="themeSchemaUrl" target="_blank" rel="noreferrer">
+                <a
+                  class="theme-schema-link"
+                  :href="themeSchemaUrl"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {{ $t('settings.theme.schemaLink') }}
                 </a>
               </div>
               <div v-if="themeImportError" class="theme-import-error">{{ themeImportError }}</div>
             </div>
-          </div>
-
+          </SettingRow>
         </template>
 
         <template v-else-if="activePage === 'editor'">
@@ -390,7 +353,9 @@
           <label class="setting-row setting-row-stack">
             <span class="setting-info">
               <span class="setting-label">{{ $t('settings.editor.tabSize.label') }}</span>
-              <span class="setting-description">{{ $t('settings.editor.tabSize.description') }}</span>
+              <span class="setting-description">{{
+                $t('settings.editor.tabSize.description')
+              }}</span>
             </span>
             <input
               v-model.number="editorTabSize"
@@ -404,16 +369,11 @@
             />
           </label>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.editor.editInVis.label') }}</div>
-              <div class="setting-description">{{ $t('settings.editor.editInVis.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="editInVis" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="editInVis"
+            :label="$t('settings.editor.editInVis.label')"
+            :description="$t('settings.editor.editInVis.description')"
+          />
 
           <div class="setting-row setting-row-stack editor-shortcut-section">
             <div class="editor-shortcut-heading">
@@ -426,7 +386,11 @@
               {{ $t('settings.editor.shortcuts.description') }}
             </div>
             <div class="editor-shortcut-grid">
-              <div v-for="field in editorShortcutFields" :key="field.key" class="editor-shortcut-field">
+              <div
+                v-for="field in editorShortcutFields"
+                :key="field.key"
+                class="editor-shortcut-field"
+              >
                 <span class="editor-shortcut-label">{{ field.label }}</span>
                 <button
                   type="button"
@@ -451,11 +415,12 @@
             </div>
           </div>
 
-          <div v-if="isElectron" class="setting-row setting-row-stack">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.editor.localApplication.label') }}</div>
-              <div class="setting-description">{{ $t('settings.editor.localApplication.description') }}</div>
-            </div>
+          <SettingRow
+            v-if="isElectron"
+            :label="$t('settings.editor.localApplication.label')"
+            :description="$t('settings.editor.localApplication.description')"
+            class="setting-row-stack"
+          >
             <div class="local-application-controls">
               <input
                 :value="localApplicationPath"
@@ -478,238 +443,75 @@
                 {{ $t('settings.editor.localApplication.clear') }}
               </button>
             </div>
-            <div v-if="localApplicationError" class="theme-import-error">{{ localApplicationError }}</div>
-          </div>
+            <div v-if="localApplicationError" class="theme-import-error">
+              {{ localApplicationError }}
+            </div>
+          </SettingRow>
         </template>
 
         <template v-else-if="activePage === 'experimental'">
-          <div class="setting-page-description">{{ $t('settings.experimentalFeatures.pageDescription') }}</div>
-
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.experimentalFeatures.showCodexButton.label') }}</div>
-              <div class="setting-description">{{ $t('settings.experimentalFeatures.showCodexButton.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="showCodexButton" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
+          <div class="setting-page-description">
+            {{ $t('settings.experimentalFeatures.pageDescription') }}
           </div>
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.experimentalFeatures.showForgeButton.label') }}</div>
-              <div class="setting-description">{{ $t('settings.experimentalFeatures.showForgeButton.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="showForgePanelButton" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="showCodexButton"
+            :label="$t('settings.experimentalFeatures.showCodexButton.label')"
+            :description="$t('settings.experimentalFeatures.showCodexButton.description')"
+          />
 
-          <div class="setting-row">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.experimentalFeatures.showCodexInStatusMonitor.label') }}</div>
-              <div class="setting-description">{{ $t('settings.experimentalFeatures.showCodexInStatusMonitor.description') }}</div>
-            </div>
-            <label class="toggle-switch">
-              <input v-model="showCodexInStatusMonitor" type="checkbox" class="toggle-input" />
-              <span class="toggle-track" />
-            </label>
-          </div>
+          <ToggleSettingRow
+            v-model="showForgePanelButton"
+            :label="$t('settings.experimentalFeatures.showForgeButton.label')"
+            :description="$t('settings.experimentalFeatures.showForgeButton.description')"
+          />
 
+          <ToggleSettingRow
+            v-model="showCodexInStatusMonitor"
+            :label="$t('settings.experimentalFeatures.showCodexInStatusMonitor.label')"
+            :description="$t('settings.experimentalFeatures.showCodexInStatusMonitor.description')"
+          />
         </template>
 
         <template v-else>
           <div class="setting-page-description">{{ $t('settings.fontSettings.description') }}</div>
 
-          <div class="setting-row setting-row-font">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.terminalFontFamily.label') }}</div>
-              <div class="setting-description">{{ $t('settings.terminalFontFamily.description') }}</div>
-            </div>
+          <SettingRow
+            v-for="section in fontStackSections"
+            :key="section.id"
+            :label="$t(section.labelKey)"
+            :description="$t(section.descriptionKey)"
+            class="setting-row-font"
+          >
             <div class="font-setting-controls">
-              <div class="font-setting-section">
-                <label :for="terminalSizeInputId" class="font-setting-section-label">{{ $t('settings.terminalFontSizePx.label') }}</label>
+              <div v-for="size in section.sizes" :key="size.inputId" class="font-setting-section">
+                <label :for="size.inputId" class="font-setting-section-label">{{
+                  $t(size.labelKey)
+                }}</label>
                 <div class="number-setting-group">
                   <input
-                    :id="terminalSizeInputId"
-                    v-model.number="terminalFontSizePx"
+                    :id="size.inputId"
+                    v-model.number="size.model.value"
                     type="number"
                     class="number-input"
-                    :min="minTerminalFontSizePx"
-                    :max="maxTerminalFontSizePx"
+                    :min="size.min"
+                    :max="size.max"
                     step="1"
-                    @blur="clampTerminalFontSize"
-                    @keydown.enter="clampTerminalFontSize"
+                    @blur="size.clamp"
+                    @keydown.enter="size.clamp"
                   />
                 </div>
-                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.terminalFontSizePx.description') }}</div>
-              </div>
-              <div class="font-setting-section">
-                <div :id="terminalPresetLabelId" class="font-setting-section-label">{{ $t('settings.fontPresetsLabel') }}</div>
-                <div class="font-preset-row" role="group" :aria-labelledby="terminalPresetLabelId">
-                  <button
-                    v-for="preset in terminalFontPresets"
-                    :key="preset.id"
-                    type="button"
-                    class="font-preset-chip"
-                    :class="{ 'is-active': isFontPresetSelected(terminalFontFamily, preset.value) }"
-                    :aria-pressed="isFontPresetSelected(terminalFontFamily, preset.value)"
-                    @click="terminalFontFamily = preset.value"
-                  >
-                    {{ preset.label }}
-                  </button>
+                <div class="setting-description" style="margin-top: 2px">
+                  {{ $t(size.descriptionKey) }}
                 </div>
               </div>
-              <div class="font-setting-section">
-                <label :id="terminalInputLabelId" class="font-setting-section-label" :for="terminalTextareaId">
-                  {{ $t('settings.customFontStackLabel') }}
-                </label>
-                <textarea
-                  :id="terminalTextareaId"
-                  v-model.trim="terminalFontFamily"
-                  class="font-stack-input"
-                  rows="3"
-                  spellcheck="false"
-                  autocapitalize="off"
-                  autocomplete="off"
-                  :placeholder="defaultTerminalFontFamily"
-                  :aria-describedby="terminalPresetLabelId"
-                />
-                <div class="font-stack-status-list" role="status" aria-live="polite">
-                  <div
-                    v-for="entry in terminalFontStatusEntries"
-                    :key="`terminal-${entry.family}`"
-                    class="font-stack-status-item"
-                    :class="`is-${entry.status}`"
-                  >
-                    <span class="font-stack-status-name">{{ entry.family }}</span>
-                    <span class="font-stack-status-value">{{ getFontStatusLabel(entry.status) }}</span>
-                  </div>
-                </div>
-              </div>
-              <div class="font-setting-section">
-                <button
-                  type="button"
-                  class="font-discovery-toggle"
-                  :aria-expanded="isTerminalFontDiscoveryOpen"
-                  @click="toggleFontDiscovery('terminal')"
-                >
-                  <span>{{ $t('settings.systemFonts.label') }}</span>
-                  <Icon
-                    :icon="isTerminalFontDiscoveryOpen ? 'lucide:chevron-up' : 'lucide:chevron-down'"
-                    :width="14"
-                    :height="14"
-                  />
-                </button>
-                <div v-if="isTerminalFontDiscoveryOpen" class="font-discovery-panel">
-                  <div class="font-system-actions">
-                    <button
-                      v-if="supportsLocalFontsApi"
-                      type="button"
-                      class="font-system-button"
-                      :disabled="isLoadingLocalFonts"
-                      @click="loadLocalFonts"
-                    >
-                      {{ isLoadingLocalFonts ? $t('settings.systemFonts.loading') : $t('settings.systemFonts.scan') }}
-                    </button>
-                    <div v-else class="font-system-hint">{{ $t('settings.systemFonts.unsupported') }}</div>
-                    <div v-if="localFontsError" class="font-system-error">{{ localFontsError }}</div>
-                  </div>
-                  <div v-if="localFontFamilies.length > 0" class="font-system-list" role="list">
-                    <button
-                      v-for="font in localFontFamilies"
-                      :key="`terminal-${font.family}`"
-                      type="button"
-                      class="font-system-item"
-                      @click="terminalFontFamily = prependFamily(terminalFontFamily, font.family)"
-                    >
-                      <span class="font-system-family">{{ font.family }}</span>
-                      <span class="font-system-meta">{{ font.styles.join(', ') || $t('settings.systemFonts.regular') }}</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="setting-row setting-row-font">
-            <div class="setting-info">
-              <div class="setting-label">{{ $t('settings.appMonospaceFontFamily.label') }}</div>
-              <div class="setting-description">{{ $t('settings.appMonospaceFontFamily.description') }}</div>
-            </div>
-            <div class="font-setting-controls">
-              <div class="font-setting-section">
-                <label :for="appSizeInputId" class="font-setting-section-label">{{ $t('settings.appFontSizePx.label') }}</label>
-                <div class="number-setting-group">
-                  <input
-                    :id="appSizeInputId"
-                    v-model.number="appFontSizePx"
-                    type="number"
-                    class="number-input"
-                    :min="minAppFontSizePx"
-                    :max="maxAppFontSizePx"
-                    step="1"
-                    @blur="clampAppFontSize"
-                    @keydown.enter="clampAppFontSize"
-                  />
-                </div>
-                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.appFontSizePx.description') }}</div>
-              </div>
-              <div class="font-setting-section">
-                <label :for="messageSizeInputId" class="font-setting-section-label">{{ $t('settings.messageFontSizePx.label') }}</label>
-                <div class="number-setting-group">
-                  <input
-                    :id="messageSizeInputId"
-                    v-model.number="messageFontSizePx"
-                    type="number"
-                    class="number-input"
-                    :min="minMessageFontSizePx"
-                    :max="maxMessageFontSizePx"
-                    step="1"
-                    @blur="clampMessageFontSize"
-                    @keydown.enter="clampMessageFontSize"
-                  />
-                </div>
-                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.messageFontSizePx.description') }}</div>
-              </div>
-              <div class="font-setting-section">
-                <label :for="sidebarSizeInputId" class="font-setting-section-label">{{ $t('settings.sidebarFontSizePx.label') }}</label>
-                <div class="number-setting-group">
-                  <input
-                    :id="sidebarSizeInputId"
-                    v-model.number="sidebarFontSizePx"
-                    type="number"
-                    class="number-input"
-                    :min="minSidebarFontSizePx"
-                    :max="maxSidebarFontSizePx"
-                    step="1"
-                    @blur="clampSidebarFontSize"
-                    @keydown.enter="clampSidebarFontSize"
-                  />
-                </div>
-                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.sidebarFontSizePx.description') }}</div>
-              </div>
-              <div class="font-setting-section">
-                <label :for="uiSizeInputId" class="font-setting-section-label">{{ $t('settings.uiFontSizePx.label') }}</label>
-                <div class="number-setting-group">
-                  <input
-                    :id="uiSizeInputId"
-                    v-model.number="uiFontSizePx"
-                    type="number"
-                    class="number-input"
-                    :min="minUiFontSizePx"
-                    :max="maxUiFontSizePx"
-                    step="1"
-                    @blur="clampUiFontSize"
-                    @keydown.enter="clampUiFontSize"
-                  />
-                </div>
-                <div class="setting-description" style="margin-top: 2px;">{{ $t('settings.uiFontSizePx.description') }}</div>
-              </div>
-              <div class="font-setting-section font-setting-suboption">
-                <label class="font-setting-section-label">{{ $t('settings.editor.fontSize.label') }}</label>
+              <div
+                v-if="section.editorSuboption"
+                class="font-setting-section font-setting-suboption"
+              >
+                <label class="font-setting-section-label">{{
+                  $t('settings.editor.fontSize.label')
+                }}</label>
                 <div class="editor-number-control">
                   <input
                     v-model.number="editorFontSizePx"
@@ -726,50 +528,60 @@
                     {{ $t('settings.editor.fontSize.inheritAction') }}
                   </button>
                 </div>
-                <div class="setting-description" style="margin-top: 2px;">
+                <div class="setting-description" style="margin-top: 2px">
                   {{ $t('settings.editor.fontSize.description') }}
                 </div>
               </div>
               <div class="font-setting-section">
-                <div :id="appPresetLabelId" class="font-setting-section-label">{{ $t('settings.fontPresetsLabel') }}</div>
-                <div class="font-preset-row" role="group" :aria-labelledby="appPresetLabelId">
+                <div :id="section.presetLabelId" class="font-setting-section-label">
+                  {{ $t('settings.fontPresetsLabel') }}
+                </div>
+                <div class="font-preset-row" role="group" :aria-labelledby="section.presetLabelId">
                   <button
-                    v-for="preset in appMonospaceFontPresets"
+                    v-for="preset in section.presets"
                     :key="preset.id"
                     type="button"
                     class="font-preset-chip"
-                    :class="{ 'is-active': isFontPresetSelected(appMonospaceFontFamily, preset.value) }"
-                    :aria-pressed="isFontPresetSelected(appMonospaceFontFamily, preset.value)"
-                    @click="appMonospaceFontFamily = preset.value"
+                    :class="{
+                      'is-active': isFontPresetSelected(section.family.value, preset.value),
+                    }"
+                    :aria-pressed="isFontPresetSelected(section.family.value, preset.value)"
+                    @click="section.family.value = preset.value"
                   >
                     {{ preset.label }}
                   </button>
                 </div>
               </div>
               <div class="font-setting-section">
-                <label :id="appInputLabelId" class="font-setting-section-label" :for="appTextareaId">
+                <label
+                  :id="section.inputLabelId"
+                  class="font-setting-section-label"
+                  :for="section.textareaId"
+                >
                   {{ $t('settings.customFontStackLabel') }}
                 </label>
                 <textarea
-                  :id="appTextareaId"
-                  v-model.trim="appMonospaceFontFamily"
+                  :id="section.textareaId"
+                  v-model.trim="section.family.value"
                   class="font-stack-input"
                   rows="3"
                   spellcheck="false"
                   autocapitalize="off"
                   autocomplete="off"
-                  :placeholder="defaultAppMonospaceFontFamily"
-                  :aria-describedby="appPresetLabelId"
+                  :placeholder="section.placeholder"
+                  :aria-describedby="section.presetLabelId"
                 />
                 <div class="font-stack-status-list" role="status" aria-live="polite">
                   <div
-                    v-for="entry in appFontStatusEntries"
-                    :key="`app-${entry.family}`"
+                    v-for="entry in section.statusEntries"
+                    :key="`${section.id}-${entry.family}`"
                     class="font-stack-status-item"
                     :class="`is-${entry.status}`"
                   >
                     <span class="font-stack-status-name">{{ entry.family }}</span>
-                    <span class="font-stack-status-value">{{ getFontStatusLabel(entry.status) }}</span>
+                    <span class="font-stack-status-value">{{
+                      getFontStatusLabel(entry.status)
+                    }}</span>
                   </div>
                 </div>
               </div>
@@ -777,17 +589,19 @@
                 <button
                   type="button"
                   class="font-discovery-toggle"
-                  :aria-expanded="isAppFontDiscoveryOpen"
-                  @click="toggleFontDiscovery('app')"
+                  :aria-expanded="section.discoveryOpen.value"
+                  @click="toggleFontDiscovery(section.id)"
                 >
                   <span>{{ $t('settings.systemFonts.label') }}</span>
                   <Icon
-                    :icon="isAppFontDiscoveryOpen ? 'lucide:chevron-up' : 'lucide:chevron-down'"
+                    :icon="
+                      section.discoveryOpen.value ? 'lucide:chevron-up' : 'lucide:chevron-down'
+                    "
                     :width="14"
                     :height="14"
                   />
                 </button>
-                <div v-if="isAppFontDiscoveryOpen" class="font-discovery-panel">
+                <div v-if="section.discoveryOpen.value" class="font-discovery-panel">
                   <div class="font-system-actions">
                     <button
                       v-if="supportsLocalFontsApi"
@@ -796,28 +610,39 @@
                       :disabled="isLoadingLocalFonts"
                       @click="loadLocalFonts"
                     >
-                      {{ isLoadingLocalFonts ? $t('settings.systemFonts.loading') : $t('settings.systemFonts.scan') }}
+                      {{
+                        isLoadingLocalFonts
+                          ? $t('settings.systemFonts.loading')
+                          : $t('settings.systemFonts.scan')
+                      }}
                     </button>
-                    <div v-else class="font-system-hint">{{ $t('settings.systemFonts.unsupported') }}</div>
-                    <div v-if="localFontsError" class="font-system-error">{{ localFontsError }}</div>
+                    <div v-else class="font-system-hint">
+                      {{ $t('settings.systemFonts.unsupported') }}
+                    </div>
+                    <div v-if="localFontsError" class="font-system-error">
+                      {{ localFontsError }}
+                    </div>
                   </div>
                   <div v-if="localFontFamilies.length > 0" class="font-system-list" role="list">
                     <button
                       v-for="font in localFontFamilies"
-                      :key="`app-${font.family}`"
+                      :key="`${section.id}-${font.family}`"
                       type="button"
                       class="font-system-item"
-                      @click="appMonospaceFontFamily = prependFamily(appMonospaceFontFamily, font.family)"
+                      @click="
+                        section.family.value = prependFamily(section.family.value, font.family)
+                      "
                     >
                       <span class="font-system-family">{{ font.family }}</span>
-                      <span class="font-system-meta">{{ font.styles.join(', ') || $t('settings.systemFonts.regular') }}</span>
+                      <span class="font-system-meta">{{
+                        font.styles.join(', ') || $t('settings.systemFonts.regular')
+                      }}</span>
                     </button>
                   </div>
                 </div>
               </div>
             </div>
-          </div>
-
+          </SettingRow>
         </template>
       </div>
     </div>
@@ -825,8 +650,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, watchEffect } from 'vue';
+import { computed, nextTick, onMounted, ref, watch, watchEffect, type Ref } from 'vue';
 import { Icon } from '@iconify/vue';
+import SettingRow from './SettingRow.vue';
+import ToggleSettingRow from './ToggleSettingRow.vue';
 import { useSettings } from '../composables/useSettings';
 import { getTextTransformerTriggerIssue } from '../utils/textTransformers';
 import { useI18n } from 'vue-i18n';
@@ -846,14 +673,8 @@ import {
   type FontAvailabilityStatus,
   type LocalFontFamily,
 } from '../utils/fontDiscovery';
-import {
-  resolveThemeStoragePreset,
-  regionThemeToStorage,
-} from '../utils/themeTokens';
-import {
-  DEFAULT_REGION_THEME,
-  resolveRegionThemePresetName,
-} from '../utils/regionTheme';
+import { resolveThemeStoragePreset, regionThemeToStorage } from '../utils/themeTokens';
+import { DEFAULT_REGION_THEME, resolveRegionThemePresetName } from '../utils/regionTheme';
 import {
   THEME_SCHEMA_URL,
   createExternalThemeDefinition,
@@ -997,7 +818,9 @@ const activeThemeStorage = themeStorage;
 const selectedPreset = ref<string>('default');
 let isSyncingThemeEditorState = false;
 
-const themeRegistryEntries = computed<ThemeRegistryEntry[]>(() => listThemeRegistryEntries(externalThemes.value));
+const themeRegistryEntries = computed<ThemeRegistryEntry[]>(() =>
+  listThemeRegistryEntries(externalThemes.value),
+);
 const themeSchemaUrl = computed(() => new URL(THEME_SCHEMA_URL, window.location.href).toString());
 
 function syncSelectedPresetFromActiveTheme() {
@@ -1023,7 +846,10 @@ function syncThemeEditorState() {
 }
 
 function applyPreset(name: string) {
-  const presetTheme = name === DEFAULT_REGION_THEME.name ? null : resolveThemeRegistryTheme(name, externalThemes.value);
+  const presetTheme =
+    name === DEFAULT_REGION_THEME.name
+      ? null
+      : resolveThemeRegistryTheme(name, externalThemes.value);
   activeThemeStorage.value = presetTheme ? regionThemeToStorage(presetTheme) : null;
 }
 
@@ -1046,7 +872,8 @@ async function importThemeFile(event: Event) {
     externalThemes.value = Array.from(nextThemes.values());
     selectedPreset.value = importedTheme.id;
   } catch (error) {
-    themeImportError.value = error instanceof Error ? error.message : t('settings.theme.importError');
+    themeImportError.value =
+      error instanceof Error ? error.message : t('settings.theme.importError');
   } finally {
     isImportingTheme.value = false;
     if (input) {
@@ -1112,7 +939,9 @@ const themePresetCards = computed<ThemePresetCard[]>(() =>
     id: entry.id,
     label: entry.labelKey ? t(entry.labelKey) : entry.theme.label,
     badge: entry.badgeKey ? t(entry.badgeKey) : (entry.badge ?? t('settings.theme.externalBadge')),
-    description: entry.descriptionKey ? t(entry.descriptionKey) : (entry.description ?? t('settings.theme.externalDescription')),
+    description: entry.descriptionKey
+      ? t(entry.descriptionKey)
+      : (entry.description ?? t('settings.theme.externalDescription')),
     swatches: entry.swatches,
     source: entry.source,
     removable: entry.removable,
@@ -1171,22 +1000,26 @@ const appMonospaceFontPresets = computed<FontPreset[]>(() => [
   {
     id: 'sfmono',
     label: t('settings.fontPresets.sfMono'),
-    value: "'SF Mono', 'SFMono-Regular', ui-monospace, 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace",
+    value:
+      "'SF Mono', 'SFMono-Regular', ui-monospace, 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace",
   },
   {
     id: 'jetbrains',
     label: t('settings.fontPresets.jetbrainsMono'),
-    value: "'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace",
+    value:
+      "'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace",
   },
   {
     id: 'firacode',
     label: t('settings.fontPresets.firaCode'),
-    value: "'Fira Code', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace",
+    value:
+      "'Fira Code', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', monospace",
   },
   {
     id: 'iosevka',
     label: t('settings.fontPresets.iosevkaTerm'),
-    value: "'Iosevka Term', 'Iosevka Fixed', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace",
+    value:
+      "'Iosevka Term', 'Iosevka Fixed', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', monospace",
   },
 ]);
 
@@ -1202,8 +1035,12 @@ function isFontPresetSelected(currentValue: string, presetValue: string) {
   return normalizeFontStack(currentValue) === normalizeFontStack(presetValue);
 }
 
-const terminalFontStatusEntries = computed(() => inspectFontStack(debouncedTerminalFontFamily.value).slice(0, 8));
-const appFontStatusEntries = computed(() => inspectFontStack(debouncedAppMonospaceFontFamily.value).slice(0, 8));
+const terminalFontStatusEntries = computed(() =>
+  inspectFontStack(debouncedTerminalFontFamily.value).slice(0, 8),
+);
+const appFontStatusEntries = computed(() =>
+  inspectFontStack(debouncedAppMonospaceFontFamily.value).slice(0, 8),
+);
 
 function getFontStatusLabel(status: FontAvailabilityStatus) {
   if (status === 'available') return t('settings.fontStatus.available');
@@ -1223,6 +1060,114 @@ function toggleFontDiscovery(target: 'terminal' | 'app') {
   isAppFontDiscoveryOpen.value = !isAppFontDiscoveryOpen.value;
 }
 
+type FontStatusEntry = ReturnType<typeof inspectFontStack>[number];
+
+type FontSizeField = {
+  inputId: string;
+  labelKey: string;
+  descriptionKey: string;
+  model: Ref<number>;
+  min: number;
+  max: number;
+  clamp: () => void;
+};
+
+type FontStackSection = {
+  id: 'terminal' | 'app';
+  labelKey: string;
+  descriptionKey: string;
+  family: Ref<string>;
+  placeholder: string;
+  presets: FontPreset[];
+  statusEntries: FontStatusEntry[];
+  presetLabelId: string;
+  inputLabelId: string;
+  textareaId: string;
+  discoveryOpen: Ref<boolean>;
+  sizes: FontSizeField[];
+  editorSuboption: boolean;
+};
+
+const fontStackSections = computed<FontStackSection[]>(() => [
+  {
+    id: 'terminal',
+    labelKey: 'settings.terminalFontFamily.label',
+    descriptionKey: 'settings.terminalFontFamily.description',
+    family: terminalFontFamily,
+    placeholder: defaultTerminalFontFamily,
+    presets: terminalFontPresets.value,
+    statusEntries: terminalFontStatusEntries.value,
+    presetLabelId: terminalPresetLabelId,
+    inputLabelId: terminalInputLabelId,
+    textareaId: terminalTextareaId,
+    discoveryOpen: isTerminalFontDiscoveryOpen,
+    sizes: [
+      {
+        inputId: terminalSizeInputId,
+        labelKey: 'settings.terminalFontSizePx.label',
+        descriptionKey: 'settings.terminalFontSizePx.description',
+        model: terminalFontSizePx,
+        min: minTerminalFontSizePx,
+        max: maxTerminalFontSizePx,
+        clamp: clampTerminalFontSize,
+      },
+    ],
+    editorSuboption: false,
+  },
+  {
+    id: 'app',
+    labelKey: 'settings.appMonospaceFontFamily.label',
+    descriptionKey: 'settings.appMonospaceFontFamily.description',
+    family: appMonospaceFontFamily,
+    placeholder: defaultAppMonospaceFontFamily,
+    presets: appMonospaceFontPresets.value,
+    statusEntries: appFontStatusEntries.value,
+    presetLabelId: appPresetLabelId,
+    inputLabelId: appInputLabelId,
+    textareaId: appTextareaId,
+    discoveryOpen: isAppFontDiscoveryOpen,
+    sizes: [
+      {
+        inputId: appSizeInputId,
+        labelKey: 'settings.appFontSizePx.label',
+        descriptionKey: 'settings.appFontSizePx.description',
+        model: appFontSizePx,
+        min: minAppFontSizePx,
+        max: maxAppFontSizePx,
+        clamp: clampAppFontSize,
+      },
+      {
+        inputId: messageSizeInputId,
+        labelKey: 'settings.messageFontSizePx.label',
+        descriptionKey: 'settings.messageFontSizePx.description',
+        model: messageFontSizePx,
+        min: minMessageFontSizePx,
+        max: maxMessageFontSizePx,
+        clamp: clampMessageFontSize,
+      },
+      {
+        inputId: sidebarSizeInputId,
+        labelKey: 'settings.sidebarFontSizePx.label',
+        descriptionKey: 'settings.sidebarFontSizePx.description',
+        model: sidebarFontSizePx,
+        min: minSidebarFontSizePx,
+        max: maxSidebarFontSizePx,
+        clamp: clampSidebarFontSize,
+      },
+      {
+        inputId: uiSizeInputId,
+        labelKey: 'settings.uiFontSizePx.label',
+        descriptionKey: 'settings.uiFontSizePx.description',
+        model: uiFontSizePx,
+        min: minUiFontSizePx,
+        max: maxUiFontSizePx,
+        clamp: clampUiFontSize,
+      },
+    ],
+    editorSuboption: true,
+  },
+]);
+
 function clampTerminalFontSize() {
   terminalFontSizePx.value = Math.max(
     minTerminalFontSizePx,
@@ -1231,10 +1176,7 @@ function clampTerminalFontSize() {
 }
 
 function clampAppFontSize() {
-  appFontSizePx.value = Math.max(
-    minAppFontSizePx,
-    Math.min(maxAppFontSizePx, appFontSizePx.value),
-  );
+  appFontSizePx.value = Math.max(minAppFontSizePx, Math.min(maxAppFontSizePx, appFontSizePx.value));
 }
 
 function clampMessageFontSize() {
@@ -1252,10 +1194,7 @@ function clampSidebarFontSize() {
 }
 
 function clampUiFontSize() {
-  uiFontSizePx.value = Math.max(
-    minUiFontSizePx,
-    Math.min(maxUiFontSizePx, uiFontSizePx.value),
-  );
+  uiFontSizePx.value = Math.max(minUiFontSizePx, Math.min(maxUiFontSizePx, uiFontSizePx.value));
 }
 
 function clampOpenInEditorMaxSizeMb() {
@@ -1278,10 +1217,7 @@ function inheritEditorFontSize() {
 }
 
 function clampEditorTabSize() {
-  editorTabSize.value = Math.max(
-    minEditorTabSize,
-    Math.min(maxEditorTabSize, editorTabSize.value),
-  );
+  editorTabSize.value = Math.max(minEditorTabSize, Math.min(maxEditorTabSize, editorTabSize.value));
 }
 
 function resetEditorShortcuts() {
@@ -1297,11 +1233,7 @@ function removeTextTransformer(index: number) {
   textTransformers.value = textTransformers.value.filter((_, itemIndex) => itemIndex !== index);
 }
 
-function updateTextTransformer(
-  index: number,
-  field: 'trigger' | 'replacement',
-  event: Event,
-) {
+function updateTextTransformer(index: number, field: 'trigger' | 'replacement', event: Event) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement)) return;
   const current = textTransformers.value[index];
@@ -1363,9 +1295,7 @@ function recordShortcut(key: EditorShortcutKey, event: KeyboardEvent) {
 function shortcutButtonLabel(key: EditorShortcutKey) {
   if (recordingShortcut.value === key) return t('settings.editor.shortcuts.recording');
   const shortcut = editorShortcuts.value[key];
-  return shortcut
-    ? formatShortcutForDisplay(shortcut)
-    : t('settings.editor.shortcuts.unassigned');
+  return shortcut ? formatShortcutForDisplay(shortcut) : t('settings.editor.shortcuts.unassigned');
 }
 
 async function browseLocalApplication() {
@@ -1423,13 +1353,20 @@ watch(locale, (newLocale) => {
 
 const pageTitle = computed(() => {
   switch (activePage.value) {
-    case 'root': return t('settings.title');
-    case 'fonts': return t('settings.fontsPageTitle');
-    case 'editor': return t('settings.editor.pageTitle');
-    case 'transformers': return t('settings.textTransformers.pageTitle');
-    case 'theme': return t('settings.themePageTitle');
-    case 'experimental': return t('settings.experimentalFeatures.pageTitle');
-    default: return t('settings.title');
+    case 'root':
+      return t('settings.title');
+    case 'fonts':
+      return t('settings.fontsPageTitle');
+    case 'editor':
+      return t('settings.editor.pageTitle');
+    case 'transformers':
+      return t('settings.textTransformers.pageTitle');
+    case 'theme':
+      return t('settings.themePageTitle');
+    case 'experimental':
+      return t('settings.experimentalFeatures.pageTitle');
+    default:
+      return t('settings.title');
   }
 });
 
@@ -1840,7 +1777,10 @@ watch(
 }
 
 .setting-link-row:hover {
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.72)));
+  background: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.72))
+  );
   border-color: var(--theme-modal-accent, var(--theme-border-strong, #475569));
 }
 
@@ -1879,13 +1819,24 @@ watch(
 
 .theme-preset-card:hover {
   border-color: var(--theme-modal-accent, var(--theme-border-strong, #475569));
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.72)));
+  background: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-panel-hover, rgba(15, 23, 42, 0.72))
+  );
 }
 
 .theme-preset-card.is-active {
   border-color: var(--theme-modal-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.16)));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 35%, transparent);
+  background: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-panel-active, rgba(59, 130, 246, 0.16))
+  );
+  box-shadow: 0 0 0 1px
+    color-mix(
+      in srgb,
+      var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 35%,
+      transparent
+    );
 }
 
 .theme-preset-card-header {
@@ -1999,7 +1950,8 @@ watch(
   gap: 12px;
   flex-wrap: wrap;
   padding-top: 4px;
-  border-top: 1px solid var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.4)));
+  border-top: 1px solid
+    var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.4)));
 }
 
 .theme-import-button {
@@ -2024,12 +1976,6 @@ watch(
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
-.theme-import-schema-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
 .theme-schema-link {
   font-size: 11px;
   color: var(--theme-accent-primary, #60a5fa);
@@ -2044,8 +1990,6 @@ watch(
   font-size: 11px;
   color: var(--theme-text-danger, #fca5a5);
 }
-
-
 
 .setting-info {
   display: flex;
@@ -2089,7 +2033,8 @@ watch(
 .font-setting-suboption {
   margin-left: 10px;
   padding-left: 10px;
-  border-left: 1px solid var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.35)));
+  border-left: 1px solid
+    var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.35)));
 }
 
 .font-setting-section-label {
@@ -2104,9 +2049,18 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: var(--ui-action-gap);
-  --ui-chip-border-neutral: var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
-  --ui-chip-bg-neutral: var(--theme-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75)));
-  --ui-chip-bg-hover: var(--theme-modal-active-bg, var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92)));
+  --ui-chip-border-neutral: var(
+    --theme-modal-border,
+    var(--theme-border-muted, rgba(148, 163, 184, 0.65))
+  );
+  --ui-chip-bg-neutral: var(
+    --theme-modal-control-bg,
+    var(--theme-surface-chip, rgba(15, 23, 42, 0.75))
+  );
+  --ui-chip-bg-hover: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92))
+  );
   --ui-chip-fg-neutral: var(--theme-modal-text, var(--theme-text-primary, #bfdbfe));
 }
 
@@ -2131,7 +2085,10 @@ watch(
 
 .font-preset-chip.is-active {
   border-color: var(--theme-modal-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2)));
+  background: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2))
+  );
   color: var(--theme-modal-active-text, var(--theme-text-primary, #dbeafe));
 }
 
@@ -2318,7 +2275,10 @@ watch(
   padding: 10px;
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
   border-radius: 8px;
-  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72)));
+  background: var(
+    --theme-modal-control-bg,
+    var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.72))
+  );
   color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
   text-align: left;
   cursor: pointer;
@@ -2326,7 +2286,10 @@ watch(
 
 .font-system-item:hover {
   border-color: var(--theme-modal-accent, var(--theme-border-strong, #475569));
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92)));
+  background: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-panel-hover, rgba(30, 41, 59, 0.92))
+  );
 }
 
 .font-system-family {
@@ -2355,89 +2318,11 @@ watch(
 .language-select:focus {
   outline: none;
   border-color: var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%, transparent);
-}
-
-
-.toggle-switch {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  cursor: pointer;
-}
-
-.toggle-input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-
-.toggle-input:focus-visible + .toggle-track {
-  outline: 2px solid var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6));
-  outline-offset: 2px;
-}
-
-.toggle-track {
-  width: 36px;
-  height: 20px;
-  background: var(--theme-modal-border, var(--theme-border-default, #334155));
-  border-radius: 10px;
-  position: relative;
-  transition: background 0.2s;
-}
-
-.toggle-track::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--theme-modal-text, var(--theme-text-muted, #94a3b8));
-  transition:
-    transform 0.2s,
-    background 0.2s;
-}
-
-.toggle-input:checked + .toggle-track {
-  background: var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6));
-}
-
-.toggle-input:checked + .toggle-track::after {
-  transform: translateX(16px);
-  background: var(--theme-modal-active-text, var(--theme-text-inverse, #fff));
-}
-
-.theme-region-colors {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  width: 100%;
-}
-
-.theme-color-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.theme-color-label {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
-}
-
-.theme-color-input {
-  width: 100%;
-  height: 32px;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
+  box-shadow: 0 0 0 1px
+    color-mix(
+      in srgb,
+      var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%,
+      transparent
+    );
 }
 </style>
