@@ -1,6 +1,6 @@
 import type { BackendKind } from '../backends/types';
 
-export type BackendRequestToken = {
+type BackendRequestToken = {
   backend: BackendKind;
   generation: number;
 };
