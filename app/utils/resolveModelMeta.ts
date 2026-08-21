@@ -1,3 +1,8 @@
+export type ModelMeta = {
+  displayName: string;
+  providerLabel?: string;
+};
+
 export type ModelOption = {
   id: string;
   modelID: string;
@@ -7,11 +12,6 @@ export type ModelOption = {
   providerLabel?: string;
   variants?: Record<string, unknown>;
   attachmentCapable?: boolean;
-};
-
-export type ModelMeta = {
-  displayName: string;
-  providerLabel?: string;
 };
 
 export function buildModelMetaIndex(
