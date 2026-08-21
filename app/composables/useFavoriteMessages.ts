@@ -1,7 +1,7 @@
 import { ref, watch } from 'vue';
 import { StorageKeys, storageGet, storageKey, storageSetJSON } from '../utils/storageKeys';
 
-export type FavoriteMessageEntry = {
+type FavoriteMessageEntry = {
   text: string;
   agent?: string;
   agentColor?: string;
@@ -45,11 +45,11 @@ function isSameFavoriteMessages(a: FavoriteMessageEntry[], b: FavoriteMessageEnt
     return (
       next &&
       item.text === next.text &&
-        (item.agent ?? '') === (next.agent ?? '') &&
-        (item.agentColor ?? '') === (next.agentColor ?? '') &&
-        (item.model ?? '') === (next.model ?? '') &&
-        (item.variant ?? '') === (next.variant ?? '') &&
-        Boolean(item.isSubagent) === Boolean(next.isSubagent)
+      (item.agent ?? '') === (next.agent ?? '') &&
+      (item.agentColor ?? '') === (next.agentColor ?? '') &&
+      (item.model ?? '') === (next.model ?? '') &&
+      (item.variant ?? '') === (next.variant ?? '') &&
+      Boolean(item.isSubagent) === Boolean(next.isSubagent)
     );
   });
 }
@@ -58,12 +58,9 @@ const favorites = ref<FavoriteMessageEntry[]>(
   parseFavoriteMessages(storageGet(StorageKeys.favorites.messages)),
 );
 
-watch(
-  favorites,
-  (value) => {
-    storageSetJSON(StorageKeys.favorites.messages, value);
-  },
-);
+watch(favorites, (value) => {
+  storageSetJSON(StorageKeys.favorites.messages, value);
+});
 
 if (typeof window !== 'undefined') {
   window.addEventListener('storage', (event) => {
@@ -79,7 +76,13 @@ function normalizeText(text: string) {
 }
 
 export function useFavoriteMessages() {
-  function isFavorite(entry: { text: string; agent?: string; model?: string; variant?: string; isSubagent?: boolean }) {
+  function isFavorite(entry: {
+    text: string;
+    agent?: string;
+    model?: string;
+    variant?: string;
+    isSubagent?: boolean;
+  }) {
     const normalized = normalizeText(entry.text);
     if (!normalized) return false;
     return favorites.value.some(
