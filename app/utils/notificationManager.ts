@@ -10,7 +10,7 @@ type NotificationEntry = {
   requestOrigins: Map<string, string>;
 };
 
-export type NotificationSnapshotEntry = {
+type NotificationSnapshotEntry = {
   projectId: string;
   sessionId: string;
   requestIds: string[];
@@ -183,10 +183,12 @@ export function createNotificationManager(
         projectId: trimmedProjectId,
         sessionId: trimmedSessionId,
         requestIds: new Set(entry.requestIds),
-        requestOrigins: new Map(entry.requestIds.map((requestId) => [
-          requestId,
-          importedOrigins.get(requestId) ?? trimmedSessionId,
-        ])),
+        requestOrigins: new Map(
+          entry.requestIds.map((requestId) => [
+            requestId,
+            importedOrigins.get(requestId) ?? trimmedSessionId,
+          ]),
+        ),
       });
       order.push(key);
     }
