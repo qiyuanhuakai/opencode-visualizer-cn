@@ -2,6 +2,7 @@ import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from 'markdown-it';
 import { fromHighlighter, type MarkdownItShikiSetupOptions } from '@shikijs/markdown-it/core';
 import { transformerNotationDiff } from '@shikijs/transformers';
 import { compactUnifiedDiffPatch } from '../utils/diffCompression';
+import { parseHunkHeader, reconstructSourcesFromDiff, walkDiffLines } from '../utils/unifiedDiff';
 import {
   createLanguageCacheState,
   createThemedHighlighter,
@@ -334,12 +335,12 @@ function applyPatchToCode(code: string, patch: string) {
       index += 1;
       continue;
     }
-    const match = /@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(line);
-    if (!match) {
+    const header = parseHunkHeader(line);
+    if (!header) {
       index += 1;
       continue;
     }
-    const oldLine = Number(match[1]);
+    const oldLine = header.oldStart;
     let pointer = oldLine - 1 + offset;
     index += 1;
     while (index < patchLines.length && !patchLines[index].startsWith('@@')) {
@@ -374,75 +375,24 @@ function extractShikiLines(html: string) {
   });
 }
 
-function isDiffMetadataLine(line: string) {
-  return (
-    line.startsWith('diff ') ||
-    line.startsWith('index ') ||
-    line.startsWith('Index: ') ||
-    line.startsWith('===') ||
-    line.startsWith('---') ||
-    line.startsWith('+++') ||
-    line.startsWith('***')
-  );
-}
-
 function buildDiffGutterLines(source: string) {
-  const lines = source.split('\n');
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
   const oldValues: Array<string> = [];
   const newValues: Array<string> = [];
 
-  lines.forEach((line) => {
-    if (line.startsWith('@@')) {
-      const match = /@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
-      if (match) {
-        oldLine = Number(match[1]);
-        newLine = Number(match[2]);
-      }
-      inHunk = true;
-      oldValues.push('');
-      newValues.push('');
-      return;
-    }
-    if (isDiffMetadataLine(line) || line.startsWith('\\')) {
-      inHunk = false;
-      oldValues.push('');
-      newValues.push('');
-      return;
-    }
-    if (!inHunk) {
-      oldValues.push('');
-      newValues.push('');
-      return;
-    }
-    if (line.startsWith('+') && !line.startsWith('+++')) {
+  walkDiffLines(source, ({ kind, oldLine, newLine }) => {
+    if (kind === 'added') {
       oldValues.push('');
       newValues.push(String(newLine));
-      newLine += 1;
-      return;
-    }
-    if (line.startsWith('-') && !line.startsWith('---')) {
+    } else if (kind === 'removed') {
       oldValues.push(String(oldLine));
       newValues.push('');
-      oldLine += 1;
-      return;
-    }
-    if (line.startsWith(' ')) {
+    } else if (kind === 'context') {
       oldValues.push(String(oldLine));
       newValues.push(String(newLine));
-      oldLine += 1;
-      newLine += 1;
-      return;
-    }
-    if (oldLine === 0 && newLine === 0) {
+    } else {
       oldValues.push('');
       newValues.push('');
-      return;
     }
-    oldValues.push('');
-    newValues.push('');
   });
 
   return { oldValues, newValues };
@@ -536,87 +486,19 @@ function renderGrepRows(
 function diffMaxLines(diff: string): { maxOld: number; maxNew: number } {
   let maxOld = 0;
   let maxNew = 0;
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('@@')) {
-      const match = /@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(line);
-      if (match) {
-        oldLine = Number(match[1]);
-        newLine = Number(match[3]);
-      }
-      inHunk = true;
-      continue;
-    }
-    if (isDiffMetadataLine(line) || line.startsWith('\\')) {
-      inHunk = false;
-      continue;
-    }
-    if (!inHunk) continue;
-    if (line.startsWith('+') && !line.startsWith('+++')) {
+
+  walkDiffLines(diff, ({ kind, oldLine, newLine }) => {
+    if (kind === 'added') {
       maxNew = Math.max(maxNew, newLine);
-      newLine += 1;
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
+    } else if (kind === 'removed') {
       maxOld = Math.max(maxOld, oldLine);
-      oldLine += 1;
-    } else if (line.startsWith(' ')) {
+    } else if (kind === 'context') {
       maxOld = Math.max(maxOld, oldLine);
       maxNew = Math.max(maxNew, newLine);
-      oldLine += 1;
-      newLine += 1;
     }
-  }
+  });
+
   return { maxOld, maxNew };
-}
-
-function reconstructSourcesFromDiff(diff: string): { before: string; after: string } {
-  const beforeLines: Array<[number, string]> = [];
-  const afterLines: Array<[number, string]> = [];
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('@@')) {
-      const match = /@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
-      if (match) {
-        oldLine = Number(match[1]);
-        newLine = Number(match[2]);
-      }
-      inHunk = true;
-      continue;
-    }
-    if (isDiffMetadataLine(line) || line.startsWith('\\')) {
-      inHunk = false;
-      continue;
-    }
-    if (!inHunk) continue;
-    if (line.startsWith('+') && !line.startsWith('+++')) {
-      afterLines.push([newLine, line.slice(1)]);
-      newLine += 1;
-    } else if (line.startsWith('-') && !line.startsWith('---')) {
-      beforeLines.push([oldLine, line.slice(1)]);
-      oldLine += 1;
-    } else if (line.startsWith(' ')) {
-      const text = line.slice(1);
-      beforeLines.push([oldLine, text]);
-      afterLines.push([newLine, text]);
-      oldLine += 1;
-      newLine += 1;
-    }
-  }
-
-  const buildPadded = (entries: Array<[number, string]>) => {
-    if (entries.length === 0) return '';
-    const maxLine = entries.reduce((m, [n]) => Math.max(m, n), 0);
-    const arr = Array.from<string>({ length: maxLine }).fill('');
-    entries.forEach(([n, text]) => {
-      arr[n - 1] = text;
-    });
-    return arr.join('\n');
-  };
-
-  return { before: buildPadded(beforeLines), after: buildPadded(afterLines) };
 }
 
 function buildDiffHtmlFromCode(
@@ -648,59 +530,30 @@ function buildDiffHtmlFromCode(
     const afterHtml = safeCodeToHtml(highlighter, trimmedAfter, resolvedLang, theme);
     const beforeLines = extractShikiLines(beforeHtml);
     const afterLines = extractShikiLines(afterHtml);
-    const diffLines = diff.split('\n');
-    let oldLine = 0;
-    let newLine = 0;
-    let inHunk = false;
     const output: DiffRow[] = [];
-    diffLines.forEach((line) => {
-      if (line.startsWith('@@')) {
-        const match = /@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line);
-        if (match) {
-          oldLine = Number(match[1]);
-          newLine = Number(match[2]);
-        }
-        inHunk = true;
+    walkDiffLines(diff, ({ kind, line, text, oldLine, newLine }) => {
+      if (kind === 'hunk') {
         output.push({
           html: `<span class="line">${escapeHtml(line)}</span>`,
           rowClass: 'line-hunk',
         });
-        return;
-      }
-      if (isDiffMetadataLine(line) || line.startsWith('\\')) {
-        inHunk = false;
-        return;
-      }
-      if (!inHunk) {
-        return;
-      }
-      if (line.startsWith('+') && !line.startsWith('+++')) {
-        const htmlLine =
-          afterLines[newLine - 1] ?? `<span class="line">${escapeHtml(line.slice(1))}</span>`;
+      } else if (kind === 'added') {
+        const htmlLine = afterLines[newLine - 1] ?? `<span class="line">${escapeHtml(text)}</span>`;
         output.push({ html: htmlLine, rowClass: 'line-added' });
-        newLine += 1;
-        return;
-      }
-      if (line.startsWith('-') && !line.startsWith('---')) {
+      } else if (kind === 'removed') {
         const htmlLine =
-          beforeLines[oldLine - 1] ?? `<span class="line">${escapeHtml(line.slice(1))}</span>`;
+          beforeLines[oldLine - 1] ?? `<span class="line">${escapeHtml(text)}</span>`;
         output.push({ html: htmlLine, rowClass: 'line-removed' });
-        oldLine += 1;
-        return;
-      }
-      if (!line.startsWith(' ')) {
+      } else if (kind === 'context') {
+        const htmlLine =
+          beforeLines[oldLine - 1] ?? `<span class="line">${escapeHtml(text)}</span>`;
+        output.push({ html: htmlLine });
+      } else if (kind === 'other') {
         output.push({
           html: `<span class="line">${escapeHtml(line)}</span>`,
           rowClass: 'line-header',
         });
-        return;
       }
-      const htmlLine =
-        beforeLines[oldLine - 1] ??
-        `<span class="line">${escapeHtml(line.replace(/^ /, ''))}</span>`;
-      output.push({ html: htmlLine });
-      oldLine += 1;
-      newLine += 1;
     });
     const { oldValues, newValues } = buildDiffGutterLines(diff);
     const rows = wrapDiffRows(output, oldValues, newValues, mode);
@@ -828,7 +681,6 @@ function taskListEmojiPlugin(md: MarkdownItInstance) {
   });
 }
 
-
 function getMarkdownIt(highlighter: Highlighter, theme: string) {
   if (
     !cachedMd ||
@@ -861,8 +713,6 @@ function getMarkdownIt(highlighter: Highlighter, theme: string) {
       tokens[idx].attrSet('rel', 'noopener noreferrer');
       return defaultLinkOpen(tokens, idx, options, _env, self);
     };
-
-
 
     const defaultCodeInline =
       cachedMd.renderer.rules.code_inline ??
@@ -952,7 +802,8 @@ async function renderMarkdownHtml(request: RenderRequest): Promise<string> {
 
 function renderRequest(request: RenderRequest): Promise<string> {
   if (request.patch) {
-    const compactPatch = request.after === undefined ? compactUnifiedDiffPatch(request.patch) : request.patch;
+    const compactPatch =
+      request.after === undefined ? compactUnifiedDiffPatch(request.patch) : request.patch;
     const after = request.after ?? applyPatchToCode(request.code, compactPatch);
     return buildDiffHtmlFromCode(
       request.code,

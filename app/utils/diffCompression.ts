@@ -1,3 +1,5 @@
+import { isDiffMetadataLine, parseHunkHeader } from './unifiedDiff';
+
 type ParsedHunk = {
   oldStart: number;
   newStart: number;
@@ -34,10 +36,12 @@ export function compactUnifiedDiffPatch(patch: string, contextLines = 3) {
   return output.join('\n');
 }
 
-function parseHunk(lines: string[], startIndex: number): { hunk: ParsedHunk; nextIndex: number } | null {
-  const header = lines[startIndex]!;
-  const match = /@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/.exec(header);
-  if (!match) return null;
+function parseHunk(
+  lines: string[],
+  startIndex: number,
+): { hunk: ParsedHunk; nextIndex: number } | null {
+  const header = parseHunkHeader(lines[startIndex]!);
+  if (!header) return null;
 
   const hunkLines: string[] = [];
   let index = startIndex + 1;
@@ -50,8 +54,8 @@ function parseHunk(lines: string[], startIndex: number): { hunk: ParsedHunk; nex
 
   return {
     hunk: {
-      oldStart: Number(match[1]),
-      newStart: Number(match[3]),
+      oldStart: header.oldStart,
+      newStart: header.newStart,
       lines: hunkLines,
     },
     nextIndex: index,
@@ -106,7 +110,12 @@ function compactHunk(hunk: ParsedHunk, contextLines: number) {
   return output;
 }
 
-function formatHunkHeader(oldStart: number, oldLines: string[], newStart: number, newLines: string[]) {
+function formatHunkHeader(
+  oldStart: number,
+  oldLines: string[],
+  newStart: number,
+  newLines: string[],
+) {
   return `@@ -${oldStart},${countOldLines(oldLines)} +${newStart},${countNewLines(newLines)} @@`;
 }
 
@@ -119,7 +128,10 @@ function countNewLines(lines: string[]) {
 }
 
 function isChangeLine(line: string) {
-  return (line.startsWith('+') && !line.startsWith('+++')) || (line.startsWith('-') && !line.startsWith('---'));
+  return (
+    (line.startsWith('+') && !line.startsWith('+++')) ||
+    (line.startsWith('-') && !line.startsWith('---'))
+  );
 }
 
 function consumesOldLine(line: string) {
@@ -132,16 +144,4 @@ function consumesNewLine(line: string) {
 
 function isNoNewlineMarker(line: string) {
   return line.startsWith('\\');
-}
-
-function isDiffMetadataLine(line: string) {
-  return (
-    line.startsWith('diff ') ||
-    line.startsWith('index ') ||
-    line.startsWith('Index: ') ||
-    line.startsWith('===') ||
-    line.startsWith('---') ||
-    line.startsWith('+++') ||
-    line.startsWith('***')
-  );
 }
