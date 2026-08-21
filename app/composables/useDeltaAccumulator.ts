@@ -10,7 +10,7 @@ type GlobalEvents = {
   on(event: string, listener: (payload: any) => void): () => void;
 };
 
-export type AccumulatedMessage = {
+type AccumulatedMessage = {
   info: MessageInfo;
   parts: Map<string, MessagePart>;
 };

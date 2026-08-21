@@ -4,12 +4,6 @@ const _pendingWorkerRenders = ref(0);
 
 export const pendingWorkerRenders = readonly(_pendingWorkerRenders);
 
-export function useRenderState() {
-  return {
-    pendingWorkerRenders,
-  };
-}
-
 export function incrementPendingRenders(): void {
   _pendingWorkerRenders.value++;
 }
