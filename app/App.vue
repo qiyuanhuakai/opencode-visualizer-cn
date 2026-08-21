@@ -33,7 +33,6 @@
           @archive-session="backendSessionActions.archiveSession"
           @unarchive-session="backendSessionActions.unarchiveSession"
           @rename-session="backendSessionActions.renameSession"
-          @compact-session="backendSessionActions.compactSession"
           @pin-session="backendSessionActions.pinSession"
           @unpin-session="backendSessionActions.unpinSession"
           @pin-project="pinProject"
@@ -600,10 +599,11 @@ import { fetchAcpBridgeAgents, type AcpAgentStatus } from './composables/useAcpB
 import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
-import { useFloatingWindows } from './composables/useFloatingWindows';
+import { useFloatingWindows, type FloatingWindowEntry } from './composables/useFloatingWindows';
 import { usePermissions, type PermissionRequest } from './composables/usePermissions';
-import { useQuestions, type QuestionRequest } from './composables/useQuestions';
+import { useQuestions } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
+import type { QuestionRequest } from './types/sse';
 import { codexPlansToTodoSessions } from './utils/codexPlanTodos';
 import { createCodexSubpanelProps } from './utils/codexSubpanelProps';
 import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
@@ -658,28 +658,20 @@ import {
   normalizePinnedAt,
   parsePinnedSessionStore,
   pinnedSessionStoreKey,
-  reconcilePinnedSessionStore,
   sandboxPinKey,
   type LocalPinnedSessionStore,
 } from './utils/pinnedSessions';
+import { forEachProjectSession, reconcilePinnedSessionStore } from './utils/pinnedReconciliation';
 import { applyPinHierarchyTransition, buildPinHierarchy } from './utils/pinHierarchy';
+import { reconcileDialogRequests } from './utils/reconcileDialogRequests';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import { createBackendRequestFence } from './utils/backendRequestFence';
-import {
-  resolveThreadSubagentSessions,
-  type SessionHistoryMeta,
-} from './utils/threadSubagents';
-import {
-  requestWorkerResult,
-  retryReferencedSessionIds,
-} from './utils/retryReferencedSessions';
+import { resolveThreadSubagentSessions, type SessionHistoryMeta } from './utils/threadSubagents';
+import { requestWorkerResult, retryReferencedSessionIds } from './utils/retryReferencedSessions';
 import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
 import { normalizeToolName } from './utils/toolNames';
-import {
-  collectMagicContextWorkers,
-  isPluginToolName,
-} from './utils/pluginCompatibility';
+import { collectMagicContextWorkers, isPluginToolName } from './utils/pluginCompatibility';
 import {
   extractFileRead as extractToolFileRead,
   extractPatch as extractToolPatch,
@@ -749,10 +741,7 @@ import {
 } from './utils/deletedSandboxes';
 import { shouldSkipAutoOpenWebTool } from './utils/codexToolWindows';
 import { cloneNullPrototypeRecord } from './utils/historyMaps';
-import {
-  persistExternalFileChange,
-  type ExternalFileSyncTarget,
-} from './utils/externalFileSync';
+import { persistExternalFileChange, type ExternalFileSyncTarget } from './utils/externalFileSync';
 import {
   captureTrackedLocalFileChange,
   closeTrackedLocalFileSession,
@@ -2539,12 +2528,13 @@ watch(
   () => codexApi.serverRequests.value,
   (requests) => {
     if (activeBackendKind.value !== 'codex') return;
-    const nextIds = new Set(requests.map((request) => encodeCodexDialogRequestId(request.id)));
-    codexPermissionDialogIds.value.forEach((id) => {
-      if (!nextIds.has(id)) removePermissionEntry(id);
+    reconcileDialogRequests(requests, {
+      encodeId: (request) => encodeCodexDialogRequestId(request.id),
+      normalize: normalizeCodexPermissionRequest,
+      upsert: upsertPermissionEntry,
+      remove: removePermissionEntry,
+      ids: codexPermissionDialogIds,
     });
-    requests.forEach((request) => upsertPermissionEntry(normalizeCodexPermissionRequest(request)));
-    codexPermissionDialogIds.value = nextIds;
   },
   { deep: true },
 );
@@ -2553,14 +2543,13 @@ watch(
   () => codexApi.permissionRequests.value,
   (requests) => {
     if (activeBackendKind.value !== 'codex') return;
-    const nextIds = new Set(requests.map((request) => request.dialogId));
-    codexStructuredPermissionDialogIds.value.forEach((id) => {
-      if (!nextIds.has(id)) removePermissionEntry(id);
+    reconcileDialogRequests(requests, {
+      encodeId: (request) => request.dialogId,
+      normalize: normalizeCodexStructuredPermissionRequest,
+      upsert: upsertPermissionEntry,
+      remove: removePermissionEntry,
+      ids: codexStructuredPermissionDialogIds,
     });
-    requests.forEach((request) =>
-      upsertPermissionEntry(normalizeCodexStructuredPermissionRequest(request)),
-    );
-    codexStructuredPermissionDialogIds.value = nextIds;
   },
   { deep: true },
 );
@@ -2613,12 +2602,13 @@ watch(
   () => codexApi.toolUserInputRequests.value,
   (requests) => {
     if (activeBackendKind.value !== 'codex') return;
-    const nextIds = new Set(requests.map((request) => encodeCodexToolQuestionRequestId(request)));
-    codexQuestionDialogIds.value.forEach((id) => {
-      if (!nextIds.has(id)) removeQuestionEntry(id);
+    reconcileDialogRequests(requests, {
+      encodeId: encodeCodexToolQuestionRequestId,
+      normalize: normalizeCodexToolQuestionRequest,
+      upsert: upsertQuestionEntry,
+      remove: removeQuestionEntry,
+      ids: codexQuestionDialogIds,
     });
-    requests.forEach((request) => upsertQuestionEntry(normalizeCodexToolQuestionRequest(request)));
-    codexQuestionDialogIds.value = nextIds;
   },
   { deep: true },
 );
@@ -2627,16 +2617,13 @@ watch(
   () => codexApi.dynamicToolCalls.value,
   (requests) => {
     if (activeBackendKind.value !== 'codex') return;
-    const nextIds = new Set(
-      requests.map((request) => encodeCodexDynamicToolCallRequestId(request)),
-    );
-    codexDynamicQuestionDialogIds.value.forEach((id) => {
-      if (!nextIds.has(id)) removeQuestionEntry(id);
+    reconcileDialogRequests(requests, {
+      encodeId: encodeCodexDynamicToolCallRequestId,
+      normalize: normalizeCodexDynamicToolCallRequest,
+      upsert: upsertQuestionEntry,
+      remove: removeQuestionEntry,
+      ids: codexDynamicQuestionDialogIds,
     });
-    requests.forEach((request) =>
-      upsertQuestionEntry(normalizeCodexDynamicToolCallRequest(request)),
-    );
-    codexDynamicQuestionDialogIds.value = nextIds;
   },
   { deep: true },
 );
@@ -3039,10 +3026,13 @@ function parseProviderModelKey(value: string) {
   return { providerID, modelID };
 }
 
-async function syncCodexActiveProviderModel(providerID: string, modelID: string) {
+async function syncCodexActiveProviderModel(
+  providerID: string,
+  modelID: string,
+): Promise<ProviderConfigState | null> {
   const normalizedProvider = providerID.trim();
   const normalizedModel = modelID.trim();
-  if (!normalizedProvider || !normalizedModel) return;
+  if (!normalizedProvider || !normalizedModel) return providerConfig.value;
 
   const codexProvider = codexAppServerProviderId(normalizedProvider);
   const edits: Array<{ keyPath: string; value: unknown; mergeStrategy: ConfigMergeStrategy }> = [];
@@ -3050,8 +3040,7 @@ async function syncCodexActiveProviderModel(providerID: string, modelID: string)
   edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });
   edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });
   await codexApi.batchWriteConfig(edits);
-  providerConfig.value =
-    (codexApi.config.value?.config as ProviderConfigState | undefined) ?? providerConfig.value;
+  return (codexApi.config.value?.config as ProviderConfigState | undefined) ?? providerConfig.value;
 }
 
 function codexAppServerProviderId(providerID: string) {
@@ -3565,19 +3554,24 @@ function reconcileLocalPinnedSessionStore() {
   if (!bootstrapReady.value) return;
   const currentStore = localPinnedSessionStore.value;
   if (Object.keys(currentStore).length === 0) return;
-  const sessionHydration = activeBackendKind.value === 'opencode'
-    ? serverState.sessionHydrationByDirectory
-    : undefined;
-  const nextStore = reconcilePinnedSessionStore(
-    currentStore,
-    serverState.projects,
-    10000,
-    sessionHydration,
-    {
+  const inventory =
+    activeBackendKind.value === 'opencode'
+      ? {
+          kind: 'directory-hydration' as const,
+          byDirectory: serverState.sessionHydrationByDirectory,
+        }
+      : { kind: 'assume-complete' as const };
+  const nextStore = reconcilePinnedSessionStore({
+    store: currentStore,
+    projects: serverState.projects,
+    limit: 10000,
+    inventory,
+    hierarchy: {
+      kind: 'tracked',
       gitInfoByDirectory: acpGitInfoByDirectory.value,
       homePath: homePath.value,
     },
-  );
+  });
 
   if (isSamePinnedSessionStore(currentStore, nextStore)) return;
   localPinnedSessionStore.value = nextStore;
@@ -5478,6 +5472,26 @@ function buildOpenInEditorCommand(absolutePath: string) {
   return `editor_cmd=\${VISUAL:-\${EDITOR:-}}; if [ -z "$editor_cmd" ]; then printf '%s\\n' 'VISUAL/EDITOR is not set.'; exit 127; fi; eval "$editor_cmd '${escapedPath}'"; status=$?; exit $status`;
 }
 
+type FileViewerLocation = {
+  readonly directory: string;
+  readonly path: string;
+  readonly absolutePath: string;
+};
+
+function readFileViewerString(entry: FloatingWindowEntry, key: string): string {
+  const value = entry.props?.[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function getFileViewerLocation(entry: FloatingWindowEntry): FileViewerLocation | null {
+  const location = {
+    directory: readFileViewerString(entry, 'fileDirectory'),
+    path: readFileViewerString(entry, 'filePath'),
+    absolutePath: readFileViewerString(entry, 'absolutePath'),
+  };
+  return Object.values(location).every(Boolean) ? location : null;
+}
+
 function getFileViewerEditState(key: string) {
   return {
     editing: Object.prototype.hasOwnProperty.call(editingFileDrafts, key),
@@ -5646,25 +5660,23 @@ async function handleFloatingWindowOpenLocal(key: string) {
   const applicationPath = localApplicationPath.value.trim();
   if (!localFile || !entry || !applicationPath || !key.startsWith('file-viewer:')) return;
   const content = typeof entry.props?.fileContent === 'string' ? entry.props.fileContent : null;
-  const directory = typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
-  const filePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
-  const absolutePath = typeof entry.props?.absolutePath === 'string' ? entry.props.absolutePath : '';
-  if (content === null || !directory || !filePath || !absolutePath) return;
+  const location = getFileViewerLocation(entry);
+  if (content === null || !location) return;
 
   await closeLocalApplicationSessionsForKey(key);
   const sessionId = crypto.randomUUID();
   localApplicationEditTargets.set(sessionId, {
     key,
-    directory,
-    path: filePath,
-    absolutePath,
+    directory: location.directory,
+    path: location.path,
+    absolutePath: location.absolutePath,
     baseContent: content,
     backendIdentity: currentBackendIdentity(),
   });
   try {
     await localFile.open({
       sessionId,
-      fileName: filePath.split(/[\\/]/).pop() || 'untitled.txt',
+      fileName: location.path.split(/[\\/]/).pop() || 'untitled.txt',
       content,
     });
     setSendStatusText(t('floatingWindow.localApplicationOpened'));
@@ -5678,10 +5690,8 @@ async function closeLocalApplicationSession(sessionId: string) {
   const localFile = window.electronAPI?.localFile;
   if (!localFile) return;
   try {
-    await closeTrackedLocalFileSession(
-      localApplicationEditTargets,
-      sessionId,
-      (currentSessionId) => localFile.close(currentSessionId),
+    await closeTrackedLocalFileSession(localApplicationEditTargets, sessionId, (currentSessionId) =>
+      localFile.close(currentSessionId),
     );
   } catch (error) {
     log('Local application session cleanup failed', error);
@@ -5699,7 +5709,11 @@ async function closeAllLocalApplicationSessions() {
   await Promise.all(Array.from(localApplicationEditTargets.keys(), closeLocalApplicationSession));
 }
 
-function handleLocalApplicationError(error: { sessionId: string; message: string; closed?: boolean }) {
+function handleLocalApplicationError(error: {
+  sessionId: string;
+  message: string;
+  closed?: boolean;
+}) {
   if (!localApplicationEditTargets.has(error.sessionId)) return;
   if (error.closed) localApplicationEditTargets.delete(error.sessionId);
   setSendStatusKey('app.error.fileLoadFailed', { message: error.message });
@@ -5758,7 +5772,9 @@ async function syncLocalApplicationChange(
     } else if (result === 'saved-refresh-failed') {
       setSendStatusText(t('floatingWindow.localApplicationSavedRefreshFailed'));
     } else if (result === 'saved') {
-      setSendStatusText(`${t('floatingWindow.openInLocalApplication')} · ${t('viewers.content.save')}`);
+      setSendStatusText(
+        `${t('floatingWindow.openInLocalApplication')} · ${t('viewers.content.save')}`,
+      );
     }
   } catch (error) {
     setSendStatusKey('app.error.fileLoadFailed', { message: toErrorMessage(error) });
@@ -5774,10 +5790,7 @@ function handleLocalApplicationChange(change: { sessionId: string; content: stri
   if (!captured) return;
   const { target } = captured;
   void enqueueFileWrite(target.backendIdentity, target.absolutePath, () =>
-    syncLocalApplicationChange(
-      { sessionId: change.sessionId, content: captured.content },
-      target,
-    ),
+    syncLocalApplicationChange({ sessionId: change.sessionId, content: captured.content }, target),
   );
 }
 
@@ -5790,27 +5803,28 @@ async function saveFileViewerEdit(key: string, content: string) {
   const entry = fw.get(key);
   if (!entry) return;
   if (entry.props?.canEditInVis !== true) return;
-  const fileDirectory =
-    typeof entry.props?.fileDirectory === 'string' ? entry.props.fileDirectory : '';
-  const filePath = typeof entry.props?.filePath === 'string' ? entry.props.filePath : '';
-  const absolutePath =
-    typeof entry.props?.absolutePath === 'string' ? entry.props.absolutePath : '';
-  if (!fileDirectory || !filePath || !absolutePath) return;
+  const location = getFileViewerLocation(entry);
+  if (!location) return;
 
   try {
     editingFileSaving[key] = true;
     updateFileViewerEditProps(key, { editableContent: content });
     const backendIdentity = currentBackendIdentity();
-    const saved = await enqueueFileWrite(backendIdentity, absolutePath, async () => {
+    const saved = await enqueueFileWrite(backendIdentity, location.absolutePath, async () => {
       if (backendIdentity !== currentBackendIdentity()) return false;
       const readFileContent = requireBackendMethod(backend().readFileContent, 'file reading');
       const latest = (await readFileContent({
-        directory: fileDirectory,
-        path: filePath,
+        directory: location.directory,
+        path: location.path,
       })) as FileContentResponse;
       const latestContent = typeof latest?.content === 'string' ? latest.content : '';
       if (latestContent !== (editingFileBaseContent[key] ?? '')) return false;
-      await writeFileForVisEdit({ directory: fileDirectory, path: filePath, absolutePath, content });
+      await writeFileForVisEdit({
+        directory: location.directory,
+        path: location.path,
+        absolutePath: location.absolutePath,
+        content,
+      });
       return true;
     });
     if (!saved) {
@@ -5823,8 +5837,8 @@ async function saveFileViewerEdit(key: string, content: string) {
     editingFileBaseContent[key] = content;
     clearFileViewerEditState(key);
     await refreshFileViewerWindow(key, { bringToFront: false });
-    await refreshOpenGitDiffWindowsForPath(absolutePath);
-    feed({ file: absolutePath, event: 'change' });
+    await refreshOpenGitDiffWindowsForPath(location.absolutePath);
+    feed({ file: location.absolutePath, event: 'change' });
     setSendStatusText(`${t('floatingWindow.editInVis')} · ${t('viewers.content.save')}`);
   } catch (error) {
     editingFileSaving[key] = false;
@@ -7188,23 +7202,18 @@ watch(
 // This avoids deep watching the entire projects object
 const pinnedSessionReconciliationDeps = computed(() => {
   const deps: Array<[string, number | undefined, number | undefined, string | undefined]> = [];
-  for (const project of Object.values(serverState.projects)) {
-    for (const sandbox of Object.values(project.sandboxes) as SandboxState[]) {
-      for (const session of Object.values(sandbox.sessions)) {
-        const key = pinnedSessionStoreKey(project.id, session.id);
-        if (!key) continue;
-        deps.push([key, session.timePinned, session.timeArchived, session.parentID]);
-      }
-    }
-  }
+  forEachProjectSession(serverState.projects, (project, _sandbox, session) => {
+    const key = pinnedSessionStoreKey(project.id, session.id);
+    if (!key) return;
+    deps.push([key, session.timePinned, session.timeArchived, session.parentID]);
+  });
   return deps;
 });
 
 const pinnedSessionHydrationDeps = computed(() =>
-  Object.entries(serverState.sessionHydrationByDirectory).map(([directory, hydration]) => [
-    directory,
-    hydration.status,
-  ] as const),
+  Object.entries(serverState.sessionHydrationByDirectory).map(
+    ([directory, hydration]) => [directory, hydration.status] as const,
+  ),
 );
 
 watch(
@@ -7216,12 +7225,7 @@ watch(
 );
 
 watch(
-  [
-    pinnedSessionReconciliationDeps,
-    pinnedSessionHydrationDeps,
-    acpGitInfoByDirectory,
-    homePath,
-  ],
+  [pinnedSessionReconciliationDeps, pinnedSessionHydrationDeps, acpGitInfoByDirectory, homePath],
   () => {
     reconcileLocalPinnedSessionStore();
   },
@@ -7913,10 +7917,7 @@ const backendMessageSend = useBackendMessageSend({
   isSending,
   codexPendingSessionLock,
   modelOptions,
-  commands,
-  agents,
   providerConfig,
-  hiddenModels,
   openCodeApi: {
     sendPromptAsync: async (sessionId, payload) => {
       const sendPromptAsync = requireBackendMethod(
@@ -8727,7 +8728,9 @@ function handleOpenHistoryReasoning(payload: { part: ReasoningPart }) {
   fw.open(key, {
     component: ReasoningContent,
     props: {
-      entries: [{ id: payload.part.id, text: payload.part.text, completed: !!payload.part.time?.end }],
+      entries: [
+        { id: payload.part.id, text: payload.part.text, completed: !!payload.part.time?.end },
+      ],
       theme: DEFAULT_SYNTAX_THEME,
     },
     title: t('app.windowTitles.thought'),
@@ -8951,7 +8954,6 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         path,
         backendKind: activeBackendKind.value,
         canEditInVis: canCurrentBackendWriteFiles(),
-        rawHtml: t('app.read.noActiveDirectorySelected'),
         lines,
         gutterMode: 'none',
         theme: shikiTheme.value,
@@ -8986,7 +8988,6 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
             canEditInVis: canCurrentBackendWriteFiles(),
             fileDirectory: directory,
             filePath,
-            rawHtml: t('app.read.binaryContentNotIncluded'),
             fileContent: undefined,
             binaryBase64: undefined,
             fileSizeBytes: 0,
@@ -9031,7 +9032,6 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
           canEditInVis: canCurrentBackendWriteFiles(),
           fileDirectory: directory,
           filePath,
-          rawHtml: undefined,
           fileContent: undefined,
           binaryBase64: binaryContent,
           fileSizeBytes: content.length,
@@ -9063,7 +9063,6 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         canEditInVis: canCurrentBackendWriteFiles(),
         fileDirectory: directory,
         filePath,
-        rawHtml: undefined,
         binaryBase64: undefined,
         fileSizeBytes,
         fileContent: textContent,
@@ -9083,7 +9082,6 @@ async function refreshFileViewerWindow(key: string, options?: { bringToFront?: b
         canEditInVis: canCurrentBackendWriteFiles(),
         fileDirectory: directory,
         filePath,
-        rawHtml: t('app.error.fileLoadFailed', { message: toErrorMessage(error) }),
         fileContent: undefined,
         binaryBase64: undefined,
         lines,
