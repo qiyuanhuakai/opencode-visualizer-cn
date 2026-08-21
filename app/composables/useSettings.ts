@@ -1,5 +1,13 @@
-import { ref, watch } from 'vue';
-import { StorageKeys, storageGet, storageKey, storageSet, storageGetJSON, storageRemove, storageSetJSON } from '../utils/storageKeys';
+import { ref, watch, type Ref } from 'vue';
+import {
+  StorageKeys,
+  storageGet,
+  storageKey,
+  storageSet,
+  storageGetJSON,
+  storageRemove,
+  storageSetJSON,
+} from '../utils/storageKeys';
 import {
   migrateLegacyRegionThemeStorage,
   normalizeThemeStorage,
@@ -14,10 +22,7 @@ import {
   normalizeEditorShortcutMap,
   type EditorShortcutMap,
 } from '../utils/editorShortcuts';
-import {
-  normalizeTextTransformers,
-  type TextTransformer,
-} from '../utils/textTransformers';
+import { normalizeTextTransformers, type TextTransformer } from '../utils/textTransformers';
 
 function isSerializedEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -52,7 +57,8 @@ const DEFAULT_APP_MONOSPACE_FONT_FAMILY =
   "'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace";
 
 function normalizeOpenInEditorMaxSizeMb(value: unknown) {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB;
+  if (typeof value !== 'number' || !Number.isFinite(value))
+    return DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB;
   const rounded = Math.round(value);
   if (rounded < MIN_OPEN_IN_EDITOR_MAX_SIZE_MB) return MIN_OPEN_IN_EDITOR_MAX_SIZE_MB;
   if (rounded > MAX_OPEN_IN_EDITOR_MAX_SIZE_MB) return MAX_OPEN_IN_EDITOR_MAX_SIZE_MB;
@@ -71,7 +77,9 @@ function readTerminalFontFamily() {
 }
 
 function readAppMonospaceFontFamily() {
-  return storageGet(StorageKeys.settings.appMonospaceFontFamily) || DEFAULT_APP_MONOSPACE_FONT_FAMILY;
+  return (
+    storageGet(StorageKeys.settings.appMonospaceFontFamily) || DEFAULT_APP_MONOSPACE_FONT_FAMILY
+  );
 }
 
 function normalizeFontFamily(value: string, fallback: string) {
@@ -194,7 +202,7 @@ function readThemeStorage(): ThemeStorageV2 | null {
   const current = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
   if (current) {
     storageSetJSON(StorageKeys.settings.themeTokens, current);
-    }
+  }
   if (current) {
     return current;
   }
@@ -244,9 +252,13 @@ const appFontSizePx = ref(readAppFontSizePx());
 const messageFontSizePx = ref(readMessageFontSizePx());
 const sidebarFontSizePx = ref(readSidebarFontSizePx());
 const uiFontSizePx = ref(readUiFontSizePx());
-const showOpenInEditorButton = ref(storageGet(StorageKeys.settings.showOpenInEditorButton) !== 'false');
+const showOpenInEditorButton = ref(
+  storageGet(StorageKeys.settings.showOpenInEditorButton) !== 'false',
+);
 const openInEditorMaxSizeMb = ref(readOpenInEditorMaxSizeMb());
-const floatingPreviewWordWrap = ref(storageGet(StorageKeys.settings.floatingPreviewWordWrap) === 'true');
+const floatingPreviewWordWrap = ref(
+  storageGet(StorageKeys.settings.floatingPreviewWordWrap) === 'true',
+);
 const editorFontSizePx = ref(readEditorFontSizePx());
 const editorTabSize = ref(readEditorTabSize());
 const editorShortcuts = ref<EditorShortcutMap>(readEditorShortcuts());
@@ -260,255 +272,430 @@ const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
 
 const syncWatchOptions = { flush: 'sync' as const };
 
-watch(enterToSend, (value) => {
-  storageSet(StorageKeys.settings.enterToSend, String(value));
-}, syncWatchOptions);
+function persistBooleanSetting(setting: Ref<boolean>, key: string) {
+  watch(
+    setting,
+    (value) => {
+      storageSet(key, String(value));
+    },
+    syncWatchOptions,
+  );
+}
 
-watch(suppressAutoWindows, (value) => {
-  storageSet(StorageKeys.settings.suppressAutoWindows, String(value));
-}, syncWatchOptions);
+persistBooleanSetting(enterToSend, StorageKeys.settings.enterToSend);
+persistBooleanSetting(suppressAutoWindows, StorageKeys.settings.suppressAutoWindows);
+persistBooleanSetting(showMinimizeButtons, StorageKeys.settings.showMinimizeButtons);
+persistBooleanSetting(showCodexButton, StorageKeys.settings.showCodexButton);
+persistBooleanSetting(showCodexInStatusMonitor, StorageKeys.settings.showCodexInStatusMonitor);
+persistBooleanSetting(editInVis, StorageKeys.settings.editInVis);
 
-watch(showMinimizeButtons, (value) => {
-  storageSet(StorageKeys.settings.showMinimizeButtons, String(value));
-}, syncWatchOptions);
+watch(
+  showMinimizeButtons,
+  (value) => {
+    if (value) return;
+    dockAlwaysOpen.value = false;
+  },
+  syncWatchOptions,
+);
 
-watch(showMinimizeButtons, (value) => {
-  if (value) return;
-  dockAlwaysOpen.value = false;
-}, syncWatchOptions);
+watch(
+  showForgeButton,
+  (value) => {
+    storageSet(StorageKeys.settings.showForgePanelButton, String(value));
+    storageSet(StorageKeys.settings.showForgeButton, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(showCodexButton, (value) => {
-  storageSet(StorageKeys.settings.showCodexButton, String(value));
-}, syncWatchOptions);
+watch(
+  dockAlwaysOpen,
+  (value) => {
+    storageSet(StorageKeys.settings.dockAlwaysOpen, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(showForgeButton, (value) => {
-  storageSet(StorageKeys.settings.showForgePanelButton, String(value));
-  storageSet(StorageKeys.settings.showForgeButton, String(value));
-}, syncWatchOptions);
+watch(
+  terminalFontFamily,
+  (value) => {
+    const normalized = normalizeFontFamily(value, DEFAULT_TERMINAL_FONT_FAMILY);
+    if (normalized !== value) {
+      terminalFontFamily.value = normalized;
+      return;
+    }
+    storageSet(StorageKeys.settings.terminalFontFamily, normalized);
+  },
+  syncWatchOptions,
+);
 
-watch(showCodexInStatusMonitor, (value) => {
-  storageSet(StorageKeys.settings.showCodexInStatusMonitor, String(value));
-}, syncWatchOptions);
+watch(
+  appMonospaceFontFamily,
+  (value) => {
+    const normalized = normalizeFontFamily(value, DEFAULT_APP_MONOSPACE_FONT_FAMILY);
+    if (normalized !== value) {
+      appMonospaceFontFamily.value = normalized;
+      return;
+    }
+    storageSet(StorageKeys.settings.appMonospaceFontFamily, normalized);
+  },
+  syncWatchOptions,
+);
 
-watch(editInVis, (value) => {
-  storageSet(StorageKeys.settings.editInVis, String(value));
-}, syncWatchOptions);
+watch(
+  terminalFontSizePx,
+  (value) => {
+    storageSet(StorageKeys.settings.terminalFontSizePx, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(dockAlwaysOpen, (value) => {
-  storageSet(StorageKeys.settings.dockAlwaysOpen, String(value));
-}, syncWatchOptions);
+watch(
+  appFontSizePx,
+  (value) => {
+    storageSet(StorageKeys.settings.appFontSizePx, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(terminalFontFamily, (value) => {
-  const normalized = normalizeFontFamily(value, DEFAULT_TERMINAL_FONT_FAMILY);
-  if (normalized !== value) {
-    terminalFontFamily.value = normalized;
-    return;
-  }
-  storageSet(StorageKeys.settings.terminalFontFamily, normalized);
-}, syncWatchOptions);
+watch(
+  messageFontSizePx,
+  (value) => {
+    storageSet(StorageKeys.settings.messageFontSizePx, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(appMonospaceFontFamily, (value) => {
-  const normalized = normalizeFontFamily(value, DEFAULT_APP_MONOSPACE_FONT_FAMILY);
-  if (normalized !== value) {
-    appMonospaceFontFamily.value = normalized;
-    return;
-  }
-  storageSet(StorageKeys.settings.appMonospaceFontFamily, normalized);
-}, syncWatchOptions);
+watch(
+  sidebarFontSizePx,
+  (value) => {
+    storageSet(StorageKeys.settings.sidebarFontSizePx, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(terminalFontSizePx, (value) => {
-  storageSet(StorageKeys.settings.terminalFontSizePx, String(value));
-}, syncWatchOptions);
+watch(
+  uiFontSizePx,
+  (value) => {
+    storageSet(StorageKeys.settings.uiFontSizePx, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(appFontSizePx, (value) => {
-  storageSet(StorageKeys.settings.appFontSizePx, String(value));
-}, syncWatchOptions);
+watch(
+  showOpenInEditorButton,
+  (value) => {
+    storageSet(StorageKeys.settings.showOpenInEditorButton, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(messageFontSizePx, (value) => {
-  storageSet(StorageKeys.settings.messageFontSizePx, String(value));
-}, syncWatchOptions);
+watch(
+  openInEditorMaxSizeMb,
+  (value) => {
+    storageSet(StorageKeys.settings.openInEditorMaxSizeMb, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(sidebarFontSizePx, (value) => {
-  storageSet(StorageKeys.settings.sidebarFontSizePx, String(value));
-}, syncWatchOptions);
+watch(
+  floatingPreviewWordWrap,
+  (value) => {
+    storageSet(StorageKeys.settings.floatingPreviewWordWrap, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(uiFontSizePx, (value) => {
-  storageSet(StorageKeys.settings.uiFontSizePx, String(value));
-}, syncWatchOptions);
+watch(
+  editorFontSizePx,
+  (value) => {
+    if (value === null) {
+      storageRemove(StorageKeys.settings.editorFontSizePx);
+      return;
+    }
+    storageSet(StorageKeys.settings.editorFontSizePx, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(showOpenInEditorButton, (value) => {
-  storageSet(StorageKeys.settings.showOpenInEditorButton, String(value));
-}, syncWatchOptions);
+watch(
+  editorTabSize,
+  (value) => {
+    storageSet(StorageKeys.settings.editorTabSize, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(openInEditorMaxSizeMb, (value) => {
-  storageSet(StorageKeys.settings.openInEditorMaxSizeMb, String(value));
-}, syncWatchOptions);
+watch(
+  editorShortcuts,
+  (value) => {
+    const normalized = normalizeEditorShortcutMap(value);
+    if (!isSerializedEqual(value, normalized)) {
+      editorShortcuts.value = normalized;
+      return;
+    }
+    if (isSerializedEqual(storageGetJSON(StorageKeys.settings.editorShortcuts), normalized)) return;
+    storageSetJSON(StorageKeys.settings.editorShortcuts, normalized);
+  },
+  { deep: true, flush: 'sync' },
+);
 
-watch(floatingPreviewWordWrap, (value) => {
-  storageSet(StorageKeys.settings.floatingPreviewWordWrap, String(value));
-}, syncWatchOptions);
+watch(
+  textTransformersEnabled,
+  (value) => {
+    storageSet(StorageKeys.settings.textTransformersEnabled, String(value));
+  },
+  syncWatchOptions,
+);
 
-watch(editorFontSizePx, (value) => {
-  if (value === null) {
-    storageRemove(StorageKeys.settings.editorFontSizePx);
-    return;
-  }
-  storageSet(StorageKeys.settings.editorFontSizePx, String(value));
-}, syncWatchOptions);
+watch(
+  textTransformers,
+  (value) => {
+    const normalized = normalizeTextTransformers(value);
+    if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized))
+      return;
+    storageSetJSON(StorageKeys.settings.textTransformers, normalized);
+  },
+  { deep: true, flush: 'sync' },
+);
 
-watch(editorTabSize, (value) => {
-  storageSet(StorageKeys.settings.editorTabSize, String(value));
-}, syncWatchOptions);
+watch(
+  localApplicationPath,
+  (value) => {
+    const normalized = value.trim();
+    if (normalized === '') {
+      storageRemove(StorageKeys.settings.localApplicationPath);
+      return;
+    }
+    storageSet(StorageKeys.settings.localApplicationPath, normalized);
+  },
+  syncWatchOptions,
+);
 
-watch(editorShortcuts, (value) => {
-  const normalized = normalizeEditorShortcutMap(value);
-  if (!isSerializedEqual(value, normalized)) {
-    editorShortcuts.value = normalized;
-    return;
-  }
-  if (isSerializedEqual(storageGetJSON(StorageKeys.settings.editorShortcuts), normalized)) return;
-  storageSetJSON(StorageKeys.settings.editorShortcuts, normalized);
-}, { deep: true, flush: 'sync' });
+watch(
+  externalThemes,
+  (value) => {
+    if (value.length === 0) {
+      if (storageGet(StorageKeys.settings.themeRegistry) === null) return;
+      storageRemove(StorageKeys.settings.themeRegistry);
+      return;
+    }
+    const payload = {
+      version: 1,
+      themes: value,
+    };
+    const current = storageGetJSON(StorageKeys.settings.themeRegistry);
+    if (isSerializedEqual(current, payload)) return;
+    storageSetJSON(StorageKeys.settings.themeRegistry, payload);
+  },
+  { deep: true, flush: 'sync' },
+);
 
-watch(textTransformersEnabled, (value) => {
-  storageSet(StorageKeys.settings.textTransformersEnabled, String(value));
-}, syncWatchOptions);
+type SettingsStorageEventHandler = (event: StorageEvent) => void;
 
-watch(textTransformers, (value) => {
-  const normalized = normalizeTextTransformers(value);
-  if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized)) return;
-  storageSetJSON(StorageKeys.settings.textTransformers, normalized);
-}, { deep: true, flush: 'sync' });
-
-watch(localApplicationPath, (value) => {
-  const normalized = value.trim();
-  if (normalized === '') {
-    storageRemove(StorageKeys.settings.localApplicationPath);
-    return;
-  }
-  storageSet(StorageKeys.settings.localApplicationPath, normalized);
-}, syncWatchOptions);
-
-watch(externalThemes, (value) => {
-  if (value.length === 0) {
-    if (storageGet(StorageKeys.settings.themeRegistry) === null) return;
-    storageRemove(StorageKeys.settings.themeRegistry);
-    return;
-  }
-  const payload = {
-    version: 1,
-    themes: value,
-  };
-  const current = storageGetJSON(StorageKeys.settings.themeRegistry);
-  if (isSerializedEqual(current, payload)) return;
-  storageSetJSON(StorageKeys.settings.themeRegistry, payload);
-}, { deep: true, flush: 'sync' });
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (event) => {
-    if (event.key === storageKey(StorageKeys.settings.enterToSend)) {
+const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
+  [
+    storageKey(StorageKeys.settings.enterToSend),
+    (event) => {
       enterToSend.value = event.newValue === 'true';
-    }
-    if (event.key === storageKey(StorageKeys.settings.suppressAutoWindows)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.suppressAutoWindows),
+    (event) => {
       suppressAutoWindows.value = event.newValue === 'true';
-    }
-    if (event.key === storageKey(StorageKeys.settings.showMinimizeButtons)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.showMinimizeButtons),
+    (event) => {
       showMinimizeButtons.value = event.newValue !== 'false';
-    }
-    if (event.key === storageKey(StorageKeys.settings.showCodexButton)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.showCodexButton),
+    (event) => {
       showCodexButton.value = event.newValue === 'true';
-    }
-    if (event.key === storageKey(StorageKeys.settings.showForgeButton)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.showForgeButton),
+    (event) => {
       showForgeButton.value = event.newValue !== 'false';
-    }
-    if (event.key === storageKey(StorageKeys.settings.showForgePanelButton)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.showForgePanelButton),
+    (event) => {
       showForgePanelButton.value = event.newValue !== 'false';
-    }
-    if (event.key === storageKey(StorageKeys.settings.showCodexInStatusMonitor)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.showCodexInStatusMonitor),
+    (event) => {
       showCodexInStatusMonitor.value = event.newValue !== 'false';
-    }
-    if (event.key === storageKey(StorageKeys.settings.editInVis)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.editInVis),
+    (event) => {
       editInVis.value = event.newValue === 'true';
-    }
-    if (event.key === storageKey(StorageKeys.settings.dockAlwaysOpen)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.dockAlwaysOpen),
+    (event) => {
       dockAlwaysOpen.value = event.newValue === 'true';
-    }
-    if (event.key === storageKey(StorageKeys.settings.terminalFontFamily)) {
-      terminalFontFamily.value = normalizeFontFamily(event.newValue ?? '', DEFAULT_TERMINAL_FONT_FAMILY);
-    }
-    if (event.key === storageKey(StorageKeys.settings.appMonospaceFontFamily)) {
-      appMonospaceFontFamily.value = normalizeFontFamily(event.newValue ?? '', DEFAULT_APP_MONOSPACE_FONT_FAMILY);
-    }
-    if (event.key === storageKey(StorageKeys.settings.terminalFontSizePx)) {
-      const parsed = event.newValue === null ? DEFAULT_TERMINAL_FONT_SIZE_PX : Number(event.newValue);
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.terminalFontFamily),
+    (event) => {
+      terminalFontFamily.value = normalizeFontFamily(
+        event.newValue ?? '',
+        DEFAULT_TERMINAL_FONT_FAMILY,
+      );
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.appMonospaceFontFamily),
+    (event) => {
+      appMonospaceFontFamily.value = normalizeFontFamily(
+        event.newValue ?? '',
+        DEFAULT_APP_MONOSPACE_FONT_FAMILY,
+      );
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.terminalFontSizePx),
+    (event) => {
+      const parsed =
+        event.newValue === null ? DEFAULT_TERMINAL_FONT_SIZE_PX : Number(event.newValue);
       terminalFontSizePx.value = normalizeTerminalFontSizePx(parsed);
-    }
-    if (event.key === storageKey(StorageKeys.settings.appFontSizePx)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.appFontSizePx),
+    (event) => {
       const parsed = event.newValue === null ? DEFAULT_APP_FONT_SIZE_PX : Number(event.newValue);
       appFontSizePx.value = normalizeAppFontSizePx(parsed);
-    }
-    if (event.key === storageKey(StorageKeys.settings.messageFontSizePx)) {
-      const parsed = event.newValue === null ? DEFAULT_MESSAGE_FONT_SIZE_PX : Number(event.newValue);
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.messageFontSizePx),
+    (event) => {
+      const parsed =
+        event.newValue === null ? DEFAULT_MESSAGE_FONT_SIZE_PX : Number(event.newValue);
       messageFontSizePx.value = normalizeMessageFontSizePx(parsed);
-    }
-    if (event.key === storageKey(StorageKeys.settings.sidebarFontSizePx)) {
-      const parsed = event.newValue === null ? DEFAULT_SIDEBAR_FONT_SIZE_PX : Number(event.newValue);
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.sidebarFontSizePx),
+    (event) => {
+      const parsed =
+        event.newValue === null ? DEFAULT_SIDEBAR_FONT_SIZE_PX : Number(event.newValue);
       sidebarFontSizePx.value = normalizeSidebarFontSizePx(parsed);
-    }
-    if (event.key === storageKey(StorageKeys.settings.uiFontSizePx)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.uiFontSizePx),
+    (event) => {
       const parsed = event.newValue === null ? DEFAULT_UI_FONT_SIZE_PX : Number(event.newValue);
       uiFontSizePx.value = normalizeUiFontSizePx(parsed);
-    }
-    if (event.key === storageKey(StorageKeys.settings.showOpenInEditorButton)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.showOpenInEditorButton),
+    (event) => {
       showOpenInEditorButton.value = event.newValue !== 'false';
-    }
-    if (event.key === storageKey(StorageKeys.settings.openInEditorMaxSizeMb)) {
-      const parsed = event.newValue === null ? DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB : Number(event.newValue);
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.openInEditorMaxSizeMb),
+    (event) => {
+      const parsed =
+        event.newValue === null ? DEFAULT_OPEN_IN_EDITOR_MAX_SIZE_MB : Number(event.newValue);
       openInEditorMaxSizeMb.value = normalizeOpenInEditorMaxSizeMb(parsed);
-    }
-    if (event.key === storageKey(StorageKeys.settings.floatingPreviewWordWrap)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.floatingPreviewWordWrap),
+    (event) => {
       floatingPreviewWordWrap.value = event.newValue === 'true';
-    }
-    if (event.key === storageKey(StorageKeys.settings.editorFontSizePx)) {
-      editorFontSizePx.value = event.newValue === null
-        ? null
-        : normalizeEditorFontSizePx(Number(event.newValue));
-    }
-    if (event.key === storageKey(StorageKeys.settings.editorTabSize)) {
-      editorTabSize.value = event.newValue === null
-        ? DEFAULT_EDITOR_TAB_SIZE
-        : normalizeEditorTabSize(Number(event.newValue));
-    }
-    if (event.key === storageKey(StorageKeys.settings.editorShortcuts)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.editorFontSizePx),
+    (event) => {
+      editorFontSizePx.value =
+        event.newValue === null ? null : normalizeEditorFontSizePx(Number(event.newValue));
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.editorTabSize),
+    (event) => {
+      editorTabSize.value =
+        event.newValue === null
+          ? DEFAULT_EDITOR_TAB_SIZE
+          : normalizeEditorTabSize(Number(event.newValue));
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.editorShortcuts),
+    () => {
       const nextShortcuts = readEditorShortcuts();
       if (!isSerializedEqual(editorShortcuts.value, nextShortcuts)) {
         editorShortcuts.value = nextShortcuts;
       }
-    }
-    if (event.key === storageKey(StorageKeys.settings.textTransformersEnabled)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.textTransformersEnabled),
+    (event) => {
       textTransformersEnabled.value = event.newValue === 'true';
-    }
-    if (event.key === storageKey(StorageKeys.settings.textTransformers)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.textTransformers),
+    (event) => {
       const nextTextTransformers = parseTextTransformers(event.newValue);
       if (!isSerializedEqual(textTransformers.value, nextTextTransformers)) {
         textTransformers.value = nextTextTransformers;
       }
-    }
-    if (event.key === storageKey(StorageKeys.settings.localApplicationPath)) {
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.localApplicationPath),
+    (event) => {
       localApplicationPath.value = event.newValue ?? '';
-    }
-    if (event.key === storageKey(StorageKeys.settings.themeTokens)) {
-      const nextThemeStorage = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.themeTokens),
+    () => {
+      const nextThemeStorage = normalizeThemeStorage(
+        storageGetJSON(StorageKeys.settings.themeTokens),
+      );
       if (!isSerializedEqual(themeStorage.value, nextThemeStorage)) {
         themeStorage.value = nextThemeStorage;
       }
-    }
-    if (event.key === storageKey(StorageKeys.settings.themeRegistry)) {
-      const nextExternalThemes = normalizeStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
+    },
+  ],
+  [
+    storageKey(StorageKeys.settings.themeRegistry),
+    () => {
+      const nextExternalThemes = normalizeStoredExternalThemes(
+        storageGetJSON(StorageKeys.settings.themeRegistry),
+      );
       if (!isSerializedEqual(externalThemes.value, nextExternalThemes)) {
         externalThemes.value = nextExternalThemes;
       }
-    }
+    },
+  ],
+]);
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => {
+    settingsStorageHandlers.get(event.key ?? '')?.(event);
   });
 }
 

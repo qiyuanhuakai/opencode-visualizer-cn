@@ -98,6 +98,28 @@ describe('useSettings', () => {
     expect(storage.getItem('opencode.settings.editInVis.v1')).toBe('true');
   });
 
+  it('persists boolean toggle settings to their exact sync storage keys', async () => {
+    // Given: fresh settings with their production defaults on unset storage.
+    const settings = await importFresh();
+    expect(settings.suppressAutoWindows.value).toBe(false);
+    expect(settings.showMinimizeButtons.value).toBe(true);
+    expect(settings.showCodexButton.value).toBe(false);
+    expect(settings.showCodexInStatusMonitor.value).toBe(true);
+
+    // When: each toggle flips away from its default and the sync watch flushes.
+    settings.suppressAutoWindows.value = true;
+    settings.showMinimizeButtons.value = false;
+    settings.showCodexButton.value = true;
+    settings.showCodexInStatusMonitor.value = false;
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Then: the flipped value is persisted to its exact storage key.
+    expect(storage.getItem('opencode.settings.suppressAutoWindows.v1')).toBe('true');
+    expect(storage.getItem('opencode.settings.showMinimizeButtons.v1')).toBe('false');
+    expect(storage.getItem('opencode.settings.showCodexButton.v1')).toBe('true');
+    expect(storage.getItem('opencode.settings.showCodexInStatusMonitor.v1')).toBe('false');
+  });
+
   it('keeps text transformers disabled with no mappings by default', async () => {
     // Given: no text transformer settings have been persisted.
     const settings = await importFresh();
@@ -154,7 +176,10 @@ describe('useSettings', () => {
   });
 
   it('treats persisted shortcut JSON as untrusted and preserves disabled bindings', async () => {
-    storage.setItem('opencode.settings.editorShortcuts.v1', JSON.stringify({ indent: 42, outdent: '' }));
+    storage.setItem(
+      'opencode.settings.editorShortcuts.v1',
+      JSON.stringify({ indent: 42, outdent: '' }),
+    );
 
     const settings = await importFresh();
 
@@ -240,6 +265,43 @@ describe('useSettings', () => {
     expect(settings.editInVis.value).toBe(true);
   });
 
+  it('ignores untrusted prototype and unknown storage keys as no-ops', async () => {
+    // Given: fresh settings with production defaults.
+    const settings = await importFresh();
+    const before = {
+      enterToSend: settings.enterToSend.value,
+      suppressAutoWindows: settings.suppressAutoWindows.value,
+      showMinimizeButtons: settings.showMinimizeButtons.value,
+      showCodexButton: settings.showCodexButton.value,
+      showCodexInStatusMonitor: settings.showCodexInStatusMonitor.value,
+      editInVis: settings.editInVis.value,
+      dockAlwaysOpen: settings.dockAlwaysOpen.value,
+      terminalFontFamily: settings.terminalFontFamily.value,
+      terminalFontSizePx: settings.terminalFontSizePx.value,
+      editorShortcuts: settings.editorShortcuts.value,
+    };
+
+    // When: storage events arrive for prototype-pollution and unknown keys.
+    for (const key of ['__proto__', 'toString', 'constructor', 'opencode.settings.unknown.v1']) {
+      for (const listener of storageListeners) {
+        listener({ key, newValue: 'true' } as unknown as StorageEvent);
+      }
+    }
+
+    // Then: no setting changes and no prototype pollution occurs.
+    expect(settings.enterToSend.value).toBe(before.enterToSend);
+    expect(settings.suppressAutoWindows.value).toBe(before.suppressAutoWindows);
+    expect(settings.showMinimizeButtons.value).toBe(before.showMinimizeButtons);
+    expect(settings.showCodexButton.value).toBe(before.showCodexButton);
+    expect(settings.showCodexInStatusMonitor.value).toBe(before.showCodexInStatusMonitor);
+    expect(settings.editInVis.value).toBe(before.editInVis);
+    expect(settings.dockAlwaysOpen.value).toBe(before.dockAlwaysOpen);
+    expect(settings.terminalFontFamily.value).toBe(before.terminalFontFamily);
+    expect(settings.terminalFontSizePx.value).toBe(before.terminalFontSizePx);
+    expect(settings.editorShortcuts.value).toEqual(before.editorShortcuts);
+    expect(({} as Record<string, unknown>).__proto__).toBe(Object.prototype);
+  });
+
   it('resets dockAlwaysOpen when showMinimizeButtons is disabled', async () => {
     const settings = await importFresh();
     settings.dockAlwaysOpen.value = true;
@@ -272,8 +334,12 @@ describe('useSettings', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(settings.terminalFontFamily.value).toBe(settings.defaultTerminalFontFamily);
     expect(settings.appMonospaceFontFamily.value).toBe(settings.defaultAppMonospaceFontFamily);
-    expect(storage.getItem('opencode.settings.terminalFontFamily.v1')).toBe(settings.defaultTerminalFontFamily);
-    expect(storage.getItem('opencode.settings.appMonospaceFontFamily.v1')).toBe(settings.defaultAppMonospaceFontFamily);
+    expect(storage.getItem('opencode.settings.terminalFontFamily.v1')).toBe(
+      settings.defaultTerminalFontFamily,
+    );
+    expect(storage.getItem('opencode.settings.appMonospaceFontFamily.v1')).toBe(
+      settings.defaultAppMonospaceFontFamily,
+    );
   });
 
   it('uses default font families when storage event clears font keys', async () => {
