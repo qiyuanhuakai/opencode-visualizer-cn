@@ -1,0 +1,31 @@
+{
+  "$schema": "https://fallow.tools/config-schema.json",
+  "entry": [
+    "app/main.ts",
+    "electron/preload.cjs",
+    "bridge/binaryEntry.js",
+    "app/dev/stream-bench.ts",
+    "app/dev/stream-driver.ts",
+    "app/dev/stream-md-driver.ts",
+    "scripts/qa/build-artifact-check.mjs",
+    "scripts/qa/ensure-production-dist.mjs",
+    "scripts/qa/stream-bench.mjs",
+    "scripts/qa/stream-driver-check.mjs",
+    "scripts/qa/stream-md-check.mjs"
+  ],
+  "ignoreDependencies": [
+    "@iconify/vue",
+    "@kikuchan/hexdump",
+    "@shikijs/markdown-it",
+    "@shikijs/stream",
+    "@shikijs/transformers",
+    "@tailwindcss/typography",
+    "@xterm/xterm",
+    "markdown-it",
+    "node-pty",
+    "postject",
+    "shiki",
+    "tailwindcss",
+    "vue"
+  ]
+}
