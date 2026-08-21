@@ -13,11 +13,6 @@ export type SseConnectionOptions = {
   };
 };
 
-export type SseConnectionConnectOptions = {
-  failFast?: boolean;
-  timeoutMs?: number;
-};
-
 export type SseConnectionCallbacks = {
   onPacket: (packet: SsePacket) => void;
   onOpen: (isReconnect: boolean) => void;
@@ -72,11 +67,7 @@ export function createSseEventParser(
     let consumedBytes = 0;
     let blockStart = 0;
     let scannedBytes = 0;
-    for (
-      let index = Math.max(0, oldLength - 1);
-      index + 1 < pendingLength;
-      index += 1
-    ) {
+    for (let index = Math.max(0, oldLength - 1); index + 1 < pendingLength; index += 1) {
       scannedBytes += 1;
       if (pending[index] !== 10 || pending[index + 1] !== 10) continue;
 
@@ -245,7 +236,10 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
           controller.abort();
           abortController = undefined;
           connected = false;
-          callbacks.onError(target?.errorMessages?.authenticationFailed ?? 'Authentication failed.', 401);
+          callbacks.onError(
+            target?.errorMessages?.authenticationFailed ?? 'Authentication failed.',
+            401,
+          );
           return;
         }
 
