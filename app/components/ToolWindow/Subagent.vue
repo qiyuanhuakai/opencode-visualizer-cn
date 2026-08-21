@@ -6,7 +6,13 @@
       class="subagent-entry"
       :class="{ 'subagent-entry-separator': index > 0 }"
     >
-      <MessageViewer :code="entry.text" lang="markdown" :theme="theme" :streaming="isEntryStreaming(entry)" @rendered="handleRendered" />
+      <MessageViewer
+        :code="entry.text"
+        lang="markdown"
+        :theme="theme"
+        :streaming="isEntryStreaming(entry)"
+        @rendered="handleRendered"
+      />
     </div>
   </div>
 </template>
@@ -16,7 +22,7 @@ import MessageViewer from '../MessageViewer.vue';
 import { useFloatingWindow } from '../../composables/useFloatingWindow';
 import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
 
-export type SubagentEntry = {
+type SubagentEntry = {
   id: string;
   text: string;
   completed?: boolean;

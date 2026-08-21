@@ -978,7 +978,6 @@ const emit = defineEmits<{
   (event: 'archive-session', value: string): void;
   (event: 'unarchive-session', value: string): void;
   (event: 'rename-session', value: string): void;
-  (event: 'compact-session', value: string): void;
   (event: 'pin-session', value: string): void;
   (event: 'unpin-session', value: string): void;
   (event: 'pin-project', projectId: string): void;
