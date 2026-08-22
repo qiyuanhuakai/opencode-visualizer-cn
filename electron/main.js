@@ -10,6 +10,7 @@ import {
 } from './localApplicationApproval.js';
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
+import { createPersistentStorage } from './persistentStorage.js';
 import {
   classifyMime,
   classifyNavigation,
@@ -41,7 +42,6 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow = null;
-let persistentStorageCache = null;
 let approvedLocalApplicationPath = null;
 const localFileSessionOwners = new Map();
 const localFileEditor = createLocalFileEditor({
@@ -70,60 +70,22 @@ function persistentStorageFilePath() {
   return path.join(app.getPath('userData'), PERSISTENT_STORAGE_FILE);
 }
 
+const persistentStorage = createPersistentStorage(persistentStorageFilePath);
+
 function localApplicationApprovalFilePath() {
   return path.join(app.getPath('userData'), LOCAL_APPLICATION_APPROVAL_FILE);
 }
 
-function loadPersistentStorage() {
-  if (persistentStorageCache) {
-    return persistentStorageCache;
-  }
-
-  try {
-    const raw = fs.readFileSync(persistentStorageFilePath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      persistentStorageCache = Object.fromEntries(
-        Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
-      );
-      return persistentStorageCache;
-    }
-  } catch {
-    // Ignore missing or malformed storage files and recreate them on write.
-  }
-
-  persistentStorageCache = {};
-  return persistentStorageCache;
-}
-
-function writePersistentStorage() {
-  const filePath = persistentStorageFilePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(loadPersistentStorage(), null, 2), 'utf8');
-}
-
 function getPersistentStorageItem(key) {
-  const storage = loadPersistentStorage();
-  return Object.hasOwn(storage, key) ? storage[key] : null;
+  return persistentStorage.getItem(key);
 }
 
 function setPersistentStorageItem(key, value) {
-  const storage = loadPersistentStorage();
-  const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
-  storage[key] = value;
-  writePersistentStorage();
-  return oldValue;
+  return persistentStorage.setItem(key, value);
 }
 
 function removePersistentStorageItem(key) {
-  const storage = loadPersistentStorage();
-  const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
-  if (oldValue === null) {
-    return null;
-  }
-  delete storage[key];
-  writePersistentStorage();
-  return oldValue;
+  return persistentStorage.removeItem(key);
 }
 
 function broadcastPersistentStorageChange(change, sourceWebContentsId) {
