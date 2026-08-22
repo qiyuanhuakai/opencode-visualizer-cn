@@ -102,6 +102,29 @@ afterEach(() => {
 });
 
 describe('SettingsModal snippets', () => {
+  it('surfaces rejected startup storage without replacing its recovery data', async () => {
+    // Given: startup storage exceeds the complete library contract.
+    const excessive = Array.from({ length: 1_001 }, (_, index) => ({
+      id: `startup-ui-${index}`,
+      trigger: `startup-ui-${index}`,
+      name: `Startup UI ${index}`,
+      body: 'Body',
+      enabled: true,
+      tags: [],
+    }));
+    const raw = JSON.stringify(excessive);
+
+    // When: the Snippets settings page opens.
+    const { host, settings } = await mountSnippetSettings(excessive);
+
+    // Then: invalid rows stay out of runtime, raw recovery survives, and the error is visible.
+    expect(settings.textTransformers.value).toEqual([]);
+    expect(localStorage.getItem('opencode.settings.textTransformers.v1')).toBe(raw);
+    expect(host.querySelector('.transformer-import-status')?.textContent).toContain(
+      en.settings.textTransformers.saveError,
+    );
+  });
+
   it('keeps migrated reserved triggers visibly and operationally disabled', async () => {
     // Given: legacy storage contains a reserved command trigger that migration retains.
     const legacyReserved = {

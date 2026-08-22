@@ -1495,11 +1495,15 @@ const textTransformerImportStatus = ref<{ kind: 'success' | 'error'; message: st
 );
 let textTransformerImportGeneration = 0;
 
-watch(textTransformerPersistenceErrorRevision, () => {
+function showTextTransformerPersistenceError() {
   textTransformerImportStatus.value = {
     kind: 'error',
     message: t('settings.textTransformers.saveError'),
   };
+}
+
+watch(textTransformerPersistenceErrorRevision, showTextTransformerPersistenceError, {
+  immediate: textTransformerPersistenceErrorRevision.value > 0,
 });
 
 const displayedTextTransformers = computed(() => {
