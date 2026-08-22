@@ -1,6 +1,7 @@
 import {
   isValidTextTransformerTrigger,
   normalizeTextTransformers,
+  textTransformerTriggerKey,
   type TextTransformer,
   type TextTransformerInput,
 } from './snippets';
@@ -29,6 +30,92 @@ type TextTransformerContext = {
   readonly start: number;
   readonly end: number;
 };
+
+type TextTransformerMatcherNode = {
+  readonly children: Map<string, TextTransformerMatcherNode>;
+  indexes?: number[];
+};
+
+type TextTransformerMatcher = {
+  readonly root: TextTransformerMatcherNode;
+  readonly maxSequenceLength: number;
+};
+
+const textTransformerMatcherCache = new WeakMap<readonly TextTransformer[], TextTransformerMatcher>();
+
+function createTextTransformerMatcher(
+  transformers: readonly TextTransformer[],
+): TextTransformerMatcher {
+  const root: TextTransformerMatcherNode = { children: new Map() };
+  let maxSequenceLength = 0;
+  for (const [index, transformer] of transformers.entries()) {
+    if (!transformer.enabled) continue;
+    const sequence = textTransformerSequence(transformer);
+    const minimumLength = sequencePrefixLength(sequence);
+    maxSequenceLength = Math.max(maxSequenceLength, sequence.length);
+    let consumedLength = 0;
+    let node = root;
+    for (const character of sequence) {
+      consumedLength += character.length;
+      const key = textTransformerTriggerKey(character);
+      let child = node.children.get(key);
+      if (!child) {
+        child = { children: new Map() };
+        node.children.set(key, child);
+      }
+      node = child;
+      if (consumedLength >= minimumLength) (node.indexes ??= []).push(index);
+    }
+  }
+  return { root, maxSequenceLength };
+}
+
+function textTransformerMatcherFor(
+  transformers: readonly TextTransformer[],
+): TextTransformerMatcher {
+  const cached = textTransformerMatcherCache.get(transformers);
+  if (cached) return cached;
+  const matcher = createTextTransformerMatcher(transformers);
+  textTransformerMatcherCache.set(transformers, matcher);
+  return matcher;
+}
+
+function matcherInputPoints(input: string, cursor: number, maxLength: number) {
+  let minimumStart = Math.max(0, cursor - maxLength);
+  const startsInsideSurrogate =
+    minimumStart > 0 &&
+    input.charCodeAt(minimumStart) >= 0xdc00 &&
+    input.charCodeAt(minimumStart) <= 0xdfff &&
+    input.charCodeAt(minimumStart - 1) >= 0xd800 &&
+    input.charCodeAt(minimumStart - 1) <= 0xdbff;
+  if (startsInsideSurrogate) minimumStart += 1;
+  const points: Array<{ readonly character: string; readonly start: number }> = [];
+  let pointStart = minimumStart;
+  for (const character of input.slice(minimumStart, cursor)) {
+    points.push({ character, start: pointStart });
+    pointStart += character.length;
+  }
+  return points;
+}
+
+function matchingTransformerIndexes(
+  input: string,
+  points: ReadonlyArray<{ readonly character: string; readonly start: number }>,
+  root: TextTransformerMatcherNode,
+): Set<number> {
+  const matchedIndexes = new Set<number>();
+  for (let startIndex = 0; startIndex < points.length; startIndex += 1) {
+    if (!hasValidStartBoundary(input, points[startIndex]!.start)) continue;
+    let node: TextTransformerMatcherNode | undefined = root;
+    for (let pointIndex = startIndex; pointIndex < points.length; pointIndex += 1) {
+      node = node.children.get(textTransformerTriggerKey(points[pointIndex]!.character));
+      if (!node) break;
+      if (pointIndex !== points.length - 1) continue;
+      for (const index of node.indexes ?? []) matchedIndexes.add(index);
+    }
+  }
+  return matchedIndexes;
+}
 
 type ResolvedTextTransformerBody = {
   readonly text: string;
@@ -230,10 +317,14 @@ export function findNormalizedTextTransformerMatches(
   cursor: number,
   transformers: readonly TextTransformer[],
 ): TextTransformer[] {
+  const matcher = textTransformerMatcherFor(transformers);
+  const boundedCursor = Math.max(0, Math.min(cursor, input.length));
+  const points = matcherInputPoints(input, boundedCursor, matcher.maxSequenceLength);
+  const matchedIndexes = matchingTransformerIndexes(input, points, matcher.root);
   const matches: TextTransformer[] = [];
-  for (const item of transformers) {
-    if (!item.enabled || transformerContext(input, cursor, item) === null) continue;
-    matches.push(item);
+  for (const [index, transformer] of transformers.entries()) {
+    if (!matchedIndexes.has(index)) continue;
+    matches.push(transformer);
     if (matches.length === MAX_TEXT_TRANSFORMER_MATCHES) break;
   }
   return matches;

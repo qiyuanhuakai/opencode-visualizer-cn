@@ -6,6 +6,7 @@ import {
   applyTextTransformerAtCursor,
   applyTextTransformerSelectionAtCursor,
   expandTextTransformers,
+  findNormalizedTextTransformerMatches,
   findTextTransformerMatches,
   getTextTransformerTriggerIssue,
   normalizeTextTransformers,
@@ -17,6 +18,28 @@ const transformers = [
 ] as const;
 
 describe('text transformers', () => {
+  it('keeps accepted-maximum no-match lookup inside an interactive budget', () => {
+    // Given: the maximum accepted library uses 256-character enabled triggers.
+    const transformers = normalizeTextTransformers(Array.from({ length: 1_000 }, (_, index) => ({
+      id: `performance-${index}`,
+      trigger: `${'a'.repeat(250)}${index.toString(36).padStart(6, '0')}`,
+      name: `Performance ${index}`,
+      body: 'Body',
+      enabled: true,
+      tags: [],
+    })));
+    const input = '!'.repeat(257);
+
+    // When: three warmed no-match lookups run on the typing hot path.
+    findNormalizedTextTransformerMatches(input, input.length, transformers);
+    const startedAt = performance.now();
+    for (let index = 0; index < 3; index += 1) {
+      findNormalizedTextTransformerMatches(input, input.length, transformers);
+    }
+
+    // Then: total synchronous work stays below a single visible interaction delay.
+    expect(performance.now() - startedAt).toBeLessThan(100);
+  });
   it('expands every configured backslash sequence before sending', () => {
     // Given: a prompt contains configured and unknown sequences.
     const input = String.raw`Say \hi, then \never but keep \unknown`;
