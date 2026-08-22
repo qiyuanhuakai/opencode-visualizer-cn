@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
+  MAX_TEXT_TRANSFORMER_TOTAL_TAGS,
   mergeTextTransformers,
   normalizeTextTransformers,
   parseTextTransformerImport,
   serializeTextTransformers,
   textTransformerTriggerKey,
+  validateTextTransformerLibrary,
 } from './snippets';
 
 const snippet = {
@@ -249,6 +251,60 @@ describe('snippet import and export', () => {
     expect(firstMigration).toHaveLength(2);
     expect(new Set(firstMigration.map(({ id }) => id))).toHaveLength(2);
     expect(secondMigration).toEqual(firstMigration);
+  });
+
+  it('preserves generated-id hash collisions split across merge operands', () => {
+    // Given: one legacy hash-collision row exists locally and its pair arrives in an import.
+    const local = [{ trigger: 'tmrkyczzoeosd', replacement: 'bixntxizktiha' }];
+    const imported = [{ trigger: 'trgbyrbeujkiu', replacement: 'bsxjtgyuqazzr' }];
+
+    // When: both independently normalized inputs are merged.
+    const result = mergeTextTransformers(local, imported);
+
+    // Then: neither unrelated row is mistaken for an id-based update.
+    expect(result).toHaveLength(2);
+    expect(new Set(result.map(({ id }) => id))).toHaveLength(2);
+    expect(result.map(({ trigger }) => trigger)).toEqual(['tmrkyczzoeosd', 'trgbyrbeujkiu']);
+  });
+
+  it('rejects a merged library whose complete backup exceeds the UTF-8 budget', () => {
+    // Given: two bounded libraries are individually importable but exceed five MiB together.
+    const library = (prefix: string) =>
+      Array.from({ length: 3 }, (_, index) => ({
+        ...snippet,
+        id: `${prefix}-${index}`,
+        trigger: `${prefix}-${index}`,
+        body: '界'.repeat(300_000),
+      }));
+    const current = library('current');
+    const imported = library('imported');
+    expect(validateTextTransformerLibrary(current)).not.toBeNull();
+    expect(validateTextTransformerLibrary(imported)).not.toBeNull();
+
+    // When: the imported rows are merged with the local library.
+    const merged = mergeTextTransformers(current, imported);
+
+    // Then: the shared whole-library boundary rejects the non-restorable result.
+    expect(validateTextTransformerLibrary(merged)).toBeNull();
+  });
+
+  it('enforces an aggregate tag budget across otherwise bounded rows', () => {
+    // Given: no row exceeds its per-snippet tag limit, but their aggregate exceeds the UI budget.
+    const excessiveTags = Array.from({ length: 5 }, (_, snippetIndex) => ({
+      ...snippet,
+      id: `aggregate-tags-${snippetIndex}`,
+      trigger: `aggregate-tags-${snippetIndex}`,
+      tags: Array.from(
+        { length: Math.ceil((MAX_TEXT_TRANSFORMER_TOTAL_TAGS + 1) / 5) },
+        (_, tagIndex) => `tag-${snippetIndex}-${tagIndex}`,
+      ),
+    }));
+
+    // When: the versioned payload crosses the import boundary.
+    const result = parseTextTransformerImport(JSON.stringify({ version: 1, snippets: excessiveTags }));
+
+    // Then: the complete collection is rejected before the settings UI renders its tags.
+    expect(result).toEqual({ ok: false, reason: 'invalid-snippets' });
   });
 
   it('serializes duplicate explicit ids into an importable backup', () => {

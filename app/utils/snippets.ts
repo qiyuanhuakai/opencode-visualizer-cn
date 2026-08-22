@@ -2,6 +2,7 @@ import {
   isBoundedTextTransformerImportSnippet,
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_TOTAL_TAGS,
 } from './snippetImportLimits';
 
 export type TextTransformer = {
@@ -39,6 +40,7 @@ const TEXT_TRANSFORMER_EXPORT_VERSION = 1;
 export {
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_TOTAL_TAGS,
 } from './snippetImportLimits';
 const simpleCaseFoldCache = new Map<string, string>();
 
@@ -206,27 +208,35 @@ export function normalizeTextTransformers(value: unknown): TextTransformer[] {
   });
 }
 
-export function serializeTextTransformers(transformers: readonly TextTransformerInput[]): string {
+function serializedTextTransformerLibrary(snippets: readonly TextTransformer[]): string {
+  return JSON.stringify({ version: TEXT_TRANSFORMER_EXPORT_VERSION, snippets }, null, 2);
+}
+
+export function validateTextTransformerLibrary(
+  transformers: readonly TextTransformerInput[],
+): TextTransformer[] | null {
   const snippets = normalizeTextTransformers(transformers);
+  const totalTags = snippets.reduce((count, snippet) => count + snippet.tags.length, 0);
   if (
     snippets.length !== transformers.length ||
     snippets.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT ||
+    totalTags > MAX_TEXT_TRANSFORMER_TOTAL_TAGS ||
     !snippets.every(isBoundedTextTransformerImportSnippet)
   ) {
+    return null;
+  }
+  const serialized = serializedTextTransformerLibrary(snippets);
+  return new TextEncoder().encode(serialized).byteLength <= MAX_TEXT_TRANSFORMER_IMPORT_BYTES
+    ? snippets
+    : null;
+}
+
+export function serializeTextTransformers(transformers: readonly TextTransformerInput[]): string {
+  const snippets = validateTextTransformerLibrary(transformers);
+  if (!snippets) {
     throw new RangeError('Snippet backup exceeds the import limits');
   }
-  const serialized = JSON.stringify(
-    {
-      version: TEXT_TRANSFORMER_EXPORT_VERSION,
-      snippets,
-    },
-    null,
-    2,
-  );
-  if (new TextEncoder().encode(serialized).byteLength > MAX_TEXT_TRANSFORMER_IMPORT_BYTES) {
-    throw new RangeError('Snippet backup exceeds the import limits');
-  }
-  return serialized;
+  return serializedTextTransformerLibrary(snippets);
 }
 
 export function parseTextTransformerImport(input: string): TextTransformerImportResult {
@@ -256,11 +266,8 @@ export function parseTextTransformerImport(input: string): TextTransformerImport
   ) {
     return { ok: false, reason: 'invalid-snippets' };
   }
-  const snippets = normalizeTextTransformers(rawSnippets);
-  if (
-    snippets.length !== rawSnippets.length ||
-    !snippets.every(isBoundedTextTransformerImportSnippet)
-  ) {
+  const snippets = validateTextTransformerLibrary(rawSnippets);
+  if (!snippets) {
     return { ok: false, reason: 'invalid-snippets' };
   }
   const ids = new Set(snippets.map((snippet) => snippet.id));
@@ -274,10 +281,36 @@ export function mergeTextTransformers(
 ): TextTransformer[] {
   const mergedById = new Map<string, TextTransformer>();
   const idByTrigger = new Map<string, string>();
-  for (const snippet of [
-    ...normalizeTextTransformers(current),
-    ...normalizeTextTransformers(imported),
-  ]) {
+  const currentSnippets = normalizeTextTransformers(current);
+  const importedSnippets = normalizeTextTransformers(imported);
+
+  function isGeneratedSnippetId(snippet: TextTransformer): boolean {
+    const baseId = stableSnippetId(snippet.trigger, snippet.body);
+    return snippet.id === baseId || new RegExp(`^${baseId}-[2-9][0-9]*$`, 'u').test(snippet.id);
+  }
+
+  function allocateMergedSnippetId(snippet: TextTransformer): TextTransformer {
+    const baseId = stableSnippetId(snippet.trigger, snippet.body);
+    let suffix = 2;
+    let id = `${baseId}-${suffix}`;
+    while (mergedById.has(id)) {
+      suffix += 1;
+      id = `${baseId}-${suffix}`;
+    }
+    return { ...snippet, id };
+  }
+
+  function mergeSnippet(rawSnippet: TextTransformer, importedEntry: boolean) {
+    const rawTriggerKey = textTransformerTriggerKey(rawSnippet.trigger);
+    const sameId = mergedById.get(rawSnippet.id);
+    const snippet =
+      importedEntry &&
+      sameId &&
+      textTransformerTriggerKey(sameId.trigger) !== rawTriggerKey &&
+      isGeneratedSnippetId(sameId) &&
+      isGeneratedSnippetId(rawSnippet)
+        ? allocateMergedSnippetId(rawSnippet)
+        : rawSnippet;
     const triggerKey = textTransformerTriggerKey(snippet.trigger);
     const replacedById = mergedById.get(snippet.id);
     if (replacedById) idByTrigger.delete(textTransformerTriggerKey(replacedById.trigger));
@@ -287,5 +320,7 @@ export function mergeTextTransformers(
     mergedById.set(snippet.id, snippet);
     idByTrigger.set(triggerKey, snippet.id);
   }
+  for (const snippet of currentSnippets) mergeSnippet(snippet, false);
+  for (const snippet of importedSnippets) mergeSnippet(snippet, true);
   return [...mergedById.values()];
 }

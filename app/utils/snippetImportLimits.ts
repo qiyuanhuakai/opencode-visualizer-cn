@@ -1,10 +1,11 @@
 export const MAX_TEXT_TRANSFORMER_IMPORT_BYTES = 5 * 1024 * 1024;
 export const MAX_TEXT_TRANSFORMER_IMPORT_COUNT = 1_000;
+export const MAX_TEXT_TRANSFORMER_TOTAL_TAGS = 1_000;
 
-const MAX_TAGS = 256;
-const MAX_TAG_LENGTH = 256;
-const MAX_TRIGGER_LENGTH = 256;
-const MAX_BODY_LENGTH = 1024 * 1024;
+export const MAX_TEXT_TRANSFORMER_TAGS = 256;
+export const MAX_TEXT_TRANSFORMER_TAG_LENGTH = 256;
+export const MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH = 256;
+export const MAX_TEXT_TRANSFORMER_BODY_LENGTH = 1024 * 1024;
 const OPTIONAL_STRING_LIMITS = [
   ['id', 512],
   ['name', 512],
@@ -20,8 +21,10 @@ function boundedOptionalStrings(value: object): boolean {
 
 function boundedTags(value: unknown): boolean {
   if (value === undefined) return true;
-  if (!Array.isArray(value) || value.length > MAX_TAGS) return false;
-  return value.every((tag) => typeof tag === 'string' && tag.length <= MAX_TAG_LENGTH);
+  if (!Array.isArray(value) || value.length > MAX_TEXT_TRANSFORMER_TAGS) return false;
+  return value.every(
+    (tag) => typeof tag === 'string' && tag.length <= MAX_TEXT_TRANSFORMER_TAG_LENGTH,
+  );
 }
 
 function importBody(value: object): unknown {
@@ -33,8 +36,10 @@ export function isBoundedTextTransformerImportSnippet(value: unknown): boolean {
   const trigger = Reflect.get(value, 'trigger');
   const body = importBody(value);
   const enabled = Reflect.get(value, 'enabled');
-  if (typeof trigger !== 'string' || trigger.length > MAX_TRIGGER_LENGTH) return false;
-  if (typeof body !== 'string' || body.length > MAX_BODY_LENGTH) return false;
+  if (typeof trigger !== 'string' || trigger.length > MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH) {
+    return false;
+  }
+  if (typeof body !== 'string' || body.length > MAX_TEXT_TRANSFORMER_BODY_LENGTH) return false;
   if (enabled !== undefined && typeof enabled !== 'boolean') return false;
   return boundedOptionalStrings(value) && boundedTags(Reflect.get(value, 'tags'));
 }
