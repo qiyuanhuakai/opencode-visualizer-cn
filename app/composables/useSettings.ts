@@ -716,8 +716,11 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
         return;
       }
       if (!isSerializedEqual(textTransformers.value, nextTextTransformers)) {
-        textTransformers.value = nextTextTransformers;
+        restoringTextTransformerState = true;
+        textTransformers.value = cloneTextTransformers(nextTextTransformers);
+        restoringTextTransformerState = false;
       }
+      lastPersistedTextTransformers = cloneTextTransformers(nextTextTransformers);
     },
   ],
   [

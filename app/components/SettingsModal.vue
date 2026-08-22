@@ -1658,6 +1658,11 @@ function removeTextTransformerDraft(id: string) {
   textTransformerTagDrafts.value = tagDrafts;
 }
 
+watch(activePage, (page) => {
+  if (page !== 'transformers' || editingTextTransformerId.value) return;
+  editingTextTransformerId.value = Object.keys(textTransformerDrafts.value)[0] ?? null;
+});
+
 function openTextTransformerDetail(id: string) {
   if (!textTransformerDrafts.value[id]) {
     const persisted = textTransformers.value.find((snippet) => snippet.id === id);

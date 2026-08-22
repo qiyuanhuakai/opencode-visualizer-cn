@@ -354,7 +354,8 @@ describe('useSettings', () => {
     });
 
     // When: a nested array mutates through Vue's deep watcher.
-    settings.textTransformers.value[0]!.tags.push('unsaved');
+    const mutableSnippet = settings.textTransformers.value[0]! as unknown as { tags: string[] };
+    mutableSnippet.tags.push('unsaved');
 
     // Then: rollback restores an independent snapshot rather than the already-mutated alias.
     expect(settings.textTransformers.value).toEqual(persisted);

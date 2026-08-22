@@ -15,11 +15,10 @@ export function createPersistentStorage(filePath) {
         );
         return cache;
       }
-    } catch {
-      cache = {};
-    }
-    cache ??= {};
-    return cache;
+    } catch {}
+    const empty = {};
+    cache = empty;
+    return empty;
   }
 
   function commit(next) {
