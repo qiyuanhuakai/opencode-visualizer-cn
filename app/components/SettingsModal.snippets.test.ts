@@ -523,8 +523,35 @@ describe('SettingsModal snippets', () => {
       'review-new',
     );
     expect(host.querySelector('.transformer-detail')?.textContent).toContain(
-      en.settings.textTransformers.saveError,
+      en.settings.textTransformers.conflictError,
     );
+
+    // When: leaving the detail view would otherwise perform a second implicit commit.
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: the conflict remains latched and the external row cannot be overwritten implicitly.
+    expect(host.querySelector('.transformer-detail')).not.toBeNull();
+    expect(settings.textTransformers.value[0]).toMatchObject({
+      name: 'External review',
+      trigger: '::review',
+    });
+    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]).toMatchObject(
+      { name: 'External review', trigger: '::review' },
+    );
+
+    // When: the user explicitly reloads the externally saved row.
+    host.querySelector<HTMLButtonElement>('.transformer-conflict-reload')!.click();
+    await nextTick();
+
+    // Then: the conflict clears and the detail fields show the authoritative external values.
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
+      'External review',
+    );
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')?.value).toBe(
+      '::review',
+    );
+    expect(host.querySelector('.transformer-conflict-reload')).toBeNull();
   });
 
   it('reports an import error when persistence rejects the merged library', async () => {

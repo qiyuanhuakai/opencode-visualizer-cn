@@ -176,6 +176,22 @@
                     : $t('settings.textTransformers.autoSave')
                 }}
               </span>
+              <div v-if="editingTextTransformerConflicted" class="transformer-conflict-actions">
+                <button
+                  type="button"
+                  class="font-system-button transformer-conflict-reload"
+                  @click="reloadTextTransformerDraft(editingTextTransformer.id)"
+                >
+                  {{ $t('settings.textTransformers.reloadSaved') }}
+                </button>
+                <button
+                  type="button"
+                  class="font-system-button transformer-conflict-overwrite"
+                  @click="overwriteTextTransformerDraft(editingTextTransformer.id)"
+                >
+                  {{ $t('settings.textTransformers.overwriteSaved') }}
+                </button>
+              </div>
             </div>
             <div class="transformer-row-grid">
               <label class="transformer-field">
@@ -1457,6 +1473,7 @@ const editingTextTransformerId = ref<string | null>(null);
 type TextTransformerDraft = {
   readonly snippet: TextTransformer;
   readonly base: TextTransformer | null;
+  readonly conflicted?: boolean;
 };
 const textTransformerDrafts = ref<Record<string, TextTransformerDraft>>({});
 const TEXT_TRANSFORMER_PAGE_SIZE = 50;
@@ -1552,6 +1569,9 @@ const editingTextTransformerIndex = computed(() =>
 const editingTextTransformer = computed(
   () => displayedTextTransformers.value[editingTextTransformerIndex.value] ?? null,
 );
+const editingTextTransformerConflicted = computed(
+  () => Boolean(textTransformerDrafts.value[editingTextTransformerId.value ?? '']?.conflicted),
+);
 
 const transformerEmptyText = computed(() =>
   displayedTextTransformers.value.length === 0
@@ -1579,6 +1599,7 @@ function goBackInSettings() {
   if (activePage.value === 'transformers' && editingTextTransformerId.value) {
     const id = editingTextTransformerId.value;
     if (commitTextTransformerDraft(id)) removeTextTransformerDraft(id);
+    else if (textTransformerDrafts.value[id]?.conflicted) return;
     editingTextTransformerId.value = null;
     reconcileActiveTagFilter(transformerTagFilters.value);
     return;
@@ -1659,15 +1680,13 @@ function updateTextTransformerDraft(
 function commitTextTransformerDraft(id: string): boolean {
   const draft = textTransformerDrafts.value[id];
   if (!draft) return true;
+  if (draft.conflicted) return false;
   const persisted = textTransformers.value.find((snippet) => snippet.id === id);
   if (!sameTextTransformer(draft.base, persisted)) {
-    setTextTransformerDraft(id, {
-      ...draft,
-      base: persisted ? cloneTextTransformer(persisted) : null,
-    });
+    setTextTransformerDraft(id, { ...draft, conflicted: true });
     textTransformerImportStatus.value = {
       kind: 'error',
-      message: t('settings.textTransformers.saveError'),
+      message: t('settings.textTransformers.conflictError'),
     };
     return false;
   }
@@ -1694,9 +1713,45 @@ function commitTextTransformerDraft(id: string): boolean {
     return false;
   }
   const normalized = cloneTextTransformer(committed);
-  setTextTransformerDraft(id, { snippet: normalized, base: cloneTextTransformer(normalized) });
+  setTextTransformerDraft(id, {
+    snippet: normalized,
+    base: cloneTextTransformer(normalized),
+    conflicted: false,
+  });
   textTransformerImportStatus.value = null;
   return true;
+}
+
+function reloadTextTransformerDraft(id: string) {
+  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+  if (!persisted) {
+    removeTextTransformerDraft(id);
+    editingTextTransformerId.value = null;
+    return;
+  }
+  const reloaded = cloneTextTransformer(persisted);
+  setTextTransformerDraft(id, {
+    snippet: reloaded,
+    base: cloneTextTransformer(reloaded),
+    conflicted: false,
+  });
+  textTransformerTagDrafts.value = {
+    ...textTransformerTagDrafts.value,
+    [id]: reloaded.tags.join(', '),
+  };
+  textTransformerImportStatus.value = null;
+}
+
+function overwriteTextTransformerDraft(id: string) {
+  const draft = textTransformerDrafts.value[id];
+  if (!draft) return;
+  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+  setTextTransformerDraft(id, {
+    ...draft,
+    base: persisted ? cloneTextTransformer(persisted) : null,
+    conflicted: false,
+  });
+  commitTextTransformerDraft(id);
 }
 
 function addTextTransformer() {
@@ -2131,6 +2186,12 @@ watch(
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 12px;
   text-align: center;
+}
+
+.transformer-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .transformer-toolbar {

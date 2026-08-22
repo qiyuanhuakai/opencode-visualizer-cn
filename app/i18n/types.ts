@@ -668,6 +668,9 @@ export interface LocaleMessages {
       importAction: string;
       importSuccess: string;
       saveError: string;
+      conflictError: string;
+      reloadSaved: string;
+      overwriteSaved: string;
       previousPage: string;
       nextPage: string;
       pageStatus: string;
