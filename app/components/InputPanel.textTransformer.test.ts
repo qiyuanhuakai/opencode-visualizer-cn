@@ -9,7 +9,17 @@ const settings = vi.hoisted(() => ({
   enterToSend: { value: true, __v_isRef: true },
   textTransformersEnabled: { value: true, __v_isRef: true },
   textTransformers: {
-    value: [{ trigger: 'hi', replacement: '你好' }],
+    value: [
+      {
+        id: 'snippet-hi',
+        trigger: 'hi',
+        name: 'Greeting',
+        body: '你好',
+        description: 'Friendly greeting',
+        enabled: true,
+        tags: ['Common'],
+      },
+    ],
     __v_isRef: true,
   },
 }));
@@ -19,10 +29,11 @@ vi.mock('../composables/useSettings', () => ({ useSettings: () => settings }));
 
 const mountedApps: Array<() => void> = [];
 
-function mountInputPanel() {
+function mountInputPanel(options: { commands?: Array<{ name: string; description?: string }> } = {}) {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const message = ref('');
+  const currentSessionId = ref('session-a');
   const send = vi.fn();
   const app = createApp(
     defineComponent({
@@ -54,8 +65,11 @@ function mountInputPanel() {
             hasThinkingOptions: true,
             isThinking: false,
             canAbort: false,
-            commands: [],
+            commands: options.commands ?? [],
             attachments: [],
+            currentSessionId: currentSessionId.value,
+            activeDirectory: '/repo',
+            activeFile: '/repo/src/main.ts',
           });
       },
     }),
@@ -66,7 +80,7 @@ function mountInputPanel() {
     app.unmount();
     root.remove();
   });
-  return { root, message, send };
+  return { root, message, send, currentSessionId };
 }
 
 async function typeInto(textarea: HTMLTextAreaElement, value: string) {
@@ -77,15 +91,25 @@ async function typeInto(textarea: HTMLTextAreaElement, value: string) {
 }
 
 function press(textarea: HTMLTextAreaElement, key: string, isComposing = false) {
-  textarea.dispatchEvent(
-    new KeyboardEvent('keydown', { key, isComposing, bubbles: true, cancelable: true }),
-  );
+  const event = new KeyboardEvent('keydown', { key, isComposing, bubbles: true, cancelable: true });
+  textarea.dispatchEvent(event);
+  return event;
 }
 
 beforeEach(() => {
   settings.enterToSend.value = true;
   settings.textTransformersEnabled.value = true;
-  settings.textTransformers.value = [{ trigger: 'hi', replacement: '你好' }];
+  settings.textTransformers.value = [
+    {
+      id: 'snippet-hi',
+      trigger: 'hi',
+      name: 'Greeting',
+      body: '你好',
+      description: 'Friendly greeting',
+      enabled: true,
+      tags: ['Common'],
+    },
+  ];
 });
 
 afterEach(() => {
@@ -103,8 +127,10 @@ describe('InputPanel text transformers', () => {
     await typeInto(textarea, String.raw`\h`);
     await nextTick();
 
-    // Then: the popup shows both the sequence and its replacement.
+    // Then: the popup shows the trigger, name, description, and a compact body preview.
     expect(document.body.textContent).toContain(String.raw`\hi`);
+    expect(document.body.textContent).toContain('Greeting');
+    expect(document.body.textContent).toContain('Friendly greeting');
     expect(document.body.textContent).toContain('你好');
     expect(textarea.getAttribute('role')).toBe('combobox');
     expect(textarea.getAttribute('aria-autocomplete')).toBe('list');
@@ -178,43 +204,145 @@ describe('InputPanel text transformers', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it.each([' ', 'Tab'])('expands an exact sequence when %s is pressed', async (key) => {
-    // Given: the cursor follows an exact configured sequence.
+  it('does not consume Space to expand an exact sequence', async () => {
+    // Given: the cursor follows an exact configured sequence with its popup open.
     const { root, message } = mountInputPanel();
     const textarea = root.querySelector('textarea')!;
     await typeInto(textarea, String.raw`Before \hi`);
 
-    // When: Space or Tab triggers expansion.
-    press(textarea, key);
+    // When: Space is pressed.
+    const event = press(textarea, ' ');
     await nextTick();
 
-    // Then: the sequence is replaced in place and a trailing space is inserted.
-    expect(message.value).toBe('Before 你好 ');
-    expect(textarea.selectionStart).toBe('Before 你好 '.length);
+    // Then: the transformer leaves the key and draft untouched for native text insertion.
+    expect(event.defaultPrevented).toBe(false);
+    expect(message.value).toBe(String.raw`Before \hi`);
   });
 
-  it('accepts a partial transformer completion with Tab', async () => {
+  it('does not accept a partial transformer completion with Tab', async () => {
     // Given: the popup offers a configured mapping for a partial sequence.
     const { root, message } = mountInputPanel();
     const textarea = root.querySelector('textarea')!;
     await typeInto(textarea, String.raw`\h`);
     await nextTick();
 
-    // When: Tab accepts the highlighted completion.
+    // When: Tab follows the application's existing non-transformer shortcut path.
     press(textarea, 'Tab');
     await nextTick();
 
-    // Then: the entire partial token is replaced by the configured content.
-    expect(message.value).toBe('你好 ');
+    // Then: the transformer does not replace the partial token.
+    expect(message.value).toBe(String.raw`\h`);
   });
 
-  it.each(['Tab', 'Enter'])(
-    'prefers the highlighted completion over an exact shorter trigger with %s',
-    async (key) => {
+  it('always sends on Ctrl+Enter while a snippet popup is open', async () => {
+    // Given: a matching snippet popup is open over a sendable draft.
+    const { root, message, send } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\h`);
+    expect(textarea.getAttribute('aria-expanded')).toBe('true');
+
+    // When: the user invokes the existing always-send shortcut.
+    const event = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(event);
+    await nextTick();
+
+    // Then: the popup cannot consume the shortcut or expand the draft.
+    expect(event.defaultPrevented).toBe(true);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(message.value).toBe(String.raw`\h`);
+  });
+
+  it('keeps built-in command completion ahead of an overlapping snippet', async () => {
+    // Given: one command and one custom-prefix snippet match the same slash input.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-overlap',
+        trigger: '::foo',
+        name: 'Overlapping snippet',
+        body: 'snippet body',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const { root, message, send } = mountInputPanel({
+      commands: [{ name: '::foo', description: 'Built-in command' }],
+    });
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, '/::f');
+    expect(textarea.getAttribute('aria-expanded')).toBe('true');
+
+    // When: Enter accepts the highlighted completion.
+    press(textarea, 'Enter');
+    await nextTick();
+
+    // Then: the command wins and the snippet body is never inserted.
+    expect(message.value).toBe('/::foo ');
+    expect(message.value).not.toContain('snippet body');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('replaces a selected range when the confirmed snippet uses selection context', async () => {
+    // Given: the textarea selection follows a matching snippet trigger.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-wrap',
+        trigger: 'wrap',
+        name: 'Wrap selection',
+        body: '[{selection}]',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const { root, message } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    const input = String.raw`Before \wrapselected after`;
+    await typeInto(textarea, input);
+    const selectionStart = String.raw`Before \wrap`.length;
+    const selectionEnd = selectionStart + 'selected'.length;
+    textarea.setSelectionRange(selectionStart, selectionEnd);
+    textarea.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await nextTick();
+    await nextTick();
+    expect(textarea.getAttribute('aria-expanded')).toBe('true');
+
+    // When: Enter confirms the displayed completion.
+    press(textarea, 'Enter');
+    await nextTick();
+
+    // Then: the trigger and selected text become one expansion without duplication.
+    expect(message.value).toBe('Before [selected]  after');
+    expect(textarea.selectionStart).toBe('Before [selected] '.length);
+    expect(textarea.selectionEnd).toBe('Before [selected] '.length);
+  });
+
+  it('prefers the highlighted completion over an exact shorter trigger with Enter', async () => {
       // Given: an exact short trigger and a longer completion both match the current input.
       settings.textTransformers.value = [
-        { trigger: 'foo', replacement: 'short' },
-        { trigger: 'foobar', replacement: 'long' },
+        {
+          id: 'snippet-foo',
+          trigger: 'foo',
+          name: 'Short',
+          body: 'short',
+          description: '',
+          enabled: true,
+          tags: [],
+        },
+        {
+          id: 'snippet-foobar',
+          trigger: 'foobar',
+          name: 'Long',
+          body: 'long',
+          description: '',
+          enabled: true,
+          tags: [],
+        },
       ];
       const { root, message, send } = mountInputPanel();
       const textarea = root.querySelector('textarea')!;
@@ -223,14 +351,13 @@ describe('InputPanel text transformers', () => {
       press(textarea, 'ArrowDown');
 
       // When: the delimiter accepts the highlighted longer completion.
-      press(textarea, key);
+      press(textarea, 'Enter');
       await nextTick();
 
       // Then: the highlighted mapping wins without sending the message.
       expect(message.value).toBe('long ');
       expect(send).not.toHaveBeenCalled();
-    },
-  );
+  });
 
   it('expands on Enter before a subsequent Enter sends', async () => {
     // Given: Enter-to-send is enabled and the input ends with an exact sequence.
@@ -264,5 +391,154 @@ describe('InputPanel text transformers', () => {
     expect(message.value).toBe(String.raw`\hi`);
     expect(document.body.textContent).not.toContain('你好');
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('expands multiline custom-prefix snippets with live editor context', async () => {
+    // Given: a custom-prefix snippet uses clipboard, file, cwd, and cursor variables.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-context',
+        trigger: '::ctx',
+        name: 'Insert context',
+        body: '{clipboard}\n{activeFile}\n{cwd}\n{cursor}Continue',
+        description: '',
+        enabled: true,
+        tags: ['Context'],
+      },
+    ];
+    const readText = vi.fn().mockResolvedValue('clipboard text');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText },
+    });
+    const { root, message } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, 'Before ::ct');
+
+    // When: Enter confirms the highlighted snippet.
+    press(textarea, 'Enter');
+
+    // Then: context variables resolve and the caret lands before trailing body text.
+    await vi.waitFor(() => {
+      expect(message.value).toBe(
+        'Before clipboard text\n/repo/src/main.ts\n/repo\nContinue ',
+      );
+    });
+    expect(readText).toHaveBeenCalledTimes(1);
+    expect(textarea.selectionStart).toBe('Before clipboard text\n/repo/src/main.ts\n/repo\n'.length);
+  });
+
+  it('does not overwrite an ABA-restored draft after asynchronous clipboard resolution', async () => {
+    // Given: a confirmed snippet is waiting for an asynchronous clipboard read.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-clipboard',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    let resolveClipboard!: (value: string) => void;
+    const readText = vi.fn(
+      () => new Promise<string>((resolve) => (resolveClipboard = resolve)),
+    );
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText },
+    });
+    const { root, message } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+    await nextTick();
+
+    // When: the user confirms, edits away and back to the exact captured draft, then the clipboard resolves.
+    press(textarea, 'Enter');
+    await vi.waitFor(() => expect(readText).toHaveBeenCalledTimes(1));
+    await typeInto(textarea, 'newer draft');
+    await typeInto(textarea, String.raw`\clip`);
+    resolveClipboard('stale clipboard');
+    await nextTick();
+
+    // Then: revision identity, not final text equality, rejects the stale expansion.
+    expect(message.value).toBe(String.raw`\clip`);
+  });
+
+  it('does not overwrite the same draft after its owning session changes', async () => {
+    // Given: a clipboard snippet is pending in one session.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-session-clipboard',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    let resolveClipboard!: (value: string) => void;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: vi.fn(() => new Promise<string>((resolve) => (resolveClipboard = resolve))),
+      },
+    });
+    const { root, message, currentSessionId } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+    press(textarea, 'Enter');
+
+    // When: ownership switches while the visible text and selection remain identical.
+    currentSessionId.value = 'session-b';
+    await nextTick();
+    textarea.setSelectionRange(String.raw`\clip`.length, String.raw`\clip`.length);
+    resolveClipboard('session-a clipboard');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await nextTick();
+
+    // Then: the stale result cannot commit into the new session.
+    expect(message.value).toBe(String.raw`\clip`);
+  });
+
+  it('records same-task input ABA changes synchronously', async () => {
+    // Given: a clipboard snippet is pending and the draft will change twice in one task.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-synchronous-clipboard',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    let resolveClipboard!: (value: string) => void;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: vi.fn(() => new Promise<string>((resolve) => (resolveClipboard = resolve))),
+      },
+    });
+    const { root, message } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+    press(textarea, 'Enter');
+
+    // When: synthetic input moves away and back before Vue flushes its watcher.
+    textarea.value = 'temporary';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.value = String.raw`\clip`;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.setSelectionRange(String.raw`\clip`.length, String.raw`\clip`.length);
+    resolveClipboard('stale clipboard');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await nextTick();
+
+    // Then: synchronous input revision tracking rejects the stale result.
+    expect(message.value).toBe(String.raw`\clip`);
   });
 });

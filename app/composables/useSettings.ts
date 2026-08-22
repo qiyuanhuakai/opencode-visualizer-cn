@@ -195,7 +195,12 @@ function parseTextTransformers(value: string | null): TextTransformer[] {
 }
 
 function readTextTransformers() {
-  return normalizeTextTransformers(storageGetJSON(StorageKeys.settings.textTransformers));
+  const stored = storageGetJSON(StorageKeys.settings.textTransformers);
+  const normalized = normalizeTextTransformers(stored);
+  if (stored !== null && !isSerializedEqual(stored, normalized)) {
+    storageSetJSON(StorageKeys.settings.textTransformers, normalized);
+  }
+  return normalized;
 }
 
 function readThemeStorage(): ThemeStorageV2 | null {

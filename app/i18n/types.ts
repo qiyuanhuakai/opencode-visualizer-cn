@@ -572,6 +572,7 @@ export interface LocaleMessages {
     noMatchingModels: string;
     bookmark: string;
     removeFromFavorites: string;
+    createSnippetFromFavorite: string;
     attach: string;
     agent: string;
     model: string;
@@ -639,14 +640,38 @@ export interface LocaleMessages {
       mappingLabel: string;
       mappingDescription: string;
       sequenceLabel: string;
-      replacementLabel: string;
       sequencePlaceholder: string;
-      replacementPlaceholder: string;
+      nameLabel: string;
+      namePlaceholder: string;
+      descriptionLabel: string;
+      descriptionPlaceholder: string;
+      tagsLabel: string;
+      tagsPlaceholder: string;
+      bodyLabel: string;
+      bodyPlaceholder: string;
+      enabledField: string;
+      untitled: string;
+      filterByTag: string;
+      allTags: string;
+      emptyFiltered: string;
+      variablesLabel: string;
       add: string;
       remove: string;
+      editAction: string;
+      enableAction: string;
+      disableAction: string;
+      autoSave: string;
       empty: string;
       invalidTrigger: string;
       duplicateTrigger: string;
+      exportAction: string;
+      importAction: string;
+      importSuccess: string;
+      importErrors: {
+        invalidJson: string;
+        unsupportedVersion: string;
+        invalidSnippets: string;
+      };
     };
     showMinimizeButtons: {
       label: string;

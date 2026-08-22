@@ -96,6 +96,15 @@
               </div>
               <button
                 type="button"
+                class="history-action-button favorite-snippet-action"
+                :title="$t('inputPanel.createSnippetFromFavorite')"
+                :aria-label="$t('inputPanel.createSnippetFromFavorite')"
+                @click.stop="createSnippetFromFavorite(entry)"
+              >
+                <Icon icon="lucide:notebook-pen" :width="14" :height="14" />
+              </button>
+              <button
+                type="button"
                 class="history-action-button remove"
                 :title="$t('inputPanel.removeFromFavorites')"
                 @click.stop="confirmRemoveFavorite(i)"
@@ -119,7 +128,7 @@
         :aria-activedescendant="mentionOpen ? activeMentionOptionId || undefined : undefined"
         :disabled="false"
         :placeholder="$t('inputPanel.placeholder')"
-        @input="syncTextCursor"
+        @input="handleTextInput"
         @keydown="handleKeydown"
         @keyup="syncTextCursor"
         @click="syncTextCursor"
@@ -222,14 +231,14 @@
             <div v-else-if="activeMentionType === 'transformer'" class="dropdown-list">
               <DropdownItem
                 v-for="(transformer, index) in textTransformerMatches"
-                :key="transformer.trigger"
+                :key="transformer.id"
                 :id="mentionOptionId(index)"
-                :value="transformer.trigger"
+                :value="transformer.id"
               >
-                <div class="command-dropdown-item">
-                  <div class="command-name">\{{ transformer.trigger }}</div>
-                  <div class="command-desc">{{ transformer.replacement }}</div>
-                </div>
+                <SnippetCompletion
+                  :snippet="transformer"
+                  :sequence="textTransformerSequence(transformer)"
+                />
               </DropdownItem>
             </div>
             <div v-else-if="activeMentionType === 'agent'" class="dropdown-list">
@@ -537,15 +546,18 @@ import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownLabel from './Dropdown/Label.vue';
 import DropdownSearch from './Dropdown/Search.vue';
+import SnippetCompletion from './SnippetCompletion.vue';
 import { useMessages } from '../composables/useMessages';
 import { useFavoriteMessages } from '../composables/useFavoriteMessages';
 import { getMessageVariant } from '../types/sse';
 import { useSettings } from '../composables/useSettings';
 import {
-  applyTextTransformerAtCursor,
   applyTextTransformerSelectionAtCursor,
-  findTextTransformerMatches,
+  findNormalizedTextTransformerMatches,
   normalizeTextTransformers,
+  textTransformerSequence,
+  textTransformerTriggerKey,
+  type TextTransformerVariables,
 } from '../utils/textTransformers';
 import type { CodexSkill } from '../backends/codex/codexAdapter';
 type ModelOption = {
@@ -606,6 +618,8 @@ const props = defineProps<{
   agentColor?: string;
   resolveAgentColor?: (agent?: string) => string;
   disabled?: boolean;
+  activeDirectory?: string;
+  activeFile?: string;
 }>();
 
 const emit = defineEmits<{
@@ -628,6 +642,7 @@ const emit = defineEmits<{
   (event: 'add-attachments', files: File[]): void;
   (event: 'remove-attachment', id: string): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
+  (event: 'open-snippet-settings'): void;
 }>();
 
 const messageValue = computed({
@@ -642,6 +657,8 @@ const permissionModeValue = computed({
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const textCursor = ref<number | null>(null);
+let textTransformerInputRevision = 0;
+let textTransformerApplicationGeneration = 0;
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const modelDropdownRef = ref<HTMLElement | null>(null);
 const modelSearchQuery = ref('');
@@ -848,6 +865,39 @@ function handleFavoriteSelect(entry: unknown) {
   applyHistoryEntry(value);
 }
 
+function favoriteSnippetTrigger() {
+  const triggers = new Set(
+    normalizeTextTransformers(textTransformers.value).map((snippet) =>
+      textTransformerTriggerKey(snippet.trigger),
+    ),
+  );
+  let index = 1;
+  while (triggers.has(textTransformerTriggerKey(index === 1 ? 'favorite' : `favorite-${index}`))) {
+    index += 1;
+  }
+  return index === 1 ? 'favorite' : `favorite-${index}`;
+}
+
+function createSnippetFromFavorite(entry: HistoryEntry) {
+  const body = entry.text.trim();
+  if (!body) return;
+  const firstLine = body.split(/\r?\n/u, 1)[0]?.trim() ?? '';
+  const name = firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine;
+  textTransformers.value = [
+    ...textTransformers.value,
+    {
+      id: `snippet-${globalThis.crypto.randomUUID()}`,
+      trigger: favoriteSnippetTrigger(),
+      name,
+      body,
+      enabled: false,
+      tags: [],
+    },
+  ];
+  favoritesOpen.value = false;
+  emit('open-snippet-settings');
+}
+
 async function confirmRemoveFavorite(index: number) {
   const confirmed = showConfirm
     ? await showConfirm(t('inputPanel.removeFromFavoritesConfirm'))
@@ -907,7 +957,7 @@ const normalizedTextTransformers = computed(() =>
 );
 const textTransformerMatches = computed(() => {
   if (!textTransformersEnabled.value) return [];
-  return findTextTransformerMatches(
+  return findNormalizedTextTransformerMatches(
     messageValue.value,
     textCursor.value ?? messageValue.value.length,
     normalizedTextTransformers.value,
@@ -919,22 +969,27 @@ function syncTextCursor(event: Event) {
   textCursor.value = event.currentTarget.selectionStart;
 }
 
+function handleTextInput(event: Event) {
+  textTransformerInputRevision += 1;
+  syncTextCursor(event);
+}
+
 function syncTextCursorFromTextarea() {
   textCursor.value = textareaRef.value?.selectionStart ?? messageValue.value.length;
 }
 
 // --- Unified mention popup (command / agent / skill) ---
-// Priority: $skill > @agent > /command (most specific first)
+// Priority: built-in mentions before custom Snippets
 const activeMentionType = computed<'command' | 'agent' | 'file' | 'skill' | 'transformer' | null>(
   () => {
-    if (textTransformerMatches.value.length > 0 && !transformerPopupDismissed.value)
-      return 'transformer';
     if (skillMatches.value.length > 0 && !skillPopupDismissed.value) return 'skill';
     if (props.preferFileMentions && fileMatches.value.length > 0 && !filePopupDismissed.value)
       return 'file';
     if (agentMatches.value.length > 0 && !agentPopupDismissed.value) return 'agent';
     if (fileMatches.value.length > 0 && !filePopupDismissed.value) return 'file';
     if (commandMatches.value.length > 0 && !commandPopupDismissed.value) return 'command';
+    if (textTransformerMatches.value.length > 0 && !transformerPopupDismissed.value)
+      return 'transformer';
     return null;
   },
 );
@@ -1064,6 +1119,7 @@ const skillMatches = computed<SkillOption[]>(() => {
 watch(
   () => messageValue.value,
   () => {
+    textTransformerInputRevision += 1;
     commandPopupDismissed.value = false;
     agentPopupDismissed.value = false;
     filePopupDismissed.value = false;
@@ -1077,7 +1133,7 @@ function handleMentionSelect(value: unknown) {
   if (typeof value !== 'string') return;
   const type = activeMentionType.value;
   if (type === 'command') applyCommandSelection(value);
-  else if (type === 'transformer') applyTextTransformerSelection(value);
+  else if (type === 'transformer') void applyTextTransformerSelection(value);
   else if (type === 'agent') applyAgentSelection(value);
   else if (type === 'file') applyFileSelection(value);
   else if (type === 'skill') applySkillSelection(value);
@@ -1098,22 +1154,80 @@ function commitTextTransformerApplication(result: {
   return true;
 }
 
-function applyTextTransformerSelection(trigger: string) {
-  const transformer = normalizedTextTransformers.value.find(
-    (item) => item.trigger.toLocaleLowerCase() === trigger.toLocaleLowerCase(),
-  );
-  if (!transformer) return;
-  const cursor = textareaRef.value?.selectionStart ?? messageValue.value.length;
-  commitTextTransformerApplication(
-    applyTextTransformerSelectionAtCursor(messageValue.value, cursor, transformer, ' '),
+function currentTextTransformerVariables(
+  selectionStart: number,
+  selectionEnd: number,
+): TextTransformerVariables {
+  return {
+    activeFile: props.activeFile ?? '',
+    cwd: props.activeDirectory ?? '',
+    selection: messageValue.value.slice(selectionStart, selectionEnd),
+  };
+}
+
+async function readClipboardText(): Promise<string> {
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return '';
+  }
+}
+
+function textTransformerSelectionChanged(
+  input: string,
+  selectionStart: number,
+  selectionEnd: number,
+  inputRevision: number,
+  applicationGeneration: number,
+  sessionId: string | undefined,
+) {
+  const textarea = textareaRef.value;
+  return (
+    textTransformerInputRevision !== inputRevision ||
+    textTransformerApplicationGeneration !== applicationGeneration ||
+    props.currentSessionId !== sessionId ||
+    messageValue.value !== input ||
+    textarea?.selectionStart !== selectionStart ||
+    textarea.selectionEnd !== selectionEnd
   );
 }
 
-function applyExactTextTransformer() {
-  if (!textTransformersEnabled.value) return false;
-  const cursor = textareaRef.value?.selectionStart ?? messageValue.value.length;
-  return commitTextTransformerApplication(
-    applyTextTransformerAtCursor(messageValue.value, cursor, normalizedTextTransformers.value, ' '),
+async function applyTextTransformerSelection(id: string) {
+  const applicationGeneration = ++textTransformerApplicationGeneration;
+  const transformer = normalizedTextTransformers.value.find((item) => item.id === id);
+  if (!transformer) return;
+  const textarea = textareaRef.value;
+  const selectionStart = textarea?.selectionStart ?? messageValue.value.length;
+  const selectionEnd = textarea?.selectionEnd ?? selectionStart;
+  const input = messageValue.value;
+  const inputRevision = textTransformerInputRevision;
+  const sessionId = props.currentSessionId;
+  let variables = currentTextTransformerVariables(selectionStart, selectionEnd);
+  if (transformer.body.includes('{clipboard}')) {
+    const clipboard = await readClipboardText();
+    variables = { ...variables, clipboard };
+    if (
+      textTransformerSelectionChanged(
+        input,
+        selectionStart,
+        selectionEnd,
+        inputRevision,
+        applicationGeneration,
+        sessionId,
+      )
+    ) {
+      return;
+    }
+  }
+  commitTextTransformerApplication(
+    applyTextTransformerSelectionAtCursor(
+      input,
+      selectionStart,
+      selectionEnd,
+      transformer,
+      ' ',
+      variables,
+    ),
   );
 }
 
@@ -1285,13 +1399,16 @@ function handleModelDropdownOpenChange(open: boolean) {
 function handleKeydown(event: KeyboardEvent) {
   if (event.isComposing) return;
   syncTextCursor(event);
-  const isTransformerDelimiter =
-    (event.key === ' ' || event.key === 'Tab' || event.key === 'Enter') &&
+  const isPlainEnter =
+    event.key === 'Enter' &&
     !event.ctrlKey &&
     !event.metaKey &&
     !event.shiftKey &&
     !event.altKey;
+  const isAlwaysSend =
+    event.key === 'Enter' && event.ctrlKey && !event.metaKey && !event.altKey;
   if (mentionOpen.value) {
+    const mentionType = activeMentionType.value;
     if (event.key === 'Escape') {
       event.preventDefault();
       dismissActiveMention();
@@ -1307,24 +1424,22 @@ function handleKeydown(event: KeyboardEvent) {
       mentionDropdownRef.value?.moveHighlight('up');
       return;
     }
-    if (event.key === 'Tab' && isTransformerDelimiter) {
+    if (event.key === 'Tab' && mentionType !== 'transformer') {
       event.preventDefault();
       mentionDropdownRef.value?.selectHighlighted();
       return;
     }
-    if (event.key === 'Enter' && isTransformerDelimiter) {
+    if (isPlainEnter) {
       event.preventDefault();
       mentionDropdownRef.value?.selectHighlighted();
       return;
     }
-    if (event.key === ' ' && isTransformerDelimiter && applyExactTextTransformer()) {
-      event.preventDefault();
+    if (isAlwaysSend) {
+      dismissActiveMention();
+    } else {
+      if (mentionType !== 'transformer' || event.key !== 'Tab') return;
+      dismissActiveMention();
     }
-    return;
-  }
-  if (isTransformerDelimiter && applyExactTextTransformer()) {
-    event.preventDefault();
-    return;
   }
   // --- Input history: open dropdown when ArrowUp on empty input ---
   if (
@@ -1375,7 +1490,7 @@ function handleKeydown(event: KeyboardEvent) {
     return;
   }
   // Ctrl+Enter: always send
-  if (event.key === 'Enter' && event.ctrlKey && !event.metaKey && !event.altKey) {
+  if (isAlwaysSend) {
     event.preventDefault();
     emit('send');
     return;

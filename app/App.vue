@@ -43,7 +43,7 @@
           @batch-session-action="backendSessionActions.handleTopPanelBatchSessionAction"
           @open-directory="handleOpenProjectDirectory"
           @edit-project="handleEditProject"
-          @open-settings="isSettingsOpen = true"
+          @open-settings="openSettings()"
           @open-provider-manager="isProviderManagerOpen = true"
           @open-status-monitor="isStatusMonitorOpen = true"
           @open-codex-panel="openCodexPanel"
@@ -186,6 +186,8 @@
               :commands="commandOptions"
               :available-skills="activeBackendKind === 'codex' ? codexApi.skills.value : []"
               :attachments="attachments"
+              :active-directory="activeDirectory"
+              :active-file="selectedTreePath"
               :message-input="messageInput"
               :selected-mode="selectedMode"
               :selected-permission-mode="selectedAcpPermissionMode"
@@ -204,6 +206,7 @@
               @add-attachments="handleAddAttachments"
               @remove-attachment="removeAttachment"
               @open-image="handleOpenImage"
+              @open-snippet-settings="openSettings('transformers')"
             />
           </footer>
         </div>
@@ -430,7 +433,11 @@
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
     />
-    <SettingsModal :open="isSettingsOpen" @close="isSettingsOpen = false" />
+    <SettingsModal
+      :open="isSettingsOpen"
+      :initial-page="settingsInitialPage"
+      @close="isSettingsOpen = false"
+    />
     <ProviderManagerModal
       :open="isProviderManagerOpen"
       :providers="providers"
@@ -1877,6 +1884,12 @@ const editingProjectMeta = computed(() => {
   return pid ? serverState.projects[pid] : undefined;
 });
 const isSettingsOpen = ref(false);
+const settingsInitialPage = ref<'root' | 'transformers'>('root');
+
+function openSettings(page: 'root' | 'transformers' = 'root') {
+  settingsInitialPage.value = page;
+  isSettingsOpen.value = true;
+}
 const isProviderManagerOpen = ref(false);
 const isStatusMonitorOpen = ref(false);
 
