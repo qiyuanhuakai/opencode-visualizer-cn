@@ -203,5 +203,8 @@ describe('InputPanel prompt history', () => {
       },
     ]);
     expect(openSnippetSettings).toHaveBeenCalledTimes(1);
+    const favoritesDropdown = root.querySelectorAll('.history-dropdown-wrapper .ui-dropdown')[1];
+    expect(favoritesDropdown?.classList.contains('is-open')).toBe(false);
+    expect(favoritesDropdown?.querySelector('.ui-dropdown-menu')?.hasAttribute('inert')).toBe(true);
   });
 });

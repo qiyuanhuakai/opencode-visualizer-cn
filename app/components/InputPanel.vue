@@ -894,6 +894,7 @@ function createSnippetFromFavorite(entry: HistoryEntry) {
       tags: [],
     },
   ];
+  favoritesOpen.value = false;
   emit('open-snippet-settings');
 }
 
