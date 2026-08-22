@@ -7885,6 +7885,7 @@ watch(
   ],
   () => {
     messageCacheAuthGeneration.value += 1;
+    sessionReloadRequestId.value += 1;
     msg.clearSessionCache();
     backendSessionReload.invalidateMessageCacheContext();
   },

@@ -10,6 +10,7 @@ describe('message cache authentication lifecycle', () => {
       /watch\(\s*\[\s*\(\) => credentials\.authHeader\.value,\s*\(\) => credentials\.codexBridgeToken\.value,\s*\(\) => credentials\.acpBridgeToken\.value,/,
     );
     expect(source).toContain('messageCacheAuthGeneration.value += 1;');
+    expect(source).toContain('sessionReloadRequestId.value += 1;');
     expect(source).toContain('msg.clearSessionCache();');
     expect(source).toContain('backendSessionReload.invalidateMessageCacheContext();');
     expect(source).toContain("{ flush: 'sync' }");
