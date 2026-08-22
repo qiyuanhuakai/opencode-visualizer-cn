@@ -5211,9 +5211,8 @@ async function fetchHistory(
 }
 
 async function fetchRootSessionHistory(rootSessionId: string) {
-  const requestId = ++primaryHistoryRequestId;
-  const loaded = await fetchHistory(rootSessionId, false, requestId);
-  return { requestId, loaded };
+  const loaded = await fetchHistory(rootSessionId);
+  return { requestId: primaryHistoryRequestId, loaded };
 }
 
 function reserveRootHistoryRequestId() {
