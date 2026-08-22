@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   mergeTextTransformers,
   normalizeTextTransformers,
   parseTextTransformerImport,
   serializeTextTransformers,
+  textTransformerTriggerKey,
 } from './snippets';
 
 const snippet = {
@@ -230,6 +232,146 @@ describe('snippet import and export', () => {
     expect(migrated).toHaveLength(3);
     expect(migrated.every((entry) => entry.enabled === false)).toBe(true);
     expect(imported).toEqual({ ok: true, snippets: migrated });
+  });
+
+  it('assigns deterministic unique ids when distinct legacy snippets collide', () => {
+    // Given: two distinct legacy snippets reproduce the current 32-bit hash collision.
+    const colliding = [
+      { trigger: 'tmrkyczzoeosd', replacement: 'bixntxizktiha' },
+      { trigger: 'trgbyrbeujkiu', replacement: 'bsxjtgyuqazzr' },
+    ];
+
+    // When: legacy storage is normalized twice as it would be across reloads.
+    const firstMigration = normalizeTextTransformers(colliding);
+    const secondMigration = normalizeTextTransformers(firstMigration);
+
+    // Then: both rows survive with unique ids that remain stable after persistence.
+    expect(firstMigration).toHaveLength(2);
+    expect(new Set(firstMigration.map(({ id }) => id))).toHaveLength(2);
+    expect(secondMigration).toEqual(firstMigration);
+  });
+
+  it('serializes duplicate explicit ids into an importable backup', () => {
+    // Given: corrupted legacy storage contains distinct triggers sharing one explicit id.
+    const duplicateIds = [
+      { ...snippet, id: 'duplicate-id', trigger: 'alpha' },
+      { ...snippet, id: 'duplicate-id', trigger: 'beta' },
+    ];
+
+    // When: the public serializer produces a versioned backup.
+    const imported = parseTextTransformerImport(serializeTextTransformers(duplicateIds));
+
+    // Then: every source row survives and the serializer output is accepted by its parser.
+    expect(imported).toMatchObject({ ok: true });
+    if (!imported.ok) throw new Error('Expected the serialized backup to be importable');
+    expect(imported.snippets).toHaveLength(2);
+    expect(new Set(imported.snippets.map(({ id }) => id))).toHaveLength(2);
+  });
+
+  it('refuses to serialize libraries that exceed the public import contract', () => {
+    // Given: one library exceeds the row limit and another exceeds the body limit.
+    const excessiveLibrary = Array.from({ length: 1_001 }, (_, index) => ({
+      ...snippet,
+      id: `snippet-export-${index}`,
+      trigger: `export-${index}`,
+    }));
+    const excessiveBody = [{ ...snippet, body: 'x'.repeat(1_048_577) }];
+
+    // When: callers request backups that the public parser cannot restore.
+    const serializeLibrary = () => serializeTextTransformers(excessiveLibrary);
+    const serializeBody = () => serializeTextTransformers(excessiveBody);
+
+    // Then: the serializer fails before emitting a non-importable backup.
+    expect(serializeLibrary).toThrow(RangeError);
+    expect(serializeBody).toThrow(RangeError);
+  });
+
+  it('measures the import payload limit in UTF-8 bytes', () => {
+    // Given: a valid JSON payload is below the UTF-16 length limit but above five MiB as UTF-8.
+    const emojiBody = '😀'.repeat(250_000);
+    const oversizedUtf8 = JSON.stringify({
+      version: 1,
+      snippets: Array.from({ length: 6 }, (_, index) => ({
+        ...snippet,
+        id: `snippet-utf8-${index}`,
+        trigger: `utf8-${index}`,
+        body: emojiBody,
+      })),
+    });
+    expect(oversizedUtf8.length).toBeLessThan(MAX_TEXT_TRANSFORMER_IMPORT_BYTES);
+    expect(new TextEncoder().encode(oversizedUtf8).byteLength).toBeGreaterThan(
+      MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
+    );
+
+    // When: the payload crosses the parser boundary.
+    const result = parseTextTransformerImport(oversizedUtf8);
+
+    // Then: encoded bytes, rather than UTF-16 code units, enforce the resource budget.
+    expect(result).toEqual({ ok: false, reason: 'invalid-snippets' });
+  });
+
+  it('uses one key for every reviewed Unicode simple-fold pair', () => {
+    // Given: the reviewed pairs compare equal under the runtime matcher used for triggers.
+    const pairs = [
+      ['\u0345', '\u1fbe'],
+      ['\u03f2', '\u03f9'],
+      ['\u1c89', '\u1c8a'],
+    ] as const;
+    expect(pairs.every(([left, right]) => new RegExp(`^${left}$`, 'iu').test(right))).toBe(true);
+
+    // When: each side is canonicalized independently.
+    const keys = pairs.map(([left, right]) => [
+      textTransformerTriggerKey(left),
+      textTransformerTriggerKey(right),
+    ]);
+
+    // Then: key equality matches the trigger comparison contract.
+    expect(keys.every(([left, right]) => left === right)).toBe(true);
+  });
+
+  it('rejects ids that exceed their bound after collision allocation', () => {
+    // Given: two valid raw rows share an explicit id at the maximum accepted length.
+    const maximumId = 'x'.repeat(512);
+    const input = JSON.stringify({
+      version: 1,
+      snippets: [
+        { ...snippet, id: maximumId, trigger: 'maximum-a' },
+        { ...snippet, id: maximumId, trigger: 'maximum-b' },
+      ],
+    });
+
+    // When: collision allocation appends a suffix during import normalization.
+    const result = parseTextTransformerImport(input);
+
+    // Then: the post-normalization row is rechecked and rejected instead of becoming unexportable.
+    expect(result).toEqual({ ok: false, reason: 'invalid-snippets' });
+  });
+
+  it('accepts an importable serialized backup at the exact byte limit', () => {
+    // Given: six bounded ASCII snippets are padded to the exact public payload limit.
+    const rows = Array.from({ length: 6 }, (_, index) => ({
+      ...snippet,
+      id: `snippet-exact-${index}`,
+      trigger: `exact-${index}`,
+      body: '',
+    }));
+    const emptySize = new TextEncoder().encode(serializeTextTransformers(rows)).byteLength;
+    const bodyBytes = MAX_TEXT_TRANSFORMER_IMPORT_BYTES - emptySize;
+    const baseBodySize = Math.floor(bodyBytes / rows.length);
+    const exactRows = rows.map((row, index) => ({
+      ...row,
+      body: 'x'.repeat(baseBodySize + (index < bodyBytes % rows.length ? 1 : 0)),
+    }));
+
+    // When: the exact-limit backup is serialized and parsed again.
+    const serialized = serializeTextTransformers(exactRows);
+    const result = parseTextTransformerImport(serialized);
+
+    // Then: no extra byte is introduced and the public round trip succeeds.
+    expect(new TextEncoder().encode(serialized).byteLength).toBe(
+      MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
+    );
+    expect(result).toMatchObject({ ok: true });
   });
 
   it('rejects imports above the interactive library limit', () => {

@@ -30,7 +30,12 @@ export type TextTransformerImportResult =
   | { readonly ok: true; readonly snippets: TextTransformer[] }
   | { readonly ok: false; readonly reason: TextTransformerImportFailure };
 
-export const TEXT_TRANSFORMER_EXPORT_VERSION = 1;
+type NormalizedSnippet = {
+  readonly snippet: TextTransformer;
+  readonly hasExplicitId: boolean;
+};
+
+const TEXT_TRANSFORMER_EXPORT_VERSION = 1;
 export {
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
@@ -96,7 +101,7 @@ function normalizeSnippetTrigger(
   return isLegacyReservedTrigger(trigger) ? { trigger, enabled: false } : null;
 }
 
-function normalizeSnippet(value: object): TextTransformer | null {
+function normalizeSnippet(value: object): NormalizedSnippet | null {
   const normalizedTrigger = normalizeSnippetTrigger(
     Reflect.get(value, 'trigger'),
     Reflect.get(value, 'enabled'),
@@ -106,7 +111,8 @@ function normalizeSnippet(value: object): TextTransformer | null {
   if (body === null) return null;
 
   const { trigger, enabled } = normalizedTrigger;
-  const id = optionalTrimmedString(Reflect.get(value, 'id')) ?? stableSnippetId(trigger, body);
+  const explicitId = optionalTrimmedString(Reflect.get(value, 'id'));
+  const id = explicitId ?? stableSnippetId(trigger, body);
   const name = optionalTrimmedString(Reflect.get(value, 'name')) ?? trigger;
   const description = optionalTrimmedString(Reflect.get(value, 'description'));
   const snippet = {
@@ -117,7 +123,10 @@ function normalizeSnippet(value: object): TextTransformer | null {
     enabled,
     tags: normalizeTags(Reflect.get(value, 'tags')),
   };
-  return description ? { ...snippet, description } : snippet;
+  return {
+    snippet: description ? { ...snippet, description } : snippet,
+    hasExplicitId: explicitId !== undefined,
+  };
 }
 
 function hasSameTrigger(left: string, right: string): boolean {
@@ -163,31 +172,65 @@ export function textTransformerTriggerKey(value: string): string {
 
 export function normalizeTextTransformers(value: unknown): TextTransformer[] {
   if (!Array.isArray(value)) return [];
-  const normalized = new Map<string, TextTransformer>();
+  const normalized = new Map<string, NormalizedSnippet>();
   for (const item of value) {
     if (typeof item !== 'object' || item === null) continue;
-    const snippet = normalizeSnippet(item);
-    if (!snippet) continue;
-    const triggerKey = textTransformerTriggerKey(snippet.trigger);
+    const candidate = normalizeSnippet(item);
+    if (!candidate) continue;
+    const triggerKey = textTransformerTriggerKey(candidate.snippet.trigger);
     normalized.delete(triggerKey);
-    normalized.set(triggerKey, snippet);
+    normalized.set(triggerKey, candidate);
   }
-  return [...normalized.values()];
+  const candidates = [...normalized.values()];
+  const reservedIds = new Set(
+    candidates.filter(({ hasExplicitId }) => hasExplicitId).map(({ snippet }) => snippet.id),
+  );
+  const allocatedIds = new Set<string>();
+  return candidates.map(({ snippet, hasExplicitId }) => {
+    if (hasExplicitId && !allocatedIds.has(snippet.id)) {
+      allocatedIds.add(snippet.id);
+      return snippet;
+    }
+    if (!hasExplicitId && !reservedIds.has(snippet.id) && !allocatedIds.has(snippet.id)) {
+      allocatedIds.add(snippet.id);
+      return snippet;
+    }
+    let suffix = 2;
+    let id = `${snippet.id}-${suffix}`;
+    while (reservedIds.has(id) || allocatedIds.has(id)) {
+      suffix += 1;
+      id = `${snippet.id}-${suffix}`;
+    }
+    allocatedIds.add(id);
+    return { ...snippet, id };
+  });
 }
 
 export function serializeTextTransformers(transformers: readonly TextTransformerInput[]): string {
-  return JSON.stringify(
+  const snippets = normalizeTextTransformers(transformers);
+  if (
+    snippets.length !== transformers.length ||
+    snippets.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT ||
+    !snippets.every(isBoundedTextTransformerImportSnippet)
+  ) {
+    throw new RangeError('Snippet backup exceeds the import limits');
+  }
+  const serialized = JSON.stringify(
     {
       version: TEXT_TRANSFORMER_EXPORT_VERSION,
-      snippets: normalizeTextTransformers(transformers),
+      snippets,
     },
     null,
     2,
   );
+  if (new TextEncoder().encode(serialized).byteLength > MAX_TEXT_TRANSFORMER_IMPORT_BYTES) {
+    throw new RangeError('Snippet backup exceeds the import limits');
+  }
+  return serialized;
 }
 
 export function parseTextTransformerImport(input: string): TextTransformerImportResult {
-  if (input.length > MAX_TEXT_TRANSFORMER_IMPORT_BYTES) {
+  if (new TextEncoder().encode(input).byteLength > MAX_TEXT_TRANSFORMER_IMPORT_BYTES) {
     return { ok: false, reason: 'invalid-snippets' };
   }
   let parsed: unknown;
@@ -214,7 +257,10 @@ export function parseTextTransformerImport(input: string): TextTransformerImport
     return { ok: false, reason: 'invalid-snippets' };
   }
   const snippets = normalizeTextTransformers(rawSnippets);
-  if (snippets.length !== rawSnippets.length) {
+  if (
+    snippets.length !== rawSnippets.length ||
+    !snippets.every(isBoundedTextTransformerImportSnippet)
+  ) {
     return { ok: false, reason: 'invalid-snippets' };
   }
   const ids = new Set(snippets.map((snippet) => snippet.id));
