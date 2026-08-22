@@ -305,6 +305,101 @@ describe('useSettings', () => {
     expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
   });
 
+  it('rejects mixed valid and malformed startup rows without salvaging a lossy subset', async () => {
+    // Given: storage contains one valid row and one malformed row whose body is missing.
+    const mixed = [
+      {
+        id: 'snippet-safe-startup',
+        trigger: 'safe-startup',
+        name: 'Safe startup',
+        body: 'Keep',
+        enabled: true,
+        tags: [],
+      },
+      {
+        id: 'snippet-recover-startup',
+        trigger: 'recover-startup',
+        name: 'Recover startup',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const raw = JSON.stringify(mixed);
+    storage.setItem('opencode.settings.textTransformers.v1', raw);
+
+    // When: settings initialize from the mixed collection.
+    const settings = await importFresh();
+
+    // Then: no lossy subset enters runtime or replaces the recoverable raw value.
+    expect(settings.textTransformers.value).toEqual([]);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(raw);
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
+  it('rejects semantically invalid current triggers before startup normalization', async () => {
+    // Given: every current field has the right type, but one trigger contains whitespace.
+    const mixed = [
+      {
+        id: 'snippet-safe-semantic',
+        trigger: 'safe-semantic',
+        name: 'Safe semantic',
+        body: 'Keep',
+        enabled: true,
+        tags: [],
+      },
+      {
+        id: 'snippet-recover-semantic',
+        trigger: 'has space',
+        name: 'Recover semantic',
+        body: 'Recover',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const raw = JSON.stringify(mixed);
+    storage.setItem('opencode.settings.textTransformers.v1', raw);
+
+    // When: startup parses the structurally valid collection.
+    const settings = await importFresh();
+
+    // Then: semantic validation rejects the whole collection before lossy normalization.
+    expect(settings.textTransformers.value).toEqual([]);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(raw);
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
+  it('rejects duplicate current triggers before startup collection normalization', async () => {
+    // Given: two fully valid current rows have case-fold-equivalent triggers.
+    const duplicates = [
+      {
+        id: 'snippet-duplicate-first',
+        trigger: 'duplicate',
+        name: 'Duplicate first',
+        body: 'Recover first',
+        enabled: true,
+        tags: [],
+      },
+      {
+        id: 'snippet-duplicate-second',
+        trigger: 'DUPLICATE',
+        name: 'Duplicate second',
+        body: 'Keep second',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const raw = JSON.stringify(duplicates);
+    storage.setItem('opencode.settings.textTransformers.v1', raw);
+
+    // When: startup parses the duplicate collection.
+    const settings = await importFresh();
+
+    // Then: neither row is discarded or rewritten as a lossy subset.
+    expect(settings.textTransformers.value).toEqual([]);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(raw);
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
   it('rejects malformed external snippet storage without erasing valid state', async () => {
     // Given: one valid persisted snippet is active in this window.
     const persisted = [
@@ -332,6 +427,82 @@ describe('useSettings', () => {
     // Then: the valid runtime state and malformed recovery value are both preserved.
     expect(settings.textTransformers.value).toEqual(persisted);
     expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe('not-json');
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
+  it('rejects structurally malformed external rows without salvaging their valid siblings', async () => {
+    // Given: this window holds one valid authoritative snippet.
+    const persisted = [
+      {
+        id: 'snippet-safe-external',
+        trigger: 'safe-external',
+        name: 'Safe external',
+        body: 'Safe body',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+    const mixedRaw = JSON.stringify([
+      persisted[0],
+      {
+        id: 'snippet-recover-external',
+        trigger: 'recover-external',
+        name: 'Recover external',
+        body: 'Recover body',
+        enabled: 'false',
+        tags: [],
+      },
+    ]);
+
+    // When: an external event publishes the mixed collection.
+    storage.setItem('opencode.settings.textTransformers.v1', mixedRaw);
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: mixedRaw,
+      } as unknown as StorageEvent);
+    }
+
+    // Then: valid runtime state remains authoritative and the raw recovery payload is untouched.
+    expect(settings.textTransformers.value).toEqual(persisted);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(mixedRaw);
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
+  it('rejects duplicate current triggers from external storage as one atomic collection', async () => {
+    // Given: this window has a valid authoritative row.
+    const persisted = [
+      {
+        id: 'snippet-external-authoritative',
+        trigger: 'authoritative',
+        name: 'Authoritative',
+        body: 'Keep',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+    const duplicates = [
+      { ...persisted[0]!, id: 'snippet-external-first', trigger: 'external-duplicate' },
+      { ...persisted[0]!, id: 'snippet-external-second', trigger: 'EXTERNAL-DUPLICATE' },
+    ];
+    const raw = JSON.stringify(duplicates);
+
+    // When: another window publishes the duplicate current collection.
+    storage.setItem('opencode.settings.textTransformers.v1', raw);
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: raw,
+      } as unknown as StorageEvent);
+    }
+
+    // Then: the complete event is rejected and raw recovery data remains untouched.
+    expect(settings.textTransformers.value).toEqual(persisted);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(raw);
     expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
   });
 

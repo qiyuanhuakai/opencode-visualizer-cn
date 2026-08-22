@@ -24,6 +24,7 @@ import {
 } from '../utils/editorShortcuts';
 import { normalizeTextTransformers, type TextTransformer } from '../utils/textTransformers';
 import { validateTextTransformerLibrary } from '../utils/snippets';
+import { isBoundedTextTransformerImportSnippet } from '../utils/snippetImportLimits';
 
 function isSerializedEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -190,6 +191,37 @@ function parseTextTransformers(value: string): TextTransformer[] | null {
   try {
     const parsed: unknown = JSON.parse(value);
     if (!Array.isArray(parsed)) return null;
+    let currentEntryCount = 0;
+    let legacyEntryCount = 0;
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== 'object') return null;
+      const currentShape =
+        'body' in entry ||
+        'id' in entry ||
+        'name' in entry ||
+        'description' in entry ||
+        'enabled' in entry ||
+        'tags' in entry;
+      if (!currentShape) {
+        if (!('replacement' in entry)) return null;
+        legacyEntryCount += 1;
+        continue;
+      }
+      currentEntryCount += 1;
+      if (
+        !isBoundedTextTransformerImportSnippet(entry) ||
+        typeof Reflect.get(entry, 'id') !== 'string' ||
+        typeof Reflect.get(entry, 'name') !== 'string' ||
+        typeof Reflect.get(entry, 'body') !== 'string' ||
+        typeof Reflect.get(entry, 'enabled') !== 'boolean' ||
+        !Array.isArray(Reflect.get(entry, 'tags'))
+      ) {
+        return null;
+      }
+    }
+    if (currentEntryCount > 0) {
+      return legacyEntryCount === 0 ? validateTextTransformerLibrary(parsed) : null;
+    }
     return validateTextTransformerLibrary(normalizeTextTransformers(parsed));
   } catch {
     return null;
