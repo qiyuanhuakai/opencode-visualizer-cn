@@ -2,7 +2,7 @@ import { createApp, defineComponent, h, nextTick, ref } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import en from '../locales/en';
 
-const fileExport = vi.hoisted(() => ({ downloadJsonFile: vi.fn() }));
+const fileExport = vi.hoisted(() => ({ downloadJsonFile: vi.fn(), downloadTextFile: vi.fn() }));
 
 vi.mock('@iconify/vue', () => ({
   Icon: (props: { icon: string }) => h('svg', { 'data-icon': props.icon }),
@@ -88,6 +88,7 @@ beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
   fileExport.downloadJsonFile.mockReset();
+  fileExport.downloadTextFile.mockReset();
 });
 
 afterEach(() => {
@@ -118,6 +119,79 @@ describe('SettingsModal snippets', () => {
     expect(enableButton.disabled).toBe(true);
     expect(enableButton.getAttribute('aria-pressed')).toBe('false');
     expect(settings.textTransformers.value[0]?.enabled).toBe(false);
+  });
+
+  it('disables an enabled snippet immediately when its trigger becomes reserved', async () => {
+    // Given: an enabled valid snippet is open in the detail editor.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+
+    // When: its trigger is edited into the built-in command namespace.
+    inputValue(host.querySelector('[data-snippet-field="trigger"]')!, '/legacy');
+    await nextTick();
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: reactive state, persisted state, and the row control all agree that it is disabled.
+    expect(settings.textTransformers.value[0]).toMatchObject({ trigger: '/legacy', enabled: false });
+    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1')!)[0]).toMatchObject(
+      { trigger: '/legacy', enabled: false },
+    );
+    const enableButton = host.querySelector<HTMLButtonElement>('.transformer-enable')!;
+    expect(enableButton.disabled).toBe(true);
+    expect(enableButton.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('rolls back ordinary snippet changes when persistence fails', async () => {
+    // Given: settings are open and the storage backend will reject each next write independently.
+    const { host, settings } = await mountSnippetSettings();
+    const setItem = vi.spyOn(localStorage, 'setItem');
+    const rejectNextWrite = () => {
+      setItem.mockImplementationOnce(() => {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError');
+      });
+    };
+
+    // When: an edit, row toggle, removal, and global toggle each fail at the storage boundary.
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    rejectNextWrite();
+    inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Unsaved name');
+    await nextTick();
+    expect(settings.textTransformers.value[0]?.name).toBe('Review changes');
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
+      'Review changes',
+    );
+    expect(host.querySelector('.transformer-detail')?.textContent).toContain(
+      en.settings.textTransformers.saveError,
+    );
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    rejectNextWrite();
+    host.querySelector<HTMLButtonElement>('.transformer-enable')!.click();
+    await nextTick();
+    expect(settings.textTransformers.value[0]?.enabled).toBe(true);
+
+    rejectNextWrite();
+    host.querySelector<HTMLButtonElement>('.transformer-remove')!.click();
+    await nextTick();
+    expect(settings.textTransformers.value).toHaveLength(2);
+
+    const globalToggle = host.querySelector<HTMLInputElement>('.toggle-input')!;
+    expect(globalToggle.checked).toBe(false);
+    rejectNextWrite();
+    globalToggle.click();
+    await nextTick();
+
+    // Then: no failed value becomes authoritative and the live region reports the save failure.
+    expect(settings.textTransformersEnabled.value).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('.toggle-input')?.checked).toBe(false);
+    expect(host.querySelector('.transformer-import-status')?.textContent?.toLowerCase()).toContain(
+      'save',
+    );
+    setItem.mockRestore();
   });
 
   it('edits metadata-rich multiline snippets and filters them by tag', async () => {
@@ -239,6 +313,7 @@ describe('SettingsModal snippets', () => {
 
     // Then: no invalid backup is downloaded and a useful status is shown.
     expect(fileExport.downloadJsonFile).not.toHaveBeenCalled();
+    expect(fileExport.downloadTextFile).not.toHaveBeenCalled();
     expect(host.querySelector('.transformer-import-status')?.textContent).toContain('invalid');
 
     // When: the draft receives a valid trigger and is exported again.
@@ -253,10 +328,11 @@ describe('SettingsModal snippets', () => {
     host.querySelector<HTMLButtonElement>('.transformer-export')!.click();
 
     // Then: the emitted payload can pass the same versioned import boundary.
-    expect(fileExport.downloadJsonFile).toHaveBeenCalledTimes(1);
-    const exported = fileExport.downloadJsonFile.mock.calls[0]?.[0];
+    expect(fileExport.downloadTextFile).toHaveBeenCalledTimes(1);
+    const exported = fileExport.downloadTextFile.mock.calls[0]?.[0];
     const { parseTextTransformerImport } = await import('../utils/snippets');
-    expect(parseTextTransformerImport(JSON.stringify(exported))).toMatchObject({ ok: true });
+    expect(typeof exported === 'string' && exported.endsWith('\n')).toBe(false);
+    expect(parseTextTransformerImport(String(exported))).toMatchObject({ ok: true });
 
     // When: a valid versioned file is selected for import.
     const importedSnippet = {
@@ -354,6 +430,47 @@ describe('SettingsModal snippets', () => {
     // Then: the stale read cannot overwrite the later user selection.
     expect(settings.textTransformers.value.find((entry) => entry.id === 'snippet-race')?.body).toBe(
       'Newer body',
+    );
+  });
+
+  it('does not import over an unfinished local draft', async () => {
+    // Given: the local list contains a newly added snippet with an invalid empty trigger.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-add')!.click();
+    await nextTick();
+    const draftId = settings.textTransformers.value.at(-1)?.id;
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+    const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
+    const file = new File([], 'valid.json', { type: 'application/json' });
+    Object.defineProperty(file, 'text', {
+      value: async () =>
+        JSON.stringify({
+          version: 1,
+          snippets: [
+            {
+              id: 'snippet-import-blocked',
+              trigger: 'imported',
+              name: 'Imported',
+              body: 'Imported body',
+              enabled: true,
+              tags: [],
+            },
+          ],
+        }),
+    });
+
+    // When: a valid import is selected before the draft is completed.
+    Object.defineProperty(importInput, 'files', { configurable: true, value: [file] });
+    importInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(host.querySelector('.transformer-import-status')?.textContent).toContain('invalid'),
+    );
+
+    // Then: neither the draft nor any persisted local snippet is discarded for the import.
+    expect(settings.textTransformers.value.some(({ id }) => id === draftId)).toBe(true);
+    expect(settings.textTransformers.value.some(({ id }) => id === 'snippet-import-blocked')).toBe(
+      false,
     );
   });
 

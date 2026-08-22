@@ -736,6 +736,7 @@ const messages: LocaleMessages = {
       exportAction: '导出片段',
       importAction: '导入片段',
       importSuccess: '已导入 {count} 个片段。',
+      saveError: '无法保存片段，已恢复之前的设置。',
       importErrors: {
         invalidJson: '所选文件不是有效的 JSON。',
         unsupportedVersion: '所选文件的片段版本不受支持。',

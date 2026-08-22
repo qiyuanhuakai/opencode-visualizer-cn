@@ -741,6 +741,7 @@ const messages: LocaleMessages = {
       exportAction: 'Eksporti erojn',
       importAction: 'Importi erojn',
       importSuccess: 'Importis {count} erojn.',
+      saveError: 'Ne eblis konservi erojn. La antaŭaj agordoj estis restaŭritaj.',
       importErrors: {
         invalidJson: 'La elektita dosiero ne estas valida JSON.',
         unsupportedVersion: 'La elektita dosiero uzas nesubtenatan erversion.',

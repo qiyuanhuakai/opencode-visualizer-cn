@@ -745,6 +745,7 @@ const messages: LocaleMessages = {
       exportAction: 'Export snippets',
       importAction: 'Import snippets',
       importSuccess: 'Imported {count} snippets.',
+      saveError: 'Could not save Snippets. Your previous settings were restored.',
       importErrors: {
         invalidJson: 'The selected file is not valid JSON.',
         unsupportedVersion: 'The selected file uses an unsupported snippets version.',

@@ -667,6 +667,7 @@ export interface LocaleMessages {
       exportAction: string;
       importAction: string;
       importSuccess: string;
+      saveError: string;
       importErrors: {
         invalidJson: string;
         unsupportedVersion: string;

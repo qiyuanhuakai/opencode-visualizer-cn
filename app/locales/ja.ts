@@ -745,6 +745,7 @@ const messages: LocaleMessages = {
       exportAction: 'スニペットをエクスポート',
       importAction: 'スニペットをインポート',
       importSuccess: '{count} 件のスニペットをインポートしました。',
+      saveError: 'スニペットを保存できませんでした。以前の設定を復元しました。',
       importErrors: {
         invalidJson: '選択したファイルは有効な JSON ではありません。',
         unsupportedVersion: '選択したファイルのスニペットバージョンはサポートされていません。',

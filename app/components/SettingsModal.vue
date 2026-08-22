@@ -158,11 +158,23 @@
         <template v-else-if="activePage === 'transformers'">
           <div
             v-if="editingTextTransformer"
+            :key="`${editingTextTransformer.id}-${textTransformerPersistenceErrorRevision}`"
             class="setting-row setting-row-stack transformer-detail"
           >
             <div class="transformer-detail-header">
-              <span class="transformer-detail-status">
-                {{ $t('settings.textTransformers.autoSave') }}
+              <span
+                class="transformer-detail-status"
+                :class="{
+                  'is-error': textTransformerImportStatus?.kind === 'error',
+                }"
+                role="status"
+                aria-live="polite"
+              >
+                {{
+                  textTransformerImportStatus?.kind === 'error'
+                    ? textTransformerImportStatus.message
+                    : $t('settings.textTransformers.autoSave')
+                }}
               </span>
             </div>
             <div class="transformer-row-grid">
@@ -259,6 +271,7 @@
               {{ $t('settings.textTransformers.pageDescription') }}
             </div>
             <ToggleSettingRow
+              :key="`text-transformers-enabled-${textTransformerPersistenceErrorRevision}`"
               v-model="textTransformersEnabled"
               :label="$t('settings.textTransformers.enabledLabel')"
               :description="$t('settings.textTransformers.enabledDescription')"
@@ -824,15 +837,16 @@ import {
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
   isValidTextTransformerTrigger,
+  normalizeTextTransformers,
   parseTextTransformerImport,
-  TEXT_TRANSFORMER_EXPORT_VERSION,
+  serializeTextTransformers,
   type TextTransformer,
   type TextTransformerImportResult,
 } from '../utils/snippets';
 import { useI18n } from 'vue-i18n';
 import { getLocale, setLocale } from '../i18n';
 import type { Locale } from '../i18n/types';
-import { downloadJsonFile } from '../utils/fileExport';
+import { downloadJsonFile, downloadTextFile } from '../utils/fileExport';
 import { StorageKeys, storageSetJSON } from '../utils/storageKeys';
 import {
   formatShortcutForDisplay,
@@ -957,6 +971,7 @@ const {
   editorShortcuts,
   textTransformersEnabled,
   textTransformers,
+  textTransformerPersistenceErrorRevision,
   localApplicationPath,
   defaultEditorShortcuts,
   minEditorFontSizePx,
@@ -1419,6 +1434,14 @@ const textTransformerImportStatus = ref<{ kind: 'success' | 'error'; message: st
 );
 let textTransformerImportGeneration = 0;
 
+watch(textTransformerPersistenceErrorRevision, () => {
+  textTransformerTagDrafts.value = {};
+  textTransformerImportStatus.value = {
+    kind: 'error',
+    message: t('settings.textTransformers.saveError'),
+  };
+});
+
 const transformerTagFilters = computed(() => {
   const tags: string[] = [];
   const keys = new Set<string>();
@@ -1565,20 +1588,15 @@ function updateTextTransformerTags(id: string, event: Event) {
 }
 
 function exportTextTransformers() {
-  const parsed = parseTextTransformerImport(
-    JSON.stringify({ version: TEXT_TRANSFORMER_EXPORT_VERSION, snippets: textTransformers.value }),
-  );
-  if (!parsed.ok) {
+  try {
+    const serialized = serializeTextTransformers(textTransformers.value);
+    downloadTextFile(serialized, 'vis-snippets.json', 'application/json;charset=utf-8');
+  } catch {
     textTransformerImportStatus.value = {
       kind: 'error',
       message: t('settings.textTransformers.importErrors.invalidSnippets'),
     };
-    return;
   }
-  downloadJsonFile(
-    { version: TEXT_TRANSFORMER_EXPORT_VERSION, snippets: parsed.snippets },
-    'vis-snippets.json',
-  );
 }
 
 const textTransformerImportErrorKeys = {
@@ -1600,7 +1618,9 @@ async function parseSelectedTextTransformerFile(
 }
 
 function persistImportedTextTransformers(imported: readonly TextTransformer[]): boolean {
-  const merged = mergeTextTransformers(textTransformers.value, imported);
+  const current = normalizeTextTransformers(textTransformers.value);
+  if (current.length !== textTransformers.value.length) return false;
+  const merged = mergeTextTransformers(current, imported);
   if (merged.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT) return false;
   if (!storageSetJSON(StorageKeys.settings.textTransformers, merged)) return false;
   textTransformers.value = merged;
@@ -2096,6 +2116,10 @@ watch(
   flex: 1 1 auto;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
   font-size: 11px;
+}
+
+.transformer-detail-status.is-error {
+  color: var(--theme-status-error, #f87171);
 }
 
 .transformer-row-grid {
