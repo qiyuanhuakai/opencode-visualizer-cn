@@ -283,6 +283,9 @@ export function mergeTextTransformers(
   const idByTrigger = new Map<string, string>();
   const currentSnippets = normalizeTextTransformers(current);
   const importedSnippets = normalizeTextTransformers(imported);
+  const reservedIds = new Set(
+    [...currentSnippets, ...importedSnippets].map((snippet) => snippet.id),
+  );
 
   function isGeneratedSnippetId(snippet: TextTransformer): boolean {
     const baseId = stableSnippetId(snippet.trigger, snippet.body);
@@ -293,7 +296,7 @@ export function mergeTextTransformers(
     const baseId = stableSnippetId(snippet.trigger, snippet.body);
     let suffix = 2;
     let id = `${baseId}-${suffix}`;
-    while (mergedById.has(id)) {
+    while (mergedById.has(id) || reservedIds.has(id)) {
       suffix += 1;
       id = `${baseId}-${suffix}`;
     }

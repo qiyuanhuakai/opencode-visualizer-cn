@@ -283,6 +283,84 @@ describe('useSettings', () => {
     expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(3);
   });
 
+  it('rejects over-limit snippet storage at startup without destroying the raw backup', async () => {
+    // Given: persisted storage contains 1,001 individually valid snippets.
+    const excessive = Array.from({ length: 1_001 }, (_, index) => ({
+      id: `startup-${index}`,
+      trigger: `startup-${index}`,
+      name: `Startup ${index}`,
+      body: 'Body',
+      enabled: true,
+      tags: [],
+    }));
+    const raw = JSON.stringify(excessive);
+    storage.setItem('opencode.settings.textTransformers.v1', raw);
+
+    // When: settings initialize from the untrusted persisted value.
+    const settings = await importFresh();
+
+    // Then: runtime stays valid, the raw recovery value remains untouched, and failure is observable.
+    expect(settings.textTransformers.value).toEqual([]);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(raw);
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
+  it('rejects malformed external snippet storage without erasing valid state', async () => {
+    // Given: one valid persisted snippet is active in this window.
+    const persisted = [
+      {
+        id: 'snippet-safe',
+        trigger: 'safe',
+        name: 'Safe',
+        body: 'Safe body',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+
+    // When: another window publishes malformed JSON at the same storage key.
+    storage.setItem('opencode.settings.textTransformers.v1', 'not-json');
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: 'not-json',
+      } as unknown as StorageEvent);
+    }
+
+    // Then: the valid runtime state and malformed recovery value are both preserved.
+    expect(settings.textTransformers.value).toEqual(persisted);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe('not-json');
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
+  it('keeps a detached rollback snapshot when deep mutations fail to persist', async () => {
+    // Given: one valid snippet has been loaded and the next write will fail.
+    const persisted = [
+      {
+        id: 'snippet-snapshot',
+        trigger: 'snapshot',
+        name: 'Snapshot',
+        body: 'Snapshot body',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+    vi.spyOn(storage, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+
+    // When: a nested array mutates through Vue's deep watcher.
+    settings.textTransformers.value[0]!.tags.push('unsaved');
+
+    // Then: rollback restores an independent snapshot rather than the already-mutated alias.
+    expect(settings.textTransformers.value).toEqual(persisted);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(JSON.stringify(persisted));
+  });
+
   it('persists editor preferences and local application path', async () => {
     const settings = await importFresh();
 

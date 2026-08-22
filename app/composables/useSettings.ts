@@ -186,22 +186,28 @@ function readEditorShortcuts() {
   return normalizeEditorShortcutMap(storageGetJSON(StorageKeys.settings.editorShortcuts));
 }
 
-function parseTextTransformers(value: string | null): TextTransformer[] {
-  if (!value) return [];
+function parseTextTransformers(value: string): TextTransformer[] | null {
   try {
-    return normalizeTextTransformers(JSON.parse(value));
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return null;
+    return validateTextTransformerLibrary(normalizeTextTransformers(parsed));
   } catch {
-    return [];
+    return null;
   }
 }
 
 function readTextTransformers() {
-  const stored = storageGetJSON(StorageKeys.settings.textTransformers);
-  const normalized = normalizeTextTransformers(stored);
-  if (stored !== null && !isSerializedEqual(stored, normalized)) {
-    storageSetJSON(StorageKeys.settings.textTransformers, normalized);
+  const raw = storageGet(StorageKeys.settings.textTransformers);
+  if (raw === null) return { value: [] as TextTransformer[], failed: false };
+  const normalized = parseTextTransformers(raw);
+  if (!normalized) return { value: [] as TextTransformer[], failed: true };
+  if (raw !== JSON.stringify(normalized)) {
+    return {
+      value: normalized,
+      failed: !storageSetJSON(StorageKeys.settings.textTransformers, normalized),
+    };
   }
-  return normalized;
+  return { value: normalized, failed: false };
 }
 
 function readThemeStorage(): ThemeStorageV2 | null {
@@ -271,8 +277,9 @@ const editorShortcuts = ref<EditorShortcutMap>(readEditorShortcuts());
 const textTransformersEnabled = ref(
   storageGet(StorageKeys.settings.textTransformersEnabled) === 'true',
 );
-const textTransformers = ref<TextTransformer[]>(readTextTransformers());
-const textTransformerPersistenceErrorRevision = ref(0);
+const initialTextTransformers = readTextTransformers();
+const textTransformers = ref<TextTransformer[]>(initialTextTransformers.value);
+const textTransformerPersistenceErrorRevision = ref(initialTextTransformers.failed ? 1 : 0);
 const localApplicationPath = ref(storageGet(StorageKeys.settings.localApplicationPath) ?? '');
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
@@ -448,11 +455,14 @@ watch(
 
 let restoringTextTransformerState = false;
 let lastPersistedTextTransformersEnabled = textTransformersEnabled.value;
-let lastPersistedTextTransformers = normalizeTextTransformers(textTransformers.value);
+function cloneTextTransformers(value: readonly TextTransformer[]): TextTransformer[] {
+  return value.map((snippet) => ({ ...snippet, tags: [...snippet.tags] }));
+}
+let lastPersistedTextTransformers = cloneTextTransformers(textTransformers.value);
 
 function restoreTextTransformerState<T>(setting: Ref<T>, value: T) {
   restoringTextTransformerState = true;
-  setting.value = value;
+  setting.value = Array.isArray(value) ? (cloneTextTransformers(value) as T) : value;
   restoringTextTransformerState = false;
   textTransformerPersistenceErrorRevision.value += 1;
 }
@@ -484,9 +494,9 @@ watch(
       return;
     }
     if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized)) {
-      lastPersistedTextTransformers = normalized;
+      lastPersistedTextTransformers = cloneTextTransformers(normalized);
     } else if (storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
-      lastPersistedTextTransformers = normalized;
+      lastPersistedTextTransformers = cloneTextTransformers(normalized);
     } else {
       restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
       return;
@@ -699,10 +709,12 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
   [
     storageKey(StorageKeys.settings.textTransformers),
     (event) => {
-      const nextTextTransformers = validateTextTransformerLibrary(
-        parseTextTransformers(event.newValue),
-      );
-      if (!nextTextTransformers) return;
+      const nextTextTransformers =
+        event.newValue === null ? [] : parseTextTransformers(event.newValue);
+      if (!nextTextTransformers) {
+        textTransformerPersistenceErrorRevision.value += 1;
+        return;
+      }
       if (!isSerializedEqual(textTransformers.value, nextTextTransformers)) {
         textTransformers.value = nextTextTransformers;
       }

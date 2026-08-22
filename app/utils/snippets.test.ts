@@ -267,6 +267,34 @@ describe('snippet import and export', () => {
     expect(result.map(({ trigger }) => trigger)).toEqual(['tmrkyczzoeosd', 'trgbyrbeujkiu']);
   });
 
+  it('reserves later imported ids before allocating collision suffixes', () => {
+    // Given: a generated-id collision and a later imported row already owning the first suffix.
+    const local = [{ trigger: 'tmrkyczzoeosd', replacement: 'bixntxizktiha' }];
+    const baseId = normalizeTextTransformers(local)[0]!.id;
+    const imported = [
+      { trigger: 'trgbyrbeujkiu', replacement: 'bsxjtgyuqazzr' },
+      {
+        id: `${baseId}-2`,
+        trigger: 'reserved-future-id',
+        name: 'Reserved future id',
+        body: 'Keep this row',
+        enabled: true,
+        tags: [],
+      },
+    ];
+
+    // When: both imported rows are merged in source order.
+    const result = mergeTextTransformers(local, imported);
+
+    // Then: collision allocation skips the future explicit id and all three rows survive.
+    expect(result.map(({ trigger }) => trigger)).toEqual([
+      'tmrkyczzoeosd',
+      'trgbyrbeujkiu',
+      'reserved-future-id',
+    ]);
+    expect(new Set(result.map(({ id }) => id))).toHaveLength(3);
+  });
+
   it('rejects a merged library whose complete backup exceeds the UTF-8 budget', () => {
     // Given: two bounded libraries are individually importable but exceed five MiB together.
     const library = (prefix: string) =>
