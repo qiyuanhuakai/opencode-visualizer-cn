@@ -206,7 +206,6 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  loadPersistentStorage();
   approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
   protocol.handle('app', async (request) => {

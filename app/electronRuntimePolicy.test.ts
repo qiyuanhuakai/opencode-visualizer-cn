@@ -212,5 +212,17 @@ describe('electron-runtime-policy', () => {
         handler?.indexOf('assertTrustedRenderer(event)') ?? Number.MAX_SAFE_INTEGER,
       );
     });
+
+    it('does not call removed storage helpers before creating the first window', () => {
+      // Given: renderer persistence is owned by the createPersistentStorage module.
+      expect(mainSource).toContain('createPersistentStorage(persistentStorageFilePath)');
+
+      // When: Electron enters its app.whenReady startup path.
+      const readyPath = mainSource.match(/app\.whenReady\(\)\.then\(\(\) => \{[\s\S]*?createWindow\(\);/u)?.[0];
+
+      // Then: startup never references the removed eager-load helper before window creation.
+      expect(readyPath).toBeDefined();
+      expect(readyPath).not.toContain('loadPersistentStorage');
+    });
   });
 });
