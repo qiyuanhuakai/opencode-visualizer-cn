@@ -28,6 +28,8 @@ const DEV_SERVER_URL = 'http://127.0.0.1:5173';
 const LOCAL_APPLICATION_PATH_KEY = 'opencode.settings.localApplicationPath.v1';
 const OPEN_IN_EDITOR_MAX_SIZE_KEY = 'opencode.settings.openInEditorMaxSizeMb.v1';
 const DEFAULT_MAX_LOCAL_FILE_BYTES = 20 * 1024 * 1024;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) app.quit();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -43,6 +45,12 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow = null;
 let approvedLocalApplicationPath = null;
+
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
 const localFileSessionOwners = new Map();
 const localFileEditor = createLocalFileEditor({
   onChange(change) {
@@ -206,6 +214,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!hasSingleInstanceLock) return;
   approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
   protocol.handle('app', async (request) => {

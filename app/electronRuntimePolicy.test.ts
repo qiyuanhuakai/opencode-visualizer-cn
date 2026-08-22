@@ -224,5 +224,18 @@ describe('electron-runtime-policy', () => {
       expect(readyPath).toBeDefined();
       expect(readyPath).not.toContain('loadPersistentStorage');
     });
+
+    it('acquires a single-instance lock before creating process-local storage', () => {
+      // Given: renderer storage caches a whole-file snapshot inside one Electron process.
+      const lockIndex = mainSource.indexOf('app.requestSingleInstanceLock()');
+      const storageIndex = mainSource.indexOf('createPersistentStorage(persistentStorageFilePath)');
+
+      // When: main-process initialization ordering is inspected.
+      expect(lockIndex).toBeGreaterThanOrEqual(0);
+
+      // Then: only the lock owner can initialize storage and later launches focus its window.
+      expect(lockIndex).toBeLessThan(storageIndex);
+      expect(mainSource).toMatch(/app\.on\('second-instance',[\s\S]*?mainWindow\.focus\(\)/u);
+    });
   });
 });
