@@ -190,6 +190,91 @@ describe('useSettings', () => {
     expect(settings.textTransformersEnabled.value).toBe(false);
   });
 
+  it('restores the last persisted snippet state when storage rejects a write', async () => {
+    // Given: one persisted snippet is loaded and the next two storage writes will fail.
+    const persisted = [
+      {
+        id: 'snippet-persisted',
+        trigger: 'saved',
+        name: 'Saved',
+        body: 'Saved body',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+    const setItem = vi.spyOn(storage, 'setItem');
+    setItem.mockImplementationOnce(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+
+    // When: a replacement library and then the global enable flag fail to persist.
+    settings.textTransformers.value = [{ ...persisted[0]!, name: 'Unsaved' }];
+    setItem.mockImplementationOnce(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+    settings.textTransformersEnabled.value = true;
+
+    // Then: both refs roll back synchronously and expose two observable persistence failures.
+    expect(settings.textTransformers.value).toEqual(persisted);
+    expect(settings.textTransformersEnabled.value).toBe(false);
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(2);
+  });
+
+  it('does not overwrite persisted snippets with invalid or duplicate drafts', async () => {
+    // Given: two distinct valid snippets are persisted.
+    const persisted = [
+      {
+        id: 'snippet-alpha',
+        trigger: 'alpha',
+        name: 'Alpha',
+        body: 'Alpha body',
+        enabled: true,
+        tags: [],
+      },
+      {
+        id: 'snippet-beta',
+        trigger: 'beta',
+        name: 'Beta',
+        body: 'Beta body',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+    const storedBeforeDraft = storage.getItem('opencode.settings.textTransformers.v1');
+
+    // When: one draft becomes invalid and then conflicts with the other trigger.
+    settings.textTransformers.value = [persisted[0]!, { ...persisted[1]!, trigger: 'has space' }];
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(storedBeforeDraft);
+    settings.textTransformers.value = [persisted[0]!, { ...persisted[1]!, trigger: 'alpha' }];
+
+    // Then: reactive drafts remain editable while the last valid persisted collection is untouched.
+    expect(settings.textTransformers.value).toHaveLength(2);
+    expect(settings.textTransformers.value[1]?.trigger).toBe('alpha');
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(storedBeforeDraft);
+
+    // When: another window persists a valid collection while the local duplicate draft is active.
+    const external = [{ ...persisted[0]!, name: 'External Alpha' }];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: JSON.stringify(external),
+      } as unknown as StorageEvent);
+    }
+
+    // Then: the external update is deferred until the local draft is corrected and persisted whole.
+    expect(settings.textTransformers.value).toHaveLength(2);
+    expect(settings.textTransformers.value[1]?.trigger).toBe('alpha');
+    settings.textTransformers.value = [persisted[0]!, { ...persisted[1]!, trigger: 'gamma' }];
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(
+      JSON.stringify(settings.textTransformers.value),
+    );
+  });
+
   it('persists editor preferences and local application path', async () => {
     const settings = await importFresh();
 
