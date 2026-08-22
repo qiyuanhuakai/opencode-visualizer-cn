@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+### 桌面端内存与长生命周期稳定性
+
+- [x] Electron 从 43.3.0 升级至 **43.4.1**，纳入 BrowserWindow 原生 content view 泄漏修复；继续保持 Chromium 沙箱、上下文隔离与现有安全边界开启。
+- [x] OpenCode 与 ACP 会话历史采用有界 warm cache：最多保留 5 个快照、总预算 32 MiB、单项上限 16 MiB，并按后端身份、工作目录和认证 generation 隔离；Codex 不写入该缓存，失败或过期的根历史也不会被误保存，凭据切换会同步清理缓存并取消旧请求。
+- [x] 主线程渲染结果和 Shiki Worker 高亮结果改用按 UTF-16 字节估算的 LRU 预算，分别限制为 16 MiB 与 8 MiB；渲染 Worker 上限由 8 个收紧为 4 个，并通过真实流式渲染与并发 burst 验证未引入性能回退。
+- [x] 修复 ACP terminal 输出长期累积、UTF-8 截断和关闭时丢失尾部输出的问题；PTY 窗口创建、字体就绪、关闭与同 ID 重建现在使用显式异步所有权，旧任务不会遗留元数据、复活窗口或关闭替代窗口。
+- [x] Electron smoke 新增 Browser/Renderer/GPU/Utility 进程指标、Renderer heap、Linux PSS 与完整重启样本，用于持续审计真实常驻内存和生命周期回收；生产路径不增加周期性内存轮询、强制 GC 或缓存全清理。
+
 ### 代码可维护性与稳定性
 
 - [x] 基于 Fallow 完成项目范围的死代码、未使用依赖、重复实现与复杂度清理；移除无调用组件、临时 QA 驱动及无效公共导出，并补充项目入口与构建期依赖配置，降低静态分析噪声。
