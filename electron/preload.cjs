@@ -51,6 +51,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 剪贴板
   clipboard: {
+    readText: () => ipcRenderer.invoke('clipboard-read-text'),
     writeText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
   },
 

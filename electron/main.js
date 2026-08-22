@@ -326,6 +326,11 @@ ipcMain.handle('clipboard-write-text', (_event, text) => {
   clipboard.writeText(text);
 });
 
+ipcMain.handle('clipboard-read-text', (event) => {
+  assertTrustedRenderer(event);
+  return clipboard.readText();
+});
+
 ipcMain.handle('local-file-select-application', async (event) => {
   assertTrustedRenderer(event);
   const options = {

@@ -658,7 +658,11 @@ const permissionModeValue = computed({
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const textCursor = ref<number | null>(null);
 let textTransformerInputRevision = 0;
+let textTransformerSelectionRevision = 0;
+let textTransformerContextRevision = 0;
 let textTransformerApplicationGeneration = 0;
+let lastTextTransformerSelectionStart: number | null = null;
+let lastTextTransformerSelectionEnd: number | null = null;
 const fileInputRef = ref<HTMLInputElement | null>(null);
 const modelDropdownRef = ref<HTMLElement | null>(null);
 const modelSearchQuery = ref('');
@@ -966,7 +970,17 @@ const textTransformerMatches = computed(() => {
 
 function syncTextCursor(event: Event) {
   if (!(event.currentTarget instanceof HTMLTextAreaElement)) return;
-  textCursor.value = event.currentTarget.selectionStart;
+  const { selectionStart, selectionEnd } = event.currentTarget;
+  if (
+    lastTextTransformerSelectionStart !== null &&
+    (selectionStart !== lastTextTransformerSelectionStart ||
+      selectionEnd !== lastTextTransformerSelectionEnd)
+  ) {
+    textTransformerSelectionRevision += 1;
+  }
+  lastTextTransformerSelectionStart = selectionStart;
+  lastTextTransformerSelectionEnd = selectionEnd;
+  textCursor.value = selectionStart;
 }
 
 function handleTextInput(event: Event) {
@@ -1167,28 +1181,42 @@ function currentTextTransformerVariables(
 
 async function readClipboardText(): Promise<string> {
   try {
+    const electronClipboard = (
+      window as typeof window & {
+        electronAPI?: { clipboard?: { readText: () => Promise<string> } };
+      }
+    ).electronAPI?.clipboard;
+    if (electronClipboard?.readText) {
+      return await electronClipboard.readText();
+    }
     return await navigator.clipboard.readText();
   } catch {
     return '';
   }
 }
 
-function textTransformerSelectionChanged(
-  input: string,
-  selectionStart: number,
-  selectionEnd: number,
-  inputRevision: number,
-  applicationGeneration: number,
-  sessionId: string | undefined,
-) {
+type TextTransformerSelectionSnapshot = {
+  readonly input: string;
+  readonly selectionStart: number;
+  readonly selectionEnd: number;
+  readonly inputRevision: number;
+  readonly selectionRevision: number;
+  readonly applicationGeneration: number;
+  readonly sessionId: string | undefined;
+  readonly contextRevision: number;
+};
+
+function textTransformerSelectionChanged(snapshot: TextTransformerSelectionSnapshot) {
   const textarea = textareaRef.value;
   return (
-    textTransformerInputRevision !== inputRevision ||
-    textTransformerApplicationGeneration !== applicationGeneration ||
-    props.currentSessionId !== sessionId ||
-    messageValue.value !== input ||
-    textarea?.selectionStart !== selectionStart ||
-    textarea.selectionEnd !== selectionEnd
+    textTransformerInputRevision !== snapshot.inputRevision ||
+    textTransformerSelectionRevision !== snapshot.selectionRevision ||
+    textTransformerApplicationGeneration !== snapshot.applicationGeneration ||
+    textTransformerContextRevision !== snapshot.contextRevision ||
+    props.currentSessionId !== snapshot.sessionId ||
+    messageValue.value !== snapshot.input ||
+    textarea?.selectionStart !== snapshot.selectionStart ||
+    textarea.selectionEnd !== snapshot.selectionEnd
   );
 }
 
@@ -1200,22 +1228,21 @@ async function applyTextTransformerSelection(id: string) {
   const selectionStart = textarea?.selectionStart ?? messageValue.value.length;
   const selectionEnd = textarea?.selectionEnd ?? selectionStart;
   const input = messageValue.value;
-  const inputRevision = textTransformerInputRevision;
-  const sessionId = props.currentSessionId;
+  const snapshot: TextTransformerSelectionSnapshot = {
+    input,
+    selectionStart,
+    selectionEnd,
+    inputRevision: textTransformerInputRevision,
+    selectionRevision: textTransformerSelectionRevision,
+    applicationGeneration,
+    sessionId: props.currentSessionId,
+    contextRevision: textTransformerContextRevision,
+  };
   let variables = currentTextTransformerVariables(selectionStart, selectionEnd);
   if (transformer.body.includes('{clipboard}')) {
     const clipboard = await readClipboardText();
     variables = { ...variables, clipboard };
-    if (
-      textTransformerSelectionChanged(
-        input,
-        selectionStart,
-        selectionEnd,
-        inputRevision,
-        applicationGeneration,
-        sessionId,
-      )
-    ) {
+    if (textTransformerSelectionChanged(snapshot)) {
       return;
     }
   }
@@ -1230,6 +1257,14 @@ async function applyTextTransformerSelection(id: string) {
     ),
   );
 }
+
+watch(
+  [() => props.currentSessionId, () => props.activeFile, () => props.activeDirectory],
+  () => {
+    textTransformerContextRevision += 1;
+  },
+  { flush: 'sync' },
+);
 
 function applyFileSelection(path: string) {
   const textarea = textareaRef.value;

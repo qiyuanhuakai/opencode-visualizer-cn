@@ -24,7 +24,7 @@ const EXPECTED_PRELOAD_SCHEMA = {
     'platform',
     'versions',
   ],
-  clipboard: ['writeText'],
+  clipboard: ['readText', 'writeText'],
   persistentStorage: ['getItem', 'removeItem', 'setItem'],
   localFile: [
     'clearApplication',
@@ -129,7 +129,7 @@ describe('electron smoke driver contract', () => {
 
   it('round-trips clipboard writes and reads', () => {
     expect(driverSurface).toMatch(/clipboard\.writeText/);
-    expect(driverSurface).toMatch(/readText/);
+    expect(driverSurface).toMatch(/electronAPI\.clipboard\.readText/);
   });
 
   it('verifies window.open does not create a child window', () => {

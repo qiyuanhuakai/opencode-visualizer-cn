@@ -34,6 +34,8 @@ function mountInputPanel(options: { commands?: Array<{ name: string; description
   document.body.appendChild(root);
   const message = ref('');
   const currentSessionId = ref('session-a');
+  const activeDirectory = ref('/repo');
+  const activeFile = ref('/repo/src/main.ts');
   const send = vi.fn();
   const app = createApp(
     defineComponent({
@@ -68,8 +70,8 @@ function mountInputPanel(options: { commands?: Array<{ name: string; description
             commands: options.commands ?? [],
             attachments: [],
             currentSessionId: currentSessionId.value,
-            activeDirectory: '/repo',
-            activeFile: '/repo/src/main.ts',
+            activeDirectory: activeDirectory.value,
+            activeFile: activeFile.value,
           });
       },
     }),
@@ -80,7 +82,7 @@ function mountInputPanel(options: { commands?: Array<{ name: string; description
     app.unmount();
     root.remove();
   });
-  return { root, message, send, currentSessionId };
+  return { root, message, send, currentSessionId, activeDirectory, activeFile };
 }
 
 async function typeInto(textarea: HTMLTextAreaElement, value: string) {
@@ -92,6 +94,12 @@ async function typeInto(textarea: HTMLTextAreaElement, value: string) {
 
 function press(textarea: HTMLTextAreaElement, key: string, isComposing = false) {
   const event = new KeyboardEvent('keydown', { key, isComposing, bubbles: true, cancelable: true });
+  textarea.dispatchEvent(event);
+  return event;
+}
+
+function release(textarea: HTMLTextAreaElement, key: string) {
+  const event = new KeyboardEvent('keyup', { key, bubbles: true });
   textarea.dispatchEvent(event);
   return event;
 }
@@ -115,6 +123,7 @@ beforeEach(() => {
 afterEach(() => {
   while (mountedApps.length > 0) mountedApps.pop()?.();
   document.body.innerHTML = '';
+  delete window.electronAPI;
 });
 
 describe('InputPanel text transformers', () => {
@@ -417,6 +426,7 @@ describe('InputPanel text transformers', () => {
 
     // When: Enter confirms the highlighted snippet.
     press(textarea, 'Enter');
+    release(textarea, 'Enter');
 
     // Then: context variables resolve and the caret lands before trailing body text.
     await vi.waitFor(() => {
@@ -426,6 +436,153 @@ describe('InputPanel text transformers', () => {
     });
     expect(readText).toHaveBeenCalledTimes(1);
     expect(textarea.selectionStart).toBe('Before clipboard text\n/repo/src/main.ts\n/repo\n'.length);
+  });
+
+  it('does not commit captured file context after it changes away and back', async () => {
+    // Given: a clipboard snippet captures file and workspace context while its read is pending.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-context-aba',
+        trigger: 'ctx',
+        name: 'Insert context',
+        body: '{clipboard}:{activeFile}:{cwd}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    let resolveClipboard!: (value: string) => void;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: vi.fn(() => new Promise<string>((resolve) => (resolveClipboard = resolve))),
+      },
+    });
+    const { root, message, activeFile, activeDirectory } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\ctx`);
+    press(textarea, 'Enter');
+
+    // When: both context owners change away and back before the clipboard resolves.
+    activeFile.value = '/repo/src/other.ts';
+    activeDirectory.value = '/other';
+    await nextTick();
+    activeFile.value = '/repo/src/main.ts';
+    activeDirectory.value = '/repo';
+    await nextTick();
+    resolveClipboard('stale');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: monotonic context identity rejects the stale captured values.
+    expect(message.value).toBe(String.raw`\ctx`);
+  });
+
+  it('reads clipboard variables through the trusted Electron preload API', async () => {
+    // Given: Electron exposes clipboard read through preload while browser clipboard permission fails.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-electron-clipboard',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const electronReadText = vi.fn().mockResolvedValue('native clipboard');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { clipboard: { readText: electronReadText } },
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText: vi.fn().mockRejectedValue(new DOMException('Denied')) },
+    });
+    const { root, message } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+
+    // When: the user confirms the clipboard snippet.
+    press(textarea, 'Enter');
+
+    // Then: the trusted preload value is inserted despite renderer permission denial.
+    await vi.waitFor(() => expect(message.value).toBe('native clipboard '));
+    expect(electronReadText).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not commit after the selection moves away and back during clipboard resolution', async () => {
+    // Given: a clipboard snippet is pending at one collapsed selection.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-selection-clipboard',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    let resolveClipboard!: (value: string) => void;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: vi.fn(() => new Promise<string>((resolve) => (resolveClipboard = resolve))),
+      },
+    });
+    const { root, message } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+    press(textarea, 'Enter');
+
+    // When: selection ownership moves away and back to the captured endpoints before resolution.
+    textarea.setSelectionRange(0, 0);
+    textarea.dispatchEvent(new Event('select', { bubbles: true }));
+    textarea.setSelectionRange(String.raw`\clip`.length, String.raw`\clip`.length);
+    textarea.dispatchEvent(new Event('select', { bubbles: true }));
+    resolveClipboard('stale clipboard');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: monotonic selection identity rejects the stale result.
+    expect(message.value).toBe(String.raw`\clip`);
+  });
+
+  it('does not commit after session ownership changes away and back', async () => {
+    // Given: a clipboard snippet is pending in session A.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-session-aba-clipboard',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    let resolveClipboard!: (value: string) => void;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: vi.fn(() => new Promise<string>((resolve) => (resolveClipboard = resolve))),
+      },
+    });
+    const { root, message, currentSessionId } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+    press(textarea, 'Enter');
+
+    // When: ownership changes A to B to A before the clipboard promise resolves.
+    currentSessionId.value = 'session-b';
+    await nextTick();
+    currentSessionId.value = 'session-a';
+    await nextTick();
+    resolveClipboard('session-a stale clipboard');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Then: monotonic session identity rejects the stale result.
+    expect(message.value).toBe(String.raw`\clip`);
   });
 
   it('does not overwrite an ABA-restored draft after asynchronous clipboard resolution', async () => {

@@ -21,7 +21,10 @@ interface ElectronApiSchema {
   versions: { node: string; electron: string; chrome: string };
   getAppVersion: () => Promise<unknown>;
   getPlatform: () => Promise<unknown>;
-  clipboard: { writeText: (text: string) => Promise<unknown> };
+  clipboard: {
+    readText: () => Promise<unknown>;
+    writeText: (text: string) => Promise<unknown>;
+  };
   localFile: {
     selectApplication: () => Promise<unknown>;
     clearApplication: () => Promise<unknown>;
@@ -142,7 +145,7 @@ describe('electron preload contract', () => {
 
   it('exposes the exact clipboard api name', () => {
     const { api } = loadPreloadWithMocks();
-    expect(Object.keys(api.clipboard).sort()).toEqual(['writeText']);
+    expect(Object.keys(api.clipboard).sort()).toEqual(['readText', 'writeText']);
   });
 
   it('exposes exactly the localFile api names', () => {
@@ -182,6 +185,17 @@ describe('electron preload contract', () => {
     const { api, ipcRenderer } = loadPreloadWithMocks();
     await expect(api.clipboard.writeText('hello')).resolves.toBe('invoked');
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('clipboard-write-text', 'hello');
+  });
+
+  it('routes clipboard.readText through ipcRenderer.invoke', async () => {
+    // Given: the preload API is loaded with an observable IPC renderer.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+
+    // When: the renderer requests trusted clipboard text.
+    await expect(api.clipboard.readText()).resolves.toBe('invoked');
+
+    // Then: preload invokes only the dedicated no-argument read channel.
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('clipboard-read-text');
   });
 
   it('routes localFile methods through ipcRenderer.invoke', async () => {

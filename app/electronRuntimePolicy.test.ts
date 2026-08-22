@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   classifyMime,
@@ -7,6 +9,8 @@ import {
   isTrustedSender,
   resolveAppRelativePath,
 } from '../electron/runtimePolicy.js';
+
+const mainSource = readFileSync(path.resolve(__dirname, '../electron/main.js'), 'utf8');
 
 describe('electron-runtime-policy', () => {
   describe('resolveAppRelativePath', () => {
@@ -191,6 +195,22 @@ describe('electron-runtime-policy', () => {
       expect(
         isTrustedSender({ senderId: 7, mainWebContentsId: null, mainWebContentsDestroyed: false }),
       ).toBe(false);
+    });
+
+    it('guards clipboard reads with the trusted renderer assertion', () => {
+      // Given: clipboard read crosses from the sandboxed renderer into Electron main.
+      const handler = mainSource.match(
+        /ipcMain\.handle\('clipboard-read-text',[\s\S]*?\n\}\);/u,
+      )?.[0];
+
+      // When: the main-process IPC wiring is inspected.
+      expect(handler).toBeDefined();
+
+      // Then: sender validation runs before the native clipboard is read.
+      expect(handler?.indexOf('assertTrustedRenderer(event)')).toBeGreaterThanOrEqual(0);
+      expect(handler?.indexOf('clipboard.readText()')).toBeGreaterThan(
+        handler?.indexOf('assertTrustedRenderer(event)') ?? Number.MAX_SAFE_INTEGER,
+      );
     });
   });
 });

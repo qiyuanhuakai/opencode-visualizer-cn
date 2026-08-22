@@ -318,9 +318,9 @@ async function main() {
     );
     record('persistent-storage-set-get', storageRoundTrip === STORAGE_VALUE, `got ${JSON.stringify(storageRoundTrip)}`);
 
-    // clipboard write via preload -> read back in main.
+    // clipboard round-trip through the trusted preload API.
     await page.evaluate((text) => window.electronAPI.clipboard.writeText(text), CLIPBOARD_TEXT);
-    const readBack = await app.evaluate(({ clipboard }) => clipboard.readText());
+    const readBack = await page.evaluate(() => window.electronAPI.clipboard.readText());
     record('clipboard-write-read-roundtrip', readBack === CLIPBOARD_TEXT, `read ${JSON.stringify(readBack)}`);
     receipt.clipboard = { written: CLIPBOARD_TEXT, readBack };
 
