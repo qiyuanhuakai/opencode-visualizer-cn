@@ -742,6 +742,9 @@ const messages: LocaleMessages = {
       importAction: 'Importi erojn',
       importSuccess: 'Importis {count} erojn.',
       saveError: 'Ne eblis konservi erojn. La antaŭaj agordoj estis restaŭritaj.',
+      previousPage: 'Antaŭa paĝo de eroj',
+      nextPage: 'Sekva paĝo de eroj',
+      pageStatus: 'Paĝo {current} el {total}',
       importErrors: {
         invalidJson: 'La elektita dosiero ne estas valida JSON.',
         unsupportedVersion: 'La elektita dosiero uzas nesubtenatan erversion.',

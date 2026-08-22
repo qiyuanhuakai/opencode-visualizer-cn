@@ -425,6 +425,38 @@
                   </div>
                 </div>
               </div>
+              <div
+                v-if="textTransformerPageCount > 1"
+                class="transformer-pagination"
+                aria-live="polite"
+              >
+                <button
+                  type="button"
+                  class="transformer-action-button transformer-page-previous"
+                  :disabled="textTransformerPage === 0"
+                  :aria-label="$t('settings.textTransformers.previousPage')"
+                  @click="textTransformerPage -= 1"
+                >
+                  <Icon icon="lucide:chevron-left" :width="16" :height="16" />
+                </button>
+                <span class="transformer-pagination-status">
+                  {{
+                    $t('settings.textTransformers.pageStatus', {
+                      current: textTransformerPage + 1,
+                      total: textTransformerPageCount,
+                    })
+                  }}
+                </span>
+                <button
+                  type="button"
+                  class="transformer-action-button transformer-page-next"
+                  :disabled="textTransformerPage + 1 >= textTransformerPageCount"
+                  :aria-label="$t('settings.textTransformers.nextPage')"
+                  @click="textTransformerPage += 1"
+                >
+                  <Icon icon="lucide:chevron-right" :width="16" :height="16" />
+                </button>
+              </div>
             </div>
           </template>
         </template>
@@ -1428,6 +1460,8 @@ type TextTransformerDraft = {
   readonly base: TextTransformer | null;
 };
 const textTransformerDrafts = ref<Record<string, TextTransformerDraft>>({});
+const TEXT_TRANSFORMER_PAGE_SIZE = 50;
+const textTransformerPage = ref(0);
 const textTransformerVariables = [
   '{cursor}',
   '{date}',
@@ -1487,7 +1521,7 @@ function reconcileActiveTagFilter(tags: readonly string[]) {
 
 watch(transformerTagFilters, reconcileActiveTagFilter);
 
-const visibleTextTransformers = computed(() => {
+const filteredTextTransformers = computed(() => {
   const entries = displayedTextTransformers.value.map((snippet, index) => ({ snippet, index }));
   const filter = activeTagFilter.value;
   if (!filter) return entries;
@@ -1495,6 +1529,20 @@ const visibleTextTransformers = computed(() => {
   return entries.filter(({ snippet }) =>
     snippet.tags.some((tag) => tag.toLocaleLowerCase() === lowered),
   );
+});
+const textTransformerPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredTextTransformers.value.length / TEXT_TRANSFORMER_PAGE_SIZE)),
+);
+const visibleTextTransformers = computed(() => {
+  const start = textTransformerPage.value * TEXT_TRANSFORMER_PAGE_SIZE;
+  return filteredTextTransformers.value.slice(start, start + TEXT_TRANSFORMER_PAGE_SIZE);
+});
+
+watch(activeTagFilter, () => {
+  textTransformerPage.value = 0;
+});
+watch(textTransformerPageCount, (count) => {
+  textTransformerPage.value = Math.min(textTransformerPage.value, count - 1);
 });
 
 const editingTextTransformerIndex = computed(() =>
@@ -2070,6 +2118,20 @@ watch(
   flex-direction: column;
   gap: 8px;
   width: 100%;
+}
+
+.transformer-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.transformer-pagination-status {
+  min-width: 88px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 12px;
+  text-align: center;
 }
 
 .transformer-toolbar {

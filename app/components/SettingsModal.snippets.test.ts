@@ -564,4 +564,64 @@ describe('SettingsModal snippets', () => {
     expect(settings.textTransformers.value).toEqual(before);
     setItem.mockRestore();
   });
+
+  it('rejects an import whose merged library exceeds the complete backup budget', async () => {
+    // Given: local and imported collections are independently valid but exceed five MiB together.
+    const body = 'x'.repeat(850_000);
+    const current = Array.from({ length: 3 }, (_, index) => ({
+      ...initialSnippets[0],
+      id: `current-large-${index}`,
+      trigger: `current-large-${index}`,
+      body,
+    }));
+    const imported = Array.from({ length: 3 }, (_, index) => ({
+      ...initialSnippets[0],
+      id: `imported-large-${index}`,
+      trigger: `imported-large-${index}`,
+      body: 'y'.repeat(900_000),
+    }));
+    const { host, settings } = await mountSnippetSettings(current);
+    const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
+    const file = new File([], 'oversized-merge.json', { type: 'application/json' });
+    Object.defineProperty(file, 'text', {
+      value: async () => JSON.stringify({ version: 1, snippets: imported }),
+    });
+
+    // When: the valid file is selected for merge.
+    Object.defineProperty(importInput, 'files', { configurable: true, value: [file] });
+    importInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Then: the aggregate boundary rejects it without mutating the local collection.
+    await vi.waitFor(() =>
+      expect(host.querySelector('.transformer-import-status')?.textContent).toContain('invalid'),
+    );
+    expect(settings.textTransformers.value).toEqual(current);
+  });
+
+  it('paginates bounded previews instead of mounting the complete library and bodies', async () => {
+    // Given: the settings library contains 120 snippets with bodies longer than the preview budget.
+    const snippets = Array.from({ length: 120 }, (_, index) => ({
+      ...initialSnippets[0],
+      id: `snippet-page-${index}`,
+      trigger: `page-${index}`,
+      name: `Snippet ${index}`,
+      body: `Body ${index}-${'x'.repeat(500)}-tail-${index}`,
+    }));
+    const { host } = await mountSnippetSettings(snippets);
+
+    // When: the first settings page is rendered.
+    const firstPageRows = host.querySelectorAll('.transformer-row');
+
+    // Then: only 50 bounded previews are mounted and the remaining pages stay reachable.
+    expect(firstPageRows).toHaveLength(50);
+    const firstPreview = firstPageRows[0]?.querySelector('.snippet-completion-preview')?.textContent ?? '';
+    expect(firstPreview.length).toBeLessThanOrEqual(240);
+    expect(firstPreview).not.toContain('-tail-0');
+    expect(host.querySelector('.transformer-pagination-status')?.textContent).toContain('1');
+    host.querySelector<HTMLButtonElement>('.transformer-page-next')!.click();
+    await nextTick();
+    const secondPageRows = host.querySelectorAll('.transformer-row');
+    expect(secondPageRows).toHaveLength(50);
+    expect(secondPageRows[0]?.textContent).toContain('Snippet 50');
+  });
 });

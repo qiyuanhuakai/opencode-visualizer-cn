@@ -7,7 +7,7 @@
     <div v-if="snippet.description" class="snippet-completion-description">
       {{ snippet.description }}
     </div>
-    <div class="snippet-completion-preview">{{ snippet.body }}</div>
+    <div class="snippet-completion-preview">{{ bodyPreview }}</div>
     <div v-if="snippet.tags.length > 0" class="snippet-completion-tags">
       <span v-for="tag in snippet.tags" :key="tag" class="snippet-completion-tag">
         {{ tag }}
@@ -17,12 +17,21 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import type { TextTransformer } from '../utils/snippets';
 
-defineProps<{
+const props = defineProps<{
   snippet: TextTransformer;
   sequence: string;
 }>();
+
+const MAX_PREVIEW_LENGTH = 240;
+const bodyPreview = computed(() => {
+  let end = Math.min(props.snippet.body.length, MAX_PREVIEW_LENGTH);
+  const lastCodeUnit = props.snippet.body.charCodeAt(end - 1);
+  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) end -= 1;
+  return props.snippet.body.slice(0, end);
+});
 </script>
 
 <style scoped>
