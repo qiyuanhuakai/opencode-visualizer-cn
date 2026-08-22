@@ -874,7 +874,6 @@ import {
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
   isValidTextTransformerTrigger,
-  normalizeTextTransformers,
   parseTextTransformerImport,
   serializeTextTransformers,
   validateTextTransformerLibrary,
@@ -1613,16 +1612,16 @@ function sameTextTransformer(
   right: TextTransformer | null | undefined,
 ): boolean {
   if (!left || !right) return !left && !right;
-  return (
-    left.id === right.id &&
-    left.trigger === right.trigger &&
-    left.name === right.name &&
-    left.body === right.body &&
-    left.description === right.description &&
-    left.enabled === right.enabled &&
-    left.tags.length === right.tags.length &&
-    left.tags.every((tag, index) => tag === right.tags[index])
-  );
+  const values = (snippet: TextTransformer) => [
+    snippet.id,
+    snippet.trigger,
+    snippet.name,
+    snippet.body,
+    snippet.description,
+    snippet.enabled,
+    snippet.tags,
+  ];
+  return JSON.stringify(values(left)) === JSON.stringify(values(right));
 }
 
 function setTextTransformerDraft(id: string, draft: TextTransformerDraft) {
