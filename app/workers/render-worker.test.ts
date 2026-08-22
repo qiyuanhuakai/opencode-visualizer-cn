@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ByteWeightedLruCache } from '../utils/byteWeightedLru';
 
 type WorkerResponse = {
   data: {
@@ -36,7 +37,7 @@ function request(id: string, theme: string): RenderPayload {
 }
 
 async function startWorker(
-  moduleSuffix: 'dark-baseline' | 'light-baseline' | 'overlap' | 'copy-controls',
+  moduleSuffix: 'dark-baseline' | 'light-baseline' | 'overlap' | 'copy-controls' | 'oversized',
 ) {
   const messages: WorkerResponse['data'][] = [];
   const waiters = new Map<string, (message: WorkerResponse['data']) => void>();
@@ -51,6 +52,11 @@ async function startWorker(
   priorSelf ??= Reflect.get(globalThis, 'self');
   Object.defineProperty(globalThis, 'self', { configurable: true, value: worker });
   await import(/* @vite-ignore */ `./render-worker?theme-regression-${moduleSuffix}`);
+  const cache = Reflect.get(globalThis, '__visRenderWorkerCacheForTests');
+  if (!(cache instanceof ByteWeightedLruCache)) {
+    throw new Error('render worker test cache is unavailable');
+  }
+  cache.clear();
 
   function render(payload: ReturnType<typeof request>) {
     return new Promise<string>((resolve, reject) => {
@@ -62,7 +68,7 @@ async function startWorker(
     });
   }
 
-  return { messages, render };
+  return { messages, render, cache };
 }
 
 describe('render worker theme isolation', () => {
@@ -103,5 +109,29 @@ describe('render worker theme isolation', () => {
     expect(html).not.toContain('md-copy-btn');
     expect(html).not.toContain('COPY');
     expect(html).not.toContain('Copied');
+  });
+
+  it('shares one byte budget across code and markdown entries with LRU promotion', async () => {
+    const { cache } = await startWorker('overlap');
+    const codeKey = `code:${'x'.repeat(10)}`;
+    const markdownKey = `markdown:${'y'.repeat(10)}`;
+    cache.set(codeKey, 'a'.repeat(1.5 * 1024 * 1024));
+    cache.set(markdownKey, 'b'.repeat(1.5 * 1024 * 1024));
+    expect(cache.get(codeKey)).toHaveLength(1.5 * 1024 * 1024);
+
+    cache.set('code:new', 'c'.repeat(2 * 1024 * 1024));
+
+    expect(cache.has(codeKey)).toBe(true);
+    expect(cache.has(markdownKey)).toBe(false);
+    expect(cache.get('code:new')).toHaveLength(2 * 1024 * 1024);
+  });
+
+  it('rejects an oversized worker cache entry without changing retained output', async () => {
+    const { cache, render } = await startWorker('oversized');
+    const oversized = 'z'.repeat(5 * 1024 * 1024);
+    cache.set('code:oversized', oversized);
+
+    expect(cache.has('code:oversized')).toBe(false);
+    await expect(render(request('exact-output', 'github-dark'))).resolves.toContain('42');
   });
 });

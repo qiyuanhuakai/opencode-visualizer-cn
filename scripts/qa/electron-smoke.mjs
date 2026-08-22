@@ -28,7 +28,7 @@
  *   VIS_ELECTRON_EXECUTABLE=dist-electron/linux-unpacked/vis pnpm qa:electron
  */
 import { _electron } from 'playwright';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
@@ -153,6 +153,92 @@ async function main() {
     return { app: electronApp, page };
   }
 
+  const unavailableMemory = (reason) => ({ available: false, reason });
+
+  const smapsField = (fields, name) => (fields.has(name) ? fields.get(name) : null);
+
+  const parseSmapsLine = (line) => {
+    const match = line.match(/^(Rss|Pss|Private_Clean|Private_Dirty|SwapPss):\s+(\d+)\s+kB$/);
+    return match ? [match[1], Number(match[2])] : null;
+  };
+
+  const parseSmapsRollup = (source) => {
+    const fields = new Map();
+    for (const line of source.split('\n')) {
+      const field = parseSmapsLine(line);
+      if (field) fields.set(field[0], field[1]);
+    }
+    return {
+      available: true,
+      rssKb: smapsField(fields, 'Rss'),
+      pssKb: smapsField(fields, 'Pss'),
+      privateCleanKb: smapsField(fields, 'Private_Clean'),
+      privateDirtyKb: smapsField(fields, 'Private_Dirty'),
+      swapPssKb: smapsField(fields, 'SwapPss'),
+    };
+  };
+
+  const readLinuxSmapsRollup = (pid) => {
+    try {
+      return parseSmapsRollup(readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8'));
+    } catch {
+      return unavailableMemory('unavailable');
+    }
+  };
+
+  const readSmapsRollup = (pid) =>
+    process.platform === 'linux'
+      ? readLinuxSmapsRollup(pid)
+      : unavailableMemory('not-applicable');
+
+  const captureMemory = async (electronApp, page) => {
+    const main = await electronApp.evaluate(async ({ app }) => {
+      const [processMemory, systemMemory] = await Promise.all([
+        process.getProcessMemoryInfo(),
+        process.getSystemMemoryInfo(),
+      ]);
+      const appMetrics = app.getAppMetrics().map((metric) => ({
+        pid: metric.pid,
+        type: metric.type,
+        memory: metric.memory
+          ? {
+              workingSetSize: metric.memory.workingSetSize,
+              peakWorkingSetSize: metric.memory.peakWorkingSetSize,
+              privateBytes: metric.memory.privateBytes,
+            }
+          : null,
+        cpu: {
+          percentCPUUsage: metric.cpu.percentCPUUsage,
+          idleWakeupsPerSecond: metric.cpu.idleWakeupsPerSecond,
+        },
+      }));
+      return { processMemory, systemMemory, appMetrics };
+    });
+    const renderer = await page.evaluate(() => {
+      const memory = performance.memory;
+      if (!memory) return { available: false };
+      return {
+        available: true,
+        jsHeapSizeLimit: memory.jsHeapSizeLimit,
+        totalJSHeapSize: memory.totalJSHeapSize,
+        usedJSHeapSize: memory.usedJSHeapSize,
+      };
+    });
+    return {
+      main: {
+        ...main,
+        nodeMemory: await electronApp.evaluate(() => {
+          const { rss, heapUsed, external, arrayBuffers } = process.memoryUsage();
+          return { rss, heapUsed, external, arrayBuffers };
+        }),
+      },
+      renderer,
+      linuxSmapsRollup: Object.fromEntries(
+        main.appMetrics.map(({ pid }) => [String(pid), readSmapsRollup(pid)]),
+      ),
+    };
+  };
+
   try {
     let { app, page } = await launchAndProbe();
 
@@ -180,6 +266,9 @@ async function main() {
     receipt.electronVersion = versions.electron;
     receipt.platform = platformInfo;
     receipt.runtimeVersions = versions;
+    receipt.memory = {
+      initial: await captureMemory(app, page),
+    };
     record('platform-and-versions-captured', true, `${platformInfo.platform}/${platformInfo.arch} electron ${versions.electron} chrome ${versions.chrome} node ${versions.node}`);
 
     // Wait for the main window to become visible (ready-to-show), then check sandbox + URL.
@@ -258,6 +347,7 @@ async function main() {
     }, STORAGE_KEY);
     record('persistent-storage-remove', removed === null, `got ${JSON.stringify(removed)}`);
     receipt.persistentStorage = { key: STORAGE_KEY, roundTrip: storageRoundTrip === STORAGE_VALUE, survivedRelaunch: persisted === STORAGE_VALUE, removed: removed === null };
+    receipt.memory.relaunch = await captureMemory(app, page);
 
     // Console cleanliness (uncaught only; handled diagnostics recorded in the log).
     record('no-uncaught-console-errors', pageErrors.length === 0 && mainErrors.length === 0,

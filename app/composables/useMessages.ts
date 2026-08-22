@@ -15,6 +15,12 @@ import type {
 } from '../types/sse';
 import type { SessionScope } from './useGlobalEvents';
 import { useDeltaAccumulator } from './useDeltaAccumulator';
+import { ByteWeightedLruCache } from '../utils/byteWeightedLru';
+
+export type MessageCacheIdentity = {
+  namespace: string;
+  sessionId: string;
+};
 
 type MessageEntry = {
   info?: MessageInfo;
@@ -30,14 +36,78 @@ const pendingMessageTriggers = new Set<ShallowRef<MessageEntry>>();
 const pendingCollectionTrigger = { value: false };
 let flushScheduled = false;
 const HISTORY_CHUNK_SIZE = 150;
+const MESSAGE_CACHE_NAMESPACE = 'messages';
 const MAX_SESSION_CACHE_ENTRIES = 5;
+const MAX_SESSION_CACHE_BYTES = 32 * 1024 * 1024;
+const MAX_SESSION_CACHE_ENTRY_BYTES = 16 * 1024 * 1024;
 
 type MessageCacheEntry = {
   messages: Map<string, { info?: MessageInfo; parts: MessagePart[] }>;
-  parts: Map<string, MessagePart>;
 };
 
-const sessionCache = new Map<string, MessageCacheEntry>();
+function estimateRetainedBytes(value: unknown, seen = new WeakSet<object>()): number {
+  switch (typeof value) {
+    case 'string':
+      return value.length * 2;
+    case 'number':
+    case 'boolean':
+    case 'bigint':
+      return 8;
+    case 'object':
+      return value === null ? 0 : estimateRetainedObjectBytes(value, seen);
+    default:
+      return 0;
+  }
+}
+
+function estimateRetainedObjectBytes(value: object, seen: WeakSet<object>): number {
+  if (seen.has(value)) return 0;
+  seen.add(value);
+
+  if (value instanceof Map) return estimateMapBytes(value, seen);
+  if (value instanceof Set || Array.isArray(value)) return estimateIterableBytes(value, seen);
+  return estimatePlainObjectBytes(value, seen);
+}
+
+function estimateMapBytes(value: Map<unknown, unknown>, seen: WeakSet<object>): number {
+  let bytes = 0;
+  for (const [key, entry] of value) {
+    bytes += estimateRetainedBytes(key, seen) + estimateRetainedBytes(entry, seen);
+  }
+  return bytes;
+}
+
+function estimateIterableBytes(value: Iterable<unknown>, seen: WeakSet<object>): number {
+  let bytes = 0;
+  for (const entry of value) bytes += estimateRetainedBytes(entry, seen);
+  return bytes;
+}
+
+function estimatePlainObjectBytes(value: object, seen: WeakSet<object>): number {
+  let bytes = 0;
+  for (const [key, entry] of Object.entries(value)) {
+    bytes += key.length * 2 + estimateRetainedBytes(entry, seen);
+  }
+  return bytes;
+}
+
+const sessionCache = new ByteWeightedLruCache<string, MessageCacheEntry>({
+  maxBytes: MAX_SESSION_CACHE_BYTES,
+  maxEntries: MAX_SESSION_CACHE_ENTRIES,
+  maxEntryBytes: MAX_SESSION_CACHE_ENTRY_BYTES,
+  weigh: messageCacheWeight,
+});
+
+function messageCacheKey(identity: MessageCacheIdentity): string {
+  return `${MESSAGE_CACHE_NAMESPACE}:${JSON.stringify([
+    identity.namespace,
+    identity.sessionId,
+  ])}`;
+}
+
+function messageCacheWeight(_key: string, entry: MessageCacheEntry): number {
+  return estimateRetainedBytes(entry.messages);
+}
 
 type BackgroundTaskScheduler = {
   postTask: (
@@ -547,22 +617,14 @@ function dispose() {
   for (const unsub of unsubs) unsub();
 }
 
-function saveSessionState(sessionId: string) {
-  if (!sessionId || messages.value.size === 0) return;
+function saveSessionState(identity: MessageCacheIdentity) {
+  if (!identity.namespace || !identity.sessionId || messages.value.size === 0) return;
 
   for (const messageRef of messages.value.values()) {
     if (resolveStatus(messageRef.value.info) === 'streaming') return;
   }
 
-  if (sessionCache.size >= MAX_SESSION_CACHE_ENTRIES) {
-    const oldestKey = sessionCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      sessionCache.delete(oldestKey);
-    }
-  }
-
   const cachedMessages = new Map<string, { info?: MessageInfo; parts: MessagePart[] }>();
-  const cachedParts = new Map<string, MessagePart>();
 
   for (const [id, messageRef] of messages.value) {
     const entry = messageRef.value;
@@ -570,16 +632,18 @@ function saveSessionState(sessionId: string) {
     for (const partRef of entry.parts) {
       const part = partRef.value;
       partsList.push(part);
-      cachedParts.set(partLookupKey(part.messageID, part.id), part);
     }
     cachedMessages.set(id, { info: entry.info, parts: partsList });
   }
 
-  sessionCache.set(sessionId, { messages: cachedMessages, parts: cachedParts });
+  const key = messageCacheKey(identity);
+  const cached = { messages: cachedMessages };
+  sessionCache.set(key, cached);
 }
 
-function tryLoadFromCache(sessionId: string): boolean {
-  const cached = sessionCache.get(sessionId);
+function tryLoadFromCache(identity: MessageCacheIdentity): boolean {
+  if (!identity.namespace || !identity.sessionId) return false;
+  const cached = sessionCache.get(messageCacheKey(identity));
   if (!cached) return false;
 
   messages.value.clear();
@@ -597,14 +661,12 @@ function tryLoadFromCache(sessionId: string): boolean {
     messages.value.set(id, shallowRef(entry));
   }
 
-  for (const [key, part] of cached.parts) {
-    if (!parts.has(key)) {
-      parts.set(key, shallowRef(part));
-    }
-  }
-
   triggerCollection();
   return true;
+}
+
+function clearSessionCache() {
+  sessionCache.clear();
 }
 
 export function useMessages() {
@@ -638,6 +700,7 @@ export function useMessages() {
     reset,
     saveSessionState,
     tryLoadFromCache,
+    clearSessionCache,
     dispose,
     bindScope,
   };

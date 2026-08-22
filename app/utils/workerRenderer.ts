@@ -1,6 +1,7 @@
 import RenderWorker from '../workers/render-worker?worker';
 import { incrementPendingRenders, decrementPendingRenders } from '../composables/useRenderState';
 import { RenderCancelledError } from './renderErrors';
+import { ByteWeightedLruCache } from './byteWeightedLru';
 
 export { RenderCancelledError } from './renderErrors';
 // Streaming client lives in ./workerStream; re-exported here so the public
@@ -50,15 +51,19 @@ type RenderTask = {
   cancel: () => void;
 };
 
-const WORKER_POOL_SIZE = typeof navigator !== 'undefined'
-  ? Math.min(8, Math.max(4, navigator.hardwareConcurrency || 4))
-  : 4;
+const RENDER_WORKER_POOL_CEILING = 4;
+const WORKER_POOL_SIZE =
+  typeof navigator !== 'undefined'
+    ? Math.min(RENDER_WORKER_POOL_CEILING, Math.max(2, navigator.hardwareConcurrency || 2))
+    : RENDER_WORKER_POOL_CEILING;
 
 const workers: Worker[] = [];
 let workerIndex = 0;
 const pending = new Map<string, PendingEntry>();
-const completedCache = new Map<string, string>();
-const CACHE_LIMIT = 200;
+const completedCache = new ByteWeightedLruCache<string, string>({
+  maxBytes: 16 * 1024 * 1024,
+  weigh: (key, html) => (key.length + html.length) * 2,
+});
 
 function normalizeLines(value?: string[]) {
   return value && value.length > 0 ? value.join('\u0001') : '';
@@ -90,13 +95,7 @@ function getCacheKey(payload: RenderRequest) {
 }
 
 function cacheRenderedHtml(key: string, html: string) {
-  if (completedCache.has(key)) {
-    completedCache.delete(key);
-  }
   completedCache.set(key, html);
-  if (completedCache.size <= CACHE_LIMIT) return;
-  const oldestKey = completedCache.keys().next().value;
-  if (oldestKey) completedCache.delete(oldestKey);
 }
 
 function errorFromWorkerEvent(error: unknown): Error {

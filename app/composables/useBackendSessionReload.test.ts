@@ -3,6 +3,100 @@ import { ref } from 'vue';
 import { useBackendSessionReload } from './useBackendSessionReload';
 
 describe('useBackendSessionReload', () => {
+  it('keeps a completed root snapshot cacheable when child hydration fails', async () => {
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
+    const activeBackendKind = ref('opencode');
+    const activeDirectory = ref('/repo');
+    const sessionReloadRequestId = ref(0);
+    const deferredSessionReloadId = ref<string>();
+    const hydrateReferencedSubagents = vi
+      .fn()
+      .mockRejectedValue(new Error('child hydration failed'));
+    const fetchRootSessionHistory = vi.fn().mockResolvedValue({ requestId: 42, loaded: true });
+    const reportError = vi.fn();
+    const msg = {
+      saveSessionState: vi.fn(),
+      reset: vi.fn(),
+      tryLoadFromCache: vi.fn().mockReturnValue(false),
+    };
+
+    const { reloadSelectedSessionState } = useBackendSessionReload({
+      activeBackendKind,
+      activeDirectory,
+      getMessageCacheNamespace: () => 'opencode:primary:/repo',
+      sessionReloadRequestId,
+      isBootstrapping: ref(false),
+      deferredSessionReloadId,
+      selectedProject: ref(null),
+      persistSelectionState: vi.fn(),
+      invokeBackendSelectionAfterBootstrap: vi.fn(),
+      fwCloseAll: vi.fn(),
+      msg,
+      resetFollow: vi.fn(),
+      reasoningReset: vi.fn(),
+      subagentWindowsReset: vi.fn(),
+      clearRetryStatus: vi.fn(),
+      codexApi: {
+        loadThreadHistory: vi.fn(),
+      },
+      loadCodeReviewComments: vi.fn(),
+      reportError,
+      oc: null,
+      acp: null,
+      providerModels: ref([]),
+      selectedModel: ref(''),
+      acpSessionModels: new Map(),
+      acpSessionAgents: new Map(),
+      selectionReasoningEfforts: ref({}),
+      fetchRootSessionHistory,
+      hydratedDescendantSessionIds: new Set(),
+      waitForPendingRenders: vi.fn(),
+      hydrateReferencedSubagents,
+      scheduleDescendantSessionHistoryHydration: vi.fn(),
+      isLoadingHistory: ref(false),
+      activeSessionStarted: ref(false),
+      renderTick: ref(0),
+      anchorOutputToBottom: vi.fn(),
+      uiInitState: ref('idle'),
+      reloadTodosForAllowedSessions: vi.fn(),
+      fetchPendingPermissions: vi.fn(),
+      fetchPendingQuestions: vi.fn(),
+      focusInput: vi.fn(),
+      sessionHasStarted: vi.fn().mockReturnValue(true),
+      setActiveSessionStarted: vi.fn(),
+      windowSetTimeout: (callback: () => void) => {
+        callback();
+        return 0;
+      },
+    } as unknown as Parameters<typeof useBackendSessionReload>[0]);
+
+    try {
+      await reloadSelectedSessionState('session-1');
+      expect(hydrateReferencedSubagents).toHaveBeenCalledWith('session-1', 1);
+      expect(msg.saveSessionState).not.toHaveBeenCalled();
+
+      await reloadSelectedSessionState('session-2', 'session-1');
+
+      expect(msg.saveSessionState).toHaveBeenCalledWith({
+        namespace: 'opencode:primary:/repo',
+        sessionId: 'session-1',
+      });
+
+      fetchRootSessionHistory.mockResolvedValue({ requestId: 43, loaded: false });
+      await reloadSelectedSessionState('session-failed', 'session-2');
+      msg.saveSessionState.mockClear();
+
+      await reloadSelectedSessionState('session-3', 'session-failed');
+
+      expect(msg.saveSessionState).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('reloads Codex session history through unified reload runtime', async () => {
     const msg = {
       saveSessionState: vi.fn(),
@@ -14,6 +108,7 @@ describe('useBackendSessionReload', () => {
     const reload = useBackendSessionReload({
       activeBackendKind: ref('codex'),
       activeDirectory: ref('/repo'),
+      getMessageCacheNamespace: () => 'codex:http://127.0.0.1:4500:/repo',
       uiInitState: ref('ready'),
       isBootstrapping: ref(false),
       isLoadingHistory: ref(false),
@@ -46,7 +141,7 @@ describe('useBackendSessionReload', () => {
 
     await reload.reloadSelectedSessionState('thread-1', 'thread-old');
 
-    expect(msg.saveSessionState).toHaveBeenCalledWith('thread-old');
+    expect(msg.saveSessionState).not.toHaveBeenCalled();
     expect(selectThread).toHaveBeenCalledWith('thread-1');
     expect(msg.reset).toHaveBeenCalled();
     expect(msg.loadHistory).toHaveBeenCalledWith([{ id: 'history-1' }]);
@@ -63,6 +158,7 @@ describe('useBackendSessionReload', () => {
     const reload = useBackendSessionReload({
       activeBackendKind: ref('codex'),
       activeDirectory: ref('/repo'),
+      getMessageCacheNamespace: () => 'codex:http://127.0.0.1:4500:/repo',
       uiInitState: ref('ready'),
       isBootstrapping: ref(false),
       isLoadingHistory: ref(false),
@@ -113,6 +209,7 @@ describe('useBackendSessionReload', () => {
     const reload = useBackendSessionReload({
       activeBackendKind: ref<'opencode'>('opencode'),
       activeDirectory: ref('/repo'),
+      getMessageCacheNamespace: () => 'opencode:http://127.0.0.1:4096:/repo',
       uiInitState: ref<'ready'>('ready'),
       isBootstrapping: ref(false),
       isLoadingHistory: ref(false),
@@ -145,7 +242,10 @@ describe('useBackendSessionReload', () => {
 
     await reload.reloadSelectedSessionState('session-1');
 
-    expect(msg.tryLoadFromCache).toHaveBeenCalledWith('session-1');
+    expect(msg.tryLoadFromCache).toHaveBeenCalledWith({
+      namespace: 'opencode:http://127.0.0.1:4096:/repo',
+      sessionId: 'session-1',
+    });
     expect(fetchRootSessionHistory).not.toHaveBeenCalled();
     expect(scheduleDescendantSessionHistoryHydration).toHaveBeenCalledWith('session-1', 7, 1);
   });
@@ -163,6 +263,7 @@ describe('useBackendSessionReload', () => {
     const options = {
       activeBackendKind: ref<'opencode'>('opencode'),
       activeDirectory: ref('/repo'),
+      getMessageCacheNamespace: () => 'opencode:http://127.0.0.1:4096:/repo',
       uiInitState: ref<'ready'>('ready'),
       isBootstrapping: ref(false),
       isLoadingHistory: ref(false),
@@ -219,6 +320,7 @@ describe('useBackendSessionReload', () => {
     const options = {
       activeBackendKind: ref<'opencode'>('opencode'),
       activeDirectory: ref('/repo'),
+      getMessageCacheNamespace: () => 'opencode:http://127.0.0.1:4096:/repo',
       uiInitState: ref<'ready'>('ready'),
       isBootstrapping: ref(false),
       isLoadingHistory: ref(false),
@@ -263,5 +365,62 @@ describe('useBackendSessionReload', () => {
     await pendingReload;
 
     expect(scheduleDescendantSessionHistoryHydration).not.toHaveBeenCalled();
+  });
+
+  it('saves the old materialized view under its original backend identity', async () => {
+    const activeBackendKind = ref<'opencode' | 'acp'>('opencode');
+    const activeDirectory = ref('/repo-a');
+    let namespace = 'opencode:http://127.0.0.1:4096:/repo-a';
+    const msg = {
+      saveSessionState: vi.fn(),
+      reset: vi.fn(),
+      loadHistory: vi.fn(),
+      tryLoadFromCache: vi.fn().mockReturnValue(true),
+    };
+    const reload = useBackendSessionReload({
+      activeBackendKind,
+      activeDirectory,
+      getMessageCacheNamespace: () => namespace,
+      uiInitState: ref<'ready'>('ready'),
+      isBootstrapping: ref(false),
+      isLoadingHistory: ref(false),
+      deferredSessionReloadId: ref<string | null>(null),
+      sessionReloadRequestId: ref(0),
+      hydratedDescendantSessionIds: new Set<string>(),
+      msg,
+      fwCloseAll: vi.fn(),
+      resetFollow: vi.fn(),
+      reasoningReset: vi.fn(),
+      subagentWindowsReset: vi.fn(),
+      clearRetryStatus: vi.fn(),
+      codexApi: { activeThreadId: ref(''), selectThread: vi.fn() },
+      codexHistory: ref([]),
+      codexReapplyBackfill: vi.fn(),
+      fetchRootSessionHistory: vi.fn(),
+      waitForPendingRenders: vi.fn(),
+      reserveRootHistoryRequestId: vi.fn().mockReturnValue(1),
+      scheduleDescendantSessionHistoryHydration: vi.fn(),
+      anchorOutputToBottom: vi.fn().mockResolvedValue(undefined),
+      restoreShellSessions: vi.fn().mockResolvedValue(undefined),
+      reloadTodosForAllowedSessions: vi.fn(),
+      fetchPendingPermissions: vi.fn(),
+      fetchPendingQuestions: vi.fn(),
+      focusInput: vi.fn(),
+    });
+
+    await reload.reloadSelectedSessionState('shared-session');
+    activeBackendKind.value = 'acp';
+    activeDirectory.value = '/repo-b';
+    namespace = 'acp:agent-b:/repo-b';
+    await reload.reloadSelectedSessionState('next-session', 'shared-session');
+
+    expect(msg.saveSessionState).toHaveBeenCalledWith({
+      namespace: 'opencode:http://127.0.0.1:4096:/repo-a',
+      sessionId: 'shared-session',
+    });
+    expect(msg.tryLoadFromCache).toHaveBeenLastCalledWith({
+      namespace: 'acp:agent-b:/repo-b',
+      sessionId: 'next-session',
+    });
   });
 });

@@ -154,6 +154,25 @@ describe('electron smoke driver contract', () => {
     expect(driverSource).toMatch(/writeFileSync\(RECEIPT_PATH[\s\S]*?catch \{\s*receipt\.pass = false;/);
   });
 
+  it('records a QA-only main-process memory receipt', () => {
+    expect(driverSource).toMatch(/process\.memoryUsage\(\)/);
+    expect(driverSource).toMatch(/receipt\.memory/);
+    expect(driverSource).toMatch(/rss/);
+    expect(driverSource).toMatch(/heapUsed/);
+  });
+
+  it('captures process, renderer, and Linux smaps memory evidence in both samples', () => {
+    expect(driverSource).toMatch(/getProcessMemoryInfo/);
+    expect(driverSource).toMatch(/getSystemMemoryInfo/);
+    expect(driverSource).toMatch(/getAppMetrics/);
+    expect(driverSource).toMatch(/performance\.memory/);
+    expect(driverSource).toMatch(/smaps_rollup/);
+    expect(driverSource).toMatch(/initial:\s*await captureMemory\(app, page\)/);
+    expect(driverSource).toMatch(/receipt\.memory\.relaunch\s*=\s*await captureMemory\(app, page\)/);
+    expect(driverSource).toMatch(/receipt\.memory\.relaunch/);
+    expect(driverSource).toMatch(/memory:\s*metric\.memory\s*\?/);
+  });
+
   it('tears down the app and the temp profile even on failure', () => {
     expect(driverSurface).toMatch(/finally/);
     expect(driverSurface).toMatch(/close\(\)/);

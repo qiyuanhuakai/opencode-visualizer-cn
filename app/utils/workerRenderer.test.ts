@@ -116,8 +116,22 @@ describe('startRenderWorkerStream', () => {
     // Then: token batches arrive at onBatch callbacks in arrival order
     const batches: Array<{ recall: number; stable: unknown[]; unstable: unknown[] }> = [];
     stream.onBatch((batch) => batches.push(batch));
-    streamWorker.emit({ kind: 'tokens', id: 'm1', streamId, recall: 0, stable: [{ content: 'const' }], unstable: [] });
-    streamWorker.emit({ kind: 'tokens', id: 'm2', streamId, recall: 2, stable: [{ content: 'b' }], unstable: [{ content: ';' }] });
+    streamWorker.emit({
+      kind: 'tokens',
+      id: 'm1',
+      streamId,
+      recall: 0,
+      stable: [{ content: 'const' }],
+      unstable: [],
+    });
+    streamWorker.emit({
+      kind: 'tokens',
+      id: 'm2',
+      streamId,
+      recall: 2,
+      stable: [{ content: 'b' }],
+      unstable: [{ content: ';' }],
+    });
     expect(batches.map((batch) => batch.recall)).toEqual([0, 2]);
     expect(batches[1]?.unstable).toEqual([{ content: ';' }]);
 
@@ -174,6 +188,23 @@ describe('startRenderWorkerStream', () => {
 });
 
 describe('single-shot regression', () => {
+  it('caps the single-shot render pool at the memory ceiling', async () => {
+    const mod = await import('../utils/workerRenderer');
+    const render = mod.renderWorkerHtml({
+      id: 'pool-ceiling',
+      code: 'pool ceiling',
+      lang: 'text',
+      theme: 'github-dark',
+    });
+
+    expect(workerState.FakeWorker.instances.length).toBeLessThanOrEqual(4);
+    expect(workerState.FakeWorker.instances.length).toBeGreaterThan(0);
+    const poolWorker = workerState.FakeWorker.instances[0];
+    if (!poolWorker) throw new Error('no pool worker');
+    poolWorker.emit({ id: 'pool-ceiling', ok: true, html: '<pool />' });
+    await expect(render).resolves.toBe('<pool />');
+  });
+
   it('rejects asynchronously and restores counters when worker construction fails', async () => {
     const mod = await import('../utils/workerRenderer');
     const renderState = await import('../composables/useRenderState');
@@ -360,6 +391,53 @@ describe('single-shot regression', () => {
     if (!secondWorker) throw new Error('copy-controls-off request was not posted');
     secondWorker.emit({ id: 'copy-controls-off', ok: true, html: '<h1>Result</h1>' });
     await expect(withoutControls).resolves.toBe('<h1>Result</h1>');
+  });
+
+  it('evicts completed renders by HTML byte budget before entry count', async () => {
+    const mod = await import('../utils/workerRenderer');
+    const firstRequest = {
+      id: 'byte-budget-first',
+      code: 'first byte-budget render',
+      lang: 'text',
+      theme: 'github-dark',
+    };
+    const secondRequest = {
+      id: 'byte-budget-second',
+      code: 'second byte-budget render',
+      lang: 'text',
+      theme: 'github-dark',
+    };
+    const first = mod.renderWorkerHtml(firstRequest);
+    const firstWorker = workerState.FakeWorker.instances.find((worker) =>
+      worker.posted.includes(firstRequest),
+    );
+    if (!firstWorker) throw new Error('first render was not posted');
+    const largeHtmlLength = (9 * 1024 * 1024) / 2;
+    firstWorker.emit({ id: firstRequest.id, ok: true, html: 'a'.repeat(largeHtmlLength) });
+    await expect(first).resolves.toHaveLength(largeHtmlLength);
+
+    const second = mod.renderWorkerHtml(secondRequest);
+    const secondWorker = workerState.FakeWorker.instances.find((worker) =>
+      worker.posted.includes(secondRequest),
+    );
+    if (!secondWorker) throw new Error('second render was not posted');
+    secondWorker.emit({ id: secondRequest.id, ok: true, html: 'b'.repeat(largeHtmlLength) });
+    await expect(second).resolves.toHaveLength(largeHtmlLength);
+
+    const firstAgain = mod.renderWorkerHtml({ ...firstRequest, id: 'byte-budget-first-again' });
+    expect(workerState.FakeWorker.instances.flatMap((worker) => worker.posted)).toHaveLength(3);
+    const firstAgainWorker = workerState.FakeWorker.instances.find((worker) =>
+      worker.posted.some(
+        (message) =>
+          typeof message === 'object' &&
+          message !== null &&
+          'id' in message &&
+          message.id === 'byte-budget-first-again',
+      ),
+    );
+    if (!firstAgainWorker) throw new Error('first render was unexpectedly cached');
+    firstAgainWorker.emit({ id: 'byte-budget-first-again', ok: true, html: '<first-again />' });
+    await expect(firstAgain).resolves.toBe('<first-again />');
   });
 
   it('renderWorkerHtml rejects when the pool worker reports an error', async () => {
