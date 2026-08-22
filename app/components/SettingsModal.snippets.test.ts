@@ -166,11 +166,14 @@ describe('SettingsModal snippets', () => {
     await nextTick();
     expect(settings.textTransformers.value[0]?.name).toBe('Review changes');
     expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
-      'Review changes',
+      'Unsaved name',
     );
     expect(host.querySelector('.transformer-detail')?.textContent).toContain(
       en.settings.textTransformers.saveError,
     );
+    changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Unsaved name');
+    await nextTick();
+    expect(settings.textTransformers.value[0]?.name).toBe('Unsaved name');
     host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
     await nextTick();
 
@@ -552,6 +555,51 @@ describe('SettingsModal snippets', () => {
       '::review',
     );
     expect(host.querySelector('.transformer-conflict-reload')).toBeNull();
+
+    // When: another stale edit is explicitly resolved with Overwrite.
+    inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Local overwrite');
+    const externalAgain = [{ ...external[0]!, name: 'External again' }, external[1]!];
+    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(externalAgain));
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: JSON.stringify(externalAgain),
+      }),
+    );
+    changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Local overwrite');
+    await nextTick();
+    host.querySelector<HTMLButtonElement>('.transformer-conflict-overwrite')!.click();
+    await nextTick();
+
+    // Then: only the explicit overwrite replaces the external row and persists the draft.
+    expect(settings.textTransformers.value[0]?.name).toBe('Local overwrite');
+    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]).toMatchObject(
+      { name: 'Local overwrite' },
+    );
+  });
+
+  it('finalizes clean drafts on close and reopens unresolved drafts directly', async () => {
+    // Given: a persisted row is opened without edits.
+    const { host, reopenSnippets } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+
+    // When: Settings closes and reopens on the Snippets page.
+    await reopenSnippets();
+    host.querySelector<HTMLButtonElement>('.transformer-export')!.click();
+
+    // Then: the clean draft was finalized and no longer blocks export.
+    expect(fileExport.downloadTextFile).toHaveBeenCalledTimes(1);
+    expect(host.querySelector('.transformer-detail')).toBeNull();
+
+    // When: a new invalid draft exists while Settings closes and reopens.
+    host.querySelector<HTMLButtonElement>('.transformer-add')!.click();
+    await nextTick();
+    await reopenSnippets();
+
+    // Then: the unresolved draft reopens directly instead of becoming a phantom list row.
+    expect(host.querySelector('.transformer-detail')).not.toBeNull();
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')?.value).toBe('');
   });
 
   it('reports an import error when persistence rejects the merged library', async () => {

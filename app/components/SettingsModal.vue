@@ -1,5 +1,5 @@
 <template>
-  <dialog ref="dialogRef" class="modal-backdrop" @close="$emit('close')" @cancel.prevent>
+  <dialog ref="dialogRef" class="modal-backdrop" @close="handleSettingsClosed" @cancel.prevent>
     <div class="modal">
       <header class="modal-header">
         <div class="modal-header-main">
@@ -950,7 +950,7 @@ const props = defineProps<{
   initialPage?: SettingsPage;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   (event: 'close'): void;
 }>();
 
@@ -1704,12 +1704,6 @@ function commitTextTransformerDraft(id: string): boolean {
   textTransformers.value = validated;
   const committed = textTransformers.value.find((snippet) => snippet.id === id);
   if (!committed || !sameTextTransformer(committed, validated.find((snippet) => snippet.id === id))) {
-    if (persisted) {
-      setTextTransformerDraft(id, {
-        snippet: cloneTextTransformer(persisted),
-        base: cloneTextTransformer(persisted),
-      });
-    }
     return false;
   }
   const normalized = cloneTextTransformer(committed);
@@ -1752,6 +1746,18 @@ function overwriteTextTransformerDraft(id: string) {
     conflicted: false,
   });
   commitTextTransformerDraft(id);
+}
+
+function finalizeEditingTextTransformer() {
+  const id = editingTextTransformerId.value;
+  if (!id) return;
+  if (commitTextTransformerDraft(id)) removeTextTransformerDraft(id);
+  editingTextTransformerId.value = null;
+}
+
+function handleSettingsClosed() {
+  finalizeEditingTextTransformer();
+  emit('close');
 }
 
 function addTextTransformer() {
@@ -2023,13 +2029,17 @@ watch(
     if (!el) return;
     if (open) {
       activePage.value = props.initialPage ?? 'root';
-      editingTextTransformerId.value = null;
+      editingTextTransformerId.value =
+        activePage.value === 'transformers'
+          ? (Object.keys(textTransformerDrafts.value)[0] ?? null)
+          : null;
       activeTagFilter.value = null;
       isTerminalFontDiscoveryOpen.value = false;
       isAppFontDiscoveryOpen.value = false;
       if (!el.open) el.showModal();
-    } else if (el.open) {
-      el.close();
+    } else {
+      finalizeEditingTextTransformer();
+      if (el.open) el.close();
     }
   },
 );
