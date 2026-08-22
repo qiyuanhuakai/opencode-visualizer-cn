@@ -222,7 +222,7 @@ describe('useSettings', () => {
     expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(2);
   });
 
-  it('does not overwrite persisted snippets with invalid or duplicate drafts', async () => {
+  it('keeps the shared snippet state within the complete persistence contract', async () => {
     // Given: two distinct valid snippets are persisted.
     const persisted = [
       {
@@ -246,17 +246,16 @@ describe('useSettings', () => {
     const settings = await importFresh();
     const storedBeforeDraft = storage.getItem('opencode.settings.textTransformers.v1');
 
-    // When: one draft becomes invalid and then conflicts with the other trigger.
+    // When: direct callers assign an invalid trigger and then a duplicate trigger.
     settings.textTransformers.value = [persisted[0]!, { ...persisted[1]!, trigger: 'has space' }];
-    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(storedBeforeDraft);
+    expect(settings.textTransformers.value).toEqual(persisted);
     settings.textTransformers.value = [persisted[0]!, { ...persisted[1]!, trigger: 'alpha' }];
 
-    // Then: reactive drafts remain editable while the last valid persisted collection is untouched.
-    expect(settings.textTransformers.value).toHaveLength(2);
-    expect(settings.textTransformers.value[1]?.trigger).toBe('alpha');
+    // Then: the shared runtime ref rolls back while the last valid persisted collection is untouched.
+    expect(settings.textTransformers.value).toEqual(persisted);
     expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(storedBeforeDraft);
 
-    // When: another window persists a valid collection while the local duplicate draft is active.
+    // When: another window persists a valid collection after those rejected assignments.
     const external = [{ ...persisted[0]!, name: 'External Alpha' }];
     storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
     for (const listener of storageListeners) {
@@ -266,13 +265,22 @@ describe('useSettings', () => {
       } as unknown as StorageEvent);
     }
 
-    // Then: the external update is deferred until the local draft is corrected and persisted whole.
-    expect(settings.textTransformers.value).toHaveLength(2);
-    expect(settings.textTransformers.value[1]?.trigger).toBe('alpha');
-    settings.textTransformers.value = [persisted[0]!, { ...persisted[1]!, trigger: 'gamma' }];
-    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(
-      JSON.stringify(settings.textTransformers.value),
-    );
+    // Then: the external valid collection becomes authoritative immediately.
+    expect(settings.textTransformers.value).toEqual(external);
+
+    // When: a complete library exceeds the public five MiB backup budget.
+    const excessive = Array.from({ length: 6 }, (_, index) => ({
+      ...persisted[0]!,
+      id: `snippet-large-${index}`,
+      trigger: `large-${index}`,
+      body: '界'.repeat(300_000),
+    }));
+    settings.textTransformers.value = excessive;
+
+    // Then: it also rolls back before storage or runtime can accept an unexportable collection.
+    expect(settings.textTransformers.value).toEqual(external);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(JSON.stringify(external));
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(3);
   });
 
   it('persists editor preferences and local application path', async () => {

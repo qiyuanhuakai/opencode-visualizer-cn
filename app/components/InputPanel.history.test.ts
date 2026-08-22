@@ -7,6 +7,7 @@ import { useFavoriteMessages } from '../composables/useFavoriteMessages';
 import en from '../locales/en';
 import type { MessageInfo, TextPart } from '../types/sse';
 import type { TextTransformer } from '../utils/textTransformers';
+import { validateTextTransformerLibrary } from '../utils/snippets';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 const settings = vi.hoisted(() => ({
@@ -192,7 +193,7 @@ describe('InputPanel prompt history', () => {
 
     // Then: a safe disabled draft is created and its editor opens immediately.
     expect(settings.textTransformers.value).toEqual([
-      expect.objectContaining({ id: 'snippet-existing', trigger: '\\favorite' }),
+      expect.objectContaining({ id: 'snippet-existing', trigger: 'favorite' }),
       {
         id: expect.stringMatching(/^snippet-/),
         trigger: 'favorite-2',
@@ -206,5 +207,34 @@ describe('InputPanel prompt history', () => {
     const favoritesDropdown = root.querySelectorAll('.history-dropdown-wrapper .ui-dropdown')[1];
     expect(favoritesDropdown?.classList.contains('is-open')).toBe(false);
     expect(favoritesDropdown?.querySelector('.ui-dropdown-menu')?.hasAttribute('inert')).toBe(true);
+  });
+
+  it('rejects favorite conversion when the complete snippet backup would exceed its budget', async () => {
+    // Given: the persisted library is valid but leaves too little room for a large favorite.
+    const body = 'x'.repeat(800_000);
+    settings.textTransformers.value = Array.from({ length: 6 }, (_, index) => ({
+      id: `snippet-large-${index}`,
+      trigger: `large-${index}`,
+      name: `Large ${index}`,
+      body,
+      enabled: true,
+      tags: [],
+    }));
+    expect(validateTextTransformerLibrary(settings.textTransformers.value)).not.toBeNull();
+    useFavoriteMessages().favorites.value = [{ text: 'y'.repeat(500_000) }];
+    const before = settings.textTransformers.value;
+    const { root, openSnippetSettings } = mountInputPanel();
+    root
+      .querySelector('textarea')
+      ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await nextTick();
+
+    // When: the favorite's create-snippet action is clicked.
+    root.querySelector<HTMLButtonElement>('.favorite-snippet-action')!.click();
+    await nextTick();
+
+    // Then: no unexportable library reaches shared state and settings are not opened falsely.
+    expect(settings.textTransformers.value).toBe(before);
+    expect(openSnippetSettings).not.toHaveBeenCalled();
   });
 });

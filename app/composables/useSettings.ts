@@ -23,6 +23,7 @@ import {
   type EditorShortcutMap,
 } from '../utils/editorShortcuts';
 import { normalizeTextTransformers, type TextTransformer } from '../utils/textTransformers';
+import { validateTextTransformerLibrary } from '../utils/snippets';
 
 function isSerializedEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -477,8 +478,11 @@ watch(
   textTransformers,
   (value) => {
     if (restoringTextTransformerState) return;
-    const normalized = normalizeTextTransformers(value);
-    if (normalized.length !== value.length) return;
+    const normalized = validateTextTransformerLibrary(value);
+    if (!normalized) {
+      restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
+      return;
+    }
     if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized)) {
       lastPersistedTextTransformers = normalized;
     } else if (storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
@@ -695,9 +699,10 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
   [
     storageKey(StorageKeys.settings.textTransformers),
     (event) => {
-      const currentTextTransformers = normalizeTextTransformers(textTransformers.value);
-      if (currentTextTransformers.length !== textTransformers.value.length) return;
-      const nextTextTransformers = parseTextTransformers(event.newValue);
+      const nextTextTransformers = validateTextTransformerLibrary(
+        parseTextTransformers(event.newValue),
+      );
+      if (!nextTextTransformers) return;
       if (!isSerializedEqual(textTransformers.value, nextTextTransformers)) {
         textTransformers.value = nextTextTransformers;
       }

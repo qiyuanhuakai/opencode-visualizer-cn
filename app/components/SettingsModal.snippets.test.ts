@@ -84,6 +84,11 @@ function inputValue(element: HTMLInputElement | HTMLTextAreaElement, value: stri
   element.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
+function changeValue(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
+  inputValue(element, value);
+  element.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
@@ -128,7 +133,7 @@ describe('SettingsModal snippets', () => {
     await nextTick();
 
     // When: its trigger is edited into the built-in command namespace.
-    inputValue(host.querySelector('[data-snippet-field="trigger"]')!, '/legacy');
+    changeValue(host.querySelector('[data-snippet-field="trigger"]')!, '/legacy');
     await nextTick();
     host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
     await nextTick();
@@ -157,7 +162,7 @@ describe('SettingsModal snippets', () => {
     host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
     await nextTick();
     rejectNextWrite();
-    inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Unsaved name');
+    changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Unsaved name');
     await nextTick();
     expect(settings.textTransformers.value[0]?.name).toBe('Review changes');
     expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
@@ -224,7 +229,20 @@ describe('SettingsModal snippets', () => {
     inputValue(detail!.querySelector('[data-snippet-field="body"]')!, 'Line one\nLine two');
     await nextTick();
 
-    // Then: all metadata is persisted, multiline content is retained, and tag filtering works.
+    // Then: edits remain local until leaving the detail view.
+    expect(settings.textTransformers.value[0]).toMatchObject({
+      name: 'Review changes',
+      description: 'Checks correctness',
+      tags: ['Review', 'Quality'],
+      body: 'Review the selected changes.',
+    });
+    expect(detail?.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
+      'Strict review',
+    );
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: the valid batch is persisted, multiline content is retained, and filtering works.
     expect(settings.textTransformers.value[0]).toMatchObject({
       name: 'Strict review',
       description: 'Find regressions',
@@ -232,8 +250,6 @@ describe('SettingsModal snippets', () => {
       body: 'Line one\nLine two',
       enabled: false,
     });
-    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
-    await nextTick();
     const reviewFilter = Array.from(
       host.querySelectorAll<HTMLButtonElement>('.transformer-tag-filter'),
     ).find((button) => button.textContent?.trim() === 'Review');
@@ -294,16 +310,9 @@ describe('SettingsModal snippets', () => {
     await nextTick();
 
     // Then: a complete snippet draft exists and opens directly in its secondary detail view.
-    expect(settings.textTransformers.value).toHaveLength(3);
-    expect(settings.textTransformers.value[2]).toMatchObject({
-      id: expect.any(String),
-      trigger: '',
-      name: '',
-      body: '',
-      enabled: true,
-      tags: [],
-    });
+    expect(settings.textTransformers.value).toHaveLength(2);
     expect(host.querySelector('.transformer-detail')).not.toBeNull();
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')?.value).toBe('');
 
     // When: the user returns to the library and tries to export the invalid draft.
     host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
@@ -438,9 +447,10 @@ describe('SettingsModal snippets', () => {
     const { host, settings } = await mountSnippetSettings();
     host.querySelector<HTMLButtonElement>('.transformer-add')!.click();
     await nextTick();
-    const draftId = settings.textTransformers.value.at(-1)?.id;
     host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
     await nextTick();
+    expect(settings.textTransformers.value).toHaveLength(2);
+    expect(host.querySelectorAll('.transformer-row')).toHaveLength(3);
     const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
     const file = new File([], 'valid.json', { type: 'application/json' });
     Object.defineProperty(file, 'text', {
@@ -468,9 +478,52 @@ describe('SettingsModal snippets', () => {
     );
 
     // Then: neither the draft nor any persisted local snippet is discarded for the import.
-    expect(settings.textTransformers.value.some(({ id }) => id === draftId)).toBe(true);
     expect(settings.textTransformers.value.some(({ id }) => id === 'snippet-import-blocked')).toBe(
       false,
+    );
+    expect(host.querySelectorAll('.transformer-row')).toHaveLength(3);
+  });
+
+  it('isolates invalid detail drafts and rejects stale commits after an external row update', async () => {
+    // Given: the first persisted snippet is open and another valid trigger already exists.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+
+    // When: the local trigger becomes a duplicate and another window updates the persisted row.
+    inputValue(host.querySelector('[data-snippet-field="trigger"]')!, 'write');
+    await nextTick();
+    expect(settings.textTransformers.value[0]?.trigger).toBe('::review');
+    const external = [{ ...initialSnippets[0], name: 'External review' }, initialSnippets[1]];
+    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: JSON.stringify(external),
+      }),
+    );
+    await nextTick();
+
+    // Then: runtime state accepts the external update while the unsaved draft remains local.
+    expect(settings.textTransformers.value[0]?.name).toBe('External review');
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')?.value).toBe(
+      'write',
+    );
+
+    // When: the draft becomes valid but is committed against its stale base revision.
+    changeValue(host.querySelector('[data-snippet-field="trigger"]')!, 'review-new');
+    await nextTick();
+
+    // Then: the first commit is rejected without overwriting the external row or losing the draft.
+    expect(settings.textTransformers.value[0]).toMatchObject({
+      name: 'External review',
+      trigger: '::review',
+    });
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')?.value).toBe(
+      'review-new',
+    );
+    expect(host.querySelector('.transformer-detail')?.textContent).toContain(
+      en.settings.textTransformers.saveError,
     );
   });
 

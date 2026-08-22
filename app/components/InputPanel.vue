@@ -559,6 +559,7 @@ import {
   textTransformerTriggerKey,
   type TextTransformerVariables,
 } from '../utils/textTransformers';
+import { validateTextTransformerLibrary } from '../utils/snippets';
 import type { CodexSkill } from '../backends/codex/codexAdapter';
 type ModelOption = {
   id: string;
@@ -887,7 +888,7 @@ function createSnippetFromFavorite(entry: HistoryEntry) {
   if (!body) return;
   const firstLine = body.split(/\r?\n/u, 1)[0]?.trim() ?? '';
   const name = firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine;
-  textTransformers.value = [
+  const nextTextTransformers = validateTextTransformerLibrary([
     ...textTransformers.value,
     {
       id: `snippet-${globalThis.crypto.randomUUID()}`,
@@ -897,7 +898,9 @@ function createSnippetFromFavorite(entry: HistoryEntry) {
       enabled: false,
       tags: [],
     },
-  ];
+  ]);
+  if (!nextTextTransformers) return;
+  textTransformers.value = nextTextTransformers;
   favoritesOpen.value = false;
   emit('open-snippet-settings');
 }

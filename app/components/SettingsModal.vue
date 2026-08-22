@@ -198,6 +198,7 @@
                       : undefined
                   "
                   @input="updateTextTransformerField(editingTextTransformer.id, 'trigger', $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
                 />
                 <span
                   v-if="textTransformerTriggerError(editingTextTransformerIndex)"
@@ -217,6 +218,7 @@
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.namePlaceholder')"
                   @input="updateTextTransformerField(editingTextTransformer.id, 'name', $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
                 />
               </label>
               <label class="transformer-field">
@@ -231,6 +233,7 @@
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.descriptionPlaceholder')"
                   @input="updateTextTransformerField(editingTextTransformer.id, 'description', $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
                 />
               </label>
               <label class="transformer-field">
@@ -243,6 +246,7 @@
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.tagsPlaceholder')"
                   @input="updateTextTransformerTags(editingTextTransformer.id, $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
                 />
               </label>
               <label class="transformer-field transformer-field-body">
@@ -255,6 +259,7 @@
                   spellcheck="false"
                   :placeholder="$t('settings.textTransformers.bodyPlaceholder')"
                   @input="updateTextTransformerField(editingTextTransformer.id, 'body', $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
                 />
                 <span class="transformer-variable-help">
                   <span>{{ $t('settings.textTransformers.variablesLabel') }}</span>
@@ -413,7 +418,7 @@
                       class="transformer-action-button transformer-edit"
                       :aria-label="$t('settings.textTransformers.editAction', { name: textTransformerTitle(entry.snippet) })"
                       :title="$t('settings.textTransformers.editAction', { name: textTransformerTitle(entry.snippet) })"
-                      @click="editingTextTransformerId = entry.snippet.id"
+                      @click="openTextTransformerDetail(entry.snippet.id)"
                     >
                       <Icon icon="lucide:pencil" :width="16" :height="16" />
                     </button>
@@ -840,6 +845,7 @@ import {
   normalizeTextTransformers,
   parseTextTransformerImport,
   serializeTextTransformers,
+  validateTextTransformerLibrary,
   type TextTransformer,
   type TextTransformerImportResult,
 } from '../utils/snippets';
@@ -1417,6 +1423,11 @@ function resetEditorShortcuts() {
 
 const activeTagFilter = ref<string | null>(null);
 const editingTextTransformerId = ref<string | null>(null);
+type TextTransformerDraft = {
+  readonly snippet: TextTransformer;
+  readonly base: TextTransformer | null;
+};
+const textTransformerDrafts = ref<Record<string, TextTransformerDraft>>({});
 const textTransformerVariables = [
   '{cursor}',
   '{date}',
@@ -1435,17 +1446,27 @@ const textTransformerImportStatus = ref<{ kind: 'success' | 'error'; message: st
 let textTransformerImportGeneration = 0;
 
 watch(textTransformerPersistenceErrorRevision, () => {
-  textTransformerTagDrafts.value = {};
   textTransformerImportStatus.value = {
     kind: 'error',
     message: t('settings.textTransformers.saveError'),
   };
 });
 
+const displayedTextTransformers = computed(() => {
+  const persistedIds = new Set(textTransformers.value.map(({ id }) => id));
+  const displayed = textTransformers.value.map(
+    (snippet) => textTransformerDrafts.value[snippet.id]?.snippet ?? snippet,
+  );
+  for (const draft of Object.values(textTransformerDrafts.value)) {
+    if (!persistedIds.has(draft.snippet.id)) displayed.push(draft.snippet);
+  }
+  return displayed;
+});
+
 const transformerTagFilters = computed(() => {
   const tags: string[] = [];
   const keys = new Set<string>();
-  for (const snippet of textTransformers.value) {
+  for (const snippet of displayedTextTransformers.value) {
     for (const tag of snippet.tags) {
       const key = tag.toLocaleLowerCase();
       if (keys.has(key)) continue;
@@ -1467,7 +1488,7 @@ function reconcileActiveTagFilter(tags: readonly string[]) {
 watch(transformerTagFilters, reconcileActiveTagFilter);
 
 const visibleTextTransformers = computed(() => {
-  const entries = textTransformers.value.map((snippet, index) => ({ snippet, index }));
+  const entries = displayedTextTransformers.value.map((snippet, index) => ({ snippet, index }));
   const filter = activeTagFilter.value;
   if (!filter) return entries;
   const lowered = filter.toLocaleLowerCase();
@@ -1477,14 +1498,16 @@ const visibleTextTransformers = computed(() => {
 });
 
 const editingTextTransformerIndex = computed(() =>
-  textTransformers.value.findIndex((snippet) => snippet.id === editingTextTransformerId.value),
+  displayedTextTransformers.value.findIndex(
+    (snippet) => snippet.id === editingTextTransformerId.value,
+  ),
 );
 const editingTextTransformer = computed(
-  () => textTransformers.value[editingTextTransformerIndex.value] ?? null,
+  () => displayedTextTransformers.value[editingTextTransformerIndex.value] ?? null,
 );
 
 const transformerEmptyText = computed(() =>
-  textTransformers.value.length === 0
+  displayedTextTransformers.value.length === 0
     ? t('settings.textTransformers.empty')
     : t('settings.textTransformers.emptyFiltered'),
 );
@@ -1507,6 +1530,8 @@ function textTransformerDisplayTrigger(snippet: TextTransformer) {
 
 function goBackInSettings() {
   if (activePage.value === 'transformers' && editingTextTransformerId.value) {
+    const id = editingTextTransformerId.value;
+    if (commitTextTransformerDraft(id)) removeTextTransformerDraft(id);
     editingTextTransformerId.value = null;
     reconcileActiveTagFilter(transformerTagFilters.value);
     return;
@@ -1531,10 +1556,100 @@ function parseTextTransformerTags(value: string): string[] {
   return tags;
 }
 
-function replaceTextTransformer(id: string, update: (snippet: TextTransformer) => TextTransformer) {
-  textTransformers.value = textTransformers.value.map((snippet) =>
-    snippet.id === id ? update(snippet) : snippet,
+function cloneTextTransformer(snippet: TextTransformer): TextTransformer {
+  return { ...snippet, tags: [...snippet.tags] };
+}
+
+function sameTextTransformer(
+  left: TextTransformer | null | undefined,
+  right: TextTransformer | null | undefined,
+): boolean {
+  if (!left || !right) return !left && !right;
+  return (
+    left.id === right.id &&
+    left.trigger === right.trigger &&
+    left.name === right.name &&
+    left.body === right.body &&
+    left.description === right.description &&
+    left.enabled === right.enabled &&
+    left.tags.length === right.tags.length &&
+    left.tags.every((tag, index) => tag === right.tags[index])
   );
+}
+
+function setTextTransformerDraft(id: string, draft: TextTransformerDraft) {
+  textTransformerDrafts.value = { ...textTransformerDrafts.value, [id]: draft };
+}
+
+function removeTextTransformerDraft(id: string) {
+  const drafts = { ...textTransformerDrafts.value };
+  delete drafts[id];
+  textTransformerDrafts.value = drafts;
+  const tagDrafts = { ...textTransformerTagDrafts.value };
+  delete tagDrafts[id];
+  textTransformerTagDrafts.value = tagDrafts;
+}
+
+function openTextTransformerDetail(id: string) {
+  if (!textTransformerDrafts.value[id]) {
+    const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+    if (!persisted) return;
+    const base = cloneTextTransformer(persisted);
+    setTextTransformerDraft(id, { snippet: cloneTextTransformer(persisted), base });
+  }
+  editingTextTransformerId.value = id;
+}
+
+function updateTextTransformerDraft(
+  id: string,
+  update: (snippet: TextTransformer) => TextTransformer,
+) {
+  const draft = textTransformerDrafts.value[id];
+  if (!draft) return;
+  setTextTransformerDraft(id, { ...draft, snippet: update(draft.snippet) });
+}
+
+function commitTextTransformerDraft(id: string): boolean {
+  const draft = textTransformerDrafts.value[id];
+  if (!draft) return true;
+  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+  if (!sameTextTransformer(draft.base, persisted)) {
+    setTextTransformerDraft(id, {
+      ...draft,
+      base: persisted ? cloneTextTransformer(persisted) : null,
+    });
+    textTransformerImportStatus.value = {
+      kind: 'error',
+      message: t('settings.textTransformers.saveError'),
+    };
+    return false;
+  }
+  const candidate = persisted
+    ? textTransformers.value.map((snippet) => (snippet.id === id ? draft.snippet : snippet))
+    : [...textTransformers.value, draft.snippet];
+  const validated = validateTextTransformerLibrary(candidate);
+  if (!validated) {
+    textTransformerImportStatus.value = {
+      kind: 'error',
+      message: t('settings.textTransformers.importErrors.invalidSnippets'),
+    };
+    return false;
+  }
+  textTransformers.value = validated;
+  const committed = textTransformers.value.find((snippet) => snippet.id === id);
+  if (!committed || !sameTextTransformer(committed, validated.find((snippet) => snippet.id === id))) {
+    if (persisted) {
+      setTextTransformerDraft(id, {
+        snippet: cloneTextTransformer(persisted),
+        base: cloneTextTransformer(persisted),
+      });
+    }
+    return false;
+  }
+  const normalized = cloneTextTransformer(committed);
+  setTextTransformerDraft(id, { snippet: normalized, base: cloneTextTransformer(normalized) });
+  textTransformerImportStatus.value = null;
+  return true;
 }
 
 function addTextTransformer() {
@@ -1546,11 +1661,12 @@ function addTextTransformer() {
     enabled: true,
     tags: [],
   };
-  textTransformers.value = [...textTransformers.value, draft];
+  setTextTransformerDraft(draft.id, { snippet: draft, base: null });
   editingTextTransformerId.value = draft.id;
 }
 
 function removeTextTransformer(id: string) {
+  removeTextTransformerDraft(id);
   textTransformers.value = textTransformers.value.filter((snippet) => snippet.id !== id);
   if (editingTextTransformerId.value === id) editingTextTransformerId.value = null;
 }
@@ -1562,7 +1678,7 @@ function updateTextTransformerField(
 ) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return;
-  replaceTextTransformer(id, (snippet) => {
+  updateTextTransformerDraft(id, (snippet) => {
     if (field === 'trigger') return { ...snippet, trigger: input.value.replace(/^\\+/u, '') };
     if (field === 'description') {
       return { ...snippet, description: input.value || undefined };
@@ -1572,10 +1688,10 @@ function updateTextTransformerField(
 }
 
 function toggleTextTransformerEnabled(id: string) {
-  replaceTextTransformer(id, (snippet) =>
-    isValidTextTransformerTrigger(snippet.trigger)
-      ? { ...snippet, enabled: !snippet.enabled }
-      : snippet,
+  const snippet = textTransformers.value.find((entry) => entry.id === id);
+  if (!snippet || !isValidTextTransformerTrigger(snippet.trigger)) return;
+  textTransformers.value = textTransformers.value.map((entry) =>
+    entry.id === id ? { ...entry, enabled: !entry.enabled } : entry,
   );
 }
 
@@ -1584,11 +1700,12 @@ function updateTextTransformerTags(id: string, event: Event) {
   if (!(input instanceof HTMLInputElement)) return;
   textTransformerTagDrafts.value = { ...textTransformerTagDrafts.value, [id]: input.value };
   const tags = parseTextTransformerTags(input.value);
-  replaceTextTransformer(id, (snippet) => ({ ...snippet, tags }));
+  updateTextTransformerDraft(id, (snippet) => ({ ...snippet, tags }));
 }
 
 function exportTextTransformers() {
   try {
+    if (Object.keys(textTransformerDrafts.value).length > 0) throw new RangeError();
     const serialized = serializeTextTransformers(textTransformers.value);
     downloadTextFile(serialized, 'vis-snippets.json', 'application/json;charset=utf-8');
   } catch {
@@ -1618,12 +1735,14 @@ async function parseSelectedTextTransformerFile(
 }
 
 function persistImportedTextTransformers(imported: readonly TextTransformer[]): boolean {
-  const current = normalizeTextTransformers(textTransformers.value);
-  if (current.length !== textTransformers.value.length) return false;
+  if (Object.keys(textTransformerDrafts.value).length > 0) return false;
+  const current = validateTextTransformerLibrary(textTransformers.value);
+  if (!current) return false;
   const merged = mergeTextTransformers(current, imported);
-  if (merged.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT) return false;
-  if (!storageSetJSON(StorageKeys.settings.textTransformers, merged)) return false;
-  textTransformers.value = merged;
+  const validated = validateTextTransformerLibrary(merged);
+  if (!validated || validated.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT) return false;
+  if (!storageSetJSON(StorageKeys.settings.textTransformers, validated)) return false;
+  textTransformers.value = validated;
   return true;
 }
 
@@ -1668,7 +1787,7 @@ async function importTextTransformers(event: Event) {
 }
 
 function textTransformerTriggerError(index: number) {
-  const issue = getTextTransformerTriggerIssue(textTransformers.value, index);
+  const issue = getTextTransformerTriggerIssue(displayedTextTransformers.value, index);
   if (issue === 'invalid') return t('settings.textTransformers.invalidTrigger');
   if (issue === 'duplicate') return t('settings.textTransformers.duplicateTrigger');
   return '';
