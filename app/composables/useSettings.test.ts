@@ -138,6 +138,7 @@ describe('useSettings', () => {
       JSON.stringify([
         { trigger: String.raw`\hi`, replacement: 'first' },
         { trigger: 'hi', replacement: '你好' },
+        { trigger: '/legacy-command', replacement: 'preserve me' },
         { trigger: 'bad key', replacement: 'ignored' },
       ]),
     );
@@ -145,8 +146,36 @@ describe('useSettings', () => {
 
     // When: a mapping is edited and another window disables the feature.
     expect(settings.textTransformersEnabled.value).toBe(true);
-    expect(settings.textTransformers.value).toEqual([{ trigger: 'hi', replacement: '你好' }]);
-    settings.textTransformers.value = [{ trigger: 'never', replacement: '千万不要这样做' }];
+    expect(settings.textTransformers.value).toEqual([
+      {
+        id: settings.textTransformers.value[0]?.id,
+        trigger: 'hi',
+        name: 'hi',
+        body: '你好',
+        enabled: true,
+        tags: [],
+      },
+      {
+        id: settings.textTransformers.value[1]?.id,
+        trigger: '/legacy-command',
+        name: '/legacy-command',
+        body: 'preserve me',
+        enabled: false,
+        tags: [],
+      },
+    ]);
+    const migratedStorage = storage.getItem('opencode.settings.textTransformers.v1');
+    expect(migratedStorage).toBe(JSON.stringify(settings.textTransformers.value));
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-never',
+        trigger: 'never',
+        name: 'Never do this',
+        body: '千万不要这样做',
+        enabled: true,
+        tags: ['Guardrail'],
+      },
+    ];
     for (const listener of storageListeners) {
       listener({
         key: 'opencode.settings.textTransformersEnabled.v1',
@@ -156,7 +185,7 @@ describe('useSettings', () => {
 
     // Then: edits are canonicalized in storage and the external toggle is applied immediately.
     expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(
-      JSON.stringify([{ trigger: 'never', replacement: '千万不要这样做' }]),
+      JSON.stringify(settings.textTransformers.value),
     );
     expect(settings.textTransformersEnabled.value).toBe(false);
   });
