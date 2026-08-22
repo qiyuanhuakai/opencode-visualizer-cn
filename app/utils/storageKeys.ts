@@ -125,11 +125,12 @@ export function storageGet(key: string) {
 
 export function storageSet(key: string, value: string) {
   const storage = resolveStorageBackend();
-  if (!storage) return;
+  if (!storage) return false;
   try {
     storage.setItem(storageKey(key), value);
+    return true;
   } catch {
-    return;
+    return false;
   }
 }
 
@@ -154,5 +155,5 @@ export function storageGetJSON<T>(key: string): T | null {
 }
 
 export function storageSetJSON(key: string, value: unknown) {
-  storageSet(key, JSON.stringify(value));
+  return storageSet(key, JSON.stringify(value));
 }
