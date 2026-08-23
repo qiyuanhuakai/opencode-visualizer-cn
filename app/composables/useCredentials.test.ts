@@ -40,9 +40,17 @@ describe('useCredentials', () => {
           getItem: vi.fn((key: string) => electronStore.get(key) ?? null),
           setItem: vi.fn((key: string, value: string) => {
             electronStore.set(key, value);
+            return true;
           }),
           removeItem: vi.fn((key: string) => {
             electronStore.delete(key);
+            return true;
+          }),
+          migrate: vi.fn((entries: Record<string, string>) => {
+            for (const [key, value] of Object.entries(entries)) {
+              if (!electronStore.has(key)) electronStore.set(key, value);
+            }
+            return true;
           }),
         },
       },
