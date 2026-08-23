@@ -213,6 +213,46 @@ describe('electron-runtime-policy', () => {
       );
     });
 
+    it('guards clipboard writes with the trusted renderer assertion', () => {
+      // Given: clipboard write crosses from the sandboxed renderer into Electron main.
+      const handler = mainSource.match(
+        /ipcMain\.handle\('clipboard-write-text',[\s\S]*?\n\}\);/u,
+      )?.[0];
+
+      // When: the main-process IPC wiring is inspected.
+      expect(handler).toBeDefined();
+
+      // Then: sender validation runs before the native clipboard is written.
+      expect(handler?.indexOf('assertTrustedRenderer(event)')).toBeGreaterThanOrEqual(0);
+      expect(handler?.indexOf('clipboard.writeText(text)')).toBeGreaterThan(
+        handler?.indexOf('assertTrustedRenderer(event)') ?? Number.MAX_SAFE_INTEGER,
+      );
+    });
+
+    it('guards every persistent storage IPC handler before reading or mutating native state', () => {
+      // Given: renderer storage IPC reaches a native file outside the sandbox.
+      const channels = [
+        'persistent-storage-get',
+        'persistent-storage-set',
+        'persistent-storage-remove',
+        'persistent-storage-migrate',
+      ];
+
+      // When: every synchronous storage handler is inspected.
+      const handlers = channels.map((channel) =>
+        mainSource.match(new RegExp(`ipcMain\\.on\\('${channel}',[\\s\\S]*?\\n\\}\\);`, 'u'))?.[0],
+      );
+
+      // Then: each handler rejects an untrusted sender before any payload processing.
+      expect(handlers).not.toContain(undefined);
+      for (const handler of handlers) {
+        expect(handler?.indexOf('assertTrustedRenderer(event)')).toBeGreaterThanOrEqual(0);
+        expect(handler?.indexOf('assertTrustedRenderer(event)')).toBeLessThan(
+          handler?.indexOf('typeof') ?? Number.MAX_SAFE_INTEGER,
+        );
+      }
+    });
+
     it('does not call removed storage helpers before creating the first window', () => {
       // Given: renderer persistence is owned by the createPersistentStorage module.
       expect(mainSource).toContain('createPersistentStorage(persistentStorageFilePath)');

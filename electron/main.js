@@ -290,7 +290,8 @@ ipcMain.handle('get-platform', () => {
   return process.platform;
 });
 
-ipcMain.handle('clipboard-write-text', (_event, text) => {
+ipcMain.handle('clipboard-write-text', (event, text) => {
+  assertTrustedRenderer(event);
   if (typeof text !== 'string') {
     throw new Error('Invalid text: expected string');
   }
@@ -372,6 +373,7 @@ ipcMain.handle('local-file-close', async (event, sessionId) => {
 });
 
 ipcMain.on('persistent-storage-get', (event, key) => {
+  assertTrustedRenderer(event);
   if (typeof key !== 'string') {
     event.returnValue = null;
     return;
@@ -384,6 +386,7 @@ ipcMain.on('persistent-storage-get', (event, key) => {
 });
 
 ipcMain.on('persistent-storage-set', (event, payload) => {
+  assertTrustedRenderer(event);
   const key = payload?.key;
   const value = payload?.value;
   if (typeof key !== 'string' || typeof value !== 'string') {
@@ -412,6 +415,7 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
 });
 
 ipcMain.on('persistent-storage-remove', (event, key) => {
+  assertTrustedRenderer(event);
   if (typeof key !== 'string') {
     event.returnValue = false;
     return;
@@ -435,6 +439,7 @@ ipcMain.on('persistent-storage-remove', (event, key) => {
 });
 
 ipcMain.on('persistent-storage-migrate', (event, entries) => {
+  assertTrustedRenderer(event);
   if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
     event.returnValue = false;
     return;
