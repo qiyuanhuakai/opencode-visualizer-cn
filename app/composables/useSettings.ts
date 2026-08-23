@@ -187,42 +187,45 @@ function readEditorShortcuts() {
   return normalizeEditorShortcutMap(storageGetJSON(StorageKeys.settings.editorShortcuts));
 }
 
+const currentTextTransformerFields = ['body', 'id', 'name', 'description', 'enabled', 'tags'];
+
+function hasCurrentTextTransformerShape(entry: object): boolean {
+  return currentTextTransformerFields.some((field) => field in entry);
+}
+
+function isValidStoredTextTransformer(entry: object): entry is TextTransformer {
+  const requiredTypes = [
+    ['id', 'string'],
+    ['name', 'string'],
+    ['body', 'string'],
+    ['enabled', 'boolean'],
+  ] as const;
+  return (
+    isBoundedTextTransformerImportSnippet(entry) &&
+    requiredTypes.every(([field, type]) => typeof Reflect.get(entry, field) === type) &&
+    Array.isArray(Reflect.get(entry, 'tags'))
+  );
+}
+
+function validateParsedTextTransformers(parsed: unknown[]): TextTransformer[] | null {
+  if (parsed.some((entry) => !entry || typeof entry !== 'object')) return null;
+  const entries = parsed as object[];
+  const currentEntries = entries.filter(hasCurrentTextTransformerShape);
+  if (currentEntries.length === 0) {
+    if (!entries.every((entry) => 'replacement' in entry)) return null;
+    return validateTextTransformerLibrary(normalizeTextTransformers(entries));
+  }
+  if (currentEntries.length !== entries.length) return null;
+  const validCurrentEntries = currentEntries.filter(isValidStoredTextTransformer);
+  return validCurrentEntries.length === entries.length
+    ? validateTextTransformerLibrary(validCurrentEntries)
+    : null;
+}
+
 function parseTextTransformers(value: string): TextTransformer[] | null {
   try {
     const parsed: unknown = JSON.parse(value);
-    if (!Array.isArray(parsed)) return null;
-    let currentEntryCount = 0;
-    let legacyEntryCount = 0;
-    for (const entry of parsed) {
-      if (!entry || typeof entry !== 'object') return null;
-      const currentShape =
-        'body' in entry ||
-        'id' in entry ||
-        'name' in entry ||
-        'description' in entry ||
-        'enabled' in entry ||
-        'tags' in entry;
-      if (!currentShape) {
-        if (!('replacement' in entry)) return null;
-        legacyEntryCount += 1;
-        continue;
-      }
-      currentEntryCount += 1;
-      if (
-        !isBoundedTextTransformerImportSnippet(entry) ||
-        typeof Reflect.get(entry, 'id') !== 'string' ||
-        typeof Reflect.get(entry, 'name') !== 'string' ||
-        typeof Reflect.get(entry, 'body') !== 'string' ||
-        typeof Reflect.get(entry, 'enabled') !== 'boolean' ||
-        !Array.isArray(Reflect.get(entry, 'tags'))
-      ) {
-        return null;
-      }
-    }
-    if (currentEntryCount > 0) {
-      return legacyEntryCount === 0 ? validateTextTransformerLibrary(parsed) : null;
-    }
-    return validateTextTransformerLibrary(normalizeTextTransformers(parsed));
+    return Array.isArray(parsed) ? validateParsedTextTransformers(parsed) : null;
   } catch {
     return null;
   }

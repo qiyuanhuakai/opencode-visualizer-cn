@@ -578,17 +578,24 @@ describe('SettingsModal snippets', () => {
       '::review',
     );
     expect(host.querySelector('.transformer-conflict-reload')).toBeNull();
+  });
 
-    // When: another stale edit is explicitly resolved with Overwrite.
+  it('persists a stale draft only after explicit conflict overwrite', async () => {
+    // Given: a local detail edit races with an external update of the same row.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
     inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Local overwrite');
-    const externalAgain = [{ ...external[0]!, name: 'External again' }, external[1]!];
-    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(externalAgain));
+    const external = [{ ...initialSnippets[0], name: 'External again' }, initialSnippets[1]];
+    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
     window.dispatchEvent(
       new StorageEvent('storage', {
         key: 'opencode.settings.textTransformers.v1',
-        newValue: JSON.stringify(externalAgain),
+        newValue: JSON.stringify(external),
       }),
     );
+
+    // When: the stale change is submitted and then explicitly overwritten.
     changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Local overwrite');
     await nextTick();
     host.querySelector<HTMLButtonElement>('.transformer-conflict-overwrite')!.click();
