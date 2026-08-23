@@ -14,14 +14,15 @@ let hasMigratedElectronStorage = false;
 let nextElectronStorageMigrationAttemptAt = 0;
 const ELECTRON_STORAGE_MIGRATION_RETRY_MS = 1_000;
 
-function migrateLocalStorageToElectronStorage(electronStorage: ElectronStorageBackend) {
+function migrateLocalStorageToElectronStorage(
+  electronStorage: ElectronStorageBackend,
+  localStorage: Storage,
+) {
   if (hasMigratedElectronStorage) return true;
   if (typeof window === 'undefined') return false;
   const now = Date.now();
   if (now < nextElectronStorageMigrationAttemptAt) return false;
   try {
-    const localStorage = window.localStorage;
-    if (!localStorage) return false;
     const entries: Record<string, string> = {};
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
@@ -57,13 +58,19 @@ function resolveStorageBackend(): StorageBackend | null {
   if (typeof window === 'undefined') return null;
 
   const electronStorage = window.electronAPI?.persistentStorage;
+  let localStorage: Storage;
+  try {
+    localStorage = window.localStorage;
+  } catch {
+    return electronStorage ?? null;
+  }
   if (electronStorage) {
-    return migrateLocalStorageToElectronStorage(electronStorage)
+    return migrateLocalStorageToElectronStorage(electronStorage, localStorage)
       ? electronStorage
-      : pendingElectronMigrationBackend(electronStorage, window.localStorage);
+      : pendingElectronMigrationBackend(electronStorage, localStorage);
   }
 
-  return window.localStorage;
+  return localStorage;
 }
 
 export const StorageKeys = {

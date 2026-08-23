@@ -233,6 +233,49 @@ describe('storageKeys', () => {
     });
   });
 
+  it('uses Electron storage when the localStorage getter is unavailable', async () => {
+    // Given: a sandbox policy makes localStorage access throw while Electron storage remains healthy.
+    vi.resetModules();
+    const key = 'opencode.settings.enterToSend.v1';
+    const electronStore: Record<string, string> = { [key]: 'electron-value' };
+    const migrate = vi.fn(() => true);
+    const windowStub = {
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn((requestedKey: string) => electronStore[requestedKey] ?? null),
+          setItem: vi.fn((requestedKey: string, value: string) => {
+            electronStore[requestedKey] = value;
+            return true;
+          }),
+          removeItem: vi.fn((requestedKey: string) => {
+            delete electronStore[requestedKey];
+            return true;
+          }),
+          migrate,
+        },
+      },
+    };
+    Object.defineProperty(windowStub, 'localStorage', {
+      get() {
+        throw new DOMException('Access denied', 'SecurityError');
+      },
+    });
+    vi.stubGlobal('window', windowStub);
+    const freshStorage = await import('./storageKeys');
+
+    // When: callers read, write, and remove through the generic storage helpers.
+    const initial = freshStorage.storageGet(freshStorage.StorageKeys.settings.enterToSend);
+    const saved = freshStorage.storageSet(freshStorage.StorageKeys.settings.enterToSend, 'updated');
+    const removed = freshStorage.storageRemove(freshStorage.StorageKeys.settings.enterToSend);
+
+    // Then: no helper throws, Electron owns every operation, and migration is not attempted.
+    expect(initial).toBe('electron-value');
+    expect(saved).toBe(true);
+    expect(removed).toBe(true);
+    expect(electronStore[key]).toBeUndefined();
+    expect(migrate).not.toHaveBeenCalled();
+  });
+
   it('exposes codexActiveThread key for codex session persistence', () => {
     expect(StorageKeys.state.codexActiveThread).toBe('state.codexActiveThread.v1');
     storageSet(StorageKeys.state.codexActiveThread, 'thr_abc123');
