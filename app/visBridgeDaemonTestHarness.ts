@@ -20,6 +20,28 @@ export type DaemonFixture = {
   readonly env: NodeJS.ProcessEnv;
 };
 
+type RunningDaemonControl = {
+  readonly pid: number;
+  readonly instanceId: string;
+  readonly controlPort: number;
+  readonly controlToken: string;
+};
+
+const RUNNING_DAEMON_CONTROL_FIELDS = [
+  ['pid', 'number'],
+  ['instanceId', 'string'],
+  ['controlPort', 'number'],
+  ['controlToken', 'string'],
+] as const;
+
+function isRunningDaemonControl(value: unknown): value is RunningDaemonControl {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return RUNNING_DAEMON_CONTROL_FIELDS.every(
+    ([key, expectedType]) => typeof record[key] === expectedType,
+  );
+}
+
 export async function reservePort() {
   const server = createServer();
   server.listen(0, '127.0.0.1');
@@ -109,6 +131,39 @@ export function runCommandRequest(port: number, payload: object) {
     commandRequest.once('error', reject);
     commandRequest.end(body);
   });
+}
+
+export async function requestFixtureStop(fixture: DaemonFixture) {
+  const state: unknown = JSON.parse(
+    await readFile(path.join(fixture.directory, 'state', 'daemon.json'), 'utf8'),
+  );
+  if (!isRunningDaemonControl(state)) {
+    throw new Error('Expected the running daemon control state.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    const stopRequest = request(
+      {
+        host: '127.0.0.1',
+        port: state.controlPort,
+        path: '/stop',
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${state.controlToken}`,
+          'X-Vis-Bridge-Instance': state.instanceId,
+        },
+      },
+      (response) => {
+        response.resume();
+        response.once('end', () => {
+          if (response.statusCode === 202) resolve();
+          else reject(new Error(`Expected stop acknowledgement, received ${response.statusCode}.`));
+        });
+      },
+    );
+    stopRequest.once('error', reject);
+    stopRequest.end();
+  });
+  return state.pid;
 }
 
 export function isAlive(pid: number) {

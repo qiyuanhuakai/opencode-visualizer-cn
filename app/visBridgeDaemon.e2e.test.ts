@@ -10,6 +10,7 @@ import {
   readHealthStatus,
   runCli,
   runCommandRequest,
+  requestFixtureStop,
   startFixture,
   waitForTextFile,
 } from './visBridgeDaemonTestHarness';
@@ -108,6 +109,7 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
   });
 
   it('does not admit a command whose request body completes during shutdown', { timeout: 15_000 }, async () => {
+    // Given: a command request is waiting on its final body bytes when the daemon is running.
     const fixture = await createFixture();
     await startFixture(fixture);
     const pidPath = path.join(fixture.directory, 'late-command.pid');
@@ -127,12 +129,16 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
     );
 
     try {
-      const stopping = runCli(['stop'], fixture.env);
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      if (!socket.destroyed) socket.write(payload.slice(1));
-      await stopping;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // When: the authenticated stop endpoint acknowledges shutdown before the body completes.
+      const daemonPid = await requestFixtureStop(fixture);
+      if (!socket.destroyed) socket.end(payload.slice(1));
+      const deadline = Date.now() + 3_000;
+      while (isAlive(daemonPid) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
 
+      // Then: command admission is already closed and no late child can be created.
+      expect(isAlive(daemonPid)).toBe(false);
       await expect(readFile(pidPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       socket.destroy();
