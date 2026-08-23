@@ -38,8 +38,11 @@ type NormalizedSnippet = {
 
 const TEXT_TRANSFORMER_EXPORT_VERSION = 1;
 export {
+  MAX_TEXT_TRANSFORMER_BODY_LENGTH,
+  MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH,
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_NAME_LENGTH,
   MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
   MAX_TEXT_TRANSFORMER_TOTAL_TAGS,
   MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
@@ -291,7 +294,10 @@ export function mergeTextTransformers(
 
   function isGeneratedSnippetId(snippet: TextTransformer): boolean {
     const baseId = stableSnippetId(snippet.trigger, snippet.body);
-    return snippet.id === baseId || new RegExp(`^${baseId}-[2-9][0-9]*$`, 'u').test(snippet.id);
+    return (
+      snippet.id === baseId ||
+      new RegExp(`^${baseId}-(?:[2-9]|[1-9][0-9]+)$`, 'u').test(snippet.id)
+    );
   }
 
   function allocateMergedSnippetId(snippet: TextTransformer): TextTransformer {

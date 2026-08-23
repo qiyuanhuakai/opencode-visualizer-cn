@@ -232,6 +232,7 @@
                   data-snippet-field="name"
                   type="text"
                   class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_NAME_LENGTH"
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.namePlaceholder')"
                   @input="updateTextTransformerField(editingTextTransformer.id, 'name', $event)"
@@ -247,6 +248,7 @@
                   data-snippet-field="description"
                   type="text"
                   class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH"
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.descriptionPlaceholder')"
                   @input="updateTextTransformerField(editingTextTransformer.id, 'description', $event)"
@@ -274,6 +276,7 @@
                   data-snippet-field="body"
                   class="transformer-input transformer-body"
                   rows="7"
+                  :maxlength="MAX_TEXT_TRANSFORMER_BODY_LENGTH"
                   spellcheck="false"
                   :placeholder="$t('settings.textTransformers.bodyPlaceholder')"
                   @input="updateTextTransformerField(editingTextTransformer.id, 'body', $event)"
@@ -889,8 +892,11 @@ import { useSettings } from '../composables/useSettings';
 import { getTextTransformerTriggerIssue, textTransformerSequence } from '../utils/textTransformers';
 import {
   mergeTextTransformers,
+  MAX_TEXT_TRANSFORMER_BODY_LENGTH,
+  MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH,
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_NAME_LENGTH,
   MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
   MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
   isValidTextTransformerTrigger,
@@ -1481,6 +1487,7 @@ type TextTransformerDraft = {
   readonly snippet: TextTransformer;
   readonly base: TextTransformer | null;
   readonly conflicted?: boolean;
+  readonly persistenceFailed?: boolean;
 };
 const textTransformerDrafts = ref<Record<string, TextTransformerDraft>>({});
 const TEXT_TRANSFORMER_PAGE_SIZE = 50;
@@ -1609,8 +1616,13 @@ function textTransformerDisplayTrigger(snippet: TextTransformer) {
 function goBackInSettings() {
   if (activePage.value === 'transformers' && editingTextTransformerId.value) {
     const id = editingTextTransformerId.value;
-    if (commitTextTransformerDraft(id)) removeTextTransformerDraft(id);
-    else if (textTransformerDrafts.value[id]?.conflicted) return;
+    if (!commitTextTransformerDraft(id)) {
+      const draft = textTransformerDrafts.value[id];
+      if (draft?.conflicted || draft?.persistenceFailed) return;
+      editingTextTransformerId.value = null;
+      return;
+    }
+    removeTextTransformerDraft(id);
     editingTextTransformerId.value = null;
     reconcileActiveTagFilter(transformerTagFilters.value);
     return;
@@ -1740,6 +1752,7 @@ function finalizeTextTransformerDraftCommit(id: string, validated: readonly Text
     snippet: normalized,
     base: cloneTextTransformer(normalized),
     conflicted: false,
+    persistenceFailed: false,
   });
   textTransformerImportStatus.value = null;
   return true;
@@ -1766,13 +1779,22 @@ function textTransformerDraftCommitContext(
 function commitTextTransformerDraft(id: string, overwriteStorageConflict = false): boolean {
   const draft = textTransformerDrafts.value[id];
   if (!draft) return true;
+  const persistenceErrorRevision = textTransformerPersistenceErrorRevision.value;
   const context = textTransformerDraftCommitContext(id, draft, overwriteStorageConflict);
   if (!context) return false;
   const candidate = candidateTextTransformerLibrary(id, draft.snippet, context.persisted);
   const validated = validateTextTransformerCandidate(candidate);
   if (!validated) return false;
-  if (!persistTextTransformerCandidate(validated, overwriteStorageConflict)) return false;
-  return finalizeTextTransformerDraftCommit(id, validated);
+  const persisted = persistTextTransformerCandidate(validated, overwriteStorageConflict);
+  const finalized = persisted && finalizeTextTransformerDraftCommit(id, validated);
+  if (
+    !finalized &&
+    textTransformerPersistenceErrorRevision.value !== persistenceErrorRevision
+  ) {
+    const retained = textTransformerDrafts.value[id];
+    if (retained) setTextTransformerDraft(id, { ...retained, persistenceFailed: true });
+  }
+  return finalized;
 }
 
 function reloadTextTransformerDraft(id: string) {
@@ -1792,6 +1814,7 @@ function reloadTextTransformerDraft(id: string) {
     snippet: reloaded,
     base: cloneTextTransformer(reloaded),
     conflicted: false,
+    persistenceFailed: false,
   });
   textTransformerTagDrafts.value = {
     ...textTransformerTagDrafts.value,
@@ -1835,24 +1858,31 @@ function removeTextTransformer(id: string) {
   if (editingTextTransformerId.value === id) editingTextTransformerId.value = null;
 }
 
+type TextTransformerEditableField = 'trigger' | 'name' | 'description' | 'body';
+
+const TEXT_TRANSFORMER_FIELD_LIMITS: Record<TextTransformerEditableField, number> = {
+  trigger: MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
+  name: MAX_TEXT_TRANSFORMER_NAME_LENGTH,
+  description: MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH,
+  body: MAX_TEXT_TRANSFORMER_BODY_LENGTH,
+};
+
 function updateTextTransformerField(
   id: string,
-  field: 'trigger' | 'name' | 'description' | 'body',
+  field: TextTransformerEditableField,
   event: Event,
 ) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return;
-  const boundedValue =
-    field === 'trigger'
-      ? input.value.replace(/^\\+/u, '').slice(0, MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH)
-      : input.value;
-  if (field === 'trigger' && input.value !== boundedValue) input.value = boundedValue;
+  const normalizedValue = field === 'trigger' ? input.value.replace(/^\\+/u, '') : input.value;
+  const boundedValue = normalizedValue.slice(0, TEXT_TRANSFORMER_FIELD_LIMITS[field]);
+  if (input.value !== boundedValue) input.value = boundedValue;
   updateTextTransformerDraft(id, (snippet) => {
     if (field === 'trigger') return { ...snippet, trigger: boundedValue };
     if (field === 'description') {
-      return { ...snippet, description: input.value || undefined };
+      return { ...snippet, description: boundedValue || undefined };
     }
-    return { ...snippet, [field]: input.value };
+    return { ...snippet, [field]: boundedValue };
   });
 }
 

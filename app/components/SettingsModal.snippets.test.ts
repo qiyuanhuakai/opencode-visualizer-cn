@@ -92,6 +92,7 @@ function changeValue(element: HTMLInputElement | HTMLTextAreaElement, value: str
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
+  Reflect.deleteProperty(window, 'electronAPI');
   fileExport.downloadJsonFile.mockReset();
   fileExport.downloadTextFile.mockReset();
 });
@@ -185,6 +186,39 @@ describe('SettingsModal snippets', () => {
     // Then: the editable DOM is bounded and no uncommitted value enters runtime state.
     expect(triggerInput.value).toHaveLength(256);
     expect(settings.textTransformers.value[0]?.trigger).toBe('::review');
+  });
+
+  it('bounds every free-text draft before reactive assignment', async () => {
+    // Given: the detail editor is open and receives programmatic values beyond every schema limit.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const nameInput = host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')!;
+    const descriptionInput = host.querySelector<HTMLInputElement>(
+      '[data-snippet-field="description"]',
+    )!;
+    const bodyInput = host.querySelector<HTMLTextAreaElement>('[data-snippet-field="body"]')!;
+
+    // When: input events bypass native maxlength enforcement and Back commits the draft.
+    inputValue(nameInput, 'n'.repeat(612));
+    inputValue(descriptionInput, 'd'.repeat(4_196));
+    inputValue(bodyInput, 'b'.repeat(1024 * 1024 + 100));
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: DOM, runtime, and persistence retain only the maximum legal values.
+    expect(nameInput.maxLength).toBe(512);
+    expect(descriptionInput.maxLength).toBe(4_096);
+    expect(bodyInput.maxLength).toBe(1024 * 1024);
+    expect(settings.textTransformers.value[0]?.name).toHaveLength(512);
+    expect(settings.textTransformers.value[0]?.description).toHaveLength(4_096);
+    expect(settings.textTransformers.value[0]?.body).toHaveLength(1024 * 1024);
+    const persisted = JSON.parse(
+      localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]',
+    )[0];
+    expect(persisted.name).toHaveLength(512);
+    expect(persisted.description).toHaveLength(4_096);
+    expect(persisted.body).toHaveLength(1024 * 1024);
   });
 
   it('bounds a large tag draft before splitting it into collection state', async () => {
@@ -283,6 +317,59 @@ describe('SettingsModal snippets', () => {
       'save',
     );
     setItem.mockRestore();
+  });
+
+  it('keeps a rejected Electron Back commit inside the retryable detail view', async () => {
+    // Given: Electron owns the migrated library and rejects subsequent synchronous writes.
+    const electronStore: Record<string, string> = {};
+    let rejectWrites = false;
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        persistentStorage: {
+          getItem: (key: string) => electronStore[key] ?? null,
+          setItem: (key: string, value: string) => {
+            if (rejectWrites) return false;
+            electronStore[key] = value;
+            return true;
+          },
+          removeItem: (key: string) => {
+            if (rejectWrites) return false;
+            delete electronStore[key];
+            return true;
+          },
+          migrate: (entries: Record<string, string>) => {
+            Object.assign(electronStore, entries);
+            return true;
+          },
+        },
+      },
+    });
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const bodyInput = host.querySelector<HTMLTextAreaElement>('[data-snippet-field="body"]')!;
+    inputValue(bodyInput, 'Electron retry draft');
+    rejectWrites = true;
+
+    // When: blur and Back both cross the rejected native persistence boundary.
+    bodyInput.dispatchEvent(new Event('change', { bubbles: true }));
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: canonical state is restored while detail retains the draft and reports the retry.
+    expect(settings.textTransformers.value[0]?.body).toBe('Review the selected changes.');
+    expect(
+      JSON.parse(electronStore['opencode.settings.textTransformers.v1'] ?? '[]')[0]?.body,
+    ).toBe('Review the selected changes.');
+    expect(host.querySelector('.transformer-detail')).not.toBeNull();
+    expect(host.querySelectorAll('.transformer-row')).toHaveLength(0);
+    expect(host.querySelector<HTMLTextAreaElement>('[data-snippet-field="body"]')?.value).toBe(
+      'Electron retry draft',
+    );
+    expect(host.querySelector('.transformer-detail')?.textContent).toContain(
+      en.settings.textTransformers.saveError,
+    );
   });
 
   it('edits metadata-rich multiline snippets and filters them by tag', async () => {

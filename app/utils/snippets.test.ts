@@ -267,6 +267,25 @@ describe('snippet import and export', () => {
     expect(result.map(({ trigger }) => trigger)).toEqual(['tmrkyczzoeosd', 'trgbyrbeujkiu']);
   });
 
+  it('preserves decimal generated-id suffixes across large collision merges', () => {
+    // Given: twenty distinct bounded rows share one hash input and each half allocates through -10.
+    const segments = Array.from({ length: 21 }, (_, index) => `p${index}`);
+    const colliding = Array.from({ length: 20 }, (_, splitIndex) => ({
+      trigger: segments.slice(0, splitIndex + 1).join('\0'),
+      replacement: segments.slice(splitIndex + 1).join('\0'),
+    }));
+    const local = normalizeTextTransformers(colliding.slice(0, 10));
+    const imported = normalizeTextTransformers(colliding.slice(10));
+
+    // When: independently generated identifiers are merged.
+    const result = mergeTextTransformers(local, imported);
+
+    // Then: suffix -10 remains generated, is reallocated, and no row is overwritten.
+    expect(result).toHaveLength(20);
+    expect(new Set(result.map(({ id }) => id))).toHaveLength(20);
+    expect(result.map(({ trigger }) => trigger)).toEqual(colliding.map(({ trigger }) => trigger));
+  });
+
   it('reserves later imported ids before allocating collision suffixes', () => {
     // Given: a generated-id collision and a later imported row already owning the first suffix.
     const local = [{ trigger: 'tmrkyczzoeosd', replacement: 'bixntxizktiha' }];
