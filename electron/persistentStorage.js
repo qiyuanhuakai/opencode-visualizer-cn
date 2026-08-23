@@ -59,5 +59,17 @@ export function createPersistentStorage(filePath) {
       commit(next);
       return oldValue;
     },
+    migrate(entries) {
+      const storage = load();
+      const changes = Object.entries(entries)
+        .filter(([key]) => !Object.hasOwn(storage, key))
+        .map(([key, newValue]) => ({ key, oldValue: null, newValue }));
+      if (changes.length === 0) return changes;
+      commit({
+        ...storage,
+        ...Object.fromEntries(changes.map(({ key, newValue }) => [key, newValue])),
+      });
+      return changes;
+    },
   };
 }

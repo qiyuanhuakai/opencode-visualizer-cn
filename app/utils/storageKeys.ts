@@ -6,34 +6,51 @@ type StorageBackend = {
   removeItem: (key: string) => boolean | void;
 };
 
+type ElectronStorageBackend = StorageBackend & {
+  migrate: (entries: Record<string, string>) => boolean;
+};
+
 let hasMigratedElectronStorage = false;
+let nextElectronStorageMigrationAttemptAt = 0;
+const ELECTRON_STORAGE_MIGRATION_RETRY_MS = 1_000;
 
-function migrateLocalStorageToElectronStorage(electronStorage: StorageBackend) {
-  if (hasMigratedElectronStorage || typeof window === 'undefined') return;
-  hasMigratedElectronStorage = true;
-
-  const localStorage = window.localStorage;
-  if (!localStorage) return;
-
+function migrateLocalStorageToElectronStorage(electronStorage: ElectronStorageBackend) {
+  if (hasMigratedElectronStorage) return true;
+  if (typeof window === 'undefined') return false;
+  const now = Date.now();
+  if (now < nextElectronStorageMigrationAttemptAt) return false;
   try {
+    const localStorage = window.localStorage;
+    if (!localStorage) return false;
+    const entries: Record<string, string> = {};
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
-      if (!key || !key.startsWith(STORAGE_PREFIX)) {
-        continue;
-      }
-
-      if (electronStorage.getItem(key) !== null) {
-        continue;
-      }
-
+      if (!key || !key.startsWith(STORAGE_PREFIX)) continue;
       const value = localStorage.getItem(key);
-      if (value !== null) {
-        electronStorage.setItem(key, value);
-      }
+      if (value !== null) entries[key] = value;
     }
+    if (!electronStorage.migrate(entries)) {
+      nextElectronStorageMigrationAttemptAt = now + ELECTRON_STORAGE_MIGRATION_RETRY_MS;
+      return false;
+    }
+    hasMigratedElectronStorage = true;
+    nextElectronStorageMigrationAttemptAt = 0;
+    return true;
   } catch {
-    return;
+    nextElectronStorageMigrationAttemptAt = now + ELECTRON_STORAGE_MIGRATION_RETRY_MS;
+    return false;
   }
+}
+
+function pendingElectronMigrationBackend(
+  electronStorage: ElectronStorageBackend,
+  localStorage: StorageBackend,
+): StorageBackend {
+  return {
+    getItem: (key) => electronStorage.getItem(key) ?? localStorage.getItem(key),
+    setItem: () => false,
+    removeItem: () => false,
+  };
 }
 
 function resolveStorageBackend(): StorageBackend | null {
@@ -41,8 +58,9 @@ function resolveStorageBackend(): StorageBackend | null {
 
   const electronStorage = window.electronAPI?.persistentStorage;
   if (electronStorage) {
-    migrateLocalStorageToElectronStorage(electronStorage);
-    return electronStorage;
+    return migrateLocalStorageToElectronStorage(electronStorage)
+      ? electronStorage
+      : pendingElectronMigrationBackend(electronStorage, window.localStorage);
   }
 
   return window.localStorage;

@@ -40,4 +40,31 @@ describe('Electron persistent storage', () => {
     });
     expect(fs.readdirSync(directory)).toEqual(['renderer-storage.json']);
   });
+
+  it('merges legacy migration entries in one recoverable commit', () => {
+    // Given: persisted state already owns one key and the first migration write fails.
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'vis-persistent-storage-'));
+    temporaryDirectories.push(directory);
+    const filePath = path.join(directory, 'renderer-storage.json');
+    const storage = createPersistentStorage(() => filePath);
+    storage.setItem('existing', 'electron');
+    vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    // When: one atomic migration fails and is retried after storage recovers.
+    expect(() =>
+      storage.migrate({ existing: 'legacy', missingA: 'a', missingB: 'b' }),
+    ).toThrow('disk full');
+    expect(storage.getItem('missingA')).toBeNull();
+    storage.migrate({ existing: 'legacy', missingA: 'a', missingB: 'b' });
+
+    // Then: retry preserves Electron winners and commits every missing legacy key together.
+    expect(JSON.parse(fs.readFileSync(filePath, 'utf8'))).toEqual({
+      existing: 'electron',
+      missingA: 'a',
+      missingB: 'b',
+    });
+    expect(fs.readdirSync(directory)).toEqual(['renderer-storage.json']);
+  });
 });

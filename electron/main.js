@@ -27,6 +27,7 @@ const LOCAL_APPLICATION_APPROVAL_FILE = 'local-application.json';
 const DEV_SERVER_URL = 'http://127.0.0.1:5173';
 const LOCAL_APPLICATION_PATH_KEY = 'opencode.settings.localApplicationPath.v1';
 const OPEN_IN_EDITOR_MAX_SIZE_KEY = 'opencode.settings.openInEditorMaxSizeMb.v1';
+const RENDERER_STORAGE_PREFIX = 'opencode.';
 const DEFAULT_MAX_LOCAL_FILE_BYTES = 20 * 1024 * 1024;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) app.quit();
@@ -429,6 +430,34 @@ ipcMain.on('persistent-storage-remove', (event, key) => {
   }
   if (oldValue !== null) {
     broadcastPersistentStorageChange({ key, oldValue, newValue: null }, event.sender.id);
+  }
+  event.returnValue = true;
+});
+
+ipcMain.on('persistent-storage-migrate', (event, entries) => {
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
+    event.returnValue = false;
+    return;
+  }
+
+  const migrationEntries = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (!key.startsWith(RENDERER_STORAGE_PREFIX) || typeof value !== 'string') {
+      event.returnValue = false;
+      return;
+    }
+    if (key !== LOCAL_APPLICATION_PATH_KEY) migrationEntries[key] = value;
+  }
+
+  let changes;
+  try {
+    changes = persistentStorage.migrate(migrationEntries);
+  } catch {
+    event.returnValue = false;
+    return;
+  }
+  for (const change of changes) {
+    broadcastPersistentStorageChange(change, event.sender.id);
   }
   event.returnValue = true;
 });

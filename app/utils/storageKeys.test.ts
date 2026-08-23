@@ -85,6 +85,7 @@ describe('storageKeys', () => {
           removeItem: vi.fn((key: string) => {
             delete electronStore[key];
           }),
+          migrate: vi.fn(() => true),
         },
       },
     });
@@ -103,6 +104,7 @@ describe('storageKeys', () => {
           getItem: vi.fn(() => null),
           setItem: vi.fn(() => false),
           removeItem: vi.fn(() => false),
+          migrate: vi.fn(() => true),
         },
       },
     });
@@ -114,6 +116,121 @@ describe('storageKeys', () => {
     // Then: both false acknowledgements remain observable to rollback callers.
     expect(setResult).toBe(false);
     expect(removeResult).toBe(false);
+  });
+
+  it('throttles failed migration retries while keeping legacy storage readable', async () => {
+    // Given: Electron rejects the first atomic migration of legacy renderer state.
+    vi.resetModules();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const key = 'opencode.settings.textTransformers.v1';
+    const migrate = vi.fn(() => false);
+    const localStorage = {
+      length: 1,
+      key: vi.fn(() => key),
+      getItem: vi.fn((requestedKey: string) =>
+        requestedKey === key ? 'legacy-snippets' : null,
+      ),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+    };
+    vi.stubGlobal('window', {
+      localStorage,
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn(() => null),
+          setItem: vi.fn(() => true),
+          removeItem: vi.fn(() => true),
+          migrate,
+        },
+      },
+    });
+    const freshStorage = await import('./storageKeys');
+
+    // When: callers read repeatedly inside one retry window and once after it advances.
+    const first = freshStorage.storageGet(freshStorage.StorageKeys.settings.textTransformers);
+    const second = freshStorage.storageGet(freshStorage.StorageKeys.settings.textTransformers);
+    now.mockReturnValue(2_000);
+    const third = freshStorage.storageGet(freshStorage.StorageKeys.settings.textTransformers);
+
+    // Then: every read uses legacy data but only one migration runs per retry window.
+    expect(first).toBe('legacy-snippets');
+    expect(second).toBe('legacy-snippets');
+    expect(third).toBe('legacy-snippets');
+    expect(migrate).toHaveBeenCalledTimes(2);
+    expect(migrate).toHaveBeenLastCalledWith({ [key]: 'legacy-snippets' });
+  });
+
+  it('rejects mutations while pending migration preserves Electron winners', async () => {
+    // Given: Electron owns one key, local storage has a stale copy plus one missing legacy key.
+    vi.resetModules();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+    const ownedKey = 'opencode.settings.enterToSend.v1';
+    const missingKey = 'opencode.settings.textTransformers.v1';
+    const localStore: Record<string, string> = {
+      [ownedKey]: 'legacy-owned',
+      [missingKey]: 'legacy-missing',
+    };
+    const electronStore: Record<string, string> = { [ownedKey]: 'electron-owned' };
+    let migrationAvailable = false;
+    const localStorage = {
+      get length() {
+        return Object.keys(localStore).length;
+      },
+      key: vi.fn((index: number) => Object.keys(localStore)[index] ?? null),
+      getItem: vi.fn((key: string) => localStore[key] ?? null),
+      setItem: vi.fn((key: string, value: string) => {
+        localStore[key] = value;
+      }),
+      removeItem: vi.fn((key: string) => {
+        delete localStore[key];
+      }),
+    };
+    const migrate = vi.fn((entries: Record<string, string>) => {
+      if (!migrationAvailable) return false;
+      for (const [key, value] of Object.entries(entries)) {
+        if (!(key in electronStore)) electronStore[key] = value;
+      }
+      return true;
+    });
+    vi.stubGlobal('window', {
+      localStorage,
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn((key: string) => electronStore[key] ?? null),
+          setItem: vi.fn(() => true),
+          removeItem: vi.fn(() => true),
+          migrate,
+        },
+      },
+    });
+    const freshStorage = await import('./storageKeys');
+
+    // When: callers read and mutate while migration is unavailable, then retry after recovery.
+    expect(freshStorage.storageGet(freshStorage.StorageKeys.settings.enterToSend)).toBe(
+      'electron-owned',
+    );
+    expect(freshStorage.storageGet(freshStorage.StorageKeys.settings.textTransformers)).toBe(
+      'legacy-missing',
+    );
+    expect(freshStorage.storageSet(freshStorage.StorageKeys.settings.enterToSend, 'draft')).toBe(
+      false,
+    );
+    expect(freshStorage.storageRemove(freshStorage.StorageKeys.settings.enterToSend)).toBe(false);
+    migrationAvailable = true;
+    now.mockReturnValue(2_000);
+
+    // Then: recovery imports only the missing key and no rejected mutation is lost or resurrected.
+    expect(freshStorage.storageGet(freshStorage.StorageKeys.settings.textTransformers)).toBe(
+      'legacy-missing',
+    );
+    expect(freshStorage.storageGet(freshStorage.StorageKeys.settings.enterToSend)).toBe(
+      'electron-owned',
+    );
+    expect(localStore[ownedKey]).toBe('legacy-owned');
+    expect(electronStore).toEqual({
+      [ownedKey]: 'electron-owned',
+      [missingKey]: 'legacy-missing',
+    });
   });
 
   it('exposes codexActiveThread key for codex session persistence', () => {

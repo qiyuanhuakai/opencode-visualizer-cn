@@ -255,5 +255,21 @@ describe('electron-runtime-policy', () => {
       expect(setHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
       expect(removeHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
     });
+
+    it('commits renderer storage migration through one acknowledged main-process handler', () => {
+      // Given: legacy renderer state must cross a fallible disk boundary atomically.
+      const migrationHandler = mainSource.match(
+        /ipcMain\.on\('persistent-storage-migrate',[\s\S]*?\n\}\);/u,
+      )?.[0];
+
+      // When: the migration handler source is inspected.
+      expect(migrationHandler).toBeDefined();
+
+      // Then: one storage migration is attempted and failures return false.
+      expect(migrationHandler).toContain('persistentStorage.migrate');
+      expect(migrationHandler).toMatch(
+        /try\s*\{[\s\S]*persistentStorage\.migrate[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
+      );
+    });
   });
 });
