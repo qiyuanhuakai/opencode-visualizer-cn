@@ -394,12 +394,18 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
     return;
   }
 
-  const currentValue = getPersistentStorageItem(key);
-  if (currentValue === value) {
-    event.returnValue = true;
+  let oldValue;
+  try {
+    const currentValue = getPersistentStorageItem(key);
+    if (currentValue === value) {
+      event.returnValue = true;
+      return;
+    }
+    oldValue = setPersistentStorageItem(key, value);
+  } catch {
+    event.returnValue = false;
     return;
   }
-  const oldValue = setPersistentStorageItem(key, value);
   broadcastPersistentStorageChange({ key, oldValue, newValue: value }, event.sender.id);
   event.returnValue = true;
 });
@@ -414,7 +420,13 @@ ipcMain.on('persistent-storage-remove', (event, key) => {
     return;
   }
 
-  const oldValue = removePersistentStorageItem(key);
+  let oldValue;
+  try {
+    oldValue = removePersistentStorageItem(key);
+  } catch {
+    event.returnValue = false;
+    return;
+  }
   if (oldValue !== null) {
     broadcastPersistentStorageChange({ key, oldValue, newValue: null }, event.sender.id);
   }

@@ -47,7 +47,7 @@ type IpcListener = (event: unknown, payload?: unknown) => void;
 function createIpcRendererMock() {
   const listenersByChannel = new Map<string, IpcListener[]>();
   const invoke = vi.fn((_channel: string, ..._args: unknown[]) => Promise.resolve('invoked'));
-  const sendSync = vi.fn((_channel: string, ..._args: unknown[]) => 'synced');
+  const sendSync = vi.fn((_channel: string, ..._args: unknown[]): unknown => 'synced');
   const on = vi.fn((channel: string, listener: IpcListener) => {
     const listeners = listenersByChannel.get(channel) ?? [];
     listeners.push(listener);
@@ -221,6 +221,20 @@ describe('electron preload contract', () => {
     });
     api.persistentStorage.removeItem('theme');
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-remove', 'theme');
+  });
+
+  it('returns persistentStorage mutation acknowledgements to the renderer', () => {
+    // Given: Electron main rejects a synchronous persistent storage mutation.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    ipcRenderer.sendSync.mockReturnValueOnce(false).mockReturnValueOnce(false);
+
+    // When: preload forwards set and remove requests.
+    const setResult = api.persistentStorage.setItem('theme', 'dark');
+    const removeResult = api.persistentStorage.removeItem('theme');
+
+    // Then: preload preserves both rejection acknowledgements unchanged.
+    expect(setResult).toBe(false);
+    expect(removeResult).toBe(false);
   });
 
   it('forwards persistent-storage-changed into a window storage event', () => {

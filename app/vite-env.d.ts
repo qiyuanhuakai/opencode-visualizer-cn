@@ -23,8 +23,8 @@ interface Window {
     getPlatform: () => Promise<string>,
     persistentStorage?: {
       getItem: (key: string) => string | null,
-      setItem: (key: string, value: string) => void,
-      removeItem: (key: string) => void,
+      setItem: (key: string, value: string) => boolean,
+      removeItem: (key: string) => boolean,
     },
     localFile?: {
       selectApplication: () => Promise<string | null>,

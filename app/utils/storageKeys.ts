@@ -1,6 +1,10 @@
 const STORAGE_PREFIX = 'opencode.';
 
-type StorageBackend = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+type StorageBackend = {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => boolean | void;
+  removeItem: (key: string) => boolean | void;
+};
 
 let hasMigratedElectronStorage = false;
 
@@ -127,8 +131,7 @@ export function storageSet(key: string, value: string) {
   const storage = resolveStorageBackend();
   if (!storage) return false;
   try {
-    storage.setItem(storageKey(key), value);
-    return true;
+    return storage.setItem(storageKey(key), value) !== false;
   } catch {
     return false;
   }
@@ -136,11 +139,11 @@ export function storageSet(key: string, value: string) {
 
 export function storageRemove(key: string) {
   const storage = resolveStorageBackend();
-  if (!storage) return;
+  if (!storage) return false;
   try {
-    storage.removeItem(storageKey(key));
+    return storage.removeItem(storageKey(key)) !== false;
   } catch {
-    return;
+    return false;
   }
 }
 

@@ -237,5 +237,23 @@ describe('electron-runtime-policy', () => {
       expect(lockIndex).toBeLessThan(storageIndex);
       expect(mainSource).toMatch(/app\.on\('second-instance',[\s\S]*?mainWindow\.focus\(\)/u);
     });
+
+    it('converts persistent storage mutation exceptions into false IPC acknowledgements', () => {
+      // Given: set and remove are synchronous IPC boundaries backed by fallible disk writes.
+      const setHandler = mainSource.match(
+        /ipcMain\.on\('persistent-storage-set',[\s\S]*?\n\}\);/u,
+      )?.[0];
+      const removeHandler = mainSource.match(
+        /ipcMain\.on\('persistent-storage-remove',[\s\S]*?\n\}\);/u,
+      )?.[0];
+
+      // When: the main-process mutation handlers are inspected.
+      expect(setHandler).toBeDefined();
+      expect(removeHandler).toBeDefined();
+
+      // Then: each catches persistence exceptions and returns an explicit rejection.
+      expect(setHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
+      expect(removeHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
+    });
   });
 });

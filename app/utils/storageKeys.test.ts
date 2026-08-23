@@ -94,6 +94,28 @@ describe('storageKeys', () => {
     expect(electronStore['opencode.settings.enterToSend.v1']).toBe('true');
   });
 
+  it('propagates rejected Electron storage mutation acknowledgements', () => {
+    // Given: the Electron persistence owner rejects both mutation channels.
+    vi.stubGlobal('window', {
+      localStorage: window.localStorage,
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn(() => null),
+          setItem: vi.fn(() => false),
+          removeItem: vi.fn(() => false),
+        },
+      },
+    });
+
+    // When: renderer storage helpers attempt to mutate persistent state.
+    const setResult = storageSet('rejected', 'value');
+    const removeResult = storageRemove('rejected');
+
+    // Then: both false acknowledgements remain observable to rollback callers.
+    expect(setResult).toBe(false);
+    expect(removeResult).toBe(false);
+  });
+
   it('exposes codexActiveThread key for codex session persistence', () => {
     expect(StorageKeys.state.codexActiveThread).toBe('state.codexActiveThread.v1');
     storageSet(StorageKeys.state.codexActiveThread, 'thr_abc123');
