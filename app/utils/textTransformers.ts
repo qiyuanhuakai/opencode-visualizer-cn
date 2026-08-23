@@ -1,5 +1,6 @@
 import {
   isValidTextTransformerTrigger,
+  MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
   normalizeTextTransformers,
   textTransformerTriggerKey,
   type TextTransformer,
@@ -297,10 +298,16 @@ export function getTextTransformerTriggerIssue(
   const trigger = transformers[index]?.trigger.trim() ?? '';
   if (!trigger) return null;
   const normalizedTrigger = trigger.replace(/^\\+/u, '');
+  if (normalizedTrigger.length > MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH) return 'invalid';
   if (!isValidTextTransformerTrigger(normalizedTrigger)) return 'invalid';
-  const matches = transformers.filter((item) =>
-    hasSameText(item.trigger.trim().replace(/^\\+/u, ''), normalizedTrigger),
-  );
+  const triggerKey = textTransformerTriggerKey(normalizedTrigger);
+  const matches = transformers.filter((item) => {
+    const candidate = item.trigger.trim().replace(/^\\+/u, '');
+    return (
+      candidate.length <= MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH &&
+      textTransformerTriggerKey(candidate) === triggerKey
+    );
+  });
   return matches.length > 1 ? 'duplicate' : null;
 }
 

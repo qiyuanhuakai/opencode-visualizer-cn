@@ -430,6 +430,37 @@ describe('useSettings', () => {
     expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
   });
 
+  it('keeps rejected external recovery data through an unchanged local commit', async () => {
+    // Given: valid runtime state has rejected a malformed value published by another window.
+    const persisted = [
+      {
+        id: 'snippet-recovery-latch',
+        trigger: 'recovery-latch',
+        name: 'Recovery latch',
+        body: 'Keep',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+    storage.setItem('opencode.settings.textTransformers.v1', 'not-json');
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: 'not-json',
+      } as unknown as StorageEvent);
+    }
+
+    // When: a clean settings close reassigns an unchanged clone of the valid runtime library.
+    settings.textTransformers.value = persisted.map((snippet) => ({ ...snippet, tags: [] }));
+
+    // Then: the rejected raw payload remains recoverable and runtime rolls back to its valid snapshot.
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe('not-json');
+    expect(settings.textTransformers.value).toEqual(persisted);
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(2);
+  });
+
   it('rejects structurally malformed external rows without salvaging their valid siblings', async () => {
     // Given: this window holds one valid authoritative snippet.
     const persisted = [

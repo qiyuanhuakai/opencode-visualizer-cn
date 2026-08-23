@@ -171,6 +171,66 @@ describe('SettingsModal snippets', () => {
     expect(enableButton.getAttribute('aria-pressed')).toBe('false');
   });
 
+  it('bounds an oversized trigger paste before rendering validation', async () => {
+    // Given: a persisted snippet is open in the detail editor.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const triggerInput = host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')!;
+
+    // When: the user pastes a trigger much larger than the public schema permits.
+    inputValue(triggerInput, 'x'.repeat(50_000));
+    await nextTick();
+
+    // Then: the editable DOM is bounded and no uncommitted value enters runtime state.
+    expect(triggerInput.value).toHaveLength(256);
+    expect(settings.textTransformers.value[0]?.trigger).toBe('::review');
+  });
+
+  it('bounds a large tag draft before splitting it into collection state', async () => {
+    // Given: a detail editor receives more maximum-sized tags than the schema accepts.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const tagInput = host.querySelector<HTMLInputElement>('[data-snippet-field="tags"]')!;
+    const oversizedTags = Array.from({ length: 300 }, (_, index) =>
+      `${index}`.padEnd(256, 'x'),
+    ).join(',');
+
+    // When: the complete oversized value is pasted at once.
+    inputValue(tagInput, oversizedTags);
+    await nextTick();
+
+    // Then: the raw draft is bounded before split allocation and persisted state remains isolated.
+    expect(tagInput.value.length).toBeLessThanOrEqual(66_046);
+    expect(tagInput.maxLength).toBe(66_046);
+    expect(settings.textTransformers.value[0]?.tags).toEqual(['Review', 'Quality']);
+  });
+
+  it('round-trips the maximum valid tag collection through the detail input', async () => {
+    // Given: one valid snippet contains 256 unique tags of 256 characters each.
+    const tags = Array.from({ length: 256 }, (_, index) =>
+      `${index.toString(36)}-`.padEnd(256, 'x'),
+    );
+    const snippet = { ...initialSnippets[0], tags };
+    const { host, settings } = await mountSnippetSettings([snippet]);
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const tagInput = host.querySelector<HTMLInputElement>('[data-snippet-field="tags"]')!;
+
+    // When: the unchanged canonical tag text crosses the input and Back commit boundaries.
+    inputValue(tagInput, tagInput.value);
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: every maximum-length tag survives without truncating the final entry.
+    expect(tagInput.maxLength).toBe(66_046);
+    expect(settings.textTransformers.value[0]?.tags).toEqual(tags);
+    expect(
+      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]?.tags,
+    ).toEqual(tags);
+  });
+
   it('rolls back ordinary snippet changes when persistence fails', async () => {
     // Given: settings are open and the storage backend will reject each next write independently.
     const { host, settings } = await mountSnippetSettings();
@@ -608,6 +668,88 @@ describe('SettingsModal snippets', () => {
     );
   });
 
+  it('requires explicit overwrite after external storage publishes rejected recovery data', async () => {
+    // Given: a local detail edit is open when another window publishes malformed raw storage.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Local recovery overwrite');
+    localStorage.setItem('opencode.settings.textTransformers.v1', 'not-json');
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: 'not-json',
+      }),
+    );
+    await nextTick();
+
+    // When: an ordinary change and Back both attempt to commit the still-valid local draft.
+    changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Local recovery overwrite');
+    await nextTick();
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: recovery data and the local draft remain intact behind the conflict latch.
+    expect(localStorage.getItem('opencode.settings.textTransformers.v1')).toBe('not-json');
+    expect(host.querySelector('.transformer-detail')).not.toBeNull();
+    expect(host.querySelector('.transformer-detail')?.textContent).toContain(
+      en.settings.textTransformers.conflictError,
+    );
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
+      'Local recovery overwrite',
+    );
+
+    // When: the user explicitly chooses Overwrite.
+    host.querySelector<HTMLButtonElement>('.transformer-conflict-overwrite')!.click();
+    await nextTick();
+
+    // Then: the valid draft deliberately replaces recovery data and clears the conflict.
+    expect(settings.textTransformers.value[0]?.name).toBe('Local recovery overwrite');
+    expect(
+      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0],
+    ).toMatchObject({ name: 'Local recovery overwrite' });
+    expect(host.querySelector('.transformer-conflict-overwrite')).toBeNull();
+  });
+
+  it('keeps a failed explicit overwrite latched against a later close retry', async () => {
+    // Given: a local edit conflicts with an external row and the next persistence write will fail.
+    const { host, settings, reopenSnippets } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    inputValue(host.querySelector('[data-snippet-field="name"]')!, 'Local retry candidate');
+    const external = [{ ...initialSnippets[0], name: 'External winner' }, initialSnippets[1]];
+    localStorage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(external));
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: JSON.stringify(external),
+      }),
+    );
+    await nextTick();
+    changeValue(host.querySelector('[data-snippet-field="name"]')!, 'Local retry candidate');
+    await nextTick();
+    vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+
+    // When: explicit Overwrite fails and Settings is then closed and reopened.
+    host.querySelector<HTMLButtonElement>('.transformer-conflict-overwrite')!.click();
+    await nextTick();
+    host.querySelector<HTMLButtonElement>('.modal-close-button')!.click();
+    await nextTick();
+    await reopenSnippets();
+
+    // Then: Close cannot retry implicitly; the external row, draft, and conflict all remain.
+    expect(settings.textTransformers.value[0]?.name).toBe('External winner');
+    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]?.name).toBe(
+      'External winner',
+    );
+    expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
+      'Local retry candidate',
+    );
+    expect(host.querySelector('.transformer-conflict-overwrite')).not.toBeNull();
+  });
+
   it('finalizes clean drafts on close and reopens unresolved drafts directly', async () => {
     // Given: a persisted row is opened without edits.
     const { host, reopenSnippets } = await mountSnippetSettings();
@@ -668,6 +810,49 @@ describe('SettingsModal snippets', () => {
     // Then: success is not reported and the previous library remains authoritative.
     expect(settings.textTransformers.value).toEqual(before);
     setItem.mockRestore();
+  });
+
+  it('rejects imports while malformed external recovery data is pending', async () => {
+    // Given: valid runtime state has rejected malformed external raw storage.
+    const { host, settings } = await mountSnippetSettings();
+    localStorage.setItem('opencode.settings.textTransformers.v1', 'not-json');
+    window.dispatchEvent(
+      new StorageEvent('storage', {
+        key: 'opencode.settings.textTransformers.v1',
+        newValue: 'not-json',
+      }),
+    );
+    await nextTick();
+    const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
+    const file = new File([], 'recovery-import.json', { type: 'application/json' });
+    Object.defineProperty(file, 'text', {
+      value: async () =>
+        JSON.stringify({
+          version: 1,
+          snippets: [
+            {
+              id: 'snippet-recovery-import',
+              trigger: 'recovery-import',
+              name: 'Recovery import',
+              body: 'Recovery import body',
+              enabled: true,
+              tags: [],
+            },
+          ],
+        }),
+    });
+
+    // When: the user selects a valid import without explicitly resolving recovery data.
+    Object.defineProperty(importInput, 'files', { configurable: true, value: [file] });
+    importInput.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(host.querySelector('.transformer-import-status')?.textContent).toContain('invalid'),
+    );
+
+    // Then: raw recovery and runtime remain unchanged and no success state is reported.
+    expect(localStorage.getItem('opencode.settings.textTransformers.v1')).toBe('not-json');
+    expect(settings.textTransformers.value).toEqual(initialSnippets);
+    expect(host.querySelector('.transformer-import-status')?.textContent).not.toContain('Imported');
   });
 
   it('rejects an import whose merged library exceeds the complete backup budget', async () => {

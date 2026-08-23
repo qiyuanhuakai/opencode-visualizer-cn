@@ -315,6 +315,7 @@ const textTransformersEnabled = ref(
 const initialTextTransformers = readTextTransformers();
 const textTransformers = ref<TextTransformer[]>(initialTextTransformers.value);
 const textTransformerPersistenceErrorRevision = ref(initialTextTransformers.failed ? 1 : 0);
+const textTransformerStorageRecoveryPending = ref(initialTextTransformers.failed);
 const localApplicationPath = ref(storageGet(StorageKeys.settings.localApplicationPath) ?? '');
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
@@ -495,6 +496,36 @@ function cloneTextTransformers(value: readonly TextTransformer[]): TextTransform
 }
 let lastPersistedTextTransformers = cloneTextTransformers(textTransformers.value);
 
+function applyTextTransformerSnapshot(value: readonly TextTransformer[]) {
+  const snapshot = cloneTextTransformers(value);
+  restoringTextTransformerState = true;
+  textTransformers.value = snapshot;
+  restoringTextTransformerState = false;
+  lastPersistedTextTransformers = cloneTextTransformers(snapshot);
+}
+
+function overwriteTextTransformerStorage(value: readonly TextTransformer[]): boolean {
+  const normalized = validateTextTransformerLibrary(value);
+  if (!normalized || !storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
+    textTransformerPersistenceErrorRevision.value += 1;
+    return false;
+  }
+  applyTextTransformerSnapshot(normalized);
+  textTransformerStorageRecoveryPending.value = false;
+  return true;
+}
+
+function reloadTextTransformerStorage(): boolean {
+  const loaded = readTextTransformers();
+  if (loaded.failed) {
+    textTransformerPersistenceErrorRevision.value += 1;
+    return false;
+  }
+  applyTextTransformerSnapshot(loaded.value);
+  textTransformerStorageRecoveryPending.value = false;
+  return true;
+}
+
 function restoreTextTransformerState<T>(setting: Ref<T>, value: T) {
   restoringTextTransformerState = true;
   setting.value = Array.isArray(value) ? (cloneTextTransformers(value) as T) : value;
@@ -523,6 +554,10 @@ watch(
   textTransformers,
   (value) => {
     if (restoringTextTransformerState) return;
+    if (textTransformerStorageRecoveryPending.value) {
+      restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
+      return;
+    }
     const normalized = validateTextTransformerLibrary(value);
     if (!normalized) {
       restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
@@ -747,6 +782,7 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
       const nextTextTransformers =
         event.newValue === null ? [] : parseTextTransformers(event.newValue);
       if (!nextTextTransformers) {
+        textTransformerStorageRecoveryPending.value = true;
         textTransformerPersistenceErrorRevision.value += 1;
         return;
       }
@@ -756,6 +792,7 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
         restoringTextTransformerState = false;
       }
       lastPersistedTextTransformers = cloneTextTransformers(nextTextTransformers);
+      textTransformerStorageRecoveryPending.value = false;
     },
   ],
   [
@@ -818,6 +855,9 @@ export function useSettings() {
     textTransformersEnabled,
     textTransformers,
     textTransformerPersistenceErrorRevision,
+    textTransformerStorageRecoveryPending,
+    overwriteTextTransformerStorage,
+    reloadTextTransformerStorage,
     localApplicationPath,
     defaultEditorShortcuts: DEFAULT_EDITOR_SHORTCUTS,
     minEditorFontSizePx: MIN_EDITOR_FONT_SIZE_PX,

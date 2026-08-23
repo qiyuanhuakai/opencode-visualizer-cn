@@ -294,6 +294,17 @@ describe('text transformers', () => {
     expect(getTextTransformerTriggerIssue(editableTransformers, 3)).toBe('duplicate');
   });
 
+  it('rejects an oversized editable trigger without compiling it as a regular expression', () => {
+    // Given: a pasted draft exceeds the persisted trigger boundary by several orders of magnitude.
+    const editableTransformers = [{ trigger: 'x'.repeat(50_000), replacement: 'ignored' }];
+
+    // When: the settings surface asks for the trigger issue during rendering.
+    const issue = getTextTransformerTriggerIssue(editableTransformers, 0);
+
+    // Then: the draft is rejected deterministically instead of throwing from RegExp construction.
+    expect(issue).toBe('invalid');
+  });
+
   it('migrates legacy mappings into stable snippet metadata', () => {
     // Given: persisted v1 mappings only contain trigger and replacement.
     const legacy = [{ trigger: 'review', replacement: 'Review this change carefully.' }];

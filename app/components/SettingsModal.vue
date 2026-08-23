@@ -204,6 +204,7 @@
                   data-snippet-field="trigger"
                   type="text"
                   class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH"
                   spellcheck="false"
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.sequencePlaceholder')"
@@ -259,6 +260,7 @@
                   data-snippet-field="tags"
                   type="text"
                   class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH"
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.tagsPlaceholder')"
                   @input="updateTextTransformerTags(editingTextTransformer.id, $event)"
@@ -889,6 +891,8 @@ import {
   mergeTextTransformers,
   MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
+  MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
   isValidTextTransformerTrigger,
   parseTextTransformerImport,
   serializeTextTransformers,
@@ -1025,6 +1029,9 @@ const {
   textTransformersEnabled,
   textTransformers,
   textTransformerPersistenceErrorRevision,
+  textTransformerStorageRecoveryPending,
+  overwriteTextTransformerStorage,
+  reloadTextTransformerStorage,
   localApplicationPath,
   defaultEditorShortcuts,
   minEditorFontSizePx,
@@ -1686,35 +1693,48 @@ function updateTextTransformerDraft(
   setTextTransformerDraft(id, { ...draft, snippet: update(draft.snippet) });
 }
 
-function commitTextTransformerDraft(id: string): boolean {
-  const draft = textTransformerDrafts.value[id];
-  if (!draft) return true;
-  if (draft.conflicted) return false;
-  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
-  if (!sameTextTransformer(draft.base, persisted)) {
-    setTextTransformerDraft(id, { ...draft, conflicted: true });
-    textTransformerImportStatus.value = {
-      kind: 'error',
-      message: t('settings.textTransformers.conflictError'),
-    };
-    return false;
-  }
-  const candidate = persisted
-    ? textTransformers.value.map((snippet) => (snippet.id === id ? draft.snippet : snippet))
-    : [...textTransformers.value, draft.snippet];
+function rejectTextTransformerDraftConflict(id: string, draft: TextTransformerDraft): false {
+  setTextTransformerDraft(id, { ...draft, conflicted: true });
+  textTransformerImportStatus.value = {
+    kind: 'error',
+    message: t('settings.textTransformers.conflictError'),
+  };
+  return false;
+}
+
+function candidateTextTransformerLibrary(
+  id: string,
+  draft: TextTransformer,
+  persisted: TextTransformer | undefined,
+): TextTransformer[] {
+  return persisted
+    ? textTransformers.value.map((snippet) => (snippet.id === id ? draft : snippet))
+    : [...textTransformers.value, draft];
+}
+
+function persistTextTransformerCandidate(
+  candidate: TextTransformer[],
+  overwriteStorageConflict: boolean,
+): boolean {
+  if (overwriteStorageConflict) return overwriteTextTransformerStorage(candidate);
+  textTransformers.value = candidate;
+  return true;
+}
+
+function validateTextTransformerCandidate(candidate: readonly TextTransformer[]) {
   const validated = validateTextTransformerLibrary(candidate);
-  if (!validated) {
-    textTransformerImportStatus.value = {
-      kind: 'error',
-      message: t('settings.textTransformers.importErrors.invalidSnippets'),
-    };
-    return false;
-  }
-  textTransformers.value = validated;
+  if (validated) return validated;
+  textTransformerImportStatus.value = {
+    kind: 'error',
+    message: t('settings.textTransformers.importErrors.invalidSnippets'),
+  };
+  return null;
+}
+
+function finalizeTextTransformerDraftCommit(id: string, validated: readonly TextTransformer[]) {
   const committed = textTransformers.value.find((snippet) => snippet.id === id);
-  if (!committed || !sameTextTransformer(committed, validated.find((snippet) => snippet.id === id))) {
-    return false;
-  }
+  const expected = validated.find((snippet) => snippet.id === id);
+  if (!committed || !sameTextTransformer(committed, expected)) return false;
   const normalized = cloneTextTransformer(committed);
   setTextTransformerDraft(id, {
     snippet: normalized,
@@ -1725,7 +1745,42 @@ function commitTextTransformerDraft(id: string): boolean {
   return true;
 }
 
+function textTransformerDraftCommitContext(
+  id: string,
+  draft: TextTransformerDraft,
+  overwriteStorageConflict: boolean,
+): { persisted: TextTransformer | undefined } | null {
+  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+  if (overwriteStorageConflict) return { persisted };
+  if (draft.conflicted) return null;
+  if (
+    textTransformerStorageRecoveryPending.value ||
+    !sameTextTransformer(draft.base, persisted)
+  ) {
+    rejectTextTransformerDraftConflict(id, draft);
+    return null;
+  }
+  return { persisted };
+}
+
+function commitTextTransformerDraft(id: string, overwriteStorageConflict = false): boolean {
+  const draft = textTransformerDrafts.value[id];
+  if (!draft) return true;
+  const context = textTransformerDraftCommitContext(id, draft, overwriteStorageConflict);
+  if (!context) return false;
+  const candidate = candidateTextTransformerLibrary(id, draft.snippet, context.persisted);
+  const validated = validateTextTransformerCandidate(candidate);
+  if (!validated) return false;
+  if (!persistTextTransformerCandidate(validated, overwriteStorageConflict)) return false;
+  return finalizeTextTransformerDraftCommit(id, validated);
+}
+
 function reloadTextTransformerDraft(id: string) {
+  if (textTransformerStorageRecoveryPending.value && !reloadTextTransformerStorage()) {
+    const draft = textTransformerDrafts.value[id];
+    if (draft) setTextTransformerDraft(id, { ...draft, conflicted: true });
+    return;
+  }
   const persisted = textTransformers.value.find((snippet) => snippet.id === id);
   if (!persisted) {
     removeTextTransformerDraft(id);
@@ -1746,15 +1801,7 @@ function reloadTextTransformerDraft(id: string) {
 }
 
 function overwriteTextTransformerDraft(id: string) {
-  const draft = textTransformerDrafts.value[id];
-  if (!draft) return;
-  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
-  setTextTransformerDraft(id, {
-    ...draft,
-    base: persisted ? cloneTextTransformer(persisted) : null,
-    conflicted: false,
-  });
-  commitTextTransformerDraft(id);
+  commitTextTransformerDraft(id, true);
 }
 
 function finalizeEditingTextTransformer() {
@@ -1795,8 +1842,13 @@ function updateTextTransformerField(
 ) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return;
+  const boundedValue =
+    field === 'trigger'
+      ? input.value.replace(/^\\+/u, '').slice(0, MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH)
+      : input.value;
+  if (field === 'trigger' && input.value !== boundedValue) input.value = boundedValue;
   updateTextTransformerDraft(id, (snippet) => {
-    if (field === 'trigger') return { ...snippet, trigger: input.value.replace(/^\\+/u, '') };
+    if (field === 'trigger') return { ...snippet, trigger: boundedValue };
     if (field === 'description') {
       return { ...snippet, description: input.value || undefined };
     }
@@ -1815,8 +1867,10 @@ function toggleTextTransformerEnabled(id: string) {
 function updateTextTransformerTags(id: string, event: Event) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement)) return;
-  textTransformerTagDrafts.value = { ...textTransformerTagDrafts.value, [id]: input.value };
-  const tags = parseTextTransformerTags(input.value);
+  const boundedValue = input.value.slice(0, MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH);
+  if (input.value !== boundedValue) input.value = boundedValue;
+  textTransformerTagDrafts.value = { ...textTransformerTagDrafts.value, [id]: boundedValue };
+  const tags = parseTextTransformerTags(boundedValue);
   updateTextTransformerDraft(id, (snippet) => ({ ...snippet, tags }));
 }
 
@@ -1852,7 +1906,12 @@ async function parseSelectedTextTransformerFile(
 }
 
 function persistImportedTextTransformers(imported: readonly TextTransformer[]): boolean {
-  if (Object.keys(textTransformerDrafts.value).length > 0) return false;
+  if (
+    textTransformerStorageRecoveryPending.value ||
+    Object.keys(textTransformerDrafts.value).length > 0
+  ) {
+    return false;
+  }
   const current = validateTextTransformerLibrary(textTransformers.value);
   if (!current) return false;
   const merged = mergeTextTransformers(current, imported);
