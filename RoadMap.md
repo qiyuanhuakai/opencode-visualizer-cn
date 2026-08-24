@@ -3,14 +3,14 @@
 ## [In Progress] 
 
 
-- [ ] 参考 Raycast Snippets 完善 Text Transformer
-  - [ ] 将数据结构从 `trigger/replacement` 演进为包含 `id`、`trigger`、`name`、`body`、`description?`、`enabled`、`tags?` 的 Snippet，并兼容迁移已有数据
-  - [ ] 候选框显示名称、描述和正文预览，不再直接展示完整 replacement；支持启用/禁用与按 tag 筛选
-  - [ ] 支持多行正文与多个触发前缀，不再劫持 Tab 和空格
-  - [ ] 支持 `{cursor}`，并首批加入 `{date}`、`{time}`、`{datetime}`、`{uuid}`、`{clipboard}`、`{activeFile}`、`{cwd}`、`{selection}` 动态变量
-  - [ ] 打通文本收藏与 Text Transformer，可将收藏内容直接创建为 Snippet
-  - [ ] 支持带版本号的 JSON 导入/导出（`{ "version": 1, "snippets": [...] }`），用于备份、恢复和跨设备迁移
-  - [ ] 暂不引入文件夹和脚本引擎；待 Snippet 数量与使用场景增长后再评估
+- [x] 参考 Raycast Snippets 完善 Text Transformer
+  - [x] 将数据结构从 `trigger/replacement` 演进为包含 `id`、`trigger`、`name`、`body`、`description?`、`enabled`、`tags?` 的 Snippet，并兼容迁移已有数据
+  - [x] 候选框显示名称、描述和正文预览，不再直接展示完整 replacement；支持启用/禁用与按 tag 筛选
+  - [x] 支持多行正文与多个触发前缀，不再劫持 Tab 和空格
+  - [x] 支持 `{cursor}`，并首批加入 `{date}`、`{time}`、`{datetime}`、`{uuid}`、`{clipboard}`、`{activeFile}`、`{cwd}`、`{selection}` 动态变量
+  - [x] 打通文本收藏与 Text Transformer，可将收藏内容直接创建为 Snippet
+  - [x] 支持带版本号的 JSON 导入/导出（`{ "version": 1, "snippets": [...] }`），用于备份、恢复和跨设备迁移
+  - [x] 暂不引入文件夹和脚本引擎；待 Snippet 数量与使用场景增长后再评估
 
 - [x] 改善代码可维护性
   - [x] 参考fallow提供的探针修复高复杂度的代码
