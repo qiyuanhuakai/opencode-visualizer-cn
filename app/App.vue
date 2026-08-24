@@ -740,6 +740,12 @@ import {
   storageSetJSON,
 } from './utils/storageKeys';
 import {
+  modelVisibilityKey,
+  readHiddenModelsFromStorage,
+  writeHiddenModelsToStorage,
+  type ModelVisibilityEntry,
+} from './utils/modelVisibilityStorage';
+import {
   markSandboxDeleted,
   pruneDeletedSandboxStore,
   readDeletedSandboxStore,
@@ -1570,21 +1576,6 @@ type ProviderResponse = BackendProviderResponse;
 type ProviderConfigState = BackendProviderConfigState;
 
 const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';
-
-type ModelVisibilityEntry = {
-  providerID: string;
-  modelID: string;
-  visibility: 'show' | 'hide';
-};
-
-type ModelVisibilityStore = {
-  user: ModelVisibilityEntry[];
-  recent: string[];
-  variant: Record<string, string>;
-};
-
-const MODEL_VISIBILITY_STORAGE_KEY = 'opencode.global.dat:model';
-const LEGACY_DISABLED_MODELS_STORAGE_KEY = 'opencode.settings.disabledModels.v1';
 
 type AgentInfo = {
   name: string;
@@ -3080,99 +3071,6 @@ function normalizeIdList(values?: string[]) {
     : [];
 }
 
-function createEmptyModelVisibilityStore(): ModelVisibilityStore {
-  return {
-    user: [],
-    recent: [],
-    variant: {},
-  };
-}
-
-function parseModelVisibilityStore(raw: string | null): ModelVisibilityStore {
-  if (!raw) return createEmptyModelVisibilityStore();
-  try {
-    const parsed = JSON.parse(raw) as Partial<ModelVisibilityStore>;
-    return {
-      user: Array.isArray(parsed.user)
-        ? parsed.user.filter(
-            (entry): entry is ModelVisibilityEntry =>
-              Boolean(entry?.providerID && entry?.modelID) &&
-              (entry.visibility === 'show' || entry.visibility === 'hide'),
-          )
-        : [],
-      recent: Array.isArray(parsed.recent)
-        ? parsed.recent.filter((value): value is string => typeof value === 'string')
-        : [],
-      variant:
-        parsed.variant && typeof parsed.variant === 'object' && !Array.isArray(parsed.variant)
-          ? Object.fromEntries(
-              Object.entries(parsed.variant).filter(
-                (entry): entry is [string, string] => typeof entry[1] === 'string',
-              ),
-            )
-          : {},
-    };
-  } catch {
-    return createEmptyModelVisibilityStore();
-  }
-}
-
-function modelVisibilityKey(providerID: string, modelID: string) {
-  return `${providerID}/${modelID}`;
-}
-
-function readHiddenModelsFromStorage() {
-  if (typeof window === 'undefined') return [];
-  const currentStore = parseModelVisibilityStore(
-    window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY),
-  );
-  const currentHidden = currentStore.user
-    .filter((entry) => entry.visibility === 'hide')
-    .map((entry) => modelVisibilityKey(entry.providerID, entry.modelID));
-  if (currentHidden.length > 0) return Array.from(new Set(currentHidden)).sort();
-  const legacyRaw = window.localStorage.getItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
-  if (!legacyRaw) return [];
-  try {
-    const legacy = JSON.parse(legacyRaw) as string[];
-    return Array.isArray(legacy)
-      ? [...new Set(legacy.filter((value): value is string => typeof value === 'string'))].sort()
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
-  if (typeof window === 'undefined') return;
-  const store = parseModelVisibilityStore(
-    window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY),
-  );
-  const hiddenSet = new Set(nextHiddenModels);
-  const preservedUser = store.user.filter(
-    (entry) => !hiddenSet.has(modelVisibilityKey(entry.providerID, entry.modelID)),
-  );
-  const nextUser = [
-    ...preservedUser,
-    ...Array.from(hiddenSet)
-      .sort()
-      .map((key) => {
-        const { providerID, modelID } = parseProviderModelKey(key);
-        return providerID && modelID ? { providerID, modelID, visibility: 'hide' as const } : null;
-      })
-      .filter((entry): entry is { providerID: string; modelID: string; visibility: 'hide' } =>
-        Boolean(entry),
-      ),
-  ];
-  window.localStorage.setItem(
-    MODEL_VISIBILITY_STORAGE_KEY,
-    JSON.stringify({
-      ...store,
-      user: nextUser,
-    }),
-  );
-  window.localStorage.removeItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
-}
-
 function isModelAvailable(modelId: string) {
   return !hiddenModels.value.includes(modelId);
 }
@@ -3989,8 +3887,8 @@ async function fetchGlobalProviderConfig() {
 
 function handleModelVisibilityStorage(event: StorageEvent) {
   if (
-    event.key !== MODEL_VISIBILITY_STORAGE_KEY &&
-    event.key !== LEGACY_DISABLED_MODELS_STORAGE_KEY
+    event.key !== storageKey(StorageKeys.settings.modelVisibility) &&
+    event.key !== storageKey(StorageKeys.settings.disabledModels)
   )
     return;
   try {
