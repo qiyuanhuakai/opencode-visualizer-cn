@@ -125,6 +125,44 @@ export function storageRemove(key: string) {
   }
 }
 
+function restoreStorageEntries(
+  storage: StorageBackend,
+  previousEntries: Readonly<Record<string, string | null>>,
+) {
+  for (const [key, value] of Object.entries(previousEntries)) {
+    try {
+      if (value === null) storage.removeItem(key);
+      else storage.setItem(key, value);
+    } catch {}
+  }
+}
+
+export function storageUpdate(entries: Readonly<Record<string, string | null>>) {
+  const storage = resolveStorageBackend();
+  if (!storage) return false;
+  const prefixedEntries = Object.fromEntries(
+    Object.entries(entries).map(([key, value]) => [storageKey(key), value]),
+  );
+  try {
+    if (storage.update) return storage.update(prefixedEntries) !== false;
+    const previousEntries = Object.fromEntries(
+      Object.keys(prefixedEntries).map((key) => [key, storage.getItem(key)]),
+    );
+    try {
+      for (const [key, value] of Object.entries(prefixedEntries)) {
+        const acknowledged = value === null ? storage.removeItem(key) : storage.setItem(key, value);
+        if (acknowledged === false) throw new Error('Storage update rejected');
+      }
+      return true;
+    } catch {
+      restoreStorageEntries(storage, previousEntries);
+      return false;
+    }
+  } catch {
+    return false;
+  }
+}
+
 export function storageGetJSON<T>(key: string): T | null {
   const raw = storageGet(key);
   if (!raw) return null;

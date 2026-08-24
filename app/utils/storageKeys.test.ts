@@ -8,6 +8,7 @@ import {
   storageRemove,
   storageSet,
   storageSetJSON,
+  storageUpdate,
 } from './storageKeys';
 
 describe('storageKeys', () => {
@@ -120,6 +121,38 @@ describe('storageKeys', () => {
     // Then: both false acknowledgements remain observable to rollback callers.
     expect(setResult).toBe(false);
     expect(removeResult).toBe(false);
+  });
+
+  it('prefixes and forwards one atomic Electron storage update', () => {
+    // Given: Electron exposes one observable bundle-update boundary.
+    const update = vi.fn(() => true);
+    vi.stubGlobal('window', {
+      localStorage: window.localStorage,
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn(() => null),
+          setItem: vi.fn(() => true),
+          removeItem: vi.fn(() => true),
+          migrate: vi.fn(() => true),
+          update,
+        },
+      },
+    });
+
+    // When: credential metadata, secret, and removal are submitted together.
+    const result = storageUpdate({
+      [StorageKeys.auth.serverUrl]: 'https://new.example',
+      [StorageKeys.auth.credentials]: 'new-secret',
+      [StorageKeys.auth.codexBridgeToken]: null,
+    });
+
+    // Then: one prefixed payload crosses the Electron boundary unchanged.
+    expect(result).toBe(true);
+    expect(update).toHaveBeenCalledWith({
+      'opencode.auth.serverUrl.v1': 'https://new.example',
+      'opencode.auth.credentials.v1': 'new-secret',
+      'opencode.auth.codexBridgeToken.v1': null,
+    });
   });
 
   it('throttles failed migration retries while keeping legacy storage readable', async () => {
