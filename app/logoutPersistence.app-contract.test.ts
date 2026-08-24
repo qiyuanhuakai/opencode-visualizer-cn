@@ -34,14 +34,25 @@ describe('App logout persistence contract', () => {
     const handlerSource = appSource.slice(handlerStart, handlerEnd);
 
     // When: the application handles the unauthorized connection event.
-    const loadingGuard = handlerSource.indexOf("if (uiInitState.value === 'loading')");
+    const stateCaptureIndex = handlerSource.indexOf(
+      'const connectionStateBeforeError = connectionState.value',
+    );
+    const errorStateIndex = handlerSource.indexOf("connectionState.value = 'error'");
+    const loadingGuard = handlerSource.indexOf(
+      "uiInitState.value === 'loading' && connectionStateBeforeError === 'connecting'",
+    );
+    const cancelIndex = handlerSource.indexOf('cancelInitialization()');
     const recoveryIndex = handlerSource.indexOf('await handleOpenCodeUnauthorized(msg)');
     const loginIndex = handlerSource.indexOf("uiInitState.value = 'login'");
 
-    // Then: rejected cleanup is observed before any login transition.
+    // Then: only the initial fail-fast owner is ignored; replacement errors cancel stale bootstrap.
     expect(handlerStart).toBeGreaterThan(-1);
     expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(stateCaptureIndex).toBeGreaterThan(-1);
+    expect(errorStateIndex).toBeGreaterThan(stateCaptureIndex);
     expect(loadingGuard).toBeGreaterThan(-1);
+    expect(loadingGuard).toBeGreaterThan(errorStateIndex);
+    expect(cancelIndex).toBeGreaterThan(loadingGuard);
     expect(loadingGuard).toBeLessThan(recoveryIndex);
     expect(recoveryIndex).toBeGreaterThan(-1);
     expect(loginIndex).toBeGreaterThan(recoveryIndex);

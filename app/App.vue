@@ -9278,7 +9278,7 @@ function handlePtyEvent(event: {
   }
 }
 
-const { startInitialization, abortInitialization } = useBackendActivation({
+const { startInitialization, cancelInitialization, abortInitialization } = useBackendActivation({
   credentials,
   codexApi,
   ge,
@@ -9450,8 +9450,10 @@ onMounted(() => {
     ge.on('connection.error', async (payload) => {
       if (payload.statusCode === 401 || payload.statusCode === 403) {
         const msg = `${payload.message} (HTTP ${payload.statusCode})`;
+        const connectionStateBeforeError = connectionState.value;
         connectionState.value = 'error';
-        if (uiInitState.value === 'loading') return;
+        if (uiInitState.value === 'loading' && connectionStateBeforeError === 'connecting') return;
+        cancelInitialization();
         const credentialsCleared = await handleOpenCodeUnauthorized(msg);
         if (!credentialsCleared) {
           initErrorMessage.value = t('app.errors.logoutPersistenceFailed');
