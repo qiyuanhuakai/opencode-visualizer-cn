@@ -674,6 +674,7 @@ import { reconcileDialogRequests } from './utils/reconcileDialogRequests';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import { createBackendRequestFence } from './utils/backendRequestFence';
+import { createSingleFlightCredentialCleanup } from './utils/credentialCleanup';
 import { resolveThreadSubagentSessions, type SessionHistoryMeta } from './utils/threadSubagents';
 import { requestWorkerResult, retryReferencedSessionIds } from './utils/retryReferencedSessions';
 import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
@@ -3196,9 +3197,20 @@ async function hydrateActiveWorktreeResources() {
   ]);
 }
 
-function handleOpenCodeUnauthorized(message: string) {
+const clearUnauthorizedOpenCodeCredentials = createSingleFlightCredentialCleanup({
+  disconnect: () => ge.disconnect(),
+  clear: () => credentials.clear(),
+  confirmRetry: () => showConfirm(t('app.errors.logoutPersistenceFailed')),
+});
+
+async function handleOpenCodeUnauthorized(message: string) {
   storageSet(StorageKeys.state.lastAuthError, message);
-  credentials.clear();
+  const cleared = await clearUnauthorizedOpenCodeCredentials();
+  if (!cleared) return false;
+  loginUsername.value = '';
+  loginPassword.value = '';
+  loginRequiresAuth.value = false;
+  return true;
 }
 
 function normalizeStoredAttachment(value: unknown): Attachment | null {
@@ -9343,6 +9355,9 @@ async function handleLogout() {
     const shouldRetry = await showConfirm(t('app.errors.logoutPersistenceFailed'));
     if (!shouldRetry) return;
   }
+  loginUsername.value = '';
+  loginPassword.value = '';
+  loginRequiresAuth.value = false;
   uiInitState.value = 'login';
   acpMessageBridge.stop();
   disconnectAcpBackend();
@@ -9432,14 +9447,18 @@ onMounted(() => {
     }),
   );
   globalEventUnsubscribers.push(
-    ge.on('connection.error', (payload) => {
+    ge.on('connection.error', async (payload) => {
       if (payload.statusCode === 401 || payload.statusCode === 403) {
         const msg = `${payload.message} (HTTP ${payload.statusCode})`;
-        storageSet(StorageKeys.state.lastAuthError, msg);
-        credentials.clear();
+        connectionState.value = 'error';
+        if (uiInitState.value === 'loading') return;
+        const credentialsCleared = await handleOpenCodeUnauthorized(msg);
+        if (!credentialsCleared) {
+          initErrorMessage.value = t('app.errors.logoutPersistenceFailed');
+          return;
+        }
         uiInitState.value = 'login';
         initErrorMessage.value = msg;
-        connectionState.value = 'error';
         return;
       }
       if (uiInitState.value === 'loading') {

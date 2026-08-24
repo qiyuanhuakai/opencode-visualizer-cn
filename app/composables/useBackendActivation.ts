@@ -1,5 +1,6 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
+import { SseConnectionError } from '../utils/sseConnection';
 
 type UiInitState = 'loading' | 'ready' | 'error' | 'login';
 type ConnectionState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error';
@@ -73,7 +74,7 @@ export type UseBackendActivationOptions = {
   bootstrapSelections: () => Promise<void>;
   hydrateActiveWorktreeResources: () => Promise<void>;
   reloadSelectedSessionState: (sessionId: string) => Promise<void>;
-  handleOpenCodeUnauthorized: (message: string) => void;
+  handleOpenCodeUnauthorized: (message: string) => Promise<boolean>;
 };
 
 export function useBackendActivation(options: UseBackendActivationOptions) {
@@ -169,6 +170,19 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
+  async function resolveOpenCodeFailure(error: unknown) {
+    const connectionError = error instanceof SseConnectionError ? error : null;
+    const message = connectionError
+      ? `${connectionError.message} (HTTP ${connectionError.statusCode})`
+      : options.toErrorMessage(error);
+    const unauthorized =
+      connectionError?.statusCode === 401 || connectionError?.statusCode === 403;
+    const credentialsCleared = unauthorized
+      ? await options.handleOpenCodeUnauthorized(message)
+      : true;
+    return { message, credentialsCleared };
+  }
+
   async function activateOpenCode() {
     options.disconnectAcpBackend();
     options.disconnectCodexBackend();
@@ -202,13 +216,10 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       // failures (all pre-Ready) may send the user back to login.
       if (options.uiInitState.value === 'ready') return;
       options.ge.disconnect();
-      const message = options.toErrorMessage(error);
+      const { message, credentialsCleared } = await resolveOpenCodeFailure(error);
       options.connectionState.value = 'error';
-      if (/\(40[13]\)/.test(message)) {
-        options.handleOpenCodeUnauthorized(message);
-      }
       options.initErrorMessage.value = message;
-      options.uiInitState.value = 'login';
+      options.uiInitState.value = credentialsCleared ? 'login' : 'error';
     } finally {
       initializationInFlight.value = false;
     }

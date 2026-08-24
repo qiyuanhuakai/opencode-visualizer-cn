@@ -21,6 +21,30 @@ describe('App logout persistence contract', () => {
     expect(logoutSource).toContain("await showConfirm(t('app.errors.logoutPersistenceFailed'))");
     expect(clearIndex).toBeGreaterThan(-1);
     expect(loginIndex).toBeGreaterThan(clearIndex);
+    expect(logoutSource.indexOf("loginUsername.value = ''")).toBeGreaterThan(clearIndex);
+    expect(logoutSource.indexOf("loginPassword.value = ''")).toBeGreaterThan(clearIndex);
+    expect(logoutSource.indexOf('loginRequiresAuth.value = false')).toBeGreaterThan(clearIndex);
+  });
+
+  it('does not present an unauthorized login until credential deletion succeeds', () => {
+    // Given: the live connection can receive 401/403 while native credential deletion rejects.
+    const appSource = readFileSync(resolve(__dirname, 'App.vue'), 'utf8');
+    const handlerStart = appSource.indexOf("ge.on('connection.error'");
+    const handlerEnd = appSource.indexOf("sessionScope.on('permission.asked'", handlerStart);
+    const handlerSource = appSource.slice(handlerStart, handlerEnd);
+
+    // When: the application handles the unauthorized connection event.
+    const loadingGuard = handlerSource.indexOf("if (uiInitState.value === 'loading')");
+    const recoveryIndex = handlerSource.indexOf('await handleOpenCodeUnauthorized(msg)');
+    const loginIndex = handlerSource.indexOf("uiInitState.value = 'login'");
+
+    // Then: rejected cleanup is observed before any login transition.
+    expect(handlerStart).toBeGreaterThan(-1);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(loadingGuard).toBeGreaterThan(-1);
+    expect(loadingGuard).toBeLessThan(recoveryIndex);
+    expect(recoveryIndex).toBeGreaterThan(-1);
+    expect(loginIndex).toBeGreaterThan(recoveryIndex);
   });
 
   it('does not initialize a backend until replacement credentials persist', () => {

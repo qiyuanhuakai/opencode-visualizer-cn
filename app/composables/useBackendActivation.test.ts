@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useBackendActivation } from './useBackendActivation';
 import type { BackendKind } from '../backends/types';
+import { SseConnectionError } from '../utils/sseConnection';
 
 type HarnessOverrides = {
   bootstrapSelections?: () => Promise<void>;
   hydrateActiveWorktreeResources?: () => Promise<void>;
+  connectOpenCode?: () => Promise<void>;
+  handleOpenCodeUnauthorized?: (message: string) => Promise<boolean>;
 };
 
 function createHarness(initialBackend: BackendKind = 'opencode', overrides: HarnessOverrides = {}) {
@@ -37,9 +40,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     }),
   };
   const ge = {
-    connect: vi.fn(async () => {
-      calls.push('ge.connect');
-    }),
+    connect: vi.fn(
+      overrides.connectOpenCode ??
+        (async () => {
+          calls.push('ge.connect');
+        }),
+    ),
     disconnect: vi.fn(() => {
       calls.push('ge.disconnect');
     }),
@@ -143,9 +149,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     reloadSelectedSessionState: async () => {
       calls.push('reloadSelectedSessionState');
     },
-    handleOpenCodeUnauthorized: (message: string) => {
-      calls.push(`handleOpenCodeUnauthorized:${message}`);
-    },
+    handleOpenCodeUnauthorized:
+      overrides.handleOpenCodeUnauthorized ??
+      (async (message: string) => {
+        calls.push(`handleOpenCodeUnauthorized:${message}`);
+        return true;
+      }),
   });
 
   return {
@@ -357,6 +366,44 @@ describe('useBackendActivation', () => {
     expect(harness.uiInitState.value).toBe('login');
     expect(harness.initErrorMessage.value).toContain('errors.sessionNotFound');
     expect(harness.calls).not.toContain('handleOpenCodeUnauthorized:errors.sessionNotFound');
+  });
+
+  it('does not present login when unauthorized credential deletion is rejected', async () => {
+    // Given: the real transport rejects startup with typed 401 and cleanup cannot commit.
+    const handleOpenCodeUnauthorized = vi.fn(async () => false);
+    const harness = createHarness('opencode', {
+      connectOpenCode: async () => {
+        throw new SseConnectionError('Authentication failed.', 401);
+      },
+      handleOpenCodeUnauthorized,
+    });
+
+    // When: OpenCode activation handles the unauthorized response.
+    await harness.activation.startInitialization();
+
+    // Then: the application exposes an error state instead of claiming login cleanup completed.
+    expect(handleOpenCodeUnauthorized).toHaveBeenCalledWith('Authentication failed. (HTTP 401)');
+    expect(harness.uiInitState.value).toBe('error');
+    expect(harness.connectionState.value).toBe('error');
+  });
+
+  it('routes startup 403 through acknowledged credential cleanup', async () => {
+    // Given: the real transport rejects startup with typed 403 and cleanup cannot commit.
+    const handleOpenCodeUnauthorized = vi.fn(async () => false);
+    const harness = createHarness('opencode', {
+      connectOpenCode: async () => {
+        throw new SseConnectionError('Authentication failed.', 403);
+      },
+      handleOpenCodeUnauthorized,
+    });
+
+    // When: OpenCode activation handles the forbidden response.
+    await harness.activation.startInitialization();
+
+    // Then: 403 uses the same durable cleanup gate and cannot present login early.
+    expect(handleOpenCodeUnauthorized).toHaveBeenCalledWith('Authentication failed. (HTTP 403)');
+    expect(harness.uiInitState.value).toBe('error');
+    expect(harness.connectionState.value).toBe('error');
   });
 
   it('reports ACP configuration failures and releases the initialization lock', async () => {

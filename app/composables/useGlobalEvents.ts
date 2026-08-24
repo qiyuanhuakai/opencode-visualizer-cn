@@ -1,7 +1,7 @@
 import { type Ref, watch, watchEffect } from 'vue';
 import type { GlobalEventMap, SsePacket } from '../types/sse';
 import type { TabToWorkerMessage, WorkerToTabMessage } from '../types/sse-worker';
-import { createSseConnection } from '../utils/sseConnection';
+import { createSseConnection, SseConnectionError } from '../utils/sseConnection';
 import { TypedEmitter } from '../utils/eventEmitter';
 import SseSharedWorker from '../workers/sse-shared-worker?sharedworker';
 import { useI18n } from '../i18n/useI18n';
@@ -31,6 +31,12 @@ type Transport = {
   disconnect: () => void;
   sendToWorker: (message: TabToWorkerMessage) => boolean;
 };
+
+function createConnectionError(message: string, statusCode?: number) {
+  return statusCode === undefined
+    ? new Error(message)
+    : new SseConnectionError(message, statusCode);
+}
 
 export type SessionScope = {
   on<K extends EventKey>(event: K, listener: (payload: GlobalEventMap[K]) => void): () => void;
@@ -160,12 +166,12 @@ function createDirectTransport(
     },
     onError(message, statusCode) {
       connected = false;
-      callbacks.onError(message, statusCode);
       if (openRejector) {
-        openRejector(new Error(message));
+        openRejector(createConnectionError(message, statusCode));
         openResolver = null;
         openRejector = null;
       }
+      callbacks.onError(message, statusCode);
     },
   });
 
@@ -258,12 +264,12 @@ function createSharedWorkerTransport(
       }
       if (message.type === 'connection.error') {
         connected = false;
-        callbacks.onError(message.message, message.statusCode);
         if (openRejector) {
-          openRejector(new Error(message.message));
+          openRejector(createConnectionError(message.message, message.statusCode));
           openResolver = null;
           openRejector = null;
         }
+        callbacks.onError(message.message, message.statusCode);
       }
     };
     instance.port.start();
