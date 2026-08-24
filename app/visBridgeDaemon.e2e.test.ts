@@ -123,9 +123,10 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
     });
     const socket = connect(fixture.port, '127.0.0.1');
     socket.on('error', () => {});
+    const responseChunks: Buffer[] = [];
+    socket.on('data', (chunk) => responseChunks.push(chunk));
     const socketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
     await new Promise<void>((resolve) => socket.once('connect', resolve));
-    socket.resume();
     socket.write(
       `POST /command/exec HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload[0]}`,
     );
@@ -136,7 +137,10 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
       if (!socket.destroyed) socket.end(payload.slice(1));
       await socketClosed;
 
-      // Then: command admission is already closed and no late child can be created.
+      // Then: the request is explicitly rejected after admission closes and no late child is created.
+      const rawResponse = Buffer.concat(responseChunks).toString('utf8');
+      expect(rawResponse).toContain('HTTP/1.1 400 Bad Request');
+      expect(rawResponse).toContain('{"error":"Command runner is shutting down."}');
       await expect(readFile(pidPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       socket.destroy();
