@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 // Mirror of the Task 2 preload schema (sorted arrays; double-quoted literals so
 // the JSON serialization is a stable substring the contract test can pin).
 // `versions` holds the SORTED key set of { node, electron, chrome }.
-export const EXPECTED_PRELOAD_SCHEMA = { "topLevel": ["clipboard", "getAppVersion", "getPlatform", "localFile", "persistentStorage", "platform", "versions"], "clipboard": ["readText", "writeText"], "persistentStorage": ["getItem", "migrate", "removeItem", "setItem"], "localFile": ["clearApplication", "close", "offChanged", "offError", "onChanged", "onError", "open", "selectApplication"], "versions": ["chrome", "electron", "node"] };
+export const EXPECTED_PRELOAD_SCHEMA = { "topLevel": ["clipboard", "getAppVersion", "getPlatform", "localFile", "persistentStorage", "platform", "versions"], "clipboard": ["readText", "writeText"], "persistentStorage": ["getItem", "migrate", "removeItem", "setItem", "update"], "localFile": ["clearApplication", "close", "offChanged", "offError", "onChanged", "onError", "open", "selectApplication"], "versions": ["chrome", "electron", "node"] };
 
 // The sandbox-disable switch is reconstructed at runtime so the driver source
 // never contains the literal; it is only ever CHECKED for, never passed.

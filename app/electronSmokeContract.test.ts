@@ -25,7 +25,7 @@ const EXPECTED_PRELOAD_SCHEMA = {
     'versions',
   ],
   clipboard: ['readText', 'writeText'],
-  persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem'],
+  persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem', 'update'],
   localFile: [
     'clearApplication',
     'close',
