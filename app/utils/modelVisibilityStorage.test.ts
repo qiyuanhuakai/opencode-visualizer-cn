@@ -76,6 +76,30 @@ describe('model visibility storage', () => {
     expect(hiddenModels).toEqual(['provider/legacy-model']);
   });
 
+  it.each([
+    JSON.stringify({
+      user: [{ providerID: 'provider', modelID: 7, visibility: 'hide' }],
+      recent: [],
+      variant: {},
+    }),
+    JSON.stringify({
+      user: [],
+      recent: [{ providerID: 'provider', modelID: 7 }],
+      variant: {},
+    }),
+    JSON.stringify({ user: [], recent: [], variant: { 'provider/model': 7 } }),
+  ])('falls back when canonical collections contain malformed members in %s', (value) => {
+    // Given: a canonical collection contains a malformed member while legacy state is valid.
+    storage.values.set('global.dat:model', value);
+    storage.values.set('settings.disabledModels.v1', JSON.stringify(['provider/legacy-model']));
+
+    // When: the application restores hidden model state.
+    const hiddenModels = readHiddenModelsFromStorage();
+
+    // Then: partial parsing cannot turn corrupt canonical data into an authoritative empty store.
+    expect(hiddenModels).toEqual(['provider/legacy-model']);
+  });
+
   it('removes obsolete hide entries when a model is made visible', () => {
     // Given: canonical storage contains two hidden models and unrelated explicit visibility metadata.
     storage.values.set(
@@ -86,7 +110,7 @@ describe('model visibility storage', () => {
           { providerID: 'provider', modelID: 'second', visibility: 'hide' },
           { providerID: 'provider', modelID: 'shown', visibility: 'show' },
         ],
-        recent: ['provider/recent'],
+        recent: [{ providerID: 'provider', modelID: 'recent' }],
         variant: { 'provider/second': 'fast' },
       }),
     );
@@ -101,7 +125,7 @@ describe('model visibility storage', () => {
         { providerID: 'provider', modelID: 'shown', visibility: 'show' },
         { providerID: 'provider', modelID: 'second', visibility: 'hide' },
       ],
-      recent: ['provider/recent'],
+      recent: [{ providerID: 'provider', modelID: 'recent' }],
       variant: { 'provider/second': 'fast' },
     });
   });
@@ -132,5 +156,22 @@ describe('model visibility storage', () => {
     expect(saved).toBe(true);
     expect(storage.values.has('settings.disabledModels.v1')).toBe(true);
     expect(readHiddenModelsFromStorage()).toEqual([]);
+  });
+
+  it('refuses to overwrite malformed canonical model state', () => {
+    // Given: canonical state has valid preferences beside one malformed history member.
+    const malformed = JSON.stringify({
+      recent: [{ providerID: 'openai', modelID: 7 }],
+      user: [{ providerID: 'openai', modelID: 'gpt-5', visibility: 'show' }],
+      variant: { 'openai/gpt-5': 'high' },
+    });
+    storage.values.set('global.dat:model', malformed);
+
+    // When: a visibility update tries to commit through the canonical writer.
+    const saved = writeHiddenModelsToStorage(['anthropic/claude-sonnet']);
+
+    // Then: the invalid payload remains recoverable instead of being replaced.
+    expect(saved).toBe(false);
+    expect(storage.values.get('global.dat:model')).toBe(malformed);
   });
 });

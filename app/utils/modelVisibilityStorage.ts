@@ -6,9 +6,14 @@ export type ModelVisibilityEntry = {
   visibility: 'show' | 'hide';
 };
 
+type ModelKey = {
+  providerID: string;
+  modelID: string;
+};
+
 type ModelVisibilityStore = {
   user: ModelVisibilityEntry[];
-  recent: string[];
+  recent: ModelKey[];
   variant: Record<string, string>;
 };
 
@@ -16,60 +21,54 @@ function createEmptyStore(): ModelVisibilityStore {
   return { user: [], recent: [], variant: {} };
 }
 
-function isModelVisibilityEntry(value: unknown): value is ModelVisibilityEntry {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const entry = value as Record<string, unknown>;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isModelKey(value: unknown): value is ModelKey {
   return (
-    typeof entry.providerID === 'string' &&
-    entry.providerID.length > 0 &&
-    typeof entry.modelID === 'string' &&
-    entry.modelID.length > 0 &&
-    (entry.visibility === 'show' || entry.visibility === 'hide')
+    isRecord(value) &&
+    typeof value.providerID === 'string' &&
+    value.providerID.length > 0 &&
+    typeof value.modelID === 'string' &&
+    value.modelID.length > 0
   );
+}
+
+function isModelVisibilityEntry(value: unknown): value is ModelVisibilityEntry {
+  if (!isModelKey(value) || !('visibility' in value)) return false;
+  return value.visibility === 'show' || value.visibility === 'hide';
 }
 
 function parseUserEntries(value: unknown) {
-  return Array.isArray(value) ? value.filter(isModelVisibilityEntry) : [];
+  if (value === undefined) return [];
+  return Array.isArray(value) && value.every(isModelVisibilityEntry) ? value : null;
 }
 
 function parseRecentEntries(value: unknown) {
-  return Array.isArray(value)
-    ? value.filter((entry): entry is string => typeof entry === 'string')
-    : [];
+  if (value === undefined) return [];
+  return Array.isArray(value) && value.every(isModelKey) ? value : null;
 }
 
 function parseVariants(value: unknown) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value).filter(
-      (entry): entry is [string, string] => typeof entry[1] === 'string',
-    ),
-  );
-}
-
-function hasValidStoreFields(value: Record<string, unknown>) {
-  return (
-    (value.user === undefined || Array.isArray(value.user)) &&
-    (value.recent === undefined || Array.isArray(value.recent)) &&
-    (value.variant === undefined ||
-      (Boolean(value.variant) &&
-        typeof value.variant === 'object' &&
-        !Array.isArray(value.variant)))
-  );
+  if (value === undefined) return {};
+  if (!isRecord(value)) return null;
+  const entries = Object.entries(value);
+  if (!entries.every((entry): entry is [string, string] => typeof entry[1] === 'string')) {
+    return null;
+  }
+  return Object.fromEntries(entries);
 }
 
 function parseStore(raw: string | null): ModelVisibilityStore | null {
   if (!raw) return null;
   try {
     const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const parsed = value as Record<string, unknown>;
-    if (!hasValidStoreFields(parsed)) return null;
-    return {
-      user: parseUserEntries(parsed.user),
-      recent: parseRecentEntries(parsed.recent),
-      variant: parseVariants(parsed.variant),
-    };
+    if (!isRecord(value)) return null;
+    const user = parseUserEntries(value.user);
+    const recent = parseRecentEntries(value.recent);
+    const variant = parseVariants(value.variant);
+    return user && recent && variant ? { user, recent, variant } : null;
   } catch {
     return null;
   }
@@ -115,7 +114,9 @@ export function readHiddenModelsFromStorage() {
 }
 
 export function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
-  const store = parseStore(storageGet(StorageKeys.settings.modelVisibility)) ?? createEmptyStore();
+  const stored = storageGet(StorageKeys.settings.modelVisibility);
+  const store = stored === null ? createEmptyStore() : parseStore(stored);
+  if (!store) return false;
   const hiddenSet = new Set(nextHiddenModels);
   const preservedUser = store.user.filter(
     (entry) =>
