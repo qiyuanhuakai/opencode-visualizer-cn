@@ -15,6 +15,7 @@ export type DirectorySessionHydration = {
 export type TabToWorkerMessage =
   | {
       type: 'connect';
+      connectionEpoch: number;
       baseUrl: string;
       authorization?: string;
       errorMessages?: {
@@ -54,14 +55,17 @@ export type WorkerToTabMessage =
     }
   | {
       type: 'connection.open';
+      connectionEpoch: number;
     }
   | {
       type: 'connection.error';
+      connectionEpoch: number;
       message: string;
       statusCode?: number;
     }
   | {
       type: 'connection.reconnected';
+      connectionEpoch: number;
     }
   | {
       type: 'state.bootstrap';

@@ -200,7 +200,11 @@ async function flush(): Promise<void> {
   await Promise.resolve();
 }
 
-async function connectWorker(baseUrl = 'http://server', authorization?: string): Promise<WorkerPort> {
+async function connectWorker(
+  baseUrl = 'http://server',
+  authorization?: string,
+  connectionEpoch = 1,
+): Promise<WorkerPort> {
   await import('./sse-shared-worker');
   const connectionCount = mocks.callbacks.length;
   const channel = new MessageChannel();
@@ -213,7 +217,7 @@ async function connectWorker(baseUrl = 'http://server', authorization?: string):
   onconnect(new MessageEvent('connect', { ports: [channel.port1] }));
   channel.port1.onmessage?.(
     new MessageEvent<TabToWorkerMessage>('message', {
-      data: { type: 'connect', baseUrl, authorization },
+      data: { type: 'connect', baseUrl, authorization, connectionEpoch } as TabToWorkerMessage,
     }),
   );
   if (mocks.callbacks.length > connectionCount) {
@@ -255,6 +259,29 @@ afterEach(() => {
 });
 
 describe('SSE SharedWorker hydration', () => {
+  it('echoes each attached port epoch on shared connection lifecycle errors', async () => {
+    // Given: two windows share one SSE connection with distinct connect epochs.
+    const first = await connectWorker('http://shared', 'Bearer shared', 11);
+    const second = await connectWorker('http://shared', 'Bearer shared', 22);
+    first.messages.splice(0);
+    second.messages.splice(0);
+
+    // When: their shared connection emits an authorization failure.
+    latestCallbacks().onError('Authentication failed.', 401);
+    await vi.waitFor(() => {
+      expect(messagesOf(first.messages, 'connection.error')).toHaveLength(1);
+      expect(messagesOf(second.messages, 'connection.error')).toHaveLength(1);
+    });
+
+    // Then: each window receives its own opaque port binding epoch.
+    expect(messagesOf(first.messages, 'connection.error')[0]).toMatchObject({
+      connectionEpoch: 11,
+    });
+    expect(messagesOf(second.messages, 'connection.error')[0]).toMatchObject({
+      connectionEpoch: 22,
+    });
+  });
+
   it('passes an explicit undefined authorization into an unauthenticated worker read', async () => {
     const authenticated = await connectWorker('http://authenticated', 'Bearer TOP-SECRET');
     await vi.waitFor(() =>

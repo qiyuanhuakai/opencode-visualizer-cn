@@ -230,6 +230,7 @@ function createSharedWorkerTransport(
   const t = translate ?? ((key: string) => key);
   let worker: SharedWorker | null = null;
   let connected = false;
+  let connectionEpoch = 0;
   let openResolver: ((value: void) => void) | null = null;
   let openRejector: ((reason: Error) => void) | null = null;
 
@@ -239,6 +240,14 @@ function createSharedWorkerTransport(
     instance.port.onmessage = (event: MessageEvent<WorkerToTabMessage>) => {
       const message = event.data;
       if (!message || typeof message !== 'object') return;
+      if (
+        (message.type === 'connection.open' ||
+          message.type === 'connection.error' ||
+          message.type === 'connection.reconnected') &&
+        message.connectionEpoch !== connectionEpoch
+      ) {
+        return;
+      }
 
       if (callbacks.onWorkerMessage?.(message)) {
         return;
@@ -306,8 +315,10 @@ function createSharedWorkerTransport(
         throw new Error(t('errors.sseUrlEmpty'));
       }
       connected = false;
+      connectionEpoch += 1;
       const message: TabToWorkerMessage = {
         type: 'connect',
+        connectionEpoch,
         baseUrl: normalized,
         authorization,
         errorMessages: {
@@ -321,6 +332,7 @@ function createSharedWorkerTransport(
     },
     disconnect() {
       connected = false;
+      connectionEpoch += 1;
       if (worker) {
         const message: TabToWorkerMessage = { type: 'disconnect' };
         worker.port.postMessage(message);

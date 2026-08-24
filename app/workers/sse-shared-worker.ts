@@ -99,6 +99,7 @@ type ConnectionState = {
 
 const connections = new Map<string, ConnectionState>();
 const portToKey = new Map<MessagePort, string>();
+const portToConnectionEpoch = new Map<MessagePort, number>();
 const MAX_UNKNOWN_SESSION_DIRECTORIES = 32;
 const MAX_PENDING_UNKNOWN_SESSIONS = 2_000;
 const MAX_PENDING_DIRECT_HYDRATIONS = 128;
@@ -114,6 +115,24 @@ function toKey(baseUrl: string, authorization?: string) {
 function send(port: MessagePort, message: WorkerToTabMessage) { port.postMessage(message); }
 
 function broadcast(state: ConnectionState, message: WorkerToTabMessage) { for (const port of state.ports) send(port, message); }
+
+type ConnectionLifecyclePayload =
+  | { type: 'connection.open' }
+  | { type: 'connection.error'; message: string; statusCode?: number }
+  | { type: 'connection.reconnected' };
+
+function sendConnectionLifecycle(
+  port: MessagePort,
+  message: ConnectionLifecyclePayload,
+  connectionEpoch = portToConnectionEpoch.get(port),
+) {
+  if (connectionEpoch === undefined) return;
+  send(port, { ...message, connectionEpoch } as WorkerToTabMessage);
+}
+
+function broadcastConnectionLifecycle(state: ConnectionState, message: ConnectionLifecyclePayload) {
+  for (const port of state.ports) sendConnectionLifecycle(port, message);
+}
 
 function isCurrentConnection(state: ConnectionState) { return connections.get(state.key) === state; }
 
@@ -1074,7 +1093,7 @@ function scheduleAuthoritativeBootstrap(state: ConnectionState): void {
     void bootstrapState(state).catch((error: unknown) => {
       const message =
         error instanceof Error ? error.message : 'Failed to bootstrap worker state.';
-      broadcast(state, { type: 'connection.error', message });
+      broadcastConnectionLifecycle(state, { type: 'connection.error', message });
     });
   });
 }
@@ -1209,6 +1228,7 @@ function cleanupIfUnused(state: ConnectionState) {
 
 function detachPort(port: MessagePort) {
   const key = portToKey.get(port);
+  portToConnectionEpoch.delete(port);
   if (!key) return;
   portToKey.delete(port);
   const state = connections.get(key);
@@ -1280,24 +1300,24 @@ function createConnectionState(
       onOpen(isReconnect) {
         state.connected = true;
         clearBootstrapRetry(state, true);
-        broadcast(state, { type: 'connection.open' });
+        broadcastConnectionLifecycle(state, { type: 'connection.open' });
         if (isReconnect) {
           cancelAllReferencedSubagentHydrations(state);
           abortAllUnknownSessionResolutions(state);
           abortCurrentBootstrap(state);
           state.topologyReady = false;
           replaceHydrationGeneration(state);
-          broadcast(state, { type: 'connection.reconnected' });
+          broadcastConnectionLifecycle(state, { type: 'connection.reconnected' });
         }
         void bootstrapState(state, isReconnect).catch((error) => {
           const message =
             error instanceof Error ? error.message : 'Failed to bootstrap worker state.';
-          broadcast(state, { type: 'connection.error', message });
+          broadcastConnectionLifecycle(state, { type: 'connection.error', message });
         });
       },
       onError(message, statusCode) {
         state.connected = false;
-        broadcast(state, { type: 'connection.error', message, statusCode });
+        broadcastConnectionLifecycle(state, { type: 'connection.error', message, statusCode });
       },
     }),
   };
@@ -1307,6 +1327,7 @@ function createConnectionState(
 
 function attachPort(
   port: MessagePort,
+  connectionEpoch: number,
   baseUrl: string,
   authorization?: string,
   errorMessages?: {
@@ -1326,9 +1347,10 @@ function attachPort(
 
   state.ports.add(port);
   portToKey.set(port, key);
+  portToConnectionEpoch.set(port, connectionEpoch);
 
   if (state.connected) {
-    send(port, { type: 'connection.open' });
+    sendConnectionLifecycle(port, { type: 'connection.open' });
     if (!state.bootstrapPromise) {
       send(port, {
         type: 'state.bootstrap',
@@ -1345,14 +1367,25 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
   if (!message || typeof message !== 'object') return;
 
   if (message.type === 'connect') {
+    if (!Number.isSafeInteger(message.connectionEpoch) || message.connectionEpoch <= 0) return;
     if (!message.baseUrl) {
-      send(port, {
-        type: 'connection.error',
-        message: message.errorMessages?.emptyBaseUrl ?? 'SSE base URL is empty.',
-      });
+      sendConnectionLifecycle(
+        port,
+        {
+          type: 'connection.error',
+          message: message.errorMessages?.emptyBaseUrl ?? 'SSE base URL is empty.',
+        },
+        message.connectionEpoch,
+      );
       return;
     }
-    attachPort(port, message.baseUrl, message.authorization, message.errorMessages);
+    attachPort(
+      port,
+      message.connectionEpoch,
+      message.baseUrl,
+      message.authorization,
+      message.errorMessages,
+    );
     return;
   }
 
