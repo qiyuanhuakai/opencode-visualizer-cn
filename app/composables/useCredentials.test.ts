@@ -52,6 +52,13 @@ describe('useCredentials', () => {
             }
             return true;
           }),
+          update: vi.fn((entries: Record<string, string | null>) => {
+            for (const [key, value] of Object.entries(entries)) {
+              if (value === null) electronStore.delete(key);
+              else electronStore.set(key, value);
+            }
+            return true;
+          }),
         },
       },
     });
@@ -102,6 +109,87 @@ describe('useCredentials', () => {
     expect(credentials.password.value).toBe('');
     expect(electronStore.get('opencode.auth.credentials.v1')).toBeUndefined();
     expect(electronStore.get('opencode.auth.serverUrl.v1')).toBe('http://localhost:5555');
+  });
+
+  it('clears canonical and legacy credential aliases together', async () => {
+    // Given: canonical credentials coexist with residue from the legacy storage key.
+    electronStore.set(
+      'opencode.auth.credentials.v1',
+      JSON.stringify({ url: 'http://localhost:5555', username: 'alice', password: 'secret' }),
+    );
+    electronStore.set(
+      'opencode.credentials.v1',
+      JSON.stringify({ url: 'http://localhost:4096', username: 'legacy', password: 'stale' }),
+    );
+    const credentials = await importFresh();
+    credentials.load();
+
+    // When: the user clears authentication.
+    credentials.clear();
+
+    // Then: neither key can restore credentials on a later launch.
+    expect(electronStore.get('opencode.auth.credentials.v1')).toBeUndefined();
+    expect(electronStore.get('opencode.credentials.v1')).toBeUndefined();
+  });
+
+  it('keeps the active credentials when the deletion transaction is rejected', async () => {
+    // Given: both aliases exist and native storage rejects their atomic deletion.
+    const canonical = JSON.stringify({
+      url: 'http://localhost:5555',
+      username: 'alice',
+      password: 'secret',
+    });
+    electronStore.set('opencode.auth.credentials.v1', canonical);
+    electronStore.set('opencode.credentials.v1', canonical);
+    const update = vi.mocked(window.electronAPI!.persistentStorage!.update);
+    update.mockReturnValue(false);
+    const credentials = await importFresh();
+    credentials.load();
+
+    // When: the user tries to clear authentication during the storage failure.
+    const cleared = credentials.clear();
+
+    // Then: logout remains unsuccessful and neither durable nor in-memory auth is lost.
+    expect(cleared).toBe(false);
+    expect(credentials.username.value).toBe('alice');
+    expect(credentials.password.value).toBe('secret');
+    expect(electronStore.get('opencode.auth.credentials.v1')).toBe(canonical);
+    expect(electronStore.get('opencode.credentials.v1')).toBe(canonical);
+  });
+
+  it('rejects replacement credentials without mutating memory when persistence is unavailable', async () => {
+    // Given: Electron migration completed but every credential mutation is rejected.
+    const persistentStorage = window.electronAPI!.persistentStorage!;
+    vi.mocked(persistentStorage.update).mockReturnValue(false);
+    vi.mocked(persistentStorage.setItem).mockReturnValue(false);
+    vi.mocked(persistentStorage.removeItem).mockReturnValue(false);
+    const credentials = await importFresh();
+    const initial = {
+      backendKind: credentials.backendKind.value,
+      codexUrl: credentials.codexBridgeUrl.value,
+      acpUrl: credentials.acpBridgeUrl.value,
+    };
+
+    // When: each login mode attempts to replace its credentials.
+    const openCodeSaved = credentials.save('http://replacement', 'new-user', 'new-password');
+    const codexSaved = credentials.saveCodex('ws://replacement-codex', 'new-codex-token');
+    const acpSaved = credentials.saveAcp(
+      'ws://replacement-acp',
+      'new-acp-token',
+      'replacement-agent',
+    );
+
+    // Then: every caller receives failure and no replacement is exposed in memory.
+    expect([openCodeSaved, codexSaved, acpSaved]).toEqual([false, false, false]);
+    expect(credentials.backendKind.value).toBe(initial.backendKind);
+    expect(credentials.url.value).toBe('');
+    expect(credentials.username.value).toBe('');
+    expect(credentials.password.value).toBe('');
+    expect(credentials.codexBridgeUrl.value).toBe(initial.codexUrl);
+    expect(credentials.codexBridgeToken.value).toBe('');
+    expect(credentials.acpBridgeUrl.value).toBe(initial.acpUrl);
+    expect(credentials.acpBridgeToken.value).toBe('');
+    expect(credentials.acpAgentId.value).toBe('');
   });
 
   it('migrates legacy credentials storage into the new keys', async () => {

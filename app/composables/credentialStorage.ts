@@ -3,6 +3,7 @@ import {
   storageGet,
   storageRemove,
   storageSet,
+  storageUpdate,
 } from '../utils/storageKeys';
 
 export type StoredCredentials = {
@@ -37,4 +38,14 @@ export function migrateLegacyCredentials() {
   storageSet(StorageKeys.auth.credentials, JSON.stringify(next));
   storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY);
   return next;
+}
+
+export function clearStoredCredentials(
+  additionalEntries: Readonly<Record<string, string | null>> = {},
+) {
+  return storageUpdate({
+    ...additionalEntries,
+    [LEGACY_CREDENTIALS_STORAGE_KEY]: null,
+    [StorageKeys.auth.credentials]: null,
+  });
 }
