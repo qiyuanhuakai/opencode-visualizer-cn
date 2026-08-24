@@ -60,6 +60,52 @@ describe('model visibility storage', () => {
     expect(hiddenModels).toEqual(['provider/legacy-model']);
   });
 
+  it.each([
+    JSON.stringify({ user: 'corrupt', recent: [], variant: {} }),
+    JSON.stringify({ user: [], recent: {}, variant: {} }),
+    JSON.stringify({ user: [], recent: [], variant: [] }),
+  ])('falls back from invalid canonical fields in %s', (value) => {
+    // Given: canonical JSON is object-shaped but one required field has the wrong type.
+    storage.values.set('global.dat:model', value);
+    storage.values.set('settings.disabledModels.v1', JSON.stringify(['provider/legacy-model']));
+
+    // When: the application restores hidden model state.
+    const hiddenModels = readHiddenModelsFromStorage();
+
+    // Then: malformed canonical fields cannot suppress the valid recovery source.
+    expect(hiddenModels).toEqual(['provider/legacy-model']);
+  });
+
+  it('removes obsolete hide entries when a model is made visible', () => {
+    // Given: canonical storage contains two hidden models and unrelated explicit visibility metadata.
+    storage.values.set(
+      'global.dat:model',
+      JSON.stringify({
+        user: [
+          { providerID: 'provider', modelID: 'first', visibility: 'hide' },
+          { providerID: 'provider', modelID: 'second', visibility: 'hide' },
+          { providerID: 'provider', modelID: 'shown', visibility: 'show' },
+        ],
+        recent: ['provider/recent'],
+        variant: { 'provider/second': 'fast' },
+      }),
+    );
+
+    // When: the user makes the first model visible while leaving the second hidden.
+    expect(writeHiddenModelsToStorage(['provider/second'])).toBe(true);
+
+    // Then: reload restores only the requested hidden model and preserves unrelated metadata.
+    expect(readHiddenModelsFromStorage()).toEqual(['provider/second']);
+    expect(JSON.parse(storage.values.get('global.dat:model')!)).toEqual({
+      user: [
+        { providerID: 'provider', modelID: 'shown', visibility: 'show' },
+        { providerID: 'provider', modelID: 'second', visibility: 'hide' },
+      ],
+      recent: ['provider/recent'],
+      variant: { 'provider/second': 'fast' },
+    });
+  });
+
   it('retains legacy state when the canonical write is rejected', () => {
     // Given: only legacy model state exists and canonical persistence rejects the update.
     storage.values.set('settings.disabledModels.v1', JSON.stringify(['provider/legacy-model']));

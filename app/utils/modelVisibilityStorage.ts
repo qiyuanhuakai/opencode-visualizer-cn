@@ -47,12 +47,24 @@ function parseVariants(value: unknown) {
   );
 }
 
+function hasValidStoreFields(value: Record<string, unknown>) {
+  return (
+    (value.user === undefined || Array.isArray(value.user)) &&
+    (value.recent === undefined || Array.isArray(value.recent)) &&
+    (value.variant === undefined ||
+      (Boolean(value.variant) &&
+        typeof value.variant === 'object' &&
+        !Array.isArray(value.variant)))
+  );
+}
+
 function parseStore(raw: string | null): ModelVisibilityStore | null {
   if (!raw) return null;
   try {
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const parsed = value as Partial<ModelVisibilityStore>;
+    const parsed = value as Record<string, unknown>;
+    if (!hasValidStoreFields(parsed)) return null;
     return {
       user: parseUserEntries(parsed.user),
       recent: parseRecentEntries(parsed.recent),
@@ -106,7 +118,9 @@ export function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
   const store = parseStore(storageGet(StorageKeys.settings.modelVisibility)) ?? createEmptyStore();
   const hiddenSet = new Set(nextHiddenModels);
   const preservedUser = store.user.filter(
-    (entry) => !hiddenSet.has(modelVisibilityKey(entry.providerID, entry.modelID)),
+    (entry) =>
+      entry.visibility !== 'hide' &&
+      !hiddenSet.has(modelVisibilityKey(entry.providerID, entry.modelID)),
   );
   const hiddenEntries = [...hiddenSet]
     .sort()
