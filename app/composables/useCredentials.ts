@@ -18,6 +18,7 @@ import {
   clearStoredCredentials,
   migrateLegacyCredentials,
   parseStoredCredentials,
+  saveStoredCredentials,
   type StoredCredentials,
 } from './credentialStorage';
 
@@ -76,11 +77,7 @@ export function useCredentials() {
     };
     if (
       typeof window !== 'undefined' &&
-      !storageUpdate({
-        [StorageKeys.auth.backendKind]: 'opencode',
-        [StorageKeys.auth.serverUrl]: newUrl,
-        [StorageKeys.auth.credentials]: JSON.stringify(next),
-      })
+      !saveStoredCredentials(next, { [StorageKeys.auth.backendKind]: 'opencode' })
     ) {
       return false;
     }

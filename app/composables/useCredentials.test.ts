@@ -213,6 +213,44 @@ describe('useCredentials', () => {
     expect(electronStore.get('opencode.credentials.v1')).toBeUndefined();
   });
 
+  it('retains legacy credentials when their atomic migration is rejected', async () => {
+    // Given: legacy credentials are the only durable copy and native storage rejects migration.
+    const legacy = JSON.stringify({
+      url: 'http://localhost:4096',
+      username: 'legacy-user',
+      password: 'legacy-pass',
+    });
+    electronStore.set('opencode.credentials.v1', legacy);
+    const persistentStorage = window.electronAPI!.persistentStorage!;
+    vi.mocked(persistentStorage.update).mockReturnValueOnce(false);
+
+    // When: credentials load during the failed migration.
+    const credentials = await importFresh();
+    credentials.load();
+
+    // Then: the source remains retryable and unacknowledged secrets are not exposed as canonical.
+    expect(electronStore.get('opencode.credentials.v1')).toBe(legacy);
+    expect(electronStore.get('opencode.auth.credentials.v1')).toBeUndefined();
+    expect(credentials.username.value).toBe('');
+    expect(credentials.password.value).toBe('');
+  });
+
+  it('removes the legacy alias in the same replacement credential transaction', async () => {
+    // Given: stale legacy credentials remain beside a new login attempt.
+    electronStore.set(
+      'opencode.credentials.v1',
+      JSON.stringify({ url: 'http://old', username: 'old-user', password: 'old-secret' }),
+    );
+    const credentials = await importFresh();
+
+    // When: replacement OpenCode credentials are persisted.
+    expect(credentials.save('http://new', 'new-user', 'new-secret')).toBe(true);
+
+    // Then: the atomic bundle cannot leave the stale alias available for later resurrection.
+    expect(electronStore.get('opencode.credentials.v1')).toBeUndefined();
+    expect(electronStore.get('opencode.auth.credentials.v1')).toContain('new-user');
+  });
+
   it('reacts to cross-window storage updates', async () => {
     const credentials = await importFresh();
 
