@@ -79,5 +79,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     setItem: (key, value) => ipcRenderer.sendSync('persistent-storage-set', { key, value }),
     removeItem: (key) => ipcRenderer.sendSync('persistent-storage-remove', key),
     migrate: (entries) => ipcRenderer.sendSync('persistent-storage-migrate', entries),
+    update: (entries) => ipcRenderer.sendSync('persistent-storage-update', entries),
   },
 });

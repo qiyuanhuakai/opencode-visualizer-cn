@@ -26,6 +26,7 @@ interface Window {
       setItem: (key: string, value: string) => boolean,
       removeItem: (key: string) => boolean,
       migrate: (entries: Record<string, string>) => boolean,
+      update: (entries: Record<string, string | null>) => boolean,
     },
     localFile?: {
       selectApplication: () => Promise<string | null>,

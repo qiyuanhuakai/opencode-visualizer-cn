@@ -40,6 +40,7 @@ interface ElectronApiSchema {
     setItem: (key: string, value: string) => unknown;
     removeItem: (key: string) => unknown;
     migrate: (entries: Record<string, string>) => unknown;
+    update: (entries: Record<string, string | null>) => unknown;
   };
 }
 
@@ -170,6 +171,7 @@ describe('electron preload contract', () => {
       'migrate',
       'removeItem',
       'setItem',
+      'update',
     ]);
   });
 
@@ -255,6 +257,20 @@ describe('electron preload contract', () => {
     // Then: preload preserves the acknowledgement and sends one bulk payload.
     expect(result).toBe(false);
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-migrate', entries);
+  });
+
+  it('routes one acknowledged persistentStorage bundle update through synchronous IPC', () => {
+    // Given: main rejects one atomic set-and-remove transaction.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    ipcRenderer.sendSync.mockReturnValueOnce(false);
+    const entries = { 'opencode.auth.serverUrl.v1': 'https://new.example', obsolete: null };
+
+    // When: renderer replaces the complete credential bundle.
+    const result = api.persistentStorage.update(entries);
+
+    // Then: preload preserves the acknowledgement and sends one bulk payload.
+    expect(result).toBe(false);
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-update', entries);
   });
 
   it('forwards persistent-storage-changed into a window storage event', () => {
