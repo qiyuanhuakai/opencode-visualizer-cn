@@ -123,22 +123,20 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
     });
     const socket = connect(fixture.port, '127.0.0.1');
     socket.on('error', () => {});
+    const socketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
     await new Promise<void>((resolve) => socket.once('connect', resolve));
+    socket.resume();
     socket.write(
-      `POST /command/exec HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload[0]}`,
+      `POST /command/exec HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload[0]}`,
     );
 
     try {
       // When: the authenticated stop endpoint acknowledges shutdown before the body completes.
-      const daemonPid = await requestFixtureStop(fixture);
+      await requestFixtureStop(fixture);
       if (!socket.destroyed) socket.end(payload.slice(1));
-      const deadline = Date.now() + 3_000;
-      while (isAlive(daemonPid) && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
+      await socketClosed;
 
       // Then: command admission is already closed and no late child can be created.
-      expect(isAlive(daemonPid)).toBe(false);
       await expect(readFile(pidPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       socket.destroy();

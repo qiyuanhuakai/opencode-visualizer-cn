@@ -120,10 +120,11 @@ export async function runDaemonProcess(options, createBridgeServer) {
 
   const shutdown = () => {
     if (shutdownPromise) return shutdownPromise;
+    const stoppingOwnedProcesses = server.stopOwnedProcesses?.();
     shutdownPromise = (async () => {
       await startupPromise?.catch(() => undefined);
       const closingMainServer = closeMainServer();
-      await server.stopOwnedProcesses?.();
+      await stoppingOwnedProcesses;
       await closingMainServer;
       await runtime.stop();
       if (controlServer) await closeServer(controlServer, controlSockets);
@@ -161,11 +162,9 @@ export async function runDaemonProcess(options, createBridgeServer) {
         response.writeHead(404).end();
         return;
       }
-      void closeMainServer();
+      const stopping = shutdown();
       response.writeHead(202).end();
-      setImmediate(() => {
-        void shutdown().then(() => process.exit(0));
-      });
+      void stopping.then(() => process.exit(0));
     });
     controlSockets = trackConnections(controlServer);
     const controlPort = await listenServer(controlServer, 0, '127.0.0.1');
