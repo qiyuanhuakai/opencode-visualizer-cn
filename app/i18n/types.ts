@@ -126,6 +126,8 @@ export interface LocaleMessages {
     };
     errors: {
       sseConnectFailed: string;
+      credentialPersistenceFailed: string;
+      logoutPersistenceFailed: string;
       sessionRenameInvalidResponse: string;
     };
     descriptions: {

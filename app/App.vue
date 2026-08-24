@@ -9304,20 +9304,33 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   handleOpenCodeUnauthorized,
 });
 
-function handleLogin() {
-  if (loginBackendKind.value === 'codex') {
-    credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value);
-    void startInitialization();
-    return;
-  }
-  if (loginBackendKind.value === 'acp') {
-    credentials.saveAcp(loginAcpBridgeUrl.value, loginAcpBridgeToken.value, loginAcpAgentId.value);
-    void startInitialization();
-    return;
-  }
+function saveOpenCodeLoginCredentials() {
   const u = loginRequiresAuth.value ? loginUsername.value : '';
   const p = loginRequiresAuth.value ? loginPassword.value : '';
-  credentials.save(loginUrl.value, u, p);
+  return credentials.save(loginUrl.value, u, p);
+}
+
+const saveLoginCredentialsByBackend: Record<BackendKind, () => boolean> = {
+  opencode: saveOpenCodeLoginCredentials,
+  codex: () => credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value),
+  acp: () =>
+    credentials.saveAcp(
+      loginAcpBridgeUrl.value,
+      loginAcpBridgeToken.value,
+      loginAcpAgentId.value,
+    ),
+};
+
+function saveLoginCredentials() {
+  return saveLoginCredentialsByBackend[loginBackendKind.value]();
+}
+
+function handleLogin() {
+  if (!saveLoginCredentials()) {
+    initErrorMessage.value = t('app.errors.credentialPersistenceFailed');
+    return;
+  }
+  initErrorMessage.value = '';
   void startInitialization();
 }
 
@@ -9325,11 +9338,14 @@ function handleAbortInit() {
   abortInitialization();
 }
 
-function handleLogout() {
+async function handleLogout() {
+  while (!credentials.clear()) {
+    const shouldRetry = await showConfirm(t('app.errors.logoutPersistenceFailed'));
+    if (!shouldRetry) return;
+  }
   uiInitState.value = 'login';
   acpMessageBridge.stop();
   disconnectAcpBackend();
-  credentials.clear();
   ge.disconnect();
   activeBackendKind.value = credentials.backendKind.value;
   loginBackendKind.value = credentials.backendKind.value;

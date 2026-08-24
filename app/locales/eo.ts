@@ -129,6 +129,9 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: 'Konekto al SSE-fluo malsukcesis.',
+      credentialPersistenceFailed:
+        'Ne eblis konservi la akreditaĵojn. Kontrolu la konservejon kaj reprovu.',
+      logoutPersistenceFailed: 'Ne eblis forigi la konservitajn akreditaĵojn. Ĉu reprovi elsaluti?',
       sessionRenameInvalidResponse: 'Renomado de seanco redonis nevalidan respondon.',
     },
     descriptions: {

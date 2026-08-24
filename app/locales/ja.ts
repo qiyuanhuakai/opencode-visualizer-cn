@@ -131,6 +131,10 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: 'SSEストリームへの接続に失敗しました。',
+      credentialPersistenceFailed:
+        '認証情報を保存できませんでした。ストレージを確認して再試行してください。',
+      logoutPersistenceFailed:
+        '保存された認証情報を削除できませんでした。ログアウトを再試行しますか？',
       sessionRenameInvalidResponse: 'セッション名変更の応答が無効です。',
     },
     descriptions: {
