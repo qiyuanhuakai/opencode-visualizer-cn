@@ -323,6 +323,28 @@ describe('useCredentials', () => {
     expect(electronStore.get('opencode.auth.acpBridgeToken.v1')).toBe('legacy-secret');
   });
 
+  it('does not resurrect a migrated shared token after ACP logout', async () => {
+    // Given: an ACP profile imported the historical shared Codex token on its first launch.
+    electronStore.set('opencode.auth.backendKind.v1', 'acp');
+    electronStore.set('opencode.auth.codexBridgeUrl.v1', 'ws://bridge.test:23004/codex');
+    electronStore.set('opencode.auth.codexBridgeToken.v1', 'legacy-secret');
+    electronStore.set('opencode.auth.acpAgentId.v1', 'oh-my-pi');
+    const first = await importFresh();
+    first.load();
+    expect(first.acpBridgeToken.value).toBe('legacy-secret');
+
+    // When: ACP logout succeeds and a fresh renderer loads the retained ACP selection.
+    expect(first.clear()).toBe(true);
+    vi.resetModules();
+    const second = await importFresh();
+    second.load();
+
+    // Then: neither the canonical nor historical token can silently authenticate ACP again.
+    expect(electronStore.get('opencode.auth.acpBridgeToken.v1')).toBe('');
+    expect(electronStore.get('opencode.auth.codexBridgeToken.v1')).toBe('legacy-secret');
+    expect(second.acpBridgeToken.value).toBe('');
+  });
+
   it('falls back to OpenCode when persisted ACP credentials have no agent id', async () => {
     electronStore.set('opencode.auth.backendKind.v1', 'acp');
     electronStore.set('opencode.auth.codexBridgeUrl.v1', 'ws://localhost:23004/codex');

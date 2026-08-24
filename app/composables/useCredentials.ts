@@ -191,7 +191,7 @@ export function useCredentials() {
       }
       if (preservedBackendKind === 'acp') {
         entries[StorageKeys.auth.acpBridgeUrl] = preservedAcpUrl;
-        entries[StorageKeys.auth.acpBridgeToken] = null;
+        entries[StorageKeys.auth.acpBridgeToken] = '';
       }
       if (!clearStoredCredentials(entries)) return false;
     } catch {
