@@ -241,6 +241,35 @@ describe('SettingsModal snippets', () => {
     expect(settings.textTransformers.value[0]?.tags).toEqual(['Review', 'Quality']);
   });
 
+  it('bounds many short unique tags before returning to the snippet list', async () => {
+    // Given: a detail editor receives the maximum raw draft length as short unique tags.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const tagInput = host.querySelector<HTMLInputElement>('[data-snippet-field="tags"]')!;
+    const manyTags = Array.from({ length: 40_000 }, (_, index) => index.toString(36)).join(',');
+    const boundedDraft = manyTags.slice(0, tagInput.maxLength);
+    const splitSpy = vi.spyOn(String.prototype, 'split');
+
+    // When: the raw value crosses the input boundary and the user returns to the list.
+    inputValue(tagInput, manyTags);
+    const eagerlySplitWholeDraft = splitSpy.mock.contexts.some(
+      (context, index) =>
+        String(context) === boundedDraft && String(splitSpy.mock.calls[index]?.[0]) === ',',
+    );
+    splitSpy.mockRestore();
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: parsing stops without splitting the whole draft and each tag is rendered at most once per surface.
+    expect(eagerlySplitWholeDraft).toBe(false);
+    expect(settings.textTransformers.value[0]?.tags).toHaveLength(256);
+    expect(host.querySelectorAll('.transformer-tag-filter').length).toBeLessThanOrEqual(258);
+    expect(
+      host.querySelector('.transformer-row')?.querySelectorAll('.snippet-completion-tag'),
+    ).toHaveLength(256);
+  });
+
   it('round-trips the maximum valid tag collection through the detail input', async () => {
     // Given: one valid snippet contains 256 unique tags of 256 characters each.
     const tags = Array.from({ length: 256 }, (_, index) =>

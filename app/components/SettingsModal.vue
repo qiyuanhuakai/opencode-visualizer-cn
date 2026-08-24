@@ -898,6 +898,8 @@ import {
   MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
   MAX_TEXT_TRANSFORMER_NAME_LENGTH,
   MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAG_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAGS,
   MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
   isValidTextTransformerTrigger,
   parseTextTransformerImport,
@@ -1637,12 +1639,18 @@ function textTransformerTagText(snippet: TextTransformer) {
 function parseTextTransformerTags(value: string): string[] {
   const tags: string[] = [];
   const keys = new Set<string>();
-  for (const part of value.split(',')) {
-    const tag = part.trim();
+  let start = 0;
+  while (start <= value.length && tags.length < MAX_TEXT_TRANSFORMER_TAGS) {
+    const separator = value.indexOf(',', start);
+    const end = separator === -1 ? value.length : separator;
+    const tag = value.slice(start, end).trim().slice(0, MAX_TEXT_TRANSFORMER_TAG_LENGTH);
     const key = tag.toLocaleLowerCase();
-    if (!tag || keys.has(key)) continue;
-    keys.add(key);
-    tags.push(tag);
+    if (tag && !keys.has(key)) {
+      keys.add(key);
+      tags.push(tag);
+    }
+    if (separator === -1) break;
+    start = separator + 1;
   }
   return tags;
 }
