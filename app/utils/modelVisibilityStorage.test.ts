@@ -107,7 +107,12 @@ describe('model visibility storage', () => {
       JSON.stringify({
         user: [
           { providerID: 'provider', modelID: 'first', visibility: 'hide' },
-          { providerID: 'provider', modelID: 'second', visibility: 'hide' },
+          {
+            providerID: 'provider',
+            modelID: 'second',
+            visibility: 'hide',
+            favorite: true,
+          },
           { providerID: 'provider', modelID: 'shown', visibility: 'show' },
         ],
         recent: [{ providerID: 'provider', modelID: 'recent' }],
@@ -123,10 +128,53 @@ describe('model visibility storage', () => {
     expect(JSON.parse(storage.values.get('global.dat:model')!)).toEqual({
       user: [
         { providerID: 'provider', modelID: 'shown', visibility: 'show' },
-        { providerID: 'provider', modelID: 'second', visibility: 'hide' },
+        {
+          providerID: 'provider',
+          modelID: 'second',
+          visibility: 'hide',
+          favorite: true,
+        },
       ],
       recent: [{ providerID: 'provider', modelID: 'recent' }],
       variant: { 'provider/second': 'fast' },
+    });
+  });
+
+  it('replaces an explicit show entry when the same model becomes hidden', () => {
+    // Given: canonical state explicitly shows a model with unrelated metadata.
+    storage.values.set(
+      'global.dat:model',
+      JSON.stringify({
+        user: [
+          {
+            providerID: 'provider',
+            modelID: 'model',
+            visibility: 'show',
+            favorite: true,
+            label: 'keep-me',
+          },
+        ],
+        recent: [],
+        variant: {},
+      }),
+    );
+
+    // When: the user hides that model.
+    expect(writeHiddenModelsToStorage(['provider/model'])).toBe(true);
+
+    // Then: canonical state has one hide entry rather than contradictory show and hide entries.
+    expect(JSON.parse(storage.values.get('global.dat:model')!)).toEqual({
+      user: [
+        {
+          providerID: 'provider',
+          modelID: 'model',
+          visibility: 'hide',
+          favorite: true,
+          label: 'keep-me',
+        },
+      ],
+      recent: [],
+      variant: {},
     });
   });
 

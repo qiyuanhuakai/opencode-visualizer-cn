@@ -118,6 +118,9 @@ export function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
   const store = stored === null ? createEmptyStore() : parseStore(stored);
   if (!store) return false;
   const hiddenSet = new Set(nextHiddenModels);
+  const existingEntries = new Map(
+    store.user.map((entry) => [modelVisibilityKey(entry.providerID, entry.modelID), entry]),
+  );
   const preservedUser = store.user.filter(
     (entry) =>
       entry.visibility !== 'hide' &&
@@ -125,9 +128,13 @@ export function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
   );
   const hiddenEntries = [...hiddenSet]
     .sort()
-    .map(parseModelKey)
-    .filter((entry): entry is { providerID: string; modelID: string } => Boolean(entry))
-    .map((entry) => ({ ...entry, visibility: 'hide' as const }));
+    .map((key) => {
+      const existing = existingEntries.get(key);
+      if (existing) return { ...existing, visibility: 'hide' as const };
+      const entry = parseModelKey(key);
+      return entry ? { ...entry, visibility: 'hide' as const } : null;
+    })
+    .filter((entry) => entry !== null);
   const saved = storageSet(
     StorageKeys.settings.modelVisibility,
     JSON.stringify({ ...store, user: [...preservedUser, ...hiddenEntries] }),
