@@ -7,6 +7,11 @@ export type PersistentStorage = {
     oldValue: null;
     newValue: string;
   }>;
+  readonly update: (entries: Readonly<Record<string, string | null>>) => Array<{
+    key: string;
+    oldValue: string | null;
+    newValue: string | null;
+  }>;
 };
 
 export function createPersistentStorage(filePath: () => string): PersistentStorage;
