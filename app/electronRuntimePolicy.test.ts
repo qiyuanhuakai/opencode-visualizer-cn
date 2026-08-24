@@ -236,6 +236,7 @@ describe('electron-runtime-policy', () => {
         'persistent-storage-set',
         'persistent-storage-remove',
         'persistent-storage-migrate',
+        'persistent-storage-update',
       ];
 
       // When: every synchronous storage handler is inspected.
@@ -309,6 +310,23 @@ describe('electron-runtime-policy', () => {
       expect(migrationHandler).toContain('persistentStorage.migrate');
       expect(migrationHandler).toMatch(
         /try\s*\{[\s\S]*persistentStorage\.migrate[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
+      );
+    });
+
+    it('commits renderer storage bundle updates through one acknowledged main-process handler', () => {
+      // Given: credential metadata and secrets must cross the disk boundary together.
+      const updateHandler = mainSource.match(
+        /ipcMain\.on\('persistent-storage-update',[\s\S]*?\n\}\);/u,
+      )?.[0];
+
+      // When: the bundle update handler source is inspected.
+      expect(updateHandler).toBeDefined();
+
+      // Then: sender trust precedes one atomic update and failures reject the transaction.
+      expect(updateHandler).toContain('assertTrustedRenderer(event)');
+      expect(updateHandler).toContain('persistentStorage.update');
+      expect(updateHandler).toMatch(
+        /try\s*\{[\s\S]*persistentStorage\.update[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
       );
     });
   });

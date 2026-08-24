@@ -466,3 +466,32 @@ ipcMain.on('persistent-storage-migrate', (event, entries) => {
   }
   event.returnValue = true;
 });
+
+ipcMain.on('persistent-storage-update', (event, entries) => {
+  assertTrustedRenderer(event);
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
+    event.returnValue = false;
+    return;
+  }
+
+  const updateEntries = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (!key.startsWith(RENDERER_STORAGE_PREFIX) || (typeof value !== 'string' && value !== null)) {
+      event.returnValue = false;
+      return;
+    }
+    if (key !== LOCAL_APPLICATION_PATH_KEY) updateEntries[key] = value;
+  }
+
+  let changes;
+  try {
+    changes = persistentStorage.update(updateEntries);
+  } catch {
+    event.returnValue = false;
+    return;
+  }
+  for (const change of changes) {
+    broadcastPersistentStorageChange(change, event.sender.id);
+  }
+  event.returnValue = true;
+});
