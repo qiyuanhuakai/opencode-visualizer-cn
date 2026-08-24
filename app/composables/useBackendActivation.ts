@@ -79,6 +79,8 @@ export type UseBackendActivationOptions = {
 
 export function useBackendActivation(options: UseBackendActivationOptions) {
   const initializationInFlight = { value: false } as Ref<boolean>;
+  let openCodeInitializationGeneration = 0;
+  let selectionBootstrapInFlight: Promise<void> | null = null;
 
   function markStartup(name: string) {
     if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
@@ -183,7 +185,23 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     return { message, credentialsCleared };
   }
 
-  async function activateOpenCode() {
+  async function bootstrapOpenCodeSelection() {
+    if (selectionBootstrapInFlight) {
+      await selectionBootstrapInFlight;
+      return;
+    }
+    const bootstrap = Promise.resolve().then(() => options.bootstrapSelections());
+    selectionBootstrapInFlight = bootstrap;
+    try {
+      await bootstrap;
+    } finally {
+      if (selectionBootstrapInFlight === bootstrap) selectionBootstrapInFlight = null;
+    }
+  }
+
+  async function activateOpenCode(generation: number) {
+    const isCurrentInitialization = () =>
+      initializationInFlight.value && generation === openCodeInitializationGeneration;
     options.disconnectAcpBackend();
     options.disconnectCodexBackend();
     options.activeBackendKind.value = 'opencode';
@@ -196,11 +214,14 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
       await options.ge.connect({ failFast: true, timeoutMs: 10000 });
+      if (!isCurrentInitialization()) return;
       options.connectionState.value = 'bootstrapping';
       options.initLoadingMessage.value = options.t('app.status.loadingServerPath');
       await options.fetchHomePath();
+      if (!isCurrentInitialization()) return;
       options.initLoadingMessage.value = options.t('app.status.loadingProjects');
-      await options.bootstrapSelections();
+      await bootstrapOpenCodeSelection();
+      if (!isCurrentInitialization()) return;
       markStartup('vis:opencode-session-selectable');
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
@@ -211,7 +232,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await options.fetchGlobalProviderConfig();
       await Promise.all([options.fetchProviders(true), options.fetchAgents()]);
     } catch (error) {
-      if (!initializationInFlight.value) return;
+      if (!isCurrentInitialization()) return;
       // Once the UI reached Ready, only connect/path/hydration/selection
       // failures (all pre-Ready) may send the user back to login.
       if (options.uiInitState.value === 'ready') return;
@@ -221,7 +242,9 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.initErrorMessage.value = message;
       options.uiInitState.value = credentialsCleared ? 'login' : 'error';
     } finally {
-      initializationInFlight.value = false;
+      if (generation === openCodeInitializationGeneration) {
+        initializationInFlight.value = false;
+      }
     }
   }
 
@@ -280,15 +303,20 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await activateAcp();
       return;
     }
-    await activateOpenCode();
+    await activateOpenCode(++openCodeInitializationGeneration);
+  }
+
+  function cancelInitialization() {
+    openCodeInitializationGeneration += 1;
+    initializationInFlight.value = false;
   }
 
   function abortInitialization() {
+    cancelInitialization();
     options.ge.disconnect();
     options.disconnectAcpBackend();
     if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnectTransport();
     options.disconnectCodexBackend();
-    initializationInFlight.value = false;
     options.connectionState.value = 'connecting';
     options.uiInitState.value = 'login';
     options.initErrorMessage.value = '';
@@ -297,6 +325,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   return {
     initializationInFlight,
     startInitialization,
+    cancelInitialization,
     abortInitialization,
   };
 }

@@ -304,6 +304,67 @@ describe('useBackendActivation', () => {
     expect(harness.activation.initializationInFlight.value).toBe(false);
   });
 
+  it('does not let a cancelled bootstrap publish Ready after a replacement connection failure', async () => {
+    // Given: the initial SSE opened, while project selection is still bootstrapping.
+    let resolveBootstrap: (() => void) | undefined;
+    const harness = createHarness('opencode', {
+      bootstrapSelections: () =>
+        new Promise<void>((resolve) => {
+          resolveBootstrap = resolve;
+        }),
+    });
+    const initPromise = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(harness.connectionState.value).toBe('bootstrapping'));
+
+    // When: a replacement SSE fails terminally and invalidates this initialization generation.
+    harness.activation.cancelInitialization();
+    resolveBootstrap?.();
+    await initPromise;
+
+    // Then: the obsolete bootstrap cannot overwrite the error/login state with Ready.
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+    expect(harness.connectionState.value).toBe('bootstrapping');
+    expect(harness.uiInitState.value).toBe('loading');
+  });
+
+  it('keeps an immediate retry behind the cancelled selection bootstrap owner', async () => {
+    // Given: the cancelled generation still owns an unfinished selection bootstrap.
+    let bootstrapInProgress = false;
+    let resolveFirstBootstrap: (() => void) | undefined;
+    const bootstrapSelections = vi.fn(() => {
+      if (bootstrapInProgress) return Promise.resolve();
+      bootstrapInProgress = true;
+      return new Promise<void>((resolve) => {
+        resolveFirstBootstrap = () => {
+          bootstrapInProgress = false;
+          resolve();
+        };
+      });
+    });
+    const harness = createHarness('opencode', { bootstrapSelections });
+    const firstInitialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(harness.connectionState.value).toBe('bootstrapping'));
+
+    // When: replacement failure cancels that generation and retry starts immediately.
+    harness.activation.cancelInitialization();
+    const retryInitialization = harness.activation.startInitialization();
+    await vi.waitFor(() =>
+      expect(harness.calls.filter((call) => call === 'fetchHomePath')).toHaveLength(2),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Then: retry still awaits the first owner instead of treating its lock as success.
+    expect(bootstrapSelections).toHaveBeenCalledTimes(1);
+    expect(harness.connectionState.value).toBe('bootstrapping');
+    expect(harness.uiInitState.value).toBe('loading');
+
+    resolveFirstBootstrap?.();
+    await Promise.all([firstInitialization, retryInitialization]);
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.uiInitState.value).toBe('ready');
+  });
+
   it('keeps Ready state when resource hydration rejects after activation', async () => {
     // Given: hydration fails after the UI is already Ready
     let rejectHydration: ((error: unknown) => void) | undefined;

@@ -178,7 +178,10 @@ describe('ProviderManagerModal events', () => {
     expect(activationSource).toContain('options.connectedProviderIds.value = [];');
     expect(activationSource).toContain('options.modelOptions.value = [];');
     expect(activationSource).toContain("options.selectedModel.value = '';");
-    expect(activationSource).toContain('await options.bootstrapSelections();');
+    expect(activationSource).toContain(
+      'const bootstrap = Promise.resolve().then(() => options.bootstrapSelections());',
+    );
+    expect(activationSource).toContain('await bootstrapOpenCodeSelection();');
     expect(activationSource).toContain('await options.hydrateActiveWorktreeResources();');
     expect(activationSource).toContain('await options.fetchGlobalProviderConfig();');
     expect(activationSource).toContain(
