@@ -114,8 +114,8 @@ describe('Electron renderer storage migration', () => {
     expect(electronStore[credentialKey]).toBe('legacy-secret');
   });
 
-  it('preserves every legacy source entry when Electron rejects migration', async () => {
-    // Given: Electron rejects an atomic migration containing a credential.
+  it('retains sensitive migration sources for retry without exposing them', async () => {
+    // Given: Electron rejects an atomic migration containing stale credentials.
     const credentialKey = 'opencode.auth.credentials.v1';
     const localStore: LocalStore = { [credentialKey]: 'legacy-secret' };
     const localStorage = createLocalStorage(localStore);
@@ -133,10 +133,37 @@ describe('Electron renderer storage migration', () => {
     const storage = await import('./storageKeys');
 
     // When: a caller reads while migration is unavailable.
-    expect(storage.storageGet(storage.StorageKeys.auth.credentials)).toBe('legacy-secret');
+    expect(storage.storageGet(storage.StorageKeys.auth.credentials)).toBeNull();
 
-    // Then: fallback remains readable and no local source is deleted.
+    // Then: the sensitive source remains available only for a later migration retry.
     expect(localStore).toEqual({ [credentialKey]: 'legacy-secret' });
+    expect(localStorage.removeItem).not.toHaveBeenCalled();
+  });
+
+  it('keeps non-sensitive fallback readable while migration is pending', async () => {
+    // Given: Electron rejects an atomic migration containing non-sensitive model state.
+    const modelKey = 'opencode.global.dat:model';
+    const localStore: LocalStore = { [modelKey]: 'legacy-model-state' };
+    const localStorage = createLocalStorage(localStore);
+    vi.stubGlobal('window', {
+      localStorage,
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn(() => null),
+          setItem: vi.fn(() => true),
+          removeItem: vi.fn(() => true),
+          migrate: vi.fn(() => false),
+        },
+      },
+    });
+    const storage = await import('./storageKeys');
+
+    // When: a caller reads the non-sensitive value before migration recovers.
+    const modelState = storage.storageGet(storage.StorageKeys.settings.modelVisibility);
+
+    // Then: existing settings remain readable and their source is retained for retry.
+    expect(modelState).toBe('legacy-model-state');
+    expect(localStore).toEqual({ [modelKey]: 'legacy-model-state' });
     expect(localStorage.removeItem).not.toHaveBeenCalled();
   });
 
@@ -161,9 +188,9 @@ describe('Electron renderer storage migration', () => {
     const storage = await import('./storageKeys');
 
     // When: a caller reads through the retry-safe fallback path.
-    expect(storage.storageGet(storage.StorageKeys.auth.credentials)).toBe('legacy-secret');
+    expect(storage.storageGet(storage.StorageKeys.auth.credentials)).toBeNull();
 
-    // Then: the exception is fail-closed and leaves the complete source intact.
+    // Then: the exception hides sensitive residue while leaving the source intact for retry.
     expect(localStore).toEqual({ [credentialKey]: 'legacy-secret' });
     expect(localStorage.removeItem).not.toHaveBeenCalled();
   });

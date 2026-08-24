@@ -4,13 +4,21 @@ export type StorageBackend = {
   getItem: (key: string) => string | null;
   setItem: (key: string, value: string) => boolean | void;
   removeItem: (key: string) => boolean | void;
+  update?: (entries: Record<string, string | null>) => boolean | void;
 };
 
 export type ElectronStorageBackend = StorageBackend & {
   migrate: (entries: Record<string, string>) => boolean;
+  update: (entries: Record<string, string | null>) => boolean;
 };
 
 const MIGRATION_RETRY_MS = 1_000;
+const SENSITIVE_STORAGE_KEYS = new Set([
+  'opencode.credentials.v1',
+  'opencode.auth.credentials.v1',
+  'opencode.auth.codexBridgeToken.v1',
+  'opencode.auth.acpBridgeToken.v1',
+]);
 let hasMigrated = false;
 let nextAttemptAt = 0;
 
@@ -56,8 +64,13 @@ export function pendingElectronMigrationBackend(
   localStorage: Storage,
 ): StorageBackend {
   return {
-    getItem: (key) => electronStorage.getItem(key) ?? localStorage.getItem(key),
+    getItem: (key) => {
+      const nativeValue = electronStorage.getItem(key);
+      if (nativeValue !== null || SENSITIVE_STORAGE_KEYS.has(key)) return nativeValue;
+      return localStorage.getItem(key);
+    },
     setItem: () => false,
     removeItem: () => false,
+    update: () => false,
   };
 }
