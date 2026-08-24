@@ -77,6 +77,12 @@ function receiveStartOptions(instanceId) {
   });
 }
 
+export function acknowledgeDaemonStop(response, shutdown, exitProcess) {
+  const stopping = shutdown();
+  response.writeHead(202).end();
+  void stopping.then(exitProcess);
+}
+
 export async function runDaemonProcess(options, createBridgeServer) {
   const instanceId = process.env.VIS_BRIDGE_DAEMON_INSTANCE_ID;
   if (!instanceId) throw new Error('vis_bridge daemon identity is missing.');
@@ -162,9 +168,7 @@ export async function runDaemonProcess(options, createBridgeServer) {
         response.writeHead(404).end();
         return;
       }
-      const stopping = shutdown();
-      response.writeHead(202).end();
-      void stopping.then(() => process.exit(0));
+      acknowledgeDaemonStop(response, shutdown, () => process.exit(0));
     });
     controlSockets = trackConnections(controlServer);
     const controlPort = await listenServer(controlServer, 0, '127.0.0.1');
