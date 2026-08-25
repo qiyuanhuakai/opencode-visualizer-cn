@@ -1,27 +1,51 @@
-import {
-  migrateLocalStorageToElectronStorage,
-  pendingElectronMigrationBackend,
-  STORAGE_PREFIX,
-  type StorageBackend,
-} from './electronStorageMigration';
+const STORAGE_PREFIX = 'opencode.';
+
+type StorageBackend = {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => boolean | void;
+  removeItem: (key: string) => boolean | void;
+};
+
+let hasMigratedElectronStorage = false;
+
+function migrateLocalStorageToElectronStorage(electronStorage: StorageBackend) {
+  if (hasMigratedElectronStorage || typeof window === 'undefined') return;
+  hasMigratedElectronStorage = true;
+
+  const localStorage = window.localStorage;
+  if (!localStorage) return;
+
+  try {
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (!key || !key.startsWith(STORAGE_PREFIX)) {
+        continue;
+      }
+
+      if (electronStorage.getItem(key) !== null) {
+        continue;
+      }
+
+      const value = localStorage.getItem(key);
+      if (value !== null) {
+        electronStorage.setItem(key, value);
+      }
+    }
+  } catch {
+    return;
+  }
+}
 
 function resolveStorageBackend(): StorageBackend | null {
   if (typeof window === 'undefined') return null;
 
   const electronStorage = window.electronAPI?.persistentStorage;
-  let localStorage: Storage;
-  try {
-    localStorage = window.localStorage;
-  } catch {
-    return electronStorage ?? null;
-  }
   if (electronStorage) {
-    return migrateLocalStorageToElectronStorage(electronStorage, localStorage)
-      ? electronStorage
-      : pendingElectronMigrationBackend(electronStorage, localStorage);
+    migrateLocalStorageToElectronStorage(electronStorage);
+    return electronStorage;
   }
 
-  return localStorage;
+  return window.localStorage;
 }
 
 export const StorageKeys = {
@@ -54,8 +78,6 @@ export const StorageKeys = {
     regionTheme: 'settings.regionTheme.v1',
     themeTokens: 'settings.themeTokens.v2',
     themeRegistry: 'settings.themeRegistry.v1',
-    modelVisibility: 'global.dat:model',
-    disabledModels: 'settings.disabledModels.v1',
   },
   state: {
     sidePanelCollapsed: 'state.sidePanelCollapsed.v1',
@@ -88,7 +110,6 @@ export const StorageKeys = {
     codexBridgeToken: 'auth.codexBridgeToken.v1',
     acpBridgeToken: 'auth.acpBridgeToken.v1',
     acpAgentId: 'auth.acpAgentId.v1',
-    credentialRevision: 'auth.credentialRevision.v1',
   },
 } as const;
 
@@ -121,44 +142,6 @@ export function storageRemove(key: string) {
   if (!storage) return false;
   try {
     return storage.removeItem(storageKey(key)) !== false;
-  } catch {
-    return false;
-  }
-}
-
-function restoreStorageEntries(
-  storage: StorageBackend,
-  previousEntries: Readonly<Record<string, string | null>>,
-) {
-  for (const [key, value] of Object.entries(previousEntries)) {
-    try {
-      if (value === null) storage.removeItem(key);
-      else storage.setItem(key, value);
-    } catch {}
-  }
-}
-
-export function storageUpdate(entries: Readonly<Record<string, string | null>>) {
-  const storage = resolveStorageBackend();
-  if (!storage) return false;
-  const prefixedEntries = Object.fromEntries(
-    Object.entries(entries).map(([key, value]) => [storageKey(key), value]),
-  );
-  try {
-    if (storage.update) return storage.update(prefixedEntries) !== false;
-    const previousEntries = Object.fromEntries(
-      Object.keys(prefixedEntries).map((key) => [key, storage.getItem(key)]),
-    );
-    try {
-      for (const [key, value] of Object.entries(prefixedEntries)) {
-        const acknowledged = value === null ? storage.removeItem(key) : storage.setItem(key, value);
-        if (acknowledged === false) throw new Error('Storage update rejected');
-      }
-      return true;
-    } catch {
-      restoreStorageEntries(storage, previousEntries);
-      return false;
-    }
   } catch {
     return false;
   }
