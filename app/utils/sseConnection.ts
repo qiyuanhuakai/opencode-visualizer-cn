@@ -38,6 +38,7 @@ export class SseConnectionError extends Error {
   constructor(
     message: string,
     readonly statusCode: number,
+    readonly credentialRevision?: string | null,
   ) {
     super(message);
     this.name = 'SseConnectionError';

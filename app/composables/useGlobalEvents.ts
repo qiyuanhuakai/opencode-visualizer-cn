@@ -1,4 +1,5 @@
 import { type Ref, watch, watchEffect } from 'vue';
+import type { BackendKind } from '../backends/types';
 import type { GlobalEventMap, SsePacket } from '../types/sse';
 import type { TabToWorkerMessage, WorkerToTabMessage } from '../types/sse-worker';
 import { createSseConnection, SseConnectionError } from '../utils/sseConnection';
@@ -10,14 +11,20 @@ type EventKey = keyof GlobalEventMap;
 type ConnectOptions = { failFast?: boolean; timeoutMs?: number };
 
 type CredentialsBinding = {
+  backendKind: Ref<BackendKind>;
   baseUrl: Ref<string>;
   authHeader: Ref<string | undefined>;
+  credentialRevision: Ref<string | null>;
 };
 
 type TransportCallbacks = {
   onPacket: (packet: SsePacket) => void;
   onOpen: () => void;
-  onError: (message: string, statusCode?: number) => void;
+  onError: (
+    message: string,
+    statusCode: number | undefined,
+    credentialRevision: string | null,
+  ) => void;
   onReconnected: () => void;
   onWorkerMessage?: (message: WorkerToTabMessage) => boolean;
 };
@@ -26,16 +33,21 @@ type Transport = {
   connect: (
     baseUrl: string,
     authorization: string | undefined,
+    credentialRevision: string | null,
     options?: ConnectOptions,
   ) => Promise<void>;
   disconnect: () => void;
   sendToWorker: (message: TabToWorkerMessage) => boolean;
 };
 
-function createConnectionError(message: string, statusCode?: number) {
+function createConnectionError(
+  message: string,
+  statusCode: number | undefined,
+  credentialRevision: string | null,
+) {
   return statusCode === undefined
     ? new Error(message)
-    : new SseConnectionError(message, statusCode);
+    : new SseConnectionError(message, statusCode, credentialRevision);
 }
 
 export type SessionScope = {
@@ -141,14 +153,58 @@ function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, '');
 }
 
+type OpenWaiter = {
+  resolve: (() => void) | null;
+  reject: ((reason: Error) => void) | null;
+};
+
+function resolveOpenWaiter(waiter: OpenWaiter) {
+  waiter.resolve?.();
+  waiter.resolve = null;
+  waiter.reject = null;
+}
+
+function rejectOpenWaiter(waiter: OpenWaiter, error: Error) {
+  waiter.reject?.(error);
+  waiter.resolve = null;
+  waiter.reject = null;
+}
+
+function waitForTransportOpen(
+  waiter: OpenWaiter,
+  isConnected: () => boolean,
+  timeoutMs: number,
+  timeoutMessage: string,
+) {
+  return new Promise<void>((resolve, reject) => {
+    if (isConnected()) {
+      resolve();
+      return;
+    }
+    const timer = setTimeout(() => {
+      waiter.resolve = null;
+      waiter.reject = null;
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+    waiter.resolve = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    waiter.reject = (error) => {
+      clearTimeout(timer);
+      reject(error);
+    };
+  });
+}
+
 function createDirectTransport(
   callbacks: TransportCallbacks,
   translate?: (key: string) => string,
 ): Transport {
   const t = translate ?? ((key: string) => key);
   let connected = false;
-  let openResolver: ((value: void) => void) | null = null;
-  let openRejector: ((reason: Error) => void) | null = null;
+  const openWaiter: OpenWaiter = { resolve: null, reject: null };
+  let credentialRevision: string | null = null;
 
   const connection = createSseConnection({
     onPacket(packet) {
@@ -158,51 +214,35 @@ function createDirectTransport(
       connected = true;
       callbacks.onOpen();
       if (isReconnect) callbacks.onReconnected();
-      if (openResolver) {
-        openResolver();
-        openResolver = null;
-        openRejector = null;
-      }
+      resolveOpenWaiter(openWaiter);
     },
     onError(message, statusCode) {
       connected = false;
-      if (openRejector) {
-        openRejector(createConnectionError(message, statusCode));
-        openResolver = null;
-        openRejector = null;
-      }
-      callbacks.onError(message, statusCode);
+      rejectOpenWaiter(openWaiter, createConnectionError(message, statusCode, credentialRevision));
+      callbacks.onError(message, statusCode, credentialRevision);
     },
   });
 
   function waitForOpen(timeoutMs = 5000) {
-    return new Promise<void>((resolve, reject) => {
-      if (connected || connection.isConnected()) {
-        resolve();
-        return;
-      }
-      const timer = setTimeout(() => {
-        openResolver = null;
-        openRejector = null;
-        reject(new Error(t('errors.sseConnectFailed')));
-      }, timeoutMs);
-      openResolver = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      openRejector = (error) => {
-        clearTimeout(timer);
-        reject(error);
-      };
-    });
+    return waitForTransportOpen(
+      openWaiter,
+      () => connected || connection.isConnected(),
+      timeoutMs,
+      t('errors.sseConnectFailed'),
+    );
   }
 
   return {
-    async connect(baseUrl, authorization, options = {}) {
+    async connect(baseUrl, authorization, nextCredentialRevision, options = {}) {
       const normalized = normalizeBaseUrl(baseUrl);
       if (!normalized) {
         throw new Error(t('errors.sseUrlEmpty'));
       }
+      if (credentialRevision !== nextCredentialRevision) {
+        connection.disconnect();
+        connected = false;
+      }
+      credentialRevision = nextCredentialRevision;
       connection.connect({ baseUrl: normalized, authorization });
       if (options.failFast) {
         await waitForOpen(options.timeoutMs ?? 5000);
@@ -211,11 +251,7 @@ function createDirectTransport(
     disconnect() {
       connected = false;
       connection.disconnect();
-      if (openRejector) {
-        openRejector(new Error(t('errors.sseConnectionAborted')));
-        openResolver = null;
-        openRejector = null;
-      }
+      rejectOpenWaiter(openWaiter, new Error(t('errors.sseConnectionAborted')));
     },
     sendToWorker() {
       return false;
@@ -231,8 +267,7 @@ function createSharedWorkerTransport(
   let worker: SharedWorker | null = null;
   let connected = false;
   let connectionEpoch = 0;
-  let openResolver: ((value: void) => void) | null = null;
-  let openRejector: ((reason: Error) => void) | null = null;
+  const openWaiter: OpenWaiter = { resolve: null, reject: null };
 
   function ensureWorker() {
     if (worker) return worker;
@@ -240,12 +275,7 @@ function createSharedWorkerTransport(
     instance.port.onmessage = (event: MessageEvent<WorkerToTabMessage>) => {
       const message = event.data;
       if (!message || typeof message !== 'object') return;
-      if (
-        (message.type === 'connection.open' ||
-          message.type === 'connection.error' ||
-          message.type === 'connection.reconnected') &&
-        message.connectionEpoch !== connectionEpoch
-      ) {
+      if (message.connectionEpoch !== connectionEpoch) {
         return;
       }
 
@@ -260,11 +290,7 @@ function createSharedWorkerTransport(
       if (message.type === 'connection.open') {
         connected = true;
         callbacks.onOpen();
-        if (openResolver) {
-          openResolver();
-          openResolver = null;
-          openRejector = null;
-        }
+        resolveOpenWaiter(openWaiter);
         return;
       }
       if (message.type === 'connection.reconnected') {
@@ -273,12 +299,11 @@ function createSharedWorkerTransport(
       }
       if (message.type === 'connection.error') {
         connected = false;
-        if (openRejector) {
-          openRejector(createConnectionError(message.message, message.statusCode));
-          openResolver = null;
-          openRejector = null;
-        }
-        callbacks.onError(message.message, message.statusCode);
+        rejectOpenWaiter(
+          openWaiter,
+          createConnectionError(message.message, message.statusCode, message.credentialRevision),
+        );
+        callbacks.onError(message.message, message.statusCode, message.credentialRevision);
       }
     };
     instance.port.start();
@@ -287,29 +312,16 @@ function createSharedWorkerTransport(
   }
 
   function waitForOpen(timeoutMs = 5000) {
-    return new Promise<void>((resolve, reject) => {
-      if (connected) {
-        resolve();
-        return;
-      }
-      const timer = setTimeout(() => {
-        openResolver = null;
-        openRejector = null;
-        reject(new Error(t('errors.sseConnectFailed')));
-      }, timeoutMs);
-      openResolver = () => {
-        clearTimeout(timer);
-        resolve();
-      };
-      openRejector = (error) => {
-        clearTimeout(timer);
-        reject(error);
-      };
-    });
+    return waitForTransportOpen(
+      openWaiter,
+      () => connected,
+      timeoutMs,
+      t('errors.sseConnectFailed'),
+    );
   }
 
   return {
-    async connect(baseUrl, authorization, options = {}) {
+    async connect(baseUrl, authorization, credentialRevision, options = {}) {
       const normalized = normalizeBaseUrl(baseUrl);
       if (!normalized) {
         throw new Error(t('errors.sseUrlEmpty'));
@@ -319,6 +331,7 @@ function createSharedWorkerTransport(
       const message: TabToWorkerMessage = {
         type: 'connect',
         connectionEpoch,
+        credentialRevision,
         baseUrl: normalized,
         authorization,
         errorMessages: {
@@ -337,11 +350,7 @@ function createSharedWorkerTransport(
         const message: TabToWorkerMessage = { type: 'disconnect' };
         worker.port.postMessage(message);
       }
-      if (openRejector) {
-        openRejector(new Error(t('errors.sseConnectionAborted')));
-        openResolver = null;
-        openRejector = null;
-      }
+      rejectOpenWaiter(openWaiter, new Error(t('errors.sseConnectionAborted')));
     },
     sendToWorker(message) {
       if (!worker) return false;
@@ -370,8 +379,8 @@ export function useGlobalEvents(credentials: CredentialsBinding) {
           {
             onPacket: routePacket,
             onOpen: () => emitter.emit('connection.open', {}),
-            onError: (message, statusCode) =>
-              emitter.emit('connection.error', { message, statusCode }),
+            onError: (message, statusCode, credentialRevision) =>
+              emitter.emit('connection.error', { message, statusCode, credentialRevision }),
             onReconnected: () => emitter.emit('connection.reconnected', {}),
             onWorkerMessage: (message) => workerMessageHandler?.(message) ?? false,
           },
@@ -381,8 +390,8 @@ export function useGlobalEvents(credentials: CredentialsBinding) {
           {
             onPacket: routePacket,
             onOpen: () => emitter.emit('connection.open', {}),
-            onError: (message, statusCode) =>
-              emitter.emit('connection.error', { message, statusCode }),
+            onError: (message, statusCode, credentialRevision) =>
+              emitter.emit('connection.error', { message, statusCode, credentialRevision }),
             onReconnected: () => emitter.emit('connection.reconnected', {}),
             onWorkerMessage: (message) => workerMessageHandler?.(message) ?? false,
           },
@@ -392,19 +401,29 @@ export function useGlobalEvents(credentials: CredentialsBinding) {
   let requested = false;
   let lastKey = '';
   const stopCredentialSync = watch(
-    [() => credentials.baseUrl.value, () => credentials.authHeader.value],
-    ([baseUrl, authHeader]) => {
+    [
+      () => credentials.backendKind.value,
+      () => credentials.baseUrl.value,
+      () => credentials.authHeader.value,
+      () => credentials.credentialRevision.value,
+    ],
+    ([backendKind, baseUrl, authHeader, credentialRevision]) => {
       if (!requested) return;
+      if (backendKind !== 'opencode') {
+        transport.disconnect();
+        lastKey = '';
+        return;
+      }
       const normalized = normalizeBaseUrl(baseUrl);
       if (!normalized) {
         transport.disconnect();
         lastKey = '';
         return;
       }
-      const nextKey = `${normalized}\u0000${authHeader ?? ''}`;
+      const nextKey = `${normalized}\u0000${authHeader ?? ''}\u0000${credentialRevision ?? ''}`;
       if (nextKey === lastKey) return;
       lastKey = nextKey;
-      void transport.connect(normalized, authHeader);
+      void transport.connect(normalized, authHeader, credentialRevision);
     },
   );
 
@@ -412,8 +431,13 @@ export function useGlobalEvents(credentials: CredentialsBinding) {
     const baseUrl = normalizeBaseUrl(credentials.baseUrl.value);
     if (!baseUrl) throw new Error(t('errors.sseUrlEmpty'));
     requested = true;
-    lastKey = `${baseUrl}\u0000${credentials.authHeader.value ?? ''}`;
-    await transport.connect(baseUrl, credentials.authHeader.value, options);
+    lastKey = `${baseUrl}\u0000${credentials.authHeader.value ?? ''}\u0000${credentials.credentialRevision.value ?? ''}`;
+    await transport.connect(
+      baseUrl,
+      credentials.authHeader.value,
+      credentials.credentialRevision.value,
+      options,
+    );
   }
 
   function disconnect() {

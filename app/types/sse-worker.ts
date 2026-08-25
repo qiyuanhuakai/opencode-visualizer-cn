@@ -16,6 +16,7 @@ export type TabToWorkerMessage =
   | {
       type: 'connect';
       connectionEpoch: number;
+      credentialRevision: string | null;
       baseUrl: string;
       authorization?: string;
       errorMessages?: {
@@ -48,24 +49,22 @@ export type TabToWorkerMessage =
       directory: string;
     };
 
-export type WorkerToTabMessage =
+export type WorkerToTabPayload =
   | {
       type: 'packet';
       packet: SsePacket;
     }
   | {
       type: 'connection.open';
-      connectionEpoch: number;
     }
   | {
       type: 'connection.error';
-      connectionEpoch: number;
+      credentialRevision: string | null;
       message: string;
       statusCode?: number;
     }
   | {
       type: 'connection.reconnected';
-      connectionEpoch: number;
     }
   | {
       type: 'state.bootstrap';
@@ -111,3 +110,5 @@ export type WorkerToTabMessage =
       sessionId: string;
       kind: 'permission' | 'question' | 'idle';
     };
+
+export type WorkerToTabMessage = WorkerToTabPayload & { readonly connectionEpoch: number };

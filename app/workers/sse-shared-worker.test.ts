@@ -50,9 +50,8 @@ vi.mock('../backends/openCodeAdapter', () => ({
 }));
 vi.mock('../utils/sseConnection', () => ({ createSseConnection: mocks.createConnection }));
 vi.mock('../utils/stateBuilder', async () => {
-  const actual = await vi.importActual<typeof import('../utils/stateBuilder')>(
-    '../utils/stateBuilder',
-  );
+  const actual =
+    await vi.importActual<typeof import('../utils/stateBuilder')>('../utils/stateBuilder');
   return {
     ...actual,
     createStateBuilder: () => {
@@ -204,6 +203,7 @@ async function connectWorker(
   baseUrl = 'http://server',
   authorization?: string,
   connectionEpoch = 1,
+  credentialRevision: string | null = null,
 ): Promise<WorkerPort> {
   await import('./sse-shared-worker');
   const connectionCount = mocks.callbacks.length;
@@ -217,7 +217,13 @@ async function connectWorker(
   onconnect(new MessageEvent('connect', { ports: [channel.port1] }));
   channel.port1.onmessage?.(
     new MessageEvent<TabToWorkerMessage>('message', {
-      data: { type: 'connect', baseUrl, authorization, connectionEpoch } as TabToWorkerMessage,
+      data: {
+        type: 'connect',
+        baseUrl,
+        authorization,
+        connectionEpoch,
+        credentialRevision,
+      } as TabToWorkerMessage,
     }),
   );
   if (mocks.callbacks.length > connectionCount) {
@@ -261,8 +267,8 @@ afterEach(() => {
 describe('SSE SharedWorker hydration', () => {
   it('echoes each attached port epoch on shared connection lifecycle errors', async () => {
     // Given: two windows share one SSE connection with distinct connect epochs.
-    const first = await connectWorker('http://shared', 'Bearer shared', 11);
-    const second = await connectWorker('http://shared', 'Bearer shared', 22);
+    const first = await connectWorker('http://shared', 'Bearer shared', 11, 'revision-a');
+    const second = await connectWorker('http://shared', 'Bearer shared', 22, 'revision-a');
     first.messages.splice(0);
     second.messages.splice(0);
 
@@ -276,9 +282,76 @@ describe('SSE SharedWorker hydration', () => {
     // Then: each window receives its own opaque port binding epoch.
     expect(messagesOf(first.messages, 'connection.error')[0]).toMatchObject({
       connectionEpoch: 11,
+      credentialRevision: 'revision-a',
     });
     expect(messagesOf(second.messages, 'connection.error')[0]).toMatchObject({
       connectionEpoch: 22,
+      credentialRevision: 'revision-a',
+    });
+  });
+
+  it('echoes the owning port epoch on packet, state, and notification messages', async () => {
+    // Given: one tab owns connection epoch 41 and its worker bootstrap is complete.
+    const worker = await connectWorker('http://shared', 'Bearer shared', 41, 'revision-a');
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    worker.messages.splice(0);
+
+    // When: the physical connection emits packet, state, and notification updates.
+    latestCallbacks().onPacket(sessionCreatedPacket('root', 'Root session'));
+    latestCallbacks().onPacket({
+      directory: '/a',
+      payload: {
+        type: 'session.status',
+        properties: { sessionID: 'root', status: { type: 'idle' } },
+      },
+    });
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'notification.show')).toHaveLength(1),
+    );
+
+    // Then: every connection-owned class carries the epoch captured at worker send time.
+    expect(
+      messagesOf(worker.messages, 'packet').map((message) =>
+        Reflect.get(message, 'connectionEpoch'),
+      ),
+    ).toEqual([41, 41]);
+    expect(
+      messagesOf(worker.messages, 'state.project-updated').map((message) =>
+        Reflect.get(message, 'connectionEpoch'),
+      ),
+    ).toEqual([41, 41]);
+    expect(
+      messagesOf(worker.messages, 'notification.show').map((message) =>
+        Reflect.get(message, 'connectionEpoch'),
+      ),
+    ).toEqual([41]);
+  });
+
+  it('opens distinct physical connections for identical auth with different revisions', async () => {
+    // Given: revision A owns an established shared-worker connection.
+    const first = await connectWorker('http://shared', 'Bearer shared', 11, 'revision-a');
+    first.messages.splice(0);
+
+    // When: another port connects with the same auth bytes but replacement revision B.
+    const second = await connectWorker('http://shared', 'Bearer shared', 22, 'revision-b');
+    second.messages.splice(0);
+
+    // Then: each physical connection can report errors only to its owning revision.
+    expect(mocks.callbacks).toHaveLength(2);
+    mocks.callbacks[0]?.onError('A rejected credentials', 401);
+    await vi.waitFor(() => {
+      expect(messagesOf(first.messages, 'connection.error')).toHaveLength(1);
+    });
+    expect(messagesOf(second.messages, 'connection.error')).toHaveLength(0);
+    mocks.callbacks[1]?.onError('B rejected credentials', 401);
+    await vi.waitFor(() => {
+      expect(messagesOf(second.messages, 'connection.error')).toHaveLength(1);
+    });
+    expect(messagesOf(first.messages, 'connection.error')[0]).toMatchObject({
+      credentialRevision: 'revision-a',
+    });
+    expect(messagesOf(second.messages, 'connection.error')[0]).toMatchObject({
+      credentialRevision: 'revision-b',
     });
   });
 
@@ -290,7 +363,9 @@ describe('SSE SharedWorker hydration', () => {
     mocks.adapter.configure.mockClear();
 
     const anonymous = await connectWorker('http://anonymous');
-    await vi.waitFor(() => expect(messagesOf(anonymous.messages, 'state.bootstrap')).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(messagesOf(anonymous.messages, 'state.bootstrap')).toHaveLength(1),
+    );
 
     expect(mocks.adapter.configure).toHaveBeenCalledWith({
       baseUrl: 'http://anonymous',
@@ -374,6 +449,7 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() =>
       expect(messagesOf(worker.messages, 'state.referenced-subagents-hydrated')).toContainEqual({
         type: 'state.referenced-subagents-hydrated',
+        connectionEpoch: 1,
         requestId: 'hydrate-capped',
         rootSessionId: 'root',
         sessionIds: [],
@@ -407,6 +483,7 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() =>
       expect(messagesOf(worker.messages, 'state.referenced-subagents-hydrated')).toContainEqual({
         type: 'state.referenced-subagents-hydrated',
+        connectionEpoch: 1,
         requestId: 'hydrate-stale',
         rootSessionId: 'root',
         sessionIds: [],
@@ -457,25 +534,24 @@ describe('SSE SharedWorker hydration', () => {
       '/b': { status: 'unloaded' },
     });
 
-    mocks.adapter.listSessions.mockImplementation(
-      ({ directory }: { directory: string }) =>
-        directory === '/'
-          ? Promise.resolve([
-              {
-                ...sessionInfo('global-session', 'Global session', undefined, '/'),
-                projectID: 'global',
-              },
-            ])
-          : Promise.resolve([]),
+    mocks.adapter.listSessions.mockImplementation(({ directory }: { directory: string }) =>
+      directory === '/'
+        ? Promise.resolve([
+            {
+              ...sessionInfo('global-session', 'Global session', undefined, '/'),
+              projectID: 'global',
+            },
+          ])
+        : Promise.resolve([]),
     );
 
     post(worker, { type: 'load-sessions', directory: '/' });
 
     await vi.waitFor(() =>
       expect(
-        messagesOf(worker.messages, 'state.directory-hydration-updated').filter(
-          ({ directory }) => directory === '/',
-        ).map(({ hydration }) => hydration.status),
+        messagesOf(worker.messages, 'state.directory-hydration-updated')
+          .filter(({ directory }) => directory === '/')
+          .map(({ hydration }) => hydration.status),
       ).toEqual(['loading', 'loaded']),
     );
     expect(
@@ -551,9 +627,9 @@ describe('SSE SharedWorker hydration', () => {
       ).toBe(true),
     );
 
-    expect(mocks.adapter.getVcsInfo.mock.calls.filter(([directory]) => directory === '/a')).toHaveLength(
-      1,
-    );
+    expect(
+      mocks.adapter.getVcsInfo.mock.calls.filter(([directory]) => directory === '/a'),
+    ).toHaveLength(1);
   });
 
   it('reconciles hydration with project updates and ignores a retired directory read', async () => {
@@ -581,8 +657,7 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() =>
       expect(
         messagesOf(worker.messages, 'state.directory-hydration-updated').some(
-          ({ directory, hydration }) =>
-            directory === '/b' && hydration.status === 'unloaded',
+          ({ directory, hydration }) => directory === '/b' && hydration.status === 'unloaded',
         ),
       ).toBe(true),
     );
@@ -596,9 +671,8 @@ describe('SSE SharedWorker hydration', () => {
       ).toEqual(['unloaded', 'loading', 'loaded']),
     );
     expect(
-      messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/b']?.sessions[
-        'session-b'
-      ],
+      messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/b']
+        ?.sessions['session-b'],
     ).toBeDefined();
 
     post(worker, { type: 'load-sessions', directory: '/a' });
@@ -609,9 +683,11 @@ describe('SSE SharedWorker hydration', () => {
     );
     latestCallbacks().onPacket(projectUpdatedPacket(project(['/b'])));
     await vi.waitFor(() =>
-      expect(
-        messagesOf(worker.messages, 'state.directory-hydration-removed'),
-      ).toContainEqual({ type: 'state.directory-hydration-removed', directory: '/a' }),
+      expect(messagesOf(worker.messages, 'state.directory-hydration-removed')).toContainEqual({
+        type: 'state.directory-hydration-removed',
+        connectionEpoch: 1,
+        directory: '/a',
+      }),
     );
     const retiredHydrationUpdateCount = messagesOf(
       worker.messages,
@@ -660,9 +736,7 @@ describe('SSE SharedWorker hydration', () => {
   it('reports queue-capacity rejection and permits a later directory retry', async () => {
     const busyDirectories = Array.from({ length: 268 }, (_, index) => `/busy-${index}`);
     const targetDirectory = '/capacity-target';
-    mocks.adapter.listProjects.mockResolvedValue([
-      project([...busyDirectories, targetDirectory]),
-    ]);
+    mocks.adapter.listProjects.mockResolvedValue([project([...busyDirectories, targetDirectory])]);
     const activeReads = Array.from({ length: 12 }, () => deferred<unknown>());
     let readCalls = 0;
     mocks.adapter.listSessions.mockImplementation(() => {
@@ -736,7 +810,9 @@ describe('SSE SharedWorker hydration', () => {
 
     replacementProjects.resolve([project(['/priority'])]);
     await vi.waitFor(() => expect(messagesOf(second.messages, 'state.bootstrap')).toHaveLength(1));
-    expect(messagesOf(second.messages, 'state.bootstrap')[0]?.projects.project.sandboxes['/priority']).toBeDefined();
+    expect(
+      messagesOf(second.messages, 'state.bootstrap')[0]?.projects.project.sandboxes['/priority'],
+    ).toBeDefined();
 
     for (const activeRead of activeReads.slice(1)) activeRead.resolve([]);
   });
@@ -753,7 +829,9 @@ describe('SSE SharedWorker hydration', () => {
     post(worker, { type: 'load-sessions', directory: '/a' });
 
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.directory-hydration-updated').at(-1)?.hydration).toEqual({
+      expect(
+        messagesOf(worker.messages, 'state.directory-hydration-updated').at(-1)?.hydration,
+      ).toEqual({
         status: 'loaded',
       }),
     );
@@ -779,9 +857,7 @@ describe('SSE SharedWorker hydration', () => {
 
     for (let index = 0; index < 11; index += 1) {
       latestCallbacks().onOpen(true);
-      await vi.waitFor(() =>
-        expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(index + 2),
-      );
+      await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(index + 2));
     }
     latestCallbacks().onOpen(true);
     await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(12));
@@ -801,9 +877,8 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
     expect(messagesOf(worker.messages, 'connection.error')).toHaveLength(0);
     expect(
-      messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']?.sessions[
-        'buffered-during-reconnect'
-      ],
+      messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']
+        ?.sessions['buffered-during-reconnect'],
     ).toBeDefined();
 
     const finalRead = deferred<unknown>();
@@ -945,8 +1020,8 @@ describe('SSE SharedWorker hydration', () => {
     staleSessions.resolve([sessionInfo('stale-after-overflow')]);
     await flush();
     expect(
-      messagesOf(worker.messages, 'state.project-updated').some(
-        ({ project: updated }) => Boolean(updated.sandboxes['/a']?.sessions['stale-after-overflow']),
+      messagesOf(worker.messages, 'state.project-updated').some(({ project: updated }) =>
+        Boolean(updated.sandboxes['/a']?.sessions['stale-after-overflow']),
       ),
     ).toBe(false);
 
@@ -1018,7 +1093,9 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() => expect(mocks.adapter.getCurrentProject).toHaveBeenCalledTimes(1));
 
     for (let index = 0; index <= 2_000; index += 1) {
-      latestCallbacks().onPacket(sessionPacket('session.deleted', sessionInfo(`overflow-${index}`)));
+      latestCallbacks().onPacket(
+        sessionPacket('session.deleted', sessionInfo(`overflow-${index}`)),
+      );
     }
 
     expect(staleSignal?.aborted).toBe(true);
@@ -1145,13 +1222,14 @@ describe('SSE SharedWorker hydration', () => {
 
     await vi.waitFor(() =>
       expect(
-        messagesOf(worker.messages, 'state.notifications-updated').some(
-          ({ notifications }) => notifications['new-root']?.requestIds.includes('idle:project:new-root'),
+        messagesOf(worker.messages, 'state.notifications-updated').some(({ notifications }) =>
+          notifications['new-root']?.requestIds.includes('idle:project:new-root'),
         ),
       ).toBe(true),
     );
     expect(messagesOf(worker.messages, 'notification.show')).toContainEqual({
       type: 'notification.show',
+      connectionEpoch: 1,
       projectId: 'project',
       sessionId: 'new-root',
       kind: 'idle',
@@ -1166,8 +1244,8 @@ describe('SSE SharedWorker hydration', () => {
     latestCallbacks().onPacket(sessionPacket('session.created', info));
     await vi.waitFor(() =>
       expect(
-        messagesOf(worker.messages, 'state.project-updated').some(
-          ({ project: updated }) => Boolean(updated.sandboxes['/a']?.sessions.known),
+        messagesOf(worker.messages, 'state.project-updated').some(({ project: updated }) =>
+          Boolean(updated.sandboxes['/a']?.sessions.known),
         ),
       ).toBe(true),
     );
@@ -1196,8 +1274,10 @@ describe('SSE SharedWorker hydration', () => {
 
     latestCallbacks().onPacket(sessionPacket('session.deleted', info));
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/missing']?.sessions.late)
-        .toBeUndefined(),
+      expect(
+        messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/missing']
+          ?.sessions.late,
+      ).toBeUndefined(),
     );
     lookup.resolve(project(['/a', '/missing']));
     await flush();
@@ -1226,8 +1306,8 @@ describe('SSE SharedWorker hydration', () => {
     await flush();
 
     expect(
-      messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/missing']?.sessions
-        .unknown,
+      messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/missing']
+        ?.sessions.unknown,
     ).toBeDefined();
   });
 
@@ -1283,7 +1363,9 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(2));
     await flush();
     expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(2);
-    expect(new Set(mocks.adapter.getCurrentProject.mock.calls.map(([directory]) => directory)).size).toBeLessThanOrEqual(32);
+    expect(
+      new Set(mocks.adapter.getCurrentProject.mock.calls.map(([directory]) => directory)).size,
+    ).toBeLessThanOrEqual(32);
     expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2);
   });
 
@@ -1317,7 +1399,9 @@ describe('SSE SharedWorker hydration', () => {
         },
       );
       let worker = await connectWorker();
-      await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+      await vi.waitFor(() =>
+        expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1),
+      );
       const initialTracker = stateBuilderTrackers.trackers.at(-1);
       if (!initialTracker) throw new Error('Expected the initial state builder tracker');
 
@@ -1331,7 +1415,9 @@ describe('SSE SharedWorker hydration', () => {
 
       if (abortMode === 'reconnect') {
         latestCallbacks().onOpen(true);
-        await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2));
+        await vi.waitFor(() =>
+          expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2),
+        );
         await flush();
       } else if (abortMode === 'bootstrap') {
         for (let index = 0; index < 33; index += 1) {
@@ -1342,12 +1428,16 @@ describe('SSE SharedWorker hydration', () => {
             }),
           );
         }
-        await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2));
+        await vi.waitFor(() =>
+          expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2),
+        );
         await flush();
       } else {
         post(worker, { type: 'disconnect' });
         worker = await connectWorker();
-        await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+        await vi.waitFor(() =>
+          expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1),
+        );
       }
 
       expect(initialTracker.active.size).toBe(0);
@@ -1388,8 +1478,8 @@ describe('SSE SharedWorker hydration', () => {
       futureLookup.resolve(project(['/a', '/future']));
       await vi.waitFor(() =>
         expect(
-          messagesOf(worker.messages, 'state.project-updated').some(
-            ({ project: updated }) => Boolean(updated.sandboxes['/future']?.sessions['future-1999']),
+          messagesOf(worker.messages, 'state.project-updated').some(({ project: updated }) =>
+            Boolean(updated.sandboxes['/future']?.sessions['future-1999']),
           ),
         ).toBe(true),
       );
@@ -1459,7 +1549,9 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() =>
       expect(messagesOf(worker.messages, 'state.notifications-updated').length).toBeGreaterThan(0),
     );
-    expect(messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root).toBeUndefined();
+    expect(
+      messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root,
+    ).toBeUndefined();
     worker.messages.splice(0);
     latestCallbacks().onPacket({
       directory: '/a',
@@ -1470,10 +1562,9 @@ describe('SSE SharedWorker hydration', () => {
     });
 
     await vi.waitFor(() =>
-      expect(
-        messagesOf(worker.messages, 'notification.show'),
-      ).toContainEqual({
+      expect(messagesOf(worker.messages, 'notification.show')).toContainEqual({
         type: 'notification.show',
+        connectionEpoch: 1,
         projectId: 'project',
         sessionId: 'root',
         kind: 'idle',
@@ -1524,8 +1615,9 @@ describe('SSE SharedWorker hydration', () => {
       },
     });
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root)
-        .toMatchObject({ requestIds: ['permission-sibling'] }),
+      expect(
+        messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root,
+      ).toMatchObject({ requestIds: ['permission-sibling'] }),
     );
 
     latestCallbacks().onPacket({
@@ -1537,8 +1629,9 @@ describe('SSE SharedWorker hydration', () => {
     });
 
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root)
-        .toMatchObject({ requestIds: ['permission-sibling', 'idle:project:root'] }),
+      expect(
+        messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root,
+      ).toMatchObject({ requestIds: ['permission-sibling', 'idle:project:root'] }),
     );
   });
 
@@ -1558,14 +1651,15 @@ describe('SSE SharedWorker hydration', () => {
     latestCallbacks().onPacket(questionAskedPacket('question-root', 'root'));
 
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root)
-        .toMatchObject({
-          requestIds: expect.arrayContaining([
-            'idle:project:root',
-            'permission-root',
-            'question-root',
-          ]),
-        }),
+      expect(
+        messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root,
+      ).toMatchObject({
+        requestIds: expect.arrayContaining([
+          'idle:project:root',
+          'permission-root',
+          'question-root',
+        ]),
+      }),
     );
     worker.messages.splice(0);
 
@@ -1612,31 +1706,35 @@ describe('SSE SharedWorker hydration', () => {
     latestCallbacks().onPacket(questionAskedPacket('question-child', 'busy-child'));
 
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root)
-        .toMatchObject({
-          requestIds: expect.arrayContaining([
-            'permission-root',
-            'question-sibling',
-            'permission-child',
-            'question-child',
-          ]),
-        }),
+      expect(
+        messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root,
+      ).toMatchObject({
+        requestIds: expect.arrayContaining([
+          'permission-root',
+          'question-sibling',
+          'permission-child',
+          'question-child',
+        ]),
+      }),
     );
 
-    latestCallbacks().onPacket(sessionPacket('session.deleted', sessionInfo('busy-child', 'Busy child', 'root')));
+    latestCallbacks().onPacket(
+      sessionPacket('session.deleted', sessionInfo('busy-child', 'Busy child', 'root')),
+    );
 
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root)
-        .toMatchObject({
-          requestIds: expect.arrayContaining([
-            'permission-root',
-            'question-sibling',
-            'idle:project:root',
-          ]),
-        }),
+      expect(
+        messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications.root,
+      ).toMatchObject({
+        requestIds: expect.arrayContaining([
+          'permission-root',
+          'question-sibling',
+          'idle:project:root',
+        ]),
+      }),
     );
-    const requestIds = messagesOf(worker.messages, 'state.notifications-updated').at(-1)?.notifications
-      .root?.requestIds;
+    const requestIds = messagesOf(worker.messages, 'state.notifications-updated').at(-1)
+      ?.notifications.root?.requestIds;
     expect(requestIds).not.toContain('permission-child');
     expect(requestIds).not.toContain('question-child');
   });
@@ -1645,16 +1743,25 @@ describe('SSE SharedWorker hydration', () => {
     const worker = await connectWorker();
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
 
-    for (const directories of [['/b', '/c'], ['/c', '/d'], ['/d', '/e']] as const) {
+    for (const directories of [
+      ['/b', '/c'],
+      ['/c', '/d'],
+      ['/d', '/e'],
+    ] as const) {
       latestCallbacks().onPacket(projectUpdatedPacket(project(directories)));
       await vi.waitFor(() =>
-        expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes[directories[0]])
-          .toBeDefined(),
+        expect(
+          messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes[
+            directories[0]
+          ],
+        ).toBeDefined(),
       );
     }
 
     mocks.adapter.getCurrentProject.mockClear();
-    latestCallbacks().onPacket(sessionPacket('session.created', sessionInfo('retired', 'Retired', undefined, '/a')));
+    latestCallbacks().onPacket(
+      sessionPacket('session.created', sessionInfo('retired', 'Retired', undefined, '/a')),
+    );
 
     await vi.waitFor(() =>
       expect(mocks.adapter.getCurrentProject).toHaveBeenCalledWith(
@@ -1674,8 +1781,9 @@ describe('SSE SharedWorker hydration', () => {
 
     latestCallbacks().onPacket(projectUpdatedPacket(project(['/b'], 'project')));
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/b'])
-        .toBeDefined(),
+      expect(
+        messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/b'],
+      ).toBeDefined(),
     );
     mocks.adapter.getCurrentProject.mockClear();
 
@@ -1690,10 +1798,7 @@ describe('SSE SharedWorker hydration', () => {
   });
 
   it('retains a resolved unknown directory while another project updates', async () => {
-    mocks.adapter.listProjects.mockResolvedValue([
-      project(['/a']),
-      project(['/other'], 'other'),
-    ]);
+    mocks.adapter.listProjects.mockResolvedValue([project(['/a']), project(['/other'], 'other')]);
     mocks.adapter.getCurrentProject.mockResolvedValue(project(['/a', '/resolved']));
     const worker = await connectWorker();
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
@@ -1705,16 +1810,19 @@ describe('SSE SharedWorker hydration', () => {
     latestCallbacks().onPacket(sessionPacket('session.created', resolvedSession));
     await vi.waitFor(() =>
       expect(
-        messagesOf(worker.messages, 'state.project-updated').some(
-          ({ project: updated }) => Boolean(updated.sandboxes['/resolved']?.sessions.resolved),
+        messagesOf(worker.messages, 'state.project-updated').some(({ project: updated }) =>
+          Boolean(updated.sandboxes['/resolved']?.sessions.resolved),
         ),
       ).toBe(true),
     );
 
     latestCallbacks().onPacket(projectUpdatedPacket(project(['/other', '/other-new'], 'other')));
     await vi.waitFor(() =>
-      expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/other-new'])
-        .toBeDefined(),
+      expect(
+        messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes[
+          '/other-new'
+        ],
+      ).toBeDefined(),
     );
     mocks.adapter.getCurrentProject.mockClear();
 
@@ -1744,48 +1852,60 @@ describe('SSE SharedWorker hydration', () => {
 
     await vi.waitFor(() =>
       expect(
-        messagesOf(worker.messages, 'state.project-updated').some(
-          ({ project: updated }) => Boolean(updated.sandboxes['/a']?.sessions['state-first']),
+        messagesOf(worker.messages, 'state.project-updated').some(({ project: updated }) =>
+          Boolean(updated.sandboxes['/a']?.sessions['state-first']),
         ),
       ).toBe(true),
     );
   });
 
-  it('schedules one authoritative bootstrap after buffered state overflows', { timeout: 15_000 }, async () => {
-    const projects = deferred<unknown>();
-    mocks.adapter.listProjects.mockReturnValueOnce(projects.promise).mockResolvedValueOnce([
-      project(['/a']),
-    ]);
-    const worker = await connectWorker();
+  it(
+    'schedules one authoritative bootstrap after buffered state overflows',
+    { timeout: 15_000 },
+    async () => {
+      const projects = deferred<unknown>();
+      mocks.adapter.listProjects
+        .mockReturnValueOnce(projects.promise)
+        .mockResolvedValueOnce([project(['/a'])]);
+      const worker = await connectWorker();
 
-    for (let index = 0; index <= 2_000; index += 1) {
-      latestCallbacks().onPacket(sessionCreatedPacket(`overflow-${index}`));
-    }
-    projects.resolve([project(['/a'])]);
+      for (let index = 0; index <= 2_000; index += 1) {
+        latestCallbacks().onPacket(sessionCreatedPacket(`overflow-${index}`));
+      }
+      projects.resolve([project(['/a'])]);
 
-    await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2));
-    const secondBootstrap = messagesOf(worker.messages, 'state.bootstrap')[1];
-    expect(secondBootstrap?.projects.project?.sandboxes['/a']?.sessions).toEqual({});
-  });
+      await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() =>
+        expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2),
+      );
+      const secondBootstrap = messagesOf(worker.messages, 'state.bootstrap')[1];
+      expect(secondBootstrap?.projects.project?.sandboxes['/a']?.sessions).toEqual({});
+    },
+  );
 
-  it('restarts from authoritative state after the packet count reaches its cap', { timeout: 15_000 }, async () => {
-    const projects = deferred<unknown>();
-    mocks.adapter.listProjects.mockReturnValueOnce(projects.promise).mockResolvedValueOnce([
-      project(['/a']),
-    ]);
-    const worker = await connectWorker();
+  it(
+    'restarts from authoritative state after the packet count reaches its cap',
+    { timeout: 15_000 },
+    async () => {
+      const projects = deferred<unknown>();
+      mocks.adapter.listProjects
+        .mockReturnValueOnce(projects.promise)
+        .mockResolvedValueOnce([project(['/a'])]);
+      const worker = await connectWorker();
 
-    for (let index = 0; index <= 2_000; index += 1) {
-      latestCallbacks().onPacket(sessionCreatedPacket(`buffered-${index}`));
-    }
-    projects.resolve([project(['/a'])]);
+      for (let index = 0; index <= 2_000; index += 1) {
+        latestCallbacks().onPacket(sessionCreatedPacket(`buffered-${index}`));
+      }
+      projects.resolve([project(['/a'])]);
 
-    await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2));
-    const finalProject = messagesOf(worker.messages, 'state.bootstrap')[1]?.projects.project;
-    expect(finalProject?.sandboxes['/a']?.sessions).toEqual({});
-  });
+      await vi.waitFor(() => expect(mocks.adapter.listProjects).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() =>
+        expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(2),
+      );
+      const finalProject = messagesOf(worker.messages, 'state.bootstrap')[1]?.projects.project;
+      expect(finalProject?.sandboxes['/a']?.sessions).toEqual({});
+    },
+  );
 
   it('evicts oldest bootstrap packets when their serialized bytes exceed the cap', async () => {
     const projects = deferred<unknown>();
@@ -1799,8 +1919,8 @@ describe('SSE SharedWorker hydration', () => {
 
     await vi.waitFor(() =>
       expect(
-        messagesOf(worker.messages, 'state.project-updated').some(
-          ({ project: updated }) => Boolean(updated.sandboxes['/a']?.sessions['large-1']),
+        messagesOf(worker.messages, 'state.project-updated').some(({ project: updated }) =>
+          Boolean(updated.sandboxes['/a']?.sessions['large-1']),
         ),
       ).toBe(true),
     );
@@ -1905,6 +2025,7 @@ describe('SSE SharedWorker hydration', () => {
     await vi.waitFor(() =>
       expect(messagesOf(worker.messages, 'state.directory-hydration-removed')).toContainEqual({
         type: 'state.directory-hydration-removed',
+        connectionEpoch: 1,
         directory: '/a',
       }),
     );
@@ -1988,8 +2109,7 @@ describe('SSE SharedWorker hydration', () => {
       expect(
         messagesOf(worker.messages, 'state.project-updated').some(
           ({ project: updated }) =>
-            updated.sandboxes['/a']?.sessions['kept-during-retry']?.title ===
-            'kept-during-retry',
+            updated.sandboxes['/a']?.sessions['kept-during-retry']?.title === 'kept-during-retry',
         ),
       ).toBe(true),
     );
@@ -2072,11 +2192,15 @@ describe('SSE SharedWorker hydration', () => {
       ).toEqual({ status: 'loaded' }),
     );
 
-    expect(mocks.adapter.listSessions.mock.calls.filter(([options]) => options.directory === '/a')).toHaveLength(1);
-    expect(mocks.adapter.getVcsInfo.mock.calls.filter(([directory]) => directory === '/a')).toHaveLength(1);
     expect(
-      messagesOf(worker.messages, 'state.project-updated').some(
-        ({ project: updated }) => Boolean(updated.sandboxes['/a']?.sessions['reconnected-session']),
+      mocks.adapter.listSessions.mock.calls.filter(([options]) => options.directory === '/a'),
+    ).toHaveLength(1);
+    expect(
+      mocks.adapter.getVcsInfo.mock.calls.filter(([directory]) => directory === '/a'),
+    ).toHaveLength(1);
+    expect(
+      messagesOf(worker.messages, 'state.project-updated').some(({ project: updated }) =>
+        Boolean(updated.sandboxes['/a']?.sessions['reconnected-session']),
       ),
     ).toBe(true);
   });
