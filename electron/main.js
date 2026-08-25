@@ -10,7 +10,6 @@ import {
 } from './localApplicationApproval.js';
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
-import { createPersistentStorage } from './persistentStorage.js';
 import {
   classifyMime,
   classifyNavigation,
@@ -27,10 +26,7 @@ const LOCAL_APPLICATION_APPROVAL_FILE = 'local-application.json';
 const DEV_SERVER_URL = 'http://127.0.0.1:5173';
 const LOCAL_APPLICATION_PATH_KEY = 'opencode.settings.localApplicationPath.v1';
 const OPEN_IN_EDITOR_MAX_SIZE_KEY = 'opencode.settings.openInEditorMaxSizeMb.v1';
-const RENDERER_STORAGE_PREFIX = 'opencode.';
 const DEFAULT_MAX_LOCAL_FILE_BYTES = 20 * 1024 * 1024;
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
-if (!hasSingleInstanceLock) app.quit();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -45,13 +41,8 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow = null;
+let persistentStorageCache = null;
 let approvedLocalApplicationPath = null;
-
-app.on('second-instance', () => {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.focus();
-});
 const localFileSessionOwners = new Map();
 const localFileEditor = createLocalFileEditor({
   onChange(change) {
@@ -79,22 +70,60 @@ function persistentStorageFilePath() {
   return path.join(app.getPath('userData'), PERSISTENT_STORAGE_FILE);
 }
 
-const persistentStorage = createPersistentStorage(persistentStorageFilePath);
-
 function localApplicationApprovalFilePath() {
   return path.join(app.getPath('userData'), LOCAL_APPLICATION_APPROVAL_FILE);
 }
 
+function loadPersistentStorage() {
+  if (persistentStorageCache) {
+    return persistentStorageCache;
+  }
+
+  try {
+    const raw = fs.readFileSync(persistentStorageFilePath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      persistentStorageCache = Object.fromEntries(
+        Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
+      );
+      return persistentStorageCache;
+    }
+  } catch {
+    // Ignore missing or malformed storage files and recreate them on write.
+  }
+
+  persistentStorageCache = {};
+  return persistentStorageCache;
+}
+
+function writePersistentStorage() {
+  const filePath = persistentStorageFilePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(loadPersistentStorage(), null, 2), 'utf8');
+}
+
 function getPersistentStorageItem(key) {
-  return persistentStorage.getItem(key);
+  const storage = loadPersistentStorage();
+  return Object.hasOwn(storage, key) ? storage[key] : null;
 }
 
 function setPersistentStorageItem(key, value) {
-  return persistentStorage.setItem(key, value);
+  const storage = loadPersistentStorage();
+  const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
+  storage[key] = value;
+  writePersistentStorage();
+  return oldValue;
 }
 
 function removePersistentStorageItem(key) {
-  return persistentStorage.removeItem(key);
+  const storage = loadPersistentStorage();
+  const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
+  if (oldValue === null) {
+    return null;
+  }
+  delete storage[key];
+  writePersistentStorage();
+  return oldValue;
 }
 
 function broadcastPersistentStorageChange(change, sourceWebContentsId) {
@@ -215,7 +244,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  if (!hasSingleInstanceLock) return;
+  loadPersistentStorage();
   approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
   protocol.handle('app', async (request) => {
@@ -290,8 +319,7 @@ ipcMain.handle('get-platform', () => {
   return process.platform;
 });
 
-ipcMain.handle('clipboard-write-text', (event, text) => {
-  assertTrustedRenderer(event);
+ipcMain.handle('clipboard-write-text', (_event, text) => {
   if (typeof text !== 'string') {
     throw new Error('Invalid text: expected string');
   }
@@ -373,7 +401,6 @@ ipcMain.handle('local-file-close', async (event, sessionId) => {
 });
 
 ipcMain.on('persistent-storage-get', (event, key) => {
-  assertTrustedRenderer(event);
   if (typeof key !== 'string') {
     event.returnValue = null;
     return;
@@ -386,7 +413,6 @@ ipcMain.on('persistent-storage-get', (event, key) => {
 });
 
 ipcMain.on('persistent-storage-set', (event, payload) => {
-  assertTrustedRenderer(event);
   const key = payload?.key;
   const value = payload?.value;
   if (typeof key !== 'string' || typeof value !== 'string') {
@@ -415,7 +441,6 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
 });
 
 ipcMain.on('persistent-storage-remove', (event, key) => {
-  assertTrustedRenderer(event);
   if (typeof key !== 'string') {
     event.returnValue = false;
     return;
@@ -434,64 +459,6 @@ ipcMain.on('persistent-storage-remove', (event, key) => {
   }
   if (oldValue !== null) {
     broadcastPersistentStorageChange({ key, oldValue, newValue: null }, event.sender.id);
-  }
-  event.returnValue = true;
-});
-
-ipcMain.on('persistent-storage-migrate', (event, entries) => {
-  assertTrustedRenderer(event);
-  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
-    event.returnValue = false;
-    return;
-  }
-
-  const migrationEntries = {};
-  for (const [key, value] of Object.entries(entries)) {
-    if (!key.startsWith(RENDERER_STORAGE_PREFIX) || typeof value !== 'string') {
-      event.returnValue = false;
-      return;
-    }
-    if (key !== LOCAL_APPLICATION_PATH_KEY) migrationEntries[key] = value;
-  }
-
-  let changes;
-  try {
-    changes = persistentStorage.migrate(migrationEntries);
-  } catch {
-    event.returnValue = false;
-    return;
-  }
-  for (const change of changes) {
-    broadcastPersistentStorageChange(change, event.sender.id);
-  }
-  event.returnValue = true;
-});
-
-ipcMain.on('persistent-storage-update', (event, entries) => {
-  assertTrustedRenderer(event);
-  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
-    event.returnValue = false;
-    return;
-  }
-
-  const updateEntries = {};
-  for (const [key, value] of Object.entries(entries)) {
-    if (!key.startsWith(RENDERER_STORAGE_PREFIX) || (typeof value !== 'string' && value !== null)) {
-      event.returnValue = false;
-      return;
-    }
-    if (key !== LOCAL_APPLICATION_PATH_KEY) updateEntries[key] = value;
-  }
-
-  let changes;
-  try {
-    changes = persistentStorage.update(updateEntries);
-  } catch {
-    event.returnValue = false;
-    return;
-  }
-  for (const change of changes) {
-    broadcastPersistentStorageChange(change, event.sender.id);
   }
   event.returnValue = true;
 });
