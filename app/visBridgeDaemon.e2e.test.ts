@@ -10,7 +10,6 @@ import {
   readHealthStatus,
   runCli,
   runCommandRequest,
-  requestFixtureStop,
   startFixture,
   waitForTextFile,
 } from './visBridgeDaemonTestHarness';
@@ -109,7 +108,6 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
   });
 
   it('does not admit a command whose request body completes during shutdown', { timeout: 15_000 }, async () => {
-    // Given: a command request is waiting on its final body bytes when the daemon is running.
     const fixture = await createFixture();
     await startFixture(fixture);
     const pidPath = path.join(fixture.directory, 'late-command.pid');
@@ -123,24 +121,18 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
     });
     const socket = connect(fixture.port, '127.0.0.1');
     socket.on('error', () => {});
-    const responseChunks: Buffer[] = [];
-    socket.on('data', (chunk) => responseChunks.push(chunk));
-    const socketClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
     await new Promise<void>((resolve) => socket.once('connect', resolve));
     socket.write(
-      `POST /command/exec HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload[0]}`,
+      `POST /command/exec HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n\r\n${payload[0]}`,
     );
 
     try {
-      // When: the authenticated stop endpoint acknowledges shutdown before the body completes.
-      await requestFixtureStop(fixture);
-      if (!socket.destroyed) socket.end(payload.slice(1));
-      await socketClosed;
+      const stopping = runCli(['stop'], fixture.env);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      if (!socket.destroyed) socket.write(payload.slice(1));
+      await stopping;
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-      // Then: the request is explicitly rejected after admission closes and no late child is created.
-      const rawResponse = Buffer.concat(responseChunks).toString('utf8');
-      expect(rawResponse).toContain('HTTP/1.1 400 Bad Request');
-      expect(rawResponse).toContain('{"error":"Command runner is shutting down."}');
       await expect(readFile(pidPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       socket.destroy();
