@@ -1,4 +1,9 @@
-import { StorageKeys, storageGet, storageUpdate } from '../utils/storageKeys';
+import {
+  StorageKeys,
+  storageGet,
+  storageRemove,
+  storageSet,
+} from '../utils/storageKeys';
 
 export type StoredCredentials = {
   url: string;
@@ -27,31 +32,9 @@ export function parseStoredCredentials(raw: string | null): StoredCredentials | 
 export function migrateLegacyCredentials() {
   const legacy = parseStoredCredentials(storageGet(LEGACY_CREDENTIALS_STORAGE_KEY));
   if (!legacy) return null;
-  const next = {
-    ...legacy,
-    url: legacy.url.trim() || storageGet(StorageKeys.auth.serverUrl)?.trim() || '',
-  };
-  return saveStoredCredentials(next) ? next : null;
-}
-
-export function saveStoredCredentials(
-  next: StoredCredentials,
-  additionalEntries: Readonly<Record<string, string | null>> = {},
-) {
-  return storageUpdate({
-    ...additionalEntries,
-    [StorageKeys.auth.serverUrl]: next.url,
-    [StorageKeys.auth.credentials]: JSON.stringify(next),
-    [LEGACY_CREDENTIALS_STORAGE_KEY]: null,
-  });
-}
-
-export function clearStoredCredentials(
-  additionalEntries: Readonly<Record<string, string | null>> = {},
-) {
-  return storageUpdate({
-    ...additionalEntries,
-    [LEGACY_CREDENTIALS_STORAGE_KEY]: null,
-    [StorageKeys.auth.credentials]: null,
-  });
+  const next = { ...legacy, url: legacy.url.trim() };
+  if (next.url) storageSet(StorageKeys.auth.serverUrl, next.url);
+  storageSet(StorageKeys.auth.credentials, JSON.stringify(next));
+  storageRemove(LEGACY_CREDENTIALS_STORAGE_KEY);
+  return next;
 }
