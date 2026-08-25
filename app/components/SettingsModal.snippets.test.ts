@@ -1092,4 +1092,32 @@ describe('SettingsModal snippets', () => {
     expect(secondPageRows).toHaveLength(50);
     expect(secondPageRows[0]?.textContent).toContain('Snippet 50');
   });
+
+  it.each(['__proto__', 'constructor', 'toString', '__v_raw', '__v_isReactive'])(
+    'edits an imported Snippet whose id is %s',
+    async (id) => {
+      // Given: a valid imported Snippet uses an ID inherited by ordinary object prototypes.
+      const snippet = {
+        ...initialSnippets[0],
+        id,
+        trigger: `prototype-${id.length}`,
+        name: `Prototype ${id}`,
+      };
+      const { host, settings } = await mountSnippetSettings([snippet]);
+
+      // When: the user opens the row, changes its name, and commits with Back.
+      host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+      await nextTick();
+      changeValue(host.querySelector('[data-snippet-field="name"]')!, `Edited ${id}`);
+      changeValue(host.querySelector('[data-snippet-field="tags"]')!, 'Vue, Reserved');
+      await nextTick();
+      host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+      await nextTick();
+
+      // Then: that exact ID remains editable and persists without prototype interference.
+      expect(settings.textTransformers.value).toEqual([
+        { ...snippet, name: `Edited ${id}`, tags: ['Vue', 'Reserved'] },
+      ]);
+    },
+  );
 });

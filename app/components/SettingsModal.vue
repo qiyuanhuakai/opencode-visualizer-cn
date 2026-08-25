@@ -907,7 +907,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, watchEffect, type Ref } from 'vue';
+import { computed, nextTick, onMounted, ref, shallowRef, watch, watchEffect, type Ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import SettingRow from './SettingRow.vue';
 import SnippetCompletion from './SnippetCompletion.vue';
@@ -1515,7 +1515,7 @@ type TextTransformerDraft = {
   readonly conflicted?: boolean;
   readonly persistenceFailed?: boolean;
 };
-const textTransformerDrafts = ref<Record<string, TextTransformerDraft>>({});
+const textTransformerDrafts = shallowRef<Record<string, TextTransformerDraft>>({});
 const TEXT_TRANSFORMER_PAGE_SIZE = 50;
 const textTransformerPage = ref(0);
 const textTransformerVariables = [
@@ -1529,11 +1529,21 @@ const textTransformerVariables = [
   '{cwd}',
   '{selection}',
 ] as const;
-const textTransformerTagDrafts = ref<Record<string, string>>({});
+const textTransformerTagDrafts = shallowRef<Record<string, string>>({});
 const textTransformerImportStatus = ref<{ kind: 'success' | 'error'; message: string } | null>(
   null,
 );
 let textTransformerImportGeneration = 0;
+
+function textTransformerDraft(id: string): TextTransformerDraft | undefined {
+  const drafts = textTransformerDrafts.value;
+  return Object.hasOwn(drafts, id) ? drafts[id] : undefined;
+}
+
+function textTransformerTagDraft(id: string): string | undefined {
+  const drafts = textTransformerTagDrafts.value;
+  return Object.hasOwn(drafts, id) ? drafts[id] : undefined;
+}
 
 function showTextTransformerPersistenceError() {
   textTransformerImportStatus.value = {
@@ -1549,7 +1559,7 @@ watch(textTransformerPersistenceErrorRevision, showTextTransformerPersistenceErr
 const displayedTextTransformers = computed(() => {
   const persistedIds = new Set(textTransformers.value.map(({ id }) => id));
   const displayed = textTransformers.value.map(
-    (snippet) => textTransformerDrafts.value[snippet.id]?.snippet ?? snippet,
+    (snippet) => textTransformerDraft(snippet.id)?.snippet ?? snippet,
   );
   for (const draft of Object.values(textTransformerDrafts.value)) {
     if (!persistedIds.has(draft.snippet.id)) displayed.push(draft.snippet);
@@ -1614,7 +1624,7 @@ const editingTextTransformer = computed(
   () => displayedTextTransformers.value[editingTextTransformerIndex.value] ?? null,
 );
 const editingTextTransformerConflicted = computed(() =>
-  Boolean(textTransformerDrafts.value[editingTextTransformerId.value ?? '']?.conflicted),
+  Boolean(textTransformerDraft(editingTextTransformerId.value ?? '')?.conflicted),
 );
 
 const transformerEmptyText = computed(() =>
@@ -1643,7 +1653,7 @@ function goBackInSettings() {
   if (activePage.value === 'transformers' && editingTextTransformerId.value) {
     const id = editingTextTransformerId.value;
     if (!commitTextTransformerDraft(id)) {
-      const draft = textTransformerDrafts.value[id];
+      const draft = textTransformerDraft(id);
       if (draft?.conflicted || draft?.persistenceFailed) return;
       editingTextTransformerId.value = null;
       focusTextTransformerListAction(id);
@@ -1659,7 +1669,7 @@ function goBackInSettings() {
 }
 
 function textTransformerTagText(snippet: TextTransformer) {
-  return textTransformerTagDrafts.value[snippet.id] ?? snippet.tags.join(', ');
+  return textTransformerTagDraft(snippet.id) ?? snippet.tags.join(', ');
 }
 
 function parseTextTransformerTags(value: string): string[] {
@@ -1721,7 +1731,7 @@ watch(activePage, (page) => {
 });
 
 function openTextTransformerDetail(id: string) {
-  if (!textTransformerDrafts.value[id]) {
+  if (!textTransformerDraft(id)) {
     const persisted = textTransformers.value.find((snippet) => snippet.id === id);
     if (!persisted) return;
     const base = cloneTextTransformer(persisted);
@@ -1750,7 +1760,7 @@ function updateTextTransformerDraft(
   id: string,
   update: (snippet: TextTransformer) => TextTransformer,
 ) {
-  const draft = textTransformerDrafts.value[id];
+  const draft = textTransformerDraft(id);
   if (!draft) return;
   setTextTransformerDraft(id, { ...draft, snippet: update(draft.snippet) });
 }
@@ -1824,7 +1834,7 @@ function textTransformerDraftCommitContext(
 }
 
 function commitTextTransformerDraft(id: string, overwriteStorageConflict = false): boolean {
-  const draft = textTransformerDrafts.value[id];
+  const draft = textTransformerDraft(id);
   if (!draft) return true;
   const persistenceErrorRevision = textTransformerPersistenceErrorRevision.value;
   const context = textTransformerDraftCommitContext(id, draft, overwriteStorageConflict);
@@ -1835,7 +1845,7 @@ function commitTextTransformerDraft(id: string, overwriteStorageConflict = false
   const persisted = persistTextTransformerCandidate(validated, overwriteStorageConflict);
   const finalized = persisted && finalizeTextTransformerDraftCommit(id, validated);
   if (!finalized && textTransformerPersistenceErrorRevision.value !== persistenceErrorRevision) {
-    const retained = textTransformerDrafts.value[id];
+    const retained = textTransformerDraft(id);
     if (retained) setTextTransformerDraft(id, { ...retained, persistenceFailed: true });
   }
   return finalized;
@@ -1843,7 +1853,7 @@ function commitTextTransformerDraft(id: string, overwriteStorageConflict = false
 
 function reloadTextTransformerDraft(id: string) {
   if (textTransformerStorageRecoveryPending.value && !reloadTextTransformerStorage()) {
-    const draft = textTransformerDrafts.value[id];
+    const draft = textTransformerDraft(id);
     if (draft) setTextTransformerDraft(id, { ...draft, conflicted: true });
     return;
   }
