@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { useServerState } from './useServerState';
-import type { WorkerToTabPayload } from '../types/sse-worker';
+import type { WorkerToTabMessage } from '../types/sse-worker';
 import type { ProjectState, WorkerNotificationEntry } from '../types/worker-state';
 
-type BootstrapMessage = Extract<WorkerToTabPayload, { type: 'state.bootstrap' }>;
+type BootstrapMessage = Extract<WorkerToTabMessage, { type: 'state.bootstrap' }>;
 
 function createProject(id: string): ProjectState {
   return { id, worktree: `/repo/${id}`, sandboxes: {} };

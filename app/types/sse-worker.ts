@@ -15,8 +15,6 @@ export type DirectorySessionHydration = {
 export type TabToWorkerMessage =
   | {
       type: 'connect';
-      connectionEpoch: number;
-      credentialRevision: string | null;
       baseUrl: string;
       authorization?: string;
       errorMessages?: {
@@ -49,7 +47,7 @@ export type TabToWorkerMessage =
       directory: string;
     };
 
-export type WorkerToTabPayload =
+export type WorkerToTabMessage =
   | {
       type: 'packet';
       packet: SsePacket;
@@ -59,7 +57,6 @@ export type WorkerToTabPayload =
     }
   | {
       type: 'connection.error';
-      credentialRevision: string | null;
       message: string;
       statusCode?: number;
     }
@@ -110,5 +107,3 @@ export type WorkerToTabPayload =
       sessionId: string;
       kind: 'permission' | 'question' | 'idle';
     };
-
-export type WorkerToTabMessage = WorkerToTabPayload & { readonly connectionEpoch: number };

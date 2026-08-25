@@ -1,8 +1,8 @@
 import { reactive, ref } from 'vue';
-import type { DirectorySessionHydration, WorkerToTabPayload } from '../types/sse-worker';
+import type { DirectorySessionHydration, WorkerToTabMessage } from '../types/sse-worker';
 import type { ProjectState, WorkerNotificationEntry } from '../types/worker-state';
 
-type NotificationShowMessage = Extract<WorkerToTabPayload, { type: 'notification.show' }>;
+type NotificationShowMessage = Extract<WorkerToTabMessage, { type: 'notification.show' }>;
 
 export function useServerState() {
   const projects = reactive<Record<string, ProjectState>>({});
@@ -34,7 +34,7 @@ export function useServerState() {
     Object.assign(sessionHydrationByDirectory, next);
   }
 
-  function handleStateMessage(message: WorkerToTabPayload): boolean {
+  function handleStateMessage(message: WorkerToTabMessage): boolean {
     if (message.type === 'state.bootstrap') {
       replaceProjects(message.projects);
       replaceNotifications(message.notifications);

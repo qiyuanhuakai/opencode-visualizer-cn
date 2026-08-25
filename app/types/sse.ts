@@ -488,11 +488,7 @@ export type McpToolsChangedPacket = { server: string };
 
 // connection lifecycle (client-side only)
 export type ConnectionOpenPacket = Record<string, never>;
-export type ConnectionErrorPacket = {
-  message: string;
-  statusCode?: number;
-  credentialRevision: string | null;
-};
+export type ConnectionErrorPacket = { message: string; statusCode?: number };
 export type ConnectionReconnectedPacket = Record<string, never>;
 
 // ── GlobalEventMap ────────────────────────────────────────────────────────
