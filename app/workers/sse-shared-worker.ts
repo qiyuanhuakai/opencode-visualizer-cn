@@ -1,7 +1,7 @@
 import type {
   DirectorySessionHydration,
   TabToWorkerMessage,
-  WorkerToTabPayload,
+  WorkerToTabMessage,
 } from '../types/sse-worker';
 import type { SessionInfo, SsePacket } from '../types/sse';
 import {
@@ -20,11 +20,7 @@ import { createSseConnection, type SseConnection } from '../utils/sseConnection'
 import { createStateBuilder } from '../utils/stateBuilder';
 import { mapWithConcurrency } from '../utils/mapWithConcurrency';
 import { createOpencodeReadRunner, OpencodeReadAbortedError } from './opencode-read-runner';
-import {
-  bufferStatePacket,
-  clearBufferedStatePackets,
-  type BufferedStatePacket,
-} from './sse-state-buffer';
+import { bufferStatePacket, clearBufferedStatePackets, type BufferedStatePacket } from './sse-state-buffer';
 
 type SharedWorkerSelf = {
   onconnect: ((event: MessageEvent) => void) | null;
@@ -103,8 +99,6 @@ type ConnectionState = {
 
 const connections = new Map<string, ConnectionState>();
 const portToKey = new Map<MessagePort, string>();
-const portToConnectionEpoch = new Map<MessagePort, number>();
-const portToCredentialRevision = new Map<MessagePort, string | null>();
 const MAX_UNKNOWN_SESSION_DIRECTORIES = 32;
 const MAX_PENDING_UNKNOWN_SESSIONS = 2_000;
 const MAX_PENDING_DIRECT_HYDRATIONS = 128;
@@ -113,58 +107,15 @@ const INITIAL_BOOTSTRAP_RETRY_MS = 50;
 const MAX_BOOTSTRAP_RETRY_MS = 2_000;
 const opencodeBackend = createOpenCodeWorkerAdapter();
 
-function toKey(
-  baseUrl: string,
-  authorization: string | undefined,
-  credentialRevision: string | null,
-) {
-  return `${baseUrl.replace(/\/+$/, '')}\u0000${authorization ?? ''}\u0000${credentialRevision ?? ''}`;
+function toKey(baseUrl: string, authorization?: string) {
+  return `${baseUrl.replace(/\/+$/, '')}\u0000${authorization ?? ''}`;
 }
 
-function send(
-  port: MessagePort,
-  message: WorkerToTabPayload,
-  connectionEpoch = portToConnectionEpoch.get(port),
-) {
-  if (connectionEpoch === undefined) return;
-  port.postMessage({ ...message, connectionEpoch });
-}
+function send(port: MessagePort, message: WorkerToTabMessage) { port.postMessage(message); }
 
-function broadcast(state: ConnectionState, message: WorkerToTabPayload) {
-  for (const port of state.ports) send(port, message);
-}
+function broadcast(state: ConnectionState, message: WorkerToTabMessage) { for (const port of state.ports) send(port, message); }
 
-type ConnectionLifecyclePayload =
-  | { type: 'connection.open' }
-  | { type: 'connection.error'; message: string; statusCode?: number }
-  | { type: 'connection.reconnected' };
-
-function sendConnectionLifecycle(
-  port: MessagePort,
-  message: ConnectionLifecyclePayload,
-  connectionEpoch = portToConnectionEpoch.get(port),
-) {
-  if (message.type === 'connection.error') {
-    send(
-      port,
-      {
-        ...message,
-        credentialRevision: portToCredentialRevision.get(port) ?? null,
-      },
-      connectionEpoch,
-    );
-    return;
-  }
-  send(port, message, connectionEpoch);
-}
-
-function broadcastConnectionLifecycle(state: ConnectionState, message: ConnectionLifecyclePayload) {
-  for (const port of state.ports) sendConnectionLifecycle(port, message);
-}
-
-function isCurrentConnection(state: ConnectionState) {
-  return connections.get(state.key) === state;
-}
+function isCurrentConnection(state: ConnectionState) { return connections.get(state.key) === state; }
 
 const runOpencodeReadTask = createOpencodeReadRunner<ConnectionState>({
   isCurrent: isCurrentConnection,
@@ -292,9 +243,8 @@ async function hydrateReferencedSubagents(
 
   state.referencedSubagentHydrationByPort.set(port, hydration);
   const results = await mapWithConcurrency(sessionIds, 2, async (sessionId) => {
-    const rawSession = await runOpencodeReadTask(
-      state,
-      () => getSession(sessionId, directory, { signal: hydration.controller.signal }),
+    const rawSession = await runOpencodeReadTask(state, () =>
+      getSession(sessionId, directory, { signal: hydration.controller.signal }),
       { signal: hydration.controller.signal, generation: hydration.generation },
     );
     if (!isSessionInfo(rawSession)) return null;
@@ -460,50 +410,57 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
   state.sessionHydrationRequestByDirectory.set(normalizedDirectory, requestToken);
   state.sessionHydrationControllerByDirectory.set(normalizedDirectory, controller);
   emitDirectoryHydration(state, normalizedDirectory, { status: 'loading' });
-  const promise = runOpencodeReadTask(
-    state,
-    async () => {
-      const [rawSessions, rawStatuses] = await Promise.all([
-        opencodeBackend.listSessions({
-          directory: normalizedDirectory,
-          roots: true,
-          signal: controller.signal,
-        }),
-        opencodeBackend.getSessionStatusMap?.(normalizedDirectory, { signal: controller.signal }),
-      ]);
-      if (!isActiveDirectorySessionHydration(state, normalizedDirectory, generation, requestToken))
-        return;
+  const promise = runOpencodeReadTask(state, async () => {
+    const [rawSessions, rawStatuses] = await Promise.all([
+      opencodeBackend.listSessions({
+        directory: normalizedDirectory,
+        roots: true,
+        signal: controller.signal,
+      }),
+      opencodeBackend.getSessionStatusMap?.(normalizedDirectory, { signal: controller.signal }),
+    ]);
+    if (
+      !isActiveDirectorySessionHydration(
+        state,
+        normalizedDirectory,
+        generation,
+        requestToken,
+      )
+    )
+      return;
 
-      const sessions = asObjectArray(rawSessions) as Parameters<
-        typeof snapshotBuilder.applySessions
-      >[0];
-      snapshotBuilder.applySessionSnapshot(sessions, mutationSnapshot);
-      snapshotBuilder.applyStatusSnapshot(
-        sessions.map((session) => session.id),
-        asStatusMap(rawStatuses),
-        statusSnapshot,
-      );
-      if (snapshotBuilder.consumeSnapshotOverflow()) {
-        requestAuthoritativeBootstrap(state);
-        return;
-      }
+    const sessions = asObjectArray(rawSessions) as Parameters<typeof snapshotBuilder.applySessions>[0];
+    snapshotBuilder.applySessionSnapshot(sessions, mutationSnapshot);
+    snapshotBuilder.applyStatusSnapshot(
+      sessions.map((session) => session.id),
+      asStatusMap(rawStatuses),
+      statusSnapshot,
+    );
+    if (snapshotBuilder.consumeSnapshotOverflow()) {
+      requestAuthoritativeBootstrap(state);
+      return;
+    }
 
-      const projectIds = new Set<string>();
-      const resolvedProjectId =
-        state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
-      if (resolvedProjectId) projectIds.add(resolvedProjectId);
-      for (const session of sessions) {
-        const projectId = session.projectID?.trim();
-        if (projectId) projectIds.add(projectId);
-      }
-      for (const projectId of projectIds) emitProjectUpdated(state, projectId);
-      emitDirectoryHydration(state, normalizedDirectory, { status: 'loaded' });
-    },
-    { generation, signal: controller.signal },
-  )
+    const projectIds = new Set<string>();
+    const resolvedProjectId = state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory);
+    if (resolvedProjectId) projectIds.add(resolvedProjectId);
+    for (const session of sessions) {
+      const projectId = session.projectID?.trim();
+      if (projectId) projectIds.add(projectId);
+    }
+    for (const projectId of projectIds) emitProjectUpdated(state, projectId);
+    emitDirectoryHydration(state, normalizedDirectory, { status: 'loaded' });
+  }, { generation, signal: controller.signal })
     .catch((error: unknown) => {
       if (controller.signal.aborted || error instanceof OpencodeReadAbortedError) return;
-      if (isActiveDirectorySessionHydration(state, normalizedDirectory, generation, requestToken)) {
+      if (
+        isActiveDirectorySessionHydration(
+          state,
+          normalizedDirectory,
+          generation,
+          requestToken,
+        )
+      ) {
         emitDirectoryHydration(state, normalizedDirectory, {
           status: 'error',
           error: error instanceof Error ? error.message : 'Failed to load directory sessions.',
@@ -551,53 +508,48 @@ async function loadDirectoryVcs(state: ConnectionState, directory: string) {
   const controller = new AbortController();
   state.vcsHydrationRequestByDirectory.set(normalizedDirectory, requestToken);
   state.vcsHydrationControllerByDirectory.set(normalizedDirectory, controller);
-  const promise = runOpencodeReadTask(
-    state,
-    async () => {
-      const raw = opencodeBackend.getVcsInfo
-        ? await opencodeBackend
-            .getVcsInfo(normalizedDirectory, { signal: controller.signal })
-            .catch(() => null)
-        : null;
-      if (!isActiveDirectoryVcsHydration(state, normalizedDirectory, generation, requestToken))
-        return;
-      const vcsInfo = asRecord(raw);
-      if (!vcsInfo) {
-        state.vcsHydratedDirectories.add(normalizedDirectory);
-        return;
-      }
+  const promise = runOpencodeReadTask(state, async () => {
+    const raw = opencodeBackend.getVcsInfo
+      ? await opencodeBackend
+          .getVcsInfo(normalizedDirectory, { signal: controller.signal })
+          .catch(() => null)
+      : null;
+    if (!isActiveDirectoryVcsHydration(state, normalizedDirectory, generation, requestToken)) return;
+    const vcsInfo = asRecord(raw);
+    if (!vcsInfo) {
+      state.vcsHydratedDirectories.add(normalizedDirectory);
+      return;
+    }
 
-      const branch = asString(vcsInfo.branch);
-      if (branch) {
-        state.stateBuilder.applyVcsInfo(normalizedDirectory, { branch });
-        emitProjectUpdated(
-          state,
-          state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory),
-        );
-      }
+    const branch = asString(vcsInfo.branch);
+    if (branch) {
+      state.stateBuilder.applyVcsInfo(normalizedDirectory, { branch });
+      emitProjectUpdated(
+        state,
+        state.stateBuilder.resolveProjectIdForDirectory(normalizedDirectory),
+      );
+    }
 
-      if (isActiveDirectoryVcsHydration(state, normalizedDirectory, generation, requestToken)) {
-        state.vcsHydratedDirectories.add(normalizedDirectory);
-      }
-    },
-    { generation, signal: controller.signal },
-  )
+    if (isActiveDirectoryVcsHydration(state, normalizedDirectory, generation, requestToken)) {
+      state.vcsHydratedDirectories.add(normalizedDirectory);
+    }
+  }, { generation, signal: controller.signal })
     .catch((error: unknown) => {
       if (controller.signal.aborted || error instanceof OpencodeReadAbortedError) return;
       throw error;
     })
     .finally(() => {
-      const active = state.vcsHydrationInFlightByDirectory.get(normalizedDirectory);
-      if (active === promise) {
-        state.vcsHydrationInFlightByDirectory.delete(normalizedDirectory);
-      }
-      if (state.vcsHydrationRequestByDirectory.get(normalizedDirectory) === requestToken) {
-        state.vcsHydrationRequestByDirectory.delete(normalizedDirectory);
-      }
-      if (state.vcsHydrationControllerByDirectory.get(normalizedDirectory) === controller) {
-        state.vcsHydrationControllerByDirectory.delete(normalizedDirectory);
-      }
-    });
+    const active = state.vcsHydrationInFlightByDirectory.get(normalizedDirectory);
+    if (active === promise) {
+      state.vcsHydrationInFlightByDirectory.delete(normalizedDirectory);
+    }
+    if (state.vcsHydrationRequestByDirectory.get(normalizedDirectory) === requestToken) {
+      state.vcsHydrationRequestByDirectory.delete(normalizedDirectory);
+    }
+    if (state.vcsHydrationControllerByDirectory.get(normalizedDirectory) === controller) {
+      state.vcsHydrationControllerByDirectory.delete(normalizedDirectory);
+    }
+  });
 
   state.vcsHydrationInFlightByDirectory.set(normalizedDirectory, promise);
   await promise;
@@ -647,14 +599,15 @@ function requestPriorityHydration(state: ConnectionState, directory?: string) {
   void Promise.allSettled([
     loadDirectorySessions(state, normalizedDirectory),
     loadDirectoryVcs(state, normalizedDirectory),
-  ]).finally(() => {
-    if (
-      state.hydrationGeneration === generation &&
-      state.pendingSelectedDirectory === normalizedDirectory
-    ) {
-      state.pendingSelectedDirectory = null;
-    }
-  });
+  ])
+    .finally(() => {
+      if (
+        state.hydrationGeneration === generation &&
+        state.pendingSelectedDirectory === normalizedDirectory
+      ) {
+        state.pendingSelectedDirectory = null;
+      }
+    });
 }
 
 function requestDirectSessionHydration(state: ConnectionState, directory: string): void {
@@ -735,7 +688,11 @@ function reconcileIdleNotification(
   }
   if (shouldSuppressIdleNotification(state, projectId, rootSessionId)) return false;
 
-  const added = state.notificationManager.addNotification(projectId, rootSessionId, idleRequestId);
+  const added = state.notificationManager.addNotification(
+    projectId,
+    rootSessionId,
+    idleRequestId,
+  );
   if (added) emitNotificationShow(state, projectId, rootSessionId, 'idle');
   return added;
 }
@@ -892,7 +849,7 @@ async function resolveUnknownSessionDirectory(
     for (const [sessionId, pending] of resolution.pendingBySessionId) {
       const current = state.pendingUnknownSessionsById.get(sessionId);
       if (!current || current.resolution !== resolution || current.pending !== pending) continue;
-      emitResolvedSession(state, pending.info, resolution.directory, pending.mutationSnapshot);
+       emitResolvedSession(state, pending.info, resolution.directory, pending.mutationSnapshot);
       completePendingUnknownSession(state, sessionId, current);
     }
   } finally {
@@ -997,8 +954,11 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
           notificationsChanged =
             state.notificationManager.removeNotification(idleRequestId) || notificationsChanged;
           notificationsChanged =
-            reconcileIdleNotification(state, deletedProjectId, notificationSessionId) ||
-            notificationsChanged;
+            reconcileIdleNotification(
+              state,
+              deletedProjectId,
+              notificationSessionId,
+            ) || notificationsChanged;
         }
       }
       break;
@@ -1112,8 +1072,9 @@ function scheduleAuthoritativeBootstrap(state: ConnectionState): void {
     state.bufferedStateOverflowed = false;
     state.authoritativeResyncRequested = false;
     void bootstrapState(state).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : 'Failed to bootstrap worker state.';
-      broadcastConnectionLifecycle(state, { type: 'connection.error', message });
+      const message =
+        error instanceof Error ? error.message : 'Failed to bootstrap worker state.';
+      broadcast(state, { type: 'connection.error', message });
     });
   });
 }
@@ -1127,7 +1088,11 @@ function clearBootstrapRetry(state: ConnectionState, resetAttempt = false): void
 }
 
 function scheduleBootstrapRetry(state: ConnectionState): void {
-  if (state.bootstrapRetryTimer !== undefined || !state.connected || !isCurrentConnection(state))
+  if (
+    state.bootstrapRetryTimer !== undefined ||
+    !state.connected ||
+    !isCurrentConnection(state)
+  )
     return;
   const delay = Math.min(
     INITIAL_BOOTSTRAP_RETRY_MS * 2 ** state.bootstrapRetryAttempt,
@@ -1209,9 +1174,9 @@ async function bootstrapState(state: ConnectionState, forceRestart = false): Pro
 
   let bootstrapPromise: Promise<void>;
   bootstrapPromise = run.finally(() => {
-    if (!ownsBootstrap(state, bootstrapToken) || state.bootstrapPromise !== bootstrapPromise)
-      return;
-    const shouldResync = state.bufferedStateOverflowed || state.authoritativeResyncRequested;
+    if (!ownsBootstrap(state, bootstrapToken) || state.bootstrapPromise !== bootstrapPromise) return;
+    const shouldResync =
+      state.bufferedStateOverflowed || state.authoritativeResyncRequested;
     state.isBootstrappingState = !bootstrapSucceeded;
     state.bootstrapPromise = undefined;
     state.bootstrapController = undefined;
@@ -1244,8 +1209,6 @@ function cleanupIfUnused(state: ConnectionState) {
 
 function detachPort(port: MessagePort) {
   const key = portToKey.get(port);
-  portToConnectionEpoch.delete(port);
-  portToCredentialRevision.delete(port);
   if (!key) return;
   portToKey.delete(port);
   const state = connections.get(key);
@@ -1260,8 +1223,7 @@ function detachPort(port: MessagePort) {
 
 function createConnectionState(
   baseUrl: string,
-  authorization: string | undefined,
-  credentialRevision: string | null,
+  authorization?: string,
   errorMessages?: {
     emptyBaseUrl?: string;
     authenticationFailed?: string;
@@ -1269,7 +1231,7 @@ function createConnectionState(
     httpError?: (status: number) => string;
   },
 ) {
-  const key = toKey(baseUrl, authorization, credentialRevision);
+  const key = toKey(baseUrl, authorization);
   let state: ConnectionState;
   state = {
     key,
@@ -1318,24 +1280,24 @@ function createConnectionState(
       onOpen(isReconnect) {
         state.connected = true;
         clearBootstrapRetry(state, true);
-        broadcastConnectionLifecycle(state, { type: 'connection.open' });
+        broadcast(state, { type: 'connection.open' });
         if (isReconnect) {
           cancelAllReferencedSubagentHydrations(state);
           abortAllUnknownSessionResolutions(state);
           abortCurrentBootstrap(state);
           state.topologyReady = false;
           replaceHydrationGeneration(state);
-          broadcastConnectionLifecycle(state, { type: 'connection.reconnected' });
+          broadcast(state, { type: 'connection.reconnected' });
         }
         void bootstrapState(state, isReconnect).catch((error) => {
           const message =
             error instanceof Error ? error.message : 'Failed to bootstrap worker state.';
-          broadcastConnectionLifecycle(state, { type: 'connection.error', message });
+          broadcast(state, { type: 'connection.error', message });
         });
       },
       onError(message, statusCode) {
         state.connected = false;
-        broadcastConnectionLifecycle(state, { type: 'connection.error', message, statusCode });
+        broadcast(state, { type: 'connection.error', message, statusCode });
       },
     }),
   };
@@ -1345,8 +1307,6 @@ function createConnectionState(
 
 function attachPort(
   port: MessagePort,
-  connectionEpoch: number,
-  credentialRevision: string | null,
   baseUrl: string,
   authorization?: string,
   errorMessages?: {
@@ -1357,27 +1317,24 @@ function attachPort(
   },
 ) {
   detachPort(port);
-  const key = toKey(baseUrl, authorization, credentialRevision);
+  const key = toKey(baseUrl, authorization);
   const existing = connections.get(key);
-  const state =
-    existing ?? createConnectionState(baseUrl, authorization, credentialRevision, errorMessages);
+  const state = existing ?? createConnectionState(baseUrl, authorization, errorMessages);
   if (!existing) {
     connections.set(key, state);
   }
 
   state.ports.add(port);
   portToKey.set(port, key);
-  portToConnectionEpoch.set(port, connectionEpoch);
-  portToCredentialRevision.set(port, credentialRevision);
 
   if (state.connected) {
-    sendConnectionLifecycle(port, { type: 'connection.open' });
+    send(port, { type: 'connection.open' });
     if (!state.bootstrapPromise) {
       send(port, {
         type: 'state.bootstrap',
         projects: state.stateBuilder.getState().projects,
         notifications: state.notificationManager.getState(),
-        sessionHydrationByDirectory: Object.fromEntries(state.sessionHydrationByDirectory),
+    sessionHydrationByDirectory: Object.fromEntries(state.sessionHydrationByDirectory),
       });
     }
   }
@@ -1388,26 +1345,14 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
   if (!message || typeof message !== 'object') return;
 
   if (message.type === 'connect') {
-    if (!Number.isSafeInteger(message.connectionEpoch) || message.connectionEpoch <= 0) return;
     if (!message.baseUrl) {
-      sendConnectionLifecycle(
-        port,
-        {
-          type: 'connection.error',
-          message: message.errorMessages?.emptyBaseUrl ?? 'SSE base URL is empty.',
-        },
-        message.connectionEpoch,
-      );
+      send(port, {
+        type: 'connection.error',
+        message: message.errorMessages?.emptyBaseUrl ?? 'SSE base URL is empty.',
+      });
       return;
     }
-    attachPort(
-      port,
-      message.connectionEpoch,
-      message.credentialRevision ?? null,
-      message.baseUrl,
-      message.authorization,
-      message.errorMessages,
-    );
+    attachPort(port, message.baseUrl, message.authorization, message.errorMessages);
     return;
   }
 
