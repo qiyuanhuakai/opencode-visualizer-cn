@@ -674,7 +674,10 @@ import { reconcileDialogRequests } from './utils/reconcileDialogRequests';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import { createBackendRequestFence } from './utils/backendRequestFence';
-import { createSingleFlightCredentialCleanup } from './utils/credentialCleanup';
+import {
+  createSingleFlightCredentialCleanup,
+  runCredentialMutationExclusive,
+} from './utils/credentialCleanup';
 import { resolveThreadSubagentSessions, type SessionHistoryMeta } from './utils/threadSubagents';
 import { requestWorkerResult, retryReferencedSessionIds } from './utils/retryReferencedSessions';
 import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
@@ -3199,13 +3202,14 @@ async function hydrateActiveWorktreeResources() {
 
 const clearUnauthorizedOpenCodeCredentials = createSingleFlightCredentialCleanup({
   disconnect: () => ge.disconnect(),
-  clear: () => credentials.clear(),
+  clear: (expectedRevision) => credentials.clearIfRevision(expectedRevision),
   confirmRetry: () => showConfirm(t('app.errors.logoutPersistenceFailed')),
+  runExclusive: runCredentialMutationExclusive,
 });
 
-async function handleOpenCodeUnauthorized(message: string) {
+async function handleOpenCodeUnauthorized(message: string, credentialRevision: string | null) {
   storageSet(StorageKeys.state.lastAuthError, message);
-  const cleared = await clearUnauthorizedOpenCodeCredentials();
+  const cleared = await clearUnauthorizedOpenCodeCredentials(credentialRevision);
   if (!cleared) return false;
   loginUsername.value = '';
   loginPassword.value = '';
@@ -6042,8 +6046,7 @@ function connectShellSocket(ptyId: string) {
   const url = buildPtyWsUrl(`/pty/${ptyId}/connect`, directory);
   const socket = new WebSocket(url);
   session.socket = socket;
-  const isCurrentSocket = () =>
-    isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
+  const isCurrentSocket = () => isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
   socket.binaryType = 'arraybuffer';
   socket.addEventListener('message', (event) => {
     if (!isCurrentSocket()) return;
@@ -9326,19 +9329,16 @@ const saveLoginCredentialsByBackend: Record<BackendKind, () => boolean> = {
   opencode: saveOpenCodeLoginCredentials,
   codex: () => credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value),
   acp: () =>
-    credentials.saveAcp(
-      loginAcpBridgeUrl.value,
-      loginAcpBridgeToken.value,
-      loginAcpAgentId.value,
-    ),
+    credentials.saveAcp(loginAcpBridgeUrl.value, loginAcpBridgeToken.value, loginAcpAgentId.value),
 };
 
 function saveLoginCredentials() {
   return saveLoginCredentialsByBackend[loginBackendKind.value]();
 }
 
-function handleLogin() {
-  if (!saveLoginCredentials()) {
+async function handleLogin() {
+  const saved = await runCredentialMutationExclusive(() => saveLoginCredentials());
+  if (!saved) {
     initErrorMessage.value = t('app.errors.credentialPersistenceFailed');
     return;
   }
@@ -9351,10 +9351,14 @@ function handleAbortInit() {
 }
 
 async function handleLogout() {
-  while (!credentials.clear()) {
-    const shouldRetry = await showConfirm(t('app.errors.logoutPersistenceFailed'));
-    if (!shouldRetry) return;
-  }
+  const cleared = await runCredentialMutationExclusive(async () => {
+    while (!credentials.clear()) {
+      const shouldRetry = await showConfirm(t('app.errors.logoutPersistenceFailed'));
+      if (!shouldRetry) return false;
+    }
+    return true;
+  });
+  if (!cleared) return;
   loginUsername.value = '';
   loginPassword.value = '';
   loginRequiresAuth.value = false;
@@ -9374,7 +9378,7 @@ async function handleLogout() {
   connectionState.value = 'connecting';
 }
 
-onMounted(() => {
+onMounted(async () => {
   ensureBrowserNotificationPermission();
   window.addEventListener('keydown', handleGlobalKeydown);
   window.electronAPI?.localFile?.onChanged(handleLocalApplicationChange);
@@ -9385,7 +9389,7 @@ onMounted(() => {
       handleWindowResize();
     });
   }
-  credentials.load();
+  await credentials.load();
   codexApi.url.value = credentials.codexBridgeUrl.value;
   codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
   void codexApi.restoreConnection().catch(() => undefined);
@@ -9448,13 +9452,17 @@ onMounted(() => {
   );
   globalEventUnsubscribers.push(
     ge.on('connection.error', async (payload) => {
+      if (activeBackendKind.value !== 'opencode') return;
       if (payload.statusCode === 401 || payload.statusCode === 403) {
         const msg = `${payload.message} (HTTP ${payload.statusCode})`;
         const connectionStateBeforeError = connectionState.value;
         connectionState.value = 'error';
         if (uiInitState.value === 'loading' && connectionStateBeforeError === 'connecting') return;
         cancelInitialization();
-        const credentialsCleared = await handleOpenCodeUnauthorized(msg);
+        const credentialsCleared = await handleOpenCodeUnauthorized(
+          msg,
+          payload.credentialRevision,
+        );
         if (!credentialsCleared) {
           initErrorMessage.value = t('app.errors.logoutPersistenceFailed');
           return;

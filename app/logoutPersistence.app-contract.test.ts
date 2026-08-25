@@ -41,8 +41,9 @@ describe('App logout persistence contract', () => {
     const loadingGuard = handlerSource.indexOf(
       "uiInitState.value === 'loading' && connectionStateBeforeError === 'connecting'",
     );
+    const revisionCaptureIndex = handlerSource.indexOf('payload.credentialRevision');
     const cancelIndex = handlerSource.indexOf('cancelInitialization()');
-    const recoveryIndex = handlerSource.indexOf('await handleOpenCodeUnauthorized(msg)');
+    const recoveryIndex = handlerSource.indexOf('await handleOpenCodeUnauthorized(');
     const loginIndex = handlerSource.indexOf("uiInitState.value = 'login'");
 
     // Then: only the initial fail-fast owner is ignored; replacement errors cancel stale bootstrap.
@@ -53,9 +54,10 @@ describe('App logout persistence contract', () => {
     expect(loadingGuard).toBeGreaterThan(-1);
     expect(loadingGuard).toBeGreaterThan(errorStateIndex);
     expect(cancelIndex).toBeGreaterThan(loadingGuard);
-    expect(loadingGuard).toBeLessThan(recoveryIndex);
+    expect(recoveryIndex).toBeGreaterThan(cancelIndex);
     expect(recoveryIndex).toBeGreaterThan(-1);
-    expect(loginIndex).toBeGreaterThan(recoveryIndex);
+    expect(revisionCaptureIndex).toBeGreaterThan(recoveryIndex);
+    expect(loginIndex).toBeGreaterThan(revisionCaptureIndex);
   });
 
   it('does not initialize a backend until replacement credentials persist', () => {
@@ -66,17 +68,19 @@ describe('App logout persistence contract', () => {
     const loginSource = appSource.slice(loginStart, loginEnd);
 
     // When: the login handler submits the selected backend credentials.
+    const lockIndex = loginSource.indexOf('await runCredentialMutationExclusive');
     const saveIndex = loginSource.indexOf('saveLoginCredentials()');
     const initializationIndex = loginSource.indexOf('void startInitialization()');
 
-    // Then: failed acknowledgement shows a retryable error before initialization can begin.
+    // Then: persistence owns the cross-window lock and failed acknowledgement blocks initialization.
     expect(loginStart).toBeGreaterThan(-1);
     expect(loginEnd).toBeGreaterThan(loginStart);
-    expect(loginSource).toContain('if (!saveLoginCredentials())');
+    expect(loginSource).toContain('if (!saved)');
     expect(loginSource).toContain(
       "initErrorMessage.value = t('app.errors.credentialPersistenceFailed')",
     );
-    expect(saveIndex).toBeGreaterThan(-1);
+    expect(lockIndex).toBeGreaterThan(-1);
+    expect(saveIndex).toBeGreaterThan(lockIndex);
     expect(initializationIndex).toBeGreaterThan(saveIndex);
   });
 });
