@@ -674,10 +674,6 @@ import { reconcileDialogRequests } from './utils/reconcileDialogRequests';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import { createBackendRequestFence } from './utils/backendRequestFence';
-import {
-  createSingleFlightCredentialCleanup,
-  runCredentialMutationExclusive,
-} from './utils/credentialCleanup';
 import { resolveThreadSubagentSessions, type SessionHistoryMeta } from './utils/threadSubagents';
 import { requestWorkerResult, retryReferencedSessionIds } from './utils/retryReferencedSessions';
 import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
@@ -743,12 +739,6 @@ import {
   storageSet,
   storageSetJSON,
 } from './utils/storageKeys';
-import {
-  modelVisibilityKey,
-  readHiddenModelsFromStorage,
-  writeHiddenModelsToStorage,
-  type ModelVisibilityEntry,
-} from './utils/modelVisibilityStorage';
 import {
   markSandboxDeleted,
   pruneDeletedSandboxStore,
@@ -1580,6 +1570,21 @@ type ProviderResponse = BackendProviderResponse;
 type ProviderConfigState = BackendProviderConfigState;
 
 const CODEX_OFFICIAL_MODEL_PROVIDER = 'openai';
+
+type ModelVisibilityEntry = {
+  providerID: string;
+  modelID: string;
+  visibility: 'show' | 'hide';
+};
+
+type ModelVisibilityStore = {
+  user: ModelVisibilityEntry[];
+  recent: string[];
+  variant: Record<string, string>;
+};
+
+const MODEL_VISIBILITY_STORAGE_KEY = 'opencode.global.dat:model';
+const LEGACY_DISABLED_MODELS_STORAGE_KEY = 'opencode.settings.disabledModels.v1';
 
 type AgentInfo = {
   name: string;
@@ -3075,6 +3080,99 @@ function normalizeIdList(values?: string[]) {
     : [];
 }
 
+function createEmptyModelVisibilityStore(): ModelVisibilityStore {
+  return {
+    user: [],
+    recent: [],
+    variant: {},
+  };
+}
+
+function parseModelVisibilityStore(raw: string | null): ModelVisibilityStore {
+  if (!raw) return createEmptyModelVisibilityStore();
+  try {
+    const parsed = JSON.parse(raw) as Partial<ModelVisibilityStore>;
+    return {
+      user: Array.isArray(parsed.user)
+        ? parsed.user.filter(
+            (entry): entry is ModelVisibilityEntry =>
+              Boolean(entry?.providerID && entry?.modelID) &&
+              (entry.visibility === 'show' || entry.visibility === 'hide'),
+          )
+        : [],
+      recent: Array.isArray(parsed.recent)
+        ? parsed.recent.filter((value): value is string => typeof value === 'string')
+        : [],
+      variant:
+        parsed.variant && typeof parsed.variant === 'object' && !Array.isArray(parsed.variant)
+          ? Object.fromEntries(
+              Object.entries(parsed.variant).filter(
+                (entry): entry is [string, string] => typeof entry[1] === 'string',
+              ),
+            )
+          : {},
+    };
+  } catch {
+    return createEmptyModelVisibilityStore();
+  }
+}
+
+function modelVisibilityKey(providerID: string, modelID: string) {
+  return `${providerID}/${modelID}`;
+}
+
+function readHiddenModelsFromStorage() {
+  if (typeof window === 'undefined') return [];
+  const currentStore = parseModelVisibilityStore(
+    window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY),
+  );
+  const currentHidden = currentStore.user
+    .filter((entry) => entry.visibility === 'hide')
+    .map((entry) => modelVisibilityKey(entry.providerID, entry.modelID));
+  if (currentHidden.length > 0) return Array.from(new Set(currentHidden)).sort();
+  const legacyRaw = window.localStorage.getItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
+  if (!legacyRaw) return [];
+  try {
+    const legacy = JSON.parse(legacyRaw) as string[];
+    return Array.isArray(legacy)
+      ? [...new Set(legacy.filter((value): value is string => typeof value === 'string'))].sort()
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeHiddenModelsToStorage(nextHiddenModels: string[]) {
+  if (typeof window === 'undefined') return;
+  const store = parseModelVisibilityStore(
+    window.localStorage.getItem(MODEL_VISIBILITY_STORAGE_KEY),
+  );
+  const hiddenSet = new Set(nextHiddenModels);
+  const preservedUser = store.user.filter(
+    (entry) => !hiddenSet.has(modelVisibilityKey(entry.providerID, entry.modelID)),
+  );
+  const nextUser = [
+    ...preservedUser,
+    ...Array.from(hiddenSet)
+      .sort()
+      .map((key) => {
+        const { providerID, modelID } = parseProviderModelKey(key);
+        return providerID && modelID ? { providerID, modelID, visibility: 'hide' as const } : null;
+      })
+      .filter((entry): entry is { providerID: string; modelID: string; visibility: 'hide' } =>
+        Boolean(entry),
+      ),
+  ];
+  window.localStorage.setItem(
+    MODEL_VISIBILITY_STORAGE_KEY,
+    JSON.stringify({
+      ...store,
+      user: nextUser,
+    }),
+  );
+  window.localStorage.removeItem(LEGACY_DISABLED_MODELS_STORAGE_KEY);
+}
+
 function isModelAvailable(modelId: string) {
   return !hiddenModels.value.includes(modelId);
 }
@@ -3200,21 +3298,9 @@ async function hydrateActiveWorktreeResources() {
   ]);
 }
 
-const clearUnauthorizedOpenCodeCredentials = createSingleFlightCredentialCleanup({
-  disconnect: () => ge.disconnect(),
-  clear: (expectedRevision) => credentials.clearIfRevision(expectedRevision),
-  confirmRetry: () => showConfirm(t('app.errors.logoutPersistenceFailed')),
-  runExclusive: runCredentialMutationExclusive,
-});
-
-async function handleOpenCodeUnauthorized(message: string, credentialRevision: string | null) {
+function handleOpenCodeUnauthorized(message: string) {
   storageSet(StorageKeys.state.lastAuthError, message);
-  const cleared = await clearUnauthorizedOpenCodeCredentials(credentialRevision);
-  if (!cleared) return false;
-  loginUsername.value = '';
-  loginPassword.value = '';
-  loginRequiresAuth.value = false;
-  return true;
+  credentials.clear();
 }
 
 function normalizeStoredAttachment(value: unknown): Attachment | null {
@@ -3903,8 +3989,8 @@ async function fetchGlobalProviderConfig() {
 
 function handleModelVisibilityStorage(event: StorageEvent) {
   if (
-    event.key !== storageKey(StorageKeys.settings.modelVisibility) &&
-    event.key !== storageKey(StorageKeys.settings.disabledModels)
+    event.key !== MODEL_VISIBILITY_STORAGE_KEY &&
+    event.key !== LEGACY_DISABLED_MODELS_STORAGE_KEY
   )
     return;
   try {
@@ -6046,7 +6132,8 @@ function connectShellSocket(ptyId: string) {
   const url = buildPtyWsUrl(`/pty/${ptyId}/connect`, directory);
   const socket = new WebSocket(url);
   session.socket = socket;
-  const isCurrentSocket = () => isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
+  const isCurrentSocket = () =>
+    isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
   socket.binaryType = 'arraybuffer';
   socket.addEventListener('message', (event) => {
     if (!isCurrentSocket()) return;
@@ -9281,7 +9368,7 @@ function handlePtyEvent(event: {
   }
 }
 
-const { startInitialization, cancelInitialization, abortInitialization } = useBackendActivation({
+const { startInitialization, abortInitialization } = useBackendActivation({
   credentials,
   codexApi,
   ge,
@@ -9319,30 +9406,20 @@ const { startInitialization, cancelInitialization, abortInitialization } = useBa
   handleOpenCodeUnauthorized,
 });
 
-function saveOpenCodeLoginCredentials() {
-  const u = loginRequiresAuth.value ? loginUsername.value : '';
-  const p = loginRequiresAuth.value ? loginPassword.value : '';
-  return credentials.save(loginUrl.value, u, p);
-}
-
-const saveLoginCredentialsByBackend: Record<BackendKind, () => boolean> = {
-  opencode: saveOpenCodeLoginCredentials,
-  codex: () => credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value),
-  acp: () =>
-    credentials.saveAcp(loginAcpBridgeUrl.value, loginAcpBridgeToken.value, loginAcpAgentId.value),
-};
-
-function saveLoginCredentials() {
-  return saveLoginCredentialsByBackend[loginBackendKind.value]();
-}
-
-async function handleLogin() {
-  const saved = await runCredentialMutationExclusive(() => saveLoginCredentials());
-  if (!saved) {
-    initErrorMessage.value = t('app.errors.credentialPersistenceFailed');
+function handleLogin() {
+  if (loginBackendKind.value === 'codex') {
+    credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value);
+    void startInitialization();
     return;
   }
-  initErrorMessage.value = '';
+  if (loginBackendKind.value === 'acp') {
+    credentials.saveAcp(loginAcpBridgeUrl.value, loginAcpBridgeToken.value, loginAcpAgentId.value);
+    void startInitialization();
+    return;
+  }
+  const u = loginRequiresAuth.value ? loginUsername.value : '';
+  const p = loginRequiresAuth.value ? loginPassword.value : '';
+  credentials.save(loginUrl.value, u, p);
   void startInitialization();
 }
 
@@ -9350,21 +9427,11 @@ function handleAbortInit() {
   abortInitialization();
 }
 
-async function handleLogout() {
-  const cleared = await runCredentialMutationExclusive(async () => {
-    while (!credentials.clear()) {
-      const shouldRetry = await showConfirm(t('app.errors.logoutPersistenceFailed'));
-      if (!shouldRetry) return false;
-    }
-    return true;
-  });
-  if (!cleared) return;
-  loginUsername.value = '';
-  loginPassword.value = '';
-  loginRequiresAuth.value = false;
+function handleLogout() {
   uiInitState.value = 'login';
   acpMessageBridge.stop();
   disconnectAcpBackend();
+  credentials.clear();
   ge.disconnect();
   activeBackendKind.value = credentials.backendKind.value;
   loginBackendKind.value = credentials.backendKind.value;
@@ -9378,7 +9445,7 @@ async function handleLogout() {
   connectionState.value = 'connecting';
 }
 
-onMounted(async () => {
+onMounted(() => {
   ensureBrowserNotificationPermission();
   window.addEventListener('keydown', handleGlobalKeydown);
   window.electronAPI?.localFile?.onChanged(handleLocalApplicationChange);
@@ -9389,7 +9456,7 @@ onMounted(async () => {
       handleWindowResize();
     });
   }
-  await credentials.load();
+  credentials.load();
   codexApi.url.value = credentials.codexBridgeUrl.value;
   codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
   void codexApi.restoreConnection().catch(() => undefined);
@@ -9451,24 +9518,14 @@ onMounted(async () => {
     }),
   );
   globalEventUnsubscribers.push(
-    ge.on('connection.error', async (payload) => {
-      if (activeBackendKind.value !== 'opencode') return;
+    ge.on('connection.error', (payload) => {
       if (payload.statusCode === 401 || payload.statusCode === 403) {
         const msg = `${payload.message} (HTTP ${payload.statusCode})`;
-        const connectionStateBeforeError = connectionState.value;
-        connectionState.value = 'error';
-        if (uiInitState.value === 'loading' && connectionStateBeforeError === 'connecting') return;
-        cancelInitialization();
-        const credentialsCleared = await handleOpenCodeUnauthorized(
-          msg,
-          payload.credentialRevision,
-        );
-        if (!credentialsCleared) {
-          initErrorMessage.value = t('app.errors.logoutPersistenceFailed');
-          return;
-        }
+        storageSet(StorageKeys.state.lastAuthError, msg);
+        credentials.clear();
         uiInitState.value = 'login';
         initErrorMessage.value = msg;
+        connectionState.value = 'error';
         return;
       }
       if (uiInitState.value === 'loading') {
