@@ -1,29 +1,56 @@
 type CredentialCleanupOptions = {
   disconnect: () => void;
-  clear: () => boolean;
+  clear: (expectedRevision: string | null) => 'cleared' | 'already-cleared' | 'failed' | 'stale';
   confirmRetry: () => Promise<boolean>;
+  runExclusive: <T>(operation: () => Promise<T> | T) => Promise<T>;
 };
 
+const CREDENTIAL_MUTATION_LOCK = 'vis:credential-mutation';
+let fallbackMutationTail = Promise.resolve();
+
+export function runCredentialMutationExclusive<T>(operation: () => Promise<T> | T) {
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    return navigator.locks.request(CREDENTIAL_MUTATION_LOCK, () => operation());
+  }
+  const current = fallbackMutationTail.then(operation, operation);
+  fallbackMutationTail = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  return current;
+}
+
 export function createSingleFlightCredentialCleanup(options: CredentialCleanupOptions) {
-  let inFlight: Promise<boolean> | null = null;
+  const inFlightByRevision = new Map<string | null, Promise<boolean>>();
 
-  return function cleanup() {
-    if (inFlight) return inFlight;
+  return function cleanup(expectedRevision: string | null) {
+    const existing = inFlightByRevision.get(expectedRevision);
+    if (existing) return existing;
 
-    const current = (async () => {
-      options.disconnect();
-      while (!options.clear()) {
+    const current = options.runExclusive(async () => {
+      let disconnected = false;
+      for (;;) {
+        const result = options.clear(expectedRevision);
+        if (result === 'stale') return false;
+        if (!disconnected) {
+          options.disconnect();
+          disconnected = true;
+        }
+        if (result === 'cleared' || result === 'already-cleared') return true;
         if (!(await options.confirmRetry())) return false;
       }
-      return true;
-    })();
-    inFlight = current;
+    });
+    inFlightByRevision.set(expectedRevision, current);
     void current.then(
       () => {
-        if (inFlight === current) inFlight = null;
+        if (inFlightByRevision.get(expectedRevision) === current) {
+          inFlightByRevision.delete(expectedRevision);
+        }
       },
       () => {
-        if (inFlight === current) inFlight = null;
+        if (inFlightByRevision.get(expectedRevision) === current) {
+          inFlightByRevision.delete(expectedRevision);
+        }
       },
     );
     return current;
