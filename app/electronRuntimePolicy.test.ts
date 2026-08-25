@@ -229,5 +229,25 @@ describe('electron-runtime-policy', () => {
       expect(setHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
       expect(removeHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
     });
+
+    it('commits persistent storage cache only after the disk write succeeds', () => {
+      // Given: set and remove both derive a candidate from the current cache.
+      const setMutation = mainSource.match(/function setPersistentStorageItem\([\s\S]*?\n\}/u)?.[0];
+      const removeMutation = mainSource.match(
+        /function removePersistentStorageItem\([\s\S]*?\n\}/u,
+      )?.[0];
+
+      // When: the main-process mutation ordering is inspected.
+      expect(setMutation).toBeDefined();
+      expect(removeMutation).toBeDefined();
+
+      // Then: neither operation publishes its candidate cache before persistence succeeds.
+      for (const mutation of [setMutation, removeMutation]) {
+        const writeIndex = mutation?.indexOf('writePersistentStorage(nextStorage)') ?? -1;
+        const commitIndex = mutation?.indexOf('persistentStorageCache = nextStorage') ?? -1;
+        expect(writeIndex).toBeGreaterThanOrEqual(0);
+        expect(commitIndex).toBeGreaterThan(writeIndex);
+      }
+    });
   });
 });

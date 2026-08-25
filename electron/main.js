@@ -96,10 +96,10 @@ function loadPersistentStorage() {
   return persistentStorageCache;
 }
 
-function writePersistentStorage() {
+function writePersistentStorage(storage) {
   const filePath = persistentStorageFilePath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(loadPersistentStorage(), null, 2), 'utf8');
+  fs.writeFileSync(filePath, JSON.stringify(storage, null, 2), 'utf8');
 }
 
 function getPersistentStorageItem(key) {
@@ -110,8 +110,9 @@ function getPersistentStorageItem(key) {
 function setPersistentStorageItem(key, value) {
   const storage = loadPersistentStorage();
   const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
-  storage[key] = value;
-  writePersistentStorage();
+  const nextStorage = { ...storage, [key]: value };
+  writePersistentStorage(nextStorage);
+  persistentStorageCache = nextStorage;
   return oldValue;
 }
 
@@ -121,8 +122,10 @@ function removePersistentStorageItem(key) {
   if (oldValue === null) {
     return null;
   }
-  delete storage[key];
-  writePersistentStorage();
+  const nextStorage = { ...storage };
+  delete nextStorage[key];
+  writePersistentStorage(nextStorage);
+  persistentStorageCache = nextStorage;
   return oldValue;
 }
 
@@ -349,7 +352,7 @@ ipcMain.handle('local-file-select-application', async (event) => {
     broadcastPersistentStorageChange(
       { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
       event.sender.id,
-  );
+    );
   return selectedPath;
 });
 
