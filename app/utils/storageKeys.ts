@@ -88,6 +88,7 @@ export const StorageKeys = {
     codexBridgeToken: 'auth.codexBridgeToken.v1',
     acpBridgeToken: 'auth.acpBridgeToken.v1',
     acpAgentId: 'auth.acpAgentId.v1',
+    credentialRevision: 'auth.credentialRevision.v1',
   },
 } as const;
 
