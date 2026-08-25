@@ -39,8 +39,6 @@ interface ElectronApiSchema {
     getItem: (key: string) => unknown;
     setItem: (key: string, value: string) => unknown;
     removeItem: (key: string) => unknown;
-    migrate: (entries: Record<string, string>) => unknown;
-    update: (entries: Record<string, string | null>) => unknown;
   };
 }
 
@@ -166,13 +164,7 @@ describe('electron preload contract', () => {
 
   it('exposes exactly the persistentStorage api names', () => {
     const { api } = loadPreloadWithMocks();
-    expect(Object.keys(api.persistentStorage).sort()).toEqual([
-      'getItem',
-      'migrate',
-      'removeItem',
-      'setItem',
-      'update',
-    ]);
+    expect(Object.keys(api.persistentStorage).sort()).toEqual(['getItem', 'removeItem', 'setItem']);
   });
 
   it('exposes the platform and version metadata', () => {
@@ -243,34 +235,6 @@ describe('electron preload contract', () => {
     // Then: preload preserves both rejection acknowledgements unchanged.
     expect(setResult).toBe(false);
     expect(removeResult).toBe(false);
-  });
-
-  it('routes one acknowledged persistentStorage migration through synchronous IPC', () => {
-    // Given: main rejects an atomic migration request.
-    const { api, ipcRenderer } = loadPreloadWithMocks();
-    ipcRenderer.sendSync.mockReturnValueOnce(false);
-    const entries = { 'opencode.settings.textTransformers.v1': 'legacy' };
-
-    // When: renderer attempts to migrate its complete legacy snapshot.
-    const result = api.persistentStorage.migrate(entries);
-
-    // Then: preload preserves the acknowledgement and sends one bulk payload.
-    expect(result).toBe(false);
-    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-migrate', entries);
-  });
-
-  it('routes one acknowledged persistentStorage bundle update through synchronous IPC', () => {
-    // Given: main rejects one atomic set-and-remove transaction.
-    const { api, ipcRenderer } = loadPreloadWithMocks();
-    ipcRenderer.sendSync.mockReturnValueOnce(false);
-    const entries = { 'opencode.auth.serverUrl.v1': 'https://new.example', obsolete: null };
-
-    // When: renderer replaces the complete credential bundle.
-    const result = api.persistentStorage.update(entries);
-
-    // Then: preload preserves the acknowledgement and sends one bulk payload.
-    expect(result).toBe(false);
-    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-update', entries);
   });
 
   it('forwards persistent-storage-changed into a window storage event', () => {
