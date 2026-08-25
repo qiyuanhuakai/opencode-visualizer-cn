@@ -2,16 +2,17 @@
   <div class="snippet-completion">
     <div class="snippet-completion-header">
       <span class="snippet-completion-name">{{ snippet.name }}</span>
-      <code class="snippet-completion-trigger">{{ sequence }}</code>
+      <code class="snippet-completion-trigger" :title="sequence">{{ sequence }}</code>
     </div>
     <div v-if="snippet.description" class="snippet-completion-description">
       {{ snippet.description }}
     </div>
     <div class="snippet-completion-preview">{{ bodyPreview }}</div>
     <div v-if="snippet.tags.length > 0" class="snippet-completion-tags">
-      <span v-for="tag in snippet.tags" :key="tag" class="snippet-completion-tag">
+      <span v-for="tag in visibleTags" :key="tag" class="snippet-completion-tag">
         {{ tag }}
       </span>
+      <span v-if="hiddenTagCount > 0" class="snippet-completion-tag">+{{ hiddenTagCount }}</span>
     </div>
   </div>
 </template>
@@ -26,6 +27,9 @@ const props = defineProps<{
 }>();
 
 const MAX_PREVIEW_LENGTH = 240;
+const MAX_VISIBLE_TAGS = 4;
+const visibleTags = computed(() => props.snippet.tags.slice(0, MAX_VISIBLE_TAGS));
+const hiddenTagCount = computed(() => Math.max(0, props.snippet.tags.length - MAX_VISIBLE_TAGS));
 const bodyPreview = computed(() => {
   let end = Math.min(props.snippet.body.length, MAX_PREVIEW_LENGTH);
   const lastCodeUnit = props.snippet.body.charCodeAt(end - 1);
@@ -52,6 +56,7 @@ const bodyPreview = computed(() => {
 }
 
 .snippet-completion-name {
+  flex: 1;
   overflow: hidden;
   color: var(--theme-input-text, var(--theme-modal-text, var(--theme-text-primary, #e2e8f0)));
   font-size: var(--ui-font-size, 12px);
@@ -62,14 +67,22 @@ const bodyPreview = computed(() => {
 }
 
 .snippet-completion-trigger {
-  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  flex: 0 1 auto;
   color: var(--theme-accent-primary, #60a5fa);
   font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .snippet-completion-description,
 .snippet-completion-preview {
-  color: var(--theme-input-text-muted, var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8)));
+  color: var(
+    --theme-input-text-muted,
+    var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8))
+  );
   font-size: 10px;
   line-height: 1.35;
 }
@@ -95,7 +108,10 @@ const bodyPreview = computed(() => {
     var(--theme-input-border, var(--theme-modal-border, var(--theme-border-default, #334155)));
   border-radius: 999px;
   padding: 1px 5px;
-  color: var(--theme-input-text-muted, var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8)));
+  color: var(
+    --theme-input-text-muted,
+    var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8))
+  );
   font-size: 9px;
   line-height: 1.2;
 }
