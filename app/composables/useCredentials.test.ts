@@ -91,11 +91,49 @@ describe('useCredentials', () => {
     vi.resetModules();
 
     const second = await importFresh();
-    second.load();
+    await second.load();
 
     expect(second.url.value).toBe('http://127.0.0.1:7777');
     expect(second.baseUrl.value).toBe('http://127.0.0.1:7777');
     expect(second.isConfigured.value).toBe(true);
+  });
+
+  it('waits for the credential transaction before publishing the initial load', async () => {
+    // Given: another window holds the mutation lock after committing credentials C.
+    const { runCredentialMutationExclusive } = await import('../utils/credentialCleanup');
+    let releaseMutation!: () => void;
+    let markMutationStarted!: () => void;
+    const mutationGate = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+    const mutation = runCredentialMutationExclusive(async () => {
+      electronStore.set('opencode.auth.serverUrl.v1', 'http://c');
+      electronStore.set(
+        'opencode.auth.credentials.v1',
+        JSON.stringify({ url: 'http://c', username: 'carol', password: 'secret-c' }),
+      );
+      electronStore.set('opencode.auth.credentialRevision.v1', 'revision-c');
+      markMutationStarted();
+      await mutationGate;
+    });
+    await mutationStarted;
+    const credentials = await importFresh();
+
+    // When: initial load starts while C's transaction still owns the lock.
+    const loading = credentials.load();
+    await Promise.resolve();
+
+    // Then: no credential state is published until load acquires the lock.
+    expect(credentials.url.value).toBe('');
+    releaseMutation();
+    await mutation;
+    await loading;
+    expect(credentials.url.value).toBe('http://c');
+    expect(credentials.username.value).toBe('carol');
+    expect(credentials.credentialRevision.value).toBe('revision-c');
   });
 
   it('keeps the server URL when clearing auth', async () => {
@@ -122,7 +160,7 @@ describe('useCredentials', () => {
       JSON.stringify({ url: 'http://localhost:4096', username: 'legacy', password: 'stale' }),
     );
     const credentials = await importFresh();
-    credentials.load();
+    await credentials.load();
 
     // When: the user clears authentication.
     credentials.clear();
@@ -144,7 +182,7 @@ describe('useCredentials', () => {
     const update = vi.mocked(window.electronAPI!.persistentStorage!.update);
     update.mockReturnValue(false);
     const credentials = await importFresh();
-    credentials.load();
+    await credentials.load();
 
     // When: the user tries to clear authentication during the storage failure.
     const cleared = credentials.clear();
@@ -203,7 +241,7 @@ describe('useCredentials', () => {
     );
 
     const credentials = await importFresh();
-    credentials.load();
+    await credentials.load();
 
     expect(credentials.url.value).toBe('http://localhost:4096');
     expect(credentials.username.value).toBe('legacy-user');
@@ -226,7 +264,7 @@ describe('useCredentials', () => {
 
     // When: credentials load during the failed migration.
     const credentials = await importFresh();
-    credentials.load();
+    await credentials.load();
 
     // Then: the source remains retryable and unacknowledged secrets are not exposed as canonical.
     expect(electronStore.get('opencode.credentials.v1')).toBe(legacy);
@@ -259,6 +297,8 @@ describe('useCredentials', () => {
       username: 'bob',
       password: 'pw',
     });
+    electronStore.set('opencode.auth.serverUrl.v1', 'http://localhost:9000');
+    electronStore.set('opencode.auth.credentials.v1', payload);
 
     for (const listener of storageListeners) {
       listener({
@@ -267,9 +307,81 @@ describe('useCredentials', () => {
       } as StorageEvent);
     }
 
-    expect(credentials.url.value).toBe('http://localhost:9000');
+    await vi.waitFor(() => expect(credentials.url.value).toBe('http://localhost:9000'));
     expect(credentials.username.value).toBe('bob');
     expect(credentials.password.value).toBe('pw');
+  });
+
+  it('applies a committed cross-window credential snapshot before its revision', async () => {
+    // Given: window A is using credentials A and window B atomically commits credentials B.
+    const credentials = await importFresh();
+    expect(credentials.save('http://a', 'alice', 'secret-a')).toBe(true);
+    const replacement = JSON.stringify({
+      url: 'http://b',
+      username: 'bob',
+      password: 'secret-b',
+    });
+    electronStore.set('opencode.auth.serverUrl.v1', 'http://b');
+    electronStore.set('opencode.auth.credentials.v1', replacement);
+    electronStore.set('opencode.auth.credentialRevision.v1', 'revision-b');
+
+    // When: the revision event is delivered before the later per-key event tasks.
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.credentialRevision.v1',
+        newValue: 'revision-b',
+      } as StorageEvent);
+    }
+
+    // Then: observers can only see the complete B snapshot paired with revision B.
+    await vi.waitFor(() => expect(credentials.url.value).toBe('http://b'));
+    expect(credentials.username.value).toBe('bob');
+    expect(credentials.password.value).toBe('secret-b');
+    expect(credentials.credentialRevision.value).toBe('revision-b');
+  });
+
+  it('waits for the credential transaction before reading a storage-event snapshot', async () => {
+    // Given: credentials A are active while another window holds the mutation lock for C.
+    const credentials = await importFresh();
+    expect(credentials.save('http://a', 'alice', 'secret-a')).toBe(true);
+    const { runCredentialMutationExclusive } = await import('../utils/credentialCleanup');
+    let releaseMutation!: () => void;
+    let markMutationStarted!: () => void;
+    const mutationGate = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+    const mutation = runCredentialMutationExclusive(async () => {
+      electronStore.set('opencode.auth.serverUrl.v1', 'http://c');
+      electronStore.set(
+        'opencode.auth.credentials.v1',
+        JSON.stringify({ url: 'http://c', username: 'carol', password: 'secret-c' }),
+      );
+      electronStore.set('opencode.auth.credentialRevision.v1', 'revision-c');
+      markMutationStarted();
+      await mutationGate;
+    });
+    await mutationStarted;
+
+    // When: an auth storage event arrives before that transaction releases its lock.
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.credentialRevision.v1',
+        newValue: 'revision-c',
+      } as StorageEvent);
+    }
+    await Promise.resolve();
+
+    // Then: A remains published until the reader can acquire the same lock and load all of C.
+    expect(credentials.url.value).toBe('http://a');
+    expect(credentials.username.value).toBe('alice');
+    releaseMutation();
+    await mutation;
+    await vi.waitFor(() => expect(credentials.credentialRevision.value).toBe('revision-c'));
+    expect(credentials.url.value).toBe('http://c');
+    expect(credentials.username.value).toBe('carol');
   });
 
   it('persists and restores ACP bridge credentials and agent selection', async () => {
@@ -289,7 +401,7 @@ describe('useCredentials', () => {
 
     vi.resetModules();
     const second = await importFresh();
-    second.load();
+    await second.load();
 
     expect(second.backendKind.value).toBe('acp');
     expect(second.codexBridgeUrl.value).toBe('ws://localhost:23004/codex');
@@ -315,7 +427,7 @@ describe('useCredentials', () => {
     electronStore.set('opencode.auth.acpAgentId.v1', 'oh-my-pi');
     const credentials = await importFresh();
 
-    credentials.load();
+    await credentials.load();
 
     expect(credentials.acpBridgeUrl.value).toBe('ws://bridge.test:23004');
     expect(electronStore.get('opencode.auth.acpBridgeUrl.v1')).toBe('ws://bridge.test:23004');
@@ -330,19 +442,42 @@ describe('useCredentials', () => {
     electronStore.set('opencode.auth.codexBridgeToken.v1', 'legacy-secret');
     electronStore.set('opencode.auth.acpAgentId.v1', 'oh-my-pi');
     const first = await importFresh();
-    first.load();
+    await first.load();
     expect(first.acpBridgeToken.value).toBe('legacy-secret');
 
-    // When: ACP logout succeeds and a fresh renderer loads the retained ACP selection.
+    // When: ACP logout succeeds, then tokenless login retains that ACP selection.
     expect(first.clear()).toBe(true);
+    expect(first.saveAcp('ws://bridge.test:23004', '', 'oh-my-pi')).toBe(true);
     vi.resetModules();
     const second = await importFresh();
-    second.load();
+    await second.load();
 
     // Then: neither the canonical nor historical token can silently authenticate ACP again.
     expect(electronStore.get('opencode.auth.acpBridgeToken.v1')).toBe('');
     expect(electronStore.get('opencode.auth.codexBridgeToken.v1')).toBe('legacy-secret');
     expect(second.acpBridgeToken.value).toBe('');
+  });
+
+  it('assigns a new revision to same-value replacement credentials', async () => {
+    // Given: one durable credential bundle owns the active connection revision.
+    const credentials = await importFresh();
+    expect(credentials.save('http://localhost:4096', 'alice', 'secret')).toBe(true);
+    const firstRevision = credentials.getRevision();
+
+    // When: the same credential values are explicitly submitted again.
+    expect(credentials.save('http://localhost:4096', 'alice', 'secret')).toBe(true);
+    const secondRevision = credentials.getRevision();
+
+    // Then: the old owner cannot clear the replacement and logout leaves a new tombstone revision.
+    expect(firstRevision).not.toBeNull();
+    expect(secondRevision).not.toBe(firstRevision);
+    expect(credentials.clearIfRevision(firstRevision)).toBe('stale');
+    expect(credentials.password.value).toBe('secret');
+    expect(credentials.clearIfRevision(secondRevision)).toBe('cleared');
+    const logoutRevision = credentials.getRevision();
+    expect(logoutRevision).not.toBeNull();
+    expect(logoutRevision).not.toBe(secondRevision);
+    expect(credentials.clearIfRevision(secondRevision)).toBe('already-cleared');
   });
 
   it('falls back to OpenCode when persisted ACP credentials have no agent id', async () => {
@@ -351,7 +486,7 @@ describe('useCredentials', () => {
     electronStore.set('opencode.auth.acpAgentId.v1', '  ');
     const credentials = await importFresh();
 
-    credentials.load();
+    await credentials.load();
 
     expect(credentials.backendKind.value).toBe('opencode');
     expect(credentials.isConfigured.value).toBe(false);
