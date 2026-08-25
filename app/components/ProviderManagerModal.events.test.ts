@@ -181,7 +181,7 @@ describe('ProviderManagerModal events', () => {
     expect(activationSource).toContain(
       'const bootstrap = Promise.resolve().then(() => options.bootstrapSelections());',
     );
-    expect(activationSource).toContain('await bootstrapOpenCodeSelection();');
+    expect(activationSource).toContain('await bootstrapOpenCodeSelection(generation);');
     expect(activationSource).toContain('await options.hydrateActiveWorktreeResources();');
     expect(activationSource).toContain('await options.fetchGlobalProviderConfig();');
     expect(activationSource).toContain(

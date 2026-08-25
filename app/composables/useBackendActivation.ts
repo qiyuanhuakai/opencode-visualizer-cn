@@ -12,6 +12,8 @@ type CredentialsLike = {
   codexBridgeToken: Ref<string>;
   acpBridgeToken: Ref<string>;
   acpAgentId: Ref<string>;
+  getRevision: () => string | null;
+  load: () => Promise<void>;
 };
 
 type CodexApiLike = {
@@ -74,13 +76,19 @@ export type UseBackendActivationOptions = {
   bootstrapSelections: () => Promise<void>;
   hydrateActiveWorktreeResources: () => Promise<void>;
   reloadSelectedSessionState: (sessionId: string) => Promise<void>;
-  handleOpenCodeUnauthorized: (message: string) => Promise<boolean>;
+  handleOpenCodeUnauthorized: (
+    message: string,
+    credentialRevision: string | null,
+  ) => Promise<boolean>;
 };
 
 export function useBackendActivation(options: UseBackendActivationOptions) {
   const initializationInFlight = { value: false } as Ref<boolean>;
   let openCodeInitializationGeneration = 0;
-  let selectionBootstrapInFlight: Promise<void> | null = null;
+  let selectionBootstrapInFlight: {
+    generation: number;
+    promise: Promise<void>;
+  } | null = null;
 
   function markStartup(name: string) {
     if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
@@ -172,34 +180,75 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
-  async function resolveOpenCodeFailure(error: unknown) {
+  async function resolveOpenCodeFailure(error: unknown, credentialRevision: string | null) {
     const connectionError = error instanceof SseConnectionError ? error : null;
     const message = connectionError
       ? `${connectionError.message} (HTTP ${connectionError.statusCode})`
       : options.toErrorMessage(error);
-    const unauthorized =
-      connectionError?.statusCode === 401 || connectionError?.statusCode === 403;
+    const unauthorized = connectionError?.statusCode === 401 || connectionError?.statusCode === 403;
     const credentialsCleared = unauthorized
-      ? await options.handleOpenCodeUnauthorized(message)
+      ? await options.handleOpenCodeUnauthorized(message, credentialRevision)
       : true;
-    return { message, credentialsCleared };
+    return { message, unauthorized, credentialsCleared };
   }
 
-  async function bootstrapOpenCodeSelection() {
-    if (selectionBootstrapInFlight) {
-      await selectionBootstrapInFlight;
+  function getRejectedCredentialRevision(error: unknown, fallbackRevision: string | null) {
+    if (error instanceof SseConnectionError && error.credentialRevision !== undefined) {
+      return error.credentialRevision;
+    }
+    return fallbackRevision;
+  }
+
+  async function handleOpenCodeActivationFailure(
+    error: unknown,
+    fallbackRevision: string | null,
+    isCurrentInitialization: () => boolean,
+  ) {
+    if (!isCurrentInitialization() || options.uiInitState.value === 'ready') return false;
+    const rejectedCredentialRevision = getRejectedCredentialRevision(error, fallbackRevision);
+    const { message, unauthorized, credentialsCleared } = await resolveOpenCodeFailure(
+      error,
+      rejectedCredentialRevision,
+    );
+    if (!isCurrentInitialization()) return false;
+    if (!unauthorized) options.ge.disconnect();
+    if (
+      unauthorized &&
+      !credentialsCleared &&
+      options.credentials.getRevision() !== rejectedCredentialRevision
+    ) {
+      await options.credentials.load();
+      return isCurrentInitialization();
+    }
+    options.connectionState.value = 'error';
+    options.initErrorMessage.value = message;
+    options.uiInitState.value = credentialsCleared ? 'login' : 'error';
+    return false;
+  }
+
+  async function bootstrapOpenCodeSelection(generation: number) {
+    const existingBootstrap = selectionBootstrapInFlight;
+    if (existingBootstrap?.generation === generation) {
+      await existingBootstrap.promise;
       return;
     }
+    if (existingBootstrap) {
+      await Promise.allSettled([existingBootstrap.promise]);
+      if (generation !== openCodeInitializationGeneration) return;
+    }
     const bootstrap = Promise.resolve().then(() => options.bootstrapSelections());
-    selectionBootstrapInFlight = bootstrap;
+    const owner = { generation, promise: bootstrap };
+    selectionBootstrapInFlight = owner;
     try {
       await bootstrap;
     } finally {
-      if (selectionBootstrapInFlight === bootstrap) selectionBootstrapInFlight = null;
+      if (selectionBootstrapInFlight === owner) selectionBootstrapInFlight = null;
     }
   }
 
   async function activateOpenCode(generation: number) {
+    const credentialRevision = options.credentials.getRevision();
+    let restartWithReplacement = false;
     const isCurrentInitialization = () =>
       initializationInFlight.value && generation === openCodeInitializationGeneration;
     options.disconnectAcpBackend();
@@ -220,7 +269,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await options.fetchHomePath();
       if (!isCurrentInitialization()) return;
       options.initLoadingMessage.value = options.t('app.status.loadingProjects');
-      await bootstrapOpenCodeSelection();
+      await bootstrapOpenCodeSelection(generation);
       if (!isCurrentInitialization()) return;
       markStartup('vis:opencode-session-selectable');
       options.connectionState.value = 'ready';
@@ -232,18 +281,17 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await options.fetchGlobalProviderConfig();
       await Promise.all([options.fetchProviders(true), options.fetchAgents()]);
     } catch (error) {
-      if (!isCurrentInitialization()) return;
       // Once the UI reached Ready, only connect/path/hydration/selection
       // failures (all pre-Ready) may send the user back to login.
-      if (options.uiInitState.value === 'ready') return;
-      options.ge.disconnect();
-      const { message, credentialsCleared } = await resolveOpenCodeFailure(error);
-      options.connectionState.value = 'error';
-      options.initErrorMessage.value = message;
-      options.uiInitState.value = credentialsCleared ? 'login' : 'error';
+      restartWithReplacement = await handleOpenCodeActivationFailure(
+        error,
+        credentialRevision,
+        isCurrentInitialization,
+      );
     } finally {
       if (generation === openCodeInitializationGeneration) {
         initializationInFlight.value = false;
+        if (restartWithReplacement) await startInitialization();
       }
     }
   }
