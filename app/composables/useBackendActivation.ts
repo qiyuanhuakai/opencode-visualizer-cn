@@ -1,6 +1,5 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
-import { SseConnectionError } from '../utils/sseConnection';
 
 type UiInitState = 'loading' | 'ready' | 'error' | 'login';
 type ConnectionState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error';
@@ -12,8 +11,6 @@ type CredentialsLike = {
   codexBridgeToken: Ref<string>;
   acpBridgeToken: Ref<string>;
   acpAgentId: Ref<string>;
-  getRevision: () => string | null;
-  load: () => Promise<void>;
 };
 
 type CodexApiLike = {
@@ -76,19 +73,11 @@ export type UseBackendActivationOptions = {
   bootstrapSelections: () => Promise<void>;
   hydrateActiveWorktreeResources: () => Promise<void>;
   reloadSelectedSessionState: (sessionId: string) => Promise<void>;
-  handleOpenCodeUnauthorized: (
-    message: string,
-    credentialRevision: string | null,
-  ) => Promise<boolean>;
+  handleOpenCodeUnauthorized: (message: string) => void;
 };
 
 export function useBackendActivation(options: UseBackendActivationOptions) {
   const initializationInFlight = { value: false } as Ref<boolean>;
-  let openCodeInitializationGeneration = 0;
-  let selectionBootstrapInFlight: {
-    generation: number;
-    promise: Promise<void>;
-  } | null = null;
 
   function markStartup(name: string) {
     if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
@@ -180,77 +169,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
-  async function resolveOpenCodeFailure(error: unknown, credentialRevision: string | null) {
-    const connectionError = error instanceof SseConnectionError ? error : null;
-    const message = connectionError
-      ? `${connectionError.message} (HTTP ${connectionError.statusCode})`
-      : options.toErrorMessage(error);
-    const unauthorized = connectionError?.statusCode === 401 || connectionError?.statusCode === 403;
-    const credentialsCleared = unauthorized
-      ? await options.handleOpenCodeUnauthorized(message, credentialRevision)
-      : true;
-    return { message, unauthorized, credentialsCleared };
-  }
-
-  function getRejectedCredentialRevision(error: unknown, fallbackRevision: string | null) {
-    if (error instanceof SseConnectionError && error.credentialRevision !== undefined) {
-      return error.credentialRevision;
-    }
-    return fallbackRevision;
-  }
-
-  async function handleOpenCodeActivationFailure(
-    error: unknown,
-    fallbackRevision: string | null,
-    isCurrentInitialization: () => boolean,
-  ) {
-    if (!isCurrentInitialization() || options.uiInitState.value === 'ready') return false;
-    const rejectedCredentialRevision = getRejectedCredentialRevision(error, fallbackRevision);
-    const { message, unauthorized, credentialsCleared } = await resolveOpenCodeFailure(
-      error,
-      rejectedCredentialRevision,
-    );
-    if (!isCurrentInitialization()) return false;
-    if (!unauthorized) options.ge.disconnect();
-    if (
-      unauthorized &&
-      !credentialsCleared &&
-      options.credentials.getRevision() !== rejectedCredentialRevision
-    ) {
-      await options.credentials.load();
-      return isCurrentInitialization();
-    }
-    options.connectionState.value = 'error';
-    options.initErrorMessage.value = message;
-    options.uiInitState.value = credentialsCleared ? 'login' : 'error';
-    return false;
-  }
-
-  async function bootstrapOpenCodeSelection(generation: number) {
-    const existingBootstrap = selectionBootstrapInFlight;
-    if (existingBootstrap?.generation === generation) {
-      await existingBootstrap.promise;
-      return;
-    }
-    if (existingBootstrap) {
-      await Promise.allSettled([existingBootstrap.promise]);
-      if (generation !== openCodeInitializationGeneration) return;
-    }
-    const bootstrap = Promise.resolve().then(() => options.bootstrapSelections());
-    const owner = { generation, promise: bootstrap };
-    selectionBootstrapInFlight = owner;
-    try {
-      await bootstrap;
-    } finally {
-      if (selectionBootstrapInFlight === owner) selectionBootstrapInFlight = null;
-    }
-  }
-
-  async function activateOpenCode(generation: number) {
-    const credentialRevision = options.credentials.getRevision();
-    let restartWithReplacement = false;
-    const isCurrentInitialization = () =>
-      initializationInFlight.value && generation === openCodeInitializationGeneration;
+  async function activateOpenCode() {
     options.disconnectAcpBackend();
     options.disconnectCodexBackend();
     options.activeBackendKind.value = 'opencode';
@@ -263,14 +182,11 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
       await options.ge.connect({ failFast: true, timeoutMs: 10000 });
-      if (!isCurrentInitialization()) return;
       options.connectionState.value = 'bootstrapping';
       options.initLoadingMessage.value = options.t('app.status.loadingServerPath');
       await options.fetchHomePath();
-      if (!isCurrentInitialization()) return;
       options.initLoadingMessage.value = options.t('app.status.loadingProjects');
-      await bootstrapOpenCodeSelection(generation);
-      if (!isCurrentInitialization()) return;
+      await options.bootstrapSelections();
       markStartup('vis:opencode-session-selectable');
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
@@ -281,18 +197,20 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await options.fetchGlobalProviderConfig();
       await Promise.all([options.fetchProviders(true), options.fetchAgents()]);
     } catch (error) {
+      if (!initializationInFlight.value) return;
       // Once the UI reached Ready, only connect/path/hydration/selection
       // failures (all pre-Ready) may send the user back to login.
-      restartWithReplacement = await handleOpenCodeActivationFailure(
-        error,
-        credentialRevision,
-        isCurrentInitialization,
-      );
-    } finally {
-      if (generation === openCodeInitializationGeneration) {
-        initializationInFlight.value = false;
-        if (restartWithReplacement) await startInitialization();
+      if (options.uiInitState.value === 'ready') return;
+      options.ge.disconnect();
+      const message = options.toErrorMessage(error);
+      options.connectionState.value = 'error';
+      if (/\(40[13]\)/.test(message)) {
+        options.handleOpenCodeUnauthorized(message);
       }
+      options.initErrorMessage.value = message;
+      options.uiInitState.value = 'login';
+    } finally {
+      initializationInFlight.value = false;
     }
   }
 
@@ -351,20 +269,15 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await activateAcp();
       return;
     }
-    await activateOpenCode(++openCodeInitializationGeneration);
-  }
-
-  function cancelInitialization() {
-    openCodeInitializationGeneration += 1;
-    initializationInFlight.value = false;
+    await activateOpenCode();
   }
 
   function abortInitialization() {
-    cancelInitialization();
     options.ge.disconnect();
     options.disconnectAcpBackend();
     if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnectTransport();
     options.disconnectCodexBackend();
+    initializationInFlight.value = false;
     options.connectionState.value = 'connecting';
     options.uiInitState.value = 'login';
     options.initErrorMessage.value = '';
@@ -373,7 +286,6 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   return {
     initializationInFlight,
     startInitialization,
-    cancelInitialization,
     abortInitialization,
   };
 }
