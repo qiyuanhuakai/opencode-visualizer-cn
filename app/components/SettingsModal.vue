@@ -1,5 +1,10 @@
 <template>
-  <dialog ref="dialogRef" class="modal-backdrop" @close="handleSettingsClosed" @cancel.prevent>
+  <dialog
+    ref="dialogRef"
+    class="modal-backdrop"
+    aria-labelledby="settings-modal-title"
+    @close="handleSettingsClosed"
+  >
     <div class="modal">
       <header class="modal-header">
         <div class="modal-header-main">
@@ -12,7 +17,7 @@
           >
             <Icon icon="lucide:arrow-left" :width="14" :height="14" />
           </button>
-          <div class="modal-title">{{ pageTitle }}</div>
+          <div id="settings-modal-title" class="modal-title">{{ pageTitle }}</div>
         </div>
         <button
           type="button"
@@ -226,7 +231,9 @@
                 </span>
               </label>
               <label class="transformer-field">
-                <span class="transformer-field-label">{{ $t('settings.textTransformers.nameLabel') }}</span>
+                <span class="transformer-field-label">{{
+                  $t('settings.textTransformers.nameLabel')
+                }}</span>
                 <input
                   :value="editingTextTransformer.name"
                   data-snippet-field="name"
@@ -251,12 +258,16 @@
                   :maxlength="MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH"
                   autocomplete="off"
                   :placeholder="$t('settings.textTransformers.descriptionPlaceholder')"
-                  @input="updateTextTransformerField(editingTextTransformer.id, 'description', $event)"
+                  @input="
+                    updateTextTransformerField(editingTextTransformer.id, 'description', $event)
+                  "
                   @change="commitTextTransformerDraft(editingTextTransformer.id)"
                 />
               </label>
               <label class="transformer-field">
-                <span class="transformer-field-label">{{ $t('settings.textTransformers.tagsLabel') }}</span>
+                <span class="transformer-field-label">{{
+                  $t('settings.textTransformers.tagsLabel')
+                }}</span>
                 <input
                   :value="textTransformerTagText(editingTextTransformer)"
                   data-snippet-field="tags"
@@ -270,7 +281,9 @@
                 />
               </label>
               <label class="transformer-field transformer-field-body">
-                <span class="transformer-field-label">{{ $t('settings.textTransformers.bodyLabel') }}</span>
+                <span class="transformer-field-label">{{
+                  $t('settings.textTransformers.bodyLabel')
+                }}</span>
                 <textarea
                   :value="editingTextTransformer.body"
                   data-snippet-field="body"
@@ -309,7 +322,9 @@
             <div class="setting-row setting-row-stack transformer-settings-section">
               <div class="transformer-heading">
                 <div class="setting-info">
-                  <div class="setting-label">{{ $t('settings.textTransformers.mappingLabel') }}</div>
+                  <div class="setting-label">
+                    {{ $t('settings.textTransformers.mappingLabel') }}
+                  </div>
                   <div class="setting-description">
                     {{ $t('settings.textTransformers.mappingDescription') }}
                   </div>
@@ -437,8 +452,17 @@
                     <button
                       type="button"
                       class="transformer-action-button transformer-edit"
-                      :aria-label="$t('settings.textTransformers.editAction', { name: textTransformerTitle(entry.snippet) })"
-                      :title="$t('settings.textTransformers.editAction', { name: textTransformerTitle(entry.snippet) })"
+                      :data-snippet-id="entry.snippet.id"
+                      :aria-label="
+                        $t('settings.textTransformers.editAction', {
+                          name: textTransformerTitle(entry.snippet),
+                        })
+                      "
+                      :title="
+                        $t('settings.textTransformers.editAction', {
+                          name: textTransformerTitle(entry.snippet),
+                        })
+                      "
                       @click="openTextTransformerDetail(entry.snippet.id)"
                     >
                       <Icon icon="lucide:pencil" :width="16" :height="16" />
@@ -1589,8 +1613,8 @@ const editingTextTransformerIndex = computed(() =>
 const editingTextTransformer = computed(
   () => displayedTextTransformers.value[editingTextTransformerIndex.value] ?? null,
 );
-const editingTextTransformerConflicted = computed(
-  () => Boolean(textTransformerDrafts.value[editingTextTransformerId.value ?? '']?.conflicted),
+const editingTextTransformerConflicted = computed(() =>
+  Boolean(textTransformerDrafts.value[editingTextTransformerId.value ?? '']?.conflicted),
 );
 
 const transformerEmptyText = computed(() =>
@@ -1622,11 +1646,13 @@ function goBackInSettings() {
       const draft = textTransformerDrafts.value[id];
       if (draft?.conflicted || draft?.persistenceFailed) return;
       editingTextTransformerId.value = null;
+      focusTextTransformerListAction(id);
       return;
     }
     removeTextTransformerDraft(id);
     editingTextTransformerId.value = null;
     reconcileActiveTagFilter(transformerTagFilters.value);
+    focusTextTransformerListAction(id);
     return;
   }
   activePage.value = 'root';
@@ -1702,6 +1728,22 @@ function openTextTransformerDetail(id: string) {
     setTextTransformerDraft(id, { snippet: cloneTextTransformer(persisted), base });
   }
   editingTextTransformerId.value = id;
+  focusTextTransformerTrigger();
+}
+
+function focusTextTransformerTrigger() {
+  void nextTick(() => {
+    modalBody.value?.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')?.focus();
+  });
+}
+
+function focusTextTransformerListAction(id: string) {
+  void nextTick(() => {
+    const actions = modalBody.value?.querySelectorAll<HTMLButtonElement>('.transformer-edit');
+    Array.from(actions ?? [])
+      .find((action) => action.dataset.snippetId === id)
+      ?.focus();
+  });
 }
 
 function updateTextTransformerDraft(
@@ -1774,10 +1816,7 @@ function textTransformerDraftCommitContext(
   const persisted = textTransformers.value.find((snippet) => snippet.id === id);
   if (overwriteStorageConflict) return { persisted };
   if (draft.conflicted) return null;
-  if (
-    textTransformerStorageRecoveryPending.value ||
-    !sameTextTransformer(draft.base, persisted)
-  ) {
+  if (textTransformerStorageRecoveryPending.value || !sameTextTransformer(draft.base, persisted)) {
     rejectTextTransformerDraftConflict(id, draft);
     return null;
   }
@@ -1795,10 +1834,7 @@ function commitTextTransformerDraft(id: string, overwriteStorageConflict = false
   if (!validated) return false;
   const persisted = persistTextTransformerCandidate(validated, overwriteStorageConflict);
   const finalized = persisted && finalizeTextTransformerDraftCommit(id, validated);
-  if (
-    !finalized &&
-    textTransformerPersistenceErrorRevision.value !== persistenceErrorRevision
-  ) {
+  if (!finalized && textTransformerPersistenceErrorRevision.value !== persistenceErrorRevision) {
     const retained = textTransformerDrafts.value[id];
     if (retained) setTextTransformerDraft(id, { ...retained, persistenceFailed: true });
   }
@@ -1858,6 +1894,7 @@ function addTextTransformer() {
   };
   setTextTransformerDraft(draft.id, { snippet: draft, base: null });
   editingTextTransformerId.value = draft.id;
+  focusTextTransformerTrigger();
 }
 
 function removeTextTransformer(id: string) {
@@ -1875,11 +1912,7 @@ const TEXT_TRANSFORMER_FIELD_LIMITS: Record<TextTransformerEditableField, number
   body: MAX_TEXT_TRANSFORMER_BODY_LENGTH,
 };
 
-function updateTextTransformerField(
-  id: string,
-  field: TextTransformerEditableField,
-  event: Event,
-) {
+function updateTextTransformerField(id: string, field: TextTransformerEditableField, event: Event) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return;
   const normalizedValue = field === 'trigger' ? input.value.replace(/^\\+/u, '') : input.value;
@@ -2201,14 +2234,19 @@ watch(
 
 .modal-header-main {
   display: flex;
+  flex: 1;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
 .modal-title {
+  min-width: 0;
+  overflow: hidden;
   font-size: 14px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-back-button,
@@ -2328,8 +2366,7 @@ watch(
 
 .transformer-tag-filter {
   height: var(--ui-chip-height);
-  border: 1px solid
-    var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
+  border: 1px solid var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
   border-radius: var(--ui-chip-radius);
   background: var(--theme-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75)));
   color: var(--theme-modal-text, var(--theme-text-primary, #bfdbfe));

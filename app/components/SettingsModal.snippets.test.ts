@@ -103,6 +103,56 @@ afterEach(() => {
 });
 
 describe('SettingsModal snippets', () => {
+  it('labels the dialog and preserves native Escape dismissal', async () => {
+    // Given: the settings dialog is open on the Snippets page.
+    const { host } = await mountSnippetSettings();
+    const dialog = host.querySelector('dialog');
+    const title = host.querySelector('.modal-title');
+    expect(dialog).not.toBeNull();
+    expect(title).not.toBeNull();
+
+    // When: assistive technology resolves the dialog name and the browser dispatches cancel.
+    const cancel = new Event('cancel', { cancelable: true });
+    const shouldContinue = dialog!.dispatchEvent(cancel);
+
+    // Then: the visible title labels the dialog and Vue does not prevent native Escape closing.
+    expect(title!.id).not.toBe('');
+    expect(dialog!.getAttribute('aria-labelledby')).toBe(title!.id);
+    expect(shouldContinue).toBe(true);
+    expect(cancel.defaultPrevented).toBe(false);
+  });
+
+  it('moves focus into Add/Edit and restores the edited row on Back', async () => {
+    // Given: keyboard focus starts on an existing Snippet edit action.
+    const { host } = await mountSnippetSettings();
+    const existingEdit = host.querySelector<HTMLButtonElement>('.transformer-edit');
+    expect(existingEdit).not.toBeNull();
+    existingEdit!.focus();
+
+    // When: the existing Snippet opens and then returns to the library.
+    existingEdit!.click();
+    await nextTick();
+    expect(document.activeElement).toBe(
+      host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]'),
+    );
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: focus returns to the same row's edit action.
+    expect(document.activeElement).toBe(
+      host.querySelector<HTMLButtonElement>('[data-snippet-id="snippet-review"]'),
+    );
+
+    // When: Add creates a new draft.
+    host.querySelector<HTMLButtonElement>('.transformer-add')!.click();
+    await nextTick();
+
+    // Then: focus moves directly to its first editable field.
+    expect(document.activeElement).toBe(
+      host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]'),
+    );
+  });
+
   it('surfaces rejected startup storage without replacing its recovery data', async () => {
     // Given: startup storage exceeds the complete library contract.
     const excessive = Array.from({ length: 1_001 }, (_, index) => ({
@@ -163,10 +213,13 @@ describe('SettingsModal snippets', () => {
     await nextTick();
 
     // Then: reactive state, persisted state, and the row control all agree that it is disabled.
-    expect(settings.textTransformers.value[0]).toMatchObject({ trigger: '/legacy', enabled: false });
-    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1')!)[0]).toMatchObject(
-      { trigger: '/legacy', enabled: false },
-    );
+    expect(settings.textTransformers.value[0]).toMatchObject({
+      trigger: '/legacy',
+      enabled: false,
+    });
+    expect(
+      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1')!)[0],
+    ).toMatchObject({ trigger: '/legacy', enabled: false });
     const enableButton = host.querySelector<HTMLButtonElement>('.transformer-enable')!;
     expect(enableButton.disabled).toBe(true);
     expect(enableButton.getAttribute('aria-pressed')).toBe('false');
@@ -261,13 +314,15 @@ describe('SettingsModal snippets', () => {
     host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
     await nextTick();
 
-    // Then: parsing stops without splitting the whole draft and each tag is rendered at most once per surface.
+    // Then: parsing stops without splitting the whole draft and the compact row summarizes overflow tags.
     expect(eagerlySplitWholeDraft).toBe(false);
     expect(settings.textTransformers.value[0]?.tags).toHaveLength(256);
     expect(host.querySelectorAll('.transformer-tag-filter').length).toBeLessThanOrEqual(258);
-    expect(
-      host.querySelector('.transformer-row')?.querySelectorAll('.snippet-completion-tag'),
-    ).toHaveLength(256);
+    const renderedTags = Array.from(
+      host.querySelector('.transformer-row')?.querySelectorAll('.snippet-completion-tag') ?? [],
+    );
+    expect(renderedTags).toHaveLength(5);
+    expect(renderedTags[4]?.textContent?.trim()).toBe('+252');
   });
 
   it('round-trips the maximum valid tag collection through the detail input', async () => {
@@ -477,7 +532,9 @@ describe('SettingsModal snippets', () => {
     );
 
     await reopenSnippets();
-    expect(host.querySelector('.transformer-tag-filter.is-active')?.textContent?.trim()).toBe('All');
+    expect(host.querySelector('.transformer-tag-filter.is-active')?.textContent?.trim()).toBe(
+      'All',
+    );
     expect(host.querySelectorAll('.transformer-row')).toHaveLength(2);
     Array.from(host.querySelectorAll<HTMLButtonElement>('.transformer-tag-filter'))
       .find((button) => button.textContent?.trim() === 'review')
@@ -494,7 +551,9 @@ describe('SettingsModal snippets', () => {
 
     // Then: the stale filter clears and the full library remains reachable.
     expect(host.querySelectorAll('.transformer-row')).toHaveLength(2);
-    expect(host.querySelector('.transformer-tag-filter.is-active')?.textContent?.trim()).toBe('All');
+    expect(host.querySelector('.transformer-tag-filter.is-active')?.textContent?.trim()).toBe(
+      'All',
+    );
   });
 
   it('adds, exports, and imports versioned snippet data from the settings surface', async () => {
@@ -619,7 +678,9 @@ describe('SettingsModal snippets', () => {
     Object.defineProperty(importInput, 'files', { configurable: true, value: [newerFile] });
     importInput.dispatchEvent(new Event('change', { bubbles: true }));
     await vi.waitFor(() =>
-      expect(settings.textTransformers.value.some((entry) => entry.body === 'Newer body')).toBe(true),
+      expect(settings.textTransformers.value.some((entry) => entry.body === 'Newer body')).toBe(
+        true,
+      ),
     );
     resolveOlder(
       JSON.stringify({
@@ -738,9 +799,9 @@ describe('SettingsModal snippets', () => {
       name: 'External review',
       trigger: '::review',
     });
-    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]).toMatchObject(
-      { name: 'External review', trigger: '::review' },
-    );
+    expect(
+      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0],
+    ).toMatchObject({ name: 'External review', trigger: '::review' });
 
     // When: the user explicitly reloads the externally saved row.
     host.querySelector<HTMLButtonElement>('.transformer-conflict-reload')!.click();
@@ -779,9 +840,9 @@ describe('SettingsModal snippets', () => {
 
     // Then: only the explicit overwrite replaces the external row and persists the draft.
     expect(settings.textTransformers.value[0]?.name).toBe('Local overwrite');
-    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]).toMatchObject(
-      { name: 'Local overwrite' },
-    );
+    expect(
+      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0],
+    ).toMatchObject({ name: 'Local overwrite' });
   });
 
   it('requires explicit overwrite after external storage publishes rejected recovery data', async () => {
@@ -857,9 +918,9 @@ describe('SettingsModal snippets', () => {
 
     // Then: Close cannot retry implicitly; the external row, draft, and conflict all remain.
     expect(settings.textTransformers.value[0]?.name).toBe('External winner');
-    expect(JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]?.name).toBe(
-      'External winner',
-    );
+    expect(
+      JSON.parse(localStorage.getItem('opencode.settings.textTransformers.v1') ?? '[]')[0]?.name,
+    ).toBe('External winner');
     expect(host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')?.value).toBe(
       'Local retry candidate',
     );
@@ -1020,7 +1081,8 @@ describe('SettingsModal snippets', () => {
 
     // Then: only 50 bounded previews are mounted and the remaining pages stay reachable.
     expect(firstPageRows).toHaveLength(50);
-    const firstPreview = firstPageRows[0]?.querySelector('.snippet-completion-preview')?.textContent ?? '';
+    const firstPreview =
+      firstPageRows[0]?.querySelector('.snippet-completion-preview')?.textContent ?? '';
     expect(firstPreview.length).toBeLessThanOrEqual(240);
     expect(firstPreview).not.toContain('-tail-0');
     expect(host.querySelector('.transformer-pagination-status')?.textContent).toContain('1');
