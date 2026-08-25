@@ -266,26 +266,6 @@ describe('createSseConnection', () => {
     conn.disconnect();
   });
 
-  it('reports auth error on 403 without reconnecting', async () => {
-    // Given: an authenticated SSE request is rejected as forbidden.
-    const onError = vi.fn();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(createMockResponse(null, 403)));
-    const conn = createSseConnection({
-      onPacket: vi.fn(),
-      onOpen: vi.fn(),
-      onError,
-    });
-
-    // When: the connection receives the HTTP response.
-    conn.connect({ baseUrl: 'http://localhost' });
-
-    // Then: the status remains attached and the transport does not retry.
-    await vi.waitFor(() => expect(onError).toHaveBeenCalledWith('Authentication failed.', 403));
-    vi.advanceTimersByTime(2000);
-    expect(fetch).toHaveBeenCalledTimes(1);
-    conn.disconnect();
-  });
-
   it('disconnects cleanly and marks not connected', async () => {
     const { readable } = t();
     vi.stubGlobal(

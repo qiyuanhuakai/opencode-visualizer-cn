@@ -34,17 +34,6 @@ export type SseConnection = {
   isConnected: () => boolean;
 };
 
-export class SseConnectionError extends Error {
-  constructor(
-    message: string,
-    readonly statusCode: number,
-    readonly credentialRevision?: string | null,
-  ) {
-    super(message);
-    this.name = 'SseConnectionError';
-  }
-}
-
 function normalizeBaseUrl(baseUrl: string) {
   return baseUrl.replace(/\/+$/, '');
 }
@@ -243,13 +232,13 @@ export function createSseConnection(callbacks: SseConnectionCallbacks): SseConne
 
         if (controller.signal.aborted || abortController !== controller) return;
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           controller.abort();
           abortController = undefined;
           connected = false;
           callbacks.onError(
             target?.errorMessages?.authenticationFailed ?? 'Authentication failed.',
-            response.status,
+            401,
           );
           return;
         }
