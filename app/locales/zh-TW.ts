@@ -128,8 +128,6 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: '無法連線到 SSE 串流。',
-      credentialPersistenceFailed: '無法儲存憑證。請檢查儲存空間後再試一次。',
-      logoutPersistenceFailed: '無法刪除已儲存的憑證。要重試登出嗎？',
       sessionRenameInvalidResponse: '工作階段重新命名回傳了無效回應。',
     },
     descriptions: {

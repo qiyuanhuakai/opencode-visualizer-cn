@@ -129,8 +129,6 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: 'Failed to connect to SSE stream.',
-      credentialPersistenceFailed: 'Failed to save credentials. Check storage and retry.',
-      logoutPersistenceFailed: 'Failed to remove saved credentials. Retry logout?',
       sessionRenameInvalidResponse: 'Session rename returned an invalid response.',
     },
     descriptions: {

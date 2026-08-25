@@ -128,8 +128,6 @@ const messages: LocaleMessages = {
     },
     errors: {
       sseConnectFailed: '无法连接到 SSE 流。',
-      credentialPersistenceFailed: '无法保存凭据。请检查存储后重试。',
-      logoutPersistenceFailed: '无法删除已保存的凭据。重试退出登录？',
       sessionRenameInvalidResponse: '会话重命名返回了无效响应。',
     },
     descriptions: {
