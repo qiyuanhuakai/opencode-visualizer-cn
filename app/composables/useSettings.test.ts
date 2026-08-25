@@ -283,6 +283,37 @@ describe('useSettings', () => {
     expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(3);
   });
 
+  it('ignores a delayed snippet event after newer storage has committed', async () => {
+    // Given: runtime and storage start from the same Snippet library.
+    const original = [
+      {
+        id: 'snippet-event-order',
+        trigger: 'event-order',
+        name: 'Original',
+        body: 'Original body',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(original));
+    const settings = await importFresh();
+    const newer = [{ ...original[0]!, name: 'Newest committed value' }];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(newer));
+
+    // When: an older cross-window event arrives after the newer write is already authoritative.
+    for (const listener of storageListeners) {
+      listener(
+        new StorageEvent('storage', {
+          key: 'opencode.settings.textTransformers.v1',
+          newValue: JSON.stringify(original),
+        }),
+      );
+    }
+
+    // Then: the handler reloads canonical storage instead of reverting runtime to the stale event.
+    expect(settings.textTransformers.value).toEqual(newer);
+  });
+
   it('rejects over-limit snippet storage at startup without destroying the raw backup', async () => {
     // Given: persisted storage contains 1,001 individually valid snippets.
     const excessive = Array.from({ length: 1_001 }, (_, index) => ({
@@ -561,7 +592,9 @@ describe('useSettings', () => {
 
     // Then: rollback restores an independent snapshot rather than the already-mutated alias.
     expect(settings.textTransformers.value).toEqual(persisted);
-    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(JSON.stringify(persisted));
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(
+      JSON.stringify(persisted),
+    );
   });
 
   it('persists editor preferences and local application path', async () => {

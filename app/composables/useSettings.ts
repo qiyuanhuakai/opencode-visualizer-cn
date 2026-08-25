@@ -778,20 +778,19 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
   ],
   [
     storageKey(StorageKeys.settings.textTransformers),
-    (event) => {
-      const nextTextTransformers =
-        event.newValue === null ? [] : parseTextTransformers(event.newValue);
-      if (!nextTextTransformers) {
+    () => {
+      const loaded = readTextTransformers();
+      if (loaded.failed) {
         textTransformerStorageRecoveryPending.value = true;
         textTransformerPersistenceErrorRevision.value += 1;
         return;
       }
-      if (!isSerializedEqual(textTransformers.value, nextTextTransformers)) {
+      if (!isSerializedEqual(textTransformers.value, loaded.value)) {
         restoringTextTransformerState = true;
-        textTransformers.value = cloneTextTransformers(nextTextTransformers);
+        textTransformers.value = cloneTextTransformers(loaded.value);
         restoringTextTransformerState = false;
       }
-      lastPersistedTextTransformers = cloneTextTransformers(nextTextTransformers);
+      lastPersistedTextTransformers = cloneTextTransformers(loaded.value);
       textTransformerStorageRecoveryPending.value = false;
     },
   ],
