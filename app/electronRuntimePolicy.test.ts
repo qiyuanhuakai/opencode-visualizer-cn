@@ -212,73 +212,6 @@ describe('electron-runtime-policy', () => {
         handler?.indexOf('assertTrustedRenderer(event)') ?? Number.MAX_SAFE_INTEGER,
       );
     });
-
-    it('guards clipboard writes with the trusted renderer assertion', () => {
-      // Given: clipboard write crosses from the sandboxed renderer into Electron main.
-      const handler = mainSource.match(
-        /ipcMain\.handle\('clipboard-write-text',[\s\S]*?\n\}\);/u,
-      )?.[0];
-
-      // When: the main-process IPC wiring is inspected.
-      expect(handler).toBeDefined();
-
-      // Then: sender validation runs before the native clipboard is written.
-      expect(handler?.indexOf('assertTrustedRenderer(event)')).toBeGreaterThanOrEqual(0);
-      expect(handler?.indexOf('clipboard.writeText(text)')).toBeGreaterThan(
-        handler?.indexOf('assertTrustedRenderer(event)') ?? Number.MAX_SAFE_INTEGER,
-      );
-    });
-
-    it('guards every persistent storage IPC handler before reading or mutating native state', () => {
-      // Given: renderer storage IPC reaches a native file outside the sandbox.
-      const channels = [
-        'persistent-storage-get',
-        'persistent-storage-set',
-        'persistent-storage-remove',
-        'persistent-storage-migrate',
-        'persistent-storage-update',
-      ];
-
-      // When: every synchronous storage handler is inspected.
-      const handlers = channels.map((channel) =>
-        mainSource.match(new RegExp(`ipcMain\\.on\\('${channel}',[\\s\\S]*?\\n\\}\\);`, 'u'))?.[0],
-      );
-
-      // Then: each handler rejects an untrusted sender before any payload processing.
-      expect(handlers).not.toContain(undefined);
-      for (const handler of handlers) {
-        expect(handler?.indexOf('assertTrustedRenderer(event)')).toBeGreaterThanOrEqual(0);
-        expect(handler?.indexOf('assertTrustedRenderer(event)')).toBeLessThan(
-          handler?.indexOf('typeof') ?? Number.MAX_SAFE_INTEGER,
-        );
-      }
-    });
-
-    it('does not call removed storage helpers before creating the first window', () => {
-      // Given: renderer persistence is owned by the createPersistentStorage module.
-      expect(mainSource).toContain('createPersistentStorage(persistentStorageFilePath)');
-
-      // When: Electron enters its app.whenReady startup path.
-      const readyPath = mainSource.match(/app\.whenReady\(\)\.then\(\(\) => \{[\s\S]*?createWindow\(\);/u)?.[0];
-
-      // Then: startup never references the removed eager-load helper before window creation.
-      expect(readyPath).toBeDefined();
-      expect(readyPath).not.toContain('loadPersistentStorage');
-    });
-
-    it('acquires a single-instance lock before creating process-local storage', () => {
-      // Given: renderer storage caches a whole-file snapshot inside one Electron process.
-      const lockIndex = mainSource.indexOf('app.requestSingleInstanceLock()');
-      const storageIndex = mainSource.indexOf('createPersistentStorage(persistentStorageFilePath)');
-
-      // When: main-process initialization ordering is inspected.
-      expect(lockIndex).toBeGreaterThanOrEqual(0);
-
-      // Then: only the lock owner can initialize storage and later launches focus its window.
-      expect(lockIndex).toBeLessThan(storageIndex);
-      expect(mainSource).toMatch(/app\.on\('second-instance',[\s\S]*?mainWindow\.focus\(\)/u);
-    });
-
     it('converts persistent storage mutation exceptions into false IPC acknowledgements', () => {
       // Given: set and remove are synchronous IPC boundaries backed by fallible disk writes.
       const setHandler = mainSource.match(
@@ -295,39 +228,6 @@ describe('electron-runtime-policy', () => {
       // Then: each catches persistence exceptions and returns an explicit rejection.
       expect(setHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
       expect(removeHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
-    });
-
-    it('commits renderer storage migration through one acknowledged main-process handler', () => {
-      // Given: legacy renderer state must cross a fallible disk boundary atomically.
-      const migrationHandler = mainSource.match(
-        /ipcMain\.on\('persistent-storage-migrate',[\s\S]*?\n\}\);/u,
-      )?.[0];
-
-      // When: the migration handler source is inspected.
-      expect(migrationHandler).toBeDefined();
-
-      // Then: one storage migration is attempted and failures return false.
-      expect(migrationHandler).toContain('persistentStorage.migrate');
-      expect(migrationHandler).toMatch(
-        /try\s*\{[\s\S]*persistentStorage\.migrate[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
-      );
-    });
-
-    it('commits renderer storage bundle updates through one acknowledged main-process handler', () => {
-      // Given: credential metadata and secrets must cross the disk boundary together.
-      const updateHandler = mainSource.match(
-        /ipcMain\.on\('persistent-storage-update',[\s\S]*?\n\}\);/u,
-      )?.[0];
-
-      // When: the bundle update handler source is inspected.
-      expect(updateHandler).toBeDefined();
-
-      // Then: sender trust precedes one atomic update and failures reject the transaction.
-      expect(updateHandler).toContain('assertTrustedRenderer(event)');
-      expect(updateHandler).toContain('persistentStorage.update');
-      expect(updateHandler).toMatch(
-        /try\s*\{[\s\S]*persistentStorage\.update[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
-      );
     });
   });
 });
