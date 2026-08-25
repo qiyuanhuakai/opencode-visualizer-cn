@@ -77,12 +77,6 @@ function receiveStartOptions(instanceId) {
   });
 }
 
-export function acknowledgeDaemonStop(response, shutdown, exitProcess) {
-  const stopping = shutdown();
-  response.writeHead(202).end();
-  void stopping.then(exitProcess);
-}
-
 export async function runDaemonProcess(options, createBridgeServer) {
   const instanceId = process.env.VIS_BRIDGE_DAEMON_INSTANCE_ID;
   if (!instanceId) throw new Error('vis_bridge daemon identity is missing.');
@@ -106,12 +100,6 @@ export async function runDaemonProcess(options, createBridgeServer) {
   let controlSockets = new Set();
   let startupPromise;
   let shutdownPromise;
-  let serverClosePromise;
-
-  const closeMainServer = () => {
-    serverClosePromise ??= closeServer(server, serverSockets);
-    return serverClosePromise;
-  };
 
   await writeDaemonState(paths, {
     instanceId,
@@ -126,12 +114,10 @@ export async function runDaemonProcess(options, createBridgeServer) {
 
   const shutdown = () => {
     if (shutdownPromise) return shutdownPromise;
-    const stoppingOwnedProcesses = server.stopOwnedProcesses?.();
     shutdownPromise = (async () => {
       await startupPromise?.catch(() => undefined);
-      const closingMainServer = closeMainServer();
-      await stoppingOwnedProcesses;
-      await closingMainServer;
+      await server.stopOwnedProcesses?.();
+      await closeServer(server, serverSockets);
       await runtime.stop();
       if (controlServer) await closeServer(controlServer, controlSockets);
       await removeDaemonState(paths, instanceId);
@@ -168,7 +154,10 @@ export async function runDaemonProcess(options, createBridgeServer) {
         response.writeHead(404).end();
         return;
       }
-      acknowledgeDaemonStop(response, shutdown, () => process.exit(0));
+      response.writeHead(202).end();
+      setImmediate(() => {
+        void shutdown().then(() => process.exit(0));
+      });
     });
     controlSockets = trackConnections(controlServer);
     const controlPort = await listenServer(controlServer, 0, '127.0.0.1');
