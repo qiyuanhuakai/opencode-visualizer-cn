@@ -403,6 +403,51 @@ describe('SettingsModal snippets', () => {
     setItem.mockRestore();
   });
 
+  it('clears a stale global-toggle save error after an acknowledged retry', async () => {
+    // Given: the Snippets page is open and the next global-toggle persistence attempt will fail.
+    const { host, settings } = await mountSnippetSettings();
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+    const globalToggle = host.querySelector<HTMLInputElement>('.toggle-input')!;
+
+    // When: the user retries the same toggle after the failure is removed.
+    globalToggle.click();
+    await nextTick();
+    expect(host.querySelector('.transformer-import-status')?.textContent).toContain(
+      en.settings.textTransformers.saveError,
+    );
+    setItem.mockRestore();
+    host.querySelector<HTMLInputElement>('.toggle-input')!.click();
+    await nextTick();
+
+    // Then: the acknowledged setting is enabled and only the stale save error is cleared.
+    expect(settings.textTransformersEnabled.value).toBe(true);
+    expect(host.querySelector('.transformer-import-status')?.textContent).not.toContain(
+      en.settings.textTransformers.saveError,
+    );
+  });
+
+  it('clears a same-task global-toggle save error after an acknowledged retry', async () => {
+    // Given: the next global-toggle persistence attempt fails but the following attempt succeeds.
+    const { host, settings } = await mountSnippetSettings();
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+
+    // When: the user retries immediately in the same task before Vue flushes the error watchers.
+    settings.textTransformersEnabled.value = true;
+    settings.textTransformersEnabled.value = true;
+    await nextTick();
+
+    // Then: the successful setting and status both win without coalescing away the clear transition.
+    expect(settings.textTransformersEnabled.value).toBe(true);
+    expect(host.querySelector('.transformer-import-status')?.textContent).not.toContain(
+      en.settings.textTransformers.saveError,
+    );
+    setItem.mockRestore();
+  });
+
   it('keeps a rejected Electron Back commit inside the retryable detail view', async () => {
     // Given: Electron owns the migrated library and rejects subsequent synchronous writes.
     const electronStore: Record<string, string> = {};

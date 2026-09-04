@@ -1061,6 +1061,7 @@ const {
   textTransformersEnabled,
   textTransformers,
   textTransformerPersistenceErrorRevision,
+  textTransformerEnabledPersistenceErrorRevision,
   textTransformerStorageRecoveryPending,
   overwriteTextTransformerStorage,
   reloadTextTransformerStorage,
@@ -1554,7 +1555,22 @@ function showTextTransformerPersistenceError() {
 
 watch(textTransformerPersistenceErrorRevision, showTextTransformerPersistenceError, {
   immediate: textTransformerPersistenceErrorRevision.value > 0,
+  flush: 'sync',
 });
+
+watch(
+  textTransformerEnabledPersistenceErrorRevision,
+  (revision) => {
+    if (
+      revision === null &&
+      textTransformerImportStatus.value?.kind === 'error' &&
+      textTransformerImportStatus.value.message === t('settings.textTransformers.saveError')
+    ) {
+      textTransformerImportStatus.value = null;
+    }
+  },
+  { flush: 'sync' },
+);
 
 const displayedTextTransformers = computed(() => {
   const persistedIds = new Set(textTransformers.value.map(({ id }) => id));
