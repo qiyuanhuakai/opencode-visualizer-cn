@@ -4,8 +4,12 @@
       <span class="snippet-completion-name">{{ snippet.name }}</span>
       <code class="snippet-completion-trigger" :title="sequence">{{ sequence }}</code>
     </div>
-    <div v-if="snippet.description" class="snippet-completion-description">
-      {{ snippet.description }}
+    <div
+      v-if="snippet.description"
+      class="snippet-completion-description"
+      :title="snippet.description"
+    >
+      {{ descriptionPreview }}
     </div>
     <div class="snippet-completion-preview">{{ bodyPreview }}</div>
     <div v-if="snippet.tags.length > 0" class="snippet-completion-tags">
@@ -30,12 +34,14 @@ const MAX_PREVIEW_LENGTH = 240;
 const MAX_VISIBLE_TAGS = 4;
 const visibleTags = computed(() => props.snippet.tags.slice(0, MAX_VISIBLE_TAGS));
 const hiddenTagCount = computed(() => Math.max(0, props.snippet.tags.length - MAX_VISIBLE_TAGS));
-const bodyPreview = computed(() => {
-  let end = Math.min(props.snippet.body.length, MAX_PREVIEW_LENGTH);
-  const lastCodeUnit = props.snippet.body.charCodeAt(end - 1);
+function previewText(value: string) {
+  let end = Math.min(value.length, MAX_PREVIEW_LENGTH);
+  const lastCodeUnit = value.charCodeAt(end - 1);
   if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) end -= 1;
-  return props.snippet.body.slice(0, end);
-});
+  return value.slice(0, end);
+}
+const descriptionPreview = computed(() => previewText(props.snippet.description ?? ''));
+const bodyPreview = computed(() => previewText(props.snippet.body));
 </script>
 
 <style scoped>
@@ -79,22 +85,23 @@ const bodyPreview = computed(() => {
 
 .snippet-completion-description,
 .snippet-completion-preview {
+  display: -webkit-box;
+  overflow: hidden;
   color: var(
     --theme-input-text-muted,
     var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8))
   );
   font-size: 10px;
   line-height: 1.35;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .snippet-completion-preview {
-  display: -webkit-box;
-  overflow: hidden;
   color: var(--theme-input-text, var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1)));
   white-space: pre-wrap;
   word-break: break-word;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
 }
 
 .snippet-completion-tags {
