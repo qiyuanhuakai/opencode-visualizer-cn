@@ -44,6 +44,12 @@ describe('useCredentials', () => {
           removeItem: vi.fn((key: string) => {
             electronStore.delete(key);
           }),
+          migrate: vi.fn((entries: Record<string, string>) => {
+            for (const [key, value] of Object.entries(entries)) {
+              if (!electronStore.has(key)) electronStore.set(key, value);
+            }
+            return true;
+          }),
         },
       },
     });

@@ -34,6 +34,64 @@ describe('storageKeys', () => {
     vi.unstubAllGlobals();
   });
 
+  function installPendingNativeOwnerFixture() {
+    const legacyStore: Record<string, string> = {
+      'opencode.settings.enterToSend.v1': 'legacy-old',
+      'opencode.settings.textTransformersEnabled.v1': 'legacy-missing',
+    };
+    const electronStore: Record<string, string> = {
+      'opencode.settings.enterToSend.v1': 'native-old',
+    };
+    let rejectMigration = true;
+    const migrationSnapshots: Array<Record<string, string>> = [];
+    const migrate = vi.fn((entries: Record<string, string>) => {
+      migrationSnapshots.push({ ...entries });
+      if (rejectMigration) return false;
+      for (const [key, value] of Object.entries(entries)) {
+        if (!Object.hasOwn(electronStore, key)) electronStore[key] = value;
+      }
+      return true;
+    });
+    vi.stubGlobal('window', {
+      localStorage: {
+        get length() {
+          return Object.keys(legacyStore).length;
+        },
+        key: (index: number) => Object.keys(legacyStore)[index] ?? null,
+        getItem: (key: string) => legacyStore[key] ?? null,
+        setItem: (key: string, value: string) => {
+          legacyStore[key] = value;
+        },
+        removeItem: (key: string) => {
+          delete legacyStore[key];
+        },
+      },
+      electronAPI: {
+        persistentStorage: {
+          getItem: (key: string) => electronStore[key] ?? null,
+          setItem: vi.fn((key: string, value: string) => {
+            electronStore[key] = value;
+            return true;
+          }),
+          removeItem: vi.fn((key: string) => {
+            delete electronStore[key];
+            return true;
+          }),
+          migrate,
+        },
+      },
+    });
+    vi.resetModules();
+    return {
+      electronStore,
+      legacyStore,
+      migrationSnapshots,
+      makeMigrationSucceed: () => {
+        rejectMigration = false;
+      },
+    };
+  }
+
   it('prefixes keys with opencode', () => {
     expect(storageKey('foo')).toBe('opencode.foo');
   });
@@ -85,6 +143,12 @@ describe('storageKeys', () => {
           removeItem: vi.fn((key: string) => {
             delete electronStore[key];
           }),
+          migrate: vi.fn((entries: Record<string, string>) => {
+            for (const [key, value] of Object.entries(entries)) {
+              if (!Object.hasOwn(electronStore, key)) electronStore[key] = value;
+            }
+            return true;
+          }),
         },
       },
     });
@@ -103,6 +167,7 @@ describe('storageKeys', () => {
           getItem: vi.fn(() => null),
           setItem: vi.fn(() => false),
           removeItem: vi.fn(() => false),
+          migrate: vi.fn(() => true),
         },
       },
     });
@@ -114,6 +179,195 @@ describe('storageKeys', () => {
     // Then: both false acknowledgements remain observable to rollback callers.
     expect(setResult).toBe(false);
     expect(removeResult).toBe(false);
+  });
+
+  it('keeps legacy storage authoritative until Electron acknowledges the complete migration', async () => {
+    // Given: one legacy value exists and Electron rejects the first atomic migration attempt.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const legacyStore: Record<string, string> = {
+        'opencode.settings.enterToSend.v1': 'legacy-value',
+      };
+      const electronStore: Record<string, string> = {};
+      let rejectMigration = true;
+      const migrate = vi.fn((entries: Record<string, string>) => {
+        if (rejectMigration) return false;
+        for (const [key, value] of Object.entries(entries)) {
+          if (!Object.hasOwn(electronStore, key)) electronStore[key] = value;
+        }
+        return true;
+      });
+      vi.stubGlobal('window', {
+        localStorage: {
+          get length() {
+            return Object.keys(legacyStore).length;
+          },
+          key: (index: number) => Object.keys(legacyStore)[index] ?? null,
+          getItem: (key: string) => legacyStore[key] ?? null,
+          setItem: (key: string, value: string) => {
+            legacyStore[key] = value;
+          },
+          removeItem: (key: string) => {
+            delete legacyStore[key];
+          },
+        },
+        electronAPI: {
+          persistentStorage: {
+            getItem: (key: string) => electronStore[key] ?? null,
+            setItem: vi.fn(() => false),
+            removeItem: vi.fn(() => false),
+            migrate,
+          },
+        },
+      });
+      vi.resetModules();
+      const freshStorage = await import('./storageKeys');
+
+      // When: the rejected attempt is read, then the retry window elapses and Electron recovers.
+      const pendingValue = freshStorage.storageGet(StorageKeys.settings.enterToSend);
+      rejectMigration = false;
+      vi.advanceTimersByTime(1_000);
+      const migratedValue = freshStorage.storageGet(StorageKeys.settings.enterToSend);
+
+      // Then: the source remains readable until one acknowledged batch becomes authoritative.
+      expect(pendingValue).toBe('legacy-value');
+      expect(migratedValue).toBe('legacy-value');
+      expect(electronStore['opencode.settings.enterToSend.v1']).toBe('legacy-value');
+      expect(migrate).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('persists pending mutations before retrying the complete migration snapshot', async () => {
+    // Given: legacy storage is canonical while the first Electron migration is rejected.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const legacyStore: Record<string, string> = {
+        'opencode.settings.textTransformersEnabled.v1': 'false',
+        'opencode.state.retryWindow.v1': 'stale',
+      };
+      const electronStore: Record<string, string> = {};
+      let rejectMigration = true;
+      const migrationSnapshots: Array<Record<string, string>> = [];
+      const migrate = vi.fn((entries: Record<string, string>) => {
+        migrationSnapshots.push({ ...entries });
+        if (rejectMigration) return false;
+        for (const [key, value] of Object.entries(entries)) {
+          if (!Object.hasOwn(electronStore, key)) electronStore[key] = value;
+        }
+        return true;
+      });
+      vi.stubGlobal('window', {
+        localStorage: {
+          get length() {
+            return Object.keys(legacyStore).length;
+          },
+          key: (index: number) => Object.keys(legacyStore)[index] ?? null,
+          getItem: (key: string) => legacyStore[key] ?? null,
+          setItem: (key: string, value: string) => {
+            legacyStore[key] = value;
+          },
+          removeItem: (key: string) => {
+            delete legacyStore[key];
+          },
+        },
+        electronAPI: {
+          persistentStorage: {
+            getItem: (key: string) => electronStore[key] ?? null,
+            setItem: vi.fn(() => false),
+            removeItem: vi.fn(() => false),
+            migrate,
+          },
+        },
+      });
+      vi.resetModules();
+      const freshStorage = await import('./storageKeys');
+
+      // When: a user sets and removes values during the migration retry window, then migration retries.
+      expect(freshStorage.storageGet(StorageKeys.settings.textTransformersEnabled)).toBe('false');
+      expect(freshStorage.storageSet(StorageKeys.settings.textTransformersEnabled, 'true')).toBe(
+        true,
+      );
+      expect(freshStorage.storageRemove('state.retryWindow.v1')).toBe(true);
+      rejectMigration = false;
+      vi.advanceTimersByTime(1_000);
+      expect(freshStorage.storageGet(StorageKeys.settings.textTransformersEnabled)).toBe('true');
+
+      // Then: the acknowledged batch contains the newest legacy snapshot and durable values win.
+      expect(legacyStore['opencode.settings.textTransformersEnabled.v1']).toBe('true');
+      expect(legacyStore['opencode.state.retryWindow.v1']).toBeUndefined();
+      expect(migrationSnapshots[1]).toEqual({
+        'opencode.settings.textTransformersEnabled.v1': 'true',
+      });
+      expect(electronStore['opencode.settings.textTransformersEnabled.v1']).toBe('true');
+      expect(electronStore['opencode.state.retryWindow.v1']).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('makes a pending set observable when native storage already owns the key', async () => {
+    // Given: native storage owns one key and rejects the first complete migration attempt.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const fixture = installPendingNativeOwnerFixture();
+      const freshStorage = await import('./storageKeys');
+
+      // When: the user sets the natively-owned key during the retry window, then migration retries.
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('native-old');
+      expect(freshStorage.storageSet(StorageKeys.settings.enterToSend, 'user-new')).toBe(true);
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('user-new');
+      fixture.makeMigrationSucceed();
+      vi.advanceTimersByTime(1_000);
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('user-new');
+
+      // Then: the acknowledged native mutation remains authoritative and the retry fills untouched keys.
+      expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBe('user-new');
+      expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBe('user-new');
+      expect(fixture.electronStore['opencode.settings.textTransformersEnabled.v1']).toBe(
+        'legacy-missing',
+      );
+      expect(fixture.migrationSnapshots[1]).toEqual({
+        'opencode.settings.enterToSend.v1': 'user-new',
+        'opencode.settings.textTransformersEnabled.v1': 'legacy-missing',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('prevents a pending remove from resurrecting a natively-owned key', async () => {
+    // Given: native storage owns one key and rejects the first complete migration attempt.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const fixture = installPendingNativeOwnerFixture();
+      const freshStorage = await import('./storageKeys');
+
+      // When: the user removes the natively-owned key during retry, then migration retries.
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('native-old');
+      expect(freshStorage.storageRemove(StorageKeys.settings.enterToSend)).toBe(true);
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBeNull();
+      fixture.makeMigrationSucceed();
+      vi.advanceTimersByTime(1_000);
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBeNull();
+
+      // Then: both owners stay removed and retry does not resurrect the native key.
+      expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBeUndefined();
+      expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBeUndefined();
+      expect(fixture.electronStore['opencode.settings.textTransformersEnabled.v1']).toBe(
+        'legacy-missing',
+      );
+      expect(fixture.migrationSnapshots[1]).toEqual({
+        'opencode.settings.textTransformersEnabled.v1': 'legacy-missing',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('exposes codexActiveThread key for codex session persistence', () => {
