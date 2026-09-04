@@ -39,6 +39,7 @@ interface ElectronApiSchema {
     getItem: (key: string) => unknown;
     setItem: (key: string, value: string) => unknown;
     removeItem: (key: string) => unknown;
+    migrate: (entries: Record<string, string>) => unknown;
   };
 }
 
@@ -62,7 +63,12 @@ function createIpcRendererMock() {
 interface LoadedPreload {
   api: ElectronApiSchema;
   ipcRenderer: ReturnType<typeof createIpcRendererMock>;
-  dispatchedEvents: Array<{ type: string; key: string | null; oldValue: string | null; newValue: string | null }>;
+  dispatchedEvents: Array<{
+    type: string;
+    key: string | null;
+    oldValue: string | null;
+    newValue: string | null;
+  }>;
 }
 
 function loadPreloadWithMocks(): LoadedPreload {
@@ -78,15 +84,22 @@ function loadPreloadWithMocks(): LoadedPreload {
 
   const windowStub = {
     location: { href: 'app://index.html' },
-    dispatchEvent: vi.fn((event: { type: string; key: string | null; oldValue: string | null; newValue: string | null }) => {
-      dispatchedEvents.push({
-        type: event.type,
-        key: event.key,
-        oldValue: event.oldValue,
-        newValue: event.newValue,
-      });
-      return true;
-    }),
+    dispatchEvent: vi.fn(
+      (event: {
+        type: string;
+        key: string | null;
+        oldValue: string | null;
+        newValue: string | null;
+      }) => {
+        dispatchedEvents.push({
+          type: event.type,
+          key: event.key,
+          oldValue: event.oldValue,
+          newValue: event.newValue,
+        });
+        return true;
+      },
+    ),
   };
 
   vm.runInNewContext(
@@ -164,7 +177,12 @@ describe('electron preload contract', () => {
 
   it('exposes exactly the persistentStorage api names', () => {
     const { api } = loadPreloadWithMocks();
-    expect(Object.keys(api.persistentStorage).sort()).toEqual(['getItem', 'removeItem', 'setItem']);
+    expect(Object.keys(api.persistentStorage).sort()).toEqual([
+      'getItem',
+      'migrate',
+      'removeItem',
+      'setItem',
+    ]);
   });
 
   it('exposes the platform and version metadata', () => {
@@ -237,9 +255,27 @@ describe('electron preload contract', () => {
     expect(removeResult).toBe(false);
   });
 
+  it('routes one acknowledged persistentStorage migration through synchronous IPC', () => {
+    // Given: main rejects an atomic renderer-storage migration request.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    ipcRenderer.sendSync.mockReturnValueOnce(false);
+    const entries = { 'opencode.settings.textTransformers.v1': 'legacy' };
+
+    // When: renderer submits the complete legacy snapshot.
+    const result = api.persistentStorage.migrate(entries);
+
+    // Then: preload preserves the acknowledgement and sends one bulk payload.
+    expect(result).toBe(false);
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-migrate', entries);
+  });
+
   it('forwards persistent-storage-changed into a window storage event', () => {
     const { ipcRenderer, dispatchedEvents } = loadPreloadWithMocks();
-    ipcRenderer.emit('persistent-storage-changed', { sender: {} }, { key: 'theme', oldValue: null, newValue: 'dark' });
+    ipcRenderer.emit(
+      'persistent-storage-changed',
+      { sender: {} },
+      { key: 'theme', oldValue: null, newValue: 'dark' },
+    );
     expect(dispatchedEvents).toEqual([
       { type: 'storage', key: 'theme', oldValue: null, newValue: 'dark' },
     ]);
@@ -249,7 +285,11 @@ describe('electron preload contract', () => {
     const { api, ipcRenderer } = loadPreloadWithMocks();
     const listener = vi.fn();
     api.localFile.onChanged(listener);
-    ipcRenderer.emit('local-file-changed', { sender: {} }, { sessionId: 's1', content: 'new content' });
+    ipcRenderer.emit(
+      'local-file-changed',
+      { sender: {} },
+      { sessionId: 's1', content: 'new content' },
+    );
     expect(listener).toHaveBeenCalledWith({ sessionId: 's1', content: 'new content' });
   });
 
