@@ -2,6 +2,7 @@ import { ref, watch, type Ref } from 'vue';
 import {
   StorageKeys,
   storageGet,
+  storageRead,
   storageKey,
   storageSet,
   storageGetJSON,
@@ -315,6 +316,7 @@ const textTransformersEnabled = ref(
 const initialTextTransformers = readTextTransformers();
 const textTransformers = ref<TextTransformer[]>(initialTextTransformers.value);
 const textTransformerPersistenceErrorRevision = ref(initialTextTransformers.failed ? 1 : 0);
+const textTransformerEnabledPersistenceErrorRevision = ref<number | null>(null);
 const textTransformerStorageRecoveryPending = ref(initialTextTransformers.failed);
 const localApplicationPath = ref(storageGet(StorageKeys.settings.localApplicationPath) ?? '');
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
@@ -543,9 +545,17 @@ watch(
     }
     if (storageSet(StorageKeys.settings.textTransformersEnabled, String(value))) {
       lastPersistedTextTransformersEnabled = value;
+      if (
+        textTransformerEnabledPersistenceErrorRevision.value ===
+        textTransformerPersistenceErrorRevision.value
+      ) {
+        textTransformerEnabledPersistenceErrorRevision.value = null;
+      }
       return;
     }
     restoreTextTransformerState(textTransformersEnabled, lastPersistedTextTransformersEnabled);
+    textTransformerEnabledPersistenceErrorRevision.value =
+      textTransformerPersistenceErrorRevision.value;
   },
   syncWatchOptions,
 );
@@ -772,8 +782,10 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
   ],
   [
     storageKey(StorageKeys.settings.textTransformersEnabled),
-    (event) => {
-      textTransformersEnabled.value = event.newValue === 'true';
+    () => {
+      const result = storageRead(StorageKeys.settings.textTransformersEnabled);
+      if (result.kind === 'error') return;
+      textTransformersEnabled.value = result.kind === 'value' && result.value === 'true';
     },
   ],
   [
@@ -854,6 +866,7 @@ export function useSettings() {
     textTransformersEnabled,
     textTransformers,
     textTransformerPersistenceErrorRevision,
+    textTransformerEnabledPersistenceErrorRevision,
     textTransformerStorageRecoveryPending,
     overwriteTextTransformerStorage,
     reloadTextTransformerStorage,

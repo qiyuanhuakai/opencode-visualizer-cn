@@ -176,6 +176,7 @@ describe('useSettings', () => {
         tags: ['Guardrail'],
       },
     ];
+    storage.setItem('opencode.settings.textTransformersEnabled.v1', 'false');
     for (const listener of storageListeners) {
       listener({
         key: 'opencode.settings.textTransformersEnabled.v1',
@@ -312,6 +313,53 @@ describe('useSettings', () => {
 
     // Then: the handler reloads canonical storage instead of reverting runtime to the stale event.
     expect(settings.textTransformers.value).toEqual(newer);
+  });
+
+  it('ignores a delayed snippet-enabled event after newer storage has committed', async () => {
+    // Given: runtime and canonical storage both start with Snippets disabled.
+    storage.setItem('opencode.settings.textTransformersEnabled.v1', 'false');
+    const settings = await importFresh();
+    storage.setItem('opencode.settings.textTransformersEnabled.v1', 'true');
+
+    // When: an older disable event arrives after the newer enable write is authoritative.
+    for (const listener of storageListeners) {
+      listener(
+        new StorageEvent('storage', {
+          key: 'opencode.settings.textTransformersEnabled.v1',
+          newValue: 'false',
+        }),
+      );
+    }
+
+    // Then: runtime follows canonical storage rather than the stale event payload.
+    expect(settings.textTransformersEnabled.value).toBe(true);
+  });
+
+  it('keeps enabled state unchanged when canonical storage temporarily fails to read', async () => {
+    // Given: runtime and canonical storage both contain the newer enabled value.
+    storage.setItem('opencode.settings.textTransformersEnabled.v1', 'false');
+    const settings = await importFresh();
+    storage.setItem('opencode.settings.textTransformersEnabled.v1', 'true');
+    settings.textTransformersEnabled.value = true;
+    const getItem = vi.spyOn(storage, 'getItem');
+    getItem.mockImplementationOnce(() => {
+      throw new DOMException('Storage unavailable', 'InvalidStateError');
+    });
+
+    // When: an older disable event arrives during one transient canonical read failure.
+    for (const listener of storageListeners) {
+      listener(
+        new StorageEvent('storage', {
+          key: 'opencode.settings.textTransformersEnabled.v1',
+          newValue: 'false',
+        }),
+      );
+    }
+    getItem.mockRestore();
+
+    // Then: the failed read leaves both runtime and canonical storage untouched.
+    expect(settings.textTransformersEnabled.value).toBe(true);
+    expect(storage.getItem('opencode.settings.textTransformersEnabled.v1')).toBe('true');
   });
 
   it('rejects over-limit snippet storage at startup without destroying the raw backup', async () => {
