@@ -249,5 +249,48 @@ describe('electron-runtime-policy', () => {
         expect(commitIndex).toBeGreaterThan(writeIndex);
       }
     });
+
+    it('commits renderer storage migration through one acknowledged main-process transaction', () => {
+      // Given: legacy renderer state must cross one fallible disk boundary atomically.
+      const migrationHandler = mainSource.match(
+        /ipcMain\.on\('persistent-storage-migrate',[\s\S]*?\n\}\);/u,
+      )?.[0];
+      const migrationMutation = mainSource.match(
+        /function migratePersistentStorage\([\s\S]*?\n\}/u,
+      )?.[0];
+
+      // When: the main-process migration path is inspected.
+      expect(migrationHandler).toBeDefined();
+      expect(migrationMutation).toBeDefined();
+
+      // Then: trusted input is committed before cache publication and failures reject the batch.
+      expect(migrationHandler).toContain('assertTrustedRenderer(event)');
+      expect(migrationHandler).toMatch(
+        /try\s*\{[\s\S]*migratePersistentStorage[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
+      );
+      const writeIndex = migrationMutation?.indexOf('writePersistentStorage(nextStorage)') ?? -1;
+      const commitIndex = migrationMutation?.indexOf('persistentStorageCache = nextStorage') ?? -1;
+      expect(writeIndex).toBeGreaterThanOrEqual(0);
+      expect(commitIndex).toBeGreaterThan(writeIndex);
+    });
+
+    it('stages persistent storage beside the final file before atomic replacement', () => {
+      // Given: a renderer-storage write can fail after a temporary file is partially written.
+      const writeFunction = mainSource.match(
+        /function writePersistentStorage\(storage\)\s*\{[\s\S]*?\n\}/u,
+      )?.[0];
+
+      // When: the common persistent-storage write path is inspected.
+      expect(writeFunction).toBeDefined();
+
+      // Then: failure cleanup protects the old final file and successful replacement is same-directory atomic.
+      expect(writeFunction).toMatch(/temporaryFilePath/u);
+      expect(writeFunction).toMatch(/path\.dirname\(filePath\)/u);
+      expect(writeFunction).toMatch(/statSync\(filePath\)/u);
+      expect(writeFunction).toMatch(/mode/u);
+      expect(writeFunction).toMatch(/writeFileSync\(temporaryFilePath/u);
+      expect(writeFunction).toMatch(/renameSync\(temporaryFilePath, filePath\)/u);
+      expect(writeFunction).toMatch(/unlinkSync\(temporaryFilePath\)/u);
+    });
   });
 });

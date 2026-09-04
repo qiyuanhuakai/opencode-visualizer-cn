@@ -26,6 +26,7 @@ const LOCAL_APPLICATION_APPROVAL_FILE = 'local-application.json';
 const DEV_SERVER_URL = 'http://127.0.0.1:5173';
 const LOCAL_APPLICATION_PATH_KEY = 'opencode.settings.localApplicationPath.v1';
 const OPEN_IN_EDITOR_MAX_SIZE_KEY = 'opencode.settings.openInEditorMaxSizeMb.v1';
+const RENDERER_STORAGE_PREFIX = 'opencode.';
 const DEFAULT_MAX_LOCAL_FILE_BYTES = 20 * 1024 * 1024;
 
 protocol.registerSchemesAsPrivileged([
@@ -98,8 +99,28 @@ function loadPersistentStorage() {
 
 function writePersistentStorage(storage) {
   const filePath = persistentStorageFilePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(storage, null, 2), 'utf8');
+  const directory = path.dirname(filePath);
+  const temporaryFilePath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${process.hrtime.bigint()}.tmp`,
+  );
+  let mode = 0o600;
+  fs.mkdirSync(directory, { recursive: true });
+  try {
+    mode = fs.statSync(filePath).mode & 0o777;
+  } catch {}
+  try {
+    fs.writeFileSync(temporaryFilePath, JSON.stringify(storage, null, 2), {
+      encoding: 'utf8',
+      mode,
+    });
+    fs.renameSync(temporaryFilePath, filePath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(temporaryFilePath);
+    } catch {}
+    throw error;
+  }
 }
 
 function getPersistentStorageItem(key) {
@@ -127,6 +148,21 @@ function removePersistentStorageItem(key) {
   writePersistentStorage(nextStorage);
   persistentStorageCache = nextStorage;
   return oldValue;
+}
+
+function migratePersistentStorage(entries) {
+  const storage = loadPersistentStorage();
+  const nextStorage = { ...storage };
+  const changes = [];
+  for (const [key, value] of Object.entries(entries)) {
+    if (Object.hasOwn(storage, key)) continue;
+    nextStorage[key] = value;
+    changes.push({ key, oldValue: null, newValue: value });
+  }
+  if (changes.length === 0) return changes;
+  writePersistentStorage(nextStorage);
+  persistentStorageCache = nextStorage;
+  return changes;
 }
 
 function broadcastPersistentStorageChange(change, sourceWebContentsId) {
@@ -210,9 +246,7 @@ function createWindow() {
     callback({ responseHeaders });
   });
 
-  const appUrl = isDev
-    ? DEV_SERVER_URL
-    : 'app://index.html';
+  const appUrl = isDev ? DEV_SERVER_URL : 'app://index.html';
 
   if (isDev) {
     mainWindow.webContents.on(
@@ -297,9 +331,13 @@ app.on('window-all-closed', () => {
   }
 });
 
-installAsyncQuitCleanup(app, () => localFileEditor.closeAll(), (error) => {
-  console.error('[electron] Failed to clean local edit sessions before quit:', error);
-});
+installAsyncQuitCleanup(
+  app,
+  () => localFileEditor.closeAll(),
+  (error) => {
+    console.error('[electron] Failed to clean local edit sessions before quit:', error);
+  },
+);
 
 app.on('web-contents-created', (_event, contents) => {
   contents.once('destroyed', () => {
@@ -307,11 +345,9 @@ app.on('web-contents-created', (_event, contents) => {
       console.error('[electron] Failed to clean renderer local edit sessions:', error);
     });
   });
-  contents.session.setPermissionRequestHandler(
-    (_webContents, permission, callback) => {
-      callback(isPermissionAllowed(permission));
-    }
-  );
+  contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(isPermissionAllowed(permission));
+  });
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -343,16 +379,16 @@ ipcMain.handle('local-file-select-application', async (event) => {
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
     : await dialog.showOpenDialog(options);
-    const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
-    if (!selectedPath) return null;
-    await fs.promises.access(selectedPath, fs.constants.X_OK);
-    const oldValue = approvedLocalApplicationPath;
-    persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
-    approvedLocalApplicationPath = selectedPath;
-    broadcastPersistentStorageChange(
-      { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
-      event.sender.id,
-    );
+  const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
+  if (!selectedPath) return null;
+  await fs.promises.access(selectedPath, fs.constants.X_OK);
+  const oldValue = approvedLocalApplicationPath;
+  persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
+  approvedLocalApplicationPath = selectedPath;
+  broadcastPersistentStorageChange(
+    { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
+    event.sender.id,
+  );
   return selectedPath;
 });
 
@@ -373,7 +409,10 @@ ipcMain.handle('local-file-open', async (event, payload) => {
   assertTrustedRenderer(event);
   const sessionId = payload?.sessionId;
   if (typeof sessionId !== 'string') throw new Error('Invalid local file session ID');
-  if (typeof approvedLocalApplicationPath !== 'string' || approvedLocalApplicationPath.length === 0) {
+  if (
+    typeof approvedLocalApplicationPath !== 'string' ||
+    approvedLocalApplicationPath.length === 0
+  ) {
     throw new Error('No local application has been approved');
   }
   localFileSessionOwners.set(sessionId, event.sender.id);
@@ -462,6 +501,35 @@ ipcMain.on('persistent-storage-remove', (event, key) => {
   }
   if (oldValue !== null) {
     broadcastPersistentStorageChange({ key, oldValue, newValue: null }, event.sender.id);
+  }
+  event.returnValue = true;
+});
+
+ipcMain.on('persistent-storage-migrate', (event, entries) => {
+  assertTrustedRenderer(event);
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
+    event.returnValue = false;
+    return;
+  }
+
+  const migrationEntries = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (!key.startsWith(RENDERER_STORAGE_PREFIX) || typeof value !== 'string') {
+      event.returnValue = false;
+      return;
+    }
+    if (key !== LOCAL_APPLICATION_PATH_KEY) migrationEntries[key] = value;
+  }
+
+  let changes;
+  try {
+    changes = migratePersistentStorage(migrationEntries);
+  } catch {
+    event.returnValue = false;
+    return;
+  }
+  for (const change of changes) {
+    broadcastPersistentStorageChange(change, event.sender.id);
   }
   event.returnValue = true;
 });
