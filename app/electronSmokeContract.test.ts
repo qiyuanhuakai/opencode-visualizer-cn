@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 const DRIVER_PATH = path.resolve(__dirname, '../scripts/qa/electron-smoke.mjs');
@@ -25,7 +26,7 @@ const EXPECTED_PRELOAD_SCHEMA = {
     'versions',
   ],
   clipboard: ['readText', 'writeText'],
-  persistentStorage: ['getItem', 'removeItem', 'setItem'],
+  persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem'],
   localFile: [
     'clearApplication',
     'close',
@@ -93,7 +94,10 @@ describe('electron smoke driver contract', () => {
   it('mirrors the Task 2 preload API schema instead of inventing its own', () => {
     const literal = driverSurface.match(/const EXPECTED_PRELOAD_SCHEMA = (\{.*?\});/s);
     expect(literal).not.toBeNull();
-    const schema = JSON.parse(literal![1]) as Record<string, string[]>;
+    const schema = runInNewContext(`(${literal![1]})`, Object.create(null)) as Record<
+      string,
+      string[]
+    >;
     expect(schema).toEqual(EXPECTED_PRELOAD_SCHEMA);
   });
 
@@ -151,7 +155,9 @@ describe('electron smoke driver contract', () => {
   });
 
   it('fails the smoke when the required receipt cannot be written', () => {
-    expect(driverSource).toMatch(/writeFileSync\(RECEIPT_PATH[\s\S]*?catch \{\s*receipt\.pass = false;/);
+    expect(driverSource).toMatch(
+      /writeFileSync\(RECEIPT_PATH[\s\S]*?catch \{\s*receipt\.pass = false;/,
+    );
   });
 
   it('records a QA-only main-process memory receipt', () => {
@@ -168,7 +174,9 @@ describe('electron smoke driver contract', () => {
     expect(driverSource).toMatch(/performance\.memory/);
     expect(driverSource).toMatch(/smaps_rollup/);
     expect(driverSource).toMatch(/initial:\s*await captureMemory\(app, page\)/);
-    expect(driverSource).toMatch(/receipt\.memory\.relaunch\s*=\s*await captureMemory\(app, page\)/);
+    expect(driverSource).toMatch(
+      /receipt\.memory\.relaunch\s*=\s*await captureMemory\(app, page\)/,
+    );
     expect(driverSource).toMatch(/receipt\.memory\.relaunch/);
     expect(driverSource).toMatch(/memory:\s*metric\.memory\s*\?/);
   });
