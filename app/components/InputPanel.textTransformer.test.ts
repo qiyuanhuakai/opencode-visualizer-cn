@@ -29,7 +29,9 @@ vi.mock('../composables/useSettings', () => ({ useSettings: () => settings }));
 
 const mountedApps: Array<() => void> = [];
 
-function mountInputPanel(options: { commands?: Array<{ name: string; description?: string }> } = {}) {
+function mountInputPanel(
+  options: { commands?: Array<{ name: string; description?: string }> } = {},
+) {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const message = ref('');
@@ -37,6 +39,7 @@ function mountInputPanel(options: { commands?: Array<{ name: string; description
   const activeDirectory = ref('/repo');
   const activeFile = ref('/repo/src/main.ts');
   const send = vi.fn();
+  const statusError = vi.fn();
   const app = createApp(
     defineComponent({
       setup() {
@@ -47,6 +50,7 @@ function mountInputPanel(options: { commands?: Array<{ name: string; description
               message.value = value;
             },
             onSend: send,
+            onStatusError: statusError,
             canSend: true,
             selectedMode: 'build',
             agentOptions: [{ id: 'build', label: 'Build' }],
@@ -82,7 +86,7 @@ function mountInputPanel(options: { commands?: Array<{ name: string; description
     app.unmount();
     root.remove();
   });
-  return { root, message, send, currentSessionId, activeDirectory, activeFile };
+  return { root, message, send, statusError, currentSessionId, activeDirectory, activeFile };
 }
 
 async function typeInto(textarea: HTMLTextAreaElement, value: string) {
@@ -332,40 +336,40 @@ describe('InputPanel text transformers', () => {
   });
 
   it('prefers the highlighted completion over an exact shorter trigger with Enter', async () => {
-      // Given: an exact short trigger and a longer completion both match the current input.
-      settings.textTransformers.value = [
-        {
-          id: 'snippet-foo',
-          trigger: 'foo',
-          name: 'Short',
-          body: 'short',
-          description: '',
-          enabled: true,
-          tags: [],
-        },
-        {
-          id: 'snippet-foobar',
-          trigger: 'foobar',
-          name: 'Long',
-          body: 'long',
-          description: '',
-          enabled: true,
-          tags: [],
-        },
-      ];
-      const { root, message, send } = mountInputPanel();
-      const textarea = root.querySelector('textarea')!;
-      await typeInto(textarea, String.raw`\foo`);
-      await nextTick();
-      press(textarea, 'ArrowDown');
+    // Given: an exact short trigger and a longer completion both match the current input.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-foo',
+        trigger: 'foo',
+        name: 'Short',
+        body: 'short',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+      {
+        id: 'snippet-foobar',
+        trigger: 'foobar',
+        name: 'Long',
+        body: 'long',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const { root, message, send } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\foo`);
+    await nextTick();
+    press(textarea, 'ArrowDown');
 
-      // When: the delimiter accepts the highlighted longer completion.
-      press(textarea, 'Enter');
-      await nextTick();
+    // When: the delimiter accepts the highlighted longer completion.
+    press(textarea, 'Enter');
+    await nextTick();
 
-      // Then: the highlighted mapping wins without sending the message.
-      expect(message.value).toBe('long ');
-      expect(send).not.toHaveBeenCalled();
+    // Then: the highlighted mapping wins without sending the message.
+    expect(message.value).toBe('long ');
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('expands on Enter before a subsequent Enter sends', async () => {
@@ -430,12 +434,12 @@ describe('InputPanel text transformers', () => {
 
     // Then: context variables resolve and the caret lands before trailing body text.
     await vi.waitFor(() => {
-      expect(message.value).toBe(
-        'Before clipboard text\n/repo/src/main.ts\n/repo\nContinue ',
-      );
+      expect(message.value).toBe('Before clipboard text\n/repo/src/main.ts\n/repo\nContinue ');
     });
     expect(readText).toHaveBeenCalledTimes(1);
-    expect(textarea.selectionStart).toBe('Before clipboard text\n/repo/src/main.ts\n/repo\n'.length);
+    expect(textarea.selectionStart).toBe(
+      'Before clipboard text\n/repo/src/main.ts\n/repo\n'.length,
+    );
   });
 
   it('does not commit captured file context after it changes away and back', async () => {
@@ -509,6 +513,84 @@ describe('InputPanel text transformers', () => {
     // Then: the trusted preload value is inserted despite renderer permission denial.
     await vi.waitFor(() => expect(message.value).toBe('native clipboard '));
     expect(electronReadText).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the draft and caret when browser clipboard permission is denied', async () => {
+    // Given: a clipboard Snippet is selected while the browser clipboard read will reject.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-browser-clipboard-denied',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const readText = vi.fn().mockRejectedValue(new DOMException('Denied', 'NotAllowedError'));
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText },
+    });
+    const { root, message, statusError } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+    const originalCaret = textarea.selectionStart;
+
+    // When: the user confirms the Snippet and the clipboard request fails.
+    press(textarea, 'Enter');
+    await vi.waitFor(() => expect(readText).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await nextTick();
+
+    // Then: no empty clipboard value is inserted and the failure is visible to the user.
+    expect(message.value).toBe(String.raw`\clip`);
+    expect(textarea.selectionStart).toBe(originalCaret);
+    expect(statusError).toHaveBeenCalledWith(
+      'Clipboard could not be read. The Snippet was not inserted.',
+    );
+  });
+
+  it('preserves the draft when the trusted Electron clipboard read rejects', async () => {
+    // Given: Electron owns clipboard access and its trusted preload call will reject.
+    settings.textTransformers.value = [
+      {
+        id: 'snippet-electron-clipboard-denied',
+        trigger: 'clip',
+        name: 'Insert clipboard',
+        body: '{clipboard}',
+        description: '',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const electronReadText = vi.fn().mockRejectedValue(new Error('Native clipboard unavailable'));
+    const browserReadText = vi.fn().mockResolvedValue('must not be used');
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { clipboard: { readText: electronReadText } },
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { readText: browserReadText },
+    });
+    const { root, message, statusError } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, String.raw`\clip`);
+
+    // When: the user confirms the Snippet and the Electron IPC request fails.
+    press(textarea, 'Enter');
+    await vi.waitFor(() => expect(electronReadText).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await nextTick();
+
+    // Then: Electron does not silently fall through or replace the draft with an empty value.
+    expect(browserReadText).not.toHaveBeenCalled();
+    expect(message.value).toBe(String.raw`\clip`);
+    expect(statusError).toHaveBeenCalledWith(
+      'Clipboard could not be read. The Snippet was not inserted.',
+    );
   });
 
   it('does not commit after the selection moves away and back during clipboard resolution', async () => {
@@ -599,9 +681,7 @@ describe('InputPanel text transformers', () => {
       },
     ];
     let resolveClipboard!: (value: string) => void;
-    const readText = vi.fn(
-      () => new Promise<string>((resolve) => (resolveClipboard = resolve)),
-    );
+    const readText = vi.fn(() => new Promise<string>((resolve) => (resolveClipboard = resolve)));
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: { readText },

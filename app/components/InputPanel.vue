@@ -644,6 +644,7 @@ const emit = defineEmits<{
   (event: 'remove-attachment', id: string): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
   (event: 'open-snippet-settings'): void;
+  (event: 'status-error', message: string): void;
 }>();
 
 const messageValue = computed({
@@ -1182,7 +1183,11 @@ function currentTextTransformerVariables(
   };
 }
 
-async function readClipboardText(): Promise<string> {
+type ClipboardReadResult =
+  | { readonly kind: 'value'; readonly value: string }
+  | { readonly kind: 'error' };
+
+async function readClipboardText(): Promise<ClipboardReadResult> {
   try {
     const electronClipboard = (
       window as typeof window & {
@@ -1190,11 +1195,11 @@ async function readClipboardText(): Promise<string> {
       }
     ).electronAPI?.clipboard;
     if (electronClipboard?.readText) {
-      return await electronClipboard.readText();
+      return { kind: 'value', value: await electronClipboard.readText() };
     }
-    return await navigator.clipboard.readText();
+    return { kind: 'value', value: await navigator.clipboard.readText() };
   } catch {
-    return '';
+    return { kind: 'error' };
   }
 }
 
@@ -1243,11 +1248,15 @@ async function applyTextTransformerSelection(id: string) {
   };
   let variables = currentTextTransformerVariables(selectionStart, selectionEnd);
   if (transformer.body.includes('{clipboard}')) {
-    const clipboard = await readClipboardText();
-    variables = { ...variables, clipboard };
+    const clipboardResult = await readClipboardText();
     if (textTransformerSelectionChanged(snapshot)) {
       return;
     }
+    if (clipboardResult.kind === 'error') {
+      emit('status-error', t('inputPanel.clipboardReadFailed'));
+      return;
+    }
+    variables = { ...variables, clipboard: clipboardResult.value };
   }
   commitTextTransformerApplication(
     applyTextTransformerSelectionAtCursor(
@@ -1438,13 +1447,8 @@ function handleKeydown(event: KeyboardEvent) {
   if (event.isComposing) return;
   syncTextCursor(event);
   const isPlainEnter =
-    event.key === 'Enter' &&
-    !event.ctrlKey &&
-    !event.metaKey &&
-    !event.shiftKey &&
-    !event.altKey;
-  const isAlwaysSend =
-    event.key === 'Enter' && event.ctrlKey && !event.metaKey && !event.altKey;
+    event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey;
+  const isAlwaysSend = event.key === 'Enter' && event.ctrlKey && !event.metaKey && !event.altKey;
   if (mentionOpen.value) {
     const mentionType = activeMentionType.value;
     if (event.key === 'Escape') {
