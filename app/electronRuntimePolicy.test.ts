@@ -17,6 +17,20 @@ const persistentStorageSource = readFileSync(
 );
 
 describe('electron-runtime-policy', () => {
+  it('acquires single-instance ownership before initializing native storage', () => {
+    // Given: each Electron process would otherwise retain an independent storage snapshot.
+    const lockIndex = mainSource.indexOf('app.requestSingleInstanceLock()');
+    const storageIndex = mainSource.indexOf('getPersistentStorage();', lockIndex);
+
+    // When: startup ownership and storage initialization order are inspected.
+    expect(lockIndex).toBeGreaterThanOrEqual(0);
+
+    // Then: only the lock owner initializes storage and later launches focus that owner.
+    expect(lockIndex).toBeLessThan(storageIndex);
+    expect(mainSource).toContain("app.on('second-instance'");
+    expect(mainSource).toContain('mainWindow.focus()');
+  });
+
   describe('resolveAppRelativePath', () => {
     it('maps the root path to index.html', () => {
       expect(resolveAppRelativePath('/')).toBe('index.html');
@@ -254,6 +268,9 @@ describe('electron-runtime-policy', () => {
 
     it('converts persistent storage mutation exceptions into false IPC acknowledgements', () => {
       // Given: set and remove are synchronous IPC boundaries backed by fallible disk writes.
+      const mutationHelper = mainSource.match(
+        /function commitPersistentStorageMutation[\s\S]*?\n\}/u,
+      )?.[0];
       const setHandler = mainSource.match(
         /ipcMain\.on\('persistent-storage-set',[\s\S]*?\n\}\);/u,
       )?.[0];
@@ -262,12 +279,14 @@ describe('electron-runtime-policy', () => {
       )?.[0];
 
       // When: the main-process mutation handlers are inspected.
+      expect(mutationHelper).toBeDefined();
       expect(setHandler).toBeDefined();
       expect(removeHandler).toBeDefined();
 
-      // Then: each catches persistence exceptions and returns an explicit rejection.
-      expect(setHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
-      expect(removeHandler).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
+      // Then: the shared commit boundary catches persistence exceptions and explicitly rejects.
+      expect(mutationHelper).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
+      expect(setHandler).toContain('commitPersistentStorageMutation');
+      expect(removeHandler).toContain('commitPersistentStorageMutation');
     });
 
     it('commits persistent storage cache only after the disk write succeeds', () => {
@@ -307,14 +326,41 @@ describe('electron-runtime-policy', () => {
 
       // Then: trusted input is committed before cache publication and failures reject the batch.
       expect(migrationHandler).toContain('assertTrustedRenderer(event)');
-      expect(migrationHandler).toMatch(
-        /try\s*\{[\s\S]*getPersistentStorage\(\)\.migrate[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
+      expect(migrationHandler).toContain(
+        'commitPersistentStorageMutation(event, (storage) => storage.migrate(migrationEntries));',
       );
       const writeIndex =
         migrationMutation?.indexOf('writeStore(filePath, nextStorage, fileSystem)') ?? -1;
       const commitIndex = migrationMutation?.indexOf('cache = nextStorage') ?? -1;
       expect(writeIndex).toBeGreaterThanOrEqual(0);
       expect(commitIndex).toBeGreaterThan(writeIndex);
+    });
+
+    it('broadcasts every unpublished storage transition after a successful durability retry', () => {
+      // Given: set, remove, and migration may complete a previously unacknowledged replacement.
+      const mutationHelper = mainSource.match(
+        /function commitPersistentStorageMutation[\s\S]*?\n\}/u,
+      )?.[0];
+      const handlers = [
+        mainSource.match(/ipcMain\.on\('persistent-storage-set',[\s\S]*?\n\}\);/u)?.[0],
+        mainSource.match(/ipcMain\.on\('persistent-storage-remove',[\s\S]*?\n\}\);/u)?.[0],
+        mainSource.match(/ipcMain\.on\('persistent-storage-migrate',[\s\S]*?\n\}\);/u)?.[0],
+      ];
+
+      // When: the successful main-process acknowledgement paths are inspected.
+      expect(mutationHelper).toBeDefined();
+      expect(handlers.every(Boolean)).toBe(true);
+
+      // Then: the shared commit drains and broadcasts storage-owned net changes once.
+      expect(mutationHelper).toContain('drainPendingChanges()');
+      expect(mutationHelper).toContain('broadcastPersistentStorageChange(change');
+      // Then: each IPC path assigns only its current optimistic key to the sender exclusion.
+      for (const handler of handlers) {
+        expect(handler).toContain('commitPersistentStorageMutation');
+      }
+      expect(handlers[0]).toContain('(storage) => storage.setItem(key, value), key');
+      expect(handlers[1]).toContain('(storage) => storage.removeItem(key), key');
+      expect(handlers[2]).toContain('(storage) => storage.migrate(migrationEntries)');
     });
 
     it('stages persistent storage beside the final file before atomic replacement', () => {

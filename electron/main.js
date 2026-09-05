@@ -91,6 +91,23 @@ function broadcastPersistentStorageChange(change, sourceWebContentsId) {
   }
 }
 
+function commitPersistentStorageMutation(event, mutation, excludedKey) {
+  let changes;
+  try {
+    const storage = getPersistentStorage();
+    mutation(storage);
+    changes = storage.drainPendingChanges();
+  } catch {
+    event.returnValue = false;
+    return;
+  }
+  for (const change of changes) {
+    const excludedSenderId = change.key === excludedKey ? event.sender.id : undefined;
+    broadcastPersistentStorageChange(change, excludedSenderId);
+  }
+  event.returnValue = true;
+}
+
 function assertTrustedRenderer(event) {
   if (
     !isTrustedSender({
@@ -196,7 +213,18 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  app.whenReady().then(() => {
   getPersistentStorage();
   approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
@@ -239,7 +267,8 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
-});
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -385,20 +414,7 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
     return;
   }
 
-  let oldValue;
-  try {
-    const currentValue = getPersistentStorage().getItem(key);
-    if (currentValue === value) {
-      event.returnValue = true;
-      return;
-    }
-    oldValue = getPersistentStorage().setItem(key, value);
-  } catch {
-    event.returnValue = false;
-    return;
-  }
-  broadcastPersistentStorageChange({ key, oldValue, newValue: value }, event.sender.id);
-  event.returnValue = true;
+  commitPersistentStorageMutation(event, (storage) => storage.setItem(key, value), key);
 });
 
 ipcMain.on('persistent-storage-remove', (event, key) => {
@@ -412,17 +428,7 @@ ipcMain.on('persistent-storage-remove', (event, key) => {
     return;
   }
 
-  let oldValue;
-  try {
-    oldValue = getPersistentStorage().removeItem(key);
-  } catch {
-    event.returnValue = false;
-    return;
-  }
-  if (oldValue !== null) {
-    broadcastPersistentStorageChange({ key, oldValue, newValue: null }, event.sender.id);
-  }
-  event.returnValue = true;
+  commitPersistentStorageMutation(event, (storage) => storage.removeItem(key), key);
 });
 
 ipcMain.on('persistent-storage-migrate', (event, entries) => {
@@ -441,15 +447,5 @@ ipcMain.on('persistent-storage-migrate', (event, entries) => {
     if (key !== LOCAL_APPLICATION_PATH_KEY) migrationEntries[key] = value;
   }
 
-  let changes;
-  try {
-    changes = getPersistentStorage().migrate(migrationEntries);
-  } catch {
-    event.returnValue = false;
-    return;
-  }
-  for (const change of changes) {
-    broadcastPersistentStorageChange(change, event.sender.id);
-  }
-  event.returnValue = true;
+  commitPersistentStorageMutation(event, (storage) => storage.migrate(migrationEntries));
 });
