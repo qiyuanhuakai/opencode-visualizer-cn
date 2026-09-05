@@ -207,6 +207,7 @@
               @remove-attachment="removeAttachment"
               @open-image="handleOpenImage"
               @open-snippet-settings="openSettings('transformers')"
+              @status-error="setSendStatusErrorText"
             />
           </footer>
         </div>
@@ -1980,6 +1981,7 @@ const sessionError = ref('');
 const messageInput = ref('');
 const attachments = ref<Attachment[]>([]);
 const sendStatus = ref<LocalizedStatusState>({ mode: 'i18n', key: 'app.status.ready' });
+const sendStatusIsError = ref(false);
 const isSending = ref(false);
 const isAborting = ref(false);
 const isBootstrapping = ref(false);
@@ -2084,14 +2086,22 @@ const loginTitle = computed(() =>
 );
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
+  sendStatusIsError.value = false;
   sendStatus.value = params ? { mode: 'i18n', key, params } : { mode: 'i18n', key };
 }
 
 function setSendStatusText(text: string) {
+  sendStatusIsError.value = false;
+  sendStatus.value = { mode: 'text', text };
+}
+
+function setSendStatusErrorText(text: string) {
+  sendStatusIsError.value = true;
   sendStatus.value = { mode: 'text', text };
 }
 
 function setSendStatusRender(render: () => string) {
+  sendStatusIsError.value = false;
   sendStatus.value = { mode: 'render', render };
 }
 
@@ -2118,7 +2128,13 @@ const statusText = computed(() => {
   );
 });
 const isStatusError = computed(() =>
-  Boolean(projectError.value || worktreeError.value || sessionError.value || retryStatus.value),
+  [
+    projectError.value,
+    worktreeError.value,
+    sessionError.value,
+    retryStatus.value,
+    sendStatusIsError.value,
+  ].some(Boolean),
 );
 
 const sessionParentRecord = reactive<Record<string, string | undefined>>({});
@@ -6132,8 +6148,7 @@ function connectShellSocket(ptyId: string) {
   const url = buildPtyWsUrl(`/pty/${ptyId}/connect`, directory);
   const socket = new WebSocket(url);
   session.socket = socket;
-  const isCurrentSocket = () =>
-    isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
+  const isCurrentSocket = () => isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
   socket.binaryType = 'arraybuffer';
   socket.addEventListener('message', (event) => {
     if (!isCurrentSocket()) return;
