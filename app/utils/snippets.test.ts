@@ -8,6 +8,7 @@ import {
   parseTextTransformerImport,
   serializeTextTransformers,
   textTransformerTriggerKey,
+  truncateTextTransformerString,
   validateTextTransformerLibrary,
 } from './snippets';
 
@@ -56,6 +57,39 @@ describe('snippet import and export', () => {
       { ok: false, reason: 'unsupported-version' },
       { ok: false, reason: 'invalid-snippets' },
     ]);
+  });
+
+  it('rejects ill-formed UTF-16 at import and storage boundaries', () => {
+    // Given: JSON decoding can produce a lone surrogate that cannot round-trip through UTF-8.
+    const illFormedSnippet = { ...snippet, name: '\ud83d' };
+    const payload = JSON.stringify({ version: 1, snippets: [illFormedSnippet] });
+
+    // When: the value crosses both public restoration boundaries.
+    const imported = parseTextTransformerImport(payload);
+    const validated = validateTextTransformerLibrary([illFormedSnippet]);
+
+    // Then: neither boundary accepts or exports corrupted Unicode text.
+    expect(imported).toEqual({ ok: false, reason: 'invalid-snippets' });
+    expect(validated).toBeNull();
+    expect(() => serializeTextTransformers([illFormedSnippet])).toThrow(RangeError);
+  });
+
+  it('backs off only when truncation separates a well-formed surrogate pair', () => {
+    // Given: valid pairs and lone surrogates occupy below-limit, exact-limit, and cutoff positions.
+    const cases = [
+      { value: `x\ud83d`, limit: 3, expected: `x\ud83d` },
+      { value: `xx\ud83d`, limit: 3, expected: `xx\ud83d` },
+      { value: `xx\ud83dsuffix`, limit: 3, expected: `xx\ud83d` },
+      { value: `xx\ude00suffix`, limit: 3, expected: `xx\ude00` },
+      { value: `x😀`, limit: 3, expected: `x😀` },
+      { value: `xx😀`, limit: 3, expected: 'xx' },
+    ];
+
+    // When: each value crosses the shared truncation boundary.
+    const results = cases.map(({ value, limit }) => truncateTextTransformerString(value, limit));
+
+    // Then: malformed input remains visible for rejection while only a split valid pair is removed.
+    expect(results).toEqual(cases.map(({ expected }) => expected));
   });
 
   it('rejects reserved mention prefixes and resource-exhausting import rows', () => {
@@ -348,7 +382,9 @@ describe('snippet import and export', () => {
     }));
 
     // When: the versioned payload crosses the import boundary.
-    const result = parseTextTransformerImport(JSON.stringify({ version: 1, snippets: excessiveTags }));
+    const result = parseTextTransformerImport(
+      JSON.stringify({ version: 1, snippets: excessiveTags }),
+    );
 
     // Then: the complete collection is rejected before the settings UI renders its tags.
     expect(result).toEqual({ ok: false, reason: 'invalid-snippets' });
@@ -471,9 +507,7 @@ describe('snippet import and export', () => {
     const result = parseTextTransformerImport(serialized);
 
     // Then: no extra byte is introduced and the public round trip succeeds.
-    expect(new TextEncoder().encode(serialized).byteLength).toBe(
-      MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
-    );
+    expect(new TextEncoder().encode(serialized).byteLength).toBe(MAX_TEXT_TRANSFORMER_IMPORT_BYTES);
     expect(result).toMatchObject({ ok: true });
   });
 

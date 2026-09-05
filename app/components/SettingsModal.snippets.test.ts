@@ -274,6 +274,69 @@ describe('SettingsModal snippets', () => {
     expect(persisted.body).toHaveLength(1024 * 1024);
   });
 
+  it('keeps field and tag truncation boundaries Unicode well-formed', async () => {
+    // Given: a detail editor receives emoji whose surrogate pairs cross two independent limits.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const nameInput = host.querySelector<HTMLInputElement>('[data-snippet-field="name"]')!;
+    const tagInput = host.querySelector<HTMLInputElement>('[data-snippet-field="tags"]')!;
+
+    // When: input processing truncates the field and each parsed tag before Back commits them.
+    inputValue(nameInput, `${'n'.repeat(511)}😀suffix`);
+    inputValue(tagInput, `${'t'.repeat(255)}😀suffix`);
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: no persisted boundary ends with an unpaired surrogate.
+    expect(settings.textTransformers.value[0]?.name).toBe('n'.repeat(511));
+    expect(settings.textTransformers.value[0]?.name.isWellFormed()).toBe(true);
+    expect(settings.textTransformers.value[0]?.tags).toEqual(['t'.repeat(255)]);
+    expect(settings.textTransformers.value[0]?.tags[0]?.isWellFormed()).toBe(true);
+  });
+
+  it.each([
+    ['trigger', '::review'],
+    ['name', 'Review changes'],
+    ['description', 'Checks correctness'],
+    ['body', 'Review the selected changes.'],
+  ] as const)(
+    'rejects a lone high surrogate in the %s field without altering it',
+    async (field, original) => {
+      // Given: one editable field receives malformed UTF-16 below its length limit.
+      const { host, settings } = await mountSnippetSettings();
+      host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+      await nextTick();
+      const input = host.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        `[data-snippet-field="${field}"]`,
+      )!;
+
+      // When: Back attempts to commit that malformed draft through shared validation.
+      inputValue(input, `valid\ud83d`);
+      host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+      await nextTick();
+
+      // Then: validation sees the unaltered malformed value and preserves canonical settings.
+      expect(settings.textTransformers.value[0]?.[field]).toBe(original);
+    },
+  );
+
+  it('rejects a lone high surrogate tag without silently deleting it', async () => {
+    // Given: the tag editor receives malformed UTF-16 below the per-tag limit.
+    const { host, settings } = await mountSnippetSettings();
+    host.querySelector<HTMLButtonElement>('.transformer-edit')!.click();
+    await nextTick();
+    const tagInput = host.querySelector<HTMLInputElement>('[data-snippet-field="tags"]')!;
+
+    // When: Back attempts to commit the malformed tag draft.
+    inputValue(tagInput, `valid\ud83d`);
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+
+    // Then: canonical tags remain unchanged rather than accepting a shortened value.
+    expect(settings.textTransformers.value[0]?.tags).toEqual(['Review', 'Quality']);
+  });
+
   it('bounds a large tag draft before splitting it into collection state', async () => {
     // Given: a detail editor receives more maximum-sized tags than the schema accepts.
     const { host, settings } = await mountSnippetSettings();

@@ -928,6 +928,7 @@ import {
   isValidTextTransformerTrigger,
   parseTextTransformerImport,
   serializeTextTransformers,
+  truncateTextTransformerString,
   validateTextTransformerLibrary,
   type TextTransformer,
   type TextTransformerImportResult,
@@ -1709,7 +1710,10 @@ function parseTextTransformerTags(value: string): string[] {
   while (start <= value.length && tags.length < MAX_TEXT_TRANSFORMER_TAGS) {
     const separator = value.indexOf(',', start);
     const end = separator === -1 ? value.length : separator;
-    const tag = value.slice(start, end).trim().slice(0, MAX_TEXT_TRANSFORMER_TAG_LENGTH);
+    const tag = truncateTextTransformerString(
+      value.slice(start, end).trim(),
+      MAX_TEXT_TRANSFORMER_TAG_LENGTH,
+    );
     const key = tag.toLocaleLowerCase();
     if (tag && !keys.has(key)) {
       keys.add(key);
@@ -1956,7 +1960,10 @@ function updateTextTransformerField(id: string, field: TextTransformerEditableFi
   const input = event.target;
   if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return;
   const normalizedValue = field === 'trigger' ? input.value.replace(/^\\+/u, '') : input.value;
-  const boundedValue = normalizedValue.slice(0, TEXT_TRANSFORMER_FIELD_LIMITS[field]);
+  const boundedValue = truncateTextTransformerString(
+    normalizedValue,
+    TEXT_TRANSFORMER_FIELD_LIMITS[field],
+  );
   if (input.value !== boundedValue) input.value = boundedValue;
   updateTextTransformerDraft(id, (snippet) => {
     if (field === 'trigger') return { ...snippet, trigger: boundedValue };
@@ -1978,7 +1985,10 @@ function toggleTextTransformerEnabled(id: string) {
 function updateTextTransformerTags(id: string, event: Event) {
   const input = event.target;
   if (!(input instanceof HTMLInputElement)) return;
-  const boundedValue = input.value.slice(0, MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH);
+  const boundedValue = truncateTextTransformerString(
+    input.value,
+    MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
+  );
   if (input.value !== boundedValue) input.value = boundedValue;
   textTransformerTagDrafts.value = { ...textTransformerTagDrafts.value, [id]: boundedValue };
   const tags = parseTextTransformerTags(boundedValue);

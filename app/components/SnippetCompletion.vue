@@ -23,7 +23,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { TextTransformer } from '../utils/snippets';
+import { truncateTextTransformerString, type TextTransformer } from '../utils/snippets';
 
 const props = defineProps<{
   snippet: TextTransformer;
@@ -35,10 +35,7 @@ const MAX_VISIBLE_TAGS = 4;
 const visibleTags = computed(() => props.snippet.tags.slice(0, MAX_VISIBLE_TAGS));
 const hiddenTagCount = computed(() => Math.max(0, props.snippet.tags.length - MAX_VISIBLE_TAGS));
 function previewText(value: string) {
-  let end = Math.min(value.length, MAX_PREVIEW_LENGTH);
-  const lastCodeUnit = value.charCodeAt(end - 1);
-  if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) end -= 1;
-  return value.slice(0, end);
+  return truncateTextTransformerString(value, MAX_PREVIEW_LENGTH);
 }
 const descriptionPreview = computed(() => previewText(props.snippet.description ?? ''));
 const bodyPreview = computed(() => previewText(props.snippet.body));

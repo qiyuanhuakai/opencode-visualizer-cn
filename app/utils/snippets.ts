@@ -48,6 +48,7 @@ export {
   MAX_TEXT_TRANSFORMER_TAGS,
   MAX_TEXT_TRANSFORMER_TOTAL_TAGS,
   MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
+  truncateTextTransformerString,
 } from './snippetImportLimits';
 const simpleCaseFoldCache = new Map<string, string>();
 
@@ -267,8 +268,7 @@ export function parseTextTransformerImport(input: string): TextTransformerImport
   if (
     rawSnippets.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT ||
     !rawSnippets.every(
-      (snippet) =>
-        isBoundedTextTransformerImportSnippet(snippet) && hasImportableTrigger(snippet),
+      (snippet) => isBoundedTextTransformerImportSnippet(snippet) && hasImportableTrigger(snippet),
     )
   ) {
     return { ok: false, reason: 'invalid-snippets' };
@@ -296,10 +296,9 @@ export function mergeTextTransformers(
 
   function isGeneratedSnippetId(snippet: TextTransformer): boolean {
     const baseId = stableSnippetId(snippet.trigger, snippet.body);
-    return (
-      snippet.id === baseId ||
-      new RegExp(`^${baseId}-(?:[2-9]|[1-9][0-9]+)$`, 'u').test(snippet.id)
-    );
+    if (snippet.id === baseId) return true;
+    if (!snippet.id.startsWith(`${baseId}-`)) return false;
+    return /^(?:[2-9]|[1-9][0-9]+)$/u.test(snippet.id.slice(baseId.length + 1));
   }
 
   function allocateMergedSnippetId(snippet: TextTransformer): TextTransformer {

@@ -159,7 +159,9 @@ describe('InputPanel prompt history', () => {
     expect(document.body.textContent).not.toContain('internal reminder');
     expect(document.body.textContent).toContain('visible before reminder');
     expect(document.body.textContent).not.toContain('internal appended reminder');
-    expect(document.body.textContent).toContain('literal <system-reminder> discussion stays visible');
+    expect(document.body.textContent).toContain(
+      'literal <system-reminder> discussion stays visible',
+    );
     expect(document.body.textContent).toContain(
       'balanced <system-reminder>example</system-reminder> with visible suffix',
     );
@@ -207,6 +209,25 @@ describe('InputPanel prompt history', () => {
     const favoritesDropdown = root.querySelectorAll('.history-dropdown-wrapper .ui-dropdown')[1];
     expect(favoritesDropdown?.classList.contains('is-open')).toBe(false);
     expect(favoritesDropdown?.querySelector('.ui-dropdown-menu')?.hasAttribute('inert')).toBe(true);
+  });
+
+  it('keeps favorite-derived snippet names Unicode well-formed at the preview cutoff', async () => {
+    // Given: a favorite's first line places an emoji across the 57-code-unit preview cutoff.
+    useFavoriteMessages().favorites.value = [{ text: `${'x'.repeat(56)}😀suffix` }];
+    settings.textTransformers.value = [];
+    const { root } = mountInputPanel();
+    root
+      .querySelector('textarea')
+      ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await nextTick();
+
+    // When: the favorite is converted into a disabled snippet.
+    root.querySelector<HTMLButtonElement>('.favorite-snippet-action')!.click();
+    await nextTick();
+
+    // Then: truncation drops the split pair and persists a well-formed preview name.
+    expect(settings.textTransformers.value[0]?.name).toBe(`${'x'.repeat(56)}...`);
+    expect(settings.textTransformers.value[0]?.name.isWellFormed()).toBe(true);
   });
 
   it('rejects favorite conversion when the complete snippet backup would exceed its budget', async () => {
