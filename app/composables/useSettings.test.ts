@@ -223,6 +223,53 @@ describe('useSettings', () => {
     expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(2);
   });
 
+  it('retries a same-value Snippet write after a false native acknowledgement', async () => {
+    // Given: native storage commits a changed library but its first durability acknowledgement fails.
+    const key = 'opencode.settings.textTransformers.v1';
+    const persisted = [
+      {
+        id: 'snippet-retry',
+        trigger: 'retry',
+        name: 'Before',
+        body: 'Body',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    const nativeStore: Record<string, string> = { [key]: JSON.stringify(persisted) };
+    let rejectAcknowledgement = true;
+    const setItem = vi.fn((storageKey: string, value: string) => {
+      nativeStore[storageKey] = value;
+      if (!rejectAcknowledgement) return true;
+      rejectAcknowledgement = false;
+      return false;
+    });
+    vi.stubGlobal('window', {
+      localStorage: storage,
+      addEventListener: vi.fn(),
+      electronAPI: {
+        persistentStorage: {
+          getItem: (storageKey: string) => nativeStore[storageKey] ?? null,
+          setItem,
+          removeItem: vi.fn(() => true),
+          migrate: vi.fn(() => true),
+        },
+      },
+    });
+    const settings = await importFresh();
+    const changed = persisted.map((snippet) => ({ ...snippet, name: 'After' }));
+
+    // When: the row retries the identical edit after the optimistic state rolled back.
+    settings.textTransformers.value = changed;
+    expect(settings.textTransformers.value).toEqual(persisted);
+    settings.textTransformers.value = changed;
+
+    // Then: the retry reaches native storage again before the persistence error can clear.
+    expect(setItem).toHaveBeenCalledTimes(2);
+    expect(settings.textTransformers.value).toEqual(changed);
+    expect(Reflect.get(settings, 'textTransformerPersistenceSuccessRevision')?.value).toBe(1);
+  });
+
   it('keeps the shared snippet state within the complete persistence contract', async () => {
     // Given: two distinct valid snippets are persisted.
     const persisted = [

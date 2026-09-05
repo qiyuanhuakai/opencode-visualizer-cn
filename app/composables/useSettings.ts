@@ -542,10 +542,6 @@ watch(
   textTransformersEnabled,
   (value) => {
     if (restoringTextTransformerState) return;
-    if (storageGet(StorageKeys.settings.textTransformersEnabled) === String(value)) {
-      lastPersistedTextTransformersEnabled = value;
-      return;
-    }
     if (storageSet(StorageKeys.settings.textTransformersEnabled, String(value))) {
       lastPersistedTextTransformersEnabled = value;
       if (
@@ -576,10 +572,7 @@ watch(
       restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
       return;
     }
-    if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized)) {
-      lastPersistedTextTransformers = cloneTextTransformers(normalized);
-      textTransformerPersistenceSuccessRevision.value += 1;
-    } else if (storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
+    if (storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
       lastPersistedTextTransformers = cloneTextTransformers(normalized);
       textTransformerPersistenceSuccessRevision.value += 1;
     } else {
