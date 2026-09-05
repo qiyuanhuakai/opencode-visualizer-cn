@@ -725,6 +725,7 @@ import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
 import { useSettings } from './composables/useSettings';
+import { createComposerDraftScheduler } from './utils/composerDraftScheduler';
 import {
   clearOpenCodeLastSelection,
   readOpenCodeLastSelection,
@@ -3757,6 +3758,7 @@ function restoreComposerDraftForContext(contextKey: string): boolean {
 }
 
 function persistComposerDraftForCurrentContext() {
+  composerDraftPersistence.cancel();
   const contextKey = draftKeyForSelectedContext();
   if (!contextKey) return;
   const existingDraft = readComposerDraft(contextKey);
@@ -3779,6 +3781,11 @@ function persistComposerDraftForCurrentContext() {
   writeComposerDraft(contextKey, draft);
 }
 
+const composerDraftPersistence = createComposerDraftScheduler(
+  persistComposerDraftForCurrentContext,
+  150,
+);
+
 function clearComposerDraftForCurrentContext() {
   messageInput.value = '';
   attachments.value = [];
@@ -3787,7 +3794,7 @@ function clearComposerDraftForCurrentContext() {
 
 function handleMessageInputUpdate(value: string) {
   messageInput.value = value;
-  persistComposerDraftForCurrentContext();
+  composerDraftPersistence.schedule();
 }
 
 function applyAgentDefaults(agentName: string) {
@@ -9675,6 +9682,7 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  composerDraftPersistence.flush();
   pendingShellWindowCreates.invalidateAll();
   for (const pending of Array.from(pendingReferencedSubagentHydrations.values())) {
     pending.resolve(undefined);
