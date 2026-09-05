@@ -2,6 +2,7 @@ import {
   isValidTextTransformerTrigger,
   MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
   normalizeTextTransformers,
+  textTransformerCaseFoldKey,
   textTransformerTriggerKey,
   type TextTransformer,
   type TextTransformerInput,
@@ -42,7 +43,10 @@ type TextTransformerMatcher = {
   readonly maxSequenceLength: number;
 };
 
-const textTransformerMatcherCache = new WeakMap<readonly TextTransformer[], TextTransformerMatcher>();
+const textTransformerMatcherCache = new WeakMap<
+  readonly TextTransformer[],
+  TextTransformerMatcher
+>();
 
 function createTextTransformerMatcher(
   transformers: readonly TextTransformer[],
@@ -58,7 +62,7 @@ function createTextTransformerMatcher(
     let node = root;
     for (const character of sequence) {
       consumedLength += character.length;
-      const key = textTransformerTriggerKey(character);
+      const key = textTransformerCaseFoldKey(character);
       let child = node.children.get(key);
       if (!child) {
         child = { children: new Map() };
@@ -109,7 +113,7 @@ function matchingTransformerIndexes(
     if (!hasValidStartBoundary(input, points[startIndex]!.start)) continue;
     let node: TextTransformerMatcherNode | undefined = root;
     for (let pointIndex = startIndex; pointIndex < points.length; pointIndex += 1) {
-      node = node.children.get(textTransformerTriggerKey(points[pointIndex]!.character));
+      node = node.children.get(textTransformerCaseFoldKey(points[pointIndex]!.character));
       if (!node) break;
       if (pointIndex !== points.length - 1) continue;
       for (const index of node.indexes ?? []) matchedIndexes.add(index);
@@ -129,10 +133,11 @@ export const MAX_RESOLVED_TEXT_TRANSFORMER_BODY_LENGTH = 1024 * 1024;
 
 const DYNAMIC_VARIABLE_PATTERN =
   /\{(cursor|date|time|datetime|uuid|clipboard|activeFile|cwd|selection)\}/gu;
-type TextDynamicVariable = Exclude<
-  keyof TextTransformerVariables,
-  'now'
-> | 'date' | 'time' | 'datetime';
+type TextDynamicVariable =
+  | Exclude<keyof TextTransformerVariables, 'now'>
+  | 'date'
+  | 'time'
+  | 'datetime';
 
 function twoDigits(value: number): string {
   return String(value).padStart(2, '0');
@@ -211,9 +216,7 @@ function isIdentifierCharacter(value: string): boolean {
 
 export function textTransformerSequence(transformer: TextTransformer): string {
   const firstCharacter = String.fromCodePoint(transformer.trigger.codePointAt(0) ?? 0);
-  return isIdentifierCharacter(firstCharacter)
-    ? `\\${transformer.trigger}`
-    : transformer.trigger;
+  return isIdentifierCharacter(firstCharacter) ? `\\${transformer.trigger}` : transformer.trigger;
 }
 
 function sequencePrefixLength(sequence: string): number {
@@ -316,7 +319,11 @@ export function findTextTransformerMatches(
   cursor: number,
   transformers: readonly TextTransformerInput[],
 ): TextTransformer[] {
-  return findNormalizedTextTransformerMatches(input, cursor, normalizeTextTransformers(transformers));
+  return findNormalizedTextTransformerMatches(
+    input,
+    cursor,
+    normalizeTextTransformers(transformers),
+  );
 }
 
 export function findNormalizedTextTransformerMatches(
@@ -381,9 +388,7 @@ export function applyTextTransformerSelectionAtCursor(
   const typedLength = context.end - context.start;
   const sequenceSuffix = sequence.slice(typedLength);
   const inputSuffix = input.slice(context.end, context.end + sequenceSuffix.length);
-  const consumedSuffixLength = hasSameText(inputSuffix, sequenceSuffix)
-    ? sequenceSuffix.length
-    : 0;
+  const consumedSuffixLength = hasSameText(inputSuffix, sequenceSuffix) ? sequenceSuffix.length : 0;
   const boundedSelectionEnd = Math.max(
     selectionStart,
     Math.min(selectionEnd, input.length),
@@ -406,8 +411,7 @@ export function expandTextTransformers(
   const entries = normalizeTextTransformers(transformers)
     .filter((item) => item.enabled)
     .sort(
-      (left, right) =>
-        textTransformerSequence(right).length - textTransformerSequence(left).length,
+      (left, right) => textTransformerSequence(right).length - textTransformerSequence(left).length,
     );
   if (entries.length === 0) return input;
   const alternatives = entries

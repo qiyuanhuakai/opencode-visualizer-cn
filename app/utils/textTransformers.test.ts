@@ -20,14 +20,16 @@ const transformers = [
 describe('text transformers', () => {
   it('keeps accepted-maximum no-match lookup inside an interactive budget', () => {
     // Given: the maximum accepted library uses 256-character enabled triggers.
-    const transformers = normalizeTextTransformers(Array.from({ length: 1_000 }, (_, index) => ({
-      id: `performance-${index}`,
-      trigger: `${'a'.repeat(250)}${index.toString(36).padStart(6, '0')}`,
-      name: `Performance ${index}`,
-      body: 'Body',
-      enabled: true,
-      tags: [],
-    })));
+    const transformers = normalizeTextTransformers(
+      Array.from({ length: 1_000 }, (_, index) => ({
+        id: `performance-${index}`,
+        trigger: `${'a'.repeat(250)}${index.toString(36).padStart(6, '0')}`,
+        name: `Performance ${index}`,
+        body: 'Body',
+        enabled: true,
+        tags: [],
+      })),
+    );
     const input = '!'.repeat(257);
 
     // When: three warmed no-match lookups run on the typing hot path.
@@ -196,6 +198,17 @@ describe('text transformers', () => {
         tags: [],
       },
     ]);
+  });
+
+  it('does not turn ordinary whitespace into a trigger prefix', () => {
+    // Given: an enabled identifier trigger is compiled into the completion matcher.
+    const input = ' ';
+
+    // When: completion runs after the user types only ordinary whitespace.
+    const matches = findTextTransformerMatches(input, input.length, transformers);
+
+    // Then: input normalization cannot collapse whitespace into the trigger root.
+    expect(matches).toEqual([]);
   });
 
   it('caps broad completion results before the popup renders them', () => {

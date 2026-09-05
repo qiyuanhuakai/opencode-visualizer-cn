@@ -232,6 +232,23 @@ describe('InputPanel text transformers', () => {
     expect(message.value).toBe(String.raw`Before \hi`);
   });
 
+  it('keeps ordinary whitespace out of the snippet completion path', async () => {
+    // Given: Snippets are enabled while the composer contains only an ordinary space.
+    const { root, message, send } = mountInputPanel();
+    const textarea = root.querySelector('textarea')!;
+    await typeInto(textarea, ' ');
+
+    // When: matching settles and Enter follows the ordinary composer path.
+    expect(textarea.getAttribute('aria-expanded')).toBe('false');
+    const event = press(textarea, 'Enter');
+    await nextTick();
+
+    // Then: no completion is selected and no snippet body replaces the whitespace.
+    expect(event.defaultPrevented).toBe(true);
+    expect(message.value).toBe(' ');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
   it('does not accept a partial transformer completion with Tab', async () => {
     // Given: the popup offers a configured mapping for a partial sequence.
     const { root, message } = mountInputPanel();

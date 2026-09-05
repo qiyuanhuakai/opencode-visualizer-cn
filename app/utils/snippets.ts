@@ -166,9 +166,7 @@ function simpleCaseFoldCharacter(character: string, foldCache: Map<string, strin
 }
 
 function textTransformerTriggerKeyWithCache(value: string, foldCache: Map<string, string>): string {
-  return Array.from(normalizeTrigger(value), (character) =>
-    simpleCaseFoldCharacter(character, foldCache),
-  ).join('');
+  return Array.from(value, (character) => simpleCaseFoldCharacter(character, foldCache)).join('');
 }
 
 function hasImportableTrigger(value: unknown): boolean {
@@ -181,6 +179,10 @@ function hasImportableTrigger(value: unknown): boolean {
 }
 
 export function textTransformerTriggerKey(value: string): string {
+  return textTransformerTriggerKeyWithCache(normalizeTrigger(value), new Map());
+}
+
+export function textTransformerCaseFoldKey(value: string): string {
   return textTransformerTriggerKeyWithCache(value, new Map());
 }
 
