@@ -295,6 +295,57 @@ describe('useBackendActivation', () => {
     expect(harness.activation.initializationInFlight.value).toBe(false);
   });
 
+  it('keeps an aborted OpenCode bootstrap on the login screen after its work settles', async () => {
+    // Given: OpenCode is still selecting the initial project and session.
+    let finishBootstrap: (() => void) | undefined;
+    const harness = createHarness('opencode', {
+      bootstrapSelections: () =>
+        new Promise<void>((resolve) => {
+          finishBootstrap = resolve;
+        }),
+    });
+    const initialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(harness.connectionState.value).toBe('bootstrapping'));
+
+    // When: the user aborts startup before selection finishes.
+    harness.activation.abortInitialization();
+    finishBootstrap?.();
+    await initialization;
+
+    // Then: the obsolete bootstrap cannot publish Ready or continue startup work.
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('connecting');
+    expect(harness.calls).not.toContain('hydrateActiveWorktreeResources');
+    expect(harness.calls).not.toContain('fetchGlobalProviderConfig');
+  });
+
+  it('preserves an SSE authentication failure after cancelling its pending bootstrap', async () => {
+    // Given: project selection is pending when SSE rejects the active credentials.
+    let finishBootstrap: (() => void) | undefined;
+    const harness = createHarness('opencode', {
+      bootstrapSelections: () =>
+        new Promise<void>((resolve) => {
+          finishBootstrap = resolve;
+        }),
+    });
+    const initialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(harness.connectionState.value).toBe('bootstrapping'));
+
+    // When: the authentication handler cancels startup and returns the app to login.
+    harness.activation.abortInitialization();
+    harness.connectionState.value = 'error';
+    harness.initErrorMessage.value = 'Authentication failed. (HTTP 401)';
+    harness.uiInitState.value = 'login';
+    finishBootstrap?.();
+    await initialization;
+
+    // Then: the pending bootstrap cannot overwrite the authentication failure.
+    expect(harness.connectionState.value).toBe('error');
+    expect(harness.initErrorMessage.value).toBe('Authentication failed. (HTTP 401)');
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.calls).not.toContain('hydrateActiveWorktreeResources');
+  });
+
   it('keeps Ready state when resource hydration rejects after activation', async () => {
     // Given: hydration fails after the UI is already Ready
     let rejectHydration: ((error: unknown) => void) | undefined;
