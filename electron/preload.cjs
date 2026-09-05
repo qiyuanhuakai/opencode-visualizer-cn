@@ -3,15 +3,10 @@ const localFileListeners = new Set();
 const localFileErrorListeners = new Set();
 
 function decodePersistentStorageGetResponse(response) {
-  if (response?.ok === true && (response.value === null || typeof response.value === 'string')) {
-    return response.value;
-  }
-  if (response?.ok === false && typeof response.error?.message === 'string') {
-    const error = new Error(response.error.message);
-    if (typeof response.error.name === 'string') error.name = response.error.name;
-    throw error;
-  }
-  throw new Error('Invalid persistent storage get response');
+  if (response.ok === true) return response.value;
+  const error = new Error(response.error.message);
+  error.name = response.error.name;
+  throw error;
 }
 
 ipcRenderer.on('persistent-storage-changed', (_event, change) => {
