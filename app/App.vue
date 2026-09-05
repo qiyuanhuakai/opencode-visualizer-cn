@@ -9573,6 +9573,7 @@ onMounted(() => {
     ge.on('connection.error', (payload) => {
       if (payload.statusCode === 401 || payload.statusCode === 403) {
         const msg = `${payload.message} (HTTP ${payload.statusCode})`;
+        abortInitialization();
         storageSet(StorageKeys.state.lastAuthError, msg);
         credentials.clear();
         uiInitState.value = 'login';
