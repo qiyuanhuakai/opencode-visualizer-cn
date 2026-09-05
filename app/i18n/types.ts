@@ -570,6 +570,7 @@ export interface LocaleMessages {
     loading: string;
     searchPlaceholder: string;
     noMatchingModels: string;
+    clipboardReadFailed: string;
     bookmark: string;
     removeFromFavorites: string;
     createSnippetFromFavorite: string;
