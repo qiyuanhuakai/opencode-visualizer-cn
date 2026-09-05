@@ -1692,8 +1692,7 @@ function goBackInSettings() {
     }
     removeTextTransformerDraft(id);
     editingTextTransformerId.value = null;
-    reconcileActiveTagFilter(transformerTagFilters.value);
-    focusTextTransformerListAction(id);
+    revealTextTransformerListAction(id);
     return;
   }
   activePage.value = 'root';
@@ -1787,6 +1786,21 @@ function focusTextTransformerListAction(id: string) {
     Array.from(actions ?? [])
       .find((action) => action.dataset.snippetId === id)
       ?.focus();
+  });
+}
+
+function revealTextTransformerListAction(id: string) {
+  const visibleIndex = filteredTextTransformers.value.findIndex(({ snippet }) => snippet.id === id);
+  if (visibleIndex >= 0) {
+    textTransformerPage.value = Math.floor(visibleIndex / TEXT_TRANSFORMER_PAGE_SIZE);
+    focusTextTransformerListAction(id);
+    return;
+  }
+  activeTagFilter.value = null;
+  void nextTick(() => {
+    const index = filteredTextTransformers.value.findIndex(({ snippet }) => snippet.id === id);
+    if (index >= 0) textTransformerPage.value = Math.floor(index / TEXT_TRANSFORMER_PAGE_SIZE);
+    focusTextTransformerListAction(id);
   });
 }
 

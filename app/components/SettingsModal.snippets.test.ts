@@ -153,6 +153,43 @@ describe('SettingsModal snippets', () => {
     );
   });
 
+  it('reveals a filtered Snippet on its original page before restoring Back focus', async () => {
+    // Given: the edited Snippet is beyond the first page and shares the active tag with another row.
+    const fillers = Array.from({ length: 51 }, (_, index) => ({
+      ...initialSnippets[0],
+      id: `snippet-filler-${index}`,
+      trigger: `::filler-${index}`,
+      name: `Filler ${index}`,
+      tags: ['Other'],
+    }));
+    const { host } = await mountSnippetSettings([
+      { ...initialSnippets[0], id: 'snippet-peer', trigger: '::peer', tags: ['Shared'] },
+      ...fillers,
+      { ...initialSnippets[0], id: 'snippet-target', trigger: '::target', tags: ['Shared'] },
+    ]);
+    Array.from(host.querySelectorAll<HTMLButtonElement>('.transformer-tag-filter'))
+      .find((button) => button.textContent?.trim() === 'Shared')!
+      .click();
+    await nextTick();
+    host.querySelector<HTMLButtonElement>('[data-snippet-id="snippet-target"]')!.click();
+    await nextTick();
+
+    // When: the target leaves the active filter and Back commits the edit.
+    changeValue(host.querySelector<HTMLInputElement>('[data-snippet-field="tags"]')!, 'Other');
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+
+    // Then: filters are cleared, the target page is selected, and its rendered edit action owns focus.
+    expect(host.querySelector('.transformer-tag-filter.is-active')?.textContent?.trim()).toBe(
+      'All',
+    );
+    expect(document.activeElement).toBe(
+      host.querySelector<HTMLButtonElement>('[data-snippet-id="snippet-target"]'),
+    );
+  });
+
   it('surfaces rejected startup storage without replacing its recovery data', async () => {
     // Given: startup storage exceeds the complete library contract.
     const excessive = Array.from({ length: 1_001 }, (_, index) => ({
