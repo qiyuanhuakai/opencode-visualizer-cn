@@ -1,4 +1,8 @@
 const STORAGE_PREFIX = 'opencode.';
+const LOCAL_STORAGE_OWNED_KEYS = new Set([
+  'opencode.global.dat:model',
+  'opencode.settings.disabledModels.v1',
+]);
 
 export type StorageReadResult =
   | { kind: 'value'; value: string }
@@ -64,7 +68,7 @@ function migrateLocalStorageToElectronStorage(
     const entries: Record<string, string> = {};
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
-      if (!key?.startsWith(STORAGE_PREFIX)) continue;
+      if (!key?.startsWith(STORAGE_PREFIX) || LOCAL_STORAGE_OWNED_KEYS.has(key)) continue;
       const value = localStorage.getItem(key);
       if (value !== null) entries[key] = value;
     }

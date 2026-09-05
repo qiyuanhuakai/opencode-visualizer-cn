@@ -184,6 +184,49 @@ describe('storageKeys', () => {
     expect(electronStore['opencode.settings.enterToSend.v1']).toBe('true');
   });
 
+  it('leaves renderer-owned model visibility keys out of Electron migration', async () => {
+    // Given: local storage contains model visibility plus one storage-abstraction-owned setting.
+    const legacyStore: Record<string, string> = {
+      'opencode.global.dat:model': '{"user":[]}',
+      'opencode.settings.disabledModels.v1': '["provider/model"]',
+      'opencode.settings.enterToSend.v1': 'true',
+    };
+    const migrate = vi.fn(() => true);
+    vi.stubGlobal('window', {
+      localStorage: {
+        get length() {
+          return Object.keys(legacyStore).length;
+        },
+        key: (index: number) => Object.keys(legacyStore)[index] ?? null,
+        getItem: (key: string) => legacyStore[key] ?? null,
+        setItem: (key: string, value: string) => {
+          legacyStore[key] = value;
+        },
+        removeItem: (key: string) => {
+          delete legacyStore[key];
+        },
+      },
+      electronAPI: {
+        persistentStorage: {
+          getItem: vi.fn(() => null),
+          setItem: vi.fn(() => true),
+          removeItem: vi.fn(() => true),
+          migrate,
+        },
+      },
+    });
+    vi.resetModules();
+    const freshStorage = await import('./storageKeys');
+
+    // When: an unrelated setting first initializes the Electron storage abstraction.
+    freshStorage.storageGet(freshStorage.StorageKeys.settings.enterToSend);
+
+    // Then: only owned keys migrate and direct model consumers retain their local values.
+    expect(migrate).toHaveBeenCalledWith({ 'opencode.settings.enterToSend.v1': 'true' });
+    expect(legacyStore['opencode.global.dat:model']).toBe('{"user":[]}');
+    expect(legacyStore['opencode.settings.disabledModels.v1']).toBe('["provider/model"]');
+  });
+
   it('propagates rejected Electron storage mutation acknowledgements', () => {
     // Given: the Electron persistence owner rejects both mutation channels.
     vi.stubGlobal('window', {
