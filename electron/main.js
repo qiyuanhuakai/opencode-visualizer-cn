@@ -225,8 +225,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
-  getPersistentStorage();
-  approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
+    approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
   protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
@@ -391,14 +390,24 @@ ipcMain.handle('local-file-close', async (event, sessionId) => {
 ipcMain.on('persistent-storage-get', (event, key) => {
   assertTrustedRenderer(event);
   if (typeof key !== 'string') {
-    event.returnValue = null;
+    event.returnValue = { ok: true, value: null };
     return;
   }
   if (key === LOCAL_APPLICATION_PATH_KEY) {
-    event.returnValue = approvedLocalApplicationPath;
+    event.returnValue = { ok: true, value: approvedLocalApplicationPath };
     return;
   }
-  event.returnValue = getPersistentStorage().getItem(key);
+  try {
+    event.returnValue = { ok: true, value: getPersistentStorage().getItem(key) };
+  } catch (error) {
+    event.returnValue = {
+      ok: false,
+      error: {
+        name: typeof error?.name === 'string' ? error.name : 'Error',
+        message: typeof error?.message === 'string' ? error.message : String(error),
+      },
+    };
+  }
 });
 
 ipcMain.on('persistent-storage-set', (event, payload) => {

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import {
   classifyMime,
@@ -17,18 +18,32 @@ const persistentStorageSource = readFileSync(
 );
 
 describe('electron-runtime-policy', () => {
-  it('acquires single-instance ownership before initializing native storage', () => {
-    // Given: each Electron process would otherwise retain an independent storage snapshot.
-    const lockIndex = mainSource.indexOf('app.requestSingleInstanceLock()');
-    const storageIndex = mainSource.indexOf('getPersistentStorage();', lockIndex);
+  it('returns a failure envelope when synchronous storage loading throws', () => {
+    // Given: the production get handler is backed by a native store that rejects malformed bytes.
+    const handlerSource = mainSource.match(
+      /ipcMain\.on\('persistent-storage-get',\s*(\(event, key\) => \{[\s\S]*?\n\})\);/u,
+    )?.[1];
+    expect(handlerSource).toBeDefined();
+    const handler = vm.runInNewContext(`(${handlerSource})`, {
+      assertTrustedRenderer: () => undefined,
+      getPersistentStorage: () => ({
+        getItem: () => {
+          throw Object.assign(new TypeError('invalid UTF-8'), { code: 'ERR_ENCODING' });
+        },
+      }),
+      LOCAL_APPLICATION_PATH_KEY: 'local-application-path',
+      approvedLocalApplicationPath: null,
+    });
+    const event = { sender: { id: 7 }, returnValue: undefined };
 
-    // When: startup ownership and storage initialization order are inspected.
-    expect(lockIndex).toBeGreaterThanOrEqual(0);
+    // When: the trusted renderer performs a synchronous read.
+    handler(event, 'opencode.settings.example.v1');
 
-    // Then: only the lock owner initializes storage and later launches focus that owner.
-    expect(lockIndex).toBeLessThan(storageIndex);
-    expect(mainSource).toContain("app.on('second-instance'");
-    expect(mainSource).toContain('mainWindow.focus()');
+    // Then: main responds with a serializable failure instead of leaving sendSync unresolved.
+    expect(event.returnValue).toEqual({
+      ok: false,
+      error: { name: 'TypeError', message: 'invalid UTF-8' },
+    });
   });
 
   describe('resolveAppRelativePath', () => {
