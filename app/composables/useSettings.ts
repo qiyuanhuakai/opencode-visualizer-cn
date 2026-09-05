@@ -233,11 +233,12 @@ function parseTextTransformers(value: string): TextTransformer[] | null {
 }
 
 function readTextTransformers() {
-  const raw = storageGet(StorageKeys.settings.textTransformers);
-  if (raw === null) return { value: [] as TextTransformer[], failed: false };
-  const normalized = parseTextTransformers(raw);
+  const stored = storageRead(StorageKeys.settings.textTransformers);
+  if (stored.kind === 'error') return { value: [] as TextTransformer[], failed: true };
+  if (stored.kind === 'missing') return { value: [] as TextTransformer[], failed: false };
+  const normalized = parseTextTransformers(stored.value);
   if (!normalized) return { value: [] as TextTransformer[], failed: true };
-  if (raw !== JSON.stringify(normalized)) {
+  if (stored.value !== JSON.stringify(normalized)) {
     return {
       value: normalized,
       failed: !storageSetJSON(StorageKeys.settings.textTransformers, normalized),
@@ -316,6 +317,7 @@ const textTransformersEnabled = ref(
 const initialTextTransformers = readTextTransformers();
 const textTransformers = ref<TextTransformer[]>(initialTextTransformers.value);
 const textTransformerPersistenceErrorRevision = ref(initialTextTransformers.failed ? 1 : 0);
+const textTransformerPersistenceSuccessRevision = ref(0);
 const textTransformerEnabledPersistenceErrorRevision = ref<number | null>(null);
 const textTransformerStorageRecoveryPending = ref(initialTextTransformers.failed);
 const localApplicationPath = ref(storageGet(StorageKeys.settings.localApplicationPath) ?? '');
@@ -513,6 +515,7 @@ function overwriteTextTransformerStorage(value: readonly TextTransformer[]): boo
     return false;
   }
   applyTextTransformerSnapshot(normalized);
+  textTransformerPersistenceSuccessRevision.value += 1;
   textTransformerStorageRecoveryPending.value = false;
   return true;
 }
@@ -575,8 +578,10 @@ watch(
     }
     if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized)) {
       lastPersistedTextTransformers = cloneTextTransformers(normalized);
+      textTransformerPersistenceSuccessRevision.value += 1;
     } else if (storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
       lastPersistedTextTransformers = cloneTextTransformers(normalized);
+      textTransformerPersistenceSuccessRevision.value += 1;
     } else {
       restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
       return;
@@ -866,6 +871,7 @@ export function useSettings() {
     textTransformersEnabled,
     textTransformers,
     textTransformerPersistenceErrorRevision,
+    textTransformerPersistenceSuccessRevision,
     textTransformerEnabledPersistenceErrorRevision,
     textTransformerStorageRecoveryPending,
     overwriteTextTransformerStorage,

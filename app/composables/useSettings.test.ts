@@ -315,6 +315,43 @@ describe('useSettings', () => {
     expect(settings.textTransformers.value).toEqual(newer);
   });
 
+  it('keeps the last valid snippet library when canonical storage temporarily fails to read', async () => {
+    // Given: one valid Snippet library is active and the next canonical read will fail.
+    const persisted = [
+      {
+        id: 'snippet-read-error',
+        trigger: 'read-error',
+        name: 'Read error guard',
+        body: 'Keep this library',
+        enabled: true,
+        tags: [],
+      },
+    ];
+    storage.setItem('opencode.settings.textTransformers.v1', JSON.stringify(persisted));
+    const settings = await importFresh();
+    const getItem = vi.spyOn(storage, 'getItem').mockImplementationOnce(() => {
+      throw new DOMException('Storage unavailable', 'InvalidStateError');
+    });
+
+    // When: a cross-window signal asks this window to reload during the failed read.
+    for (const listener of storageListeners) {
+      listener(
+        new StorageEvent('storage', {
+          key: 'opencode.settings.textTransformers.v1',
+          newValue: JSON.stringify([]),
+        }),
+      );
+    }
+    getItem.mockRestore();
+
+    // Then: the error is observable without being reinterpreted as an empty library.
+    expect(settings.textTransformers.value).toEqual(persisted);
+    expect(storage.getItem('opencode.settings.textTransformers.v1')).toBe(
+      JSON.stringify(persisted),
+    );
+    expect(Reflect.get(settings, 'textTransformerPersistenceErrorRevision')?.value).toBe(1);
+  });
+
   it('ignores a delayed snippet-enabled event after newer storage has committed', async () => {
     // Given: runtime and canonical storage both start with Snippets disabled.
     storage.setItem('opencode.settings.textTransformersEnabled.v1', 'false');
