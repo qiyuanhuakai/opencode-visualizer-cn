@@ -50,8 +50,6 @@ export {
   MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
   truncateTextTransformerString,
 } from './snippetImportLimits';
-const simpleCaseFoldCache = new Map<string, string>();
-
 function normalizeTrigger(value: string): string {
   return value.trim().replace(/^\\+/u, '');
 }
@@ -149,8 +147,8 @@ function isSingleCodePoint(value: string): boolean {
   return !iterator.next().done && iterator.next().done === true;
 }
 
-function simpleCaseFoldCharacter(character: string): string {
-  const cached = simpleCaseFoldCache.get(character);
+function simpleCaseFoldCharacter(character: string, foldCache: Map<string, string>): string {
+  const cached = foldCache.get(character);
   if (cached) return cached;
   const lowercase = character.toLowerCase();
   const lowerUpper = isSingleCodePoint(lowercase) ? lowercase.toUpperCase() : '';
@@ -163,8 +161,14 @@ function simpleCaseFoldCharacter(character: string): string {
         isSingleCodePoint(candidate) &&
         (candidate === character || hasSameTrigger(character, candidate)),
     ) ?? character;
-  simpleCaseFoldCache.set(character, key);
+  foldCache.set(character, key);
   return key;
+}
+
+function textTransformerTriggerKeyWithCache(value: string, foldCache: Map<string, string>): string {
+  return Array.from(normalizeTrigger(value), (character) =>
+    simpleCaseFoldCharacter(character, foldCache),
+  ).join('');
 }
 
 function hasImportableTrigger(value: unknown): boolean {
@@ -177,17 +181,18 @@ function hasImportableTrigger(value: unknown): boolean {
 }
 
 export function textTransformerTriggerKey(value: string): string {
-  return Array.from(normalizeTrigger(value), simpleCaseFoldCharacter).join('');
+  return textTransformerTriggerKeyWithCache(value, new Map());
 }
 
 export function normalizeTextTransformers(value: unknown): TextTransformer[] {
   if (!Array.isArray(value)) return [];
   const normalized = new Map<string, NormalizedSnippet>();
+  const foldCache = new Map<string, string>();
   for (const item of value) {
     if (typeof item !== 'object' || item === null) continue;
     const candidate = normalizeSnippet(item);
     if (!candidate) continue;
-    const triggerKey = textTransformerTriggerKey(candidate.snippet.trigger);
+    const triggerKey = textTransformerTriggerKeyWithCache(candidate.snippet.trigger, foldCache);
     normalized.delete(triggerKey);
     normalized.set(triggerKey, candidate);
   }

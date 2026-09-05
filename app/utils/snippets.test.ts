@@ -23,6 +23,27 @@ const snippet = {
 } as const;
 
 describe('snippet import and export', () => {
+  it('does not retain Unicode fold entries between trigger-key calls', () => {
+    // Given: a character whose case-fold path is observable and unique to this regression.
+    const originalToLowerCase = String.prototype.toLowerCase;
+    let callCount = 0;
+    String.prototype.toLowerCase = function () {
+      callCount += 1;
+      return originalToLowerCase.call(this);
+    };
+
+    try {
+      // When: separate operations normalize the same trigger.
+      textTransformerTriggerKey('\uE000');
+      textTransformerTriggerKey('\uE000');
+
+      // Then: each operation owns and releases its fold state instead of sharing a module cache.
+      expect(callCount).toBe(2);
+    } finally {
+      String.prototype.toLowerCase = originalToLowerCase;
+    }
+  });
+
   it('round-trips a versioned JSON backup without losing metadata', () => {
     // Given: a metadata-rich snippet is ready for backup.
     const exported = serializeTextTransformers([snippet]);
