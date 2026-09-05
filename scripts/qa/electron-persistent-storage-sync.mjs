@@ -50,6 +50,10 @@ async function evaluateStorageGet(page) {
   }
 }
 
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
 async function main() {
   const executablePath = process.env.VIS_ELECTRON_EXECUTABLE;
   if (!executablePath) {
@@ -83,24 +87,26 @@ async function main() {
 
     result.malformedRead = await evaluateStorageGet(page);
     result.malformedBytesPreserved = readFileSync(storagePath).equals(malformedBytes);
-    if (result.malformedRead?.kind !== 'error') {
-      throw new Error(
-        `malformed read did not fail locally: ${JSON.stringify(result.malformedRead)}`,
-      );
-    }
-    if (!result.malformedBytesPreserved) {
-      throw new Error('malformed native storage bytes changed during failed get');
-    }
+    assert(
+      result.malformedRead?.kind === 'error',
+      `malformed read did not fail locally: ${JSON.stringify(result.malformedRead)}`,
+    );
+    assert(
+      result.malformedBytesPreserved,
+      'malformed native storage bytes changed during failed get',
+    );
 
     writeFileSync(storagePath, JSON.stringify({ [STORAGE_KEY]: STORAGE_VALUE }));
     result.recoveredRead = await evaluateStorageGet(page);
-    result.sameProcessRecovery =
-      result.recoveredRead?.kind === 'value' && result.recoveredRead.value === STORAGE_VALUE;
-    if (!result.sameProcessRecovery) {
-      throw new Error(
-        `corrected storage did not recover in place: ${JSON.stringify(result.recoveredRead)}`,
-      );
-    }
+    assert(
+      result.recoveredRead?.kind === 'value',
+      `corrected storage did not return a value: ${JSON.stringify(result.recoveredRead)}`,
+    );
+    assert(
+      result.recoveredRead.value === STORAGE_VALUE,
+      `corrected storage returned the wrong value: ${JSON.stringify(result.recoveredRead)}`,
+    );
+    result.sameProcessRecovery = true;
     console.log(JSON.stringify({ pass: true, ...result }, null, 2));
   } finally {
     await closeBounded(app);
