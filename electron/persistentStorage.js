@@ -2,17 +2,23 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 function readStore(filePath, fileSystem) {
+  let source;
   try {
-    const parsed = JSON.parse(fileSystem.readFileSync(filePath, 'utf8'));
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return Object.fromEntries(
-        Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
-      );
-    }
-  } catch {
-    return {};
+    source = fileSystem.readFileSync(filePath, 'utf8');
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return {};
+    throw error;
   }
-  return {};
+  const parsed = JSON.parse(source);
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
+    Object.values(parsed).some((value) => typeof value !== 'string')
+  ) {
+    throw new TypeError('Persistent storage must be an object of string values');
+  }
+  return { ...parsed };
 }
 
 function writeStore(filePath, storage, fileSystem) {
@@ -32,6 +38,14 @@ function writeStore(filePath, storage, fileSystem) {
       fileSystem.closeSync(descriptor);
     }
     fileSystem.renameSync(temporaryFilePath, filePath);
+    if (process.platform !== 'win32') {
+      const directoryDescriptor = fileSystem.openSync(directory, 'r');
+      try {
+        fileSystem.fsyncSync(directoryDescriptor);
+      } finally {
+        fileSystem.closeSync(directoryDescriptor);
+      }
+    }
   } catch (error) {
     fileSystem.rmSync(temporaryFilePath, { force: true });
     throw error;
@@ -40,9 +54,14 @@ function writeStore(filePath, storage, fileSystem) {
 
 export function createPersistentStorage(filePath, fileSystem = fs) {
   let cache = null;
+  let durabilityPending = false;
+  let publishedStorage = null;
 
   const load = () => {
-    cache ??= readStore(filePath, fileSystem);
+    if (cache === null) {
+      cache = readStore(filePath, fileSystem);
+      publishedStorage ??= { ...cache };
+    }
     return cache;
   };
 
@@ -54,19 +73,34 @@ export function createPersistentStorage(filePath, fileSystem = fs) {
     setItem(key, value) {
       const storage = load();
       const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
+      if (oldValue === value && !durabilityPending) return oldValue;
       const nextStorage = { ...storage, [key]: value };
-      writeStore(filePath, nextStorage, fileSystem);
+      try {
+        writeStore(filePath, nextStorage, fileSystem);
+      } catch (error) {
+        cache = null;
+        durabilityPending = true;
+        throw error;
+      }
       cache = nextStorage;
+      durabilityPending = false;
       return oldValue;
     },
     removeItem(key) {
       const storage = load();
       const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
-      if (oldValue === null) return null;
+      if (oldValue === null && !durabilityPending) return null;
       const nextStorage = { ...storage };
       delete nextStorage[key];
-      writeStore(filePath, nextStorage, fileSystem);
+      try {
+        writeStore(filePath, nextStorage, fileSystem);
+      } catch (error) {
+        cache = null;
+        durabilityPending = true;
+        throw error;
+      }
       cache = nextStorage;
+      durabilityPending = false;
       return oldValue;
     },
     migrate(entries) {
@@ -78,9 +112,29 @@ export function createPersistentStorage(filePath, fileSystem = fs) {
         nextStorage[key] = value;
         changes.push({ key, oldValue: null, newValue: value });
       }
-      if (changes.length === 0) return changes;
-      writeStore(filePath, nextStorage, fileSystem);
+      if (changes.length === 0 && !durabilityPending) return changes;
+      try {
+        writeStore(filePath, nextStorage, fileSystem);
+      } catch (error) {
+        cache = null;
+        durabilityPending = true;
+        throw error;
+      }
       cache = nextStorage;
+      durabilityPending = false;
+      return changes;
+    },
+    drainPendingChanges() {
+      if (durabilityPending) return [];
+      const storage = load();
+      const changes = [];
+      const keys = new Set([...Object.keys(publishedStorage), ...Object.keys(storage)]);
+      for (const key of keys) {
+        const oldValue = Object.hasOwn(publishedStorage, key) ? publishedStorage[key] : null;
+        const newValue = Object.hasOwn(storage, key) ? storage[key] : null;
+        if (oldValue !== newValue) changes.push({ key, oldValue, newValue });
+      }
+      publishedStorage = { ...storage };
       return changes;
     },
   };

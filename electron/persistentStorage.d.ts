@@ -1,7 +1,7 @@
 export type PersistentStorageChange = Readonly<{
   key: string;
   oldValue: string | null;
-  newValue: string;
+  newValue: string | null;
 }>;
 
 export interface PersistentStorage {
@@ -9,6 +9,7 @@ export interface PersistentStorage {
   setItem(key: string, value: string): string | null;
   removeItem(key: string): string | null;
   migrate(entries: Readonly<Record<string, string>>): readonly PersistentStorageChange[];
+  drainPendingChanges(): readonly PersistentStorageChange[];
 }
 
 export interface PersistentStorageFileSystem {
