@@ -1,5 +1,10 @@
 <template>
-  <dialog ref="dialogRef" class="modal-backdrop" @close="$emit('close')" @cancel.prevent>
+  <dialog
+    ref="dialogRef"
+    class="modal-backdrop"
+    aria-labelledby="settings-modal-title"
+    @close="handleSettingsClosed"
+  >
     <div class="modal">
       <header class="modal-header">
         <div class="modal-header-main">
@@ -8,11 +13,11 @@
             type="button"
             class="modal-back-button"
             :aria-label="$t('settings.backToRoot')"
-            @click="activePage = 'root'"
+            @click="goBackInSettings"
           >
             <Icon icon="lucide:arrow-left" :width="14" :height="14" />
           </button>
-          <div class="modal-title">{{ pageTitle }}</div>
+          <div id="settings-modal-title" class="modal-title">{{ pageTitle }}</div>
         </div>
         <button
           type="button"
@@ -156,97 +161,349 @@
         </template>
 
         <template v-else-if="activePage === 'transformers'">
-          <div class="setting-page-description">
-            {{ $t('settings.textTransformers.pageDescription') }}
-          </div>
-
-          <ToggleSettingRow
-            v-model="textTransformersEnabled"
-            :label="$t('settings.textTransformers.enabledLabel')"
-            :description="$t('settings.textTransformers.enabledDescription')"
-            :label-id="textTransformerToggleLabelId"
-            :description-id="textTransformerToggleDescriptionId"
-            :aria-labelledby="textTransformerToggleLabelId"
-            :aria-describedby="textTransformerToggleDescriptionId"
-          />
-
-          <div class="setting-row setting-row-stack transformer-settings-section">
-            <div class="transformer-heading">
-              <div class="setting-info">
-                <div class="setting-label">{{ $t('settings.textTransformers.mappingLabel') }}</div>
-                <div class="setting-description">
-                  {{ $t('settings.textTransformers.mappingDescription') }}
-                </div>
-              </div>
-              <button type="button" class="font-system-button" @click="addTextTransformer">
-                {{ $t('settings.textTransformers.add') }}
-              </button>
-            </div>
-
-            <div v-if="textTransformers.length === 0" class="transformer-empty">
-              {{ $t('settings.textTransformers.empty') }}
-            </div>
-            <div v-else class="transformer-list">
-              <div
-                v-for="(transformer, index) in textTransformers"
-                :key="index"
-                class="transformer-row"
+          <div
+            v-if="editingTextTransformer"
+            :key="`${editingTextTransformer.id}-${textTransformerPersistenceErrorRevision}`"
+            class="setting-row setting-row-stack transformer-detail"
+          >
+            <div class="transformer-detail-header">
+              <span
+                class="transformer-detail-status"
+                :class="{
+                  'is-error': textTransformerImportStatus?.kind === 'error',
+                }"
+                role="status"
+                aria-live="polite"
               >
-                <label class="transformer-field">
-                  <span class="transformer-field-label">
-                    {{ $t('settings.textTransformers.sequenceLabel') }}
-                  </span>
-                  <span class="transformer-sequence-control">
-                    <span class="transformer-prefix">\</span>
-                    <input
-                      :id="textTransformerTriggerInputId(index)"
-                      :value="transformer.trigger"
-                      type="text"
-                      class="transformer-input transformer-sequence-input"
-                      spellcheck="false"
-                      autocomplete="off"
-                      :placeholder="$t('settings.textTransformers.sequencePlaceholder')"
-                      :aria-invalid="Boolean(textTransformerTriggerError(index))"
-                      :aria-describedby="
-                        textTransformerTriggerError(index)
-                          ? textTransformerTriggerErrorId(index)
-                          : undefined
-                      "
-                      @input="updateTextTransformer(index, 'trigger', $event)"
-                    />
-                  </span>
-                  <span
-                    v-if="textTransformerTriggerError(index)"
-                    :id="textTransformerTriggerErrorId(index)"
-                    class="transformer-error"
-                  >
-                    {{ textTransformerTriggerError(index) }}
-                  </span>
-                </label>
-                <label class="transformer-field">
-                  <span class="transformer-field-label">
-                    {{ $t('settings.textTransformers.replacementLabel') }}
-                  </span>
-                  <input
-                    :value="transformer.replacement"
-                    type="text"
-                    class="transformer-input"
-                    :placeholder="$t('settings.textTransformers.replacementPlaceholder')"
-                    @input="updateTextTransformer(index, 'replacement', $event)"
-                  />
-                </label>
+                {{
+                  textTransformerImportStatus?.kind === 'error'
+                    ? textTransformerImportStatus.message
+                    : $t('settings.textTransformers.autoSave')
+                }}
+              </span>
+              <div v-if="editingTextTransformerConflicted" class="transformer-conflict-actions">
                 <button
                   type="button"
-                  class="transformer-remove"
-                  :aria-label="$t('settings.textTransformers.remove')"
-                  :title="$t('settings.textTransformers.remove')"
-                  @click="removeTextTransformer(index)"
+                  class="font-system-button transformer-conflict-reload"
+                  @click="reloadTextTransformerDraft(editingTextTransformer.id)"
                 >
-                  <Icon icon="lucide:trash-2" :width="14" :height="14" />
+                  {{ $t('settings.textTransformers.reloadSaved') }}
+                </button>
+                <button
+                  type="button"
+                  class="font-system-button transformer-conflict-overwrite"
+                  @click="overwriteTextTransformerDraft(editingTextTransformer.id)"
+                >
+                  {{ $t('settings.textTransformers.overwriteSaved') }}
                 </button>
               </div>
             </div>
+            <div class="transformer-row-grid">
+              <label class="transformer-field">
+                <span class="transformer-field-label">
+                  {{ $t('settings.textTransformers.sequenceLabel') }}
+                </span>
+                <input
+                  :id="textTransformerTriggerInputId(editingTextTransformerIndex)"
+                  :value="editingTextTransformer.trigger"
+                  data-snippet-field="trigger"
+                  type="text"
+                  class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH"
+                  spellcheck="false"
+                  autocomplete="off"
+                  :placeholder="$t('settings.textTransformers.sequencePlaceholder')"
+                  :aria-invalid="Boolean(textTransformerTriggerError(editingTextTransformerIndex))"
+                  :aria-describedby="
+                    textTransformerTriggerError(editingTextTransformerIndex)
+                      ? textTransformerTriggerErrorId(editingTextTransformerIndex)
+                      : undefined
+                  "
+                  @input="updateTextTransformerField(editingTextTransformer.id, 'trigger', $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
+                />
+                <span
+                  v-if="textTransformerTriggerError(editingTextTransformerIndex)"
+                  :id="textTransformerTriggerErrorId(editingTextTransformerIndex)"
+                  class="transformer-error"
+                >
+                  {{ textTransformerTriggerError(editingTextTransformerIndex) }}
+                </span>
+              </label>
+              <label class="transformer-field">
+                <span class="transformer-field-label">{{
+                  $t('settings.textTransformers.nameLabel')
+                }}</span>
+                <input
+                  :value="editingTextTransformer.name"
+                  data-snippet-field="name"
+                  type="text"
+                  class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_NAME_LENGTH"
+                  autocomplete="off"
+                  :placeholder="$t('settings.textTransformers.namePlaceholder')"
+                  @input="updateTextTransformerField(editingTextTransformer.id, 'name', $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
+                />
+              </label>
+              <label class="transformer-field">
+                <span class="transformer-field-label">
+                  {{ $t('settings.textTransformers.descriptionLabel') }}
+                </span>
+                <input
+                  :value="editingTextTransformer.description ?? ''"
+                  data-snippet-field="description"
+                  type="text"
+                  class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH"
+                  autocomplete="off"
+                  :placeholder="$t('settings.textTransformers.descriptionPlaceholder')"
+                  @input="
+                    updateTextTransformerField(editingTextTransformer.id, 'description', $event)
+                  "
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
+                />
+              </label>
+              <label class="transformer-field">
+                <span class="transformer-field-label">{{
+                  $t('settings.textTransformers.tagsLabel')
+                }}</span>
+                <input
+                  :value="textTransformerTagText(editingTextTransformer)"
+                  data-snippet-field="tags"
+                  type="text"
+                  class="transformer-input"
+                  :maxlength="MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH"
+                  autocomplete="off"
+                  :placeholder="$t('settings.textTransformers.tagsPlaceholder')"
+                  @input="updateTextTransformerTags(editingTextTransformer.id, $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
+                />
+              </label>
+              <label class="transformer-field transformer-field-body">
+                <span class="transformer-field-label">{{
+                  $t('settings.textTransformers.bodyLabel')
+                }}</span>
+                <textarea
+                  :value="editingTextTransformer.body"
+                  data-snippet-field="body"
+                  class="transformer-input transformer-body"
+                  rows="7"
+                  :maxlength="MAX_TEXT_TRANSFORMER_BODY_LENGTH"
+                  spellcheck="false"
+                  :placeholder="$t('settings.textTransformers.bodyPlaceholder')"
+                  @input="updateTextTransformerField(editingTextTransformer.id, 'body', $event)"
+                  @change="commitTextTransformerDraft(editingTextTransformer.id)"
+                />
+                <span class="transformer-variable-help">
+                  <span>{{ $t('settings.textTransformers.variablesLabel') }}</span>
+                  <code v-for="variable in textTransformerVariables" :key="variable">
+                    {{ variable }}
+                  </code>
+                </span>
+              </label>
+            </div>
           </div>
+
+          <template v-else>
+            <div class="setting-page-description">
+              {{ $t('settings.textTransformers.pageDescription') }}
+            </div>
+            <ToggleSettingRow
+              :key="`text-transformers-enabled-${textTransformerPersistenceErrorRevision}`"
+              v-model="textTransformersEnabled"
+              :label="$t('settings.textTransformers.enabledLabel')"
+              :description="$t('settings.textTransformers.enabledDescription')"
+              :label-id="textTransformerToggleLabelId"
+              :description-id="textTransformerToggleDescriptionId"
+              :aria-labelledby="textTransformerToggleLabelId"
+              :aria-describedby="textTransformerToggleDescriptionId"
+            />
+            <div class="setting-row setting-row-stack transformer-settings-section">
+              <div class="transformer-heading">
+                <div class="setting-info">
+                  <div class="setting-label">
+                    {{ $t('settings.textTransformers.mappingLabel') }}
+                  </div>
+                  <div class="setting-description">
+                    {{ $t('settings.textTransformers.mappingDescription') }}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  class="font-system-button transformer-add"
+                  @click="addTextTransformer"
+                >
+                  {{ $t('settings.textTransformers.add') }}
+                </button>
+              </div>
+              <div class="transformer-toolbar">
+                <div
+                  v-if="transformerTagFilters.length > 0"
+                  class="transformer-tag-filters"
+                  role="group"
+                  :aria-label="$t('settings.textTransformers.filterByTag')"
+                >
+                  <button
+                    type="button"
+                    class="transformer-tag-filter"
+                    :class="{ 'is-active': activeTagFilter === null }"
+                    :aria-pressed="activeTagFilter === null"
+                    @click="activeTagFilter = null"
+                  >
+                    {{ $t('settings.textTransformers.allTags') }}
+                  </button>
+                  <button
+                    v-for="tag in transformerTagFilters"
+                    :key="tag"
+                    type="button"
+                    class="transformer-tag-filter"
+                    :class="{ 'is-active': activeTagFilter === tag }"
+                    :aria-pressed="activeTagFilter === tag"
+                    @click="toggleTagFilter(tag)"
+                  >
+                    {{ tag }}
+                  </button>
+                </div>
+                <div class="transformer-actions">
+                  <label class="font-system-button transformer-import-button">
+                    <input
+                      class="transformer-import-input"
+                      type="file"
+                      accept="application/json,.json"
+                      :aria-label="$t('settings.textTransformers.importAction')"
+                      @change="importTextTransformers"
+                    />
+                    {{ $t('settings.textTransformers.importAction') }}
+                  </label>
+                  <button
+                    type="button"
+                    class="font-system-button transformer-export"
+                    @click="exportTextTransformers"
+                  >
+                    {{ $t('settings.textTransformers.exportAction') }}
+                  </button>
+                </div>
+              </div>
+              <div
+                class="transformer-import-status"
+                :class="textTransformerImportStatus ? `is-${textTransformerImportStatus.kind}` : ''"
+                role="status"
+                aria-live="polite"
+              >
+                {{ textTransformerImportStatus?.message }}
+              </div>
+              <div v-if="visibleTextTransformers.length === 0" class="transformer-empty">
+                {{ transformerEmptyText }}
+              </div>
+              <div v-else class="transformer-list">
+                <div
+                  v-for="entry in visibleTextTransformers"
+                  :key="entry.snippet.id"
+                  class="transformer-row"
+                  :class="{ 'is-disabled': !entry.snippet.enabled }"
+                >
+                  <SnippetCompletion
+                    :snippet="entry.snippet"
+                    :sequence="textTransformerDisplayTrigger(entry.snippet)"
+                  />
+                  <div class="transformer-row-actions">
+                    <button
+                      type="button"
+                      class="transformer-action-button transformer-enable"
+                      :class="{ 'is-active': entry.snippet.enabled }"
+                      :disabled="Boolean(textTransformerTriggerError(entry.index))"
+                      :aria-label="
+                        textTransformerTriggerError(entry.index) ||
+                        $t(
+                          entry.snippet.enabled
+                            ? 'settings.textTransformers.disableAction'
+                            : 'settings.textTransformers.enableAction',
+                          { name: textTransformerTitle(entry.snippet) },
+                        )
+                      "
+                      :aria-pressed="entry.snippet.enabled"
+                      :title="
+                        textTransformerTriggerError(entry.index) ||
+                        $t(
+                          entry.snippet.enabled
+                            ? 'settings.textTransformers.disableAction'
+                            : 'settings.textTransformers.enableAction',
+                          { name: textTransformerTitle(entry.snippet) },
+                        )
+                      "
+                      @click="toggleTextTransformerEnabled(entry.snippet.id)"
+                    >
+                      <Icon
+                        :icon="entry.snippet.enabled ? 'lucide:circle-check' : 'lucide:circle'"
+                        :width="16"
+                        :height="16"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      class="transformer-action-button transformer-remove"
+                      :aria-label="$t('settings.textTransformers.remove')"
+                      :title="$t('settings.textTransformers.remove')"
+                      @click="removeTextTransformer(entry.snippet.id)"
+                    >
+                      <Icon icon="lucide:trash-2" :width="16" :height="16" />
+                    </button>
+                    <button
+                      type="button"
+                      class="transformer-action-button transformer-edit"
+                      :data-snippet-id="entry.snippet.id"
+                      :aria-label="
+                        $t('settings.textTransformers.editAction', {
+                          name: textTransformerTitle(entry.snippet),
+                        })
+                      "
+                      :title="
+                        $t('settings.textTransformers.editAction', {
+                          name: textTransformerTitle(entry.snippet),
+                        })
+                      "
+                      @click="openTextTransformerDetail(entry.snippet.id)"
+                    >
+                      <Icon icon="lucide:pencil" :width="16" :height="16" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div
+                v-if="textTransformerPageCount > 1"
+                class="transformer-pagination"
+                aria-live="polite"
+              >
+                <button
+                  type="button"
+                  class="transformer-action-button transformer-page-previous"
+                  :disabled="textTransformerPage === 0"
+                  :aria-label="$t('settings.textTransformers.previousPage')"
+                  @click="textTransformerPage -= 1"
+                >
+                  <Icon icon="lucide:chevron-left" :width="16" :height="16" />
+                </button>
+                <span class="transformer-pagination-status">
+                  {{
+                    $t('settings.textTransformers.pageStatus', {
+                      current: textTransformerPage + 1,
+                      total: textTransformerPageCount,
+                    })
+                  }}
+                </span>
+                <button
+                  type="button"
+                  class="transformer-action-button transformer-page-next"
+                  :disabled="textTransformerPage + 1 >= textTransformerPageCount"
+                  :aria-label="$t('settings.textTransformers.nextPage')"
+                  @click="textTransformerPage += 1"
+                >
+                  <Icon icon="lucide:chevron-right" :width="16" :height="16" />
+                </button>
+              </div>
+            </div>
+          </template>
         </template>
 
         <template v-else-if="activePage === 'theme'">
@@ -650,16 +907,37 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, watchEffect, type Ref } from 'vue';
+import { computed, nextTick, onMounted, ref, shallowRef, watch, watchEffect, type Ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import SettingRow from './SettingRow.vue';
+import SnippetCompletion from './SnippetCompletion.vue';
 import ToggleSettingRow from './ToggleSettingRow.vue';
 import { useSettings } from '../composables/useSettings';
-import { getTextTransformerTriggerIssue } from '../utils/textTransformers';
+import { getTextTransformerTriggerIssue, textTransformerSequence } from '../utils/textTransformers';
+import {
+  mergeTextTransformers,
+  MAX_TEXT_TRANSFORMER_BODY_LENGTH,
+  MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH,
+  MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
+  MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_NAME_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAG_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAGS,
+  MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
+  isValidTextTransformerTrigger,
+  parseTextTransformerImport,
+  serializeTextTransformers,
+  truncateTextTransformerString,
+  validateTextTransformerLibrary,
+  type TextTransformer,
+  type TextTransformerImportResult,
+} from '../utils/snippets';
 import { useI18n } from 'vue-i18n';
 import { getLocale, setLocale } from '../i18n';
 import type { Locale } from '../i18n/types';
-import { downloadJsonFile } from '../utils/fileExport';
+import { downloadJsonFile, downloadTextFile } from '../utils/fileExport';
+import { StorageKeys, storageSetJSON } from '../utils/storageKeys';
 import {
   formatShortcutForDisplay,
   shortcutFromKeyboardEvent,
@@ -706,9 +984,10 @@ type ThemePresetCard = {
 
 const props = defineProps<{
   open: boolean;
+  initialPage?: SettingsPage;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   (event: 'close'): void;
 }>();
 
@@ -782,6 +1061,12 @@ const {
   editorShortcuts,
   textTransformersEnabled,
   textTransformers,
+  textTransformerPersistenceErrorRevision,
+  textTransformerPersistenceSuccessRevision,
+  textTransformerEnabledPersistenceErrorRevision,
+  textTransformerStorageRecoveryPending,
+  overwriteTextTransformerStorage,
+  reloadTextTransformerStorage,
   localApplicationPath,
   defaultEditorShortcuts,
   minEditorFontSizePx,
@@ -1225,27 +1510,595 @@ function resetEditorShortcuts() {
   editorShortcuts.value = { ...defaultEditorShortcuts };
 }
 
+const activeTagFilter = ref<string | null>(null);
+const editingTextTransformerId = ref<string | null>(null);
+type TextTransformerDraft = {
+  readonly snippet: TextTransformer;
+  readonly base: TextTransformer | null;
+  readonly conflicted?: boolean;
+  readonly persistenceFailed?: boolean;
+};
+const textTransformerDrafts = shallowRef<Record<string, TextTransformerDraft>>({});
+const TEXT_TRANSFORMER_PAGE_SIZE = 50;
+const textTransformerPage = ref(0);
+const textTransformerVariables = [
+  '{cursor}',
+  '{date}',
+  '{time}',
+  '{datetime}',
+  '{uuid}',
+  '{clipboard}',
+  '{activeFile}',
+  '{cwd}',
+  '{selection}',
+] as const;
+const textTransformerTagDrafts = shallowRef<Record<string, string>>({});
+const textTransformerImportStatus = ref<{ kind: 'success' | 'error'; message: string } | null>(
+  null,
+);
+let textTransformerImportGeneration = 0;
+
+function textTransformerDraft(id: string): TextTransformerDraft | undefined {
+  const drafts = textTransformerDrafts.value;
+  return Object.hasOwn(drafts, id) ? drafts[id] : undefined;
+}
+
+function textTransformerTagDraft(id: string): string | undefined {
+  const drafts = textTransformerTagDrafts.value;
+  return Object.hasOwn(drafts, id) ? drafts[id] : undefined;
+}
+
+function showTextTransformerPersistenceError() {
+  textTransformerImportStatus.value = {
+    kind: 'error',
+    message: t('settings.textTransformers.saveError'),
+  };
+}
+
+watch(textTransformerPersistenceErrorRevision, showTextTransformerPersistenceError, {
+  immediate: textTransformerPersistenceErrorRevision.value > 0,
+  flush: 'sync',
+});
+
+watch(
+  textTransformerPersistenceSuccessRevision,
+  () => {
+    if (
+      textTransformerImportStatus.value?.kind === 'error' &&
+      textTransformerImportStatus.value.message === t('settings.textTransformers.saveError')
+    ) {
+      textTransformerImportStatus.value = null;
+    }
+  },
+  { flush: 'sync' },
+);
+
+watch(
+  textTransformerEnabledPersistenceErrorRevision,
+  (revision) => {
+    if (
+      revision === null &&
+      textTransformerImportStatus.value?.kind === 'error' &&
+      textTransformerImportStatus.value.message === t('settings.textTransformers.saveError')
+    ) {
+      textTransformerImportStatus.value = null;
+    }
+  },
+  { flush: 'sync' },
+);
+
+const displayedTextTransformers = computed(() => {
+  const persistedIds = new Set(textTransformers.value.map(({ id }) => id));
+  const displayed = textTransformers.value.map(
+    (snippet) => textTransformerDraft(snippet.id)?.snippet ?? snippet,
+  );
+  for (const draft of Object.values(textTransformerDrafts.value)) {
+    if (!persistedIds.has(draft.snippet.id)) displayed.push(draft.snippet);
+  }
+  return displayed;
+});
+
+const transformerTagFilters = computed(() => {
+  const tags: string[] = [];
+  const keys = new Set<string>();
+  for (const snippet of displayedTextTransformers.value) {
+    for (const tag of snippet.tags) {
+      const key = tag.toLocaleLowerCase();
+      if (keys.has(key)) continue;
+      keys.add(key);
+      tags.push(tag);
+    }
+  }
+  return tags;
+});
+
+function reconcileActiveTagFilter(tags: readonly string[]) {
+  const active = activeTagFilter.value;
+  if (!active) return;
+  const canonical = tags.find((tag) => tag.toLocaleLowerCase() === active.toLocaleLowerCase());
+  if (canonical) activeTagFilter.value = canonical;
+  else if (!editingTextTransformerId.value) activeTagFilter.value = null;
+}
+
+watch(transformerTagFilters, reconcileActiveTagFilter);
+
+const filteredTextTransformers = computed(() => {
+  const entries = displayedTextTransformers.value.map((snippet, index) => ({ snippet, index }));
+  const filter = activeTagFilter.value;
+  if (!filter) return entries;
+  const lowered = filter.toLocaleLowerCase();
+  return entries.filter(({ snippet }) =>
+    snippet.tags.some((tag) => tag.toLocaleLowerCase() === lowered),
+  );
+});
+const textTransformerPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredTextTransformers.value.length / TEXT_TRANSFORMER_PAGE_SIZE)),
+);
+const visibleTextTransformers = computed(() => {
+  const start = textTransformerPage.value * TEXT_TRANSFORMER_PAGE_SIZE;
+  return filteredTextTransformers.value.slice(start, start + TEXT_TRANSFORMER_PAGE_SIZE);
+});
+
+watch(activeTagFilter, () => {
+  textTransformerPage.value = 0;
+});
+watch(textTransformerPageCount, (count) => {
+  textTransformerPage.value = Math.min(textTransformerPage.value, count - 1);
+});
+
+const editingTextTransformerIndex = computed(() =>
+  displayedTextTransformers.value.findIndex(
+    (snippet) => snippet.id === editingTextTransformerId.value,
+  ),
+);
+const editingTextTransformer = computed(
+  () => displayedTextTransformers.value[editingTextTransformerIndex.value] ?? null,
+);
+const editingTextTransformerConflicted = computed(() =>
+  Boolean(textTransformerDraft(editingTextTransformerId.value ?? '')?.conflicted),
+);
+
+const transformerEmptyText = computed(() =>
+  displayedTextTransformers.value.length === 0
+    ? t('settings.textTransformers.empty')
+    : t('settings.textTransformers.emptyFiltered'),
+);
+
+function toggleTagFilter(tag: string) {
+  activeTagFilter.value = activeTagFilter.value === tag ? null : tag;
+}
+
+function textTransformerTitle(snippet: TextTransformer) {
+  const name = snippet.name.trim();
+  if (name) return name;
+  const trigger = snippet.trigger.trim();
+  if (trigger) return trigger;
+  return t('settings.textTransformers.untitled');
+}
+
+function textTransformerDisplayTrigger(snippet: TextTransformer) {
+  return textTransformerSequence(snippet);
+}
+
+function goBackInSettings() {
+  if (activePage.value === 'transformers' && editingTextTransformerId.value) {
+    const id = editingTextTransformerId.value;
+    if (!commitTextTransformerDraft(id)) {
+      const draft = textTransformerDraft(id);
+      if (draft?.conflicted || draft?.persistenceFailed) return;
+      editingTextTransformerId.value = null;
+      revealTextTransformerListAction(id);
+      return;
+    }
+    removeTextTransformerDraft(id);
+    editingTextTransformerId.value = null;
+    revealTextTransformerListAction(id);
+    return;
+  }
+  activePage.value = 'root';
+}
+
+function textTransformerTagText(snippet: TextTransformer) {
+  return textTransformerTagDraft(snippet.id) ?? snippet.tags.join(', ');
+}
+
+function parseTextTransformerTags(value: string): string[] {
+  const tags: string[] = [];
+  const keys = new Set<string>();
+  let start = 0;
+  while (start <= value.length && tags.length < MAX_TEXT_TRANSFORMER_TAGS) {
+    const separator = value.indexOf(',', start);
+    const end = separator === -1 ? value.length : separator;
+    const tag = truncateTextTransformerString(
+      value.slice(start, end).trim(),
+      MAX_TEXT_TRANSFORMER_TAG_LENGTH,
+    );
+    const key = tag.toLocaleLowerCase();
+    if (tag && !keys.has(key)) {
+      keys.add(key);
+      tags.push(tag);
+    }
+    if (separator === -1) break;
+    start = separator + 1;
+  }
+  return tags;
+}
+
+function cloneTextTransformer(snippet: TextTransformer): TextTransformer {
+  return { ...snippet, tags: [...snippet.tags] };
+}
+
+function sameTextTransformer(
+  left: TextTransformer | null | undefined,
+  right: TextTransformer | null | undefined,
+): boolean {
+  if (!left || !right) return !left && !right;
+  const values = (snippet: TextTransformer) => [
+    snippet.id,
+    snippet.trigger,
+    snippet.name,
+    snippet.body,
+    snippet.description,
+    snippet.enabled,
+    snippet.tags,
+  ];
+  return JSON.stringify(values(left)) === JSON.stringify(values(right));
+}
+
+function setTextTransformerDraft(id: string, draft: TextTransformerDraft) {
+  textTransformerDrafts.value = { ...textTransformerDrafts.value, [id]: draft };
+}
+
+function removeTextTransformerDraft(id: string) {
+  const drafts = { ...textTransformerDrafts.value };
+  delete drafts[id];
+  textTransformerDrafts.value = drafts;
+  const tagDrafts = { ...textTransformerTagDrafts.value };
+  delete tagDrafts[id];
+  textTransformerTagDrafts.value = tagDrafts;
+}
+
+watch(activePage, (page) => {
+  if (page !== 'transformers' || editingTextTransformerId.value) return;
+  editingTextTransformerId.value = Object.keys(textTransformerDrafts.value)[0] ?? null;
+});
+
+function openTextTransformerDetail(id: string) {
+  if (!textTransformerDraft(id)) {
+    const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+    if (!persisted) return;
+    const base = cloneTextTransformer(persisted);
+    setTextTransformerDraft(id, { snippet: cloneTextTransformer(persisted), base });
+  }
+  editingTextTransformerId.value = id;
+  focusTextTransformerTrigger();
+}
+
+function focusTextTransformerTrigger() {
+  void nextTick(() => {
+    modalBody.value?.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')?.focus();
+  });
+}
+
+function focusTextTransformerListAction(id: string) {
+  void nextTick(() => {
+    const actions = modalBody.value?.querySelectorAll<HTMLButtonElement>('.transformer-edit');
+    Array.from(actions ?? [])
+      .find((action) => action.dataset.snippetId === id)
+      ?.focus();
+  });
+}
+
+function revealTextTransformerListAction(id: string) {
+  const visibleIndex = filteredTextTransformers.value.findIndex(({ snippet }) => snippet.id === id);
+  if (visibleIndex >= 0) {
+    textTransformerPage.value = Math.floor(visibleIndex / TEXT_TRANSFORMER_PAGE_SIZE);
+    focusTextTransformerListAction(id);
+    return;
+  }
+  activeTagFilter.value = null;
+  void nextTick(() => {
+    const index = filteredTextTransformers.value.findIndex(({ snippet }) => snippet.id === id);
+    if (index >= 0) textTransformerPage.value = Math.floor(index / TEXT_TRANSFORMER_PAGE_SIZE);
+    focusTextTransformerListAction(id);
+  });
+}
+
+function updateTextTransformerDraft(
+  id: string,
+  update: (snippet: TextTransformer) => TextTransformer,
+) {
+  const draft = textTransformerDraft(id);
+  if (!draft) return;
+  setTextTransformerDraft(id, { ...draft, snippet: update(draft.snippet) });
+}
+
+function rejectTextTransformerDraftConflict(id: string, draft: TextTransformerDraft): false {
+  setTextTransformerDraft(id, { ...draft, conflicted: true });
+  textTransformerImportStatus.value = {
+    kind: 'error',
+    message: t('settings.textTransformers.conflictError'),
+  };
+  return false;
+}
+
+function candidateTextTransformerLibrary(
+  id: string,
+  draft: TextTransformer,
+  persisted: TextTransformer | undefined,
+): TextTransformer[] {
+  return persisted
+    ? textTransformers.value.map((snippet) => (snippet.id === id ? draft : snippet))
+    : [...textTransformers.value, draft];
+}
+
+function persistTextTransformerCandidate(
+  candidate: TextTransformer[],
+  overwriteStorageConflict: boolean,
+): boolean {
+  if (overwriteStorageConflict) return overwriteTextTransformerStorage(candidate);
+  textTransformers.value = candidate;
+  return true;
+}
+
+function validateTextTransformerCandidate(candidate: readonly TextTransformer[]) {
+  const validated = validateTextTransformerLibrary(candidate);
+  if (validated) return validated;
+  textTransformerImportStatus.value = {
+    kind: 'error',
+    message: t('settings.textTransformers.importErrors.invalidSnippets'),
+  };
+  return null;
+}
+
+function finalizeTextTransformerDraftCommit(id: string, validated: readonly TextTransformer[]) {
+  const committed = textTransformers.value.find((snippet) => snippet.id === id);
+  const expected = validated.find((snippet) => snippet.id === id);
+  if (!committed || !sameTextTransformer(committed, expected)) return false;
+  const normalized = cloneTextTransformer(committed);
+  setTextTransformerDraft(id, {
+    snippet: normalized,
+    base: cloneTextTransformer(normalized),
+    conflicted: false,
+    persistenceFailed: false,
+  });
+  textTransformerImportStatus.value = null;
+  return true;
+}
+
+function textTransformerDraftCommitContext(
+  id: string,
+  draft: TextTransformerDraft,
+  overwriteStorageConflict: boolean,
+): { persisted: TextTransformer | undefined } | null {
+  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+  if (overwriteStorageConflict) return { persisted };
+  if (draft.conflicted) return null;
+  if (textTransformerStorageRecoveryPending.value || !sameTextTransformer(draft.base, persisted)) {
+    rejectTextTransformerDraftConflict(id, draft);
+    return null;
+  }
+  return { persisted };
+}
+
+function commitTextTransformerDraft(id: string, overwriteStorageConflict = false): boolean {
+  const draft = textTransformerDraft(id);
+  if (!draft) return true;
+  const persistenceErrorRevision = textTransformerPersistenceErrorRevision.value;
+  const context = textTransformerDraftCommitContext(id, draft, overwriteStorageConflict);
+  if (!context) return false;
+  const candidate = candidateTextTransformerLibrary(id, draft.snippet, context.persisted);
+  const validated = validateTextTransformerCandidate(candidate);
+  if (!validated) return false;
+  const persisted = persistTextTransformerCandidate(validated, overwriteStorageConflict);
+  const finalized = persisted && finalizeTextTransformerDraftCommit(id, validated);
+  if (!finalized && textTransformerPersistenceErrorRevision.value !== persistenceErrorRevision) {
+    const retained = textTransformerDraft(id);
+    if (retained) setTextTransformerDraft(id, { ...retained, persistenceFailed: true });
+  }
+  return finalized;
+}
+
+function reloadTextTransformerDraft(id: string) {
+  if (textTransformerStorageRecoveryPending.value && !reloadTextTransformerStorage()) {
+    const draft = textTransformerDraft(id);
+    if (draft) setTextTransformerDraft(id, { ...draft, conflicted: true });
+    return;
+  }
+  const persisted = textTransformers.value.find((snippet) => snippet.id === id);
+  if (!persisted) {
+    removeTextTransformerDraft(id);
+    editingTextTransformerId.value = null;
+    return;
+  }
+  const reloaded = cloneTextTransformer(persisted);
+  setTextTransformerDraft(id, {
+    snippet: reloaded,
+    base: cloneTextTransformer(reloaded),
+    conflicted: false,
+    persistenceFailed: false,
+  });
+  textTransformerTagDrafts.value = {
+    ...textTransformerTagDrafts.value,
+    [id]: reloaded.tags.join(', '),
+  };
+  textTransformerImportStatus.value = null;
+}
+
+function overwriteTextTransformerDraft(id: string) {
+  commitTextTransformerDraft(id, true);
+}
+
+function finalizeEditingTextTransformer() {
+  const id = editingTextTransformerId.value;
+  if (!id) return;
+  if (commitTextTransformerDraft(id)) removeTextTransformerDraft(id);
+  editingTextTransformerId.value = null;
+}
+
+function handleSettingsClosed() {
+  finalizeEditingTextTransformer();
+  emit('close');
+}
+
 function addTextTransformer() {
-  textTransformers.value = [...textTransformers.value, { trigger: '', replacement: '' }];
+  const draft: TextTransformer = {
+    id: `snippet-${globalThis.crypto.randomUUID()}`,
+    trigger: '',
+    name: '',
+    body: '',
+    enabled: true,
+    tags: [],
+  };
+  setTextTransformerDraft(draft.id, { snippet: draft, base: null });
+  editingTextTransformerId.value = draft.id;
+  focusTextTransformerTrigger();
 }
 
-function removeTextTransformer(index: number) {
-  textTransformers.value = textTransformers.value.filter((_, itemIndex) => itemIndex !== index);
+function removeTextTransformer(id: string) {
+  removeTextTransformerDraft(id);
+  textTransformers.value = textTransformers.value.filter((snippet) => snippet.id !== id);
+  if (editingTextTransformerId.value === id) editingTextTransformerId.value = null;
 }
 
-function updateTextTransformer(index: number, field: 'trigger' | 'replacement', event: Event) {
+type TextTransformerEditableField = 'trigger' | 'name' | 'description' | 'body';
+
+const TEXT_TRANSFORMER_FIELD_LIMITS: Record<TextTransformerEditableField, number> = {
+  trigger: MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
+  name: MAX_TEXT_TRANSFORMER_NAME_LENGTH,
+  description: MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH,
+  body: MAX_TEXT_TRANSFORMER_BODY_LENGTH,
+};
+
+function updateTextTransformerField(id: string, field: TextTransformerEditableField, event: Event) {
   const input = event.target;
-  if (!(input instanceof HTMLInputElement)) return;
-  const current = textTransformers.value[index];
-  if (!current) return;
-  const value = field === 'trigger' ? input.value.replace(/^\\+/u, '') : input.value;
-  textTransformers.value = textTransformers.value.map((item, itemIndex) =>
-    itemIndex === index ? { ...item, [field]: value } : item,
+  if (!(input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement)) return;
+  const normalizedValue = field === 'trigger' ? input.value.replace(/^\\+/u, '') : input.value;
+  const boundedValue = truncateTextTransformerString(
+    normalizedValue,
+    TEXT_TRANSFORMER_FIELD_LIMITS[field],
+  );
+  if (input.value !== boundedValue) input.value = boundedValue;
+  updateTextTransformerDraft(id, (snippet) => {
+    if (field === 'trigger') return { ...snippet, trigger: boundedValue };
+    if (field === 'description') {
+      return { ...snippet, description: boundedValue || undefined };
+    }
+    return { ...snippet, [field]: boundedValue };
+  });
+}
+
+function toggleTextTransformerEnabled(id: string) {
+  const snippet = textTransformers.value.find((entry) => entry.id === id);
+  if (!snippet || !isValidTextTransformerTrigger(snippet.trigger)) return;
+  textTransformers.value = textTransformers.value.map((entry) =>
+    entry.id === id ? { ...entry, enabled: !entry.enabled } : entry,
   );
 }
 
+function updateTextTransformerTags(id: string, event: Event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  const boundedValue = truncateTextTransformerString(
+    input.value,
+    MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
+  );
+  if (input.value !== boundedValue) input.value = boundedValue;
+  textTransformerTagDrafts.value = { ...textTransformerTagDrafts.value, [id]: boundedValue };
+  const tags = parseTextTransformerTags(boundedValue);
+  updateTextTransformerDraft(id, (snippet) => ({ ...snippet, tags }));
+}
+
+function exportTextTransformers() {
+  try {
+    if (Object.keys(textTransformerDrafts.value).length > 0) throw new RangeError();
+    const serialized = serializeTextTransformers(textTransformers.value);
+    downloadTextFile(serialized, 'vis-snippets.json', 'application/json;charset=utf-8');
+  } catch {
+    textTransformerImportStatus.value = {
+      kind: 'error',
+      message: t('settings.textTransformers.importErrors.invalidSnippets'),
+    };
+  }
+}
+
+const textTransformerImportErrorKeys = {
+  'invalid-json': 'settings.textTransformers.importErrors.invalidJson',
+  'unsupported-version': 'settings.textTransformers.importErrors.unsupportedVersion',
+  'invalid-snippets': 'settings.textTransformers.importErrors.invalidSnippets',
+} as const;
+
+async function parseSelectedTextTransformerFile(
+  file: File,
+  importGeneration: number,
+): Promise<TextTransformerImportResult | null> {
+  if (file.size > MAX_TEXT_TRANSFORMER_IMPORT_BYTES) {
+    return { ok: false, reason: 'invalid-snippets' };
+  }
+  const contents = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
+  if (importGeneration !== textTransformerImportGeneration) return null;
+  return parseTextTransformerImport(contents);
+}
+
+function persistImportedTextTransformers(imported: readonly TextTransformer[]): boolean {
+  if (
+    textTransformerStorageRecoveryPending.value ||
+    Object.keys(textTransformerDrafts.value).length > 0
+  ) {
+    return false;
+  }
+  const current = validateTextTransformerLibrary(textTransformers.value);
+  if (!current) return false;
+  const merged = mergeTextTransformers(current, imported);
+  const validated = validateTextTransformerLibrary(merged);
+  if (!validated || validated.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT) return false;
+  if (!storageSetJSON(StorageKeys.settings.textTransformers, validated)) return false;
+  textTransformers.value = validated;
+  return true;
+}
+
+async function importTextTransformers(event: Event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement)) return;
+  const file = input.files?.[0];
+  if (!file) return;
+  const importGeneration = ++textTransformerImportGeneration;
+  try {
+    const result = await parseSelectedTextTransformerFile(file, importGeneration);
+    if (!result) return;
+    if (!result.ok) {
+      textTransformerImportStatus.value = {
+        kind: 'error',
+        message: t(textTransformerImportErrorKeys[result.reason]),
+      };
+      return;
+    }
+    if (!persistImportedTextTransformers(result.snippets)) {
+      textTransformerImportStatus.value = {
+        kind: 'error',
+        message: t('settings.textTransformers.importErrors.invalidSnippets'),
+      };
+      return;
+    }
+    textTransformerTagDrafts.value = {};
+    activeTagFilter.value = null;
+    textTransformerImportStatus.value = {
+      kind: 'success',
+      message: t('settings.textTransformers.importSuccess', { count: result.snippets.length }),
+    };
+  } catch {
+    if (importGeneration !== textTransformerImportGeneration) return;
+    textTransformerImportStatus.value = {
+      kind: 'error',
+      message: t('settings.textTransformers.importErrors.invalidJson'),
+    };
+  } finally {
+    input.value = '';
+  }
+}
+
 function textTransformerTriggerError(index: number) {
-  const issue = getTextTransformerTriggerIssue(textTransformers.value, index);
+  const issue = getTextTransformerTriggerIssue(displayedTextTransformers.value, index);
   if (issue === 'invalid') return t('settings.textTransformers.invalidTrigger');
   if (issue === 'duplicate') return t('settings.textTransformers.duplicateTrigger');
   return '';
@@ -1360,7 +2213,9 @@ const pageTitle = computed(() => {
     case 'editor':
       return t('settings.editor.pageTitle');
     case 'transformers':
-      return t('settings.textTransformers.pageTitle');
+      return editingTextTransformer.value
+        ? textTransformerTitle(editingTextTransformer.value)
+        : t('settings.textTransformers.pageTitle');
     case 'theme':
       return t('settings.themePageTitle');
     case 'experimental':
@@ -1376,12 +2231,18 @@ watch(
     const el = dialogRef.value;
     if (!el) return;
     if (open) {
-      activePage.value = 'root';
+      activePage.value = props.initialPage ?? 'root';
+      editingTextTransformerId.value =
+        activePage.value === 'transformers'
+          ? (Object.keys(textTransformerDrafts.value)[0] ?? null)
+          : null;
+      activeTagFilter.value = null;
       isTerminalFontDiscoveryOpen.value = false;
       isAppFontDiscoveryOpen.value = false;
       if (!el.open) el.showModal();
-    } else if (el.open) {
-      el.close();
+    } else {
+      finalizeEditingTextTransformer();
+      if (el.open) el.close();
     }
   },
 );
@@ -1437,14 +2298,19 @@ watch(
 
 .modal-header-main {
   display: flex;
+  flex: 1;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
 .modal-title {
+  min-width: 0;
+  overflow: hidden;
   font-size: 14px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-back-button,
@@ -1495,6 +2361,7 @@ watch(
 }
 
 .transformer-settings-section {
+  --transformer-toolbar-button-height: 34px;
   flex-direction: column;
   align-items: stretch;
   gap: 12px;
@@ -1509,6 +2376,15 @@ watch(
   width: 100%;
 }
 
+.transformer-add {
+  flex: 0 0 auto;
+  height: var(--transformer-toolbar-button-height);
+  border-color: color-mix(in srgb, var(--theme-accent-primary, #60a5fa) 55%, transparent);
+  background: color-mix(in srgb, var(--theme-accent-primary, #60a5fa) 18%, transparent);
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  white-space: nowrap;
+}
+
 .transformer-list {
   display: flex;
   flex-direction: column;
@@ -1516,11 +2392,199 @@ watch(
   width: 100%;
 }
 
-.transformer-row {
-  display: grid;
-  grid-template-columns: minmax(130px, 0.75fr) minmax(180px, 1.25fr) 30px;
-  align-items: start;
+.transformer-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   gap: 8px;
+}
+
+.transformer-pagination-status {
+  min-width: 88px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 12px;
+  text-align: center;
+}
+
+.transformer-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.transformer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.transformer-tag-filters {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transformer-tag-filter {
+  height: var(--ui-chip-height);
+  border: 1px solid var(--theme-modal-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65)));
+  border-radius: var(--ui-chip-radius);
+  background: var(--theme-modal-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75)));
+  color: var(--theme-modal-text, var(--theme-text-primary, #bfdbfe));
+  font-family: var(--ui-chip-font-family);
+  font-size: var(--ui-chip-font-size);
+  font-weight: 600;
+  letter-spacing: var(--ui-chip-letter-spacing);
+  padding: 0 var(--ui-chip-padding-x);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.transformer-tag-filter:hover {
+  background: var(--theme-modal-active-bg, var(--theme-surface-chip-hover, rgba(30, 41, 59, 0.92)));
+}
+
+.transformer-tag-filter.is-active,
+.font-preset-chip.is-active {
+  border-color: var(--theme-modal-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
+  background: var(
+    --theme-modal-active-bg,
+    var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2))
+  );
+  color: var(--theme-modal-active-text, var(--theme-text-primary, #dbeafe));
+}
+
+.transformer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.transformer-actions .font-system-button {
+  height: var(--transformer-toolbar-button-height);
+  min-height: var(--transformer-toolbar-button-height);
+  white-space: nowrap;
+}
+
+.transformer-import-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.transformer-import-input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.transformer-import-status {
+  min-height: 14px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 11px;
+}
+
+.transformer-import-status.is-success {
+  color: var(--theme-status-success, #4ade80);
+}
+
+.transformer-import-status.is-error {
+  color: var(--theme-status-error, #f87171);
+}
+
+.transformer-import-status:empty {
+  display: none;
+}
+
+.transformer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--ui-form-control-border);
+  border-radius: 8px;
+  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.3)));
+}
+
+.transformer-row.is-disabled :deep(.snippet-completion) {
+  opacity: 0.58;
+}
+
+.transformer-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.transformer-action-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--theme-top-dropdown-border, #334155);
+  border-radius: 8px;
+  background: var(--theme-top-dropdown-control-bg, #0b1320);
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  line-height: 1;
+  cursor: pointer;
+}
+
+.transformer-action-button:hover {
+  background: var(--theme-top-dropdown-active-bg, #1d2a45);
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.transformer-enable.is-active {
+  color: var(--theme-status-success, #4ade80);
+}
+
+.transformer-remove {
+  color: var(--theme-text-danger, #fca5a5);
+}
+
+.transformer-edit {
+  color: var(--theme-status-git-archived, #c4b5fd);
+}
+
+.transformer-detail {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.transformer-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.transformer-detail-status {
+  flex: 1 1 auto;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 11px;
+}
+
+.transformer-detail-status.is-error {
+  color: var(--theme-status-error, #f87171);
+}
+
+.transformer-row-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
 }
 
 .transformer-field {
@@ -1530,29 +2594,14 @@ watch(
   min-width: 0;
 }
 
+.transformer-field-body {
+  grid-column: 1 / -1;
+}
+
 .transformer-field-label {
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
   font-size: 10px;
   font-weight: 600;
-}
-
-.transformer-sequence-control {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.transformer-prefix {
-  display: inline-flex;
-  align-items: center;
-  height: 30px;
-  padding: 0 8px;
-  border: 1px solid var(--ui-form-control-border);
-  border-right: 0;
-  border-radius: 6px 0 0 6px;
-  background: var(--theme-modal-active-bg, var(--theme-surface-panel-hover, #1e293b));
-  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
-  font-size: 12px;
 }
 
 .transformer-input {
@@ -1568,8 +2617,27 @@ watch(
   font-size: 12px;
 }
 
-.transformer-sequence-input {
-  border-radius: 0 6px 6px 0;
+.transformer-body {
+  height: auto;
+  min-height: 72px;
+  padding: 8px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.transformer-variable-help {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  margin-top: 4px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  font-size: 11px;
+}
+
+.transformer-variable-help code {
+  color: var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1));
+  font-size: 11px;
 }
 
 .transformer-input:focus {
@@ -1579,25 +2647,6 @@ watch(
   box-shadow: var(--ui-form-control-focus-ring);
 }
 
-.transformer-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  margin-top: 18px;
-  border: 1px solid var(--ui-form-button-border);
-  border-radius: 6px;
-  background: var(--ui-form-button-bg);
-  color: var(--theme-text-danger, #fca5a5);
-  cursor: pointer;
-}
-
-.transformer-remove:hover {
-  border-color: var(--ui-form-control-focus-border);
-  background: var(--ui-form-button-hover-bg);
-}
-
 .transformer-empty,
 .transformer-error {
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
@@ -1605,7 +2654,11 @@ watch(
 }
 
 .transformer-empty {
-  padding: 8px 0 2px;
+  width: 100%;
+  padding: 12px;
+  border: 1px dashed var(--theme-modal-border, var(--theme-border-default, #334155));
+  border-radius: 8px;
+  text-align: center;
 }
 
 .transformer-error {
@@ -1721,17 +2774,12 @@ watch(
     flex-direction: column;
   }
 
-  .transformer-row {
-    grid-template-columns: minmax(0, 1fr) 30px;
+  .transformer-actions {
+    margin-left: 0;
   }
 
-  .transformer-field:nth-child(2) {
-    grid-column: 1 / -1;
-  }
-
-  .transformer-remove {
-    grid-column: 2;
-    grid-row: 1;
+  .transformer-row-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -2083,15 +3131,6 @@ watch(
   background: var(--ui-chip-bg-hover);
 }
 
-.font-preset-chip.is-active {
-  border-color: var(--theme-modal-accent, var(--theme-border-accent, rgba(59, 130, 246, 0.45)));
-  background: var(
-    --theme-modal-active-bg,
-    var(--theme-surface-panel-active, rgba(59, 130, 246, 0.2))
-  );
-  color: var(--theme-modal-active-text, var(--theme-text-primary, #dbeafe));
-}
-
 .number-input {
   width: 84px;
   height: 30px;
@@ -2234,6 +3273,7 @@ watch(
   font-size: 12px;
   font-family: inherit;
   padding: 0 10px;
+  white-space: nowrap;
   cursor: pointer;
 }
 

@@ -43,7 +43,7 @@
           @batch-session-action="backendSessionActions.handleTopPanelBatchSessionAction"
           @open-directory="handleOpenProjectDirectory"
           @edit-project="handleEditProject"
-          @open-settings="isSettingsOpen = true"
+          @open-settings="openSettings()"
           @open-provider-manager="isProviderManagerOpen = true"
           @open-status-monitor="isStatusMonitorOpen = true"
           @open-codex-panel="openCodexPanel"
@@ -186,6 +186,8 @@
               :commands="commandOptions"
               :available-skills="activeBackendKind === 'codex' ? codexApi.skills.value : []"
               :attachments="attachments"
+              :active-directory="activeDirectory"
+              :active-file="selectedTreePath"
               :message-input="messageInput"
               :selected-mode="selectedMode"
               :selected-permission-mode="selectedAcpPermissionMode"
@@ -204,6 +206,8 @@
               @add-attachments="handleAddAttachments"
               @remove-attachment="removeAttachment"
               @open-image="handleOpenImage"
+              @open-snippet-settings="openSettings('transformers')"
+              @status-error="setSendStatusErrorText"
             />
           </footer>
         </div>
@@ -430,7 +434,11 @@
       @close="isProjectPickerOpen = false"
       @select="handleProjectDirectorySelect"
     />
-    <SettingsModal :open="isSettingsOpen" @close="isSettingsOpen = false" />
+    <SettingsModal
+      :open="isSettingsOpen"
+      :initial-page="settingsInitialPage"
+      @close="isSettingsOpen = false"
+    />
     <ProviderManagerModal
       :open="isProviderManagerOpen"
       :providers="providers"
@@ -717,6 +725,7 @@ import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
 import { useSettings } from './composables/useSettings';
+import { createComposerDraftScheduler } from './utils/composerDraftScheduler';
 import {
   clearOpenCodeLastSelection,
   readOpenCodeLastSelection,
@@ -1877,6 +1886,12 @@ const editingProjectMeta = computed(() => {
   return pid ? serverState.projects[pid] : undefined;
 });
 const isSettingsOpen = ref(false);
+const settingsInitialPage = ref<'root' | 'transformers'>('root');
+
+function openSettings(page: 'root' | 'transformers' = 'root') {
+  settingsInitialPage.value = page;
+  isSettingsOpen.value = true;
+}
 const isProviderManagerOpen = ref(false);
 const isStatusMonitorOpen = ref(false);
 
@@ -1967,6 +1982,7 @@ const sessionError = ref('');
 const messageInput = ref('');
 const attachments = ref<Attachment[]>([]);
 const sendStatus = ref<LocalizedStatusState>({ mode: 'i18n', key: 'app.status.ready' });
+const sendStatusIsError = ref(false);
 const isSending = ref(false);
 const isAborting = ref(false);
 const isBootstrapping = ref(false);
@@ -2071,14 +2087,22 @@ const loginTitle = computed(() =>
 );
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
+  sendStatusIsError.value = false;
   sendStatus.value = params ? { mode: 'i18n', key, params } : { mode: 'i18n', key };
 }
 
 function setSendStatusText(text: string) {
+  sendStatusIsError.value = false;
+  sendStatus.value = { mode: 'text', text };
+}
+
+function setSendStatusErrorText(text: string) {
+  sendStatusIsError.value = true;
   sendStatus.value = { mode: 'text', text };
 }
 
 function setSendStatusRender(render: () => string) {
+  sendStatusIsError.value = false;
   sendStatus.value = { mode: 'render', render };
 }
 
@@ -2105,7 +2129,13 @@ const statusText = computed(() => {
   );
 });
 const isStatusError = computed(() =>
-  Boolean(projectError.value || worktreeError.value || sessionError.value || retryStatus.value),
+  [
+    projectError.value,
+    worktreeError.value,
+    sessionError.value,
+    retryStatus.value,
+    sendStatusIsError.value,
+  ].some(Boolean),
 );
 
 const sessionParentRecord = reactive<Record<string, string | undefined>>({});
@@ -3728,6 +3758,7 @@ function restoreComposerDraftForContext(contextKey: string): boolean {
 }
 
 function persistComposerDraftForCurrentContext() {
+  composerDraftPersistence.cancel();
   const contextKey = draftKeyForSelectedContext();
   if (!contextKey) return;
   const existingDraft = readComposerDraft(contextKey);
@@ -3750,6 +3781,40 @@ function persistComposerDraftForCurrentContext() {
   writeComposerDraft(contextKey, draft);
 }
 
+function scheduleComposerDraftPersistence() {
+  const contextKey = draftKeyForSelectedContext();
+  if (!contextKey) {
+    composerDraftPersistence.schedule(() => {});
+    return;
+  }
+  const draft: Omit<ComposerDraft, 'rev' | 'writerTabId'> = {
+    messageInput: messageInput.value,
+    attachments: attachments.value.map((item) => ({
+      id: item.id,
+      filename: item.filename,
+      mime: item.mime,
+      dataUrl: item.dataUrl,
+    })),
+    agent: selectedMode.value,
+    model: selectedModel.value,
+    variant: selectedThinking.value,
+    updatedAt: Date.now(),
+  };
+  composerDraftPersistence.schedule(() => {
+    const existingDraft = readComposerDraft(contextKey);
+    writeComposerDraft(contextKey, {
+      ...draft,
+      rev: nextComposerDraftRevision(contextKey, existingDraft),
+      writerTabId: composerDraftTabId,
+    });
+  });
+}
+
+const composerDraftPersistence = createComposerDraftScheduler(
+  persistComposerDraftForCurrentContext,
+  150,
+);
+
 function clearComposerDraftForCurrentContext() {
   messageInput.value = '';
   attachments.value = [];
@@ -3758,7 +3823,7 @@ function clearComposerDraftForCurrentContext() {
 
 function handleMessageInputUpdate(value: string) {
   messageInput.value = value;
-  persistComposerDraftForCurrentContext();
+  scheduleComposerDraftPersistence();
 }
 
 function applyAgentDefaults(agentName: string) {
@@ -6119,8 +6184,7 @@ function connectShellSocket(ptyId: string) {
   const url = buildPtyWsUrl(`/pty/${ptyId}/connect`, directory);
   const socket = new WebSocket(url);
   session.socket = socket;
-  const isCurrentSocket = () =>
-    isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
+  const isCurrentSocket = () => isCurrentPtySocket(shellSessionsByPtyId, ptyId, session, socket);
   socket.binaryType = 'arraybuffer';
   socket.addEventListener('message', (event) => {
     if (!isCurrentSocket()) return;
@@ -7125,6 +7189,7 @@ watch(
   (contextKey, previousKey) => {
     const prevContextKey = previousKey ?? '';
     if (contextKey === prevContextKey) return;
+    composerDraftPersistence.flush();
     clearComposerInputState();
     nextTick(() => {
       inputPanelRef.value?.reset();
@@ -9647,6 +9712,7 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  composerDraftPersistence.flush();
   pendingShellWindowCreates.invalidateAll();
   for (const pending of Array.from(pendingReferencedSubagentHydrations.values())) {
     pending.resolve(undefined);

@@ -1,35 +1,137 @@
 const STORAGE_PREFIX = 'opencode.';
+const LOCAL_STORAGE_OWNED_KEYS = new Set([
+  'opencode.global.dat:model',
+  'opencode.settings.disabledModels.v1',
+]);
 
-type StorageBackend = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+export type StorageReadResult =
+  | { kind: 'value'; value: string }
+  | { kind: 'missing' }
+  | { kind: 'error' };
+
+type StorageBackend = {
+  readItem: (key: string) => StorageReadResult;
+  setItem: (key: string, value: string) => boolean | void;
+  removeItem: (key: string) => boolean | void;
+};
+
+type ElectronStorageBackend = {
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => boolean | void;
+  removeItem: (key: string) => boolean | void;
+  migrate: (entries: Record<string, string>) => boolean;
+};
 
 let hasMigratedElectronStorage = false;
+let nextElectronStorageMigrationAttemptAt = 0;
+const ELECTRON_STORAGE_MIGRATION_RETRY_MS = 1_000;
 
-function migrateLocalStorageToElectronStorage(electronStorage: StorageBackend) {
-  if (hasMigratedElectronStorage || typeof window === 'undefined') return;
-  hasMigratedElectronStorage = true;
-
-  const localStorage = window.localStorage;
-  if (!localStorage) return;
-
+function readStorageItem(readItem: () => string | null): StorageReadResult {
   try {
+    const value = readItem();
+    return value === null ? { kind: 'missing' } : { kind: 'value', value };
+  } catch {
+    return { kind: 'error' };
+  }
+}
+
+function createLocalStorageBackend(localStorage: Storage): StorageBackend {
+  return {
+    readItem: (key) => readStorageItem(() => localStorage.getItem(key)),
+    setItem: (key, value) => {
+      localStorage.setItem(key, value);
+      return true;
+    },
+    removeItem: (key) => {
+      localStorage.removeItem(key);
+      return true;
+    },
+  };
+}
+
+function createElectronStorageBackend(electronStorage: ElectronStorageBackend): StorageBackend {
+  return {
+    readItem: (key) => readStorageItem(() => electronStorage.getItem(key)),
+    setItem: (key, value) => electronStorage.setItem(key, value),
+    removeItem: (key) => electronStorage.removeItem(key),
+  };
+}
+
+function migrateLocalStorageToElectronStorage(
+  electronStorage: ElectronStorageBackend,
+  localStorage: Storage,
+) {
+  if (hasMigratedElectronStorage) return true;
+  const now = Date.now();
+  if (now < nextElectronStorageMigrationAttemptAt) return false;
+  try {
+    const entries: Record<string, string> = {};
     for (let index = 0; index < localStorage.length; index += 1) {
       const key = localStorage.key(index);
-      if (!key || !key.startsWith(STORAGE_PREFIX)) {
-        continue;
-      }
-
-      if (electronStorage.getItem(key) !== null) {
-        continue;
-      }
-
+      if (!key?.startsWith(STORAGE_PREFIX) || LOCAL_STORAGE_OWNED_KEYS.has(key)) continue;
       const value = localStorage.getItem(key);
-      if (value !== null) {
-        electronStorage.setItem(key, value);
+      if (value !== null) entries[key] = value;
+    }
+    if (!electronStorage.migrate(entries)) {
+      nextElectronStorageMigrationAttemptAt = now + ELECTRON_STORAGE_MIGRATION_RETRY_MS;
+      return false;
+    }
+    for (const [key, migratedValue] of Object.entries(entries)) {
+      const currentValue = localStorage.getItem(key);
+      if (currentValue === migratedValue) {
+        localStorage.removeItem(key);
+      } else if (currentValue !== null) {
+        nextElectronStorageMigrationAttemptAt = now + ELECTRON_STORAGE_MIGRATION_RETRY_MS;
+        return false;
       }
     }
+    hasMigratedElectronStorage = true;
+    nextElectronStorageMigrationAttemptAt = 0;
+    return true;
   } catch {
-    return;
+    nextElectronStorageMigrationAttemptAt = now + ELECTRON_STORAGE_MIGRATION_RETRY_MS;
+    return false;
   }
+}
+
+function pendingElectronMigrationBackend(
+  electronStorage: StorageBackend,
+  localStorage: StorageBackend,
+): StorageBackend {
+  return {
+    readItem: (key) => {
+      const nativeValue = electronStorage.readItem(key);
+      return nativeValue.kind === 'missing' ? localStorage.readItem(key) : nativeValue;
+    },
+    setItem: (key, value) => {
+      const nativeValue = electronStorage.readItem(key);
+      if (nativeValue.kind === 'error') return false;
+      if (nativeValue.kind === 'value') {
+        if (electronStorage.setItem(key, value) === false) return false;
+        try {
+          localStorage.setItem(key, value);
+        } catch {
+          return true;
+        }
+        return true;
+      }
+      return false;
+    },
+    removeItem: (key) => {
+      const nativeValue = electronStorage.readItem(key);
+      if (nativeValue.kind === 'error') return false;
+      if (nativeValue.kind === 'value') {
+        if (electronStorage.removeItem(key) === false) return false;
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          return false;
+        }
+        return true;
+      }
+      return false;
+    },
+  };
 }
 
 function resolveStorageBackend(): StorageBackend | null {
@@ -37,11 +139,20 @@ function resolveStorageBackend(): StorageBackend | null {
 
   const electronStorage = window.electronAPI?.persistentStorage;
   if (electronStorage) {
-    migrateLocalStorageToElectronStorage(electronStorage);
-    return electronStorage;
+    let localStorage: Storage;
+    try {
+      localStorage = window.localStorage;
+    } catch {
+      return createElectronStorageBackend(electronStorage);
+    }
+    const electronBackend = createElectronStorageBackend(electronStorage);
+    const localBackend = createLocalStorageBackend(localStorage);
+    return migrateLocalStorageToElectronStorage(electronStorage, localStorage)
+      ? electronBackend
+      : pendingElectronMigrationBackend(electronBackend, localBackend);
   }
 
-  return window.localStorage;
+  return createLocalStorageBackend(window.localStorage);
 }
 
 export const StorageKeys = {
@@ -114,32 +225,32 @@ export function storageKey(key: string) {
 }
 
 export function storageGet(key: string) {
+  const result = storageRead(key);
+  return result.kind === 'value' ? result.value : null;
+}
+
+export function storageRead(key: string): StorageReadResult {
   const storage = resolveStorageBackend();
-  if (!storage) return null;
-  try {
-    return storage.getItem(storageKey(key));
-  } catch {
-    return null;
-  }
+  return storage?.readItem(storageKey(key)) ?? { kind: 'missing' };
 }
 
 export function storageSet(key: string, value: string) {
   const storage = resolveStorageBackend();
-  if (!storage) return;
+  if (!storage) return false;
   try {
-    storage.setItem(storageKey(key), value);
+    return storage.setItem(storageKey(key), value) !== false;
   } catch {
-    return;
+    return false;
   }
 }
 
 export function storageRemove(key: string) {
   const storage = resolveStorageBackend();
-  if (!storage) return;
+  if (!storage) return false;
   try {
-    storage.removeItem(storageKey(key));
+    return storage.removeItem(storageKey(key)) !== false;
   } catch {
-    return;
+    return false;
   }
 }
 
@@ -154,5 +265,5 @@ export function storageGetJSON<T>(key: string): T | null {
 }
 
 export function storageSetJSON(key: string, value: unknown) {
-  storageSet(key, JSON.stringify(value));
+  return storageSet(key, JSON.stringify(value));
 }

@@ -118,12 +118,21 @@ describe('useBackendMessageSend', () => {
     });
   });
 
-  it('expands configured text transformers at the backend send boundary', async () => {
-    // Given: transformer expansion is enabled for a prompt containing known and unknown sequences.
+  it('preserves unconfirmed snippet triggers at the backend send boundary', async () => {
+    // Given: snippets are enabled but the user has not confirmed the visible completion.
     const base = createBaseParams();
     base.messageInput.value = String.raw`Say \hi and keep \unknown`;
     base.textTransformersEnabled.value = true;
-    base.textTransformers.value = [{ trigger: 'hi', replacement: '你好' }];
+    base.textTransformers.value = [
+      {
+        id: 'snippet-hi',
+        trigger: 'hi',
+        name: 'Greeting',
+        body: '你好',
+        enabled: true,
+        tags: [],
+      },
+    ];
     const sendPromptAsync = vi.fn().mockResolvedValue(undefined);
     const runtime = useBackendMessageSend({
       ...base,
@@ -139,14 +148,14 @@ describe('useBackendMessageSend', () => {
       },
     });
 
-    // When: the prompt is sent without a prior keyboard delimiter.
+    // When: the prompt is sent without selecting the candidate with Enter or a click.
     await runtime.sendMessage();
 
-    // Then: the backend receives expanded text while unmatched input remains unchanged.
+    // Then: the backend receives the literal draft without silently resolving missing context.
     const payload = sendPromptAsync.mock.calls[0]?.[1] as { parts: Array<{ text?: string }> };
     expect(payload.parts).toContainEqual({
       type: 'text',
-      text: String.raw`Say 你好 and keep \unknown`,
+      text: String.raw`Say \hi and keep \unknown`,
     });
   });
 });

@@ -2,17 +2,26 @@ const { contextBridge, ipcRenderer } = require('electron');
 const localFileListeners = new Set();
 const localFileErrorListeners = new Set();
 
+function decodePersistentStorageGetResponse(response) {
+  if (response.ok === true) return response.value;
+  const error = new Error(response.error.message);
+  error.name = response.error.name;
+  throw error;
+}
+
 ipcRenderer.on('persistent-storage-changed', (_event, change) => {
   if (!change || typeof change.key !== 'string') {
     return;
   }
 
-  window.dispatchEvent(new StorageEvent('storage', {
-    key: change.key,
-    oldValue: typeof change.oldValue === 'string' ? change.oldValue : null,
-    newValue: typeof change.newValue === 'string' ? change.newValue : null,
-    url: window.location.href,
-  }));
+  window.dispatchEvent(
+    new StorageEvent('storage', {
+      key: change.key,
+      oldValue: typeof change.oldValue === 'string' ? change.oldValue : null,
+      newValue: typeof change.newValue === 'string' ? change.newValue : null,
+      url: window.location.href,
+    }),
+  );
 });
 
 ipcRenderer.on('local-file-changed', (_event, change) => {
@@ -51,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 剪贴板
   clipboard: {
+    readText: () => ipcRenderer.invoke('clipboard-read-text'),
     writeText: (text) => ipcRenderer.invoke('clipboard-write-text', text),
   },
 
@@ -74,8 +84,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   persistentStorage: {
-    getItem: (key) => ipcRenderer.sendSync('persistent-storage-get', key),
+    getItem: (key) =>
+      decodePersistentStorageGetResponse(ipcRenderer.sendSync('persistent-storage-get', key)),
     setItem: (key, value) => ipcRenderer.sendSync('persistent-storage-set', { key, value }),
     removeItem: (key) => ipcRenderer.sendSync('persistent-storage-remove', key),
+    migrate: (entries) => ipcRenderer.sendSync('persistent-storage-migrate', entries),
   },
 });

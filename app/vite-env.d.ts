@@ -13,33 +13,38 @@ interface FontData {
 
 interface Window {
   electronAPI?: {
-    platform: string,
+    platform: string;
     versions: {
-      node: string,
-      electron: string,
-      chrome: string,
-    },
-    getAppVersion: () => Promise<string>,
-    getPlatform: () => Promise<string>,
+      node: string;
+      electron: string;
+      chrome: string;
+    };
+    getAppVersion: () => Promise<string>;
+    getPlatform: () => Promise<string>;
     persistentStorage?: {
-      getItem: (key: string) => string | null,
-      setItem: (key: string, value: string) => void,
-      removeItem: (key: string) => void,
-    },
+      getItem: (key: string) => string | null;
+      setItem: (key: string, value: string) => boolean;
+      removeItem: (key: string) => boolean;
+      migrate: (entries: Record<string, string>) => boolean;
+    };
     localFile?: {
-      selectApplication: () => Promise<string | null>,
-      clearApplication: () => Promise<void>,
+      selectApplication: () => Promise<string | null>;
+      clearApplication: () => Promise<void>;
       open: (payload: {
-        sessionId: string,
-        fileName: string,
-        content: string,
-      }) => Promise<{ sessionId: string }>,
-      close: (sessionId: string) => Promise<void>,
-      onChanged: (listener: (change: { sessionId: string; content: string }) => void) => void,
-      offChanged: (listener: (change: { sessionId: string; content: string }) => void) => void,
-      onError: (listener: (error: { sessionId: string; message: string; closed?: boolean }) => void) => void,
-      offError: (listener: (error: { sessionId: string; message: string; closed?: boolean }) => void) => void,
-    },
+        sessionId: string;
+        fileName: string;
+        content: string;
+      }) => Promise<{ sessionId: string }>;
+      close: (sessionId: string) => Promise<void>;
+      onChanged: (listener: (change: { sessionId: string; content: string }) => void) => void;
+      offChanged: (listener: (change: { sessionId: string; content: string }) => void) => void;
+      onError: (
+        listener: (error: { sessionId: string; message: string; closed?: boolean }) => void,
+      ) => void;
+      offError: (
+        listener: (error: { sessionId: string; message: string; closed?: boolean }) => void,
+      ) => void;
+    };
   };
   queryLocalFonts?: (options?: QueryLocalFontsOptions) => Promise<FontData[]>;
 }

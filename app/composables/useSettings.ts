@@ -2,6 +2,7 @@ import { ref, watch, type Ref } from 'vue';
 import {
   StorageKeys,
   storageGet,
+  storageRead,
   storageKey,
   storageSet,
   storageGetJSON,
@@ -23,6 +24,8 @@ import {
   type EditorShortcutMap,
 } from '../utils/editorShortcuts';
 import { normalizeTextTransformers, type TextTransformer } from '../utils/textTransformers';
+import { validateTextTransformerLibrary } from '../utils/snippets';
+import { isBoundedTextTransformerImportSnippet } from '../utils/snippetImportLimits';
 
 function isSerializedEqual(left: unknown, right: unknown) {
   return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
@@ -185,17 +188,63 @@ function readEditorShortcuts() {
   return normalizeEditorShortcutMap(storageGetJSON(StorageKeys.settings.editorShortcuts));
 }
 
-function parseTextTransformers(value: string | null): TextTransformer[] {
-  if (!value) return [];
+const currentTextTransformerFields = ['body', 'id', 'name', 'description', 'enabled', 'tags'];
+
+function hasCurrentTextTransformerShape(entry: object): boolean {
+  return currentTextTransformerFields.some((field) => field in entry);
+}
+
+function isValidStoredTextTransformer(entry: object): entry is TextTransformer {
+  const requiredTypes = [
+    ['id', 'string'],
+    ['name', 'string'],
+    ['body', 'string'],
+    ['enabled', 'boolean'],
+  ] as const;
+  return (
+    isBoundedTextTransformerImportSnippet(entry) &&
+    requiredTypes.every(([field, type]) => typeof Reflect.get(entry, field) === type) &&
+    Array.isArray(Reflect.get(entry, 'tags'))
+  );
+}
+
+function validateParsedTextTransformers(parsed: unknown[]): TextTransformer[] | null {
+  if (parsed.some((entry) => !entry || typeof entry !== 'object')) return null;
+  const entries = parsed as object[];
+  const currentEntries = entries.filter(hasCurrentTextTransformerShape);
+  if (currentEntries.length === 0) {
+    if (!entries.every((entry) => 'replacement' in entry)) return null;
+    return validateTextTransformerLibrary(normalizeTextTransformers(entries));
+  }
+  if (currentEntries.length !== entries.length) return null;
+  const validCurrentEntries = currentEntries.filter(isValidStoredTextTransformer);
+  return validCurrentEntries.length === entries.length
+    ? validateTextTransformerLibrary(validCurrentEntries)
+    : null;
+}
+
+function parseTextTransformers(value: string): TextTransformer[] | null {
   try {
-    return normalizeTextTransformers(JSON.parse(value));
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? validateParsedTextTransformers(parsed) : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
 function readTextTransformers() {
-  return normalizeTextTransformers(storageGetJSON(StorageKeys.settings.textTransformers));
+  const stored = storageRead(StorageKeys.settings.textTransformers);
+  if (stored.kind === 'error') return { value: [] as TextTransformer[], failed: true };
+  if (stored.kind === 'missing') return { value: [] as TextTransformer[], failed: false };
+  const normalized = parseTextTransformers(stored.value);
+  if (!normalized) return { value: [] as TextTransformer[], failed: true };
+  if (stored.value !== JSON.stringify(normalized)) {
+    return {
+      value: normalized,
+      failed: !storageSetJSON(StorageKeys.settings.textTransformers, normalized),
+    };
+  }
+  return { value: normalized, failed: false };
 }
 
 function readThemeStorage(): ThemeStorageV2 | null {
@@ -265,7 +314,12 @@ const editorShortcuts = ref<EditorShortcutMap>(readEditorShortcuts());
 const textTransformersEnabled = ref(
   storageGet(StorageKeys.settings.textTransformersEnabled) === 'true',
 );
-const textTransformers = ref<TextTransformer[]>(readTextTransformers());
+const initialTextTransformers = readTextTransformers();
+const textTransformers = ref<TextTransformer[]>(initialTextTransformers.value);
+const textTransformerPersistenceErrorRevision = ref(initialTextTransformers.failed ? 1 : 0);
+const textTransformerPersistenceSuccessRevision = ref(0);
+const textTransformerEnabledPersistenceErrorRevision = ref<number | null>(null);
+const textTransformerStorageRecoveryPending = ref(initialTextTransformers.failed);
 const localApplicationPath = ref(storageGet(StorageKeys.settings.localApplicationPath) ?? '');
 const themeStorage = ref<ThemeStorageV2 | null>(readThemeStorage());
 const externalThemes = ref<ExternalThemeDefinition[]>(readExternalThemes());
@@ -439,10 +493,68 @@ watch(
   { deep: true, flush: 'sync' },
 );
 
+let restoringTextTransformerState = false;
+let lastPersistedTextTransformersEnabled = textTransformersEnabled.value;
+function cloneTextTransformers(value: readonly TextTransformer[]): TextTransformer[] {
+  return value.map((snippet) => ({ ...snippet, tags: [...snippet.tags] }));
+}
+let lastPersistedTextTransformers = cloneTextTransformers(textTransformers.value);
+
+function applyTextTransformerSnapshot(value: readonly TextTransformer[]) {
+  const snapshot = cloneTextTransformers(value);
+  restoringTextTransformerState = true;
+  textTransformers.value = snapshot;
+  restoringTextTransformerState = false;
+  lastPersistedTextTransformers = cloneTextTransformers(snapshot);
+}
+
+function overwriteTextTransformerStorage(value: readonly TextTransformer[]): boolean {
+  const normalized = validateTextTransformerLibrary(value);
+  if (!normalized || !storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
+    textTransformerPersistenceErrorRevision.value += 1;
+    return false;
+  }
+  applyTextTransformerSnapshot(normalized);
+  textTransformerPersistenceSuccessRevision.value += 1;
+  textTransformerStorageRecoveryPending.value = false;
+  return true;
+}
+
+function reloadTextTransformerStorage(): boolean {
+  const loaded = readTextTransformers();
+  if (loaded.failed) {
+    textTransformerPersistenceErrorRevision.value += 1;
+    return false;
+  }
+  applyTextTransformerSnapshot(loaded.value);
+  textTransformerStorageRecoveryPending.value = false;
+  return true;
+}
+
+function restoreTextTransformerState<T>(setting: Ref<T>, value: T) {
+  restoringTextTransformerState = true;
+  setting.value = Array.isArray(value) ? (cloneTextTransformers(value) as T) : value;
+  restoringTextTransformerState = false;
+  textTransformerPersistenceErrorRevision.value += 1;
+}
+
 watch(
   textTransformersEnabled,
   (value) => {
-    storageSet(StorageKeys.settings.textTransformersEnabled, String(value));
+    if (restoringTextTransformerState) return;
+    if (storageSet(StorageKeys.settings.textTransformersEnabled, String(value))) {
+      lastPersistedTextTransformersEnabled = value;
+      if (
+        textTransformerEnabledPersistenceErrorRevision.value ===
+        textTransformerPersistenceErrorRevision.value
+      ) {
+        textTransformerEnabledPersistenceErrorRevision.value = null;
+      }
+      return;
+    }
+    restoreTextTransformerState(textTransformersEnabled, lastPersistedTextTransformersEnabled);
+    textTransformerEnabledPersistenceErrorRevision.value =
+      textTransformerPersistenceErrorRevision.value;
   },
   syncWatchOptions,
 );
@@ -450,10 +562,28 @@ watch(
 watch(
   textTransformers,
   (value) => {
-    const normalized = normalizeTextTransformers(value);
-    if (isSerializedEqual(storageGetJSON(StorageKeys.settings.textTransformers), normalized))
+    if (restoringTextTransformerState) return;
+    if (textTransformerStorageRecoveryPending.value) {
+      restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
       return;
-    storageSetJSON(StorageKeys.settings.textTransformers, normalized);
+    }
+    const normalized = validateTextTransformerLibrary(value);
+    if (!normalized) {
+      restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
+      return;
+    }
+    if (storageSetJSON(StorageKeys.settings.textTransformers, normalized)) {
+      lastPersistedTextTransformers = cloneTextTransformers(normalized);
+      textTransformerPersistenceSuccessRevision.value += 1;
+    } else {
+      restoreTextTransformerState(textTransformers, lastPersistedTextTransformers);
+      return;
+    }
+    if (normalized.length === value.length && !isSerializedEqual(value, normalized)) {
+      restoringTextTransformerState = true;
+      textTransformers.value = normalized;
+      restoringTextTransformerState = false;
+    }
   },
   { deep: true, flush: 'sync' },
 );
@@ -650,17 +780,28 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
   ],
   [
     storageKey(StorageKeys.settings.textTransformersEnabled),
-    (event) => {
-      textTransformersEnabled.value = event.newValue === 'true';
+    () => {
+      const result = storageRead(StorageKeys.settings.textTransformersEnabled);
+      if (result.kind === 'error') return;
+      textTransformersEnabled.value = result.kind === 'value' && result.value === 'true';
     },
   ],
   [
     storageKey(StorageKeys.settings.textTransformers),
-    (event) => {
-      const nextTextTransformers = parseTextTransformers(event.newValue);
-      if (!isSerializedEqual(textTransformers.value, nextTextTransformers)) {
-        textTransformers.value = nextTextTransformers;
+    () => {
+      const loaded = readTextTransformers();
+      if (loaded.failed) {
+        textTransformerStorageRecoveryPending.value = true;
+        textTransformerPersistenceErrorRevision.value += 1;
+        return;
       }
+      if (!isSerializedEqual(textTransformers.value, loaded.value)) {
+        restoringTextTransformerState = true;
+        textTransformers.value = cloneTextTransformers(loaded.value);
+        restoringTextTransformerState = false;
+      }
+      lastPersistedTextTransformers = cloneTextTransformers(loaded.value);
+      textTransformerStorageRecoveryPending.value = false;
     },
   ],
   [
@@ -722,6 +863,12 @@ export function useSettings() {
     editorShortcuts,
     textTransformersEnabled,
     textTransformers,
+    textTransformerPersistenceErrorRevision,
+    textTransformerPersistenceSuccessRevision,
+    textTransformerEnabledPersistenceErrorRevision,
+    textTransformerStorageRecoveryPending,
+    overwriteTextTransformerStorage,
+    reloadTextTransformerStorage,
     localApplicationPath,
     defaultEditorShortcuts: DEFAULT_EDITOR_SHORTCUTS,
     minEditorFontSizePx: MIN_EDITOR_FONT_SIZE_PX,

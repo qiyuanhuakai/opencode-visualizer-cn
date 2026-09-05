@@ -21,7 +21,10 @@ interface ElectronApiSchema {
   versions: { node: string; electron: string; chrome: string };
   getAppVersion: () => Promise<unknown>;
   getPlatform: () => Promise<unknown>;
-  clipboard: { writeText: (text: string) => Promise<unknown> };
+  clipboard: {
+    readText: () => Promise<unknown>;
+    writeText: (text: string) => Promise<unknown>;
+  };
   localFile: {
     selectApplication: () => Promise<unknown>;
     clearApplication: () => Promise<unknown>;
@@ -33,9 +36,10 @@ interface ElectronApiSchema {
     offError: (listener: (error: LocalFileError) => void) => void;
   };
   persistentStorage: {
-    getItem: (key: string) => unknown;
+    getItem: (key: string) => string | null;
     setItem: (key: string, value: string) => unknown;
     removeItem: (key: string) => unknown;
+    migrate: (entries: Record<string, string>) => unknown;
   };
 }
 
@@ -44,7 +48,10 @@ type IpcListener = (event: unknown, payload?: unknown) => void;
 function createIpcRendererMock() {
   const listenersByChannel = new Map<string, IpcListener[]>();
   const invoke = vi.fn((_channel: string, ..._args: unknown[]) => Promise.resolve('invoked'));
-  const sendSync = vi.fn((_channel: string, ..._args: unknown[]) => 'synced');
+  const sendSync = vi.fn((_channel: string, ..._args: unknown[]): unknown => ({
+    ok: true,
+    value: 'synced',
+  }));
   const on = vi.fn((channel: string, listener: IpcListener) => {
     const listeners = listenersByChannel.get(channel) ?? [];
     listeners.push(listener);
@@ -59,7 +66,12 @@ function createIpcRendererMock() {
 interface LoadedPreload {
   api: ElectronApiSchema;
   ipcRenderer: ReturnType<typeof createIpcRendererMock>;
-  dispatchedEvents: Array<{ type: string; key: string | null; oldValue: string | null; newValue: string | null }>;
+  dispatchedEvents: Array<{
+    type: string;
+    key: string | null;
+    oldValue: string | null;
+    newValue: string | null;
+  }>;
 }
 
 function loadPreloadWithMocks(): LoadedPreload {
@@ -75,15 +87,22 @@ function loadPreloadWithMocks(): LoadedPreload {
 
   const windowStub = {
     location: { href: 'app://index.html' },
-    dispatchEvent: vi.fn((event: { type: string; key: string | null; oldValue: string | null; newValue: string | null }) => {
-      dispatchedEvents.push({
-        type: event.type,
-        key: event.key,
-        oldValue: event.oldValue,
-        newValue: event.newValue,
-      });
-      return true;
-    }),
+    dispatchEvent: vi.fn(
+      (event: {
+        type: string;
+        key: string | null;
+        oldValue: string | null;
+        newValue: string | null;
+      }) => {
+        dispatchedEvents.push({
+          type: event.type,
+          key: event.key,
+          oldValue: event.oldValue,
+          newValue: event.newValue,
+        });
+        return true;
+      },
+    ),
   };
 
   vm.runInNewContext(
@@ -142,7 +161,7 @@ describe('electron preload contract', () => {
 
   it('exposes the exact clipboard api name', () => {
     const { api } = loadPreloadWithMocks();
-    expect(Object.keys(api.clipboard).sort()).toEqual(['writeText']);
+    expect(Object.keys(api.clipboard).sort()).toEqual(['readText', 'writeText']);
   });
 
   it('exposes exactly the localFile api names', () => {
@@ -161,13 +180,22 @@ describe('electron preload contract', () => {
 
   it('exposes exactly the persistentStorage api names', () => {
     const { api } = loadPreloadWithMocks();
-    expect(Object.keys(api.persistentStorage).sort()).toEqual(['getItem', 'removeItem', 'setItem']);
+    expect(Object.keys(api.persistentStorage).sort()).toEqual([
+      'getItem',
+      'migrate',
+      'removeItem',
+      'setItem',
+    ]);
   });
 
   it('exposes the platform and version metadata', () => {
     const { api } = loadPreloadWithMocks();
     expect(api.platform).toBe('linux');
-    expect(api.versions).toEqual({ node: '24.14.1', electron: '35.7.5', chrome: '134.0.7001.17' });
+    expect(api.versions).toEqual({
+      node: '24.14.1',
+      electron: '35.7.5',
+      chrome: '134.0.7001.17',
+    });
   });
 
   it('routes getAppVersion and getPlatform through ipcRenderer.invoke', async () => {
@@ -182,6 +210,17 @@ describe('electron preload contract', () => {
     const { api, ipcRenderer } = loadPreloadWithMocks();
     await expect(api.clipboard.writeText('hello')).resolves.toBe('invoked');
     expect(ipcRenderer.invoke).toHaveBeenCalledWith('clipboard-write-text', 'hello');
+  });
+
+  it('routes clipboard.readText through ipcRenderer.invoke', async () => {
+    // Given: the preload API is loaded with an observable IPC renderer.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+
+    // When: the renderer requests trusted clipboard text.
+    await expect(api.clipboard.readText()).resolves.toBe('invoked');
+
+    // Then: preload invokes only the dedicated no-argument read channel.
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('clipboard-read-text');
   });
 
   it('routes localFile methods through ipcRenderer.invoke', async () => {
@@ -209,9 +248,57 @@ describe('electron preload contract', () => {
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-remove', 'theme');
   });
 
+  it('throws the main-process storage error locally from a failure envelope', () => {
+    // Given: native storage rejects malformed bytes and main returns a failure envelope.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    ipcRenderer.sendSync.mockReturnValueOnce({
+      ok: false,
+      error: { name: 'TypeError', message: 'invalid UTF-8' },
+    });
+
+    // When: the renderer reads the malformed native entry.
+    const read = () => api.persistentStorage.getItem('theme');
+
+    // Then: preload throws locally while preserving the native error identity and message.
+    expect(read).toThrow(expect.objectContaining({ name: 'TypeError', message: 'invalid UTF-8' }));
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-get', 'theme');
+  });
+
+  it('returns persistentStorage mutation acknowledgements to the renderer', () => {
+    // Given: Electron main rejects a synchronous persistent storage mutation.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    ipcRenderer.sendSync.mockReturnValueOnce(false).mockReturnValueOnce(false);
+
+    // When: preload forwards set and remove requests.
+    const setResult = api.persistentStorage.setItem('theme', 'dark');
+    const removeResult = api.persistentStorage.removeItem('theme');
+
+    // Then: preload preserves both rejection acknowledgements unchanged.
+    expect(setResult).toBe(false);
+    expect(removeResult).toBe(false);
+  });
+
+  it('routes one acknowledged persistentStorage migration through synchronous IPC', () => {
+    // Given: main rejects an atomic renderer-storage migration request.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    ipcRenderer.sendSync.mockReturnValueOnce(false);
+    const entries = { 'opencode.settings.textTransformers.v1': 'legacy' };
+
+    // When: renderer submits the complete legacy snapshot.
+    const result = api.persistentStorage.migrate(entries);
+
+    // Then: preload preserves the acknowledgement and sends one bulk payload.
+    expect(result).toBe(false);
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-migrate', entries);
+  });
+
   it('forwards persistent-storage-changed into a window storage event', () => {
     const { ipcRenderer, dispatchedEvents } = loadPreloadWithMocks();
-    ipcRenderer.emit('persistent-storage-changed', { sender: {} }, { key: 'theme', oldValue: null, newValue: 'dark' });
+    ipcRenderer.emit(
+      'persistent-storage-changed',
+      { sender: {} },
+      { key: 'theme', oldValue: null, newValue: 'dark' },
+    );
     expect(dispatchedEvents).toEqual([
       { type: 'storage', key: 'theme', oldValue: null, newValue: 'dark' },
     ]);
@@ -221,7 +308,11 @@ describe('electron preload contract', () => {
     const { api, ipcRenderer } = loadPreloadWithMocks();
     const listener = vi.fn();
     api.localFile.onChanged(listener);
-    ipcRenderer.emit('local-file-changed', { sender: {} }, { sessionId: 's1', content: 'new content' });
+    ipcRenderer.emit(
+      'local-file-changed',
+      { sender: {} },
+      { sessionId: 's1', content: 'new content' },
+    );
     expect(listener).toHaveBeenCalledWith({ sessionId: 's1', content: 'new content' });
   });
 

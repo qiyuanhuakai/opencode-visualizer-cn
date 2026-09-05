@@ -10,6 +10,7 @@ import {
 } from './localApplicationApproval.js';
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
+import { createPersistentStorage } from './persistentStorage.js';
 import {
   classifyMime,
   classifyNavigation,
@@ -26,6 +27,7 @@ const LOCAL_APPLICATION_APPROVAL_FILE = 'local-application.json';
 const DEV_SERVER_URL = 'http://127.0.0.1:5173';
 const LOCAL_APPLICATION_PATH_KEY = 'opencode.settings.localApplicationPath.v1';
 const OPEN_IN_EDITOR_MAX_SIZE_KEY = 'opencode.settings.openInEditorMaxSizeMb.v1';
+const RENDERER_STORAGE_PREFIX = 'opencode.';
 const DEFAULT_MAX_LOCAL_FILE_BYTES = 20 * 1024 * 1024;
 
 protocol.registerSchemesAsPrivileged([
@@ -41,7 +43,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow = null;
-let persistentStorageCache = null;
+let persistentStorage = null;
 let approvedLocalApplicationPath = null;
 const localFileSessionOwners = new Map();
 const localFileEditor = createLocalFileEditor({
@@ -74,56 +76,9 @@ function localApplicationApprovalFilePath() {
   return path.join(app.getPath('userData'), LOCAL_APPLICATION_APPROVAL_FILE);
 }
 
-function loadPersistentStorage() {
-  if (persistentStorageCache) {
-    return persistentStorageCache;
-  }
-
-  try {
-    const raw = fs.readFileSync(persistentStorageFilePath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      persistentStorageCache = Object.fromEntries(
-        Object.entries(parsed).filter(([, value]) => typeof value === 'string'),
-      );
-      return persistentStorageCache;
-    }
-  } catch {
-    // Ignore missing or malformed storage files and recreate them on write.
-  }
-
-  persistentStorageCache = {};
-  return persistentStorageCache;
-}
-
-function writePersistentStorage() {
-  const filePath = persistentStorageFilePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(loadPersistentStorage(), null, 2), 'utf8');
-}
-
-function getPersistentStorageItem(key) {
-  const storage = loadPersistentStorage();
-  return Object.hasOwn(storage, key) ? storage[key] : null;
-}
-
-function setPersistentStorageItem(key, value) {
-  const storage = loadPersistentStorage();
-  const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
-  storage[key] = value;
-  writePersistentStorage();
-  return oldValue;
-}
-
-function removePersistentStorageItem(key) {
-  const storage = loadPersistentStorage();
-  const oldValue = Object.hasOwn(storage, key) ? storage[key] : null;
-  if (oldValue === null) {
-    return null;
-  }
-  delete storage[key];
-  writePersistentStorage();
-  return oldValue;
+function getPersistentStorage() {
+  persistentStorage ??= createPersistentStorage(persistentStorageFilePath());
+  return persistentStorage;
 }
 
 function broadcastPersistentStorageChange(change, sourceWebContentsId) {
@@ -134,6 +89,23 @@ function broadcastPersistentStorageChange(change, sourceWebContentsId) {
     }
     webContents.send('persistent-storage-changed', change);
   }
+}
+
+function commitPersistentStorageMutation(event, mutation, excludedKey) {
+  let changes;
+  try {
+    const storage = getPersistentStorage();
+    mutation(storage);
+    changes = storage.drainPendingChanges();
+  } catch {
+    event.returnValue = false;
+    return;
+  }
+  for (const change of changes) {
+    const excludedSenderId = change.key === excludedKey ? event.sender.id : undefined;
+    broadcastPersistentStorageChange(change, excludedSenderId);
+  }
+  event.returnValue = true;
 }
 
 function assertTrustedRenderer(event) {
@@ -149,7 +121,7 @@ function assertTrustedRenderer(event) {
 }
 
 function configuredMaxLocalFileBytes() {
-  const raw = getPersistentStorageItem(OPEN_IN_EDITOR_MAX_SIZE_KEY);
+  const raw = getPersistentStorage().getItem(OPEN_IN_EDITOR_MAX_SIZE_KEY);
   const megabytes = Number(raw);
   if (!Number.isFinite(megabytes) || megabytes <= 0) return DEFAULT_MAX_LOCAL_FILE_BYTES;
   return Math.min(Math.round(megabytes), 100) * 1024 * 1024;
@@ -207,9 +179,7 @@ function createWindow() {
     callback({ responseHeaders });
   });
 
-  const appUrl = isDev
-    ? DEV_SERVER_URL
-    : 'app://index.html';
+  const appUrl = isDev ? DEV_SERVER_URL : 'app://index.html';
 
   if (isDev) {
     mainWindow.webContents.on(
@@ -243,9 +213,19 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
-  loadPersistentStorage();
-  approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  app.whenReady().then(() => {
+    approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
 
   protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
@@ -286,7 +266,8 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
-});
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -294,9 +275,13 @@ app.on('window-all-closed', () => {
   }
 });
 
-installAsyncQuitCleanup(app, () => localFileEditor.closeAll(), (error) => {
-  console.error('[electron] Failed to clean local edit sessions before quit:', error);
-});
+installAsyncQuitCleanup(
+  app,
+  () => localFileEditor.closeAll(),
+  (error) => {
+    console.error('[electron] Failed to clean local edit sessions before quit:', error);
+  },
+);
 
 app.on('web-contents-created', (_event, contents) => {
   contents.once('destroyed', () => {
@@ -304,11 +289,9 @@ app.on('web-contents-created', (_event, contents) => {
       console.error('[electron] Failed to clean renderer local edit sessions:', error);
     });
   });
-  contents.session.setPermissionRequestHandler(
-    (_webContents, permission, callback) => {
-      callback(isPermissionAllowed(permission));
-    }
-  );
+  contents.session.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(isPermissionAllowed(permission));
+  });
 });
 
 ipcMain.handle('get-app-version', () => {
@@ -319,11 +302,17 @@ ipcMain.handle('get-platform', () => {
   return process.platform;
 });
 
-ipcMain.handle('clipboard-write-text', (_event, text) => {
+ipcMain.handle('clipboard-write-text', (event, text) => {
+  assertTrustedRenderer(event);
   if (typeof text !== 'string') {
     throw new Error('Invalid text: expected string');
   }
   clipboard.writeText(text);
+});
+
+ipcMain.handle('clipboard-read-text', (event) => {
+  assertTrustedRenderer(event);
+  return clipboard.readText();
 });
 
 ipcMain.handle('local-file-select-application', async (event) => {
@@ -335,15 +324,15 @@ ipcMain.handle('local-file-select-application', async (event) => {
   const result = mainWindow
     ? await dialog.showOpenDialog(mainWindow, options)
     : await dialog.showOpenDialog(options);
-    const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
-    if (!selectedPath) return null;
-    await fs.promises.access(selectedPath, fs.constants.X_OK);
-    const oldValue = approvedLocalApplicationPath;
-    persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
-    approvedLocalApplicationPath = selectedPath;
-    broadcastPersistentStorageChange(
-      { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
-      event.sender.id,
+  const selectedPath = result.canceled ? null : (result.filePaths[0] ?? null);
+  if (!selectedPath) return null;
+  await fs.promises.access(selectedPath, fs.constants.X_OK);
+  const oldValue = approvedLocalApplicationPath;
+  persistApprovedLocalApplication(localApplicationApprovalFilePath(), selectedPath);
+  approvedLocalApplicationPath = selectedPath;
+  broadcastPersistentStorageChange(
+    { key: LOCAL_APPLICATION_PATH_KEY, oldValue, newValue: selectedPath },
+    event.sender.id,
   );
   return selectedPath;
 });
@@ -365,7 +354,10 @@ ipcMain.handle('local-file-open', async (event, payload) => {
   assertTrustedRenderer(event);
   const sessionId = payload?.sessionId;
   if (typeof sessionId !== 'string') throw new Error('Invalid local file session ID');
-  if (typeof approvedLocalApplicationPath !== 'string' || approvedLocalApplicationPath.length === 0) {
+  if (
+    typeof approvedLocalApplicationPath !== 'string' ||
+    approvedLocalApplicationPath.length === 0
+  ) {
     throw new Error('No local application has been approved');
   }
   localFileSessionOwners.set(sessionId, event.sender.id);
@@ -396,18 +388,30 @@ ipcMain.handle('local-file-close', async (event, sessionId) => {
 });
 
 ipcMain.on('persistent-storage-get', (event, key) => {
+  assertTrustedRenderer(event);
   if (typeof key !== 'string') {
-    event.returnValue = null;
+    event.returnValue = { ok: true, value: null };
     return;
   }
   if (key === LOCAL_APPLICATION_PATH_KEY) {
-    event.returnValue = approvedLocalApplicationPath;
+    event.returnValue = { ok: true, value: approvedLocalApplicationPath };
     return;
   }
-  event.returnValue = getPersistentStorageItem(key);
+  try {
+    event.returnValue = { ok: true, value: getPersistentStorage().getItem(key) };
+  } catch (error) {
+    event.returnValue = {
+      ok: false,
+      error: {
+        name: typeof error?.name === 'string' ? error.name : 'Error',
+        message: typeof error?.message === 'string' ? error.message : String(error),
+      },
+    };
+  }
 });
 
 ipcMain.on('persistent-storage-set', (event, payload) => {
+  assertTrustedRenderer(event);
   const key = payload?.key;
   const value = payload?.value;
   if (typeof key !== 'string' || typeof value !== 'string') {
@@ -419,17 +423,11 @@ ipcMain.on('persistent-storage-set', (event, payload) => {
     return;
   }
 
-  const currentValue = getPersistentStorageItem(key);
-  if (currentValue === value) {
-    event.returnValue = true;
-    return;
-  }
-  const oldValue = setPersistentStorageItem(key, value);
-  broadcastPersistentStorageChange({ key, oldValue, newValue: value }, event.sender.id);
-  event.returnValue = true;
+  commitPersistentStorageMutation(event, (storage) => storage.setItem(key, value), key);
 });
 
 ipcMain.on('persistent-storage-remove', (event, key) => {
+  assertTrustedRenderer(event);
   if (typeof key !== 'string') {
     event.returnValue = false;
     return;
@@ -439,9 +437,24 @@ ipcMain.on('persistent-storage-remove', (event, key) => {
     return;
   }
 
-  const oldValue = removePersistentStorageItem(key);
-  if (oldValue !== null) {
-    broadcastPersistentStorageChange({ key, oldValue, newValue: null }, event.sender.id);
+  commitPersistentStorageMutation(event, (storage) => storage.removeItem(key), key);
+});
+
+ipcMain.on('persistent-storage-migrate', (event, entries) => {
+  assertTrustedRenderer(event);
+  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
+    event.returnValue = false;
+    return;
   }
-  event.returnValue = true;
+
+  const migrationEntries = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (!key.startsWith(RENDERER_STORAGE_PREFIX) || typeof value !== 'string') {
+      event.returnValue = false;
+      return;
+    }
+    if (key !== LOCAL_APPLICATION_PATH_KEY) migrationEntries[key] = value;
+  }
+
+  commitPersistentStorageMutation(event, (storage) => storage.migrate(migrationEntries));
 });

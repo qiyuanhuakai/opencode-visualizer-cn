@@ -1,0 +1,345 @@
+import {
+  isBoundedTextTransformerImportSnippet,
+  MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
+  MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_TOTAL_TAGS,
+} from './snippetImportLimits';
+
+export type TextTransformer = {
+  readonly id: string;
+  readonly trigger: string;
+  readonly name: string;
+  readonly body: string;
+  readonly description?: string;
+  readonly enabled: boolean;
+  readonly tags: readonly string[];
+};
+
+export type LegacyTextTransformer = {
+  readonly trigger: string;
+  readonly replacement: string;
+};
+
+export type TextTransformerInput = TextTransformer | LegacyTextTransformer;
+
+export type TextTransformerImportFailure =
+  | 'invalid-json'
+  | 'unsupported-version'
+  | 'invalid-snippets';
+
+export type TextTransformerImportResult =
+  | { readonly ok: true; readonly snippets: TextTransformer[] }
+  | { readonly ok: false; readonly reason: TextTransformerImportFailure };
+
+type NormalizedSnippet = {
+  readonly snippet: TextTransformer;
+  readonly hasExplicitId: boolean;
+};
+
+const TEXT_TRANSFORMER_EXPORT_VERSION = 1;
+export {
+  MAX_TEXT_TRANSFORMER_BODY_LENGTH,
+  MAX_TEXT_TRANSFORMER_DESCRIPTION_LENGTH,
+  MAX_TEXT_TRANSFORMER_IMPORT_BYTES,
+  MAX_TEXT_TRANSFORMER_IMPORT_COUNT,
+  MAX_TEXT_TRANSFORMER_NAME_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAG_DRAFT_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAG_LENGTH,
+  MAX_TEXT_TRANSFORMER_TAGS,
+  MAX_TEXT_TRANSFORMER_TOTAL_TAGS,
+  MAX_TEXT_TRANSFORMER_TRIGGER_LENGTH,
+  truncateTextTransformerString,
+} from './snippetImportLimits';
+function normalizeTrigger(value: string): string {
+  return value.trim().replace(/^\\+/u, '');
+}
+
+export function isValidTextTransformerTrigger(value: string): boolean {
+  return value.length > 0 && !/[\s\\]/u.test(value) && !/^[/@$]/u.test(value);
+}
+
+function isLegacyReservedTrigger(value: string): boolean {
+  return value.length > 0 && !/[\s\\]/u.test(value) && /^[/@$]/u.test(value);
+}
+
+function stableSnippetId(trigger: string, body: string): string {
+  let hash = 0x811c9dc5;
+  for (const character of `${trigger}\0${body}`) {
+    hash ^= character.codePointAt(0) ?? 0;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `snippet-${(hash >>> 0).toString(36)}`;
+}
+
+function normalizeTags(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const tags: string[] = [];
+  const keys = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    const tag = entry.trim();
+    const key = tag.toLocaleLowerCase();
+    if (!tag || keys.has(key)) continue;
+    keys.add(key);
+    tags.push(tag);
+  }
+  return tags;
+}
+
+function optionalTrimmedString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function snippetBody(value: object): string | null {
+  const body = Reflect.get(value, 'body');
+  if (typeof body === 'string') return body;
+  const legacyReplacement = Reflect.get(value, 'replacement');
+  return typeof legacyReplacement === 'string' ? legacyReplacement : null;
+}
+
+function normalizeSnippetTrigger(
+  value: unknown,
+  enabled: unknown,
+): { trigger: string; enabled: boolean } | null {
+  if (typeof value !== 'string') return null;
+  const trigger = normalizeTrigger(value);
+  if (isValidTextTransformerTrigger(trigger)) {
+    return { trigger, enabled: typeof enabled === 'boolean' ? enabled : true };
+  }
+  return isLegacyReservedTrigger(trigger) ? { trigger, enabled: false } : null;
+}
+
+function normalizeSnippet(value: object): NormalizedSnippet | null {
+  const normalizedTrigger = normalizeSnippetTrigger(
+    Reflect.get(value, 'trigger'),
+    Reflect.get(value, 'enabled'),
+  );
+  if (!normalizedTrigger) return null;
+  const body = snippetBody(value);
+  if (body === null) return null;
+
+  const { trigger, enabled } = normalizedTrigger;
+  const explicitId = optionalTrimmedString(Reflect.get(value, 'id'));
+  const id = explicitId ?? stableSnippetId(trigger, body);
+  const name = optionalTrimmedString(Reflect.get(value, 'name')) ?? trigger;
+  const description = optionalTrimmedString(Reflect.get(value, 'description'));
+  const snippet = {
+    id,
+    trigger,
+    name,
+    body,
+    enabled,
+    tags: normalizeTags(Reflect.get(value, 'tags')),
+  };
+  return {
+    snippet: description ? { ...snippet, description } : snippet,
+    hasExplicitId: explicitId !== undefined,
+  };
+}
+
+function hasSameTrigger(left: string, right: string): boolean {
+  const escaped = left.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return new RegExp(`^${escaped}$`, 'iu').test(right);
+}
+
+function isSingleCodePoint(value: string): boolean {
+  const iterator = value[Symbol.iterator]();
+  return !iterator.next().done && iterator.next().done === true;
+}
+
+function simpleCaseFoldCharacter(character: string, foldCache: Map<string, string>): string {
+  const cached = foldCache.get(character);
+  if (cached) return cached;
+  const lowercase = character.toLowerCase();
+  const lowerUpper = isSingleCodePoint(lowercase) ? lowercase.toUpperCase() : '';
+  const candidates = isSingleCodePoint(lowerUpper)
+    ? [lowerUpper, character.toUpperCase(), lowercase]
+    : [lowercase, character.toUpperCase()];
+  const key =
+    candidates.find(
+      (candidate) =>
+        isSingleCodePoint(candidate) &&
+        (candidate === character || hasSameTrigger(character, candidate)),
+    ) ?? character;
+  foldCache.set(character, key);
+  return key;
+}
+
+function textTransformerTriggerKeyWithCache(value: string, foldCache: Map<string, string>): string {
+  return Array.from(value, (character) => simpleCaseFoldCharacter(character, foldCache)).join('');
+}
+
+function hasImportableTrigger(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const rawTrigger = Reflect.get(value, 'trigger');
+  if (typeof rawTrigger !== 'string') return false;
+  const trigger = normalizeTrigger(rawTrigger);
+  if (isValidTextTransformerTrigger(trigger)) return true;
+  return isLegacyReservedTrigger(trigger) && Reflect.get(value, 'enabled') === false;
+}
+
+export function textTransformerTriggerKey(value: string): string {
+  return textTransformerTriggerKeyWithCache(normalizeTrigger(value), new Map());
+}
+
+export function textTransformerCaseFoldKey(value: string): string {
+  return textTransformerTriggerKeyWithCache(value, new Map());
+}
+
+export function normalizeTextTransformers(value: unknown): TextTransformer[] {
+  if (!Array.isArray(value)) return [];
+  const normalized = new Map<string, NormalizedSnippet>();
+  const foldCache = new Map<string, string>();
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) continue;
+    const candidate = normalizeSnippet(item);
+    if (!candidate) continue;
+    const triggerKey = textTransformerTriggerKeyWithCache(candidate.snippet.trigger, foldCache);
+    normalized.delete(triggerKey);
+    normalized.set(triggerKey, candidate);
+  }
+  const candidates = [...normalized.values()];
+  const reservedIds = new Set(
+    candidates.filter(({ hasExplicitId }) => hasExplicitId).map(({ snippet }) => snippet.id),
+  );
+  const allocatedIds = new Set<string>();
+  return candidates.map(({ snippet, hasExplicitId }) => {
+    if (hasExplicitId && !allocatedIds.has(snippet.id)) {
+      allocatedIds.add(snippet.id);
+      return snippet;
+    }
+    if (!hasExplicitId && !reservedIds.has(snippet.id) && !allocatedIds.has(snippet.id)) {
+      allocatedIds.add(snippet.id);
+      return snippet;
+    }
+    let suffix = 2;
+    let id = `${snippet.id}-${suffix}`;
+    while (reservedIds.has(id) || allocatedIds.has(id)) {
+      suffix += 1;
+      id = `${snippet.id}-${suffix}`;
+    }
+    allocatedIds.add(id);
+    return { ...snippet, id };
+  });
+}
+
+function serializedTextTransformerLibrary(snippets: readonly TextTransformer[]): string {
+  return JSON.stringify({ version: TEXT_TRANSFORMER_EXPORT_VERSION, snippets }, null, 2);
+}
+
+export function validateTextTransformerLibrary(
+  transformers: readonly TextTransformerInput[],
+): TextTransformer[] | null {
+  const snippets = normalizeTextTransformers(transformers);
+  const totalTags = snippets.reduce((count, snippet) => count + snippet.tags.length, 0);
+  if (
+    snippets.length !== transformers.length ||
+    snippets.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT ||
+    totalTags > MAX_TEXT_TRANSFORMER_TOTAL_TAGS ||
+    !snippets.every(isBoundedTextTransformerImportSnippet)
+  ) {
+    return null;
+  }
+  const serialized = serializedTextTransformerLibrary(snippets);
+  return new TextEncoder().encode(serialized).byteLength <= MAX_TEXT_TRANSFORMER_IMPORT_BYTES
+    ? snippets
+    : null;
+}
+
+export function serializeTextTransformers(transformers: readonly TextTransformerInput[]): string {
+  const snippets = validateTextTransformerLibrary(transformers);
+  if (!snippets) {
+    throw new RangeError('Snippet backup exceeds the import limits');
+  }
+  return serializedTextTransformerLibrary(snippets);
+}
+
+export function parseTextTransformerImport(input: string): TextTransformerImportResult {
+  if (new TextEncoder().encode(input).byteLength > MAX_TEXT_TRANSFORMER_IMPORT_BYTES) {
+    return { ok: false, reason: 'invalid-snippets' };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch {
+    return { ok: false, reason: 'invalid-json' };
+  }
+  if (typeof parsed !== 'object' || parsed === null) {
+    return { ok: false, reason: 'unsupported-version' };
+  }
+  if (Reflect.get(parsed, 'version') !== TEXT_TRANSFORMER_EXPORT_VERSION) {
+    return { ok: false, reason: 'unsupported-version' };
+  }
+  const rawSnippets = Reflect.get(parsed, 'snippets');
+  if (!Array.isArray(rawSnippets)) return { ok: false, reason: 'invalid-snippets' };
+  if (
+    rawSnippets.length > MAX_TEXT_TRANSFORMER_IMPORT_COUNT ||
+    !rawSnippets.every(
+      (snippet) => isBoundedTextTransformerImportSnippet(snippet) && hasImportableTrigger(snippet),
+    )
+  ) {
+    return { ok: false, reason: 'invalid-snippets' };
+  }
+  const snippets = validateTextTransformerLibrary(rawSnippets);
+  if (!snippets) {
+    return { ok: false, reason: 'invalid-snippets' };
+  }
+  const ids = new Set(snippets.map((snippet) => snippet.id));
+  if (ids.size !== snippets.length) return { ok: false, reason: 'invalid-snippets' };
+  return { ok: true, snippets };
+}
+
+export function mergeTextTransformers(
+  current: readonly TextTransformerInput[],
+  imported: readonly TextTransformerInput[],
+): TextTransformer[] {
+  const mergedById = new Map<string, TextTransformer>();
+  const idByTrigger = new Map<string, string>();
+  const currentSnippets = normalizeTextTransformers(current);
+  const importedSnippets = normalizeTextTransformers(imported);
+  const reservedIds = new Set(
+    [...currentSnippets, ...importedSnippets].map((snippet) => snippet.id),
+  );
+
+  function isGeneratedSnippetId(snippet: TextTransformer): boolean {
+    const baseId = stableSnippetId(snippet.trigger, snippet.body);
+    if (snippet.id === baseId) return true;
+    if (!snippet.id.startsWith(`${baseId}-`)) return false;
+    return /^(?:[2-9]|[1-9][0-9]+)$/u.test(snippet.id.slice(baseId.length + 1));
+  }
+
+  function allocateMergedSnippetId(snippet: TextTransformer): TextTransformer {
+    const baseId = stableSnippetId(snippet.trigger, snippet.body);
+    let suffix = 2;
+    let id = `${baseId}-${suffix}`;
+    while (mergedById.has(id) || reservedIds.has(id)) {
+      suffix += 1;
+      id = `${baseId}-${suffix}`;
+    }
+    return { ...snippet, id };
+  }
+
+  function mergeSnippet(rawSnippet: TextTransformer, importedEntry: boolean) {
+    const rawTriggerKey = textTransformerTriggerKey(rawSnippet.trigger);
+    const sameId = mergedById.get(rawSnippet.id);
+    const snippet =
+      importedEntry &&
+      sameId &&
+      textTransformerTriggerKey(sameId.trigger) !== rawTriggerKey &&
+      isGeneratedSnippetId(sameId) &&
+      isGeneratedSnippetId(rawSnippet)
+        ? allocateMergedSnippetId(rawSnippet)
+        : rawSnippet;
+    const triggerKey = textTransformerTriggerKey(snippet.trigger);
+    const replacedById = mergedById.get(snippet.id);
+    if (replacedById) idByTrigger.delete(textTransformerTriggerKey(replacedById.trigger));
+    const replacedId = idByTrigger.get(triggerKey);
+    if (replacedId) mergedById.delete(replacedId);
+    mergedById.delete(snippet.id);
+    mergedById.set(snippet.id, snippet);
+    idByTrigger.set(triggerKey, snippet.id);
+  }
+  for (const snippet of currentSnippets) mergeSnippet(snippet, false);
+  for (const snippet of importedSnippets) mergeSnippet(snippet, true);
+  return [...mergedById.values()];
+}

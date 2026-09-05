@@ -65,7 +65,8 @@ describe('useBackendMessageSend behavior', () => {
     expect(base.setSendStatusText).toHaveBeenCalledWith('inspect');
   });
 
-  it('expands transformers before resolving a stale session fallback', async () => {
+  it('preserves unconfirmed snippet triggers while resolving a stale session fallback', async () => {
+    // Given: an unconfirmed trigger is present and the selected session is stale.
     const events: string[] = [];
     const base = createBaseParams();
     base.selectedSessionId.value = 'stale-session';
@@ -74,27 +75,37 @@ describe('useBackendMessageSend behavior', () => {
     base.messageInput.value = String.raw`Say \hi`;
     base.textTransformers.value = [
       {
+        id: 'snippet-hi',
         trigger: 'hi',
-        get replacement() {
+        name: 'Greeting',
+        get body() {
           events.push('transform');
           return 'hello';
         },
+        enabled: true,
+        tags: [],
       },
     ];
     base.pickPreferredSessionId = (sessions) => {
       events.push('fallback');
       return sessions[0]?.id || '';
     };
+    const sendPromptAsync = vi.fn().mockResolvedValue(undefined);
     const runtime = useBackendMessageSend({
       ...base,
       activeBackendKind: ref('opencode'),
-      openCodeApi: { sendPromptAsync: vi.fn().mockResolvedValue(undefined) },
+      openCodeApi: { sendPromptAsync },
       codexApi: createCodexApi(),
     });
 
+    // When: the message crosses the backend send boundary.
     await runtime.sendMessage();
 
-    expect(events.slice(0, 2)).toEqual(['transform', 'fallback']);
+    // Then: session recovery runs without reading or expanding the snippet body.
+    expect(events).toEqual(['fallback']);
+    expect(sendPromptAsync.mock.calls[0]?.[1]).toMatchObject({
+      parts: [{ type: 'text', text: String.raw`Say \hi` }],
+    });
   });
 
   it('retains unsupported Codex attachments and reports the attachment error', async () => {

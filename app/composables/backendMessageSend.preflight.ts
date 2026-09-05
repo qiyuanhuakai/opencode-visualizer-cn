@@ -1,4 +1,3 @@
-import { expandTextTransformers } from '../utils/textTransformers';
 import type { BackendMessageSendParams, SendPreflight } from './backendMessageSend.types';
 
 function resolveSessionId(
@@ -34,11 +33,8 @@ export function prepareSendPreflight(params: BackendMessageSendParams): SendPref
   const attachments = params.attachments.value.slice();
   const hasText = text.length > 0;
   const hasAttachments = attachments.length > 0;
-  const transformersEnabled = params.textTransformersEnabled.value;
-  const transformers = params.textTransformers.value.slice();
-  const transformedText = transformersEnabled ? expandTextTransformers(text, transformers) : text;
-  const transformText = (value: string) =>
-    transformersEnabled ? expandTextTransformers(value, transformers) : value;
+  const transformedText = text;
+  const transformText = (value: string) => value;
   if ((!hasText && !hasAttachments) || !params.selectedSessionId.value) return null;
   const sessionId = resolveSessionId(params, params.selectedSessionId.value);
   if (!sessionId) return null;
