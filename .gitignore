@@ -21,3 +21,4 @@ cc-switch/
 .omo/
 /.cortexkit/
 /artifact-report.json
+/.playwright-mcp/
