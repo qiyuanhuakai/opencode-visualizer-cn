@@ -2,6 +2,18 @@ const { contextBridge, ipcRenderer } = require('electron');
 const localFileListeners = new Set();
 const localFileErrorListeners = new Set();
 
+function decodePersistentStorageGetResponse(response) {
+  if (response?.ok === true && (response.value === null || typeof response.value === 'string')) {
+    return response.value;
+  }
+  if (response?.ok === false && typeof response.error?.message === 'string') {
+    const error = new Error(response.error.message);
+    if (typeof response.error.name === 'string') error.name = response.error.name;
+    throw error;
+  }
+  throw new Error('Invalid persistent storage get response');
+}
+
 ipcRenderer.on('persistent-storage-changed', (_event, change) => {
   if (!change || typeof change.key !== 'string') {
     return;
@@ -77,7 +89,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   persistentStorage: {
-    getItem: (key) => ipcRenderer.sendSync('persistent-storage-get', key),
+    getItem: (key) =>
+      decodePersistentStorageGetResponse(ipcRenderer.sendSync('persistent-storage-get', key)),
     setItem: (key, value) => ipcRenderer.sendSync('persistent-storage-set', { key, value }),
     removeItem: (key) => ipcRenderer.sendSync('persistent-storage-remove', key),
     migrate: (entries) => ipcRenderer.sendSync('persistent-storage-migrate', entries),

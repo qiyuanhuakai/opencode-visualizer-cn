@@ -36,7 +36,7 @@ interface ElectronApiSchema {
     offError: (listener: (error: LocalFileError) => void) => void;
   };
   persistentStorage: {
-    getItem: (key: string) => unknown;
+    getItem: (key: string) => string | null;
     setItem: (key: string, value: string) => unknown;
     removeItem: (key: string) => unknown;
     migrate: (entries: Record<string, string>) => unknown;
@@ -48,7 +48,10 @@ type IpcListener = (event: unknown, payload?: unknown) => void;
 function createIpcRendererMock() {
   const listenersByChannel = new Map<string, IpcListener[]>();
   const invoke = vi.fn((_channel: string, ..._args: unknown[]) => Promise.resolve('invoked'));
-  const sendSync = vi.fn((_channel: string, ..._args: unknown[]): unknown => 'synced');
+  const sendSync = vi.fn((_channel: string, ..._args: unknown[]): unknown => ({
+    ok: true,
+    value: 'synced',
+  }));
   const on = vi.fn((channel: string, listener: IpcListener) => {
     const listeners = listenersByChannel.get(channel) ?? [];
     listeners.push(listener);
@@ -188,7 +191,11 @@ describe('electron preload contract', () => {
   it('exposes the platform and version metadata', () => {
     const { api } = loadPreloadWithMocks();
     expect(api.platform).toBe('linux');
-    expect(api.versions).toEqual({ node: '24.14.1', electron: '35.7.5', chrome: '134.0.7001.17' });
+    expect(api.versions).toEqual({
+      node: '24.14.1',
+      electron: '35.7.5',
+      chrome: '134.0.7001.17',
+    });
   });
 
   it('routes getAppVersion and getPlatform through ipcRenderer.invoke', async () => {
@@ -239,6 +246,22 @@ describe('electron preload contract', () => {
     });
     api.persistentStorage.removeItem('theme');
     expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-remove', 'theme');
+  });
+
+  it('throws the main-process storage error locally from a failure envelope', () => {
+    // Given: native storage rejects malformed bytes and main returns a failure envelope.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    ipcRenderer.sendSync.mockReturnValueOnce({
+      ok: false,
+      error: { name: 'TypeError', message: 'invalid UTF-8' },
+    });
+
+    // When: the renderer reads the malformed native entry.
+    const read = () => api.persistentStorage.getItem('theme');
+
+    // Then: preload throws locally while preserving the native error identity and message.
+    expect(read).toThrow(expect.objectContaining({ name: 'TypeError', message: 'invalid UTF-8' }));
+    expect(ipcRenderer.sendSync).toHaveBeenCalledWith('persistent-storage-get', 'theme');
   });
 
   it('returns persistentStorage mutation acknowledgements to the renderer', () => {
