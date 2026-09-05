@@ -4,6 +4,9 @@ import { useBackendActivation } from './useBackendActivation';
 import type { BackendKind } from '../backends/types';
 
 type HarnessOverrides = {
+  codexConnect?: () => Promise<void>;
+  connectOpenCode?: () => Promise<void>;
+  bootstrapAcpWorkspace?: () => Promise<void>;
   bootstrapSelections?: () => Promise<void>;
   hydrateActiveWorktreeResources?: () => Promise<void>;
 };
@@ -23,9 +26,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     bridgeToken: ref(''),
     activeThreadId: ref('thread-1'),
     visibleThreads: ref([{ id: 'thread-1' }]),
-    connect: vi.fn(async () => {
-      calls.push('codex.connect');
-    }),
+    connect: vi.fn(
+      overrides.codexConnect ??
+        (async () => {
+          calls.push('codex.connect');
+        }),
+    ),
     disconnect: vi.fn(() => {
       calls.push('codex.disconnect');
     }),
@@ -37,9 +43,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     }),
   };
   const ge = {
-    connect: vi.fn(async () => {
-      calls.push('ge.connect');
-    }),
+    connect: vi.fn(
+      overrides.connectOpenCode ??
+        (async () => {
+          calls.push('ge.connect');
+        }),
+    ),
     disconnect: vi.fn(() => {
       calls.push('ge.disconnect');
     }),
@@ -104,11 +113,13 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     configureAcpBackend,
     disconnectAcpBackend,
     disconnectCodexBackend,
-    bootstrapAcpWorkspace: async () => {
-      calls.push('bootstrapAcpWorkspace');
-      selectedProjectId.value = 'acp';
-      selectedSessionId.value = 'acp-session';
-    },
+    bootstrapAcpWorkspace:
+      overrides.bootstrapAcpWorkspace ??
+      (async () => {
+        calls.push('bootstrapAcpWorkspace');
+        selectedProjectId.value = 'acp';
+        selectedSessionId.value = 'acp-session';
+      }),
     fetchGlobalProviderConfig: async () => {
       calls.push('fetchGlobalProviderConfig');
     },
@@ -294,6 +305,97 @@ describe('useBackendActivation', () => {
     await initPromise;
     expect(harness.activation.initializationInFlight.value).toBe(false);
   });
+
+  it('keeps an aborted OpenCode bootstrap on the login screen after its work settles', async () => {
+    // Given: OpenCode is still selecting the initial project and session.
+    let finishBootstrap: (() => void) | undefined;
+    const harness = createHarness('opencode', {
+      bootstrapSelections: () =>
+        new Promise<void>((resolve) => {
+          finishBootstrap = resolve;
+        }),
+    });
+    const initialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(harness.connectionState.value).toBe('bootstrapping'));
+
+    // When: the user aborts startup before selection finishes.
+    harness.activation.abortInitialization();
+    finishBootstrap?.();
+    await initialization;
+
+    // Then: the obsolete bootstrap cannot publish Ready or continue startup work.
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('connecting');
+    expect(harness.calls).not.toContain('hydrateActiveWorktreeResources');
+    expect(harness.calls).not.toContain('fetchGlobalProviderConfig');
+  });
+
+  it('preserves an SSE authentication failure after cancelling its pending bootstrap', async () => {
+    // Given: project selection is pending when SSE rejects the active credentials.
+    let finishBootstrap: (() => void) | undefined;
+    const harness = createHarness('opencode', {
+      bootstrapSelections: () =>
+        new Promise<void>((resolve) => {
+          finishBootstrap = resolve;
+        }),
+    });
+    const initialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(harness.connectionState.value).toBe('bootstrapping'));
+
+    // When: the authentication handler cancels startup and returns the app to login.
+    harness.activation.abortInitialization();
+    harness.connectionState.value = 'error';
+    harness.initErrorMessage.value = 'Authentication failed. (HTTP 401)';
+    harness.uiInitState.value = 'login';
+    finishBootstrap?.();
+    await initialization;
+
+    // Then: the pending bootstrap cannot overwrite the authentication failure.
+    expect(harness.connectionState.value).toBe('error');
+    expect(harness.initErrorMessage.value).toBe('Authentication failed. (HTTP 401)');
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.calls).not.toContain('hydrateActiveWorktreeResources');
+  });
+
+  it.each(['codex', 'acp'] satisfies BackendKind[])(
+    'keeps a new OpenCode initialization owned after a stale %s activation settles',
+    async (staleBackend) => {
+      // Given: a backend activation remains pending while a replacement OpenCode login starts.
+      let finishStaleActivation: (() => void) | undefined;
+      let finishOpenCodeConnect: (() => void) | undefined;
+      const harness = createHarness(staleBackend, {
+        codexConnect: () =>
+          new Promise<void>((resolve) => {
+            finishStaleActivation = resolve;
+          }),
+        bootstrapAcpWorkspace: () =>
+          new Promise<void>((resolve) => {
+            finishStaleActivation = resolve;
+          }),
+        connectOpenCode: () =>
+          new Promise<void>((resolve) => {
+            finishOpenCodeConnect = resolve;
+          }),
+      });
+      const staleInitialization = harness.activation.startInitialization();
+      await vi.waitFor(() => expect(finishStaleActivation).toBeTypeOf('function'));
+      harness.activation.abortInitialization();
+      harness.credentials.backendKind.value = 'opencode';
+      const currentInitialization = harness.activation.startInitialization();
+      await vi.waitFor(() => expect(finishOpenCodeConnect).toBeTypeOf('function'));
+
+      // When: the obsolete activation reaches its finalizer.
+      finishStaleActivation?.();
+      await staleInitialization;
+
+      // Then: the replacement still owns the lock and can finish reaching Ready.
+      expect(harness.activation.initializationInFlight.value).toBe(true);
+      finishOpenCodeConnect?.();
+      await currentInitialization;
+      expect(harness.connectionState.value).toBe('ready');
+      expect(harness.uiInitState.value).toBe('ready');
+    },
+  );
 
   it('keeps Ready state when resource hydration rejects after activation', async () => {
     // Given: hydration fails after the UI is already Ready

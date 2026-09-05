@@ -78,6 +78,11 @@ export type UseBackendActivationOptions = {
 
 export function useBackendActivation(options: UseBackendActivationOptions) {
   const initializationInFlight = { value: false } as Ref<boolean>;
+  let initializationGeneration = 0;
+
+  function ownsInitialization(generation: number) {
+    return initializationInFlight.value && generation === initializationGeneration;
+  }
 
   function markStartup(name: string) {
     if (typeof performance !== 'undefined' && typeof performance.mark === 'function') {
@@ -106,7 +111,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     options.selectedModel.value = '';
   }
 
-  async function activateCodex() {
+  async function activateCodex(generation: number) {
     options.ge.disconnect();
     options.disconnectAcpBackend();
     options.activeBackendKind.value = 'codex';
@@ -165,11 +170,11 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.initErrorMessage.value = options.toErrorMessage(error);
       options.uiInitState.value = 'login';
     } finally {
-      initializationInFlight.value = false;
+      if (generation === initializationGeneration) initializationInFlight.value = false;
     }
   }
 
-  async function activateOpenCode() {
+  async function activateOpenCode(generation: number) {
     options.disconnectAcpBackend();
     options.disconnectCodexBackend();
     options.activeBackendKind.value = 'opencode';
@@ -182,11 +187,14 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
       await options.ge.connect({ failFast: true, timeoutMs: 10000 });
+      if (!ownsInitialization(generation)) return;
       options.connectionState.value = 'bootstrapping';
       options.initLoadingMessage.value = options.t('app.status.loadingServerPath');
       await options.fetchHomePath();
+      if (!ownsInitialization(generation)) return;
       options.initLoadingMessage.value = options.t('app.status.loadingProjects');
       await options.bootstrapSelections();
+      if (!ownsInitialization(generation)) return;
       markStartup('vis:opencode-session-selectable');
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
@@ -197,7 +205,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await options.fetchGlobalProviderConfig();
       await Promise.all([options.fetchProviders(true), options.fetchAgents()]);
     } catch (error) {
-      if (!initializationInFlight.value) return;
+      if (!ownsInitialization(generation)) return;
       // Once the UI reached Ready, only connect/path/hydration/selection
       // failures (all pre-Ready) may send the user back to login.
       if (options.uiInitState.value === 'ready') return;
@@ -210,11 +218,11 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.initErrorMessage.value = message;
       options.uiInitState.value = 'login';
     } finally {
-      initializationInFlight.value = false;
+      if (generation === initializationGeneration) initializationInFlight.value = false;
     }
   }
 
-  async function activateAcp() {
+  async function activateAcp(generation: number) {
     try {
       options.ge.disconnect();
       options.disconnectCodexBackend();
@@ -254,30 +262,36 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.initErrorMessage.value = options.toErrorMessage(error);
       options.uiInitState.value = 'login';
     } finally {
-      initializationInFlight.value = false;
+      if (generation === initializationGeneration) initializationInFlight.value = false;
     }
   }
 
   async function startInitialization() {
     if (initializationInFlight.value) return;
     initializationInFlight.value = true;
+    const generation = ++initializationGeneration;
     if (options.credentials.backendKind.value === 'codex') {
-      await activateCodex();
+      await activateCodex(generation);
       return;
     }
     if (options.credentials.backendKind.value === 'acp') {
-      await activateAcp();
+      await activateAcp(generation);
       return;
     }
-    await activateOpenCode();
+    await activateOpenCode(generation);
+  }
+
+  function cancelInitialization() {
+    initializationGeneration += 1;
+    initializationInFlight.value = false;
   }
 
   function abortInitialization() {
+    cancelInitialization();
     options.ge.disconnect();
     options.disconnectAcpBackend();
     if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnectTransport();
     options.disconnectCodexBackend();
-    initializationInFlight.value = false;
     options.connectionState.value = 'connecting';
     options.uiInitState.value = 'login';
     options.initErrorMessage.value = '';
