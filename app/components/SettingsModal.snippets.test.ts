@@ -448,6 +448,62 @@ describe('SettingsModal snippets', () => {
     setItem.mockRestore();
   });
 
+  it('clears a row-toggle save error after that row mutation is acknowledged', async () => {
+    // Given: the next row-level enable mutation is rejected by storage.
+    const { host, settings } = await mountSnippetSettings();
+    const setItem = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('Quota exceeded', 'QuotaExceededError');
+    });
+    const rowToggle = host.querySelector<HTMLButtonElement>('.transformer-enable')!;
+    rowToggle.click();
+    await nextTick();
+    expect(settings.textTransformers.value[0]?.enabled).toBe(true);
+    expect(host.querySelector('.transformer-import-status')?.textContent).toContain(
+      en.settings.textTransformers.saveError,
+    );
+
+    // When: the user retries the same row mutation after storage recovers.
+    setItem.mockRestore();
+    host.querySelector<HTMLButtonElement>('.transformer-enable')!.click();
+    await nextTick();
+
+    // Then: the acknowledged row state wins and its stale persistence error is cleared.
+    expect(settings.textTransformers.value[0]?.enabled).toBe(false);
+    expect(host.querySelector('.transformer-import-status')?.textContent).not.toContain(
+      en.settings.textTransformers.saveError,
+    );
+  });
+
+  it('clears a row save error when retry finds the requested native value already committed', async () => {
+    // Given: storage commits a row toggle but its first acknowledgement reports failure.
+    const { host, settings } = await mountSnippetSettings();
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    const setItem = vi
+      .spyOn(localStorage, 'setItem')
+      .mockImplementationOnce((key: string, value: string) => {
+        originalSetItem(key, value);
+        throw new DOMException('Legacy mirror unavailable', 'QuotaExceededError');
+      });
+    const rowToggle = host.querySelector<HTMLButtonElement>('.transformer-enable')!;
+    rowToggle.click();
+    await nextTick();
+    expect(settings.textTransformers.value[0]?.enabled).toBe(true);
+    expect(host.querySelector('.transformer-import-status')?.textContent).toContain(
+      en.settings.textTransformers.saveError,
+    );
+
+    // When: the user retries the same row mutation already present in canonical storage.
+    rowToggle.click();
+    await nextTick();
+
+    // Then: the row converges to the committed value and only its stale save error clears.
+    expect(settings.textTransformers.value[0]?.enabled).toBe(false);
+    expect(host.querySelector('.transformer-import-status')?.textContent).not.toContain(
+      en.settings.textTransformers.saveError,
+    );
+    setItem.mockRestore();
+  });
+
   it('keeps a rejected Electron Back commit inside the retryable detail view', async () => {
     // Given: Electron owns the migrated library and rejects subsequent synchronous writes.
     const electronStore: Record<string, string> = {};

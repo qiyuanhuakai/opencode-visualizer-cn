@@ -1061,6 +1061,7 @@ const {
   textTransformersEnabled,
   textTransformers,
   textTransformerPersistenceErrorRevision,
+  textTransformerPersistenceSuccessRevision,
   textTransformerEnabledPersistenceErrorRevision,
   textTransformerStorageRecoveryPending,
   overwriteTextTransformerStorage,
@@ -1557,6 +1558,19 @@ watch(textTransformerPersistenceErrorRevision, showTextTransformerPersistenceErr
   immediate: textTransformerPersistenceErrorRevision.value > 0,
   flush: 'sync',
 });
+
+watch(
+  textTransformerPersistenceSuccessRevision,
+  () => {
+    if (
+      textTransformerImportStatus.value?.kind === 'error' &&
+      textTransformerImportStatus.value.message === t('settings.textTransformers.saveError')
+    ) {
+      textTransformerImportStatus.value = null;
+    }
+  },
+  { flush: 'sync' },
+);
 
 watch(
   textTransformerEnabledPersistenceErrorRevision,
