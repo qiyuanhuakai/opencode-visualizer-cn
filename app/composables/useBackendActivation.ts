@@ -111,7 +111,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     options.selectedModel.value = '';
   }
 
-  async function activateCodex() {
+  async function activateCodex(generation: number) {
     options.ge.disconnect();
     options.disconnectAcpBackend();
     options.activeBackendKind.value = 'codex';
@@ -170,7 +170,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.initErrorMessage.value = options.toErrorMessage(error);
       options.uiInitState.value = 'login';
     } finally {
-      initializationInFlight.value = false;
+      if (generation === initializationGeneration) initializationInFlight.value = false;
     }
   }
 
@@ -222,7 +222,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
-  async function activateAcp() {
+  async function activateAcp(generation: number) {
     try {
       options.ge.disconnect();
       options.disconnectCodexBackend();
@@ -262,22 +262,23 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.initErrorMessage.value = options.toErrorMessage(error);
       options.uiInitState.value = 'login';
     } finally {
-      initializationInFlight.value = false;
+      if (generation === initializationGeneration) initializationInFlight.value = false;
     }
   }
 
   async function startInitialization() {
     if (initializationInFlight.value) return;
     initializationInFlight.value = true;
+    const generation = ++initializationGeneration;
     if (options.credentials.backendKind.value === 'codex') {
-      await activateCodex();
+      await activateCodex(generation);
       return;
     }
     if (options.credentials.backendKind.value === 'acp') {
-      await activateAcp();
+      await activateAcp(generation);
       return;
     }
-    await activateOpenCode(++initializationGeneration);
+    await activateOpenCode(generation);
   }
 
   function cancelInitialization() {

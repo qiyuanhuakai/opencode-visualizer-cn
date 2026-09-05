@@ -4,6 +4,9 @@ import { useBackendActivation } from './useBackendActivation';
 import type { BackendKind } from '../backends/types';
 
 type HarnessOverrides = {
+  codexConnect?: () => Promise<void>;
+  connectOpenCode?: () => Promise<void>;
+  bootstrapAcpWorkspace?: () => Promise<void>;
   bootstrapSelections?: () => Promise<void>;
   hydrateActiveWorktreeResources?: () => Promise<void>;
 };
@@ -23,9 +26,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     bridgeToken: ref(''),
     activeThreadId: ref('thread-1'),
     visibleThreads: ref([{ id: 'thread-1' }]),
-    connect: vi.fn(async () => {
-      calls.push('codex.connect');
-    }),
+    connect: vi.fn(
+      overrides.codexConnect ??
+        (async () => {
+          calls.push('codex.connect');
+        }),
+    ),
     disconnect: vi.fn(() => {
       calls.push('codex.disconnect');
     }),
@@ -37,9 +43,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     }),
   };
   const ge = {
-    connect: vi.fn(async () => {
-      calls.push('ge.connect');
-    }),
+    connect: vi.fn(
+      overrides.connectOpenCode ??
+        (async () => {
+          calls.push('ge.connect');
+        }),
+    ),
     disconnect: vi.fn(() => {
       calls.push('ge.disconnect');
     }),
@@ -104,11 +113,13 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     configureAcpBackend,
     disconnectAcpBackend,
     disconnectCodexBackend,
-    bootstrapAcpWorkspace: async () => {
-      calls.push('bootstrapAcpWorkspace');
-      selectedProjectId.value = 'acp';
-      selectedSessionId.value = 'acp-session';
-    },
+    bootstrapAcpWorkspace:
+      overrides.bootstrapAcpWorkspace ??
+      (async () => {
+        calls.push('bootstrapAcpWorkspace');
+        selectedProjectId.value = 'acp';
+        selectedSessionId.value = 'acp-session';
+      }),
     fetchGlobalProviderConfig: async () => {
       calls.push('fetchGlobalProviderConfig');
     },
@@ -345,6 +356,46 @@ describe('useBackendActivation', () => {
     expect(harness.uiInitState.value).toBe('login');
     expect(harness.calls).not.toContain('hydrateActiveWorktreeResources');
   });
+
+  it.each(['codex', 'acp'] satisfies BackendKind[])(
+    'keeps a new OpenCode initialization owned after a stale %s activation settles',
+    async (staleBackend) => {
+      // Given: a backend activation remains pending while a replacement OpenCode login starts.
+      let finishStaleActivation: (() => void) | undefined;
+      let finishOpenCodeConnect: (() => void) | undefined;
+      const harness = createHarness(staleBackend, {
+        codexConnect: () =>
+          new Promise<void>((resolve) => {
+            finishStaleActivation = resolve;
+          }),
+        bootstrapAcpWorkspace: () =>
+          new Promise<void>((resolve) => {
+            finishStaleActivation = resolve;
+          }),
+        connectOpenCode: () =>
+          new Promise<void>((resolve) => {
+            finishOpenCodeConnect = resolve;
+          }),
+      });
+      const staleInitialization = harness.activation.startInitialization();
+      await vi.waitFor(() => expect(finishStaleActivation).toBeTypeOf('function'));
+      harness.activation.abortInitialization();
+      harness.credentials.backendKind.value = 'opencode';
+      const currentInitialization = harness.activation.startInitialization();
+      await vi.waitFor(() => expect(finishOpenCodeConnect).toBeTypeOf('function'));
+
+      // When: the obsolete activation reaches its finalizer.
+      finishStaleActivation?.();
+      await staleInitialization;
+
+      // Then: the replacement still owns the lock and can finish reaching Ready.
+      expect(harness.activation.initializationInFlight.value).toBe(true);
+      finishOpenCodeConnect?.();
+      await currentInitialization;
+      expect(harness.connectionState.value).toBe('ready');
+      expect(harness.uiInitState.value).toBe('ready');
+    },
+  );
 
   it('keeps Ready state when resource hydration rejects after activation', async () => {
     // Given: hydration fails after the UI is already Ready
