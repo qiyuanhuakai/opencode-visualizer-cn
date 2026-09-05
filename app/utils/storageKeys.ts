@@ -72,6 +72,15 @@ function migrateLocalStorageToElectronStorage(
       nextElectronStorageMigrationAttemptAt = now + ELECTRON_STORAGE_MIGRATION_RETRY_MS;
       return false;
     }
+    for (const [key, migratedValue] of Object.entries(entries)) {
+      const currentValue = localStorage.getItem(key);
+      if (currentValue === migratedValue) {
+        localStorage.removeItem(key);
+      } else if (currentValue !== null) {
+        nextElectronStorageMigrationAttemptAt = now + ELECTRON_STORAGE_MIGRATION_RETRY_MS;
+        return false;
+      }
+    }
     hasMigratedElectronStorage = true;
     nextElectronStorageMigrationAttemptAt = 0;
     return true;
@@ -92,21 +101,31 @@ function pendingElectronMigrationBackend(
     },
     setItem: (key, value) => {
       const nativeValue = electronStorage.readItem(key);
-      const legacyResult = localStorage.setItem(key, value);
-      if (legacyResult === false || nativeValue.kind === 'error') return false;
+      if (nativeValue.kind === 'error') return false;
       if (nativeValue.kind === 'value') {
-        return electronStorage.setItem(key, value) !== false;
+        if (electronStorage.setItem(key, value) === false) return false;
+        try {
+          localStorage.setItem(key, value);
+        } catch {
+          return true;
+        }
+        return true;
       }
-      return true;
+      return false;
     },
     removeItem: (key) => {
       const nativeValue = electronStorage.readItem(key);
-      const legacyResult = localStorage.removeItem(key);
-      if (legacyResult === false || nativeValue.kind === 'error') return false;
+      if (nativeValue.kind === 'error') return false;
       if (nativeValue.kind === 'value') {
-        return electronStorage.removeItem(key) !== false;
+        if (electronStorage.removeItem(key) === false) return false;
+        try {
+          localStorage.removeItem(key);
+        } catch {
+          return false;
+        }
+        return true;
       }
-      return true;
+      return false;
     },
   };
 }

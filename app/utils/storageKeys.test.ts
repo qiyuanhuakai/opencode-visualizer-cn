@@ -43,6 +43,10 @@ describe('storageKeys', () => {
       'opencode.settings.enterToSend.v1': 'native-old',
     };
     let rejectMigration = true;
+    let rejectNativeMutations = false;
+    let nativeReadError = false;
+    let legacySetError = false;
+    let legacyRemoveError = false;
     const migrationSnapshots: Array<Record<string, string>> = [];
     const migrate = vi.fn((entries: Record<string, string>) => {
       migrationSnapshots.push({ ...entries });
@@ -60,20 +64,27 @@ describe('storageKeys', () => {
         key: (index: number) => Object.keys(legacyStore)[index] ?? null,
         getItem: (key: string) => legacyStore[key] ?? null,
         setItem: (key: string, value: string) => {
+          if (legacySetError) throw new DOMException('Legacy storage unavailable');
           legacyStore[key] = value;
         },
         removeItem: (key: string) => {
+          if (legacyRemoveError) throw new DOMException('Legacy storage unavailable');
           delete legacyStore[key];
         },
       },
       electronAPI: {
         persistentStorage: {
-          getItem: (key: string) => electronStore[key] ?? null,
+          getItem: (key: string) => {
+            if (nativeReadError) throw new DOMException('Native storage unavailable');
+            return electronStore[key] ?? null;
+          },
           setItem: vi.fn((key: string, value: string) => {
+            if (rejectNativeMutations) return false;
             electronStore[key] = value;
             return true;
           }),
           removeItem: vi.fn((key: string) => {
+            if (rejectNativeMutations) return false;
             delete electronStore[key];
             return true;
           }),
@@ -88,6 +99,21 @@ describe('storageKeys', () => {
       migrationSnapshots,
       makeMigrationSucceed: () => {
         rejectMigration = false;
+      },
+      rejectNativeMutations: () => {
+        rejectNativeMutations = true;
+      },
+      failNativeReads: () => {
+        nativeReadError = true;
+      },
+      failLegacySets: () => {
+        legacySetError = true;
+      },
+      failLegacyRemoves: () => {
+        legacyRemoveError = true;
+      },
+      recoverLegacyRemoves: () => {
+        legacyRemoveError = false;
       },
     };
   }
@@ -240,7 +266,7 @@ describe('storageKeys', () => {
     }
   });
 
-  it('persists pending mutations before retrying the complete migration snapshot', async () => {
+  it('rejects native-missing mutations while migration remains pending', async () => {
     // Given: legacy storage is canonical while the first Electron migration is rejected.
     vi.useFakeTimers();
     try {
@@ -286,24 +312,25 @@ describe('storageKeys', () => {
       vi.resetModules();
       const freshStorage = await import('./storageKeys');
 
-      // When: a user sets and removes values during the migration retry window, then migration retries.
+      // When: a user sets and removes native-missing values during the retry window.
       expect(freshStorage.storageGet(StorageKeys.settings.textTransformersEnabled)).toBe('false');
       expect(freshStorage.storageSet(StorageKeys.settings.textTransformersEnabled, 'true')).toBe(
-        true,
+        false,
       );
-      expect(freshStorage.storageRemove('state.retryWindow.v1')).toBe(true);
+      expect(freshStorage.storageRemove('state.retryWindow.v1')).toBe(false);
       rejectMigration = false;
       vi.advanceTimersByTime(1_000);
-      expect(freshStorage.storageGet(StorageKeys.settings.textTransformersEnabled)).toBe('true');
+      expect(freshStorage.storageGet(StorageKeys.settings.textTransformersEnabled)).toBe('false');
 
-      // Then: the acknowledged batch contains the newest legacy snapshot and durable values win.
-      expect(legacyStore['opencode.settings.textTransformersEnabled.v1']).toBe('true');
+      // Then: rejected mutations never contaminate fallback and the original snapshot migrates atomically.
+      expect(legacyStore['opencode.settings.textTransformersEnabled.v1']).toBeUndefined();
       expect(legacyStore['opencode.state.retryWindow.v1']).toBeUndefined();
       expect(migrationSnapshots[1]).toEqual({
-        'opencode.settings.textTransformersEnabled.v1': 'true',
+        'opencode.settings.textTransformersEnabled.v1': 'false',
+        'opencode.state.retryWindow.v1': 'stale',
       });
-      expect(electronStore['opencode.settings.textTransformersEnabled.v1']).toBe('true');
-      expect(electronStore['opencode.state.retryWindow.v1']).toBeUndefined();
+      expect(electronStore['opencode.settings.textTransformersEnabled.v1']).toBe('false');
+      expect(electronStore['opencode.state.retryWindow.v1']).toBe('stale');
     } finally {
       vi.useRealTimers();
     }
@@ -325,8 +352,8 @@ describe('storageKeys', () => {
       vi.advanceTimersByTime(1_000);
       expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('user-new');
 
-      // Then: the acknowledged native mutation remains authoritative and the retry fills untouched keys.
-      expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBe('user-new');
+      // Then: the native mutation remains authoritative while migrated legacy entries are retired.
+      expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBeUndefined();
       expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBe('user-new');
       expect(fixture.electronStore['opencode.settings.textTransformersEnabled.v1']).toBe(
         'legacy-missing',
@@ -368,6 +395,265 @@ describe('storageKeys', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('acknowledges a native-owned set when its legacy mirror throws', async () => {
+    // Given: native storage owns the key, migration is pending, and the legacy mirror rejects writes.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const fixture = installPendingNativeOwnerFixture();
+      fixture.failLegacySets();
+      const freshStorage = await import('./storageKeys');
+
+      // When: native storage commits the replacement before the migration retry.
+      const result = freshStorage.storageSet(StorageKeys.settings.enterToSend, 'user-new');
+      fixture.makeMigrationSucceed();
+      vi.advanceTimersByTime(1_000);
+
+      // Then: the canonical acknowledgement and value reflect the native commit despite stale legacy data.
+      expect(result).toBe(true);
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('user-new');
+      expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBe('user-new');
+      expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects a native-owned remove when its legacy retirement throws', async () => {
+    // Given: native storage owns the key, migration is pending, and legacy retirement will throw.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const fixture = installPendingNativeOwnerFixture();
+      fixture.failLegacyRemoves();
+      const freshStorage = await import('./storageKeys');
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('native-old');
+
+      // When: native deletion succeeds but the fallback copy cannot be retired.
+      const result = freshStorage.storageRemove(StorageKeys.settings.enterToSend);
+      fixture.recoverLegacyRemoves();
+      fixture.makeMigrationSucceed();
+      vi.advanceTimersByTime(1_000);
+
+      // Then: the caller receives failure and retry restores the still-visible prior value.
+      expect(result).toBe(false);
+      expect(freshStorage.storageGet(StorageKeys.settings.enterToSend)).toBe('legacy-old');
+      expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBe('legacy-old');
+      expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not resurrect stale legacy data after migration and a later native remove', async () => {
+    // Given: a native-owned update succeeds while its legacy mirror stays stale, then migration completes.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const fixture = installPendingNativeOwnerFixture();
+      fixture.failLegacySets();
+      const firstRenderer = await import('./storageKeys');
+      expect(firstRenderer.storageSet(StorageKeys.settings.enterToSend, 'user-new')).toBe(true);
+      fixture.makeMigrationSucceed();
+      vi.advanceTimersByTime(1_000);
+      expect(firstRenderer.storageGet(StorageKeys.settings.enterToSend)).toBe('user-new');
+      expect(firstRenderer.storageRemove(StorageKeys.settings.enterToSend)).toBe(true);
+
+      // When: a fresh renderer starts and performs migration discovery again.
+      vi.resetModules();
+      const freshRenderer = await import('./storageKeys');
+
+      // Then: retired legacy data cannot recreate the intentionally removed native key.
+      expect(freshRenderer.storageGet(StorageKeys.settings.enterToSend)).toBeNull();
+      expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBeUndefined();
+      expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps migration pending when a legacy value changes before conditional cleanup', async () => {
+    // Given: another renderer changes a captured legacy value after the native batch commits.
+    const key = StorageKeys.settings.enterToSend;
+    const storedKey = `opencode.${key}`;
+    const legacyStore: Record<string, string> = { [storedKey]: 'legacy-snapshot' };
+    const electronStore: Record<string, string> = { [storedKey]: 'native-winner' };
+    let firstMigration = true;
+    vi.stubGlobal('window', {
+      localStorage: {
+        get length() {
+          return Object.keys(legacyStore).length;
+        },
+        key: (index: number) => Object.keys(legacyStore)[index] ?? null,
+        getItem: (storageKey: string) => legacyStore[storageKey] ?? null,
+        setItem: (storageKey: string, value: string) => {
+          legacyStore[storageKey] = value;
+        },
+        removeItem: (storageKey: string) => {
+          delete legacyStore[storageKey];
+        },
+      },
+      electronAPI: {
+        persistentStorage: {
+          getItem: (storageKey: string) => electronStore[storageKey] ?? null,
+          setItem: (storageKey: string, value: string) => {
+            electronStore[storageKey] = value;
+            return true;
+          },
+          removeItem: (storageKey: string) => {
+            delete electronStore[storageKey];
+            return true;
+          },
+          migrate: (entries: Record<string, string>) => {
+            for (const [storageKey, value] of Object.entries(entries)) {
+              if (!Object.hasOwn(electronStore, storageKey)) electronStore[storageKey] = value;
+            }
+            if (firstMigration) {
+              firstMigration = false;
+              legacyStore[storedKey] = 'concurrent-new';
+            }
+            return true;
+          },
+        },
+      },
+    });
+    vi.resetModules();
+    const firstRenderer = await import('./storageKeys');
+    expect(firstRenderer.storageGet(key)).toBe('native-winner');
+
+    // When: the key is removed during pending reconciliation and a fresh renderer starts.
+    expect(firstRenderer.storageRemove(key)).toBe(true);
+    vi.resetModules();
+    const freshRenderer = await import('./storageKeys');
+
+    // Then: the concurrent legacy value cannot be resurrected as a completed migration source.
+    expect(freshRenderer.storageGet(key)).toBeNull();
+    expect(electronStore[storedKey]).toBeUndefined();
+    expect(legacyStore[storedKey]).toBeUndefined();
+  });
+
+  it('rejects a native-missing pending write that races an older migration snapshot', async () => {
+    // Given: renderer B is pending while renderer A can commit an older legacy snapshot.
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-08-25T08:00:00.000Z'));
+      const key = StorageKeys.settings.enterToSend;
+      const storedKey = `opencode.${key}`;
+      const legacyStore: Record<string, string> = { [storedKey]: 'snapshot-old' };
+      const electronStore: Record<string, string> = {};
+      let rejectMigration = true;
+      let concurrentWriteResult: boolean | null = null;
+      let concurrentWrite: (() => void) | null = null;
+      const migrate = (entries: Record<string, string>) => {
+        if (rejectMigration) return false;
+        concurrentWrite?.();
+        concurrentWrite = null;
+        for (const [storageKey, value] of Object.entries(entries)) {
+          if (!Object.hasOwn(electronStore, storageKey)) electronStore[storageKey] = value;
+        }
+        return true;
+      };
+      vi.stubGlobal('window', {
+        localStorage: {
+          get length() {
+            return Object.keys(legacyStore).length;
+          },
+          key: (index: number) => Object.keys(legacyStore)[index] ?? null,
+          getItem: (storageKey: string) => legacyStore[storageKey] ?? null,
+          setItem: (storageKey: string, value: string) => {
+            legacyStore[storageKey] = value;
+          },
+          removeItem: (storageKey: string) => {
+            delete legacyStore[storageKey];
+          },
+        },
+        electronAPI: {
+          persistentStorage: {
+            getItem: (storageKey: string) => electronStore[storageKey] ?? null,
+            setItem: (storageKey: string, value: string) => {
+              electronStore[storageKey] = value;
+              return true;
+            },
+            removeItem: (storageKey: string) => {
+              delete electronStore[storageKey];
+              return true;
+            },
+            migrate,
+          },
+        },
+      });
+      vi.resetModules();
+      const rendererB = await import('./storageKeys');
+      expect(rendererB.storageGet(key)).toBe('snapshot-old');
+      rejectMigration = false;
+      vi.resetModules();
+      const rendererA = await import('./storageKeys');
+      concurrentWrite = () => {
+        concurrentWriteResult = rendererB.storageSet(key, 'uncommitted-new');
+      };
+
+      // When: A commits its old snapshot and later retries reconciliation without another user write.
+      rendererA.storageGet(key);
+      vi.advanceTimersByTime(1_000);
+      const reconciledValue = rendererA.storageGet(key);
+
+      // Then: B receives failure, fallback is untouched, and A's complete snapshot remains authoritative.
+      expect(concurrentWriteResult).toBe(false);
+      expect(reconciledValue).toBe('snapshot-old');
+      expect(electronStore[storedKey]).toBe('snapshot-old');
+      expect(legacyStore[storedKey]).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not mutate legacy fallback when pending native ownership cannot be read', async () => {
+    // Given: migration is pending and native ownership cannot be determined.
+    const fixture = installPendingNativeOwnerFixture();
+    fixture.failNativeReads();
+    const freshStorage = await import('./storageKeys');
+    const before = { ...fixture.legacyStore };
+
+    // When: renderer mutations are attempted through the unresolved ownership boundary.
+    const setResult = freshStorage.storageSet(StorageKeys.settings.enterToSend, 'unconfirmed');
+    const removeResult = freshStorage.storageRemove(StorageKeys.settings.textTransformersEnabled);
+
+    // Then: both mutations are rejected without changing the retryable legacy snapshot.
+    expect(setResult).toBe(false);
+    expect(removeResult).toBe(false);
+    expect(fixture.legacyStore).toEqual(before);
+  });
+
+  it('does not mutate legacy fallback when a native-owned set is rejected', async () => {
+    // Given: native storage owns the key, migration is pending, and native writes are rejected.
+    const fixture = installPendingNativeOwnerFixture();
+    fixture.rejectNativeMutations();
+    const freshStorage = await import('./storageKeys');
+
+    // When: the renderer tries to replace the native-owned value.
+    const result = freshStorage.storageSet(StorageKeys.settings.enterToSend, 'unconfirmed');
+
+    // Then: neither owner observes a value that Electron did not acknowledge.
+    expect(result).toBe(false);
+    expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBe('native-old');
+    expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBe('legacy-old');
+  });
+
+  it('does not mutate legacy fallback when a native-owned remove is rejected', async () => {
+    // Given: native storage owns the key, migration is pending, and native removals are rejected.
+    const fixture = installPendingNativeOwnerFixture();
+    fixture.rejectNativeMutations();
+    const freshStorage = await import('./storageKeys');
+
+    // When: the renderer tries to remove the native-owned value.
+    const result = freshStorage.storageRemove(StorageKeys.settings.enterToSend);
+
+    // Then: both owners retain their prior values for the next retry.
+    expect(result).toBe(false);
+    expect(fixture.electronStore['opencode.settings.enterToSend.v1']).toBe('native-old');
+    expect(fixture.legacyStore['opencode.settings.enterToSend.v1']).toBe('legacy-old');
   });
 
   it('exposes codexActiveThread key for codex session persistence', () => {
