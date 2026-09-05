@@ -1687,7 +1687,7 @@ function goBackInSettings() {
       const draft = textTransformerDraft(id);
       if (draft?.conflicted || draft?.persistenceFailed) return;
       editingTextTransformerId.value = null;
-      focusTextTransformerListAction(id);
+      revealTextTransformerListAction(id);
       return;
     }
     removeTextTransformerDraft(id);
@@ -2035,7 +2035,7 @@ async function parseSelectedTextTransformerFile(
   if (file.size > MAX_TEXT_TRANSFORMER_IMPORT_BYTES) {
     return { ok: false, reason: 'invalid-snippets' };
   }
-  const contents = await file.text();
+  const contents = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer());
   if (importGeneration !== textTransformerImportGeneration) return null;
   return parseTextTransformerImport(contents);
 }

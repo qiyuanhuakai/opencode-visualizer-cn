@@ -29,6 +29,14 @@ const initialSnippets = [
   },
 ] as const;
 
+function encodeUtf8(value: string): ArrayBuffer {
+  return new TextEncoder().encode(value).buffer;
+}
+
+function createJsonFile(name: string, value: unknown): File {
+  return new File([JSON.stringify(value)], name, { type: 'application/json' });
+}
+
 const mountedApps: Array<() => void> = [];
 
 async function mountSnippetSettings(snippets: readonly object[] = initialSnippets) {
@@ -182,6 +190,39 @@ describe('SettingsModal snippets', () => {
     await nextTick();
 
     // Then: filters are cleared, the target page is selected, and its rendered edit action owns focus.
+    expect(host.querySelector('.transformer-tag-filter.is-active')?.textContent?.trim()).toBe(
+      'All',
+    );
+    expect(document.activeElement).toBe(
+      host.querySelector<HTMLButtonElement>('[data-snippet-id="snippet-target"]'),
+    );
+  });
+
+  it('reveals a filtered invalid draft before restoring Back focus', async () => {
+    // Given: a filtered target moves off-filter and its trigger makes the draft invalid.
+    const { host } = await mountSnippetSettings([
+      { ...initialSnippets[0], id: 'snippet-peer', trigger: '::peer', tags: ['Shared'] },
+      { ...initialSnippets[0], id: 'snippet-target', trigger: '::target', tags: ['Shared'] },
+    ]);
+    Array.from(host.querySelectorAll<HTMLButtonElement>('.transformer-tag-filter'))
+      .find((button) => button.textContent?.trim() === 'Shared')!
+      .click();
+    await nextTick();
+    host.querySelector<HTMLButtonElement>('[data-snippet-id="snippet-target"]')!.click();
+    await nextTick();
+    changeValue(host.querySelector<HTMLInputElement>('[data-snippet-field="tags"]')!, 'Other');
+    changeValue(
+      host.querySelector<HTMLInputElement>('[data-snippet-field="trigger"]')!,
+      'bad trigger',
+    );
+
+    // When: Back rejects the invalid commit and returns to the library.
+    host.querySelector<HTMLButtonElement>('.modal-back-button')!.click();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+
+    // Then: the retained draft is revealed and its rendered edit action owns focus.
     expect(host.querySelector('.transformer-tag-filter.is-active')?.textContent?.trim()).toBe(
       'All',
     );
@@ -814,10 +855,7 @@ describe('SettingsModal snippets', () => {
       enabled: true,
       tags: ['Imported'],
     };
-    const file = new File([], 'snippets.json', { type: 'application/json' });
-    Object.defineProperty(file, 'text', {
-      value: async () => JSON.stringify({ version: 1, snippets: [importedSnippet] }),
-    });
+    const file = createJsonFile('snippets.json', { version: 1, snippets: [importedSnippet] });
     Object.defineProperty(importInput, 'files', { configurable: true, value: [file] });
     importInput.dispatchEvent(new Event('change', { bubbles: true }));
 
@@ -830,11 +868,11 @@ describe('SettingsModal snippets', () => {
     expect(host.querySelector('.transformer-import-status')?.textContent).toContain('Imported');
 
     // When: a file larger than the public import limit is selected.
-    const readOversizedFile = vi.fn().mockResolvedValue('{}');
+    const readOversizedFile = vi.fn().mockResolvedValue(encodeUtf8('{}'));
     const oversizedFile = new File([], 'oversized.json', { type: 'application/json' });
     Object.defineProperties(oversizedFile, {
       size: { configurable: true, value: 5 * 1024 * 1024 + 1 },
-      text: { configurable: true, value: readOversizedFile },
+      arrayBuffer: { configurable: true, value: readOversizedFile },
     });
     Object.defineProperty(importInput, 'files', { configurable: true, value: [oversizedFile] });
     importInput.dispatchEvent(new Event('change', { bubbles: true }));
@@ -846,31 +884,54 @@ describe('SettingsModal snippets', () => {
     expect(readOversizedFile).not.toHaveBeenCalled();
   });
 
+  it('rejects malformed UTF-8 import bytes without changing the library', async () => {
+    // Given: a JSON-shaped import contains an invalid UTF-8 byte inside a snippet name.
+    const { host, settings } = await mountSnippetSettings();
+    const prefix = new TextEncoder().encode(
+      '{"version":1,"snippets":[{"id":"invalid-utf8","trigger":"invalid-utf8","name":"',
+    );
+    const suffix = new TextEncoder().encode('","body":"body","enabled":true,"tags":[]}]}');
+    const bytes = new Uint8Array(prefix.length + 1 + suffix.length);
+    bytes.set(prefix);
+    bytes[prefix.length] = 0x80;
+    bytes.set(suffix, prefix.length + 1);
+    const file = new File([bytes], 'invalid-utf8.json', { type: 'application/json' });
+    const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
+
+    // When: the malformed bytes cross the file import boundary.
+    Object.defineProperty(importInput, 'files', { configurable: true, value: [file] });
+    importInput.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Then: no replacement-character value is imported or persisted.
+    await vi.waitFor(() =>
+      expect(host.querySelector('.transformer-import-status')?.textContent).toBe(
+        en.settings.textTransformers.importErrors.invalidJson,
+      ),
+    );
+    expect(settings.textTransformers.value.some(({ id }) => id === 'invalid-utf8')).toBe(false);
+  });
+
   it('keeps the newest file selection authoritative when imports resolve out of order', async () => {
     // Given: two valid imports collide and the first file read remains pending.
     const { host, settings } = await mountSnippetSettings();
     const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
-    let resolveOlder!: (value: string) => void;
+    let resolveOlder!: (value: ArrayBuffer) => void;
     const olderFile = new File([], 'older.json', { type: 'application/json' });
-    Object.defineProperty(olderFile, 'text', {
-      value: () => new Promise<string>((resolve) => (resolveOlder = resolve)),
+    Object.defineProperty(olderFile, 'arrayBuffer', {
+      value: () => new Promise<ArrayBuffer>((resolve) => (resolveOlder = resolve)),
     });
-    const newerFile = new File([], 'newer.json', { type: 'application/json' });
-    Object.defineProperty(newerFile, 'text', {
-      value: async () =>
-        JSON.stringify({
-          version: 1,
-          snippets: [
-            {
-              id: 'snippet-race',
-              trigger: 'race',
-              name: 'Newer',
-              body: 'Newer body',
-              enabled: true,
-              tags: [],
-            },
-          ],
-        }),
+    const newerFile = createJsonFile('newer.json', {
+      version: 1,
+      snippets: [
+        {
+          id: 'snippet-race',
+          trigger: 'race',
+          name: 'Newer',
+          body: 'Newer body',
+          enabled: true,
+          tags: [],
+        },
+      ],
     });
 
     // When: the newer import completes before the older file read.
@@ -884,19 +945,21 @@ describe('SettingsModal snippets', () => {
       ),
     );
     resolveOlder(
-      JSON.stringify({
-        version: 1,
-        snippets: [
-          {
-            id: 'snippet-race',
-            trigger: 'race',
-            name: 'Older',
-            body: 'Older body',
-            enabled: true,
-            tags: [],
-          },
-        ],
-      }),
+      encodeUtf8(
+        JSON.stringify({
+          version: 1,
+          snippets: [
+            {
+              id: 'snippet-race',
+              trigger: 'race',
+              name: 'Older',
+              body: 'Older body',
+              enabled: true,
+              tags: [],
+            },
+          ],
+        }),
+      ),
     );
     await nextTick();
 
@@ -916,22 +979,18 @@ describe('SettingsModal snippets', () => {
     expect(settings.textTransformers.value).toHaveLength(2);
     expect(host.querySelectorAll('.transformer-row')).toHaveLength(3);
     const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
-    const file = new File([], 'valid.json', { type: 'application/json' });
-    Object.defineProperty(file, 'text', {
-      value: async () =>
-        JSON.stringify({
-          version: 1,
-          snippets: [
-            {
-              id: 'snippet-import-blocked',
-              trigger: 'imported',
-              name: 'Imported',
-              body: 'Imported body',
-              enabled: true,
-              tags: [],
-            },
-          ],
-        }),
+    const file = createJsonFile('valid.json', {
+      version: 1,
+      snippets: [
+        {
+          id: 'snippet-import-blocked',
+          trigger: 'imported',
+          name: 'Imported',
+          body: 'Imported body',
+          enabled: true,
+          tags: [],
+        },
+      ],
     });
 
     // When: a valid import is selected before the draft is completed.
@@ -1160,22 +1219,18 @@ describe('SettingsModal snippets', () => {
     const setItem = vi.spyOn(localStorage, 'setItem').mockImplementationOnce(() => {
       throw new DOMException('Quota exceeded', 'QuotaExceededError');
     });
-    const file = new File([], 'quota.json', { type: 'application/json' });
-    Object.defineProperty(file, 'text', {
-      value: async () =>
-        JSON.stringify({
-          version: 1,
-          snippets: [
-            {
-              id: 'snippet-quota',
-              trigger: 'quota',
-              name: 'Quota',
-              body: 'Quota body',
-              enabled: true,
-              tags: [],
-            },
-          ],
-        }),
+    const file = createJsonFile('quota.json', {
+      version: 1,
+      snippets: [
+        {
+          id: 'snippet-quota',
+          trigger: 'quota',
+          name: 'Quota',
+          body: 'Quota body',
+          enabled: true,
+          tags: [],
+        },
+      ],
     });
 
     // When: the settings import tries to persist the merged data.
@@ -1202,22 +1257,18 @@ describe('SettingsModal snippets', () => {
     );
     await nextTick();
     const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
-    const file = new File([], 'recovery-import.json', { type: 'application/json' });
-    Object.defineProperty(file, 'text', {
-      value: async () =>
-        JSON.stringify({
-          version: 1,
-          snippets: [
-            {
-              id: 'snippet-recovery-import',
-              trigger: 'recovery-import',
-              name: 'Recovery import',
-              body: 'Recovery import body',
-              enabled: true,
-              tags: [],
-            },
-          ],
-        }),
+    const file = createJsonFile('recovery-import.json', {
+      version: 1,
+      snippets: [
+        {
+          id: 'snippet-recovery-import',
+          trigger: 'recovery-import',
+          name: 'Recovery import',
+          body: 'Recovery import body',
+          enabled: true,
+          tags: [],
+        },
+      ],
     });
 
     // When: the user selects a valid import without explicitly resolving recovery data.
@@ -1250,10 +1301,7 @@ describe('SettingsModal snippets', () => {
     }));
     const { host, settings } = await mountSnippetSettings(current);
     const importInput = host.querySelector<HTMLInputElement>('.transformer-import-input')!;
-    const file = new File([], 'oversized-merge.json', { type: 'application/json' });
-    Object.defineProperty(file, 'text', {
-      value: async () => JSON.stringify({ version: 1, snippets: imported }),
-    });
+    const file = createJsonFile('oversized-merge.json', { version: 1, snippets: imported });
 
     // When: the valid file is selected for merge.
     Object.defineProperty(importInput, 'files', { configurable: true, value: [file] });
