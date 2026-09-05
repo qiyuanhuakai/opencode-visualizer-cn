@@ -1,5 +1,5 @@
 export type ComposerDraftScheduler = {
-  schedule: () => void;
+  schedule: (task?: () => void) => void;
   flush: () => void;
   cancel: () => void;
 };
@@ -9,24 +9,30 @@ export function createComposerDraftScheduler(
   delayMs: number,
 ): ComposerDraftScheduler {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let pendingTask: (() => void) | null = null;
 
   function cancel() {
     if (timer === null) return;
     clearTimeout(timer);
     timer = null;
+    pendingTask = null;
   }
 
   function flush() {
     if (timer === null) return;
+    const task = pendingTask ?? persist;
     cancel();
-    persist();
+    task();
   }
 
-  function schedule() {
+  function schedule(task = persist) {
     cancel();
+    pendingTask = task;
     timer = setTimeout(() => {
+      const pending = pendingTask ?? persist;
       timer = null;
-      persist();
+      pendingTask = null;
+      pending();
     }, delayMs);
   }
 

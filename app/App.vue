@@ -3781,6 +3781,35 @@ function persistComposerDraftForCurrentContext() {
   writeComposerDraft(contextKey, draft);
 }
 
+function scheduleComposerDraftPersistence() {
+  const contextKey = draftKeyForSelectedContext();
+  if (!contextKey) {
+    composerDraftPersistence.schedule(() => {});
+    return;
+  }
+  const draft: Omit<ComposerDraft, 'rev' | 'writerTabId'> = {
+    messageInput: messageInput.value,
+    attachments: attachments.value.map((item) => ({
+      id: item.id,
+      filename: item.filename,
+      mime: item.mime,
+      dataUrl: item.dataUrl,
+    })),
+    agent: selectedMode.value,
+    model: selectedModel.value,
+    variant: selectedThinking.value,
+    updatedAt: Date.now(),
+  };
+  composerDraftPersistence.schedule(() => {
+    const existingDraft = readComposerDraft(contextKey);
+    writeComposerDraft(contextKey, {
+      ...draft,
+      rev: nextComposerDraftRevision(contextKey, existingDraft),
+      writerTabId: composerDraftTabId,
+    });
+  });
+}
+
 const composerDraftPersistence = createComposerDraftScheduler(
   persistComposerDraftForCurrentContext,
   150,
@@ -3794,7 +3823,7 @@ function clearComposerDraftForCurrentContext() {
 
 function handleMessageInputUpdate(value: string) {
   messageInput.value = value;
-  composerDraftPersistence.schedule();
+  scheduleComposerDraftPersistence();
 }
 
 function applyAgentDefaults(agentName: string) {
@@ -7160,6 +7189,7 @@ watch(
   (contextKey, previousKey) => {
     const prevContextKey = previousKey ?? '';
     if (contextKey === prevContextKey) return;
+    composerDraftPersistence.flush();
     clearComposerInputState();
     nextTick(() => {
       inputPanelRef.value?.reset();

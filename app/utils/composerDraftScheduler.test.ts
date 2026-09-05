@@ -35,4 +35,18 @@ describe('composerDraftScheduler', () => {
     // Then: the draft is persisted immediately without a later duplicate write.
     expect(persist).toHaveBeenCalledTimes(1);
   });
+
+  it('flushes the task captured before a context change', () => {
+    vi.useFakeTimers();
+    const persist = vi.fn();
+    const scheduler = createComposerDraftScheduler(persist, 150);
+    const previousContextTask = vi.fn();
+
+    scheduler.schedule(previousContextTask);
+    scheduler.flush();
+    vi.advanceTimersByTime(150);
+
+    expect(previousContextTask).toHaveBeenCalledTimes(1);
+    expect(persist).not.toHaveBeenCalled();
+  });
 });
