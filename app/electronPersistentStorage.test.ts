@@ -99,6 +99,24 @@ describe('Electron persistent storage', () => {
     expect(fs.readFileSync(filePath)).toEqual(before);
   });
 
+  it('rejects mutation when the native store contains malformed UTF-8', () => {
+    // Given: the native store is valid JSON bytes except for an invalid UTF-8 byte in one value.
+    const { filePath } = createStorageFile({ preserved: 'value' });
+    fs.writeFileSync(
+      filePath,
+      Buffer.concat([Buffer.from('{"preserved":"'), Buffer.from([0x80]), Buffer.from('"}')]),
+    );
+    const before = fs.readFileSync(filePath);
+    const storage = createPersistentStorage(filePath);
+
+    // When: a caller attempts to mutate through the lossy snapshot.
+    const mutation = () => storage.setItem('added', 'next');
+
+    // Then: decoding fails closed and the malformed bytes remain unchanged.
+    expect(mutation).toThrow(TypeError);
+    expect(fs.readFileSync(filePath)).toEqual(before);
+  });
+
   it('preserves final bytes and cache when atomic replacement fails', () => {
     // Given: one durable value exists and replacement of the staged file will fail.
     const { directory, filePath } = createStorageFile({ saved: 'old' });

@@ -4,7 +4,8 @@ import path from 'node:path';
 function readStore(filePath, fileSystem) {
   let source;
   try {
-    source = fileSystem.readFileSync(filePath, 'utf8');
+    const bytes = fileSystem.readFileSync(filePath);
+    source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
   } catch (error) {
     if (error && typeof error === 'object' && error.code === 'ENOENT') return {};
     throw error;
