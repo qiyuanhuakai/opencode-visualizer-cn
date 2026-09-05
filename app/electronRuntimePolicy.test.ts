@@ -11,6 +11,10 @@ import {
 } from '../electron/runtimePolicy.js';
 
 const mainSource = readFileSync(path.resolve(__dirname, '../electron/main.js'), 'utf8');
+const persistentStorageSource = readFileSync(
+  path.resolve(__dirname, '../electron/persistentStorage.js'),
+  'utf8',
+);
 
 describe('electron-runtime-policy', () => {
   describe('resolveAppRelativePath', () => {
@@ -212,6 +216,42 @@ describe('electron-runtime-policy', () => {
         handler?.indexOf('assertTrustedRenderer(event)') ?? Number.MAX_SAFE_INTEGER,
       );
     });
+
+    it('guards every privileged clipboard and persistent-storage IPC entry point', () => {
+      // Given: four synchronous IPC handlers expose native clipboard or persistent storage access.
+      const handlers = [
+        {
+          source: mainSource.match(/ipcMain\.handle\('clipboard-write-text',[\s\S]*?\n\}\);/u)?.[0],
+          firstUse: 'typeof text',
+        },
+        {
+          source: mainSource.match(/ipcMain\.on\('persistent-storage-get',[\s\S]*?\n\}\);/u)?.[0],
+          firstUse: 'typeof key',
+        },
+        {
+          source: mainSource.match(/ipcMain\.on\('persistent-storage-set',[\s\S]*?\n\}\);/u)?.[0],
+          firstUse: 'const key = payload',
+        },
+        {
+          source: mainSource.match(
+            /ipcMain\.on\('persistent-storage-remove',[\s\S]*?\n\}\);/u,
+          )?.[0],
+          firstUse: 'typeof key',
+        },
+      ];
+
+      // When: the main-process IPC wiring is inspected.
+      expect(handlers.every(({ source }) => Boolean(source))).toBe(true);
+
+      // Then: sender ownership is asserted before any payload is read or native capability is used.
+      for (const { source, firstUse } of handlers) {
+        expect(source?.indexOf('assertTrustedRenderer(event)')).toBeGreaterThanOrEqual(0);
+        expect(source?.indexOf('assertTrustedRenderer(event)')).toBeLessThan(
+          source?.indexOf(firstUse) ?? -1,
+        );
+      }
+    });
+
     it('converts persistent storage mutation exceptions into false IPC acknowledgements', () => {
       // Given: set and remove are synchronous IPC boundaries backed by fallible disk writes.
       const setHandler = mainSource.match(
@@ -232,9 +272,11 @@ describe('electron-runtime-policy', () => {
 
     it('commits persistent storage cache only after the disk write succeeds', () => {
       // Given: set and remove both derive a candidate from the current cache.
-      const setMutation = mainSource.match(/function setPersistentStorageItem\([\s\S]*?\n\}/u)?.[0];
-      const removeMutation = mainSource.match(
-        /function removePersistentStorageItem\([\s\S]*?\n\}/u,
+      const setMutation = persistentStorageSource.match(
+        /setItem\(key, value\) \{[\s\S]*?\n    \},/u,
+      )?.[0];
+      const removeMutation = persistentStorageSource.match(
+        /removeItem\(key\) \{[\s\S]*?\n    \},/u,
       )?.[0];
 
       // When: the main-process mutation ordering is inspected.
@@ -243,8 +285,8 @@ describe('electron-runtime-policy', () => {
 
       // Then: neither operation publishes its candidate cache before persistence succeeds.
       for (const mutation of [setMutation, removeMutation]) {
-        const writeIndex = mutation?.indexOf('writePersistentStorage(nextStorage)') ?? -1;
-        const commitIndex = mutation?.indexOf('persistentStorageCache = nextStorage') ?? -1;
+        const writeIndex = mutation?.indexOf('writeStore(filePath, nextStorage, fileSystem)') ?? -1;
+        const commitIndex = mutation?.indexOf('cache = nextStorage') ?? -1;
         expect(writeIndex).toBeGreaterThanOrEqual(0);
         expect(commitIndex).toBeGreaterThan(writeIndex);
       }
@@ -255,8 +297,8 @@ describe('electron-runtime-policy', () => {
       const migrationHandler = mainSource.match(
         /ipcMain\.on\('persistent-storage-migrate',[\s\S]*?\n\}\);/u,
       )?.[0];
-      const migrationMutation = mainSource.match(
-        /function migratePersistentStorage\([\s\S]*?\n\}/u,
+      const migrationMutation = persistentStorageSource.match(
+        /migrate\(entries\) \{[\s\S]*?\n    \},/u,
       )?.[0];
 
       // When: the main-process migration path is inspected.
@@ -266,18 +308,19 @@ describe('electron-runtime-policy', () => {
       // Then: trusted input is committed before cache publication and failures reject the batch.
       expect(migrationHandler).toContain('assertTrustedRenderer(event)');
       expect(migrationHandler).toMatch(
-        /try\s*\{[\s\S]*migratePersistentStorage[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
+        /try\s*\{[\s\S]*getPersistentStorage\(\)\.migrate[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u,
       );
-      const writeIndex = migrationMutation?.indexOf('writePersistentStorage(nextStorage)') ?? -1;
-      const commitIndex = migrationMutation?.indexOf('persistentStorageCache = nextStorage') ?? -1;
+      const writeIndex =
+        migrationMutation?.indexOf('writeStore(filePath, nextStorage, fileSystem)') ?? -1;
+      const commitIndex = migrationMutation?.indexOf('cache = nextStorage') ?? -1;
       expect(writeIndex).toBeGreaterThanOrEqual(0);
       expect(commitIndex).toBeGreaterThan(writeIndex);
     });
 
     it('stages persistent storage beside the final file before atomic replacement', () => {
       // Given: a renderer-storage write can fail after a temporary file is partially written.
-      const writeFunction = mainSource.match(
-        /function writePersistentStorage\(storage\)\s*\{[\s\S]*?\n\}/u,
+      const writeFunction = persistentStorageSource.match(
+        /function writeStore\(filePath, storage, fileSystem\)\s*\{[\s\S]*?\n\}/u,
       )?.[0];
 
       // When: the common persistent-storage write path is inspected.
@@ -289,8 +332,9 @@ describe('electron-runtime-policy', () => {
       expect(writeFunction).toMatch(/statSync\(filePath\)/u);
       expect(writeFunction).toMatch(/mode/u);
       expect(writeFunction).toMatch(/writeFileSync\(temporaryFilePath/u);
+      expect(writeFunction).toMatch(/fsyncSync\(descriptor\)/u);
       expect(writeFunction).toMatch(/renameSync\(temporaryFilePath, filePath\)/u);
-      expect(writeFunction).toMatch(/unlinkSync\(temporaryFilePath\)/u);
+      expect(writeFunction).toMatch(/rmSync\(temporaryFilePath/u);
     });
   });
 });
