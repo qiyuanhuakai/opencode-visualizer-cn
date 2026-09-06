@@ -8,6 +8,26 @@ export type ScrollAnchorSettlement = {
   frameTimeoutMs?: number;
 };
 
+export async function preserveScrollAnchor(
+  host: HTMLElement,
+  anchor: HTMLElement,
+  update: () => Promise<boolean>,
+): Promise<void> {
+  const previousOverflowAnchor = host.style.overflowAnchor;
+  const initialScrollTop = host.scrollTop;
+  const documentTop = () => anchor.getBoundingClientRect().top - host.getBoundingClientRect().top + host.scrollTop;
+  const anchorDocumentTop = documentTop();
+  host.style.overflowAnchor = 'none';
+  try {
+    if (!(await update()) || !anchor.isConnected) return;
+    const nextDocumentTop = documentTop();
+    // The DOM update may already have clamped scrollTop. Correct from the pre-update baseline.
+    host.scrollTop = initialScrollTop + nextDocumentTop - anchorDocumentTop;
+  } finally {
+    host.style.overflowAnchor = previousOverflowAnchor;
+  }
+}
+
 export async function settleScrollAnchor(options: ScrollAnchorSettlement): Promise<void> {
   const maxFrames = Math.max(1, options.maxFrames ?? 90);
   const requiredStableFrames = Math.max(1, options.requiredStableFrames ?? 2);
