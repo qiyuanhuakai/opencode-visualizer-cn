@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.7.10 released]
 
 ### Electron 桌面集成
 
