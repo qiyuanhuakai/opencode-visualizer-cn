@@ -65,4 +65,31 @@ describe('desktop notification routing', () => {
     await router.send(notification);
     expect(sent(0).id).toBe(sent(1).id);
   });
+  it('bounds native IDs without colliding on long shared prefixes', async () => {
+    const { router, sent, changeBackend } = setup();
+    const prefix = 'backend:'.repeat(100);
+    const completion = { ...notification, id: 'turn:'.repeat(100) };
+    changeBackend(`${prefix}A`);
+    await router.send(completion);
+    changeBackend(`${prefix}B`);
+    await router.send(completion);
+    expect(sent(0).id.length).toBeLessThanOrEqual(256);
+    expect(sent(1).id.length).toBeLessThanOrEqual(256);
+    expect(sent(0).id).not.toBe(sent(1).id);
+  });
+  it('bounds native body text while retaining original click data', async () => {
+    const { router, sent, click, onSelect } = setup();
+    const long = { ...notification, body: '会话'.repeat(2048) };
+    await router.send(long);
+    expect(sent(0).body).toBe(long.body.slice(0, 2048));
+    click(sent(0));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(long);
+  });
+  it('does not deliver after disposal while the ID digest is pending', async () => {
+    const { router, api } = setup();
+    const sending = router.send(notification);
+    router.dispose();
+    await sending;
+    expect(api.notify).not.toHaveBeenCalled();
+  });
 });
