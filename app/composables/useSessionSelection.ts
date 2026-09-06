@@ -1,4 +1,4 @@
-import { computed, ref, type Ref } from 'vue';
+import { computed, ref, watch, type Ref } from 'vue';
 import type { ProjectState } from '../types/worker-state';
 import { waitForState } from '../utils/waitForState';
 import { uniqueBy } from '../utils/array';
@@ -81,6 +81,8 @@ export function useSessionSelection(
   const ensureProjectHydrated = options.ensureProjectHydrated ?? noopHydrate;
   const selectedProjectId = ref<string>('');
   const selectedSessionId = ref<string>('');
+  let selectionGeneration = 0;
+  watch([selectedProjectId, selectedSessionId], () => { selectionGeneration += 1; }, { flush: 'sync' });
 
   const projectMap = computed(() => projects.value);
 
@@ -99,6 +101,7 @@ export function useSessionSelection(
   const projectDirectory = computed(() => project.value?.worktree ?? '');
 
   async function ensureSession(projectIdHint?: string): Promise<string> {
+    const generation = ++selectionGeneration;
     const map = projectMap.value;
     let projectId = projectIdHint?.trim() || selectedProjectId.value.trim();
 
@@ -131,6 +134,7 @@ export function useSessionSelection(
     // The session list read was empty: hydrate the project, then RE-READ the
     // reactive map before deciding to create. A hydration error rejects as-is.
     await ensureProjectHydrated(projectId);
+    if (generation !== selectionGeneration) return selectedSessionId.value;
     const hydratedProject = projectMap.value[projectId];
     if (hydratedProject) {
       const hydratedIds = getProjectSessionIds(hydratedProject);
@@ -146,6 +150,7 @@ export function useSessionSelection(
     }
 
     const created = await createSessionFn(projectId);
+    if (generation !== selectionGeneration) return selectedSessionId.value;
     const createdProjectId = (created.projectId || projectId).trim();
     const createdSessionId = created.id.trim();
     if (!createdProjectId || !createdSessionId) {
@@ -160,6 +165,7 @@ export function useSessionSelection(
     projectIdHint: string,
     directoryHint: string,
   ): Promise<string> {
+    const generation = ++selectionGeneration;
     const projectId = projectIdHint.trim();
     const directory = directoryHint.trim();
     if (!projectId) {
@@ -171,6 +177,7 @@ export function useSessionSelection(
 
     if (!projectMap.value[projectId]) {
       await ensureProjectHydrated(projectId);
+      if (generation !== selectionGeneration) return selectedSessionId.value;
     }
     const project = projectMap.value[projectId];
     if (!project) {
@@ -180,6 +187,7 @@ export function useSessionSelection(
     let sessionId = findDirectoryRootSession(project, directory);
     if (!sessionId) {
       await ensureDirectoryHydrated(directory);
+      if (generation !== selectionGeneration) return selectedSessionId.value;
       const hydratedProject = projectMap.value[projectId];
       sessionId = hydratedProject ? findDirectoryRootSession(hydratedProject, directory) : null;
     }
@@ -191,6 +199,7 @@ export function useSessionSelection(
     }
 
     const created = await createSessionFn(projectId, directory);
+    if (generation !== selectionGeneration) return selectedSessionId.value;
     const createdProjectId = (created.projectId || projectId).trim();
     const createdSessionId = created.id.trim();
     if (!createdProjectId || !createdSessionId) {
@@ -202,6 +211,7 @@ export function useSessionSelection(
   }
 
   async function switchSession(projectId: string, sessionId: string) {
+    const generation = ++selectionGeneration;
     const nextProjectId = projectId.trim();
     const nextSessionId = sessionId.trim();
     if (!nextProjectId || !nextSessionId) {
@@ -220,6 +230,7 @@ export function useSessionSelection(
       },
     );
 
+    if (generation !== selectionGeneration) return;
     selectedProjectId.value = nextProjectId;
     selectedSessionId.value = nextSessionId;
   }

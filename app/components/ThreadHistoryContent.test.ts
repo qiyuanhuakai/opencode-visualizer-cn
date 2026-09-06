@@ -435,6 +435,109 @@ describe('ThreadHistoryContent', () => {
     mounted.root.remove();
   });
 
+  it('keeps user scrolling after compensating a window layout change', async () => {
+    const mounted = mountHistory(createToolEntries(3_000, 'original'));
+    await flushRender();
+
+    const host = mounted.root;
+    expect(host.style.overflowAnchor).toBe('');
+    Object.defineProperties(host, {
+      scrollTop: { configurable: true, writable: true, value: 100 },
+      scrollHeight: { configurable: true, value: 180_000 },
+      clientHeight: { configurable: true, value: 600 },
+    });
+
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+
+    // Simulate layout: the anchor sits at a document position that shrinks
+    // when the rows above it are swapped for shorter ones.
+    const anchorDocumentTop = () => host.querySelector('.history-item')?.getAttribute('data-history-key') === 'original-2900' ? 5_000 : 4_900;
+    const mockAnchorRect = () => {
+      const anchorEl = host.querySelector<HTMLElement>('[data-history-key="original-2900"]');
+      if (!anchorEl) return;
+      anchorEl.getBoundingClientRect = () =>
+        ({
+          top: anchorDocumentTop() - host.scrollTop,
+          bottom: anchorDocumentTop() - host.scrollTop + 60,
+          left: 0,
+          right: 0,
+          width: 0,
+          height: 60,
+          x: 0,
+          y: anchorDocumentTop() - host.scrollTop,
+          toJSON: () => ({}),
+        }) as DOMRect;
+    };
+    mockAnchorRect();
+
+    const pumpFrames = async (max = 12) => {
+      for (let i = 0; i < max && frames.length > 0; i += 1) {
+        const callback = frames.shift();
+        callback?.(performance.now());
+        await flushRender();
+      }
+    };
+
+    host.dispatchEvent(new Event('scroll'));
+    await flushRender();
+    mockAnchorRect();
+    expect(host.querySelector('.history-item')?.getAttribute('data-history-key')).toBe(
+      'original-2880',
+    );
+
+    await pumpFrames(1);
+    expect(host.scrollTop).toBe(0);
+
+    host.scrollTop = 300;
+    await pumpFrames();
+
+    expect(host.scrollTop).toBe(300);
+    expect(host.style.overflowAnchor).toBe('');
+
+    mounted.app.unmount();
+    mounted.root.remove();
+  });
+
+  it('compensates once when a shorter next window clamps the browser scroll range', async () => {
+    vi.stubGlobal('CSS', { escape: CSS.escape, supports: () => true });
+    const mounted = mountHistory(createToolEntries(3_000, 'clamp'));
+    await flushRender();
+    const host = mounted.root;
+    host.dispatchEvent(new Event('scroll'));
+    await flushRender();
+    expect(host.querySelector('.history-item')?.getAttribute('data-history-key')).toBe('clamp-2880');
+    for (let i = 0; i < 3; i += 1) {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      await flushRender();
+    }
+    const inOldWindow = () => host.querySelector('.history-item')?.getAttribute('data-history-key') === 'clamp-2880';
+    let top = 5400;
+    Object.defineProperties(host, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => inOldWindow() ? 6000 : 5200 },
+      scrollTop: {
+        configurable: true,
+        get: () => Math.min(top, host.scrollHeight - host.clientHeight),
+        set: (value: number) => { top = Math.max(0, Math.min(value, host.scrollHeight - host.clientHeight)); },
+      },
+    });
+    const anchor = host.querySelector<HTMLElement>('[data-history-key="clamp-2900"]');
+    if (!anchor) throw new Error('missing retained anchor');
+    anchor.getBoundingClientRect = () => new DOMRect(0, (inOldWindow() ? 1200 : 0) - host.scrollTop, 100, 60);
+    host.dispatchEvent(new Event('scroll'));
+    await flushRender();
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await flushRender();
+    expect(host.scrollTop).toBe(4200);
+    expect(host.style.overflowAnchor).toBe('');
+    mounted.app.unmount();
+    mounted.root.remove();
+  });
+
   it('extends a short history at the bottom without a negative window start', async () => {
     const mounted = mountHistory(createToolEntries(50, 'short'));
     await flushRender();

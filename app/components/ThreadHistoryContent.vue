@@ -124,9 +124,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n';
 import MessageViewer from './MessageViewer.vue';
 import { useFloatingWindow } from '../composables/useFloatingWindow';
-import { pendingWorkerRenders } from '../composables/useRenderState';
 import type { QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from '../types/sse';
-import { settleScrollAnchor } from '../utils/scrollAnchor';
+import { preserveScrollAnchor } from '../utils/scrollAnchor';
 import { resolveToolAccentColor } from '../utils/theme';
 import { normalizeToolName } from '../utils/toolNames';
 
@@ -179,8 +178,10 @@ const windowEnd = ref(props.entries.length);
 const visibleEntries = computed(() => props.entries.slice(windowStart.value, windowEnd.value));
 let scrollHost: HTMLElement | null = null;
 let shiftInProgress = false;
+let shiftGeneration = 0;
 
 function resetHistoryWindow(): void {
+  shiftGeneration += 1;
   windowEnd.value = props.entries.length;
   windowStart.value = Math.max(0, windowEnd.value - HISTORY_WINDOW_SIZE);
 }
@@ -227,23 +228,18 @@ async function shiftHistoryWindow(nextStart: number): Promise<void> {
   const anchor = props.entries[retainedIndex];
   const anchorElement = anchor ? historyEntryElement(anchor.key) : null;
   if (!anchor || !anchorElement) return;
-  const anchorTop = anchorElement.getBoundingClientRect().top;
+  const generation = ++shiftGeneration;
   shiftInProgress = true;
-  windowStart.value = nextStart;
-  windowEnd.value = Math.min(props.entries.length, nextStart + HISTORY_WINDOW_SIZE);
-  await nextTick();
-  await settleScrollAnchor({
-    measureDelta: () => {
-      const current = historyEntryElement(anchor.key);
-      return current ? current.getBoundingClientRect().top - anchorTop : null;
-    },
-    applyDelta: (delta) => {
-      if (scrollHost) scrollHost.scrollTop += delta;
-    },
-    hasPendingWork: () => pendingWorkerRenders.value > 0,
-    waitForFrame: () => new Promise((resolve) => requestAnimationFrame(() => resolve())),
-  });
-  shiftInProgress = false;
+  try {
+    await preserveScrollAnchor(scrollHost, anchorElement, async () => {
+      windowStart.value = nextStart;
+      windowEnd.value = Math.min(props.entries.length, nextStart + HISTORY_WINDOW_SIZE);
+      await nextTick();
+      return generation === shiftGeneration;
+    });
+  } finally {
+    shiftInProgress = false;
+  }
 }
 
 function onHistoryScroll(): void {
@@ -270,6 +266,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   scrollHost?.removeEventListener('scroll', onHistoryScroll);
+  shiftGeneration += 1;
   scrollHost = null;
 });
 

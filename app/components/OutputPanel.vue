@@ -19,7 +19,7 @@
             >
               <div class="app-loading-spinner" aria-hidden="true"></div>
             </div>
-            <div class="output-panel-messages" :class="{ 'is-anchor-pending': shouldHideMessages }">
+            <div class="output-panel-messages">
               <div
                 v-for="root in visibleThreadRoots"
                 :key="root.id"
@@ -91,7 +91,6 @@ import { useFileTree } from '../composables/useFileTree';
 
 import { useMessages } from '../composables/useMessages';
 import { useAssistantPreRenderer } from '../composables/useAssistantPreRenderer';
-import { pendingWorkerRenders } from '../composables/useRenderState';
 import { useThinkingAnimation } from '../composables/useThinkingAnimation';
 import type { HistoryWindowEntry, MessageDiffEntry, MessageTokens } from '../types/message';
 import type { MessageInfo } from '../types/sse';
@@ -103,7 +102,7 @@ import {
   preserveProgressiveRootWindowOnAppend,
   shiftProgressiveRootWindow,
 } from '../utils/progressiveRoots';
-import { settleScrollAnchor } from '../utils/scrollAnchor';
+import { preserveScrollAnchor } from '../utils/scrollAnchor';
 
 const msg = useMessages();
 const { t } = useI18n();
@@ -308,7 +307,6 @@ let contentResizeObserver: ResizeObserver | undefined;
 let resizeNotifyFrameId: number | null = null;
 let scrollToBottomFrameId: number | null = null;
 let settleScrollToBottom: (() => void) | null = null;
-const shouldHideMessages = computed(() => Boolean(props.isAnchoring && !props.isLoading));
 
 const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
   visibleRoots: visibleThreadRoots,
@@ -344,28 +342,20 @@ async function onPanelScroll(event: Event) {
   const anchorBefore = contentEl.value?.querySelector<HTMLElement>(
     `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
   );
-  const anchorTopBefore = anchorBefore?.getBoundingClientRect().top;
-  rootWindow.value = shiftProgressiveRootWindow(
-    rootWindow.value,
-    renderableRoots.value.length,
-    direction,
-    THREAD_BATCH_SIZE,
-    THREAD_WINDOW_MAX,
-  );
-  await nextTick();
-  await settleScrollAnchor({
-    waitForFrame: () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
-    measureDelta: () => {
-      if (shiftGeneration !== windowShiftGeneration || anchorTopBefore === undefined) return null;
-      const anchorAfter = contentEl.value?.querySelector<HTMLElement>(
-        `.thread-card-item[data-root-id="${anchorRootId ?? ''}"]`,
-      );
-      return anchorAfter ? anchorAfter.getBoundingClientRect().top - anchorTopBefore : null;
-    },
-    applyDelta: (delta) => {
-      panel.scrollTop += delta;
-    },
-    hasPendingWork: () => pendingWorkerRenders.value > 0,
+  if (!anchorBefore) {
+    windowShiftInProgress = false;
+    return;
+  }
+  await preserveScrollAnchor(panel, anchorBefore, async () => {
+    rootWindow.value = shiftProgressiveRootWindow(
+      rootWindow.value,
+      renderableRoots.value.length,
+      direction,
+      THREAD_BATCH_SIZE,
+      THREAD_WINDOW_MAX,
+    );
+    await nextTick();
+    return shiftGeneration === windowShiftGeneration;
   });
   if (shiftGeneration !== windowShiftGeneration) return;
   windowShiftInProgress = false;
@@ -584,11 +574,6 @@ defineExpose({ panelEl, scrollToBottom });
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-
-.output-panel-messages.is-anchor-pending {
-  visibility: hidden;
-  pointer-events: none;
 }
 
 .output-panel-content :deep(.markdown-host code.file-ref) {
