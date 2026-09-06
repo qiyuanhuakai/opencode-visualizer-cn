@@ -1,6 +1,6 @@
 const LABELS = Object.freeze({
   en: Object.freeze({
-    edit: 'Edit',
+    reload: 'Reload',
     undo: 'Undo',
     redo: 'Redo',
     cut: 'Cut',
@@ -11,7 +11,7 @@ const LABELS = Object.freeze({
     quit: 'Quit',
   }),
   'zh-CN': Object.freeze({
-    edit: '编辑',
+    reload: '刷新',
     undo: '撤销',
     redo: '重做',
     cut: '剪切',
@@ -22,7 +22,7 @@ const LABELS = Object.freeze({
     quit: '退出',
   }),
   'zh-TW': Object.freeze({
-    edit: '編輯',
+    reload: '重新載入',
     undo: '復原',
     redo: '重做',
     cut: '剪下',
@@ -33,7 +33,7 @@ const LABELS = Object.freeze({
     quit: '結束',
   }),
   ja: Object.freeze({
-    edit: '編集',
+    reload: '再読み込み',
     undo: '元に戻す',
     redo: 'やり直す',
     cut: '切り取り',
@@ -44,7 +44,7 @@ const LABELS = Object.freeze({
     quit: '終了',
   }),
   eo: Object.freeze({
-    edit: 'Redakti',
+    reload: 'Reŝargi',
     undo: 'Malfari',
     redo: 'Refari',
     cut: 'Eltondi',
@@ -72,16 +72,12 @@ export function createApplicationMenuTemplate(appName, labels) {
       ],
     },
     {
-      label: labels.edit,
+      label: labels.reload,
       submenu: [
-        { label: labels.undo, role: 'undo' },
-        { label: labels.redo, role: 'redo' },
-        { type: 'separator' },
-        { label: labels.cut, role: 'cut' },
-        { label: labels.copy, role: 'copy' },
-        { label: labels.paste, role: 'paste' },
-        { type: 'separator' },
-        { label: labels.selectAll, role: 'selectAll' },
+        { label: labels.reload, role: 'reload', accelerator: 'CmdOrCtrl+R' },
+        ...['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll'].map((role) => ({
+          label: labels[role], role, visible: false, acceleratorWorksWhenHidden: true,
+        })),
       ],
     },
   ];
