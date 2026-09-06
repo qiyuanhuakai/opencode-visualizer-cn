@@ -28,6 +28,7 @@ export function useAcpMessageBridge(options: {
   upsertPermissionEntry(request: AcpPermissionRequest): void;
   onSessionUpdated(info: BackendSessionInfo): void;
   onSessionDeleted?(sessionId: string): void;
+  onTaskCompleted?(completion: { sessionId: string; completionId: string }): void;
   onCommandsUpdated?(commands: Array<Record<string, unknown>>): void;
   onConfigUpdated?(options: unknown[]): void;
   onToolPart?(part: MessagePart): void;
@@ -55,7 +56,12 @@ export function useAcpMessageBridge(options: {
         options.onCommandsUpdated?.(event.commands);
       } else if (event.type === 'config.updated') {
         options.onConfigUpdated?.(event.options);
-      } else {
+      } else if (event.type === 'session.promptCompleted') {
+        options.onTaskCompleted?.({
+          sessionId: event.sessionId,
+          completionId: event.completionId,
+        });
+      } else if (event.type === 'session.deleted') {
         options.onSessionDeleted?.(event.sessionId);
       }
     });

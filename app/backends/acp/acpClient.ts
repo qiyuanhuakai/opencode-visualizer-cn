@@ -29,6 +29,7 @@ import { loadAcpSessionHistory } from './sessionHistory';
 import { ACP_PROJECT_ID } from './bridgeUrl';
 import type { AcpClientEvent, AcpClientOptions, AcpPromptPayload } from './acpClientTypes';
 import type { AcpAttributionStore } from './attributionStore';
+import { clearPromptGeneration } from './promptGeneration';
 
 export type { AcpPermissionRequest } from './permissionStore';
 export type { AcpClientEvent, AcpClientOptions, AcpPromptPayload } from './acpClientTypes';
@@ -55,7 +56,8 @@ export class AcpClient {
   private readonly deletedSessions = new Set<string>();
   private readonly eventHandlers = new Set<(event: AcpClientEvent) => void>();
   private readonly permissions: AcpPermissionStore;
-  private readonly promptingSessions = new Set<string>();
+  private readonly promptingSessionGenerations = new Map<string, number>();
+  private readonly abortedPromptGenerations = new Map<string, number>();
   private readonly historyLoads = new Map<string, Promise<AcpHistoryEntry[]>>();
   private initializeResult: AcpInitializeResult | null = null;
   private activeSessionId: string | null = null;
@@ -257,10 +259,12 @@ export class AcpClient {
 
   async sendPromptAsync(sessionId: string, payload: AcpPromptPayload) {
     await this.initialize();
-    if (this.promptingSessions.has(sessionId)) {
+    if (this.promptingSessionGenerations.has(sessionId)) {
       throw new Error(`ACP session already has a prompt in progress: ${sessionId}`);
     }
-    this.promptingSessions.add(sessionId);
+    const generation = this.lifecycleGeneration;
+    this.abortedPromptGenerations.delete(sessionId);
+    this.promptingSessionGenerations.set(sessionId, generation);
     this.activatedSessions.add(sessionId);
     this.activeSessionId = sessionId;
     const state =
@@ -297,6 +301,19 @@ export class AcpClient {
         }
         state.info.status = 'idle';
         this.emit({ type: 'session.updated', info: state.info });
+        if (
+          completed &&
+          result.stopReason !== 'cancelled' &&
+          result.stopReason !== 'error' &&
+          this.abortedPromptGenerations.get(sessionId) !== generation &&
+          this.lifecycleGeneration === generation
+        ) {
+          this.emit({
+            type: 'session.promptCompleted',
+            sessionId,
+            completionId: completed.info.id,
+          });
+        }
       } catch (error) {
         const completed = completeAcpPrompt(state, 'error', this.now());
         if (completed) this.recordAttribution(completed);
@@ -312,7 +329,8 @@ export class AcpClient {
         throw error;
       }
     } finally {
-      this.promptingSessions.delete(sessionId);
+      clearPromptGeneration(this.promptingSessionGenerations, sessionId, generation);
+      clearPromptGeneration(this.abortedPromptGenerations, sessionId, generation);
     }
   }
 
@@ -387,6 +405,8 @@ export class AcpClient {
   }
 
   async abortSession(sessionId: string) {
+    const generation = this.promptingSessionGenerations.get(sessionId);
+    if (generation !== undefined) this.abortedPromptGenerations.set(sessionId, generation);
     await this.initialize();
     this.client.notify('session/cancel', { sessionId });
   }
@@ -428,7 +448,8 @@ export class AcpClient {
     this.activatedSessions.clear();
     this.loadedSessions.clear();
     this.deletedSessions.clear();
-    this.promptingSessions.clear();
+    this.promptingSessionGenerations.clear();
+    this.abortedPromptGenerations.clear();
     this.historyLoads.clear();
     this.activeSessionId = null;
     this.permissions.clear();
@@ -446,7 +467,7 @@ export class AcpClient {
     this.sessions.set(params.sessionId, state);
     const entry = applyAcpUpdate(state, params.update, this.now(), this.agentId);
     state.info.status = state.status;
-    if (entry) this.emitEntry(entry, !this.promptingSessions.has(params.sessionId));
+    if (entry) this.emitEntry(entry, !this.promptingSessionGenerations.has(params.sessionId));
     const update = toRecord(params.update);
     if (update?.sessionUpdate === 'available_commands_update') {
       this.emit({ type: 'commands.updated', commands: this.getAvailableCommands() });

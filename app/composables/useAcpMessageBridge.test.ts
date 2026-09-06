@@ -17,14 +17,18 @@ describe('useAcpMessageBridge', () => {
     const msg = { updateMessage: vi.fn(), updatePart: vi.fn() };
     const upsertPermissionEntry = vi.fn();
     const onSessionUpdated = vi.fn();
+    const onSessionDeleted = vi.fn();
     const onCommandsUpdated = vi.fn();
     const onConfigUpdated = vi.fn();
+    const onTaskCompleted = vi.fn();
     const bridge = useAcpMessageBridge({
       msg,
       upsertPermissionEntry,
       onSessionUpdated,
+      onSessionDeleted,
       onCommandsUpdated,
       onConfigUpdated,
+      onTaskCompleted,
     });
 
     bridge.bind(adapter);
@@ -59,6 +63,12 @@ describe('useAcpMessageBridge', () => {
     handler?.({ type: 'session.updated', info: session });
     handler?.({ type: 'commands.updated', commands: [{ name: 'plan' }] });
     handler?.({ type: 'config.updated', options: [{ id: 'mode' }] });
+    handler?.({
+      type: 'session.promptCompleted',
+      sessionId: 'session-1',
+      completionId: 'assistant-1',
+    });
+    handler?.({ type: 'session.deleted', sessionId: 'session-deleted' });
 
     expect(msg.updateMessage).toHaveBeenCalledWith(info);
     expect(msg.updatePart).toHaveBeenCalledWith(part);
@@ -66,6 +76,12 @@ describe('useAcpMessageBridge', () => {
     expect(onSessionUpdated).toHaveBeenCalledWith(session);
     expect(onCommandsUpdated).toHaveBeenCalledWith([{ name: 'plan' }]);
     expect(onConfigUpdated).toHaveBeenCalledWith([{ id: 'mode' }]);
+    expect(onTaskCompleted).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      completionId: 'assistant-1',
+    });
+    expect(onSessionDeleted).toHaveBeenCalledOnce();
+    expect(onSessionDeleted).toHaveBeenCalledWith('session-deleted');
     bridge.stop();
     expect(handler).toBeUndefined();
   });
