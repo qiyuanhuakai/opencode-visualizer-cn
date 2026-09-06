@@ -20,7 +20,15 @@ export interface DesktopSettingsMessages {
     };
     currentVersion: string;
     availableVersion: string;
+    availableLocalVersion: string;
     unknownVersion: string;
+    connectedBridge: {
+      label: string;
+      notConnected: string;
+      loading: string;
+      unavailable: string;
+      error: string;
+    };
     installKind: {
       automatic: string;
       manual: string;
@@ -85,7 +93,15 @@ const en: DesktopSettingsMessages = {
     },
     currentVersion: 'Current: {version}',
     availableVersion: 'Available: {version}',
+    availableLocalVersion: 'Local installer available: {version}',
     unknownVersion: 'Unknown',
+    connectedBridge: {
+      label: 'Connected version',
+      notConnected: 'Not connected',
+      loading: 'Checking...',
+      unavailable: 'Unavailable (bridge does not report a version)',
+      error: 'Version check failed',
+    },
     installKind: {
       automatic: 'Automatic',
       manual: 'Manual',
@@ -170,7 +186,15 @@ const zhCN: DesktopSettingsMessages = {
     },
     currentVersion: '当前版本：{version}',
     availableVersion: '可用版本：{version}',
+    availableLocalVersion: '本机安装包可用版本：{version}',
     unknownVersion: '未知',
+    connectedBridge: {
+      label: '已连接版本',
+      notConnected: '未连接',
+      loading: '正在检查...',
+      unavailable: '不可用（Bridge 未报告版本）',
+      error: '版本检查失败',
+    },
     installKind: {
       automatic: '自动',
       manual: '手动',
@@ -255,7 +279,15 @@ const zhTW: DesktopSettingsMessages = {
     },
     currentVersion: '目前版本：{version}',
     availableVersion: '可用版本：{version}',
+    availableLocalVersion: '本機安裝程式可用版本：{version}',
     unknownVersion: '未知',
+    connectedBridge: {
+      label: '已連線版本',
+      notConnected: '未連線',
+      loading: '正在檢查...',
+      unavailable: '不可用（橋接器未回報版本）',
+      error: '版本檢查失敗',
+    },
     installKind: {
       automatic: '自動',
       manual: '手動',
@@ -340,7 +372,15 @@ const ja: DesktopSettingsMessages = {
     },
     currentVersion: '現在のバージョン: {version}',
     availableVersion: '利用可能なバージョン: {version}',
+    availableLocalVersion: 'ローカルインストーラー: {version}',
     unknownVersion: '不明',
+    connectedBridge: {
+      label: '接続中のバージョン',
+      notConnected: '未接続',
+      loading: '確認中...',
+      unavailable: '利用不可（ブリッジがバージョンを報告しません）',
+      error: 'バージョン確認に失敗しました',
+    },
     installKind: {
       automatic: '自動',
       manual: '手動',
@@ -426,7 +466,15 @@ const eo: DesktopSettingsMessages = {
     },
     currentVersion: 'Nuna versio: {version}',
     availableVersion: 'Havebla versio: {version}',
+    availableLocalVersion: 'Loka instalilo havebla: {version}',
     unknownVersion: 'Nekonata',
+    connectedBridge: {
+      label: 'Konektita versio',
+      notConnected: 'Ne konektita',
+      loading: 'Kontrolas...',
+      unavailable: 'Ne havebla (la ponto ne raportas version)',
+      error: 'Versikontrolo malsukcesis',
+    },
     installKind: {
       automatic: 'Aŭtomata',
       manual: 'Mana',

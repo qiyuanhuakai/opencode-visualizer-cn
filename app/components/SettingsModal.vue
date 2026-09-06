@@ -744,7 +744,7 @@
         </template>
 
         <template v-else-if="activePage === 'desktop'">
-          <DesktopSettings />
+          <DesktopSettings :bridge-health-url="bridgeHealthUrl" />
         </template>
 
         <template v-else>
@@ -1010,6 +1010,7 @@ type ThemePresetCard = {
 const props = defineProps<{
   open: boolean;
   initialPage?: SettingsPage;
+  bridgeHealthUrl?: string;
 }>();
 
 const emit = defineEmits<{

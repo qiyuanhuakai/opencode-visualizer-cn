@@ -13,6 +13,7 @@
       <DesktopUpdateCard
         v-for="component in components" :key="component"
         :state="state.updates[component]" :busy="isComponentBusy(component)" :action-error="actionError(component)"
+        :connected-bridge="component === 'bridge' ? connectedBridgeState : null"
         @check="checkComponent(component)" @download="downloadComponent(component)" @install="installComponent(component)"
       />
       <ToggleSettingRow v-for="key in updatePreferences" :key="key"
@@ -47,12 +48,16 @@
 </template>
 
 <script setup lang="ts">
+import { toRef } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ToggleSettingRow from '../ToggleSettingRow.vue';
 import DesktopUpdateCard from './DesktopUpdateCard.vue';
 import { useDesktopSettings } from '../../composables/useDesktopSettings';
+import { useConnectedBridgeVersion } from '../../composables/useConnectedBridgeVersion';
 
+const props = withDefaults(defineProps<{ readonly bridgeHealthUrl?: string }>(), { bridgeHealthUrl: '' });
 const { t } = useI18n();
+const { state: connectedBridgeState } = useConnectedBridgeVersion(toRef(props, 'bridgeHealthUrl'));
 const { available, state, loading, loadError, savingPreferences, preferenceError,
   isComponentBusy, actionError, refresh, setPreference, checkComponent, downloadComponent, installComponent,
 } = useDesktopSettings();

@@ -236,11 +236,11 @@ describe('Electron desktop shell', () => {
   });
 
   it.each([
-    ['en', 'Edit', 'Restore', 'Quit'],
-    ['zh-CN', '编辑', '恢复', '退出'],
-    ['zh-TW', '編輯', '恢復', '結束'],
-    ['ja', '編集', '表示', '終了'],
-    ['eo', 'Redakti', 'Restarigi', 'Ĉesi'],
+    ['en', 'Reload', 'Restore', 'Quit'],
+    ['zh-CN', '刷新', '恢复', '退出'],
+    ['zh-TW', '重新載入', '恢復', '結束'],
+    ['ja', '再読み込み', '表示', '終了'],
+    ['eo', 'Reŝargi', 'Restarigi', 'Ĉesi'],
   ] as const)(
     'builds a reduced native %s menu without losing editing roles',
     (locale, edit, restore, quit) => {
@@ -264,7 +264,10 @@ describe('Electron desktop shell', () => {
         (editSubmenu as Array<Record<string, unknown>>)
           .filter((item) => item.role)
           .map((item) => item.role),
-      ).toEqual(['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
+      ).toEqual(['reload', 'undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
+      expect(editSubmenu.filter((item) => item.visible !== false)).toEqual([
+        { label: edit, role: 'reload', accelerator: 'CmdOrCtrl+R' },
+      ]);
       expect(trayTemplate.map((item) => item.label)).toEqual([restore, quit]);
     },
   );
