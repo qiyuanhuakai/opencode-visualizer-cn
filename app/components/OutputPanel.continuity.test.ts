@@ -32,6 +32,7 @@ describe('OutputPanel card continuity', () => {
   afterEach(() => {
     messages.reset();
     outputWorkerState.startRenderWorkerHtml.mockClear();
+    vi.unstubAllGlobals();
     document.body.replaceChildren();
   });
 
@@ -80,12 +81,34 @@ describe('OutputPanel card continuity', () => {
 
     const panel = document.querySelector('.output-panel-scroll');
     expect(panel).toBeInstanceOf(HTMLDivElement);
+    if (!(panel instanceof HTMLDivElement)) throw new Error('missing output panel');
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    panel.scrollTop = 50;
+    const anchorDocumentTop = () => panel.querySelector('.thread-card-item')?.getAttribute('data-root-id') === 'message-0' ? 200 : 100;
+    const anchor = panel.querySelector<HTMLElement>('[data-root-id="message-5"]');
+    if (!anchor) throw new Error('missing retained card');
+    anchor.getBoundingClientRect = () => new DOMRect(0, anchorDocumentTop() - panel.scrollTop, 100, 60);
     panel?.dispatchEvent(new Event('scroll'));
     await nextTick();
     await nextTick();
 
     expect(document.querySelectorAll('.thread-block')).toHaveLength(25);
     expect(document.querySelector('.virtual-scroll-spacer')).toBeNull();
+    frames.splice(0).forEach((callback) => callback(0));
+    for (let i = 0; i < 10; i += 1) await nextTick();
+    expect(panel.scrollTop).toBe(150);
+    panel.scrollTop = 100;
+    for (let i = 0; i < 6; i += 1) {
+      frames.shift()?.(i + 1);
+      await nextTick();
+      await nextTick();
+      await nextTick();
+    }
+    expect(panel.scrollTop).toBe(100);
     app.unmount();
   });
 
@@ -187,6 +210,7 @@ describe('OutputPanel card continuity', () => {
             isStatusError: false,
             isThinking: false,
             isLoading: isLoading.value,
+            isAnchoring: true,
             theme: 'github-dark',
             currentSessionId: 'root-session',
           });
@@ -214,6 +238,7 @@ describe('OutputPanel card continuity', () => {
     isLoading.value = false;
     await nextTick();
     expect(host.querySelectorAll('.thread-block').length).toBeLessThanOrEqual(100);
+    expect(host.querySelector('.output-panel-messages')?.classList.contains('is-anchor-pending')).toBe(false);
     app.unmount();
   });
 });
