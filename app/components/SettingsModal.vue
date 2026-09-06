@@ -744,7 +744,10 @@
         </template>
 
         <template v-else-if="activePage === 'desktop'">
-          <DesktopSettings :bridge-health-url="bridgeHealthUrl" />
+          <DesktopSettings
+            :connected-bridge-state="connectedBridgeState"
+            :refresh-bridge-version="refreshBridgeVersion"
+          />
         </template>
 
         <template v-else>
@@ -930,6 +933,7 @@ import SettingRow from './SettingRow.vue';
 import SnippetCompletion from './SnippetCompletion.vue';
 import ToggleSettingRow from './ToggleSettingRow.vue';
 import DesktopSettings from './settings/DesktopSettings.vue';
+import type { ConnectedBridgeVersion } from '../composables/useConnectedBridgeVersion';
 import { useSettings } from '../composables/useSettings';
 import { getTextTransformerTriggerIssue, textTransformerSequence } from '../utils/textTransformers';
 import {
@@ -1010,7 +1014,8 @@ type ThemePresetCard = {
 const props = defineProps<{
   open: boolean;
   initialPage?: SettingsPage;
-  bridgeHealthUrl?: string;
+  connectedBridgeState?: ConnectedBridgeVersion | null;
+  refreshBridgeVersion?: () => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{

@@ -12,8 +12,8 @@
       <div class="desktop-section-title">{{ t('desktopSettings.sections.updates') }}</div>
       <DesktopUpdateCard
         v-for="component in components" :key="component"
-        :state="state.updates[component]" :busy="isComponentBusy(component)" :action-error="actionError(component)"
-        :connected-bridge="component === 'bridge' ? connectedBridgeState : null"
+        :state="state.updates[component]" :busy="isCardBusy(component)" :action-error="actionError(component)"
+        :connected-bridge="component === 'bridge' ? connectedBridge : null"
         @check="checkComponent(component)" @download="downloadComponent(component)" @install="installComponent(component)"
       />
       <ToggleSettingRow v-for="key in updatePreferences" :key="key"
@@ -48,23 +48,54 @@
 </template>
 
 <script setup lang="ts">
-import { toRef } from 'vue';
+import { computed, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import ToggleSettingRow from '../ToggleSettingRow.vue';
 import DesktopUpdateCard from './DesktopUpdateCard.vue';
 import { useDesktopSettings } from '../../composables/useDesktopSettings';
-import { useConnectedBridgeVersion } from '../../composables/useConnectedBridgeVersion';
+import type { ConnectedBridgeVersion } from '../../composables/useConnectedBridgeVersion';
+import type { DesktopComponent } from '../../types/desktop';
 
-const props = withDefaults(defineProps<{ readonly bridgeHealthUrl?: string }>(), { bridgeHealthUrl: '' });
+const props = withDefaults(
+  defineProps<{
+    readonly connectedBridgeState?: ConnectedBridgeVersion | null;
+    readonly refreshBridgeVersion?: () => Promise<boolean>;
+  }>(),
+  { connectedBridgeState: null, refreshBridgeVersion: undefined },
+);
 const { t } = useI18n();
-const { state: connectedBridgeState } = useConnectedBridgeVersion(toRef(props, 'bridgeHealthUrl'));
+const connectedBridge = computed<ConnectedBridgeVersion>(
+  () => props.connectedBridgeState ?? { status: 'disconnected' },
+);
+const bridgeHealthBusy = ref(false);
 const { available, state, loading, loadError, savingPreferences, preferenceError,
-  isComponentBusy, actionError, refresh, setPreference, checkComponent, downloadComponent, installComponent,
+  isComponentBusy, actionError, refresh, setPreference, downloadComponent, installComponent,
+  checkComponent: checkComponentNative,
 } = useDesktopSettings();
 const components = ['app', 'bridge'] as const;
 const updatePreferences = ['autoCheckUpdates', 'autoDownloadUpdates'] as const;
 const trayPreferences = ['minimizeToTray', 'closeToTray'] as const;
 const notificationPreferences = ['idleNotifications', 'notificationSound'] as const;
+
+async function checkComponent(component: DesktopComponent) {
+  const refreshBridge = props.refreshBridgeVersion;
+  if (component === 'bridge' && refreshBridge) {
+    if (bridgeHealthBusy.value) return;
+    bridgeHealthBusy.value = true;
+    let accepted = false;
+    try {
+      accepted = await refreshBridge();
+    } finally {
+      bridgeHealthBusy.value = false;
+    }
+    if (!accepted) return;
+  }
+  await checkComponentNative(component);
+}
+
+function isCardBusy(component: DesktopComponent) {
+  return isComponentBusy(component) || (component === 'bridge' && bridgeHealthBusy.value);
+}
 </script>
 
 <style src="./desktop-settings.css"></style>

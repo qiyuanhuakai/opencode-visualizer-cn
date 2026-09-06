@@ -437,7 +437,8 @@
     <SettingsModal
       :open="isSettingsOpen"
       :initial-page="settingsInitialPage"
-      :bridge-health-url="connectedBridgeHealthUrl"
+      :connected-bridge-state="connectedBridgeState"
+      :refresh-bridge-version="desktopBridgeVersion.refresh"
       @close="isSettingsOpen = false"
     />
     <ProviderManagerModal
@@ -629,6 +630,10 @@ import { useBackendSessionStatus } from './composables/useBackendSessionStatus';
 import { useBackendSelectionBootstrap } from './composables/useBackendSelectionBootstrap';
 import { useCodexMessageBridge } from './composables/useCodexMessageBridge';
 import { useDeltaAccumulator } from './composables/useDeltaAccumulator';
+import {
+  resolveDesktopBridgeHealthUrl,
+  useDesktopBridgeVersion,
+} from './composables/useDesktopBridgeVersion';
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useLiveDescendantHistoryHydration } from './composables/useLiveDescendantHistoryHydration';
 import { useMessages } from './composables/useMessages';
@@ -711,7 +716,7 @@ import {
   createAcpUiModeState,
   resolveAcpModeSelection,
 } from './backends/acp/configOptions';
-import { ACP_PROJECT_ID, acpBridgeHttpUrl } from './backends/acp/bridgeUrl';
+import { ACP_PROJECT_ID } from './backends/acp/bridgeUrl';
 import type { BackendKind, ConfigMergeStrategy } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
@@ -2019,24 +2024,17 @@ const loginPassword = ref('');
 const loginRequiresAuth = ref(false);
 const activeBackendKind = ref<BackendKind>('opencode');
 const connectedBridgeHealthUrl = computed(() => {
-  if (uiInitState.value !== 'ready' || connectionState.value !== 'ready') return '';
-  if (activeBackendKind.value === 'codex') {
-    if (!codexApi.connected.value) return '';
-    try {
-      return appendCodexBridgeToken(codexBridgeHttpUrl(codexApi.url.value, '/healthz'), codexApi.bridgeToken.value);
-    } catch {
-      return '';
-    }
-  }
-  if (activeBackendKind.value === 'acp') {
-    try {
-      return appendCodexBridgeToken(acpBridgeHttpUrl(credentials.acpBridgeUrl.value, '/healthz'), credentials.acpBridgeToken.value);
-    } catch {
-      return '';
-    }
-  }
-  return '';
+  if (!desktopApi || uiInitState.value !== 'ready') return '';
+  return resolveDesktopBridgeHealthUrl({
+    backendKind: activeBackendKind.value,
+    acpBridgeUrl: credentials.acpBridgeUrl.value,
+    acpBridgeToken: credentials.acpBridgeToken.value,
+    codexBridgeUrl: credentials.codexBridgeUrl.value,
+    codexBridgeToken: credentials.codexBridgeToken.value,
+  });
 });
+const desktopBridgeVersion = useDesktopBridgeVersion(connectedBridgeHealthUrl, desktopApi);
+const connectedBridgeState = computed(() => desktopBridgeVersion.state.value);
 const providerConfigRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const providersRequestFence = createBackendRequestFence(() => activeBackendKind.value);
 const agentsRequestFence = createBackendRequestFence(() => activeBackendKind.value);
