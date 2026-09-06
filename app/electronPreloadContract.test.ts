@@ -167,19 +167,39 @@ describe('electron preload contract', () => {
     expect(Object.keys(api.clipboard).sort()).toEqual(['readText', 'writeText']);
   });
 
+  it('exposes exactly the trusted desktop api names', () => {
+    const { api } = loadPreloadWithMocks();
+    expect(Object.keys(api.desktop).sort()).toEqual([
+      'check',
+      'configure',
+      'download',
+      'getState',
+      'install',
+      'notify',
+      'onNotificationClick',
+      'onState',
+      'reportBridgeVersion',
+    ]);
+  });
+
   it('routes desktop actions through fixed IPC channels', async () => {
     // Given: the actual preload running with an observable transport.
     const { api, ipcRenderer } = loadPreloadWithMocks();
     // When: desktop operations are requested by the renderer.
     await api.desktop.getState();
     await api.desktop.configure({ closeToTray: true });
+    await api.desktop.reportBridgeVersion?.({ connectionId: 'connection-1', version: 'v1.2.3' });
     await api.desktop.check('app');
     await api.desktop.download('bridge');
     await api.desktop.install('bridge');
     // Then: only named operations and their bounded payloads cross the bridge.
     expect(ipcRenderer.invoke.mock.calls).toEqual([
-      ['desktop-get-state'], ['desktop-configure', { closeToTray: true }],
-      ['desktop-check', 'app'], ['desktop-download', 'bridge'], ['desktop-install', 'bridge'],
+      ['desktop-get-state'],
+      ['desktop-configure', { closeToTray: true }],
+      ['desktop-report-bridge-version', { connectionId: 'connection-1', version: 'v1.2.3' }],
+      ['desktop-check', 'app'],
+      ['desktop-download', 'bridge'],
+      ['desktop-install', 'bridge'],
     ]);
   });
 
