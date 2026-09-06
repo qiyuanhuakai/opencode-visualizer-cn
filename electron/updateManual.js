@@ -12,6 +12,23 @@ export function createManualUpdate({
   shell,
   stagingFiles,
 }) {
+  const retirements = new Set();
+
+  function retireDownload(component, pendingWork) {
+    const filePath = downloads.get(component);
+    downloads.delete(component);
+    if (!filePath || handedOffFiles.has(filePath)) return;
+    const retirement = (async () => {
+      await pendingWork?.catch(() => undefined);
+      if (handedOffFiles.has(filePath)) return;
+      await runtime.removeFile(filePath);
+      stagingFiles.delete(filePath);
+    })();
+    retirements.add(retirement);
+    const settled = () => retirements.delete(retirement);
+    void retirement.then(settled, settled);
+  }
+
   async function check(component, currentVersion, revision) {
     const release = await runtime.getLatestRelease();
     if (!isUsable(component, revision)) return;
@@ -91,5 +108,5 @@ export function createManualUpdate({
     }
   }
 
-  return { check, download, openInstaller };
+  return { check, download, openInstaller, retireDownload, pendingCleanup: () => [...retirements] };
 }

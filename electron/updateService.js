@@ -193,7 +193,7 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
 
   function resetBridge(version) {
     assets.delete('bridge');
-    downloads.delete('bridge');
+    manualUpdate.retireDownload('bridge', bridgeSession.pending());
     state.bridge = initialState('bridge', version, bridgeSupported ? 'manual' : 'unsupported');
     onChange(getState());
   }
@@ -233,7 +233,7 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     installAbortController.abort();
     removeUpdaterListeners();
     runtime.dispose();
-    await settleWithin(Promise.allSettled(admission.pending()), DISPOSE_WAIT_MS);
+    await settleWithin(Promise.allSettled([...admission.pending(), ...manualUpdate.pendingCleanup()]), DISPOSE_WAIT_MS);
     const disposable = [...stagingFiles].filter((filePath) => !handedOffFiles.has(filePath));
     await Promise.all(disposable.map((filePath) => runtime.removeFile(filePath)));
     stagingFiles.clear();

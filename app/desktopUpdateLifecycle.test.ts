@@ -16,6 +16,61 @@ const RELEASE = {
 };
 
 describe('desktop update lifecycle', () => {
+  it('deletes a retired downloaded installer before application exit', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+    await fixture.service.download('bridge');
+    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
+    await vi.waitFor(() => expect(fixture.runtime.removeFile).toHaveBeenCalledWith('/private/update/bridge.deb'));
+    await fixture.service.dispose();
+    expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for an active verification before retiring its installer', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+    await fixture.service.download('bridge');
+    fixture.beforeInstall.mockResolvedValueOnce(true);
+    const verification = deferred<undefined>();
+    fixture.runtime.verifyAsset.mockImplementationOnce(() => verification.promise);
+    const installation = fixture.service.install('bridge');
+    await vi.waitFor(() => expect(fixture.runtime.verifyAsset).toHaveBeenCalledTimes(2));
+    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
+    expect(fixture.runtime.removeFile).not.toHaveBeenCalled();
+    verification.resolve(undefined);
+    await installation;
+    await vi.waitFor(() => expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(1));
+    expect(fixture.shell.openPath).not.toHaveBeenCalled();
+    await fixture.service.dispose();
+    expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains failed retirement cleanup for disposal to retry', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+    await fixture.service.download('bridge');
+    fixture.runtime.removeFile.mockRejectedValueOnce(new Error('temporary removal failure'));
+    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
+    await vi.waitFor(() => expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(1));
+    await fixture.service.dispose();
+    expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retire an installer already handed to the operating system', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+    await fixture.service.download('bridge');
+    fixture.beforeInstall.mockResolvedValueOnce(true);
+    const opened = deferred<string>();
+    fixture.shell.openPath.mockImplementationOnce(() => opened.promise);
+    const installation = fixture.service.install('bridge');
+    await vi.waitFor(() => expect(fixture.shell.openPath).toHaveBeenCalledOnce());
+    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
+    opened.resolve('');
+    await installation;
+    await fixture.service.dispose();
+    expect(fixture.runtime.removeFile).not.toHaveBeenCalled();
+  });
   it('rejects late version reports after disposal without publishing or changing state', async () => {
     const fixture = createFixture();
     await fixture.service.dispose();
