@@ -103,6 +103,7 @@ export type WorkerToTabMessage =
     }
   | {
       type: 'notification.show';
+      completionId?: string;
       projectId: string;
       sessionId: string;
       kind: 'permission' | 'question' | 'idle';

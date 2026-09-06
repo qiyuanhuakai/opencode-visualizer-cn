@@ -1131,6 +1131,35 @@ describe('SSE SharedWorker hydration', () => {
     });
   });
 
+  it('identifies a real successful busy-to-idle completion separately from idle badges', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const deliver = latestCallbacks().onPacket;
+    deliver(sessionCreatedPacket('native-root', 'Native root'));
+    deliver({ directory: '/a', payload: { type: 'session.status', properties: { sessionID: 'native-root', status: { type: 'busy' } } } });
+    deliver({ directory: '/a', payload: { type: 'message.updated', properties: { info: {
+      id: 'native-result-1', sessionID: 'native-root', role: 'assistant', finish: 'stop', time: { created: 1, completed: 2 },
+    } } } });
+    deliver({ directory: '/a', payload: { type: 'session.status', properties: { sessionID: 'native-root', status: { type: 'idle' } } } });
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'notification.show')).toContainEqual({
+      type: 'notification.show', projectId: 'project', sessionId: 'native-root', kind: 'idle', completionId: 'native-result-1',
+    }));
+  });
+
+  it('does not identify an aborted OpenCode message as a successful native completion', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const deliver = latestCallbacks().onPacket;
+    deliver(sessionCreatedPacket('aborted-root', 'Aborted root'));
+    deliver({ directory: '/a', payload: { type: 'session.status', properties: { sessionID: 'aborted-root', status: { type: 'busy' } } } });
+    deliver({ directory: '/a', payload: { type: 'message.updated', properties: { info: {
+      id: 'aborted-result', sessionID: 'aborted-root', role: 'assistant', error: { name: 'MessageAbortedError' }, time: { created: 1, completed: 2 },
+    } } } });
+    deliver({ directory: '/a', payload: { type: 'session.status', properties: { sessionID: 'aborted-root', status: { type: 'idle' } } } });
+    await flush();
+    expect(messagesOf(worker.messages, 'notification.show').filter((message) => 'completionId' in message)).toEqual([]);
+  });
+
   it('does not resolve a known session when an identical update is unchanged', async () => {
     const worker = await connectWorker();
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
