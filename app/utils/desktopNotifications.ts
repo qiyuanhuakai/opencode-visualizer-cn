@@ -13,15 +13,17 @@ export function createDesktopNotificationRouter(options: {
   });
   return {
     async send(notification: DesktopNotification) {
-      pending.set(notification.id, { identity: options.getIdentity(), notification });
+      const identity = options.getIdentity();
+      const id = JSON.stringify([identity, notification.id]);
+      pending.set(id, { identity, notification });
       if (pending.size > 128) {
         const oldest = pending.keys().next().value;
         if (oldest !== undefined) pending.delete(oldest);
       }
       try {
-        await options.api.notify(notification);
+        await options.api.notify({ ...notification, id });
       } catch (error) {
-        pending.delete(notification.id);
+        pending.delete(id);
         throw error;
       }
     },
