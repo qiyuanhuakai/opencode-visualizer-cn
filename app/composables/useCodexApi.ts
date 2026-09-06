@@ -149,6 +149,7 @@ export type CodexApiOptions = {
   url?: string;
   bridgeToken?: string;
   adapterFactory?: (options: CodexAdapterOptions) => CodexAdapter;
+  onTaskCompleted?: (completion: { sessionId: string; completionId: string }) => void;
 };
 
 type CodexConnectPhase = 'home' | 'handshake' | 'threads' | 'workspace' | 'panelData';
@@ -649,6 +650,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   };
   const observedTurnIdsByThread = new Map<string, string[]>();
   const invalidatedTurnIdsByThread = new Map<string, Set<string>>();
+  const liveTurnGenerations = new Map<string, number>();
+
+  function liveTurnKey(threadId: string, turnId: string) {
+    return `${threadId}\0${turnId}`;
+  }
 
   function recordObservedTurnId(threadId: string, turnId: string) {
     if (!threadId || !turnId) return;
@@ -1113,7 +1119,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     );
   }
 
-  function handleNotification(notification: CodexJsonRpcNotification) {
+  function handleNotification(notification: CodexJsonRpcNotification, request: ConnectionRequest) {
+    if (!isCurrentConnection(request)) return;
     events.value.push({
       id: nextEventId,
       method: notification.method,
@@ -1130,6 +1137,23 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (notificationThreadId && notificationTurnId) {
       if (isInvalidatedTurnId(notificationThreadId, notificationTurnId)) return;
       recordObservedTurnId(notificationThreadId, notificationTurnId);
+    }
+    if (notification.method === 'turn/started' || notification.method === 'turn/completed') {
+      const turn = extractTurn(notification.params);
+      const threadId = notificationThreadId || activeThreadId.value;
+      const turnId = turn?.id || notificationTurnId;
+      if (threadId && turnId) {
+        const key = liveTurnKey(threadId, turnId);
+        if (notification.method === 'turn/started') {
+          liveTurnGenerations.set(key, request.generation);
+        } else {
+          const startedGeneration = liveTurnGenerations.get(key);
+          liveTurnGenerations.delete(key);
+          if (turn?.status === 'completed' && startedGeneration === request.generation) {
+            initialOptions.onTaskCompleted?.({ sessionId: threadId, completionId: turnId });
+          }
+        }
+      }
     }
     const isRealtimeThreadNotification =
       notification.method.startsWith('item/') ||
@@ -1785,7 +1809,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     onPhase?.('home');
     await refreshHomeDir(false, request);
     if (!isCurrentConnection(request)) return;
-    unsubscribeNotifications = sourceAdapter.onNotification(handleNotification);
+    unsubscribeNotifications = sourceAdapter.onNotification((notification) =>
+      handleNotification(notification, request),
+    );
     unsubscribeServerRequests = sourceAdapter.onServerRequest(handleServerRequest);
 
     try {
@@ -1837,6 +1863,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     capabilityRegistry.reset();
     initialized.value = false;
     activeTurn.value = null;
+    liveTurnGenerations.clear();
     serverRequests.value = [];
     permissionRequests.value = [];
     elicitationRequests.value = [];
@@ -2365,6 +2392,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const turn = activeTurn.value;
     const turnId = turn?.id;
     if (!activeThreadId.value || !turnId) return;
+    liveTurnGenerations.delete(liveTurnKey(activeThreadId.value, turnId));
     await adapter.interruptTurn({ threadId: activeThreadId.value, turnId });
     activeTurn.value = { ...turn, status: 'interrupted' };
     pending.value = false;
