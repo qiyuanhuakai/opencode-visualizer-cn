@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
+import type { DesktopApi } from './types/desktop';
 
 const PRELOAD_PATH = path.resolve(__dirname, '../electron/preload.cjs');
 const preloadSource = readFileSync(PRELOAD_PATH, 'utf8');
@@ -17,6 +18,7 @@ interface LocalFileError {
 }
 
 interface ElectronApiSchema {
+  desktop: DesktopApi;
   platform: string;
   versions: { node: string; electron: string; chrome: string };
   getAppVersion: () => Promise<unknown>;
@@ -150,6 +152,7 @@ describe('electron preload contract', () => {
     const { api } = loadPreloadWithMocks();
     expect(Object.keys(api).sort()).toEqual([
       'clipboard',
+      'desktop',
       'getAppVersion',
       'getPlatform',
       'localFile',
@@ -162,6 +165,35 @@ describe('electron preload contract', () => {
   it('exposes the exact clipboard api name', () => {
     const { api } = loadPreloadWithMocks();
     expect(Object.keys(api.clipboard).sort()).toEqual(['readText', 'writeText']);
+  });
+
+  it('routes desktop actions through fixed IPC channels', async () => {
+    // Given: the actual preload running with an observable transport.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    // When: desktop operations are requested by the renderer.
+    await api.desktop.getState();
+    await api.desktop.configure({ closeToTray: true });
+    await api.desktop.check('app');
+    await api.desktop.download('bridge');
+    await api.desktop.install('bridge');
+    // Then: only named operations and their bounded payloads cross the bridge.
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      ['desktop-get-state'], ['desktop-configure', { closeToTray: true }],
+      ['desktop-check', 'app'], ['desktop-download', 'bridge'], ['desktop-install', 'bridge'],
+    ]);
+  });
+
+  it('unsubscribes desktop events without exposing the IPC event', () => {
+    // Given: a subscribed renderer callback.
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    const listener = vi.fn();
+    const unsubscribe = api.desktop.onState(listener);
+    // When: a state event arrives before and after disposal.
+    ipcRenderer.emit('desktop-state', { sender: 'private' }, { preferences: {} });
+    unsubscribe();
+    ipcRenderer.emit('desktop-state', {}, { preferences: {} });
+    // Then: only the payload from the live subscription is delivered.
+    expect(listener.mock.calls).toEqual([[{ preferences: {} }]]);
   });
 
   it('exposes exactly the localFile api names', () => {

@@ -1,8 +1,34 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
 import { installAsyncQuitCleanup, type QuitEvent } from '../../electron/asyncQuitCleanup.js';
 
 describe('Electron async quit cleanup', () => {
+  it('executes the main-process quit seam with editor and desktop runtime cleanup together', async () => {
+    // Given: the cleanup callback extracted from the production main-process wiring.
+    const mainSource = readFileSync(path.resolve(__dirname, '../../electron/main.js'), 'utf8');
+    const callbackSource = mainSource.match(
+      /installAsyncQuitCleanup\(\s*app,\s*(\(\) => Promise\.all\(\[[\s\S]*?\]\))/u,
+    )?.[1];
+    expect(callbackSource).toBeDefined();
+    const closeAll = vi.fn(async () => undefined);
+    const dispose = vi.fn(async () => undefined);
+    const cleanup = vm.runInNewContext(`(${callbackSource})`, {
+      localFileEditor: { closeAll },
+      desktopRuntime: { dispose },
+      Promise,
+    }) as () => Promise<unknown>;
+
+    // When: the actual callback used by main is awaited.
+    await cleanup();
+
+    // Then: both asynchronous owners complete through the same bounded quit gate.
+    expect(closeAll).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it('prevents quitting until cleanup finishes and resumes the graceful quit once', async () => {
     let beforeQuit: ((event: QuitEvent) => void) | undefined;
     let finishCleanup: (() => void) | undefined;
