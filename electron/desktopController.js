@@ -8,6 +8,9 @@ const DEFAULTS = Object.freeze({
   notificationSound: false,
 });
 const LOCALES = new Set(['en', 'zh-CN', 'zh-TW', 'ja', 'eo']);
+const BRIDGE_VERSION_PATTERN = /^v?(\d+\.\d+\.\d+)$/u;
+const MAX_CONNECTION_ID_LENGTH = 128;
+const MAX_BRIDGE_VERSION_LENGTH = 64;
 
 function parsePreferences(patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
@@ -23,8 +26,37 @@ function parsePreferences(patch) {
 }
 
 function parseComponent(component) {
-  if (component !== 'app' && component !== 'bridge') throw new TypeError('Invalid update component');
+  if (component !== 'app' && component !== 'bridge')
+    throw new TypeError('Invalid update component');
   return component;
+}
+
+function parseBridgeVersionReport(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new TypeError('Invalid bridge version report');
+  }
+  const keys = Object.keys(payload);
+  if (keys.length !== 2 || !keys.includes('connectionId') || !keys.includes('version')) {
+    throw new TypeError('Invalid bridge version report');
+  }
+  if (
+    typeof payload.connectionId !== 'string' ||
+    payload.connectionId.length === 0 ||
+    payload.connectionId.length > MAX_CONNECTION_ID_LENGTH
+  ) {
+    throw new TypeError('Invalid bridge connection ID');
+  }
+  if (payload.version === null) return { connectionId: payload.connectionId, version: null };
+  const match =
+    typeof payload.version === 'string' && payload.version.length <= MAX_BRIDGE_VERSION_LENGTH
+      ? BRIDGE_VERSION_PATTERN.exec(payload.version)
+      : null;
+  if (!match) throw new TypeError('Invalid bridge version');
+  const version = match[1]
+    .split('.')
+    .map((part) => BigInt(part).toString())
+    .join('.');
+  return { connectionId: payload.connectionId, version };
 }
 
 function parseNotification(notification) {
@@ -45,7 +77,11 @@ function parseNotification(notification) {
 export function createDesktopController({ storage, desktopShell, updates, publish }) {
   const saved = storage.getItem('preferences');
   let preferences = { ...DEFAULTS, ...(saved === null ? {} : parsePreferences(JSON.parse(saved))) };
-  const getState = () => ({ preferences: { ...preferences }, ...desktopShell.getCapabilities(), updates: updates.getState() });
+  const getState = () => ({
+    preferences: { ...preferences },
+    ...desktopShell.getCapabilities(),
+    updates: updates.getState(),
+  });
   const activate = () => {
     desktopShell.configure(preferences);
     updates.configure(preferences);
@@ -66,6 +102,10 @@ export function createDesktopController({ storage, desktopShell, updates, publis
       publish(state);
       return state;
     },
+    async reportBridgeVersion(payload) {
+      updates.reportBridgeVersion(parseBridgeVersionReport(payload));
+      return getState();
+    },
     check: (component) => runUpdate('check', component),
     download: (component) => runUpdate('download', component),
     install: (component) => runUpdate('install', component),
@@ -77,6 +117,7 @@ export function registerDesktopIpc({ ipcMain, controller, assertTrustedRenderer 
   const handlers = {
     'desktop-get-state': () => controller.getState(),
     'desktop-configure': (payload) => controller.configure(payload),
+    'desktop-report-bridge-version': (payload) => controller.reportBridgeVersion(payload),
     'desktop-check': (payload) => controller.check(payload),
     'desktop-download': (payload) => controller.download(payload),
     'desktop-install': (payload) => controller.install(payload),
