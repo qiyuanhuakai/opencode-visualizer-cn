@@ -2388,12 +2388,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   async function interruptActiveTurn() {
-    if (!adapter) throw new Error('Codex is not connected.');
+    const request = captureConnection();
+    if (!request) throw new Error('Codex is not connected.');
     const turn = activeTurn.value;
     const turnId = turn?.id;
-    if (!activeThreadId.value || !turnId) return;
-    liveTurnGenerations.delete(liveTurnKey(activeThreadId.value, turnId));
-    await adapter.interruptTurn({ threadId: activeThreadId.value, turnId });
+    const threadId = activeThreadId.value;
+    if (!threadId || !turnId) return;
+    await request.sourceAdapter.interruptTurn({ threadId, turnId });
+    if (!isCurrentConnection(request)) return;
+    liveTurnGenerations.delete(liveTurnKey(threadId, turnId));
+    if (activeThreadId.value !== threadId || activeTurn.value !== turn) return;
     activeTurn.value = { ...turn, status: 'interrupted' };
     pending.value = false;
   }
