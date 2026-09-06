@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
+import packageInfo from '../package.json' with { type: 'json' };
 import {
   authorizeHttpRequest,
   rejectUnprotectedBridgeControlHttp,
@@ -48,7 +49,11 @@ export function createVisBridgeServer(options) {
 
     if (requestUrl.pathname === '/healthz' || requestUrl.pathname === '/readyz') {
       if (!authorizeHttpRequest(request, response, options.bridgeToken)) return;
-      writeJsonHttpResponse(response, 200, { ok: true, service: 'vis_bridge' });
+      writeJsonHttpResponse(response, 200, {
+        ok: true,
+        service: 'vis_bridge',
+        version: packageInfo.version,
+      });
       return;
     }
 

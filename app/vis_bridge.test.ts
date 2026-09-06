@@ -11,6 +11,7 @@ import { createVisBridgeServer } from '../vis_bridge';
 import { createBridgeConfigStore } from '../bridge/bridgeConfig.js';
 import { createBridgeRuntime } from '../bridge/bridgeRuntime.js';
 import type { BridgeRuntime } from '../bridge/bridgeRuntime.js';
+import packageInfo from '../package.json' with { type: 'json' };
 
 type TestServer = ReturnType<typeof createVisBridgeServer>;
 
@@ -261,16 +262,20 @@ async function createTestRuntime(enabled = true) {
 
 describe('vis_bridge', () => {
   it('serves health checks', async () => {
+    const runtime = await createTestRuntime(false);
     const server = createVisBridgeServer({
       path: '/codex',
       target: 'ws://127.0.0.1:4500',
+      runtime,
     });
     const port = await listen(server);
 
-    await expect(readHttpBody(port, '/healthz')).resolves.toEqual({
-      status: 200,
-      body: { ok: true, service: 'vis_bridge' },
-    });
+    for (const endpoint of ['/healthz', '/readyz']) {
+      await expect(readHttpBody(port, endpoint)).resolves.toEqual({
+        status: 200,
+        body: { ok: true, service: 'vis_bridge', version: packageInfo.version },
+      });
+    }
   });
 
   it('rejects WebSocket upgrades on the wrong path before contacting upstream', async () => {
@@ -319,7 +324,7 @@ describe('vis_bridge', () => {
     });
     await expect(readHttpBody(port, '/readyz?token=secret-token')).resolves.toEqual({
       status: 200,
-      body: { ok: true, service: 'vis_bridge' },
+      body: { ok: true, service: 'vis_bridge', version: packageInfo.version },
     });
 
     const homedir = await readHttpBody(port, '/homedir', { Authorization: 'Bearer secret-token' });
