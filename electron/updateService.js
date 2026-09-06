@@ -1,10 +1,17 @@
-import path from 'node:path';
 import { createUpdateAdmission } from './updateAdmission.js';
 import { createAutomaticUpdate } from './updateAutomatic.js';
+import { createAutomaticAppCheck } from './updateAutomaticCheck.js';
+import { createBridgeUpdateSession } from './updateBridgeSession.js';
 import { attachUpdaterEvents } from './updateEvents.js';
-import { isNewerVersion, selectManualAsset, sha256FromDigest } from './updatePolicy.js';
+import { createManualUpdate } from './updateManual.js';
 import { createUpdateRuntime } from './updateRuntime.js';
-import { boundedPercent, errorMessage, initialState, settleWithin, transition, unsupportedMessage, versionFromInfo } from './updateState.js';
+import {
+  errorMessage,
+  initialState,
+  settleWithin,
+  transition,
+  unsupportedMessage,
+} from './updateState.js';
 
 const COMPONENTS = ['app', 'bridge'];
 const DISPOSE_WAIT_MS = 5_000;
@@ -13,10 +20,15 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
   const runtime = injectedRuntime ?? createUpdateRuntime();
   const automaticApp = app.isPackaged && runtime.automaticAppUpdates;
   const manualApp = app.isPackaged && runtime.platform === 'darwin';
-  const bridgeSupported = ['darwin', 'linux', 'win32'].includes(runtime.platform) &&
+  const bridgeSupported =
+    ['darwin', 'linux', 'win32'].includes(runtime.platform) &&
     ['arm64', 'x64'].includes(runtime.arch);
   const state = {
-    app: initialState('app', app.getVersion(), automaticApp ? 'automatic' : manualApp ? 'manual' : 'unsupported'),
+    app: initialState(
+      'app',
+      app.getVersion(),
+      automaticApp ? 'automatic' : manualApp ? 'manual' : 'unsupported',
+    ),
     bridge: initialState('bridge', null, bridgeSupported ? 'manual' : 'unsupported'),
   };
   const assets = new Map();
@@ -29,7 +41,6 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
   let autoDownloadUpdates = false;
   let disposed = false;
   let disposePromise = null;
-  let automaticOfferError = null;
   const installAbortController = new AbortController();
 
   const publish = (component, patch) => {
@@ -37,103 +48,88 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     state[component] = { ...state[component], ...patch };
     onChange(getState());
   };
-  const fail = (component, error) => {
+  let bridgeSession;
+  const isCurrent = (component, revision) => bridgeSession.isCurrent(component, revision);
+  const isUsable = (component, revision) => !disposed && isCurrent(component, revision);
+  const fail = (component, error, revision) => {
+    if (!isCurrent(component, revision)) return;
     publish(component, { phase: 'error', progress: null, error: errorMessage(error) });
   };
 
-  const acceptAutomaticOffer = (info) => {
-    return automaticUpdate.accept(info);
-  };
+  const automaticAppCheck = createAutomaticAppCheck({
+    automaticUpdate,
+    currentVersion: () => state.app.currentVersion,
+    publish,
+    runtime,
+  });
   const removeUpdaterListeners = attachUpdaterEvents(
     runtime.updater,
     publish,
     () => state.app.availableVersion,
-    acceptAutomaticOffer,
-    (error) => { automaticOfferError = error; automaticUpdate.clear(); },
+    automaticAppCheck.accept,
+    automaticAppCheck.reject,
   );
   runtime.updater.autoDownload = false;
   runtime.updater.autoInstallOnAppQuit = false;
   runtime.updater.allowPrerelease = false;
-  runtime.updater.channel = runtime.platform === 'win32' && runtime.arch === 'arm64' ? 'latest-arm64' : null;
+  runtime.updater.channel =
+    runtime.platform === 'win32' && runtime.arch === 'arm64' ? 'latest-arm64' : null;
   runtime.updater.allowDowngrade = false;
 
+  const manualUpdate = createManualUpdate({
+    assets,
+    downloads,
+    handedOffFiles,
+    isUsable,
+    publish,
+    runtime,
+    shell,
+    stagingFiles,
+  });
+  bridgeSession = createBridgeUpdateSession({
+    isPackaged: app.isPackaged,
+    isDisposed: () => disposed,
+    onVersionChange: resetBridge,
+    runCheck: () => check('bridge'),
+  });
+
   function getState() {
-    return Object.freeze({ app: Object.freeze({ ...state.app }), bridge: Object.freeze({ ...state.bridge }) });
+    return Object.freeze({
+      app: Object.freeze({ ...state.app }),
+      bridge: Object.freeze({ ...state.bridge }),
+    });
   }
 
-  async function checkUnlocked(component) {
+  async function checkUnlocked(component, revision) {
+    if (!isCurrent(component, revision)) return getState();
     if (state[component].installKind === 'unsupported') {
-      publish(component, { phase: 'unsupported', progress: null, error: unsupportedMessage(component) });
+      publish(component, {
+        phase: 'unsupported',
+        progress: null,
+        error: unsupportedMessage(component),
+      });
       return getState();
     }
+    if (component === 'bridge' && state.bridge.currentVersion === null) return getState();
     publish(component, transition('checking'));
     let checkSucceeded = false;
     try {
-      if (component === 'app' && automaticApp) await checkAutomaticApp();
-      else await checkManual(component);
-      checkSucceeded = true;
+      if (component === 'app' && automaticApp) await automaticAppCheck.check();
+      else await manualUpdate.check(component, state[component].currentVersion, revision);
+      checkSucceeded = isCurrent(component, revision);
     } catch (error) {
-      fail(component, error);
+      fail(component, error, revision);
     }
     if (checkSucceeded && autoDownloadUpdates && state[component].phase === 'available') {
-      await downloadUnlocked(component);
+      await downloadUnlocked(component, revision);
     }
     return getState();
   }
 
-  async function checkAutomaticApp() {
-    automaticUpdate.clear();
-    automaticOfferError = null;
-    const result = await runtime.updater.checkForUpdates();
-    if (automaticOfferError) throw automaticOfferError;
-    if (result === null) {
-      automaticUpdate.clear();
-      publish('app', { phase: 'unsupported', error: 'Automatic app updater is inactive', progress: null });
-      return;
-    }
-    const file = automaticUpdate.accept(result.updateInfo);
-    const version = versionFromInfo(result.updateInfo);
-    if (version !== null && isNewerVersion(version, state.app.currentVersion)) {
-      publish('app', { availableVersion: version, phase: 'available', error: null, assetName: file.name });
-    } else {
-      automaticUpdate.clear();
-      publish('app', { availableVersion: null, phase: 'up-to-date', error: null, assetName: null });
-    }
-  }
-
-  async function checkManual(component) {
-    const currentVersion = component === 'bridge'
-      ? await runtime.getBridgeVersion()
-      : state.app.currentVersion;
-    const release = await runtime.getLatestRelease();
-    if (!isNewerVersion(release.version, currentVersion)) {
-      assets.delete(component);
-      publish(component, {
-        currentVersion,
-        availableVersion: null,
-        phase: 'up-to-date',
-        progress: null,
-        error: null,
-        assetName: null,
-      });
-      return;
-    }
-    const asset = selectManualAsset(release, component, runtime.platform, runtime.arch);
-    sha256FromDigest(asset);
-    assets.set(component, asset);
-    publish(component, {
-      currentVersion,
-      availableVersion: release.version,
-      phase: 'available',
-      progress: null,
-      error: null,
-      assetName: asset.name,
-    });
-  }
-
-  async function downloadUnlocked(component) {
+  async function downloadUnlocked(component, revision) {
+    if (!isCurrent(component, revision)) return getState();
     if (state[component].phase !== 'available') {
-      fail(component, new Error(`No ${component} update is available to download`));
+      fail(component, new Error(`No ${component} update is available to download`), revision);
       return getState();
     }
     publish(component, { phase: 'downloading', progress: 0, error: null });
@@ -141,100 +137,88 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
       if (component === 'app' && automaticApp) {
         const paths = await runtime.downloadAppUpdate();
         automaticUpdate.recordDownload(paths);
-        if (state.app.phase === 'downloading') publish('app', { phase: 'downloaded', progress: 100 });
+        if (state.app.phase === 'downloading')
+          publish('app', { phase: 'downloaded', progress: 100 });
       } else {
-        await downloadManual(component);
+        await manualUpdate.download(component, revision);
       }
     } catch (error) {
-      fail(component, error);
+      fail(component, error, revision);
     }
     return getState();
   }
 
-  async function downloadManual(component) {
-    const asset = assets.get(component);
-    if (!asset) throw new Error(`No verified ${component} release asset is selected`);
-    const expectedSha256 = sha256FromDigest(asset);
-    const filePath = await runtime.downloadAsset(asset, (progress) => {
-      publish(component, { phase: 'downloading', progress: boundedPercent({ percent: progress }), error: null });
-    });
-    if (disposed) {
-      await runtime.removeFile(filePath);
-      return;
-    }
-    try {
-      await runtime.verifyAsset(filePath, asset, expectedSha256);
-    } catch (error) {
-      await runtime.removeFile(filePath);
-      throw error;
-    }
-    if (disposed) {
-      await runtime.removeFile(filePath);
-      return;
-    }
-    stagingFiles.add(filePath);
-    downloads.set(component, filePath);
-    publish(component, { phase: 'downloaded', progress: 100, error: null });
-  }
-
-  async function installUnlocked(component) {
+  async function installUnlocked(component, revision) {
+    if (!isCurrent(component, revision)) return getState();
     if (state[component].phase !== 'downloaded') {
-      fail(component, new Error(`No downloaded ${component} update is ready to install`));
+      fail(component, new Error(`No downloaded ${component} update is ready to install`), revision);
       return getState();
     }
     try {
       const approved = await beforeInstall(component, installAbortController.signal);
-      if (approved === false || disposed) return getState();
+      if (approved === false || disposed || !isCurrent(component, revision)) return getState();
       publish(component, { phase: 'installing', error: null });
       if (component === 'app' && automaticApp) {
         await automaticUpdate.verifyDownload();
         if (disposed) return getState();
         runtime.updater.quitAndInstall(false, true);
       } else {
-        await openManualInstaller(component);
+        await manualUpdate.openInstaller(component, revision);
       }
     } catch (error) {
-      fail(component, error);
+      fail(component, error, revision);
     }
     return getState();
-  }
-
-  async function openManualInstaller(component) {
-    const asset = assets.get(component);
-    const filePath = downloads.get(component);
-    if (!asset || !filePath) throw new Error(`No downloaded ${component} installer is ready`);
-    await runtime.verifyAsset(filePath, asset, sha256FromDigest(asset));
-    if (disposed) return;
-    handedOffFiles.add(filePath);
-    try {
-      const openError = await shell.openPath(filePath);
-      if (openError) throw new Error(`Could not open ${path.basename(filePath)}: ${openError}`);
-    } catch (error) {
-      handedOffFiles.delete(filePath);
-      if (disposed) await runtime.removeFile(filePath);
-      throw error;
-    }
-    publish(component, { phase: 'installer-opened', progress: 100, error: null });
   }
 
   const admit = (component, operation) => {
     assertComponent(component);
     if (disposed) return Promise.reject(new Error('Desktop update service is disposed'));
-    return admission.run(component, operation);
+    const admitted = admission.run(component, operation);
+    bridgeSession.track(component, admitted);
+    return admitted;
   };
-  const check = (component) => admit(component, () => checkUnlocked(component));
-  const download = (component) => admit(component, () => downloadUnlocked(component));
-  const install = (component) => admit(component, () => installUnlocked(component));
+  const check = (component) => {
+    const revision = bridgeSession.capture(component);
+    return admit(component, () => checkUnlocked(component, revision));
+  };
+  const download = (component) => {
+    const revision = bridgeSession.capture(component);
+    return admit(component, () => downloadUnlocked(component, revision));
+  };
+  const install = (component) => {
+    const revision = bridgeSession.capture(component);
+    return admit(component, () => installUnlocked(component, revision));
+  };
+
+  function resetBridge(version) {
+    assets.delete('bridge');
+    downloads.delete('bridge');
+    state.bridge = initialState('bridge', version, bridgeSupported ? 'manual' : 'unsupported');
+    onChange(getState());
+  }
+
+  function reportBridgeVersion(report) {
+    if (disposed) throw new Error('Desktop update service is disposed');
+    bridgeSession.report(report);
+    return getState();
+  }
 
   async function configure(preferences) {
     const shouldCheck = preferences.autoCheckUpdates && !autoCheckUpdates;
     const shouldDownload = preferences.autoDownloadUpdates && !autoDownloadUpdates;
     autoCheckUpdates = preferences.autoCheckUpdates;
     autoDownloadUpdates = preferences.autoDownloadUpdates;
+    bridgeSession.configure(autoCheckUpdates, shouldCheck && state.bridge.currentVersion === null);
     if (!app.isPackaged) return getState();
-    if (shouldCheck) await Promise.allSettled(COMPONENTS.map((component) => check(component)));
+    if (shouldCheck) {
+      const components = state.bridge.currentVersion === null ? ['app'] : COMPONENTS;
+      await Promise.allSettled(components.map((component) => check(component)));
+    }
     if (autoDownloadUpdates && (shouldCheck || shouldDownload)) {
-      await Promise.allSettled(COMPONENTS.filter((component) => state[component].phase === 'available').map(download));
+      await Promise.allSettled(
+        COMPONENTS.filter((component) => state[component].phase === 'available').map(download),
+      );
     }
     return getState();
   }
@@ -259,9 +243,10 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     automaticUpdate.clear();
   }
 
-  return { getState, check, download, install, configure, dispose };
+  return { getState, reportBridgeVersion, check, download, install, configure, dispose };
 }
 
 function assertComponent(component) {
-  if (component !== 'app' && component !== 'bridge') throw new TypeError('Invalid update component');
+  if (component !== 'app' && component !== 'bridge')
+    throw new TypeError('Invalid update component');
 }

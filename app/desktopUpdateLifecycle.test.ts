@@ -5,22 +5,38 @@ import type { DesktopUpdateState } from './types/desktop';
 
 const RELEASE = {
   version: '1.2.3',
-  assets: [{
-    name: 'VisBridge-1.2.3-x64-Linux.deb',
-    digest: `sha256:${'a'.repeat(64)}`,
-    size: 12,
-    url: 'https://api.github.com/repos/qiyuanhuakai/opencode-visualizer-cn/releases/assets/1',
-  }],
+  assets: [
+    {
+      name: 'VisBridge-1.2.3-x64-Linux.deb',
+      digest: `sha256:${'a'.repeat(64)}`,
+      size: 12,
+      url: 'https://api.github.com/repos/qiyuanhuakai/opencode-visualizer-cn/releases/assets/1',
+    },
+  ],
 };
 
 describe('desktop update lifecycle', () => {
+  it('rejects late version reports after disposal without publishing or changing state', async () => {
+    const fixture = createFixture();
+    await fixture.service.dispose();
+    const before = fixture.service.getState();
+    const count = fixture.changes.length;
+    expect(() => fixture.service.reportBridgeVersion({ connectionId: 'late', version: '9.9.9' })).toThrow('disposed');
+    expect(fixture.service.getState()).toEqual(before);
+    expect(fixture.changes).toHaveLength(count);
+  });
   it('keeps downloaded state stable while install confirmation is pending', async () => {
     // Given: a downloaded installer whose native confirmation has not resolved.
     const fixture = createFixture();
     await fixture.service.check('bridge');
     await fixture.service.download('bridge');
     let approve = (_value: boolean) => {};
-    fixture.beforeInstall.mockImplementationOnce(() => new Promise((resolve) => { approve = resolve; }));
+    fixture.beforeInstall.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          approve = resolve;
+        }),
+    );
 
     // When: a concurrent check arrives while install owns the component.
     const install = fixture.service.install('bridge');
@@ -118,9 +134,10 @@ describe('desktop update lifecycle', () => {
     await fixture.service.check('bridge');
     await fixture.service.download('bridge');
     fixture.beforeInstall.mockImplementationOnce(
-      (_component, signal) => new Promise((resolve) => {
-        signal.addEventListener('abort', () => resolve(false), { once: true });
-      }),
+      (_component, signal) =>
+        new Promise((resolve) => {
+          signal.addEventListener('abort', () => resolve(false), { once: true });
+        }),
     );
     const install = fixture.service.install('bridge');
     await vi.waitFor(() => expect(fixture.beforeInstall).toHaveBeenCalledOnce());
@@ -167,35 +184,177 @@ describe('desktop update lifecycle', () => {
     expect(fixture.service.getState().app.phase).toBe('unsupported');
     expect(fixture.updater.checkForUpdates).not.toHaveBeenCalled();
   });
+
+  it('discards a check result from a replaced bridge connection', async () => {
+    const fixture = createFixture();
+    const release = deferred<typeof RELEASE>();
+    fixture.runtime.getLatestRelease.mockReturnValueOnce(release.promise);
+    const checking = fixture.service.check('bridge');
+    await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce());
+
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.2.3' });
+    release.resolve(RELEASE);
+    await checking;
+
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: '1.2.3',
+      availableVersion: null,
+      phase: 'idle',
+    });
+  });
+
+  it('cleans a stale download and ignores its later progress', async () => {
+    const fixture = createFixture();
+    const download = deferred<string>();
+    let reportProgress: ((percent: number) => void) | undefined;
+    fixture.runtime.downloadAsset.mockImplementationOnce((_asset, onProgress) => {
+      reportProgress = onProgress;
+      return download.promise;
+    });
+    await fixture.service.check('bridge');
+    const downloading = fixture.service.download('bridge');
+    await vi.waitFor(() => expect(fixture.runtime.downloadAsset).toHaveBeenCalledOnce());
+
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    reportProgress?.(75);
+    download.resolve('/private/update/stale-bridge.deb');
+    await downloading;
+
+    expect(fixture.runtime.removeFile).toHaveBeenCalledWith('/private/update/stale-bridge.deb');
+    expect(fixture.service.getState().bridge).toMatchObject({
+      phase: 'idle',
+      progress: null,
+      assetName: null,
+    });
+  });
+
+  it('does not verify or open an installer approved for a replaced bridge connection', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+    await fixture.service.download('bridge');
+    const approval = deferred<boolean>();
+    fixture.beforeInstall.mockReturnValueOnce(approval.promise);
+    const installing = fixture.service.install('bridge');
+    await vi.waitFor(() => expect(fixture.beforeInstall).toHaveBeenCalledOnce());
+
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    approval.resolve(true);
+    await installing;
+
+    expect(fixture.runtime.verifyAsset).toHaveBeenCalledOnce();
+    expect(fixture.shell.openPath).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge.phase).toBe('idle');
+  });
+
+  it('does not open an installer whose final verification became stale', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+    await fixture.service.download('bridge');
+    const verification = deferred<undefined>();
+    fixture.runtime.verifyAsset.mockReturnValueOnce(verification.promise);
+    const installing = fixture.service.install('bridge');
+    await vi.waitFor(() => expect(fixture.runtime.verifyAsset).toHaveBeenCalledTimes(2));
+
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    verification.resolve(undefined);
+    await installing;
+
+    expect(fixture.shell.openPath).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge.phase).toBe('idle');
+  });
+
+  it('drains a pending metadata auto-check after stale bridge work settles', async () => {
+    const fixture = createFixture();
+    const staleRelease = deferred<typeof RELEASE>();
+    fixture.runtime.getLatestRelease.mockReturnValueOnce(staleRelease.promise);
+    const staleCheck = fixture.service.check('bridge');
+    await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce());
+    const configuring = fixture.service.configure({
+      autoCheckUpdates: true,
+      autoDownloadUpdates: false,
+    });
+
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    staleRelease.resolve(RELEASE);
+    await Promise.all([staleCheck, configuring]);
+    await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledTimes(2));
+
+    expect(fixture.service.getState().bridge.phase).toBe('available');
+  });
+
+  it('keeps a pending auto-check dormant when the bridge disconnects before it drains', async () => {
+    const fixture = createFixture();
+    const staleRelease = deferred<typeof RELEASE>();
+    fixture.runtime.getLatestRelease.mockReturnValueOnce(staleRelease.promise);
+    const staleCheck = fixture.service.check('bridge');
+    await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce());
+    const configuring = fixture.service.configure({
+      autoCheckUpdates: true,
+      autoDownloadUpdates: false,
+    });
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-3', version: null });
+    staleRelease.resolve(RELEASE);
+    await Promise.all([staleCheck, configuring]);
+    await Promise.resolve();
+
+    expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: null,
+      phase: 'idle',
+    });
+  });
 });
 
 function createFixture(options: { readonly automaticAppUpdates?: boolean } = {}) {
   const updater = Object.assign(new EventEmitter(), {
-    autoDownload: false, autoInstallOnAppQuit: true, allowPrerelease: true, allowDowngrade: true,
+    autoDownload: false,
+    autoInstallOnAppQuit: true,
+    allowPrerelease: true,
+    allowDowngrade: true,
     channel: null as string | null,
     checkForUpdates: vi.fn(async () => null),
     downloadUpdate: vi.fn(async () => [] as string[]),
     quitAndInstall: vi.fn(),
   });
   const runtime = {
-    platform: 'linux' as const, arch: 'x64' as const,
+    platform: 'linux' as const,
+    arch: 'x64' as const,
     automaticAppUpdates: options.automaticAppUpdates ?? true,
-    automaticAppUpdateTarget: options.automaticAppUpdates === false ? null : 'appimage' as const,
+    automaticAppUpdateTarget: options.automaticAppUpdates === false ? null : ('appimage' as const),
     updater,
     getLatestRelease: vi.fn(async () => RELEASE),
     getBridgeVersion: vi.fn(async () => '1.0.0'),
     downloadAppUpdate: vi.fn(async () => [] as string[]),
-    downloadAsset: vi.fn(async (_asset, _onProgress: (percent: number) => void) => '/private/update/bridge.deb'),
+    downloadAsset: vi.fn(
+      async (_asset, _onProgress: (percent: number) => void) => '/private/update/bridge.deb',
+    ),
     verifyAsset: vi.fn(async () => undefined),
     removeFile: vi.fn(async () => undefined),
     dispose: vi.fn(),
   };
   const shell = { openPath: vi.fn(async () => '') };
-  const beforeInstall = vi.fn<(_component: 'app' | 'bridge', _signal: AbortSignal) => Promise<void | boolean>>();
+  const beforeInstall =
+    vi.fn<(_component: 'app' | 'bridge', _signal: AbortSignal) => Promise<void | boolean>>();
   const changes: DesktopUpdateState[][] = [];
-  const service = createDesktopUpdates({
-    app: { isPackaged: true, getVersion: () => '1.0.0' }, shell,
-    onChange: (state) => changes.push([state.app, state.bridge]), beforeInstall,
-  }, runtime);
+  const service = createDesktopUpdates(
+    {
+      app: { isPackaged: true, getVersion: () => '1.0.0' },
+      shell,
+      onChange: (state) => changes.push([state.app, state.bridge]),
+      beforeInstall,
+    },
+    runtime,
+  );
+  service.reportBridgeVersion({ connectionId: 'connection-1', version: '1.0.0' });
   return { beforeInstall, changes, runtime, service, shell, updater };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }

@@ -21,7 +21,12 @@ describe('desktop update service', () => {
   it('preserves an installer while OS handoff is still pending beyond the quit deadline', async () => {
     const fixture = createFixture();
     let finishOpen: ((error: string) => void) | undefined;
-    fixture.shell.openPath.mockImplementation(() => new Promise<string>((resolve) => { finishOpen = resolve; }));
+    fixture.shell.openPath.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          finishOpen = resolve;
+        }),
+    );
     await fixture.service.check('bridge');
     await fixture.service.download('bridge');
     const installing = fixture.service.install('bridge');
@@ -46,7 +51,7 @@ describe('desktop update service', () => {
     await fixture.service.check('app');
     await fixture.service.check('bridge');
 
-    // Then: app updating is unsupported, while bridge uses only the local CLI version.
+    // Then: app updating is unsupported, while bridge uses the connected bridge version.
     expect(fixture.service.getState().app.phase).toBe('unsupported');
     expect(fixture.service.getState().bridge).toMatchObject({
       currentVersion: '1.0.0',
@@ -102,30 +107,29 @@ describe('desktop update service', () => {
   it.each([
     { platform: 'linux' as const, arch: 'x64' as const, channel: null },
     { platform: 'win32' as const, arch: 'arm64' as const, channel: 'latest-arm64' },
-  ])('disables downgrade after assigning the real updater channel setter for $platform $arch', async ({
-    platform,
-    arch,
-    channel,
-  }) => {
-    // Given: electron-updater's real channel setter, which enables downgrades on assignment.
-    const updater = new SetterBackedUpdater();
+  ])(
+    'disables downgrade after assigning the real updater channel setter for $platform $arch',
+    async ({ platform, arch, channel }) => {
+      // Given: electron-updater's real channel setter, which enables downgrades on assignment.
+      const updater = new SetterBackedUpdater();
 
-    // When: the desktop service configures the platform channel.
-    createDesktopUpdates(
-      {
-        app: { isPackaged: true, getVersion: () => '1.0.0' },
-        shell: { openPath: vi.fn(async () => '') },
-        onChange: () => undefined,
-        beforeInstall: vi.fn(async () => true),
-      },
-      createRuntime(updater, platform, arch),
-    );
+      // When: the desktop service configures the platform channel.
+      createDesktopUpdates(
+        {
+          app: { isPackaged: true, getVersion: () => '1.0.0' },
+          shell: { openPath: vi.fn(async () => '') },
+          onChange: () => undefined,
+          beforeInstall: vi.fn(async () => true),
+        },
+        createRuntime(updater, platform, arch),
+      );
 
-    // Then: the selected channel is retained without permitting older releases.
-    expect(updater.channel).toBe(channel);
-    expect(updater.allowDowngrade).toBe(false);
-    await expect(updater.accepts(updateInfo('0.9.9'))).resolves.toBe(false);
-  });
+      // Then: the selected channel is retained without permitting older releases.
+      expect(updater.channel).toBe(channel);
+      expect(updater.allowDowngrade).toBe(false);
+      await expect(updater.accepts(updateInfo('0.9.9'))).resolves.toBe(false);
+    },
+  );
 
   it('rejects an older automatic app offer without downloading it', async () => {
     // Given: automatic download is enabled and electron-updater returns an older release.
@@ -169,6 +173,78 @@ describe('desktop update service', () => {
     expect(fixture.runtime.getLatestRelease).toHaveBeenCalledTimes(1);
   });
 
+  it('does not offer the latest release when the connected bridge already runs it', async () => {
+    const fixture = createFixture({ bridgeVersion: '1.2.3' });
+
+    await fixture.service.check('bridge');
+
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: '1.2.3',
+      availableVersion: null,
+      phase: 'up-to-date',
+    });
+  });
+
+  it('does not query releases or offer an update before bridge health reports a version', async () => {
+    const fixture = createFixture({ bridgeVersion: null });
+
+    await fixture.service.check('bridge');
+
+    expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: null,
+      availableVersion: null,
+      phase: 'idle',
+    });
+  });
+
+  it('offers a newer release using only the reported connected bridge version', async () => {
+    const fixture = createFixture({ bridgeVersion: '1.0.0' });
+
+    await fixture.service.check('bridge');
+
+    expect(fixture.runtime.getBridgeVersion).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: '1.0.0',
+      availableVersion: '1.2.3',
+      phase: 'available',
+    });
+  });
+
+  it('defers one automatic bridge check until health metadata arrives', async () => {
+    const fixture = createFixture({ bridgeVersion: null });
+    await fixture.service.configure({ autoCheckUpdates: true, autoDownloadUpdates: false });
+    expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce());
+    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+
+    await Promise.resolve();
+    expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce();
+    expect(fixture.service.getState().bridge.phase).toBe('available');
+  });
+
+  it('resets bridge update eligibility when the active connection becomes unavailable', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+
+    const state = fixture.service.reportBridgeVersion({
+      connectionId: 'connection-2',
+      version: null,
+    });
+    await fixture.service.check('bridge');
+
+    expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce();
+    expect(state.bridge).toMatchObject({
+      currentVersion: null,
+      availableVersion: null,
+      phase: 'idle',
+      assetName: null,
+    });
+    expect(fixture.service.getState().bridge.phase).toBe('idle');
+  });
+
   it('does not access update networks when automatic checking is enabled in development', async () => {
     // Given: an unpackaged application with automatic checking enabled.
     const fixture = createFixture({ packaged: false });
@@ -210,10 +286,15 @@ describe('desktop update service', () => {
     expect(fixture.runtime.downloadAsset).toHaveBeenCalledTimes(2);
     expect(fixture.service.getState().bridge.phase).toBe('downloaded');
   });
-
 });
 
-function createFixture(options: { readonly packaged?: boolean; readonly automaticAppUpdates?: boolean } = {}) {
+function createFixture(
+  options: {
+    readonly packaged?: boolean;
+    readonly automaticAppUpdates?: boolean;
+    readonly bridgeVersion?: string | null;
+  } = {},
+) {
   const updater = Object.assign(new EventEmitter(), {
     autoDownload: false,
     autoInstallOnAppQuit: true,
@@ -225,22 +306,25 @@ function createFixture(options: { readonly packaged?: boolean; readonly automati
     quitAndInstall: vi.fn(),
   });
   const runtime = {
-    platform: 'linux' as const, arch: 'x64' as const,
+    platform: 'linux' as const,
+    arch: 'x64' as const,
     automaticAppUpdates: options.automaticAppUpdates ?? true,
-    automaticAppUpdateTarget: options.automaticAppUpdates === false ? null : 'appimage' as const,
+    automaticAppUpdateTarget: options.automaticAppUpdates === false ? null : ('appimage' as const),
     updater,
     getLatestRelease: vi.fn(async () => RELEASE),
     getBridgeVersion: vi.fn(async () => '1.0.0'),
     downloadAppUpdate: vi.fn(async () => [] as string[]),
-    downloadAsset: vi.fn(async (_asset, _onProgress: (percent: number) => void) => '/private/update/bridge.deb'),
+    downloadAsset: vi.fn(
+      async (_asset, _onProgress: (percent: number) => void) => '/private/update/bridge.deb',
+    ),
     verifyAsset: vi.fn(async () => undefined),
     removeFile: vi.fn(async () => undefined),
     dispose: vi.fn(),
   };
   const shell = { openPath: vi.fn(async () => '') };
-  const beforeInstall = vi.fn<(_component: 'app' | 'bridge', _signal: AbortSignal) => Promise<void | boolean>>(
-    async () => undefined,
-  );
+  const beforeInstall = vi.fn<
+    (_component: 'app' | 'bridge', _signal: AbortSignal) => Promise<void | boolean>
+  >(async () => undefined);
   const changes: DesktopUpdateState[][] = [];
   const service = createDesktopUpdates(
     {
@@ -254,12 +338,20 @@ function createFixture(options: { readonly packaged?: boolean; readonly automati
     },
     runtime,
   );
+  if (options.bridgeVersion !== null) {
+    service.reportBridgeVersion({
+      connectionId: 'connection-1',
+      version: options.bridgeVersion ?? '1.0.0',
+    });
+  }
   return { beforeInstall, changes, runtime, service, shell, updater };
 }
 
 class SetterBackedUpdater extends AppUpdater {
   accepts(updateInfo: UpdateInfo): Promise<boolean> {
-    return (this as unknown as { isUpdateAvailable(info: UpdateInfo): Promise<boolean> }).isUpdateAvailable(updateInfo);
+    return (
+      this as unknown as { isUpdateAvailable(info: UpdateInfo): Promise<boolean> }
+    ).isUpdateAvailable(updateInfo);
   }
 
   constructor() {
@@ -304,9 +396,10 @@ function createRuntime(
   arch: 'x64' | 'arm64',
 ) {
   return {
-    platform, arch,
+    platform,
+    arch,
     automaticAppUpdates: true,
-    automaticAppUpdateTarget: platform === 'win32' ? 'nsis' as const : 'appimage' as const,
+    automaticAppUpdateTarget: platform === 'win32' ? ('nsis' as const) : ('appimage' as const),
     updater,
     getLatestRelease: vi.fn(async () => RELEASE),
     getBridgeVersion: vi.fn(async () => '1.0.0'),
