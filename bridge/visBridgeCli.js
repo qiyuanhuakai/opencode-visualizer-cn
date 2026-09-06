@@ -20,6 +20,7 @@ Usage:
   vis_bridge start [options]
   vis_bridge stop
   vis_bridge restart [options]
+  vis_bridge --version
 
 Options:
   --target             Upstream Codex app-server WebSocket URL.
