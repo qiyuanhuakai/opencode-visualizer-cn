@@ -1,4 +1,4 @@
-import { createApp, h, nextTick } from 'vue';
+import { createApp, h, nextTick, ref } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopMessages } from '../../locales/desktop';
 import type {
@@ -114,10 +114,10 @@ function createDesktopApi(initial: DesktopState) {
 }
 
 async function flushAsync() {
-  await Promise.resolve();
-  await nextTick();
-  await Promise.resolve();
-  await nextTick();
+  for (let round = 0; round < 6; round += 1) {
+    await Promise.resolve();
+    await nextTick();
+  }
 }
 
 async function mountDesktopSettings(options: { locale?: Locale } = {}) {
@@ -219,7 +219,7 @@ describe('DesktopSettings', () => {
     const appCard = cardFor(host, 'app');
     expect(appCard.textContent).toContain('Current: 1.4.0');
     const bridgeCard = cardFor(host, 'bridge');
-    expect(bridgeCard.textContent).toContain(`Current: ${en.updates.unknownVersion}`);
+    expect(bridgeCard.textContent).toContain(en.updates.connectedBridge.notConnected);
     expect(bridgeCard.textContent).toContain(en.updates.installKind.manual);
     expect(appCard.textContent).toContain(en.updates.installKind.automatic);
   });
@@ -564,6 +564,132 @@ describe('DesktopSettings', () => {
 
     // Then: the subscription is disposed.
     expect(desktop.listeners.size).toBe(0);
+  });
+});
+
+describe('DesktopSettings connected bridge version', () => {
+  function healthResponse(body: unknown, status = 200) {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  function mountWithBridgeUrl(initialUrl: string) {
+    const url = ref(initialUrl);
+    return {
+      url,
+      async mount() {
+        const [{ default: DesktopSettings }, { i18n }] = await Promise.all([
+          import('./DesktopSettings.vue'),
+          import('../../i18n'),
+        ]);
+        const host = document.createElement('div');
+        document.body.appendChild(host);
+        const app = createApp({
+          render: () => h(DesktopSettings, { bridgeHealthUrl: url.value }),
+        });
+        app.use(i18n);
+        app.mount(host);
+        mountedApps.push(() => app.unmount());
+        await nextTick();
+        return { host };
+      },
+    };
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the connected bridge version instead of the local installed version', async () => {
+    // Given: the local installed bridge is 0.7.9 but the connected bridge reports 9.9.9.
+    const desktop = createDesktopApi(makeState({ bridge: { currentVersion: '0.7.9' } }));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(healthResponse({ ok: true, service: 'vis_bridge', version: '9.9.9' })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    // When: the settings section mounts with a connected bridge health URL.
+    const { host } = await mountWithBridgeUrl('http://bridge.test/healthz').mount();
+    await flushAsync();
+
+    // Then: the connected version is fetched and shown distinctly from the local version.
+    expect(fetchMock).toHaveBeenCalledWith('http://bridge.test/healthz', expect.objectContaining({ credentials: 'omit' }));
+    const bridgeCard = cardFor(host, 'bridge');
+    expect(bridgeCard.textContent).not.toContain('0.7.9');
+    expect(bridgeCard.textContent).toContain(`${en.updates.connectedBridge.label}: 9.9.9`);
+  });
+
+  it('marks the connected version unavailable when the old bridge health reports no version', async () => {
+    // Given: an old bridge whose health payload lacks a version field.
+    const desktop = createDesktopApi(makeState({ bridge: { currentVersion: '0.7.9' } }));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(healthResponse({ ok: true, service: 'vis_bridge' }))));
+
+    // When: the settings section mounts.
+    const { host } = await mountWithBridgeUrl('http://bridge.test/healthz').mount();
+    await flushAsync();
+
+    // Then: the connected row is explicitly unavailable and never mirrors the local version.
+    const bridgeCard = cardFor(host, 'bridge');
+    const connectedRow = bridgeCard.querySelector('[data-testid="bridge-connected-version"]');
+    expect(connectedRow?.textContent).toContain(en.updates.connectedBridge.unavailable);
+    expect(connectedRow?.textContent).not.toContain('0.7.9');
+    expect(bridgeCard.textContent).not.toContain('0.7.9');
+  });
+
+  it('ignores a delayed response from the previous bridge after switching backends', async () => {
+    // Given: bridge A answers slowly while bridge B answers immediately.
+    let resolveA: ((response: Response) => void) | undefined;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      if (String(input).includes('a.test')) {
+        return new Promise<Response>((resolve) => { resolveA = resolve; });
+      }
+      return Promise.resolve(healthResponse({ ok: true, service: 'vis_bridge', version: '2.0.0' }));
+    }));
+    const desktop = createDesktopApi(makeState({ bridge: { currentVersion: '0.7.9' } }));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+
+    // When: the connected backend switches from A to B before A answers.
+    const mounted = mountWithBridgeUrl('http://a.test/healthz');
+    const { host } = await mounted.mount();
+    await flushAsync();
+    mounted.url.value = 'http://b.test/healthz';
+    await flushAsync();
+
+    // Then: B's version is shown.
+    const bridgeCard = () => cardFor(host, 'bridge');
+    expect(bridgeCard().textContent).toContain(`${en.updates.connectedBridge.label}: 2.0.0`);
+
+    // And: A's late response cannot overwrite it.
+    resolveA?.(healthResponse({ ok: true, service: 'vis_bridge', version: '1.0.0' }));
+    await flushAsync();
+    expect(bridgeCard().textContent).toContain(`${en.updates.connectedBridge.label}: 2.0.0`);
+    expect(bridgeCard().textContent).not.toContain('1.0.0');
+  });
+
+  it('clears the connected version when the bridge disconnects', async () => {
+    // Given: a connected bridge that already reported its version.
+    const desktop = createDesktopApi(makeState({ bridge: { currentVersion: '0.7.9' } }));
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+    vi.stubGlobal('fetch', vi.fn(() =>
+      Promise.resolve(healthResponse({ ok: true, service: 'vis_bridge', version: '9.9.9' })),
+    ));
+    const mounted = mountWithBridgeUrl('http://bridge.test/healthz');
+    const { host } = await mounted.mount();
+    await flushAsync();
+    expect(cardFor(host, 'bridge').textContent).toContain(`${en.updates.connectedBridge.label}: 9.9.9`);
+
+    // When: the bridge disconnects.
+    mounted.url.value = '';
+    await flushAsync();
+
+    // Then: no stale version remains and the not-connected state is visible.
+    const connectedRow = cardFor(host, 'bridge').querySelector('[data-testid="bridge-connected-version"]');
+    expect(connectedRow?.textContent).toContain(en.updates.connectedBridge.notConnected);
+    expect(connectedRow?.textContent).not.toContain('9.9.9');
   });
 });
 

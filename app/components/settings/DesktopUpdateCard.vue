@@ -10,8 +10,9 @@
       </span>
     </div>
     <div class="desktop-update-versions">
-      <span>{{ t('desktopSettings.updates.currentVersion', { version: state.currentVersion ?? t('desktopSettings.updates.unknownVersion') }) }}</span>
-      <span v-if="state.availableVersion">{{ t('desktopSettings.updates.availableVersion', { version: state.availableVersion }) }}</span>
+      <span v-if="state.component === 'app'">{{ t('desktopSettings.updates.currentVersion', { version: state.currentVersion ?? t('desktopSettings.updates.unknownVersion') }) }}</span>
+      <span v-if="state.component === 'bridge' && connectedBridgeText !== null" data-testid="bridge-connected-version">{{ connectedBridgeText }}</span>
+      <span v-if="state.availableVersion">{{ t(state.component === 'bridge' ? 'desktopSettings.updates.availableLocalVersion' : 'desktopSettings.updates.availableVersion', { version: state.availableVersion }) }}</span>
     </div>
     <div v-if="state.phase === 'downloading' && state.progress !== null" class="desktop-progress"
       role="progressbar" :aria-label="t('desktopSettings.updates.progressLabel')"
@@ -44,11 +45,38 @@
 import { computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { DesktopUpdateState } from '../../types/desktop';
+import type { ConnectedBridgeVersion } from '../../composables/useConnectedBridgeVersion';
 
-const props = defineProps<{ readonly state: DesktopUpdateState; readonly busy: boolean; readonly actionError: string | null }>();
+const props = defineProps<{
+  readonly state: DesktopUpdateState;
+  readonly busy: boolean;
+  readonly actionError: string | null;
+  readonly connectedBridge?: ConnectedBridgeVersion | null;
+}>();
 defineEmits<{ check: []; download: []; install: [] }>();
 const { t } = useI18n();
 const errorText = computed(() => props.actionError ?? (props.state.phase === 'error' ? props.state.error : null));
+const connectedBridgeText = computed(() => {
+  const bridge = props.connectedBridge;
+  if (!bridge) return null;
+  const label = t('desktopSettings.updates.connectedBridge.label');
+  switch (bridge.status) {
+    case 'disconnected':
+      return `${label}: ${t('desktopSettings.updates.connectedBridge.notConnected')}`;
+    case 'loading':
+      return `${label}: ${t('desktopSettings.updates.connectedBridge.loading')}`;
+    case 'ready':
+      return `${label}: ${bridge.version}`;
+    case 'unavailable':
+      return `${label}: ${t('desktopSettings.updates.connectedBridge.unavailable')}`;
+    case 'error':
+      return `${label}: ${t('desktopSettings.updates.connectedBridge.error')}`;
+    default: {
+      const unreachable: never = bridge;
+      return unreachable;
+    }
+  }
+});
 const statusKeys: Record<DesktopUpdateState['phase'], string> = {
   idle: 'idle', checking: 'checking', available: 'available', downloading: 'downloading', downloaded: 'downloaded',
   installing: 'installing', 'installer-opened': 'installerOpened', 'up-to-date': 'upToDate', error: 'error', unsupported: 'unsupported',
