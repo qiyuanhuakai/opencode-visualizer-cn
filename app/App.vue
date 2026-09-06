@@ -572,6 +572,7 @@ import Welcome from './components/Welcome.vue';
 import TopPanel, { type TopPanelCodexSubpanel } from './components/TopPanel.vue';
 import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
+import { createDesktopNotificationRouter } from './utils/desktopNotifications';
 import StatusMonitorModal from './components/StatusMonitorModal.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ThemeInjector from './components/ThemeInjector.vue';
@@ -758,7 +759,20 @@ import {
 import { createKeyedTaskQueue } from './utils/keyedTaskQueue';
 import { createPendingPtyCreateRegistry, isCurrentPtySocket } from './utils/ptyLifecycle';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
+const desktopApi = window.electronAPI?.desktop;
+const desktopNotifications = desktopApi ? createDesktopNotificationRouter({
+  api: desktopApi,
+  getIdentity: currentBackendIdentity,
+  onSelect: ({ projectId, sessionId }) => {
+    if (uiInitState.value === 'ready') void switchSessionSelection(projectId, sessionId);
+  },
+}) : undefined;
+watch(locale, (value) => {
+  if (!desktopApi) return;
+  const supported = value === 'zh-CN' || value === 'zh-TW' || value === 'ja' || value === 'eo' ? value : 'en';
+  void desktopApi.configure({ locale: supported }).catch((error) => log('Desktop locale sync failed', error));
+}, { immediate: true });
 
 type LocalizedStatusState =
   | { mode: 'i18n'; key: string; params?: Record<string, unknown> }
@@ -1628,7 +1642,11 @@ const agentsLoading = ref(false);
 const commandsLoading = ref(false);
 const serverState = useServerState();
 const openCodeApi = useOpenCodeApi(serverState.projects, t);
-const codexApi = useCodexApi();
+const codexApi = useCodexApi({
+  onTaskCompleted: ({ sessionId, completionId }) => {
+    if (activeBackendKind.value === 'codex') showBrowserNotification(CODEX_PROJECT_ID, sessionId, 'idle', completionId);
+  },
+});
 const codexWorkspace = useCodexWorkspace(codexApi, { pinnedStore: localPinnedSessionStore });
 const bootstrapReady = serverState.bootstrapped;
 
@@ -5094,11 +5112,9 @@ function showBrowserNotification(
   projectId: string,
   sessionId: string,
   type: 'permission' | 'question' | 'idle',
+  completionId?: string,
 ) {
   if (typeof window === 'undefined' || typeof document === 'undefined') return;
-  if (typeof Notification === 'undefined') return;
-  if (isWindowAttentive()) return;
-  if (Notification.permission !== 'granted') return;
   const session = sessions.value.find(
     (entry) => entry.id === sessionId && resolveProjectIdForSession(entry.id) === projectId,
   );
@@ -5113,6 +5129,14 @@ function showBrowserNotification(
     type === 'idle'
       ? t('app.notification.sessionIdle', { session: sessionName })
       : t('app.notification.sessionRequiresResponse', { session: sessionName });
+  if (type === 'idle' && desktopNotifications) {
+    if (!completionId) return;
+    void desktopNotifications.send({
+      id: completionId, title: kind, body, projectId, sessionId,
+    }).catch((error) => log('Desktop notification failed', error));
+    return;
+  }
+  if (typeof Notification === 'undefined' || isWindowAttentive() || Notification.permission !== 'granted') return;
   const notification = new Notification(`${kind}`, {
     body,
     tag: `vis-${type}-${projectId}-${sessionId}`,
@@ -7489,7 +7513,7 @@ ge.setWorkerMessageHandler((message) => {
   return true;
 });
 serverState.setNotificationShowHandler((message) => {
-  showBrowserNotification(message.projectId, message.sessionId, message.kind);
+  showBrowserNotification(message.projectId, message.sessionId, message.kind, message.completionId);
 });
 const deltaAccumulator = useDeltaAccumulator();
 deltaAccumulator.listen(ge);
@@ -7639,6 +7663,9 @@ const acpMessageBridge = useAcpMessageBridge({
   upsertPermissionEntry,
   onSessionUpdated: upsertAcpSession,
   onSessionDeleted: removeAcpSession,
+  onTaskCompleted: ({ sessionId, completionId }) => {
+    if (activeBackendKind.value === 'acp') showBrowserNotification(ACP_PROJECT_ID, sessionId, 'idle', completionId);
+  },
   onCommandsUpdated: updateAcpCommands,
   onConfigUpdated: (options) => {
     hydrateAcpModeConfiguration(options);
@@ -9713,6 +9740,7 @@ onMounted(() => {
   );
 });
 onBeforeUnmount(() => {
+  desktopNotifications?.dispose();
   composerDraftPersistence.flush();
   pendingShellWindowCreates.invalidateAll();
   for (const pending of Array.from(pendingReferencedSubagentHydrations.values())) {

@@ -158,6 +158,19 @@
           >
             <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
           </SettingRow>
+
+          <SettingRow
+            v-if="desktopAvailable"
+            tag="button"
+            type="button"
+            class="setting-link-row"
+            :label="$t('desktopSettings.linkLabel')"
+            :description="$t('desktopSettings.linkDescription')"
+            :aria-label="$t('desktopSettings.linkLabel')"
+            @click="activePage = 'desktop'"
+          >
+            <Icon icon="lucide:chevron-right" :width="16" :height="16" class="setting-link-icon" />
+          </SettingRow>
         </template>
 
         <template v-else-if="activePage === 'transformers'">
@@ -730,6 +743,10 @@
           />
         </template>
 
+        <template v-else-if="activePage === 'desktop'">
+          <DesktopSettings />
+        </template>
+
         <template v-else>
           <div class="setting-page-description">{{ $t('settings.fontSettings.description') }}</div>
 
@@ -912,6 +929,7 @@ import { Icon } from '@iconify/vue';
 import SettingRow from './SettingRow.vue';
 import SnippetCompletion from './SnippetCompletion.vue';
 import ToggleSettingRow from './ToggleSettingRow.vue';
+import DesktopSettings from './settings/DesktopSettings.vue';
 import { useSettings } from '../composables/useSettings';
 import { getTextTransformerTriggerIssue, textTransformerSequence } from '../utils/textTransformers';
 import {
@@ -971,7 +989,14 @@ type FontPreset = {
   value: string;
 };
 
-type SettingsPage = 'root' | 'editor' | 'fonts' | 'theme' | 'transformers' | 'experimental';
+type SettingsPage =
+  | 'root'
+  | 'editor'
+  | 'fonts'
+  | 'theme'
+  | 'transformers'
+  | 'experimental'
+  | 'desktop';
 type ThemePresetCard = {
   id: string;
   label: string;
@@ -1021,6 +1046,7 @@ const isAppFontDiscoveryOpen = ref(false);
 const themeImportError = ref('');
 const isImportingTheme = ref(false);
 const isElectron = computed(() => Boolean(window.electronAPI?.localFile));
+const desktopAvailable = Boolean(window.electronAPI?.desktop);
 const localApplicationError = ref('');
 const {
   enterToSend,
@@ -2220,6 +2246,8 @@ const pageTitle = computed(() => {
       return t('settings.themePageTitle');
     case 'experimental':
       return t('settings.experimentalFeatures.pageTitle');
+    case 'desktop':
+      return t('desktopSettings.pageTitle');
     default:
       return t('settings.title');
   }
