@@ -4,7 +4,11 @@
       <div v-if="streamError" class="stream-error">{{ streamError }}</div>
       <div v-if="showLoading" class="viewer-loading">{{ t('common.loading') }}</div>
       <div v-else-if="props.streaming && streamingRenderParams && !streamDone" ref="streamContainerRef" class="code-scroll-content" />
-      <div v-else-if="useVirtualScroll" class="code-scroll-content virtual-scroll">
+      <div
+        v-else-if="useVirtualScroll"
+        class="code-scroll-content virtual-scroll"
+        :class="{ 'wrap-off': !wrapsCode }"
+      >
         <div :style="{ height: topPadding + 'px' }" />
         <CodeContent
           v-for="row in visibleRows"
@@ -13,6 +17,7 @@
           :variant="viewerVariant"
           :word-wrap="wrapsCode"
           class="virtual-row"
+          :style="virtualRowMinWidthStyle"
         />
         <div :style="{ height: bottomPadding + 'px' }" />
       </div>
@@ -176,6 +181,9 @@ const OVERSCAN_ROWS = 10;
 const scrollTop = ref(0);
 const containerHeight = ref(600);
 const rowHeight = ref(DEFAULT_ROW_HEIGHT);
+// Widest unwrapped virtual row measured so far; keeps the horizontal scroll
+// extent stable once an offscreen long line has been rendered at least once.
+const maxUnwrappedRowWidth = ref(0);
 const variableRowGeometry = shallowRef<VariableRowGeometry>(
   createVariableRowGeometry(0, DEFAULT_ROW_HEIGHT),
 );
@@ -232,6 +240,12 @@ const endRow = computed(() => virtualWindow.value.end);
 const visibleRows = computed(() => {
   if (!useVirtualScroll.value) return allRows.value;
   return allRows.value.slice(startRow.value, endRow.value);
+});
+
+const virtualRowMinWidthStyle = computed(() => {
+  if (!useVirtualScroll.value || wrapsCode.value) return undefined;
+  if (maxUnwrappedRowWidth.value <= 0) return undefined;
+  return { minWidth: `max(100%, ${maxUnwrappedRowWidth.value}px)` };
 });
 
 const topPadding = computed(() => {
@@ -303,6 +317,7 @@ watch(
       geometryChanged && !contentChanged && previousWrapped !== undefined
         ? captureCurrentRowAnchor(previousWrapped, true)
         : null;
+    maxUnwrappedRowWidth.value = 0;
     resetVariableRowGeometry(anchor);
   },
   { immediate: true, flush: 'sync' },
@@ -335,6 +350,14 @@ function updateRowRects() {
   }
   const containerRect = root.getBoundingClientRect();
   const rows = Array.from(scrollContent.querySelectorAll<HTMLElement>('.code-row'));
+  if (useVirtualScroll.value && !wrapsCode.value) {
+    let widest = maxUnwrappedRowWidth.value;
+    const viewportWidth = viewerBodyEl.value?.clientWidth ?? 0;
+    for (const row of rows) {
+      if (row.scrollWidth > viewportWidth) widest = Math.max(widest, row.scrollWidth);
+    }
+    if (widest !== maxUnwrappedRowWidth.value) maxUnwrappedRowWidth.value = widest;
+  }
   const measuredRowHeights = useVirtualScroll.value
     ? wrapsCode.value
       ? measureOuterVirtualRowHeights(scrollContent, startRow.value)
@@ -697,6 +720,14 @@ const showLoading = computed(() => {
   min-height: v-bind('rowHeight + "px"');
   overflow: hidden;
   width: 100%;
+}
+
+/* Unwrapped rows size to their longest line so the viewer can scroll
+   horizontally; wrapped rows stay width-capped for variable-height math. */
+.code-scroll-content.virtual-scroll.wrap-off .virtual-row {
+  overflow: visible;
+  width: max-content;
+  min-width: 100%;
 }
 
 .code-renderer-content :deep(.code-row.line-highlight) {
