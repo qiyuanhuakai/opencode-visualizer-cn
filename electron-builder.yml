@@ -28,6 +28,10 @@ asar: true
 asarUnpack:
   - "**/*.node"
 
+extraResources:
+  - from: build/icon.png
+    to: application-icon.png
+
 # macOS 配置 — unsigned but ad-hoc (approved decision): explicit ad-hoc identity
 # "-" and notarization disabled; no Developer ID, no TeamIdentifier, no secrets.
 mac:
