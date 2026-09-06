@@ -15,6 +15,7 @@ import {
 } from './sse-state-packet';
 import { normalizeDirectory } from '../utils/path';
 import { createNotificationManager } from '../utils/notificationManager';
+import { createTaskCompletionTracker } from './task-completion-tracker';
 import { createOpenCodeWorkerAdapter } from '../backends/openCodeAdapter';
 import { createSseConnection, type SseConnection } from '../utils/sseConnection';
 import { createStateBuilder } from '../utils/stateBuilder';
@@ -56,6 +57,7 @@ type ConnectionState = {
   connected: boolean;
   stateBuilder: ReturnType<typeof createStateBuilder>;
   notificationManager: ReturnType<typeof createNotificationManager>;
+  taskCompletions: ReturnType<typeof createTaskCompletionTracker>;
   bootstrapPromise?: Promise<void>;
   bootstrapController?: AbortController;
   bootstrapToken?: symbol;
@@ -677,6 +679,7 @@ function reconcileIdleNotification(
   state: ConnectionState,
   projectId: string | null,
   sessionId: string,
+  liveStatus = false,
 ): boolean {
   if (!projectId) return false;
   const rootSessionId = state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId);
@@ -686,6 +689,7 @@ function reconcileIdleNotification(
   if (!state.stateBuilder.isSessionTreeIdle(projectId, rootSessionId)) {
     return state.notificationManager.removeNotification(idleRequestId);
   }
+  const completionId = liveStatus ? state.taskCompletions.consume(projectId, rootSessionId) : undefined;
   if (shouldSuppressIdleNotification(state, projectId, rootSessionId)) return false;
 
   const added = state.notificationManager.addNotification(
@@ -693,7 +697,7 @@ function reconcileIdleNotification(
     rootSessionId,
     idleRequestId,
   );
-  if (added) emitNotificationShow(state, projectId, rootSessionId, 'idle');
+  if (added || completionId) emitNotificationShow(state, projectId, rootSessionId, 'idle', completionId);
   return added;
 }
 
@@ -702,6 +706,7 @@ function emitNotificationShow(
   projectId: string,
   sessionId: string,
   kind: 'permission' | 'question' | 'idle',
+  completionId?: string,
 ) {
   if (!projectId || !sessionId) return;
   broadcast(state, {
@@ -709,6 +714,7 @@ function emitNotificationShow(
     projectId,
     sessionId,
     kind,
+    ...(completionId ? { completionId } : {}),
   });
 }
 
@@ -973,7 +979,7 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
         statusProjectId || undefined,
       );
       notificationsChanged =
-        reconcileIdleNotification(state, statusProjectId || projectId, sessionId) ||
+        reconcileIdleNotification(state, statusProjectId || projectId, sessionId, true) ||
         notificationsChanged;
       break;
     }
@@ -1240,6 +1246,12 @@ function createConnectionState(
     ports: new Set<MessagePort>(),
     connected: false,
     stateBuilder: createStateBuilder(),
+    taskCompletions: createTaskCompletionTracker((directory, sessionId) => {
+      const projectId = state.stateBuilder.resolveProjectIdForDirectory(directory);
+      if (!projectId) return null;
+      const rootSessionId = state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId);
+      return rootSessionId ? [projectId, rootSessionId] : null;
+    }),
     notificationManager: createNotificationManager((projectId, sessionId) => ({
       projectId,
       sessionId: state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId),
@@ -1274,10 +1286,12 @@ function createConnectionState(
     referencedSubagentHydrationByPort: new Map(),
     client: createSseConnection({
       onPacket(packet) {
+        if (!state.isBootstrappingState) state.taskCompletions.observe(packet);
         broadcast(state, { type: 'packet', packet });
         handleStatePacket(state, packet);
       },
       onOpen(isReconnect) {
+        state.taskCompletions.clear();
         state.connected = true;
         clearBootstrapRetry(state, true);
         broadcast(state, { type: 'connection.open' });
@@ -1296,6 +1310,7 @@ function createConnectionState(
         });
       },
       onError(message, statusCode) {
+        state.taskCompletions.clear();
         state.connected = false;
         broadcast(state, { type: 'connection.error', message, statusCode });
       },

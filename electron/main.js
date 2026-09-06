@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { installAsyncQuitCleanup } from './asyncQuitCleanup.js';
+import { createDesktopRuntime } from './desktopRuntime.js';
 import {
   clearApprovedLocalApplication,
   loadApprovedLocalApplication,
@@ -43,6 +44,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let mainWindow = null;
+let desktopRuntime = null;
 let persistentStorage = null;
 let approvedLocalApplicationPath = null;
 const localFileSessionOwners = new Map();
@@ -156,6 +158,7 @@ function createWindow() {
     backgroundColor: '#1a1a2e',
   });
 
+  desktopRuntime?.attachWindow(mainWindow);
   if (isDev) {
     mainWindow.loadURL(DEV_SERVER_URL);
     mainWindow.webContents.openDevTools();
@@ -218,14 +221,16 @@ if (!hasSingleInstanceLock) {
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+    desktopRuntime?.restore();
   });
 
   app.whenReady().then(() => {
     approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
+    desktopRuntime = createDesktopRuntime({
+      getWindow: () => mainWindow,
+      assertTrustedRenderer,
+      closeLocalFiles: () => localFileEditor.closeAll(),
+    });
 
   protocol.handle('app', async (request) => {
     const { pathname } = new URL(request.url);
@@ -264,6 +269,8 @@ if (!hasSingleInstanceLock) {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
+    } else {
+      desktopRuntime?.restore();
     }
   });
   });
@@ -277,9 +284,9 @@ app.on('window-all-closed', () => {
 
 installAsyncQuitCleanup(
   app,
-  () => localFileEditor.closeAll(),
+  () => Promise.all([localFileEditor.closeAll(), desktopRuntime?.dispose()]),
   (error) => {
-    console.error('[electron] Failed to clean local edit sessions before quit:', error);
+    console.error('[electron] Failed to clean desktop resources before quit:', error);
   },
 );
 

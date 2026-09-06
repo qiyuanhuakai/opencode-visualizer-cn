@@ -21,6 +21,7 @@ interface Window {
     };
     getAppVersion: () => Promise<string>;
     getPlatform: () => Promise<string>;
+    desktop: import('./types/desktop').DesktopApi;
     persistentStorage?: {
       getItem: (key: string) => string | null;
       setItem: (key: string, value: string) => boolean;

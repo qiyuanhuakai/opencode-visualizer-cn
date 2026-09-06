@@ -221,12 +221,20 @@ jobs:
           $electronBin = node -e "process.stdout.write(require('electron'))"
           node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron --electron-executable $electronBin --out-dir $env:VIS_PTY_OUT_DIR
 
+      - name: Verify updater metadata
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'dist-electron/latest.yml')) { throw 'Missing latest.yml' }
+          if (-not (Get-ChildItem 'dist-electron/*.blockmap')) { throw 'Missing Windows blockmap' }
+
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
           name: electron-windows-x64-artifacts
           path: |
             dist-electron/Vis-*-x64-Windows.exe
+            dist-electron/Vis-*-x64-Windows.exe.blockmap
+            dist-electron/latest.yml
           retention-days: 7
           if-no-files-found: error
 
@@ -282,12 +290,21 @@ jobs:
           $electronBin = node -e "process.stdout.write(require('electron'))"
           node scripts/qa/node-pty-dual-runtime.mjs --runtimes electron --electron-executable $electronBin --out-dir $env:VIS_PTY_OUT_DIR
 
+      - name: Rename updater manifest for arm64 channel
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'dist-electron/latest.yml')) { throw 'Missing latest.yml' }
+          if (-not (Get-ChildItem 'dist-electron/*.blockmap')) { throw 'Missing Windows blockmap' }
+          Move-Item dist-electron/latest.yml dist-electron/latest-arm64.yml
+
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
           name: electron-windows-arm64-artifacts
           path: |
             dist-electron/Vis-*-arm64-Windows.exe
+            dist-electron/Vis-*-arm64-Windows.exe.blockmap
+            dist-electron/latest-arm64.yml
           retention-days: 7
           if-no-files-found: error
 
@@ -345,6 +362,11 @@ jobs:
             --electron-executable "$ELECTRON_BIN" \
             --out-dir "$VIS_PTY_OUT_DIR"
 
+      - name: Verify updater metadata
+        shell: bash
+        run: |
+          test -f dist-electron/latest-linux.yml
+
       - name: Upload VIS installers
         uses: actions/upload-artifact@v4
         with:
@@ -352,6 +374,7 @@ jobs:
           path: |
             dist-electron/Vis-*-x86_64-Linux.AppImage
             dist-electron/Vis-*-amd64-Linux.deb
+            dist-electron/latest-linux.yml
           retention-days: 7
           if-no-files-found: error
 
@@ -577,5 +600,7 @@ jobs:
             artifacts/**/*.AppImage
             artifacts/**/*.deb
             artifacts/**/*.pkg
+            artifacts/**/*.yml
+            artifacts/**/*.blockmap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

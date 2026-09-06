@@ -1,6 +1,21 @@
 const { contextBridge, ipcRenderer } = require('electron');
 const localFileListeners = new Set();
 const localFileErrorListeners = new Set();
+const desktopStateListeners = new Set();
+const desktopNotificationListeners = new Set();
+
+ipcRenderer.on('desktop-state', (_event, state) => {
+  for (const listener of desktopStateListeners) listener(state);
+});
+ipcRenderer.on('desktop-notification-click', (_event, notification) => {
+  for (const listener of desktopNotificationListeners) listener(notification);
+});
+
+function subscribe(listeners, listener) {
+  if (typeof listener !== 'function') throw new TypeError('Expected listener');
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
 
 function decodePersistentStorageGetResponse(response) {
   if (response.ok === true) return response.value;
@@ -42,6 +57,16 @@ ipcRenderer.on('local-file-error', (_event, error) => {
  * - 所有通信经过验证
  */
 contextBridge.exposeInMainWorld('electronAPI', {
+  desktop: {
+    getState: () => ipcRenderer.invoke('desktop-get-state'),
+    configure: (patch) => ipcRenderer.invoke('desktop-configure', patch),
+    check: (component) => ipcRenderer.invoke('desktop-check', component),
+    download: (component) => ipcRenderer.invoke('desktop-download', component),
+    install: (component) => ipcRenderer.invoke('desktop-install', component),
+    notify: (notification) => ipcRenderer.invoke('desktop-notify', notification),
+    onState: (listener) => subscribe(desktopStateListeners, listener),
+    onNotificationClick: (listener) => subscribe(desktopNotificationListeners, listener),
+  },
   // 平台信息
   platform: process.platform,
 

@@ -110,6 +110,9 @@ function createAdapterMock() {
 
   return {
     adapter: adapter as unknown as CodexAdapter,
+    captureNotificationHandler() {
+      return notificationHandler;
+    },
     emit(notification: CodexJsonRpcNotification) {
       notificationHandler?.(notification);
     },
@@ -123,6 +126,119 @@ describe('useCodexApi', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+  });
+
+  it('reports each successful live turn once, including background threads', async () => {
+    const mock = createAdapterMock();
+    const onTaskCompleted = vi.fn();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter, onTaskCompleted });
+    await api.connect();
+
+    mock.emit({
+      method: 'turn/started',
+      params: { threadId: 'thr_background', turn: { id: 'turn-live', status: 'inProgress' } },
+    });
+    mock.emit({
+      method: 'turn/completed',
+      params: { threadId: 'thr_background', turn: { id: 'turn-live', status: 'completed' } },
+    });
+    mock.emit({
+      method: 'turn/completed',
+      params: { threadId: 'thr_background', turn: { id: 'turn-live', status: 'completed' } },
+    });
+
+    expect(onTaskCompleted).toHaveBeenCalledOnce();
+    expect(onTaskCompleted).toHaveBeenCalledWith({
+      sessionId: 'thr_background',
+      completionId: 'turn-live',
+    });
+  });
+
+  it('still reports completion when the interruption RPC rejects', async () => {
+    const mock = createAdapterMock();
+    const onTaskCompleted = vi.fn();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter, onTaskCompleted });
+    await api.connect();
+    mock.emit({ method: 'turn/started', params: { threadId: 'thr_existing', turn: { id: 'turn-running', status: 'inProgress' } } });
+    vi.spyOn(mock.adapter, 'interruptTurn').mockRejectedValueOnce(new Error('Interruption rejected'));
+    await expect(api.interruptActiveTurn()).rejects.toThrow('Interruption rejected');
+    expect(api.activeTurn.value?.status).toBe('inProgress');
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: 'turn-running', status: 'completed' } } });
+    expect(onTaskCompleted).toHaveBeenCalledExactlyOnceWith({ sessionId: 'thr_existing', completionId: 'turn-running' });
+  });
+
+  it.each(['new turn', 'new connection'] as const)('does not overwrite a %s with a late interruption response', async (mode) => {
+    const first = createAdapterMock();
+    const second = createAdapterMock();
+    const interrupted = deferred<Awaited<ReturnType<CodexAdapter['interruptTurn']>>>();
+    vi.spyOn(first.adapter, 'interruptTurn').mockReturnValueOnce(interrupted.promise);
+    const onTaskCompleted = vi.fn();
+    let connection = 0;
+    const api = useCodexApi({ adapterFactory: () => connection++ === 0 ? first.adapter : second.adapter, onTaskCompleted });
+    await api.connect();
+    first.emit({ method: 'turn/started', params: { threadId: 'thr_existing', turn: { id: 'turn-shared', status: 'inProgress' } } });
+    const pendingInterruption = api.interruptActiveTurn();
+    if (mode === 'new connection') {
+      api.disconnectTransport();
+      await api.connect();
+    }
+    const current = mode === 'new connection' ? second : first;
+    const turnId = mode === 'new connection' ? 'turn-shared' : 'turn-new';
+    current.emit({ method: 'turn/started', params: { threadId: 'thr_existing', turn: { id: turnId, status: 'inProgress' } } });
+    interrupted.resolve({});
+    await pendingInterruption;
+    expect(api.activeTurn.value).toMatchObject({ id: turnId, status: 'inProgress' });
+    current.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: turnId, status: 'completed' } } });
+    expect(onTaskCompleted).toHaveBeenCalledExactlyOnceWith({ sessionId: 'thr_existing', completionId: turnId });
+  });
+
+  it('suppresses non-live, interrupted, failed, and stale-connection turn completions', async () => {
+    const first = createAdapterMock();
+    const second = createAdapterMock();
+    const onTaskCompleted = vi.fn();
+    let connection = 0;
+    const api = useCodexApi({
+      adapterFactory: () => (connection++ === 0 ? first.adapter : second.adapter),
+      onTaskCompleted,
+    });
+    await api.connect();
+
+    first.emit({
+      method: 'turn/completed',
+      params: { threadId: 'thr_existing', turn: { id: 'turn-history', status: 'completed' } },
+    });
+    first.emit({
+      method: 'turn/started',
+      params: { threadId: 'thr_existing', turn: { id: 'turn-failed', status: 'inProgress' } },
+    });
+    first.emit({
+      method: 'turn/completed',
+      params: { threadId: 'thr_existing', turn: { id: 'turn-failed', status: 'failed' } },
+    });
+    first.emit({
+      method: 'turn/started',
+      params: { threadId: 'thr_existing', turn: { id: 'turn-interrupted', status: 'inProgress' } },
+    });
+    api.activeTurn.value = { id: 'turn-interrupted', status: 'inProgress' };
+    await api.interruptActiveTurn();
+    first.emit({
+      method: 'turn/completed',
+      params: { threadId: 'thr_existing', turn: { id: 'turn-interrupted', status: 'completed' } },
+    });
+    first.emit({
+      method: 'turn/started',
+      params: { threadId: 'thr_existing', turn: { id: 'turn-stale', status: 'inProgress' } },
+    });
+    const staleHandler = first.captureNotificationHandler();
+
+    api.disconnectTransport();
+    await api.connect();
+    staleHandler?.({
+      method: 'turn/completed',
+      params: { threadId: 'thr_existing', turn: { id: 'turn-stale', status: 'completed' } },
+    });
+
+    expect(onTaskCompleted).not.toHaveBeenCalled();
   });
 
   it('connects through a Codex adapter and loads threads', async () => {

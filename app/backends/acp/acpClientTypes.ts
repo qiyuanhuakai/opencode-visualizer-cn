@@ -12,6 +12,7 @@ export type AcpClientEvent =
   | { type: 'commands.updated'; commands: Array<Record<string, unknown>> }
   | { type: 'config.updated'; options: unknown[] }
   | { type: 'session.updated'; info: BackendSessionInfo }
+  | { type: 'session.promptCompleted'; sessionId: string; completionId: string }
   | { type: 'session.deleted'; sessionId: string };
 
 export type AcpClientOptions = {

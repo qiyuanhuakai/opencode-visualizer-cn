@@ -265,6 +265,8 @@ pnpm dev
 
 ### Electron 桌面端
 
+应用内更新、托盘、精简本地化菜单、任务完成通知与声音设置见 [桌面集成说明](docs/desktop-integration.md)。macOS 保留现有 ad-hoc 签名，通过下载后手动安装更新；vis_bridge 使用独立系统安装器。
+
 本项目支持将 Web UI 打包为原生桌面应用，基于 Electron 框架，支持 **Windows**、**macOS** 和 **Linux** 三大平台。
 
 **桌面端特性：**
@@ -272,7 +274,7 @@ pnpm dev
 - 安全沙箱（`contextIsolation` + `sandbox`），外部链接通过系统浏览器打开
 - 开发模式下自动处理 CORS，便于本地调试
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
-- 运行时基线：Electron **43.3.0**（Chromium 150 / Node 24.18.1），Chromium 沙箱全程开启
+- 运行时基线：Electron **43.4.1**（Chromium 150 / Node 24.18.1），Chromium 沙箱全程开启
 
 **macOS 签名状态（重要）：** macOS 安装包为 **ad-hoc 签名**（无 Developer ID、未分配 TeamIdentifier、无 notarization，`mac.identity: "-"`、`mac.notarize: false`）。Intel 与 Apple Silicon 产物均已在 macOS runner 上通过 `codesign --verify --deep --strict`，并分别验证 DMG 挂载与 ZIP 解压后的应用。Gatekeeper 仍会显示"无法验证开发者"的常规提示，需要右键 → 打开；macOS 上 **Notifications 不可用**，notarization 亦未配置。这些限制为本版本接受的明确决策，详见 `CHANGELOG.md`。
 
@@ -531,7 +533,7 @@ This project supports packaging the Web UI as a native desktop application using
 - Secure sandbox (`contextIsolation` + `sandbox`); external links open in system browser
 - Auto CORS handling in development mode for local debugging
 - Supports NSIS / AppImage / deb / dmg installers for each platform
-- Runtime baseline: Electron **43.3.0** (Chromium 150 / Node 24.18.1), Chromium sandbox always enabled
+- Runtime baseline: Electron **43.4.1** (Chromium 150 / Node 24.18.1), Chromium sandbox always enabled
 
 **macOS Signing Status (Important):** macOS builds are **ad-hoc signed** (no Developer ID, no assigned TeamIdentifier, no notarization; `mac.identity: "-"`, `mac.notarize: false`). Both Intel and Apple Silicon artifacts have passed `codesign --verify --deep --strict` on macOS runners, with checks against the app bundles mounted from DMG and extracted from ZIP. Gatekeeper still shows the standard "cannot verify the developer" warning; right-click → Open is required. macOS **Notifications are unavailable** and notarization is not configured. These limits are accepted decisions for this release — see `CHANGELOG.md`.
 

@@ -12,7 +12,6 @@ files:
   - "dist/**/*"
   - "electron/**/*"
   - "package.json"
-  - "!node_modules"
   - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
   - "!.editorconfig"
   - "!.gitattributes"
