@@ -1,6 +1,9 @@
 import { effectScope, nextTick, ref, type EffectScope } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { useConnectedBridgeVersion } from './useConnectedBridgeVersion';
+import {
+  useConnectedBridgeVersion,
+  type ConnectedBridgeVersion,
+} from './useConnectedBridgeVersion';
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -196,5 +199,155 @@ describe('useConnectedBridgeVersion', () => {
 
     // Then: the late response is discarded.
     expect(state.value).toEqual({ status: 'loading' });
+  });
+});
+
+describe('useConnectedBridgeVersion connection reporting', () => {
+  let scope: EffectScope;
+  let reports: Array<{ connectionId: string; state: ConnectedBridgeVersion }>;
+
+  function collect(connectionId: string, state: ConnectedBridgeVersion) {
+    reports.push({ connectionId, state });
+  }
+
+  beforeEach(() => {
+    scope = effectScope();
+    reports = [];
+  });
+
+  afterEach(() => {
+    scope.stop();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('reports a loading connection with a fresh id before the ready version', async () => {
+    // Given: a healthy bridge endpoint.
+    vi.stubGlobal('fetch', vi.fn(() =>
+      Promise.resolve(jsonResponse({ ok: true, service: 'vis_bridge', version: '1.2.3' })),
+    ));
+
+    // When: the composable connects.
+    scope.run(() =>
+      useConnectedBridgeVersion(ref('http://bridge.test/healthz'), { onConnectionChange: collect }),
+    );
+    await flush();
+
+    // Then: a fresh connection id reported loading first, then the ready version.
+    expect(reports).toHaveLength(2);
+    expect(reports[0]!.state).toEqual({ status: 'loading' });
+    expect(reports[1]!.state).toEqual({ status: 'ready', version: '1.2.3' });
+    expect(reports[0]!.connectionId).not.toBe('');
+    expect(reports[0]!.connectionId).toBe(reports[1]!.connectionId);
+  });
+
+  it('reports a failure state when the health fetch fails', async () => {
+    // Given: a failing health endpoint.
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('connection refused'))));
+
+    scope.run(() =>
+      useConnectedBridgeVersion(ref('http://bridge.test/healthz'), { onConnectionChange: collect }),
+    );
+    await flush();
+
+    // Then: the connection reported loading, then the failure.
+    expect(reports.map((entry) => entry.state.status)).toEqual(['loading', 'error']);
+    expect(reports[0]!.connectionId).toBe(reports[1]!.connectionId);
+  });
+
+  it('creates a fresh connection id on every refresh and re-reports the lifecycle', async () => {
+    // Given: a connected bridge that already reported its version.
+    vi.stubGlobal('fetch', vi.fn(() =>
+      Promise.resolve(jsonResponse({ ok: true, service: 'vis_bridge', version: '1.2.3' })),
+    ));
+    const handle = scope.run(() =>
+      useConnectedBridgeVersion(ref('http://bridge.test/healthz'), { onConnectionChange: collect }),
+    )!;
+    await flush();
+    expect(reports).toHaveLength(2);
+    const firstConnectionId = reports[0]!.connectionId;
+
+    // When: the health is explicitly refreshed.
+    await handle.refresh();
+
+    // Then: a new connection id reported loading then ready again.
+    expect(reports).toHaveLength(4);
+    expect(reports[2]!.state).toEqual({ status: 'loading' });
+    expect(reports[3]!.state).toEqual({ status: 'ready', version: '1.2.3' });
+    expect(reports[2]!.connectionId).toBe(reports[3]!.connectionId);
+    expect(reports[2]!.connectionId).not.toBe(firstConnectionId);
+  });
+
+  it('never reports a stale generation after the health url changes', async () => {
+    // Given: bridge A answers slowly while bridge B answers immediately.
+    let resolveA: ((response: Response) => void) | undefined;
+    vi.stubGlobal('fetch', vi.fn((input: string | URL | Request) => {
+      if (String(input).includes('a.test')) {
+        return new Promise<Response>((resolve) => { resolveA = resolve; });
+      }
+      return Promise.resolve(jsonResponse({ ok: true, service: 'vis_bridge', version: '2.0.0' }));
+    }));
+    const url = ref('http://a.test/healthz');
+    scope.run(() => useConnectedBridgeVersion(url, { onConnectionChange: collect }));
+    await flush();
+    const connectionA = reports[0]!.connectionId;
+
+    // When: the connection switches to B before A answers.
+    url.value = 'http://b.test/healthz';
+    await flush();
+
+    // And: A's late response arrives afterwards.
+    resolveA?.(jsonResponse({ ok: true, service: 'vis_bridge', version: '1.0.0' }));
+    await flush();
+
+    // Then: no ready report for the stale generation A ever reaches the listener.
+    const readyReports = reports.filter((entry) => entry.state.status === 'ready');
+    expect(readyReports).toHaveLength(1);
+    expect(readyReports[0]!.state).toEqual({ status: 'ready', version: '2.0.0' });
+    expect(readyReports[0]!.connectionId).not.toBe(connectionA);
+    expect(
+      reports.some(
+        (entry) => entry.connectionId === connectionA && entry.state.status !== 'loading',
+      ),
+    ).toBe(false);
+  });
+
+  it('reports a disconnect on disposal without mutating the visible state', async () => {
+    // Given: a connected bridge that reported its version.
+    vi.stubGlobal('fetch', vi.fn(() =>
+      Promise.resolve(jsonResponse({ ok: true, service: 'vis_bridge', version: '0.7.10' })),
+    ));
+    const { state } = scope.run(() =>
+      useConnectedBridgeVersion(ref('http://bridge.test/healthz'), { onConnectionChange: collect }),
+    )!;
+    await flush();
+    expect(state.value).toEqual({ status: 'ready', version: '0.7.10' });
+    const connectionId = reports[0]!.connectionId;
+
+    // When: the owning scope is disposed.
+    scope.stop();
+
+    // Then: the runtime is told the connection is gone, but the visible state stays put.
+    expect(reports.at(-1)).toEqual({ connectionId, state: { status: 'disconnected' } });
+    expect(state.value).toEqual({ status: 'ready', version: '0.7.10' });
+  });
+
+  it('reports a disconnect with the previous connection id when the bridge url clears', async () => {
+    // Given: a connected bridge that reported its version.
+    vi.stubGlobal('fetch', vi.fn(() =>
+      Promise.resolve(jsonResponse({ ok: true, service: 'vis_bridge', version: '0.7.10' })),
+    ));
+    const url = ref('http://bridge.test/healthz');
+    scope.run(() => useConnectedBridgeVersion(url, { onConnectionChange: collect }));
+    await flush();
+    const connectionId = reports[0]!.connectionId;
+
+    // When: the bridge disconnects.
+    url.value = '';
+    await flush();
+
+    // Then: the old connection is reported as disconnected.
+    expect(reports.at(-1)).toEqual({ connectionId, state: { status: 'disconnected' } });
   });
 });

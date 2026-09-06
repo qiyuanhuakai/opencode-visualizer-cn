@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -118,6 +120,7 @@ const basePreferences: DesktopShellPreferences = {
 function createHarness(
   options: {
     beforeQuitListener?: Listener;
+    emptyTrayImage?: boolean;
     failTray?: boolean;
     failTrayMenu?: boolean;
     linuxTray?: boolean;
@@ -130,6 +133,8 @@ function createHarness(
   if (options.beforeQuitListener) appListeners.set('before-quit', [options.beforeQuitListener]);
   const app = {
     name: 'Vis',
+    isPackaged: false,
+    getAppPath: vi.fn(() => path.resolve(__dirname, '..')),
     getName: vi.fn(() => 'Vis'),
     isUnityRunning: vi.fn(() => options.linuxTray ?? true),
     on: vi.fn((event: string, listener: Listener) => {
@@ -170,10 +175,12 @@ function createHarness(
     setApplicationMenu: vi.fn(),
   };
   const image = {
-    isEmpty: vi.fn(() => false),
+    isEmpty: vi.fn(() => options.emptyTrayImage ?? false),
+    resize: vi.fn(),
     setTemplateImage: vi.fn(),
   };
-  const nativeImage = { createFromDataURL: vi.fn(() => image) };
+  image.resize.mockReturnValue(image);
+  const nativeImage = { createFromPath: vi.fn(() => image) };
   const shellApi = { beep: vi.fn() };
   const window = new WindowMock();
   const onChange = vi.fn();
@@ -199,6 +206,7 @@ function createHarness(
     emitApp,
     image,
     Menu,
+    nativeImage,
     Notification: NotificationMock,
     onChange,
     onNotificationClick,
@@ -213,6 +221,31 @@ function preventableEvent() {
 }
 
 describe('Electron desktop shell', () => {
+  it('creates the tray from a resized canonical application icon without template conversion', () => {
+    // Given: a development desktop shell with a decodable canonical image.
+    const harness = createHarness();
+
+    // When: tray initialization completes during shell creation.
+    // Then: Electron receives the canonical build asset and preserves its full-color rendering.
+    expect(harness.nativeImage.createFromPath).toHaveBeenCalledWith(
+      expect.stringMatching(/[\\/]build[\\/]icon\.png$/u),
+    );
+    expect(harness.image.resize).toHaveBeenCalledWith({ width: 16, height: 16, quality: 'best' });
+    expect(harness.image.setTemplateImage).not.toHaveBeenCalled();
+  });
+
+  it('rejects a canonical tray image that Electron cannot decode', () => {
+    // Given: Electron returns an empty native image for the canonical asset.
+    const harness = createHarness({ emptyTrayImage: true, linuxTray: true });
+
+    // When: tray initialization validates the decoded image.
+    // Then: the invalid image is not passed to the native Tray constructor.
+    expect(harness.nativeImage.createFromPath).toHaveBeenCalledOnce();
+    expect(harness.image.isEmpty).toHaveBeenCalledOnce();
+    expect(harness.trays).toHaveLength(0);
+    expect(harness.desktopShell.getCapabilities().trayAvailable).toBe(false);
+  });
+
   it('conservatively detects whether a Linux tray can be reached', () => {
     const app = { isUnityRunning: () => false };
     expect(trayEnvironmentIsSupported('linux', app, {})).toBe(false);
@@ -367,6 +400,22 @@ describe('Electron desktop shell', () => {
     expect(harness.window.restore).toHaveBeenCalledOnce();
     expect(harness.window.show).toHaveBeenCalledOnce();
     expect(harness.window.focus).toHaveBeenCalledOnce();
+  });
+
+  it('shows the renderer even when Windows restore already marks the native window visible', () => {
+    const harness = createHarness();
+    harness.desktopShell.attachWindow(harness.window);
+    harness.window.visible = false;
+    harness.window.minimized = true;
+    harness.window.restore.mockImplementation(() => {
+      harness.window.minimized = false;
+      harness.window.visible = true;
+    });
+    harness.trays[0]?.emit('click');
+    expect(harness.window.restore).toHaveBeenCalledOnce();
+    expect(harness.window.show).toHaveBeenCalledOnce();
+    expect(harness.window.focus).toHaveBeenCalledOnce();
+    expect(harness.window.show.mock.invocationCallOrder[0]).toBeGreaterThan(harness.window.restore.mock.invocationCallOrder[0]);
   });
 
   it('suppresses attentive notifications and uses one explicit sound source when hidden', () => {

@@ -9,13 +9,12 @@ import {
   nativeNotificationsAreAvailable,
   validateDesktopNotification,
 } from './desktopShellNotification.js';
+import { createApplicationTrayIcon } from './applicationTrayIcon.js';
 import { safelyDisposeNativeResource } from './desktopShellNative.js';
 import { trayEnvironmentIsSupported } from './desktopShellTray.js';
 
 const APP_USER_MODEL_ID = 'com.xenodrive.vis';
 const ACTIVE_NOTIFICATION_MAX_ENTRIES = 64;
-const TRAY_ICON_DATA_URL =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA10lEQVR4nKRSuw4BURCdGb5ChF9QSqh3RbMbjUqhUSl8jmjRymrE+gKlX/CIL9BI1r1mE9a9dpebvaebk3POzGSGwBIElihnkRfXH0gAX4JsxjUC7hEgqIbB/FuLanHt9uqREDMmnaxgDt2ViUaVzer45rQVIvFY5plf3RxusFC5JODkekMetQV/wCHtWJsKQIQ+GELVJgFSQsPQr2mtz6iucDA1qdrPCgKnhn5Nq/3BueNtmXJ/miWsa2HgpyaIURJiwt93z3fDjYjGKoVZusKvXATWZ3wCAAD//2Dk3HsAAAAGSURBVAMATmRCumuMUIkAAAAASUVORK5CYII=';
 const DEFAULT_PREFERENCES = Object.freeze({
   locale: 'en',
   minimizeToTray: false,
@@ -66,7 +65,7 @@ export function createDesktopShell({
     const window = resolveWindow();
     if (!window || window.isDestroyed()) return;
     if (window.isMinimized()) window.restore();
-    if (!window.isVisible()) window.show();
+    window.show();
     window.focus();
   };
 
@@ -232,9 +231,7 @@ export function createDesktopShell({
   let initializingTray = null;
   if (trayEnvironmentIsSupported(process.platform, app, process.env)) {
     try {
-      const icon = nativeImage.createFromDataURL(TRAY_ICON_DATA_URL);
-      if (icon.isEmpty()) throw new Error('Tray icon could not be decoded');
-      if (process.platform === 'darwin') icon.setTemplateImage(true);
+      const icon = createApplicationTrayIcon(app, nativeImage);
       initializingTray = new Tray(icon);
       initializingTray.setToolTip(app.getName?.() ?? app.name);
       initializingTray.on('click', restore);

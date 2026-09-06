@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   desktop: {
     getState: () => ipcRenderer.invoke('desktop-get-state'),
     configure: (patch) => ipcRenderer.invoke('desktop-configure', patch),
+    reportBridgeVersion: (payload) => ipcRenderer.invoke('desktop-report-bridge-version', payload),
     check: (component) => ipcRenderer.invoke('desktop-check', component),
     download: (component) => ipcRenderer.invoke('desktop-download', component),
     install: (component) => ipcRenderer.invoke('desktop-install', component),

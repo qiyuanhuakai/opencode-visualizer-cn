@@ -15,7 +15,17 @@ export interface DesktopUpdateState {
   readonly component: DesktopComponent;
   readonly currentVersion: string | null;
   readonly availableVersion: string | null;
-  readonly phase: 'idle' | 'checking' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'installer-opened' | 'up-to-date' | 'error' | 'unsupported';
+  readonly phase:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'downloading'
+    | 'downloaded'
+    | 'installing'
+    | 'installer-opened'
+    | 'up-to-date'
+    | 'error'
+    | 'unsupported';
   readonly progress: number | null;
   readonly error: string | null;
   readonly installKind: 'automatic' | 'manual' | 'unsupported';
@@ -37,9 +47,15 @@ export interface DesktopNotification {
   readonly sessionId: string;
 }
 
+export interface DesktopBridgeVersionReport {
+  readonly connectionId: string;
+  readonly version: string | null;
+}
+
 export interface DesktopApi {
   getState(): Promise<DesktopState>;
   configure(patch: Partial<DesktopPreferences>): Promise<DesktopState>;
+  reportBridgeVersion?(report: DesktopBridgeVersionReport): Promise<DesktopState>;
   check(component: DesktopComponent): Promise<DesktopState>;
   download(component: DesktopComponent): Promise<DesktopState>;
   install(component: DesktopComponent): Promise<DesktopState>;
