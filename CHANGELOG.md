@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.7.12 released]
 
 ### 托盘恢复与 bridge 更新修复
 
