@@ -18,6 +18,7 @@ const PACKAGE_PATH = path.resolve(__dirname, '../package.json');
 const EXPECTED_PRELOAD_SCHEMA = {
   topLevel: [
     'clipboard',
+    'desktop',
     'getAppVersion',
     'getPlatform',
     'localFile',
@@ -26,6 +27,7 @@ const EXPECTED_PRELOAD_SCHEMA = {
     'versions',
   ],
   clipboard: ['readText', 'writeText'],
+  desktop: ['check', 'configure', 'download', 'getState', 'install', 'notify', 'onNotificationClick', 'onState'],
   persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem'],
   localFile: [
     'clearApplication',

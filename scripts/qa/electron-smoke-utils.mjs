@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 export const EXPECTED_PRELOAD_SCHEMA = {
   topLevel: [
     'clipboard',
+    'desktop',
     'getAppVersion',
     'getPlatform',
     'localFile',
@@ -18,6 +19,7 @@ export const EXPECTED_PRELOAD_SCHEMA = {
     'versions',
   ],
   clipboard: ['readText', 'writeText'],
+  desktop: ['check', 'configure', 'download', 'getState', 'install', 'notify', 'onNotificationClick', 'onState'],
   persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem'],
   localFile: [
     'clearApplication',
@@ -69,6 +71,7 @@ export const collectPreloadSchema = () => {
   return {
     topLevel: Object.keys(api).sort(),
     clipboard: Object.keys(api.clipboard).sort(),
+    desktop: Object.keys(api.desktop).sort(),
     persistentStorage: Object.keys(api.persistentStorage).sort(),
     localFile: Object.keys(api.localFile).sort(),
     versions: Object.keys(api.versions).sort(),
