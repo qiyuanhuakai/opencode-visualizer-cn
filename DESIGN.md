@@ -104,6 +104,13 @@ All spacing derives from a 4px base.
 
 ## 6. Motion & Interaction
 
+### Desktop Settings
+- Reuse SettingsModal navigation and ToggleSettingRow for persisted native preferences.
+- Update cards use modal surface/border/text tokens, 12px padding, 8px gaps and 12px helper copy.
+- Show checking, download progress, verified download, installer handoff, unsupported and error states explicitly; installer handoff is not installation success.
+- Error text uses `--theme-status-error` (fallback `#f87171`). Long filenames and translated notices wrap; buttons retain keyboard focus outlines.
+- Progress fill updates directly without layout animation. Native notification availability never disables the independent sound fallback.
+
 | Type | Duration | Easing | Usage |
 |------|----------|--------|-------|
 | Micro | 120-150ms | ease-out | Button hover/press and toggle response |
