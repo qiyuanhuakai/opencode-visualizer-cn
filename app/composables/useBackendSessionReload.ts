@@ -90,6 +90,7 @@ export function useBackendSessionReload(params: {
 
   async function reloadSelectedSessionState(newId?: string, oldId?: string) {
     const reloadRequestId = ++params.sessionReloadRequestId.value;
+    params.isLoadingHistory.value = false;
     const previousCacheContext = loadedMessageCacheContext;
     const nextCacheContext: LoadedMessageCacheContext | null = newId
       ? {
@@ -124,6 +125,7 @@ export function useBackendSessionReload(params: {
           let nextHistory = params.codexHistory.value;
           if (params.codexApi.activeThreadId.value !== sessionId || nextHistory.length === 0) {
             await params.codexApi.selectThread(sessionId);
+            if (reloadRequestId !== params.sessionReloadRequestId.value) return;
             nextHistory = params.codexHistory.value;
           }
           if (isSessionSwitch) {
@@ -134,6 +136,7 @@ export function useBackendSessionReload(params: {
           params.subagentWindowsReset();
           params.clearRetryStatus();
           await nextTick();
+          if (reloadRequestId !== params.sessionReloadRequestId.value) return;
           params.msg.loadHistory(nextHistory);
           params.codexReapplyBackfill();
         } finally {
@@ -154,6 +157,7 @@ export function useBackendSessionReload(params: {
       params.subagentWindowsReset();
       params.clearRetryStatus();
       await nextTick();
+      if (reloadRequestId !== params.sessionReloadRequestId.value) return;
 
       const cacheHit = params.msg.tryLoadFromCache({
         namespace: nextCacheContext?.namespace ?? params.getMessageCacheNamespace(),
@@ -168,6 +172,8 @@ export function useBackendSessionReload(params: {
         params.isLoadingHistory.value = true;
         try {
           const rootHistory = await params.fetchRootSessionHistory(sessionId);
+          if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+          params.isLoadingHistory.value = false;
           if (rootHistory.loaded && reloadRequestId === params.sessionReloadRequestId.value) {
             if (loadedMessageCacheContext === nextCacheContext && nextCacheContext) {
               nextCacheContext.cacheable = true;
@@ -214,6 +220,7 @@ export function useBackendSessionReload(params: {
 
   function invalidateMessageCacheContext() {
     loadedMessageCacheContext = null;
+    params.isLoadingHistory.value = false;
   }
 
   return {
