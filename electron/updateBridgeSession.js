@@ -65,5 +65,5 @@ export function createBridgeUpdateSession({ isPackaged, isDisposed, onVersionCha
     }
   }
 
-  return { capture, configure, isCurrent, report, track };
+  return { capture, configure, isCurrent, report, track, pending: () => activeWork };
 }
