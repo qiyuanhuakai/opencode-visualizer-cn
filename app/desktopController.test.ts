@@ -137,6 +137,7 @@ describe('desktop controller', () => {
         {},
         {
           connectionId: 'connection-1',
+          endpointLocality: 'local',
           version: '1.2.3-rc.1',
         },
       ),
@@ -149,20 +150,39 @@ describe('desktop controller', () => {
   it('normalizes connected bridge versions and accepts explicit unavailable reports', async () => {
     const { controller, updates } = setup();
 
-    await controller.reportBridgeVersion({ connectionId: 'connection-1', version: 'v01.002.0003' });
-    await controller.reportBridgeVersion({ connectionId: 'connection-2', version: null });
+    await controller.reportBridgeVersion({
+      connectionId: 'connection-1',
+      endpointLocality: 'local',
+      version: 'v01.002.0003',
+    });
+    await controller.reportBridgeVersion({
+      connectionId: 'connection-2',
+      endpointLocality: 'unknown',
+      version: null,
+    });
 
     expect(updates.reportBridgeVersion.mock.calls).toEqual([
-      [{ connectionId: 'connection-1', version: '1.2.3' }],
-      [{ connectionId: 'connection-2', version: null }],
+      [{ connectionId: 'connection-1', endpointLocality: 'local', version: '1.2.3' }],
+      [{ connectionId: 'connection-2', endpointLocality: 'unknown', version: null }],
     ]);
   });
 
+  it('rejects bridge reports without explicit endpoint locality', async () => {
+    const { controller, updates } = setup();
+
+    await expect(
+      controller.reportBridgeVersion({ connectionId: 'connection-1', version: '1.2.3' }),
+    ).rejects.toThrow('Invalid bridge version report');
+
+    expect(updates.reportBridgeVersion).not.toHaveBeenCalled();
+  });
+
   it.each([
-    { connectionId: '', version: '1.2.3' },
-    { connectionId: 'x'.repeat(129), version: '1.2.3' },
-    { connectionId: 'connection-1', version: '1.2' },
-    { connectionId: 'connection-1', version: `1.2.${'3'.repeat(65)}` },
+    { connectionId: '', endpointLocality: 'local', version: '1.2.3' },
+    { connectionId: 'x'.repeat(129), endpointLocality: 'local', version: '1.2.3' },
+    { connectionId: 'connection-1', endpointLocality: 'local', version: '1.2' },
+    { connectionId: 'connection-1', endpointLocality: 'local', version: `1.2.${'3'.repeat(65)}` },
+    { connectionId: 'connection-1', endpointLocality: 'nearby', version: '1.2.3' },
   ])('rejects malformed bridge report %#', async (payload) => {
     const { controller, updates } = setup();
 
