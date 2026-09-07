@@ -1371,20 +1371,6 @@ function applySkillSelection(name: string) {
   });
 }
 
-function extractSlashCommand(value: string) {
-  if (!value.startsWith('/')) return '';
-  const trimmed = value.slice(1);
-  const match = trimmed.match(/^(\S+)/);
-  return match?.[1] ?? '';
-}
-
-function hasMatchingCommand(name: string) {
-  if (!name) return false;
-  return (props.commands ?? []).some(
-    (command) => command.name.toLowerCase() === name.toLowerCase(),
-  );
-}
-
 function nextCyclicIndex(current: string | undefined, options: Array<string | undefined>) {
   if (options.length === 0) return -1;
   const index = options.indexOf(current);
@@ -1544,21 +1530,11 @@ function handleKeydown(event: KeyboardEvent) {
     !event.ctrlKey &&
     !event.metaKey &&
     !event.shiftKey &&
-    !event.altKey
+    !event.altKey &&
+    enterToSend.value
   ) {
-    if (enterToSend.value) {
-      event.preventDefault();
-      emit('send');
-      return;
-    }
-    // Default: send only for recognized slash commands
-    if (messageValue.value.startsWith('/')) {
-      const commandName = extractSlashCommand(messageValue.value);
-      if (hasMatchingCommand(commandName)) {
-        event.preventDefault();
-        emit('send');
-      }
-    }
+    event.preventDefault();
+    emit('send');
   }
 }
 

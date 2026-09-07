@@ -625,6 +625,7 @@ import {
   useBackendSessionLifecycle,
 } from './composables/useBackendSessionLifecycle';
 import { useBackendMessageSend } from './composables/useBackendMessageSend';
+import type { CommandFilePart } from './composables/backendMessageSend.types';
 import { useBackendSessionReload } from './composables/useBackendSessionReload';
 import { useBackendSessionStatus } from './composables/useBackendSessionStatus';
 import { useBackendSelectionBootstrap } from './composables/useBackendSelectionBootstrap';
@@ -2724,7 +2725,13 @@ const {
   branchListLoading,
   refreshBranchEntries,
   ensureBranchEntriesLoaded,
-} = useFileTree({ activeDirectory, activeBackendKind });
+} = useFileTree({
+  activeDirectory,
+  activeBackendKind,
+  refreshEnabled: computed(
+    () => uiInitState.value === 'ready' && connectionState.value === 'ready',
+  ),
+});
 
 const treeDirectoryName = computed(() => {
   const raw = activeDirectory.value.trim();
@@ -6965,7 +6972,12 @@ function runDebugCommand(args: string): { ok: boolean; message: string } {
   return { ok: false, message: t('app.debug.unknownSubcommand', { sub }) };
 }
 
-async function sendCommand(sessionId: string, command: CommandInfo, commandArgs: string) {
+async function sendCommand(
+  sessionId: string,
+  command: CommandInfo,
+  commandArgs: string,
+  parts: CommandFilePart[],
+) {
   if (!ensureConnectionReady(t('app.actions.sendingCommands'))) return;
   const directory = activeDirectory.value.trim();
   const sendCommand = requireBackendMethod(backend().sendCommand, 'session command sending');
@@ -6976,6 +6988,7 @@ async function sendCommand(sessionId: string, command: CommandInfo, commandArgs:
     agent: command.agent || resolvePromptAgentMode(selectedMode.value),
     model: command.model || selectedModel.value,
     variant: selectedThinking.value,
+    parts,
   });
 }
 

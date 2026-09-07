@@ -185,6 +185,125 @@ describe('DesktopSettings', () => {
     await clickToggle(sound);
     expect(desktop.api.configure).toHaveBeenCalledWith({ notificationSound: true });
   });
+  it('shares one row between the version text and the check actions in each update card', async () => {
+    // Given: mounted settings with the desktop runtime.
+    const desktop = createDesktopApi(makeState());
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+    const { host } = await mountDesktopSettings();
+    await flushAsync();
+
+    // Then: in both cards the versions block and the actions block share a single summary row.
+    for (const component of ['app', 'bridge'] as const) {
+      const card = cardFor(host, component);
+      const versions = card.querySelector('.desktop-update-versions');
+      const actions = card.querySelector('.desktop-update-actions');
+      expect(versions, `${component} card must render the versions block`).not.toBeNull();
+      expect(actions, `${component} card must render its check action`).not.toBeNull();
+      const summary = card.querySelector(':scope > .desktop-update-summary');
+      expect(
+        summary,
+        `${component} card must place versions and the check action inside a shared summary row`,
+      ).not.toBeNull();
+      expect(versions!.parentElement).toBe(summary);
+      expect(actions!.parentElement).toBe(summary);
+      expect(
+        versions!.compareDocumentPosition(actions!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${component} card must render the versions before the check action`,
+      ).not.toBe(0);
+
+      // And: the summary row holds only the check button, never the phase actions.
+      const summaryButtons = Array.from(actions!.querySelectorAll('button')).map((button) =>
+        button.textContent?.trim(),
+      );
+      expect(summaryButtons).toEqual([en.updates.actions.check]);
+      expect(card.querySelector('.desktop-update-extra-actions')).toBeNull();
+    }
+  });
+
+  it('places download and install actions on a separate row below the summary', async () => {
+    // Given: mounted settings with an available app update and a downloaded bridge update.
+    const desktop = createDesktopApi(
+      makeState({
+        app: { phase: 'available', availableVersion: '1.5.0', assetName: 'Vis-1.5.0.AppImage' },
+        bridge: { phase: 'downloaded', availableVersion: '0.9.2', progress: 100 },
+      }),
+    );
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+    const { host } = await mountDesktopSettings();
+    await flushAsync();
+
+    // Then: the app card keeps Check in the summary and Download on the extra row below.
+    const appCard = cardFor(host, 'app');
+    const appSummary = appCard.querySelector(':scope > .desktop-update-summary')!;
+    const appExtra = appCard.querySelector(':scope > .desktop-update-extra-actions');
+    expect(appExtra, 'app card must render the extra actions row below the summary').not.toBeNull();
+    expect(
+      appSummary.compareDocumentPosition(appExtra!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'extra actions must come after the summary row',
+    ).not.toBe(0);
+    expect(
+      Array.from(appSummary.querySelectorAll('button')).map((button) => button.textContent?.trim()),
+    ).toEqual([en.updates.actions.check]);
+    expect(
+      Array.from(appExtra!.querySelectorAll('button')).map((button) => button.textContent?.trim()),
+    ).toEqual([en.updates.actions.download]);
+
+    // And: the bridge card keeps Check in the summary and the manual install action below.
+    const bridgeCard = cardFor(host, 'bridge');
+    const bridgeExtra = bridgeCard.querySelector(':scope > .desktop-update-extra-actions');
+    expect(bridgeExtra).not.toBeNull();
+    expect(
+      Array.from(bridgeCard.querySelectorAll(':scope > .desktop-update-summary button')).map(
+        (button) => button.textContent?.trim(),
+      ),
+    ).toEqual([en.updates.actions.check]);
+    expect(
+      Array.from(bridgeExtra!.querySelectorAll('button')).map((button) => button.textContent?.trim()),
+    ).toEqual([en.updates.actions.openInstaller]);
+  });
+
+  it('places the retry action on the extra row while the error phase keeps check in the summary', async () => {
+    // Given: an app update in the error phase.
+    const desktop = createDesktopApi(
+      makeState({ app: { phase: 'error', error: 'network unreachable' } }),
+    );
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+    const { host } = await mountDesktopSettings();
+    await flushAsync();
+
+    // Then: the summary keeps only the check action and retry lives on the extra row.
+    const appCard = cardFor(host, 'app');
+    expect(
+      Array.from(appCard.querySelectorAll(':scope > .desktop-update-summary button')).map(
+        (button) => button.textContent?.trim(),
+      ),
+    ).toEqual([en.updates.actions.check]);
+    const extra = appCard.querySelector(':scope > .desktop-update-extra-actions');
+    expect(extra).not.toBeNull();
+    expect(
+      Array.from(extra!.querySelectorAll('button')).map((button) => button.textContent?.trim()),
+    ).toEqual([en.updates.actions.retry]);
+  });
+
+  it('keeps the versions row intact without actions for an unsupported component', async () => {
+    // Given: a bridge component unsupported on this platform.
+    const desktop = createDesktopApi(
+      makeState({ bridge: { phase: 'unsupported', installKind: 'unsupported' } }),
+    );
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { desktop: desktop.api } });
+    const { host } = await mountDesktopSettings();
+    await flushAsync();
+
+    // Then: the summary row still holds the versions while the notice stays below it.
+    const bridgeCard = cardFor(host, 'bridge');
+    const summary = bridgeCard.querySelector(':scope > .desktop-update-summary');
+    expect(summary).not.toBeNull();
+    expect(summary!.querySelector('.desktop-update-versions')).not.toBeNull();
+    expect(summary!.querySelector('button')).toBeNull();
+    const notice = bridgeCard.querySelector(':scope > .desktop-notice');
+    expect(notice, 'unsupported notice must remain on its own row below the summary').not.toBeNull();
+  });
+
   it('renders nothing when the desktop API is unavailable (web)', async () => {
     // Given: a web runtime without window.electronAPI.
     const { host } = await mountDesktopSettings();

@@ -1,5 +1,7 @@
+import type { ComposerAttachment } from '../types/composer';
 import type {
   BackendMessageSendParams,
+  CommandFilePart,
   RequestGuard,
   SendPreflight,
 } from './backendMessageSend.types';
@@ -61,6 +63,41 @@ async function buildOpenCodeParts(
   return parts;
 }
 
+function buildOpenCodeCommand(
+  params: BackendMessageSendParams,
+  attachments: readonly ComposerAttachment[],
+  argumentText: string,
+): { arguments: string; parts: CommandFilePart[] } {
+  const notes: string[] = [];
+  const parts: CommandFilePart[] = [];
+  for (const item of attachments) {
+    if (!item.lineComment) {
+      parts.push({ type: 'file', mime: item.mime, url: item.dataUrl, filename: item.filename });
+      continue;
+    }
+    notes.push(
+      params.formatCommentNote(
+        item.lineComment.path,
+        item.lineComment.startLine,
+        item.lineComment.endLine,
+        item.lineComment.text,
+      ),
+    );
+    parts.push({
+      type: 'file',
+      mime: 'text/plain',
+      url: params.buildLineCommentFileUrl(
+        item.lineComment.path,
+        item.lineComment.startLine,
+        item.lineComment.endLine,
+      ),
+      filename: item.filename.split(':')[0] || item.filename,
+    });
+  }
+  const combined = [argumentText, ...notes].filter((value) => value.length > 0);
+  return { arguments: combined.join('\n'), parts };
+}
+
 export async function runOpenCodeSend(
   params: BackendMessageSendParams,
   preflight: SendPreflight,
@@ -68,10 +105,16 @@ export async function runOpenCodeSend(
 ): Promise<OpenCodeExecutionResult> {
   if (preflight.slash && preflight.commandMatch) {
     if (!guard.isCurrent()) return { kind: 'stale' };
+    const command = buildOpenCodeCommand(
+      params,
+      preflight.attachments,
+      preflight.transformText(preflight.slash.arguments),
+    );
     await params.sendCommand(
       preflight.sessionId,
       preflight.commandMatch,
-      preflight.transformText(preflight.slash.arguments),
+      command.arguments,
+      command.parts,
     );
     return guard.isCurrent() ? { kind: 'command' } : { kind: 'stale' };
   }

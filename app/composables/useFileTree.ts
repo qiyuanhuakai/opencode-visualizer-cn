@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue';
+import { computed, onScopeDispose, ref, watch } from 'vue';
 import type { Ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { FileWatcherUpdatedPacket } from '../types/sse';
@@ -12,6 +12,7 @@ import type {
 import { getActiveBackendAdapter } from '../backends/registry';
 import { normalizeDirectory } from '../utils/path';
 import { uniqueBy } from '../utils/array';
+import { createWorkspaceRefreshLoop } from '../utils/workspaceRefreshLoop';
 import { usePtyOneshot } from './usePtyOneshot';
 
 const GIT_ENV_PREAMBLE = [
@@ -76,6 +77,7 @@ type FileTreeStrategy = 'filesystem' | 'git';
 type UseFileTreeOptions = {
   activeDirectory: Ref<string>;
   activeBackendKind?: Ref<string>;
+  refreshEnabled?: Readonly<Ref<boolean>>;
 };
 
 type DirectorySidebarSnapshot = {
@@ -128,7 +130,9 @@ let branchEntriesLoadedForDirectory = false;
 let gitStatusRefreshInFlight: Promise<void> | null = null;
 let gitStatusRefreshQueued = false;
 let gitStatusRefreshQueuedIncludeFileSnapshot = false;
+let gitStatusRefreshQueuedToken = 0;
 let untrackedCountRefreshInFlight: Promise<void> | null = null;
+let workspaceRefreshToken = 0;
 const pendingFileWatcherEvents: FileWatcherUpdatedPacket[] = [];
 
 const BRANCH_LIST_FORMAT =
@@ -290,6 +294,10 @@ function isPathInsideDirectory(path: string, directory: string) {
   );
 }
 
+function isRefreshCurrent(directory: string, token: number) {
+  return token === workspaceRefreshToken && getOptions().activeDirectory.value.trim() === directory;
+}
+
 function parentDirectoryPath(relativePath: string) {
   if (!relativePath.includes('/')) return '.';
   return relativePath.slice(0, relativePath.lastIndexOf('/')) || '.';
@@ -326,7 +334,7 @@ function replaceDirectoryFilesInCache(parentPath: string, children: TreeNode[]) 
     if (!filePath.startsWith(prefix)) return true;
     return filePath.slice(prefix.length).includes('/');
   });
-  const next = uniqueBy([...preserved, ...directFiles], x => x).sort((a, b) =>
+  const next = uniqueBy([...preserved, ...directFiles], (x) => x).sort((a, b) =>
     a.localeCompare(b),
   );
   const changed =
@@ -434,7 +442,10 @@ function parseShortstatLine(line: string): { additions: number; deletions: numbe
   };
 }
 
-function parseGitStatusOutput(output: string): { status: GitStatus; repoRelativeCwdPrefix: string } {
+function parseGitStatusOutput(output: string): {
+  status: GitStatus;
+  repoRelativeCwdPrefix: string;
+} {
   const cleaned = stripAnsi(output).replace(/\r/g, '');
   const tokens = cleaned.split('\0');
 
@@ -591,7 +602,10 @@ function mapGitStatusPathToActiveDirectory(path: string, repoRelativeCwdPrefix: 
   return normalizedPath;
 }
 
-function normalizeGitStatusToActiveDirectory(status: GitStatus, repoRelativeCwdPrefix: string): GitStatus {
+function normalizeGitStatusToActiveDirectory(
+  status: GitStatus,
+  repoRelativeCwdPrefix: string,
+): GitStatus {
   return {
     ...status,
     files: status.files.map((entry) => ({
@@ -715,14 +729,19 @@ async function retryOnce<T>(runner: (attempt: number) => Promise<T>, shouldRetry
   throw lastError;
 }
 
-async function listFilesWithRetry(directory: string, path: string) {
+async function listFilesWithRetry(
+  directory: string,
+  path: string,
+  refreshToken = workspaceRefreshToken,
+) {
   const data = await retryOnce(
     async () => {
+      if (!isRefreshCurrent(directory, refreshToken)) return [];
       const listFiles = getActiveBackendAdapter().listFiles;
       if (!listFiles) throw new Error('Active backend does not support file listing.');
       return await listFiles({ directory, path });
     },
-    () => getOptions().activeDirectory.value.trim() === directory,
+    () => isRefreshCurrent(directory, refreshToken),
   );
   return Array.isArray(data) ? data : [];
 }
@@ -782,6 +801,7 @@ function buildFullTreeFromPaths(allPaths: string[]): TreeNode[] {
 }
 
 async function detectFileTreeStrategy(directory: string): Promise<FileTreeStrategy> {
+  const refreshToken = workspaceRefreshToken;
   try {
     const raw = await retryOnce(
       async () => {
@@ -789,7 +809,7 @@ async function detectFileTreeStrategy(directory: string): Promise<FileTreeStrate
         if (!getVcsInfo) throw new Error('Active backend does not support VCS info.');
         return await getVcsInfo(directory);
       },
-      () => getOptions().activeDirectory.value.trim() === directory,
+      () => isRefreshCurrent(directory, refreshToken),
     );
     if (!raw || typeof raw !== 'object') return 'filesystem';
     const branch = (raw as Record<string, unknown>).branch;
@@ -798,38 +818,6 @@ async function detectFileTreeStrategy(directory: string): Promise<FileTreeStrate
   } catch {
     return 'filesystem';
   }
-}
-
-function deepMergeGitTree(existing: TreeNode[], incoming: TreeNode[]): TreeNode[] {
-  if (existing.length === 0) return incoming;
-  const existingByPath = new Map(existing.map((node) => [node.path, node]));
-  const incomingByPath = new Map(incoming.map((node) => [node.path, node]));
-
-  const merged = incoming.map((node) => {
-    const prev = existingByPath.get(node.path);
-    if (!prev || node.type !== 'directory' || prev.type !== 'directory') return node;
-
-    if (prev.loaded && Array.isArray(prev.children)) {
-      // Already expanded via /file — keep its children (includes ignored items)
-      return { ...node, children: prev.children, loaded: true };
-    }
-
-    // Not loaded, but recurse to preserve any loaded subdirectories deeper down
-    if (Array.isArray(prev.children) && Array.isArray(node.children)) {
-      return { ...node, children: deepMergeGitTree(prev.children, node.children) };
-    }
-
-    return node;
-  });
-
-  // Preserve existing nodes not in incoming (e.g., ignored root entries from /file)
-  for (const [path, node] of existingByPath) {
-    if (!incomingByPath.has(path)) {
-      merged.push(node);
-    }
-  }
-
-  return sortTreeNodes(merged);
 }
 
 function mergeApiWithGitChildren(apiChildren: TreeNode[], gitChildren: TreeNode[]): TreeNode[] {
@@ -844,7 +832,7 @@ function mergeApiWithGitChildren(apiChildren: TreeNode[], gitChildren: TreeNode[
       // Directory exists in both — use API metadata but keep git-derived subtree
       merged.push({
         ...apiNode,
-        children: gitNode.children,
+        children: apiNode.loaded ? apiNode.children : gitNode.children,
       });
     } else {
       merged.push(apiNode);
@@ -860,9 +848,74 @@ function mergeApiWithGitChildren(apiChildren: TreeNode[], gitChildren: TreeNode[
   return sortTreeNodes(merged);
 }
 
-async function loadIgnoredRootNodes(directory: string): Promise<TreeNode[]> {
+async function refreshLoadedDirectory(
+  directory: string,
+  apiNode: TreeNode,
+  gitNode: TreeNode | undefined,
+  previousNode: TreeNode,
+  refreshToken: number,
+): Promise<TreeNode> {
+  const list = await listFilesWithRetry(directory, apiNode.path, refreshToken);
+  if (!isRefreshCurrent(directory, refreshToken)) return apiNode;
+
+  const apiChildren = buildTreeNodes(list, directory, apiNode.path);
+  const gitChildren = gitNode?.type === 'directory' ? (gitNode.children ?? []) : [];
+  const mergedChildren = mergeApiWithGitChildren(apiChildren, gitChildren);
+  const previousByPath = new Map((previousNode.children ?? []).map((node) => [node.path, node]));
+  const gitByPath = new Map(gitChildren.map((node) => [node.path, node]));
+  const children = await Promise.all(
+    mergedChildren.map(async (child) => {
+      const previousChild = previousByPath.get(child.path);
+      if (
+        child.type !== 'directory' ||
+        previousChild?.type !== 'directory' ||
+        !previousChild.loaded
+      ) {
+        return child;
+      }
+      return refreshLoadedDirectory(
+        directory,
+        child,
+        gitByPath.get(child.path),
+        previousChild,
+        refreshToken,
+      );
+    }),
+  );
+
+  return { ...apiNode, children: sortTreeNodes(children), loaded: true };
+}
+
+async function reconcileLoadedRootNodes(
+  directory: string,
+  gitTree: TreeNode[],
+  ignoredRoot: TreeNode[],
+  previousTree: TreeNode[],
+  refreshToken: number,
+) {
+  const gitByPath = new Map(gitTree.map((node) => [node.path, node]));
+  const previousByPath = new Map(previousTree.map((node) => [node.path, node]));
+  const mergedRoot = mergeApiWithGitChildren(ignoredRoot, gitTree);
+  return Promise.all(
+    mergedRoot.map(async (node) => {
+      const previousNode = previousByPath.get(node.path);
+      if (node.type !== 'directory' || previousNode?.type !== 'directory' || !previousNode.loaded) {
+        return node;
+      }
+      return refreshLoadedDirectory(
+        directory,
+        node,
+        gitByPath.get(node.path),
+        previousNode,
+        refreshToken,
+      );
+    }),
+  );
+}
+
+async function loadIgnoredRootNodes(directory: string, refreshToken: number): Promise<TreeNode[]> {
   try {
-    const list = await listFilesWithRetry(directory, '.');
+    const list = await listFilesWithRetry(directory, '.', refreshToken);
     const nodes = buildTreeNodes(list, directory, '.');
     return nodes.filter((node) => node.ignored);
   } catch {
@@ -878,15 +931,15 @@ function parseGitFileList(output: string): string[] {
     .filter(Boolean);
 }
 
-async function refreshGitFileSnapshot() {
+async function refreshGitFileSnapshot(refreshToken = workspaceRefreshToken) {
   const { activeDirectory } = getOptions();
   const directory = activeDirectory.value.trim();
-  if (!directory) return;
+  if (!directory || !isRefreshCurrent(directory, refreshToken)) return;
 
   const { runOneShotPtyCommand } = usePtyOneshot();
+  const generation = ++gitFileListGeneration;
   await retryOnce(
     async () => {
-      const generation = ++gitFileListGeneration;
       const output = await runOneShotPtyCommand('bash', [
         '--noprofile',
         '--norc',
@@ -894,28 +947,27 @@ async function refreshGitFileSnapshot() {
         GIT_FILE_LIST_SCRIPT,
       ]);
       if (generation !== gitFileListGeneration) return;
-      if (activeDirectory.value.trim() !== directory) return;
+      if (!isRefreshCurrent(directory, refreshToken)) return;
 
       const allPaths = parseGitFileList(output);
-      if (allPaths.length === 0) {
-        treeNodes.value = [];
-        files.value = [];
-        fileCacheVersion.value += 1;
-        cacheCurrentDirectoryState(directory);
-        return;
-      }
-
       const gitTree = buildFullTreeFromPaths(allPaths);
-      const ignoredRoot = await loadIgnoredRootNodes(directory);
+      const previousTree = treeNodes.value;
+      const ignoredRoot = await loadIgnoredRootNodes(directory, refreshToken);
       if (generation !== gitFileListGeneration) return;
-      if (activeDirectory.value.trim() !== directory) return;
+      if (!isRefreshCurrent(directory, refreshToken)) return;
 
-      const mergedRoot = ignoredRoot.length > 0 ? deepMergeGitTree(ignoredRoot, gitTree) : gitTree;
-      // On manual refresh, replace the tree entirely rather than merging with old state.
-      // This ensures deleted files are removed from the sidebar.
-      treeNodes.value = mergedRoot;
+      const nextTree = await reconcileLoadedRootNodes(
+        directory,
+        gitTree,
+        ignoredRoot,
+        previousTree,
+        refreshToken,
+      );
+      if (generation !== gitFileListGeneration) return;
+      if (!isRefreshCurrent(directory, refreshToken)) return;
+      treeNodes.value = nextTree;
 
-      const sorted = uniqueBy(allPaths, x => x).sort((a, b) => a.localeCompare(b));
+      const sorted = uniqueBy(allPaths, (x) => x).sort((a, b) => a.localeCompare(b));
       if (
         sorted.length !== files.value.length ||
         sorted.some((path, index) => path !== files.value[index])
@@ -925,7 +977,7 @@ async function refreshGitFileSnapshot() {
       }
       cacheCurrentDirectoryState(directory);
     },
-    () => activeDirectory.value.trim() === directory,
+    () => isRefreshCurrent(directory, refreshToken),
   );
 }
 
@@ -942,7 +994,9 @@ function setGitStatus(next: GitStatus | null) {
   gitStatusByPath.value = byPath;
 }
 
-function updateUntrackedSummary(updater: (current: GitStatus['untracked']) => GitStatus['untracked']) {
+function updateUntrackedSummary(
+  updater: (current: GitStatus['untracked']) => GitStatus['untracked'],
+) {
   if (!gitStatus.value) return;
   gitStatus.value = {
     ...gitStatus.value,
@@ -951,7 +1005,7 @@ function updateUntrackedSummary(updater: (current: GitStatus['untracked']) => Gi
   cacheCurrentDirectoryState(getOptions().activeDirectory.value.trim());
 }
 
-async function refreshGitStatusOnly() {
+async function refreshGitStatusOnly(refreshToken = workspaceRefreshToken) {
   const { activeDirectory } = getOptions();
   const directory = activeDirectory.value.trim();
   if (!directory) {
@@ -959,10 +1013,11 @@ async function refreshGitStatusOnly() {
     return;
   }
 
+  if (!isRefreshCurrent(directory, refreshToken)) return;
   const { runOneShotPtyCommand } = usePtyOneshot();
+  const generation = ++gitStatusGeneration;
   await retryOnce(
     async () => {
-      const generation = ++gitStatusGeneration;
       const output = await runOneShotPtyCommand('bash', [
         '--noprofile',
         '--norc',
@@ -970,6 +1025,7 @@ async function refreshGitStatusOnly() {
         GIT_STATUS_SCRIPT,
       ]);
       if (generation !== gitStatusGeneration) return;
+      if (!isRefreshCurrent(directory, refreshToken)) return;
       if (!output.trim()) {
         setGitStatus(null);
         cacheCurrentDirectoryState(directory);
@@ -991,14 +1047,14 @@ async function refreshGitStatusOnly() {
       setGitStatus(normalizedStatus);
       cacheCurrentDirectoryState(directory);
     },
-    () => activeDirectory.value.trim() === directory,
+    () => isRefreshCurrent(directory, refreshToken),
   );
 }
 
-async function refreshUntrackedEligibleCount() {
+async function refreshUntrackedEligibleCount(refreshToken = workspaceRefreshToken) {
   const { activeDirectory } = getOptions();
   const directory = activeDirectory.value.trim();
-  if (!directory || !gitStatus.value) return;
+  if (!directory || !gitStatus.value || !isRefreshCurrent(directory, refreshToken)) return;
   if (untrackedCountRefreshInFlight) return untrackedCountRefreshInFlight;
 
   updateUntrackedSummary((current) => ({
@@ -1007,11 +1063,11 @@ async function refreshUntrackedEligibleCount() {
   }));
 
   const { runOneShotPtyCommand } = usePtyOneshot();
+  const generation = ++untrackedCountGeneration;
   untrackedCountRefreshInFlight = (async () => {
     try {
       await retryOnce(
         async () => {
-          const generation = ++untrackedCountGeneration;
           const output = await runOneShotPtyCommand('bash', [
             '--noprofile',
             '--norc',
@@ -1019,21 +1075,21 @@ async function refreshUntrackedEligibleCount() {
             GIT_UNTRACKED_COUNT_SCRIPT,
           ]);
           if (generation !== untrackedCountGeneration) return;
-          if (activeDirectory.value.trim() !== directory) return;
+          if (!isRefreshCurrent(directory, refreshToken)) return;
           const match = output.match(/\d+/);
           const eligibleFileCount = match ? Number.parseInt(match[0], 10) || 0 : 0;
           updateUntrackedSummary(() => ({ eligibleFileCount, pending: false }));
         },
-        () => activeDirectory.value.trim() === directory,
+        () => isRefreshCurrent(directory, refreshToken),
       );
     } catch {
-      if (activeDirectory.value.trim() !== directory) return;
+      if (!isRefreshCurrent(directory, refreshToken)) return;
       updateUntrackedSummary((current) => ({
         eligibleFileCount: current?.eligibleFileCount ?? 0,
         pending: false,
       }));
     } finally {
-      if (activeDirectory.value.trim() === directory) {
+      if (isRefreshCurrent(directory, refreshToken)) {
         untrackedCountRefreshInFlight = null;
       }
     }
@@ -1042,12 +1098,17 @@ async function refreshUntrackedEligibleCount() {
   return untrackedCountRefreshInFlight;
 }
 
-async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
+async function refreshGitStatus(
+  options: RefreshGitStatusOptions = {},
+  refreshToken = workspaceRefreshToken,
+) {
+  if (refreshToken !== workspaceRefreshToken) return;
   const includeFileSnapshot = options.includeFileSnapshot ?? true;
   if (gitStatusRefreshInFlight) {
-    if (!gitStatusRefreshQueued) {
+    if (!gitStatusRefreshQueued || gitStatusRefreshQueuedToken !== refreshToken) {
       gitStatusRefreshQueued = true;
       gitStatusRefreshQueuedIncludeFileSnapshot = includeFileSnapshot;
+      gitStatusRefreshQueuedToken = refreshToken;
     } else {
       gitStatusRefreshQueuedIncludeFileSnapshot ||= includeFileSnapshot;
     }
@@ -1058,25 +1119,28 @@ async function refreshGitStatus(options: RefreshGitStatusOptions = {}) {
   gitStatusRefreshInFlight = (async () => {
     try {
       if (!includeFileSnapshot || fileTreeStrategy.value !== 'git') {
-        await refreshGitStatusOnly().catch(() => {});
+        await refreshGitStatusOnly(refreshToken).catch(() => {});
         return;
       }
       const [statusResult] = await Promise.allSettled([
-        refreshGitStatusOnly(),
-        refreshGitFileSnapshot(),
+        refreshGitStatusOnly(refreshToken),
+        refreshGitFileSnapshot(refreshToken),
       ]);
       if (statusResult.status === 'rejected') {
         return;
       }
-      void refreshUntrackedEligibleCount();
+      void refreshUntrackedEligibleCount(refreshToken);
     } finally {
       gitStatusRefreshInFlight = null;
       if (gitStatusRefreshQueued) {
         const nextIncludeFileSnapshot = gitStatusRefreshQueuedIncludeFileSnapshot;
+        const nextRefreshToken = gitStatusRefreshQueuedToken;
         gitStatusRefreshQueued = false;
         gitStatusRefreshQueuedIncludeFileSnapshot = false;
+        gitStatusRefreshQueuedToken = 0;
         queueMicrotask(() => {
-          void refreshGitStatus({ includeFileSnapshot: nextIncludeFileSnapshot });
+          if (nextRefreshToken !== workspaceRefreshToken) return;
+          void refreshGitStatus({ includeFileSnapshot: nextIncludeFileSnapshot }, nextRefreshToken);
         });
       }
     }
@@ -1174,11 +1238,12 @@ async function refreshBranchEntries(options: RefreshBranchEntriesOptions = {}) {
   }
 
   branchListLoading.value = true;
+  const refreshToken = workspaceRefreshToken;
   const { runOneShotPtyCommand } = usePtyOneshot();
+  const generation = ++branchListGeneration;
   try {
     await retryOnce(
       async () => {
-        const generation = ++branchListGeneration;
         const output = await runOneShotPtyCommand('git', [
           '--no-pager',
           '-c',
@@ -1192,17 +1257,18 @@ async function refreshBranchEntries(options: RefreshBranchEntriesOptions = {}) {
           `--format=${BRANCH_LIST_FORMAT}`,
         ]);
         if (generation !== branchListGeneration) return;
+        if (!isRefreshCurrent(directory, refreshToken)) return;
         branchEntries.value = parseBranchEntries(output);
         branchEntriesLoadedForDirectory = true;
         cacheCurrentDirectoryState(directory);
       },
-      () => activeDirectory.value.trim() === directory,
+      () => isRefreshCurrent(directory, refreshToken),
     );
   } catch {
-    if (activeDirectory.value.trim() !== directory) return;
+    if (!isRefreshCurrent(directory, refreshToken)) return;
     branchEntriesLoadedForDirectory = false;
   } finally {
-    if (activeDirectory.value.trim() === directory) {
+    if (isRefreshCurrent(directory, refreshToken)) {
       branchListLoading.value = false;
     }
   }
@@ -1247,13 +1313,13 @@ async function loadSingleDirectory(path: string) {
       const apiChildren = buildTreeNodes(list, directory, path);
       const parent = findTreeNodeByPath(treeNodes.value, path);
       const gitChildren = parent?.children ?? [];
-       const merged = mergeApiWithGitChildren(apiChildren, gitChildren);
-       treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, merged);
-       cacheCurrentDirectoryState(directory);
-     } catch (error) {
-       console.error('[useFileTree] loadSingleDirectory (git) failed:', error);
-       return;
-     }
+      const merged = mergeApiWithGitChildren(apiChildren, gitChildren);
+      treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, merged);
+      cacheCurrentDirectoryState(directory);
+    } catch (error) {
+      console.error('[useFileTree] loadSingleDirectory (git) failed:', error);
+      return;
+    }
     return;
   }
 
@@ -1272,20 +1338,21 @@ async function loadSingleDirectory(path: string) {
       return;
     }
 
-     const parent = findTreeNodeByPath(treeNodes.value, path);
-     const mergedChildren = mergeTreeNodeChildren(parent?.children ?? [], children);
-     treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, mergedChildren);
-     replaceDirectoryFilesInCache(path, mergedChildren);
-     cacheCurrentDirectoryState(directory);
-   } catch (error) {
-     console.error('[useFileTree] loadSingleDirectory (fs) failed:', error);
-   }
+    const parent = findTreeNodeByPath(treeNodes.value, path);
+    const mergedChildren = mergeTreeNodeChildren(parent?.children ?? [], children);
+    treeNodes.value = updateTreeNodeChildren(treeNodes.value, path, mergedChildren);
+    replaceDirectoryFilesInCache(path, mergedChildren);
+    cacheCurrentDirectoryState(directory);
+  } catch (error) {
+    console.error('[useFileTree] loadSingleDirectory (fs) failed:', error);
+  }
 }
 
 function feed(packet: FileWatcherUpdatedPacket) {
   const options = getOptions();
   const directory = options.activeDirectory.value.trim();
   if (!directory) return;
+  if (!(options.refreshEnabled?.value ?? true)) return;
   if (!isPathInsideDirectory(packet.file, directory)) return;
   if (treeLoading.value) {
     pendingFileWatcherEvents.push(packet);
@@ -1391,7 +1458,7 @@ async function rebuildFileCache() {
 
     if (buildId !== fileCacheBuildId) return;
     if (options.activeDirectory.value.trim() !== directory) return;
-    files.value = uniqueBy(collected, x => x).sort((a, b) => a.localeCompare(b));
+    files.value = uniqueBy(collected, (x) => x).sort((a, b) => a.localeCompare(b));
     fileCacheVersion.value += 1;
     cacheCurrentDirectoryState(directory);
   } catch (error) {
@@ -1414,6 +1481,29 @@ async function reloadTree() {
   await rebuildFileCache();
 }
 
+async function refreshWorkspaceFromDisk() {
+  const directory = getOptions().activeDirectory.value.trim();
+  if (!directory) return;
+  if (fileTreeStrategy.value === 'git') {
+    await refreshGitStatus({ includeFileSnapshot: true });
+    return;
+  }
+  await Promise.allSettled([reloadTree(), refreshGitStatus({ includeFileSnapshot: false })]);
+}
+
+function invalidateWorkspaceRefreshes() {
+  workspaceRefreshToken += 1;
+  fileCacheBuildId += 1;
+  gitStatusGeneration += 1;
+  gitFileListGeneration += 1;
+  untrackedCountGeneration += 1;
+  branchListGeneration += 1;
+  untrackedCountRefreshInFlight = null;
+  gitStatusRefreshQueued = false;
+  gitStatusRefreshQueuedIncludeFileSnapshot = false;
+  gitStatusRefreshQueuedToken = 0;
+}
+
 function initializeFileTree(options: UseFileTreeOptions) {
   if (boundOptions) return;
   boundOptions = options;
@@ -1424,12 +1514,7 @@ function initializeFileTree(options: UseFileTreeOptions) {
       clearScheduledDirectoryReloads();
       clearScheduledGitStatusReload();
 
-      fileCacheBuildId += 1;
-      gitStatusGeneration += 1;
-      gitFileListGeneration += 1;
-      untrackedCountGeneration += 1;
-      branchListGeneration += 1;
-      untrackedCountRefreshInFlight = null;
+      invalidateWorkspaceRefreshes();
       treeLoading.value = false;
       branchListLoading.value = false;
       expandedTreePathSet.value = new Set();
@@ -1450,6 +1535,31 @@ function initializeFileTree(options: UseFileTreeOptions) {
     },
     { immediate: true },
   );
+
+  const workspaceRefreshLoop = createWorkspaceRefreshLoop(refreshWorkspaceFromDisk, {
+    isEnabled: () => options.refreshEnabled?.value ?? true,
+  });
+  workspaceRefreshLoop.start();
+  const stopRefreshEnabledWatch = options.refreshEnabled
+    ? watch(
+        options.refreshEnabled,
+        (enabled) => {
+          if (!enabled) {
+            clearScheduledDirectoryReloads();
+            clearScheduledGitStatusReload();
+            invalidateWorkspaceRefreshes();
+            treeLoading.value = false;
+            branchListLoading.value = false;
+          }
+          workspaceRefreshLoop.sync();
+        },
+        { flush: 'sync' },
+      )
+    : undefined;
+  onScopeDispose(() => {
+    stopRefreshEnabledWatch?.();
+    workspaceRefreshLoop.stop();
+  });
 }
 
 function getT() {
@@ -1466,8 +1576,6 @@ function getT() {
   }
   return tFunction;
 }
-
-
 
 export function useFileTree(options?: UseFileTreeOptions) {
   const { t } = useI18n();

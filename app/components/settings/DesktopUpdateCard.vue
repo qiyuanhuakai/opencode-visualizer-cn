@@ -9,10 +9,17 @@
         <span class="desktop-badge">{{ t(`desktopSettings.updates.installKind.${state.installKind}`) }}</span>
       </span>
     </div>
-    <div class="desktop-update-versions">
-      <span v-if="state.component === 'app'">{{ t('desktopSettings.updates.currentVersion', { version: state.currentVersion ?? t('desktopSettings.updates.unknownVersion') }) }}</span>
-      <span v-if="state.component === 'bridge' && connectedBridgeText !== null" data-testid="bridge-connected-version">{{ connectedBridgeText }}</span>
-      <span v-if="state.availableVersion">{{ t(state.component === 'bridge' ? 'desktopSettings.updates.availableLocalVersion' : 'desktopSettings.updates.availableVersion', { version: state.availableVersion }) }}</span>
+    <div class="desktop-update-summary">
+      <div class="desktop-update-versions">
+        <span v-if="state.component === 'app'">{{ t('desktopSettings.updates.currentVersion', { version: state.currentVersion ?? t('desktopSettings.updates.unknownVersion') }) }}</span>
+        <span v-if="state.component === 'bridge' && connectedBridgeText !== null" data-testid="bridge-connected-version">{{ connectedBridgeText }}</span>
+        <span v-if="state.availableVersion">{{ t(state.component === 'bridge' ? 'desktopSettings.updates.availableLocalVersion' : 'desktopSettings.updates.availableVersion', { version: state.availableVersion }) }}</span>
+      </div>
+      <div v-if="state.phase !== 'unsupported'" class="desktop-update-actions">
+        <button type="button" class="desktop-button" :disabled="busy" @click="$emit('check')">
+          {{ t(state.phase === 'checking' ? 'desktopSettings.updates.actions.checking' : 'desktopSettings.updates.actions.check') }}
+        </button>
+      </div>
     </div>
     <div v-if="state.phase === 'downloading' && state.progress !== null" class="desktop-progress"
       role="progressbar" :aria-label="t('desktopSettings.updates.progressLabel')"
@@ -24,10 +31,7 @@
     <div v-if="state.phase === 'installer-opened'" class="desktop-notice">{{ t('desktopSettings.updates.manualInstallerOpenedNotice') }}</div>
     <div v-if="state.component === 'bridge' && interruptPhases.has(state.phase)" class="desktop-notice">{{ t('desktopSettings.updates.bridgeInterruptNotice') }}</div>
     <div v-if="state.phase === 'unsupported'" class="desktop-notice">{{ t('desktopSettings.updates.unsupportedNotice') }}</div>
-    <div v-else class="desktop-update-actions">
-      <button type="button" class="desktop-button" :disabled="busy" @click="$emit('check')">
-        {{ t(state.phase === 'checking' ? 'desktopSettings.updates.actions.checking' : 'desktopSettings.updates.actions.check') }}
-      </button>
+    <div v-if="hasExtraActions" class="desktop-update-extra-actions">
       <button v-if="state.phase === 'available'" type="button" class="desktop-button" :disabled="busy" @click="$emit('download')">
         {{ t('desktopSettings.updates.actions.download') }}
       </button>
@@ -56,6 +60,12 @@ const props = defineProps<{
 defineEmits<{ check: []; download: []; install: [] }>();
 const { t } = useI18n();
 const errorText = computed(() => props.actionError ?? (props.state.phase === 'error' ? props.state.error : null));
+const hasExtraActions = computed(
+  () =>
+    props.state.phase === 'available' ||
+    props.state.phase === 'downloaded' ||
+    props.state.phase === 'error',
+);
 const connectedBridgeText = computed(() => {
   const bridge = props.connectedBridge;
   if (!bridge) return null;

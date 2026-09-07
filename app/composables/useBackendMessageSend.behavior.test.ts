@@ -149,7 +149,8 @@ describe('useBackendMessageSend behavior', () => {
     expect(base.isSending.value).toBe(false);
   });
 
-  it('retains attachments after a successful OpenCode command', async () => {
+  it('sends attachments as file parts with an OpenCode command and clears them', async () => {
+    // Given: a recognized slash command with a queued image attachment.
     const base = createBaseParams();
     base.messageInput.value = '/fix issue';
     base.attachments.value = [imageAttachment()];
@@ -162,11 +163,105 @@ describe('useBackendMessageSend behavior', () => {
       sendCommand,
     });
 
+    // When: the command is sent.
     await runtime.sendMessage();
 
-    expect(sendCommand).toHaveBeenCalledWith('session-1', { name: 'fix' }, 'issue');
-    expect(base.attachments.value).toHaveLength(1);
+    // Then: the attachment rides the command payload as a file part and is consumed.
+    expect(sendCommand).toHaveBeenCalledWith('session-1', { name: 'fix' }, 'issue', [
+      { type: 'file', mime: 'image/png', url: 'data:image/png;base64,AA==', filename: 'image.png' },
+    ]);
+    expect(base.attachments.value).toEqual([]);
     expect(base.clearComposerDraftForCurrentContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('folds line-comment notes into command arguments and keeps the file part', async () => {
+    // Given: a recognized slash command with a line-comment attachment.
+    const base = createBaseParams();
+    base.messageInput.value = '/fix issue';
+    base.attachments.value = [
+      {
+        id: 'c1',
+        filename: 'a.ts:1-2',
+        mime: 'text/plain',
+        dataUrl: '',
+        lineComment: { path: 'src/a.ts', startLine: 1, endLine: 2, text: 'note' },
+      },
+    ];
+    const sendCommand = vi.fn().mockResolvedValue(undefined);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('opencode'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi: createCodexApi(),
+      sendCommand,
+    });
+
+    // When: the command is sent.
+    await runtime.sendMessage();
+
+    // Then: the note text joins the arguments and the referenced lines ride as a file part.
+    expect(sendCommand).toHaveBeenCalledWith(
+      'session-1',
+      { name: 'fix' },
+      'issue\nsrc/a.ts:1-2:note',
+      [{ type: 'file', mime: 'text/plain', url: 'src/a.ts:1-2', filename: 'a.ts' }],
+    );
+    expect(base.attachments.value).toEqual([]);
+  });
+
+  it('clears command attachments only after the forwarded request resolves', async () => {
+    // Given: a recognized slash command with an attachment and a pending command request.
+    const pending = deferred<void>();
+    const sendCommand = vi.fn().mockReturnValue(pending.promise);
+    const base = createBaseParams();
+    base.messageInput.value = '/fix issue';
+    base.attachments.value = [imageAttachment()];
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('opencode'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi: createCodexApi(),
+      sendCommand,
+    });
+
+    // When: the send starts but the forwarded request has not resolved yet.
+    const sending = runtime.sendMessage();
+    await vi.waitFor(() => expect(sendCommand).toHaveBeenCalledTimes(1));
+
+    // Then: the attachment is still queued.
+    expect(base.attachments.value).toHaveLength(1);
+
+    // When: the forwarded request resolves.
+    pending.resolve(undefined);
+    await sending;
+
+    // Then: the attachment is cleared.
+    expect(base.attachments.value).toEqual([]);
+  });
+
+  it('retains attachments when an OpenCode command send fails', async () => {
+    // Given: a recognized slash command with a queued attachment and a failing command request.
+    const base = createBaseParams();
+    base.messageInput.value = '/fix issue';
+    base.attachments.value = [imageAttachment()];
+    const sendCommand = vi.fn().mockRejectedValue(new Error('command rejected'));
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('opencode'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi: createCodexApi(),
+      sendCommand,
+    });
+
+    // When: the forwarded command request rejects.
+    await runtime.sendMessage();
+
+    // Then: the attachment is retained for retry and the failure is surfaced.
+    expect(base.attachments.value).toHaveLength(1);
+    expect(base.setSendStatusKey).toHaveBeenLastCalledWith('app.error.sendFailed', {
+      message: 'Error: command rejected',
+    });
+    expect(base.isSending.value).toBe(false);
   });
 
   it('keeps ACP isSending true while prompt is pending', async () => {

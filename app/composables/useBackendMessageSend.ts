@@ -53,7 +53,7 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
   ) {
     if (!guard.isCurrent() || result.kind === 'stale' || result.kind === 'no-directory') return;
     params.setSendStatusKey('app.status.sent');
-    if (result.kind === 'prompt') params.attachments.value = [];
+    if (result.kind === 'prompt' || result.kind === 'command') params.attachments.value = [];
     params.clearComposerDraftForCurrentContext();
   }
 

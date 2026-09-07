@@ -32,7 +32,7 @@
 | 功能类别 | 改进内容 | 状态 |
 |---|---|---|
 | **国际化 (i18n)** | 完整 i18n 框架支持，支持简体中文、繁体中文、日语、世界语 | ✅ 已上线 |
-| **字体管理** | 支持设置 Shell 字体、界面等宽字体，支持设置终端/代码/消息/UI 字体大小，系统字体自动发现 | 🅱️ Beta |
+| **字体管理** | 支持设置 Shell 字体、界面等宽字体，支持设置终端/代码/消息/UI/侧边栏字体大小，系统字体自动发现 | 🅱️ Beta |
 | **供应商与模型管理** | 查看/启用/禁用本地模型和供应商；支持所有提供商的 Web 端连接、自定义提供商连接；完善的 i18n 支持 | ✅ 已上线 |
 | **状态监控** | 查看服务器、MCP、LSP、Plugin、Skills 状态；支持关闭 MCP 连接；实时显示当前会话 Token 消耗（上下文限制、输入/输出/推理 Token、使用率进度条） | ✅ 已上线 |
 | **主题设置** | 自定义各卡片不同组件颜色 | 🅱️ Beta |
@@ -44,10 +44,13 @@
 | **会话重命名** | 重命名 Session | ✅ 已上线 |
 | **悬浮窗管理** | 全面覆盖的关闭/最小化按钮，底部 Dock 栏存放最小化窗口 | ✅ 已上线 |
 | **悬浮窗预览自动换行** | 在设置中开启/关闭；超大文件使用可变行高虚拟滚动，换行时仍限制实际挂载行数 | ✅ 已上线 |
-| **快捷命令** | 支持 `@` 显式召唤代理 | ✅ 已上线 |
+| **快捷命令** | 支持 `@` 显式召唤代理、`$` 召唤技能 | ✅ 已上线 |
+| **代码片段 (Snippets)** | 自定义触发词（`\name` 或 `::name`、`;name` 等带标点前缀）与动态变量（`{date}`、`{time}`、`{datetime}`、`{uuid}`、`{clipboard}`、`{activeFile}`、`{cwd}`、`{selection}`、`{cursor}`）；标签筛选、启用开关、导入/导出；可从收藏一键创建；输入触发词后显式选择补全展开 | ✅ 已上线 |
+| **本地文件编辑** | 内置 CodeMirror 6 编辑器，在 Web 端编辑本地文件：三个后端均通过桥接 `/fs/writeFile` 写入（OpenCode 经已连接的 vis_bridge 并回读校验，Codex / ACP 经各自桥接工作区接口）；编辑器字号、缩进与键盘快捷键可自定义；桌面端可用本地应用打开临时副本并将每次保存同步回后端，带磁盘变更冲突保护 | ✅ 已上线 |
+| **文件树 Git 操作** | 基于 git status 的文件树，支持暂存区/变更/全部三种视图与 diff 统计；分支搜索、创建（输入新名称）、切换、合并、变基、删除本地分支；ahead/behind 徽标提供 push/pull，分支与上游操作菜单提供 fetch。切换分支与 fetch 直接执行，合并/变基/删除/push/pull 需确认；这些用户触发的分支操作在一次性 PTY（`/bin/sh -c`）中运行，成功后自动关闭并刷新文件树 | ✅ 已上线 |
 | **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速、输出面板连续批次加载、悬浮窗弹出性能优化 | ✅ 已上线 |
-| **桌面应用** | Electron 桌面端打包，支持 Windows / macOS / Linux | ✅ 已上线 |
-| **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板；设置中开启实验性功能 | 🅰️ Alpha |
+| **桌面应用** | Electron 桌面端打包，支持 Windows / macOS / Linux；应用与 vis_bridge 的应用内更新检查与下载、系统托盘（最小化/关闭到托盘）、任务完成桌面通知与可选提示音 | ✅ 已上线 |
+| **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板，内置模型、技能、插件市场、MCP 服务器与本地文件管理；运行时检查器按方法探测 app-server 能力（支持/不支持/需开启实验开关）；设置中开启实验性功能 | 🅰️ Alpha |
 | **ACP Agent 集成 (Alpha)** | ACP v1 作为第三后端复用主会话界面；状态监控中管理 Pi、Oh My Pi、Kimi Code 等 ACP Agent | 🅰️ Alpha |
 | **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
 
@@ -207,6 +210,19 @@ forge setup
 
 ---
 
+## 代码片段（Snippets）使用说明
+
+代码片段让你把常用提示词保存为可复用模板，在输入框中通过触发词展开。
+
+1. 进入 Vis 的"设置" → "片段"，确认"启用片段"已开启
+2. 新建片段：设置触发词、正文，可附加标签便于筛选；保存自动完成
+3. 触发词默认以 `\name` 形式展开；使用 `::name`、`;name` 等带标点的触发词可自定义前缀
+4. 正文中可使用动态变量：`{date}`、`{time}`、`{datetime}`、`{uuid}`、`{clipboard}`、`{activeFile}`、`{cwd}`、`{selection}`，以及 `{cursor}` 指定展开后的光标位置
+5. 在输入框中输入触发词，从补全列表选择对应片段或按 Enter 展开；Space 和 Tab 保持原有输入行为
+6. 收藏夹中的消息可通过"从收藏创建片段"直接转为代码片段；片段支持导出/导入 JSON 文件
+
+---
+
 ## 功能展示
 
 ### 1. 主界面与简体中文支持
@@ -273,6 +289,10 @@ pnpm dev
 - 独立应用窗口，无需浏览器，支持 macOS 隐藏式标题栏
 - 安全沙箱（`contextIsolation` + `sandbox`），外部链接通过系统浏览器打开
 - 开发模式下自动处理 CORS，便于本地调试
+- 应用与 vis_bridge 分别检查更新：Windows / Linux 安装版支持应用内下载安装；macOS 应用下载 DMG 后手动安装，vis_bridge 使用 PKG 安装包。自动检查与自动下载默认关闭，安装始终需要确认
+- 可选"最小化到托盘"与"关闭到托盘"（默认关闭），托盘菜单可退出
+- 会话任务完成时弹出桌面通知（窗口聚焦时不打扰），可选系统提示音（默认关闭）；macOS ad-hoc 构建不支持原生通知，仅保留声音回退
+- 原生菜单跟随应用语言，保留退出与刷新入口
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
 - 运行时基线：Electron **43.4.1**（Chromium 150 / Node 24.18.1），Chromium 沙箱全程开启
 
@@ -340,21 +360,25 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | Category | Feature | Status |
 |---|---|---|
 | **Internationalization (i18n)** | Full i18n framework supporting English, Simplified Chinese, Traditional Chinese, Japanese, and Esperanto | ✅ Available |
-| **Font Management** | Shell font, UI monospace font, system font auto-discovery | 🅱️ Beta |
+| **Font Management** | Shell font, UI monospace font, adjustable terminal/code/message/UI/sidebar font sizes, system font auto-discovery | 🅱️ Beta |
 | **Provider & Model Management** | View/enable/disable local models and providers; support all provider Web connections and custom provider connections; full i18n support | ✅ Available |
 | **Status Monitor** | View server, MCP, LSP, Plugin, Skills status; close MCP connections; real-time session token usage (context limit, input/output/reasoning tokens, usage progress bar) | ✅ Available |
 | **Theme Settings** | Customize colors for different card components | 🅱️ Beta |
 | **Editor Integration** | Open text files with system `$EDITOR` | ✅ Available |
 | **Code Line Comment** | Drag to select range and append comment to input | ✅ Available |
-| **Session Tree Management** | Added a session tree panel in the sidebar; sessions are pinned based on a three-level hierarchy of project-sandbox-session. ✅ Available |
-| **Batch Management** | Top bar "Management" button for multi-select Session operations. ✅ Available |
-| **Unarchive** | Restore archived Sessions. ✅ Available |
-| **Rename Session** | Rename Session. ✅ Available |
+| **Session Tree Management** | Added a session tree panel in the sidebar; sessions are pinned based on a three-level hierarchy of project-sandbox-session | ✅ Available |
+| **Batch Management** | Top bar "Management" button for multi-select Session operations | ✅ Available |
+| **Unarchive** | Restore archived Sessions | ✅ Available |
+| **Rename Session** | Rename Session | ✅ Available |
 | **Floating Window Management** | Close/minimize buttons for all popups, bottom Dock bar | ✅ Available |
-| **Quick Commands** | `@` shortcut to explicitly summon agents | ✅ Available |
+| **Floating Preview Auto-Wrap** | Toggle in Settings; oversized files use variable-row-height virtual scrolling, still capping actually mounted rows while wrapped | ✅ Available |
+| **Quick Commands** | `@` to explicitly summon agents, `$` to invoke skills | ✅ Available |
+| **Snippets** | Custom triggers (`\name`, or punctuation-prefixed like `::name` / `;name`) with dynamic variables (`{date}`, `{time}`, `{datetime}`, `{uuid}`, `{clipboard}`, `{activeFile}`, `{cwd}`, `{selection}`, `{cursor}`); tag filtering, per-snippet toggle, JSON import/export; create snippets from favorites; type a trigger and pick its completion or press Enter to expand | ✅ Available |
+| **Local File Editing** | Embedded CodeMirror 6 editor; edit local files from the web UI on all three backends via the bridged `/fs/writeFile` (OpenCode writes through the connected vis_bridge with a verify-read, Codex / ACP through their bridged workspace endpoints); adjustable editor font size, indent, and remappable keyboard shortcuts; on desktop, open a temporary copy in a local application and sync each save back to the backend with on-disk conflict protection | ✅ Available |
+| **File Tree Git Actions** | git-status-based file tree with Index/Changes/All views and diff stats; branch search, create (prompts for a name), checkout, merge, rebase, and local branch deletion; push/pull on ahead/behind badges, and fetch in the branch/upstream action menu. Checkout and fetch run immediately; merge/rebase/delete/push/pull ask for confirmation; these user-triggered branch actions run in a one-shot PTY (`/bin/sh -c`) that closes on success and refreshes the file tree | ✅ Available |
 | **Performance** | Lazy loading for large sessions, background hydration, faster cold start, continuous batched output loading, floating window popup optimization | ✅ Available |
-| **Desktop App** | Electron desktop packaging for Windows / macOS / Linux | ✅ Available |
-| **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel; experimental features toggle in settings | 🅰️ Alpha |
+| **Desktop App** | Electron desktop packaging for Windows / macOS / Linux; in-app update checks and downloads for both the app and vis_bridge, system tray (minimize/close to tray), desktop completion notifications with optional sound | ✅ Available |
+| **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel with built-in model, skill, plugin marketplace, MCP server, and local file management; runtime inspector probes app-server capabilities per method (supported/unsupported/gated); experimental features toggle in settings | 🅰️ Alpha |
 | **ACP Agent Integration (Alpha)** | ACP v1 as a third backend using the shared main chat UI; manage Pi, Oh My Pi, Kimi Code, and other ACP agents in Status Monitor | 🅰️ Alpha |
 | **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
 
@@ -515,6 +539,19 @@ Drag the sidebar to resize it. Dragging it right past the hide threshold collaps
 
 ---
 
+## Snippets Usage
+
+Snippets save reusable prompt templates that expand from triggers in the composer.
+
+1. Go to Vis **Settings** → **Snippets** and make sure **Enable snippets** is on
+2. Create a snippet with a trigger, body, and optional tags for filtering; changes save automatically
+3. A plain trigger expands as `\name`; include punctuation such as `::name` or `;name` for a custom prefix
+4. The body supports dynamic variables: `{date}`, `{time}`, `{datetime}`, `{uuid}`, `{clipboard}`, `{activeFile}`, `{cwd}`, `{selection}`, plus `{cursor}` to place the caret after expansion
+5. Type a trigger in the composer and pick its completion or press Enter to expand; Space and Tab keep their normal behavior
+6. Favorited messages can be turned into snippets via **Create snippet from favorite**; snippets export and import as JSON files
+
+---
+
 ## Development & Building
 
 ### Web Development
@@ -532,8 +569,14 @@ This project supports packaging the Web UI as a native desktop application using
 - Standalone app window, no browser required, supports macOS hidden-inset title bar
 - Secure sandbox (`contextIsolation` + `sandbox`); external links open in system browser
 - Auto CORS handling in development mode for local debugging
+- Separate update checks for the app and vis_bridge: in-app download and install for Windows / Linux installed builds; on macOS, install the app manually from a DMG and vis_bridge from a PKG installer. Automatic checks and downloads are off by default and installing always asks for confirmation
+- Optional minimize-to-tray and close-to-tray (both off by default), with quit from the tray menu
+- Desktop notifications when a session task completes (suppressed while the window is focused), with an optional system sound (off by default); macOS ad-hoc builds do not support native notifications and keep only the sound fallback
+- Native menus follow the app language and keep only Quit and Reload entries
 - Supports NSIS / AppImage / deb / dmg installers for each platform
 - Runtime baseline: Electron **43.4.1** (Chromium 150 / Node 24.18.1), Chromium sandbox always enabled
+
+For details on in-app updates, tray behavior, and notification sounds, see [docs/desktop-integration.md](docs/desktop-integration.md).
 
 **macOS Signing Status (Important):** macOS builds are **ad-hoc signed** (no Developer ID, no assigned TeamIdentifier, no notarization; `mac.identity: "-"`, `mac.notarize: false`). Both Intel and Apple Silicon artifacts have passed `codesign --verify --deep --strict` on macOS runners, with checks against the app bundles mounted from DMG and extracted from ZIP. Gatekeeper still shows the standard "cannot verify the developer" warning; right-click → Open is required. macOS **Notifications are unavailable** and notarization is not configured. These limits are accepted decisions for this release — see `CHANGELOG.md`.
 

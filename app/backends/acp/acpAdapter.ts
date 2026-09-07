@@ -331,6 +331,7 @@ export class AcpAdapter implements BackendAdapter {
       agent?: string;
       model?: string;
       variant?: string;
+      parts?: Array<{ type: 'file'; mime: string; url: string; filename?: string }>;
     },
   ) {
     const argumentsText = payload.arguments.trim();
@@ -341,6 +342,7 @@ export class AcpAdapter implements BackendAdapter {
       variant: payload.variant,
       parts: [
         { type: 'text', text: `/${payload.command}${argumentsText ? ` ${argumentsText}` : ''}` },
+        ...(payload.parts ?? []),
       ],
     });
   }

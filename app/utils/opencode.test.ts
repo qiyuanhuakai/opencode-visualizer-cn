@@ -247,6 +247,44 @@ describe('opencode utilities', () => {
       );
     });
 
+    it('sendCommand includes attachment file parts in the POST body', async () => {
+      const mockFetch = vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: async () => ({}),
+        text: async () => '{}',
+      } as Response);
+      const parts = [
+        {
+          type: 'file' as const,
+          mime: 'image/png',
+          url: 'data:image/png;base64,AA==',
+          filename: 'image.png',
+        },
+      ];
+
+      await sendCommand('s1', {
+        directory: '/dir',
+        command: 'goal',
+        arguments: 'ship it',
+        parts,
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/session/s1/command?directory=%2Fdir',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            directory: '/dir',
+            command: 'goal',
+            arguments: 'ship it',
+            parts,
+          }),
+        }),
+      );
+    });
+
     it('readFileContentBytes preserves auth and directory headers', async () => {
       const bytes = new Uint8Array([0x69, 0x63, 0x6e, 0x73]);
       const mockFetch = vi.mocked(fetch).mockResolvedValue({
