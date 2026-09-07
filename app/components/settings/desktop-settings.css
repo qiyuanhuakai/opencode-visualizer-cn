@@ -32,12 +32,22 @@
   background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted));
 }
 .desktop-update-card { flex-direction: column; align-items: stretch; }
-.desktop-update-header, .desktop-update-versions, .desktop-update-actions, .desktop-update-badges {
+.desktop-update-header, .desktop-update-versions, .desktop-update-actions, .desktop-update-extra-actions, .desktop-update-badges {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
+.desktop-update-summary {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.desktop-update-summary .desktop-update-versions { flex: 1 1 auto; min-width: 0; }
+.desktop-update-summary .desktop-update-actions { flex: 0 0 auto; }
+.desktop-update-summary .desktop-button { flex: 0 0 auto; }
 .desktop-update-header { justify-content: space-between; }
 .desktop-update-name {
   color: var(--theme-modal-text, var(--theme-text-primary));
@@ -73,7 +83,7 @@
   padding: 8px;
   border-left: 2px solid var(--theme-modal-border, var(--theme-border-default));
 }
-.desktop-update-actions { justify-content: flex-end; }
+.desktop-update-actions, .desktop-update-extra-actions { justify-content: flex-end; }
 .desktop-button {
   min-height: 30px;
   padding: 0 12px;
