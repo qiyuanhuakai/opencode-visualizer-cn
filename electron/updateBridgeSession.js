@@ -1,5 +1,6 @@
 export function createBridgeUpdateSession({ isPackaged, isDisposed, onVersionChange, runCheck }) {
   let connectionId = null;
+  let endpointLocality = 'unknown';
   let version = null;
   let revision = 0;
   let autoCheck = false;
@@ -12,15 +13,23 @@ export function createBridgeUpdateSession({ isPackaged, isDisposed, onVersionCha
   }
 
   function isCurrent(component, capturedRevision) {
-    return component !== 'bridge' || capturedRevision === revision;
+    return (
+      component !== 'bridge' || (capturedRevision === revision && endpointLocality === 'local')
+    );
   }
 
   function report(next) {
-    if (next.connectionId === connectionId && next.version === version) return false;
+    if (
+      next.connectionId === connectionId &&
+      next.endpointLocality === endpointLocality &&
+      next.version === version
+    )
+      return false;
     connectionId = next.connectionId;
+    endpointLocality = next.endpointLocality;
     version = next.version;
     revision += 1;
-    onVersionChange(version);
+    onVersionChange(version, endpointLocality);
     if (canAutoCheck()) requestAutoCheck();
     return true;
   }
@@ -52,7 +61,9 @@ export function createBridgeUpdateSession({ isPackaged, isDisposed, onVersionCha
   }
 
   function canAutoCheck() {
-    return autoCheck && isPackaged && version !== null && !isDisposed();
+    return (
+      autoCheck && isPackaged && endpointLocality === 'local' && version !== null && !isDisposed()
+    );
   }
 
   async function drainAutoCheck() {

@@ -29,7 +29,7 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
       app.getVersion(),
       automaticApp ? 'automatic' : manualApp ? 'manual' : 'unsupported',
     ),
-    bridge: initialState('bridge', null, bridgeSupported ? 'manual' : 'unsupported'),
+    bridge: initialState('bridge', null, 'unsupported'),
   };
   const assets = new Map();
   const downloads = new Map();
@@ -191,10 +191,16 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     return admit(component, () => installUnlocked(component, revision));
   };
 
-  function resetBridge(version) {
+  function resetBridge(version, endpointLocality) {
     assets.delete('bridge');
     manualUpdate.retireDownload('bridge', bridgeSession.pending());
-    state.bridge = initialState('bridge', version, bridgeSupported ? 'manual' : 'unsupported');
+    const installKind =
+      endpointLocality === 'remote'
+        ? 'remote'
+        : bridgeSupported && endpointLocality === 'local'
+          ? 'manual'
+          : 'unsupported';
+    state.bridge = initialState('bridge', version, installKind);
     onChange(getState());
   }
 

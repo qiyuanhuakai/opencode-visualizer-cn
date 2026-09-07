@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { AppUpdater, type UpdateInfo } from 'electron-updater';
 import { describe, expect, it, vi } from 'vitest';
 import { createDesktopUpdates } from '../electron/updateService.js';
-import type { DesktopUpdateState } from './types/desktop';
+import type { DesktopBridgeVersionReport, DesktopUpdateState } from './types/desktop';
 
 const RELEASE = {
   version: '1.2.3',
@@ -188,13 +188,52 @@ describe('desktop update service', () => {
   it('does not query releases or offer an update before bridge health reports a version', async () => {
     const fixture = createFixture({ bridgeVersion: null });
 
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: null,
+      installKind: 'unsupported',
+      phase: 'unsupported',
+    });
+
     await fixture.service.check('bridge');
 
     expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
     expect(fixture.service.getState().bridge).toMatchObject({
       currentVersion: null,
       availableVersion: null,
-      phase: 'idle',
+      installKind: 'unsupported',
+      phase: 'unsupported',
+    });
+  });
+
+  it('restores local bridge update eligibility after an unknown endpoint report', async () => {
+    const fixture = createFixture({ bridgeVersion: null });
+
+    fixture.service.reportBridgeVersion({
+      connectionId: 'unknown-connection',
+      endpointLocality: 'unknown',
+      version: null,
+    });
+    await fixture.service.check('bridge');
+
+    expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: null,
+      installKind: 'unsupported',
+      phase: 'unsupported',
+    });
+
+    fixture.service.reportBridgeVersion({
+      connectionId: 'local-connection',
+      endpointLocality: 'local',
+      version: '1.0.0',
+    });
+    await fixture.service.check('bridge');
+
+    expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: '1.0.0',
+      installKind: 'manual',
+      phase: 'available',
     });
   });
 
@@ -211,14 +250,80 @@ describe('desktop update service', () => {
     });
   });
 
+  it.each(['remote', 'unknown'] as const)(
+    'blocks every native bridge updater action for %s endpoint locality',
+    async (endpointLocality) => {
+      const fixture = createFixture({ bridgeVersion: null });
+      const remoteReport: DesktopBridgeVersionReport = {
+        connectionId: 'remote-connection',
+        endpointLocality,
+        version: '1.0.0',
+      };
+      fixture.service.reportBridgeVersion(remoteReport);
+
+      await fixture.service.check('bridge');
+      await fixture.service.download('bridge');
+      await fixture.service.install('bridge');
+
+      expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+      expect(fixture.runtime.downloadAsset).not.toHaveBeenCalled();
+      expect(fixture.beforeInstall).not.toHaveBeenCalled();
+      expect(fixture.shell.openPath).not.toHaveBeenCalled();
+    },
+  );
+
+  it('does not automatically check a remote bridge', async () => {
+    const fixture = createFixture({ bridgeVersion: null });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'remote-connection',
+      endpointLocality: 'remote',
+      version: '1.0.0',
+    });
+
+    await fixture.service.configure({ autoCheckUpdates: true, autoDownloadUpdates: true });
+
+    expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+    expect(fixture.runtime.downloadAsset).not.toHaveBeenCalled();
+  });
+
+  it('invalidates local bridge offers when the same connection becomes remote', async () => {
+    const fixture = createFixture();
+    await fixture.service.check('bridge');
+    expect(fixture.service.getState().bridge.phase).toBe('available');
+    const remoteReport: DesktopBridgeVersionReport = {
+      connectionId: 'connection-1',
+      endpointLocality: 'remote',
+      version: '1.0.0',
+    };
+
+    fixture.service.reportBridgeVersion(remoteReport);
+    await fixture.service.download('bridge');
+
+    expect(fixture.runtime.downloadAsset).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: '1.0.0',
+      error: null,
+      installKind: 'remote',
+      phase: 'unsupported',
+    });
+  });
+
   it('defers one automatic bridge check until health metadata arrives', async () => {
     const fixture = createFixture({ bridgeVersion: null });
     await fixture.service.configure({ autoCheckUpdates: true, autoDownloadUpdates: false });
     expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
 
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-2',
+      endpointLocality: 'local',
+      version: '1.0.0',
+    });
     await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce());
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-2',
+      endpointLocality: 'local',
+      version: '1.0.0',
+    });
 
     await Promise.resolve();
     expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce();
@@ -231,6 +336,7 @@ describe('desktop update service', () => {
 
     const state = fixture.service.reportBridgeVersion({
       connectionId: 'connection-2',
+      endpointLocality: 'unknown',
       version: null,
     });
     await fixture.service.check('bridge');
@@ -239,10 +345,11 @@ describe('desktop update service', () => {
     expect(state.bridge).toMatchObject({
       currentVersion: null,
       availableVersion: null,
-      phase: 'idle',
+      installKind: 'unsupported',
+      phase: 'unsupported',
       assetName: null,
     });
-    expect(fixture.service.getState().bridge.phase).toBe('idle');
+    expect(fixture.service.getState().bridge.phase).toBe('unsupported');
   });
 
   it('does not access update networks when automatic checking is enabled in development', async () => {
@@ -341,6 +448,7 @@ function createFixture(
   if (options.bridgeVersion !== null) {
     service.reportBridgeVersion({
       connectionId: 'connection-1',
+      endpointLocality: 'local',
       version: options.bridgeVersion ?? '1.0.0',
     });
   }
