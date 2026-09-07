@@ -751,6 +751,39 @@ describe('DesktopSettings connected bridge version', () => {
     expect(bridgeCard.textContent).toContain(`${en.updates.connectedBridge.label}: 9.9.9`);
   });
 
+  it('keeps a remote connected version visible without local updater actions', async () => {
+    const desktop = createDesktopApi(
+      makeState({
+        bridge: {
+          currentVersion: '9.9.9',
+          installKind: 'remote',
+          phase: 'unsupported',
+        },
+      }),
+    );
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { desktop: desktop.api },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(healthResponse({ ok: true, service: 'vis_bridge', version: '9.9.9' })),
+      ),
+    );
+
+    const { host } = await mountWithBridgeUrl('https://bridge.example.com/healthz').mount();
+    await flushAsync();
+
+    const bridgeCard = cardFor(host, 'bridge');
+    expect(bridgeCard.textContent).toContain(`${en.updates.connectedBridge.label}: 9.9.9`);
+    expect(bridgeCard.textContent).toContain(en.updates.remoteUpdateUnavailableNotice);
+    expect(
+      bridgeCard.querySelector('[data-testid="bridge-remote-update-unavailable"]'),
+    ).not.toBeNull();
+    expect(bridgeCard.querySelector('button')).toBeNull();
+  });
+
   it('marks the connected version unavailable when the old bridge health reports no version', async () => {
     // Given: an old bridge whose health payload lacks a version field.
     const desktop = createDesktopApi(makeState({ bridge: { currentVersion: '0.7.9' } }));
