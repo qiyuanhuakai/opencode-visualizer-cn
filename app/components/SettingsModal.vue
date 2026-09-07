@@ -689,7 +689,7 @@
             v-if="isElectron"
             :label="$t('settings.editor.localApplication.label')"
             :description="$t('settings.editor.localApplication.description')"
-            class="setting-row-stack"
+            class="setting-row-column"
           >
             <div class="local-application-controls">
               <input
@@ -2830,6 +2830,12 @@ watch(
 
 .setting-row-stack {
   align-items: flex-start;
+}
+
+.setting-row-column {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
 }
 
 .setting-row.theme-settings-section {

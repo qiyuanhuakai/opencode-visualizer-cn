@@ -1,6 +1,7 @@
 import { createApp, h, nextTick } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { desktopMessages } from '../locales/desktop';
+import enLocale from '../locales/en';
 import type { DesktopApi, DesktopState } from '../types/desktop';
 
 vi.mock('@iconify/vue', () => ({
@@ -141,5 +142,91 @@ describe('SettingsModal desktop mounting', () => {
     expect(api.getState).toHaveBeenCalled();
     const cards = modalBody(host).querySelectorAll('.desktop-update-card');
     expect(cards).toHaveLength(2);
+  });
+});
+
+describe('SettingsModal local application row layout', () => {
+  function mountWithLocalFile(path: string) {
+    localStorage.setItem('opencode.settings.localApplicationPath.v1', path);
+    const localFile = {
+      selectApplication: vi.fn(() => Promise.resolve(null)),
+      clearApplication: vi.fn(() => Promise.resolve()),
+    };
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { desktop: createDesktopApi(), localFile },
+    });
+    return { localFile };
+  }
+
+  async function openEditorPage(host: HTMLElement) {
+    const editorLink = pageRows(host).find(
+      (row) => row.querySelector('.setting-label')?.textContent === enLocale.settings.editor.label,
+    );
+    expect(editorLink, 'editor link row must exist').toBeDefined();
+    editorLink!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flushAsync();
+  }
+
+  function localApplicationRow(host: HTMLElement) {
+    const row = pageRows(host).find(
+      (candidate) =>
+        candidate.querySelector('.setting-label')?.textContent ===
+        enLocale.settings.editor.localApplication.label,
+    );
+    expect(row, 'local application row must exist on the editor page').toBeDefined();
+    return row as HTMLElement;
+  }
+
+  it('places the path input and app buttons on a separate row below the label and description', async () => {
+    // Given: an Electron runtime with the local file API and a configured path.
+    mountWithLocalFile('/usr/bin/code');
+    const host = await mountModal();
+
+    // When: the editor page is opened.
+    await openEditorPage(host);
+
+    // Then: the row stacks vertically so the controls sit on their own row.
+    const row = localApplicationRow(host);
+    expect(row.getAttribute('class')).toBe('setting-row setting-row-column');
+    const info = row.querySelector(':scope > .setting-info');
+    const controls = row.querySelector(':scope > .local-application-controls');
+    expect(info, 'row must lead with the label/description block').not.toBeNull();
+    expect(controls, 'row must render the controls block').not.toBeNull();
+    expect(
+      info!.compareDocumentPosition(controls!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'controls must come after the label/description in DOM order',
+    ).not.toBe(0);
+
+    // And: the controls row carries the readonly path input with both buttons.
+    const input = controls!.querySelector('input.font-stack-input[readonly]');
+    expect(input).not.toBeNull();
+    expect((input as HTMLInputElement).value).toBe('/usr/bin/code');
+    const buttonLabels = Array.from(controls!.querySelectorAll('button')).map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(buttonLabels).toEqual([
+      enLocale.settings.editor.localApplication.browse,
+      enLocale.settings.editor.localApplication.clear,
+    ]);
+  });
+
+  it('omits the remove button when no local application is configured', async () => {
+    // Given: an Electron runtime without a configured local application path.
+    mountWithLocalFile('');
+    const host = await mountModal();
+
+    // When: the editor page is opened.
+    await openEditorPage(host);
+
+    // Then: only the browse action renders inside the controls row.
+    const controls = localApplicationRow(host).querySelector(
+      ':scope > .local-application-controls',
+    );
+    expect(controls).not.toBeNull();
+    const buttonLabels = Array.from(controls!.querySelectorAll('button')).map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(buttonLabels).toEqual([enLocale.settings.editor.localApplication.browse]);
   });
 });
