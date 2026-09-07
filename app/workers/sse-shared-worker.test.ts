@@ -1146,6 +1146,116 @@ describe('SSE SharedWorker hydration', () => {
     }));
   });
 
+  it('emits a successful completion for a selected root with a native notification consumer', async () => {
+    const worker = await connectWorker();
+    const browserWorker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(messagesOf(browserWorker.messages, 'state.bootstrap')).toHaveLength(1),
+    );
+    const deliver = latestCallbacks().onPacket;
+    deliver(sessionCreatedPacket('foreground-root', 'Foreground root'));
+    post(worker, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'foreground-root',
+      directory: '/a',
+      nativeCompletionNotifications: true,
+    });
+    worker.messages.splice(0);
+    browserWorker.messages.splice(0);
+
+    deliver({
+      directory: '/a',
+      payload: {
+        type: 'session.status',
+        properties: { sessionID: 'foreground-root', status: { type: 'busy' } },
+      },
+    });
+    deliver({
+      directory: '/a',
+      payload: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'foreground-result',
+            sessionID: 'foreground-root',
+            role: 'assistant',
+            finish: 'stop',
+            time: { created: 1, completed: 2 },
+          },
+        },
+      },
+    });
+    deliver({
+      directory: '/a',
+      payload: {
+        type: 'session.status',
+        properties: { sessionID: 'foreground-root', status: { type: 'idle' } },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(messagesOf(worker.messages, 'notification.show')).toContainEqual({
+        type: 'notification.show',
+        projectId: 'project',
+        sessionId: 'foreground-root',
+        kind: 'idle',
+        completionId: 'foreground-result',
+      }),
+    );
+    expect(messagesOf(browserWorker.messages, 'notification.show')).toHaveLength(0);
+    expect(messagesOf(worker.messages, 'state.notifications-updated')).toHaveLength(0);
+  });
+
+  it('keeps a selected root completion suppressed for browser-only consumers', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const deliver = latestCallbacks().onPacket;
+    deliver(sessionCreatedPacket('browser-root', 'Browser root'));
+    post(worker, {
+      type: 'selection.active',
+      projectId: 'project',
+      sessionId: 'browser-root',
+      directory: '/a',
+    });
+    worker.messages.splice(0);
+
+    deliver({
+      directory: '/a',
+      payload: {
+        type: 'session.status',
+        properties: { sessionID: 'browser-root', status: { type: 'busy' } },
+      },
+    });
+    deliver({
+      directory: '/a',
+      payload: {
+        type: 'message.updated',
+        properties: {
+          info: {
+            id: 'browser-result',
+            sessionID: 'browser-root',
+            role: 'assistant',
+            finish: 'stop',
+            time: { created: 1, completed: 2 },
+          },
+        },
+      },
+    });
+    deliver({
+      directory: '/a',
+      payload: {
+        type: 'session.status',
+        properties: { sessionID: 'browser-root', status: { type: 'idle' } },
+      },
+    });
+    await flush();
+
+    expect(messagesOf(worker.messages, 'notification.show')).toHaveLength(0);
+    expect(messagesOf(worker.messages, 'state.notifications-updated')).toHaveLength(0);
+  });
+
   it('does not identify an aborted OpenCode message as a successful native completion', async () => {
     const worker = await connectWorker();
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));

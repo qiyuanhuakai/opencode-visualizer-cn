@@ -61,11 +61,12 @@ type ConnectionState = {
   bootstrapPromise?: Promise<void>;
   bootstrapController?: AbortController;
   bootstrapToken?: symbol;
-  activeSelection: {
-    port: MessagePort;
-    projectId: string;
-    sessionId: string;
-  } | null;
+  activeSelection: readonly [
+    port: MessagePort,
+    projectId: string,
+    sessionId: string,
+    nativeNotify: boolean,
+  ] | null;
   sessionHydrationByDirectory: Map<string, DirectorySessionHydration>;
   sessionHydrationInFlightByDirectory: Map<string, Promise<void>>;
   sessionHydrationRequestByDirectory: Map<string, symbol>;
@@ -115,7 +116,7 @@ function toKey(baseUrl: string, authorization?: string) {
 
 function send(port: MessagePort, message: WorkerToTabMessage) { port.postMessage(message); }
 
-function broadcast(state: ConnectionState, message: WorkerToTabMessage) { for (const port of state.ports) send(port, message); }
+function broadcast(state: ConnectionState, message: WorkerToTabMessage, target?: MessagePort) { for (const port of target ? [target] : state.ports) send(port, message); }
 
 function isCurrentConnection(state: ConnectionState) { return connections.get(state.key) === state; }
 
@@ -659,22 +660,6 @@ function emitNotificationsUpdated(state: ConnectionState) {
   });
 }
 
-function shouldSuppressIdleNotification(
-  state: ConnectionState,
-  projectId: string,
-  rootSessionId: string,
-) {
-  if (!projectId || !rootSessionId) return false;
-  const activeSelection = state.activeSelection;
-  if (!activeSelection) return false;
-  if (activeSelection.projectId !== projectId) return false;
-  const activeRootSessionId = state.stateBuilder.resolveRootSessionIdForProject(
-    projectId,
-    activeSelection.sessionId,
-  );
-  return activeRootSessionId === rootSessionId;
-}
-
 function reconcileIdleNotification(
   state: ConnectionState,
   projectId: string | null,
@@ -690,7 +675,23 @@ function reconcileIdleNotification(
     return state.notificationManager.removeNotification(idleRequestId);
   }
   const completionId = liveStatus ? state.taskCompletions.consume(projectId, rootSessionId) : undefined;
-  if (shouldSuppressIdleNotification(state, projectId, rootSessionId)) return false;
+  const activeSelection = state.activeSelection;
+  if (
+    activeSelection?.[1] === projectId &&
+    state.stateBuilder.resolveRootSessionIdForProject(projectId, activeSelection[2]) === rootSessionId
+  ) {
+    if (completionId && activeSelection[3]) {
+      emitNotificationShow(
+        state,
+        projectId,
+        rootSessionId,
+        'idle',
+        completionId,
+        activeSelection[0],
+      );
+    }
+    return false;
+  }
 
   const added = state.notificationManager.addNotification(
     projectId,
@@ -707,6 +708,7 @@ function emitNotificationShow(
   sessionId: string,
   kind: 'permission' | 'question' | 'idle',
   completionId?: string,
+  target?: MessagePort,
 ) {
   if (!projectId || !sessionId) return;
   broadcast(state, {
@@ -715,7 +717,7 @@ function emitNotificationShow(
     sessionId,
     kind,
     ...(completionId ? { completionId } : {}),
-  });
+  }, target);
 }
 
 function hasKnownSessionDirectory(state: ConnectionState, info: SessionInfo): boolean {
@@ -1220,7 +1222,7 @@ function detachPort(port: MessagePort) {
   const state = connections.get(key);
   if (!state) return;
   cancelReferencedSubagentHydration(state, port);
-  if (state.activeSelection?.port === port) {
+  if (state.activeSelection?.[0] === port) {
     state.activeSelection = null;
   }
   state.ports.delete(port);
@@ -1402,7 +1404,7 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
     const directory = normalizeDirectory(message.directory ?? '');
     if (!projectId || !sessionId) {
       cancelReferencedSubagentHydration(state, port);
-      if (state.activeSelection?.port === port) {
+      if (state.activeSelection?.[0] === port) {
         state.activeSelection = null;
       }
       state.pendingSelectedDirectory = null;
@@ -1412,11 +1414,7 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
     if (activeSubagentHydration && activeSubagentHydration.rootSessionId !== sessionId) {
       cancelReferencedSubagentHydration(state, port);
     }
-    state.activeSelection = {
-      port,
-      projectId,
-      sessionId,
-    };
+    state.activeSelection = [port, projectId, sessionId, message.nativeCompletionNotifications === true];
 
     if (state.topologyReady) {
       const rootSessionId = state.stateBuilder.resolveRootSessionIdForProject(projectId, sessionId);
