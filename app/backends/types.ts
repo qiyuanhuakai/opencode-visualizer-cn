@@ -209,6 +209,7 @@ export type BackendAdapter = {
       agent?: string;
       model?: string;
       variant?: string;
+      parts?: Array<{ type: 'file'; mime: string; url: string; filename?: string }>;
     },
   ): Promise<void>;
   sendPromptAsync?(

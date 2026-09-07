@@ -1,11 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import {
   createAcpAgentList,
   createAcpPermissionModeList,
   createAcpUiModeState,
   resolveAcpModeSelection,
 } from './configOptions';
-import { initializeAdapter, sent } from './acpTestHarness';
+import { initializeAdapter, MockAcpWebSocket, sent } from './acpTestHarness';
 
 const modeConfig = {
   id: 'mode',
@@ -22,6 +22,10 @@ const modeConfig = {
 };
 
 describe('ACP mode and command adaptation', () => {
+  beforeEach(() => {
+    MockAcpWebSocket.instances = [];
+  });
+
   it('separates agent modes from permission policies', () => {
     expect(createAcpAgentList([modeConfig], 'Oh My Pi')).toEqual([
       expect.objectContaining({ name: 'default' }),
@@ -87,6 +91,47 @@ describe('ACP mode and command adaptation', () => {
       params: {
         sessionId: 'session-1',
         prompt: [{ type: 'text', text: '/plan inspect auth' }],
+      },
+    });
+    socket.receive({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } });
+    await sending;
+  });
+
+  it('forwards command file parts as prompt content blocks', async () => {
+    const { adapter, socket } = await initializeAdapter();
+    const creating = adapter.createSession('/workspace');
+    await expect.poll(() => socket.sent.length).toBe(2);
+    socket.receive({
+      jsonrpc: '2.0',
+      id: 2,
+      result: { sessionId: 'session-1', configOptions: [modeConfig] },
+    });
+    await creating;
+
+    const sending = adapter.sendCommand?.('session-1', {
+      directory: '/workspace',
+      command: 'plan',
+      arguments: 'inspect auth',
+      agent: 'default',
+      model: 'default',
+      parts: [
+        {
+          type: 'file',
+          mime: 'image/png',
+          url: 'data:image/png;base64,AA==',
+          filename: 'image.png',
+        },
+      ],
+    });
+    await expect.poll(() => socket.sent.length).toBe(3);
+    expect(sent(socket, 2)).toMatchObject({
+      method: 'session/prompt',
+      params: {
+        sessionId: 'session-1',
+        prompt: [
+          { type: 'text', text: '/plan inspect auth' },
+          { type: 'image', mimeType: 'image/png', data: 'AA==' },
+        ],
       },
     });
     socket.receive({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } });
