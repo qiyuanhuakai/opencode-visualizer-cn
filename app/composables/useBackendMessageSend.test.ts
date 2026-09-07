@@ -86,7 +86,7 @@ describe('useBackendMessageSend', () => {
 
     await runtime.sendMessage();
 
-    expect(sendCommand).toHaveBeenCalledWith('session-1', { name: 'fix' }, 'issue');
+    expect(sendCommand).toHaveBeenCalledWith('session-1', { name: 'fix' }, 'issue', []);
     expect(sendPromptAsync).not.toHaveBeenCalled();
   });
 

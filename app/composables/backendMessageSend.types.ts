@@ -34,6 +34,13 @@ export type ParsedSlashCommand = {
   readonly arguments: string;
 };
 
+export type CommandFilePart = {
+  readonly type: 'file';
+  readonly mime: string;
+  readonly url: string;
+  readonly filename?: string;
+};
+
 export type OpenCodeApiLike = {
   readonly sendPromptAsync: (
     sessionId: string,
@@ -133,6 +140,7 @@ export type BackendMessageSendParams = {
     sessionId: string,
     command: CommandInfo,
     commandArgs: string,
+    parts: CommandFilePart[],
   ) => Promise<void>;
   readonly buildLineCommentFileUrl: (path: string, startLine: number, endLine: number) => string;
   readonly formatCommentNote: (
