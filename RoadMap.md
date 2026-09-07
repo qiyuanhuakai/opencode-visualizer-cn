@@ -47,6 +47,7 @@
   - [ ] 排查/重构文件树自动刷新功能：能否在git提交/手动修改文件后自动刷新文件树
   - [ ] 调查pty按钮在所有后端失效的问题
   - [ ] 调查当使用/goal这样的<auto-slash-command>时，附件不会随文字一起发送出去的问题
+  - [ ] 调查/goal这样的<auto-slash-command>会被enter发送出去，即使关闭了enter发送的问题
 - [ ] 参照最近的提交和原始README，扩写README（README不讲bug修复，只讲内容更新）
 - [x] 提供electron的应用内检查更新和自动更新功能（包括vis_bridge的更新）。
 - [x] 提供“最小化到托盘”的相关功能
