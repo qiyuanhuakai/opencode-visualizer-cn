@@ -2725,7 +2725,13 @@ const {
   branchListLoading,
   refreshBranchEntries,
   ensureBranchEntriesLoaded,
-} = useFileTree({ activeDirectory, activeBackendKind });
+} = useFileTree({
+  activeDirectory,
+  activeBackendKind,
+  refreshEnabled: computed(
+    () => uiInitState.value === 'ready' && connectionState.value === 'ready',
+  ),
+});
 
 const treeDirectoryName = computed(() => {
   const raw = activeDirectory.value.trim();
