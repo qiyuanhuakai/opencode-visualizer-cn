@@ -13,7 +13,7 @@ export function createPendingPtyCreateRegistry<T>() {
     const generation = generations.get(id) ?? 0;
     let entry: Promise<T>;
     const isCurrent = () =>
-      generations.get(id) === generation && pending.get(id) === entry;
+      (generations.get(id) ?? 0) === generation && pending.get(id) === entry;
     const created = factory(isCurrent);
     entry = created;
     pending.set(id, created);

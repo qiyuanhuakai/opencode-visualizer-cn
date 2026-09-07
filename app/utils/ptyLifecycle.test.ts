@@ -3,6 +3,20 @@ import { describe, expect, it } from 'vitest';
 import { createPendingPtyCreateRegistry, isCurrentPtySocket } from './ptyLifecycle';
 
 describe('createPendingPtyCreateRegistry', () => {
+  it('allows the first PTY window to open after its terminal module loads', async () => {
+    // Given a PTY id which has never been invalidated.
+    const registry = createPendingPtyCreateRegistry<boolean>();
+
+    // When its asynchronous terminal import completes.
+    const creation = registry.getOrCreate('new-pty', async (isCurrent) => {
+      await Promise.resolve();
+      return isCurrent();
+    });
+
+    // Then the window creation remains eligible to commit.
+    await expect(creation).resolves.toBe(true);
+  });
+
   it('shares one in-flight PTY window creation for the same id', async () => {
     let resolveCreation!: (value: string) => void;
     const creation = new Promise<string>((resolve) => {
