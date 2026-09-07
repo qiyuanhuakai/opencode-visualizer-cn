@@ -291,7 +291,8 @@ pnpm dev
 - 开发模式下自动处理 CORS，便于本地调试
 - 应用与 vis_bridge 分别检查更新：Windows / Linux 安装版支持应用内下载安装；macOS 应用下载 DMG 后手动安装，vis_bridge 使用 PKG 安装包。自动检查与自动下载默认关闭，安装始终需要确认
 - 可选"最小化到托盘"与"关闭到托盘"（默认关闭），托盘菜单可退出
-- 会话任务完成时弹出桌面通知（窗口聚焦时不打扰），可选系统提示音（默认关闭）；macOS ad-hoc 构建不支持原生通知，仅保留声音回退
+- 远程 bridge 保留连接版本显示，需在其所在主机更新；仅本机回环连接提供本机安装包的更新操作
+- 会话任务完成时弹出桌面通知，窗口可见且聚焦时同样生效；可选系统提示音（默认关闭）。macOS ad-hoc 构建不支持原生通知，仅保留声音回退
 - 原生菜单跟随应用语言，保留退出与刷新入口
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
 - 运行时基线：Electron **43.4.1**（Chromium 150 / Node 24.18.1），Chromium 沙箱全程开启
@@ -571,7 +572,8 @@ This project supports packaging the Web UI as a native desktop application using
 - Auto CORS handling in development mode for local debugging
 - Separate update checks for the app and vis_bridge: in-app download and install for Windows / Linux installed builds; on macOS, install the app manually from a DMG and vis_bridge from a PKG installer. Automatic checks and downloads are off by default and installing always asks for confirmation
 - Optional minimize-to-tray and close-to-tray (both off by default), with quit from the tray menu
-- Desktop notifications when a session task completes (suppressed while the window is focused), with an optional system sound (off by default); macOS ad-hoc builds do not support native notifications and keep only the sound fallback
+- Remote bridges keep their connected version display and must be updated on their own host; local installer updates are offered only for loopback connections
+- Desktop notifications when a session task completes, including while the window is visible and focused, with an optional system sound (off by default); macOS ad-hoc builds do not support native notifications and keep only the sound fallback
 - Native menus follow the app language and keep only Quit and Reload entries
 - Supports NSIS / AppImage / deb / dmg installers for each platform
 - Runtime baseline: Electron **43.4.1** (Chromium 150 / Node 24.18.1), Chromium sandbox always enabled
