@@ -2,7 +2,7 @@ import type { Ref } from 'vue';
 import { acpBridgeHttpUrl } from '../backends/acp/bridgeUrl';
 import { appendCodexBridgeToken, codexBridgeHttpUrl } from '../backends/codex/bridgeUrl';
 import type { BackendKind } from '../backends/types';
-import type { DesktopApi } from '../types/desktop';
+import type { DesktopApi, DesktopBridgeEndpointLocality } from '../types/desktop';
 import {
   useConnectedBridgeVersion,
   type ConnectedBridgeVersion,
@@ -35,14 +35,44 @@ export function resolveDesktopBridgeHealthUrl(target: DesktopBridgeHealthTarget)
   }
 }
 
-export function useDesktopBridgeVersion(healthUrl: Ref<string>, desktopApi: DesktopApi | undefined) {
+export function classifyDesktopBridgeEndpoint(url: string): DesktopBridgeEndpointLocality {
+  if (!url.trim()) return 'unknown';
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'unknown';
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+    if (
+      hostname === 'localhost' ||
+      hostname === 'localhost.' ||
+      hostname === '::1' ||
+      /^127(?:\.\d{1,3}){3}$/u.test(hostname)
+    ) {
+      return 'local';
+    }
+    const mappedLoopback = /^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/u.exec(hostname);
+    if (mappedLoopback && Number.parseInt(mappedLoopback[1], 16) >>> 8 === 127) return 'local';
+    return 'remote';
+  } catch {
+    return 'unknown';
+  }
+}
+
+export function useDesktopBridgeVersion(
+  healthUrl: Ref<string>,
+  desktopApi: DesktopApi | undefined,
+) {
   let latestReport: Promise<unknown> = Promise.resolve();
 
   function report(connectionId: string, connection: ConnectedBridgeVersion) {
     const reportBridgeVersion = desktopApi?.reportBridgeVersion;
     if (!reportBridgeVersion) return;
     const version = connection.status === 'ready' ? connection.version : null;
-    const request = reportBridgeVersion.call(desktopApi, { connectionId, version });
+    const endpointLocality = classifyDesktopBridgeEndpoint(healthUrl.value);
+    const request = reportBridgeVersion.call(desktopApi, {
+      connectionId,
+      endpointLocality,
+      version,
+    });
     void request.catch(() => undefined);
     latestReport = request;
   }
@@ -64,7 +94,11 @@ export function useDesktopBridgeVersion(healthUrl: Ref<string>, desktopApi: Desk
     } catch {
       return false;
     }
-    return healthUrl.value.trim() === urlAtStart && latestReport === reportAtStart && state.value.status === 'ready';
+    return (
+      healthUrl.value.trim() === urlAtStart &&
+      latestReport === reportAtStart &&
+      state.value.status === 'ready'
+    );
   }
 
   return { state, refresh };
