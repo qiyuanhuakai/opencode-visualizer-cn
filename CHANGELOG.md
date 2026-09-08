@@ -4,6 +4,27 @@
 
 ---
 
+## [Unreleased]
+
+### bridge 终端更新与 RPM 发布
+
+- [x] 新增 `vis_bridge update` / `vis_bridge upgrade` 手动更新命令，支持 `--check` 仅检查及 `--yes` / `-y` 显式确认；独立于服务启动参数解析，不启动 daemon。
+- [x] 根据本机平台、架构及 Linux 包归属选择 DEB、RPM、PKG 或 NSIS 安装包，复用正式版本筛选、官方 HTTPS 下载限制、大小与 SHA-256 校验；安装仅面向原生安装包管理的程序。
+- [x] 安装前检查进程祖先，拒绝从 bridge 托管终端发起更新；Linux 必要时在确认后通过限定的 sudo 命令读取不可访问的进程身份，并检查 PID 身份变化；macOS 兼容短进程名判定。
+- [x] POSIX 使用 `execve` 安全交接安装器并保留退出状态；Windows 使用隐藏的 PowerShell bootstrap 启动实际 helper，等待原进程退出后安装并保留成功或失败日志，避免 Node 进程退出时清理 helper。安装停止 bridge 及其子进程，不自动重启。
+- [x] 新增 Linux x64 / arm64 RPM 安装包构建、载荷检查、上传和 GitHub Release 发布；桌面端同步按本机包归属选择 RPM 更新，异步识别期间继续隔离连接切换后的过期结果。
+
+### 远程 bridge 与前台通知
+
+- [x] 桌面 bridge 更新按连接端点区分本机、远程与未知状态：远程保留版本显示并提示在所在主机更新，原生层禁止远程或未知端点触发本机检查、下载和安装，自动更新遵循相同限制。
+- [x] 窗口可见且聚焦时也触发桌面任务完成通知，并按声音设置播放提示音；同步调整 OpenCode Worker 的前置通知路由，保留去重、取消、断连隔离及 Web 原有行为。
+
+### 打包与跨平台验证
+
+- [x] 补齐 Electron 安装包中的 bridge 更新模块，并增加本地主进程模块依赖闭包回归，防止打包后因缺少模块无法启动；保留 Chromium 与 renderer 沙箱。
+- [x] 增加 Linux 非 root 用户的原生版本更新事务和 Fedora 正常 `dnf` 安装、升级、卸载验证，覆盖跨 UID 只读挂载、进程树停止、不自动重启及临时目录清理。
+- [x] 增加 Windows 原生 PowerShell 交接、父进程退出后的成功与失败日志验证，覆盖含空格与 shell 特殊字符的路径，并修正 PowerShell 5.1 无限等待参数类型；完整 Electron 与 bridge 安装器 CI 矩阵通过。
+
 ## [v0.7.13 released]
 
 ### 文件树自动刷新与终端
