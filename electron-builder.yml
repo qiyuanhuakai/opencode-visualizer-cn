@@ -11,6 +11,7 @@ directories:
 files:
   - "dist/**/*"
   - "electron/**/*"
+  - "bridge/update*.js"
   - "package.json"
   - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
   - "!.editorconfig"
