@@ -44,7 +44,18 @@ export function createManualUpdate({
       });
       return;
     }
-    const asset = selectManualAsset(release, component, runtime.platform, runtime.arch);
+    const linuxFormat =
+      component === 'bridge' && runtime.platform === 'linux'
+        ? await runtime.resolveBridgeLinuxFormat()
+        : 'deb';
+    if (!isUsable(component, revision)) return;
+    const asset = selectManualAsset(
+      release,
+      component,
+      runtime.platform,
+      runtime.arch,
+      linuxFormat,
+    );
     sha256FromDigest(asset);
     assets.set(component, asset);
     publish(component, {

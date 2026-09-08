@@ -358,6 +358,30 @@ describe('desktop update lifecycle', () => {
     expect(fixture.service.getState().bridge.phase).toBe('unsupported');
   });
 
+  it('does not offer a local installer when package detection completes after the bridge becomes remote', async () => {
+    // Given: Linux package detection is still pending during a local bridge check.
+    const fixture = createFixture();
+    const detection = deferred<'deb'>();
+    fixture.runtime.resolveBridgeLinuxFormat.mockReturnValueOnce(detection.promise);
+    const checking = fixture.service.check('bridge');
+    await vi.waitFor(() => expect(fixture.runtime.resolveBridgeLinuxFormat).toHaveBeenCalledOnce());
+
+    // When: the connection becomes remote before package detection finishes.
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-1',
+      endpointLocality: 'remote',
+      version: '1.0.0',
+    });
+    detection.resolve('deb');
+    await checking;
+
+    // Then: stale local package metadata cannot replace the remote-only state.
+    expect(fixture.service.getState().bridge).toMatchObject({
+      installKind: 'remote',
+      assetName: null,
+    });
+  });
+
   it('drains a pending metadata auto-check after stale bridge work settles', async () => {
     const fixture = createFixture();
     const staleRelease = deferred<typeof RELEASE>();
@@ -434,6 +458,7 @@ function createFixture(options: { readonly automaticAppUpdates?: boolean } = {})
     updater,
     getLatestRelease: vi.fn(async () => RELEASE),
     getBridgeVersion: vi.fn(async () => '1.0.0'),
+    resolveBridgeLinuxFormat: vi.fn(async () => 'deb' as const),
     downloadAppUpdate: vi.fn(async () => [] as string[]),
     downloadAsset: vi.fn(
       async (_asset, _onProgress: (percent: number) => void) => '/private/update/bridge.deb',

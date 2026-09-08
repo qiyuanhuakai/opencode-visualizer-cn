@@ -14,6 +14,13 @@ const RELEASE = {
       size: 12,
       url: 'https://api.github.com/repos/qiyuanhuakai/opencode-visualizer-cn/releases/assets/1',
     },
+    {
+      name: 'VisBridge-1.2.3-x64-Linux.rpm',
+      digest: `sha256:${'b'.repeat(64)}`,
+      sha256: 'b'.repeat(64),
+      size: 12,
+      url: 'https://api.github.com/repos/qiyuanhuakai/opencode-visualizer-cn/releases/assets/2',
+    },
   ],
 };
 
@@ -80,6 +87,21 @@ describe('desktop update service', () => {
     });
   });
 
+  it('selects the installed RPM package family for a local Linux bridge update', async () => {
+    // Given: the desktop runtime detected an RPM-managed local bridge.
+    const fixture = createFixture({ bridgeLinuxFormat: 'rpm' });
+
+    // When: the local bridge checks the shared release.
+    await fixture.service.check('bridge');
+
+    // Then: the offer uses the RPM asset instead of the desktop DEB fallback.
+    expect(fixture.runtime.resolveBridgeLinuxFormat).toHaveBeenCalledOnce();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      phase: 'available',
+      assetName: 'VisBridge-1.2.3-x64-Linux.rpm',
+    });
+  });
+
   it('uses electron-updater for packaged Linux app updates and quits only on explicit install', async () => {
     // Given: electron-updater has announced and downloaded an app update.
     const fixture = createFixture();
@@ -100,6 +122,7 @@ describe('desktop update service', () => {
 
     // Then: the confirmation hook precedes the updater-owned quit/install action.
     expect(fixture.runtime.downloadAppUpdate).toHaveBeenCalledOnce();
+    expect(fixture.runtime.resolveBridgeLinuxFormat).not.toHaveBeenCalled();
     expect(fixture.beforeInstall).toHaveBeenCalledWith('app', expect.any(AbortSignal));
     expect(fixture.updater.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
@@ -400,6 +423,7 @@ function createFixture(
     readonly packaged?: boolean;
     readonly automaticAppUpdates?: boolean;
     readonly bridgeVersion?: string | null;
+    readonly bridgeLinuxFormat?: 'deb' | 'rpm';
   } = {},
 ) {
   const updater = Object.assign(new EventEmitter(), {
@@ -420,6 +444,7 @@ function createFixture(
     updater,
     getLatestRelease: vi.fn(async () => RELEASE),
     getBridgeVersion: vi.fn(async () => '1.0.0'),
+    resolveBridgeLinuxFormat: vi.fn(async () => options.bridgeLinuxFormat ?? 'deb'),
     downloadAppUpdate: vi.fn(async () => [] as string[]),
     downloadAsset: vi.fn(
       async (_asset, _onProgress: (percent: number) => void) => '/private/update/bridge.deb',
@@ -511,6 +536,7 @@ function createRuntime(
     updater,
     getLatestRelease: vi.fn(async () => RELEASE),
     getBridgeVersion: vi.fn(async () => '1.0.0'),
+    resolveBridgeLinuxFormat: vi.fn(async () => 'deb' as const),
     downloadAppUpdate: vi.fn(async () => [] as string[]),
     downloadAsset: vi.fn(async () => '/private/update/bridge.deb'),
     verifyAsset: vi.fn(async () => undefined),
