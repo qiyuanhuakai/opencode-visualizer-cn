@@ -2,6 +2,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -32,6 +33,7 @@ describe.runIf(nativeQaEnabled)('vis_bridge native updater transaction', () => {
       stageFixtureDependencies(fixtureRoot);
       const oldInstaller = await buildFixtureInstaller(fixtureRoot, '0.7.12');
       const newInstaller = await buildFixtureInstaller(fixtureRoot, '0.8.0');
+      chmodSync(fixtureRoot, 0o755);
       const digest = createHash('sha256').update(readFileSync(newInstaller)).digest('hex');
       const output = execFileSync('docker', [
         'run', '--rm', '--init', '--name', containerName,
@@ -47,6 +49,7 @@ describe.runIf(nativeQaEnabled)('vis_bridge native updater transaction', () => {
 
       for (const evidence of [
         'OLD_VERSION=0.7.12',
+        'UID_MISMATCH=1',
         'UNREADABLE_ROOT_ANCESTOR=1',
         'HOSTED_REJECTED=1',
         'NEW_VERSION=0.8.0',
@@ -147,9 +150,27 @@ function containerTransaction(paths: {
   digest: string;
 }): string {
   return `
+dump_logs() {
+  status=$?
+  trap - EXIT
+  if test "$status" -ne 0; then
+    for log in /tmp/hosted.log /tmp/daemon.log /tmp/update.log; do
+      if test -f "$log"; then
+        printf '\\n=== %s ===\\n' "$log" >&2
+        cat "$log" >&2 || true
+      fi
+    done
+  fi
+  exit "$status"
+}
+trap dump_logs EXIT
 apt-get update >/dev/null
 apt-get install -y --no-install-recommends procps sudo >/dev/null
-useradd --create-home updater
+fixture_uid=$(stat -c %u /fixtures)
+if test "$fixture_uid" = '1000'; then updater_uid=1001; else updater_uid=1000; fi
+useradd --uid "$updater_uid" --create-home updater
+test "$fixture_uid" != "$updater_uid"
+printf 'UID_MISMATCH=1\n'
 printf 'updater ALL=(root) NOPASSWD: /usr/bin/readlink, /usr/bin/dpkg\\n' >/etc/sudoers.d/updater
 chmod 0440 /etc/sudoers.d/updater
 dpkg -i ${paths.oldInstaller} >/dev/null
