@@ -11,6 +11,14 @@ export interface InstallerHandoffRequest {
 
 export declare function createPosixUpdateHelper(platform: string, linuxFormat: 'deb' | 'rpm' | null): string;
 export declare function createWindowsUpdateHelper(): string;
+export declare function createWindowsUpdateBootstrap(options: {
+  readonly powershellPath: string;
+  readonly helperPath: string;
+  readonly parentPid: number;
+  readonly ackPath: string;
+  readonly installerPath: string;
+  readonly stagingDirectory: string;
+}): string;
 export declare function waitForAck(
   ackPath: string,
   child: UpdateHelperProcess,

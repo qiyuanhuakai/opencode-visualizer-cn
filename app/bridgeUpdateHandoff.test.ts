@@ -11,6 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createPosixUpdateHelper,
+  createWindowsUpdateBootstrap,
   createWindowsUpdateHelper,
   handoffPosixInstaller,
   handoffWindowsInstaller,
@@ -69,6 +70,7 @@ describe('bridge updater installer handoff', () => {
     const helper = createWindowsUpdateHelper();
     expect(helper).toContain('OpenProcess');
     expect(helper).toContain('WaitForSingleObject');
+    expect(helper).toContain('WaitForSingleObject($parentHandle, [uint32]::MaxValue)');
     expect(helper).toContain("[IO.File]::WriteAllText($AckPath, ('ready' + [Environment]::NewLine + $resultLogPath))");
     expect(helper.indexOf('WaitForSingleObject')).toBeLessThan(helper.indexOf("ArgumentList '/S'"));
     expect(helper).toContain("[IO.File]::WriteAllText($resultLogPath, ('status=success'");
@@ -76,8 +78,26 @@ describe('bridge updater installer handoff', () => {
     expect(helper.indexOf('$resultLogPath')).toBeLessThan(helper.indexOf('Remove-Item -LiteralPath $StagingDirectory'));
   });
 
+  it('encodes a hidden PowerShell bootstrap that waits for the real helper process', () => {
+    const command = createWindowsUpdateBootstrap({
+      powershellPath: String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+      helperPath: String.raw`C:\private & staging\install helper.ps1`,
+      parentPid: 42,
+      ackPath: String.raw`C:\private & staging\ready`,
+      installerPath: String.raw`C:\private & staging\update package.exe`,
+      stagingDirectory: String.raw`C:\private & staging`,
+    });
+    const bootstrap = Buffer.from(command, 'base64').toString('utf16le');
+
+    expect(bootstrap).toContain('Start-Process');
+    expect(bootstrap).toContain('-WindowStyle Hidden');
+    expect(bootstrap).toContain('$helper.WaitForExit()');
+    expect(bootstrap).not.toContain(String.raw`C:\private & staging`);
+  });
+
   it('waits for the Windows handle-ready acknowledgement before accepting handoff', async () => {
     const child = new ChildProcess();
+    const unref = vi.spyOn(child, 'unref');
     const resultLogPath = String.raw`C:\Users\me\AppData\Local\Temp\vis_bridge-updates\installer-42.log`;
     const waitForAck = vi.fn(async () => resultLogPath);
     const spawnProcess = vi.fn(() => child);
@@ -94,8 +114,9 @@ describe('bridge updater installer handoff', () => {
 
     expect(waitForAck).toHaveBeenCalledWith(String.raw`C:\private\ready`, child);
     expect(spawnProcess).toHaveBeenCalledWith(expect.stringContaining('System32'), expect.arrayContaining([
-      '-File', String.raw`C:\private\install.ps1`, '-ParentPid', '42',
-    ]), expect.objectContaining({ detached: true, stdio: 'ignore', windowsHide: true }));
+      '-EncodedCommand', expect.any(String),
+    ]), expect.objectContaining({ detached: false, stdio: 'ignore', windowsHide: true }));
+    expect(unref).toHaveBeenCalledOnce();
     expect(accepted).toHaveBeenCalledWith(resultLogPath);
   });
 

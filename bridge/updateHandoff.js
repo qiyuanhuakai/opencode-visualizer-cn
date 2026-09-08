@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
 import { chmod, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { createWindowsUpdateBootstrap } from './updateHandoffWindows.js';
+
+export { createWindowsUpdateBootstrap } from './updateHandoffWindows.js';
 
 export async function handoffBridgeInstaller(options) {
   if (options.platform === 'win32') return handoffWindowsInstaller(options);
@@ -28,23 +31,23 @@ export async function handoffWindowsInstaller(options) {
     createWindowsUpdateHelper(),
   );
   const stagingDirectory = path.win32.dirname(options.assetPath);
+  const bootstrapCommand = createWindowsUpdateBootstrap({
+    powershellPath: options.powershellPath,
+    helperPath,
+    parentPid: options.parentPid,
+    ackPath,
+    installerPath: options.assetPath,
+    stagingDirectory,
+  });
   const child = options.spawnProcess(options.powershellPath, [
     '-NoProfile',
     '-NonInteractive',
     '-ExecutionPolicy',
     'Bypass',
-    '-File',
-    helperPath,
-    '-ParentPid',
-    String(options.parentPid),
-    '-AckPath',
-    ackPath,
-    '-InstallerPath',
-    options.assetPath,
-    '-StagingDirectory',
-    stagingDirectory,
+    '-EncodedCommand',
+    bootstrapCommand,
   ], {
-    detached: true,
+    detached: false,
     env: { ...process.env },
     stdio: 'ignore',
     windowsHide: true,
@@ -112,7 +115,7 @@ try {
   $parentHandle = [VisBridgeUpdateNative]::OpenProcess(0x00100000, $false, $ParentPid)
   if ($parentHandle -eq [IntPtr]::Zero) { throw 'Unable to acquire the vis_bridge parent process handle.' }
   [IO.File]::WriteAllText($AckPath, ('ready' + [Environment]::NewLine + $resultLogPath))
-  $waitResult = [VisBridgeUpdateNative]::WaitForSingleObject($parentHandle, 0xFFFFFFFF)
+  $waitResult = [VisBridgeUpdateNative]::WaitForSingleObject($parentHandle, [uint32]::MaxValue)
   if ($waitResult -ne 0) { throw "Waiting for vis_bridge exit failed: $waitResult" }
   $process = Start-Process -FilePath $InstallerPath -ArgumentList '/S' -Wait -PassThru
   if ($process.ExitCode -ne 0) { throw "vis_bridge installer failed with exit code $($process.ExitCode)." }
