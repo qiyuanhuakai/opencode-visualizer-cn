@@ -2,6 +2,13 @@ export type VisBridgeInstallerTarget = {
   readonly version: string;
   readonly platform: NodeJS.Platform;
   readonly arch: NodeJS.Architecture;
+  readonly format?: 'deb' | 'rpm';
+};
+
+export type LinuxRpmSpecOptions = {
+  readonly version: string;
+  readonly architecture: 'x86_64' | 'aarch64';
+  readonly payloadPath: string;
 };
 
 export type VisBridgeInstallerPaths = {
@@ -15,6 +22,7 @@ export class VisBridgeInstallerTargetError extends Error {}
 
 export function createNsiPath(filePath: string): string;
 export function createLinuxMaintainerScript(): string;
+export function createLinuxRpmSpec(options: LinuxRpmSpecOptions): string;
 export function createMacPreinstallScript(): string;
 export function createWindowsStopScript(): string;
 export function createWindowsInstallerScript(paths: VisBridgeInstallerPaths): string;
