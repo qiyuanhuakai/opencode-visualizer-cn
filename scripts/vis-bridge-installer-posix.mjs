@@ -11,20 +11,29 @@ import { stageNodePtyRuntime } from './vis-bridge-node-pty.mjs';
 
 const execFileAsync = promisify(execFile);
 
-export async function packageLinuxInstaller(paths, target, rootDirectory, normalizedVersion) {
-  const binaryDirectory = path.join(paths.workspacePath, 'usr', 'bin');
-  const metadataDirectory = path.join(paths.workspacePath, 'DEBIAN');
+export async function stageLinuxRuntimePayload({ payloadPath, binaryPath, rootDirectory, target }) {
+  const binaryDirectory = path.join(payloadPath, 'usr', 'bin');
   await mkdir(binaryDirectory, { recursive: true });
-  await mkdir(metadataDirectory, { recursive: true });
   const installedBinary = path.join(binaryDirectory, 'vis_bridge');
-  await copyFile(paths.binaryPath, installedBinary);
+  await copyFile(binaryPath, installedBinary);
   await chmod(installedBinary, 0o755);
   await stageNodePtyRuntime(
     rootDirectory,
-    path.join(paths.workspacePath, 'usr', 'lib', 'vis_bridge', 'node_modules', 'node-pty'),
+    path.join(payloadPath, 'usr', 'lib', 'vis_bridge', 'node_modules', 'node-pty'),
     target.platform,
     target.arch,
   );
+}
+
+export async function packageLinuxInstaller(paths, target, rootDirectory, normalizedVersion) {
+  const metadataDirectory = path.join(paths.workspacePath, 'DEBIAN');
+  await mkdir(metadataDirectory, { recursive: true });
+  await stageLinuxRuntimePayload({
+    payloadPath: paths.workspacePath,
+    binaryPath: paths.binaryPath,
+    rootDirectory,
+    target,
+  });
   const architecture = target.arch === 'x64' ? 'amd64' : 'arm64';
   await writeFile(
     path.join(metadataDirectory, 'control'),
