@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.7.15 released]
 
 ### bridge 终端更新与 RPM 发布
 
