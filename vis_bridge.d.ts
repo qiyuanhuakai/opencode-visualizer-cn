@@ -1,5 +1,6 @@
 import type { Server } from 'node:http';
 import type { BridgeRuntime } from './bridge/bridgeRuntime.js';
+export { parseBridgeUpdateArgs } from './bridge/updateCli.js';
 
 export type VisBridgeServerOptions = {
   host?: string;

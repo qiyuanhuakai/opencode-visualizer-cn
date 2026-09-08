@@ -20,6 +20,8 @@ Usage:
   vis_bridge start [options]
   vis_bridge stop
   vis_bridge restart [options]
+  vis_bridge update [--check] [--yes|-y]
+  vis_bridge upgrade [--check] [--yes|-y]
   vis_bridge --version
 
 Options:
