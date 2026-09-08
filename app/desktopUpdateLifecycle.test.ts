@@ -20,8 +20,14 @@ describe('desktop update lifecycle', () => {
     const fixture = createFixture();
     await fixture.service.check('bridge');
     await fixture.service.download('bridge');
-    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
-    await vi.waitFor(() => expect(fixture.runtime.removeFile).toHaveBeenCalledWith('/private/update/bridge.deb'));
+    fixture.service.reportBridgeVersion({
+      connectionId: 'replacement',
+      endpointLocality: 'local',
+      version: '1.2.3',
+    });
+    await vi.waitFor(() =>
+      expect(fixture.runtime.removeFile).toHaveBeenCalledWith('/private/update/bridge.deb'),
+    );
     await fixture.service.dispose();
     expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(1);
   });
@@ -35,7 +41,11 @@ describe('desktop update lifecycle', () => {
     fixture.runtime.verifyAsset.mockImplementationOnce(() => verification.promise);
     const installation = fixture.service.install('bridge');
     await vi.waitFor(() => expect(fixture.runtime.verifyAsset).toHaveBeenCalledTimes(2));
-    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'replacement',
+      endpointLocality: 'local',
+      version: '1.2.3',
+    });
     expect(fixture.runtime.removeFile).not.toHaveBeenCalled();
     verification.resolve(undefined);
     await installation;
@@ -50,7 +60,11 @@ describe('desktop update lifecycle', () => {
     await fixture.service.check('bridge');
     await fixture.service.download('bridge');
     fixture.runtime.removeFile.mockRejectedValueOnce(new Error('temporary removal failure'));
-    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'replacement',
+      endpointLocality: 'local',
+      version: '1.2.3',
+    });
     await vi.waitFor(() => expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(1));
     await fixture.service.dispose();
     expect(fixture.runtime.removeFile).toHaveBeenCalledTimes(2);
@@ -65,7 +79,11 @@ describe('desktop update lifecycle', () => {
     fixture.shell.openPath.mockImplementationOnce(() => opened.promise);
     const installation = fixture.service.install('bridge');
     await vi.waitFor(() => expect(fixture.shell.openPath).toHaveBeenCalledOnce());
-    fixture.service.reportBridgeVersion({ connectionId: 'replacement', version: '1.2.3' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'replacement',
+      endpointLocality: 'local',
+      version: '1.2.3',
+    });
     opened.resolve('');
     await installation;
     await fixture.service.dispose();
@@ -76,7 +94,13 @@ describe('desktop update lifecycle', () => {
     await fixture.service.dispose();
     const before = fixture.service.getState();
     const count = fixture.changes.length;
-    expect(() => fixture.service.reportBridgeVersion({ connectionId: 'late', version: '9.9.9' })).toThrow('disposed');
+    expect(() =>
+      fixture.service.reportBridgeVersion({
+        connectionId: 'late',
+        endpointLocality: 'local',
+        version: '9.9.9',
+      }),
+    ).toThrow('disposed');
     expect(fixture.service.getState()).toEqual(before);
     expect(fixture.changes).toHaveLength(count);
   });
@@ -247,7 +271,11 @@ describe('desktop update lifecycle', () => {
     const checking = fixture.service.check('bridge');
     await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce());
 
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.2.3' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-2',
+      endpointLocality: 'local',
+      version: '1.2.3',
+    });
     release.resolve(RELEASE);
     await checking;
 
@@ -258,7 +286,7 @@ describe('desktop update lifecycle', () => {
     });
   });
 
-  it('cleans a stale download and ignores its later progress', async () => {
+  it('cleans a stale download when the same bridge connection becomes remote', async () => {
     const fixture = createFixture();
     const download = deferred<string>();
     let reportProgress: ((percent: number) => void) | undefined;
@@ -270,20 +298,24 @@ describe('desktop update lifecycle', () => {
     const downloading = fixture.service.download('bridge');
     await vi.waitFor(() => expect(fixture.runtime.downloadAsset).toHaveBeenCalledOnce());
 
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-1',
+      endpointLocality: 'remote',
+      version: '1.0.0',
+    });
     reportProgress?.(75);
     download.resolve('/private/update/stale-bridge.deb');
     await downloading;
 
     expect(fixture.runtime.removeFile).toHaveBeenCalledWith('/private/update/stale-bridge.deb');
     expect(fixture.service.getState().bridge).toMatchObject({
-      phase: 'idle',
+      phase: 'unsupported',
       progress: null,
       assetName: null,
     });
   });
 
-  it('does not verify or open an installer approved for a replaced bridge connection', async () => {
+  it('does not verify or open an installer approved after the bridge becomes remote', async () => {
     const fixture = createFixture();
     await fixture.service.check('bridge');
     await fixture.service.download('bridge');
@@ -292,16 +324,20 @@ describe('desktop update lifecycle', () => {
     const installing = fixture.service.install('bridge');
     await vi.waitFor(() => expect(fixture.beforeInstall).toHaveBeenCalledOnce());
 
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-1',
+      endpointLocality: 'remote',
+      version: '1.0.0',
+    });
     approval.resolve(true);
     await installing;
 
     expect(fixture.runtime.verifyAsset).toHaveBeenCalledOnce();
     expect(fixture.shell.openPath).not.toHaveBeenCalled();
-    expect(fixture.service.getState().bridge.phase).toBe('idle');
+    expect(fixture.service.getState().bridge.phase).toBe('unsupported');
   });
 
-  it('does not open an installer whose final verification became stale', async () => {
+  it('does not open an installer when final verification completes after the bridge becomes remote', async () => {
     const fixture = createFixture();
     await fixture.service.check('bridge');
     await fixture.service.download('bridge');
@@ -310,12 +346,16 @@ describe('desktop update lifecycle', () => {
     const installing = fixture.service.install('bridge');
     await vi.waitFor(() => expect(fixture.runtime.verifyAsset).toHaveBeenCalledTimes(2));
 
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-1',
+      endpointLocality: 'remote',
+      version: '1.0.0',
+    });
     verification.resolve(undefined);
     await installing;
 
     expect(fixture.shell.openPath).not.toHaveBeenCalled();
-    expect(fixture.service.getState().bridge.phase).toBe('idle');
+    expect(fixture.service.getState().bridge.phase).toBe('unsupported');
   });
 
   it('drains a pending metadata auto-check after stale bridge work settles', async () => {
@@ -329,7 +369,11 @@ describe('desktop update lifecycle', () => {
       autoDownloadUpdates: false,
     });
 
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-2',
+      endpointLocality: 'local',
+      version: '1.0.0',
+    });
     staleRelease.resolve(RELEASE);
     await Promise.all([staleCheck, configuring]);
     await vi.waitFor(() => expect(fixture.runtime.getLatestRelease).toHaveBeenCalledTimes(2));
@@ -347,9 +391,17 @@ describe('desktop update lifecycle', () => {
       autoCheckUpdates: true,
       autoDownloadUpdates: false,
     });
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-2', version: '1.0.0' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-2',
+      endpointLocality: 'local',
+      version: '1.0.0',
+    });
 
-    fixture.service.reportBridgeVersion({ connectionId: 'connection-3', version: null });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'connection-3',
+      endpointLocality: 'unknown',
+      version: null,
+    });
     staleRelease.resolve(RELEASE);
     await Promise.all([staleCheck, configuring]);
     await Promise.resolve();
@@ -357,7 +409,8 @@ describe('desktop update lifecycle', () => {
     expect(fixture.runtime.getLatestRelease).toHaveBeenCalledOnce();
     expect(fixture.service.getState().bridge).toMatchObject({
       currentVersion: null,
-      phase: 'idle',
+      installKind: 'unsupported',
+      phase: 'unsupported',
     });
   });
 });
@@ -402,7 +455,11 @@ function createFixture(options: { readonly automaticAppUpdates?: boolean } = {})
     },
     runtime,
   );
-  service.reportBridgeVersion({ connectionId: 'connection-1', version: '1.0.0' });
+  service.reportBridgeVersion({
+    connectionId: 'connection-1',
+    endpointLocality: 'local',
+    version: '1.0.0',
+  });
   return { beforeInstall, changes, runtime, service, shell, updater };
 }
 

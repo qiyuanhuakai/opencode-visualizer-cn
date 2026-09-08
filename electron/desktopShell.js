@@ -119,17 +119,6 @@ export function createDesktopShell({
     return false;
   };
 
-  const windowIsAttentive = () => {
-    const window = resolveWindow();
-    return Boolean(
-      window &&
-      !window.isDestroyed() &&
-      window.isVisible() &&
-      !window.isMinimized() &&
-      window.isFocused(),
-    );
-  };
-
   const playNotificationSound = () => {
     if (preferences.notificationSound) shell.beep();
   };
@@ -161,7 +150,7 @@ export function createDesktopShell({
   const notify = (payload) => {
     const notificationPayload = validateDesktopNotification(payload);
     if (!preferences.idleNotifications) return;
-    if (completionWasRecentlyHandled(notificationPayload.id) || windowIsAttentive()) return;
+    if (completionWasRecentlyHandled(notificationPayload.id)) return;
 
     if (!nativeNotificationsAvailable) {
       playNotificationSound();

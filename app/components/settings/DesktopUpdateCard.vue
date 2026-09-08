@@ -30,7 +30,16 @@
     <div v-if="errorText" class="desktop-error" role="alert">{{ errorText }}</div>
     <div v-if="state.phase === 'installer-opened'" class="desktop-notice">{{ t('desktopSettings.updates.manualInstallerOpenedNotice') }}</div>
     <div v-if="state.component === 'bridge' && interruptPhases.has(state.phase)" class="desktop-notice">{{ t('desktopSettings.updates.bridgeInterruptNotice') }}</div>
-    <div v-if="state.phase === 'unsupported'" class="desktop-notice">{{ t('desktopSettings.updates.unsupportedNotice') }}</div>
+    <div
+      v-if="state.installKind === 'remote'"
+      class="desktop-notice"
+      data-testid="bridge-remote-update-unavailable"
+    >
+      {{ t('desktopSettings.updates.remoteUpdateUnavailableNotice') }}
+    </div>
+    <div v-else-if="state.phase === 'unsupported'" class="desktop-notice">
+      {{ t('desktopSettings.updates.unsupportedNotice') }}
+    </div>
     <div v-if="hasExtraActions" class="desktop-update-extra-actions">
       <button v-if="state.phase === 'available'" type="button" class="desktop-button" :disabled="busy" @click="$emit('download')">
         {{ t('desktopSettings.updates.actions.download') }}

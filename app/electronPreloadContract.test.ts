@@ -188,7 +188,11 @@ describe('electron preload contract', () => {
     // When: desktop operations are requested by the renderer.
     await api.desktop.getState();
     await api.desktop.configure({ closeToTray: true });
-    await api.desktop.reportBridgeVersion?.({ connectionId: 'connection-1', version: 'v1.2.3' });
+    await api.desktop.reportBridgeVersion?.({
+      connectionId: 'connection-1',
+      endpointLocality: 'local',
+      version: 'v1.2.3',
+    });
     await api.desktop.check('app');
     await api.desktop.download('bridge');
     await api.desktop.install('bridge');
@@ -196,7 +200,10 @@ describe('electron preload contract', () => {
     expect(ipcRenderer.invoke.mock.calls).toEqual([
       ['desktop-get-state'],
       ['desktop-configure', { closeToTray: true }],
-      ['desktop-report-bridge-version', { connectionId: 'connection-1', version: 'v1.2.3' }],
+      [
+        'desktop-report-bridge-version',
+        { connectionId: 'connection-1', endpointLocality: 'local', version: 'v1.2.3' },
+      ],
       ['desktop-check', 'app'],
       ['desktop-download', 'bridge'],
       ['desktop-install', 'bridge'],

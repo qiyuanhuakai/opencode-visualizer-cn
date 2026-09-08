@@ -11,6 +11,7 @@ const LOCALES = new Set(['en', 'zh-CN', 'zh-TW', 'ja', 'eo']);
 const BRIDGE_VERSION_PATTERN = /^v?(\d+\.\d+\.\d+)$/u;
 const MAX_CONNECTION_ID_LENGTH = 128;
 const MAX_BRIDGE_VERSION_LENGTH = 64;
+const BRIDGE_ENDPOINT_LOCALITIES = new Set(['local', 'remote', 'unknown']);
 
 function parsePreferences(patch) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
@@ -36,7 +37,12 @@ function parseBridgeVersionReport(payload) {
     throw new TypeError('Invalid bridge version report');
   }
   const keys = Object.keys(payload);
-  if (keys.length !== 2 || !keys.includes('connectionId') || !keys.includes('version')) {
+  if (
+    keys.length !== 3 ||
+    !keys.includes('connectionId') ||
+    !keys.includes('endpointLocality') ||
+    !keys.includes('version')
+  ) {
     throw new TypeError('Invalid bridge version report');
   }
   if (
@@ -46,7 +52,16 @@ function parseBridgeVersionReport(payload) {
   ) {
     throw new TypeError('Invalid bridge connection ID');
   }
-  if (payload.version === null) return { connectionId: payload.connectionId, version: null };
+  if (!BRIDGE_ENDPOINT_LOCALITIES.has(payload.endpointLocality)) {
+    throw new TypeError('Invalid bridge endpoint locality');
+  }
+  if (payload.version === null) {
+    return {
+      connectionId: payload.connectionId,
+      endpointLocality: payload.endpointLocality,
+      version: null,
+    };
+  }
   const match =
     typeof payload.version === 'string' && payload.version.length <= MAX_BRIDGE_VERSION_LENGTH
       ? BRIDGE_VERSION_PATTERN.exec(payload.version)
@@ -56,7 +71,11 @@ function parseBridgeVersionReport(payload) {
     .split('.')
     .map((part) => BigInt(part).toString())
     .join('.');
-  return { connectionId: payload.connectionId, version };
+  return {
+    connectionId: payload.connectionId,
+    endpointLocality: payload.endpointLocality,
+    version,
+  };
 }
 
 function parseNotification(notification) {

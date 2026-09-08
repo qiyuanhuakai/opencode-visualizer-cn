@@ -32,6 +32,7 @@ export interface DesktopSettingsMessages {
     installKind: {
       automatic: string;
       manual: string;
+      remote: string;
       unsupported: string;
     };
     status: {
@@ -59,6 +60,7 @@ export interface DesktopSettingsMessages {
     progressLabel: string;
     manualInstallerOpenedNotice: string;
     bridgeInterruptNotice: string;
+    remoteUpdateUnavailableNotice: string;
     unsupportedNotice: string;
   };
   preferences: {
@@ -105,6 +107,7 @@ const en: DesktopSettingsMessages = {
     installKind: {
       automatic: 'Automatic',
       manual: 'Manual',
+      remote: 'Remote',
       unsupported: 'Unsupported',
     },
     status: {
@@ -134,6 +137,8 @@ const en: DesktopSettingsMessages = {
       'The installer has opened. The update is not installed yet; complete the steps in the installer window.',
     bridgeInterruptNotice:
       'Installing the bridge update restarts the local vis_bridge daemon; active Codex and ACP connections are briefly interrupted.',
+    remoteUpdateUnavailableNotice:
+      'This bridge is remote. Update vis_bridge on the machine where it is running.',
     unsupportedNotice: 'Updates are not supported in this build.',
   },
   preferences: {
@@ -198,6 +203,7 @@ const zhCN: DesktopSettingsMessages = {
     installKind: {
       automatic: '自动',
       manual: '手动',
+      remote: '远程',
       unsupported: '不支持',
     },
     status: {
@@ -227,6 +233,8 @@ const zhCN: DesktopSettingsMessages = {
       '安装程序已打开。更新尚未安装；请在安装程序窗口中完成剩余步骤。',
     bridgeInterruptNotice:
       '安装 Bridge 更新会重启本地 vis_bridge 守护进程，进行中的 Codex 与 ACP 连接会被短暂中断。',
+    remoteUpdateUnavailableNotice:
+      '此 Bridge 运行在远程主机上，请在运行它的主机上更新 vis_bridge。',
     unsupportedNotice: '当前构建不支持更新。',
   },
   preferences: {
@@ -291,6 +299,7 @@ const zhTW: DesktopSettingsMessages = {
     installKind: {
       automatic: '自動',
       manual: '手動',
+      remote: '遠端',
       unsupported: '不支援',
     },
     status: {
@@ -320,6 +329,7 @@ const zhTW: DesktopSettingsMessages = {
       '安裝程式已開啟。更新尚未安裝；請在安裝程式視窗中完成剩餘步驟。',
     bridgeInterruptNotice:
       '安裝橋接器更新會重新啟動本機 vis_bridge 守護行程，進行中的 Codex 與 ACP 連線會短暫中斷。',
+    remoteUpdateUnavailableNotice: '此橋接器在遠端主機上執行，請在執行它的主機上更新 vis_bridge。',
     unsupportedNotice: '此版本不支援更新。',
   },
   preferences: {
@@ -384,6 +394,7 @@ const ja: DesktopSettingsMessages = {
     installKind: {
       automatic: '自動',
       manual: '手動',
+      remote: 'リモート',
       unsupported: '非対応',
     },
     status: {
@@ -413,6 +424,8 @@ const ja: DesktopSettingsMessages = {
       'インストーラーが開きました。更新はまだインストールされていません。インストーラーウィンドウで手順を完了してください。',
     bridgeInterruptNotice:
       'ブリッジの更新をインストールするとローカルの vis_bridge デーモンが再起動し、実行中の Codex および ACP 接続が一時的に中断されます。',
+    remoteUpdateUnavailableNotice:
+      'このブリッジはリモートで実行されています。実行先のマシンで vis_bridge を更新してください。',
     unsupportedNotice: 'このビルドでは更新はサポートされていません。',
   },
   preferences: {
@@ -478,6 +491,7 @@ const eo: DesktopSettingsMessages = {
     installKind: {
       automatic: 'Aŭtomata',
       manual: 'Mana',
+      remote: 'Fora',
       unsupported: 'Nesubtenata',
     },
     status: {
@@ -507,6 +521,8 @@ const eo: DesktopSettingsMessages = {
       'La instalilo malfermiĝis. La ĝisdatigo ankoraŭ ne estas instalita; finu la paŝojn en la instalila fenestro.',
     bridgeInterruptNotice:
       'Instalado de la ponta ĝisdatigo relanĉas la lokan vis_bridge-daemonon; aktivaj Codex- kaj ACP-konektoj estas mallonge interrompitaj.',
+    remoteUpdateUnavailableNotice:
+      'Ĉi tiu ponto estas fora. Ĝisdatigu vis_bridge sur la maŝino, kie ĝi funkcias.',
     unsupportedNotice: 'Ĝisdatigoj ne estas subtenataj en ĉi tiu konstruaĵo.',
   },
   preferences: {

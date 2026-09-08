@@ -161,7 +161,16 @@ describe('useDesktopBridgeVersion', () => {
 
     // Then: the runtime saw null first, then the ready version, on one connection id.
     expect(desktop.reports).toHaveLength(2);
-    expect(desktop.reports[0]).toEqual({ connectionId: desktop.reports[1]!.connectionId, version: null });
+    expect(desktop.reports[0]).toEqual({
+      connectionId: desktop.reports[1]!.connectionId,
+      endpointLocality: 'remote',
+      version: null,
+    });
+    expect(desktop.reports[1]).toEqual({
+      connectionId: desktop.reports[0]!.connectionId,
+      endpointLocality: 'remote',
+      version: '1.2.3',
+    });
     expect(desktop.reports[1]!.version).toBe('1.2.3');
     expect(handle.state.value).toEqual({ status: 'ready', version: '1.2.3' });
   });
@@ -170,7 +179,9 @@ describe('useDesktopBridgeVersion', () => {
     const desktop = createDesktopApi();
     scope.run(() => useDesktopBridgeVersion(ref(''), desktop.api));
     await flush();
-    expect(desktop.reports).toEqual([{ connectionId: expect.any(String), version: null }]);
+    expect(desktop.reports).toEqual([
+      { connectionId: expect.any(String), endpointLocality: 'unknown', version: null },
+    ]);
     expect(desktop.reports[0]?.connectionId).not.toBe('');
   });
 
@@ -225,7 +236,47 @@ describe('useDesktopBridgeVersion', () => {
     scope.stop();
 
     // Then: the runtime receives a final null for that connection.
-    expect(desktop.reports.at(-1)).toEqual({ connectionId, version: null });
+    expect(desktop.reports.at(-1)).toEqual({
+      connectionId,
+      endpointLocality: 'remote',
+      version: null,
+    });
+  });
+
+  it.each([
+    'http://localhost:23004/healthz',
+    'http://localhost.:23004/healthz',
+    'http://127.42.0.9:23004/healthz',
+    'http://[::1]:23004/healthz',
+    'http://[::ffff:127.0.0.1]:23004/healthz',
+  ])('reports local endpoint locality for loopback bridge URL %s', async (healthUrl) => {
+    const desktop = createDesktopApi();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(healthPayload('1.2.3'))),
+    );
+
+    scope.run(() => useDesktopBridgeVersion(ref(healthUrl), desktop.api));
+    await flush();
+
+    expect(desktop.reports.at(-1)?.endpointLocality).toBe('local');
+  });
+
+  it.each([
+    'http://[::ffff:192.168.1.2]:23004/healthz',
+    'http://127.evil.example:23004/healthz',
+    'http://127.0.0.1.evil.example:23004/healthz',
+  ])('reports non-loopback endpoint %s as remote', async (healthUrl) => {
+    const desktop = createDesktopApi();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(healthPayload('1.2.3'))),
+    );
+
+    scope.run(() => useDesktopBridgeVersion(ref(healthUrl), desktop.api));
+    await flush();
+
+    expect(desktop.reports.at(-1)?.endpointLocality).toBe('remote');
   });
 
   it('keeps fetching health without reporting when the runtime lacks the report API', async () => {

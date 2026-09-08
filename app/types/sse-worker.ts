@@ -29,6 +29,7 @@ export type TabToWorkerMessage =
       projectId: string;
       sessionId: string;
       directory?: string;
+      nativeCompletionNotifications?: boolean;
     }
   | {
       type: 'load-sessions';

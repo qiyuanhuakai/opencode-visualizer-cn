@@ -418,7 +418,7 @@ describe('Electron desktop shell', () => {
     expect(harness.window.show.mock.invocationCallOrder[0]).toBeGreaterThan(harness.window.restore.mock.invocationCallOrder[0]);
   });
 
-  it('suppresses attentive notifications and uses one explicit sound source when hidden', () => {
+  it('shows attentive notifications and uses the configured explicit sound source', () => {
     const harness = createHarness();
     harness.desktopShell.configure({
       ...basePreferences,
@@ -435,11 +435,6 @@ describe('Electron desktop shell', () => {
     };
     harness.window.focused = true;
     harness.desktopShell.notify(payload);
-    expect(NotificationMock.instances).toHaveLength(0);
-    expect(harness.shellApi.beep).not.toHaveBeenCalled();
-
-    harness.window.visible = false;
-    harness.desktopShell.notify({ ...payload, id: 'completion-2' });
     expect(NotificationMock.instances).toHaveLength(1);
     expect(NotificationMock.instances[0]?.options).toEqual({
       title: payload.title,
@@ -448,6 +443,45 @@ describe('Electron desktop shell', () => {
     });
     expect(NotificationMock.instances[0]?.show).toHaveBeenCalledOnce();
     expect(harness.shellApi.beep).toHaveBeenCalledOnce();
+  });
+
+  it('shows attentive notifications without sound when sound is disabled', () => {
+    const harness = createHarness();
+    harness.desktopShell.configure({ ...basePreferences, idleNotifications: true });
+    harness.desktopShell.attachWindow(harness.window);
+    harness.window.focused = true;
+
+    harness.desktopShell.notify({
+      id: 'completion-silent',
+      title: 'Task complete',
+      body: 'The foreground task completed.',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+    });
+
+    expect(NotificationMock.instances[0]?.show).toHaveBeenCalledOnce();
+    expect(harness.shellApi.beep).not.toHaveBeenCalled();
+  });
+
+  it('keeps notification and sound side effects disabled when notifications are disabled', () => {
+    const harness = createHarness();
+    harness.desktopShell.configure({
+      ...basePreferences,
+      idleNotifications: false,
+      notificationSound: true,
+    });
+    harness.window.focused = true;
+
+    harness.desktopShell.notify({
+      id: 'completion-disabled',
+      title: 'Task complete',
+      body: 'The foreground task completed.',
+      projectId: 'project-1',
+      sessionId: 'session-1',
+    });
+
+    expect(NotificationMock.instances).toHaveLength(0);
+    expect(harness.shellApi.beep).not.toHaveBeenCalled();
   });
 
   it('retires asynchronously failed native alerts and reports the lost capability', () => {
@@ -592,6 +626,32 @@ describe('Electron desktop shell', () => {
     expect(harness.desktopShell.getCapabilities().nativeNotificationsAvailable).toBe(false);
     expect(NotificationMock.instances).toHaveLength(0);
     expect(harness.shellApi.beep).toHaveBeenCalledOnce();
+  });
+
+  it('retains the configured sound fallback when native alerts are unsupported on macOS', () => {
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin');
+    try {
+      const harness = createHarness();
+      harness.desktopShell.configure({
+        ...basePreferences,
+        idleNotifications: true,
+        notificationSound: true,
+      });
+      harness.window.focused = true;
+      harness.desktopShell.notify({
+        id: 'macos-completion',
+        title: 'Complete',
+        body: 'Done',
+        projectId: 'project-1',
+        sessionId: 'session-1',
+      });
+
+      expect(harness.desktopShell.getCapabilities().nativeNotificationsAvailable).toBe(false);
+      expect(NotificationMock.instances).toHaveLength(0);
+      expect(harness.shellApi.beep).toHaveBeenCalledOnce();
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   it('sets the stable app identity and disposes native resources and listeners', () => {

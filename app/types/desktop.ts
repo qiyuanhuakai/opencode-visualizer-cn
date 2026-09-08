@@ -1,5 +1,6 @@
 export type DesktopComponent = 'app' | 'bridge';
 export type DesktopLocale = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'eo';
+export type DesktopBridgeEndpointLocality = 'local' | 'remote' | 'unknown';
 
 export interface DesktopPreferences {
   readonly locale: DesktopLocale;
@@ -28,7 +29,7 @@ export interface DesktopUpdateState {
     | 'unsupported';
   readonly progress: number | null;
   readonly error: string | null;
-  readonly installKind: 'automatic' | 'manual' | 'unsupported';
+  readonly installKind: 'automatic' | 'manual' | 'remote' | 'unsupported';
   readonly assetName: string | null;
 }
 
@@ -49,6 +50,7 @@ export interface DesktopNotification {
 
 export interface DesktopBridgeVersionReport {
   readonly connectionId: string;
+  readonly endpointLocality: DesktopBridgeEndpointLocality;
   readonly version: string | null;
 }
 

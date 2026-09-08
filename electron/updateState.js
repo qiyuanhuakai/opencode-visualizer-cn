@@ -33,11 +33,12 @@ export function unsupportedMessage(component) {
 }
 
 export function initialState(component, currentVersion, installKind) {
+  const unavailable = installKind === 'unsupported' || installKind === 'remote';
   return {
     component,
     currentVersion,
     availableVersion: null,
-    phase: installKind === 'unsupported' ? 'unsupported' : 'idle',
+    phase: unavailable ? 'unsupported' : 'idle',
     progress: null,
     error: installKind === 'unsupported' ? unsupportedMessage(component) : null,
     installKind,

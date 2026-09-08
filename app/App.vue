@@ -5179,6 +5179,7 @@ function syncActiveSelectionToWorker() {
     projectId: isWindowAttentive() ? selectedProjectId.value : '',
     sessionId: isWindowAttentive() ? selectedSessionId.value : '',
     directory: isWindowAttentive() ? activeDirectory.value : '',
+    nativeCompletionNotifications: Boolean(desktopNotifications),
   });
 }
 
