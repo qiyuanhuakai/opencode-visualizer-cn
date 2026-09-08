@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { text } from 'node:stream/consumers';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,11 @@ import {
 
 const temporaryDirectories: string[] = [];
 const temporaryFiles: string[] = [];
+
+function esmImportSpecifier(filePath: string): string {
+  return pathToFileURL(filePath).href;
+}
+
 afterEach(async () => {
   await Promise.all([
     ...temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
@@ -93,13 +99,30 @@ describe('bridge updater installer handoff', () => {
     expect(accepted).toHaveBeenCalledWith(resultLogPath);
   });
 
+  it('converts Windows drive paths before embedding them in an ESM driver', async () => {
+    const windowsModulePath = String.raw`D:\ci\bridge\updateHandoff.js`;
+    const driverProcess = spawn(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      `import(${JSON.stringify(windowsModulePath)})`,
+    ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const [[driverExit], driverStderr] = await Promise.all([
+      once(driverProcess, 'exit'),
+      text(driverProcess.stderr),
+    ]);
+
+    expect(driverExit, driverStderr).not.toBe(0);
+    expect(driverStderr).toContain('ERR_UNSUPPORTED_ESM_URL_SCHEME');
+    expect(new URL(esmImportSpecifier(windowsModulePath)).protocol).toBe('file:');
+  });
+
   it('keeps a separate Node protocol driver alive until acknowledgement arrives', async () => {
     const directory = await mkdtemp(path.join(tmpdir(), 'vis-bridge-ack-driver-'));
     temporaryDirectories.push(directory);
     const ackPath = path.join(directory, 'ready');
     const startedPath = path.join(directory, 'started');
     const resultPath = path.join(directory, 'accepted');
-    const moduleUrl = pathToFileURL(path.resolve(import.meta.dirname, '../bridge/updateHandoff.js')).href;
+    const moduleUrl = esmImportSpecifier(path.resolve(import.meta.dirname, '../bridge/updateHandoff.js'));
     const driver = `
       import { EventEmitter } from 'node:events';
       import { writeFile } from 'node:fs/promises';
@@ -173,18 +196,18 @@ C:\Users\me\AppData\Local\Temp\vis_bridge-updates\installer.log`);
   it.runIf(process.platform === 'win32').each([
     ['success', 0],
     ['failure', 7],
-  ])('writes a durable %s result through the real PowerShell helper protocol', async (expectedStatus, installerExit) => {
-    const directory = await mkdtemp(path.join(tmpdir(), 'vis-bridge-powershell-helper-'));
+  ])('writes a durable %s result through the real PowerShell helper protocol with shell-sensitive paths', async (expectedStatus, installerExit) => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis bridge & powershell (helper)-'));
     temporaryDirectories.push(directory);
     const stagingDirectory = path.join(directory, 'staging');
     const acceptedPath = path.join(directory, 'accepted-path');
     const helperPath = path.join(stagingDirectory, 'install.ps1');
     const ackPath = path.join(stagingDirectory, 'ready');
-    const installerPath = path.join(stagingDirectory, 'fake-installer.cmd');
+    const installerPath = path.join(stagingDirectory, 'fake installer & handoff.cmd');
     await mkdir(stagingDirectory);
     await writeFile(helperPath, createWindowsUpdateHelper());
     await writeFile(installerPath, `@exit /b ${installerExit}\r\n`);
-    const moduleUrl = pathToFileURL(path.resolve(import.meta.dirname, '../bridge/updateHandoff.js')).href;
+    const moduleUrl = esmImportSpecifier(path.resolve(import.meta.dirname, '../bridge/updateHandoff.js'));
     const powershellPath = path.win32.join(process.env.SystemRoot ?? String.raw`C:\Windows`, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     const driver = `
       import { spawn } from 'node:child_process';
@@ -198,9 +221,14 @@ C:\Users\me\AppData\Local\Temp\vis_bridge-updates\installer.log`);
         onAccepted: (resultLogPath) => writeFileSync(${JSON.stringify(acceptedPath)}, resultLogPath),
       });
     `;
-    const driverProcess = spawn(process.execPath, ['--input-type=module', '--eval', driver], { stdio: 'ignore' });
-    const [driverExit] = await once(driverProcess, 'exit');
-    expect(driverExit).toBe(0);
+    const driverProcess = spawn(process.execPath, ['--input-type=module', '--eval', driver], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    const [[driverExit, driverSignal], driverStderr] = await Promise.all([
+      once(driverProcess, 'exit'),
+      text(driverProcess.stderr),
+    ]);
+    expect(driverExit, `driver exited with code ${driverExit}, signal ${driverSignal}; stderr:\n${driverStderr}`).toBe(0);
     const resultLogPath = await readFile(acceptedPath, 'utf8');
     temporaryFiles.push(resultLogPath);
     await vi.waitFor(() => expect(existsSync(resultLogPath)).toBe(true), { timeout: 10_000 });
