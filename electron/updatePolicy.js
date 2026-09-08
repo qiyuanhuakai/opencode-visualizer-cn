@@ -27,9 +27,25 @@ export function parseStableRelease(value) {
   };
 }
 
-export function selectManualAsset(release, component, platform, arch) {
+export function selectManualAsset(release, component, platform, arch, linuxFormat = 'deb') {
+  if (component === 'bridge') {
+    return selectBridgeAsset(release, platform, arch, linuxFormat);
+  }
   assertSupportedTarget(platform, arch);
-  const expectedName = assetName(release.version, component, platform, arch);
+  const expectedName = assetName(release.version, component, platform, arch, linuxFormat);
+  return exactlyOneAsset(release, expectedName);
+}
+
+export function selectBridgeAsset(release, platform, arch, linuxFormat = 'deb') {
+  assertSupportedTarget(platform, arch);
+  if (platform === 'linux' && linuxFormat !== 'deb' && linuxFormat !== 'rpm') {
+    throw new DesktopUpdatePolicyError(`Unsupported Linux bridge package format: ${linuxFormat}`);
+  }
+  const expectedName = assetName(release.version, 'bridge', platform, arch, linuxFormat ?? 'deb');
+  return exactlyOneAsset(release, expectedName);
+}
+
+function exactlyOneAsset(release, expectedName) {
   const matches = release.assets.filter((asset) => asset.name === expectedName);
   if (matches.length !== 1) {
     throw new DesktopUpdatePolicyError(
@@ -41,12 +57,18 @@ export function selectManualAsset(release, component, platform, arch) {
 
 export function selectAutomaticAppFile(info, platform, arch, target) {
   assertSupportedTarget(platform, arch);
-  if (!isRecord(info) || typeof info.version !== 'string' || !AUTOMATIC_VERSION_PATTERN.test(info.version)) {
+  if (
+    !isRecord(info) ||
+    typeof info.version !== 'string' ||
+    !AUTOMATIC_VERSION_PATTERN.test(info.version)
+  ) {
     throw new DesktopUpdatePolicyError('Automatic update metadata has no stable version');
   }
   const expected = automaticAppNames(info.version, platform, arch, target);
   if (!Array.isArray(info.files) || info.files.length !== expected.names.size) {
-    throw new DesktopUpdatePolicyError('Automatic update artifact list does not match generated Vis targets');
+    throw new DesktopUpdatePolicyError(
+      'Automatic update artifact list does not match generated Vis targets',
+    );
   }
   const files = new Map();
   for (const file of info.files) {
@@ -61,12 +83,17 @@ export function selectAutomaticAppFile(info, platform, arch, target) {
       !Number.isSafeInteger(file.size) ||
       file.size <= 0
     ) {
-      throw new DesktopUpdatePolicyError('Automatic update artifact does not match the Vis release target');
+      throw new DesktopUpdatePolicyError(
+        'Automatic update artifact does not match the Vis release target',
+      );
     }
     files.set(file.url, file);
   }
   const file = files.get(expected.selected);
-  if (!file) throw new DesktopUpdatePolicyError('Automatic update manifest omits the installed Vis package target');
+  if (!file)
+    throw new DesktopUpdatePolicyError(
+      'Automatic update manifest omits the installed Vis package target',
+    );
   return { name: file.url, size: file.size, sha512: file.sha512, url: file.url };
 }
 
@@ -139,12 +166,14 @@ function checkedAssetApiUrl(rawUrl) {
     url.search ||
     url.hash
   ) {
-    throw new DesktopUpdatePolicyError('GitHub returned a release asset URL outside the official repository');
+    throw new DesktopUpdatePolicyError(
+      'GitHub returned a release asset URL outside the official repository',
+    );
   }
   return url.toString();
 }
 
-function assetName(version, component, platform, arch) {
+function assetName(version, component, platform, arch, linuxFormat) {
   if (component === 'app') {
     if (platform !== 'darwin') {
       throw new DesktopUpdatePolicyError('Manual app installers are supported only on macOS');
@@ -152,7 +181,7 @@ function assetName(version, component, platform, arch) {
     return `Vis-${version}-${arch}-MacOS.dmg`;
   }
   const platformName = { darwin: 'MacOS', linux: 'Linux', win32: 'Windows' }[platform];
-  const extension = { darwin: 'pkg', linux: 'deb', win32: 'exe' }[platform];
+  const extension = { darwin: 'pkg', linux: linuxFormat, win32: 'exe' }[platform];
   return `VisBridge-${version}-${arch}-${platformName}.${extension}`;
 }
 
@@ -176,7 +205,9 @@ function automaticAppNames(version, platform, arch, target) {
     const appImage = `Vis-${version}-${appImageArch}-Linux.AppImage`;
     const deb = `Vis-${version}-${debArch}-Linux.deb`;
     if (target !== 'appimage' && target !== 'deb') {
-      throw new DesktopUpdatePolicyError('Automatic app update target does not match the Linux package');
+      throw new DesktopUpdatePolicyError(
+        'Automatic app update target does not match the Linux package',
+      );
     }
     return { names: new Set([appImage, deb]), selected: target === 'appimage' ? appImage : deb };
   }

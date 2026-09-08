@@ -2,6 +2,7 @@ export type UpdateComponent = 'app' | 'bridge';
 export type UpdatePlatform = 'darwin' | 'linux' | 'win32';
 export type UpdateArchitecture = 'x64' | 'arm64';
 export type AutomaticUpdateTarget = 'appimage' | 'deb' | 'nsis';
+export type BridgeLinuxFormat = 'deb' | 'rpm';
 
 export interface ReleaseAsset {
   readonly name: string;
@@ -28,6 +29,13 @@ export declare function selectManualAsset(
   component: UpdateComponent,
   platform: UpdatePlatform,
   arch: UpdateArchitecture,
+  linuxFormat?: BridgeLinuxFormat,
+): ReleaseAsset;
+export declare function selectBridgeAsset(
+  release: StableRelease,
+  platform: UpdatePlatform,
+  arch: UpdateArchitecture,
+  linuxFormat?: BridgeLinuxFormat,
 ): ReleaseAsset;
 export declare function selectAutomaticAppFile(
   info: unknown,
