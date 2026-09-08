@@ -152,14 +152,35 @@ describe('complete CI workflow', () => {
   });
 
   it('publishes only native bridge installers with VIS releases', () => {
+    const bridgeJob = workflow.slice(
+      workflow.indexOf('\n  bridge-installers:'),
+      workflow.indexOf('\n  complete-ci:'),
+    );
+    const buildIndex = bridgeJob.indexOf('run: pnpm bridge:build');
+    const rpmPackageIndex = bridgeJob.indexOf(
+      'run: pnpm bridge:package-installer -- --format rpm',
+    );
+    const rpmLifecycleIndex = bridgeJob.indexOf(
+      'bash scripts/qa/vis-bridge-rpm-lifecycle.sh',
+    );
+
     expect(workflow).toContain('run: pnpm bridge:package-installer');
+    expect(workflow).toContain('run: pnpm bridge:package-installer -- --format rpm');
+    expect(workflow).toContain('run: pnpm vitest run bridgeInstallerRpm.integration.test.ts');
+    expect(workflow).toContain('sudo apt-get install -y cpio rpm');
+    expect(workflow).toContain('bash scripts/qa/vis-bridge-rpm-lifecycle.sh');
     expect(workflow).toContain('dist-bridge/installers/*.deb');
+    expect(workflow).toContain('dist-bridge/installers/*.rpm');
     expect(workflow).toContain('dist-bridge/installers/*.pkg');
     expect(workflow).toContain('dist-bridge/installers/*.exe');
     expect(workflow).not.toContain('dist-bridge/vis_bridge*');
     expect(workflow).toContain('runner: ubuntu-24.04-arm');
     expect(workflow).toContain('runner: windows-11-arm');
     expect(workflow).toContain('runner: macos-15-intel');
+    expect(workflow).toContain('artifacts/**/*.rpm');
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(rpmPackageIndex).toBeGreaterThan(buildIndex);
+    expect(rpmLifecycleIndex).toBeGreaterThan(rpmPackageIndex);
   });
 
   it('exercises each native bridge installer through the installed PATH command', () => {
@@ -167,6 +188,9 @@ describe('complete CI workflow', () => {
     expect(workflow).toContain('name: Exercise macOS installer');
     expect(workflow).toContain('name: Exercise Windows installer');
     expect(workflow).toContain('vis_bridge --help');
+    expect(workflow).toContain('rpm -qpl');
+    expect(workflow).toContain('rpm -qp --scripts');
+    expect(workflow).toContain('rpm2cpio');
   });
 
   it('builds the electron app on five native architecture lanes, one per platform/arch pair', () => {
