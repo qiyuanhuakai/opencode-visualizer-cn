@@ -222,11 +222,19 @@ C:\Users\me\AppData\Local\Temp\vis_bridge-updates\installer.log`);
     temporaryDirectories.push(directory);
     const stagingDirectory = path.join(directory, 'staging');
     const acceptedPath = path.join(directory, 'accepted-path');
+    const cleanupReleasePath = path.join(directory, 'release-cleanup');
     const helperPath = path.join(stagingDirectory, 'install.ps1');
     const ackPath = path.join(stagingDirectory, 'ready');
     const installerPath = path.join(stagingDirectory, 'fake installer & handoff.cmd');
     await mkdir(stagingDirectory);
-    await writeFile(helperPath, createWindowsUpdateHelper());
+    const cleanupReleasePathBase64 = Buffer.from(cleanupReleasePath).toString('base64');
+    const helper = createWindowsUpdateHelper().replace(
+      '  Remove-Item -LiteralPath $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue',
+      `  $cleanupReleasePath = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${cleanupReleasePathBase64}'))
+  while (-not (Test-Path -LiteralPath $cleanupReleasePath)) { Start-Sleep -Milliseconds 10 }
+  Remove-Item -LiteralPath $StagingDirectory -Recurse -Force -ErrorAction SilentlyContinue`,
+    );
+    await writeFile(helperPath, helper);
     await writeFile(installerPath, `@exit /b ${installerExit}\r\n`);
     const moduleUrl = esmImportSpecifier(path.resolve(import.meta.dirname, '../bridge/updateHandoff.js'));
     const powershellPath = path.win32.join(process.env.SystemRoot ?? String.raw`C:\Windows`, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
@@ -252,9 +260,17 @@ C:\Users\me\AppData\Local\Temp\vis_bridge-updates\installer.log`);
     expect(driverExit, `driver exited with code ${driverExit}, signal ${driverSignal}; stderr:\n${driverStderr}`).toBe(0);
     const resultLogPath = await readFile(acceptedPath, 'utf8');
     temporaryFiles.push(resultLogPath);
-    await vi.waitFor(() => expect(existsSync(resultLogPath)).toBe(true), { timeout: 10_000 });
-
-    expect(await readFile(resultLogPath, 'utf8')).toContain(`status=${expectedStatus}`);
-    expect(existsSync(stagingDirectory)).toBe(false);
+    try {
+      await vi.waitFor(async () => {
+        expect(await readFile(resultLogPath, 'utf8')).toContain(`status=${expectedStatus}`);
+        expect(existsSync(stagingDirectory)).toBe(true);
+      }, { timeout: 10_000 });
+    } finally {
+      await writeFile(cleanupReleasePath, 'release');
+    }
+    await vi.waitFor(async () => {
+      expect(await readFile(resultLogPath, 'utf8')).toContain(`status=${expectedStatus}`);
+      expect(existsSync(stagingDirectory)).toBe(false);
+    }, { timeout: 10_000 });
   }, 20_000);
 });
