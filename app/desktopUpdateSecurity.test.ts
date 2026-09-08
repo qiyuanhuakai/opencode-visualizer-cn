@@ -30,7 +30,9 @@ describe('automatic desktop update security', () => {
       fixture.updater.emit('update-available', info);
       return { updateInfo: info };
     });
-    fixture.runtime.downloadAppUpdate.mockResolvedValueOnce(['/private/update/Vis-1.2.3-x86_64-Linux.AppImage']);
+    fixture.runtime.downloadAppUpdate.mockResolvedValueOnce([
+      '/private/update/Vis-1.2.3-x86_64-Linux.AppImage',
+    ]);
     await fixture.service.check('app');
     await fixture.service.download('app');
 
@@ -40,7 +42,12 @@ describe('automatic desktop update security', () => {
     // Then: the returned path is checked against retained manifest evidence before quitAndInstall.
     expect(fixture.runtime.verifyAsset).toHaveBeenCalledWith(
       '/private/update/Vis-1.2.3-x86_64-Linux.AppImage',
-      { name: 'Vis-1.2.3-x86_64-Linux.AppImage', size: 12, sha512: `${'A'.repeat(86)}==`, url: 'Vis-1.2.3-x86_64-Linux.AppImage' },
+      {
+        name: 'Vis-1.2.3-x86_64-Linux.AppImage',
+        size: 12,
+        sha512: `${'A'.repeat(86)}==`,
+        url: 'Vis-1.2.3-x86_64-Linux.AppImage',
+      },
       `${'A'.repeat(86)}==`,
       'sha512',
     );
@@ -54,7 +61,9 @@ describe('automatic desktop update security', () => {
     const fixture = createFixture();
     const info = updateInfo('Vis-1.2.3-x86_64-Linux.AppImage');
     fixture.updater.checkForUpdates.mockResolvedValueOnce({ updateInfo: info });
-    fixture.runtime.downloadAppUpdate.mockResolvedValueOnce(['/private/update/Vis-1.2.3-arm64-Linux.AppImage']);
+    fixture.runtime.downloadAppUpdate.mockResolvedValueOnce([
+      '/private/update/Vis-1.2.3-arm64-Linux.AppImage',
+    ]);
     await fixture.service.check('app');
 
     // When: the update download is recorded.
@@ -70,7 +79,9 @@ describe('automatic desktop update security', () => {
     const fixture = createFixture();
     const info = updateInfo('Vis-1.2.3-x86_64-Linux.AppImage');
     fixture.updater.checkForUpdates.mockResolvedValueOnce({ updateInfo: info });
-    fixture.runtime.downloadAppUpdate.mockResolvedValueOnce(['/private/update/Vis-1.2.3-x86_64-Linux.AppImage']);
+    fixture.runtime.downloadAppUpdate.mockResolvedValueOnce([
+      '/private/update/Vis-1.2.3-x86_64-Linux.AppImage',
+    ]);
     fixture.runtime.verifyAsset.mockRejectedValueOnce(new Error('SHA512 mismatch'));
     await fixture.service.check('app');
     await fixture.service.download('app');
@@ -79,13 +90,18 @@ describe('automatic desktop update security', () => {
     await fixture.service.install('app');
 
     // Then: the mismatch becomes renderer-safe error state without handing off to the updater.
-    expect(fixture.service.getState().app).toMatchObject({ phase: 'error', error: 'SHA512 mismatch' });
+    expect(fixture.service.getState().app).toMatchObject({
+      phase: 'error',
+      error: 'SHA512 mismatch',
+    });
     expect(fixture.updater.quitAndInstall).not.toHaveBeenCalled();
   });
 
   it('removes URL credentials, query, and fragment from bounded renderer errors', () => {
     // Given: a provider error containing secrets in a URL and an oversized suffix.
-    const secret = new Error(`failed https://user:password@github.com/release/file?token=secret#fragment ${'x'.repeat(700)}`);
+    const secret = new Error(
+      `failed https://user:password@github.com/release/file?token=secret#fragment ${'x'.repeat(700)}`,
+    );
 
     // When: the error is prepared for renderer state.
     const message = errorMessage(secret);
@@ -116,18 +132,22 @@ function createFixture() {
     updater,
     getLatestRelease: vi.fn(),
     getBridgeVersion: vi.fn(),
+    resolveBridgeLinuxFormat: vi.fn(async () => 'deb' as const),
     downloadAppUpdate: vi.fn(async () => [] as string[]),
     downloadAsset: vi.fn(),
     verifyAsset: vi.fn(async () => undefined),
     removeFile: vi.fn(async () => undefined),
     dispose: vi.fn(),
   };
-  const service = createDesktopUpdates({
-    app: { isPackaged: true, getVersion: () => '1.0.0' },
-    shell: { openPath: vi.fn(async () => '') },
-    onChange: () => undefined,
-    beforeInstall: vi.fn(async () => true),
-  }, runtime);
+  const service = createDesktopUpdates(
+    {
+      app: { isPackaged: true, getVersion: () => '1.0.0' },
+      shell: { openPath: vi.fn(async () => '') },
+      onChange: () => undefined,
+      beforeInstall: vi.fn(async () => true),
+    },
+    runtime,
+  );
   return { runtime, service, updater };
 }
 

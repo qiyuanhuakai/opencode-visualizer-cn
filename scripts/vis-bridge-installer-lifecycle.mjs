@@ -1,4 +1,4 @@
-function stopProcessLines(matchingCommand) {
+function stopProcessLines(matchingCommand, commandPaths) {
   return [
     'matching_vis_bridge_pids() {',
     ...matchingCommand.map((line) => `  ${line}`),
@@ -6,20 +6,20 @@ function stopProcessLines(matchingCommand) {
     'pids="$(matching_vis_bridge_pids)"',
     'if [ -n "$pids" ]; then',
     '  collect_process_tree() {',
-    '    for child in $(/usr/bin/pgrep -P "$1" 2>/dev/null || true); do collect_process_tree "$child"; done',
+    `    for child in $(${commandPaths.pgrep} -P "$1" 2>/dev/null || true); do collect_process_tree "$child"; done`,
     '    printf "%s\\n" "$1"',
     '  }',
     '  tree_pids=""',
     '  for pid in $pids; do tree_pids="$tree_pids $(collect_process_tree "$pid")"; done',
-    '  for pid in $tree_pids; do /bin/kill -TERM "$pid" 2>/dev/null || true; done',
+    `  for pid in $tree_pids; do ${commandPaths.kill} -TERM "$pid" 2>/dev/null || true; done`,
     '  # Startup readiness may still be unwinding; allow its signal cleanup to finish.',
     '  attempt=0',
-    '  tree_alive() { for pid in $tree_pids; do /bin/kill -0 "$pid" 2>/dev/null && return 0; done; return 1; }',
+    `  tree_alive() { for pid in $tree_pids; do ${commandPaths.kill} -0 "$pid" 2>/dev/null && return 0; done; return 1; }`,
     '  while [ "$attempt" -lt 350 ] && tree_alive; do',
-    '    /bin/sleep 0.1',
+    `    ${commandPaths.sleep} 0.1`,
     '    attempt=$((attempt + 1))',
     '  done',
-    '  for pid in $tree_pids; do /bin/kill -KILL "$pid" 2>/dev/null || true; done',
+    `  for pid in $tree_pids; do ${commandPaths.kill} -KILL "$pid" 2>/dev/null || true; done`,
     'fi',
   ];
 }
@@ -28,14 +28,17 @@ export function createLinuxMaintainerScript() {
   return [
     '#!/bin/sh',
     'set -e',
-    ...stopProcessLines([
-      'for executable in /proc/[0-9]*/exe; do',
-      '  [ -e "$executable" ] || continue',
-      '  [ "$(/usr/bin/readlink "$executable" 2>/dev/null || true)" = "/usr/bin/vis_bridge" ] || continue',
-      '  pid="${executable#/proc/}"',
-      '  printf "%s\\n" "${pid%/exe}"',
-      'done',
-    ]),
+    ...stopProcessLines(
+      [
+        'for executable in /proc/[0-9]*/exe; do',
+        '  [ -e "$executable" ] || continue',
+        '  [ "$(/usr/bin/readlink "$executable" 2>/dev/null || true)" = "/usr/bin/vis_bridge" ] || continue',
+        '  pid="${executable#/proc/}"',
+        '  printf "%s\\n" "${pid%/exe}"',
+        'done',
+      ],
+      { pgrep: '/usr/bin/pgrep', kill: '/usr/bin/kill', sleep: '/usr/bin/sleep' },
+    ),
     'exit 0',
     '',
   ].join('\n');
@@ -44,12 +47,15 @@ export function createLinuxMaintainerScript() {
 export function createMacPreinstallScript() {
   return [
     '#!/bin/sh',
-    ...stopProcessLines([
-      '/usr/bin/pgrep -x vis_bridge 2>/dev/null | while IFS= read -r pid; do',
-      '  executable="$(/usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null | /usr/bin/sed -n "s/^n//p" | /usr/bin/head -n 1)"',
-      '  [ "$executable" = "/usr/local/bin/vis_bridge" ] && printf "%s\\n" "$pid"',
-      'done',
-    ]),
+    ...stopProcessLines(
+      [
+        '/usr/bin/pgrep -x vis_bridge 2>/dev/null | while IFS= read -r pid; do',
+        '  executable="$(/usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null | /usr/bin/sed -n "s/^n//p" | /usr/bin/head -n 1)"',
+        '  [ "$executable" = "/usr/local/bin/vis_bridge" ] && printf "%s\\n" "$pid"',
+        'done',
+      ],
+      { pgrep: '/usr/bin/pgrep', kill: '/bin/kill', sleep: '/bin/sleep' },
+    ),
     'exit 0',
     '',
   ].join('\n');

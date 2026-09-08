@@ -7,10 +7,8 @@ import {
   createWindowsStopScript,
   windowsStopDaemonLines,
 } from './vis-bridge-installer-lifecycle.mjs';
-import {
-  packageLinuxInstaller,
-  packageMacInstaller,
-} from './vis-bridge-installer-posix.mjs';
+import { packageLinuxInstaller, packageMacInstaller } from './vis-bridge-installer-posix.mjs';
+import { createLinuxRpmSpec, packageLinuxRpmInstaller } from './vis-bridge-installer-rpm.mjs';
 import { stageNodePtyRuntime } from './vis-bridge-node-pty.mjs';
 
 export {
@@ -18,6 +16,7 @@ export {
   createMacPreinstallScript,
 } from './vis-bridge-installer-lifecycle.mjs';
 export { createWindowsStopScript };
+export { createLinuxRpmSpec };
 
 const execFileAsync = promisify(execFile);
 
@@ -45,12 +44,21 @@ function checkedArchitecture(arch) {
   return arch;
 }
 
+function checkedLinuxFormat(format) {
+  if (format !== undefined && format !== 'deb' && format !== 'rpm') {
+    throw new VisBridgeInstallerTargetError(
+      `Unsupported vis_bridge Linux installer format: ${format}`,
+    );
+  }
+  return format ?? 'deb';
+}
+
 export function createVisBridgeInstallerAssetName(target) {
   const version = normalizedVersion(target.version);
   const arch = checkedArchitecture(target.arch);
   switch (target.platform) {
     case 'linux':
-      return `VisBridge-${version}-${arch}-Linux.deb`;
+      return `VisBridge-${version}-${arch}-Linux.${checkedLinuxFormat(target.format)}`;
     case 'darwin':
       return `VisBridge-${version}-${arch}-MacOS.pkg`;
     case 'win32':
@@ -64,6 +72,12 @@ export function createVisBridgeInstallerAssetName(target) {
 
 export function createVisBridgeInstallerPaths(rootDirectory, target) {
   const installerDirectory = path.join(rootDirectory, 'dist-bridge', 'installers');
+  const linuxFormat = target.platform === 'linux' ? checkedLinuxFormat(target.format) : undefined;
+  if (target.platform !== 'linux' && target.format !== undefined) {
+    throw new VisBridgeInstallerTargetError(
+      `Unsupported vis_bridge installer format for ${target.platform}: ${target.format}`,
+    );
+  }
   return {
     binaryPath: path.join(
       rootDirectory,
@@ -76,7 +90,7 @@ export function createVisBridgeInstallerPaths(rootDirectory, target) {
       rootDirectory,
       'dist-bridge',
       'installer-work',
-      `${target.platform}-${checkedArchitecture(target.arch)}`,
+      `${target.platform}-${checkedArchitecture(target.arch)}${linuxFormat === 'rpm' ? '-rpm' : ''}`,
     ),
   };
 }
@@ -181,7 +195,11 @@ export async function packageVisBridgeInstaller(rootDirectory, target) {
   await mkdir(paths.installerDirectory, { recursive: true });
   switch (target.platform) {
     case 'linux':
-      await packageLinuxInstaller(paths, target, rootDirectory, normalizedVersion);
+      if (checkedLinuxFormat(target.format) === 'rpm') {
+        await packageLinuxRpmInstaller(paths, target, rootDirectory, normalizedVersion);
+      } else {
+        await packageLinuxInstaller(paths, target, rootDirectory, normalizedVersion);
+      }
       break;
     case 'darwin':
       await packageMacInstaller(paths, target, rootDirectory, normalizedVersion);
@@ -208,10 +226,17 @@ if (directRun) {
   if (typeof packageVersion !== 'string') {
     throw new VisBridgeInstallerTargetError('Unable to resolve the vis_bridge installer version');
   }
+  const formatArgumentIndex = process.argv.findIndex((argument) => argument === '--format');
+  const formatValue =
+    formatArgumentIndex === -1 ? undefined : process.argv[formatArgumentIndex + 1];
+  if (formatArgumentIndex !== -1 && formatValue === undefined) {
+    throw new VisBridgeInstallerTargetError('Missing value for --format');
+  }
   const installerPath = await packageVisBridgeInstaller(rootDirectory, {
     version: packageVersion,
     platform: process.platform,
     arch: process.arch,
+    format: formatValue,
   });
   process.stdout.write(`${installerPath}\n`);
 }

@@ -433,18 +433,70 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install nsis --no-progress --yes
 
+      - name: Install RPM packaging tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cpio rpm
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Run RPM packaging inspection test
+        if: runner.os == 'Linux'
+        run: pnpm vitest run bridgeInstallerRpm.integration.test.ts
 
       - name: Verify Windows process-tree cleanup
         if: runner.os == 'Windows'
         run: pnpm vitest run processTree.windows.test.ts acpTerminalManager.test.ts
+
+      - name: Verify terminal updater handoff
+        run: pnpm vitest run bridgeUpdateCli.test.ts bridgeUpdatePlatform.test.ts bridgeUpdateHandoff.test.ts bridgeUpdateCommand.test.ts
+
+      - name: Verify native terminal update transaction
+        if: runner.os == 'Linux'
+        env:
+          VIS_BRIDGE_NATIVE_UPDATE_QA: '1'
+        run: pnpm vitest run bridgeUpdaterTransaction.integration.test.ts
 
       - name: Build vis_bridge binary payload
         run: pnpm bridge:build
 
       - name: Package native vis_bridge installer
         run: pnpm bridge:package-installer
+
+      - name: Package native vis_bridge RPM
+        if: runner.os == 'Linux'
+        run: pnpm bridge:package-installer -- --format rpm
+
+      - name: Inspect Linux RPM payload and lifecycle
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rpm_installer=(dist-bridge/installers/*.rpm)
+          test "${#rpm_installer[@]}" -eq 1
+          test "$(rpm -qp --qf '%{NAME}' "${rpm_installer[0]}")" = 'vis-bridge'
+          expected_rpm_arch="$([ '${{ matrix.arch }}' = 'x64' ] && printf x86_64 || printf aarch64)"
+          test "$(rpm -qp --qf '%{ARCH}' "${rpm_installer[0]}")" = "$expected_rpm_arch"
+          rpm -qpl "${rpm_installer[0]}" | grep -Fx '/usr/bin/vis_bridge'
+          rpm -qpl "${rpm_installer[0]}" | grep -F '/usr/lib/vis_bridge/node_modules/node-pty/'
+          rpm -qp --scripts "${rpm_installer[0]}" | tee "$RUNNER_TEMP/vis-bridge-rpm-scriptlets.txt"
+          grep -F '/usr/bin/vis_bridge' "$RUNNER_TEMP/vis-bridge-rpm-scriptlets.txt"
+          rpm_extract="$RUNNER_TEMP/vis-bridge-rpm-extract"
+          mkdir -p "$rpm_extract"
+          rpm2cpio "${rpm_installer[0]}" | (cd "$rpm_extract" && cpio --quiet -idmu)
+          cmp dist-bridge/vis_bridge "$rpm_extract/usr/bin/vis_bridge"
+          cmp "node_modules/node-pty/prebuilds/linux-${{ matrix.arch }}/pty.node" "$rpm_extract/usr/lib/vis_bridge/node_modules/node-pty/prebuilds/linux-${{ matrix.arch }}/pty.node"
+          test -x "$rpm_extract/usr/bin/vis_bridge"
+          test -f "$rpm_extract/usr/lib/vis_bridge/node_modules/node-pty/lib/index.js"
+
+      - name: Exercise RPM install, upgrade, and removal lifecycle
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          rpm_installer=(dist-bridge/installers/*.rpm)
+          test "${#rpm_installer[@]}" -eq 1
+          bash scripts/qa/vis-bridge-rpm-lifecycle.sh "${rpm_installer[0]}"
 
       - name: Exercise Linux installer
         if: runner.os == 'Linux'
@@ -539,6 +591,7 @@ jobs:
           name: bridge-${{ matrix.platform }}-${{ matrix.arch }}-artifacts
           path: |
             dist-bridge/installers/*.deb
+            dist-bridge/installers/*.rpm
             dist-bridge/installers/*.pkg
             dist-bridge/installers/*.exe
           retention-days: 7
@@ -599,6 +652,7 @@ jobs:
             artifacts/**/*.exe
             artifacts/**/*.AppImage
             artifacts/**/*.deb
+            artifacts/**/*.rpm
             artifacts/**/*.pkg
             artifacts/**/*.yml
             artifacts/**/*.blockmap

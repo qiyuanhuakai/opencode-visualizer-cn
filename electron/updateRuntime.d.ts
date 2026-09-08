@@ -1,9 +1,21 @@
 import type { EventEmitter } from 'node:events';
-import type { AutomaticUpdateFile, AutomaticUpdateTarget, ReleaseAsset, StableRelease, UpdateArchitecture, UpdatePlatform } from './updatePolicy.js';
+import type {
+  AutomaticUpdateFile,
+  AutomaticUpdateTarget,
+  BridgeLinuxFormat,
+  ReleaseAsset,
+  StableRelease,
+  UpdateArchitecture,
+  UpdatePlatform,
+} from './updatePolicy.js';
 
 export interface UpdateInfo {
   readonly version: string;
-  readonly files: readonly { readonly url: string; readonly size?: number; readonly sha512: string }[];
+  readonly files: readonly {
+    readonly url: string;
+    readonly size?: number;
+    readonly sha512: string;
+  }[];
 }
 
 export interface DesktopAutoUpdater extends EventEmitter {
@@ -25,6 +37,7 @@ export interface UpdateRuntime {
   readonly updater: DesktopAutoUpdater;
   getLatestRelease(): Promise<StableRelease>;
   getBridgeVersion(): Promise<string | null>;
+  resolveBridgeLinuxFormat(): Promise<BridgeLinuxFormat>;
   downloadAppUpdate(): Promise<readonly string[]>;
   downloadAsset(asset: ReleaseAsset, onProgress: (percent: number) => void): Promise<string>;
   verifyAsset(

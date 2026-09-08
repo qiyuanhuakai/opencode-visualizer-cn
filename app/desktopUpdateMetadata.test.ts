@@ -8,10 +8,53 @@ const workflow = readFileSync(path.join(root, '.github/workflows/build-electron.
 const packageJson = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')) as {
   dependencies?: Record<string, string>;
 };
+const localImportPattern =
+  /^\s*(?:import|export)\s+(?:[^'"]+\s+from\s+)?['"](\.[^'"]+)['"];?\s*$/gmu;
+
+function localModuleClosure(entryPath: string) {
+  const pending = [entryPath];
+  const closure = new Set<string>();
+  while (pending.length > 0) {
+    const modulePath = pending.pop();
+    if (!modulePath || closure.has(modulePath)) continue;
+    closure.add(modulePath);
+    const source = readFileSync(path.join(root, modulePath), 'utf8');
+    for (const match of source.matchAll(localImportPattern)) {
+      const specifier = match[1];
+      if (!specifier) continue;
+      const resolved = path.posix.normalize(
+        path.posix.join(path.posix.dirname(modulePath), specifier),
+      );
+      pending.push(path.posix.extname(resolved) ? resolved : `${resolved}.js`);
+    }
+  }
+  return [...closure];
+}
+
+function packagedByBuilder(modulePath: string) {
+  const filePatterns = builder
+    .slice(builder.indexOf('files:'), builder.indexOf('\nasar:'))
+    .matchAll(/^\s*-\s*["']([^"']+)["']\s*$/gmu);
+  return [...filePatterns].some(([, pattern]) => {
+    if (!pattern || pattern.startsWith('!')) return false;
+    if (pattern.endsWith('/**/*')) return modulePath.startsWith(pattern.slice(0, -4));
+    if (pattern.endsWith('*.js')) {
+      return modulePath.startsWith(pattern.slice(0, -4)) && modulePath.endsWith('.js');
+    }
+    return modulePath === pattern;
+  });
+}
 
 describe('desktop update metadata pipeline', () => {
   it('does not exclude production modules needed by the packaged main process', () => {
     expect(builder).not.toMatch(/^\s*-\s*["']?!node_modules(?:\/\*\*\/\*)?["']?\s*$/mu);
+  });
+
+  it('packages the local module closure of the Electron entry point', () => {
+    const unpackagedModules = localModuleClosure('electron/main.js').filter(
+      (modulePath) => !packagedByBuilder(modulePath),
+    );
+    expect(unpackagedModules).toEqual([]);
   });
   it('keeps the updater at runtime and pins the official GitHub provider', () => {
     // Given the packaged main process needs electron-updater at runtime
@@ -41,7 +84,7 @@ describe('desktop update metadata pipeline', () => {
     expect(workflow).toContain('artifacts/**/*.yml');
     expect(workflow).toContain('artifacts/**/*.blockmap');
     expect(workflow).toContain("Test-Path 'dist-electron/latest.yml'");
-    expect(workflow).toContain("test -f dist-electron/latest-linux.yml");
+    expect(workflow).toContain('test -f dist-electron/latest-linux.yml');
     expect(windowsJobs).toContain('dist-electron/*.blockmap');
     expect(linuxJob).not.toContain('dist-electron/*.blockmap');
   });

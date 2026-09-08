@@ -3,13 +3,23 @@ import { parseCliOptions, usage } from './bridge/visBridgeCli.js';
 import { createVisBridgeServer } from './bridge/visBridgeServer.js';
 import { createDaemonController } from './bridge/daemonController.js';
 import { runDaemonProcess } from './bridge/daemonProcess.js';
+import { parseBridgeUpdateArgs, runBridgeUpdate, updateUsage } from './bridge/updateCli.js';
 import packageInfo from './package.json' with { type: 'json' };
 
-export { createVisBridgeServer, parseCliOptions };
+export { createVisBridgeServer, parseBridgeUpdateArgs, parseCliOptions };
 
 export async function main() {
   if (process.argv.length === 3 && process.argv[2] === '--version') {
     console.log(packageInfo.version);
+    return;
+  }
+  const updateOptions = parseBridgeUpdateArgs();
+  if (updateOptions) {
+    if (updateOptions.help) {
+      console.log(updateUsage());
+      return;
+    }
+    await runBridgeUpdate(updateOptions, { currentVersion: packageInfo.version });
     return;
   }
   const options = parseCliOptions();

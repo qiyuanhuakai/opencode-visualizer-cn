@@ -141,7 +141,7 @@ codex --version
 
 | 平台 | 安装文件 | 安装结果 |
 |---|---|---|
-| Linux | `VisBridge-<version>-<arch>-Linux.deb` | 安装到 `/usr/bin/vis_bridge` |
+| Linux | `VisBridge-<version>-<arch>-Linux.deb` / `VisBridge-<version>-<arch>-Linux.rpm` | 分别适用于 DEB / RPM 系统，安装到 `/usr/bin/vis_bridge` |
 | macOS | `VisBridge-<version>-<arch>-MacOS.pkg` | 安装到 `/usr/local/bin/vis_bridge` |
 | Windows | `VisBridge-<version>-<arch>-Windows.exe` | 安装到 `%LOCALAPPDATA%\Programs\vis_bridge` 并加入用户 PATH |
 
@@ -159,7 +159,19 @@ vis_bridge stop
 vis_bridge restart
 ```
 
+在 bridge 所在主机的外部终端中手动更新：
+
+```bash
+vis_bridge update --check  # 仅查询最新正式版本，不下载或安装
+vis_bridge update          # 显示更新信息并确认后安装
+vis_bridge upgrade --yes   # update 的别名；非交互使用需显式确认
+```
+
+更新仅适用于原生安装包管理的 `vis_bridge`；源码或自定义位置仍可执行 `--check`。Linux 根据包归属及发行版选择 DEB/RPM，macOS 使用 PKG，Windows 使用每用户 NSIS 安装包；下载须通过大小与 SHA-256 校验。安装会停止 bridge 及其子进程，不自动重启，不能从 bridge 自己托管的终端发起安装。POSIX 终端保留安装器退出状态，非 root 用户需要 `sudo` 权限；Windows 在原命令退出后交接安装，并打印持久结果日志位置，交接成功不等于安装成功。
+
 `start` 会等待 bridge 完成监听和初次服务探测后再返回。OpenCode、Codex 或 ACP Agent 启动失败时，命令行会直接列出对应名称和错误；bridge 本身仍可用时会继续在后台运行，完整错误也会显示在“状态监控”→“ACP”中。配置损坏或端口被占用等 bridge 级错误会让 `start` 以失败退出，不会留下一个表面可用的服务。
+
+Linux 的 `--check` 在有新版时也需要可识别的发行版及包管理工具，无法确定 DEB/RPM 时会明确失败。安装前若祖先进程身份不可读，会在确认后请求仅用于读取进程身份的 `sudo` 权限，不能因此跳过托管终端检查。
 
 源码开发使用相同的守护进程命令：
 
@@ -470,7 +482,7 @@ GitHub Releases publish native installers only, not the intermediate standalone 
 
 | Platform | Installer | Result |
 |---|---|---|
-| Linux | `VisBridge-<version>-<arch>-Linux.deb` | Installs `/usr/bin/vis_bridge` |
+| Linux | `VisBridge-<version>-<arch>-Linux.deb` / `VisBridge-<version>-<arch>-Linux.rpm` | For DEB / RPM systems respectively; installs `/usr/bin/vis_bridge` |
 | macOS | `VisBridge-<version>-<arch>-MacOS.pkg` | Installs `/usr/local/bin/vis_bridge` |
 | Windows | `VisBridge-<version>-<arch>-Windows.exe` | Installs under `%LOCALAPPDATA%\Programs\vis_bridge` and adds it to the user PATH |
 
@@ -489,6 +501,18 @@ vis_bridge restart
 ```
 
 `start` waits until the bridge is listening and the initial service probe has completed. If OpenCode, Codex, or an ACP agent fails to start, the CLI prints the component name and error while keeping the usable bridge online; the full error also appears under **Status Monitor → ACP**. Bridge-level failures such as an invalid config or occupied listen port make `start` fail instead of publishing a superficially healthy service.
+
+Update manually from an external terminal on the bridge host:
+
+```bash
+vis_bridge update --check  # Query the latest stable release without downloading or installing
+vis_bridge update          # Show the offer, then confirm installation
+vis_bridge upgrade --yes   # Alias for update; explicit consent for non-interactive use
+```
+
+Installation requires a native-package-managed `vis_bridge`; source and custom-location builds may still use `--check`. Linux selects DEB/RPM using package ownership and distribution evidence, macOS uses PKG, and Windows uses the per-user NSIS installer. Downloads must pass size and SHA-256 verification. Installation stops the bridge and its children without restarting them; do not install from a bridge-hosted terminal. POSIX preserves the installer exit status and requires `sudo` privileges when non-root. Windows waits for the original command to exit, then runs the installer and records its result at the printed persistent log path; accepted handoff does not mean successful installation.
+
+On Linux, an available update also requires a recognized distribution and package tools for `--check`; ambiguous DEB/RPM selection fails explicitly. After confirmation, installation may request narrowly scoped `sudo` access to inspect otherwise unreadable ancestors rather than bypassing the hosted-terminal guard.
 
 Source development uses the same daemon commands:
 
