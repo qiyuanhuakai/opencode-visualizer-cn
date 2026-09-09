@@ -1114,6 +1114,10 @@ watch(showMinimizeButtons, (enabled) => {
 });
 
 function openCodexPanel() {
+  if (fw.has(CODEX_PANEL_KEY)) {
+    fw.activate(CODEX_PANEL_KEY);
+    return;
+  }
   const width = 760;
   const height = 560;
   const extent = fw.getExtent();
@@ -1339,13 +1343,19 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
     openCodexPanel();
     return;
   }
+  const key = `codex-${panel}`;
+  if (fw.has(key)) {
+    fw.activate(key);
+    refreshCodexSubpanel(panel);
+    return;
+  }
   const extent = fw.getExtent();
   const x = Math.max(20, extent.width - definition.width - 36);
   const y = 96;
   const openCodexFilePreview = (path: string) => {
     void openCodexNativeFilePreview(path);
   };
-  void fw.open(`codex-${panel}`, {
+  void fw.open(key, {
     component: definition.component,
     props: createCodexSubpanelProps(codexApi, openCodexFilePreview),
     title: t(definition.titleKey),

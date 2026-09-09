@@ -244,6 +244,16 @@ export function useFloatingWindows() {
     renderVersionMap.clear();
   });
 
+  function focusWindowBody(key: string): void {
+    nextTick(() => {
+      const body = document.querySelector(
+        `[data-floating-key="${key}"] .floating-window-body`,
+      ) as HTMLElement | null;
+      if (!body) return;
+      body.focus();
+    });
+  }
+
   async function open(key: string, opts: Partial<FloatingWindowEntry>): Promise<void> {
     const openToken = Symbol(key);
     activeOpenTokens.set(key, openToken);
@@ -290,6 +300,7 @@ export function useFloatingWindows() {
       merged.width = liveEntry.width;
       merged.height = liveEntry.height;
       merged.minimized = liveEntry.minimized;
+      merged.zIndex = liveEntry.zIndex;
     }
     if (!liveEntry && !clampEntryForCreation(merged, extent)) pendingInitialLayoutKeys.add(key);
 
@@ -359,13 +370,7 @@ export function useFloatingWindows() {
     }
 
     if (shouldFocusOnOpen) {
-      nextTick(() => {
-        const body = document.querySelector(
-          `[data-floating-key="${key}"] .floating-window-body`,
-        ) as HTMLElement | null;
-        if (!body) return;
-        body.focus();
-      });
+      focusWindowBody(key);
     }
   }
 
@@ -489,6 +494,16 @@ export function useFloatingWindows() {
     bringToFront(key);
   }
 
+  // Explicit user activation only: unlike open(), never re-resolves content,
+  // resets geometry, or runs on automatic updates.
+  function activate(key: string): void {
+    const entry = entriesMap.get(key);
+    if (!entry) return;
+    entry.minimized = false;
+    bringToFront(key);
+    focusWindowBody(key);
+  }
+
   function extend(key: string, ms: number): void {
     const entry = entriesMap.get(key);
     if (entry) {
@@ -558,6 +573,7 @@ export function useFloatingWindows() {
     bringToFront,
     minimize,
     restore,
+    activate,
     extend,
     close,
     closeAll,
