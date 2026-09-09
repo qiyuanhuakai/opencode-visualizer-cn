@@ -1,5 +1,6 @@
 import { type Component, type Ref } from 'vue';
 import type {
+  MessageInfo,
   MessagePart,
   MessagePartDeltaPacket,
   MessagePartUpdatedPacket,
@@ -50,7 +51,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
     activeMessageIdBySession.clear();
   }
 
-  function handleTextPart(part: MessagePart) {
+  function handleTextPart(part: MessagePart, info?: MessageInfo) {
     if (part.type !== 'text') return;
 
     const resolvedSessionId = part.sessionID || selectedSessionId.value;
@@ -65,7 +66,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
 
     manager.upsertEntry(resolvedSessionId, partId, messageText, !!part.time?.end);
 
-    const messageInfo = manager.acc.getMessage(messageId)?.info;
+    const messageInfo = info ?? manager.acc.getMessage(messageId)?.info;
     let modelLabel: string | undefined;
     let agentLabel: string | undefined;
     if (messageInfo?.role === 'assistant') {
@@ -80,6 +81,7 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
       ? `🤖 [${modelLabel}] ${agentPart}Working...`
       : `🤖 ${agentPart}Working...`;
 
+    if (part.time?.end) manager.markSessionCompleted(resolvedSessionId);
     manager.openWindow(resolvedSessionId, title);
 
     if (part.time?.end) {
@@ -120,5 +122,6 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
     reset,
     entriesBySession: manager.entriesBySession,
     bindScope: subscribe,
+    handlePart: handleTextPart,
   };
 }

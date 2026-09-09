@@ -1,5 +1,6 @@
 import { type Component, type Ref } from 'vue';
 import type {
+  MessageInfo,
   MessagePart,
   MessagePartDeltaPacket,
   MessagePartUpdatedPacket,
@@ -118,7 +119,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     finishedReasoningByKey.clear();
   }
 
-  function handleReasoningPart(part: MessagePart) {
+  function handleReasoningPart(part: MessagePart, info?: MessageInfo) {
     if (part.type !== 'reasoning') return;
 
     const resolvedSessionId = part.sessionID || selectedSessionId.value;
@@ -137,7 +138,7 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
 
     manager.upsertEntry(resolvedSessionId, partId, messageText, !!part.time?.end);
 
-    const messageInfo = manager.acc.getMessage(messageId)?.info;
+    const messageInfo = info ?? manager.acc.getMessage(messageId)?.info;
     const isSubagent = resolvedSessionId !== selectedSessionId.value;
     let modelLabel: string | undefined;
     if (messageInfo?.role === 'assistant') {
@@ -207,5 +208,6 @@ export function useReasoningWindows(options: UseReasoningWindowsOptions) {
     reset,
     entriesBySession: manager.entriesBySession,
     bindScope: subscribe,
+    handlePart: handleReasoningPart,
   };
 }

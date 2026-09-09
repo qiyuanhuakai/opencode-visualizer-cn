@@ -619,6 +619,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const dynamicToolCalls = ref<CodexDynamicToolCallRequest[]>([]);
   const realtimeHistoryQueue = ref<CodexCanonicalHistoryEntry[]>([]);
   const realtimeMessageAliases = ref<Record<string, string>>({});
+  const realtimeCompletedPart = ref<CodexRealtimePartRecord<ToolPart> | null>(null);
   const realtimeStreamingPart = ref<CodexRealtimePartRecord<TextPart> | null>(null);
   const realtimeReasoningPart = ref<CodexRealtimePartRecord<ReasoningPart> | null>(null);
   const realtimeToolParts = ref<Array<CodexRealtimePartRecord<ToolPart>>>([]);
@@ -1382,6 +1383,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           : null;
       const normalizedToolPart =
         normalizedBundle?.parts.find((part): part is ToolPart => part.type === 'tool') ?? null;
+      const completedReasoning = normalizedBundle?.parts.find((part): part is ReasoningPart => part.type === 'reasoning');
+      const completedInfo = normalizedBundle?.messages.find((info) => info.role === 'assistant');
+      if (completedReasoning && completedInfo && realtimeReasoningPart.value?.part.id !== completedReasoning.id) {
+        realtimeReasoningPart.value = {
+          info: completedInfo,
+          part: { ...completedReasoning, time: { ...completedReasoning.time, end: Date.now() } },
+          updatedAt: Date.now(),
+        };
+      }
+      if (normalizedToolPart?.tool === 'task' && completedInfo) {
+        realtimeCompletedPart.value = { info: completedInfo, part: normalizedToolPart, updatedAt: Date.now() };
+      }
       let completedToolMerged = false;
       if (isRecord(item) && typeof item.type === 'string') {
         const itemId = typeof item.id === 'string' ? item.id : '';
@@ -2357,6 +2370,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     realtimeHistoryQueue.value = [];
     realtimeMessageAliases.value = {};
     realtimeStreamingPart.value = null;
+    realtimeCompletedPart.value = null;
     realtimeReasoningPart.value = null;
     realtimeToolParts.value = [];
     loadingThread.value = true;
@@ -2450,6 +2464,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     canonicalHistory.value = [];
     realtimeHistoryQueue.value = [];
     realtimeStreamingPart.value = null;
+    realtimeCompletedPart.value = null;
     realtimeReasoningPart.value = null;
     realtimeToolParts.value = [];
     activeTurn.value = null;
@@ -2531,6 +2546,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       (entry) => entry.info.sessionID !== threadId,
     );
     if (activeThreadId.value === threadId) {
+      realtimeCompletedPart.value = null;
       realtimeReasoningPart.value = null;
       realtimeToolParts.value = [];
     }
@@ -3656,6 +3672,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     canonicalHistory,
     realtimeHistoryQueue,
     realtimeMessageAliases,
+    realtimeCompletedPart,
     realtimeStreamingPart,
     realtimeReasoningPart,
     realtimeToolParts,

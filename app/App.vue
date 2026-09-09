@@ -7637,6 +7637,8 @@ const codexMessageBridge = useCodexMessageBridge({
   msg,
   syncRealtimeToolWindows: syncRealtimeCodexToolWindows,
   updateReasoningExpiry,
+  onLiveReasoning: (info, part) => reasoning.handlePart(part, info),
+  onLiveSubagent: (info, part) => subagentWindows.handlePart(part, info),
 });
 
 function upsertAcpSession(info: BackendSessionInfo) {

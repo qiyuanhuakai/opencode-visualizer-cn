@@ -192,6 +192,19 @@ describe('useCodexApi', () => {
     expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject({ parentID: 'turn-race:user:0' });
   });
 
+  it('publishes completed-only reasoning and collaboration notifications to live window sources', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn-c', item: { id: 'reason-only', type: 'reasoning', summary: ['Decision'] } } });
+    expect(api.realtimeReasoningPart.value?.part).toMatchObject({id: 'reason-only', text: 'Decision', time: {end: expect.any(Number)}});
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn-c', item: { id: 'spawn-only', type: 'collabAgentToolCall', tool: 'spawnAgent', status: 'completed', senderThreadId: 'thr_existing', receiverThreadIds: ['child'], prompt: 'Review', agentsStates: {child: {status: 'running'}} } } });
+    expect(api.realtimeCompletedPart.value?.part).toMatchObject({tool: 'task', state: {metadata: {sessionIds: ['child']}}});
+    await api.selectThread('thr_existing');
+    expect(api.realtimeReasoningPart.value).toBeNull();
+    expect(api.realtimeToolParts.value).toEqual([]);
+  });
+
   it('reads child history without changing the selected parent session', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });

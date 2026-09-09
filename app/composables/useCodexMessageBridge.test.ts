@@ -20,6 +20,7 @@ function bridgeFixture() {
     codexApi: {
       realtimeHistoryQueue: ref<CodexCanonicalHistoryEntry[]>([]),
       realtimeMessageAliases: ref<Record<string, string>>({}),
+      realtimeCompletedPart: ref<{ info: AssistantMessageInfo | UserMessageInfo; part: MessagePart } | null>(null),
       realtimeStreamingPart: ref<{ info: AssistantMessageInfo | UserMessageInfo; part: MessagePart } | null>(null),
       realtimeReasoningPart: ref<{ info: AssistantMessageInfo | UserMessageInfo; part: ReasoningPart } | null>(null),
       realtimeToolParts: ref<Array<{ info: AssistantMessageInfo | UserMessageInfo; part: ToolPart }>>([]),
@@ -29,6 +30,8 @@ function bridgeFixture() {
     msg: { loadHistory: vi.fn(), updateMessage: vi.fn(), updatePart: vi.fn(), removeMessage: vi.fn() },
     syncRealtimeToolWindows: vi.fn(),
     updateReasoningExpiry: vi.fn(),
+    onLiveReasoning: vi.fn(),
+    onLiveSubagent: vi.fn(),
   };
   useCodexMessageBridge(params);
   return params;
@@ -201,6 +204,8 @@ describe('useCodexMessageBridge', () => {
       },
       syncRealtimeToolWindows,
       updateReasoningExpiry: vi.fn(),
+    onLiveReasoning: vi.fn(),
+    onLiveSubagent: vi.fn(),
     });
 
     realtimeHistoryQueue.value = restored;
@@ -217,4 +222,57 @@ describe('useCodexMessageBridge', () => {
     expect(updatePart).toHaveBeenCalledWith(expect.objectContaining({ type: 'file', url: 'data:image/png;base64,AA==' }));
 
   });
+});
+
+
+describe('Codex automatic streaming windows', () => {
+  it('opens reasoning only for live updates, deduplicates queue/stream and retains close delay', async () => {
+    const p = bridgeFixture();
+    const entries = normalizeCodexTurnsToHistory({sessionId: 'thread-1', turns: [{id: 'turn-r', items: [{id: 'reason', type: 'reasoning', summary: ['Thinking']}]}]});
+    const entry = entries.find(e => e.info.role === 'assistant');
+    const part = entry?.parts.find(p => p.type === 'reasoning');
+    if (!entry || !part) throw new Error('missing reasoning fixture');
+    p.history.value = entries;
+    await nextTick();
+    expect(p.onLiveReasoning).not.toHaveBeenCalled();
+    p.codexApi.realtimeHistoryQueue.value = entries;
+    await nextTick();
+    expect(p.onLiveReasoning).not.toHaveBeenCalled();
+    p.codexApi.realtimeReasoningPart.value = {info: entry.info, part};
+    await nextTick();
+    expect(p.onLiveReasoning).toHaveBeenCalledTimes(1);
+    expect(p.updateReasoningExpiry).not.toHaveBeenCalled();
+  });
+
+  it('opens each child from parent collaboration state and ignores historical or unrelated events', async () => {
+    const p = bridgeFixture();
+    const entries = normalizeCodexTurnsToHistory({sessionId: 'thread-1', turns: [{id: 'turn-c', items: [{id: 'spawn', type: 'collabAgentToolCall', tool: 'spawnAgent', status: 'completed', senderThreadId: 'thread-1', receiverThreadIds: ['child-a', 'child-b'], prompt: 'Inspect files', agentsStates: {'child-a': {status: 'running'}, 'child-b': {status: 'completed', message: 'All checked'}}}]}]});
+    p.history.value = entries;
+    await nextTick();
+    expect(p.onLiveSubagent).not.toHaveBeenCalled();
+    p.codexApi.realtimeHistoryQueue.value = entries;
+    await nextTick();
+    expect(p.onLiveSubagent).not.toHaveBeenCalled();
+    p.codexApi.realtimeToolParts.value = entries.flatMap(entry => entry.parts.flatMap(part => part.type === 'tool' ? [{info: entry.info, part}] : []));
+    await nextTick();
+    expect(p.onLiveSubagent).toHaveBeenCalledTimes(2);
+    expect(p.onLiveSubagent).toHaveBeenCalledWith(expect.objectContaining({sessionID: 'child-a'}), expect.objectContaining({text: expect.stringContaining('Inspect files'), time: expect.not.objectContaining({end: expect.any(Number)})}));
+    expect(p.onLiveSubagent).toHaveBeenCalledWith(expect.objectContaining({sessionID: 'child-b'}), expect.objectContaining({text: expect.stringContaining('All checked'), time: expect.objectContaining({end: expect.any(Number)})}));
+    p.codexApi.realtimeHistoryQueue.value = [...entries, ...normalizeCodexTurnsToHistory({sessionId:'unrelated', turns:[{id:'other',items:[{id:'other-spawn',type:'collabAgentToolCall', tool:'spawnAgent', receiverThreadIds:['stranger'], prompt:'Ignore'}]}]})];
+    await nextTick();
+    expect(p.onLiveSubagent).toHaveBeenCalledTimes(2);
+  });
+  it('publishes completed collaboration synchronously and deduplicates unchanged parts', async () => {
+    const p = bridgeFixture();
+    const [entry] = normalizeCodexTurnsToHistory({sessionId: 'thread-1', turns: [{id: 'turn-c', items: [{id: 'wait', type: 'collabAgentToolCall', tool: 'wait', status: 'completed', senderThreadId: 'thread-1', receiverThreadIds: ['child'], agentsStates: {child: {status: 'interrupted'}}}]}]});
+    const part = entry?.parts[0];
+    if (!entry || !part) throw new Error('missing completed fixture');
+    p.codexApi.realtimeCompletedPart.value = { info: entry.info, part };
+    expect(p.onLiveSubagent).toHaveBeenCalledTimes(1);
+    expect(p.onLiveSubagent.mock.calls[0]?.[1]).toMatchObject({text: 'interrupted', time: {end: expect.any(Number)}});
+    p.codexApi.realtimeCompletedPart.value = { info: entry.info, part: {...part} };
+    await nextTick();
+    expect(p.onLiveSubagent).toHaveBeenCalledTimes(1);
+  });
+
 });
