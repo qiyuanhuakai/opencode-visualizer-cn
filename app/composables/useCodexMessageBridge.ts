@@ -34,20 +34,7 @@ function parseCodexDiffEntries(diffText: string): MessageDiffEntry[] {
 }
 
 function buildRealtimeQueueSignature(queue: CodexCanonicalHistoryEntry[]) {
-  return queue.map((entry) => `${entry.info.id}:${entry.parts.map((part) => {
-    if (part.type === 'tool') {
-      const output = part.state.status === 'completed'
-        ? part.state.output
-        : part.state.status === 'error'
-          ? part.state.error
-          : part.state.status === 'running'
-            ? part.state.metadata?.output || ''
-            : '';
-      return `${part.id}:${part.state.status}:${output}`;
-    }
-    if (part.type === 'text' || part.type === 'reasoning') return `${part.id}:${part.text}`;
-    return part.id;
-  }).join(',')}`).join('|');
+  return JSON.stringify(queue);
 }
 
 export function useCodexMessageBridge(params: {
@@ -61,6 +48,28 @@ export function useCodexMessageBridge(params: {
   updateReasoningExpiry: (sessionId: string, state: 'idle' | 'busy') => void;
 }) {
   const lastRealtimeQueueSignature = ref('');
+  const publishedMessages = new Map<string, string>();
+  const publishedParts = new Map<string, string>();
+
+  function updateMessage(info: AssistantMessageInfo | UserMessageInfo) {
+    const signature = JSON.stringify(info);
+    if (publishedMessages.get(info.id) === signature) return;
+    publishedMessages.set(info.id, signature);
+    params.msg.updateMessage(info);
+  }
+
+  function updatePart(part: MessagePart) {
+    const signature = JSON.stringify(part);
+    if (publishedParts.get(part.id) === signature) return;
+    publishedParts.set(part.id, signature);
+    params.msg.updatePart(part);
+  }
+
+  function resetPublishedState() {
+    lastRealtimeQueueSignature.value = '';
+    publishedMessages.clear();
+    publishedParts.clear();
+  }
 
   function matchesActiveCodexRealtimeSession(sessionId: string) {
     const target = params.selectedSessionId.value;
@@ -137,6 +146,12 @@ export function useCodexMessageBridge(params: {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value) return;
     params.msg.loadHistory(history);
+    publishedMessages.clear();
+    publishedParts.clear();
+    for (const entry of history) {
+      publishedMessages.set(entry.info.id, JSON.stringify(entry.info));
+      for (const part of entry.parts) publishedParts.set(part.id, JSON.stringify(part));
+    }
     reapplyCodexSharedBackfill();
   });
 
@@ -154,25 +169,24 @@ export function useCodexMessageBridge(params: {
     for (const [provisionalId, finalizedId] of Object.entries(params.codexApi.realtimeMessageAliases.value)) {
       if (!provisionalId || !finalizedId || provisionalId === finalizedId) continue;
       params.msg.removeMessage(provisionalId);
+      publishedMessages.delete(provisionalId);
     }
     const realtimeEntries = params.codexApi.realtimeHistoryQueue.value.filter((entry) => matchesActiveCodexRealtimeSession(entry.info.sessionID));
     for (const entry of realtimeEntries) {
-      params.msg.updateMessage(entry.info as AssistantMessageInfo | UserMessageInfo);
-      for (const part of entry.parts) params.msg.updatePart(part);
+      updateMessage(entry.info);
+      for (const part of entry.parts) updatePart(part);
     }
     params.syncRealtimeToolWindows(realtimeEntries);
   });
 
-  watch(params.selectedSessionId, () => {
-    lastRealtimeQueueSignature.value = '';
-  });
+  watch([params.selectedSessionId, params.activeBackendKind], resetPublishedState, { flush: 'sync' });
 
   watch(params.codexApi.realtimeStreamingPart, (streaming) => {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value || !streaming) return;
     if (!matchesActiveCodexRealtimeSession(streaming.info.sessionID)) return;
-    params.msg.updateMessage(streaming.info);
-    params.msg.updatePart(streaming.part);
+    updateMessage(streaming.info);
+    updatePart(streaming.part);
     if (streaming.part.type === 'text' && streaming.part.time?.end) {
       params.updateReasoningExpiry(streaming.part.sessionID, 'idle');
     }
@@ -182,8 +196,8 @@ export function useCodexMessageBridge(params: {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value || !reasoning) return;
     if (!matchesActiveCodexRealtimeSession(reasoning.info.sessionID)) return;
-    params.msg.updateMessage(reasoning.info);
-    params.msg.updatePart(reasoning.part);
+    updateMessage(reasoning.info);
+    updatePart(reasoning.part);
     params.updateReasoningExpiry(reasoning.part.sessionID, reasoning.part.time?.end ? 'idle' : 'busy');
   });
 
@@ -191,8 +205,8 @@ export function useCodexMessageBridge(params: {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value) return;
     for (const { info, part } of toolParts.filter(({ info }) => matchesActiveCodexRealtimeSession(info.sessionID))) {
-      params.msg.updateMessage(info);
-      params.msg.updatePart(part);
+      updateMessage(info);
+      updatePart(part);
     }
   }, { deep: true });
 
@@ -212,7 +226,7 @@ export function useCodexMessageBridge(params: {
     matchesActiveCodexRealtimeSession,
     reapplyCodexSharedBackfill,
     resetRealtimeQueueSignature() {
-      lastRealtimeQueueSignature.value = '';
+      resetPublishedState();
     },
   };
 }

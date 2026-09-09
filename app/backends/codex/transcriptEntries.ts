@@ -1,3 +1,5 @@
+import { codexReasoningText } from './reasoning';
+
 export type CodexTranscriptEntry = {
   id: number;
   role: 'user' | 'assistant' | 'system';
@@ -156,8 +158,8 @@ function mapFileChange(item: TranscriptItemOf<'fileChange'>, createEntry: Transc
 }
 
 function mapReasoning(item: TranscriptItemOf<'reasoning'>, createEntry: TranscriptEntryFactory) {
-  const summary = stringValue(item.summary);
-  const text = summary ? `Reasoning: ${summary}` : '';
+  const reasoning = codexReasoningText(item);
+  const text = reasoning ? `Reasoning: ${reasoning}` : '';
   return text ? [createEntry('system', text)] : [];
 }
 

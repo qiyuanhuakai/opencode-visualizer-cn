@@ -3,14 +3,18 @@ import { createApp, defineComponent, h, nextTick } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { ref } from 'vue';
 
+import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import SubagentHistoryContent from './SubagentHistoryContent.vue';
 import { FLOATING_WINDOW_KEY } from '../composables/useFloatingWindow';
 import { useMessages } from '../composables/useMessages';
 import type { MessageInfo, ReasoningPart, ToolPart } from '../types/sse';
 
+vi.mock('./MessageViewer.vue', () => ({ default: defineComponent({ props: ['code'], setup: (props) => () => h('div', props.code) }) }));
+
 function createMessages() {
   return {
     en: {
+      common: { loading: 'Loading...' },
       toolTitles: {
         shell: 'SHELL',
         write: 'WRITE',
@@ -130,6 +134,7 @@ function makeFloatingWindowStub() {
 
 function mount(props: {
   parentThreadId: string;
+  loadHistory?: (threadId: string) => Promise<CodexCanonicalHistoryEntry[]>;
   sessionLabel?: string;
   theme?: string;
   onToolClick?: (part: ToolPart) => void;
@@ -366,4 +371,26 @@ describe('SubagentHistoryContent', () => {
     app.unmount();
     root.remove();
   });
+});
+
+it('loads Codex child history independently of the parent message store', async () => {
+  const loadHistory = vi.fn(async () => [{
+    info: makeAssistantMessage('child-codex', 'child-answer', 'child-user', 2),
+    parts: [makeTextPart('child-answer', 'child-codex', 'Codex child result')],
+  }]);
+  const { root, app } = mount({ parentThreadId: 'child-codex', loadHistory });
+  await flushRender();
+  expect(loadHistory).toHaveBeenCalledWith('child-codex');
+  expect(root.textContent).toContain('Codex child result');
+  expect(useMessages().getParts('child-answer')).toEqual([]);
+  app.unmount();
+  root.remove();
+});
+
+it('shows failed Codex child reads instead of claiming history is empty', async () => {
+  const { root, app } = mount({ parentThreadId: 'child-codex', loadHistory: async () => { throw new Error('Child history unavailable'); } });
+  await flushRender();
+  expect(root.querySelector('[role="alert"]')?.textContent).toContain('Child history unavailable');
+  app.unmount();
+  root.remove();
 });

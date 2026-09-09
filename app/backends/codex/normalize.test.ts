@@ -2,6 +2,28 @@ import { describe, expect, it } from 'vitest';
 import { normalizeCodexTurnItems, normalizeCodexTurnsToHistory } from './normalize';
 
 describe('normalizeCodexTurnItems', () => {
+  it('retains each assistant item as a separate chronological message around tools', () => {
+    const result = normalizeCodexTurnItems({ sessionId: 's', turnId: 't', createdAt: 100, items: [
+      { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'request' }] },
+      { id: 'a1', type: 'agentMessage', text: 'first' },
+      { id: 'cmd', type: 'commandExecution', command: ['ls'] },
+      { id: 'a2', type: 'agentMessage', text: 'second' },
+    ] });
+    const replies = result.parts.filter(part => part.type === 'text' && part.text !== 'request');
+    expect(new Set(replies.map(part => part.id)).size).toBe(2);
+    expect(new Set(replies.map(part => part.messageID)).size).toBe(2);
+    expect(result.messages.filter(message => message.role === 'assistant').map(message => message.time.created)).toEqual([101, 102, 103]);
+    expect(result.messages.filter(message => message.role === 'assistant').every(message => message.parentID === 't:user:0')).toBe(true);
+    const reloaded = normalizeCodexTurnsToHistory({ sessionId: 's', turns: [{ id: 't', items: [
+      { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'request' }] },
+      { id: 'a1', type: 'agentMessage', text: 'first' },
+      { id: 'cmd', type: 'commandExecution', command: ['ls'] },
+      { id: 'a2', type: 'agentMessage', text: 'second' },
+    ] }] });
+    expect(reloaded.flatMap(entry => entry.parts).filter(part => part.type === 'text' && part.text !== 'request').map(part => part.id)).toEqual(replies.map(part => part.id));
+
+  });
+
   it('maps user and agent messages to canonical message parts', () => {
     const result = normalizeCodexTurnItems({
       sessionId: 'thread-1',
@@ -30,7 +52,7 @@ describe('normalizeCodexTurnItems', () => {
     });
     expect(result.parts[1]).toMatchObject({
       type: 'text',
-      messageID: 'turn-1:assistant',
+      messageID: 'turn-1:assistant:agent-item',
       text: 'hello vis',
     });
     expect(result.messages[1]).toMatchObject({
@@ -69,7 +91,7 @@ describe('normalizeCodexTurnItems', () => {
 
     expect(result.messages.find((message) => message.role === 'assistant')).toMatchObject({
       id: 'turn-time:assistant',
-      time: { created: 120, completed: 135 },
+      time: { created: 120, completed: 120 },
       parentID: 'turn-time:user:0',
     });
   });
@@ -322,8 +344,12 @@ describe('normalizeCodexTurnItems', () => {
     expect(result.parts).toEqual([
       expect.objectContaining({
         type: 'tool',
-        tool: 'spawnAgent',
-        state: expect.objectContaining({ status: 'completed' }),
+        tool: 'task',
+        state: expect.objectContaining({
+          status: 'completed',
+          input: expect.objectContaining({ operation: 'spawnAgent', prompt: 'Inspect the parser' }),
+          metadata: expect.objectContaining({ sessionIds: ['thread-child'], agentsStates: { 'thread-child': { status: 'completed' } } }),
+        }),
       }),
     ]);
   });
@@ -430,7 +456,7 @@ describe('normalizeCodexTurnItems', () => {
     });
 
     expect(result.parts[0]?.id).toBe('turn-stable:user:0:text');
-    expect(result.parts[1]?.id).toBe('turn-stable:assistant:text');
+    expect(result.parts[1]?.id).toBe('turn-stable:assistant:stable-agent-id:text');
     expect(result.parts[2]?.id).toBe('stable-cmd-id');
   });
 
@@ -450,12 +476,14 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
-    expect(history.map((entry) => entry.info.role)).toEqual(['user', 'assistant']);
+    expect(history.map((entry) => entry.info.role)).toEqual(['user', 'assistant', 'assistant']);
     expect(history[0]?.parts).toEqual([
       expect.objectContaining({ type: 'text', text: 'inspect repo' }),
     ]);
     expect(history[1]?.parts).toEqual([
       expect.objectContaining({ type: 'tool', tool: 'bash' }),
+    ]);
+    expect(history[2]?.parts).toEqual([
       expect.objectContaining({ type: 'text', text: 'done' }),
     ]);
     const assistantInfo = history[1]?.info;
@@ -481,10 +509,10 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
-    expect(history).toHaveLength(2);
+    expect(history).toHaveLength(3);
     expect(history[0]?.info.role).toBe('user');
     expect(history[1]?.info.role).toBe('assistant');
-    expect(history[1]?.parts).toEqual(
+    expect(history.flatMap(entry => entry.parts)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'reasoning', text: 'analyzing code' }),
         expect.objectContaining({ type: 'text', text: 'fixed' }),

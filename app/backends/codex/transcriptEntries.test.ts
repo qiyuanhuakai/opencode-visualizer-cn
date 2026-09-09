@@ -71,6 +71,16 @@ describe('extractItemTranscriptEntries', () => {
       expected: [{ role: 'system', text: 'Reasoning: reasoning text' }],
     },
     {
+      name: 'reasoning summary blocks from app-server history',
+      item: { type: 'reasoning', summary: ['Inspecting code', 'Checking results'], content: ['Raw detail'] },
+      expected: [{ role: 'system', text: 'Reasoning: Inspecting code\n\nChecking results' }],
+    },
+    {
+      name: 'transmitted reasoning content without a summary',
+      item: { type: 'reasoning', summary: [], content: ['Inspecting code', 'Checking results'] },
+      expected: [{ role: 'system', text: 'Reasoning: Inspecting code\n\nChecking results' }],
+    },
+    {
       name: 'entered review mode',
       item: { type: 'enteredReviewMode', review: 'current changes' },
       expected: [{ role: 'system', text: 'Entered review mode: current changes' }],

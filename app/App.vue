@@ -9014,6 +9014,7 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
     component: SubagentHistoryContent,
     props: {
       parentThreadId: sessionId,
+      loadHistory: activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory : undefined,
       sessionLabel: label,
       theme: shikiTheme.value,
       onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),

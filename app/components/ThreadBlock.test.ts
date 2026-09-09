@@ -92,6 +92,7 @@ function mount(
   props: {
     root: MessageInfo;
     currentSessionId?: string;
+    backendKind?: 'codex' | 'opencode';
   },
   onShowThreadHistory: (payload: { entries: unknown[] }) => void,
 ) {
@@ -110,6 +111,7 @@ function mount(
             filesWithBasenames: [],
             isRevertedPreview: false,
             currentSessionId: props.currentSessionId,
+            backendKind: props.backendKind,
             deferredTransitionKey: 'test',
             onShowThreadHistory,
           });
@@ -126,6 +128,23 @@ describe('ThreadBlock history wiring', () => {
   afterEach(() => {
     document.body.innerHTML = '';
     useMessages().reset();
+  });
+
+  it('shows Codex turn attachments when the latest reply is a separate assistant message', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([
+      { info: user, parts: [] },
+      { info: makeAssistantMessage('main', 'turn-tools', 'u1', 2, 'codex'), parts: [{
+        id: 'image-1', sessionID: 'main', messageID: 'turn-tools', type: 'file',
+        mime: 'image/png', filename: 'preview.png', url: 'data:image/png;base64,AA==',
+      }] },
+      { info: makeAssistantMessage('main', 'reply-2', 'u1', 3, 'codex'), parts: [makeTextPart('reply-2', 'main', 'Final answer')] },
+    ]);
+    const view = mount({ root: user, currentSessionId: 'main', backendKind: 'codex' }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelectorAll('.thread-assistant img')).toHaveLength(1);
+    expect(view.root.querySelector('img')?.getAttribute('alt')).toBe('preview.png');
+    view.app.unmount();
   });
 
   it('Given a thread with a subagent-session assistant message, When the history button is clicked, Then the emitted entry carries isSubagent true and the agent name', async () => {

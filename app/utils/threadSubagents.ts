@@ -31,15 +31,19 @@ export function resolveThreadSubagentSessions(
     if (part.type !== 'tool' || part.tool !== 'task') continue;
     const state = part.state;
     if (state.status === 'pending') continue;
-    const rawChildId = state.metadata?.sessionId;
-    if (typeof rawChildId !== 'string') continue;
-    const childId = rawChildId.trim();
-    if (!childId) continue;
-    const meta = metaById?.[childId];
-    if (meta && meta.parentID !== sessionId) continue;
-    const fallbackLabel = meta?.label || childId;
-    if (isMagicContextWorkerName(fallbackLabel)) continue;
-    if (!seen.has(childId)) seen.set(childId, resolveTaskWorkerLabel(part, fallbackLabel));
+    const childIds = Array.isArray(state.metadata?.sessionIds)
+      ? state.metadata.sessionIds
+      : [state.metadata?.sessionId];
+    for (const rawChildId of childIds) {
+      if (typeof rawChildId !== 'string') continue;
+      const childId = rawChildId.trim();
+      if (!childId || childId === sessionId) continue;
+      const meta = metaById?.[childId];
+      if (meta && meta.parentID !== sessionId && (state.metadata?.source !== 'codex' || meta.parentID)) continue;
+      const fallbackLabel = meta?.label || childId;
+      if (isMagicContextWorkerName(fallbackLabel)) continue;
+      if (!seen.has(childId)) seen.set(childId, resolveTaskWorkerLabel(part, fallbackLabel));
+    }
   }
   return Array.from(seen.entries()).map(([sessionId, label]) => ({ sessionId, label }));
 }
@@ -62,9 +66,10 @@ export function resolveChildOwners(
   threads.forEach(({ rootId, parts }) => {
     parts.forEach((part) => {
       if (part.type !== 'tool' || part.tool !== 'task') return;
-      const rawChildId = 'metadata' in part.state ? part.state.metadata?.sessionId : undefined;
-      if (typeof rawChildId === 'string' && rawChildId.trim()) {
-        exactIds.add(rawChildId.trim());
+      const metadata = 'metadata' in part.state ? part.state.metadata : undefined;
+      const ids = Array.isArray(metadata?.sessionIds) ? metadata.sessionIds : [metadata?.sessionId];
+      for (const id of ids) {
+        if (typeof id === 'string' && id.trim()) exactIds.add(id.trim());
       }
       const description = taskDescription(part);
       if (!description) return;

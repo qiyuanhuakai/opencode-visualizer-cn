@@ -9,6 +9,7 @@ import type {
   ToolPart,
   UserMessageInfo,
 } from '../../types/sse';
+import { codexReasoningText } from './reasoning';
 
 type CodexRecord = Record<string, unknown>;
 
@@ -31,12 +32,12 @@ export function codexUserMessageId(turnId: string, index = 0) {
   return `${turnId}:user:${index}`;
 }
 
-export function codexAssistantMessageId(turnId: string) {
-  return `${turnId}:assistant`;
+export function codexAssistantMessageId(turnId: string, itemId?: string) {
+  return itemId ? `${turnId}:assistant:${itemId}` : `${turnId}:assistant`;
 }
 
-export function codexAssistantTextPartId(turnId: string) {
-  return `${codexAssistantMessageId(turnId)}:text`;
+export function codexAssistantTextPartId(turnId: string, itemId?: string) {
+  return `${codexAssistantMessageId(turnId, itemId)}:text`;
 }
 
 function isRecord(value: unknown): value is CodexRecord {
@@ -45,16 +46,6 @@ function isRecord(value: unknown): value is CodexRecord {
 
 function stringValue(value: unknown, fallback = '') {
   return typeof value === 'string' ? value : fallback;
-}
-
-function stringListValue(value: unknown, separator = '\n\n') {
-  if (typeof value === 'string') return value;
-  if (!Array.isArray(value)) return '';
-  return value
-    .filter((entry): entry is string => typeof entry === 'string')
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .join(separator);
 }
 
 function toolResultText(value: unknown) {
@@ -407,7 +398,7 @@ export function normalizeCodexTurnItems(params: {
       }
       files.forEach((file, fileIndex) => {
         parts.push(createFilePart({
-          id: `${message.id}:file:${file.id || fileIndex}`,
+          id: `${message.id}:file:${fileIndex}`,
           sessionId: params.sessionId,
           messageId: message.id,
           mime: file.mime,
@@ -420,20 +411,26 @@ export function normalizeCodexTurnItems(params: {
       return;
     }
 
-    ensureAssistantMessage(itemTime);
-
     if (type === 'agentMessage') {
       const text = stringValue(item.text);
       if (!text) return;
+      const messageId = codexAssistantMessageId(params.turnId, itemId);
+      messages.push(createAssistantMessage({
+        id: messageId, sessionId: params.sessionId, parentId: parentMessageId,
+        createdAt: itemTime, completedAt: isCompleted ? turnCompletedTime ?? itemTime : !hasExplicitStatus ? itemTime : undefined,
+        model: params.model,
+      }));
       parts.push(createTextPart({
-        id: codexAssistantTextPartId(params.turnId),
+        id: codexAssistantTextPartId(params.turnId, itemId),
         sessionId: params.sessionId,
-        messageId: assistantMessageId,
+        messageId,
         text,
         createdAt: itemTime,
       }));
       return;
     }
+
+    ensureAssistantMessage(itemTime);
 
     if (type === 'commandExecution') {
       const command = commandText(item);
@@ -493,9 +490,7 @@ export function normalizeCodexTurnItems(params: {
     }
 
     if (type === 'reasoning') {
-      const summary = stringListValue(item.summary);
-      const content = stringValue(item.text) || stringListValue(item.content);
-      const text = summary || content;
+      const text = codexReasoningText(item);
       if (!text) return;
       parts.push(createReasoningPart({
         id: itemId,
@@ -532,7 +527,29 @@ export function normalizeCodexTurnItems(params: {
       return;
     }
 
-    if (type === 'dynamicToolCall' || type === 'collabToolCall' || type === 'collabAgentToolCall') {
+    if (type === 'collabToolCall' || type === 'collabAgentToolCall') {
+      const tool = stringValue(item.tool);
+      const receiverIds = Array.isArray(item.receiverThreadIds)
+        ? item.receiverThreadIds.filter((id): id is string => typeof id === 'string' && !!id.trim())
+        : [stringValue(item.newThreadId) || stringValue(item.receiverThreadId)].filter(Boolean);
+      const agentsStates = isRecord(item.agentsStates) ? item.agentsStates : {};
+      const prompt = stringValue(item.prompt);
+      parts.push(createToolPart({
+        id: itemId,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        tool: 'task',
+        title: tool || 'Codex agent',
+        input: { operation: tool, prompt, model: item.model, reasoningEffort: item.reasoningEffort },
+        output: Object.entries(agentsStates).map(([id, state]) => `${id}: ${JSON.stringify(state)}`).join('\n') || stringValue(item.status),
+        createdAt: itemTime,
+        status: stringValue(item.status),
+        metadata: { sessionIds: receiverIds, sessionId: receiverIds[0], agentsStates, senderThreadId: item.senderThreadId },
+      }));
+      return;
+    }
+
+    if (type === 'dynamicToolCall') {
       const tool = stringValue(item.tool);
       const args = isRecord(item.arguments) ? item.arguments : {};
       const status = stringValue(item.status);
