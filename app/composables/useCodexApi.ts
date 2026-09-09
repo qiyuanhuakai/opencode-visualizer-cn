@@ -1016,8 +1016,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     };
   }
 
-  function setRealtimeReasoningCompleted(completedAt = Date.now()) {
-    if (!realtimeReasoningPart.value) return;
+  function setRealtimeReasoningCompleted(completedAt = Date.now(), turnId?: string) {
+    if (!realtimeReasoningPart.value || realtimeReasoningPart.value.part.time.end != null) return;
+    if (turnId && realtimeReasoningPart.value.part.messageID !== codexAssistantMessageId(turnId)) return;
     const current = realtimeReasoningPart.value;
     realtimeReasoningPart.value = {
       ...current,
@@ -1334,7 +1335,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       pruneServerRequestsForActiveContext();
       if (notification.method === 'turn/completed') {
         setRealtimeAssistantCompleted();
-        setRealtimeReasoningCompleted();
+        setRealtimeReasoningCompleted(Date.now(), turn?.id);
         realtimeStreamingPart.value = realtimeStreamingPart.value
           ? { ...realtimeStreamingPart.value, updatedAt: Date.now() }
           : null;

@@ -7436,7 +7436,7 @@ watch(
 watch(
   isThinking,
   (active) => {
-    if (active) return;
+    if (active || activeBackendKind.value === 'codex') return;
     if (!selectedSessionId.value) return;
     updateReasoningExpiry(selectedSessionId.value, 'idle');
   },

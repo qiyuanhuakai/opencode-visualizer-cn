@@ -166,6 +166,26 @@ describe('useCodexApi', () => {
     expect(reasoning.map(part => [part.id, part.text])).toEqual([['reason-1', 'First summary'], ['reason-2', 'Second summary']]);
   });
 
+  it('does not revive completed reasoning when this or a later turn finishes', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(100);
+    try {
+      mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn-a', item: { id: 'reason-a', type: 'reasoning', summary: ['Finished thought'], content: [] } } });
+      const finishedPart = api.realtimeReasoningPart.value?.part;
+      clock.mockReturnValue(200);
+      mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: 'turn-a', status: 'completed' } } });
+      expect(api.realtimeReasoningPart.value?.part).toBe(finishedPart);
+      clock.mockReturnValue(300);
+      mock.emit({ method: 'turn/started', params: { threadId: 'thr_existing', turn: { id: 'turn-b', status: 'inProgress' } } });
+      mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: 'turn-b', status: 'completed' } } });
+      expect(api.realtimeReasoningPart.value?.part).toBe(finishedPart);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('keeps authoritative completed reasoning through the turn completion event', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
