@@ -481,6 +481,7 @@
             </template>
           </Dropdown>
         </div>
+        <slot name="after-thinking" />
         <div class="input-actions">
           <button
             type="button"

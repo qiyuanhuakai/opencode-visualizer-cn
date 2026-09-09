@@ -98,6 +98,18 @@ All spacing derives from a 4px base.
 - **Accessibility**: every icon-only button has a translated title or aria-label.
 - **Motion**: color/background transition only.
 
+### Codex Collaboration and Goal Controls
+- Reuse the compact panel, border, text and accent tokens above; preserve existing floating-window chrome.
+- Collaboration presets are native selectable buttons with a visible selected label and `aria-pressed`. Explain that selection applies to the next message; distinguish this from running multiple agents.
+- Show disconnected, loading, empty and failed mode discovery separately. A failed refresh must never look like an empty successful result.
+- Goal editing belongs to the active thread. Explain unavailable, loading and error states next to the editor; disable mutations while the current thread is unresolved or disconnected.
+- Goal objectives support multiline text up to 4,000 characters. Token budget is optional; blank means no budget, otherwise require a positive safe integer.
+- Save/clear feedback uses an announced status or alert. Show token/time usage alongside the goal. Delayed results must not report success on a different thread.
+- All controls have translated visible labels, keyboard focus, wrapping helper text and no added motion. At narrow widths, forms remain readable without horizontal scrolling.
+- In the Codex composer, a flexible goal bar sits immediately after reasoning effort and before message actions. It uses a 120px minimum width and 28px height, grows into available toolbar space, truncates the objective with an ellipsis, and exposes full text in its tooltip. Narrow toolbars may wrap the bar while keeping send controls reachable.
+- Clicking the bar opens a dedicated, reusable floating goal window sized to the canvas; reopening restores its focus. The bar reflects current-thread updates and never shows another thread's goal while loading.
+- The goal bar uses the composer's transparent resting surface, 8px control radius and `--theme-input-*` text/hover/focus tokens. Goal windows use `--theme-floating-*` surfaces and text, with 12px form panels and 8px controls; no fixed black/slate fills. Status selection reuses `Dropdown`/`DropdownItem` and the shared dropdown theme, including keyboard navigation and active states.
+
 ### File Tree Toolbar
 - **Structure**: branch selector yields horizontal space to the file search control before any toolbar overflow occurs.
 - **Spacing**: file search keeps a 96px minimum inline size; long branch names truncate with an ellipsis.
