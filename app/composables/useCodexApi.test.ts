@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
-import type { CodexAdapter, CodexPromptResult } from '../backends/codex/codexAdapter';
+import type {
+  CodexAdapter,
+  CodexPromptResult,
+  CodexThreadGoal,
+} from '../backends/codex/codexAdapter';
 import {
   CodexJsonRpcError,
   type CodexJsonRpcId,
@@ -476,6 +480,78 @@ describe('useCodexApi', () => {
     await staleRefresh;
 
     expect(api.threadGoal.value?.objective).toBe('Current goal');
+  });
+
+  it.each(['updated', 'cleared'])(
+    'applies goal %s notifications before stale reads',
+    async (event) => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      await api.selectThread('thr_existing');
+      const goal: CodexThreadGoal = {
+        threadId: 'thr_existing',
+        objective: 'Live goal',
+        status: 'active',
+        tokenBudget: null,
+        tokensUsed: 8,
+        timeUsedSeconds: 2,
+        createdAt: 1,
+        updatedAt: 2,
+      };
+      mock.adapter.getThreadGoal = vi.fn().mockResolvedValue({ goal });
+      await api.refreshThreadGoal();
+      const stale = deferred<{ goal: CodexThreadGoal | null }>();
+      mock.adapter.getThreadGoal = vi.fn(() => stale.promise);
+      const refresh = api.refreshThreadGoal();
+
+      mock.emit({
+        method: `thread/goal/${event}`,
+        params: { threadId: 'thr_existing', goal: { ...goal, tokensUsed: 20 } },
+      });
+      stale.resolve({ goal: { ...goal, objective: 'Stale goal' } });
+      await refresh;
+
+      expect(api.threadGoal.value).toEqual(
+        event === 'cleared' ? null : { ...goal, tokensUsed: 20 },
+      );
+      expect(api.threadGoalThreadId.value).toBe('thr_existing');
+      expect(api.threadGoalLoading.value).toBe(false);
+    },
+  );
+
+  it('ignores goal notifications belonging to other threads', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    await api.refreshThreadGoal();
+
+    mock.emit({ method: 'thread/goal/cleared', params: { threadId: 'thr_other' } });
+
+    expect(api.threadGoalThreadId.value).toBe('thr_existing');
+  });
+
+  it.each(['thr_other', ''])('ignores goal updates with mismatched payload ownership (%s)', async (threadId) => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    await api.refreshThreadGoal();
+
+    mock.emit({
+      method: 'thread/goal/updated',
+      params: {
+        threadId: 'thr_existing',
+        goal: {
+          threadId, objective: 'Wrong owner', status: 'active', tokenBudget: null,
+          tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1,
+        },
+      },
+    });
+
+    expect(api.threadGoal.value).toBeNull();
+    expect(api.threadGoalThreadId.value).toBe('thr_existing');
   });
 
   it('keeps live plans owned by their source thread', async () => {
@@ -3403,6 +3479,7 @@ describe('useCodexApi', () => {
     expect(result.data).toEqual([]);
     expect(api.collaborationModes.value).toEqual([]);
     expect(api.collaborationModesLoading.value).toBe(false);
+    expect(api.collaborationModesError.value).toBe('method not found');
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });
@@ -3414,6 +3491,66 @@ describe('useCodexApi', () => {
     await api.connect();
     await api.refreshCollaborationModes();
     expect(api.collaborationModes.value).toEqual([]);
+  });
+
+  it('clears collaboration mode state when disconnected', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.adapter.listCollaborationModes = vi
+      .fn()
+      .mockResolvedValue({
+        data: [{ name: 'Plan', mode: 'plan', model: null, reasoningEffort: null }],
+      });
+    await api.refreshCollaborationModes();
+
+    api.disconnectTransport();
+
+    expect(api.collaborationModes.value).toEqual([]);
+    expect(api.collaborationModesLoading.value).toBe(false);
+    expect(api.collaborationModesError.value).toBeNull();
+  });
+
+  it.each([false, true])(
+    'ignores a late collaboration failure after a newer refresh (reconnect=%s)',
+    async (reconnect) => {
+      const mock = createAdapterMock();
+      const api = useCodexApi({ adapterFactory: () => mock.adapter });
+      await api.connect();
+      await api.refreshCollaborationModes();
+      const stale = deferred<void>();
+      mock.adapter.listCollaborationModes = vi.fn(async () => {
+        await stale.promise;
+        throw new Error('stale failure');
+      });
+      const refresh = api.refreshCollaborationModes();
+      const modes = [{ name: 'Plan', mode: 'plan', model: null, reasoningEffort: null }];
+      mock.adapter.listCollaborationModes = vi.fn().mockResolvedValue({ data: modes });
+      if (reconnect) await api.connect();
+      await api.refreshCollaborationModes();
+
+      stale.resolve();
+      await refresh;
+
+      expect(api.collaborationModes.value).toEqual(modes);
+      expect(api.collaborationModesError.value).toBeNull();
+    },
+  );
+
+  it('clears collaboration errors after a successful empty response', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mock.adapter.listCollaborationModes = vi.fn().mockRejectedValue(new Error('failed'));
+    await api.refreshCollaborationModes();
+    mock.adapter.listCollaborationModes = vi.fn().mockResolvedValue({ data: [] });
+
+    await api.refreshCollaborationModes();
+
+    expect(api.collaborationModes.value).toEqual([]);
+    expect(api.collaborationModesError.value).toBeNull();
+    warnSpy.mockRestore();
   });
 
   it('preserves collaboration modes returned from a successful list call', async () => {

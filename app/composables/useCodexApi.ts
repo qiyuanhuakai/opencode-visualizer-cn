@@ -352,6 +352,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isThreadGoal(value: unknown): value is CodexThreadGoal {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.threadId === 'string' &&
+    typeof value.objective === 'string' &&
+    (value.status === 'active' ||
+      value.status === 'paused' ||
+      value.status === 'blocked' ||
+      value.status === 'usageLimited' ||
+      value.status === 'budgetLimited' ||
+      value.status === 'complete') &&
+    (value.tokenBudget === null || typeof value.tokenBudget === 'number') &&
+    typeof value.tokensUsed === 'number' &&
+    typeof value.timeUsedSeconds === 'number' &&
+    typeof value.createdAt === 'number' &&
+    typeof value.updatedAt === 'number'
+  );
+}
+
 function extractThread(value: unknown): CodexThread | null {
   if (!isRecord(value)) return null;
   const thread = isRecord(value.thread) ? value.thread : value;
@@ -582,6 +601,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const experimentalFeaturesLoading = ref(false);
   const collaborationModes = ref<CodexCollaborationMode[]>([]);
   const collaborationModesLoading = ref(false);
+  const collaborationModesError = ref<string | null>(null);
   const configRequirements = ref<CodexConfigRequirementsReadResult['requirements']>(null);
   const configRequirementsLoading = ref(false);
   const externalAgentConfigItems = ref<CodexExternalAgentConfigItem[]>([]);
@@ -642,6 +662,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   let threadSelectionGeneration = 0;
   let accountRefreshGeneration = 0;
   let threadGoalRefreshGeneration = 0;
+  let collaborationModesRefreshGeneration = 0;
   let pluginsRefreshGeneration = 0;
   let connectionGeneration = 0;
   type ConnectionRequest = { sourceAdapter: CodexAdapter; generation: number };
@@ -1136,6 +1157,23 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       typeof notificationParams?.threadId === 'string' ? notificationParams.threadId : '';
     const notificationTurnId =
       typeof notificationParams?.turnId === 'string' ? notificationParams.turnId : '';
+    if (
+      notificationThreadId &&
+      notificationThreadId === activeThreadId.value &&
+      (notification.method === 'thread/goal/updated' ||
+        notification.method === 'thread/goal/cleared')
+    ) {
+      const goal = notificationParams?.goal;
+      if (
+        notification.method === 'thread/goal/updated' &&
+        (!isThreadGoal(goal) || goal.threadId !== notificationThreadId)
+      ) return;
+      threadGoalRefreshGeneration += 1;
+      threadGoal.value =
+        isThreadGoal(goal) && notification.method === 'thread/goal/updated' ? goal : null;
+      threadGoalThreadId.value = notificationThreadId;
+      threadGoalLoading.value = false;
+    }
     if (notificationThreadId && notificationTurnId) {
       if (isInvalidatedTurnId(notificationThreadId, notificationTurnId)) return;
       recordObservedTurnId(notificationThreadId, notificationTurnId);
@@ -1876,6 +1914,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     threadGoalThreadId.value = null;
     threadGoalLoading.value = false;
     loadingThread.value = false;
+    collaborationModes.value = [];
+    collaborationModesLoading.value = false;
+    collaborationModesError.value = null;
     if (resetStatus) status.value = 'idle';
   }
 
@@ -3343,16 +3384,20 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   async function refreshCollaborationModes() {
     const request = captureConnection();
     if (!request) throw new Error('Codex is not connected.');
+    const refreshGeneration = ++collaborationModesRefreshGeneration;
+    const isCurrent = () =>
+      isCurrentConnection(request) && collaborationModesRefreshGeneration === refreshGeneration;
     collaborationModesLoading.value = true;
+    collaborationModesError.value = null;
     try {
       const result: CodexCollaborationModeListResult =
         await request.sourceAdapter.listCollaborationModes();
-      if (isCurrentConnection(request))
-        collaborationModes.value = Array.isArray(result.data) ? result.data : [];
+      if (isCurrent()) collaborationModes.value = Array.isArray(result.data) ? result.data : [];
       return result;
     } catch (error) {
-      if (!isCurrentConnection(request)) return { data: [] };
+      if (!isCurrent()) return { data: [] };
       collaborationModes.value = [];
+      collaborationModesError.value = error instanceof Error ? error.message : String(error);
       if (typeof console !== 'undefined') {
         console.warn(
           '[Codex] collaborationMode/list failed (the experimental API may not be enabled on this Codex server):',
@@ -3361,7 +3406,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       }
       return { data: [] };
     } finally {
-      if (isCurrentConnection(request)) collaborationModesLoading.value = false;
+      if (isCurrent()) collaborationModesLoading.value = false;
     }
   }
 
@@ -3665,6 +3710,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     experimentalFeaturesLoading,
     collaborationModes,
     collaborationModesLoading,
+    collaborationModesError,
     configRequirements,
     configRequirementsLoading,
     externalAgentConfigItems,
