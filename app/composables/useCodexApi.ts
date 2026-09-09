@@ -1,3 +1,4 @@
+import { codexReasoningText } from '../backends/codex/reasoning';
 import { computed, ref, watch } from 'vue';
 import {
   CodexAdapter,
@@ -805,6 +806,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function setTranscriptFromTurns(turns: CodexTurn[] = []) {
+    assistantTranscriptIds.clear();
     const activeThread = threads.value.find((thread) => thread.id === activeThreadId.value);
     for (const turn of turns) recordObservedTurnId(activeThreadId.value, turn.id);
     const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
@@ -836,18 +838,45 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     transcript.value = [...textEntries, ...systemEntries];
   }
 
-  function appendAssistantDelta(text: string) {
-    if (!text) return;
-    const last = transcript.value.at(-1);
-    if (last?.role === 'assistant') {
-      transcript.value[transcript.value.length - 1] = {
-        ...last,
-        text: `${last.text}${text}`,
-        modelName: last.modelName ?? currentSelectedModelName(),
-      };
-      return;
+  const assistantTranscriptIds = new Map<string, number>();
+
+  function updateAssistantItem(sessionId: string, turnId: string, itemId: string, text: string, completed: boolean, createdAt?: number) {
+    const messageId = codexAssistantMessageId(turnId, itemId || 'pending');
+    const previous = realtimeStreamingPart.value;
+    const sameItem = previous?.info.id === messageId;
+    const provisional = previous?.info.id === codexAssistantMessageId(turnId, 'pending');
+    const now = Date.now();
+    if (previous && !sameItem && !provisional && previous.part.text) {
+      mergeRealtimeHistoryEntry({ info: previous.info, parts: [previous.part] });
     }
-    pushTranscript('assistant', text, currentSelectedModelName());
+    if (provisional && itemId) {
+      realtimeMessageAliases.value = { ...realtimeMessageAliases.value, [previous.info.id]: messageId };
+      realtimeHistoryQueue.value = realtimeHistoryQueue.value.filter(entry => entry.info.id !== previous.info.id);
+    }
+    const stored = realtimeHistoryQueue.value.find(entry => entry.info.id === messageId);
+    const storedText = stored?.parts.find((part): part is TextPart => part.type === 'text');
+    const currentText = sameItem || provisional ? previous?.part.text ?? '' : storedText?.text ?? '';
+    const info = previous && (sameItem || provisional) ? { ...previous.info, id: messageId }
+      : createCodexAssistantInfo(sessionId, messageId, createdAt ?? now, currentRealtimeParentId(sessionId, turnId));
+    const part: TextPart = {
+      id: codexAssistantTextPartId(turnId, itemId || 'pending'), sessionID: sessionId, messageID: messageId,
+      type: 'text', text: completed ? text : currentText + text,
+      time: { start: sameItem || provisional ? previous?.part.time?.start ?? info.time.created : storedText?.time?.start ?? info.time.created, ...(completed ? { end: now } : {}) },
+    };
+    if (!completed || !stored || sameItem || provisional) realtimeStreamingPart.value = { info, part, updatedAt: now };
+    mergeRealtimeHistoryEntry({ info, parts: [part] });
+    const transcriptId = assistantTranscriptIds.get(messageId)
+      ?? (provisional ? assistantTranscriptIds.get(previous.info.id) : undefined);
+    const transcriptIndex = transcript.value.findIndex(entry => entry.id === transcriptId);
+    const transcriptEntry = transcript.value[transcriptIndex];
+    if (transcriptEntry) {
+      transcript.value[transcriptIndex] = { ...transcriptEntry, text: part.text };
+    } else {
+      const entry = createTranscriptEntry('assistant', part.text, currentSelectedModelName());
+      transcript.value.push(entry);
+      assistantTranscriptIds.set(messageId, entry.id);
+    }
+    if (transcriptId !== undefined) assistantTranscriptIds.set(messageId, transcriptId);
   }
 
   function parseSelectedCodexModel(value: string | undefined) {
@@ -873,6 +902,17 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     createdAt: number,
     parentId = '',
   ): MessageInfo {
+    parentId = realtimeMessageAliases.value[parentId] || parentId;
+    const existing = [
+      realtimeStreamingPart.value?.info,
+      ...realtimeHistoryQueue.value.map(entry => entry.info),
+      ...canonicalHistory.value.map(entry => entry.info),
+      realtimeReasoningPart.value?.info,
+      ...realtimeToolParts.value.map(entry => entry.info),
+    ].find(info => info?.id === messageId && info.sessionID === sessionId && info.role === 'assistant');
+    if (existing?.role === 'assistant') {
+      return { ...existing, parentID: parentId || existing.parentID };
+    }
     const model = parseSelectedCodexModel(selectedModel.value);
     return {
       id: messageId,
@@ -895,16 +935,19 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     };
   }
 
-  function currentRealtimeParentId(sessionId?: string) {
+  function currentRealtimeParentId(sessionId?: string, turnId?: string) {
     const targetSessionId = sessionId?.trim() || activeThreadId.value || '';
-    const queueParent = [...realtimeHistoryQueue.value].reverse().find((entry) => {
-      if (entry.info.role !== 'user') return false;
-      if (!targetSessionId) return true;
-      return entry.info.sessionID === targetSessionId || entry.info.sessionID === 'codex-pending';
-    })?.info.id;
-    if (queueParent) return queueParent;
-    const aliases = realtimeMessageAliases.value;
-    return Object.values(aliases).at(-1) || '';
+    const entries = [...canonicalHistory.value, ...realtimeHistoryQueue.value];
+    if (turnId) {
+      const assistantId = codexAssistantMessageId(turnId);
+      const existing = entries.find(entry => entry.info.id === assistantId && entry.info.sessionID === targetSessionId);
+      if (existing?.info.role === 'assistant' && existing.info.parentID) return existing.info.parentID;
+      const user = entries.find(entry => entry.info.id === codexUserMessageId(turnId, 0) && entry.info.sessionID === targetSessionId);
+      if (user) return user.info.id;
+    }
+    return entries.reverse().find(entry => entry.info.role === 'user' && (
+      entry.info.sessionID === targetSessionId || entry.info.sessionID === 'codex-pending'
+    ))?.info.id || '';
   }
 
   function buildRealtimeUserParts(
@@ -925,13 +968,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         time: { start: createdAt, end: createdAt },
       } satisfies TextPart);
     }
+    let fileIndex = 0;
     inputItems?.forEach((item, index) => {
       if (item.type === 'image') {
         const mimeMatch = item.url.match(/^data:([^;,]+)/u);
         const mime = mimeMatch?.[1] || 'image/*';
         const extension = mime.split('/')[1]?.split('+')[0] || 'img';
         parts.push({
-          id: `${messageId}:file:${index}`,
+          id: `${messageId}:file:${fileIndex++}`,
           sessionID: sessionId,
           messageID: messageId,
           type: 'file',
@@ -945,7 +989,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         const filename = item.path.split(/[\\/]/u).filter(Boolean).pop() || `image-${index + 1}`;
         const extension = filename.split('.').pop()?.toLowerCase() || '';
         parts.push({
-          id: `${messageId}:file:${index}`,
+          id: `${messageId}:file:${fileIndex++}`,
           sessionID: sessionId,
           messageID: messageId,
           type: 'file',
@@ -1049,13 +1093,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     realtimeToolParts.value = realtimeToolParts.value.filter(
       (_, entryIndex) => entryIndex !== index,
     );
-    const info =
-      current.info.role === 'assistant'
-        ? {
-            ...current.info,
-            time: { ...current.info.time, completed: current.info.time.completed ?? completedAt },
-          }
-        : current.info;
+    const info = current.info;
     return {
       info,
       part: completedPart,
@@ -1072,6 +1110,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function mergeRealtimeHistoryEntry(entry: CodexCanonicalHistoryEntry) {
+    if (entry.info.role === 'assistant') {
+      entry = { ...entry, info: createCodexAssistantInfo(entry.info.sessionID, entry.info.id, entry.info.time.created, entry.info.parentID) };
+    }
     const existingIndex = realtimeHistoryQueue.value.findIndex(
       (current) => current.info.id === entry.info.id,
     );
@@ -1096,12 +1137,34 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue(nextQueue);
   }
 
-  function mergeRealtimeHistoryBundle(bundle: { messages: MessageInfo[]; parts: MessagePart[] }) {
+  const realtimeImageRequests = new Map<string, symbol>();
+  function isLocalImage(part: MessagePart): part is FilePart {
+    return part.type === 'file' && part.mime.startsWith('image/') && !/^(data:|https?:|blob:)/u.test(part.url);
+  }
+
+  function mergeRealtimeHistoryBundle(bundle: { messages: MessageInfo[]; parts: MessagePart[] }, request: ConnectionRequest, turnId: string) {
+    const selectionGeneration = threadSelectionGeneration;
     for (const info of bundle.messages) {
       mergeRealtimeHistoryEntry({
         info,
-        parts: bundle.parts.filter((part) => part.messageID === info.id),
+        parts: bundle.parts.filter((part) => part.messageID === info.id && !isLocalImage(part)),
       });
+      for (const part of bundle.parts.filter((part) => part.messageID === info.id)) {
+        const token = Symbol(part.id);
+        realtimeImageRequests.set(part.id, token);
+        if (!isLocalImage(part)) {
+          realtimeImageRequests.delete(part.id);
+          continue;
+        }
+        void hydrateThreadImages([{ info, parts: [part] }], request.sourceAdapter).then(([hydrated]) => {
+          if (!isCurrentConnection(request) || selectionGeneration !== threadSelectionGeneration ||
+              activeThreadId.value !== info.sessionID || isInvalidatedTurnId(info.sessionID, turnId) ||
+              realtimeImageRequests.get(part.id) !== token) return;
+          if (hydrated) mergeRealtimeHistoryEntry({ ...hydrated, parts: hydrated.parts.filter(part => !isLocalImage(part)) });
+        }).finally(() => {
+          if (realtimeImageRequests.get(part.id) === token) realtimeImageRequests.delete(part.id);
+        });
+      }
     }
   }
 
@@ -1288,42 +1351,21 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const params = isRecord(notification.params) ? notification.params : null;
       const item = params?.item;
       if (isRecord(item) && item.type === 'agentMessage' && typeof item.text === 'string') {
-        const last = transcript.value.at(-1);
-        if (last?.role === 'assistant') {
-          transcript.value[transcript.value.length - 1] = {
-            ...last,
-            text: item.text,
-            modelName: last.modelName ?? currentSelectedModelName(),
-          };
-        } else {
-          pushTranscript('assistant', item.text, currentSelectedModelName());
-        }
-        if (realtimeStreamingPart.value) {
-          const completedAt = Date.now();
-          realtimeStreamingPart.value = {
-            ...realtimeStreamingPart.value,
-            part: {
-              ...realtimeStreamingPart.value.part,
-              text: item.text,
-              time: {
-                start:
-                  realtimeStreamingPart.value.part.time?.start ??
-                  realtimeStreamingPart.value.info.time.created,
-                end: completedAt,
-              },
-            },
-            updatedAt: completedAt,
-          };
-        }
+        const sessionId = notificationThreadId || activeThreadId.value || 'codex-thread';
+        const turnId = notificationTurnId || activeTurn.value?.id || `${sessionId}:realtime`;
+        updateAssistantItem(sessionId, turnId, typeof item.id === 'string' ? item.id : '', item.text, true, typeof item.createdAt === 'number' ? item.createdAt : undefined);
       }
       if (isRecord(item) && item.type === 'reasoning') {
-        if (realtimeReasoningPart.value) {
+        if (realtimeReasoningPart.value && realtimeReasoningPart.value.part.id === item.id) {
           const completedAt = Date.now();
-          const finalPart = realtimeReasoningPart.value.part;
-          mergeRealtimeHistoryEntry({
-            info: realtimeReasoningPart.value.info,
-            parts: [{ ...finalPart, time: { start: finalPart.time.start, end: completedAt } }],
-          });
+          const current = realtimeReasoningPart.value;
+          const finalPart: ReasoningPart = {
+            ...current.part,
+            text: codexReasoningText(item) || current.part.text,
+            time: { start: current.part.time.start, end: completedAt },
+          };
+          realtimeReasoningPart.value = { ...current, part: finalPart, updatedAt: completedAt };
+          mergeRealtimeHistoryEntry({ info: current.info, parts: [finalPart] });
         }
       }
       const realtimeSessionId = notificationThreadId || activeThreadId.value || 'codex-thread';
@@ -1335,7 +1377,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
               sessionId: realtimeSessionId,
               turnId: realtimeTurnId,
               items: [item],
-              parentMessageId: currentRealtimeParentId(realtimeSessionId),
+              parentMessageId: currentRealtimeParentId(realtimeSessionId, realtimeTurnId),
             })
           : null;
       const normalizedToolPart =
@@ -1389,7 +1431,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (isRecord(item) && typeof item.type === 'string' && !completedToolMerged) {
         const bundle = normalizedBundle ?? { messages: [], parts: [] };
         if (bundle.messages.length > 0 || bundle.parts.length > 0) {
-          mergeRealtimeHistoryBundle(bundle);
+          mergeRealtimeHistoryBundle(bundle, request, realtimeTurnId);
         }
       }
       return;
@@ -1397,15 +1439,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
     if (notification.method === 'item/agentMessage/delta') {
       const delta = extractAgentDelta(notification.params);
-      appendAssistantDelta(delta);
-      if (delta && realtimeStreamingPart.value) {
-        const current = realtimeStreamingPart.value.part;
-        realtimeStreamingPart.value = {
-          info: realtimeStreamingPart.value.info,
-          part: { ...current, text: current.text + delta },
-          updatedAt: Date.now(),
-        };
-      }
+      const params = isRecord(notification.params) ? notification.params : null;
+      const sessionId = notificationThreadId || activeThreadId.value || 'codex-thread';
+      const turnId = notificationTurnId || activeTurn.value?.id || `${sessionId}:realtime`;
+      if (delta) updateAssistantItem(sessionId, turnId, typeof params?.itemId === 'string' ? params.itemId : '', delta, false);
       return;
     }
 
@@ -1437,7 +1474,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           sessionId: realtimeSessionId,
           turnId,
           items: [item],
-          parentMessageId: currentRealtimeParentId(realtimeSessionId),
+          parentMessageId: currentRealtimeParentId(realtimeSessionId, turnId),
         });
         for (const part of bundle.parts) {
           if (part.type === 'tool') {
@@ -1446,7 +1483,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
                 realtimeSessionId,
                 part.messageID,
                 Date.now(),
-                currentRealtimeParentId(realtimeSessionId),
+                currentRealtimeParentId(realtimeSessionId, turnId),
               ),
               part: { ...part, state: { ...part.state, status: 'running' } as ToolPart['state'] },
               updatedAt: Date.now(),
@@ -1581,7 +1618,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     if (notification.method === 'item/plan/delta') {
-      appendAssistantDelta(extractAgentDelta(notification.params));
+      const delta = extractAgentDelta(notification.params);
+      const last = transcript.value.at(-1);
+      if (last?.role === 'assistant') {
+        transcript.value[transcript.value.length - 1] = { ...last, text: last.text + delta };
+      } else if (delta) {
+        pushTranscript('assistant', delta, currentSelectedModelName());
+      }
       return;
     }
 
@@ -1606,21 +1649,21 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           notificationTurnId || activeTurn.value?.id || `reasoning:${threadId}`,
         );
         const existing = realtimeReasoningPart.value?.part;
-        const accumulated = existing?.id === `${itemId}:reasoning` ? existing.text + delta : delta;
+        const accumulated = reasoningStreams.value[itemId]?.summary || reasoningStreams.value[itemId]?.raw || delta;
         realtimeReasoningPart.value = {
           info: createCodexAssistantInfo(
             threadId,
             messageId,
             Date.now(),
-            currentRealtimeParentId(threadId),
+            currentRealtimeParentId(threadId, notificationTurnId || activeTurn.value?.id),
           ),
           part: {
-            id: `${itemId}:reasoning`,
+            id: itemId,
             sessionID: threadId,
             messageID: messageId,
             type: 'reasoning',
             text: accumulated,
-            time: { start: realtimeReasoningPart.value?.part.time.start ?? Date.now() },
+            time: { start: existing?.id === itemId ? existing.time.start : Date.now() },
           },
           updatedAt: Date.now(),
         };
@@ -1633,13 +1676,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const itemId = typeof params?.itemId === 'string' ? params.itemId : '';
       if (itemId) {
         const existing = reasoningStreams.value[itemId] ?? { summary: '', raw: '' };
-        reasoningStreams.value[itemId] = { ...existing, summary: existing.summary + '\n---\n' };
+        reasoningStreams.value[itemId] = { ...existing, summary: existing.summary ? existing.summary + '\n---\n' : '' };
       }
-      if (itemId && realtimeReasoningPart.value) {
+      if (itemId && realtimeReasoningPart.value?.part.id === itemId) {
         const current = realtimeReasoningPart.value.part;
         realtimeReasoningPart.value = {
           info: realtimeReasoningPart.value.info,
-          part: { ...current, text: current.text + '\n---\n' },
+          part: { ...current, text: reasoningStreams.value[itemId]?.summary || reasoningStreams.value[itemId]?.raw || current.text },
           updatedAt: Date.now(),
         };
       }
@@ -2251,7 +2294,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return mergeThreadReadResult(await readHistory(threadId), threadId);
   }
 
-  async function hydrateThreadImages(entries: CodexCanonicalHistoryEntry[]) {
+  async function hydrateThreadImages(entries: CodexCanonicalHistoryEntry[], sourceAdapter = adapter) {
     const nextEntries = await Promise.all(
       entries.map(async (entry) => {
         const parts = await Promise.all(
@@ -2260,12 +2303,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
             if (
               part.url.startsWith('data:') ||
               part.url.startsWith('http://') ||
-              part.url.startsWith('https://')
+              part.url.startsWith('https://') || part.url.startsWith('blob:')
             )
               return part;
             if (!part.mime.startsWith('image/')) return part;
             try {
-              const raw = await readFileRaw(part.url);
+              if (!sourceAdapter) return part;
+              const raw = await sourceAdapter.readFile({ path: expandPath(part.url) });
               const dataUrl = fileResultToDataUrl(part.url, raw);
               return dataUrl ? { ...part, url: dataUrl } : part;
             } catch {
@@ -2322,7 +2366,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (!isCurrentSelection()) return;
       upsertThread(read.thread);
       setTranscriptFromTurns(read.thread.turns ?? []);
-      const hydratedHistory = await hydrateThreadImages(canonicalHistory.value);
+      const hydratedHistory = await hydrateThreadImages(canonicalHistory.value, sourceAdapter);
       if (!isCurrentSelection()) return;
       canonicalHistory.value = hydratedHistory;
       try {
@@ -2352,6 +2396,20 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
   }
 
+  async function readSubagentHistory(threadId: string): Promise<CodexCanonicalHistoryEntry[]> {
+    const sourceAdapter = adapter;
+    if (!sourceAdapter) throw new Error('Codex is not connected.');
+    const read = await readThreadForHistory(threadId, sourceAdapter);
+    const entries = normalizeCodexTurnsToHistory({
+      sessionId: threadId,
+      turns: read.thread.turns ?? [],
+      model: { providerID: read.thread.modelProvider },
+    });
+    const hydrated = await hydrateThreadImages(entries, sourceAdapter);
+    if (adapter !== sourceAdapter) throw new Error('Codex connection changed.');
+    return hydrated;
+  }
+
   async function hydrateThread(threadId: string) {
     const sourceAdapter = adapter;
     if (!sourceAdapter) return;
@@ -2364,8 +2422,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     ) {
       return;
     }
+    const hydrated = await hydrateThreadImages(normalizeCodexTurnsToHistory({
+      sessionId: threadId, turns: read.thread.turns ?? [],
+    }), sourceAdapter);
+    if (adapter !== sourceAdapter || threadSelectionGeneration !== selectionGeneration || activeThreadId.value !== threadId) return;
     upsertThread(read.thread);
     setTranscriptFromTurns(read.thread.turns ?? []);
+    const imageUrls = new Map(hydrated.flatMap(entry => entry.parts.filter(part => part.type === 'file').map(part => [part.id, part.url])));
+    canonicalHistory.value = canonicalHistory.value.map(entry => ({ ...entry, parts: entry.parts.map(part =>
+      part.type === 'file' ? { ...part, url: imageUrls.get(part.id) ?? part.url } : part) }));
   }
 
   async function startThread(cwd?: string) {
@@ -2791,7 +2856,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const model =
         options.model?.trim() || parseSelectedCodexModel(selectedModel.value).modelID || undefined;
       const cwd = resolvePromptCwd(options.cwd, targetThreadId);
-      const input: CodexPromptInput = { text: prompt };
+      const input: CodexPromptInput = { text: prompt, summary: 'auto' };
       if (inputItems.length > 0) input.input = inputItems;
       if (targetThreadId) input.threadId = targetThreadId;
       if (model) input.model = model;
@@ -2832,25 +2897,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         [userMessageId]: finalizedUserMessageId,
       };
 
-      const assistantMessageId = codexAssistantMessageId(finalizedTurnId);
-      const assistantPartId = codexAssistantTextPartId(finalizedTurnId);
-      realtimeStreamingPart.value = {
-        info: createCodexAssistantInfo(
-          result.threadId,
-          assistantMessageId,
-          Date.now(),
-          finalizedUserMessageId,
-        ),
-        part: {
-          id: assistantPartId,
-          sessionID: result.threadId,
-          messageID: assistantMessageId,
-          type: 'text',
-          text: '',
-          time: { start: Date.now() },
-        },
-        updatedAt: Date.now(),
-      };
+      const reparent = (info: MessageInfo): MessageInfo => info.role === 'assistant' && info.parentID === userMessageId
+        ? { ...info, parentID: finalizedUserMessageId }
+        : info;
+      realtimeHistoryQueue.value = realtimeHistoryQueue.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
+      realtimeToolParts.value = realtimeToolParts.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
+      if (realtimeReasoningPart.value) {
+        realtimeReasoningPart.value = { ...realtimeReasoningPart.value, info: reparent(realtimeReasoningPart.value.info) };
+      }
+
+      if (realtimeStreamingPart.value) {
+        realtimeStreamingPart.value = { ...realtimeStreamingPart.value, info: reparent(realtimeStreamingPart.value.info) };
+      }
 
       return result;
     } catch (error) {
@@ -3585,6 +3643,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   return {
+    readSubagentHistory,
     status,
     reconnectOnMount,
     url,

@@ -21,8 +21,10 @@
         {{ t('subagentHistory.close') }}
       </button>
     </div>
+    <div v-if="loading" class="subagent-empty">{{ t('common.loading') }}</div>
+    <div v-else-if="loadError" class="subagent-empty" role="alert">{{ loadError }}</div>
     <ThreadHistoryContent
-      v-if="entries.length > 0"
+      v-else-if="entries.length > 0"
       :entries="entries"
       :theme="theme"
       :on-tool-click="handleToolClick"
@@ -35,7 +37,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
+import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import { useI18n } from 'vue-i18n';
 import ThreadHistoryContent from './ThreadHistoryContent.vue';
 import { useMessages } from '../composables/useMessages';
@@ -55,6 +58,7 @@ const props = withDefaults(
     parentThreadId: string;
     sessionLabel?: string;
     theme?: string;
+    loadHistory?: (threadId: string) => Promise<CodexCanonicalHistoryEntry[]>;
   }>(),
   {
     sessionLabel: '',
@@ -70,24 +74,52 @@ const emit = defineEmits<{
 
 const msg = useMessages();
 const floatingWindow = useFloatingWindow();
+const loadedHistory = ref<CodexCanonicalHistoryEntry[]>([]);
+const loading = ref(false);
+const loadError = ref('');
+watch(() => [props.parentThreadId, props.loadHistory] as const, async ([threadId, loadHistory], _, onCleanup) => {
+  let stale = false;
+  onCleanup(() => { stale = true; });
+  loadedHistory.value = [];
+  loadError.value = '';
+  loading.value = !!loadHistory;
+  if (!loadHistory) return;
+  try {
+    const history = await loadHistory(threadId);
+    if (!stale) loadedHistory.value = history;
+  } catch (error) {
+    if (!stale) loadError.value = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (!stale) loading.value = false;
+  }
+}, { immediate: true });
+
+function getParts(messageId: string) {
+  return props.loadHistory
+    ? loadedHistory.value.find((entry) => entry.info.id === messageId)?.parts ?? []
+    : msg.getParts(messageId);
+}
+
 
 function hasTextContent(message: { id: string }): boolean {
-  return msg.hasTextContent(message.id);
+  return getParts(message.id).some((part) => part.type === 'text' && !!part.text.trim());
 }
 
 function getMessageContent(message: { id: string }): string {
-  return msg.getTextContent(message.id);
+  return getParts(message.id).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
 }
 
 const subagentMessages = computed(() =>
-  selectSubagentMessages(msg.roots.value, (rootId) => msg.getThread(rootId), props.parentThreadId),
+  props.loadHistory
+    ? loadedHistory.value.map((entry) => entry.info)
+    : selectSubagentMessages(msg.roots.value, (rootId) => msg.getThread(rootId), props.parentThreadId),
 );
 
 const internalEntries = computed<HistoryEntry[]>(() =>
   buildHistoryEntries({
     messages: subagentMessages.value,
     hasTextContent,
-    getParts: (messageId) => msg.getParts(messageId),
+    getParts,
   }),
 );
 

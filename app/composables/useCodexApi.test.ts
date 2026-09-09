@@ -137,6 +137,74 @@ describe('useCodexApi', () => {
     localStorage.clear();
   });
 
+  it('keeps restored replies attached to their original user across tool events', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    const original = api.canonicalHistory.value.find(entry => entry.info.role === 'assistant')!;
+    mock.emit({ method: 'item/started', params: { threadId: 'thr_existing', turnId: 'turn_old', item: { id: 'command-live', type: 'commandExecution', command: 'pwd' } } });
+    expect(api.realtimeToolParts.value[0]?.info).toMatchObject({
+      parentID: 'turn_old:user:0',
+      id: 'turn_old:assistant',
+    });
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_old', item: { id: 'command-live', type: 'commandExecution', command: 'pwd', status: 'completed', aggregatedOutput: '/repo' } } });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject({ parentID: 'turn_old:user:0' });
+    expect(api.canonicalHistory.value.find(entry => entry.info.id === original.info.id)).toEqual(original);
+  });
+
+  it('retains streamed reasoning when completion contains no summary and separates consecutive items', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    for (const [itemId, delta] of [['reason-1', 'First summary'], ['reason-2', 'Second summary']]) {
+      mock.emit({ method: 'item/reasoning/summaryTextDelta', params: { threadId: 'thr_existing', turnId: 'turn_old', itemId, delta } });
+      mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_old', item: { id: itemId, type: 'reasoning', summary: [], content: [] } } });
+    }
+    const reasoning = api.realtimeHistoryQueue.value.flatMap(entry => entry.parts).filter(part => part.type === 'reasoning');
+    expect(reasoning.map(part => [part.id, part.text])).toEqual([['reason-1', 'First summary'], ['reason-2', 'Second summary']]);
+  });
+
+  it('keeps authoritative completed reasoning through the turn completion event', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.emit({ method: 'item/reasoning/summaryTextDelta', params: { threadId: 'thr_existing', turnId: 'turn-live', itemId: 'reason-final', delta: 'Draft' } });
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn-live', item: { id: 'reason-final', type: 'reasoning', summary: ['Final summary'], content: [] } } });
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: 'turn-live', status: 'completed' } } });
+    expect(api.realtimeReasoningPart.value?.part).toMatchObject({ id: 'reason-final', text: 'Final summary' });
+  });
+
+  it('reparents early tool events when the optimistic user receives its final ID', async () => {
+    const mock = createAdapterMock();
+    const reply = deferred<CodexPromptResult>();
+    mock.adapter.sendPrompt = vi.fn(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const sending = api.sendPrompt('Continue');
+    mock.emit({ method: 'item/started', params: { threadId: 'thr_existing', turnId: 'turn-race', item: { id: 'early-tool', type: 'commandExecution', command: 'pwd' } } });
+    reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn-race', status: 'inProgress' } });
+    await sending;
+    mock.emit({ method: 'item/commandExecution/outputDelta', params: { threadId: 'thr_existing', turnId: 'turn-race', itemId: 'early-tool', delta: '/repo' } });
+    expect(api.realtimeToolParts.value[0]?.info).toMatchObject({ parentID: 'turn-race:user:0' });
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn-race', item: { id: 'early-tool', type: 'commandExecution', command: 'pwd', status: 'completed' } } });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject({ parentID: 'turn-race:user:0' });
+  });
+
+  it('reads child history without changing the selected parent session', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    const parentHistory = api.canonicalHistory.value;
+    const result = await api.readSubagentHistory('thr_child');
+    expect(result.every(entry => entry.info.sessionID === 'thr_child')).toBe(true);
+    expect(result.flatMap(entry => entry.parts).some(part => part.type === 'text' && part.text.includes('thr_child answer'))).toBe(true);
+    expect(api.activeThreadId.value).toBe('thr_existing');
+    expect(api.canonicalHistory.value).toBe(parentHistory);
+  });
+
   it('reports each successful live turn once, including background threads', async () => {
     const mock = createAdapterMock();
     const onTaskCompleted = vi.fn();
@@ -854,6 +922,7 @@ describe('useCodexApi', () => {
     });
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      summary: 'auto',
       text: '',
       threadId: 'thr_existing',
       input: [{ type: 'image', url: 'data:image/png;base64,AA==' }],
@@ -869,6 +938,7 @@ describe('useCodexApi', () => {
     await api.sendPrompt('Hello custom model.', { threadId: 'thr_existing' });
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      summary: 'auto',
       text: 'Hello custom model.',
       threadId: 'thr_existing',
       model: 'mimo/mimo-v2.5',
@@ -887,6 +957,7 @@ describe('useCodexApi', () => {
     });
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      summary: 'auto',
       text: 'Hello explicit custom model.',
       threadId: 'thr_existing',
       model: 'mimo/mimo-v2.5',
@@ -1555,6 +1626,7 @@ describe('useCodexApi', () => {
     const result = await api.sendPrompt('  Summarize this repo.  ');
 
     expect(mock.adapter.sendPrompt).toHaveBeenCalledWith({
+      summary: 'auto',
       threadId: 'thr_existing',
       text: 'Summarize this repo.',
     });
@@ -1573,6 +1645,7 @@ describe('useCodexApi', () => {
     await api.sendPrompt('Continue here.', { threadId: 'thr_existing', cwd: '~/repo' });
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      summary: 'auto',
       threadId: 'thr_existing',
       text: 'Continue here.',
       cwd: '/home/codex/repo',
@@ -1592,6 +1665,7 @@ describe('useCodexApi', () => {
     });
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
+      summary: 'auto',
       text: 'Start on the selected provider.',
       model: 'mimo/mimo-v2.5',
       cwd: '/repo',
@@ -2155,6 +2229,74 @@ describe('useCodexApi', () => {
     expect(userEntries[0]?.parts[0]).toMatchObject({ type: 'text', text: 'Hello immediately.' });
   });
 
+  it('hydrates images in the turn-completed history refresh', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    mock.adapter.readFile = vi.fn().mockResolvedValue({ dataBase64: 'AA==' });
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', turns: [{ id: 'turn_img', items: [{ id: 'shot', type: 'imageView', path: '/tmp/shot.png' }] }] } });
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: 'turn_img', status: 'completed' } } });
+    await vi.waitFor(() => expect(api.canonicalHistory.value.flatMap(e => e.parts)).toContainEqual(expect.objectContaining({ type: 'file', url: 'data:image/png;base64,AA==' })));
+    api.disconnect();
+  });
+
+  it('hydrates a realtime agent image before publishing its local path', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    const read = deferred<{ dataBase64: string }>();
+    mock.adapter.readFile = vi.fn(() => read.promise);
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_img', item: { id: 'shot', type: 'imageView', path: '/tmp/shot.png' } } });
+    expect(api.realtimeHistoryQueue.value.flatMap(e => e.parts).filter(p => p.type === 'file')).toHaveLength(0);
+    read.resolve({ dataBase64: 'AA==' });
+    await vi.waitFor(() => expect(api.realtimeHistoryQueue.value.flatMap(e => e.parts)).toContainEqual(expect.objectContaining({ type: 'file', url: 'data:image/png;base64,AA==' })));
+    api.disconnect();
+  });
+
+  it('ignores realtime image reads after a thread switch', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    const read = deferred<{ dataBase64: string }>();
+    mock.adapter.readFile = vi.fn(() => read.promise);
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_img', item: { id: 'shot', type: 'imageView', path: '/tmp/shot.png' } } });
+    await api.selectThread('thr_other');
+    read.resolve({ dataBase64: 'AA==' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(api.realtimeHistoryQueue.value.flatMap(e => e.parts).filter(p => p.type === 'file')).toHaveLength(0);
+    api.disconnect();
+  });
+
+  it('retains the sent image preview when the echoed local file cannot be read', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Look', { input: [{ type: 'image', url: 'data:image/png;base64,AA==' }] });
+    mock.adapter.readFile = vi.fn().mockRejectedValue(new Error('File temporarily unavailable'));
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_1', item: { id: 'echo', type: 'userMessage', content: [{ type: 'localImage', path: '/tmp/upload.png' }] } } });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(api.realtimeHistoryQueue.value.flatMap(e => e.parts).filter(p => p.type === 'file')).toEqual([expect.objectContaining({ url: 'data:image/png;base64,AA==' })]);
+    api.disconnect();
+  });
+
+  it.each(['image', 'localImage'])('keeps sent images single when echoed as %s', async (kind) => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Look', { input: [{ type: 'text', text: 'Look' }, { type: 'image', url: 'data:image/png;base64,AA==' }, { type: 'image', url: 'data:image/png;base64,AA==' }] });
+    const initial = api.realtimeHistoryQueue.value.find(e => e.info.role === 'user')?.parts.filter(p => p.type === 'file');
+    expect(initial).toHaveLength(2);
+    mock.emit({ method: 'item/completed', params: { threadId: api.activeThreadId.value, turnId: 'turn_1', item: { type: 'userMessage', id: 'echo', content: [{ type: 'text', text: 'Look' }, ...[0, 1].map(i => kind === 'image' ? { type: 'image', url: 'data:image/png;base64,AA==' } : { type: 'localImage', path: '/tmp/sent-' + i + '.png' })] } } });
+    const files = api.realtimeHistoryQueue.value.find(e => e.info.role === 'user')?.parts.filter(p => p.type === 'file');
+    expect(files).toHaveLength(2);
+    expect(files?.map(p => p.id)).toEqual(initial?.map(p => p.id));
+    expect(mock.adapter.sendPrompt).toHaveBeenCalledTimes(1);
+    api.disconnect();
+  });
+
   it('does not reuse the previous active turn id for a new provisional user message', async () => {
     const mock = createAdapterMock();
     mock.adapter.sendPrompt = vi.fn().mockResolvedValue({
@@ -2224,6 +2366,24 @@ describe('useCodexApi', () => {
     expect(Object.values(api.realtimeMessageAliases.value)).toContain('turn_race:user:0');
   });
 
+  it('keeps successive streamed assistant items independently through completion', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Multiple replies');
+    for (const [itemId, text] of [['a1', 'First reply'], ['a2', 'Second reply']]) {
+      mock.emit({ method: 'item/agentMessage/delta', params: { itemId, turnId: 'turn_1', delta: text } });
+      expect(api.realtimeStreamingPart.value?.part.text).toBe(text);
+      mock.emit({ method: 'item/completed', params: { turnId: 'turn_1', item: { id: itemId, type: 'agentMessage', text } } });
+    }
+    const replies = api.realtimeHistoryQueue.value.flatMap(entry => entry.parts).filter(part => part.type === 'text' && part.text.endsWith('reply'));
+    expect(replies.map(part => part.type === 'text' ? part.text : '')).toEqual(['First reply', 'Second reply']);
+    expect(new Set(replies.map(part => part.messageID)).size).toBe(2);
+    mock.emit({ method: 'item/completed', params: { turnId: 'turn_1', item: { id: 'a1', type: 'agentMessage', text: 'First reply amended' } } });
+    expect(api.realtimeStreamingPart.value?.part.text).toBe('Second reply');
+    expect(api.transcript.value.filter(entry => entry.role === 'assistant').slice(-2).map(entry => entry.text)).toEqual(['First reply amended', 'Second reply']);
+  });
+
   it('updates realtimeStreamingPart on agent message deltas', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -2231,9 +2391,7 @@ describe('useCodexApi', () => {
     await api.connect();
     await api.sendPrompt('Stream test.');
 
-    expect(api.realtimeStreamingPart.value).not.toBeNull();
-    expect(api.realtimeStreamingPart.value?.info.id).toContain(':assistant');
-    expect(api.realtimeStreamingPart.value?.part.text).toBe('');
+    expect(api.realtimeStreamingPart.value).toBeNull();
 
     mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'Hello' } });
     expect(api.realtimeStreamingPart.value?.part.text).toBe('Hello');
@@ -2279,8 +2437,8 @@ describe('useCodexApi', () => {
     expect(assistantEntries).toHaveLength(1);
     const textParts = assistantEntries[0]?.parts.filter((part) => part.type === 'text') ?? [];
     expect(textParts).toHaveLength(1);
-    expect(textParts[0]?.id).toBe('turn_1:assistant:text');
-    expect(textParts[0]).toMatchObject({ messageID: 'turn_1:assistant', text: 'Hello, world!' });
+    expect(textParts[0]?.id).toBe('turn_1:assistant:agent-1:text');
+    expect(textParts[0]).toMatchObject({ messageID: 'turn_1:assistant:agent-1', text: 'Hello, world!' });
   });
 
   it('merges completed tool parts into the existing assistant entry instead of duplicating assistant history rows', async () => {
@@ -2314,10 +2472,10 @@ describe('useCodexApi', () => {
     const assistantEntries = api.realtimeHistoryQueue.value.filter(
       (entry) => entry.info.role === 'assistant',
     );
-    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries).toHaveLength(2);
     expect(assistantEntries[0]?.parts.some((part) => part.type === 'tool')).toBe(true);
     expect(
-      assistantEntries[0]?.parts.some(
+      assistantEntries[1]?.parts.some(
         (part) => part.type === 'text' && 'text' in part && part.text === 'Done',
       ),
     ).toBe(true);
@@ -2347,7 +2505,7 @@ describe('useCodexApi', () => {
     expect(api.realtimeReasoningPart.value?.part.text).toBe('Thinking... more thoughts');
   });
 
-  it('interleaves summary and raw reasoning deltas while preserving separators and metadata', async () => {
+  it('keeps summary and raw reasoning separate and displays the summary with separators', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
@@ -2380,8 +2538,8 @@ describe('useCodexApi', () => {
       raw: 'raw oneraw two',
     });
     expect(api.realtimeReasoningPart.value?.part).toMatchObject({
-      id: 'reasoning-interleaved:reasoning',
-      text: 'summary oneraw one\n---\nraw twosummary two',
+      id: 'reasoning-interleaved',
+      text: 'summary one\n---\nsummary two',
       sessionID: 'thr_existing',
       type: 'reasoning',
     });

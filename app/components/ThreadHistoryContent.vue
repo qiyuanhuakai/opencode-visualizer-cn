@@ -25,8 +25,12 @@
         <div
           v-else-if="entry.kind === 'reasoning'"
           class="history-item history-item-reasoning"
+          role="button"
+          tabindex="0"
           :data-history-key="entry.key"
           @click="handleReasoningClick(entry.part)"
+          @keydown.enter.prevent="handleReasoningClick(entry.part)"
+          @keydown.space.prevent="handleReasoningClick(entry.part)"
         >
           <div class="history-meta">
             <span class="history-index">🤔</span>
@@ -491,7 +495,8 @@ function formatMessageTime(value?: number) {
     background 0.15s;
 }
 
-.history-item-reasoning:hover {
+.history-item-reasoning:hover,
+.history-item-reasoning:focus-visible {
   border-color: color-mix(
     in srgb,
     var(--history-reasoning-color) 60%,

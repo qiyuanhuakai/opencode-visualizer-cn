@@ -209,3 +209,11 @@ describe('resolveThreadSubagentSessions', () => {
     expect(resolveThreadSubagentSessions(parts, '  ', meta)).toEqual([]);
   });
 });
+
+it('resolves all Codex collaboration receiver threads without requiring OpenCode session metadata', () => {
+  const parts = [makeTaskPart('codex-wait', { source: 'codex', sessionIds: ['child-a', 'child-b', 'child-a', CURRENT_SESSION] })];
+  expect(resolveThreadSubagentSessions(parts, CURRENT_SESSION, { 'child-a': { label: 'Parser' } })).toEqual([
+    { sessionId: 'child-a', label: 'Parser' },
+    { sessionId: 'child-b', label: 'child-b' },
+  ]);
+});

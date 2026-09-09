@@ -50,3 +50,20 @@
 - 默认主题 375/768/1280、Ocean、Sakura、自定义浅色主题的展开/关闭状态共 12 张组件截图通过独立复核，未见目标区域溢出或中文裁切。浅色为 token 兼容测试，不表示新增内置主题。
 - 27 项相关测试、vue-tsc、oxlint、构建通过；真实 Vis 窗口中选择 Paused、保存与清除均成功。新建线程验证等待会话切换完成后再打开编辑器。
 - 本轮证据：`/tmp/goal-theme-qa/report.json`、`pass-a.md`、`pass-b.md` 及 `real-app-dropdown.png`。临时 fixture 已移除，测试线程已归档。
+
+## 会话记录与实时更新
+
+- 对照 Codex CLI 0.153.4 生成的 app-server schema 和[官方协议文档](https://learn.chatgpt.com/docs/app-server)，确认支持 reasoning 摘要事件、协作代理调用和子线程历史读取。只展示服务端传回的摘要或内容；历史中未生成、未保存的思考内容无法补造。
+- 请求启用 `summary: auto`；统一解析摘要数组，实时与历史使用相同 reasoning item ID，保留完成事件的最终摘要，摘要与 raw 内容分别累积。
+- 协作调用映射到已有 task/子代理入口，支持多个 receiverThreadIds。子代理历史独立读取，含加载与错误状态，不替换主会话 store。
+- 回复保留原父消息、创建时间和模型信息；发送确认时同步替换工具及思考记录中的临时父消息 ID。实时桥接只提交有变化的消息与片段。
+- 浏览器使用真实 OutputPanel、历史/思考/子代理组件和模拟协议：连续六次工具操作及最终历史回填后，根节点与 assistant DOM 节点均保持同一对象，只有一个 user 根记录。子代理历史及思考可打开，主会话保持选中，无浏览器运行错误。
+- 本轮未调用模型验证新的生成结果。协议支持来自官方文档及本机 schema，交互证据位于 `/tmp/vis-session-browser/`，回归结果位于 `/tmp/vis-session-tests-final.log`。
+
+## 同一卡片内多条助手消息
+
+- 每条 Codex agentMessage 按 turnId/itemId 保存独立消息和文本 ID；实时片段、完成通知及历史读取使用相同身份。工具和思考仍归属同一 user 卡片，后续文本不再覆盖先前回复或继承其排序时间。
+- 切换流式消息、完成通知迟到和发送确认均保留已有回复；主卡片显示最新回复，历史按各条消息时间展示全部回复。
+- Codex 卡片从全部助手记录收集图片，避免独立文本消息隐藏 turn 级 imageView 附件。
+- 224 项相关测试、额外 3 项 ThreadBlock 测试断言通过，类型检查、lint、构建通过。ThreadBlock 既有测试环境仍输出 happy-dom AbortError/worker 退出超时警告，测试命令退出码为 0。
+- 真实组件的模拟协议浏览器验证覆盖三条历史回复、两条实时追加回复、交错工具/思考、迟到完成、历史回填和重新加载；五条助手消息均保留、八条历史记录有序、仅一个 user 根节点，附件可见，无 pageerror。两项独立视觉复核通过。证据位于 `/tmp/vis-multi-message/`；未调用真实模型。

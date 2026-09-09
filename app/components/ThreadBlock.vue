@@ -202,7 +202,9 @@ const assistantMessages = computed(() =>
 const finalAnswer = computed(() => assistantMessages.value[assistantMessages.value.length - 1]);
 const hasAssistantText = computed(() => assistantMessages.value.length > 0);
 const userAttachments = computed(() => getMessageAttachments(props.root));
-const assistantAttachments = computed(() => getMessageAttachments(finalAnswer.value));
+const assistantAttachments = computed(() => props.backendKind === 'codex'
+  ? threadMessages.value.filter(message => message.role === 'assistant').flatMap(getMessageAttachments)
+  : getMessageAttachments(finalAnswer.value));
 const historyEntries = computed(() => getHistoryEntries());
 const historyCount = computed(() => historyEntries.value.length);
 const hasHistory = computed(() => historyCount.value > 0);
