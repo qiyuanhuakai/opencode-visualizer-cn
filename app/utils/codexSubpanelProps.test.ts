@@ -11,4 +11,10 @@ describe('createCodexSubpanelProps', () => {
     expect(isReactive(entry.props)).toBe(false);
     expect(entry.props.api.threadGoal).toBe(threadGoal);
   });
+  it('keeps mode selection reactive across floating-window props', () => {
+    const selectedMode = ref('default');
+    const entry = reactive({ props: createCodexSubpanelProps({}, vi.fn(), { selectedMode, onSelectMode: vi.fn() }) });
+    selectedMode.value = 'plan';
+    expect(entry.props.modeSelection?.selectedMode.value).toBe('plan');
+  });
 });

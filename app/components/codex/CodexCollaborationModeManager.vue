@@ -8,23 +8,35 @@
           class="codex-small-button"
           :disabled="!api.connected.value || api.collaborationModesLoading.value"
           :title="t('common.refresh')"
-          @click="api.refreshCollaborationModes()"
+          @click="refreshModes"
         >
           <Icon icon="mdi:refresh" width="16" :class="{ 'codex-spin': api.collaborationModesLoading.value }" />
         </button>
       </div>
     </div>
 
-    <div v-if="api.collaborationModesLoading.value" class="codex-empty">
+    <p class="codex-collaboration-mode-description">{{ t('hint') }}</p>
+    <div v-if="!api.connected.value" class="codex-empty" role="status">
+      {{ t('codexPanel.connectToLoad') }}
+    </div>
+    <div v-else-if="api.collaborationModesLoading.value" class="codex-empty" role="status">
       {{ t('common.loading') }}
+    </div>
+    <div v-else-if="api.collaborationModesError.value || refreshError" class="codex-empty" role="alert">
+      {{ t('unavailable') }}
+      <p>{{ api.collaborationModesError.value || refreshError }}</p>
     </div>
     <div v-else-if="api.collaborationModes.value.length === 0" class="codex-empty">
       {{ api.connected.value ? t('codexPanel.collaborationModesNoModes') : t('codexPanel.connectToLoad') }}
     </div>
     <div v-else class="codex-collaboration-mode-list">
-      <div
+      <button
           v-for="mode in api.collaborationModes.value"
           :key="mode.mode"
+          type="button"
+          :aria-pressed="modeSelection?.selectedMode.value === mode.mode"
+          :disabled="!modeSelection"
+          @click="modeSelection?.onSelectMode(mode.mode)"
         class="codex-collaboration-mode-item"
       >
         <div class="codex-collaboration-mode-header">
@@ -34,24 +46,40 @@
             · {{ mode.reasoningEffort }}
           </span>
         </div>
+        <span v-if="modeSelection?.selectedMode.value === mode.mode" class="codex-collaboration-mode-description" role="status">{{ t('selected') }}</span>
+        <p v-if="mode.mode === 'plan' || mode.mode === 'default'" class="codex-collaboration-mode-description">{{ t(mode.mode) }}</p>
         <p v-if="mode.model" class="codex-collaboration-mode-description">
           {{ mode.model }}
         </p>
-      </div>
+      </button>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { Icon } from '@iconify/vue';
+import { ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { useCodexApi } from '../../composables/useCodexApi';
+import type { CodexModeSelection } from '../../utils/codexSubpanelProps';
+import { codexCollaborationUi } from '../../locales/codexCollaborationUi';
 
-const { t } = useI18n();
+const { t } = useI18n({ useScope: 'local', messages: codexCollaborationUi });
+const refreshError = ref('');
 
-defineProps<{
-  api: ReturnType<typeof useCodexApi>;
+const props = defineProps<{
+  api: Pick<ReturnType<typeof useCodexApi>, 'connected' | 'collaborationModesLoading' | 'collaborationModes' | 'collaborationModesError' | 'refreshCollaborationModes'>;
+  modeSelection?: CodexModeSelection;
 }>();
+
+async function refreshModes() {
+  refreshError.value = '';
+  try {
+    await props.api.refreshCollaborationModes();
+  } catch (error) {
+    refreshError.value = error instanceof Error ? error.message : String(error);
+  }
+}
 </script>
 
 <style scoped>
@@ -76,6 +104,9 @@ defineProps<{
 }
 
 .codex-collaboration-mode-item {
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -84,6 +115,17 @@ defineProps<{
   border-radius: 10px;
   background: rgba(15, 23, 42, 0.35);
   transition: border-color 0.2s ease;
+}
+
+.codex-collaboration-mode-item[aria-pressed='true'],
+.codex-collaboration-mode-item:focus-visible {
+  border-color: var(--color-region-accent);
+  outline: 1px solid var(--color-region-accent);
+}
+
+.codex-collaboration-mode-item:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 .codex-collaboration-mode-item:hover {
@@ -130,5 +172,10 @@ defineProps<{
   to {
     transform: rotate(360deg);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .codex-spin { animation: none; }
+  .codex-collaboration-mode-item { transition: none; }
 }
 </style>

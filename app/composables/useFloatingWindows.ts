@@ -396,7 +396,7 @@ export function useFloatingWindows() {
        }
      }
 
-     entriesMap.set(key, sanitizeEntry(merged));
+     Object.assign(existing, sanitizeEntry(merged));
      rebuildEntries();
 
      if (partialOpts.status === 'completed' || partialOpts.status === 'error') {

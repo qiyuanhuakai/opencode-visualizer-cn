@@ -208,7 +208,11 @@
               @open-image="handleOpenImage"
               @open-snippet-settings="openSettings('transformers')"
               @status-error="setSendStatusErrorText"
-            />
+            >
+              <template v-if="activeBackendKind === 'codex'" #after-thinking>
+                <CodexComposerGoal :api="codexApi" @open="openCodexThreadGoal" />
+              </template>
+            </InputPanel>
           </footer>
         </div>
         <div ref="toolWindowCanvasEl" class="tool-window-canvas">
@@ -590,6 +594,8 @@ import CodexMcpElicitation from './components/codex/CodexMcpElicitation.vue';
 import CodexModelManager from './components/codex/CodexModelManager.vue';
 import CodexPluginManager from './components/codex/CodexPluginManager.vue';
 import CodexRuntimeInspector from './components/codex/CodexRuntimeInspector.vue';
+import CodexComposerGoal from './components/codex/CodexComposerGoal.vue';
+import CodexThreadGoalWindow from './components/codex/CodexThreadGoalWindow.vue';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
 import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
 import ContentViewer from './components/viewers/ContentViewer.vue';
@@ -617,6 +623,7 @@ import { useTodos, type TodoItem } from './composables/useTodos';
 import type { QuestionRequest } from './types/sse';
 import { codexPlansToTodoSessions } from './utils/codexPlanTodos';
 import { createCodexSubpanelProps } from './utils/codexSubpanelProps';
+import { defaultComposerMode } from './utils/defaultComposerMode';
 import { useBackendSessionTrees } from './composables/useBackendSessionTrees';
 import { useBackendSessionActions } from './composables/useBackendSessionActions';
 import {
@@ -1337,6 +1344,32 @@ function refreshCodexSubpanel(panel: TopPanelCodexSubpanel) {
   }
 }
 
+function openCodexThreadGoal() {
+  if (!codexApi.connected.value || !codexApi.activeThreadId.value) return;
+  const key = 'codex-thread-goal';
+  if (fw.has(key)) {
+    fw.activate(key);
+    return;
+  }
+  const extent = fw.getExtent();
+  const width = Math.min(560, Math.max(280, extent.width - 32));
+  const height = Math.min(600, Math.max(280, extent.height - 48));
+  void fw.open(key, {
+    component: CodexThreadGoalWindow,
+    props: markRaw({ api: codexApi }),
+    title: t('codexPanel.runtime.goal'),
+    width,
+    height,
+    x: Math.max(16, (extent.width - width) / 2),
+    y: 24,
+    closable: true,
+    resizable: true,
+    scroll: 'none',
+    focusOnOpen: true,
+    expiry: Infinity,
+  });
+}
+
 function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   const definition = codexSubpanelDefinitions[panel];
   if (!codexApi.connected.value) {
@@ -1357,7 +1390,8 @@ function openCodexSubpanel(panel: TopPanelCodexSubpanel) {
   };
   void fw.open(key, {
     component: definition.component,
-    props: createCodexSubpanelProps(codexApi, openCodexFilePreview),
+    props: createCodexSubpanelProps(codexApi, openCodexFilePreview,
+      panel === 'collaborationModes' ? { selectedMode, onSelectMode: handleSelectedModeUpdate } : undefined),
     title: t(definition.titleKey),
     width: definition.width,
     height: definition.height,
@@ -3893,9 +3927,7 @@ function applyAgentDefaults(agentName: string) {
 }
 
 function resolveDefaultAgentModel(): { agent: string; model: string; variant: string | undefined } {
-  // Determine the default agent: prefer 'build' if it exists, otherwise use first available
-  const defaultAgent =
-    agentOptions.value.find((o) => o.id === 'build')?.id ?? agentOptions.value[0]?.id ?? '';
+  const defaultAgent = defaultComposerMode(activeBackendKind.value, agentOptions.value);
 
   // Set the agent and apply its defaults (model + variant)
   selectedMode.value = defaultAgent;
@@ -5070,8 +5102,7 @@ async function fetchAgents() {
       }
       agentOptions.value = options;
       if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
-        selectedMode.value =
-          options.find((option) => option.id === 'default')?.id ?? options[0]?.id ?? '';
+        selectedMode.value = defaultComposerMode('codex', options);
       }
       return;
     }
