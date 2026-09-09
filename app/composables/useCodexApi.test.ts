@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
 import type { CodexAdapter, CodexPromptResult } from '../backends/codex/codexAdapter';
-import type { CodexJsonRpcId, CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
+import {
+  CodexJsonRpcError,
+  type CodexJsonRpcId,
+  type CodexJsonRpcNotification,
+} from '../backends/codex/jsonRpcClient';
 import type { ToolStatePending } from '../types/sse';
 import {
   StorageKeys,
@@ -46,6 +50,7 @@ function createAdapterMock() {
       nextCursor: null,
     }),
     startThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } }),
+    listThreadTurns: vi.fn().mockResolvedValue({ data: [], nextCursor: null }),
     readThread: vi.fn((params: { threadId: string }) =>
       Promise.resolve({
         thread: {
@@ -723,6 +728,42 @@ describe('useCodexApi', () => {
     }
   });
 
+  it('redetects hydrated history support when the same adapter reconnects', async () => {
+    // Given: this connection has already fallen back to paginated history.
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn()
+      .mockRejectedValueOnce(new CodexJsonRpcError(-32601, 'list_turns is not supported yet'))
+      .mockResolvedValue({ thread: { id: 'thr_existing' } });
+    mock.adapter.listThreadTurns = vi.fn().mockResolvedValue({
+      data: [{ id: 'turn_old', items: [{ type: 'agentMessage', id: 'old', text: 'Old runtime' }] }],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    api.disconnect();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({
+      thread: {
+        id: 'thr_existing',
+        turns: [{ id: 'turn_new', items: [{ type: 'agentMessage', id: 'new', text: 'New runtime' }] }],
+      },
+    });
+    mock.adapter.listThreadTurns = vi.fn().mockRejectedValue(
+      new CodexJsonRpcError(-32601, 'Method not found'),
+    );
+
+    // When: the same adapter reconnects to a runtime supporting hydrated reads.
+    await api.connect();
+    await api.selectThread('thr_existing');
+
+    // Then: old connection capabilities do not force unsupported pagination.
+    expect(mock.adapter.readThread).toHaveBeenCalledWith({
+      threadId: 'thr_existing', includeTurns: true,
+    });
+    expect(mock.adapter.listThreadTurns).not.toHaveBeenCalled();
+    expect(api.transcript.value.map((entry) => entry.text)).toEqual(['New runtime']);
+  });
+
   it('sends Codex image input items without degrading them to file text', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -1015,6 +1056,52 @@ describe('useCodexApi', () => {
     expect(api.activeThreadId.value).toBe('thr_empty');
     expect(api.canonicalHistory.value).toEqual([]);
     expect(api.errorMessage.value).toBe('');
+  });
+
+  it('loads paginated full history when legacy hydrated reads are unsupported', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi
+      .fn()
+      .mockRejectedValueOnce(new CodexJsonRpcError(-32601, 'list_turns is not supported yet'))
+      .mockResolvedValueOnce({
+        thread: { id: 'thr_paginated', name: 'Paginated', historyMode: 'paginated' },
+      });
+    mock.adapter.listThreadTurns = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: [
+          {
+            id: 'turn_1',
+            items: [
+              { type: 'userMessage', id: 'u1', content: [{ type: 'text', text: 'First prompt' }] },
+            ],
+          },
+        ],
+        nextCursor: 'page-2',
+      })
+      .mockResolvedValueOnce({
+        data: [{ id: 'turn_2', items: [{ type: 'agentMessage', id: 'a1', text: 'Final answer' }] }],
+        nextCursor: null,
+      });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.selectThread('thr_paginated');
+
+    expect(mock.adapter.listThreadTurns).toHaveBeenNthCalledWith(1, {
+      threadId: 'thr_paginated',
+      limit: 100,
+      sortDirection: 'asc',
+      itemsView: 'full',
+    });
+    expect(api.canonicalHistory.value.map((entry) => entry.info.role)).toEqual([
+      'user',
+      'assistant',
+    ]);
+    expect(api.transcript.value.map((entry) => entry.text)).toEqual([
+      'First prompt',
+      'Final answer',
+    ]);
   });
 
   it('keeps the newest thread selection when an older read resolves last', async () => {
