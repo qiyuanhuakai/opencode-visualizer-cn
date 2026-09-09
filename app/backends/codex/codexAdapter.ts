@@ -15,7 +15,7 @@ import type {
   SessionUpdatePayload,
 } from '../types';
 import { CODEX_PROJECT_ID, codexBridgeHttpUrl } from './bridgeUrl';
-import { isUnmaterializedThreadError } from './errors';
+import { isUnmaterializedThreadError, isUnsupportedResumeHistoryError } from './errors';
 import { CODEX_IDEMPOTENT_RETRY_OPTIONS, type CodexIdempotentMethod } from './jsonRpcRetry';
 import { normalizeCodexTurnsToHistory } from './normalize';
 import { normalizeCodexPluginListResult } from './pluginProtocol';
@@ -83,6 +83,7 @@ export type CodexThread = {
   source?: 'main' | 'subagent';
   parentThreadId?: string;
   sessionId?: string;
+  historyMode?: 'legacy' | 'paginated';
 };
 
 export type CodexThreadListParams = {
@@ -121,6 +122,7 @@ export type CodexThreadResumeParams = {
   approvalPolicy?: string;
   sandbox?: string;
   personality?: string;
+  excludeTurns?: boolean;
 };
 
 type CodexThreadResumeResult = {
@@ -247,6 +249,7 @@ export type CodexThreadTurnsListParams = {
   cursor?: string | null;
   limit?: number;
   sortDirection?: 'asc' | 'desc';
+  itemsView?: 'notLoaded' | 'summary' | 'full';
 };
 
 type CodexThreadTurnsListResult = {
@@ -1426,6 +1429,8 @@ export class CodexAdapter implements BackendAdapter {
   private readonly mcpStatusTimeoutMs: number;
   private readonly bridgeUrl: string;
   private readonly activeTurnByThreadId = new Map<string, string>();
+  private readonly locallyStartedThreadIds = new Set<string>();
+  private resumeHistoryUnsupported = false;
   private initialized = false;
   private appServerVersion = '';
 
@@ -1493,6 +1498,8 @@ export class CodexAdapter implements BackendAdapter {
   disconnect() {
     this.initialized = false;
     this.appServerVersion = '';
+    this.locallyStartedThreadIds.clear();
+    this.resumeHistoryUnsupported = false;
     this.client.disconnect();
   }
 
@@ -1547,12 +1554,27 @@ export class CodexAdapter implements BackendAdapter {
 
   async startThread(params: CodexThreadStartParams = {}) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadStartResult>('thread/start', params);
+    const result = await this.client.request<CodexThreadStartResult>('thread/start', params);
+    this.locallyStartedThreadIds.add(result.thread.id);
+    return result;
   }
 
   async resumeThread(params: CodexThreadResumeParams) {
     await this.ensureInitialized();
-    return this.client.request<CodexThreadResumeResult>('thread/resume', params);
+    const resumeParams =
+      this.resumeHistoryUnsupported && params.excludeTurns === undefined
+        ? { ...params, excludeTurns: true }
+        : params;
+    try {
+      return await this.client.request<CodexThreadResumeResult>('thread/resume', resumeParams);
+    } catch (error) {
+      if (params.excludeTurns !== undefined || !isUnsupportedResumeHistoryError(error)) throw error;
+      this.resumeHistoryUnsupported = true;
+      return this.client.request<CodexThreadResumeResult>('thread/resume', {
+        ...params,
+        excludeTurns: true,
+      });
+    }
   }
 
   async setThreadName(params: CodexThreadNameSetParams) {
@@ -1639,7 +1661,7 @@ export class CodexAdapter implements BackendAdapter {
     if (!threadId) {
       throw new Error('Codex prompt requires a threadId or a started thread.');
     }
-    if (input.threadId) {
+    if (input.threadId && !this.locallyStartedThreadIds.has(input.threadId)) {
       try {
         await this.resumeThread({
           threadId: input.threadId,
@@ -1678,6 +1700,7 @@ export class CodexAdapter implements BackendAdapter {
       personality: input.personality,
       outputSchema: input.outputSchema,
     });
+    this.locallyStartedThreadIds.delete(threadId);
 
     return {
       threadId,

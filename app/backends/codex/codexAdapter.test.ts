@@ -326,6 +326,46 @@ describe('CodexAdapter', () => {
     });
   });
 
+  it('starts the first turn on an adapter-created thread without trying to resume it', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const started = adapter.startThread({ cwd: '/repo' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { thread: { id: 'thr_empty', cwd: '/repo' } });
+    await expect(started).resolves.toEqual({ thread: { id: 'thr_empty', cwd: '/repo' } });
+
+    const prompt = adapter.sendPrompt({
+      threadId: 'thr_empty',
+      text: 'First prompt.',
+      cwd: '/repo',
+    });
+    await waitForSent(socket, 4);
+
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 3,
+      method: 'turn/start',
+      params: {
+        threadId: 'thr_empty',
+        input: [{ type: 'text', text: 'First prompt.' }],
+        cwd: '/repo',
+      },
+    });
+    socket.respond(3, { turn: { id: 'turn_first', status: 'inProgress' } });
+    await expect(prompt).resolves.toEqual({
+      threadId: 'thr_empty',
+      thread: undefined,
+      turn: { id: 'turn_first', status: 'inProgress' },
+    });
+  });
+
   it('forwards collaborationMode to turn/start when supplied via sendPrompt', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
@@ -654,6 +694,57 @@ describe('CodexAdapter', () => {
         input: [{ type: 'text', text: 'Continue.' }],
       },
     });
+  });
+
+  it('retries existing-thread resume without history when legacy hydration is unsupported', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const prompt = adapter.sendPrompt({ threadId: 'thr_paginated', text: 'Continue.' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.reject(2, 'list_turns is not supported yet', -32601);
+    await waitForSent(socket, 4);
+
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toEqual({
+      id: 3,
+      method: 'thread/resume',
+      params: { threadId: 'thr_paginated', excludeTurns: true },
+    });
+    socket.respond(3, { thread: { id: 'thr_paginated', turns: [] } });
+    await waitForSent(socket, 5);
+    socket.respond(4, { turn: { id: 'turn_paginated', status: 'inProgress' } });
+
+    await expect(prompt).resolves.toEqual({
+      threadId: 'thr_paginated',
+      thread: undefined,
+      turn: { id: 'turn_paginated', status: 'inProgress' },
+    });
+  });
+
+  it('propagates unrelated existing-thread resume errors without starting a turn', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+
+    const prompt = adapter.sendPrompt({ threadId: 'thr_missing', text: 'Continue.' });
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.reject(2, 'thread not found', -32600);
+
+    await expect(prompt).rejects.toThrow('thread not found');
+    expect(socket.sent).toHaveLength(3);
   });
 
   it('passes cwd when resuming an existing thread and starting a prompt turn', async () => {

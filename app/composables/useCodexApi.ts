@@ -44,6 +44,7 @@ import {
 import { appendCodexBridgeToken, codexBridgeHttpUrl } from '../backends/codex/bridgeUrl';
 import { createCodexCapabilityRegistry } from '../backends/codex/capabilityRegistry';
 import { isUnmaterializedThreadError } from '../backends/codex/errors';
+import { createCodexHistoryReader } from '../backends/codex/history';
 import type {
   CodexJsonRpcId,
   CodexJsonRpcNotification,
@@ -633,6 +634,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const capabilityRegistry = createCodexCapabilityRegistry();
 
   let adapter: CodexAdapter | null = null;
+  const historyReaders = new WeakMap<CodexAdapter, ReturnType<typeof createCodexHistoryReader>>();
   let unsubscribeNotifications: (() => void) | null = null;
   let unsubscribeServerRequests: (() => void) | null = null;
   let nextEventId = 1;
@@ -1858,6 +1860,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     unsubscribeNotifications = null;
     unsubscribeServerRequests?.();
     unsubscribeServerRequests = null;
+    if (adapter) historyReaders.delete(adapter);
     adapter?.disconnect();
     adapter = null;
     capabilityRegistry.reset();
@@ -2199,14 +2202,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     sourceAdapter: CodexAdapter | null = adapter,
   ): Promise<CodexThreadReadResult> {
     if (!sourceAdapter) throw new Error('Codex is not connected.');
-    try {
-      const read = await sourceAdapter.readThread({ threadId, includeTurns: true });
-      return mergeThreadReadResult(read, threadId);
-    } catch (error) {
-      if (!isUnmaterializedThreadError(error)) throw error;
-      const read = await sourceAdapter.readThread({ threadId, includeTurns: false });
-      return mergeThreadReadResult(read, threadId);
+    let readHistory = historyReaders.get(sourceAdapter);
+    if (!readHistory) {
+      readHistory = createCodexHistoryReader(sourceAdapter);
+      historyReaders.set(sourceAdapter, readHistory);
     }
+    return mergeThreadReadResult(await readHistory(threadId), threadId);
   }
 
   async function hydrateThreadImages(entries: CodexCanonicalHistoryEntry[]) {

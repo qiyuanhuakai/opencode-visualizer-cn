@@ -1,5 +1,48 @@
 # Codex App Server
 
+## VIS 适配与运行时差异（2026-09-09）
+
+本节依据[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server)（[Markdown 原文](https://learn.chatgpt.com/docs/app-server.md)）补充，并与本机 **Codex app-server 0.153.4** 的真实 JSON-RPC 响应交叉验证。下文保留协议参考；文档描述、生成的类型存在，并不代表当前服务的存储实现支持该能力。
+
+### 新会话与历史加载必须分离
+
+- 每条连接先完成 `initialize` → `initialized`。新会话使用 `thread/start` → `turn/start`；`thread/start` 已订阅该线程事件，首发不需要再 `thread/resume`。
+- 已有会话使用 `thread/resume` → `turn/start`。恢复只加载上下文，不启动生成；`thread/read` 与 `thread/turns/list` 仅用于读取展示历史，不能替代恢复订阅。
+- 0.153.4 的本地持久线程实测返回 `historyMode: "paginated"`。官方页面仍描述 paginated 创建暂不支持，因此 VIS 不按版本号或文档断言能力，而以当前连接的响应选择兼容路径。
+
+新建持久线程尚未发送第一条用户消息时，实测为：
+
+| 请求 | 实际结果 |
+| --- | --- |
+| `thread/read`，`includeTurns: true` | `-32601`，`list_turns is not supported yet` |
+| `thread/turns/list`，`itemsView: "full"` | `-32600`，`is not materialized yet; thread/turns/list is unavailable before first user message` |
+| `thread/read`，`includeTurns: false` | 成功返回线程元数据 |
+| `thread/resume`（首条消息前） | 可能返回 `no rollout found`；不能据此丢弃当前已启动线程 |
+
+VIS 对本连接创建、尚未成功首发的线程直接调用 `turn/start`，保留同一个线程 ID。历史分页的“尚未物化”是单线程状态，不是服务器全局不支持分页。
+
+### 完整历史与恢复的兼容路径
+
+1. 优先 `thread/read({ threadId, includeTurns: true })`，保留旧版服务器的历史读取方式。
+2. 遇到不支持错误后，读取元数据，再用 `thread/turns/list({ threadId, sortDirection: "asc", itemsView: "full", limit: 100 })`，沿 `nextCursor` 读取全部页面。只请求默认 `summary` 会丢失完整 item 数据，不能作为完整对话展示。
+3. 明确的首条消息前“尚未物化”可视为空历史；其他错误必须向上传递。分页不可用不能伪装为空会话，更不能清空已有历史。兼容性缓存不跨适配器连接复用。
+4. `thread/resume` 若因 `-32601`、`list_turns ... not supported` 失败，重试 `excludeTurns: true`，将恢复订阅与展示历史分开。该字段是实验字段；其他错误不触发这一重试。
+5. `thread/turns/list` / `thread/items/list` 及相关实验字段需要 `capabilities.experimentalApi: true`。开启实验 API 不是存储能力保证；`thread/items/list` 仍可能返回不支持。
+
+分页响应包含 `data`、`nextCursor`，以及可选的反向游标 `backwardsCursor`。默认排序是最新优先；VIS 的完整历史加载显式选择 `asc`，按时间顺序拼接。`itemsView` 的值为 `notLoaded`、`summary`（默认）、`full`。
+
+临时线程（`ephemeral: true`）没有持久历史：实测 `thread/read(includeTurns: true)` 与 `thread/turns/list` 均返回 `-32600`。不要将其错误缓存成所有持久线程的能力状态。VIS 当前新会话流程创建持久线程。
+
+### 会话与悬浮窗交互约束
+
+- 历史读取保持线程选择代际隔离，过期响应不能覆盖当前会话；实时 reasoning/tool 辅助历史仍需合并，不能假设所有服务器历史接口都会返回这些 item。
+- 用户再次点击已有 Codex 面板/子面板入口时，恢复最小化、置前并聚焦，保留拖动位置和尺寸。自动内容更新不应抢焦点或恢复用户主动最小化的窗口。
+- 本节不改变 VIS 既有归档语义：可恢复归档仍为本地隐藏状态；原生 `thread/archive` 对应现有 Delete 动作，不因上游新增 `thread/delete` 自动更换行为。
+
+实现参考：上游 [`thread_processor.rs`](https://github.com/openai/codex/blob/8afccec87aa15f73ee7fc35a3a4e7834afc5ef62/codex-rs/app-server/src/request_processors/thread_processor.rs) 与 [`thread-store/src/store.rs`](https://github.com/openai/codex/blob/8afccec87aa15f73ee7fc35a3a4e7834afc5ef62/codex-rs/thread-store/src/store.rs)。协议的新方法必须另行验证实际能力后再暴露 UI，不按本文补充清单自动启用。
+
+## 官方协议参考
+
 Codex app-server is the interface Codex uses to power rich clients (for example, the Codex VS Code extension). Use it when you want a deep integration inside your own product: authentication, conversation history, approvals, and streamed agent events. The app-server implementation is open source in the Codex GitHub repository ([openai/codex/codex-rs/app-server](https://github.com/openai/codex/tree/main/codex-rs/app-server)). See the [Open Source](https://learn.chatgpt.com/docs/open-source) page for the full list of open-source Codex components.
 
 If you are automating jobs or running Codex in CI, use the
