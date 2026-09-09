@@ -1,8 +1,9 @@
 import { computed, ref, watch, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
+import { codexSubagentWindowEntries } from '../utils/codexSubagentWindowEntries';
 import type { MessageDiffEntry } from '../types/message';
-import type { AssistantMessageInfo, MessagePart, ReasoningPart, ToolPart, UserMessageInfo } from '../types/sse';
+import type { AssistantMessageInfo, MessagePart, ReasoningPart, TextPart, ToolPart, UserMessageInfo } from '../types/sse';
 
 type SharedMessageStore = {
   loadHistory: (entries: unknown[]) => void;
@@ -14,6 +15,7 @@ type SharedMessageStore = {
 type CodexMessageBridgeApi = {
   realtimeHistoryQueue: Ref<CodexCanonicalHistoryEntry[]>;
   realtimeMessageAliases: Ref<Record<string, string>>;
+  realtimeCompletedPart?: Ref<{ info: AssistantMessageInfo | UserMessageInfo; part: MessagePart } | null>;
   realtimeStreamingPart: Ref<{ info: AssistantMessageInfo | UserMessageInfo; part: MessagePart } | null>;
   realtimeReasoningPart: Ref<{ info: AssistantMessageInfo | UserMessageInfo; part: ReasoningPart } | null>;
   realtimeToolParts: Ref<Array<{ info: AssistantMessageInfo | UserMessageInfo; part: ToolPart }>>;
@@ -46,10 +48,28 @@ export function useCodexMessageBridge(params: {
   msg: SharedMessageStore;
   syncRealtimeToolWindows: (entries: CodexCanonicalHistoryEntry[]) => void;
   updateReasoningExpiry: (sessionId: string, state: 'idle' | 'busy') => void;
+  onLiveReasoning?: (info: AssistantMessageInfo | UserMessageInfo, part: ReasoningPart) => void;
+  onLiveSubagent?: (info: AssistantMessageInfo, part: TextPart) => void;
 }) {
   const lastRealtimeQueueSignature = ref('');
   const publishedMessages = new Map<string, string>();
   const publishedParts = new Map<string, string>();
+  const liveWindowParts = new Map<string, string>();
+
+  function publishLiveWindow(info: AssistantMessageInfo | UserMessageInfo, part: MessagePart) {
+    if (part.type !== 'reasoning' && !(part.type === 'tool' && part.tool === 'task')) return;
+    const key = `${info.sessionID}:${part.id}`;
+    const signature = JSON.stringify(part);
+    if (liveWindowParts.get(key) === signature) return;
+    liveWindowParts.set(key, signature);
+    if (part.type === 'reasoning') {
+      if (part.text.trim()) params.onLiveReasoning?.(info, part);
+    } else if (info.role === 'assistant') {
+      for (const child of codexSubagentWindowEntries(info, part)) {
+        params.onLiveSubagent?.(child.info, child.part);
+      }
+    }
+  }
 
   function updateMessage(info: AssistantMessageInfo | UserMessageInfo) {
     const signature = JSON.stringify(info);
@@ -67,6 +87,7 @@ export function useCodexMessageBridge(params: {
 
   function resetPublishedState() {
     lastRealtimeQueueSignature.value = '';
+    liveWindowParts.clear();
     publishedMessages.clear();
     publishedParts.clear();
   }
@@ -174,7 +195,9 @@ export function useCodexMessageBridge(params: {
     const realtimeEntries = params.codexApi.realtimeHistoryQueue.value.filter((entry) => matchesActiveCodexRealtimeSession(entry.info.sessionID));
     for (const entry of realtimeEntries) {
       updateMessage(entry.info);
-      for (const part of entry.parts) updatePart(part);
+      for (const part of entry.parts) {
+        updatePart(part);
+      }
     }
     params.syncRealtimeToolWindows(realtimeEntries);
   });
@@ -187,7 +210,7 @@ export function useCodexMessageBridge(params: {
     if (!matchesActiveCodexRealtimeSession(streaming.info.sessionID)) return;
     updateMessage(streaming.info);
     updatePart(streaming.part);
-    if (streaming.part.type === 'text' && streaming.part.time?.end) {
+    if (!params.onLiveReasoning && streaming.part.type === 'text' && streaming.part.time?.end) {
       params.updateReasoningExpiry(streaming.part.sessionID, 'idle');
     }
   });
@@ -198,8 +221,17 @@ export function useCodexMessageBridge(params: {
     if (!matchesActiveCodexRealtimeSession(reasoning.info.sessionID)) return;
     updateMessage(reasoning.info);
     updatePart(reasoning.part);
-    params.updateReasoningExpiry(reasoning.part.sessionID, reasoning.part.time?.end ? 'idle' : 'busy');
+    publishLiveWindow(reasoning.info, reasoning.part);
+    if (!params.onLiveReasoning) params.updateReasoningExpiry(reasoning.part.sessionID, reasoning.part.time?.end ? 'idle' : 'busy');
   });
+
+  if (params.codexApi.realtimeCompletedPart) {
+    watch(params.codexApi.realtimeCompletedPart, (entry) => {
+      if (params.activeBackendKind.value !== 'codex' || !entry) return;
+      if (!matchesActiveCodexRealtimeSession(entry.info.sessionID)) return;
+      publishLiveWindow(entry.info, entry.part);
+    }, { flush: 'sync' });
+  }
 
   watch(params.codexApi.realtimeToolParts, (toolParts) => {
     if (params.activeBackendKind.value !== 'codex') return;
@@ -207,6 +239,7 @@ export function useCodexMessageBridge(params: {
     for (const { info, part } of toolParts.filter(({ info }) => matchesActiveCodexRealtimeSession(info.sessionID))) {
       updateMessage(info);
       updatePart(part);
+      publishLiveWindow(info, part);
     }
   }, { deep: true });
 

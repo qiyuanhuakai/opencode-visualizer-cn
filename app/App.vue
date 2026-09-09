@@ -7436,7 +7436,7 @@ watch(
 watch(
   isThinking,
   (active) => {
-    if (active) return;
+    if (active || activeBackendKind.value === 'codex') return;
     if (!selectedSessionId.value) return;
     updateReasoningExpiry(selectedSessionId.value, 'idle');
   },
@@ -7637,6 +7637,8 @@ const codexMessageBridge = useCodexMessageBridge({
   msg,
   syncRealtimeToolWindows: syncRealtimeCodexToolWindows,
   updateReasoningExpiry,
+  onLiveReasoning: (info, part) => reasoning.handlePart(part, info),
+  onLiveSubagent: (info, part) => subagentWindows.handlePart(part, info),
 });
 
 function upsertAcpSession(info: BackendSessionInfo) {
