@@ -371,9 +371,36 @@ it('hydrates a successful own save and clear after preserving a draft', async ()
   objective.value = '  New goal  ';
   objective.dispatchEvent(new Event('input', { bubbles: true }));
   const goal = { ...api.threadGoal.value, objective: 'New goal' };
-  vi.mocked(api.setThreadGoal).mockResolvedValueOnce({ goal });
+  vi.mocked(api.setThreadGoal).mockImplementationOnce(async () => {
+    api.threadGoal.value = goal;
+    return { goal };
+  });
+  vi.mocked(api.clearThreadGoal).mockImplementationOnce(async () => {
+    api.threadGoal.value = null;
+    return { cleared: true };
+  });
   target.querySelector<HTMLButtonElement>('.goal-save')?.click();
   await vi.waitFor(() => expect(objective.value).toBe('New goal'));
   target.querySelector<HTMLButtonElement>('.goal-clear')?.click();
   await vi.waitFor(() => expect(objective.value).toBe(''));
+});
+
+it('does not reapply a save response superseded by a newer same-thread notification', async () => {
+  const { api, target } = mountInspector();
+  await nextTick();
+  const originalGoal = api.threadGoal.value;
+  if (!originalGoal) throw new Error('Missing goal');
+  const pending = Promise.withResolvers<Awaited<ReturnType<typeof api.setThreadGoal>>>();
+  vi.mocked(api.setThreadGoal).mockReturnValueOnce(pending.promise);
+  target.querySelector<HTMLButtonElement>('.goal-save')?.click();
+  api.threadGoal.value = { ...originalGoal, objective: 'Newer remote goal' };
+  await nextTick();
+  const objective = target.querySelector<HTMLTextAreaElement>('textarea[name="objective"]');
+  expect(objective?.value).toBe('Newer remote goal');
+  // The API returns the result but correctly does not publish it after a newer notification.
+  pending.resolve({ goal: originalGoal });
+  await pending.promise;
+  await nextTick();
+  expect(api.threadGoal.value?.objective).toBe('Newer remote goal');
+  expect(objective?.value).toBe('Newer remote goal');
 });

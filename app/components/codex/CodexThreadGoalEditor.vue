@@ -148,13 +148,14 @@ async function mutate(operation: 'set' | 'clear') {
   failed.value = false;
   try {
     if (operation === 'set') {
-      const result = await props.api.setThreadGoal({ objective: objective.value.trim(), status: goalStatus.value, tokenBudget: tokenBudget.value });
-      if (generation === contextGeneration) hydrateGoal(result.goal);
+      await props.api.setThreadGoal({ objective: objective.value.trim(), status: goalStatus.value, tokenBudget: tokenBudget.value });
     } else {
       await props.api.clearThreadGoal();
-      if (generation === contextGeneration) hydrateGoal(null);
     }
-    if (generation === contextGeneration) feedback.value = operation === 'set' ? copy.value.saved : copy.value.cleared;
+    if (generation === contextGeneration) {
+      if (props.api.threadGoalThreadId.value === props.api.activeThreadId.value) hydrateGoal(props.api.threadGoal.value);
+      feedback.value = operation === 'set' ? copy.value.saved : copy.value.cleared;
+    }
   } catch (error) {
     if (generation === contextGeneration) {
       failed.value = true;
