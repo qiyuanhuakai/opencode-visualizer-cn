@@ -76,6 +76,7 @@ All spacing derives from a 4px base.
 - **Variants**: code, diff, message, binary, term, plain.
 - **Spacing**: titlebar height 22px, inner terminal padding 4px/8px from existing chrome constants.
 - **States**: focused, minimized, closable, resizable, search-active, disabled action.
+- **Activation**: an explicit user reopen of an existing window restores it from the dock, raises it above siblings, and focuses the body without re-resolving content or changing user-set geometry; automatic refreshes go through `open` and never steal focus.
 - **Accessibility**: buttons use translated labels/titles; body remains keyboard focusable.
 - **Motion**: scale transition on open/close only.
 
