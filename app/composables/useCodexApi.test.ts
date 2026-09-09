@@ -137,6 +137,44 @@ describe('useCodexApi', () => {
     localStorage.clear();
   });
 
+  it('retains selected effort through the pending prompt and server echo', async () => {
+    const mock = createAdapterMock();
+    const reply = deferred<CodexPromptResult>();
+    mock.adapter.sendPrompt = vi.fn(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const sending = api.sendPrompt('Explain', { effort: 'high' });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'user')?.info.variant).toBe('high');
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_effort', item: { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Explain' }] } } });
+    reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn_effort', status: 'inProgress' } });
+    await sending;
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_effort', item: { type: 'agentMessage', id: 'a', text: 'Answer' } } });
+    const messages = api.realtimeHistoryQueue.value.map(entry => entry.info);
+    expect(messages.filter(info => info.role === 'user')).toHaveLength(1);
+    expect(messages.every(info => info.variant === 'high')).toBe(true);
+  });
+
+  it('restores each captured turn effort after reload without labelling unknown turns', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    for (const [id, effort] of [['turn_high', 'high'], ['turn_low', 'low']]) {
+      vi.mocked(mock.adapter.sendPrompt).mockResolvedValueOnce({ threadId: 'thr_existing', turn: { id, status: 'inProgress' } });
+      await api.sendPrompt('Explain', { effort });
+    }
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing', turns: ['turn_high', 'turn_low', 'turn_unknown'].map(id => ({ id, items: [
+      { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Explain' }] },
+      { type: 'agentMessage', id: 'a', text: 'Answer' },
+    ] })) } });
+    api.disconnect();
+    const restored = useCodexApi({ adapterFactory: () => mock.adapter });
+    await restored.connect();
+    await restored.selectThread('thr_existing');
+    expect(restored.canonicalHistory.value.map(entry => entry.info.variant)).toEqual(['high', 'high', 'low', 'low', undefined, undefined]);
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_high', item: { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Explain' }] } } });
+    expect(restored.realtimeHistoryQueue.value.find(entry => entry.info.id === 'turn_high:user:0')?.info.variant).toBe('high');
+  });
+
   it('keeps restored replies attached to their original user across tool events', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
