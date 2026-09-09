@@ -324,3 +324,56 @@ it('ignores an old save error after disconnecting and reconnecting', async () =>
   await nextTick();
   expect(target.querySelector('[role="alert"]')).toBeNull();
 });
+
+it('preserves unsaved draft when a live usage notification updates the goal', async () => {
+  const { api, target } = mountInspector();
+  await nextTick();
+  const objective = target.querySelector<HTMLTextAreaElement>('textarea[name="objective"]');
+  if (!objective || !api.threadGoal.value) throw new Error('Missing fixture');
+  objective.value = 'Unsaved revised objective';
+  objective.dispatchEvent(new Event('input', { bubbles: true }));
+  await nextTick();
+  api.threadGoal.value = { ...api.threadGoal.value, tokensUsed: 101 };
+  await nextTick();
+  expect(objective.value).toBe('Unsaved revised objective');
+});
+
+it.each(['usage', 'clear'])('preserves all dirty goal fields across a background %s update', async (update) => {
+  const { api, target, activeThreadId } = mountInspector();
+  await nextTick();
+  const objective = target.querySelector<HTMLTextAreaElement>('textarea[name="objective"]');
+  const budget = target.querySelector<HTMLInputElement>('input[name="tokenBudget"]');
+  if (!objective || !budget || !api.threadGoal.value) throw new Error('Missing fixture');
+  objective.value = 'Local objective';
+  objective.dispatchEvent(new Event('input', { bubbles: true }));
+  budget.value = '2500';
+  budget.dispatchEvent(new Event('input', { bubbles: true }));
+  target.querySelector<HTMLButtonElement>('.goal-status-dropdown button')?.click();
+  await nextTick();
+  Array.from(target.querySelectorAll<HTMLElement>('[role="option"]')).find(option => option.textContent?.trim() === 'Paused')?.click();
+  await nextTick();
+  api.threadGoal.value = update === 'clear' ? null : { ...api.threadGoal.value, tokensUsed: 101 };
+  await nextTick();
+  expect(objective.value).toBe('Local objective');
+  expect(budget.value).toBe('2500');
+  expect(target.querySelector('.goal-status-dropdown button')?.textContent).toContain('Paused');
+  activeThreadId.value = 'thread-2';
+  await nextTick();
+  expect(objective.value).toBe('');
+  expect(budget.value).toBe('');
+});
+
+it('hydrates a successful own save and clear after preserving a draft', async () => {
+  const { api, target } = mountInspector();
+  await nextTick();
+  const objective = target.querySelector<HTMLTextAreaElement>('textarea[name="objective"]');
+  if (!objective || !api.threadGoal.value) throw new Error('Missing fixture');
+  objective.value = '  New goal  ';
+  objective.dispatchEvent(new Event('input', { bubbles: true }));
+  const goal = { ...api.threadGoal.value, objective: 'New goal' };
+  vi.mocked(api.setThreadGoal).mockResolvedValueOnce({ goal });
+  target.querySelector<HTMLButtonElement>('.goal-save')?.click();
+  await vi.waitFor(() => expect(objective.value).toBe('New goal'));
+  target.querySelector<HTMLButtonElement>('.goal-clear')?.click();
+  await vi.waitFor(() => expect(objective.value).toBe(''));
+});

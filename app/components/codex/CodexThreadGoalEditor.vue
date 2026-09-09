@@ -47,7 +47,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
-import type { CodexThreadGoalStatus } from '../../backends/codex/codexAdapter';
+import type { CodexThreadGoal, CodexThreadGoalStatus } from '../../backends/codex/codexAdapter';
 import type { useCodexApi } from '../../composables/useCodexApi';
 import { codexGoalUi } from '../../locales/codexGoalUi';
 import Dropdown from '../Dropdown.vue';
@@ -98,13 +98,17 @@ function updateBudget(event: Event) {
   budgetText.value = event.target.value;
   budgetBadInput.value = event.target.validity.badInput;
 }
-watch([() => props.api.threadGoal.value, () => props.api.threadGoalThreadId.value, () => props.api.activeThreadId.value], ([goal, owner, active]) => {
+watch([() => props.api.threadGoal.value, () => props.api.threadGoalThreadId.value, () => props.api.activeThreadId.value, () => props.api.connected.value], ([goal, owner, active, connected], [previous, previousOwner, previousActive, previousConnected]) => {
   const current = owner === active ? goal : null;
-  objective.value = current?.objective ?? '';
-  budgetText.value = current?.tokenBudget == null ? '' : String(current.tokenBudget);
-  budgetBadInput.value = false;
-  goalStatus.value = current?.status ?? 'active';
-}, { immediate: true });
+  const reset = owner !== previousOwner || active !== previousActive || connected !== previousConnected;
+  if (reset || objective.value === (previous?.objective ?? '')) objective.value = current?.objective ?? '';
+  const previousBudget = previous?.tokenBudget == null ? '' : String(previous.tokenBudget);
+  if (reset || (!budgetBadInput.value && budgetText.value === previousBudget)) {
+    budgetText.value = current?.tokenBudget == null ? '' : String(current.tokenBudget);
+    budgetBadInput.value = false;
+  }
+  if (reset || goalStatus.value === (previous?.status ?? 'active')) goalStatus.value = current?.status ?? 'active';
+}, { immediate: true, flush: 'sync' });
 let contextGeneration = 0;
 watch([() => props.api.activeThreadId.value, () => props.api.connected.value], () => {
   contextGeneration += 1;
@@ -129,6 +133,12 @@ async function refresh() {
     }
   }
 }
+function hydrateGoal(goal: CodexThreadGoal | null) {
+  objective.value = goal?.objective ?? '';
+  budgetText.value = goal?.tokenBudget == null ? '' : String(goal.tokenBudget);
+  budgetBadInput.value = false;
+  goalStatus.value = goal?.status ?? 'active';
+}
 async function mutate(operation: 'set' | 'clear') {
   if (!goalReady.value || saving.value || operationBlocked(operation)) return;
   if (operation === 'set' && (!objective.value.trim() || validationError.value)) return;
@@ -137,8 +147,13 @@ async function mutate(operation: 'set' | 'clear') {
   feedback.value = '';
   failed.value = false;
   try {
-    if (operation === 'set') await props.api.setThreadGoal({ objective: objective.value.trim(), status: goalStatus.value, tokenBudget: tokenBudget.value });
-    else await props.api.clearThreadGoal();
+    if (operation === 'set') {
+      const result = await props.api.setThreadGoal({ objective: objective.value.trim(), status: goalStatus.value, tokenBudget: tokenBudget.value });
+      if (generation === contextGeneration) hydrateGoal(result.goal);
+    } else {
+      await props.api.clearThreadGoal();
+      if (generation === contextGeneration) hydrateGoal(null);
+    }
     if (generation === contextGeneration) feedback.value = operation === 'set' ? copy.value.saved : copy.value.cleared;
   } catch (error) {
     if (generation === contextGeneration) {
