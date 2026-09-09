@@ -504,6 +504,9 @@ describe('useCodexApi', () => {
       const stale = deferred<{ goal: CodexThreadGoal | null }>();
       mock.adapter.getThreadGoal = vi.fn(() => stale.promise);
       const refresh = api.refreshThreadGoal();
+      expect(api.threadGoalLoading.value).toBe(true);
+      expect(api.threadGoal.value).toEqual(goal);
+      expect(api.threadGoalThreadId.value).toBe('thr_existing');
 
       mock.emit({
         method: `thread/goal/${event}`,

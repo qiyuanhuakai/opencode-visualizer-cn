@@ -3030,7 +3030,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (!request) throw new Error('Codex is not connected.');
     if (!threadId) return { goal: null };
     const refreshGeneration = ++threadGoalRefreshGeneration;
-    if (activeThreadId.value === threadId) {
+    if (activeThreadId.value === threadId && threadGoalThreadId.value !== threadId) {
       threadGoal.value = null;
       threadGoalThreadId.value = null;
     }
