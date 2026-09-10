@@ -88,6 +88,7 @@ import {
   mergeCodexAuxiliaryHistory,
   saveCodexAuxiliaryHistory,
 } from '../backends/codex/auxiliaryHistory';
+import { restoreCodexMessageEfforts, saveCodexTurnEffort } from '../backends/codex/messageEffort';
 import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type {
@@ -812,14 +813,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     for (const turn of turns) recordObservedTurnId(activeThreadId.value, turn.id);
     const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
     const modelName = selectedModelInfo.modelID || selectedModelInfo.providerID;
-    canonicalHistory.value = normalizeCodexTurnsToHistory({
+    canonicalHistory.value = restoreCodexMessageEfforts(activeThreadId.value, normalizeCodexTurnsToHistory({
       sessionId: activeThreadId.value ?? 'codex-thread',
       turns,
       model: {
         providerID: activeThread?.modelProvider || selectedModelInfo.providerID,
         modelID: selectedModelInfo.modelID || undefined,
       },
-    });
+    }));
     const textEntries = canonicalHistory.value.flatMap((entry) => {
       const role = entry.info.role === 'assistant' ? 'assistant' : 'user';
       return entry.parts
@@ -915,6 +916,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       return { ...existing, parentID: parentId || existing.parentID };
     }
     const model = parseSelectedCodexModel(selectedModel.value);
+    const parent = [...realtimeHistoryQueue.value, ...canonicalHistory.value]
+      .find(entry => entry.info.id === parentId && entry.info.sessionID === sessionId);
     return {
       id: messageId,
       sessionID: sessionId,
@@ -923,6 +926,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       parentID: parentId,
       modelID: model.modelID || 'codex',
       providerID: model.providerID,
+      variant: parent?.info.variant,
       mode: 'codex',
       agent: 'codex',
       path: { cwd: '', root: '' },
@@ -1119,9 +1123,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       (current) => current.info.id === entry.info.id,
     );
     if (existingIndex === -1) {
+      const knownVariant = canonicalHistory.value.find(current =>
+        current.info.id === entry.info.id && current.info.sessionID === entry.info.sessionID,
+      )?.info.variant;
       realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue([
         ...realtimeHistoryQueue.value,
-        entry,
+        knownVariant && !entry.info.variant ? { ...entry, info: { ...entry.info, variant: knownVariant } } : entry,
       ]);
       return;
     }
@@ -1133,7 +1140,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     });
     const nextQueue = [...realtimeHistoryQueue.value];
     nextQueue[existingIndex] = {
-      info: entry.info,
+      info: { ...entry.info, variant: entry.info.variant ?? existing.info.variant },
       parts: Array.from(partsById.values()),
     };
     realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue(nextQueue);
@@ -2415,11 +2422,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const sourceAdapter = adapter;
     if (!sourceAdapter) throw new Error('Codex is not connected.');
     const read = await readThreadForHistory(threadId, sourceAdapter);
-    const entries = normalizeCodexTurnsToHistory({
+    const entries = restoreCodexMessageEfforts(threadId, normalizeCodexTurnsToHistory({
       sessionId: threadId,
       turns: read.thread.turns ?? [],
       model: { providerID: read.thread.modelProvider },
-    });
+    }));
     const hydrated = await hydrateThreadImages(entries, sourceAdapter);
     if (adapter !== sourceAdapter) throw new Error('Codex connection changed.');
     return hydrated;
@@ -2858,6 +2865,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       role: 'user',
       time: { created: now },
       agent: 'codex',
+      variant: options.effort,
       model: {
         providerID: selectedModelInfo.providerID,
         modelID: selectedModelInfo.modelID || 'unknown',
@@ -2886,11 +2894,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       activeTurn.value = result.turn;
 
       const finalizedTurnId = result.turn.id || pendingTurnId;
+      saveCodexTurnEffort(result.threadId, finalizedTurnId, options.effort);
       recordObservedTurnId(result.threadId, finalizedTurnId);
       const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, 0);
       if (realtimeHistoryQueue.value.length > 0) {
         let updated = false;
         const nextQueue = realtimeHistoryQueue.value.map((entry) => {
+          if (entry.info.id === finalizedUserMessageId) {
+            return { ...entry, info: { ...entry.info, variant: options.effort } };
+          }
           if (entry.info.id !== userMessageId) return entry;
           updated = true;
           return {
