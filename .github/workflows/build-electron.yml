@@ -197,7 +197,16 @@ jobs:
         run: node -e "if (process.arch !== 'x64') process.exit(1)"
 
       - name: Build Electron app for x64
-        run: pnpm build && pnpm exec electron-builder --publish never --win --x64
+        shell: pwsh
+        run: |
+          pnpm build
+          foreach ($attempt in 1..3) {
+            pnpm exec electron-builder --publish never --win --x64
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 3) { exit $LASTEXITCODE }
+            Write-Host "electron-builder failed (attempt $attempt); retrying after backoff."
+            Start-Sleep -Seconds (15 * $attempt)
+          }
 
       - name: Smoke unpacked app
         env:
@@ -266,7 +275,16 @@ jobs:
         run: node -e "if (process.arch !== 'arm64') process.exit(1)"
 
       - name: Build Electron app for arm64
-        run: pnpm build && pnpm exec electron-builder --publish never --win --arm64
+        shell: pwsh
+        run: |
+          pnpm build
+          foreach ($attempt in 1..3) {
+            pnpm exec electron-builder --publish never --win --arm64
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 3) { exit $LASTEXITCODE }
+            Write-Host "electron-builder failed (attempt $attempt); retrying after backoff."
+            Start-Sleep -Seconds (15 * $attempt)
+          }
 
       - name: Smoke unpacked app
         env:
