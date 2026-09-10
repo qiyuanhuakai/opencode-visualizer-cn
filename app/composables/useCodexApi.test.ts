@@ -1789,6 +1789,25 @@ describe('useCodexApi', () => {
     ]);
   });
 
+  it('restores background supplemental auxiliary records under their observed user', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('other');
+    const users = ['first', 'supplement'].map(id => ({ type: 'userMessage', id, clientId: id, content: [{ type: 'text', text: id }] }));
+    const emit = (item: Record<string, unknown>, phase = 'completed') => mock.emit({ method: `item/${phase}`, params: { threadId: 'background', turnId: 'shared', item } });
+    for (const user of users) {
+      emit(user);
+      if (user.id === 'first') emit({ type: 'commandExecution', id: 'old-tool', command: 'pwd' }, 'started');
+    }
+    emit({ type: 'reasoning', id: 'new-reason', summary: ['Supplement reasoning'] });
+    emit({ type: 'commandExecution', id: 'old-tool', command: 'pwd', status: 'completed' });
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'background', turns: [{ id: 'shared', status: 'completed', items: users }] } });
+    await api.selectThread('background');
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.parts.some(part => part.id === 'new-reason'))?.info).toMatchObject({ parentID: 'shared:user:supplement' });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.parts.some(part => part.id === 'old-tool'))?.info).toMatchObject({ parentID: 'shared:user:first' });
+  });
+
   it('persists a delayed completed item under its notification thread instead of the active thread', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });

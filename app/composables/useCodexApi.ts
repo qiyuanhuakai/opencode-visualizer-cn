@@ -870,6 +870,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   const assistantTranscriptIds = new Map<string, number>();
   const assistantContexts = new Map<string, { parentId: string; createdAt: number }>();
+  const observedTurnUsers = new Map<string, Set<string>>();
   let latestAssistantCreatedAt = 0;
 
   function updateAssistantItem(sessionId: string, turnId: string, itemId: string, text: string, completed: boolean, createdAt?: number) {
@@ -1269,7 +1270,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       parentMessageId: turnId ? codexUserMessageId(turnId, 0) : undefined,
     });
     const entries = bundle.messages.map((info) => ({
-      info,
+      info: info.role === 'assistant'
+        ? createCodexAssistantInfo(threadId, info.id, info.time.created,
+          [...(observedTurnUsers.get(liveTurnKey(threadId, turnId)) ?? [])].at(-1) || info.parentID)
+        : info,
       parts: bundle.parts.filter((part) => part.messageID === info.id),
     }));
     saveCodexAuxiliaryHistory(
@@ -1316,6 +1320,17 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
     const userItem = isRecord(notificationParams?.item) ? notificationParams.item : null;
     if ((notification.method === 'item/started' || notification.method === 'item/completed')
+      && notificationThreadId && notificationTurnId && userItem?.type === 'userMessage') {
+      const identity = typeof userItem.clientId === 'string' && userItem.clientId.trim()
+        ? userItem.clientId.trim() : typeof userItem.id === 'string' ? userItem.id.trim() : '';
+      if (identity) {
+        const key = liveTurnKey(notificationThreadId, notificationTurnId);
+        const users = observedTurnUsers.get(key) ?? new Set<string>();
+        users.add(codexUserMessageId(notificationTurnId, identity));
+        observedTurnUsers.set(key, users);
+      }
+    }
+    if ((notification.method === 'item/started' || notification.method === 'item/completed')
       && userItem?.type === 'userMessage' && typeof userItem.clientId === 'string'
       && notificationThreadId === activeThreadId.value) {
       const turnId = notificationTurnId || activeTurn.value?.id;
@@ -1351,6 +1366,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       notificationThreadId &&
       notificationThreadId !== activeThreadId.value
     ) {
+      if (notification.method === 'item/started' && userItem && userItem.type !== 'userMessage' && typeof userItem.id === 'string') {
+        const parentId = [...(observedTurnUsers.get(liveTurnKey(notificationThreadId, notificationTurnId)) ?? [])].at(-1);
+        if (parentId) createCodexAssistantInfo(notificationThreadId, codexAssistantMessageId(notificationTurnId, userItem.id), Date.now(), parentId);
+      }
       if (notification.method === 'item/completed' && isRecord(notificationParams?.item)) {
         persistCompletedAuxiliaryNotification(
           notificationThreadId,
@@ -2065,6 +2084,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     activeTurn.value = null;
     liveTurnGenerations.clear();
     assistantContexts.clear();
+    observedTurnUsers.clear();
     latestAssistantCreatedAt = 0;
     liveThreadStatuses.clear();
     serverRequests.value = [];
