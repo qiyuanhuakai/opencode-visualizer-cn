@@ -1,7 +1,10 @@
 import { codexReasoningText } from '../backends/codex/reasoning';
+import { createCodexThreadActivity } from '../backends/codex/threadActivity';
+import { migrateCodexAuxiliaryHistory } from '../backends/codex/auxiliaryHistoryIdentity';
 import { computed, ref, watch } from 'vue';
 import {
   CodexAdapter,
+  extractStatusType,
   normalizeCodexMcpServerInfo,
   type CodexAccount,
   type CodexAccountRateLimitBucket,
@@ -534,6 +537,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const bridgeToken = ref(initialOptions.bridgeToken ?? getPersistedCodexBridgeToken());
   const errorMessage = ref('');
   const threads = ref<CodexThread[]>([]);
+  const threadActivity = createCodexThreadActivity();
+  let threadStatusRevision = 0;
+  const liveThreadStatuses = new Map<string, { revision: number; status: unknown }>();
+  watch(
+    () => threads.value.map((thread) => [thread.id, thread.status] as const),
+    (states) => {
+      for (const [id, threadStatus] of states) threadActivity.observe(id, threadStatus);
+    },
+    { flush: 'sync' },
+  );
   const activeThreadId = ref(loadPersistedActiveThread());
   watch(activeThreadId, (newId, oldId) => {
     if (newId && newId !== oldId) {
@@ -760,7 +773,22 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     });
   }
 
-  function upsertThread(thread: CodexThread, refreshGitInfo = true) {
+  function reconcileThreadStatus(thread: CodexThread, revision: number): CodexThread {
+    const live = liveThreadStatuses.get(thread.id);
+    const existing = threads.value.find((item) => item.id === thread.id);
+    return {
+      ...thread,
+      status: live && live.revision > revision ? live.status : (thread.status ?? existing?.status),
+    };
+  }
+
+  function updateThreadStatus(threadId: string, threadStatus: unknown) {
+    liveThreadStatuses.set(threadId, { revision: ++threadStatusRevision, status: threadStatus });
+    upsertThread({ id: threadId, status: threadStatus }, false);
+  }
+
+  function upsertThread(thread: CodexThread, refreshGitInfo = true, revision = threadStatusRevision) {
+    thread = reconcileThreadStatus(thread, revision);
     const existing = threads.value.find((item) => item.id === thread.id);
     const monotonic = monotonicTimestamps(existing, thread);
     const normalizedThread = normalizeThreadCwd({
@@ -841,6 +869,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   const assistantTranscriptIds = new Map<string, number>();
+  const assistantContexts = new Map<string, { parentId: string; createdAt: number }>();
+  let latestAssistantCreatedAt = 0;
 
   function updateAssistantItem(sessionId: string, turnId: string, itemId: string, text: string, completed: boolean, createdAt?: number) {
     const messageId = codexAssistantMessageId(turnId, itemId || 'pending');
@@ -913,8 +943,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       ...realtimeToolParts.value.map(entry => entry.info),
     ].find(info => info?.id === messageId && info.sessionID === sessionId && info.role === 'assistant');
     if (existing?.role === 'assistant') {
-      return { ...existing, parentID: parentId || existing.parentID };
+      return { ...existing, parentID: realtimeMessageAliases.value[existing.parentID] || existing.parentID || parentId };
     }
+    const parentKey = `${sessionId}:${messageId}`;
+    const context = assistantContexts.get(parentKey);
+    parentId = context?.parentId || parentId;
+    if (context) createdAt = context.createdAt;
+    else {
+      createdAt = Math.max(createdAt, latestAssistantCreatedAt + 1);
+      latestAssistantCreatedAt = createdAt;
+      assistantContexts.set(parentKey, { parentId, createdAt });
+    }
+    parentId = realtimeMessageAliases.value[parentId] || parentId;
     const model = parseSelectedCodexModel(selectedModel.value);
     const parent = [...realtimeHistoryQueue.value, ...canonicalHistory.value]
       .find(entry => entry.info.id === parentId && entry.info.sessionID === sessionId);
@@ -944,15 +984,39 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const targetSessionId = sessionId?.trim() || activeThreadId.value || '';
     const entries = [...canonicalHistory.value, ...realtimeHistoryQueue.value];
     if (turnId) {
-      const assistantId = codexAssistantMessageId(turnId);
-      const existing = entries.find(entry => entry.info.id === assistantId && entry.info.sessionID === targetSessionId);
-      if (existing?.info.role === 'assistant' && existing.info.parentID) return existing.info.parentID;
-      const user = entries.find(entry => entry.info.id === codexUserMessageId(turnId, 0) && entry.info.sessionID === targetSessionId);
+      const user = entries.filter(entry => entry.info.role === 'user'
+        && entry.info.id.startsWith(`${turnId}:user:`)
+        && entry.info.sessionID === targetSessionId)
+        .sort((left, right) => left.info.time.created - right.info.time.created).at(-1);
       if (user) return user.info.id;
     }
     return entries.reverse().find(entry => entry.info.role === 'user' && (
       entry.info.sessionID === targetSessionId || entry.info.sessionID === 'codex-pending'
     ))?.info.id || '';
+  }
+
+  function finalizeRealtimeUser(provisionalId: string, messageId: string, sessionId: string, variant?: string) {
+    realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue(realtimeHistoryQueue.value.map(entry => {
+      if (entry.info.id === messageId) return { ...entry, info: { ...entry.info, variant: variant ?? entry.info.variant } };
+      if (entry.info.id !== provisionalId) return entry;
+      return {
+        info: { ...entry.info, id: messageId, sessionID: sessionId, variant: variant ?? entry.info.variant },
+        parts: entry.parts.map(part => ({
+          ...part,
+          id: part.id.startsWith(`${provisionalId}:`) ? `${messageId}${part.id.slice(provisionalId.length)}` : part.id,
+          sessionID: sessionId,
+          messageID: messageId,
+        })),
+      };
+    }));
+    realtimeMessageAliases.value = { ...realtimeMessageAliases.value, [provisionalId]: messageId };
+    const reparent = (info: MessageInfo): MessageInfo => info.role === 'assistant' && info.parentID === provisionalId
+      ? { ...info, parentID: messageId } : info;
+    realtimeHistoryQueue.value = realtimeHistoryQueue.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
+    realtimeToolParts.value = realtimeToolParts.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
+    if (realtimeReasoningPart.value) realtimeReasoningPart.value = { ...realtimeReasoningPart.value, info: reparent(realtimeReasoningPart.value.info) };
+    if (realtimeStreamingPart.value) realtimeStreamingPart.value = { ...realtimeStreamingPart.value, info: reparent(realtimeStreamingPart.value.info) };
+    if (realtimeCompletedPart.value) realtimeCompletedPart.value = { ...realtimeCompletedPart.value, info: reparent(realtimeCompletedPart.value.info) };
   }
 
   function buildRealtimeUserParts(
@@ -1022,7 +1086,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function setRealtimeReasoningCompleted(completedAt = Date.now(), turnId?: string) {
     if (!realtimeReasoningPart.value || realtimeReasoningPart.value.part.time.end != null) return;
-    if (turnId && realtimeReasoningPart.value.part.messageID !== codexAssistantMessageId(turnId)) return;
+    if (turnId && !realtimeReasoningPart.value.part.messageID.startsWith(`${turnId}:assistant:`)) return;
     const current = realtimeReasoningPart.value;
     realtimeReasoningPart.value = {
       ...current,
@@ -1123,12 +1187,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       (current) => current.info.id === entry.info.id,
     );
     if (existingIndex === -1) {
-      const knownVariant = canonicalHistory.value.find(current =>
+      const known = canonicalHistory.value.find(current =>
         current.info.id === entry.info.id && current.info.sessionID === entry.info.sessionID,
-      )?.info.variant;
+      );
       realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue([
         ...realtimeHistoryQueue.value,
-        knownVariant && !entry.info.variant ? { ...entry, info: { ...entry.info, variant: knownVariant } } : entry,
+        known ? { ...entry, info: { ...entry.info, time: known.info.time, variant: entry.info.variant ?? known.info.variant } } : entry,
       ]);
       return;
     }
@@ -1140,7 +1204,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     });
     const nextQueue = [...realtimeHistoryQueue.value];
     nextQueue[existingIndex] = {
-      info: { ...entry.info, variant: entry.info.variant ?? existing.info.variant },
+      info: { ...entry.info, time: existing.info.time, variant: entry.info.variant ?? existing.info.variant },
       parts: Array.from(partsById.values()),
     };
     realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue(nextQueue);
@@ -1250,11 +1314,22 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (isInvalidatedTurnId(notificationThreadId, notificationTurnId)) return;
       recordObservedTurnId(notificationThreadId, notificationTurnId);
     }
+    const userItem = isRecord(notificationParams?.item) ? notificationParams.item : null;
+    if ((notification.method === 'item/started' || notification.method === 'item/completed')
+      && userItem?.type === 'userMessage' && typeof userItem.clientId === 'string'
+      && notificationThreadId === activeThreadId.value) {
+      const turnId = notificationTurnId || activeTurn.value?.id;
+      if (turnId) {
+        finalizeRealtimeUser(codexUserMessageId(`pending-turn:${userItem.clientId}`), codexUserMessageId(turnId, userItem.clientId), notificationThreadId);
+      }
+    }
     if (notification.method === 'turn/started' || notification.method === 'turn/completed') {
       const turn = extractTurn(notification.params);
       const threadId = notificationThreadId || activeThreadId.value;
       const turnId = turn?.id || notificationTurnId;
       if (threadId && turnId) {
+        threadActivity.markParticipated(threadId);
+        updateThreadStatus(threadId, notification.method === 'turn/started' ? 'active' : 'idle');
         const key = liveTurnKey(threadId, turnId);
         if (notification.method === 'turn/started') {
           liveTurnGenerations.set(key, request.generation);
@@ -1301,12 +1376,20 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
 
     if (
-      notification.method === 'thread/status/changed' ||
       notification.method === 'thread/archived' ||
       notification.method === 'thread/unarchived' ||
       notification.method === 'thread/closed'
     ) {
       void refreshThreads();
+      return;
+    }
+
+    if (notification.method === 'thread/status/changed') {
+      if (notificationThreadId && extractStatusType(notificationParams?.status)) {
+        updateThreadStatus(notificationThreadId, notificationParams?.status);
+      } else {
+        void refreshThreads();
+      }
       return;
     }
 
@@ -1471,6 +1554,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (notification.method === 'item/started') {
       const params = isRecord(notification.params) ? notification.params : null;
       const item = isRecord(params?.item) ? params.item : null;
+      const sessionId = notificationThreadId || activeThreadId.value || 'codex-thread';
+      const turnId = notificationTurnId || activeTurn.value?.id || `${sessionId}:realtime`;
+      if (item?.type === 'userMessage') {
+        mergeRealtimeHistoryBundle(normalizeCodexTurnItems({ sessionId, turnId, items: [item] }), request, turnId);
+        return;
+      }
+      if (item?.type === 'agentMessage' && typeof item.id === 'string') {
+        createCodexAssistantInfo(sessionId, codexAssistantMessageId(turnId, item.id), Date.now(), currentRealtimeParentId(sessionId, turnId));
+        return;
+      }
       if (item?.type === 'enteredReviewMode') {
         reviewState.value = 'reviewing';
         reviewResult.value = '';
@@ -1668,6 +1761,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         const threadId = notificationThreadId || activeThreadId.value || 'codex-thread';
         const messageId = codexAssistantMessageId(
           notificationTurnId || activeTurn.value?.id || `reasoning:${threadId}`,
+          itemId,
         );
         const existing = realtimeReasoningPart.value?.part;
         const accumulated = reasoningStreams.value[itemId]?.summary || reasoningStreams.value[itemId]?.raw || delta;
@@ -1901,6 +1995,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   async function connect(nextUrl = url.value, onPhase?: (phase: CodexConnectPhase) => void) {
     teardownConnection(true);
     url.value = nextUrl.trim();
+    if (threadActivity.setConnection(url.value)) threads.value = [];
     status.value = 'connecting';
     errorMessage.value = '';
     adapter = makeAdapter();
@@ -1969,6 +2064,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     initialized.value = false;
     activeTurn.value = null;
     liveTurnGenerations.clear();
+    assistantContexts.clear();
+    latestAssistantCreatedAt = 0;
+    liveThreadStatuses.clear();
     serverRequests.value = [];
     permissionRequests.value = [];
     elicitationRequests.value = [];
@@ -2116,6 +2214,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   async function refreshConfiguredProviderThreads() {
+    const statusRevision = threadStatusRevision;
     const request = captureConnection();
     if (!request) return;
     const { sourceAdapter } = request;
@@ -2152,7 +2251,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
     const enrichedThreads = await Promise.all([...merged.values()].map(enrichThreadWithGitInfo));
     if (isCurrentConnection(request)) {
-      threads.value = enrichedThreads.sort(
+      threads.value = enrichedThreads.map((thread) => reconcileThreadStatus(thread, statusRevision)).sort(
         (left, right) =>
           (right.updatedAt ?? right.createdAt ?? 0) - (left.updatedAt ?? left.createdAt ?? 0),
       );
@@ -2163,6 +2262,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     params: CodexThreadListParams = {},
     includeConfiguredProviders = true,
   ) {
+    const statusRevision = threadStatusRevision;
     const request = captureConnection();
     const normalizedThreads = await fetchThreadList(params, includeConfiguredProviders, request);
     if (!request || !isCurrentConnection(request) || !normalizedThreads) return;
@@ -2176,7 +2276,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }
     const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
     if (!isCurrentConnection(request)) return;
-    threads.value = enrichedThreads;
+    threads.value = enrichedThreads.map((thread) => reconcileThreadStatus(thread, statusRevision));
     if (!loadingThread.value) {
       if (
         activeThreadId.value &&
@@ -2277,8 +2377,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   async function upsertThreadWithGitInfo(thread: CodexThread) {
+    const request = captureConnection();
+    const statusRevision = threadStatusRevision;
     const enrichedThread = await enrichThreadWithGitInfo(thread);
-    upsertThread(enrichedThread, false);
+    if (!request || !isCurrentConnection(request)) return;
+    upsertThread(enrichedThread, false, statusRevision);
   }
 
   function mergeThreadReadResult(
@@ -2349,7 +2452,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       canonicalHistory.value.flatMap((entry) => entry.parts.map((part) => part.id)),
     );
     const serverInfo = new Map(canonicalHistory.value.map((entry) => [entry.info.id, entry.info]));
-    const missingEntries = loadCodexAuxiliaryHistory(threadId)
+    const missingEntries = migrateCodexAuxiliaryHistory(loadCodexAuxiliaryHistory(threadId), canonicalHistory.value)
       .map((entry) => ({
         info: serverInfo.get(entry.info.id) ?? entry.info,
         parts: entry.parts.filter((part) => !serverParts.has(part.id)),
@@ -2383,22 +2486,34 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     realtimeToolParts.value = [];
     loadingThread.value = true;
     errorMessage.value = '';
+    const restoreRunningTurn = (turns: CodexTurn[] | undefined, previousTurn: CodexTurn | null) => {
+      if (activeTurn.value !== previousTurn || !turns) return;
+      activeTurn.value = turns.findLast((turn) => turn.status === 'inProgress' || turn.status === 'in_progress') ?? null;
+    };
     try {
+      let statusRevision = threadStatusRevision;
       let read = await readThreadForHistory(threadId, sourceAdapter);
       if (!isCurrentSelection()) return;
-      upsertThread(read.thread);
+      restoreRunningTurn(read.thread.turns, null);
+      upsertThread(read.thread, true, statusRevision);
       setTranscriptFromTurns(read.thread.turns ?? []);
       const hydratedHistory = await hydrateThreadImages(canonicalHistory.value, sourceAdapter);
       if (!isCurrentSelection()) return;
       canonicalHistory.value = hydratedHistory;
       try {
+        const previousTurn = activeTurn.value;
+        statusRevision = threadStatusRevision;
         const resumed = await sourceAdapter.resumeThread({ threadId });
         if (!isCurrentSelection()) return;
-        upsertThread(resumed.thread);
+        restoreRunningTurn(resumed.thread.turns, previousTurn);
+        upsertThread(resumed.thread, true, statusRevision);
         if ((read.thread.turns?.length ?? 0) === 0) {
+          const previousTurn = activeTurn.value;
+          statusRevision = threadStatusRevision;
           read = await readThreadForHistory(threadId, sourceAdapter);
           if (!isCurrentSelection()) return;
-          upsertThread(read.thread);
+          restoreRunningTurn(read.thread.turns, previousTurn);
+          upsertThread(read.thread, true, statusRevision);
           setTranscriptFromTurns(read.thread.turns ?? []);
           const resumedHistory = await hydrateThreadImages(canonicalHistory.value);
           if (!isCurrentSelection()) return;
@@ -2436,6 +2551,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const sourceAdapter = adapter;
     if (!sourceAdapter) return;
     const selectionGeneration = threadSelectionGeneration;
+    const statusRevision = threadStatusRevision;
     const read = await readThreadForHistory(threadId, sourceAdapter);
     if (
       adapter !== sourceAdapter ||
@@ -2448,7 +2564,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       sessionId: threadId, turns: read.thread.turns ?? [],
     }), sourceAdapter);
     if (adapter !== sourceAdapter || threadSelectionGeneration !== selectionGeneration || activeThreadId.value !== threadId) return;
-    upsertThread(read.thread);
+    upsertThread(read.thread, true, statusRevision);
     setTranscriptFromTurns(read.thread.turns ?? []);
     const imageUrls = new Map(hydrated.flatMap(entry => entry.parts.filter(part => part.type === 'file').map(part => [part.id, part.url])));
     canonicalHistory.value = canonicalHistory.value.map(entry => ({ ...entry, parts: entry.parts.map(part =>
@@ -2529,6 +2645,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     liveTurnGenerations.delete(liveTurnKey(threadId, turnId));
     if (activeThreadId.value !== threadId || activeTurn.value !== turn) return;
     activeTurn.value = { ...turn, status: 'interrupted' };
+    updateThreadStatus(threadId, 'idle');
     pending.value = false;
   }
 
@@ -2853,7 +2970,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     errorMessage.value = '';
     pushTranscript('user', prompt);
 
-    const pendingTurnId = `pending-turn:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    const clientUserMessageId = `client-user:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    const pendingTurnId = `pending-turn:${clientUserMessageId}`;
     const targetThreadId = options.forceNewThread ? '' : (options.threadId ?? activeThreadId.value);
     const userMessageId = codexUserMessageId(pendingTurnId, 0);
     const sessionId = targetThreadId || 'codex-pending';
@@ -2881,63 +2999,34 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const model =
         options.model?.trim() || parseSelectedCodexModel(selectedModel.value).modelID || undefined;
       const cwd = resolvePromptCwd(options.cwd, targetThreadId);
-      const input: CodexPromptInput = { text: prompt, summary: 'auto' };
+      const input: CodexPromptInput = { text: prompt, summary: 'auto', clientUserMessageId };
       if (inputItems.length > 0) input.input = inputItems;
       if (targetThreadId) input.threadId = targetThreadId;
       if (model) input.model = model;
       if (options.effort) input.effort = options.effort;
       if (options.collaborationMode) input.collaborationMode = options.collaborationMode;
       if (cwd) input.cwd = cwd;
-      const result = await adapter.sendPrompt(input);
+      const statusRevision = threadStatusRevision;
+      const request = captureConnection();
+      if (!request) throw new Error('Codex is not connected.');
+      const result = await request.sourceAdapter.sendPrompt(input);
+      if (!isCurrentConnection(request)) return result;
       activeThreadId.value = result.threadId;
-      if (result.thread) upsertThread(result.thread);
-      activeTurn.value = result.turn;
+      if (result.thread) upsertThread(result.thread, true, statusRevision);
+      threadActivity.markParticipated(result.threadId);
+      upsertThread({
+        id: result.threadId,
+        status: ['completed', 'failed', 'interrupted'].includes(result.turn.status ?? '') ? 'idle' : 'active',
+      }, false, statusRevision);
+      if (activeTurn.value?.id !== result.turn.id || (liveThreadStatuses.get(result.threadId)?.revision ?? 0) <= statusRevision) {
+        activeTurn.value = result.turn;
+      }
 
       const finalizedTurnId = result.turn.id || pendingTurnId;
-      saveCodexTurnEffort(result.threadId, finalizedTurnId, options.effort);
       recordObservedTurnId(result.threadId, finalizedTurnId);
-      const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, 0);
-      if (realtimeHistoryQueue.value.length > 0) {
-        let updated = false;
-        const nextQueue = realtimeHistoryQueue.value.map((entry) => {
-          if (entry.info.id === finalizedUserMessageId) {
-            return { ...entry, info: { ...entry.info, variant: options.effort } };
-          }
-          if (entry.info.id !== userMessageId) return entry;
-          updated = true;
-          return {
-            info: { ...entry.info, id: finalizedUserMessageId, sessionID: result.threadId },
-            parts: entry.parts.map((part) => ({
-              ...part,
-              id: part.id.startsWith(`${userMessageId}:`)
-                ? `${finalizedUserMessageId}${part.id.slice(userMessageId.length)}`
-                : part.id,
-              sessionID: result.threadId,
-              messageID: finalizedUserMessageId,
-            })),
-          };
-        });
-        if (updated) {
-          realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue(nextQueue);
-        }
-      }
-      realtimeMessageAliases.value = {
-        ...realtimeMessageAliases.value,
-        [userMessageId]: finalizedUserMessageId,
-      };
-
-      const reparent = (info: MessageInfo): MessageInfo => info.role === 'assistant' && info.parentID === userMessageId
-        ? { ...info, parentID: finalizedUserMessageId }
-        : info;
-      realtimeHistoryQueue.value = realtimeHistoryQueue.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
-      realtimeToolParts.value = realtimeToolParts.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
-      if (realtimeReasoningPart.value) {
-        realtimeReasoningPart.value = { ...realtimeReasoningPart.value, info: reparent(realtimeReasoningPart.value.info) };
-      }
-
-      if (realtimeStreamingPart.value) {
-        realtimeStreamingPart.value = { ...realtimeStreamingPart.value, info: reparent(realtimeStreamingPart.value.info) };
-      }
+      const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, clientUserMessageId);
+      saveCodexTurnEffort(result.threadId, finalizedTurnId, options.effort, finalizedUserMessageId);
+      finalizeRealtimeUser(userMessageId, finalizedUserMessageId, result.threadId, options.effort);
 
       return result;
     } catch (error) {
@@ -3679,6 +3768,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     bridgeToken,
     errorMessage,
     threads,
+    participatedThreadIds: threadActivity.participatedThreadIds,
     activeThreadId,
     activeTurn,
     transcript,

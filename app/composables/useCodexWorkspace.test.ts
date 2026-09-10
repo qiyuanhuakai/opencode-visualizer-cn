@@ -5,6 +5,21 @@ import { pinnedSessionStoreKey } from '../utils/pinnedSessions';
 import type { CodexThread } from '../backends/codex/codexAdapter';
 
 describe('useCodexWorkspace', () => {
+  it('shows green idle only for threads involved in this backend connection', () => {
+    const threads = ref<CodexThread[]>([
+      { id: 'involved', cwd: '/repo', status: { type: 'idle' } },
+      { id: 'untouched', cwd: '/repo', status: { type: 'idle' } },
+    ]);
+    const participatedThreadIds = ref(new Set(['involved']));
+    const workspace = useCodexWorkspace({ threads, visibleThreads: computed(() => threads.value),
+      activeThreadId: ref('involved'), canonicalHistory: ref([]), participatedThreadIds });
+    expect(workspace.project.value.sandboxes['/repo'].sessions['involved'].status).toBe('idle');
+    expect(workspace.project.value.sandboxes['/repo'].sessions['untouched'].status).toBe('unknown');
+    participatedThreadIds.value = new Set(['untouched']);
+    expect(workspace.project.value.sandboxes['/repo'].sessions['involved'].status).toBe('unknown');
+    expect(workspace.project.value.sandboxes['/repo'].sessions['untouched'].status).toBe('idle');
+  });
+
   it('normalizes Codex threads into a Vis project and sessions', () => {
     const threads: CodexThread[] = [
       { id: 'thread-1', name: 'Implement bridge', cwd: '/repo', gitInfo: { root: '/repo', branch: 'main' }, createdAt: 10, updatedAt: 20, status: 'running' },

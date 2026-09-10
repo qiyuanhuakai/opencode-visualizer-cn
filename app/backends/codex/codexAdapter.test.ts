@@ -326,6 +326,44 @@ describe('CodexAdapter', () => {
     });
   });
 
+  it('preserves distinct client message IDs when supplemental input returns the active turn ID', async () => {
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+    const firstInput = { text: 'Initial task', clientUserMessageId: 'client-first' };
+    const first = adapter.sendPrompt(firstInput);
+    const socket = MockWebSocket.instances[0];
+    if (!socket) throw new Error('Expected an opened adapter socket');
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, { thread: { id: 'thr_active' } });
+    await waitForSent(socket, 4);
+    socket.respond(3, { turn: { id: 'turn_active', status: 'inProgress', items: [] } });
+    const firstResult = await first;
+
+    const followupInput = { threadId: 'thr_active', text: 'Supplement', clientUserMessageId: 'client-followup' };
+    const followup = adapter.sendPrompt(followupInput);
+    await waitForSent(socket, 5);
+    socket.respond(4, { thread: { id: 'thr_active' } });
+    await waitForSent(socket, 6);
+    socket.respond(5, { turn: { id: 'turn_active', status: 'inProgress', items: [] } });
+    const followupResult = await followup;
+
+    expect(followupResult.turn.id).toBe(firstResult.turn.id);
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toMatchObject({
+      method: 'turn/start',
+      params: { clientUserMessageId: 'client-first', input: [{ type: 'text', text: 'Initial task' }] },
+    });
+    expect(JSON.parse(socket.sent[5] ?? '{}')).toMatchObject({
+      method: 'turn/start',
+      params: { clientUserMessageId: 'client-followup', input: [{ type: 'text', text: 'Supplement' }] },
+    });
+  });
+
   it('starts the first turn on an adapter-created thread without trying to resume it', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({

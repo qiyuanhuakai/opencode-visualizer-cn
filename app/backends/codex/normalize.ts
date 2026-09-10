@@ -28,7 +28,7 @@ export type CodexCanonicalHistoryEntry = {
   parts: MessagePart[];
 };
 
-export function codexUserMessageId(turnId: string, index = 0) {
+export function codexUserMessageId(turnId: string, index: string | number = 0) {
   return `${turnId}:user:${index}`;
 }
 
@@ -331,43 +331,23 @@ export function normalizeCodexTurnItems(params: {
   const messages: MessageInfo[] = [];
   const parts: MessagePart[] = [];
   let parentMessageId = params.parentMessageId ?? '';
-  let assistantMessageId = codexAssistantMessageId(params.turnId);
   let userMessageIndex = 0;
-  let assistantMessage: AssistantMessageInfo | undefined;
 
-  function ensureAssistantMessage(itemTime: number) {
-    if (!assistantMessage) {
-      let completedAt: number | undefined;
-      if (isCompleted) {
-        completedAt = turnCompletedTime ?? itemTime;
-      } else if (!hasExplicitStatus) {
-        completedAt = itemTime;
-      }
-      assistantMessage = createAssistantMessage({
-        id: assistantMessageId,
-        sessionId: params.sessionId,
-        parentId: parentMessageId,
-        createdAt: itemTime,
-        completedAt,
-        model: params.model,
-      });
-      messages.push(assistantMessage);
-      return assistantMessage;
+  function addAssistantMessage(messageId: string, itemTime: number) {
+    let completedAt: number | undefined;
+    if (isCompleted) {
+      completedAt = turnCompletedTime ?? itemTime;
+    } else if (!hasExplicitStatus) {
+      completedAt = itemTime;
     }
-
-    if (!assistantMessage.parentID && parentMessageId) {
-      assistantMessage.parentID = parentMessageId;
-    }
-    if (itemTime < assistantMessage.time.created) {
-      assistantMessage.time.created = itemTime;
-    }
-    if (isCompleted || !hasExplicitStatus) {
-      const currentCompleted = numberValue(assistantMessage.time.completed, assistantMessage.time.created);
-      if (itemTime > currentCompleted) {
-        assistantMessage.time.completed = itemTime;
-      }
-    }
-    return assistantMessage;
+    messages.push(createAssistantMessage({
+      id: messageId,
+      sessionId: params.sessionId,
+      parentId: parentMessageId,
+      createdAt: itemTime,
+      completedAt,
+      model: params.model,
+    }));
   }
 
   params.items.forEach((item, index) => {
@@ -381,7 +361,7 @@ export function normalizeCodexTurnItems(params: {
       const files = extractUserFiles(item);
       if (!text && files.length === 0) return;
       const message = createUserMessage({
-        id: codexUserMessageId(params.turnId, userMessageIndex),
+        id: codexUserMessageId(params.turnId, stringValue(item.clientId).trim() || stringValue(item.id).trim() || userMessageIndex),
         sessionId: params.sessionId,
         createdAt: itemTime,
         model: params.model,
@@ -430,7 +410,9 @@ export function normalizeCodexTurnItems(params: {
       return;
     }
 
-    ensureAssistantMessage(itemTime);
+    if (type === 'enteredReviewMode' || type === 'exitedReviewMode') return;
+    const assistantMessageId = codexAssistantMessageId(params.turnId, itemId);
+    addAssistantMessage(assistantMessageId, itemTime);
 
     if (type === 'commandExecution') {
       const command = commandText(item);

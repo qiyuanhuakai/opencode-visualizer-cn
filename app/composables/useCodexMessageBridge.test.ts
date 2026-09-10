@@ -50,6 +50,17 @@ function liveHistory() {
 }
 
 describe('useCodexMessageBridge', () => {
+  it('removes a rejected optimistic user when it disappears from the realtime queue', async () => {
+    const params = bridgeFixture();
+    const user = liveHistory().find(entry => entry.info.role === 'user');
+    if (!user) throw new Error('Expected user fixture');
+    params.codexApi.realtimeHistoryQueue.value = [{ ...user, info: { ...user.info, id: 'pending-turn:failed:user:0' }, parts: [] }];
+    await nextTick();
+    params.codexApi.realtimeHistoryQueue.value = [];
+    await nextTick();
+    expect(params.msg.removeMessage).toHaveBeenCalledExactlyOnceWith('pending-turn:failed:user:0');
+  });
+
   it('publishes only the changed tool across queue and tool watchers', async () => {
     const params = bridgeFixture();
     const entries = liveHistory();
@@ -83,7 +94,7 @@ describe('useCodexMessageBridge', () => {
       info: entry.info.role === 'assistant' ? { ...entry.info, parentID: 'correct-user' } : entry.info,
     }));
     await nextTick();
-    expect(params.msg.updateMessage).toHaveBeenCalledTimes(2);
+    expect(params.msg.updateMessage).toHaveBeenCalledTimes(3);
     expect(params.msg.updateMessage.mock.calls.map(([info]) => info.id)).toEqual(
       params.codexApi.realtimeHistoryQueue.value.filter(entry => entry.info.role === 'assistant').map(entry => entry.info.id),
     );
