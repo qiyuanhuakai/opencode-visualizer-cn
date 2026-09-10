@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.7.16 released]
 
 ### Codex 输入与线程配置
 
