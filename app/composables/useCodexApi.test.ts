@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
+import { useCodexWorkspace } from './useCodexWorkspace';
 import type {
   CodexAdapter,
   CodexPromptResult,
   CodexThreadGoal,
+  CodexThreadListResult,
 } from '../backends/codex/codexAdapter';
 import {
   CodexJsonRpcError,
@@ -137,6 +139,256 @@ describe('useCodexApi', () => {
     localStorage.clear();
   });
 
+  it('restores the running turn and interrupt target when selecting an active thread after refresh', async () => {
+    const mock = createAdapterMock();
+    const turn = { id: 'restored-turn', status: 'inProgress', items: [] };
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', turns: [turn] } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    expect(api.activeTurn.value).toEqual(turn);
+    mock.emit({ method: 'thread/status/changed', params: { threadId: 'thr_existing', status: 'active' } });
+    await api.interruptActiveTurn();
+    expect(mock.adapter.interruptTurn).toHaveBeenCalledWith({ threadId: 'thr_existing', turnId: 'restored-turn' });
+    expect(useCodexWorkspace(api).project.value.sandboxes['/'].sessions['thr_existing'].status).toBe('idle');
+  });
+
+  it('restores the latest running turn returned by resume', async () => {
+    const mock = createAdapterMock();
+    const turn = { id: 'resumed-turn', status: 'inProgress', items: [] };
+    vi.mocked(mock.adapter.resumeThread).mockResolvedValue({ thread: { id: 'thr_existing', turns: [turn] } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    expect(api.activeTurn.value).toEqual(turn);
+  });
+
+  it('does not overwrite a realtime completion with stale resumed running turn data', async () => {
+    const mock = createAdapterMock();
+    const reply = deferred<Awaited<ReturnType<CodexAdapter['resumeThread']>>>();
+    vi.mocked(mock.adapter.resumeThread).mockImplementation(() => reply.promise);
+    const turn = { id: 'restored-turn', status: 'inProgress', items: [] };
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', turns: [turn] } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const selecting = api.selectThread('thr_existing');
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalled());
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { ...turn, status: 'completed' } } });
+    reply.resolve({ thread: { id: 'thr_existing', turns: [turn] } });
+    await selecting;
+    expect(api.activeTurn.value?.status).toBe('completed');
+  });
+
+  it('does not restore a historical completed turn as active', async () => {
+    const mock = createAdapterMock();
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', turns: [{ id: 'past', status: 'completed', items: [] }] } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    expect(api.activeTurn.value).toBeNull();
+  });
+
+  it('keeps a newer realtime turn when an older running turn read resolves', async () => {
+    const mock = createAdapterMock();
+    const reply = deferred<Awaited<ReturnType<CodexAdapter['readThread']>>>();
+    vi.mocked(mock.adapter.readThread).mockImplementationOnce(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const selecting = api.selectThread('thr_existing');
+    const newerTurn = { id: 'newer-turn', status: 'inProgress', items: [] };
+    mock.emit({ method: 'turn/started', params: { threadId: 'thr_existing', turn: newerTurn } });
+    reply.resolve({ thread: { id: 'thr_existing', turns: [{ id: 'older-turn', status: 'inProgress', items: [] }] } });
+    await selecting;
+    expect(api.activeTurn.value).toEqual(newerTurn);
+  });
+
+  it('ignores the running turn from a read that resolves after selecting another thread', async () => {
+    const mock = createAdapterMock();
+    const reply = deferred<Awaited<ReturnType<CodexAdapter['readThread']>>>();
+    vi.mocked(mock.adapter.readThread).mockImplementationOnce(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const firstSelection = api.selectThread('thr_existing');
+    await api.selectThread('thr_other');
+    reply.resolve({ thread: { id: 'thr_existing', turns: [{ id: 'stale-turn', status: 'inProgress', items: [] }] } });
+    await firstSelection;
+    expect(api.activeThreadId.value).toBe('thr_other');
+    expect(api.activeTurn.value).toBeNull();
+  });
+
+  it('retains green idle only for participating threads across page reload and isolates connections', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({ data: [
+      { id: 'thr_existing', status: { type: 'active' } },
+      { id: 'untouched', status: { type: 'idle' } },
+    ], nextCursor: null });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect('ws://localhost:9001/codex');
+    const workspace = useCodexWorkspace(api);
+    const sessions = () => workspace.project.value.sandboxes['/'].sessions;
+    expect(sessions()['thr_existing'].status).toBe('busy');
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({ data: [
+      { id: 'thr_existing', status: { type: 'idle' } },
+      { id: 'untouched', status: { type: 'idle' } },
+    ], nextCursor: null });
+    await api.refreshThreads();
+    expect(sessions()['thr_existing'].status).toBe('idle');
+    expect(sessions()['untouched'].status).toBe('unknown');
+    api.disconnect();
+    const restored = useCodexApi({ adapterFactory: () => mock.adapter });
+    await restored.connect('ws://localhost:9001/codex');
+    expect(useCodexWorkspace(restored).project.value.sandboxes['/'].sessions['thr_existing'].status).toBe('idle');
+    await restored.connect('ws://localhost:9002/codex');
+    expect(useCodexWorkspace(restored).project.value.sandboxes['/'].sessions['thr_existing'].status).toBe('unknown');
+    restored.disconnect();
+  });
+
+  it('applies short background activity notifications without waiting for a list refresh', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const workspace = useCodexWorkspace(api);
+    mock.emit({ method: 'thread/status/changed', params: { threadId: 'background', status: { type: 'active' } } });
+    expect(workspace.project.value.sandboxes['/'].sessions['background']?.status).toBe('busy');
+    mock.emit({ method: 'thread/status/changed', params: { threadId: 'background', status: { type: 'idle' } } });
+    expect(workspace.project.value.sandboxes['/'].sessions['background']?.status).toBe('idle');
+    api.disconnect();
+  });
+
+  it('does not replace a newer idle notification with an older busy list response', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.emit({ method: 'thread/status/changed', params: { threadId: 'thr_existing', status: 'active' } });
+    const listing = deferred<CodexThreadListResult>();
+    mock.adapter.listThreads = vi.fn(() => listing.promise);
+    const refresh = api.refreshThreads();
+    mock.emit({ method: 'thread/status/changed', params: { threadId: 'thr_existing', status: 'idle' } });
+    listing.resolve({ data: [{ id: 'thr_existing', status: 'active' }], nextCursor: null });
+    await refresh;
+    expect(useCodexWorkspace(api).project.value.sandboxes['/'].sessions['thr_existing'].status).toBe('idle');
+    api.disconnect();
+  });
+
+  it('does not revive completed activity when the send response arrives last', async () => {
+    const mock = createAdapterMock();
+    const reply = deferred<CodexPromptResult>();
+    mock.adapter.sendPrompt = vi.fn(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const send = api.sendPrompt('Fast turn');
+    mock.emit({ method: 'turn/started', params: { threadId: 'thr_existing', turn: { id: 'fast', status: 'inProgress' } } });
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: 'fast', status: 'completed' } } });
+    reply.resolve({ threadId: 'thr_existing', turn: { id: 'fast', status: 'inProgress' } });
+    await send;
+    expect(api.activeTurn.value?.status).toBe('completed');
+    expect(useCodexWorkspace(api).project.value.sandboxes['/'].sessions['thr_existing'].status).toBe('idle');
+    api.disconnect();
+  });
+
+  it('does not carry a running thread or a late send into another connection', async () => {
+    const mock = createAdapterMock();
+    const reply = deferred<CodexPromptResult>();
+    mock.adapter.sendPrompt = vi.fn(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect('ws://localhost:9001/codex');
+    mock.emit({ method: 'thread/status/changed', params: { threadId: 'thr_existing', status: 'active' } });
+    const send = api.sendPrompt('Previous connection');
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({ data: [{ id: 'other', status: 'idle' }], nextCursor: null });
+    await api.connect('ws://localhost:9002/codex');
+    expect(api.threads.value.map(thread => thread.id)).toEqual(['other']);
+    reply.resolve({ threadId: 'thr_existing', turn: { id: 'late', status: 'inProgress' } });
+    await send;
+    expect(api.participatedThreadIds.value.size).toBe(0);
+    expect(api.activeThreadId.value).toBe('other');
+    api.disconnect();
+  });
+
+  it('preserves item-start order when an earlier assistant finishes after later tools', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100);
+    try {
+      mock.emit({ method: 'item/started', params: { threadId: 'thr_existing', turnId: 'turn_1', item: { type: 'agentMessage', id: 'z-first' } } });
+      mock.emit({ method: 'item/started', params: { threadId: 'thr_existing', turnId: 'turn_1', item: { type: 'commandExecution', id: 'a-second', command: 'pwd' } } });
+      now.mockReturnValue(200);
+      mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_1', item: { type: 'agentMessage', id: 'z-first', text: 'Delayed response' } } });
+      const assistant = api.realtimeHistoryQueue.value.find(entry => entry.info.id === 'turn_1:assistant:z-first');
+      const tool = api.realtimeToolParts.value.find(entry => entry.info.id === 'turn_1:assistant:a-second');
+      expect(assistant?.info.time.created).toBeLessThan(tool?.info.time.created ?? 0);
+    } finally {
+      now.mockRestore();
+      api.disconnect();
+    }
+  });
+
+  it('keeps supplemental echoes, item parents and card identities stable through history reload', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Same text', { effort: 'high' });
+    const firstClient = vi.mocked(mock.adapter.sendPrompt).mock.calls[0]?.[0].clientUserMessageId;
+    const firstUser = { type: 'userMessage', id: 'wire-a', clientId: firstClient, content: [{ type: 'text', text: 'Same text' }] };
+    const emit = (method: string, item: Record<string, unknown>) => mock.emit({ method, params: { threadId: 'thr_existing', turnId: 'turn_1', item } });
+    emit('item/completed', firstUser);
+    emit('item/started', { type: 'agentMessage', id: 'old-answer' });
+    emit('item/started', { type: 'commandExecution', id: 'old-tool', command: 'echo old' });
+    const reply = deferred<CodexPromptResult>();
+    mock.adapter.sendPrompt = vi.fn(() => reply.promise);
+    const pending = api.sendPrompt('Same text', { effort: 'low' });
+    const secondClient = vi.mocked(mock.adapter.sendPrompt).mock.calls[0]?.[0].clientUserMessageId;
+    expect(secondClient).not.toBe(firstClient);
+    const secondUser = { type: 'userMessage', id: 'wire-b', clientId: secondClient, content: [{ type: 'text', text: 'Same text' }] };
+    emit('item/started', secondUser);
+    emit('item/completed', secondUser);
+    expect(api.realtimeHistoryQueue.value.filter(entry => entry.info.role === 'user')).toHaveLength(2);
+    reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn_1', status: 'inProgress' } });
+    await pending;
+    const oldAnswer = { type: 'agentMessage', id: 'old-answer', text: 'Old response, delayed' };
+    const oldTool = { type: 'commandExecution', id: 'old-tool', command: 'echo old', status: 'completed' };
+    const newAnswer = { type: 'agentMessage', id: 'new-answer', text: 'New response' };
+    const newTool = { type: 'commandExecution', id: 'new-tool', command: 'echo new', status: 'completed' };
+    const reasoning = { type: 'reasoning', id: 'new-reasoning', summary: [{ type: 'summary_text', text: 'New reasoning' }] };
+    for (const item of [oldAnswer, oldTool, newAnswer, newTool, reasoning]) emit('item/completed', item);
+    const identity = (entries: typeof api.canonicalHistory.value) => entries.map(entry => ({
+      id: entry.info.id,
+      parent: entry.info.role === 'assistant' ? entry.info.parentID : '',
+      variant: entry.info.variant,
+    })).sort((a, b) => a.id.localeCompare(b.id));
+    const live = identity(api.realtimeHistoryQueue.value);
+    expect(live.find(entry => entry.id === 'turn_1:assistant:old-answer')?.parent).toBe(`turn_1:user:${firstClient}`);
+    expect(live.find(entry => entry.id === 'turn_1:assistant:old-tool')?.parent).toBe(`turn_1:user:${firstClient}`);
+    expect(live.find(entry => entry.id === 'turn_1:assistant:new-answer')?.parent).toBe(`turn_1:user:${secondClient}`);
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', turns: [{ id: 'turn_1', status: 'completed', items: [firstUser, oldAnswer, oldTool, secondUser, newAnswer, newTool, reasoning] }] } });
+    await api.selectThread('thr_existing');
+    expect(identity(api.canonicalHistory.value)).toEqual(live);
+    emit('item/completed', firstUser);
+    emit('item/completed', { type: 'agentMessage', id: 'after-reload', text: 'Still follows the latest user' });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.id === 'turn_1:assistant:after-reload')?.info).toMatchObject({ parentID: `turn_1:user:${secondClient}` });
+    api.disconnect();
+  });
+
+  it('keeps supplemental users and their replies distinct within a reused active turn', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Original request', { effort: 'high' });
+    const first = api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'user');
+    mock.emit({ method: 'item/agentMessage/delta', params: { threadId: 'thr_existing', turnId: 'turn_1', itemId: 'answer-a', delta: 'Original reply' } });
+    await api.sendPrompt('Supplemental request', { effort: 'low' });
+    const users = api.realtimeHistoryQueue.value.filter(entry => entry.info.role === 'user');
+    expect(users).toHaveLength(2);
+    expect(users.map(entry => entry.parts.find(part => part.type === 'text')?.text)).toEqual(['Original request', 'Supplemental request']);
+    mock.emit({ method: 'item/agentMessage/delta', params: { threadId: 'thr_existing', turnId: 'turn_1', itemId: 'answer-b', delta: 'Supplemental reply' } });
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_1', item: { id: 'answer-a', type: 'agentMessage', text: 'Original reply completed late' } } });
+    const parent = (id: string) => api.realtimeHistoryQueue.value.find(entry => entry.info.id === `turn_1:assistant:${id}`)?.info;
+    expect(parent('answer-a')).toMatchObject({ parentID: first?.info.id });
+    expect(parent('answer-b')).toMatchObject({ parentID: users[1]?.info.id });
+    expect(users.map(entry => entry.info.variant)).toEqual(['high', 'low']);
+    api.disconnect();
+  });
+
   it('retains selected effort through the pending prompt and server echo', async () => {
     const mock = createAdapterMock();
     const reply = deferred<CodexPromptResult>();
@@ -144,8 +396,9 @@ describe('useCodexApi', () => {
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
     const sending = api.sendPrompt('Explain', { effort: 'high' });
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
     expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'user')?.info.variant).toBe('high');
-    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_effort', item: { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Explain' }] } } });
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_effort', item: { type: 'userMessage', id: 'u', clientId, content: [{ type: 'text', text: 'Explain' }] } } });
     reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn_effort', status: 'inProgress' } });
     await sending;
     mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_effort', item: { type: 'agentMessage', id: 'a', text: 'Answer' } } });
@@ -158,12 +411,14 @@ describe('useCodexApi', () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
+    const clientIds = new Map<string, string | undefined>();
     for (const [id, effort] of [['turn_high', 'high'], ['turn_low', 'low']]) {
       vi.mocked(mock.adapter.sendPrompt).mockResolvedValueOnce({ threadId: 'thr_existing', turn: { id, status: 'inProgress' } });
       await api.sendPrompt('Explain', { effort });
+      clientIds.set(id, vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId);
     }
     vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing', turns: ['turn_high', 'turn_low', 'turn_unknown'].map(id => ({ id, items: [
-      { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Explain' }] },
+      { type: 'userMessage', id: 'u', clientId: clientIds.get(id), content: [{ type: 'text', text: 'Explain' }] },
       { type: 'agentMessage', id: 'a', text: 'Answer' },
     ] })) } });
     api.disconnect();
@@ -171,8 +426,8 @@ describe('useCodexApi', () => {
     await restored.connect();
     await restored.selectThread('thr_existing');
     expect(restored.canonicalHistory.value.map(entry => entry.info.variant)).toEqual(['high', 'high', 'low', 'low', undefined, undefined]);
-    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_high', item: { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Explain' }] } } });
-    expect(restored.realtimeHistoryQueue.value.find(entry => entry.info.id === 'turn_high:user:0')?.info.variant).toBe('high');
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_high', item: { type: 'userMessage', id: 'u', clientId: clientIds.get('turn_high'), content: [{ type: 'text', text: 'Explain' }] } } });
+    expect(restored.realtimeHistoryQueue.value.find(entry => entry.info.id === `turn_high:user:${clientIds.get('turn_high')}`)?.info.variant).toBe('high');
   });
 
   it('keeps restored replies attached to their original user across tool events', async () => {
@@ -183,11 +438,11 @@ describe('useCodexApi', () => {
     const original = api.canonicalHistory.value.find(entry => entry.info.role === 'assistant')!;
     mock.emit({ method: 'item/started', params: { threadId: 'thr_existing', turnId: 'turn_old', item: { id: 'command-live', type: 'commandExecution', command: 'pwd' } } });
     expect(api.realtimeToolParts.value[0]?.info).toMatchObject({
-      parentID: 'turn_old:user:0',
-      id: 'turn_old:assistant',
+      parentID: 'turn_old:user:u1',
+      id: 'turn_old:assistant:command-live',
     });
     mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_old', item: { id: 'command-live', type: 'commandExecution', command: 'pwd', status: 'completed', aggregatedOutput: '/repo' } } });
-    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject({ parentID: 'turn_old:user:0' });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject({ parentID: 'turn_old:user:u1' });
     expect(api.canonicalHistory.value.find(entry => entry.info.id === original.info.id)).toEqual(original);
   });
 
@@ -241,13 +496,14 @@ describe('useCodexApi', () => {
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
     const sending = api.sendPrompt('Continue');
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
     mock.emit({ method: 'item/started', params: { threadId: 'thr_existing', turnId: 'turn-race', item: { id: 'early-tool', type: 'commandExecution', command: 'pwd' } } });
     reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn-race', status: 'inProgress' } });
     await sending;
     mock.emit({ method: 'item/commandExecution/outputDelta', params: { threadId: 'thr_existing', turnId: 'turn-race', itemId: 'early-tool', delta: '/repo' } });
-    expect(api.realtimeToolParts.value[0]?.info).toMatchObject({ parentID: 'turn-race:user:0' });
+    expect(api.realtimeToolParts.value[0]?.info).toMatchObject({ parentID: `turn-race:user:${clientId}` });
     mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn-race', item: { id: 'early-tool', type: 'commandExecution', command: 'pwd', status: 'completed' } } });
-    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject({ parentID: 'turn-race:user:0' });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject({ parentID: `turn-race:user:${clientId}` });
   });
 
   it('publishes completed-only reasoning and collaboration notifications to live window sources', async () => {
@@ -994,6 +1250,7 @@ describe('useCodexApi', () => {
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
       summary: 'auto',
+      clientUserMessageId: expect.stringMatching(/^client-user:/u),
       text: '',
       threadId: 'thr_existing',
       input: [{ type: 'image', url: 'data:image/png;base64,AA==' }],
@@ -1010,6 +1267,7 @@ describe('useCodexApi', () => {
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
       summary: 'auto',
+      clientUserMessageId: expect.stringMatching(/^client-user:/u),
       text: 'Hello custom model.',
       threadId: 'thr_existing',
       model: 'mimo/mimo-v2.5',
@@ -1029,6 +1287,7 @@ describe('useCodexApi', () => {
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
       summary: 'auto',
+      clientUserMessageId: expect.stringMatching(/^client-user:/u),
       text: 'Hello explicit custom model.',
       threadId: 'thr_existing',
       model: 'mimo/mimo-v2.5',
@@ -1530,6 +1789,25 @@ describe('useCodexApi', () => {
     ]);
   });
 
+  it('restores background supplemental auxiliary records under their observed user', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('other');
+    const users = ['first', 'supplement'].map(id => ({ type: 'userMessage', id, clientId: id, content: [{ type: 'text', text: id }] }));
+    const emit = (item: Record<string, unknown>, phase = 'completed') => mock.emit({ method: `item/${phase}`, params: { threadId: 'background', turnId: 'shared', item } });
+    for (const user of users) {
+      emit(user);
+      if (user.id === 'first') emit({ type: 'commandExecution', id: 'old-tool', command: 'pwd' }, 'started');
+    }
+    emit({ type: 'reasoning', id: 'new-reason', summary: ['Supplement reasoning'] });
+    emit({ type: 'commandExecution', id: 'old-tool', command: 'pwd', status: 'completed' });
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'background', turns: [{ id: 'shared', status: 'completed', items: users }] } });
+    await api.selectThread('background');
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.parts.some(part => part.id === 'new-reason'))?.info).toMatchObject({ parentID: 'shared:user:supplement' });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.parts.some(part => part.id === 'old-tool'))?.info).toMatchObject({ parentID: 'shared:user:first' });
+  });
+
   it('persists a delayed completed item under its notification thread instead of the active thread', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -1698,6 +1976,7 @@ describe('useCodexApi', () => {
 
     expect(mock.adapter.sendPrompt).toHaveBeenCalledWith({
       summary: 'auto',
+      clientUserMessageId: expect.stringMatching(/^client-user:/u),
       threadId: 'thr_existing',
       text: 'Summarize this repo.',
     });
@@ -1717,6 +1996,7 @@ describe('useCodexApi', () => {
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
       summary: 'auto',
+      clientUserMessageId: expect.stringMatching(/^client-user:/u),
       threadId: 'thr_existing',
       text: 'Continue here.',
       cwd: '/home/codex/repo',
@@ -1737,6 +2017,7 @@ describe('useCodexApi', () => {
 
     expect(mock.adapter.sendPrompt).toHaveBeenLastCalledWith({
       summary: 'auto',
+      clientUserMessageId: expect.stringMatching(/^client-user:/u),
       text: 'Start on the selected provider.',
       model: 'mimo/mimo-v2.5',
       cwd: '/repo',
@@ -2285,17 +2566,19 @@ describe('useCodexApi', () => {
     expect(api.realtimeHistoryQueue.value).toEqual([]);
 
     await api.sendPrompt('Hello immediately.');
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    const userId = `turn_1:user:${clientId}`;
 
     const userEntries = api.realtimeHistoryQueue.value.filter((e) => e.info.role === 'user');
     expect(userEntries).toHaveLength(1);
     expect(userEntries[0]?.info.role).toBe('user');
-    expect(userEntries[0]?.info.id).toContain(':user:0');
-    expect(userEntries[0]?.info.id).toBe('turn_1:user:0');
+    expect(clientId).toMatch(/^client-user:/u);
+    expect(userEntries[0]?.info.id).toBe(userId);
     expect(userEntries.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
     expect(
       Object.keys(api.realtimeMessageAliases.value).some((key) => key.includes('pending-turn:')),
     ).toBe(true);
-    expect(Object.values(api.realtimeMessageAliases.value)).toContain('turn_1:user:0');
+    expect(Object.values(api.realtimeMessageAliases.value)).toContain(userId);
     expect(userEntries[0]?.parts).toHaveLength(1);
     expect(userEntries[0]?.parts[0]).toMatchObject({ type: 'text', text: 'Hello immediately.' });
   });
@@ -2346,8 +2629,9 @@ describe('useCodexApi', () => {
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
     await api.sendPrompt('Look', { input: [{ type: 'image', url: 'data:image/png;base64,AA==' }] });
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
     mock.adapter.readFile = vi.fn().mockRejectedValue(new Error('File temporarily unavailable'));
-    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_1', item: { id: 'echo', type: 'userMessage', content: [{ type: 'localImage', path: '/tmp/upload.png' }] } } });
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_1', item: { id: 'echo', clientId, type: 'userMessage', content: [{ type: 'localImage', path: '/tmp/upload.png' }] } } });
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(api.realtimeHistoryQueue.value.flatMap(e => e.parts).filter(p => p.type === 'file')).toEqual([expect.objectContaining({ url: 'data:image/png;base64,AA==' })]);
     api.disconnect();
@@ -2358,9 +2642,10 @@ describe('useCodexApi', () => {
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
     await api.connect();
     await api.sendPrompt('Look', { input: [{ type: 'text', text: 'Look' }, { type: 'image', url: 'data:image/png;base64,AA==' }, { type: 'image', url: 'data:image/png;base64,AA==' }] });
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
     const initial = api.realtimeHistoryQueue.value.find(e => e.info.role === 'user')?.parts.filter(p => p.type === 'file');
     expect(initial).toHaveLength(2);
-    mock.emit({ method: 'item/completed', params: { threadId: api.activeThreadId.value, turnId: 'turn_1', item: { type: 'userMessage', id: 'echo', content: [{ type: 'text', text: 'Look' }, ...[0, 1].map(i => kind === 'image' ? { type: 'image', url: 'data:image/png;base64,AA==' } : { type: 'localImage', path: '/tmp/sent-' + i + '.png' })] } } });
+    mock.emit({ method: 'item/completed', params: { threadId: api.activeThreadId.value, turnId: 'turn_1', item: { type: 'userMessage', id: 'echo', clientId, content: [{ type: 'text', text: 'Look' }, ...[0, 1].map(i => kind === 'image' ? { type: 'image', url: 'data:image/png;base64,AA==' } : { type: 'localImage', path: '/tmp/sent-' + i + '.png' })] } } });
     const files = api.realtimeHistoryQueue.value.find(e => e.info.role === 'user')?.parts.filter(p => p.type === 'file');
     expect(files).toHaveLength(2);
     expect(files?.map(p => p.id)).toEqual(initial?.map(p => p.id));
@@ -2380,6 +2665,7 @@ describe('useCodexApi', () => {
     api.activeTurn.value = { id: 'turn_old', status: 'completed' } as never;
 
     await api.sendPrompt('Fresh turn please.');
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
 
     expect(
       Object.keys(api.realtimeMessageAliases.value).some((key) => key.startsWith('turn_old:')),
@@ -2389,7 +2675,7 @@ describe('useCodexApi', () => {
     ).toBe(true);
     expect(
       api.realtimeHistoryQueue.value.find((entry) => entry.info.role === 'user')?.info.id,
-    ).toBe('turn_2:user:0');
+    ).toBe(`turn_2:user:${clientId}`);
   });
 
   it('removes provisional realtime user history if sendPrompt fails', async () => {
@@ -2416,6 +2702,8 @@ describe('useCodexApi', () => {
 
     await api.connect();
     const pendingSend = api.sendPrompt('Race test.');
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    const userId = `turn_race:user:${clientId}`;
     mock.emit({ method: 'item/agentMessage/delta', params: { delta: 'Early' } });
     expect(resolveSend).not.toBeNull();
     resolveSend!({
@@ -2428,13 +2716,13 @@ describe('useCodexApi', () => {
       (entry) => entry.info.role === 'user',
     );
     expect(userEntries).toHaveLength(1);
-    expect(userEntries[0]?.info.id).toBe('turn_race:user:0');
+    expect(userEntries[0]?.info.id).toBe(userId);
     expect(userEntries[0]?.parts[0]).toMatchObject({
-      id: 'turn_race:user:0:text',
+      id: `${userId}:text`,
       text: 'Race test.',
     });
     expect(userEntries.some((entry) => entry.info.id.includes('pending-turn:'))).toBe(false);
-    expect(Object.values(api.realtimeMessageAliases.value)).toContain('turn_race:user:0');
+    expect(Object.values(api.realtimeMessageAliases.value)).toContain(userId);
   });
 
   it('keeps successive streamed assistant items independently through completion', async () => {
@@ -3675,6 +3963,7 @@ describe('useCodexApi', () => {
 
     await api.connect();
     const pendingSend = api.sendPrompt('Pending thread switch');
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
 
     expect(
       api.realtimeHistoryQueue.value.some((entry) => entry.info.id.includes('pending-turn:')),
@@ -3697,7 +3986,7 @@ describe('useCodexApi', () => {
     await pendingSend;
 
     expect(
-      api.realtimeHistoryQueue.value.some((entry) => entry.info.id === 'turn_after_switch:user:0'),
+      api.realtimeHistoryQueue.value.some((entry) => entry.info.id === `turn_after_switch:user:${clientId}`),
     ).toBe(false);
   });
 

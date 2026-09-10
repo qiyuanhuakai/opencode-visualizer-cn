@@ -197,6 +197,7 @@ export const StorageKeys = {
     codexPanelConnected: 'state.codexPanelConnected.v1',
     codexAuxiliaryHistory: 'state.codexAuxiliaryHistory.v1',
     codexTurnEfforts: 'state.codexTurnEfforts.v1',
+    codexThreadActivity: 'state.codexThreadActivity.v1',
     forgePtyId: 'state.forgePtyId.v1',
     acpArchivedSessions: 'state.acpArchivedSessions.v1',
     acpMessageAttribution: 'state.acpMessageAttribution.v1',

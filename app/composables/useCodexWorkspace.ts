@@ -1,5 +1,5 @@
 import { computed, type ComputedRef, type Ref } from 'vue';
-import { extractStatusType, type CodexThread } from '../backends/codex/codexAdapter';
+import { extractStatusType, normalizeCodexStatus, type CodexThread } from '../backends/codex/codexAdapter';
 import { CODEX_PROJECT_ID } from '../backends/codex/bridgeUrl';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import type { ProjectState, SessionState } from '../types/worker-state';
@@ -23,6 +23,7 @@ export type CodexWorkspaceApi = {
   homeDir?: Ref<string>;
   pinnedStore?: Ref<LocalPinnedSessionStore>;
   hiddenThreadIds?: Ref<Set<string>>;
+  participatedThreadIds?: Ref<Set<string>>;
 };
 
 function isCodexThreadPinned(
@@ -85,12 +86,9 @@ function threadTitle(thread: CodexThread) {
   return thread.name?.trim() || thread.preview?.trim() || thread.id;
 }
 
-function threadStatus(thread: CodexThread): SessionState['status'] {
-  const type = extractStatusType(thread.status);
-  if (type === 'active' || type === 'running' || type === 'inProgress' || type === 'busy')
-    return 'busy';
-  if (type === 'systemError' || type === 'retry') return 'retry';
-  return 'unknown' as SessionState['status'];
+function threadStatus(thread: CodexThread, participatedThreadIds: ReadonlySet<string>): SessionState['status'] {
+  if (extractStatusType(thread.status) === 'idle' && participatedThreadIds.has(thread.id)) return 'idle';
+  return normalizeCodexStatus(thread.status) as SessionState['status'];
 }
 
 function codexThreadToSession(
@@ -99,11 +97,12 @@ function codexThreadToSession(
   pinnedStore: LocalPinnedSessionStore = {},
   hiddenThreadIds: Set<string> = new Set(),
   sessionDirectory = threadSandboxDirectory(thread, fallbackDirectory),
+  participatedThreadIds: ReadonlySet<string> = new Set(),
 ): SessionState {
   return {
     id: thread.id,
     title: threadTitle(thread),
-    status: threadStatus(thread),
+    status: threadStatus(thread, participatedThreadIds),
     directory: sessionDirectory,
     gitInfo: thread.gitInfo ?? null,
     timeCreated: threadTimestamp(thread.createdAt),
@@ -126,6 +125,7 @@ export function createCodexProjectState(
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedStore: LocalPinnedSessionStore = {},
   hiddenThreadIds: Set<string> = new Set(),
+  participatedThreadIds: ReadonlySet<string> = new Set(),
 ): ProjectState {
   const primaryDirectory = CODEX_DEFAULT_DIRECTORY;
   const sandboxes: ProjectState['sandboxes'] = {};
@@ -148,6 +148,7 @@ export function createCodexProjectState(
       pinnedStore,
       hiddenThreadIds,
       directory,
+      participatedThreadIds,
     );
     sandboxes[directory] = sandbox;
   }
@@ -180,6 +181,7 @@ export function useCodexWorkspace(
       fallbackDirectory.value,
       api.pinnedStore?.value ?? options.pinnedStore?.value,
       api.hiddenThreadIds?.value,
+      api.participatedThreadIds?.value,
     ),
   );
   const projects = computed<Record<string, ProjectState>>(() => ({

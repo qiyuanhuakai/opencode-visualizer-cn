@@ -186,6 +186,14 @@ export function useCodexMessageBridge(params: {
       return;
     }
     lastRealtimeQueueSignature.value = signature;
+    const queuedIds = new Set(params.codexApi.realtimeHistoryQueue.value.map(entry => entry.info.id));
+    for (const id of publishedMessages.keys()) {
+      if (id.startsWith('pending-turn:') && !queuedIds.has(id)
+        && !params.codexApi.realtimeMessageAliases.value[id]) {
+        params.msg.removeMessage(id);
+        publishedMessages.delete(id);
+      }
+    }
     if (params.codexApi.realtimeHistoryQueue.value.length === 0) return;
     for (const [provisionalId, finalizedId] of Object.entries(params.codexApi.realtimeMessageAliases.value)) {
       if (!provisionalId || !finalizedId || provisionalId === finalizedId) continue;

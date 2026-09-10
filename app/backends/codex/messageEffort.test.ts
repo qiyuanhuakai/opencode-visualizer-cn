@@ -16,6 +16,27 @@ function history(threadId: string) {
 describe('Codex per-turn effort metadata', () => {
   beforeEach(() => localStorage.clear());
 
+  it('restores distinct selections for supplemental users in the same turn', () => {
+    saveCodexTurnEffort('thread', 'turn', 'high', 'turn:user:a');
+    saveCodexTurnEffort('thread', 'turn', 'low', 'turn:user:b');
+    const entries = normalizeCodexTurnsToHistory({ sessionId: 'thread', turns: [{ id: 'turn', items: [
+      { id: 'a', type: 'userMessage', content: [{ type: 'text', text: 'A' }] },
+      { id: 'answer-a', type: 'agentMessage', text: 'A' },
+      { id: 'b', type: 'userMessage', content: [{ type: 'text', text: 'B' }] },
+      { id: 'answer-b', type: 'agentMessage', text: 'B' },
+    ] }] });
+    expect(restoreCodexMessageEfforts('thread', entries).map(entry => entry.info.variant)).toEqual(['high', 'high', 'low', 'low']);
+  });
+
+  it('restores old ordinal effort metadata to wire identities by user order', () => {
+    saveCodexTurnEffort('thread', 'turn', 'high');
+    const entries = normalizeCodexTurnsToHistory({ sessionId: 'thread', turns: [{ id: 'turn', items: [
+      { id: 'wire', type: 'userMessage', content: [{ type: 'text', text: 'A' }] },
+      { id: 'answer', type: 'agentMessage', text: 'A' },
+    ] }] });
+    expect(restoreCodexMessageEfforts('thread', entries).map(entry => entry.info.variant)).toEqual(['high', 'high']);
+  });
+
   it('keeps identical turn IDs isolated by thread', () => {
     saveCodexTurnEffort('thread-a', 'turn', 'high');
     saveCodexTurnEffort('thread-b', 'turn', 'low');

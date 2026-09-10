@@ -2,6 +2,30 @@ import { describe, expect, it } from 'vitest';
 import { normalizeCodexTurnItems, normalizeCodexTurnsToHistory } from './normalize';
 
 describe('normalizeCodexTurnItems', () => {
+  it('keeps wire user identities identical for batch and incremental normalization', () => {
+    const items = [
+      { id: 'wire-a', clientId: 'client-a', type: 'userMessage', content: [{ type: 'text', text: 'A' }] },
+      { id: 'wire-b', type: 'userMessage', content: [{ type: 'text', text: 'B' }] },
+    ];
+    const batch = normalizeCodexTurnItems({ sessionId: 's', turnId: 't', items });
+    const incremental = items.flatMap(item => normalizeCodexTurnItems({ sessionId: 's', turnId: 't', items: [item] }).messages);
+    expect(batch.messages.map(message => message.id)).toEqual(['t:user:client-a', 't:user:wire-b']);
+    expect(incremental.map(message => message.id)).toEqual(batch.messages.map(message => message.id));
+  });
+
+  it('keeps auxiliary item identities and parents stable across supplemental user segments', () => {
+    const tool = { id: 'tool-a', type: 'commandExecution', command: 'echo A', status: 'completed' };
+    const reasoning = { id: 'reasoning-b', type: 'reasoning', summary: [{ text: 'Think B' }] };
+    const result = normalizeCodexTurnItems({ sessionId: 's', turnId: 't', items: [
+      { id: 'user-a', type: 'userMessage', content: [{ type: 'text', text: 'A' }] }, tool,
+      { id: 'user-b', type: 'userMessage', content: [{ type: 'text', text: 'B' }] }, reasoning,
+    ] });
+    expect(result.messages.filter(message => message.role === 'assistant').map(message => [message.id, message.parentID])).toEqual([
+      ['t:assistant:tool-a', 't:user:user-a'], ['t:assistant:reasoning-b', 't:user:user-b'],
+    ]);
+    const late = normalizeCodexTurnItems({ sessionId: 's', turnId: 't', items: [tool], parentMessageId: 't:user:user-a' });
+    expect(late.messages[0]).toMatchObject({ id: 't:assistant:tool-a', parentID: 't:user:user-a' });
+  });
   it('retains each assistant item as a separate chronological message around tools', () => {
     const result = normalizeCodexTurnItems({ sessionId: 's', turnId: 't', createdAt: 100, items: [
       { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'request' }] },
@@ -13,7 +37,7 @@ describe('normalizeCodexTurnItems', () => {
     expect(new Set(replies.map(part => part.id)).size).toBe(2);
     expect(new Set(replies.map(part => part.messageID)).size).toBe(2);
     expect(result.messages.filter(message => message.role === 'assistant').map(message => message.time.created)).toEqual([101, 102, 103]);
-    expect(result.messages.filter(message => message.role === 'assistant').every(message => message.parentID === 't:user:0')).toBe(true);
+    expect(result.messages.filter(message => message.role === 'assistant').every(message => message.parentID === 't:user:u')).toBe(true);
     const reloaded = normalizeCodexTurnsToHistory({ sessionId: 's', turns: [{ id: 't', items: [
       { id: 'u', type: 'userMessage', content: [{ type: 'text', text: 'request' }] },
       { id: 'a1', type: 'agentMessage', text: 'first' },
@@ -47,7 +71,7 @@ describe('normalizeCodexTurnItems', () => {
     expect(result.parts).toHaveLength(2);
     expect(result.parts[0]).toMatchObject({
       type: 'text',
-      messageID: 'turn-1:user:0',
+      messageID: 'turn-1:user:user-item',
       text: 'hello codex',
     });
     expect(result.parts[1]).toMatchObject({
@@ -90,9 +114,9 @@ describe('normalizeCodexTurnItems', () => {
     });
 
     expect(result.messages.find((message) => message.role === 'assistant')).toMatchObject({
-      id: 'turn-time:assistant',
+      id: 'turn-time:assistant:cmd-1',
       time: { created: 120, completed: 120 },
-      parentID: 'turn-time:user:0',
+      parentID: 'turn-time:user:user-item',
     });
   });
 
@@ -116,7 +140,7 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
-    expect(result.messages).toHaveLength(1);
+    expect(result.messages).toHaveLength(2);
     expect(result.messages[0]?.role).toBe('assistant');
     expect(result.parts).toHaveLength(2);
     expect(result.parts[0]).toMatchObject({
@@ -455,7 +479,7 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
-    expect(result.parts[0]?.id).toBe('turn-stable:user:0:text');
+    expect(result.parts[0]?.id).toBe('turn-stable:user:stable-user-id:text');
     expect(result.parts[1]?.id).toBe('turn-stable:assistant:stable-agent-id:text');
     expect(result.parts[2]?.id).toBe('stable-cmd-id');
   });
@@ -509,7 +533,7 @@ describe('normalizeCodexTurnItems', () => {
       ],
     });
 
-    expect(history).toHaveLength(3);
+    expect(history).toHaveLength(4);
     expect(history[0]?.info.role).toBe('user');
     expect(history[1]?.info.role).toBe('assistant');
     expect(history.flatMap(entry => entry.parts)).toEqual(

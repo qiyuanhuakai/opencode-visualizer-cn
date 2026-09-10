@@ -10,15 +10,16 @@ export function useBackendSessionStatus(params: {
   getSessionStatus: (sessionId: string) => string | undefined;
 }) {
   const isThinking = computed(() => {
-    if (params.activeBackendKind.value === 'codex') {
-      const status = params.codexActiveTurnStatus.value;
-      return Boolean(status && status !== 'completed' && status !== 'failed' && status !== 'interrupted');
-    }
     const selected = params.selectedSessionId.value;
     const ownStatus = selected ? params.getSessionStatus(selected) : undefined;
+    const turnStatus = params.codexActiveTurnStatus.value;
+    const codexTurnActive = params.activeBackendKind.value === 'codex'
+      && ownStatus === undefined
+      && Boolean(turnStatus && turnStatus !== 'completed' && turnStatus !== 'failed' && turnStatus !== 'interrupted');
     return Boolean(
       ownStatus === 'busy'
       || ownStatus === 'retry'
+      || codexTurnActive
       || params.busyDescendantCount.value > 0
       || params.runningToolCount.value > 0,
     );

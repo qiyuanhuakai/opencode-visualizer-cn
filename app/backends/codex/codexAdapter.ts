@@ -126,7 +126,7 @@ export type CodexThreadResumeParams = {
 };
 
 type CodexThreadResumeResult = {
-  thread: CodexThread;
+  thread: CodexThreadReadResult['thread'];
 };
 
 export type CodexThreadNameSetParams = {
@@ -225,6 +225,7 @@ export type CodexCollaborationModePayload = {
 
 export type CodexTurnStartParams = {
   threadId: string;
+  clientUserMessageId?: string;
   input: CodexTurnInputItem[];
   cwd?: string;
   collaborationMode?: CodexCollaborationModePayload;
@@ -739,6 +740,7 @@ type CodexConfigMcpServerReloadResult = {};
 // turn/* types
 export type CodexTurnSteerParams = {
   threadId: string;
+  clientUserMessageId?: string;
   input: CodexTurnInputItem[];
   expectedTurnId: string;
 };
@@ -1689,6 +1691,7 @@ export class CodexAdapter implements BackendAdapter {
         : [{ type: 'text', text: input.text } satisfies CodexTurnInputItem];
     const turn = await this.startTurn({
       threadId,
+      clientUserMessageId: input.clientUserMessageId,
       input: turnInput,
       cwd: input.cwd,
       collaborationMode: input.collaborationMode,
