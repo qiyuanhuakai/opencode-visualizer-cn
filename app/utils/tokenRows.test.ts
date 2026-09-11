@@ -143,7 +143,7 @@ function tokensOf(code: string, lang: BundledLanguage) {
   return highlighter.codeToTokens(code, { lang, theme: THEME }).tokens;
 }
 
-describe('buildLineTokens', () => {
+describe('token rows', () => {
   it.each<[BundledLanguage, string]>([
     [
       'typescript',

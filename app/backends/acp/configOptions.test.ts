@@ -33,22 +33,29 @@ describe('syncAcpPromptConfig', () => {
     // kimi-code rejects an idempotent mode set with "Already in plan mode"; a failed
     // config sync must not abort the prompt nor skip the remaining options.
     const calls: Array<{ configId: string; value: string }> = [];
-    await syncAcpPromptConfig(
+    const values = [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'model-a', options: [{ value: 'model-a', name: 'A' }, { value: 'model-b', name: 'B' }] },
+      { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }] },
+    ];
+    await expect(
+      syncAcpPromptConfig(
       'session-1',
-      [
-        { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'model-a', options: [{ value: 'model-a', name: 'A' }, { value: 'model-b', name: 'B' }] },
-        { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'default', options: [{ value: 'default', name: 'Default' }, { value: 'plan', name: 'Plan' }] },
-      ],
-      { model: 'model-b', mode: 'plan' },
-      async (params) => {
-        calls.push({ configId: String(params.configId), value: String(params.value) });
-        if (params.configId === 'mode') throw new Error('Already in plan mode');
-        return {};
-      },
-    );
+        values,
+        { model: 'model-b', mode: 'plan' },
+        async (params) => {
+          calls.push({ configId: String(params.configId), value: String(params.value) });
+          if (params.configId === 'mode') throw new Error('Already in plan mode');
+          return {};
+        },
+      ),
+    ).resolves.toBeUndefined();
     expect(calls).toEqual([
       { configId: 'model', value: 'model-b' },
       { configId: 'mode', value: 'plan' },
+    ]);
+    expect(values.map(({ id, currentValue }) => ({ id, currentValue }))).toEqual([
+      { id: 'model', currentValue: 'model-b' },
+      { id: 'mode', currentValue: 'default' },
     ]);
   });
 
@@ -159,4 +166,3 @@ describe('createAcpProviderResponse', () => {
     expect(response.all[0]?.models['provider/live-model']?.variants).toBeUndefined();
   });
 });
-

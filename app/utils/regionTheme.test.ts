@@ -15,7 +15,7 @@ import {
 
 const COLOR_VALUE = /^(#[0-9a-f]{6}|#[0-9a-f]{8}|rgba?\([^)]+\))$/i;
 
-describe('DEFAULT_REGION_THEME', () => {
+describe('region themes', () => {
   it('keeps every region color undefined so CSS fallbacks are used', () => {
     for (const regionName of REGION_NAMES) {
       for (const field of REGION_COLOR_FIELDS) {

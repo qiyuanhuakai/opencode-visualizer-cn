@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MessageInfo } from '../types/sse';
 import { useMessages } from './useMessages';
 
-describe('useMessages getDiffs', () => {
+describe('useMessages history and realtime state', () => {
   beforeEach(() => {
     useMessages().reset();
   });

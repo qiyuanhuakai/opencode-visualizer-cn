@@ -6,19 +6,46 @@ import ja from './ja';
 import zhCN from './zh-CN';
 import zhTW from './zh-TW';
 
+const locales = [
+  ['en', en],
+  ['zh-CN', zhCN],
+  ['zh-TW', zhTW],
+  ['ja', ja],
+  ['eo', eo],
+] as const;
+
+const acpLoginKeys = [
+  'acpTitle',
+  'acpBackend',
+  'acpAgentId',
+  'acpBridgeHint',
+  'acpBridgeUrl',
+  'acpBridgeToken',
+] as const;
+
+function expectNonEmptyString(value: unknown) {
+  expect(typeof value).toBe('string');
+  if (typeof value === 'string') expect(value.trim()).not.toBe('');
+}
+
 describe('ACP login locale completeness', () => {
-  it.each([
-    ['en', en],
-    ['zh-CN', zhCN],
-    ['zh-TW', zhTW],
-    ['ja', ja],
-    ['eo', eo],
-  ])('%s exposes every ACP login key', (_locale, messages) => {
-    expect(messages.app.login.acpTitle).toEqual(expect.any(String));
-    expect(messages.app.login.acpBackend).toEqual(expect.any(String));
-    expect(messages.app.login.acpAgentId).toEqual(expect.any(String));
-    expect(messages.app.login.acpBridgeHint).toEqual(expect.any(String));
-    expect(messages.app.login.acpBridgeUrl).toEqual(expect.any(String));
-    expect(messages.app.login.acpBridgeToken).toEqual(expect.any(String));
+  it.each(locales)('%s exposes every ACP login key', (_locale, messages) => {
+    expectNonEmptyString(messages.app.login.acpTitle);
+    expectNonEmptyString(messages.app.login.acpBackend);
+    expectNonEmptyString(messages.app.login.acpAgentId);
+    expectNonEmptyString(messages.app.login.acpBridgeHint);
+    expectNonEmptyString(messages.app.login.acpBridgeUrl);
+    expectNonEmptyString(messages.app.login.acpBridgeToken);
+  });
+
+  it('keeps the ACP login key set identical across locales', () => {
+    const expectedKeys = [...acpLoginKeys].sort();
+    for (const [_locale, messages] of locales) {
+      expect(
+        Object.keys(messages.app.login)
+          .filter((key) => key.startsWith('acp'))
+          .sort(),
+      ).toEqual(expectedKeys);
+    }
   });
 });

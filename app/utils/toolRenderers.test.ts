@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { extractFileRead, extractStepFinish, extractXmlTagContent } from './toolRenderers';
 
-describe('extractXmlTagContent', () => {
+describe('tool renderers', () => {
   it('extracts content between tags', () => {
     expect(extractXmlTagContent('hello <foo>world</foo> bye', 'foo')).toBe('world');
   });

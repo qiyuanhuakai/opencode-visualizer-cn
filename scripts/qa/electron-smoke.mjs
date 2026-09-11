@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Real-runtime Electron smoke driver (Scenario S2).
+ * Comprehensive packaged Electron runtime smoke test.
  *
  * Launches the unpacked PACKAGED Vis executable (path via VIS_ELECTRON_EXECUTABLE)
  * with the Chromium sandbox EXPLICITLY enabled (`chromiumSandbox: true`) and an
@@ -10,7 +10,7 @@
  *     'no-sandbox' switch; webPreferences.sandbox === true
  *   - app.isPackaged === true; app.getPath('userData') === the temp profile
  *   - exactly one window, visible, on app://index.html
- *   - preload API schema matches the Task 2 contract
+ *   - preload API schema matches the current preload contract
  *     (electronPreloadContract.test.ts) — no invented list
  *   - persistentStorage set/get round-trip, relaunch persistence, remove
  *   - clipboard write (via preload) -> read (in main) round-trip

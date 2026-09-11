@@ -120,6 +120,30 @@ describe('useFloatingWindows async lifecycle', () => {
     mounted.unmount();
   });
 
+  it('prevents closeAll from being undone by an earlier pending open', async () => {
+    // Given: a window open is suspended before its entry is committed
+    const mounted = mountFloatingWindows();
+    let finishOpen: (() => void) | undefined;
+    const openGate = new Promise<void>((resolve) => {
+      finishOpen = resolve;
+    });
+    const opening = mounted.api.open('pending-open', {
+      beforeOpen: () => openGate,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+    });
+    await Promise.resolve();
+
+    // When: closeAll runs after open started but before beforeOpen resolves
+    const closing = mounted.api.closeAll();
+    finishOpen?.();
+    await Promise.all([opening, closing]);
+
+    // Then: the earlier open cannot resurrect a window after closeAll
+    expect(mounted.api.has('pending-open')).toBe(false);
+    expect(mounted.api.entries.value).toEqual([]);
+    mounted.unmount();
+  });
+
   it('keeps the latest result when same-key opens complete out of order', async () => {
     // Given: two same-key opens await independent setup operations
     const mounted = mountFloatingWindows();
@@ -236,6 +260,31 @@ describe('useFloatingWindows async lifecycle', () => {
 
     // Then: the earlier pending reopen cannot resurrect the closed window
     expect(mounted.api.get('recreate-race')).toBeUndefined();
+    mounted.unmount();
+  });
+
+  it('rebuilds visible entries after every asynchronous closeAll hook finishes', async () => {
+    // Given: closeAll includes a window whose beforeClose is still pending
+    const mounted = mountFloatingWindows();
+    let finishClose: (() => void) | undefined;
+    const closeGate = new Promise<void>((resolve) => {
+      finishClose = resolve;
+    });
+    await mounted.api.open('slow-close', {
+      beforeClose: () => closeGate,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+    });
+    await mounted.api.open('fast-close', { expiresAt: Number.MAX_SAFE_INTEGER });
+
+    // When: the asynchronous close completes after closeAll has started
+    const closing = mounted.api.closeAll();
+    finishClose?.();
+    await closing;
+
+    // Then: canonical state and the rendered entries projection are both empty
+    expect(mounted.api.has('slow-close')).toBe(false);
+    expect(mounted.api.has('fast-close')).toBe(false);
+    expect(mounted.api.entries.value).toEqual([]);
     mounted.unmount();
   });
 });

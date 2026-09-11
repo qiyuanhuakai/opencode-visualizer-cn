@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Stream bench runner — empirical benchmark of the streaming highlight path
- * vs the legacy non-streaming path (branch feat/shiki-v4).
+ * vs the legacy non-streaming path. The historical `feat/shiki-v4` comparison
+ * is retained as a frozen regression baseline captured at that time.
  *
  * Drives app/dev/stream-bench.html in a real browser with the real worker(s).
  * Each (path, fixture) combination runs 3 times, each in a FRESH page load;
@@ -119,8 +120,9 @@ const COMBOS =
 fs.rmSync(OUT_DIR, { recursive: true, force: true });
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
-// Known baseline cumulative bytes from the markdown scenario (3 runs median).
-// Used for sanity-checking the streaming path.
+// Frozen regression baseline captured with the historical feat/shiki-v4
+// comparison (markdown scenario, 3-run median); keep the numeric value fixed
+// so future runs detect regressions against that snapshot.
 const REASONING_BASELINE_BYTES = 3236149;
 
 function waitForServer(url, timeoutMs = 20000) {

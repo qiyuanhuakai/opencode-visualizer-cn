@@ -353,7 +353,7 @@ describe('applyAcpSessionMeta', () => {
   });
 });
 
-
+describe('ACP history Vue reactivity', () => {
   it('replaces info object identity so Vue reactivity observes restore-time changes', () => {
     const state = createState(WIRE_CONFIG_OPTIONS);
     applyAcpUpdate(state, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'q' } }, 5000, 'oh-my-pi');
@@ -379,3 +379,4 @@ describe('applyAcpSessionMeta', () => {
       expect(entry.info, `meta entry ${index}`).not.toBe(beforeMeta[index]);
     });
   });
+});
