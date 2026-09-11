@@ -136,6 +136,40 @@ export function runCli(arguments_: string[], env: NodeJS.ProcessEnv) {
   return execFileAsync(process.execPath, [entryPath, ...arguments_], { cwd: workspacePath, env });
 }
 
+export async function stopDaemonInProcess(fixture: DaemonFixture) {
+  const statePath = path.join(fixture.directory, 'state', 'daemon.json');
+  const state: unknown = JSON.parse(await readFile(statePath, 'utf8'));
+  if (!state || typeof state !== 'object') throw new Error('Expected daemon state.');
+  const { controlPort, controlToken, instanceId } = state as Record<string, unknown>;
+  if (
+    typeof controlPort !== 'number' ||
+    typeof controlToken !== 'string' ||
+    typeof instanceId !== 'string'
+  ) {
+    throw new Error('Daemon state is missing control credentials.');
+  }
+  await new Promise<void>((resolve, reject) => {
+    const stopRequest = request({
+      host: '127.0.0.1',
+      port: controlPort,
+      path: '/stop',
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${controlToken}`,
+        'x-vis-bridge-instance': instanceId,
+      },
+    }, (response) => {
+      response.resume();
+      response.once('end', () => {
+        if (response.statusCode === 202) resolve();
+        else reject(new Error(`vis_bridge daemon rejected stop (${response.statusCode ?? 'unknown'}).`));
+      });
+    });
+    stopRequest.once('error', reject);
+    stopRequest.end();
+  });
+}
+
 export function startFixture(fixture: DaemonFixture) {
   return runCli(
     ['start', '--port', String(fixture.port), '--config', fixture.configPath],

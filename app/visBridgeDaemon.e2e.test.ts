@@ -11,6 +11,7 @@ import {
   runCli,
   runCommandRequest,
   startFixture,
+  stopDaemonInProcess,
   waitForTextFile,
 } from './visBridgeDaemonTestHarness';
 
@@ -127,11 +128,12 @@ describe('vis_bridge daemon CLI', { timeout: 15_000 }, () => {
     );
 
     try {
-      const stopping = runCli(['stop'], fixture.env);
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // The daemon closes command admission before its 202 acknowledgement
+      // reaches the client, so completing the body now must never spawn.
+      await stopDaemonInProcess(fixture);
       if (!socket.destroyed) socket.write(payload.slice(1));
-      await stopping;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Give a wrongly admitted command ample time to spawn and write its pid.
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
 
       await expect(readFile(pidPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {

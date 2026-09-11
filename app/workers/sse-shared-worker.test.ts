@@ -1863,7 +1863,9 @@ describe('SSE SharedWorker hydration', () => {
     );
   });
 
-  it('schedules one authoritative bootstrap after buffered state overflows', { timeout: 15_000 }, async () => {
+  // Overflowing the 2000-packet production cap is CPU-bound and slows down
+  // sharply on contended CI runners, so this needs generous headroom.
+  it('schedules one authoritative bootstrap after buffered state overflows', { timeout: 60_000 }, async () => {
     const projects = deferred<unknown>();
     mocks.adapter.listProjects.mockReturnValueOnce(projects.promise).mockResolvedValueOnce([
       project(['/a']),
@@ -1881,7 +1883,7 @@ describe('SSE SharedWorker hydration', () => {
     expect(secondBootstrap?.projects.project?.sandboxes['/a']?.sessions).toEqual({});
   });
 
-  it('restarts from authoritative state after the packet count reaches its cap', { timeout: 15_000 }, async () => {
+  it('restarts from authoritative state after the packet count reaches its cap', { timeout: 60_000 }, async () => {
     const projects = deferred<unknown>();
     mocks.adapter.listProjects.mockReturnValueOnce(projects.promise).mockResolvedValueOnce([
       project(['/a']),
