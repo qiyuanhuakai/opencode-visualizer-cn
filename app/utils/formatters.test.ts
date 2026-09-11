@@ -8,7 +8,7 @@ import {
   formatTokenCount,
 } from './formatters';
 
-describe('formatTokenCount', () => {
+describe('formatters', () => {
   it('formats edge and common values', () => {
     expect(formatTokenCount(-1)).toBe('0');
     expect(formatTokenCount(0)).toBe('0');

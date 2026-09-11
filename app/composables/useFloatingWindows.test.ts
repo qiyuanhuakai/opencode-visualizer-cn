@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { getFloatingWindowDragBounds, useFloatingWindows } from './useFloatingWindows';
@@ -29,6 +29,7 @@ function mountFloatingWindows() {
 
 describe('useFloatingWindows responsive geometry', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     document.body.innerHTML = '';
   });
 
@@ -53,6 +54,32 @@ describe('useFloatingWindows responsive geometry', () => {
       width: 375,
       height: 500,
     });
+    mounted.unmount();
+  });
+
+  it('initializes each omitted position axis independently', async () => {
+    // Given: deterministic random placement in a positive floating extent
+    const mounted = mountFloatingWindows();
+    mounted.api.setExtent(800, 600);
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+
+    // When: separate windows provide only x or only y
+    await mounted.api.open('x-only', {
+      x: 40,
+      width: 300,
+      height: 200,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+    });
+    await mounted.api.open('y-only', {
+      y: 50,
+      width: 300,
+      height: 200,
+      expiresAt: Number.MAX_SAFE_INTEGER,
+    });
+
+    // Then: the provided axis is preserved and the omitted axis is finite
+    expect(mounted.api.get('x-only')).toMatchObject({ x: 40, y: 20 });
+    expect(mounted.api.get('y-only')).toMatchObject({ x: 20, y: 50 });
     mounted.unmount();
   });
 

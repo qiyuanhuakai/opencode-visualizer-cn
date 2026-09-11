@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 const STORAGE_FILE = 'renderer-storage.json';
-const STORAGE_KEY = 'pr113.sync-storage-key';
+// Regression coverage: malformed renderer storage stays preserved after a failed read
+// and can be recovered in the same process.
+const STORAGE_KEY = 'malformed-storage-recovery.sync-storage-key';
 const STORAGE_VALUE = 'recovered-in-place';
 const READ_TIMEOUT_MS = 3000;
 const CLOSE_TIMEOUT_MS = 5000;

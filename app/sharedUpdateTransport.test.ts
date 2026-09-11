@@ -5,6 +5,25 @@ import { rm, stat } from 'node:fs/promises';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createUpdateTransport, isAllowedUpdateUrl } from '../electron/updateTransport.js';
 
+const fsMocks = vi.hoisted(() => ({
+  chmod: vi.fn(),
+  mkdtemp: vi.fn(),
+  rm: vi.fn(),
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  fsMocks.chmod.mockImplementation(actual.chmod);
+  fsMocks.mkdtemp.mockImplementation(actual.mkdtemp);
+  fsMocks.rm.mockImplementation(actual.rm);
+  return {
+    ...actual,
+    chmod: fsMocks.chmod,
+    mkdtemp: fsMocks.mkdtemp,
+    rm: fsMocks.rm,
+  };
+});
+
 afterEach(() => vi.restoreAllMocks());
 
 describe('shared Node update transport policy', () => {
@@ -60,5 +79,25 @@ describe('shared Node update transport policy', () => {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it('removes a newly-created staging directory when private permission setup fails', async () => {
+    fsMocks.mkdtemp.mockResolvedValue('/tmp/vis-update-private');
+    fsMocks.chmod.mockRejectedValue(new Error('chmod failed'));
+    fsMocks.rm.mockResolvedValue(undefined);
+    const transport = createUpdateTransport();
+
+    await expect(transport.downloadAsset({
+      name: 'VisBridge-1.2.3-x64-Linux.deb',
+      digest: `sha256:${'a'.repeat(64)}`,
+      size: 4,
+      url: 'https://api.github.com/repos/qiyuanhuakai/opencode-visualizer-cn/releases/assets/1',
+    })).rejects.toThrow('chmod failed');
+
+    expect(fsMocks.rm).toHaveBeenCalledWith('/tmp/vis-update-private', {
+      recursive: true,
+      force: true,
+    });
+    transport.dispose();
   });
 });

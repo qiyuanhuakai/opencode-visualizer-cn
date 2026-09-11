@@ -10,7 +10,7 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-describe('ACP workspace adapter', () => {
+describe('ACP workspace adapter and AcpWorkspaceClient', () => {
   beforeEach(() => {
     MockAcpWebSocket.instances = [];
     vi.unstubAllGlobals();

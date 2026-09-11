@@ -6,7 +6,7 @@ function readSource(path: string) {
   return readFileSync(path, 'utf8');
 }
 
-describe('ProviderManagerModal events', () => {
+describe('ProviderManagerModal integration contracts', () => {
   it('uses matching model visibility and provider config events in App.vue', () => {
     const appSource = readSource(resolve(__dirname, '../App.vue'));
     const modalSource = readSource(resolve(__dirname, 'ProviderManagerModal.vue'));

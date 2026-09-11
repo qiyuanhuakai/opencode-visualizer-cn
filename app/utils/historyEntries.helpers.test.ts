@@ -17,7 +17,7 @@ import {
   makeUserMessage,
 } from './historyEntries.fixtures';
 
-describe('getToolPartTime', () => {
+describe('history entry helpers', () => {
   it('Given a running, completed, or error tool, When reading its time, Then it returns state.time.start', () => {
     expect(getToolPartTime(makeToolPart('a1', 's1', 'bash', 'running', 7))).toBe(7);
     expect(getToolPartTime(makeToolPart('a1', 's1', 'bash', 'completed', 8))).toBe(8);

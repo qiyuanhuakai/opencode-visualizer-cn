@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseArchive } from './archiveParser';
 
-describe('parseArchive signature detection', () => {
+describe('parseArchive format detection and parsing', () => {
   it('detects the zip signature and routes to the zip parser', async () => {
     const result = await parseArchive(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), 'dat');
 

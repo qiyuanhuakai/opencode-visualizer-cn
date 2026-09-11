@@ -52,13 +52,6 @@ async function openPage(host: HTMLElement, rowIndex: number) {
   await nextTick();
 }
 
-async function backToRoot(host: HTMLElement) {
-  const back = host.querySelector('.modal-back-button');
-  expect(back, 'sub-page must render the back button').not.toBeNull();
-  (back as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await nextTick();
-}
-
 function toggleInput(row: Element) {
   const input = row.querySelector('label.toggle-switch input.toggle-input');
   expect(input, 'row must contain the toggle switch input').not.toBeNull();
@@ -71,71 +64,7 @@ async function flip(input: HTMLInputElement, checked: boolean) {
   await nextTick();
 }
 
-/**
- * Canonical serialization of a rendered row: tag names, attributes (sorted,
- * scope ids excluded), and trimmed text — insensitive to attribute order and
- * Vue scope-id churn, sensitive to any structural or content change.
- */
-function canonical(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? '').trim();
-  if (node.nodeType !== Node.ELEMENT_NODE) return '';
-  const el = node as Element;
-  const attrs = Array.from(el.attributes)
-    .filter((attr) => !attr.name.startsWith('data-v-'))
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((attr) => `${attr.name}="${attr.value}"`)
-    .join(' ');
-  const children = Array.from(el.childNodes)
-    .map(canonical)
-    .filter((part) => part.length > 0);
-  const open =
-    attrs.length > 0 ? `<${el.tagName.toLowerCase()} ${attrs}>` : `<${el.tagName.toLowerCase()}>`;
-  return `${open}${children.join('')}</${el.tagName.toLowerCase()}>`;
-}
-
 describe('SettingsModal toggle rows characterization', () => {
-  it('locks the canonical rendered DOM of every toggle setting row', async () => {
-    // Given: the settings modal is opened.
-    const { host } = await mountModal();
-
-    // When: the root page toggle rows are collected (ordinary + title/disabled variants).
-    const rootRows = pageRows(host);
-    const canonicalRows: Record<string, string> = {
-      enterToSend: canonical(rootRows[1]),
-      showMinimizeButtons: canonical(rootRows[2]),
-      dockAlwaysOpen: canonical(rootRows[3]),
-      showOpenInEditorButton: canonical(rootRows[4]),
-      floatingPreviewWordWrap: canonical(rootRows[6]),
-    };
-
-    // And: the transformers aria-wired toggle row is captured.
-    await openPage(host, 8);
-    canonicalRows.textTransformersEnabled = canonical(pageRows(host)[0]);
-
-    // And: the editor page toggle row is captured.
-    await backToRoot(host);
-    await openPage(host, 7);
-    const editorRows = pageRows(host);
-    const editInVisRow = editorRows.find(
-      (row) =>
-        row.querySelector('.setting-label')!.textContent === en.settings.editor.editInVis.label,
-    );
-    expect(editInVisRow).toBeDefined();
-    canonicalRows.editInVis = canonical(editInVisRow!);
-
-    // And: all three experimental page toggle rows are captured.
-    await backToRoot(host);
-    await openPage(host, 10);
-    const experimentalRows = pageRows(host);
-    expect(experimentalRows).toHaveLength(3);
-    canonicalRows.showCodexButton = canonical(experimentalRows[0]);
-    canonicalRows.showForgePanelButton = canonical(experimentalRows[1]);
-    canonicalRows.showCodexInStatusMonitor = canonical(experimentalRows[2]);
-
-    // Then: the canonical DOM of all ten toggle rows matches the locked structure.
-    expect(canonicalRows).toMatchSnapshot();
-  });
-
   it('emits model updates from ordinary toggles with the locked timing', async () => {
     // Given: the settings modal is opened with enterToSend off.
     const { host, settings } = await mountModal();

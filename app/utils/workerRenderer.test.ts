@@ -56,7 +56,7 @@ beforeEach(() => {
   workerState.FakeWorker.failNextConstruction = false;
 });
 
-describe('startRenderWorkerStream', () => {
+describe('worker rendering', () => {
   it('routes stream traffic to a dedicated worker, delivers batches in order, resolves close with final html', async () => {
     // Given: the single-shot pool already exists (one render in flight)
     const mod = await import('../utils/workerRenderer');

@@ -40,7 +40,7 @@ function createProjects() {
   };
 }
 
-describe('useOpenCodeApi pin regression', () => {
+describe('useOpenCodeApi session and worktree operations', () => {
   beforeEach(() => {
     updateSessionMock.mockReset();
     waitForStateMock.mockReset();
