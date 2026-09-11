@@ -4,6 +4,12 @@
 
 ---
 
+## [Unreleased]
+
+### CI 稳定性
+
+- [x] 消除 GitHub Actions 间歇性失败：SSE Worker 缓冲区溢出回归测试在满载 runner 上超出 15 秒预算，超时提升至 60 秒；vis_bridge daemon「shutdown 期间不准入新命令」端到端测试改为等待 202 停止确认后再补发请求体，消除固定 150ms 盲等与 stop CLI 进程启动之间的竞态；Windows Electron 构建步骤增加 3 次退避重试，吸收 NSIS 资源下载的瞬时 5xx。
+
 ## [v0.7.16 released]
 
 ### Codex 输入与线程配置
