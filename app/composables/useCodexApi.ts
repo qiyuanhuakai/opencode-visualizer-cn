@@ -92,6 +92,7 @@ import {
   saveCodexAuxiliaryHistory,
 } from '../backends/codex/auxiliaryHistory';
 import { restoreCodexMessageEfforts, saveCodexTurnEffort } from '../backends/codex/messageEffort';
+import { createCodexMessageModels } from '../backends/codex/messageModels';
 import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type {
@@ -601,6 +602,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const threadGoalThreadId = ref<string | null>(null);
   const threadGoalLoading = ref(false);
   const selectedModel = ref<string>('');
+  const messageModels = createCodexMessageModels(() => url.value);
   const skills = ref<CodexSkill[]>([]);
   const skillsLoading = ref(false);
   const plugins = ref<CodexPluginWithMarketplace[]>([]);
@@ -841,14 +843,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     for (const turn of turns) recordObservedTurnId(activeThreadId.value, turn.id);
     const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
     const modelName = selectedModelInfo.modelID || selectedModelInfo.providerID;
-    canonicalHistory.value = restoreCodexMessageEfforts(activeThreadId.value, normalizeCodexTurnsToHistory({
+    canonicalHistory.value = messageModels.restore(activeThreadId.value, restoreCodexMessageEfforts(activeThreadId.value, normalizeCodexTurnsToHistory({
       sessionId: activeThreadId.value ?? 'codex-thread',
       turns,
       model: {
         providerID: activeThread?.modelProvider || selectedModelInfo.providerID,
         modelID: selectedModelInfo.modelID || undefined,
       },
-    }));
+    })), [...canonicalHistory.value, ...realtimeHistoryQueue.value]);
     const textEntries = canonicalHistory.value.flatMap((entry) => {
       const role = entry.info.role === 'assistant' ? 'assistant' : 'user';
       return entry.parts
@@ -965,8 +967,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       role: 'assistant',
       time: { created: createdAt },
       parentID: parentId,
-      modelID: model.modelID || 'codex',
-      providerID: model.providerID,
+      modelID: parent?.info.role === 'user' ? parent.info.model.modelID : model.modelID || 'codex',
+      providerID: parent?.info.role === 'user' ? parent.info.model.providerID : model.providerID,
       variant: parent?.info.variant,
       mode: 'codex',
       agent: 'codex',
@@ -1183,6 +1185,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   function mergeRealtimeHistoryEntry(entry: CodexCanonicalHistoryEntry) {
     if (entry.info.role === 'assistant') {
       entry = { ...entry, info: createCodexAssistantInfo(entry.info.sessionID, entry.info.id, entry.info.time.created, entry.info.parentID) };
+    } else {
+      entry = messageModels.restore(entry.info.sessionID, [entry], [...canonicalHistory.value, ...realtimeHistoryQueue.value])[0] ?? entry;
     }
     const existingIndex = realtimeHistoryQueue.value.findIndex(
       (current) => current.info.id === entry.info.id,
@@ -2557,11 +2561,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const sourceAdapter = adapter;
     if (!sourceAdapter) throw new Error('Codex is not connected.');
     const read = await readThreadForHistory(threadId, sourceAdapter);
-    const entries = restoreCodexMessageEfforts(threadId, normalizeCodexTurnsToHistory({
+    const entries = messageModels.restore(threadId, restoreCodexMessageEfforts(threadId, normalizeCodexTurnsToHistory({
       sessionId: threadId,
       turns: read.thread.turns ?? [],
       model: { providerID: read.thread.modelProvider },
-    }));
+    })));
     const hydrated = await hydrateThreadImages(entries, sourceAdapter);
     if (adapter !== sourceAdapter) throw new Error('Codex connection changed.');
     return hydrated;
@@ -3006,7 +3010,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       variant: options.effort,
       model: {
         providerID: selectedModelInfo.providerID,
-        modelID: selectedModelInfo.modelID || 'unknown',
+        modelID: options.model?.trim() || selectedModelInfo.modelID || 'unknown',
       },
     };
     const userParts = buildRealtimeUserParts(sessionId, userMessageId, prompt, inputItems, now);
@@ -3045,6 +3049,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const finalizedTurnId = result.turn.id || pendingTurnId;
       recordObservedTurnId(result.threadId, finalizedTurnId);
       const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, clientUserMessageId);
+      messageModels.save(result.threadId, { ...userInfo, id: finalizedUserMessageId, sessionID: result.threadId });
       saveCodexTurnEffort(result.threadId, finalizedTurnId, options.effort, finalizedUserMessageId);
       finalizeRealtimeUser(userMessageId, finalizedUserMessageId, result.threadId, options.effort);
 

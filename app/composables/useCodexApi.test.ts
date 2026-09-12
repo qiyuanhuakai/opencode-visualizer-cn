@@ -134,6 +134,36 @@ function createAdapterMock() {
 }
 
 describe('useCodexApi', () => {
+  it('preserves the sent model and provider through echoes, completion hydration and a fresh page instance', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    api.selectModel('codex/gpt-6-astra');
+    await api.sendPrompt('Keep model metadata', { effort: 'medium' });
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.calls[0]?.[0]?.clientUserMessageId;
+    const items = [
+      { type: 'userMessage', id: 'wire-user', clientId, content: [{ type: 'text', text: 'Keep model metadata' }] },
+      { type: 'agentMessage', id: 'answer', text: 'Answer' },
+    ];
+    const turn = { id: 'turn_1', status: 'completed', items };
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', modelProvider: 'openai', turns: [turn] } });
+    api.selectModel('other/different-model');
+    for (const item of items) mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_1', item } });
+    const expectedModel = { providerID: 'codex', modelID: 'gpt-6-astra' };
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'user')?.info).toMatchObject({ model: expectedModel });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject(expectedModel);
+    api.selectModel('');
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn } });
+    await vi.waitFor(() => expect(api.canonicalHistory.value.find(entry => entry.info.role === 'user')?.info).toMatchObject({ model: expectedModel }));
+    api.disconnect();
+    const fresh = useCodexApi({ adapterFactory: () => mock.adapter });
+    await fresh.connect();
+    await fresh.selectThread('thr_existing');
+    expect(fresh.canonicalHistory.value.find(entry => entry.info.role === 'user')?.info).toMatchObject({ model: expectedModel, variant: 'medium' });
+    expect(fresh.canonicalHistory.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject(expectedModel);
+    const childHistory = await fresh.readSubagentHistory('thr_existing');
+    expect(childHistory.find(entry => entry.info.role === 'assistant')?.info).toMatchObject(expectedModel);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
