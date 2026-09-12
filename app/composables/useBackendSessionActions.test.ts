@@ -103,6 +103,12 @@ function createActions(
 }
 
 describe('useBackendSessionActions mutation skeleton', () => {
+  it('passes the selected Codex message to rollback instead of always reverting one turn', async () => {
+    const rollbackThread = vi.fn().mockResolvedValue({});
+    const { actions } = createActions({ activeBackendKind: 'codex', codexApi: { rollbackThread } });
+    await actions.handleRevertMessage({ sessionId: 'session-1', messageId: 'old-turn:user:client-id' });
+    expect(rollbackThread).toHaveBeenCalledWith('session-1', 'old-turn:user:client-id');
+  });
   it('Given an opencode deleteSession rejection, When deleteSession runs, Then it reverts the pinned override and surfaces the delete error', async () => {
     const { actions, mocks } = createActions({
       openCodeApi: { deleteSession: vi.fn().mockRejectedValue(new Error('boom')) },

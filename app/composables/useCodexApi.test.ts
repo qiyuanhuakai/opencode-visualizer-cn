@@ -134,6 +134,103 @@ function createAdapterMock() {
 }
 
 describe('useCodexApi', () => {
+  it('does not unsubscribe a newer child subscription when an older resume finishes late', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({adapterFactory:()=>mock.adapter});
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    let finishOld: ((value: {thread: {id: string}}) => void) | undefined;
+    const oldResume = new Promise<{thread:{id:string}}>(resolve => {finishOld=resolve;});
+    let childResumes = 0;
+    mock.adapter.readThread = vi.fn(async ({threadId}) => ({thread:{id:threadId,turns:[]}}));
+    mock.adapter.resumeThread = vi.fn(({threadId}) => threadId === 'child' && childResumes++ === 0
+      ? oldResume : Promise.resolve({thread:{id:threadId,turns:[]}}));
+    const spawn = () => mock.emit({method:'item/completed',params:{threadId:parent,turnId:'parent-turn',item:{id:'spawn',type:'subAgentActivity',kind:'started',agentThreadId:'child',agentPath:'/root/reviewer'}}});
+    spawn();
+    await vi.waitFor(() => expect(childResumes).toBe(1));
+    await api.selectThread('other');
+    await api.selectThread(parent);
+    spawn();
+    await vi.waitFor(() => expect(childResumes).toBe(2));
+    vi.mocked(mock.adapter.unsubscribeThread).mockClear();
+    finishOld?.({thread:{id:'child'}});
+    await oldResume;
+    await Promise.resolve();
+    expect(mock.adapter.unsubscribeThread).not.toHaveBeenCalled();
+    api.disconnect();
+  });
+  it('subscribes linked children and forwards their real work without replacing parent history', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    mock.adapter.readThread = vi.fn().mockResolvedValue({thread:{id:'review-child',model:'review-model',modelProvider:'codex',turns:[]}});
+    mock.adapter.resumeThread = vi.fn().mockResolvedValue({thread:{id:'review-child',model:'review-model',modelProvider:'codex',turns:[]}});
+    mock.emit({method:'item/completed',params:{threadId:parent,turnId:'parent-turn',item:{id:'spawn',type:'subAgentActivity',kind:'started',agentThreadId:'review-child',agentPath:'/root/review_agent_protocol'}}});
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledWith({threadId:'review-child'}));
+    mock.emit({method:'item/agentMessage/delta',params:{threadId:'review-child',turnId:'review-turn',itemId:'answer',delta:'Reviewing changes'}});
+    expect(api.realtimeSubagentPart.value).toMatchObject({parentThreadId:parent,info:{sessionID:'review-child',agent:'review_agent_protocol',modelID:'review-model'},part:{type:'text',text:'Reviewing changes'}});
+    expect(api.activeThreadId.value).toBe(parent);
+    expect(api.realtimeHistoryQueue.value.every(entry => entry.info.sessionID === parent)).toBe(true);
+    api.disconnect();
+  });
+  it('bridges subAgentActivity notifications and restores reviewer history after hydration', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const item = { type: 'subAgentActivity', id: 'review-start', kind: 'started', agentThreadId: 'child-review', agentPath: '/root/code_review' };
+    mock.emit({ method: 'item/started', params: { threadId: 'thr_existing', turnId: 'turn-review', item } });
+    expect(api.realtimeToolParts.value[0]?.part).toMatchObject({ tool: 'task', state: { metadata: { sessionId: 'child-review' } } });
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn-review', item } });
+    expect(api.realtimeCompletedPart.value?.part).toMatchObject({ tool: 'task', state: { metadata: { agentPath: '/root/code_review' } } });
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', turns: [{ id: 'turn-review', items: [item] }] } });
+    await api.selectThread('thr_existing');
+    expect(api.canonicalHistory.value.flatMap(entry => entry.parts)).toContainEqual(expect.objectContaining({ tool: 'task' }));
+  });
+  it('rolls back the selected historical message and all later turns, without counting supplemental users twice', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', turns: ['a', 'b', 'c'].map(id => ({ id, items: [
+      { type: 'userMessage', id: 'first', content: [{ type: 'text', text: id }] },
+      { type: 'userMessage', id: 'supplement', content: [{ type: 'text', text: 'Supplement' }] },
+    ] })) } });
+    await api.rollbackThread('thr_existing', 'b:user:supplement');
+    expect(mock.adapter.rollbackThread).toHaveBeenCalledWith({ threadId: 'thr_existing', numTurns: 2 });
+    vi.mocked(mock.adapter.rollbackThread).mockClear();
+    await expect(api.rollbackThread('thr_existing', 'missing:user:first')).rejects.toThrow();
+    expect(mock.adapter.rollbackThread).not.toHaveBeenCalled();
+  });
+  it('preserves the sent model and provider through echoes, completion hydration and a fresh page instance', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    api.selectModel('codex/gpt-6-astra');
+    await api.sendPrompt('Keep model metadata', { effort: 'medium' });
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.calls[0]?.[0]?.clientUserMessageId;
+    const items = [
+      { type: 'userMessage', id: 'wire-user', clientId, content: [{ type: 'text', text: 'Keep model metadata' }] },
+      { type: 'agentMessage', id: 'answer', text: 'Answer' },
+    ];
+    const turn = { id: 'turn_1', status: 'completed', items };
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', modelProvider: 'openai', turns: [turn] } });
+    api.selectModel('other/different-model');
+    for (const item of items) mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_1', item } });
+    const expectedModel = { providerID: 'codex', modelID: 'gpt-6-astra' };
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'user')?.info).toMatchObject({ model: expectedModel });
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject(expectedModel);
+    api.selectModel('');
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn } });
+    await vi.waitFor(() => expect(api.canonicalHistory.value.find(entry => entry.info.role === 'user')?.info).toMatchObject({ model: expectedModel }));
+    api.disconnect();
+    const fresh = useCodexApi({ adapterFactory: () => mock.adapter });
+    await fresh.connect();
+    await fresh.selectThread('thr_existing');
+    expect(fresh.canonicalHistory.value.find(entry => entry.info.role === 'user')?.info).toMatchObject({ model: expectedModel, variant: 'medium' });
+    expect(fresh.canonicalHistory.value.find(entry => entry.info.role === 'assistant')?.info).toMatchObject(expectedModel);
+    const childHistory = await fresh.readSubagentHistory('thr_existing');
+    expect(childHistory.find(entry => entry.info.role === 'assistant')?.info).toMatchObject(expectedModel);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();

@@ -88,7 +88,7 @@ export function useBackendSessionReload(params: {
     );
   }
 
-  async function reloadSelectedSessionState(newId?: string, oldId?: string) {
+  async function reloadSelectedSessionState(newId?: string, oldId?: string, forceReset = false) {
     const reloadRequestId = ++params.sessionReloadRequestId.value;
     params.isLoadingHistory.value = false;
     const previousCacheContext = loadedMessageCacheContext;
@@ -128,7 +128,7 @@ export function useBackendSessionReload(params: {
             if (reloadRequestId !== params.sessionReloadRequestId.value) return;
             nextHistory = params.codexHistory.value;
           }
-          if (isSessionSwitch) {
+          if (isSessionSwitch || forceReset) {
             params.msg.reset();
           }
           params.resetFollow();

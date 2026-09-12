@@ -1,4 +1,5 @@
 import type { AssistantMessageInfo, TextPart, ToolPart } from '../types/sse';
+import { codexAgentName } from './codexAgentName';
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -14,6 +15,7 @@ export function codexSubagentWindowEntries(info: AssistantMessageInfo, part: Too
   const states = record(metadata.agentsStates);
   const prompt = typeof part.state.input.prompt === 'string' ? part.state.input.prompt : '';
   const model = typeof part.state.input.model === 'string' ? part.state.input.model : '';
+  const agent = typeof metadata.agentPath === 'string' ? codexAgentName(metadata.agentPath) : '';
   const entries: Array<{ info: AssistantMessageInfo; part: TextPart }> = [];
   for (const id of new Set(ids)) {
     if (typeof id !== 'string' || !id || id === info.sessionID) continue;
@@ -25,7 +27,7 @@ export function codexSubagentWindowEntries(info: AssistantMessageInfo, part: Too
     const completed = ['completed', 'interrupted', 'errored', 'shutdown', 'notFound'].includes(status);
     const messageId = `${part.messageID}:subagent:${id}`;
     entries.push({
-      info: { ...info, id: messageId, sessionID: id, modelID: model, agent: '', time: { created: info.time.created } },
+      info: { ...info, id: messageId, sessionID: id, modelID: model, agent, time: { created: info.time.created } },
       part: {
         id: `${part.id}:subagent:${id}`,
         messageID: messageId,

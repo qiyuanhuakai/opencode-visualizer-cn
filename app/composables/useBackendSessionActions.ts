@@ -66,7 +66,7 @@ export type CodexApiLike = {
   unhideThread: (sessionId: string) => void;
   setThreadName: (sessionId: string, name: string) => Promise<unknown>;
   forkThread: (sessionId: string) => Promise<{ id?: string }>;
-  rollbackThread: (sessionId: string, numTurns?: number) => Promise<{ id?: string }>;
+  rollbackThread: (sessionId: string, target?: number | string) => Promise<{ id?: string }>;
   startThreadCompaction: (sessionId: string) => Promise<unknown>;
   selectThread: (sessionId: string) => Promise<unknown>;
 };
@@ -107,7 +107,7 @@ export function useBackendSessionActions(params: {
     previousOverride?: number,
   ) => void;
   switchSessionSelection: (projectId: string, sessionId: string) => Promise<void>;
-  reloadSelectedSessionState: (sessionId?: string) => Promise<void>;
+  reloadSelectedSessionState: (sessionId?: string, oldId?: string, forceReset?: boolean) => Promise<void>;
   seedForkedSessionComposerDraft: (
     payload: { sessionId: string; messageId: string },
     session: BackendSessionInfo,
@@ -537,12 +537,12 @@ export function useBackendSessionActions(params: {
     try {
       params.setSendStatusKey('app.status.reverting');
       if (params.activeBackendKind.value === 'codex') {
-        const thread = await params.codexApi.rollbackThread(payload.sessionId, 1);
+        const thread = await params.codexApi.rollbackThread(payload.sessionId, payload.messageId);
         if (thread?.id) {
           params.selectedProjectId.value = params.codexProjectId;
           params.selectedSessionId.value = thread.id;
           await params.codexApi.selectThread(thread.id);
-          await params.reloadSelectedSessionState(thread.id);
+          await params.reloadSelectedSessionState(thread.id, undefined, true);
         }
       } else {
         await params.openCodeApi.revertSession({

@@ -1256,6 +1256,7 @@ export interface LocaleMessages {
   threadBlock: {
     confirmFork: string;
     confirmRevert: string;
+    confirmCodexRevert: string;
     confirmUndoRevert: string;
     historyTitle: string;
     historyLabel: string;

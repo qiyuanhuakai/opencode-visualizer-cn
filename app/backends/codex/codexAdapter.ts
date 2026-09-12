@@ -75,6 +75,8 @@ export type CodexThread = {
   preview?: string;
   ephemeral?: boolean;
   modelProvider?: string;
+  model?: string | null;
+  reasoningEffort?: string | null;
   createdAt?: number;
   updatedAt?: number;
   status?: unknown;

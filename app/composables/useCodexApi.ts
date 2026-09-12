@@ -1,4 +1,5 @@
 import { codexReasoningText } from '../backends/codex/reasoning';
+import { createCodexSubagentStreams } from '../backends/codex/subagentStreams';
 import { createCodexThreadActivity } from '../backends/codex/threadActivity';
 import { migrateCodexAuxiliaryHistory } from '../backends/codex/auxiliaryHistoryIdentity';
 import { computed, ref, watch } from 'vue';
@@ -92,11 +93,15 @@ import {
   saveCodexAuxiliaryHistory,
 } from '../backends/codex/auxiliaryHistory';
 import { restoreCodexMessageEfforts, saveCodexTurnEffort } from '../backends/codex/messageEffort';
+import { initializeCodexAuxiliaryStorage } from '../backends/codex/auxiliaryStorage';
+import { createCodexMessageModels } from '../backends/codex/messageModels';
+import { codexRollbackCount } from '../backends/codex/rollbackTarget';
 import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type {
   FilePart,
   MessageInfo,
+  AssistantMessageInfo,
   MessagePart,
   ReasoningPart,
   TextPart,
@@ -601,6 +606,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const threadGoalThreadId = ref<string | null>(null);
   const threadGoalLoading = ref(false);
   const selectedModel = ref<string>('');
+  const messageModels = createCodexMessageModels(() => url.value);
   const skills = ref<CodexSkill[]>([]);
   const skillsLoading = ref(false);
   const plugins = ref<CodexPluginWithMarketplace[]>([]);
@@ -634,6 +640,52 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const realtimeHistoryQueue = ref<CodexCanonicalHistoryEntry[]>([]);
   const realtimeMessageAliases = ref<Record<string, string>>({});
   const realtimeCompletedPart = ref<CodexRealtimePartRecord<ToolPart> | null>(null);
+  const realtimeSubagentPart = ref<{ parentThreadId: string; info: AssistantMessageInfo; part: MessagePart } | null>(null);
+  const subscribedSubagents = new Set<string>();
+  let subagentStreamGeneration = 0;
+  const subagentStreams = createCodexSubagentStreams({
+    getSelectedParent: () => activeThreadId.value,
+    publish: (info, part) => { realtimeSubagentPart.value = { parentThreadId: activeThreadId.value, info, part }; },
+    onDiscover: (threadId, live) => { void subscribeSubagent(threadId, live); },
+  });
+
+  async function subscribeSubagent(threadId: string, live: boolean) {
+    const request = captureConnection();
+    const parentId = activeThreadId.value;
+    const generation = subagentStreamGeneration;
+    if (!request || !parentId) return;
+    const current = () => isCurrentConnection(request) && activeThreadId.value === parentId && generation === subagentStreamGeneration;
+    try {
+      const read = await request.sourceAdapter.readThread({ threadId, includeTurns: true });
+      if (!current() || read.thread.id !== threadId) return;
+      subagentStreams.registerHistory(read.thread);
+      if (!live && extractStatusType(read.thread.status) !== 'active') return;
+      subscribedSubagents.add(threadId);
+      const resumed = await request.sourceAdapter.resumeThread({ threadId });
+      if (!current()) {
+        if (isCurrentConnection(request) && activeThreadId.value !== threadId && !subscribedSubagents.has(threadId)) {
+          await request.sourceAdapter.unsubscribeThread({ threadId });
+        }
+        return;
+      }
+      subagentStreams.registerHistory(resumed.thread, undefined, live);
+    } catch {
+      if (current()) console.warn('[codex] Unable to subscribe to subagent activity', threadId);
+    }
+  }
+
+  function resetSubagentStreams() {
+    subagentStreamGeneration += 1;
+    subagentStreams.reset();
+    realtimeSubagentPart.value = null;
+    for (const threadId of subscribedSubagents) {
+      if (adapter && threadId !== activeThreadId.value) void adapter.unsubscribeThread({ threadId }).catch(() => {
+        console.warn('[codex] Unable to unsubscribe from subagent activity', threadId);
+      });
+    }
+    subscribedSubagents.clear();
+  }
+  watch(activeThreadId, resetSubagentStreams, { flush: 'sync' });
   const realtimeStreamingPart = ref<CodexRealtimePartRecord<TextPart> | null>(null);
   const realtimeReasoningPart = ref<CodexRealtimePartRecord<ReasoningPart> | null>(null);
   const realtimeToolParts = ref<Array<CodexRealtimePartRecord<ToolPart>>>([]);
@@ -836,19 +888,20 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function setTranscriptFromTurns(turns: CodexTurn[] = []) {
+    subagentStreams.registerHistory({ id: activeThreadId.value, turns });
     assistantTranscriptIds.clear();
     const activeThread = threads.value.find((thread) => thread.id === activeThreadId.value);
     for (const turn of turns) recordObservedTurnId(activeThreadId.value, turn.id);
     const selectedModelInfo = parseSelectedCodexModel(selectedModel.value);
     const modelName = selectedModelInfo.modelID || selectedModelInfo.providerID;
-    canonicalHistory.value = restoreCodexMessageEfforts(activeThreadId.value, normalizeCodexTurnsToHistory({
+    canonicalHistory.value = messageModels.restore(activeThreadId.value, restoreCodexMessageEfforts(activeThreadId.value, normalizeCodexTurnsToHistory({
       sessionId: activeThreadId.value ?? 'codex-thread',
       turns,
       model: {
         providerID: activeThread?.modelProvider || selectedModelInfo.providerID,
         modelID: selectedModelInfo.modelID || undefined,
       },
-    }));
+    })), [...canonicalHistory.value, ...realtimeHistoryQueue.value]);
     const textEntries = canonicalHistory.value.flatMap((entry) => {
       const role = entry.info.role === 'assistant' ? 'assistant' : 'user';
       return entry.parts
@@ -965,8 +1018,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       role: 'assistant',
       time: { created: createdAt },
       parentID: parentId,
-      modelID: model.modelID || 'codex',
-      providerID: model.providerID,
+      modelID: parent?.info.role === 'user' ? parent.info.model.modelID : model.modelID || 'codex',
+      providerID: parent?.info.role === 'user' ? parent.info.model.providerID : model.providerID,
       variant: parent?.info.variant,
       mode: 'codex',
       agent: 'codex',
@@ -1183,6 +1236,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   function mergeRealtimeHistoryEntry(entry: CodexCanonicalHistoryEntry) {
     if (entry.info.role === 'assistant') {
       entry = { ...entry, info: createCodexAssistantInfo(entry.info.sessionID, entry.info.id, entry.info.time.created, entry.info.parentID) };
+    } else {
+      entry = messageModels.restore(entry.info.sessionID, [entry], [...canonicalHistory.value, ...realtimeHistoryQueue.value])[0] ?? entry;
     }
     const existingIndex = realtimeHistoryQueue.value.findIndex(
       (current) => current.info.id === entry.info.id,
@@ -1318,6 +1373,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (isInvalidatedTurnId(notificationThreadId, notificationTurnId)) return;
       recordObservedTurnId(notificationThreadId, notificationTurnId);
     }
+    subagentStreams.handle(notification);
     const userItem = isRecord(notificationParams?.item) ? notificationParams.item : null;
     if ((notification.method === 'item/started' || notification.method === 'item/completed')
       && notificationThreadId && notificationTurnId && userItem?.type === 'userMessage') {
@@ -2024,15 +2080,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
     if (import.meta.env.DEV) console.time('codex-connect');
 
-    onPhase?.('home');
-    await refreshHomeDir(false, request);
-    if (!isCurrentConnection(request)) return;
-    unsubscribeNotifications = sourceAdapter.onNotification((notification) =>
-      handleNotification(notification, request),
-    );
-    unsubscribeServerRequests = sourceAdapter.onServerRequest(handleServerRequest);
-
     try {
+      await initializeCodexAuxiliaryStorage();
+      if (!isCurrentConnection(request)) return;
+      onPhase?.('home');
+      await refreshHomeDir(false, request);
+      if (!isCurrentConnection(request)) return;
+      unsubscribeNotifications = sourceAdapter.onNotification((notification) =>
+        handleNotification(notification, request),
+      );
+      unsubscribeServerRequests = sourceAdapter.onServerRequest(handleServerRequest);
       onPhase?.('handshake');
       await sourceAdapter.initialize();
       if (!isCurrentConnection(request)) return;
@@ -2067,6 +2124,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function teardownConnection(resetStatus: boolean) {
+    subagentStreamGeneration += 1;
+    subagentStreams.reset();
+    subscribedSubagents.clear();
+    realtimeSubagentPart.value = null;
     connectionGeneration += 1;
     threadSelectionGeneration += 1;
     accountRefreshGeneration += 1;
@@ -2557,11 +2618,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const sourceAdapter = adapter;
     if (!sourceAdapter) throw new Error('Codex is not connected.');
     const read = await readThreadForHistory(threadId, sourceAdapter);
-    const entries = restoreCodexMessageEfforts(threadId, normalizeCodexTurnsToHistory({
+    const entries = messageModels.restore(threadId, restoreCodexMessageEfforts(threadId, normalizeCodexTurnsToHistory({
       sessionId: threadId,
       turns: read.thread.turns ?? [],
-      model: { providerID: read.thread.modelProvider },
-    }));
+      model: { providerID: read.thread.modelProvider, modelID: read.thread.model ?? undefined },
+    })));
     const hydrated = await hydrateThreadImages(entries, sourceAdapter);
     if (adapter !== sourceAdapter) throw new Error('Codex connection changed.');
     return hydrated;
@@ -2682,9 +2743,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return result.thread;
   }
 
-  async function rollbackThread(threadId: string, numTurns = 1) {
+  async function rollbackThread(threadId: string, target: number | string = 1) {
     if (!adapter) throw new Error('Codex is not connected.');
-    const result = await adapter.rollbackThread({ threadId, numTurns });
+    const request = captureConnection();
+    if (!request) throw new Error('Codex is not connected.');
+    const numTurns = typeof target === 'number' ? target : codexRollbackCount(threadId,
+      (await readThreadForHistory(threadId, request.sourceAdapter)).thread.turns ?? [], target);
+    if (!isCurrentConnection(request)) throw new Error('Codex connection changed.');
+    const result = await request.sourceAdapter.rollbackThread({ threadId, numTurns });
+    if (!isCurrentConnection(request)) return result.thread;
+    if (activeThreadId.value === threadId) resetSubagentStreams();
     invalidateRecentTurnIds(threadId, numTurns);
     clearCodexAuxiliaryHistory(threadId);
     realtimeHistoryQueue.value = realtimeHistoryQueue.value.filter(
@@ -3006,7 +3074,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       variant: options.effort,
       model: {
         providerID: selectedModelInfo.providerID,
-        modelID: selectedModelInfo.modelID || 'unknown',
+        modelID: options.model?.trim() || selectedModelInfo.modelID || 'unknown',
       },
     };
     const userParts = buildRealtimeUserParts(sessionId, userMessageId, prompt, inputItems, now);
@@ -3045,6 +3113,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const finalizedTurnId = result.turn.id || pendingTurnId;
       recordObservedTurnId(result.threadId, finalizedTurnId);
       const finalizedUserMessageId = codexUserMessageId(finalizedTurnId, clientUserMessageId);
+      messageModels.save(result.threadId, { ...userInfo, id: finalizedUserMessageId, sessionID: result.threadId });
       saveCodexTurnEffort(result.threadId, finalizedTurnId, options.effort, finalizedUserMessageId);
       finalizeRealtimeUser(userMessageId, finalizedUserMessageId, result.threadId, options.effort);
 
@@ -3796,6 +3865,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     realtimeHistoryQueue,
     realtimeMessageAliases,
     realtimeCompletedPart,
+    realtimeSubagentPart,
     realtimeStreamingPart,
     realtimeReasoningPart,
     realtimeToolParts,
