@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.7.17 released]
 
 ### Codex 消息信息与历史操作
 
