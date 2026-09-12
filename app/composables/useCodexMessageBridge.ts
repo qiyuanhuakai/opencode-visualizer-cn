@@ -63,10 +63,10 @@ export function useCodexMessageBridge(params: {
     }
   }
 
-  function updateMessage(rawInfo: AssistantMessageInfo | UserMessageInfo) {
+  function updateMessage(rawInfo: AssistantMessageInfo | UserMessageInfo, force = false) {
     const info = messageDiffs.enrich(rawInfo);
     const signature = JSON.stringify(info);
-    if (publishedMessages.get(info.id) === signature) return;
+    if (!force && publishedMessages.get(info.id) === signature) return;
     publishedMessages.set(info.id, signature);
     params.msg.updateMessage(info);
   }
@@ -131,12 +131,12 @@ export function useCodexMessageBridge(params: {
     });
   }
 
-  function reapplyCodexSharedBackfill() {
+  function reapplyCodexSharedBackfill(force = false) {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value) return;
     applyCodexTokenUsageToSharedMessages(params.codexApi.tokenUsage.value);
     for (const entry of [...params.history.value, ...params.codexApi.realtimeHistoryQueue.value]) {
-      if (entry.info.role === 'user' && publishedMessages.has(entry.info.id) && matchesActiveCodexRealtimeSession(entry.info.sessionID)) updateMessage(entry.info);
+      if (entry.info.role === 'user' && publishedMessages.has(entry.info.id) && matchesActiveCodexRealtimeSession(entry.info.sessionID)) updateMessage(entry.info, force);
     }
   }
 
@@ -245,7 +245,7 @@ export function useCodexMessageBridge(params: {
 
   return {
     matchesActiveCodexRealtimeSession,
-    reapplyCodexSharedBackfill,
+    reapplyCodexSharedBackfill: () => reapplyCodexSharedBackfill(true),
     resetRealtimeQueueSignature() {
       resetPublishedState();
     },

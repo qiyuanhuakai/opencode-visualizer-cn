@@ -20,8 +20,8 @@ function fixture() {
   };
   const scope = effectScope();
   scopes.push(scope);
-  scope.run(() => useCodexMessageBridge(params));
-  return { ...params, msg };
+  const bridge = scope.run(() => useCodexMessageBridge(params));
+  return { ...params, msg, bridge };
 }
 function history(turns: string[], patches = false) {
   return normalizeCodexTurnsToHistory({ sessionId: 'thread-1', turns: turns.map(id => ({ id, items: [
@@ -36,6 +36,16 @@ const patch = (turnId: string) => ({ threadId: 'thread-1', turnId, diff: `diff -
 const userId = (turn: string) => `${turn}:user:client-${turn}`;
 
 describe('Codex card diff restoration', () => {
+  it('restores diffs after explicit raw history reload even when publication signatures are unchanged', async () => {
+    const p = fixture();
+    p.history.value = history(['first'], true);
+    await nextTick();
+    p.msg.reset();
+    p.msg.loadHistory(p.history.value);
+    p.bridge?.reapplyCodexSharedBackfill();
+    await nextTick();
+    expect(p.msg.getDiffs(userId('first'))?.map(diff => diff.file)).toEqual(['first.ts', 'first.css']);
+  });
   it('keeps edits separate between two user cards inside one Codex turn', async () => {
     // Given
     const p = fixture();
