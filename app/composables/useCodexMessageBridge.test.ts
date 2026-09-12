@@ -20,6 +20,7 @@ function bridgeFixture() {
     codexApi: {
       realtimeHistoryQueue: ref<CodexCanonicalHistoryEntry[]>([]),
       realtimeMessageAliases: ref<Record<string, string>>({}),
+      realtimeSubagentPart: ref<{ parentThreadId: string; info: AssistantMessageInfo; part: MessagePart } | null>(null),
       realtimeCompletedPart: ref<{ info: AssistantMessageInfo | UserMessageInfo; part: MessagePart } | null>(null),
       realtimeStreamingPart: ref<{ info: AssistantMessageInfo | UserMessageInfo; part: MessagePart } | null>(null),
       realtimeReasoningPart: ref<{ info: AssistantMessageInfo | UserMessageInfo; part: ReasoningPart } | null>(null),
@@ -237,6 +238,28 @@ describe('useCodexMessageBridge', () => {
 
 
 describe('Codex automatic streaming windows', () => {
+  it('routes child text, reasoning and shell to windows without changing parent messages', () => {
+    const p = bridgeFixture();
+    const entries = normalizeCodexTurnsToHistory({sessionId: 'child', turns: [{id:'child-turn',items:[
+      {id:'text',type:'agentMessage',text:'Reviewing'},
+      {id:'reason',type:'reasoning',summary:['Checking correctness']},
+      {id:'shell',type:'commandExecution',command:'git diff',status:'completed',aggregatedOutput:'diff output'},
+    ]}]});
+    for (const entry of entries) {
+      if (entry.info.role !== 'assistant') continue;
+      for (const part of entry.parts) p.codexApi.realtimeSubagentPart.value = {parentThreadId:'thread-1',info:entry.info,part};
+    }
+    expect(p.onLiveSubagent).toHaveBeenCalledTimes(1);
+    expect(p.onLiveReasoning).toHaveBeenCalledTimes(1);
+    expect(p.syncRealtimeToolWindows).toHaveBeenCalledTimes(1);
+    expect(p.msg.updateMessage).not.toHaveBeenCalled();
+    expect(p.msg.updatePart).not.toHaveBeenCalled();
+    const last = p.codexApi.realtimeSubagentPart.value;
+    if (!last) throw new Error('Missing child fixture');
+    p.codexApi.realtimeSubagentPart.value = {...last};
+    p.codexApi.realtimeSubagentPart.value = {...last,parentThreadId:'unrelated'};
+    expect(p.syncRealtimeToolWindows).toHaveBeenCalledTimes(1);
+  });
   it('opens reasoning only for live updates, deduplicates queue/stream and retains close delay', async () => {
     const p = bridgeFixture();
     const entries = normalizeCodexTurnsToHistory({sessionId: 'thread-1', turns: [{id: 'turn-r', items: [{id: 'reason', type: 'reasoning', summary: ['Thinking']}]}]});

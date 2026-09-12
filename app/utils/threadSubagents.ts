@@ -1,4 +1,5 @@
 import type { MessagePart } from '../types/sse';
+import { codexAgentName } from './codexAgentName';
 import type { SessionState } from '../types/worker-state';
 import {
   isMagicContextWorkerName,
@@ -40,7 +41,9 @@ export function resolveThreadSubagentSessions(
       if (!childId || childId === sessionId) continue;
       const meta = metaById?.[childId];
       if (meta && meta.parentID !== sessionId && (state.metadata?.source !== 'codex' || meta.parentID)) continue;
-      const fallbackLabel = meta?.label || childId;
+      const agentPath = state.metadata?.source === 'codex' && typeof state.metadata.agentPath === 'string'
+        ? codexAgentName(state.metadata.agentPath) : '';
+      const fallbackLabel = meta?.label || agentPath || childId;
       if (isMagicContextWorkerName(fallbackLabel)) continue;
       if (!seen.has(childId)) seen.set(childId, resolveTaskWorkerLabel(part, fallbackLabel));
     }

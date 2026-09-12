@@ -73,7 +73,8 @@ export function useSubagentWindows(options: UseSubagentWindowsOptions) {
       const displayName = resolveModelName?.(messageInfo.providerID, messageInfo.modelID);
       modelLabel = displayName || messageInfo.modelID;
       if (messageInfo.agent) {
-        agentLabel = messageInfo.agent.charAt(0).toUpperCase() + messageInfo.agent.slice(1);
+        agentLabel = messageInfo.mode === 'codex' ? messageInfo.agent
+          : messageInfo.agent.charAt(0).toUpperCase() + messageInfo.agent.slice(1);
       }
     }
     const agentPart = agentLabel ? `Agent ${agentLabel} ` : '';

@@ -13,6 +13,7 @@ type SharedMessageStore = {
 };
 
 type CodexMessageBridgeApi = {
+  realtimeSubagentPart?: Ref<{ parentThreadId: string; info: AssistantMessageInfo; part: MessagePart } | null>;
   realtimeHistoryQueue: Ref<CodexCanonicalHistoryEntry[]>;
   realtimeMessageAliases: Ref<Record<string, string>>;
   realtimeCompletedPart?: Ref<{ info: AssistantMessageInfo | UserMessageInfo; part: MessagePart } | null>;
@@ -57,6 +58,7 @@ export function useCodexMessageBridge(params: {
     if (part.type === 'reasoning') {
       if (part.text.trim()) params.onLiveReasoning?.(info, part);
     } else if (info.role === 'assistant') {
+      if (params.codexApi.realtimeSubagentPart && 'metadata' in part.state && part.state.metadata?.agentPath) return;
       for (const child of codexSubagentWindowEntries(info, part)) {
         params.onLiveSubagent?.(child.info, child.part);
       }
@@ -191,6 +193,22 @@ export function useCodexMessageBridge(params: {
   });
 
   watch([params.selectedSessionId, params.activeBackendKind], resetPublishedState, { flush: 'sync' });
+
+  if (params.codexApi.realtimeSubagentPart) {
+    watch(params.codexApi.realtimeSubagentPart, (entry) => {
+      if (!entry || params.activeBackendKind.value !== 'codex'
+        || entry.parentThreadId !== params.selectedSessionId.value
+        || entry.info.sessionID === entry.parentThreadId) return;
+      const { info, part } = entry;
+      const key = `${info.sessionID}:${part.id}`;
+      const signature = JSON.stringify(entry);
+      if (liveWindowParts.get(key) === signature) return;
+      liveWindowParts.set(key, signature);
+      if (part.type === 'reasoning') params.onLiveReasoning?.(info, part);
+      else if (part.type === 'text') params.onLiveSubagent?.(info, part);
+      else if (part.type === 'tool') params.syncRealtimeToolWindows([{ info, parts: [part] }]);
+    }, { flush: 'sync' });
+  }
 
   watch(params.codexApi.realtimeStreamingPart, (streaming) => {
     if (params.activeBackendKind.value !== 'codex') return;

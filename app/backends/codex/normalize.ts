@@ -10,6 +10,7 @@ import type {
   UserMessageInfo,
 } from '../../types/sse';
 import { codexReasoningText } from './reasoning';
+import { codexAgentName } from '../../utils/codexAgentName';
 
 type CodexRecord = Record<string, unknown>;
 
@@ -505,6 +506,31 @@ export function normalizeCodexTurnItems(params: {
         output: error || result,
         createdAt: itemTime,
         status,
+      }));
+      return;
+    }
+
+    if (type === 'subAgentActivity') {
+      const childId = stringValue(item.agentThreadId);
+      const agentPath = stringValue(item.agentPath);
+      const agentName = codexAgentName(agentPath);
+      const kind = stringValue(item.kind);
+      const status = kind === 'completed' || kind === 'interrupted' ? kind : 'running';
+      parts.push(createToolPart({
+        id: itemId,
+        sessionId: params.sessionId,
+        messageId: assistantMessageId,
+        tool: 'task',
+        title: agentName || 'Codex agent',
+        input: { operation: kind, prompt: agentName },
+        output: [kind, agentName].filter(Boolean).join('\n'),
+        createdAt: itemTime,
+        status: 'completed',
+        metadata: {
+          sessionId: childId, sessionIds: childId ? [childId] : [],
+          agentPath, senderThreadId: params.sessionId,
+          agentsStates: childId ? { [childId]: { status } } : {},
+        },
       }));
       return;
     }
