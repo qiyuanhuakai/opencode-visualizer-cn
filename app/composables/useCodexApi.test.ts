@@ -134,6 +134,20 @@ function createAdapterMock() {
 }
 
 describe('useCodexApi', () => {
+  it('rolls back the selected historical message and all later turns, without counting supplemental users twice', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', turns: ['a', 'b', 'c'].map(id => ({ id, items: [
+      { type: 'userMessage', id: 'first', content: [{ type: 'text', text: id }] },
+      { type: 'userMessage', id: 'supplement', content: [{ type: 'text', text: 'Supplement' }] },
+    ] })) } });
+    await api.rollbackThread('thr_existing', 'b:user:supplement');
+    expect(mock.adapter.rollbackThread).toHaveBeenCalledWith({ threadId: 'thr_existing', numTurns: 2 });
+    vi.mocked(mock.adapter.rollbackThread).mockClear();
+    await expect(api.rollbackThread('thr_existing', 'missing:user:first')).rejects.toThrow();
+    expect(mock.adapter.rollbackThread).not.toHaveBeenCalled();
+  });
   it('preserves the sent model and provider through echoes, completion hydration and a fresh page instance', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });

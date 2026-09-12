@@ -1335,6 +1335,7 @@ const messages: LocaleMessages = {
   threadBlock: {
     confirmFork: 'このメッセージからフォークしますか？',
     confirmRevert: 'このメッセージまで復元しますか？',
+    confirmCodexRevert: 'このメッセージを含むターンと、それ以降のすべてのターンを取り消しますか？同じターンの追加メッセージも取り消されます。',
     confirmUndoRevert: '復元を取り消しますか？',
     historyTitle: '{count}件のエントリー - クリックして履歴を表示',
     historyLabel: '履歴',

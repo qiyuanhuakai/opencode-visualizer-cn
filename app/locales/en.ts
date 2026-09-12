@@ -1333,6 +1333,7 @@ const messages: LocaleMessages = {
   threadBlock: {
     confirmFork: 'Fork from this message?',
     confirmRevert: 'Revert to this message?',
+    confirmCodexRevert: 'Revert this message’s turn and all later turns? Supplemental messages in the same turn will also be removed.',
     confirmUndoRevert: 'Undo revert?',
     historyTitle: '{count} entries - click to view history',
     historyLabel: 'History',

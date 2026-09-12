@@ -147,7 +147,7 @@ describe('useBackendSessionReload', () => {
     expect(msg.loadHistory).toHaveBeenCalledWith([{ id: 'history-1' }]);
   });
 
-  it('does NOT call msg.reset on Codex page refresh (no oldId)', async () => {
+  it.each([false, true])('resets Codex same-session history only when explicitly requested: %s', async (forceReset) => {
     const msg = {
       saveSessionState: vi.fn(),
       reset: vi.fn(),
@@ -189,11 +189,11 @@ describe('useBackendSessionReload', () => {
       focusInput: vi.fn(),
     });
 
-    await reload.reloadSelectedSessionState('thread-1', undefined);
+    await reload.reloadSelectedSessionState('thread-1', undefined, forceReset);
 
     expect(msg.saveSessionState).not.toHaveBeenCalled();
     expect(selectThread).not.toHaveBeenCalled();
-    expect(msg.reset).not.toHaveBeenCalled();
+    expect(msg.reset).toHaveBeenCalledTimes(forceReset ? 1 : 0);
     expect(msg.loadHistory).toHaveBeenCalledWith([{ id: 'history-1' }, { id: 'history-2' }]);
   });
 

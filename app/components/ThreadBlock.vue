@@ -352,7 +352,6 @@ function showThreadDiff(root: MessageInfo) {
 
 function canRevertThread(root: MessageInfo): boolean {
   if (props.sessionRevert) return false;
-  if (props.backendKind === 'codex' && !props.isLatestRoot) return false;
   return root.role === 'user' && Boolean(root.sessionID);
 }
 
@@ -377,7 +376,7 @@ async function confirmFork() {
 
 async function confirmRevert(root: MessageInfo) {
   if (root.role !== 'user' || !root.sessionID || !root.id) return;
-  const confirmed = showConfirm ? await showConfirm(t('threadBlock.confirmRevert')) : true;
+  const confirmed = showConfirm ? await showConfirm(t(props.backendKind === 'codex' ? 'threadBlock.confirmCodexRevert' : 'threadBlock.confirmRevert')) : true;
   if (!confirmed) return;
   emit('revert-message', { sessionId: root.sessionID, messageId: root.id });
 }

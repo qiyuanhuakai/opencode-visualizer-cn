@@ -2,7 +2,7 @@ import { computed, ref, watch, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import { codexSubagentWindowEntries } from '../utils/codexSubagentWindowEntries';
-import type { MessageDiffEntry } from '../types/message';
+import { useCodexMessageDiffs } from './useCodexMessageDiffs';
 import type { AssistantMessageInfo, MessagePart, ReasoningPart, TextPart, ToolPart, UserMessageInfo } from '../types/sse';
 
 type SharedMessageStore = {
@@ -23,18 +23,6 @@ type CodexMessageBridgeApi = {
   diffState: Ref<{ threadId: string; turnId: string; diff: string } | null>;
 };
 
-function parseCodexDiffEntries(diffText: string): MessageDiffEntry[] {
-  const trimmed = diffText.trim();
-  if (!trimmed) return [];
-  const chunks = trimmed.split(/(?=^diff --git )/m).map((chunk) => chunk.trim()).filter(Boolean);
-  if (chunks.length === 0) return [{ file: 'changes.diff', diff: trimmed }];
-  return chunks.map((chunk, index) => {
-    const match = chunk.match(/^diff --git a\/(.+?) b\/(.+)$/m);
-    const file = match?.[2] || match?.[1] || `changes-${index + 1}.diff`;
-    return { file, diff: chunk };
-  });
-}
-
 function buildRealtimeQueueSignature(queue: CodexCanonicalHistoryEntry[]) {
   return JSON.stringify(queue);
 }
@@ -51,6 +39,10 @@ export function useCodexMessageBridge(params: {
   onLiveReasoning?: (info: AssistantMessageInfo | UserMessageInfo, part: ReasoningPart) => void;
   onLiveSubagent?: (info: AssistantMessageInfo, part: TextPart) => void;
 }) {
+  const messageDiffs = useCodexMessageDiffs({
+    history: params.history, queue: params.codexApi.realtimeHistoryQueue,
+    diffState: params.codexApi.diffState, selectedSessionId: params.selectedSessionId,
+  });
   const lastRealtimeQueueSignature = ref('');
   const publishedMessages = new Map<string, string>();
   const publishedParts = new Map<string, string>();
@@ -71,7 +63,8 @@ export function useCodexMessageBridge(params: {
     }
   }
 
-  function updateMessage(info: AssistantMessageInfo | UserMessageInfo) {
+  function updateMessage(rawInfo: AssistantMessageInfo | UserMessageInfo) {
+    const info = messageDiffs.enrich(rawInfo);
     const signature = JSON.stringify(info);
     if (publishedMessages.get(info.id) === signature) return;
     publishedMessages.set(info.id, signature);
@@ -138,38 +131,24 @@ export function useCodexMessageBridge(params: {
     });
   }
 
-  function applyCodexDiffStateToSharedMessages(state: { threadId: string; turnId: string; diff: string } | null) {
-    if (!state?.turnId || !state.diff.trim()) return;
-    const userInfo = findCodexHistoryMessage((info): info is UserMessageInfo => info.role === 'user' && info.id.startsWith(`${state.turnId}:user:`));
-    if (!userInfo) return;
-    params.msg.updateMessage({
-      ...userInfo,
-      summary: {
-        ...userInfo.summary,
-        diffs: parseCodexDiffEntries(state.diff).map((entry) => ({
-          file: entry.file,
-          patch: entry.diff,
-          additions: 0,
-          deletions: 0,
-        })),
-      },
-    });
-  }
-
   function reapplyCodexSharedBackfill() {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value) return;
     applyCodexTokenUsageToSharedMessages(params.codexApi.tokenUsage.value);
-    applyCodexDiffStateToSharedMessages(params.codexApi.diffState.value);
+    for (const entry of [...params.history.value, ...params.codexApi.realtimeHistoryQueue.value]) {
+      if (entry.info.role === 'user' && publishedMessages.has(entry.info.id) && matchesActiveCodexRealtimeSession(entry.info.sessionID)) updateMessage(entry.info);
+    }
   }
 
-  watch(params.history, (history) => {
+  watch(params.history, (history, previous) => {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value) return;
-    params.msg.loadHistory(history);
+    messageDiffs.pruneRemovedTurns(history, previous);
+    const enriched = history.map(entry => ({ ...entry, info: messageDiffs.enrich(entry.info) }));
+    params.msg.loadHistory(enriched);
     publishedMessages.clear();
     publishedParts.clear();
-    for (const entry of history) {
+    for (const entry of enriched) {
       publishedMessages.set(entry.info.id, JSON.stringify(entry.info));
       for (const part of entry.parts) publishedParts.set(part.id, JSON.stringify(part));
     }
@@ -207,6 +186,7 @@ export function useCodexMessageBridge(params: {
         updatePart(part);
       }
     }
+    reapplyCodexSharedBackfill();
     params.syncRealtimeToolWindows(realtimeEntries);
   });
 
@@ -257,10 +237,10 @@ export function useCodexMessageBridge(params: {
     applyCodexTokenUsageToSharedMessages(usage);
   }, { deep: true });
 
-  watch(params.codexApi.diffState, (state) => {
+  watch(params.codexApi.diffState, () => {
     if (params.activeBackendKind.value !== 'codex') return;
     if (!params.selectedSessionId.value) return;
-    applyCodexDiffStateToSharedMessages(state);
+    reapplyCodexSharedBackfill();
   }, { deep: true });
 
   return {

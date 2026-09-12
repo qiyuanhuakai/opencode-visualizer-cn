@@ -93,6 +93,7 @@ import {
 } from '../backends/codex/auxiliaryHistory';
 import { restoreCodexMessageEfforts, saveCodexTurnEffort } from '../backends/codex/messageEffort';
 import { createCodexMessageModels } from '../backends/codex/messageModels';
+import { codexRollbackCount } from '../backends/codex/rollbackTarget';
 import type { ConfigMergeStrategy } from '../backends/types';
 import { getPersistedCodexBridgeToken, getPersistedCodexBridgeUrl } from '../backends/registry';
 import type {
@@ -2686,9 +2687,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return result.thread;
   }
 
-  async function rollbackThread(threadId: string, numTurns = 1) {
+  async function rollbackThread(threadId: string, target: number | string = 1) {
     if (!adapter) throw new Error('Codex is not connected.');
-    const result = await adapter.rollbackThread({ threadId, numTurns });
+    const request = captureConnection();
+    if (!request) throw new Error('Codex is not connected.');
+    const numTurns = typeof target === 'number' ? target : codexRollbackCount(threadId,
+      (await readThreadForHistory(threadId, request.sourceAdapter)).thread.turns ?? [], target);
+    if (!isCurrentConnection(request)) throw new Error('Codex connection changed.');
+    const result = await request.sourceAdapter.rollbackThread({ threadId, numTurns });
+    if (!isCurrentConnection(request)) return result.thread;
     invalidateRecentTurnIds(threadId, numTurns);
     clearCodexAuxiliaryHistory(threadId);
     realtimeHistoryQueue.value = realtimeHistoryQueue.value.filter(

@@ -1312,6 +1312,7 @@ const messages: LocaleMessages = {
   threadBlock: {
     confirmFork: '从此消息创建分支?',
     confirmRevert: '撤销到此消息?',
+    confirmCodexRevert: '撤销此消息所在回合及之后的所有回合？同一回合的补充消息也会一起撤销。',
     confirmUndoRevert: '撤消撤销操作?',
     historyTitle: '{count} 条历史记录 - 点击查看历史',
     historyLabel: '历史记录',

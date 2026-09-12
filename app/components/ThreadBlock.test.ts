@@ -93,6 +93,7 @@ function mount(
     root: MessageInfo;
     currentSessionId?: string;
     backendKind?: 'codex' | 'opencode';
+    isLatestRoot?: boolean;
   },
   onShowThreadHistory: (payload: { entries: unknown[] }) => void,
 ) {
@@ -112,6 +113,7 @@ function mount(
             isRevertedPreview: false,
             currentSessionId: props.currentSessionId,
             backendKind: props.backendKind,
+            isLatestRoot: props.isLatestRoot,
             deferredTransitionKey: 'test',
             onShowThreadHistory,
           });
@@ -125,6 +127,15 @@ function mount(
 }
 
 describe('ThreadBlock history wiring', () => {
+  it.each([false, true])('shows revert on Codex cards while limiting fork to latest=%s', async (isLatestRoot) => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const view = mount({ root: user, currentSessionId: 'main', backendKind: 'codex', isLatestRoot }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-footer .ib-action-danger')).not.toBeNull();
+    expect([...view.root.querySelectorAll('button')].some(button => button.textContent?.trim() === 'FORK')).toBe(isLatestRoot);
+    view.app.unmount();
+  });
   afterEach(() => {
     document.body.innerHTML = '';
     useMessages().reset();

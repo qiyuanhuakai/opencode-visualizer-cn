@@ -1332,6 +1332,7 @@ const messages: LocaleMessages = {
   threadBlock: {
     confirmFork: 'Forke el ĉi tiu mesaĝo?',
     confirmRevert: 'Restarigi al ĉi tiu mesaĝo?',
+    confirmCodexRevert: 'Ĉu malfari la vicon de ĉi tiu mesaĝo kaj ĉiujn postajn vicojn? Ankaŭ suplementaj mesaĝoj en la sama vico estos forigitaj.',
     confirmUndoRevert: 'Malfari restarigon?',
     historyTitle: '{count} eroj - alklaku por vidi historion',
     historyLabel: 'Historio',
