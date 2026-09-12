@@ -1,5 +1,5 @@
 import type { MessageInfo, ReasoningPart, ToolPart } from '../../types/sse';
-import { StorageKeys, storageGetJSON, storageRemove, storageSetJSON } from '../../utils/storageKeys';
+import { readCodexAuxiliarySnapshot, removeCodexAuxiliarySnapshot, writeCodexAuxiliarySnapshot } from './auxiliaryStorage';
 import type { CodexCanonicalHistoryEntry } from './normalize';
 
 type AuxiliaryPart = ReasoningPart | ToolPart;
@@ -45,10 +45,6 @@ function isAuxiliaryPart(value: unknown, threadId: string): value is AuxiliaryPa
   return isRecord(value.state.input);
 }
 
-function snapshotKey(threadId: string) {
-  return `${StorageKeys.state.codexAuxiliaryHistory}.${encodeURIComponent(threadId)}`;
-}
-
 function isTerminalTool(part: AuxiliaryPart) {
   return part.type === 'tool' && (part.state.status === 'completed' || part.state.status === 'error');
 }
@@ -84,7 +80,7 @@ export function mergeCodexAuxiliaryHistory(
 }
 
 export function loadCodexAuxiliaryHistory(threadId: string) {
-  const snapshot = storageGetJSON<unknown>(snapshotKey(threadId));
+  const snapshot = readCodexAuxiliarySnapshot(threadId);
   if (!isRecord(snapshot)
     || snapshot.version !== 1
     || snapshot.threadId !== threadId
@@ -104,9 +100,9 @@ export function saveCodexAuxiliaryHistory(threadId: string, entries: ReadonlyArr
   const auxiliaryEntries = mergeCodexAuxiliaryHistory(threadId, entries);
   if (auxiliaryEntries.length === 0) return;
   const snapshot: AuxiliaryHistorySnapshot = { version: 1, threadId, entries: auxiliaryEntries };
-  storageSetJSON(snapshotKey(threadId), snapshot);
+  writeCodexAuxiliarySnapshot(threadId, snapshot);
 }
 
 export function clearCodexAuxiliaryHistory(threadId: string) {
-  storageRemove(snapshotKey(threadId));
+  removeCodexAuxiliarySnapshot(threadId);
 }

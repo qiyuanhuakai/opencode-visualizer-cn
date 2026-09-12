@@ -93,6 +93,7 @@ import {
   saveCodexAuxiliaryHistory,
 } from '../backends/codex/auxiliaryHistory';
 import { restoreCodexMessageEfforts, saveCodexTurnEffort } from '../backends/codex/messageEffort';
+import { initializeCodexAuxiliaryStorage } from '../backends/codex/auxiliaryStorage';
 import { createCodexMessageModels } from '../backends/codex/messageModels';
 import { codexRollbackCount } from '../backends/codex/rollbackTarget';
 import type { ConfigMergeStrategy } from '../backends/types';
@@ -2079,15 +2080,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
     if (import.meta.env.DEV) console.time('codex-connect');
 
-    onPhase?.('home');
-    await refreshHomeDir(false, request);
-    if (!isCurrentConnection(request)) return;
-    unsubscribeNotifications = sourceAdapter.onNotification((notification) =>
-      handleNotification(notification, request),
-    );
-    unsubscribeServerRequests = sourceAdapter.onServerRequest(handleServerRequest);
-
     try {
+      await initializeCodexAuxiliaryStorage();
+      if (!isCurrentConnection(request)) return;
+      onPhase?.('home');
+      await refreshHomeDir(false, request);
+      if (!isCurrentConnection(request)) return;
+      unsubscribeNotifications = sourceAdapter.onNotification((notification) =>
+        handleNotification(notification, request),
+      );
+      unsubscribeServerRequests = sourceAdapter.onServerRequest(handleServerRequest);
       onPhase?.('handshake');
       await sourceAdapter.initialize();
       if (!isCurrentConnection(request)) return;
