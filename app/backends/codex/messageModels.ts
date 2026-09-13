@@ -3,6 +3,11 @@ import { storageGetJSON, storageSetJSON, StorageKeys } from '../../utils/storage
 import type { CodexCanonicalHistoryEntry } from './normalize';
 
 type MessageModel = { readonly providerID: string; readonly modelID: string };
+type MessageSnapshot = { readonly model?: MessageModel; readonly agent?: string };
+
+function readAgent(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() && value.trim() !== 'codex' ? value.trim() : undefined;
+}
 
 function readModel(value: unknown): MessageModel | undefined {
   if (!value || typeof value !== 'object' || !('providerID' in value) || !('modelID' in value)) return;
@@ -22,11 +27,13 @@ export function createCodexMessageModels(connectionUrl: () => string) {
 
   function load(threadId: string) {
     const saved = storageGetJSON<unknown>(key(threadId));
-    const models = new Map<string, MessageModel>();
+    const models = new Map<string, MessageSnapshot>();
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return models;
     for (const [id, value] of Object.entries(saved)) {
-      const model = readModel(value);
-      if (model) models.set(id, model);
+      if (!value || typeof value !== 'object') continue;
+      const model = readModel('model' in value ? value.model : value);
+      const agent = readAgent('agent' in value ? value.agent : undefined);
+      if (model || agent) models.set(id, { model, agent });
     }
     return models;
   }
@@ -34,25 +41,32 @@ export function createCodexMessageModels(connectionUrl: () => string) {
   function save(threadId: string, user: MessageInfo) {
     if (user.role !== 'user') return;
     const model = readModel(user.model);
-    if (!model) return;
+    const agent = readAgent(user.agent);
+    if (!model && !agent) return;
     const models = load(threadId);
-    models.set(user.id, model);
+    const saved = models.get(user.id);
+    models.set(user.id, { model: model ?? saved?.model, agent: agent ?? saved?.agent });
     storageSetJSON(key(threadId), Object.fromEntries(models));
   }
 
   function restore(threadId: string, entries: readonly CodexCanonicalHistoryEntry[], known: readonly CodexCanonicalHistoryEntry[] = []) {
     const models = load(threadId);
     for (const { info } of known) {
-      if (info.role !== 'user' || info.sessionID !== threadId || models.has(info.id)) continue;
-      const model = readModel(info.model);
-      if (model) models.set(info.id, model);
+      if (info.role !== 'user' || info.sessionID !== threadId) continue;
+      const saved = models.get(info.id);
+      models.set(info.id, { model: saved?.model ?? readModel(info.model), agent: saved?.agent ?? readAgent(info.agent) });
     }
     return entries.map(entry => {
       const wireModel = readModel(entry.info.role === 'user' ? entry.info.model : entry.info);
-      const model = models.get(entry.info.role === 'user' ? entry.info.id : entry.info.parentID)
+      const snapshot = models.get(entry.info.role === 'user' ? entry.info.id : entry.info.parentID);
+      const model = snapshot?.model
         ?? (wireModel?.providerID === 'openai' ? { ...wireModel, providerID: 'codex' } : undefined);
-      if (!model) return entry;
-      const info = entry.info.role === 'user' ? { ...entry.info, model } : { ...entry.info, ...model };
+      const agent = entry.info.role === 'user' || !entry.info.agent || entry.info.agent === 'codex'
+        ? snapshot?.agent : undefined;
+      if (!model && !agent) return entry;
+      const info = entry.info.role === 'user'
+        ? { ...entry.info, ...(model ? { model } : {}), ...(agent ? { agent } : {}) }
+        : { ...entry.info, ...model, ...(agent ? { agent } : {}) };
       return { ...entry, info };
     });
   }

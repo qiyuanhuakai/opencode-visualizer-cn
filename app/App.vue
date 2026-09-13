@@ -168,7 +168,7 @@
               :current-session-id="selectedSessionId"
               :session-parent-by-id="sessionParentById"
               :can-send="canSend"
-              :agent-options="agentOptions"
+              :agent-options="activeBackendKind === 'codex' ? codexAgentOptions : agentOptions"
               :subagent-options="subagentOptions"
               :mention-files="acpMentionFiles"
               :prefer-file-mentions="activeBackendKind === 'acp'"
@@ -559,6 +559,7 @@ import {
   watchEffect,
 } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { codexModeColor, codexModeOptions } from './utils/codexModePresentation';
 import { bundledThemes } from 'shiki/bundle/web';
 import InputPanel from './components/InputPanel.vue';
 import Dropdown from './components/Dropdown.vue';
@@ -3110,7 +3111,10 @@ const resolvedTheme = computed(() => resolveTheme(opencodeTheme, 'dark'));
 
 const visibleAgents = computed(() => agents.value.filter((a) => !a.hidden));
 
+const codexAgentOptions = computed(() => codexModeOptions(codexApi.collaborationModes.value, locale.value));
+
 function resolveAgentColorForName(agentName?: string) {
+  if (activeBackendKind.value === 'codex') return codexModeColor(agentName ?? '', resolvedTheme.value);
   const agent = agentName ? agents.value.find((a) => a.name === agentName) : undefined;
   return resolveAgentColor(agentName ?? '', agent?.color, visibleAgents.value, resolvedTheme.value);
 }
@@ -5083,23 +5087,7 @@ async function fetchAgents() {
         await codexApi.refreshCollaborationModes();
       }
       if (!agentsRequestFence.isCurrent(request)) return;
-      let options: typeof agentOptions.value = codexApi.collaborationModes.value.map((mode) => ({
-        id: mode.mode,
-        label: mode.name,
-        color: 'cyan',
-      }));
-      // Defensive fallback: if the Codex server returned no collaboration modes
-      // (e.g. the experimental `collaborationMode/list` API is not enabled),
-      // synthesize a Default option so the UI is never blank and the user can
-      // always see and select an agent.
-      if (options.length === 0) {
-        options.push({
-          id: 'default',
-          label: t('inputPanel.defaultAgent'),
-          description: t('inputPanel.defaultAgentDescription'),
-          color: 'cyan',
-        });
-      }
+      const options = codexAgentOptions.value;
       agentOptions.value = options;
       if (!selectedMode.value || !options.some((option) => option.id === selectedMode.value)) {
         selectedMode.value = defaultComposerMode('codex', options);

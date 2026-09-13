@@ -486,6 +486,60 @@ describe('useCodexApi', () => {
     api.disconnect();
   });
 
+  it.each(['before', 'after'] as const)('retains a plan mode when the server echo arrives %s acknowledgement', async (echoTiming) => {
+    const mock = createAdapterMock();
+    const reply = deferred<CodexPromptResult>();
+    mock.adapter.sendPrompt = vi.fn(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const sending = api.sendPrompt('Explain', { collaborationMode: { mode: 'plan', settings: { model: 'gpt-6-astra', developer_instructions: null } } });
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'user')?.info.agent).toBe('plan');
+    if (echoTiming === 'after') {
+      reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn_mode', status: 'inProgress' } });
+      await sending;
+    }
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_mode', item: { type: 'userMessage', id: 'u', clientId, content: [{ type: 'text', text: 'Explain' }] } } });
+    expect(api.realtimeHistoryQueue.value.filter(entry => entry.info.role === 'user').map(entry => entry.info.agent)).toEqual(['plan']);
+    mock.emit({ method: 'item/agentMessage/delta', params: { threadId: 'thr_existing', turnId: 'turn_mode', itemId: 'a', delta: 'Answer' } });
+    expect(api.realtimeStreamingPart.value?.info).toMatchObject({ agent: 'plan', mode: 'codex' });
+    if (echoTiming === 'before') {
+      reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn_mode', status: 'inProgress' } });
+      await sending;
+    }
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_mode', item: { type: 'agentMessage', id: 'a', text: 'Answer' } } });
+    expect(api.realtimeHistoryQueue.value.map(entry => entry.info.agent)).toEqual(['plan', 'plan']);
+    api.disconnect();
+  });
+
+  it('restores plan and default prompts in a shared turn without relabelling unknown history', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Plan', { collaborationMode: { mode: 'plan', settings: { model: 'gpt-6-astra', developer_instructions: null } } });
+    const planClient = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    await api.sendPrompt('Implement');
+    const defaultClient = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing', turns: [
+      { id: 'turn_1', items: [
+        { type: 'userMessage', id: 'p', clientId: planClient, content: [{ type: 'text', text: 'Plan' }] },
+        { type: 'agentMessage', id: 'pa', text: 'Plan answer' },
+        { type: 'userMessage', id: 'd', clientId: defaultClient, content: [{ type: 'text', text: 'Implement' }] },
+        { type: 'agentMessage', id: 'da', text: 'Implementation answer' },
+      ] },
+      { id: 'unknown', items: [
+        { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Legacy' }] },
+        { type: 'agentMessage', id: 'a', text: 'Legacy answer' },
+      ] },
+    ] } });
+    api.disconnect();
+    const restored = useCodexApi({ adapterFactory: () => mock.adapter });
+    await restored.connect();
+    await restored.selectThread('thr_existing');
+    expect(restored.canonicalHistory.value.map(entry => entry.info.agent)).toEqual(['plan', 'plan', 'default', 'default', 'codex', 'codex']);
+    restored.disconnect();
+  });
+
   it('retains selected effort through the pending prompt and server echo', async () => {
     const mock = createAdapterMock();
     const reply = deferred<CodexPromptResult>();
