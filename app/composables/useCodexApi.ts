@@ -3380,7 +3380,20 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (!isCurrentConnection(request)) return;
       models.value = result.data;
       if (!selectedModel.value) {
-        const defaultModel = result.data.find((m) => m.isDefault);
+        if (!config.value) await refreshConfig();
+        if (!isCurrentConnection(request) || selectedModel.value) return;
+        const configuredModel = typeof config.value?.config.model === 'string'
+          ? config.value.config.model.trim() : '';
+        const configuredProvider = typeof config.value?.config.model_provider === 'string'
+          ? config.value.config.model_provider.trim() : '';
+        if (configuredModel && configuredProvider &&
+            configuredProvider !== 'openai' && configuredProvider !== 'codex') {
+          selectedModel.value = `${configuredProvider}/${configuredModel}`;
+          return;
+        }
+        const defaultModel = result.data.find((m) => m.id === configuredModel) ??
+          result.data.find((m) => m.model === configuredModel) ??
+          result.data.find((m) => m.isDefault);
         if (defaultModel) {
           selectedModel.value = defaultModel.id;
         } else if (result.data[0]) {

@@ -134,6 +134,53 @@ function createAdapterMock() {
 }
 
 describe('useCodexApi', () => {
+  it.each([
+    { provider: 'openai', expected: 'astra-choice' },
+    { provider: 'proxy', expected: 'proxy/gpt-6-astra' },
+  ])('initializes models from configured provider $provider', async ({ provider, expected }) => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    mock.adapter.readConfig = vi.fn().mockResolvedValue({
+      config: { model: 'gpt-6-astra', model_provider: provider },
+    });
+    mock.adapter.listModels = vi.fn().mockResolvedValue({ data: [
+      { id: 'codex-auto-review', model: 'codex-auto-review', isDefault: true },
+      { id: 'astra-choice', model: 'gpt-6-astra' },
+    ], nextCursor: null });
+    api.config.value = null;
+    api.selectModel('');
+
+    await api.refreshModels();
+
+    expect(api.selectedModel.value).toBe(expected);
+    api.disconnect();
+  });
+
+  it('retains a model selected while initial model configuration is loading', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    const pendingConfig = deferred<{ config: Record<string, unknown> }>();
+    mock.adapter.readConfig = vi.fn(() => pendingConfig.promise);
+    mock.adapter.listModels = vi.fn().mockResolvedValue({
+      data: [{ id: 'catalog-default', model: 'catalog-default', isDefault: true }], nextCursor: null,
+    });
+    api.config.value = null;
+    api.selectModel('');
+
+    const refresh = api.refreshModels();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    api.selectModel('user-choice');
+    pendingConfig.resolve({ config: { model: 'catalog-default' } });
+    await refresh;
+
+    expect(api.selectedModel.value).toBe('user-choice');
+    api.disconnect();
+  });
+
   it('does not unsubscribe a newer child subscription when an older resume finishes late', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({adapterFactory:()=>mock.adapter});

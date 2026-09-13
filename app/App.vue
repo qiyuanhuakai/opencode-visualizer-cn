@@ -560,6 +560,7 @@ import {
 } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { codexModeColor, codexModeOptions } from './utils/codexModePresentation';
+import { preferredProviderModel, restoredReasoningEffort } from './utils/providerSelection';
 import { bundledThemes } from 'shiki/bundle/web';
 import InputPanel from './components/InputPanel.vue';
 import Dropdown from './components/Dropdown.vue';
@@ -1678,6 +1679,7 @@ type CommandInfo = {
 };
 
 const providers = ref<ProviderInfo[]>([]);
+const providerDefaults = ref<ProviderResponse['default']>({});
 const connectedProviderIds = ref<string[]>([]);
 const agents = ref<AgentInfo[]>([]);
 const commands = ref<CommandInfo[]>([]);
@@ -3295,15 +3297,6 @@ function isProviderEnabled(providerId: string) {
   return !disabled.has(providerId);
 }
 
-function getFirstAvailableModelId() {
-  return modelOptions.value.find((model) => {
-    const providerId = model.providerID?.trim() ?? '';
-    return (
-      isProviderConnected(providerId) && isProviderEnabled(providerId) && isModelAvailable(model.id)
-    );
-  })?.id;
-}
-
 function ensureSelectedModelAvailable() {
   if (modelOptions.value.length === 0) return;
   const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
@@ -3317,7 +3310,7 @@ function ensureSelectedModelAvailable() {
   ) {
     return;
   }
-  selectedModel.value = getFirstAvailableModelId() ?? '';
+  selectedModel.value = preferredProviderModel(availableModelOptions.value, providerDefaults.value);
 }
 
 function applyModelVariantSelection(model: string | undefined, variant: string | undefined) {
@@ -3939,19 +3932,7 @@ function resolveDefaultAgentModel(): { agent: string; model: string; variant: st
 
   // If model is still empty after applyAgentDefaults, fall back to provider default or first model
   if (!selectedModel.value && modelOptions.value.length > 0) {
-    // Try to find a model from provider defaults
-    const providers_data = providers.value;
-    const defaults = providers_data.length > 0 ? ((providers_data[0] as any)?.default ?? {}) : {};
-    const preferredModelId = Object.entries(defaults)
-      .map(([providerID, modelID]) => {
-        const match = availableModelOptions.value.find(
-          (m) => m.providerID === providerID && m.modelID === modelID,
-        );
-        return match?.id;
-      })
-      .find((id) => Boolean(id));
-
-    selectedModel.value = preferredModelId || availableModelOptions.value[0]?.id || '';
+    selectedModel.value = preferredProviderModel(availableModelOptions.value, providerDefaults.value);
   }
 
   return {
@@ -4993,6 +4974,7 @@ async function fetchProviders(force = false) {
     const listProviders = requireBackendMethod(activeBackend.listProviders, 'providers');
     const data = (await listProviders()) as ProviderResponse;
     if (!providersRequestFence.isCurrent(request)) return;
+    providerDefaults.value = data.default ?? {};
     providers.value = Array.isArray(data.all) ? data.all : [];
     connectedProviderIds.value = Array.isArray(data.connected) ? data.connected : [];
     const models: Array<{
@@ -5034,26 +5016,13 @@ async function fetchProviders(force = false) {
     });
     const sameModels =
       models.length === modelOptions.value.length &&
-      models.every((model, index) => model.id === modelOptions.value[index]?.id);
+      models.every((model, index) => JSON.stringify(model) === JSON.stringify(modelOptions.value[index]));
     if (!sameModels) {
       modelOptions.value = models;
       modelMetaByPath.value = buildModelMetaIndex(models);
       log('providers models updated', models.length);
     }
 
-    if (!selectedModel.value) {
-      const defaults = data.default ?? {};
-      const preferredModelId = Object.entries(defaults)
-        .map(([providerID, modelID]) => buildProviderModelKey(providerID, modelID))
-        .find(
-          (value) =>
-            Boolean(value) &&
-            isModelAvailable(value) &&
-            isProviderEnabled(parseProviderModelKey(value).providerID),
-        );
-      const firstModel = getFirstAvailableModelId();
-      selectedModel.value = preferredModelId || firstModel || '';
-    }
     ensureSelectedModelAvailable();
     const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
     const nextThinkingOptions = buildThinkingOptions(selectedInfo?.variants);
@@ -5061,13 +5030,12 @@ async function fetchProviders(force = false) {
       nextThinkingOptions.length === thinkingOptions.value.length &&
       nextThinkingOptions.every((value, index) => value === thinkingOptions.value[index]);
     if (!sameThinking) thinkingOptions.value = nextThinkingOptions;
-    if (
-      selectedThinking.value === undefined ||
-      !nextThinkingOptions.includes(selectedThinking.value)
-    ) {
-      selectedThinking.value = thinkingOptions.value[0];
-      log('providers thinking set', selectedThinking.value);
-    }
+    selectedThinking.value = restoredReasoningEffort({
+      available: nextThinkingOptions,
+      current: selectedThinking.value,
+      configured: activeBackendKind.value === 'codex' ? providerConfig.value?.model_reasoning_effort : undefined,
+      hasSavedSelection: Boolean(readComposerDraft(selectedSessionId.value)),
+    });
     providersLoaded.value = true;
     log('providers fetch done');
   } catch (error) {
@@ -7436,7 +7404,8 @@ watch(selectedModel, () => {
   // Skip normalization; fetchProviders will handle it once models are available.
   if (modelOptions.value.length === 0) return;
   const selectedInfo = modelOptions.value.find((model) => model.id === selectedModel.value);
-  const nextThinkingOptions = buildThinkingOptions(selectedInfo?.variants);
+  if (!selectedInfo) return;
+  const nextThinkingOptions = buildThinkingOptions(selectedInfo.variants);
   const sameThinking =
     nextThinkingOptions.length === thinkingOptions.value.length &&
     nextThinkingOptions.every((value, index) => value === thinkingOptions.value[index]);

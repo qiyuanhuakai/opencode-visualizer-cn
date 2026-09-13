@@ -150,11 +150,10 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       // blocking the rest of the boot sequence.
       await Promise.allSettled([
         existingThreadId ? options.codexApi.selectThread(existingThreadId) : Promise.resolve(),
-        Promise.all([
-          options.fetchGlobalProviderConfig(),
+        options.fetchGlobalProviderConfig().then(() => Promise.all([
           options.fetchProviders(true),
           options.fetchAgents(),
-        ]),
+        ])),
       ]);
       await options.hydrateActiveWorktreeResources();
       options.connectionState.value = 'ready';
