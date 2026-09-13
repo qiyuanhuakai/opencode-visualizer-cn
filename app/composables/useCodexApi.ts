@@ -656,7 +656,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (!request || !parentId) return;
     const current = () => isCurrentConnection(request) && activeThreadId.value === parentId && generation === subagentStreamGeneration;
     try {
-      const read = await request.sourceAdapter.readThread({ threadId, includeTurns: true });
+      const read = await readThreadForHistory(threadId, request.sourceAdapter);
       if (!current() || read.thread.id !== threadId) return;
       subagentStreams.registerHistory(read.thread);
       if (!live && extractStatusType(read.thread.status) !== 'active') return;
@@ -668,9 +668,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         }
         return;
       }
-      subagentStreams.registerHistory(resumed.thread, undefined, live);
-    } catch {
-      if (current()) console.warn('[codex] Unable to subscribe to subagent activity', threadId);
+      subagentStreams.registerHistory({
+        ...resumed.thread,
+        turns: resumed.thread.turns?.length ? resumed.thread.turns : read.thread.turns,
+      }, undefined, live);
+    } catch (error) {
+      if (current()) {
+        subagentStreams.subscriptionFailed(threadId);
+        console.warn('[codex] Unable to subscribe to subagent activity', threadId,
+          error instanceof Error ? error.message : 'Unknown subscription error');
+      }
     }
   }
 

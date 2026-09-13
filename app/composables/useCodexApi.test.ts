@@ -221,6 +221,101 @@ describe('useCodexApi', () => {
     expect(api.realtimeHistoryQueue.value.every(entry => entry.info.sessionID === parent)).toBe(true);
     api.disconnect();
   });
+  it('subscribes a child before its history is materialized', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    mock.adapter.readThread = vi.fn()
+      .mockRejectedValueOnce(new CodexJsonRpcError(-32600,
+        'thread child is not materialized yet; includeTurns is unavailable before first user message'))
+      .mockResolvedValue({ thread: { id: 'child', turns: [] } });
+    mock.adapter.resumeThread = vi.fn().mockResolvedValue({ thread: { id: 'child', turns: [] } });
+
+    mock.emit({ method: 'item/completed', params: { threadId: parent, turnId: 'parent-turn',
+      item: { id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' } } });
+
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledWith({ threadId: 'child' }));
+    expect(mock.adapter.readThread).toHaveBeenCalledWith({ threadId: 'child', includeTurns: false });
+    mock.emit({ method: 'item/agentMessage/delta', params: {
+      threadId: 'child', turnId: 'child-turn', itemId: 'answer', delta: 'Working',
+    } });
+    expect(api.realtimeSubagentPart.value).toMatchObject({ parentThreadId: parent,
+      info: { sessionID: 'child' }, part: { text: 'Working' } });
+    api.disconnect();
+  });
+
+  it('catches up child commentary when resume returns metadata without turns', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'child', turns: [
+      { id: 'child-turn', status: 'completed', items: [
+        { id: 'answer', type: 'agentMessage', phase: 'commentary', text: 'Finished checking' },
+      ] },
+    ] } });
+    mock.adapter.resumeThread = vi.fn().mockResolvedValue({
+      thread: { id: 'child', model: 'resumed-model', turns: [] },
+    });
+
+    mock.emit({ method: 'item/completed', params: { threadId: parent, turnId: 'parent-turn',
+      item: { id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' } } });
+
+    await vi.waitFor(() => expect(api.realtimeSubagentPart.value).toMatchObject({
+      parentThreadId: parent, info: { sessionID: 'child', modelID: 'resumed-model' },
+      part: { text: 'Finished checking' },
+    }));
+    api.disconnect();
+  });
+
+  it('keeps historical child commentary quiet when selecting a parent', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.adapter.readThread = vi.fn(async ({ threadId }) => ({ thread: { id: threadId,
+      status: { type: 'active' }, turns: [{ id: `${threadId}-turn`, status: 'completed', items:
+        threadId === 'child'
+          ? [{ id: 'answer', type: 'agentMessage', phase: 'commentary', text: 'Historical answer' }]
+          : [{ id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' }],
+      }],
+    } }));
+    mock.adapter.resumeThread = vi.fn(async ({ threadId }) => ({ thread: { id: threadId, turns: [] } }));
+
+    await api.selectThread('historical-parent');
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledWith({ threadId: 'child' }));
+    await Promise.resolve();
+
+    expect(api.realtimeSubagentPart.value).toBeNull();
+    api.disconnect();
+  });
+
+  it('retries a failed child resume when later activity rediscovers it', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'child', turns: [] } });
+    mock.adapter.resumeThread = vi.fn()
+      .mockRejectedValueOnce(new CodexJsonRpcError(-32603, 'Child temporarily unavailable'))
+      .mockResolvedValue({ thread: { id: 'child', turns: [] } });
+    const spawn = () => mock.emit({ method: 'item/completed', params: {
+      threadId: parent, turnId: 'parent-turn',
+      item: { id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' },
+    } });
+    spawn();
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    spawn();
+
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledTimes(2));
+    mock.emit({ method: 'item/agentMessage/delta', params: {
+      threadId: 'child', turnId: 'child-turn', itemId: 'answer', delta: 'Recovered',
+    } });
+    expect(api.realtimeSubagentPart.value?.part).toMatchObject({ text: 'Recovered' });
+    api.disconnect();
+  });
+
   it('bridges subAgentActivity notifications and restores reviewer history after hydration', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });

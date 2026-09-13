@@ -24,6 +24,11 @@ export function createCodexSubagentStreams(options: {
   let selected = options.getSelectedParent();
   function reset() { children.clear(); selected = options.getSelectedParent(); }
   function sync() { if (selected !== options.getSelectedParent()) reset(); }
+  function subscriptionFailed(id: string) {
+    sync();
+    const child = children.get(id);
+    if (child) child.live = false;
+  }
   function known(id: string) { return Boolean(selected) && (id === selected || children.has(id)); }
   function discover(id: string, metadata: Wire = {}, live = true) {
     if (!id || id === selected) return;
@@ -184,5 +189,5 @@ export function createCodexSubagentStreams(options: {
     emit(id, child, item);
     return true;
   }
-  return { handle, registerHistory, reset };
+  return { handle, registerHistory, reset, subscriptionFailed };
 }
