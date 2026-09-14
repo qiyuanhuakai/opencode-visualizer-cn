@@ -1,11 +1,12 @@
 import { nextTick } from 'vue';
-import { afterEach, describe, expect, it } from 'vitest';
-import { mountLoginApp } from './test/appHarness';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mountCodexApp, mountLoginApp } from './test/appHarness';
 
 const mountedApps: Array<{ readonly unmount: () => void }> = [];
 
 afterEach(() => {
   mountedApps.splice(0).forEach(({ unmount }) => unmount());
+  window.history.replaceState({}, '', '/');
 });
 
 function clickBackend(host: HTMLElement, label: string) {
@@ -26,6 +27,27 @@ async function fillInput(host: HTMLElement, name: string, value: string) {
 }
 
 describe('App backend login isolation', () => {
+  it('restores OpenCode selection after logging out of a cold-loaded Codex deep link', async () => {
+    window.history.replaceState({}, '', '/?project=codex&session=thread-openai');
+    const fixture = await mountCodexApp();
+    mountedApps.push(fixture);
+    const logout = fixture.readSetupBinding('handleLogout');
+    if (typeof logout !== 'function') throw new Error('Logout binding unavailable');
+    logout();
+    await nextTick();
+    clickBackend(fixture.host, 'OpenCode');
+    await nextTick();
+    await fillInput(fixture.host, 'url', 'http://127.0.0.1:4096');
+    fixture.host.querySelector<HTMLButtonElement>('.app-loading-connect')?.click();
+    await vi.waitFor(() => {
+      expect(fixture.readSetupBinding('initErrorMessage')).toBe('');
+      expect(fixture.readSetupBinding('uiInitState')).toBe('ready');
+      expect(fixture.readSetupBinding('activeBackendKind')).toBe('opencode');
+    });
+    expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-b');
+    expect(fixture.host.querySelector('.app-error-message')).toBeNull();
+  });
+
   it('Given distinct Codex and ACP tokens entered through one real login form, When Codex is selected and submitted, Then Codex receives only its own token', async () => {
     const codexFixture = await mountLoginApp();
     mountedApps.push(codexFixture);

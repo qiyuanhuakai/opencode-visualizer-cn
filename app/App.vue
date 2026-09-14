@@ -9382,7 +9382,9 @@ function handleAbortInit() {
 }
 
 function handleLogout() {
-  uiInitState.value = 'login';
+  abortInitialization();
+  initialQuery.projectId = '';
+  initialQuery.sessionId = '';
   acpMessageBridge.stop();
   disconnectAcpBackend();
   credentials.clear();

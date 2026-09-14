@@ -410,6 +410,10 @@ describe('useBackendActivation', () => {
       finishStaleActivation?.();
       await staleInitialization;
 
+      expect(harness.selectedSessionId.value).toBe('');
+      expect(harness.uiInitState.value).toBe('loading');
+      expect(harness.calls).not.toContain('reloadSelectedSessionState');
+
       // Then: the replacement still owns the lock and can finish reaching Ready.
       expect(harness.activation.initializationInFlight.value).toBe(true);
       finishOpenCodeConnect?.();
