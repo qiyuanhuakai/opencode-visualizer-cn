@@ -5,6 +5,14 @@ import { reactive, ref } from 'vue';
 
 import ThreadHistoryContent from './ThreadHistoryContent.vue';
 import { FLOATING_WINDOW_KEY } from '../composables/useFloatingWindow';
+import { makeThreadHistoryToolEntries } from './historyTestBuilders';
+
+const mountedApps = new Set<ReturnType<typeof createApp>>();
+
+function unmount(app: ReturnType<typeof createApp>) {
+  if (!mountedApps.delete(app)) return;
+  app.unmount();
+}
 
 function createMessages() {
   return {
@@ -36,29 +44,7 @@ async function flushRender() {
   await nextTick();
 }
 
-function createToolEntries(count: number, prefix: string, commandPrefix = prefix) {
-  return Array.from({ length: count }, (_, index) => ({
-    key: `${prefix}-${index}`,
-    kind: 'tool' as const,
-    time: index,
-    part: {
-      id: `${prefix}-${index}`,
-      callID: `${prefix}-${index}`,
-      sessionID: 's1',
-      messageID: `m-${index}`,
-      type: 'tool' as const,
-      tool: 'bash',
-      state: {
-        status: 'completed' as const,
-         input: { command: `printf ${commandPrefix}-${index}` },
-        output: '',
-        title: 'shell',
-        metadata: {},
-        time: { start: index, end: index },
-      },
-    },
-  }));
-}
+const createToolEntries = makeThreadHistoryToolEntries;
 
 function mountHistory(initialEntries: ReturnType<typeof createToolEntries>) {
   const i18n = createI18n({ legacy: false, locale: 'en', messages: createMessages() });
@@ -66,11 +52,14 @@ function mountHistory(initialEntries: ReturnType<typeof createToolEntries>) {
   root.className = 'floating-window-body';
   document.body.appendChild(root);
   const state = reactive({ entries: initialEntries });
-  const app = createApp(defineComponent({
-    setup() {
-      return () => h(ThreadHistoryContent, { entries: state.entries });
-    },
-  }));
+  const app = createApp(
+    defineComponent({
+      setup() {
+        return () => h(ThreadHistoryContent, { entries: state.entries });
+      },
+    }),
+  );
+  mountedApps.add(app);
   app.use(i18n);
   app.provide(FLOATING_WINDOW_KEY, {
     key: 'test-floating-window',
@@ -95,6 +84,7 @@ function mountHistory(initialEntries: ReturnType<typeof createToolEntries>) {
 
 describe('ThreadHistoryContent', () => {
   afterEach(() => {
+    mountedApps.forEach(unmount);
     document.body.innerHTML = '';
     vi.unstubAllGlobals();
   });
@@ -104,34 +94,40 @@ describe('ThreadHistoryContent', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);
 
-    const app = createApp(defineComponent({
-      setup() {
-        return () => h(ThreadHistoryContent, {
-          entries: [{
-            key: 'tool-1',
-            kind: 'tool',
-            time: 1,
-            part: {
-              id: 'tool-1',
-              callID: 'tool-1',
-              sessionID: 's1',
-              messageID: 'm1',
-              type: 'tool',
-              tool: 'multiedit',
-              state: {
-                status: 'completed',
-                input: { filePath: '1.txt', files: ['1.txt', '2.txt'] },
-                output: 'done',
-                title: 'edit files',
-                metadata: {},
-                time: { start: 1, end: 1 },
-              },
-            },
-          }],
-          theme: 'github-dark',
-        });
-      },
-    }));
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(ThreadHistoryContent, {
+              entries: [
+                {
+                  key: 'tool-1',
+                  kind: 'tool',
+                  time: 1,
+                  part: {
+                    id: 'tool-1',
+                    callID: 'tool-1',
+                    sessionID: 's1',
+                    messageID: 'm1',
+                    type: 'tool',
+                    tool: 'multiedit',
+                    state: {
+                      status: 'completed',
+                      input: { filePath: '1.txt', files: ['1.txt', '2.txt'] },
+                      output: 'done',
+                      title: 'edit files',
+                      metadata: {},
+                      time: { start: 1, end: 1 },
+                    },
+                  },
+                },
+              ],
+              theme: 'github-dark',
+            });
+        },
+      }),
+    );
+    mountedApps.add(app);
 
     app.use(i18n);
     app.provide(FLOATING_WINDOW_KEY, {
@@ -156,7 +152,7 @@ describe('ThreadHistoryContent', () => {
 
     expect(root.textContent).toContain('1.txt, 2.txt');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -185,13 +181,15 @@ describe('ThreadHistoryContent', () => {
         },
       },
     }));
-    const app = createApp(defineComponent({
-      setup() {
-        return () => h('div', { class: 'floating-window-body' }, [
-          h(ThreadHistoryContent, { entries }),
-        ]);
-      },
-    }));
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h('div', { class: 'floating-window-body' }, [h(ThreadHistoryContent, { entries })]);
+        },
+      }),
+    );
+    mountedApps.add(app);
     app.use(i18n);
     app.provide(FLOATING_WINDOW_KEY, {
       key: 'test-floating-window',
@@ -229,7 +227,7 @@ describe('ThreadHistoryContent', () => {
     expect(shifted).toHaveLength(100);
     expect(shifted[0]?.getAttribute('data-history-key')).toBe('tool-2880');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -238,13 +236,17 @@ describe('ThreadHistoryContent', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);
     const state = reactive({ entries: createToolEntries(3_000, 'original') });
-    const app = createApp(defineComponent({
-      setup() {
-        return () => h('div', { class: 'floating-window-body' }, [
-          h(ThreadHistoryContent, { entries: state.entries }),
-        ]);
-      },
-    }));
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h('div', { class: 'floating-window-body' }, [
+              h(ThreadHistoryContent, { entries: state.entries }),
+            ]);
+        },
+      }),
+    );
+    mountedApps.add(app);
     app.use(i18n);
     app.provide(FLOATING_WINDOW_KEY, {
       key: 'test-floating-window',
@@ -282,7 +284,7 @@ describe('ThreadHistoryContent', () => {
     expect(rendered[0]?.getAttribute('data-history-key')).toBe('shrunk-0');
     expect(rendered[99]?.getAttribute('data-history-key')).toBe('shrunk-99');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -291,13 +293,17 @@ describe('ThreadHistoryContent', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);
     const state = reactive({ entries: createToolEntries(3_000, 'original') });
-    const app = createApp(defineComponent({
-      setup() {
-        return () => h('div', { class: 'floating-window-body' }, [
-          h(ThreadHistoryContent, { entries: state.entries }),
-        ]);
-      },
-    }));
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h('div', { class: 'floating-window-body' }, [
+              h(ThreadHistoryContent, { entries: state.entries }),
+            ]);
+        },
+      }),
+    );
+    mountedApps.add(app);
     app.use(i18n);
     app.provide(FLOATING_WINDOW_KEY, {
       key: 'test-floating-window',
@@ -334,7 +340,7 @@ describe('ThreadHistoryContent', () => {
     expect(rendered).toHaveLength(100);
     expect(rendered[0]?.getAttribute('data-history-key')).toBe('replacement-2900');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -343,13 +349,17 @@ describe('ThreadHistoryContent', () => {
     const root = document.createElement('div');
     document.body.appendChild(root);
     const state = reactive({ entries: createToolEntries(3_000, 'original') });
-    const app = createApp(defineComponent({
-      setup() {
-        return () => h('div', { class: 'floating-window-body' }, [
-          h(ThreadHistoryContent, { entries: state.entries }),
-        ]);
-      },
-    }));
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h('div', { class: 'floating-window-body' }, [
+              h(ThreadHistoryContent, { entries: state.entries }),
+            ]);
+        },
+      }),
+    );
+    mountedApps.add(app);
     app.use(i18n);
     app.provide(FLOATING_WINDOW_KEY, {
       key: 'test-floating-window',
@@ -388,7 +398,7 @@ describe('ThreadHistoryContent', () => {
     expect(rendered[99]?.getAttribute('data-history-key')).toBe('original-2979');
     expect(rendered[0]?.textContent).toContain('$ printf updated-2880');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -401,20 +411,14 @@ describe('ThreadHistoryContent', () => {
       clientHeight: { configurable: true, value: 600 },
     });
 
-    mounted.state.entries = [
-      ...mounted.state.entries,
-      ...createToolEntries(1, 'appended-a'),
-    ];
+    mounted.state.entries = [...mounted.state.entries, ...createToolEntries(1, 'appended-a')];
     await flushRender();
     let rendered = mounted.root.querySelectorAll('.history-item');
     expect(rendered[0]?.getAttribute('data-history-key')).toBe('original-2900');
     expect(rendered[99]?.getAttribute('data-history-key')).toBe('original-2999');
 
     mounted.root.scrollTop = 2_400;
-    mounted.state.entries = [
-      ...mounted.state.entries,
-      ...createToolEntries(1, 'appended-b'),
-    ];
+    mounted.state.entries = [...mounted.state.entries, ...createToolEntries(1, 'appended-b')];
     await flushRender();
     rendered = mounted.root.querySelectorAll('.history-item');
     expect(rendered[0]?.getAttribute('data-history-key')).toBe('original-2900');
@@ -422,16 +426,13 @@ describe('ThreadHistoryContent', () => {
 
     mounted.root.dispatchEvent(new Event('scroll'));
     await flushRender();
-    mounted.state.entries = [
-      ...mounted.state.entries,
-      ...createToolEntries(1, 'appended-c'),
-    ];
+    mounted.state.entries = [...mounted.state.entries, ...createToolEntries(1, 'appended-c')];
     await flushRender();
     rendered = mounted.root.querySelectorAll('.history-item');
     expect(rendered[0]?.getAttribute('data-history-key')).toBe('original-2903');
     expect(rendered[99]?.getAttribute('data-history-key')).toBe('appended-c-0');
 
-    mounted.app.unmount();
+    unmount(mounted.app);
     mounted.root.remove();
   });
 
@@ -455,7 +456,10 @@ describe('ThreadHistoryContent', () => {
 
     // Simulate layout: the anchor sits at a document position that shrinks
     // when the rows above it are swapped for shorter ones.
-    const anchorDocumentTop = () => host.querySelector('.history-item')?.getAttribute('data-history-key') === 'original-2900' ? 5_000 : 4_900;
+    const anchorDocumentTop = () =>
+      host.querySelector('.history-item')?.getAttribute('data-history-key') === 'original-2900'
+        ? 5_000
+        : 4_900;
     const mockAnchorRect = () => {
       const anchorEl = host.querySelector<HTMLElement>('[data-history-key="original-2900"]');
       if (!anchorEl) return;
@@ -498,7 +502,7 @@ describe('ThreadHistoryContent', () => {
     expect(host.scrollTop).toBe(300);
     expect(host.style.overflowAnchor).toBe('');
 
-    mounted.app.unmount();
+    unmount(mounted.app);
     mounted.root.remove();
   });
 
@@ -509,32 +513,38 @@ describe('ThreadHistoryContent', () => {
     const host = mounted.root;
     host.dispatchEvent(new Event('scroll'));
     await flushRender();
-    expect(host.querySelector('.history-item')?.getAttribute('data-history-key')).toBe('clamp-2880');
+    expect(host.querySelector('.history-item')?.getAttribute('data-history-key')).toBe(
+      'clamp-2880',
+    );
     for (let i = 0; i < 3; i += 1) {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
       await flushRender();
     }
-    const inOldWindow = () => host.querySelector('.history-item')?.getAttribute('data-history-key') === 'clamp-2880';
+    const inOldWindow = () =>
+      host.querySelector('.history-item')?.getAttribute('data-history-key') === 'clamp-2880';
     let top = 5400;
     Object.defineProperties(host, {
       clientHeight: { configurable: true, value: 600 },
-      scrollHeight: { configurable: true, get: () => inOldWindow() ? 6000 : 5200 },
+      scrollHeight: { configurable: true, get: () => (inOldWindow() ? 6000 : 5200) },
       scrollTop: {
         configurable: true,
         get: () => Math.min(top, host.scrollHeight - host.clientHeight),
-        set: (value: number) => { top = Math.max(0, Math.min(value, host.scrollHeight - host.clientHeight)); },
+        set: (value: number) => {
+          top = Math.max(0, Math.min(value, host.scrollHeight - host.clientHeight));
+        },
       },
     });
     const anchor = host.querySelector<HTMLElement>('[data-history-key="clamp-2900"]');
     if (!anchor) throw new Error('missing retained anchor');
-    anchor.getBoundingClientRect = () => new DOMRect(0, (inOldWindow() ? 1200 : 0) - host.scrollTop, 100, 60);
+    anchor.getBoundingClientRect = () =>
+      new DOMRect(0, (inOldWindow() ? 1200 : 0) - host.scrollTop, 100, 60);
     host.dispatchEvent(new Event('scroll'));
     await flushRender();
     await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     await flushRender();
     expect(host.scrollTop).toBe(4200);
     expect(host.style.overflowAnchor).toBe('');
-    mounted.app.unmount();
+    unmount(mounted.app);
     mounted.root.remove();
   });
 
@@ -546,10 +556,7 @@ describe('ThreadHistoryContent', () => {
       scrollHeight: { configurable: true, value: 1_000 },
       clientHeight: { configurable: true, value: 100 },
     });
-    mounted.state.entries = [
-      ...mounted.state.entries,
-      ...createToolEntries(1, 'appended'),
-    ];
+    mounted.state.entries = [...mounted.state.entries, ...createToolEntries(1, 'appended')];
     await flushRender();
 
     mounted.root.scrollTop = 900;
@@ -561,7 +568,7 @@ describe('ThreadHistoryContent', () => {
     expect(rendered[0]?.getAttribute('data-history-key')).toBe('short-0');
     expect(rendered[50]?.getAttribute('data-history-key')).toBe('appended-0');
 
-    mounted.app.unmount();
+    unmount(mounted.app);
     mounted.root.remove();
   });
 });

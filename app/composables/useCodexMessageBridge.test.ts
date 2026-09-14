@@ -1,5 +1,5 @@
-import { nextTick, ref } from 'vue';
-import { describe, expect, it, vi } from 'vitest';
+import { effectScope, nextTick, ref, type EffectScope } from 'vue';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { normalizeCodexTurnsToHistory, type CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import type { BackendKind } from '../backends/types';
 import type {
@@ -10,6 +10,12 @@ import type {
   UserMessageInfo,
 } from '../types/sse';
 import { useCodexMessageBridge } from './useCodexMessageBridge';
+
+const bridgeScopes: EffectScope[] = [];
+
+afterEach(() => {
+  bridgeScopes.splice(0).forEach(scope => scope.stop());
+});
 
 function bridgeFixture() {
   const params = {
@@ -34,8 +40,10 @@ function bridgeFixture() {
     onLiveReasoning: vi.fn(),
     onLiveSubagent: vi.fn(),
   };
-  useCodexMessageBridge(params);
-  return params;
+  const scope = effectScope();
+  bridgeScopes.push(scope);
+  scope.run(() => useCodexMessageBridge(params));
+  return { ...params, stop: () => scope.stop() };
 }
 
 function liveHistory() {
@@ -51,6 +59,15 @@ function liveHistory() {
 }
 
 describe('useCodexMessageBridge', () => {
+  it('stops fixture watchers so later realtime events cannot update messages', async () => {
+    const params = bridgeFixture();
+    params.stop();
+    params.codexApi.realtimeHistoryQueue.value = liveHistory();
+    await nextTick();
+    expect(params.msg.updateMessage).not.toHaveBeenCalled();
+    expect(params.msg.updatePart).not.toHaveBeenCalled();
+  });
+
   it('removes a rejected optimistic user when it disappears from the realtime queue', async () => {
     const params = bridgeFixture();
     const user = liveHistory().find(entry => entry.info.role === 'user');
@@ -185,7 +202,9 @@ describe('useCodexMessageBridge', () => {
     const syncRealtimeToolWindows = vi.fn();
 
     const realtimeHistoryQueue = ref<CodexCanonicalHistoryEntry[]>([]);
-    useCodexMessageBridge({
+    const scope = effectScope();
+    bridgeScopes.push(scope);
+    scope.run(() => useCodexMessageBridge({
       activeBackendKind: ref<BackendKind>('codex'),
       selectedSessionId: ref('thread-1'),
       codexPendingSessionLock: ref(''),
@@ -218,7 +237,7 @@ describe('useCodexMessageBridge', () => {
       updateReasoningExpiry: vi.fn(),
     onLiveReasoning: vi.fn(),
     onLiveSubagent: vi.fn(),
-    });
+    }));
 
     realtimeHistoryQueue.value = restored;
     await nextTick();

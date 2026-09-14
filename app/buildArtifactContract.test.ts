@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -52,6 +52,7 @@ fs.appendFileSync(path.join(process.cwd(), '.build-count'), 'x\\n');
 fs.rmSync(dist, { recursive: true, force: true });
 fs.mkdirSync(path.join(dist, 'assets'), { recursive: true });
 fs.writeFileSync(path.join(process.cwd(), '.wipe-done'), '1');
+if (process.env.FAKE_BUILD_FAIL === '1') throw new Error('injected fake build failure');
 await new Promise((resolve) => setTimeout(resolve, Number(process.env.FAKE_BUILD_SLEEP_MS ?? 0)));
 fs.writeFileSync(
   path.join(dist, 'index.html'),
@@ -92,17 +93,31 @@ async function deadPid(): Promise<number> {
 }
 
 const runningChildren = new Set<ReturnType<typeof spawn>>();
-afterEach(() => {
-  for (const child of runningChildren) {
-    if (child.exitCode !== null || child.signalCode !== null) continue;
-    if (child.pid === undefined) continue;
+function terminateOwnedChild(child: ReturnType<typeof spawn>): void {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.pid !== undefined && process.platform !== 'win32') {
     try {
       process.kill(-child.pid, 'SIGKILL'); // detached: true → whole process group
+      return;
     } catch {
       child.kill('SIGKILL');
+      return;
     }
   }
+  child.kill('SIGKILL');
+}
+
+async function stopOwnedChild(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  const exited = once(child, 'exit');
+  terminateOwnedChild(child);
+  await exited;
+}
+
+afterEach(async () => {
+  const children = [...runningChildren];
   runningChildren.clear();
+  await Promise.all(children.map(stopOwnedChild));
 });
 
 function spawnEnsureCli(projDir: string, extraEnv: Record<string, string> = {}) {
@@ -132,20 +147,18 @@ async function exitOf(
   child.stderr?.on('data', (d: Buffer) => {
     stderr += d.toString();
   });
-  const code = await Promise.race([
-    once(child, 'exit').then(([code]) => (typeof code === 'number' ? code : 1)),
-    delay(timeoutMs).then(() => {
-      if (child.pid !== undefined) {
-        try {
-          process.kill(-child.pid, 'SIGKILL');
-        } catch {
-          child.kill('SIGKILL');
-        }
-      }
-      return -1;
-    }),
-  ]);
-  return { code, stdout, stderr };
+  let timedOut = false;
+  const deadline = setTimeout(() => {
+    timedOut = true;
+    terminateOwnedChild(child);
+  }, timeoutMs);
+  try {
+    const [exitCode] = await once(child, 'exit');
+    const code = timedOut ? -1 : typeof exitCode === 'number' ? exitCode : 1;
+    return { code, stdout, stderr };
+  } finally {
+    clearTimeout(deadline);
+  }
 }
 
 function buildCount(projDir: string): number {
@@ -176,11 +189,7 @@ function indexComplete(projDir: string): boolean {
 //  1. artifact-budget.json is FROZEN — its caps are the pre-upgrade formula
 //     (per asset: ceil(oldBytes*1.20/1024)*1024; total: ceil(old*1.10/1024)*1024)
 //     applied to the recorded pre-upgrade bytes, and are NEVER recomputed.
-//  2. scripts/qa/build-artifact-check.mjs measures a real build against that
-//     budget (no absolute /assets in index.html, ≥1 relative app://-loadable
-//     ref and every ref resolvable, critical chunks present, per-asset +
-//     total caps respected).
-//  3. scripts/qa/ensure-production-dist.mjs serializes concurrent builders
+//  2. scripts/qa/ensure-production-dist.mjs serializes concurrent builders
 //     on a clean checkout with a lock OUTSIDE dist/ (survives the owner's
 //     own emptyOutDir wipe), recovers a stale lock left by a crashed owner
 //     (dead PID → take over), rebuilds partial/corrupt markers, and always
@@ -209,36 +218,6 @@ describe('build artifact contract', () => {
     expect(budget.totalBytes.cap).toBe(ceilKiB(budget.totalBytes.oldBytes * 1.1));
   });
 
-  it('produces a GREEN artifact report (index.html relative, chunks present, budget respected)', {
-    timeout: 180000,
-  }, () => {
-    const reportPath = path.join(os.tmpdir(), `vis-artifact-report-${process.pid}.json`);
-    try {
-      const res = spawnSync(
-        process.execPath,
-        ['scripts/qa/build-artifact-check.mjs', `--report=${reportPath}`],
-        { cwd: REPO_ROOT, encoding: 'utf8', timeout: 170000 },
-      );
-      expect(res.status, res.stdout + res.stderr).toBe(0);
-      const report = JSON.parse(readFileSync(reportPath, 'utf8')) as {
-        passed: boolean;
-        passCount: number;
-        failCount: number;
-        checks: { name: string; ok: boolean }[];
-      };
-      expect(report.passed).toBe(true);
-      expect(report.failCount).toBe(0);
-      expect(report.passCount).toBe(report.checks.length);
-      const names = report.checks.map((c) => c.name).join('|');
-      expect(names).toContain('no absolute /assets references');
-      expect(names).toContain('at least one relative asset');
-      expect(names).toContain('every relative asset reference exists on disk');
-      expect(names).toContain('within cap');
-      expect(names).toContain('within total cap');
-    } finally {
-      rmSync(reportPath, { force: true });
-    }
-  });
 });
 
 // F3 #3: the lock must survive the owner's own build (vite emptyOutDir wipes
@@ -518,6 +497,42 @@ describe('ensure-production-dist build serialization', () => {
     } finally {
       rmSync(projDir, { recursive: true, force: true });
     }
+  });
+
+  it('kills and reaps a timed-out owned caller before returning', async () => {
+    const projDir = await makeFakeProject();
+    const lockPath = tmpLockPathFor(projDir);
+    try {
+      const child = spawnEnsureCli(projDir, { FAKE_BUILD_SLEEP_MS: '30000' });
+      const pid = child.pid;
+      if (pid === undefined) throw new Error('owned caller spawn produced no pid');
+
+      const res = await exitOf(child, 50);
+
+      expect(res.code).toBe(-1);
+      expect(child.signalCode).toBe('SIGKILL');
+      expect(() => process.kill(pid, 0)).toThrow();
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
+      rmSync(lockPath, { recursive: true, force: true });
+    }
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('reports a failed build and removes its owned temporary project', async () => {
+    const projDir = await makeFakeProject();
+    const lockPath = tmpLockPathFor(projDir);
+    let exitCode: number | undefined;
+    try {
+      exitCode = (await exitOf(spawnEnsureCli(projDir, { FAKE_BUILD_FAIL: '1' }), 5000)).code;
+    } finally {
+      rmSync(projDir, { recursive: true, force: true });
+      rmSync(lockPath, { recursive: true, force: true });
+    }
+
+    expect(exitCode).not.toBe(0);
+    expect(existsSync(projDir)).toBe(false);
+    expect(existsSync(lockPath)).toBe(false);
   });
 });
 

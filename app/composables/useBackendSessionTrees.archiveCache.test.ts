@@ -3,6 +3,24 @@ import { nextTick, reactive, ref } from 'vue';
 import type { ProjectState } from '../types/worker-state';
 import { useBackendSessionTrees } from './useBackendSessionTrees';
 
+type TreeOptions = Parameters<typeof useBackendSessionTrees>[0];
+
+function createTreeFixture(
+  projects: Record<string, ProjectState>,
+  overrides: Partial<Omit<TreeOptions, 'projects'>> = {},
+) {
+  return useBackendSessionTrees({
+    activeBackendKind: ref('acp'),
+    projects,
+    pinnedStore: ref({}),
+    deletedSandboxStore: ref({}),
+    homePath: ref('/home/test'),
+    replaceHomePrefix: (path) => path,
+    resolveProjectColor: () => undefined,
+    ...overrides,
+  });
+}
+
 describe('useBackendSessionTrees projections and archive cache', () => {
   it('rebuilds TopPanel data immediately when a session archive value changes', async () => {
     const projects = reactive<Record<string, ProjectState>>({
@@ -27,15 +45,7 @@ describe('useBackendSessionTrees projections and archive cache', () => {
         },
       },
     });
-    const trees = useBackendSessionTrees({
-      activeBackendKind: ref('acp'),
-      projects,
-      pinnedStore: ref({}),
-      deletedSandboxStore: ref({}),
-      homePath: ref('/home/test'),
-      replaceHomePrefix: (path) => path,
-      resolveProjectColor: () => undefined,
-    });
+    const trees = createTreeFixture(projects);
 
     expect(trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions[0]?.archivedAt).toBeUndefined();
     projects.acp.sandboxes['/repo'].sessions['session-1'].timeArchived = 123;
@@ -68,14 +78,8 @@ describe('useBackendSessionTrees projections and archive cache', () => {
         },
       },
     });
-    const trees = useBackendSessionTrees({
+    const trees = createTreeFixture(projects, {
       activeBackendKind: ref('opencode'),
-      projects,
-      pinnedStore: ref({}),
-      deletedSandboxStore: ref({}),
-      homePath: ref('/home/test'),
-      replaceHomePrefix: (path) => path,
-      resolveProjectColor: () => undefined,
     });
 
     expect(trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions[0]?.status).toBe('busy');
@@ -108,13 +112,7 @@ describe('useBackendSessionTrees projections and archive cache', () => {
         },
       },
     });
-    const trees = useBackendSessionTrees({
-      activeBackendKind: ref('acp'),
-      projects,
-      pinnedStore: ref({}),
-      deletedSandboxStore: ref({}),
-      homePath: ref('/home/test'),
-      replaceHomePrefix: (path) => path,
+    const trees = createTreeFixture(projects, {
       resolveProjectColor: (color) => color,
     });
 
@@ -166,32 +164,28 @@ describe('useBackendSessionTrees projections and archive cache', () => {
         },
       },
     });
-    const trees = useBackendSessionTrees({
-      activeBackendKind: ref('acp'),
-      projects,
-      pinnedStore: ref({}),
-      deletedSandboxStore: ref({}),
-      homePath: ref('/home/test'),
-      replaceHomePrefix: (path) => path,
-      resolveProjectColor: () => undefined,
-    });
+    const trees = createTreeFixture(projects);
 
-    expect(trees.topPanelTreeData.value).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: 'global',
-        directory: '/',
-        sandboxes: [expect.objectContaining({ directory: '/workspace/notes', kind: 'folder' })],
-      }),
-      expect.objectContaining({
-        directory: '/workspace/repo',
-        kind: 'sandbox',
-        sandboxes: [expect.objectContaining({
+    expect(trees.topPanelTreeData.value).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: 'global',
+          directory: '/',
+          sandboxes: [expect.objectContaining({ directory: '/workspace/notes', kind: 'folder' })],
+        }),
+        expect.objectContaining({
           directory: '/workspace/repo',
-          branch: 'main',
-          kind: 'branch',
-        })],
-      }),
-    ]));
+          kind: 'sandbox',
+          sandboxes: [
+            expect.objectContaining({
+              directory: '/workspace/repo',
+              branch: 'main',
+              kind: 'branch',
+            }),
+          ],
+        }),
+      ]),
+    );
   });
 
   it('classifies ACP sessions from the VCS cache when the ACP wire omits gitInfo', () => {
@@ -217,11 +211,7 @@ describe('useBackendSessionTrees projections and archive cache', () => {
         },
       },
     });
-    const trees = useBackendSessionTrees({
-      activeBackendKind: ref('acp'),
-      projects,
-      pinnedStore: ref({}),
-      deletedSandboxStore: ref({}),
+    const trees = createTreeFixture(projects, {
       gitInfoByDirectory: ref({
         '/workspace/repository': {
           root: '/workspace/repository',
@@ -230,9 +220,6 @@ describe('useBackendSessionTrees projections and archive cache', () => {
           branch: 'main',
         },
       }),
-      homePath: ref('/home/test'),
-      replaceHomePrefix: (path) => path,
-      resolveProjectColor: () => undefined,
     });
 
     expect(trees.topPanelTreeData.value).toEqual([
@@ -282,21 +269,17 @@ describe('useBackendSessionTrees projections and archive cache', () => {
         },
       },
     });
-    const trees = useBackendSessionTrees({
-      activeBackendKind: ref('acp'),
-      projects,
+    const trees = createTreeFixture(projects, {
       pinnedStore: ref({
         'repo:acp:/repo-a': 123,
         'sandbox:acp:/repo-a': 123,
         'acp:repo-a': 123,
       }),
-      deletedSandboxStore: ref({}),
-      homePath: ref('/home/test'),
-      replaceHomePrefix: (path) => path,
-      resolveProjectColor: () => undefined,
     });
 
-    expect(trees.topPanelTreeData.value.find((entry) => entry.directory === '/repo-a')).toMatchObject({
+    expect(
+      trees.topPanelTreeData.value.find((entry) => entry.directory === '/repo-a'),
+    ).toMatchObject({
       isPinned: true,
       pinScope: { level: 'repo', root: '/repo-a' },
     });
@@ -343,14 +326,8 @@ describe('useBackendSessionTrees projections and archive cache', () => {
     });
 
     // When
-    const trees = useBackendSessionTrees({
+    const trees = createTreeFixture(projects, {
       activeBackendKind: ref('opencode'),
-      projects,
-      pinnedStore: ref({}),
-      deletedSandboxStore: ref({}),
-      homePath: ref('/home/test'),
-      replaceHomePrefix: (path) => path,
-      resolveProjectColor: () => undefined,
     });
 
     // Then

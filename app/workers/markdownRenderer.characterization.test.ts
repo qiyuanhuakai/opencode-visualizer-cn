@@ -1,83 +1,42 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  installRenderWorker,
+  markdownRequest,
+  type RenderWorkerHarness,
+} from './renderWorker.test-helpers';
 
 // Characterization of the real markdown render path (markdown-it + Shiki in
 // render-worker) on the CURRENT dependency tree. Captured GREEN before the
 // Task-8 renderer dependency upgrade; any post-upgrade divergence must be
 // proven RED here first, then adapted minimally. Do not weaken assertions.
 
-type WorkerResponse = {
-  data: {
-    id: string;
-    ok: boolean;
-    html?: string;
-    error?: string;
-  };
-};
-
-type RenderPayload = {
-  id: string;
-  code: string;
-  lang: string;
-  theme: string;
-  gutterMode: 'none';
-  copyButtons?: boolean;
-  files?: string[];
-};
-
-type WorkerHarness = {
-  onmessage: ((event: { data: RenderPayload }) => void) | null;
-  postMessage: (message: WorkerResponse['data']) => void;
-};
-
-let priorSelf: unknown;
-let harness: WorkerHarness | null = null;
+let harness: RenderWorkerHarness | null = null;
 let waiterId = 0;
-const moduleSuffix = 'v1';
-const waiters = new Map<string, (message: WorkerResponse['data']) => void>();
 
 beforeAll(async () => {
-  priorSelf ??= Reflect.get(globalThis, 'self');
-  const worker: WorkerHarness = {
-    onmessage: null,
-    postMessage: (message) => {
-      waiters.get(message.id)?.(message);
-      waiters.delete(message.id);
-    },
-  };
-  Object.defineProperty(globalThis, 'self', { configurable: true, value: worker });
-  await import(/* @vite-ignore */ `./render-worker?markdown-characterization-${moduleSuffix}`);
-  harness = worker;
+  harness = await installRenderWorker('markdown-characterization');
 });
 
 beforeEach(() => {
   // The worker's async render completion posts back through `self`, so it must
   // exist for the whole test (not just at import). Restored per test.
   if (!harness) throw new Error('worker harness not initialized');
-  Object.defineProperty(globalThis, 'self', { configurable: true, value: harness });
+  harness.activateSelf();
 });
 
 afterEach(() => {
   // Restore the ORIGINAL global `self` captured in beforeAll — never reset
   // priorSelf to undefined, or the next afterEach would DELETE the original
   // instead of restoring it.
-  if (priorSelf === undefined) Reflect.deleteProperty(globalThis, 'self');
-  else Object.defineProperty(globalThis, 'self', { configurable: true, value: priorSelf });
+  harness?.restoreSelf();
 });
 
 async function renderMarkdown(code: string, files?: string[]): Promise<string> {
   const worker = harness;
   if (!worker) throw new Error('worker harness not initialized');
   const id = `char-${waiterId++}`;
-  const promise = new Promise<string>((resolve, reject) => {
-    waiters.set(id, (message) => {
-      if (message.ok && message.html !== undefined) resolve(message.html);
-      else reject(new Error(message.error ?? 'render failed'));
-    });
-  });
-  worker.onmessage?.({
-    data: { id, code, lang: 'markdown', theme: 'github-dark', gutterMode: 'none', copyButtons: false, files },
-  });
-  return promise;
+  const payload = markdownRequest(id, code);
+  return files ? worker.render({ ...payload, files }) : worker.render(payload);
 }
 
 // Strip the single .markdown-host wrapper renderMarkdownHtml emits when copy
@@ -122,7 +81,9 @@ describe('markdown renderer characterization (markdown-it + shiki)', () => {
   });
 
   it('opens links in a new tab with noopener noreferrer', async () => {
-    const html = content(await renderMarkdown('[vis](https://github.com/qiyuanhuakai/opencode-visualizer-cn)'));
+    const html = content(
+      await renderMarkdown('[vis](https://github.com/qiyuanhuakai/opencode-visualizer-cn)'),
+    );
     expect(html).toContain('target="_blank"');
     expect(html).toContain('rel="noopener noreferrer"');
     expect(html).toContain('>vis</a>');
@@ -135,7 +96,11 @@ describe('markdown renderer characterization (markdown-it + shiki)', () => {
   });
 
   it('escapes raw HTML instead of emitting elements (html disabled)', async () => {
-    const html = content(await renderMarkdown('before\n\n<script>window.pwned = 1</script>\n\n<img src=x onerror="window.pwned = 2">\n\nafter'));
+    const html = content(
+      await renderMarkdown(
+        'before\n\n<script>window.pwned = 1</script>\n\n<img src=x onerror="window.pwned = 2">\n\nafter',
+      ),
+    );
     expect(html).not.toContain('<script');
     expect(html).not.toContain('<img');
     expect(html).toContain('&lt;script&gt;window.pwned = 1&lt;/script&gt;');
@@ -143,7 +108,11 @@ describe('markdown renderer characterization (markdown-it + shiki)', () => {
   });
 
   it('escapes raw anchor HTML but keeps markdown links working', async () => {
-    const html = content(await renderMarkdown('raw <a href="https://evil.example">x</a> and [ok](https://good.example)'));
+    const html = content(
+      await renderMarkdown(
+        'raw <a href="https://evil.example">x</a> and [ok](https://good.example)',
+      ),
+    );
     expect(html).not.toContain('<a href="https://evil.example"');
     expect(html).toContain('target="_blank"');
   });
@@ -174,7 +143,12 @@ describe('markdown renderer characterization (markdown-it + shiki)', () => {
   });
 
   it('renders GFM tables with header and body rows', async () => {
-    const fixture = ['| 语言 | 用途 |', '| --- | --- |', '| 中文 | 界面 |', '| 日本語 | 説明 |'].join('\n');
+    const fixture = [
+      '| 语言 | 用途 |',
+      '| --- | --- |',
+      '| 中文 | 界面 |',
+      '| 日本語 | 説明 |',
+    ].join('\n');
     const html = content(await renderMarkdown(fixture));
     expect(html).toContain('<table>');
     expect(html).toContain('<thead>');

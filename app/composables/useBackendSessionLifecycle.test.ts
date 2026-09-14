@@ -6,6 +6,45 @@ import {
   useBackendSessionLifecycle,
 } from './useBackendSessionLifecycle';
 
+type LifecycleOptions = Parameters<typeof useBackendSessionLifecycle>[0];
+
+function createLifecycleFixture(overrides: Partial<LifecycleOptions> = {}) {
+  const params = {
+    activeBackendKind: ref('opencode'),
+    codexProjectId: 'codex',
+    acpProjectId: 'acp',
+    selectedProjectId: ref('proj-1'),
+    selectedSessionId: ref('session-1'),
+    activeDirectory: ref('/repo'),
+    homePath: ref('/home/test'),
+    codexPendingSessionLock: ref(''),
+    codexSessionCreationByDirectory: new Map(),
+    openCodeApi: { createSession: vi.fn() },
+    codexApi: {
+      homeDir: ref('/home/test'),
+      activeThreadId: ref(''),
+      visibleThreads: ref([]),
+      startThread: vi.fn(),
+      refreshHomeDir: vi.fn(),
+      interruptActiveTurn: vi.fn(),
+    },
+    normalizeProjectDirectoryForActiveBackend: (directory: string) => directory,
+    codexThreadDirectoryMatch: () => false,
+    ensureConnectionReady: () => true,
+    translate: (key: string) => key,
+    toErrorMessage: String,
+    setSessionError: vi.fn(),
+    clearSessionError: vi.fn(),
+    setSendStatusKey: vi.fn(),
+    isAborting: ref(false),
+    busyDescendantSessionIds: ref<string[]>([]),
+    backendCreateSession: vi.fn(),
+    backendAbortSession: undefined,
+    ...overrides,
+  } satisfies LifecycleOptions;
+  return { lifecycle: useBackendSessionLifecycle(params), params };
+}
+
 describe('useBackendSessionLifecycle', () => {
   it('maps ACP session creation to the ACP synthetic project', () => {
     expect(sessionProjectIdForBackend('acp', 'codex', 'acp')).toBe('acp');
@@ -30,19 +69,12 @@ describe('useBackendSessionLifecycle', () => {
     const homePath = ref('/home/test');
     const codexPendingSessionLock = ref('');
     const isAborting = ref(false);
-    const lifecycle = useBackendSessionLifecycle({
+    const { lifecycle } = createLifecycleFixture({
       activeBackendKind: ref('codex'),
-      codexProjectId: 'codex',
-      acpProjectId: 'acp',
       selectedProjectId,
       selectedSessionId,
-      activeDirectory: ref('/repo'),
       homePath,
       codexPendingSessionLock,
-      codexSessionCreationByDirectory: new Map(),
-      openCodeApi: {
-        createSession: vi.fn(),
-      },
       codexApi: {
         homeDir: ref('/home/test'),
         activeThreadId: ref(''),
@@ -53,18 +85,7 @@ describe('useBackendSessionLifecycle', () => {
         refreshHomeDir: vi.fn().mockResolvedValue('/home/test'),
         interruptActiveTurn: vi.fn(),
       },
-      normalizeProjectDirectoryForActiveBackend: (directory) => directory,
-      codexThreadDirectoryMatch: () => false,
-      ensureConnectionReady: () => true,
-      translate: (key) => key,
-      toErrorMessage: (error) => String(error),
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
-      setSendStatusKey: vi.fn(),
       isAborting,
-      busyDescendantSessionIds: ref([]),
-      backendCreateSession: vi.fn(),
-      backendAbortSession: undefined,
     });
 
     const session = await lifecycle.createSessionInDirectory('/repo');
@@ -78,38 +99,11 @@ describe('useBackendSessionLifecycle', () => {
   it('aborts opencode session and busy descendants through backend abort', async () => {
     const abortSession = vi.fn().mockResolvedValue(undefined);
     const setSendStatusKey = vi.fn();
-    const lifecycle = useBackendSessionLifecycle({
+    const { lifecycle } = createLifecycleFixture({
       activeBackendKind: ref('opencode'),
-      codexProjectId: 'codex',
-      acpProjectId: 'acp',
-      selectedProjectId: ref('proj-1'),
       selectedSessionId: ref('session-root'),
-      activeDirectory: ref('/repo'),
-      homePath: ref('/home/test'),
-      codexPendingSessionLock: ref(''),
-      codexSessionCreationByDirectory: new Map(),
-      openCodeApi: {
-        createSession: vi.fn(),
-      },
-      codexApi: {
-        homeDir: ref('/home/test'),
-        activeThreadId: ref(''),
-        visibleThreads: ref([]),
-        startThread: vi.fn(),
-        refreshHomeDir: vi.fn(),
-        interruptActiveTurn: vi.fn(),
-      },
-      normalizeProjectDirectoryForActiveBackend: (directory) => directory,
-      codexThreadDirectoryMatch: () => false,
-      ensureConnectionReady: () => true,
-      translate: (key) => key,
-      toErrorMessage: (error) => String(error),
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
       setSendStatusKey,
-      isAborting: ref(false),
       busyDescendantSessionIds: ref(['child-1', 'child-2']),
-      backendCreateSession: vi.fn(),
       backendAbortSession: abortSession,
     });
 
@@ -136,38 +130,14 @@ describe('useBackendSessionLifecycle', () => {
       return createdSession;
     });
     const openCodeCreateSession = vi.fn();
-    const lifecycle = useBackendSessionLifecycle({
+    const { lifecycle } = createLifecycleFixture({
       activeBackendKind: ref('acp'),
-      codexProjectId: 'codex',
-      acpProjectId: 'acp',
       selectedProjectId,
       selectedSessionId,
       activeDirectory: ref(''),
-      homePath: ref('/home/test'),
-      codexPendingSessionLock: ref(''),
-      codexSessionCreationByDirectory: new Map(),
       openCodeApi: { createSession: openCodeCreateSession },
-      codexApi: {
-        homeDir: ref('/home/test'),
-        activeThreadId: ref(''),
-        visibleThreads: ref([]),
-        startThread: vi.fn(),
-        refreshHomeDir: vi.fn(),
-        interruptActiveTurn: vi.fn(),
-      },
-      normalizeProjectDirectoryForActiveBackend: (directory) => directory,
-      codexThreadDirectoryMatch: () => false,
-      ensureConnectionReady: () => true,
-      translate: (key) => key,
-      toErrorMessage: (error) => String(error),
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
-      setSendStatusKey: vi.fn(),
-      isAborting: ref(false),
-      busyDescendantSessionIds: ref([]),
       backendCreateSession: createSession,
       findAcpSessionByDirectory: () => existingSession,
-      backendAbortSession: undefined,
     });
 
     await expect(lifecycle.handleProjectDirectorySelect('/repo')).resolves.toBe('acp-session');
@@ -185,38 +155,12 @@ describe('useBackendSessionLifecycle', () => {
     const existingSession = { id: 'old-session', directory: '/repo', title: 'Old' };
     const createdSession = { id: 'new-session', directory: '/repo', title: 'new-session' };
     const createSession = vi.fn().mockResolvedValue(createdSession);
-    const lifecycle = useBackendSessionLifecycle({
+    const { lifecycle } = createLifecycleFixture({
       activeBackendKind: ref('acp'),
-      codexProjectId: 'codex',
-      acpProjectId: 'acp',
       selectedProjectId,
       selectedSessionId,
-      activeDirectory: ref('/repo'),
-      homePath: ref('/home/test'),
-      codexPendingSessionLock: ref(''),
-      codexSessionCreationByDirectory: new Map(),
-      openCodeApi: { createSession: vi.fn() },
-      codexApi: {
-        homeDir: ref('/home/test'),
-        activeThreadId: ref(''),
-        visibleThreads: ref([]),
-        startThread: vi.fn(),
-        refreshHomeDir: vi.fn(),
-        interruptActiveTurn: vi.fn(),
-      },
-      normalizeProjectDirectoryForActiveBackend: (directory) => directory,
-      codexThreadDirectoryMatch: () => false,
-      ensureConnectionReady: () => true,
-      translate: (key) => key,
-      toErrorMessage: (error) => String(error),
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
-      setSendStatusKey: vi.fn(),
-      isAborting: ref(false),
-      busyDescendantSessionIds: ref([]),
       backendCreateSession: createSession,
       findAcpSessionByDirectory: () => existingSession,
-      backendAbortSession: undefined,
     });
 
     const session = await lifecycle.createNewSession();

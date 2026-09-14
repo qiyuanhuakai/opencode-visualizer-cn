@@ -160,4 +160,89 @@ describe('ACP client generation lifecycle', () => {
     expect(release).toHaveBeenNthCalledWith(1, 'terminal-1');
     expect(release).toHaveBeenNthCalledWith(2, 'terminal-1');
   });
+
+  it('stops all agent terminals and clears every pending session and root', async () => {
+    // Given: two ACP agents own known roots, pending session creations, and terminals.
+    const directory = await mkdtemp(path.join(tmpdir(), 'vis-acp-owner-'));
+    tempDirectories.push(directory);
+    const file = path.join(directory, 'context.txt');
+    await writeFile(file, 'owned', 'utf8');
+    const stopAll = vi.fn(async () => ({}));
+    const handler = createAcpClientMethodHandler({
+      terminalManager: {
+        create: vi
+          .fn()
+          .mockResolvedValueOnce({ terminalId: 'terminal-a' })
+          .mockResolvedValueOnce({ terminalId: 'terminal-b' }),
+        output: vi.fn(() => ({ output: '', truncated: false })),
+        waitForExit: vi.fn(),
+        kill: vi.fn(),
+        release: vi.fn(),
+        stopAll,
+      },
+    });
+    registerSession(handler, 'agent-a', 'session-a', directory, 1);
+    registerSession(handler, 'agent-b', 'session-b', directory, 2);
+    handler.observeClientMessage(
+      { id: 3, method: 'session/new', params: { cwd: directory, additionalDirectories: [] } },
+      { agentId: 'agent-a' },
+    );
+    handler.observeClientMessage(
+      { id: 4, method: 'session/new', params: { cwd: directory, additionalDirectories: [] } },
+      { agentId: 'agent-b' },
+    );
+    await handler(
+      {
+        id: 5,
+        method: 'terminal/create',
+        params: { sessionId: 'session-a', command: process.execPath, args: ['-e', ''] },
+      },
+      { agentId: 'agent-a' },
+    );
+    await handler(
+      {
+        id: 6,
+        method: 'terminal/create',
+        params: { sessionId: 'session-b', command: process.execPath, args: ['-e', ''] },
+      },
+      { agentId: 'agent-b' },
+    );
+
+    // When: the all-agent stop hook runs and an old pending session response arrives late.
+    await handler.stopAll();
+    handler.observeAgentMessage(
+      { id: 3, result: { sessionId: 'late-session-a' } },
+      { agentId: 'agent-a' },
+    );
+    handler.observeAgentMessage(
+      { id: 4, result: { sessionId: 'late-session-b' } },
+      { agentId: 'agent-b' },
+    );
+
+    // Then: the real terminal stop hook ran and every previous/pending root is gone.
+    expect(stopAll).toHaveBeenCalledOnce();
+    for (const [agentId, sessionId] of [
+      ['agent-a', 'session-a'],
+      ['agent-b', 'session-b'],
+      ['agent-a', 'late-session-a'],
+      ['agent-b', 'late-session-b'],
+    ]) {
+      await expect(
+        handler(
+          { id: 7, method: 'fs/read_text_file', params: { sessionId, path: file } },
+          { agentId },
+        ),
+      ).rejects.toThrow(`ACP session roots are unknown: ${sessionId}`);
+    }
+    await expect(
+      handler(
+        {
+          id: 8,
+          method: 'terminal/output',
+          params: { sessionId: 'session-a', terminalId: 'terminal-a' },
+        },
+        { agentId: 'agent-b' },
+      ),
+    ).resolves.toEqual({ output: '', truncated: false });
+  });
 });

@@ -1,129 +1,114 @@
-import { createApp, defineComponent, h, nextTick, ref } from 'vue';
-import { afterEach, describe, expect, it } from 'vitest';
-import { EditorState } from '@codemirror/state';
+import { redo, undo } from '@codemirror/commands';
 import { EditorView } from '@codemirror/view';
-import { history, redo, undo } from '@codemirror/commands';
-import { javascript } from '@codemirror/lang-javascript';
-import { markdown } from '@codemirror/lang-markdown';
+import { createApp, defineComponent, h, nextTick, ref, type App as VueApp } from 'vue';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import CodeMirrorEditor from './CodeMirrorEditor.vue';
 
-// Characterization of the CodeMirror model contract (EditorState/EditorView
-// transaction round-trip + the vue-codemirror6 v-model sync used by
-// CodeMirrorEditor.vue) on the CURRENT dependency tree. GREEN before the
-// Task-8 CodeMirror bump; post-upgrade divergence must show RED here first.
+const supportedLanguages = [
+  'typescript',
+  'tsx',
+  'javascript',
+  'jsx',
+  'vue',
+  'astro',
+  'svelte',
+  'python',
+  'markdown',
+  'json',
+  'html',
+  'css',
+  'yaml',
+  'xml',
+  'svg',
+] as const;
 
-describe('CodeMirror model round-trip', () => {
+const mountedApps: VueApp[] = [];
+
+async function mountedEditorView(host: HTMLElement): Promise<EditorView> {
+  await nextTick();
+  await nextTick();
+  const editor = host.querySelector<HTMLElement>('.cm-editor');
+  expect(editor).not.toBeNull();
+  const view = editor ? EditorView.findFromDOM(editor) : null;
+  expect(view).not.toBeNull();
+  if (!view) throw new TypeError('Mounted CodeMirror editor view was not found');
+  return view;
+}
+
+describe('CodeMirrorEditor model round-trip', () => {
   afterEach(() => {
+    mountedApps.splice(0).forEach((app) => app.unmount());
     document.body.replaceChildren();
   });
 
-  it('round-trips a doc through state transactions with CJK and code', () => {
-    const state = EditorState.create({
-      doc: 'const x = 1;',
-      extensions: [javascript({ typescript: true })],
-    });
-    const inserted = state.update({ changes: { from: 0, insert: '中文// 注释\n' } });
-    expect(inserted.docChanged).toBe(true);
-    expect(inserted.state.doc.toString()).toBe('中文// 注释\nconst x = 1;');
-    expect(inserted.state.doc.line(1).text).toBe('中文// 注释');
-
-    const replaced = inserted.state.update({
-      changes: { from: 0, to: inserted.state.doc.length, insert: 'def f():\n    return "ok"' },
-    });
-    expect(replaced.state.doc.toString()).toBe('def f():\n    return "ok"');
-  });
-
-  it('round-trips through a mounted EditorView dispatch', () => {
+  it('propagates an editor transaction through the parent model, accepts an external update, and undoes it', async () => {
     const host = document.createElement('div');
     document.body.append(host);
-    const view = new EditorView({
-      state: EditorState.create({ doc: 'let a = 1;' }),
-      parent: host,
-    });
-    view.dispatch({ changes: { from: 0, insert: '日本語\ntext ' } });
-    expect(view.state.doc.toString()).toBe('日本語\ntext let a = 1;');
-    view.destroy();
-  });
-
-  it('supports undo/redo history across doc edits', () => {
-    const host = document.createElement('div');
-    document.body.append(host);
-    const view = new EditorView({
-      state: EditorState.create({ doc: 'original', extensions: [history()] }),
-      parent: host,
-    });
-    view.dispatch({ changes: { from: 0, to: 8, insert: 'edited 中文' } });
-    expect(view.state.doc.toString()).toBe('edited 中文');
-
-    undo(view);
-    expect(view.state.doc.toString()).toBe('original');
-
-    redo(view);
-    expect(view.state.doc.toString()).toBe('edited 中文');
-    view.destroy();
-  });
-
-  it('reports docChanged updates through updateListener (the @update contract)', () => {
-    const host = document.createElement('div');
-    document.body.append(host);
-    const seen: string[] = [];
-    const view = new EditorView({
-      state: EditorState.create({
-        doc: '',
-        extensions: [
-          markdown(),
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) seen.push(update.state.doc.toString());
-          }),
-        ],
-      }),
-      parent: host,
-    });
-    view.dispatch({ changes: { from: 0, insert: '# 标题\n\n正文' } });
-    view.dispatch({ changes: { from: 0, insert: 'x' } });
-    expect(seen.length).toBe(2);
-    expect(seen[0]).toBe('# 标题\n\n正文');
-    view.destroy();
-  });
-
-  it('syncs an external model value into the mounted editor and back out on edit', async () => {
-    const host = document.createElement('div');
-    document.body.append(host);
-    const model = ref('const a = 1;');
-    const App = defineComponent({
+    const model = ref('const x = 1;');
+    const emittedValues: string[] = [];
+    const Root = defineComponent({
       setup() {
         return () =>
           h(CodeMirrorEditor, {
             modelValue: model.value,
             lang: 'typescript',
             'onUpdate:modelValue': (value: string) => {
+              emittedValues.push(value);
               model.value = value;
             },
           });
       },
     });
-    createApp(App).mount(host);
-    await nextTick();
+    const app = createApp(Root);
+    mountedApps.push(app);
+    app.mount(host);
+
+    const view = await mountedEditorView(host);
+    const editedValue = '中文// 注释\nconst x = 1;';
+    view.dispatch({ changes: { from: 0, insert: '中文// 注释\n' } });
     await nextTick();
 
-    const content = host.querySelector<HTMLElement>('.cm-content');
-    expect(content).not.toBeNull();
-    expect(content?.textContent ?? '').toContain('const a = 1;');
+    expect(emittedValues).toEqual([editedValue]);
+    expect(model.value).toBe(editedValue);
+    expect(view.state.doc.toString()).toBe(editedValue);
 
-    model.value = 'let b: number = 2;';
+    const externalValue = '# 标题\n\n正文';
+    model.value = externalValue;
     await nextTick();
     await nextTick();
-    expect(content?.textContent ?? '').toContain('let b: number = 2;');
+    expect(view.state.doc.toString()).toBe(externalValue);
+
+    expect(undo(view)).toBe(true);
+    await nextTick();
+    expect(emittedValues.at(-1)).toBe('const x = 1;');
+    expect(model.value).toBe('const x = 1;');
+    expect(view.state.doc.toString()).toBe('const x = 1;');
+
+    expect(redo(view)).toBe(true);
+    await nextTick();
+    expect(emittedValues.at(-1)).toBe(externalValue);
+    expect(model.value).toBe(externalValue);
+    expect(view.state.doc.toString()).toBe(externalValue);
   });
 
-  it('mounts the editor under every supported language mapping', async () => {
-    for (const lang of ['typescript', 'tsx', 'javascript', 'jsx', 'python', 'markdown', 'json', 'html', 'css', 'yaml', 'xml', 'vue']) {
-      const host = document.createElement('div');
-      document.body.append(host);
-      createApp(CodeMirrorEditor, { modelValue: 'value', lang }).mount(host);
-      await nextTick();
-      expect(host.querySelector('.code-mirror-editor')).not.toBeNull();
-    }
+  it.each(supportedLanguages)('mounts and edits through the %s language mapping', async (lang) => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const emittedValues: string[] = [];
+    const app = createApp(CodeMirrorEditor, {
+      modelValue: 'value',
+      lang,
+      'onUpdate:modelValue': (value: string) => emittedValues.push(value),
+    });
+    mountedApps.push(app);
+    app.mount(host);
+
+    const view = await mountedEditorView(host);
+    view.dispatch({ changes: { from: view.state.doc.length, insert: `-${lang}` } });
+    await nextTick();
+
+    expect(view.state.doc.toString()).toBe(`value-${lang}`);
+    expect(emittedValues).toEqual([`value-${lang}`]);
   });
 });

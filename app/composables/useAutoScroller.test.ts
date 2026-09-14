@@ -25,6 +25,14 @@ function createScroller() {
   return { element, scrollTo };
 }
 
+const mountedApps: Array<() => void> = [];
+const trackedScrollers: Array<ReturnType<typeof useAutoScroller>> = [];
+
+function trackScroller(scroller: ReturnType<typeof useAutoScroller>) {
+  trackedScrollers.push(scroller);
+  return scroller;
+}
+
 describe('useAutoScroller', () => {
   beforeEach(() => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -34,17 +42,23 @@ describe('useAutoScroller', () => {
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    while (mountedApps.length > 0) mountedApps.pop()?.();
+    while (trackedScrollers.length > 0) trackedScrollers.pop()?.pauseTracking();
+    if (vi.isFakeTimers()) await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    await new Promise<void>(resolve => setImmediate(resolve));
   });
 
   it('snaps after a completion DOM swap clamps the followed position to the top', async () => {
     const container = ref<HTMLElement>();
     const mode = ref<ScrollMode>('manual');
-    const scroller = useAutoScroller(container, mode, {
+    const scroller = trackScroller(useAutoScroller(container, mode, {
       smoothEngine: 'native',
       smoothOnInitialFollow: false,
-    });
+    }));
     const { element, scrollTo } = createScroller();
     container.value = element;
     await nextTick();
@@ -61,10 +75,10 @@ describe('useAutoScroller', () => {
   it('keeps smooth follow for small streaming growth', async () => {
     const container = ref<HTMLElement>();
     const mode = ref<ScrollMode>('manual');
-    const scroller = useAutoScroller(container, mode, {
+    const scroller = trackScroller(useAutoScroller(container, mode, {
       smoothEngine: 'native',
       smoothOnInitialFollow: false,
-    });
+    }));
     const { element, scrollTo } = createScroller();
     container.value = element;
     await nextTick();
@@ -80,7 +94,7 @@ describe('useAutoScroller', () => {
   it('continues following when animation frames are suspended', async () => {
     const container = ref<HTMLElement>();
     const mode = ref<ScrollMode>('follow');
-    const scroller = useAutoScroller(container, mode, { smoothOnInitialFollow: false });
+    const scroller = trackScroller(useAutoScroller(container, mode, { smoothOnInitialFollow: false }));
     const { element } = createScroller();
     container.value = element;
     await nextTick();
@@ -99,7 +113,7 @@ describe('useAutoScroller', () => {
   it('cancels a pending content-change frame when the container is replaced', async () => {
     const container = ref<HTMLElement>();
     const mode = ref<ScrollMode>('follow');
-    const scroller = useAutoScroller(container, mode, { smoothOnInitialFollow: false });
+    const scroller = trackScroller(useAutoScroller(container, mode, { smoothOnInitialFollow: false }));
     const { element } = createScroller();
     container.value = element;
     await nextTick();
@@ -118,6 +132,7 @@ describe('useAutoScroller', () => {
     const target = document.createElement('div');
     const addWindowListener = vi.spyOn(window, 'addEventListener');
     const removeWindowListener = vi.spyOn(window, 'removeEventListener');
+    vi.useFakeTimers();
     const cancelFrame = vi.fn();
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 7));
     vi.stubGlobal('cancelAnimationFrame', cancelFrame);
@@ -133,6 +148,13 @@ describe('useAutoScroller', () => {
     });
     const app = createApp(component);
     app.mount(target);
+    const disposeApp = () => {
+      const index = mountedApps.indexOf(disposeApp);
+      if (index >= 0) mountedApps.splice(index, 1);
+      app.unmount();
+      target.remove();
+    };
+    mountedApps.push(disposeApp);
     await nextTick();
     notifyContentChange?.();
     const pointerUpHandler = addWindowListener.mock.calls.find(
@@ -142,7 +164,7 @@ describe('useAutoScroller', () => {
       ([type]) => type === 'pointercancel',
     )?.[1];
 
-    app.unmount();
+    disposeApp();
 
     expect(removeWindowListener).toHaveBeenCalledWith('pointerup', pointerUpHandler);
     expect(removeWindowListener).toHaveBeenCalledWith('pointercancel', pointerCancelHandler);

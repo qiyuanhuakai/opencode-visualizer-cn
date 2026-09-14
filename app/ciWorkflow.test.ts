@@ -40,6 +40,8 @@ interface WorkflowStep {
   name?: string;
   if?: string;
   run?: string;
+  uses?: string;
+  env?: Record<string, unknown>;
 }
 interface WorkflowJob {
   steps?: WorkflowStep[];
@@ -90,6 +92,7 @@ const ELECTRON_LANES = [
     job: 'build-macos-x64',
     runner: 'macos-15-intel',
     platform: 'mac',
+    receiptPlatform: 'darwin',
     arch: 'x64',
     unpackedDir: 'dist-electron/mac',
   },
@@ -97,6 +100,7 @@ const ELECTRON_LANES = [
     job: 'build-macos-arm64',
     runner: 'macos-latest',
     platform: 'mac',
+    receiptPlatform: 'darwin',
     arch: 'arm64',
     unpackedDir: 'dist-electron/mac-arm64',
   },
@@ -104,6 +108,7 @@ const ELECTRON_LANES = [
     job: 'build-windows-x64',
     runner: 'windows-2022',
     platform: 'win',
+    receiptPlatform: 'win32',
     arch: 'x64',
     unpackedDir: 'dist-electron/win-unpacked',
   },
@@ -111,6 +116,7 @@ const ELECTRON_LANES = [
     job: 'build-windows-arm64',
     runner: 'windows-11-arm',
     platform: 'win',
+    receiptPlatform: 'win32',
     arch: 'arm64',
     unpackedDir: 'dist-electron/win-arm64-unpacked',
   },
@@ -118,6 +124,7 @@ const ELECTRON_LANES = [
     job: 'build-linux-x64',
     runner: 'ubuntu-24.04',
     platform: 'linux',
+    receiptPlatform: 'linux',
     arch: 'x64',
     unpackedDir: 'dist-electron/linux-unpacked',
   },
@@ -256,16 +263,26 @@ describe('complete CI workflow', () => {
 
   it('runs the qa:electron smoke on the unpacked app before uploading lane artifacts', () => {
     for (const lane of ELECTRON_LANES) {
-      const block = laneBlock(lane.job);
-      const smokeIndex = block.indexOf('electron-smoke.mjs');
-      const uploadIndex = block.indexOf('name: Upload VIS installers');
-      expect(smokeIndex, `lane ${lane.job} must run electron-smoke.mjs`).toBeGreaterThan(-1);
-      expect(uploadIndex, `lane ${lane.job} must upload artifacts`).toBeGreaterThan(-1);
-      expect(smokeIndex, `lane ${lane.job}: smoke must run before upload`).toBeLessThan(uploadIndex);
-      // The smoke receipt must confirm the lane's native arch before anything is uploaded.
-      expect(block).toContain('VIS_SMOKE_OUT_DIR');
-      expect(block).toMatch(/receipt\.json/);
-      expect(block).toMatch(new RegExp(`${lane.arch}`));
+      const job = doc.jobs?.[lane.job];
+      const steps = jobSteps(job);
+      const smokeIndex = stepIndexOf(
+        job,
+        ({ run }) => run?.includes('electron-smoke.mjs') === true,
+        `${lane.job} smoke`,
+      );
+      const uploadIndex = stepIndexOf(
+        job,
+        ({ uses }) => uses?.startsWith('actions/upload-artifact@') === true,
+        `${lane.job} upload`,
+      );
+      expect(smokeIndex, `${lane.job}: smoke must run before upload`).toBeLessThan(uploadIndex);
+      const smoke = steps[smokeIndex];
+      if (smoke === undefined) throw new Error(`${lane.job} smoke step is missing`);
+      expect(smoke.env?.VIS_SMOKE_OUT_DIR).toBe('${{ runner.temp }}/smoke-unpacked');
+      expect(smoke.run).toContain("process.env.VIS_SMOKE_OUT_DIR + '/receipt.json'");
+      expect(smoke.run).toContain(`r.platform.platform !== '${lane.receiptPlatform}'`);
+      expect(smoke.run).toContain(`r.platform.arch !== '${lane.arch}'`);
+      expect(smoke.run).toContain(lane.unpackedDir);
     }
   });
 

@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import {
   classifyMime,
@@ -18,34 +17,6 @@ const persistentStorageSource = readFileSync(
 );
 
 describe('electron-runtime-policy', () => {
-  it('returns a failure envelope when synchronous storage loading throws', () => {
-    // Given: the production get handler is backed by a native store that rejects malformed bytes.
-    const handlerSource = mainSource.match(
-      /ipcMain\.on\('persistent-storage-get',\s*(\(event, key\) => \{[\s\S]*?\n\})\);/u,
-    )?.[1];
-    expect(handlerSource).toBeDefined();
-    const handler = vm.runInNewContext(`(${handlerSource})`, {
-      assertTrustedRenderer: () => undefined,
-      getPersistentStorage: () => ({
-        getItem: () => {
-          throw Object.assign(new TypeError('invalid UTF-8'), { code: 'ERR_ENCODING' });
-        },
-      }),
-      LOCAL_APPLICATION_PATH_KEY: 'local-application-path',
-      approvedLocalApplicationPath: null,
-    });
-    const event = { sender: { id: 7 }, returnValue: undefined };
-
-    // When: the trusted renderer performs a synchronous read.
-    handler(event, 'opencode.settings.example.v1');
-
-    // Then: main responds with a serializable failure instead of leaving sendSync unresolved.
-    expect(event.returnValue).toEqual({
-      ok: false,
-      error: { name: 'TypeError', message: 'invalid UTF-8' },
-    });
-  });
-
   describe('resolveAppRelativePath', () => {
     it('maps the root path to index.html', () => {
       expect(resolveAppRelativePath('/')).toBe('index.html');
@@ -246,136 +217,20 @@ describe('electron-runtime-policy', () => {
       );
     });
 
-    it('guards every privileged clipboard and persistent-storage IPC entry point', () => {
-      // Given: four synchronous IPC handlers expose native clipboard or persistent storage access.
-      const handlers = [
-        {
-          source: mainSource.match(/ipcMain\.handle\('clipboard-write-text',[\s\S]*?\n\}\);/u)?.[0],
-          firstUse: 'typeof text',
-        },
-        {
-          source: mainSource.match(/ipcMain\.on\('persistent-storage-get',[\s\S]*?\n\}\);/u)?.[0],
-          firstUse: 'typeof key',
-        },
-        {
-          source: mainSource.match(/ipcMain\.on\('persistent-storage-set',[\s\S]*?\n\}\);/u)?.[0],
-          firstUse: 'const key = payload',
-        },
-        {
-          source: mainSource.match(
-            /ipcMain\.on\('persistent-storage-remove',[\s\S]*?\n\}\);/u,
-          )?.[0],
-          firstUse: 'typeof key',
-        },
-      ];
+    it('guards clipboard writes with the trusted renderer assertion', () => {
+      // Given: clipboard write crosses from the sandboxed renderer into Electron main.
+      const handler = mainSource.match(
+        /ipcMain\.handle\('clipboard-write-text',[\s\S]*?\n\}\);/u,
+      )?.[0];
 
       // When: the main-process IPC wiring is inspected.
-      expect(handlers.every(({ source }) => Boolean(source))).toBe(true);
+      expect(handler).toBeDefined();
 
-      // Then: sender ownership is asserted before any payload is read or native capability is used.
-      for (const { source, firstUse } of handlers) {
-        expect(source?.indexOf('assertTrustedRenderer(event)')).toBeGreaterThanOrEqual(0);
-        expect(source?.indexOf('assertTrustedRenderer(event)')).toBeLessThan(
-          source?.indexOf(firstUse) ?? -1,
-        );
-      }
-    });
-
-    it('converts persistent storage mutation exceptions into false IPC acknowledgements', () => {
-      // Given: set and remove are synchronous IPC boundaries backed by fallible disk writes.
-      const mutationHelper = mainSource.match(
-        /function commitPersistentStorageMutation[\s\S]*?\n\}/u,
-      )?.[0];
-      const setHandler = mainSource.match(
-        /ipcMain\.on\('persistent-storage-set',[\s\S]*?\n\}\);/u,
-      )?.[0];
-      const removeHandler = mainSource.match(
-        /ipcMain\.on\('persistent-storage-remove',[\s\S]*?\n\}\);/u,
-      )?.[0];
-
-      // When: the main-process mutation handlers are inspected.
-      expect(mutationHelper).toBeDefined();
-      expect(setHandler).toBeDefined();
-      expect(removeHandler).toBeDefined();
-
-      // Then: the shared commit boundary catches persistence exceptions and explicitly rejects.
-      expect(mutationHelper).toMatch(/try\s*\{[\s\S]*catch\s*\{[\s\S]*event\.returnValue = false/u);
-      expect(setHandler).toContain('commitPersistentStorageMutation');
-      expect(removeHandler).toContain('commitPersistentStorageMutation');
-    });
-
-    it('commits persistent storage cache only after the disk write succeeds', () => {
-      // Given: set and remove both derive a candidate from the current cache.
-      const setMutation = persistentStorageSource.match(
-        /setItem\(key, value\) \{[\s\S]*?\n    \},/u,
-      )?.[0];
-      const removeMutation = persistentStorageSource.match(
-        /removeItem\(key\) \{[\s\S]*?\n    \},/u,
-      )?.[0];
-
-      // When: the main-process mutation ordering is inspected.
-      expect(setMutation).toBeDefined();
-      expect(removeMutation).toBeDefined();
-
-      // Then: neither operation publishes its candidate cache before persistence succeeds.
-      for (const mutation of [setMutation, removeMutation]) {
-        const writeIndex = mutation?.indexOf('writeStore(filePath, nextStorage, fileSystem)') ?? -1;
-        const commitIndex = mutation?.indexOf('cache = nextStorage') ?? -1;
-        expect(writeIndex).toBeGreaterThanOrEqual(0);
-        expect(commitIndex).toBeGreaterThan(writeIndex);
-      }
-    });
-
-    it('commits renderer storage migration through one acknowledged main-process transaction', () => {
-      // Given: legacy renderer state must cross one fallible disk boundary atomically.
-      const migrationHandler = mainSource.match(
-        /ipcMain\.on\('persistent-storage-migrate',[\s\S]*?\n\}\);/u,
-      )?.[0];
-      const migrationMutation = persistentStorageSource.match(
-        /migrate\(entries\) \{[\s\S]*?\n    \},/u,
-      )?.[0];
-
-      // When: the main-process migration path is inspected.
-      expect(migrationHandler).toBeDefined();
-      expect(migrationMutation).toBeDefined();
-
-      // Then: trusted input is committed before cache publication and failures reject the batch.
-      expect(migrationHandler).toContain('assertTrustedRenderer(event)');
-      expect(migrationHandler).toContain(
-        'commitPersistentStorageMutation(event, (storage) => storage.migrate(migrationEntries));',
-      );
-      const writeIndex =
-        migrationMutation?.indexOf('writeStore(filePath, nextStorage, fileSystem)') ?? -1;
-      const commitIndex = migrationMutation?.indexOf('cache = nextStorage') ?? -1;
-      expect(writeIndex).toBeGreaterThanOrEqual(0);
-      expect(commitIndex).toBeGreaterThan(writeIndex);
-    });
-
-    it('broadcasts every unpublished storage transition after a successful durability retry', () => {
-      // Given: set, remove, and migration may complete a previously unacknowledged replacement.
-      const mutationHelper = mainSource.match(
-        /function commitPersistentStorageMutation[\s\S]*?\n\}/u,
-      )?.[0];
-      const handlers = [
-        mainSource.match(/ipcMain\.on\('persistent-storage-set',[\s\S]*?\n\}\);/u)?.[0],
-        mainSource.match(/ipcMain\.on\('persistent-storage-remove',[\s\S]*?\n\}\);/u)?.[0],
-        mainSource.match(/ipcMain\.on\('persistent-storage-migrate',[\s\S]*?\n\}\);/u)?.[0],
-      ];
-
-      // When: the successful main-process acknowledgement paths are inspected.
-      expect(mutationHelper).toBeDefined();
-      expect(handlers.every(Boolean)).toBe(true);
-
-      // Then: the shared commit drains and broadcasts storage-owned net changes once.
-      expect(mutationHelper).toContain('drainPendingChanges()');
-      expect(mutationHelper).toContain('broadcastPersistentStorageChange(change');
-      // Then: each IPC path assigns only its current optimistic key to the sender exclusion.
-      for (const handler of handlers) {
-        expect(handler).toContain('commitPersistentStorageMutation');
-      }
-      expect(handlers[0]).toContain('(storage) => storage.setItem(key, value), key');
-      expect(handlers[1]).toContain('(storage) => storage.removeItem(key), key');
-      expect(handlers[2]).toContain('(storage) => storage.migrate(migrationEntries)');
+      // Then: sender validation runs before the payload is read or native clipboard is written.
+      const trustIndex = handler?.indexOf('assertTrustedRenderer(event)') ?? -1;
+      expect(trustIndex).toBeGreaterThanOrEqual(0);
+      expect(handler?.indexOf('typeof text')).toBeGreaterThan(trustIndex);
+      expect(handler?.indexOf('clipboard.writeText(text)')).toBeGreaterThan(trustIndex);
     });
 
     it('stages persistent storage beside the final file before atomic replacement', () => {

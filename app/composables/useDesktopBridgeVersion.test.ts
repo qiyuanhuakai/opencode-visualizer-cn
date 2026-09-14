@@ -134,20 +134,20 @@ describe('resolveDesktopBridgeHealthUrl', () => {
   });
 });
 
-describe('useDesktopBridgeVersion', () => {
-  let scope: EffectScope;
+let scope: EffectScope;
 
-  beforeEach(() => {
-    scope = effectScope();
-  });
+beforeEach(() => {
+  scope = effectScope();
+});
 
-  afterEach(() => {
-    scope.stop();
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
+afterEach(() => {
+  scope.stop();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
+describe('useDesktopBridgeVersion native reporting and ownership', () => {
   it('reports null with a fresh connection id, then the ready version, to the desktop runtime', async () => {
     // Given: a desktop runtime accepting bridge version reports and a healthy bridge.
     const desktop = createDesktopApi();
@@ -296,6 +296,9 @@ describe('useDesktopBridgeVersion', () => {
     expect(desktop.reports).toHaveLength(0);
   });
 
+});
+
+describe('useDesktopBridgeVersion refresh outcomes', () => {
   it('refresh re-checks health, reports the fresh version, and resolves true once accepted', async () => {
     // Given: a bridge that is externally upgraded from 1.0.0 to 2.0.0 at the same URL.
     const desktop = createDesktopApi();

@@ -1,6 +1,6 @@
 import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
-import { useBackendSessionActions } from './useBackendSessionActions';
+import { createSessionActionsFixture } from './useBackendSessionActions.test-helpers';
 
 function createActions(hidden: string[] = []) {
   const archiveThread = vi.fn().mockResolvedValue({});
@@ -9,27 +9,38 @@ function createActions(hidden: string[] = []) {
   const selectThread = vi.fn().mockResolvedValue({});
   const setSessionError = vi.fn();
   const backendUpdateSession = vi.fn();
-  const actions = useBackendSessionActions({
-    activeBackendKind: ref('codex'), codexProjectId: 'codex', selectedProjectId: ref('codex'),
-    selectedSessionId: ref('thread-1'), activeDirectory: ref('/repo'), localPinnedSessionStore: ref({}),
-    serverProjects: {},
-    openCodeApi: { deleteSession: vi.fn(), archiveSession: vi.fn(), unarchiveSession: vi.fn(), renameSession: vi.fn(), pinSession: vi.fn(), unpinSession: vi.fn(), forkSession: vi.fn(), revertSession: vi.fn() },
+  const { actions } = createSessionActionsFixture({
+    activeBackendKind: 'codex',
+    selectedProjectId: ref('codex'),
+    selectedSessionId: ref('thread-1'),
     codexApi: {
-      hiddenThreadIds: ref(new Set(hidden)), visibleThreads: ref([{ id: 'thread-2' }]), activeThreadId: ref('thread-2'),
-      archiveThread, hideThread, unhideThread, setThreadName: vi.fn(), forkThread: vi.fn(),
-      rollbackThread: vi.fn(), startThreadCompaction: vi.fn(), selectThread,
+      hiddenThreadIds: ref(new Set(hidden)),
+      visibleThreads: ref([{ id: 'thread-2' }]),
+      activeThreadId: ref('thread-2'),
+      archiveThread,
+      hideThread,
+      unhideThread,
+      setThreadName: vi.fn(),
+      forkThread: vi.fn(),
+      rollbackThread: vi.fn(),
+      startThreadCompaction: vi.fn(),
+      selectThread,
     },
-    ensureConnectionReady: () => true, setSessionError, clearSessionError: vi.fn(),
-    toErrorMessage: (error) => String(error), translate: (key) => key, showPrompt: vi.fn(),
-    showConfirm: vi.fn(), findSessionInProjects: () => null, resolveProjectIdForSession: () => 'codex',
+    setSessionError,
+    resolveProjectIdForSession: () => 'codex',
     resolveSessionOperationPayload: () => ({ projectId: 'codex', directory: '/repo' }),
-    getSessionPinnedOverride: () => undefined, setLocalPinnedSession: vi.fn(), setLocalUnpinnedSession: vi.fn(),
-    clearLocalPinnedSessionOverride: vi.fn(), restoreLocalPinnedSessionOverride: vi.fn(),
-    switchSessionSelection: vi.fn(), reloadSelectedSessionState: vi.fn(), seedForkedSessionComposerDraft: vi.fn(),
-    setSendStatusKey: vi.fn(), setLocalSessionArchived: vi.fn(), batchConcurrency: 2,
-    backendDeleteSession: vi.fn(), backendUpdateSession,
+    getSessionPinnedOverride: () => undefined,
+    backendUpdateSession,
   });
-  return { actions, archiveThread, hideThread, unhideThread, selectThread, setSessionError, backendUpdateSession };
+  return {
+    actions,
+    archiveThread,
+    hideThread,
+    unhideThread,
+    selectThread,
+    setSessionError,
+    backendUpdateSession,
+  };
 }
 
 describe('Codex archive and delete actions', () => {

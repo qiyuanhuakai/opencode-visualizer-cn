@@ -7,9 +7,24 @@ import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
 import SubagentHistoryContent from './SubagentHistoryContent.vue';
 import { FLOATING_WINDOW_KEY } from '../composables/useFloatingWindow';
 import { useMessages } from '../composables/useMessages';
-import type { MessageInfo, ReasoningPart, ToolPart } from '../types/sse';
+import type { ReasoningPart, ToolPart } from '../types/sse';
+import {
+  makeAssistantMessage,
+  makeTextPart,
+  makeToolPart,
+  makeUserMessage,
+} from './historyTestBuilders';
 
-vi.mock('./MessageViewer.vue', () => ({ default: defineComponent({ props: ['code'], setup: (props) => () => h('div', props.code) }) }));
+vi.mock('./MessageViewer.vue', () => ({
+  default: defineComponent({ props: ['code'], setup: (props) => () => h('div', props.code) }),
+}));
+
+const mountedApps = new Set<ReturnType<typeof createApp>>();
+
+function unmount(app: ReturnType<typeof createApp>) {
+  if (!mountedApps.delete(app)) return;
+  app.unmount();
+}
 
 function createMessages() {
   return {
@@ -38,68 +53,6 @@ function createMessages() {
       questionStatus: {
         replied: 'replied',
       },
-    },
-  };
-}
-
-function makeUserMessage(sessionId: string, id: string, time: number): MessageInfo {
-  return {
-    id,
-    sessionID: sessionId,
-    role: 'user',
-    time: { created: time },
-    agent: 'build',
-    model: { providerID: 'test', modelID: 'test-model' },
-  };
-}
-
-function makeAssistantMessage(
-  sessionId: string,
-  id: string,
-  parentId: string,
-  time: number,
-): MessageInfo {
-  return {
-    id,
-    sessionID: sessionId,
-    role: 'assistant',
-    parentID: parentId,
-    time: { created: time, completed: time + 10 },
-    agent: 'subagent',
-    modelID: 'codex',
-    providerID: 'codex',
-    mode: 'codex',
-    path: { cwd: '/repo', root: '/repo' },
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-  };
-}
-
-function makeTextPart(messageId: string, sessionId: string, text: string) {
-  return {
-    id: `text-${messageId}`,
-    sessionID: sessionId,
-    messageID: messageId,
-    type: 'text' as const,
-    text,
-  };
-}
-
-function makeToolPart(messageId: string, sessionId: string, tool: string): ToolPart {
-  return {
-    id: `tool-${messageId}`,
-    callID: `call-${messageId}`,
-    sessionID: sessionId,
-    messageID: messageId,
-    type: 'tool',
-    tool,
-    state: {
-      status: 'completed',
-      input: { command: 'ls' },
-      output: 'done',
-      title: tool,
-      metadata: {},
-      time: { start: 1, end: 1 },
     },
   };
 }
@@ -157,6 +110,7 @@ function mount(props: {
       },
     }),
   );
+  mountedApps.add(app);
   const i18n = createI18n({ legacy: false, locale: 'en', messages: createMessages() });
   app.use(i18n);
   app.provide(FLOATING_WINDOW_KEY, makeFloatingWindowStub());
@@ -166,6 +120,7 @@ function mount(props: {
 
 describe('SubagentHistoryContent', () => {
   afterEach(() => {
+    mountedApps.forEach(unmount);
     document.body.innerHTML = '';
     useMessages().reset();
   });
@@ -189,7 +144,7 @@ describe('SubagentHistoryContent', () => {
     expect(root.textContent).toContain('My Subagent');
     expect(root.textContent).toContain('Subagent');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -211,7 +166,7 @@ describe('SubagentHistoryContent', () => {
 
     expect(root.textContent).toContain('fallback-session');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -241,7 +196,7 @@ describe('SubagentHistoryContent', () => {
     await flushRender();
     expect(closeSpy).toHaveBeenCalled();
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -267,7 +222,7 @@ describe('SubagentHistoryContent', () => {
     // existing tool summary path, not the markdown worker)
     expect(root.textContent).toContain('$ ls');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -312,7 +267,7 @@ describe('SubagentHistoryContent', () => {
     ]);
     expect(onReasoningClick).toHaveBeenCalledWith(reasoningPart);
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -322,7 +277,7 @@ describe('SubagentHistoryContent', () => {
 
     expect(root.textContent).toContain('No subagent history available yet.');
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -368,29 +323,36 @@ describe('SubagentHistoryContent', () => {
     });
     expect(targetMessageItems.length).toBe(1);
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 });
 
 it('loads Codex child history independently of the parent message store', async () => {
-  const loadHistory = vi.fn(async () => [{
-    info: makeAssistantMessage('child-codex', 'child-answer', 'child-user', 2),
-    parts: [makeTextPart('child-answer', 'child-codex', 'Codex child result')],
-  }]);
+  const loadHistory = vi.fn(async () => [
+    {
+      info: makeAssistantMessage('child-codex', 'child-answer', 'child-user', 2),
+      parts: [makeTextPart('child-answer', 'child-codex', 'Codex child result')],
+    },
+  ]);
   const { root, app } = mount({ parentThreadId: 'child-codex', loadHistory });
   await flushRender();
   expect(loadHistory).toHaveBeenCalledWith('child-codex');
   expect(root.textContent).toContain('Codex child result');
   expect(useMessages().getParts('child-answer')).toEqual([]);
-  app.unmount();
+  unmount(app);
   root.remove();
 });
 
 it('shows failed Codex child reads instead of claiming history is empty', async () => {
-  const { root, app } = mount({ parentThreadId: 'child-codex', loadHistory: async () => { throw new Error('Child history unavailable'); } });
+  const { root, app } = mount({
+    parentThreadId: 'child-codex',
+    loadHistory: async () => {
+      throw new Error('Child history unavailable');
+    },
+  });
   await flushRender();
   expect(root.querySelector('[role="alert"]')?.textContent).toContain('Child history unavailable');
-  app.unmount();
+  unmount(app);
   root.remove();
 });

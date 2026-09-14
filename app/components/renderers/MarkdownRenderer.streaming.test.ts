@@ -1,91 +1,34 @@
-import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
+import { createApp, defineComponent, h, reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MarkdownRenderer from './MarkdownRenderer.vue';
+import {
+  beginRenderScenario,
+  flushRenderRequests,
+  isRenderRequestResponded,
+  markRenderRequestResponded,
+  postedRenderRequests as postedRequests,
+  renderRequestsSince as requestsSince,
+  settleRendering as settle,
+  StreamingTestWorker,
+  type PostedRenderRequest as PostedRequest,
+  type WorkerCursor as Cursor,
+} from '../streamingComponents.test-helpers';
 
-const workerState = vi.hoisted(() => {
-  class FakeWorker {
-    static instances: FakeWorker[] = [];
-    onmessage: ((event: { data: unknown }) => void) | null = null;
-    onerror: ((error: unknown) => void) | null = null;
-    posted: unknown[] = [];
-    constructor() {
-      FakeWorker.instances.push(this);
-    }
-    postMessage(message: unknown) {
-      this.posted.push(message);
-    }
-    emit(data: unknown) {
-      this.onmessage?.({ data });
-    }
-  }
-  return { FakeWorker };
-});
-
-vi.mock('../../workers/render-worker?worker', () => ({ default: workerState.FakeWorker }));
-
-type PostedRequest = {
-  id: string;
-  code: string;
-  lang: string;
-  theme: string;
-  gutterMode?: string;
-};
-
-const respondedIds = new Set<string>();
+let testStart: Cursor = [];
 
 function htmlFor(code: string): string {
   return `<div class="seg" data-len="${code.length}">${code}</div>`;
 }
 
-function postedRequests(): PostedRequest[] {
-  return workerState.FakeWorker.instances.flatMap(
-    (worker) => worker.posted as PostedRequest[],
-  );
+function flushRenders(): Promise<void> {
+  return flushRenderRequests((request) => htmlFor(request.code));
 }
 
-// The worker pool round-robins posts across workers, so a global slice index
-// is meaningless. A cursor snapshots each worker's posted length.
-type Cursor = readonly number[];
-
-function cursor(): Cursor {
-  return workerState.FakeWorker.instances.map((worker) => worker.posted.length);
-}
-
-function requestsSince(from: Cursor): PostedRequest[] {
-  return workerState.FakeWorker.instances.flatMap((worker, index) =>
-    (worker.posted as PostedRequest[]).slice(from[index] ?? 0),
-  );
-}
-
-let testStart: Cursor = [];
-
-async function settle(rounds = 8): Promise<void> {  for (let index = 0; index < rounds; index += 1) {
-    await Promise.resolve();
-    await nextTick();
-  }
-}
-
-async function flushRenders(): Promise<void> {
-  for (let round = 0; round < 20; round += 1) {
-    let answered = 0;
-    for (const worker of workerState.FakeWorker.instances) {
-      for (const message of worker.posted) {
-        const request = message as PostedRequest;
-        if (respondedIds.has(request.id)) continue;
-        respondedIds.add(request.id);
-        worker.emit({ id: request.id, ok: true, html: htmlFor(request.code) });
-        answered += 1;
-      }
-    }
-    await settle();
-    if (answered === 0) {
-      const remaining = postedRequests().filter((request) => !respondedIds.has(request.id));
-      if (remaining.length === 0) return;
-    }
-  }
-  throw new Error('flushRenders did not quiesce');
-}
+vi.mock('../../workers/render-worker?worker', async () => {
+  const helper = await import('../streamingComponents.test-helpers');
+  return { default: helper.StreamingTestWorker };
+});
 
 type MountedRenderer = {
   readonly target: HTMLElement;
@@ -126,8 +69,7 @@ function mountMarkdownRenderer(initialProps: Record<string, unknown>): MountedRe
 }
 
 beforeEach(() => {
-  testStart = cursor();
-  for (const request of postedRequests()) respondedIds.add(request.id);
+  testStart = beginRenderScenario();
 });
 
 afterEach(() => {
@@ -202,7 +144,6 @@ describe('MarkdownRenderer characterization (default path, no streaming)', () =>
     expect(allRequests[1]?.code).toBe(nextCode);
     expect(content?.innerHTML).toBe(htmlFor(nextCode));
     expect(mounted.renderedCount()).toBe(2);
-
   });
 
   it('renders the html prop directly without touching the worker', async () => {
@@ -215,7 +156,6 @@ describe('MarkdownRenderer characterization (default path, no streaming)', () =>
     expect(requestsSince(testStart)).toHaveLength(0);
     expect(mounted.target.querySelector('.message-content')?.innerHTML).toBe('<p>given</p>');
     expect(mounted.renderedCount()).toBe(1);
-
   });
 });
 
@@ -247,7 +187,6 @@ describe('MarkdownRenderer streaming', () => {
     expect(current).toBe(container);
     expect(current?.innerHTML).toContain('Second para.');
     expect(current?.innerHTML).toContain('First para.');
-
   });
 
   it('converges through exactly one default-path full render when streaming flips true to false', async () => {
@@ -286,7 +225,6 @@ describe('MarkdownRenderer streaming', () => {
     expect(content?.innerHTML).toBe(htmlFor(finalText));
     // Streaming applies already emitted rendered; convergence adds exactly one.
     expect(mounted.renderedCount()).toBe(renderedBeforeFlip + 1);
-
   });
 
   it('keeps streamed DOM visible until the final full render resolves', async () => {
@@ -302,7 +240,7 @@ describe('MarkdownRenderer streaming', () => {
     mounted.props.streaming = false;
     await settle();
     const finalRequest = postedRequests().find(
-      (request) => request.code === finalText && !respondedIds.has(request.id),
+      (request) => request.code === finalText && !isRenderRequestResponded(request.id),
     );
     if (!finalRequest) throw new Error('final full render was not posted');
 
@@ -312,11 +250,11 @@ describe('MarkdownRenderer streaming', () => {
     expect(content?.innerHTML).toBe(streamedHtml);
 
     // When: the final worker completes
-    const worker = workerState.FakeWorker.instances.find((candidate) =>
+    const worker = StreamingTestWorker.instances.find((candidate) =>
       candidate.posted.some((message) => (message as PostedRequest).id === finalRequest.id),
     );
     if (!worker) throw new Error('final render worker was not found');
-    respondedIds.add(finalRequest.id);
+    markRenderRequestResponded(finalRequest.id);
     worker.emit({ id: finalRequest.id, ok: true, html: htmlFor(finalText) });
     await settle();
 
@@ -346,7 +284,6 @@ describe('MarkdownRenderer streaming', () => {
     const allRequests = requestsSince(testStart);
     expect(allRequests).toHaveLength(2);
     expect(allRequests[1]?.code).toBe(nextCode);
-
   });
 
   it('behaves sanely with empty or missing code and streams content when it arrives', async () => {
@@ -371,6 +308,5 @@ describe('MarkdownRenderer streaming', () => {
     expect(codes).toContain('# Epsilon\n\n');
     expect(codes).not.toContain(grown);
     expect(content?.innerHTML).toContain('Body.');
-
   });
 });

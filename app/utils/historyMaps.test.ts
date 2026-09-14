@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cloneNullPrototypeRecord } from './historyMaps';
 
@@ -7,21 +5,7 @@ type HistoryMeta = {
   readonly marker: string;
 };
 
-const appSource = readFileSync(resolve(__dirname, '../App.vue'), 'utf8');
-
 describe('history metadata maps', () => {
-  it('uses the safe clone for both reactive history maps', () => {
-    expect(appSource).toContain(
-      "import { cloneNullPrototypeRecord } from './utils/historyMaps';",
-    );
-    expect(appSource).toContain(
-      'const nextUserMessageMetaById = cloneNullPrototypeRecord(userMessageMetaById.value);',
-    );
-    expect(appSource).toContain(
-      'const nextUserMessageTimeById = cloneNullPrototypeRecord(userMessageTimeById.value);',
-    );
-  });
-
   it('keeps prototype-shaped backend IDs as own properties without changing Object.prototype', () => {
     const prototypeNames = Object.getOwnPropertyNames(Object.prototype);
     const prototypeDescriptors = new Map(

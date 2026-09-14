@@ -5,6 +5,18 @@ import type { CodexSkill } from '../backends/codex/codexAdapter';
 import type { ParsedSkill } from '../utils/parseSkill';
 import type { TextTransformer } from '../utils/textTransformers';
 
+type CodexApiFixtureOptions = {
+  readonly activeThreadId?: string;
+  readonly threads?: Array<{ id: string; modelProvider: string }>;
+  readonly collaborationModes?: Array<{ mode: string; name: string }>;
+};
+
+export type Deferred<T> = {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T | PromiseLike<T>) => void;
+  readonly reject: (reason?: unknown) => void;
+};
+
 export function createBaseParams() {
   return {
     codexProjectId: 'codex',
@@ -66,14 +78,33 @@ export function createBaseParams() {
   };
 }
 
-export function createCodexApi() {
+export function createCodexApi(options: CodexApiFixtureOptions = {}) {
   return {
-    activeThreadId: ref('session-1'),
-    threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
-    collaborationModes: ref([]),
+    activeThreadId: ref(options.activeThreadId ?? 'session-1'),
+    threads: ref(options.threads ?? [{ id: 'session-1', modelProvider: 'provider' }]),
+    collaborationModes: ref(options.collaborationModes ?? []),
     sendPrompt: vi.fn().mockResolvedValue(undefined),
     refreshThreads: vi.fn().mockResolvedValue(undefined),
     selectModel: vi.fn(),
+  };
+}
+
+export function deferred<T>(): Deferred<T> {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
+  let reject: (reason?: unknown) => void = () => undefined;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+export function imageAttachment(): ComposerAttachment {
+  return {
+    id: 'image',
+    filename: 'image.png',
+    mime: 'image/png',
+    dataUrl: 'data:image/png;base64,AA==',
   };
 }
 

@@ -1,13 +1,14 @@
-import { createApp, defineComponent, h, nextTick } from 'vue';
-import { createI18n } from 'vue-i18n';
+import { nextTick } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import InputPanel from './InputPanel.vue';
 import { useMessages } from '../composables/useMessages';
 import { useFavoriteMessages } from '../composables/useFavoriteMessages';
-import en from '../locales/en';
 import type { MessageInfo, TextPart } from '../types/sse';
 import type { TextTransformer } from '../utils/textTransformers';
 import { validateTextTransformerLibrary } from '../utils/snippets';
+import {
+  cleanupInputPanelFixtures,
+  mountInputPanel as mountSharedInputPanel,
+} from './inputPanel.test-helpers';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 const settings = vi.hoisted(() => ({
@@ -18,8 +19,6 @@ const settings = vi.hoisted(() => ({
 vi.mock('../composables/useSettings', () => ({
   useSettings: () => settings,
 }));
-
-const mountedApps: Array<() => void> = [];
 
 function userMessage(id: string, sessionID: string, text: string, synthetic = false) {
   const info: MessageInfo = {
@@ -42,59 +41,20 @@ function userMessage(id: string, sessionID: string, text: string, synthetic = fa
 }
 
 function mountInputPanel() {
-  const root = document.createElement('div');
-  document.body.appendChild(root);
   const openSnippetSettings = vi.fn();
-  const app = createApp(
-    defineComponent({
-      setup() {
-        return () =>
-          h(InputPanel, {
-            messageInput: '',
-            canSend: true,
-            selectedMode: 'build',
-            agentOptions: [{ id: 'build', label: 'Build' }],
-            hasAgentOptions: true,
-            selectedModel: 'openai/gpt',
-            selectedThinking: undefined,
-            modelOptions: [
-              {
-                id: 'openai/gpt',
-                modelID: 'gpt',
-                label: 'GPT',
-                displayName: 'GPT',
-                providerID: 'openai',
-              },
-            ],
-            thinkingOptions: [undefined],
-            hasModelOptions: true,
-            hasThinkingOptions: true,
-            isThinking: false,
-            canAbort: false,
-            commands: [],
-            attachments: [],
-            onOpenSnippetSettings: openSnippetSettings,
-            currentSessionId: 'root',
-            sessionParentById: new Map<string, string | undefined>([
-              ['root', undefined],
-              ['child', 'root'],
-            ]),
-          });
-      },
-    }),
-  );
-  app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
-  app.provide('showConfirm', async () => true);
-  app.mount(root);
-  mountedApps.push(() => {
-    app.unmount();
-    root.remove();
+  const { root } = mountSharedInputPanel({
+    onOpenSnippetSettings: openSnippetSettings,
+    currentSessionId: 'root',
+    sessionParentById: new Map<string, string | undefined>([
+      ['root', undefined],
+      ['child', 'root'],
+    ]),
   });
   return { root, openSnippetSettings };
 }
 
 afterEach(() => {
-  while (mountedApps.length > 0) mountedApps.pop()?.();
+  cleanupInputPanelFixtures();
   useMessages().reset();
   useFavoriteMessages().favorites.value = [];
   settings.textTransformers.value = [];

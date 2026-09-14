@@ -96,49 +96,49 @@ async function mountComposable() {
   };
 }
 
-describe('useFileTree', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    mockListFiles.mockReset();
-    mockGetVcsInfo.mockReset();
-    mockRunOneShotPtyCommand.mockReset();
+beforeEach(() => {
+  vi.useFakeTimers();
+  mockListFiles.mockReset();
+  mockGetVcsInfo.mockReset();
+  mockRunOneShotPtyCommand.mockReset();
 
-    mockGetVcsInfo.mockResolvedValue({ branch: 'main' });
-    mockListFiles.mockResolvedValue([]);
-    mockRunOneShotPtyCommand.mockImplementation(async (_command, args = []) => {
-      const script = args.at(-1) ?? '';
-      if (script.includes('status --porcelain')) {
-        return [
-          '## main',
-          ' M src/a.ts',
-          '##PREFIX',
-          '',
-          '##HEAD',
-          'abc123',
-          '##DIFFSTAT',
-          ' 1 file changed, 1 insertion(+)',
-          '',
-          '##DIFFSTAT_CACHED',
-          '',
-        ].join('\0');
-      }
-      if (script.includes('git ls-files --others --exclude-standard -z')) {
-        return '1';
-      }
-      if (script.includes('ls-files --cached --others --exclude-standard')) {
-        return 'src/a.ts\0src/b.ts\0';
-      }
-      return '';
-    });
+  mockGetVcsInfo.mockResolvedValue({ branch: 'main' });
+  mockListFiles.mockResolvedValue([]);
+  mockRunOneShotPtyCommand.mockImplementation(async (_command, args = []) => {
+    const script = args.at(-1) ?? '';
+    if (script.includes('status --porcelain')) {
+      return [
+        '## main',
+        ' M src/a.ts',
+        '##PREFIX',
+        '',
+        '##HEAD',
+        'abc123',
+        '##DIFFSTAT',
+        ' 1 file changed, 1 insertion(+)',
+        '',
+        '##DIFFSTAT_CACHED',
+        '',
+      ].join('\0');
+    }
+    if (script.includes('git ls-files --others --exclude-standard -z')) {
+      return '1';
+    }
+    if (script.includes('ls-files --cached --others --exclude-standard')) {
+      return 'src/a.ts\0src/b.ts\0';
+    }
+    return '';
   });
+});
 
-  afterEach(async () => {
-    vi.clearAllTimers();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    document.body.innerHTML = '';
-  });
+afterEach(async () => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  document.body.innerHTML = '';
+});
 
+describe('useFileTree initial git hydration and selective refresh', () => {
   it('auto-runs git status with diff stats during initial directory hydration', async () => {
     const mounted = await mountComposable();
     await mounted.settle();
@@ -331,6 +331,9 @@ describe('useFileTree', () => {
     mounted.unmount();
   });
 
+});
+
+describe('useFileTree expanded/ignored child reconciliation', () => {
   it('keeps expanded ignored directories loaded while reconciling additions and deletions', async () => {
     vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
@@ -448,6 +451,9 @@ describe('useFileTree', () => {
     mounted.unmount();
   });
 
+});
+
+describe('useFileTree scheduler ownership/disable/polling', () => {
   it('drops a queued snapshot refresh when refresh is disabled during an in-flight status request', async () => {
     const mounted = await mountComposable();
     await mounted.settle();

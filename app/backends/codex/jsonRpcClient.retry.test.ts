@@ -1,45 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexJsonRpcClient } from './jsonRpcClient';
-
-type ListenerMap = {
-  open: Array<() => void>;
-  message: Array<(event: { data: unknown }) => void>;
-  error: Array<() => void>;
-  close: Array<(event: { reason?: string }) => void>;
-};
-
-class RetryWebSocket {
-  static instances: RetryWebSocket[] = [];
-  readyState = 0;
-  readonly sent: string[] = [];
-  private readonly listeners: ListenerMap = { open: [], message: [], error: [], close: [] };
-
-  constructor(readonly url: string, readonly protocols?: string | string[]) {
-    RetryWebSocket.instances.push(this);
-  }
-
-  addEventListener<T extends keyof ListenerMap>(type: T, listener: ListenerMap[T][number]) {
-    this.listeners[type].push(listener as never);
-  }
-
-  send(data: string) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = 3;
-    for (const listener of this.listeners.close) listener({});
-  }
-
-  open() {
-    this.readyState = 1;
-    for (const listener of this.listeners.open) listener();
-  }
-
-  respond(payload: unknown) {
-    for (const listener of this.listeners.message) listener({ data: JSON.stringify(payload) });
-  }
-}
+import { closeCodexTestSockets, CodexTestSocket as RetryWebSocket } from './codexTestSocket';
 
 async function connectedClient() {
   const client = new CodexJsonRpcClient({
@@ -61,15 +22,20 @@ describe('CodexJsonRpcClient overload retry', () => {
   });
 
   afterEach(() => {
+    closeCodexTestSockets();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
   it('retries -32001 only when the caller explicitly opts in', async () => {
     const { client, socket } = await connectedClient();
-    const request = client.request<{ ok: boolean }>('thread/list', {}, {
-      retryOverloaded: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
-    });
+    const request = client.request<{ ok: boolean }>(
+      'thread/list',
+      {},
+      {
+        retryOverloaded: { maxAttempts: 3, baseDelayMs: 100, maxDelayMs: 1_000 },
+      },
+    );
 
     socket.respond({
       id: 1,
@@ -87,9 +53,13 @@ describe('CodexJsonRpcClient overload retry', () => {
 
   it('does not send a retry into a replacement connection', async () => {
     const { client, socket } = await connectedClient();
-    const request = client.request('thread/list', {}, {
-      retryOverloaded: { maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 100 },
-    });
+    const request = client.request(
+      'thread/list',
+      {},
+      {
+        retryOverloaded: { maxAttempts: 2, baseDelayMs: 100, maxDelayMs: 100 },
+      },
+    );
     const requestError = request.then(
       () => undefined,
       (error: unknown) => error,

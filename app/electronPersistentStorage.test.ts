@@ -137,6 +137,29 @@ describe('Electron persistent storage', () => {
     expect(fs.readdirSync(directory)).toEqual(['renderer-storage.json']);
   });
 
+  it('preserves the removed key on disk and in cache when atomic replacement fails', () => {
+    // Given: one durable key exists and replacement of the staged removal will fail.
+    const { directory, filePath } = createStorageFile({ saved: 'old', retained: 'value' });
+    const failingFileSystem = {
+      ...fs,
+      renameSync: () => {
+        throw new Error('injected remove rename failure');
+      },
+    };
+    const storage = createPersistentStorage(filePath, failingFileSystem);
+
+    // When: removing the key reaches the filesystem commit boundary.
+    expect(() => storage.removeItem('saved')).toThrow('injected remove rename failure');
+
+    // Then: the original file, cache, and key remain authoritative with no staged residue.
+    expect(JSON.parse(fs.readFileSync(filePath, 'utf8'))).toEqual({
+      saved: 'old',
+      retained: 'value',
+    });
+    expect(storage.getItem('saved')).toBe('old');
+    expect(fs.readdirSync(directory)).toEqual(['renderer-storage.json']);
+  });
+
   it('rolls back the complete migration batch when persistence fails', () => {
     // Given: native storage already owns one key and the migration rename will fail.
     const { filePath } = createStorageFile({ existing: 'native' });

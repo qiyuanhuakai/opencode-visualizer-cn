@@ -1,95 +1,29 @@
-import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
+import { createApp, defineComponent, h, reactive } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import MessageViewer from './MessageViewer.vue';
+import {
+  beginRenderScenario,
+  flushRenderRequests,
+  renderRequestsSince as requestsSince,
+  type WorkerCursor as Cursor,
+} from './streamingComponents.test-helpers';
 
-const workerState = vi.hoisted(() => {
-  class FakeWorker {
-    static instances: FakeWorker[] = [];
-    onmessage: ((event: { data: unknown }) => void) | null = null;
-    onerror: ((error: unknown) => void) | null = null;
-    posted: unknown[] = [];
-    constructor() {
-      FakeWorker.instances.push(this);
-    }
-    postMessage(message: unknown) {
-      this.posted.push(message);
-    }
-    emit(data: unknown) {
-      this.onmessage?.({ data });
-    }
-  }
-  return { FakeWorker };
-});
-
-vi.mock('../workers/render-worker?worker', () => ({ default: workerState.FakeWorker }));
-
-type PostedRequest = {
-  id: string;
-  code: string;
-  lang: string;
-  theme: string;
-  gutterMode?: string;
-  copyButtonLabel?: string;
-  copiedLabel?: string;
-  copyCodeAriaLabel?: string;
-  copyMarkdownAriaLabel?: string;
-};
-
-const respondedIds = new Set<string>();
+let testStart: Cursor = [];
 
 function htmlFor(code: string): string {
   return `<div class="seg" data-len="${code.length}">${code}</div>`;
 }
 
-function postedRequests(): PostedRequest[] {
-  return workerState.FakeWorker.instances.flatMap(
-    (worker) => worker.posted as PostedRequest[],
-  );
+function flushRenders(): Promise<void> {
+  return flushRenderRequests((request) => htmlFor(request.code));
 }
 
-type Cursor = readonly number[];
-
-function cursor(): Cursor {
-  return workerState.FakeWorker.instances.map((worker) => worker.posted.length);
-}
-
-function requestsSince(from: Cursor): PostedRequest[] {
-  return workerState.FakeWorker.instances.flatMap((worker, index) =>
-    (worker.posted as PostedRequest[]).slice(from[index] ?? 0),
-  );
-}
-
-let testStart: Cursor = [];
-
-async function settle(rounds = 8): Promise<void> {
-  for (let index = 0; index < rounds; index += 1) {
-    await Promise.resolve();
-    await nextTick();
-  }
-}
-
-async function flushRenders(): Promise<void> {
-  for (let round = 0; round < 20; round += 1) {
-    let answered = 0;
-    for (const worker of workerState.FakeWorker.instances) {
-      for (const message of worker.posted) {
-        const request = message as PostedRequest;
-        if (respondedIds.has(request.id)) continue;
-        respondedIds.add(request.id);
-        worker.emit({ id: request.id, ok: true, html: htmlFor(request.code) });
-        answered += 1;
-      }
-    }
-    await settle();
-    if (answered === 0) {
-      const remaining = postedRequests().filter((request) => !respondedIds.has(request.id));
-      if (remaining.length === 0) return;
-    }
-  }
-  throw new Error('flushRenders did not quiesce');
-}
+vi.mock('../workers/render-worker?worker', async () => {
+  const helper = await import('./streamingComponents.test-helpers');
+  return { default: helper.StreamingTestWorker };
+});
 
 function createMessages() {
   return {
@@ -143,8 +77,7 @@ function mountMessageViewer(
 }
 
 beforeEach(() => {
-  testStart = cursor();
-  for (const request of postedRequests()) respondedIds.add(request.id);
+  testStart = beginRenderScenario();
 });
 
 afterEach(() => {
@@ -198,7 +131,6 @@ describe('MessageViewer characterization (default path, no streaming)', () => {
     const content = mounted.target.querySelector('.markdown-renderer .message-content');
     expect(content?.innerHTML).toBe(htmlFor(code));
     expect(mounted.target.querySelector('.code-renderer-content')).toBeNull();
-
   });
 });
 
@@ -219,7 +151,6 @@ describe('MessageViewer streaming forwarding', () => {
     expect(codes).not.toContain(grown);
     const content = mounted.target.querySelector('.markdown-renderer .message-content');
     expect(content?.innerHTML).toContain('Body.');
-
   });
 
   it('ignores streaming for non-markdown languages and keeps the CodeRenderer path untouched', async () => {
@@ -235,6 +166,5 @@ describe('MessageViewer streaming forwarding', () => {
     // And: no markdown render request was issued
     const requests = requestsSince(testStart);
     expect(requests.filter((request) => request.lang === 'markdown')).toHaveLength(0);
-
   });
 });

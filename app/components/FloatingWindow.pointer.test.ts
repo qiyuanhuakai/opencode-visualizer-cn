@@ -1,34 +1,23 @@
 // @vitest-environment happy-dom
-import { createApp, defineComponent, h, nextTick, type App as VueApp } from 'vue';
+import { createApp, defineComponent, h, nextTick } from 'vue';
 import { createI18n } from 'vue-i18n';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useFloatingWindows } from '../composables/useFloatingWindows';
 import FloatingWindow from './FloatingWindow.vue';
+import {
+  cleanupFloatingWindowApps,
+  emitPointer,
+  FloatingWindowTestContent,
+  registerFloatingWindowApp,
+} from './floatingWindow.test-helpers';
 
-const TestContent = defineComponent(() => () => h('div', 'content'));
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
-function emitPointer(
-  target: HTMLElement,
-  type: string,
-  clientX: number,
-  clientY: number,
-  pointerId: number,
-) {
-  if (!target.setPointerCapture) target.setPointerCapture = () => undefined;
-  if (!target.releasePointerCapture) target.releasePointerCapture = () => undefined;
-  const event = new PointerEvent(type, {
-    bubbles: true,
-    cancelable: true,
-    clientX,
-    clientY,
-    pointerId,
-  });
-  Reflect.set(event, '_vts', Date.now() + 1);
-  target.dispatchEvent(event);
-}
+afterEach(() => {
+  cleanupFloatingWindowApps();
+});
 
 async function mountFloatingWindow(): Promise<{
-  app: VueApp;
   target: HTMLDivElement;
   manager: ReturnType<typeof useFloatingWindows>;
 }> {
@@ -48,6 +37,7 @@ async function mountFloatingWindow(): Promise<{
     },
   });
   const app = createApp(Root);
+  registerFloatingWindowApp(app, target);
   app.use(
     createI18n({
       legacy: false,
@@ -59,7 +49,7 @@ async function mountFloatingWindow(): Promise<{
   if (!manager) throw new Error('Floating-window manager did not initialize.');
   manager.setExtent(375, 500);
   await manager.open('gesture-window', {
-    component: TestContent,
+    component: FloatingWindowTestContent,
     width: 300,
     height: 300,
     x: 50,
@@ -73,7 +63,7 @@ async function mountFloatingWindow(): Promise<{
   if (!windowElement.releasePointerCapture) windowElement.releasePointerCapture = () => undefined;
   windowElement.getBoundingClientRect = () =>
     ({ left: 50, top: 100, right: 350, bottom: 400, width: 300, height: 300 }) as DOMRect;
-  return { app, target, manager };
+  return { target, manager };
 }
 
 describe('FloatingWindow pointer ownership', () => {
@@ -90,8 +80,6 @@ describe('FloatingWindow pointer ownership', () => {
 
     // Then: the non-owner movement cannot change the window position
     expect(mounted.manager.get('gesture-window')).toMatchObject({ x: 50, y: 100 });
-    mounted.app.unmount();
-    mounted.target.remove();
   });
 
   it('does not let a second pointer steal an active drag', async () => {
@@ -109,7 +97,5 @@ describe('FloatingWindow pointer ownership', () => {
 
     // Then: pointer 1 remains the owner and commits its exact movement
     expect(mounted.manager.get('gesture-window')).toMatchObject({ x: 90, y: 100 });
-    mounted.app.unmount();
-    mounted.target.remove();
   });
 });

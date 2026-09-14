@@ -37,6 +37,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "test": "vitest run",
+    "test:codex": "vitest run app/backends/codex app/components/codex app/composables/useCodex",
+    "test:live:acp": "vitest run app/backends/acp/acpLiveQa.test.ts",
     "electron:start": "node scripts/electron-start.mjs",
     "electron:build": "vite build && electron-builder",
     "electron:preview": "vite build && electron-builder --dir",
@@ -44,6 +46,8 @@
     "qa:electron-desktop": "node scripts/qa/electron-desktop.mjs",
     "qa:electron-storage": "node scripts/qa/electron-persistent-storage-sync.mjs",
     "qa:pty": "node scripts/qa/node-pty-dual-runtime.mjs",
+    "qa:codex-popups": "node scripts/qa/codex-popups.mjs",
+    "qa:ui-contracts": "node scripts/qa/ui-contracts.mjs",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

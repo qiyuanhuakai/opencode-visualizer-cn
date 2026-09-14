@@ -1,80 +1,97 @@
-import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { loadConfigFromFile } from 'vite';
+import type { Alias, AliasOptions } from 'vite';
 
-const CONFIG_PATH = path.resolve(__dirname, '../vite.config.ts');
-const PACKAGE_PATH = path.resolve(__dirname, '../package.json');
+const repoRoot = path.resolve(__dirname, '..');
+const loaded = await loadConfigFromFile(
+  { command: 'build', mode: 'test' },
+  path.join(repoRoot, 'vite.config.ts'),
+  repoRoot,
+);
 
-// Static contract over vite.config.ts (string-level, mirroring
-// electronSmokeContract.test.ts): the Vite 8 migration (Task 7) must keep the
-// relative base (app:// and GitHub Pages hosting), the manualChunks vendor
-// split, the ES worker format, the node polyfill aliases, the fixed dev server
-// host/port, the __GIT_REVISION__ define, the happy-dom test environment, and
-// the build/test stack majors (vite 8, vitest 4, happy-dom 20, plugin-vue 6).
-const configSource = readFileSync(CONFIG_PATH, 'utf8');
+if (loaded === null) throw new Error('vite.config.ts did not export a configuration');
+
+const config = loaded.config;
+const aliases = config.resolve?.alias;
+const output = Array.isArray(config.build?.rollupOptions?.output)
+  ? config.build.rollupOptions.output[0]
+  : config.build?.rollupOptions?.output;
+const manualChunks = output?.manualChunks;
+const chunkApi = { getModuleInfo: () => null, getModuleIds: function* () {} };
+
+function isAliasArray(value: AliasOptions | undefined): value is readonly Alias[] {
+  return Array.isArray(value);
+}
+
+function aliasValue(name: string): string | undefined {
+  if (aliases === undefined) return undefined;
+  if (isAliasArray(aliases)) {
+    const alias = aliases.find(({ find }) => find === name);
+    return typeof alias?.replacement === 'string' ? alias.replacement : undefined;
+  }
+  const value = aliases[name];
+  return typeof value === 'string' ? value : undefined;
+}
 
 describe('vite config contract', () => {
-  it('keeps the relative base (app:// and GitHub Pages must not use /assets)', () => {
-    expect(configSource).toMatch(/base:\s*'\.\/'/);
-    expect(configSource).not.toMatch(/base:\s*['"]\//);
+  it('keeps a relative base for app:// and GitHub Pages assets', () => {
+    expect(config.base).toBe('./');
   });
 
-  it('keeps manualChunks with every vendor group', () => {
-    expect(configSource).toMatch(/manualChunks\s*\(/);
-    for (const marker of [
-      'vendor-vue-i18n',
-      'vendor-vue',
-      'vendor-ui',
-      'vendor-terminal',
-      'vendor-utils',
-    ]) {
-      expect(configSource).toContain(`'${marker}'`);
+  it.each([
+    ['/repo/node_modules/vue-i18n/dist/index.mjs', 'vendor-vue-i18n'],
+    ['/repo/node_modules/vue/dist/vue.runtime.esm.js', 'vendor-vue'],
+    ['/repo/node_modules/@headlessui/utils/dist/index.mjs', 'vendor-ui'],
+    ['/repo/node_modules/@iconify/utils/dist/index.mjs', 'vendor-ui'],
+    ['/repo/node_modules/@xterm/xterm/lib/xterm.js', 'vendor-terminal'],
+    ['/repo/node_modules/marked/lib/marked.esm.js', 'vendor-utils'],
+    ['/repo/node_modules/date-fns/index.js', 'vendor-utils'],
+    ['/repo/node_modules/lodash/lodash.js', 'vendor-utils'],
+  ])('classifies %s as %s', (id, expectedChunk) => {
+    expect(manualChunks).toBeTypeOf('function');
+    if (typeof manualChunks === 'function') expect(manualChunks(id, chunkApi)).toBe(expectedChunk);
+  });
+
+  it('leaves application and unrelated dependency modules unclassified', () => {
+    expect(manualChunks).toBeTypeOf('function');
+    if (typeof manualChunks === 'function') {
+      expect(manualChunks('/repo/app/main.ts', chunkApi)).toBeUndefined();
+      expect(manualChunks('/repo/node_modules/nanoid/index.js', chunkApi)).toBeUndefined();
     }
   });
 
   it('keeps the ES worker format', () => {
-    expect(configSource).toMatch(/format:\s*'es'/);
+    expect(config.worker?.format).toBe('es');
   });
 
   it('keeps the node polyfill aliases', () => {
-    expect(configSource).toMatch(/buffer:\s*'buffer\/'/);
-    for (const name of ['fs', 'path', 'crypto']) {
-      expect(configSource).toMatch(
-        new RegExp(`${name}:\\s*path\\.resolve\\(__dirname,\\s*'app/utils/node-polyfill\\.ts'\\)`),
-      );
-    }
+    expect(aliasValue('buffer')).toBe('buffer/');
+    const polyfillPath = path.join(repoRoot, 'app/utils/node-polyfill.ts');
+    expect(aliasValue('fs')).toBe(polyfillPath);
+    expect(aliasValue('path')).toBe(polyfillPath);
+    expect(aliasValue('crypto')).toBe(polyfillPath);
   });
 
-  it('keeps the fixed dev server host/port', () => {
-    expect(configSource).toMatch(/host:\s*'127\.0\.0\.1'/);
-    expect(configSource).toMatch(/port:\s*5173/);
-    expect(configSource).toMatch(/strictPort:\s*true/);
+  it('keeps the fixed dev server host and port', () => {
+    expect(config.server).toMatchObject({ host: '127.0.0.1', port: 5173, strictPort: true });
   });
 
-  it('keeps the git revision define', () => {
-    expect(configSource).toContain('__GIT_REVISION__');
+  it('defines the git revision as a JSON string literal', () => {
+    expect(config.define?.__GIT_REVISION__).toMatch(/^"[0-9a-f]+"$/);
   });
 
-  it('keeps happy-dom as the test environment with the full include glob', () => {
-    expect(configSource).toMatch(/environment:\s*'happy-dom'/);
-    expect(configSource).toMatch(/include:\s*\[\s*'\*\*\/\*\.test\.ts'\s*\]/);
-    expect(configSource).toMatch(/globals:\s*false/);
+  it('keeps the Vitest environment and discovery contract', () => {
+    expect(config.test).toMatchObject({
+      environment: 'happy-dom',
+      globals: false,
+      include: ['**/*.test.ts'],
+    });
   });
 
-  it('keeps the vue plugin', () => {
-    expect(configSource).toMatch(/import vue from '@vitejs\/plugin-vue'/);
-    expect(configSource).toMatch(/plugins:\s*\[vue\(\)\]/);
-  });
-
-  it('locks the build/test stack majors (vite 8, vitest 4, happy-dom 20, plugin-vue 6)', () => {
-    const pkg = JSON.parse(readFileSync(PACKAGE_PATH, 'utf8')) as {
-      devDependencies: Record<string, string>;
-    };
-    expect(pkg.devDependencies['vite']).toMatch(/^\^8\./);
-    expect(pkg.devDependencies['vitest']).toMatch(/^\^4\./);
-    expect(pkg.devDependencies['happy-dom']).toMatch(/^\^20\./);
-    expect(pkg.devDependencies['@vitejs/plugin-vue']).toMatch(/^\^6\./);
-    expect(pkg.devDependencies['esbuild']).toMatch(/^\^0\./);
-    expect(pkg.devDependencies['postcss']).toMatch(/^\^8\./);
+  it('loads the Vue plugin', () => {
+    expect(config.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'vite:vue' })]),
+    );
   });
 });

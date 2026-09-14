@@ -1,226 +1,148 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
-import { useBackendSessionActions } from './useBackendSessionActions';
-import type { CodexApiLike, OpenCodeApiLike } from './useBackendSessionActions';
+import type { OpenCodeApiLike } from './useBackendSessionActions';
+import { createSessionActionsFixture } from './useBackendSessionActions.test-helpers';
 
-function createOpenCodeApi(overrides: Partial<OpenCodeApiLike> = {}): OpenCodeApiLike {
-  return {
-    deleteSession: vi.fn(),
-    archiveSession: vi.fn(),
-    unarchiveSession: vi.fn(),
-    renameSession: vi.fn(),
-    pinSession: vi.fn(),
-    unpinSession: vi.fn(),
-    forkSession: vi.fn(),
-    revertSession: vi.fn(),
-    ...overrides,
-  };
-}
+type SessionActionsFixture = ReturnType<typeof createSessionActionsFixture>;
 
-function createCodexApi(overrides: Partial<CodexApiLike> = {}): CodexApiLike {
-  return {
-    hiddenThreadIds: ref(new Set()),
-    visibleThreads: ref([]),
-    activeThreadId: ref(''),
-    archiveThread: vi.fn(),
-    hideThread: vi.fn(),
-    unhideThread: vi.fn(),
-    setThreadName: vi.fn(),
-    forkThread: vi.fn(),
-    rollbackThread: vi.fn(),
-    startThreadCompaction: vi.fn(),
-    selectThread: vi.fn(),
-    ...overrides,
-  };
-}
+const sessionPayload = {
+  sessionId: 'session-1',
+  projectId: 'proj-1',
+  directory: '/repo',
+} as const;
 
-function createPinMocks() {
-  return {
-    setLocalPinnedSession: vi.fn(),
-    setLocalUnpinnedSession: vi.fn(),
-    clearLocalPinnedSessionOverride: vi.fn(),
-    restoreLocalPinnedSessionOverride: vi.fn(),
-  };
-}
-
-function createActions(
-  overrides: {
-    activeBackendKind?: 'opencode' | 'codex' | 'acp';
-    openCodeApi?: Partial<OpenCodeApiLike>;
-    codexApi?: Partial<CodexApiLike>;
-    ensureConnectionReady?: () => boolean;
-    getSessionPinnedOverride?: () => number | undefined;
-    backendDeleteSession?: () => Promise<unknown>;
-  } = {},
-) {
-  const openCodeApi = createOpenCodeApi(overrides.openCodeApi);
-  const codexApi = createCodexApi(overrides.codexApi);
-  const pinMocks = createPinMocks();
-  const setSessionError = vi.fn();
-  const actions = useBackendSessionActions({
-    activeBackendKind: ref(overrides.activeBackendKind ?? 'opencode'),
-    codexProjectId: 'codex',
-    selectedProjectId: ref('proj-1'),
-    selectedSessionId: ref('session-1'),
-    activeDirectory: ref('/repo'),
-    localPinnedSessionStore: ref({}),
-    serverProjects: {},
-    openCodeApi,
-    codexApi,
-    ensureConnectionReady: overrides.ensureConnectionReady ?? (() => true),
-    setSessionError,
-    clearSessionError: vi.fn(),
-    toErrorMessage: (error) => String(error),
-    translate: (key) => key,
-    showPrompt: vi.fn(),
-    showConfirm: vi.fn(),
-    findSessionInProjects: () => null,
-    resolveProjectIdForSession: () => 'proj-1',
-    resolveSessionOperationPayload: () => ({ projectId: 'proj-1', directory: '/repo' }),
-    getSessionPinnedOverride: overrides.getSessionPinnedOverride ?? (() => 123),
-    ...pinMocks,
-    switchSessionSelection: vi.fn(),
-    reloadSelectedSessionState: vi.fn(),
-    seedForkedSessionComposerDraft: vi.fn(),
-    setSendStatusKey: vi.fn(),
-    setLocalSessionArchived: vi.fn(),
-    batchConcurrency: 2,
-    backendDeleteSession: overrides.backendDeleteSession ?? vi.fn(),
-    backendUpdateSession: vi.fn(),
-  });
-  return {
-    actions,
-    mocks: {
-      openCodeApi: openCodeApi as unknown as Record<
-        keyof OpenCodeApiLike,
-        ReturnType<typeof vi.fn>
-      >,
-      codexApi,
-      ...pinMocks,
-      setSessionError,
+const rollbackScenarios = [
+  {
+    name: 'Given an opencode deleteSession rejection, When deleteSession runs, Then it reverts the pinned override and surfaces the delete error',
+    arrange: () => {
+      const mutation = vi
+        .fn<OpenCodeApiLike['deleteSession']>()
+        .mockRejectedValue(new Error('boom'));
+      return {
+        fixture: createSessionActionsFixture({ openCodeApi: { deleteSession: mutation } }),
+        mutation,
+      };
     },
-  };
-}
+    run: (fixture: SessionActionsFixture) => fixture.actions.deleteSession('session-1'),
+    expectedPayload: sessionPayload,
+    assertOptimistic: (fixture: SessionActionsFixture) =>
+      expect(fixture.mocks.clearLocalPinnedSessionOverride).toHaveBeenCalledWith(
+        'proj-1',
+        'session-1',
+      ),
+    errorKey: 'app.error.sessionDeleteFailed',
+  },
+  {
+    name: 'Given an opencode archiveSession rejection, When archiveSession runs, Then it reverts the pinned override and surfaces the archive error',
+    arrange: () => {
+      const mutation = vi
+        .fn<OpenCodeApiLike['archiveSession']>()
+        .mockRejectedValue(new Error('boom'));
+      return {
+        fixture: createSessionActionsFixture({ openCodeApi: { archiveSession: mutation } }),
+        mutation,
+      };
+    },
+    run: (fixture: SessionActionsFixture) => fixture.actions.archiveSession('session-1'),
+    expectedPayload: sessionPayload,
+    assertOptimistic: (fixture: SessionActionsFixture) =>
+      expect(fixture.mocks.clearLocalPinnedSessionOverride).toHaveBeenCalledWith(
+        'proj-1',
+        'session-1',
+      ),
+    errorKey: 'app.error.sessionArchiveFailed',
+  },
+  {
+    name: 'Given an opencode unarchiveSession rejection, When unarchiveSession runs, Then it reverts the pinned override and surfaces the unarchive error',
+    arrange: () => {
+      const mutation = vi
+        .fn<OpenCodeApiLike['unarchiveSession']>()
+        .mockRejectedValue(new Error('boom'));
+      return {
+        fixture: createSessionActionsFixture({ openCodeApi: { unarchiveSession: mutation } }),
+        mutation,
+      };
+    },
+    run: (fixture: SessionActionsFixture) => fixture.actions.unarchiveSession('session-1'),
+    expectedPayload: sessionPayload,
+    assertOptimistic: (fixture: SessionActionsFixture) =>
+      expect(fixture.mocks.clearLocalPinnedSessionOverride).toHaveBeenCalledWith(
+        'proj-1',
+        'session-1',
+      ),
+    errorKey: 'app.error.sessionUnarchiveFailed',
+  },
+  {
+    name: 'Given an opencode pinSession rejection, When pinSession runs, Then it reverts the pinned override and surfaces the pin error',
+    arrange: () => {
+      const mutation = vi.fn<OpenCodeApiLike['pinSession']>().mockRejectedValue(new Error('boom'));
+      return {
+        fixture: createSessionActionsFixture({ openCodeApi: { pinSession: mutation } }),
+        mutation,
+      };
+    },
+    run: (fixture: SessionActionsFixture) => fixture.actions.pinSession('session-1'),
+    expectedPayload: { ...sessionPayload, pinnedAt: expect.any(Number) },
+    assertOptimistic: (fixture: SessionActionsFixture) =>
+      expect(fixture.mocks.setLocalPinnedSession).toHaveBeenCalledWith(
+        'proj-1',
+        'session-1',
+        expect.any(Number),
+      ),
+    errorKey: 'app.error.sessionPinFailed',
+  },
+  {
+    name: 'Given an opencode unpinSession rejection, When unpinSession runs, Then it reverts the pinned override and surfaces the unpin error',
+    arrange: () => {
+      const mutation = vi
+        .fn<OpenCodeApiLike['unpinSession']>()
+        .mockRejectedValue(new Error('boom'));
+      return {
+        fixture: createSessionActionsFixture({ openCodeApi: { unpinSession: mutation } }),
+        mutation,
+      };
+    },
+    run: (fixture: SessionActionsFixture) => fixture.actions.unpinSession('session-1'),
+    expectedPayload: sessionPayload,
+    assertOptimistic: (fixture: SessionActionsFixture) =>
+      expect(fixture.mocks.setLocalUnpinnedSession).toHaveBeenCalledWith('proj-1', 'session-1'),
+    errorKey: 'app.error.sessionUnpinFailed',
+  },
+] as const;
 
 describe('useBackendSessionActions mutation skeleton', () => {
   it('passes the selected Codex message to rollback instead of always reverting one turn', async () => {
     const rollbackThread = vi.fn().mockResolvedValue({});
-    const { actions } = createActions({ activeBackendKind: 'codex', codexApi: { rollbackThread } });
-    await actions.handleRevertMessage({ sessionId: 'session-1', messageId: 'old-turn:user:client-id' });
+    const { actions } = createSessionActionsFixture({
+      activeBackendKind: 'codex',
+      codexApi: { rollbackThread },
+    });
+    await actions.handleRevertMessage({
+      sessionId: 'session-1',
+      messageId: 'old-turn:user:client-id',
+    });
     expect(rollbackThread).toHaveBeenCalledWith('session-1', 'old-turn:user:client-id');
   });
-  it('Given an opencode deleteSession rejection, When deleteSession runs, Then it reverts the pinned override and surfaces the delete error', async () => {
-    const { actions, mocks } = createActions({
-      openCodeApi: { deleteSession: vi.fn().mockRejectedValue(new Error('boom')) },
-    });
+  it.each(rollbackScenarios.map((scenario) => [scenario.name, scenario] as const))(
+    '%s',
+    async (_name, scenario) => {
+      const { fixture, mutation } = scenario.arrange();
 
-    await actions.deleteSession('session-1');
+      await scenario.run(fixture);
 
-    expect(mocks.openCodeApi.deleteSession).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      projectId: 'proj-1',
-      directory: '/repo',
-    });
-    expect(mocks.clearLocalPinnedSessionOverride).toHaveBeenCalledWith('proj-1', 'session-1');
-    expect(mocks.restoreLocalPinnedSessionOverride).toHaveBeenCalledWith(
-      'proj-1',
-      'session-1',
-      123,
-    );
-    expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionDeleteFailed');
-  });
-
-  it('Given an opencode archiveSession rejection, When archiveSession runs, Then it reverts the pinned override and surfaces the archive error', async () => {
-    const { actions, mocks } = createActions({
-      openCodeApi: { archiveSession: vi.fn().mockRejectedValue(new Error('boom')) },
-    });
-
-    await actions.archiveSession('session-1');
-
-    expect(mocks.openCodeApi.archiveSession).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      projectId: 'proj-1',
-      directory: '/repo',
-    });
-    expect(mocks.clearLocalPinnedSessionOverride).toHaveBeenCalledWith('proj-1', 'session-1');
-    expect(mocks.restoreLocalPinnedSessionOverride).toHaveBeenCalledWith(
-      'proj-1',
-      'session-1',
-      123,
-    );
-    expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionArchiveFailed');
-  });
-
-  it('Given an opencode unarchiveSession rejection, When unarchiveSession runs, Then it reverts the pinned override and surfaces the unarchive error', async () => {
-    const { actions, mocks } = createActions({
-      openCodeApi: { unarchiveSession: vi.fn().mockRejectedValue(new Error('boom')) },
-    });
-
-    await actions.unarchiveSession('session-1');
-
-    expect(mocks.openCodeApi.unarchiveSession).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      projectId: 'proj-1',
-      directory: '/repo',
-    });
-    expect(mocks.clearLocalPinnedSessionOverride).toHaveBeenCalledWith('proj-1', 'session-1');
-    expect(mocks.restoreLocalPinnedSessionOverride).toHaveBeenCalledWith(
-      'proj-1',
-      'session-1',
-      123,
-    );
-    expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionUnarchiveFailed');
-  });
-
-  it('Given an opencode pinSession rejection, When pinSession runs, Then it reverts the pinned override and surfaces the pin error', async () => {
-    const { actions, mocks } = createActions({
-      openCodeApi: { pinSession: vi.fn().mockRejectedValue(new Error('boom')) },
-    });
-
-    await actions.pinSession('session-1');
-
-    expect(mocks.openCodeApi.pinSession).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      projectId: 'proj-1',
-      directory: '/repo',
-      pinnedAt: expect.any(Number),
-    });
-    expect(mocks.setLocalPinnedSession).toHaveBeenCalledWith(
-      'proj-1',
-      'session-1',
-      expect.any(Number),
-    );
-    expect(mocks.restoreLocalPinnedSessionOverride).toHaveBeenCalledWith(
-      'proj-1',
-      'session-1',
-      123,
-    );
-    expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionPinFailed');
-  });
-
-  it('Given an opencode unpinSession rejection, When unpinSession runs, Then it reverts the pinned override and surfaces the unpin error', async () => {
-    const { actions, mocks } = createActions({
-      openCodeApi: { unpinSession: vi.fn().mockRejectedValue(new Error('boom')) },
-    });
-
-    await actions.unpinSession('session-1');
-
-    expect(mocks.openCodeApi.unpinSession).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      projectId: 'proj-1',
-      directory: '/repo',
-    });
-    expect(mocks.setLocalUnpinnedSession).toHaveBeenCalledWith('proj-1', 'session-1');
-    expect(mocks.restoreLocalPinnedSessionOverride).toHaveBeenCalledWith(
-      'proj-1',
-      'session-1',
-      123,
-    );
-    expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionUnpinFailed');
-  });
+      expect(mutation).toHaveBeenCalledWith(scenario.expectedPayload);
+      scenario.assertOptimistic(fixture);
+      expect(fixture.mocks.restoreLocalPinnedSessionOverride).toHaveBeenCalledWith(
+        'proj-1',
+        'session-1',
+        123,
+      );
+      expect(fixture.mocks.setSessionError).toHaveBeenCalledWith(scenario.errorKey);
+    },
+  );
 
   it('Given an empty session id, When deleteSession runs, Then no optimistic or server mutation happens', async () => {
-    const { actions, mocks } = createActions();
+    const { actions, mocks } = createSessionActionsFixture();
 
     await actions.deleteSession('');
 
@@ -230,7 +152,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given the connection is not ready, When archiveSession runs, Then no optimistic or server mutation happens', async () => {
-    const { actions, mocks } = createActions({ ensureConnectionReady: () => false });
+    const { actions, mocks } = createSessionActionsFixture({ ensureConnectionReady: () => false });
 
     await actions.archiveSession('session-1');
 
@@ -240,7 +162,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given an empty session id, When unpinSession runs, Then no optimistic or server mutation happens', async () => {
-    const { actions, mocks } = createActions();
+    const { actions, mocks } = createSessionActionsFixture();
 
     await actions.unpinSession('');
 
@@ -250,7 +172,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given the connection is not ready, When pinSession runs, Then no optimistic or server mutation happens', async () => {
-    const { actions, mocks } = createActions({ ensureConnectionReady: () => false });
+    const { actions, mocks } = createSessionActionsFixture({ ensureConnectionReady: () => false });
 
     await actions.pinSession('session-1');
 
@@ -261,7 +183,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given an acp backend, When pinSession runs, Then the optimistic pin is applied without a server call', async () => {
-    const { actions, mocks } = createActions({ activeBackendKind: 'acp' });
+    const { actions, mocks } = createSessionActionsFixture({ activeBackendKind: 'acp' });
 
     await actions.pinSession('session-1');
 
@@ -276,7 +198,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given a successful opencode deleteSession, When deleteSession runs, Then the optimistic pin override is cleared without a rollback', async () => {
-    const { actions, mocks } = createActions({
+    const { actions, mocks } = createSessionActionsFixture({
       openCodeApi: { deleteSession: vi.fn().mockResolvedValue(undefined) },
     });
 
@@ -288,7 +210,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given an opencode deleteSession, When deleteSession runs, Then the optimistic mutation happens before the server call', async () => {
-    const { actions, mocks } = createActions();
+    const { actions, mocks } = createSessionActionsFixture();
 
     await actions.deleteSession('session-1');
 
@@ -298,7 +220,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given a successful opencode unpinSession, When unpinSession runs, Then the optimistic pin override stays without a rollback', async () => {
-    const { actions, mocks } = createActions({
+    const { actions, mocks } = createSessionActionsFixture({
       openCodeApi: { unpinSession: vi.fn().mockResolvedValue(undefined) },
     });
 
@@ -310,7 +232,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given an opencode unpinSession, When unpinSession runs, Then the optimistic mutation happens before the server call', async () => {
-    const { actions, mocks } = createActions();
+    const { actions, mocks } = createSessionActionsFixture();
 
     await actions.unpinSession('session-1');
 
@@ -318,7 +240,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given an acp backend, When unpinSession runs, Then the optimistic unpin is applied without a server call', async () => {
-    const { actions, mocks } = createActions({ activeBackendKind: 'acp' });
+    const { actions, mocks } = createSessionActionsFixture({ activeBackendKind: 'acp' });
 
     await actions.unpinSession('session-1');
 
@@ -329,7 +251,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given an acp backendDeleteSession rejection, When deleteSession runs, Then the delete error is surfaced without a pinned rollback', async () => {
-    const { actions, mocks } = createActions({
+    const { actions, mocks } = createSessionActionsFixture({
       activeBackendKind: 'acp',
       backendDeleteSession: vi.fn().mockRejectedValue(new Error('boom')),
     });
@@ -341,7 +263,7 @@ describe('useBackendSessionActions mutation skeleton', () => {
   });
 
   it('Given a codex archiveThread rejection, When deleteSession runs, Then the delete error is surfaced without a pinned rollback', async () => {
-    const { actions, mocks } = createActions({
+    const { actions, mocks } = createSessionActionsFixture({
       activeBackendKind: 'codex',
       codexApi: { archiveThread: vi.fn().mockRejectedValue(new Error('boom')) },
     });
@@ -360,60 +282,17 @@ describe('useBackendSessionActions', () => {
     const setThreadName = vi.fn();
     const openCodeRenameSession = vi.fn();
     let resolvePrompt: ((value: string | null) => void) | undefined;
-    const actions = useBackendSessionActions({
-      activeBackendKind,
-      codexProjectId: 'codex',
+    const { actions } = createSessionActionsFixture({
+      activeBackendKindRef: activeBackendKind,
       selectedProjectId: ref('codex'),
       selectedSessionId: ref('thread-1'),
-      activeDirectory: ref('/repo'),
-      localPinnedSessionStore: ref({}),
-      serverProjects: {},
-      openCodeApi: {
-        deleteSession: vi.fn(),
-        archiveSession: vi.fn(),
-        unarchiveSession: vi.fn(),
-        renameSession: openCodeRenameSession,
-        pinSession: vi.fn(),
-        unpinSession: vi.fn(),
-        forkSession: vi.fn(),
-        revertSession: vi.fn(),
-      },
-      codexApi: {
-        hiddenThreadIds: ref(new Set()),
-        visibleThreads: ref([]),
-        activeThreadId: ref('thread-1'),
-        archiveThread: vi.fn(),
-        hideThread: vi.fn(),
-        unhideThread: vi.fn(),
-        setThreadName,
-        forkThread: vi.fn(),
-        rollbackThread: vi.fn(),
-        startThreadCompaction: vi.fn(),
-        selectThread: vi.fn(),
-      },
-      ensureConnectionReady: () => true,
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
-      toErrorMessage: (error) => String(error),
-      translate: (key) => key,
+      openCodeApi: { renameSession: openCodeRenameSession },
+      codexApi: { activeThreadId: ref('thread-1'), setThreadName },
       showPrompt: vi.fn(() => new Promise<string | null>((resolve) => (resolvePrompt = resolve))),
-      showConfirm: vi.fn(),
-      findSessionInProjects: () => null,
       resolveProjectIdForSession: () => 'codex',
       resolveSessionOperationPayload: () => ({ projectId: 'codex', directory: '/repo' }),
       getSessionPinnedOverride: () => undefined,
       setLocalPinnedSession,
-      setLocalUnpinnedSession: vi.fn(),
-      clearLocalPinnedSessionOverride: vi.fn(),
-      restoreLocalPinnedSessionOverride: vi.fn(),
-      switchSessionSelection: vi.fn(),
-      reloadSelectedSessionState: vi.fn(),
-      seedForkedSessionComposerDraft: vi.fn(),
-      setSendStatusKey: vi.fn(),
-      setLocalSessionArchived: vi.fn(),
-      batchConcurrency: 2,
-      backendDeleteSession: vi.fn(),
-      backendUpdateSession: vi.fn(),
     });
 
     await actions.pinSession('thread-1');
@@ -432,60 +311,10 @@ describe('useBackendSessionActions', () => {
   it('pins opencode sessions with optimistic local state and server call', async () => {
     const setLocalPinnedSession = vi.fn();
     const pinSession = vi.fn().mockResolvedValue(undefined);
-    const actions = useBackendSessionActions({
-      activeBackendKind: ref('opencode'),
-      codexProjectId: 'codex',
-      selectedProjectId: ref('proj-1'),
-      selectedSessionId: ref('session-1'),
-      activeDirectory: ref('/repo'),
-      localPinnedSessionStore: ref({}),
-      serverProjects: {},
-      openCodeApi: {
-        deleteSession: vi.fn(),
-        archiveSession: vi.fn(),
-        unarchiveSession: vi.fn(),
-        renameSession: vi.fn(),
-        pinSession,
-        unpinSession: vi.fn(),
-        forkSession: vi.fn(),
-        revertSession: vi.fn(),
-      },
-      codexApi: {
-        hiddenThreadIds: ref(new Set()),
-        visibleThreads: ref([]),
-        activeThreadId: ref(''),
-        archiveThread: vi.fn(),
-        hideThread: vi.fn(),
-        unhideThread: vi.fn(),
-        setThreadName: vi.fn(),
-        forkThread: vi.fn(),
-        rollbackThread: vi.fn(),
-        startThreadCompaction: vi.fn(),
-        selectThread: vi.fn(),
-      },
-      ensureConnectionReady: () => true,
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
-      toErrorMessage: (error) => String(error),
-      translate: (key) => key,
-      showPrompt: vi.fn(),
-      showConfirm: vi.fn(),
-      findSessionInProjects: () => null,
-      resolveProjectIdForSession: () => 'proj-1',
-      resolveSessionOperationPayload: () => ({ projectId: 'proj-1', directory: '/repo' }),
+    const { actions } = createSessionActionsFixture({
+      openCodeApi: { pinSession },
       getSessionPinnedOverride: () => undefined,
       setLocalPinnedSession,
-      setLocalUnpinnedSession: vi.fn(),
-      clearLocalPinnedSessionOverride: vi.fn(),
-      restoreLocalPinnedSessionOverride: vi.fn(),
-      switchSessionSelection: vi.fn(),
-      reloadSelectedSessionState: vi.fn(),
-      seedForkedSessionComposerDraft: vi.fn(),
-      setSendStatusKey: vi.fn(),
-      setLocalSessionArchived: vi.fn(),
-      batchConcurrency: 2,
-      backendDeleteSession: vi.fn(),
-      backendUpdateSession: vi.fn(),
     });
 
     await actions.pinSession('session-1');
@@ -503,60 +332,14 @@ describe('useBackendSessionActions', () => {
   it('routes ACP deletion through the active backend instead of OpenCode', async () => {
     const backendDeleteSession = vi.fn().mockResolvedValue(undefined);
     const openCodeDelete = vi.fn();
-    const actions = useBackendSessionActions({
-      activeBackendKind: ref('acp'),
-      codexProjectId: 'codex',
+    const { actions } = createSessionActionsFixture({
+      activeBackendKind: 'acp',
       selectedProjectId: ref('acp'),
-      selectedSessionId: ref('session-1'),
-      activeDirectory: ref('/repo'),
-      localPinnedSessionStore: ref({}),
-      serverProjects: {},
-      openCodeApi: {
-        deleteSession: openCodeDelete,
-        archiveSession: vi.fn(),
-        unarchiveSession: vi.fn(),
-        renameSession: vi.fn(),
-        pinSession: vi.fn(),
-        unpinSession: vi.fn(),
-        forkSession: vi.fn(),
-        revertSession: vi.fn(),
-      },
-      codexApi: {
-        hiddenThreadIds: ref(new Set()),
-        visibleThreads: ref([]),
-        activeThreadId: ref(''),
-        archiveThread: vi.fn(),
-        hideThread: vi.fn(),
-        unhideThread: vi.fn(),
-        setThreadName: vi.fn(),
-        forkThread: vi.fn(),
-        rollbackThread: vi.fn(),
-        startThreadCompaction: vi.fn(),
-        selectThread: vi.fn(),
-      },
-      ensureConnectionReady: () => true,
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
-      toErrorMessage: (error) => String(error),
-      translate: (key) => key,
-      showPrompt: vi.fn(),
-      showConfirm: vi.fn(),
-      findSessionInProjects: () => null,
+      openCodeApi: { deleteSession: openCodeDelete },
       resolveProjectIdForSession: () => 'acp',
       resolveSessionOperationPayload: () => ({ projectId: 'acp', directory: '/repo' }),
       getSessionPinnedOverride: () => undefined,
-      setLocalPinnedSession: vi.fn(),
-      setLocalUnpinnedSession: vi.fn(),
-      clearLocalPinnedSessionOverride: vi.fn(),
-      restoreLocalPinnedSessionOverride: vi.fn(),
-      switchSessionSelection: vi.fn(),
-      reloadSelectedSessionState: vi.fn(),
-      seedForkedSessionComposerDraft: vi.fn(),
-      setSendStatusKey: vi.fn(),
-      setLocalSessionArchived: vi.fn(),
-      batchConcurrency: 2,
       backendDeleteSession,
-      backendUpdateSession: vi.fn(),
     });
 
     await actions.deleteSession('session-1');
@@ -570,63 +353,19 @@ describe('useBackendSessionActions', () => {
     let resolvePrompt: ((value: string | null) => void) | undefined;
     const setThreadName = vi.fn();
     const renameSession = vi.fn();
-    const actions = useBackendSessionActions({
-      activeBackendKind,
-      codexProjectId: 'codex',
+    const { actions } = createSessionActionsFixture({
+      activeBackendKindRef: activeBackendKind,
       selectedProjectId: ref('codex'),
       selectedSessionId: ref('thread-1'),
-      activeDirectory: ref('/repo'),
-      localPinnedSessionStore: ref({}),
-      serverProjects: {},
-      openCodeApi: {
-        deleteSession: vi.fn(),
-        archiveSession: vi.fn(),
-        unarchiveSession: vi.fn(),
-        renameSession,
-        pinSession: vi.fn(),
-        unpinSession: vi.fn(),
-        forkSession: vi.fn(),
-        revertSession: vi.fn(),
-      },
-      codexApi: {
-        hiddenThreadIds: ref(new Set()),
-        visibleThreads: ref([]),
-        activeThreadId: ref('thread-1'),
-        archiveThread: vi.fn(),
-        hideThread: vi.fn(),
-        unhideThread: vi.fn(),
-        setThreadName,
-        forkThread: vi.fn(),
-        rollbackThread: vi.fn(),
-        startThreadCompaction: vi.fn(),
-        selectThread: vi.fn(),
-      },
-      ensureConnectionReady: () => true,
-      setSessionError: vi.fn(),
-      clearSessionError: vi.fn(),
-      toErrorMessage: String,
-      translate: (key) => key,
+      openCodeApi: { renameSession },
+      codexApi: { activeThreadId: ref('thread-1'), setThreadName },
       showPrompt: () =>
         new Promise((resolve) => {
           resolvePrompt = resolve;
         }),
-      showConfirm: vi.fn(),
-      findSessionInProjects: () => null,
       resolveProjectIdForSession: () => 'codex',
       resolveSessionOperationPayload: () => ({ projectId: 'codex', directory: '/repo' }),
       getSessionPinnedOverride: () => undefined,
-      setLocalPinnedSession: vi.fn(),
-      setLocalUnpinnedSession: vi.fn(),
-      clearLocalPinnedSessionOverride: vi.fn(),
-      restoreLocalPinnedSessionOverride: vi.fn(),
-      switchSessionSelection: vi.fn(),
-      reloadSelectedSessionState: vi.fn(),
-      seedForkedSessionComposerDraft: vi.fn(),
-      setSendStatusKey: vi.fn(),
-      setLocalSessionArchived: vi.fn(),
-      batchConcurrency: 2,
-      backendDeleteSession: vi.fn(),
-      backendUpdateSession: vi.fn(),
     });
 
     const pending = actions.renameSession('thread-1');

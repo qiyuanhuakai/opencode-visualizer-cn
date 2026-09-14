@@ -1,62 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexJsonRpcClient, CodexJsonRpcError } from './jsonRpcClient';
-
-type ListenerMap = {
-  open: Array<() => void>;
-  message: Array<(event: { data: unknown }) => void>;
-  error: Array<() => void>;
-  close: Array<(event: { code?: number; reason?: string }) => void>;
-};
-
-class MockWebSocket {
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSED = 3;
-  static instances: MockWebSocket[] = [];
-
-  readyState = MockWebSocket.CONNECTING;
-  readonly sent: string[] = [];
-  private readonly listeners: ListenerMap = {
-    open: [],
-    message: [],
-    error: [],
-    close: [],
-  };
-
-  constructor(readonly url: string, readonly protocols?: string | string[]) {
-    MockWebSocket.instances.push(this);
-  }
-
-  addEventListener<T extends keyof ListenerMap>(type: T, listener: ListenerMap[T][number]) {
-    this.listeners[type].push(listener as never);
-  }
-
-  send(data: string) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = MockWebSocket.CLOSED;
-    this.emitClose();
-  }
-
-  emitOpen() {
-    this.readyState = MockWebSocket.OPEN;
-    for (const listener of this.listeners.open) listener();
-  }
-
-  emitMessage(data: unknown) {
-    for (const listener of this.listeners.message) listener({ data });
-  }
-
-  emitError() {
-    for (const listener of this.listeners.error) listener();
-  }
-
-  emitClose(reason = '') {
-    for (const listener of this.listeners.close) listener({ reason });
-  }
-}
+import { closeCodexTestSockets, CodexTestSocket as MockWebSocket } from './codexTestSocket';
 
 describe('CodexJsonRpcClient', () => {
   beforeEach(() => {
@@ -65,6 +9,7 @@ describe('CodexJsonRpcClient', () => {
   });
 
   afterEach(() => {
+    closeCodexTestSockets();
     vi.useRealTimers();
   });
 
@@ -119,6 +64,57 @@ describe('CodexJsonRpcClient', () => {
     await expect(request).resolves.toEqual({ data: [], nextCursor: null });
   });
 
+  it('ignores malformed transport frames until a valid response arrives', async () => {
+    const client = new CodexJsonRpcClient({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+    const connected = client.connect();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await connected;
+
+    const request = client.request('thread/list');
+    socket.emitMessage('{malformed json');
+    socket.respond(1, { data: [], nextCursor: null });
+
+    await expect(request).resolves.toEqual({ data: [], nextCursor: null });
+  });
+
+  it('rejects pending requests with the transport close reason', async () => {
+    const client = new CodexJsonRpcClient({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+    const connected = client.connect();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await connected;
+
+    const request = client.request('thread/list');
+    socket.emitClose('bridge stopped', 1001);
+
+    await expect(request).rejects.toThrow('Codex WebSocket closed: bridge stopped');
+    expect(client.isConnected()).toBe(false);
+  });
+
+  it('forwards WebSocket protocols and reports close before opening', async () => {
+    const client = new CodexJsonRpcClient({
+      url: 'ws://localhost:4500',
+      protocols: ['codex-json-rpc'],
+      webSocketCtor: MockWebSocket,
+    });
+
+    const connected = client.connect();
+    const socket = MockWebSocket.instances[0]!;
+    expect(socket.protocols).toEqual(['codex-json-rpc']);
+    socket.emitClose('handshake rejected', 1002);
+
+    await expect(connected).rejects.toThrow(
+      'Codex WebSocket closed before opening: handshake rejected',
+    );
+  });
+
   it('rejects JSON-RPC error responses', async () => {
     const client = new CodexJsonRpcClient({
       url: 'ws://localhost:4500',
@@ -131,10 +127,12 @@ describe('CodexJsonRpcClient', () => {
     await connected;
 
     const request = client.request('thread/list');
-    socket.emitMessage(JSON.stringify({
-      id: 1,
-      error: { code: -32001, message: 'Server overloaded; retry later.' },
-    }));
+    socket.emitMessage(
+      JSON.stringify({
+        id: 1,
+        error: { code: -32001, message: 'Server overloaded; retry later.' },
+      }),
+    );
 
     await expect(request).rejects.toMatchObject({
       name: 'CodexJsonRpcError',
@@ -155,10 +153,12 @@ describe('CodexJsonRpcClient', () => {
     socket.emitOpen();
     await connected;
 
-    socket.emitMessage(JSON.stringify({
-      method: 'turn/started',
-      params: { turn: { id: 'turn_1' } },
-    }));
+    socket.emitMessage(
+      JSON.stringify({
+        method: 'turn/started',
+        params: { turn: { id: 'turn_1' } },
+      }),
+    );
 
     expect(handler).toHaveBeenCalledWith({
       method: 'turn/started',
@@ -181,11 +181,13 @@ describe('CodexJsonRpcClient', () => {
     socket.emitOpen();
     await connected;
 
-    socket.emitMessage(JSON.stringify({
-      id: 'approval-1',
-      method: 'item/commandExecution/requestApproval',
-      params: { command: ['pnpm', 'test'] },
-    }));
+    socket.emitMessage(
+      JSON.stringify({
+        id: 'approval-1',
+        method: 'item/commandExecution/requestApproval',
+        params: { command: ['pnpm', 'test'] },
+      }),
+    );
 
     expect(requestHandler).toHaveBeenCalledWith({
       id: 'approval-1',
@@ -243,12 +245,14 @@ describe('CodexJsonRpcClient', () => {
     socket.emitMessage(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 1 } }));
     await initialize;
 
-    socket.emitMessage(JSON.stringify({
-      jsonrpc: '2.0',
-      id: 'fs-1',
-      method: 'fs/read_text_file',
-      params: { sessionId: 'session-1', path: '/tmp/file' },
-    }));
+    socket.emitMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'fs-1',
+        method: 'fs/read_text_file',
+        params: { sessionId: 'session-1', path: '/tmp/file' },
+      }),
+    );
     expect(requestHandler).toHaveBeenCalledWith({
       id: 'fs-1',
       method: 'fs/read_text_file',

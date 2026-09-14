@@ -47,6 +47,28 @@ describe('useBackendSelectionBootstrap', () => {
     expect(initializeSessionSelection).not.toHaveBeenCalled();
   });
 
+  it('ignores a stale OpenCode query session and initializes the current selection', async () => {
+    const switchSessionSelection = vi.fn();
+    const initializeSessionSelection = vi.fn().mockResolvedValue(undefined);
+    const runtime = useBackendSelectionBootstrap({
+      activeBackendKind: ref('opencode'),
+      codexProjectId: 'codex',
+      selectedProjectId: ref(''),
+      selectedSessionId: ref(''),
+      codexActiveSessionId: ref(''),
+      initialProjectId: () => 'missing-project',
+      initialSessionId: () => 'missing-session',
+      sessionExistsInProjects: () => false,
+      switchSessionSelection,
+      initializeSessionSelection,
+    });
+
+    await runtime.bootstrapSelection();
+
+    expect(switchSessionSelection).not.toHaveBeenCalled();
+    expect(initializeSessionSelection).toHaveBeenCalledOnce();
+  });
+
   it('delegates OpenCode selection to the dedicated bootstrap when provided', async () => {
     const bootstrapOpenCodeSelection = vi.fn().mockResolvedValue(undefined);
     const switchSessionSelection = vi.fn();

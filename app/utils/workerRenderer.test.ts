@@ -1,59 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  postedStreamMessages,
+  resetTestRenderWorkers,
+  streamIdOf,
+  TestRenderWorker,
+} from './workerTransport.test-helpers';
 
-const workerState = vi.hoisted(() => {
-  class FakeWorker {
-    static instances: FakeWorker[] = [];
-    static failNextConstruction = false;
-    onmessage: ((event: { data: unknown }) => void) | null = null;
-    onerror: ((error: unknown) => void) | null = null;
-    posted: unknown[] = [];
-    terminated = false;
-    constructor() {
-      if (FakeWorker.failNextConstruction) {
-        FakeWorker.failNextConstruction = false;
-        throw new Error('worker construction failed');
-      }
-      FakeWorker.instances.push(this);
-    }
-    postMessage(message: unknown) {
-      this.posted.push(message);
-    }
-    emit(data: unknown) {
-      this.onmessage?.({ data });
-    }
-    terminate() {
-      this.terminated = true;
-    }
-  }
-  return { FakeWorker };
-});
-
-vi.mock('../workers/render-worker?worker', () => ({ default: workerState.FakeWorker }));
-
-type FakeWorker = InstanceType<typeof workerState.FakeWorker>;
-
-function streamIdOf(message: unknown): string {
-  if (
-    typeof message === 'object' &&
-    message !== null &&
-    'streamId' in message &&
-    typeof message.streamId === 'string'
-  ) {
-    return message.streamId;
-  }
-  throw new Error('message has no streamId');
-}
-
-function postedStreamMessages(worker: FakeWorker): unknown[] {
-  return worker.posted.filter(
-    (message) => typeof message === 'object' && message !== null && 'stream' in message,
-  );
-}
+vi.mock('../workers/render-worker?worker', () => ({ default: TestRenderWorker }));
 
 beforeEach(() => {
   vi.resetModules();
-  workerState.FakeWorker.instances = [];
-  workerState.FakeWorker.failNextConstruction = false;
+  resetTestRenderWorkers();
 });
 
 describe('worker rendering', () => {
@@ -66,9 +23,9 @@ describe('worker rendering', () => {
       lang: 'typescript',
       theme: 'github-dark',
     });
-    const poolSize = workerState.FakeWorker.instances.length;
+    const poolSize = TestRenderWorker.instances.length;
     expect(poolSize).toBeGreaterThan(0);
-    workerState.FakeWorker.instances[0]?.emit({ id: 'single-1', ok: true, html: '<b>x</b>' });
+    TestRenderWorker.instances[0]?.emit({ id: 'single-1', ok: true, html: '<b>x</b>' });
     await expect(singleShot).resolves.toBe('<b>x</b>');
 
     // When: a stream is opened
@@ -80,8 +37,8 @@ describe('worker rendering', () => {
     });
 
     // Then: exactly one new dedicated worker was created, separate from the pool
-    expect(workerState.FakeWorker.instances).toHaveLength(poolSize + 1);
-    const streamWorker = workerState.FakeWorker.instances[poolSize];
+    expect(TestRenderWorker.instances).toHaveLength(poolSize + 1);
+    const streamWorker = TestRenderWorker.instances[poolSize];
     if (!streamWorker) throw new Error('no dedicated stream worker');
     const openMessage = streamWorker.posted[0];
     expect(openMessage).toMatchObject({
@@ -92,7 +49,7 @@ describe('worker rendering', () => {
     const streamId = streamIdOf(openMessage);
 
     // And: no pool worker received any stream message
-    for (const poolWorker of workerState.FakeWorker.instances.slice(0, poolSize)) {
+    for (const poolWorker of TestRenderWorker.instances.slice(0, poolSize)) {
       expect(postedStreamMessages(poolWorker)).toEqual([]);
     }
 
@@ -146,7 +103,7 @@ describe('worker rendering', () => {
     // Given: an open stream
     const mod = await import('../utils/workerRenderer');
     const stream = mod.startRenderWorkerStream({ lang: 'typescript', theme: 'github-dark' });
-    const streamWorker = workerState.FakeWorker.instances[0];
+    const streamWorker = TestRenderWorker.instances[0];
     if (!streamWorker) throw new Error('no dedicated stream worker');
     const streamId = streamIdOf(streamWorker.posted[0]);
 
@@ -163,7 +120,7 @@ describe('worker rendering', () => {
     // Given: an open stream with a pending close
     const mod = await import('../utils/workerRenderer');
     const stream = mod.startRenderWorkerStream({ lang: 'typescript', theme: 'github-dark' });
-    const streamWorker = workerState.FakeWorker.instances[0];
+    const streamWorker = TestRenderWorker.instances[0];
     if (!streamWorker) throw new Error('no dedicated stream worker');
     const streamId = streamIdOf(streamWorker.posted[0]);
     const closePromise = stream.close();
@@ -197,9 +154,9 @@ describe('single-shot regression', () => {
       theme: 'github-dark',
     });
 
-    expect(workerState.FakeWorker.instances.length).toBeLessThanOrEqual(4);
-    expect(workerState.FakeWorker.instances.length).toBeGreaterThan(0);
-    const poolWorker = workerState.FakeWorker.instances[0];
+    expect(TestRenderWorker.instances.length).toBeLessThanOrEqual(4);
+    expect(TestRenderWorker.instances.length).toBeGreaterThan(0);
+    const poolWorker = TestRenderWorker.instances[0];
     if (!poolWorker) throw new Error('no pool worker');
     poolWorker.emit({ id: 'pool-ceiling', ok: true, html: '<pool />' });
     await expect(render).resolves.toBe('<pool />');
@@ -208,7 +165,7 @@ describe('single-shot regression', () => {
   it('rejects asynchronously and restores counters when worker construction fails', async () => {
     const mod = await import('../utils/workerRenderer');
     const renderState = await import('../composables/useRenderState');
-    workerState.FakeWorker.failNextConstruction = true;
+    TestRenderWorker.failNextConstruction = true;
 
     const task = mod.startRenderWorkerHtml({
       id: 'constructor-failure',
@@ -236,8 +193,8 @@ describe('single-shot regression', () => {
       lang: 'text',
       theme: 'github-dark',
     });
-    const firstWorker = workerState.FakeWorker.instances[0];
-    const secondWorker = workerState.FakeWorker.instances[1];
+    const firstWorker = TestRenderWorker.instances[0];
+    const secondWorker = TestRenderWorker.instances[1];
     if (!firstWorker || !secondWorker) throw new Error('expected two render workers');
 
     expect(renderState.pendingWorkerRenders.value).toBe(2);
@@ -286,17 +243,17 @@ describe('single-shot regression', () => {
       lang: 'text',
       theme: 'github-dark',
     });
-    const failedWorker = workerState.FakeWorker.instances[0];
-    const healthyWorker = workerState.FakeWorker.instances[1];
+    const failedWorker = TestRenderWorker.instances[0];
+    const healthyWorker = TestRenderWorker.instances[1];
     if (!failedWorker || !healthyWorker) throw new Error('expected two render workers');
-    const initialPoolSize = workerState.FakeWorker.instances.length;
+    const initialPoolSize = TestRenderWorker.instances.length;
     expect(failedWorker.posted).toContainEqual(expect.objectContaining({ id: 'failed-worker' }));
     expect(healthyWorker.posted).toContainEqual(expect.objectContaining({ id: 'healthy-worker' }));
     failedWorker.onerror?.('worker failed');
 
     await expect(failed.promise).rejects.toThrow('worker failed');
     expect(failedWorker.terminated).toBe(true);
-    expect(workerState.FakeWorker.instances).toHaveLength(initialPoolSize + 1);
+    expect(TestRenderWorker.instances).toHaveLength(initialPoolSize + 1);
 
     healthyWorker.emit({ id: 'healthy-worker', ok: true, html: '<healthy />' });
     await expect(healthy.promise).resolves.toBe('<healthy />');
@@ -309,7 +266,7 @@ describe('single-shot regression', () => {
         lang: 'text',
         theme: 'github-dark',
       });
-      workerState.FakeWorker.instances[index]?.emit({
+      TestRenderWorker.instances[index]?.emit({
         id: requestId,
         ok: true,
         html: `<${requestId} />`,
@@ -323,7 +280,7 @@ describe('single-shot regression', () => {
       lang: 'text',
       theme: 'github-dark',
     });
-    const replacementWorker = workerState.FakeWorker.instances[initialPoolSize];
+    const replacementWorker = TestRenderWorker.instances[initialPoolSize];
     if (!replacementWorker) throw new Error('expected a replacement worker');
     replacementWorker.emit({ id: 'replacement-worker', ok: true, html: '<replacement />' });
     await expect(replacement.promise).resolves.toBe('<replacement />');
@@ -341,7 +298,7 @@ describe('single-shot regression', () => {
 
     // When: a single-shot render is requested
     const first = mod.renderWorkerHtml(request);
-    const poolWorker = workerState.FakeWorker.instances[0];
+    const poolWorker = TestRenderWorker.instances[0];
     if (!poolWorker) throw new Error('no pool worker');
     expect(poolWorker.posted).toEqual([request]);
     poolWorker.emit({ id: 'cache-1', ok: true, html: '<cached-html>' });
@@ -366,7 +323,7 @@ describe('single-shot regression', () => {
     };
 
     const withControls = mod.renderWorkerHtml(request);
-    const poolWorker = workerState.FakeWorker.instances[0];
+    const poolWorker = TestRenderWorker.instances[0];
     if (!poolWorker) throw new Error('no pool worker');
     poolWorker.emit({ id: request.id, ok: true, html: '<button>COPY</button>' });
     await expect(withControls).resolves.toBe('<button>COPY</button>');
@@ -376,10 +333,10 @@ describe('single-shot regression', () => {
       id: 'copy-controls-off',
       copyButtons: false,
     });
-    const posted = workerState.FakeWorker.instances.flatMap((worker) => worker.posted);
+    const posted = TestRenderWorker.instances.flatMap((worker) => worker.posted);
     expect(posted).toHaveLength(2);
     expect(posted[1]).toMatchObject({ copyButtons: false });
-    const secondWorker = workerState.FakeWorker.instances.find((worker) =>
+    const secondWorker = TestRenderWorker.instances.find((worker) =>
       worker.posted.some(
         (message) =>
           typeof message === 'object' &&
@@ -408,7 +365,7 @@ describe('single-shot regression', () => {
       theme: 'github-dark',
     };
     const first = mod.renderWorkerHtml(firstRequest);
-    const firstWorker = workerState.FakeWorker.instances.find((worker) =>
+    const firstWorker = TestRenderWorker.instances.find((worker) =>
       worker.posted.includes(firstRequest),
     );
     if (!firstWorker) throw new Error('first render was not posted');
@@ -417,7 +374,7 @@ describe('single-shot regression', () => {
     await expect(first).resolves.toHaveLength(largeHtmlLength);
 
     const second = mod.renderWorkerHtml(secondRequest);
-    const secondWorker = workerState.FakeWorker.instances.find((worker) =>
+    const secondWorker = TestRenderWorker.instances.find((worker) =>
       worker.posted.includes(secondRequest),
     );
     if (!secondWorker) throw new Error('second render was not posted');
@@ -425,8 +382,8 @@ describe('single-shot regression', () => {
     await expect(second).resolves.toHaveLength(largeHtmlLength);
 
     const firstAgain = mod.renderWorkerHtml({ ...firstRequest, id: 'byte-budget-first-again' });
-    expect(workerState.FakeWorker.instances.flatMap((worker) => worker.posted)).toHaveLength(3);
-    const firstAgainWorker = workerState.FakeWorker.instances.find((worker) =>
+    expect(TestRenderWorker.instances.flatMap((worker) => worker.posted)).toHaveLength(3);
+    const firstAgainWorker = TestRenderWorker.instances.find((worker) =>
       worker.posted.some(
         (message) =>
           typeof message === 'object' &&
@@ -449,7 +406,7 @@ describe('single-shot regression', () => {
       lang: 'typescript',
       theme: 'github-dark',
     });
-    const poolWorker = workerState.FakeWorker.instances[0];
+    const poolWorker = TestRenderWorker.instances[0];
     if (!poolWorker) throw new Error('no pool worker');
 
     // When: the worker responds with an error

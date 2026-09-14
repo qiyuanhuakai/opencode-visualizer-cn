@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MessageInfo } from '../types/sse';
 import { useMessages } from './useMessages';
+import { assistantMessage, textPart, toolPart, userMessage } from './useMessages.test-helpers';
 
 describe('useMessages history and realtime state', () => {
   beforeEach(() => {
@@ -15,30 +15,29 @@ describe('useMessages history and realtime state', () => {
   it('preserves per-file patches from user message summary diffs', () => {
     const messages = useMessages();
 
-    messages.updateMessage({
-      id: 'msg-1',
-      sessionID: 'session-1',
-      role: 'user',
-      time: { created: 1 },
-      agent: 'build',
-      model: { providerID: 'test', modelID: 'test-model' },
-      summary: {
-        diffs: [
-          {
-            file: 'app/components/renderers/DiffRenderer.vue',
-            patch: '@@ -1,2 +1,2 @@\n-foo\n+bar',
-            additions: 1,
-            deletions: 1,
-          },
-          {
-            file: 'app/composables/useMessages.ts',
-            patch: '@@ -10,0 +11,1 @@\n+const value = true;',
-            additions: 1,
-            deletions: 0,
-          },
-        ],
-      },
-    } as MessageInfo);
+    messages.updateMessage(
+      userMessage('msg-1', {
+        sessionID: 'session-1',
+        agent: 'build',
+        model: { providerID: 'test', modelID: 'test-model' },
+        summary: {
+          diffs: [
+            {
+              file: 'app/components/renderers/DiffRenderer.vue',
+              patch: '@@ -1,2 +1,2 @@\n-foo\n+bar',
+              additions: 1,
+              deletions: 1,
+            },
+            {
+              file: 'app/composables/useMessages.ts',
+              patch: '@@ -10,0 +11,1 @@\n+const value = true;',
+              additions: 1,
+              deletions: 0,
+            },
+          ],
+        },
+      }),
+    );
 
     expect(messages.getDiffs('msg-1')).toEqual([
       {
@@ -61,72 +60,40 @@ describe('useMessages history and realtime state', () => {
 
     messages.loadHistory([
       {
-        info: {
-          id: 'assistant-1',
+        info: assistantMessage('assistant-1', {
           sessionID: 'session-1',
-          role: 'assistant',
           time: { created: 1, completed: 2 },
           parentID: 'user-1',
-          modelID: 'codex',
-          providerID: 'codex',
-          mode: 'codex',
-          agent: 'codex',
-          path: { cwd: '/repo', root: '/repo' },
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        },
-        parts: [{
-          id: 'tool-1',
-          sessionID: 'session-1',
-          messageID: 'assistant-1',
-          type: 'tool',
-          callID: 'tool-1',
-          tool: 'bash',
-          state: {
+        }),
+        parts: [
+          toolPart('assistant-1', {
             status: 'running',
             input: { command: 'ls' },
             title: 'ls',
             metadata: { source: 'codex' },
             time: { start: 1 },
-          },
-          metadata: { source: 'codex' },
-        }],
+          }),
+        ],
       },
     ]);
 
     messages.loadHistory([
       {
-        info: {
-          id: 'assistant-1',
+        info: assistantMessage('assistant-1', {
           sessionID: 'session-1',
-          role: 'assistant',
           time: { created: 1, completed: 3 },
           parentID: 'user-1',
-          modelID: 'codex',
-          providerID: 'codex',
-          mode: 'codex',
-          agent: 'codex',
-          path: { cwd: '/repo', root: '/repo' },
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        },
-        parts: [{
-          id: 'tool-1',
-          sessionID: 'session-1',
-          messageID: 'assistant-1',
-          type: 'tool',
-          callID: 'tool-1',
-          tool: 'bash',
-          state: {
+        }),
+        parts: [
+          toolPart('assistant-1', {
             status: 'completed',
             input: { command: 'ls' },
             output: 'done',
             title: 'ls',
             metadata: { source: 'codex' },
             time: { start: 1, end: 3 },
-          },
-          metadata: { source: 'codex' },
-        }],
+          }),
+        ],
       },
     ]);
 
@@ -138,22 +105,17 @@ describe('useMessages history and realtime state', () => {
 
     messages.loadHistory([
       {
-        info: {
-          id: 'codex:turn:pending-turn:123:user:0',
+        info: userMessage('codex:turn:pending-turn:123:user:0', {
           sessionID: 'session-1',
-          role: 'user',
-          time: { created: 1 },
-          agent: 'codex',
-          model: { providerID: 'codex', modelID: 'codex' },
-        },
-        parts: [{
-          id: 'codex:turn:pending-turn:123:user:0:text',
-          sessionID: 'session-1',
-          messageID: 'codex:turn:pending-turn:123:user:0',
-          type: 'text',
-          text: 'hello',
-          time: { start: 1, end: 1 },
-        }],
+        }),
+        parts: [
+          textPart('codex:turn:pending-turn:123:user:0', {
+            id: 'codex:turn:pending-turn:123:user:0:text',
+            sessionID: 'session-1',
+            text: 'hello',
+            time: { start: 1, end: 1 },
+          }),
+        ],
       },
     ]);
 
@@ -166,62 +128,27 @@ describe('useMessages history and realtime state', () => {
   it('does not duplicate assistant reply when streaming state is followed by completed history reload', () => {
     const messages = useMessages();
 
-    messages.updateMessage({
-      id: 'turn_1:user:0',
-      sessionID: 'thread-1',
-      role: 'user',
-      time: { created: 1 },
-      agent: 'codex',
-      model: { providerID: 'codex', modelID: 'codex' },
-    } as MessageInfo);
+    messages.updateMessage(userMessage('turn_1:user:0'));
 
-    messages.updateMessage({
-      id: 'turn_1:assistant',
-      sessionID: 'thread-1',
-      role: 'assistant',
-      time: { created: 2 },
-      parentID: 'turn_1:user:0',
-      modelID: 'codex',
-      providerID: 'codex',
-      mode: 'codex',
-      agent: 'codex',
-      path: { cwd: '/repo', root: '/repo' },
-      cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    } as MessageInfo);
-    messages.updatePart({
-      id: 'turn_1:assistant:text',
-      sessionID: 'thread-1',
-      messageID: 'turn_1:assistant',
-      type: 'text',
-      text: 'partial',
-      time: { start: 2 },
-    });
+    messages.updateMessage(assistantMessage('turn_1:assistant'));
+    messages.updatePart(
+      textPart('turn_1:assistant', {
+        text: 'partial',
+        time: { start: 2 },
+      }),
+    );
 
     messages.loadHistory([
       {
-        info: {
-          id: 'turn_1:assistant',
-          sessionID: 'thread-1',
-          role: 'assistant',
+        info: assistantMessage('turn_1:assistant', {
           time: { created: 2, completed: 3 },
-          parentID: 'turn_1:user:0',
-          modelID: 'codex',
-          providerID: 'codex',
-          mode: 'codex',
-          agent: 'codex',
-          path: { cwd: '/repo', root: '/repo' },
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        },
-        parts: [{
-          id: 'turn_1:assistant:text',
-          sessionID: 'thread-1',
-          messageID: 'turn_1:assistant',
-          type: 'text',
-          text: 'final answer',
-          time: { start: 2, end: 3 },
-        }],
+        }),
+        parts: [
+          textPart('turn_1:assistant', {
+            text: 'final answer',
+            time: { start: 2, end: 3 },
+          }),
+        ],
       },
     ]);
 
@@ -237,86 +164,45 @@ describe('useMessages history and realtime state', () => {
   it('replaces temporary realtime state after reset and hydrate reload', () => {
     const messages = useMessages();
 
-    messages.updateMessage({
-      id: 'turn_1:user:0',
-      sessionID: 'thread-1',
-      role: 'user',
-      time: { created: 1 },
-      agent: 'codex',
-      model: { providerID: 'codex', modelID: 'codex' },
-    } as MessageInfo);
-    messages.updateMessage({
-      id: 'turn_1:assistant',
-      sessionID: 'thread-1',
-      role: 'assistant',
-      time: { created: 2 },
-      parentID: 'turn_1:user:0',
-      modelID: 'codex',
-      providerID: 'codex',
-      mode: 'codex',
-      agent: 'codex',
-      path: { cwd: '/repo', root: '/repo' },
-      cost: 0,
-      tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-    } as MessageInfo);
-    messages.updatePart({
-      id: 'turn_1:assistant:text',
-      sessionID: 'thread-1',
-      messageID: 'turn_1:assistant',
-      type: 'text',
-      text: 'temporary stream',
-      time: { start: 2 },
-    });
+    messages.updateMessage(userMessage('turn_1:user:0'));
+    messages.updateMessage(assistantMessage('turn_1:assistant'));
+    messages.updatePart(
+      textPart('turn_1:assistant', {
+        text: 'temporary stream',
+        time: { start: 2 },
+      }),
+    );
 
     messages.reset();
     messages.loadHistory([
       {
-        info: {
-          id: 'turn_1:user:0',
-          sessionID: 'thread-1',
-          role: 'user',
-          time: { created: 1 },
-          agent: 'codex',
-          model: { providerID: 'codex', modelID: 'codex' },
-        },
-        parts: [{
-          id: 'turn_1:user:0:text',
-          sessionID: 'thread-1',
-          messageID: 'turn_1:user:0',
-          type: 'text',
-          text: 'prompt',
-          time: { start: 1, end: 1 },
-        }],
+        info: userMessage('turn_1:user:0'),
+        parts: [
+          textPart('turn_1:user:0', {
+            text: 'prompt',
+            time: { start: 1, end: 1 },
+          }),
+        ],
       },
       {
-        info: {
-          id: 'turn_1:assistant',
-          sessionID: 'thread-1',
-          role: 'assistant',
+        info: assistantMessage('turn_1:assistant', {
           time: { created: 2, completed: 3 },
-          parentID: 'turn_1:user:0',
-          modelID: 'codex',
-          providerID: 'codex',
-          mode: 'codex',
-          agent: 'codex',
-          path: { cwd: '/repo', root: '/repo' },
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        },
-        parts: [{
-          id: 'turn_1:assistant:text',
-          sessionID: 'thread-1',
-          messageID: 'turn_1:assistant',
-          type: 'text',
-          text: 'final answer',
-          time: { start: 2, end: 3 },
-        }],
+        }),
+        parts: [
+          textPart('turn_1:assistant', {
+            text: 'final answer',
+            time: { start: 2, end: 3 },
+          }),
+        ],
       },
     ]);
 
     expect(messages.roots.value).toHaveLength(1);
     expect(messages.getTextContent('turn_1:assistant')).toBe('final answer');
-    expect(messages.getThread('turn_1:user:0').map((entry) => entry.id)).toEqual(['turn_1:user:0', 'turn_1:assistant']);
+    expect(messages.getThread('turn_1:user:0').map((entry) => entry.id)).toEqual([
+      'turn_1:user:0',
+      'turn_1:assistant',
+    ]);
   });
 
   it('preserves older canonical history when later realtime-only updates touch the newest message', () => {
@@ -324,65 +210,43 @@ describe('useMessages history and realtime state', () => {
 
     messages.loadHistory([
       {
-        info: {
-          id: 'turn_1:user:0',
-          sessionID: 'thread-1',
-          role: 'user',
-          time: { created: 1 },
-          agent: 'codex',
-          model: { providerID: 'codex', modelID: 'codex' },
-        },
-        parts: [{
-          id: 'turn_1:user:0:text',
-          sessionID: 'thread-1',
-          messageID: 'turn_1:user:0',
-          type: 'text',
-          text: 'first question',
-          time: { start: 1, end: 1 },
-        }],
+        info: userMessage('turn_1:user:0'),
+        parts: [
+          textPart('turn_1:user:0', {
+            text: 'first question',
+            time: { start: 1, end: 1 },
+          }),
+        ],
       },
       {
-        info: {
-          id: 'turn_2:assistant',
-          sessionID: 'thread-1',
-          role: 'assistant',
+        info: assistantMessage('turn_2:assistant', {
           time: { created: 2, completed: 3 },
-          parentID: 'turn_1:user:0',
-          modelID: 'codex',
-          providerID: 'codex',
-          mode: 'codex',
-          agent: 'codex',
-          path: { cwd: '/repo', root: '/repo' },
-          cost: 0,
-          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-        },
-        parts: [{
-          id: 'turn_2:assistant:text',
-          sessionID: 'thread-1',
-          messageID: 'turn_2:assistant',
-          type: 'text',
-          text: 'latest answer',
-          time: { start: 2, end: 3 },
-        }],
+        }),
+        parts: [
+          textPart('turn_2:assistant', {
+            text: 'latest answer',
+            time: { start: 2, end: 3 },
+          }),
+        ],
       },
     ]);
 
-    messages.updatePart({
-      id: 'turn_2:assistant:text',
-      sessionID: 'thread-1',
-      messageID: 'turn_2:assistant',
-      type: 'text',
-      text: 'latest answer updated',
-      time: { start: 2, end: 4 },
-    });
+    messages.updatePart(
+      textPart('turn_2:assistant', {
+        text: 'latest answer updated',
+        time: { start: 2, end: 4 },
+      }),
+    );
 
     expect(messages.get('turn_1:user:0')?.role).toBe('user');
     const firstUserPart = messages.getParts('turn_1:user:0')[0];
     const latestAssistantPart = messages.getParts('turn_2:assistant')[0];
     expect(firstUserPart?.type).toBe('text');
     expect(latestAssistantPart?.type).toBe('text');
-    if (!firstUserPart || firstUserPart.type !== 'text') throw new Error('Expected first user text part');
-    if (!latestAssistantPart || latestAssistantPart.type !== 'text') throw new Error('Expected latest assistant text part');
+    if (!firstUserPart || firstUserPart.type !== 'text')
+      throw new Error('Expected first user text part');
+    if (!latestAssistantPart || latestAssistantPart.type !== 'text')
+      throw new Error('Expected latest assistant text part');
     expect(firstUserPart.text).toBe('first question');
     expect(latestAssistantPart.text).toBe('latest answer updated');
   });
@@ -397,8 +261,8 @@ describe('useMessages history and realtime state', () => {
   });
 
   it('uses background browser-task priority for default history yields when available', async () => {
-    const postTask = vi.fn(
-      async (callback: () => void, _options: { priority: 'background' }) => callback(),
+    const postTask = vi.fn(async (callback: () => void, _options: { priority: 'background' }) =>
+      callback(),
     );
     vi.stubGlobal('scheduler', { postTask });
 
@@ -410,44 +274,44 @@ describe('useMessages history and realtime state', () => {
 
   it('does not retain a session larger than the warm-cache byte budget', () => {
     const messages = useMessages();
-    messages.loadHistory([{
-      info: {
-        id: 'oversized-cache-message',
-        sessionID: 'oversized-cache-session',
-        role: 'user',
-        time: { created: 1 },
-        agent: 'build',
-        model: { providerID: 'test', modelID: 'test-model' },
+    messages.loadHistory([
+      {
+        info: userMessage('oversized-cache-message', {
+          sessionID: 'oversized-cache-session',
+          agent: 'build',
+          model: { providerID: 'test', modelID: 'test-model' },
+        }),
+        parts: [
+          textPart('oversized-cache-message', {
+            id: 'oversized-cache-part',
+            sessionID: 'oversized-cache-session',
+            text: 'x'.repeat(17 * 1024 * 1024),
+            time: { start: 1, end: 1 },
+          }),
+        ],
       },
-      parts: [{
-        id: 'oversized-cache-part',
-        sessionID: 'oversized-cache-session',
-        messageID: 'oversized-cache-message',
-        type: 'text',
-        text: 'x'.repeat(17 * 1024 * 1024),
-        time: { start: 1, end: 1 },
-      }],
-    }]);
+    ]);
 
     messages.saveSessionState({ namespace: 'opencode:a', sessionId: 'oversized-cache-session' });
     messages.reset();
 
-    expect(messages.tryLoadFromCache({ namespace: 'opencode:a', sessionId: 'oversized-cache-session' })).toBe(false);
+    expect(
+      messages.tryLoadFromCache({ namespace: 'opencode:a', sessionId: 'oversized-cache-session' }),
+    ).toBe(false);
   });
 
   it('isolates warm entries by backend and directory identity', () => {
     const messages = useMessages();
-    messages.loadHistory([{
-      info: {
-        id: 'scoped-cache-message',
-        sessionID: 'scoped-cache-session',
-        role: 'user',
-        time: { created: 1 },
-        agent: 'build',
-        model: { providerID: 'test', modelID: 'test-model' },
+    messages.loadHistory([
+      {
+        info: userMessage('scoped-cache-message', {
+          sessionID: 'scoped-cache-session',
+          agent: 'build',
+          model: { providerID: 'test', modelID: 'test-model' },
+        }),
+        parts: [],
       },
-      parts: [],
-    }]);
+    ]);
 
     messages.saveSessionState({
       namespace: 'opencode:endpoint-a:/repo-a',
@@ -455,28 +319,30 @@ describe('useMessages history and realtime state', () => {
     });
     messages.reset();
 
-    expect(messages.tryLoadFromCache({
-      namespace: 'opencode:endpoint-b:/repo-a',
-      sessionId: 'scoped-cache-session',
-    })).toBe(false);
-    expect(messages.tryLoadFromCache({
-      namespace: 'opencode:endpoint-a:/repo-a',
-      sessionId: 'scoped-cache-session',
-    })).toBe(true);
+    expect(
+      messages.tryLoadFromCache({
+        namespace: 'opencode:endpoint-b:/repo-a',
+        sessionId: 'scoped-cache-session',
+      }),
+    ).toBe(false);
+    expect(
+      messages.tryLoadFromCache({
+        namespace: 'opencode:endpoint-a:/repo-a',
+        sessionId: 'scoped-cache-session',
+      }),
+    ).toBe(true);
   });
 
   it('publishes each history chunk before yielding to the next browser task', async () => {
     const messages = useMessages();
     expect(messages.roots.value).toHaveLength(0);
     const entries = [1, 2].map((created) => ({
-      info: {
-        id: `user-${created}`,
+      info: userMessage(`user-${created}`, {
         sessionID: 'session-1',
-        role: 'user',
         time: { created },
         agent: 'build',
         model: { providerID: 'test', modelID: 'test-model' },
-      },
+      }),
       parts: [],
     }));
     const yieldControl = vi.fn(async () => {
@@ -489,5 +355,33 @@ describe('useMessages history and realtime state', () => {
 
     expect(yieldControl).toHaveBeenCalledOnce();
     expect(messages.roots.value).toHaveLength(2);
+  });
+});
+
+describe('useMessages authentication cache lifecycle', () => {
+  it('clears all warm snapshots when the authentication context changes', () => {
+    const messages = useMessages();
+    messages.reset();
+    messages.updateMessage(
+      userMessage('message-auth', {
+        sessionID: 'session-auth',
+        agent: 'build',
+        model: { providerID: 'test', modelID: 'test-model' },
+      }),
+    );
+    messages.saveSessionState({
+      namespace: 'opencode:primary:/repo',
+      sessionId: 'session-auth',
+    });
+
+    messages.clearSessionCache();
+
+    expect(
+      messages.tryLoadFromCache({
+        namespace: 'opencode:primary:/repo',
+        sessionId: 'session-auth',
+      }),
+    ).toBe(false);
+    messages.reset();
   });
 });
