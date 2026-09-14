@@ -19,7 +19,13 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
   const sideChat = ref<(CodexSideChat & { settings: Omit<CodexPromptInput, 'text'> }) | null>(null);
   const sideThreadIds = new Set<string>();
   const pendingUnsubscribes = new Map<string, NonNullable<ReturnType<typeof getAdapter>>>();
+  const pendingInterrupts = new Map<string, { turnId: string; adapter: NonNullable<ReturnType<typeof getAdapter>> }>();
   let generation = 0;
+  async function interrupt(threadId: string, turnId: string, adapter: NonNullable<ReturnType<typeof getAdapter>>) {
+    pendingInterrupts.set(threadId, { turnId, adapter });
+    await adapter.interruptTurn({ threadId, turnId });
+    pendingInterrupts.delete(threadId);
+  }
   async function unsubscribe(threadId: string, adapter: NonNullable<ReturnType<typeof getAdapter>>) {
     pendingUnsubscribes.set(threadId, adapter);
     await adapter.unsubscribeThread({ threadId });
@@ -31,10 +37,9 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
     sideChat.value = null;
     const adapter = getAdapter();
     if (state && adapter) pendingUnsubscribes.set(state.threadId, adapter);
+    if (state?.pending && state.turnId && adapter) pendingInterrupts.set(state.threadId, { turnId: state.turnId, adapter });
     try {
-      if (state?.pending && state.turnId && adapter) {
-        await adapter.interruptTurn({ threadId: state.threadId, turnId: state.turnId });
-      }
+      for (const [threadId, pending] of pendingInterrupts) await interrupt(threadId, pending.turnId, pending.adapter);
     } finally {
       for (const [threadId, owner] of pendingUnsubscribes) await unsubscribe(threadId, owner);
     }
@@ -62,7 +67,7 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
       state.turnId = result.turn.id;
       if (['completed', 'failed', 'interrupted'].includes(result.turn.status ?? '')) state.pending = false;
       if (sideChat.value !== state && state.pending) {
-        await adapter.interruptTurn({ threadId: state.threadId, turnId: result.turn.id });
+        await interrupt(state.threadId, result.turn.id, adapter);
       }
     } catch (error) {
       state.pending = false;
@@ -91,9 +96,10 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
     if (thread?.ephemeral === true && typeof thread.id === 'string') sideThreadIds.add(thread.id);
     const threadId = typeof params.threadId === 'string' ? params.threadId : thread?.id;
     if (typeof threadId !== 'string' || !sideThreadIds.has(threadId)) return false;
+    const turn = record(params.turn) ? params.turn : null;
+    if (notification.method === 'turn/completed' && turn?.id === pendingInterrupts.get(threadId)?.turnId) pendingInterrupts.delete(threadId);
     const state = sideChat.value;
     if (!state || state.threadId !== threadId) return true;
-    const turn = record(params.turn) ? params.turn : null;
     if (turn && typeof turn.id === 'string') state.turnId = turn.id;
     if (notification.method === 'turn/completed') {
       state.pending = false;
@@ -118,6 +124,6 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
     }
     return true;
   }
-  function reset() { generation += 1; sideChat.value = null; sideThreadIds.clear(); pendingUnsubscribes.clear(); }
+  function reset() { generation += 1; sideChat.value = null; sideThreadIds.clear(); pendingUnsubscribes.clear(); pendingInterrupts.clear(); }
   return { sideChat, startSideChat, sendSidePrompt, closeSideChat, handleNotification, reset };
 }
