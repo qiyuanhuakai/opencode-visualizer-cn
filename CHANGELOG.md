@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.7.18 released]
 
 ### Codex 文件树与会话加载
 
