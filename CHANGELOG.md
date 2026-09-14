@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### OMO App Server 适配预备文档
+
+- [x] 新增 `docs/omo.md`：OMO（senpi）codex app-server 协议兼容文档，与 `docs/codex.md` 同构，官方文档原文与上游逐字节校验一致；全部结论经两轮对本机 senpi app-server 的实连线 JSON-RPC 探针验证。
+- [x] 实测确认关键差异：loopback 强制 Bearer 鉴权（token 位于 `~/.omo/agent/app-server/ws-token`）；`initialize.userAgent` 以 `senpi_app_server` 结尾；归档因实现缺陷不可恢复（`unarchive` 恒 `-32600`、归档列表恒空、归档线程删除静默无效）；进程重启后历史保留用户与最终助手文本但丢失推理且 turn id 变为合成值；线程忙时 `turn/start` 返回 `-32603` 需改用 `streamingBehavior`；后台隐藏提示词与空响应重试会产生非客户端发起的 turn。
+
 ### Codex 原生命令与输入控制
 
 - [x] 输入框接入 Codex 原生斜杠命令，支持模型、权限、会话、目标、审查和独立侧聊等操作；状态与用量信息统一进入状态监视器的 Token 页，技能、MCP 和插件命令打开对应页面，排除外观、mention 及 agent/subagent 命令。
