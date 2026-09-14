@@ -1,55 +1,27 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createApp, defineComponent } from 'vue';
-import { createI18n } from 'vue-i18n';
-import { useFloatingWindows } from './useFloatingWindows';
+import {
+  cleanupFloatingWindows,
+  createDeferred,
+  createExtent,
+  mountFloatingWindows,
+} from './useFloatingWindows.test-helpers';
 
-function mountFloatingWindows() {
-  let api: ReturnType<typeof useFloatingWindows> | undefined;
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-  const app = createApp(
-    defineComponent({
-      setup() {
-        api = useFloatingWindows();
-        return () => null;
-      },
-    }),
-  );
-  app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} } }));
-  app.mount(root);
-  if (!api) throw new Error('Floating window composable did not mount.');
-  return {
-    api,
-    unmount() {
-      app.unmount();
-      root.remove();
-    },
-  };
-}
-
-function createGate() {
-  let release: (() => void) | undefined;
-  const promise = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  return {
-    promise,
-    release() {
-      if (!release) throw new Error('Expected lifecycle gate.');
-      release();
-    },
-  };
-}
+const createGate = () => {
+  const deferred = createDeferred<void>();
+  return { promise: deferred.promise, release: () => deferred.resolve() };
+};
 
 describe('useFloatingWindows async lifecycle', () => {
   afterEach(() => {
+    cleanupFloatingWindows();
     document.body.innerHTML = '';
   });
 
   it('restores creation geometry after a zero-height loading extent becomes ready', async () => {
     // Given: a terminal opens before the floating canvas has measurable height
     const mounted = mountFloatingWindows();
-    mounted.api.setExtent(375, 0);
+    const loadingExtent = createExtent(375, 0);
+    mounted.api.setExtent(loadingExtent.width, loadingExtent.height);
     await mounted.api.open('loading-window', {
       width: 600,
       height: 400,

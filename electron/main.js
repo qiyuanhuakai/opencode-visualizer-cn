@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, protocol, shell } from 
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { installAsyncQuitCleanup } from './asyncQuitCleanup.js';
+import { cleanupAsyncQuitOwners, installAsyncQuitCleanup } from './asyncQuitCleanup.js';
 import { createDesktopRuntime } from './desktopRuntime.js';
 import {
   clearApprovedLocalApplication,
@@ -12,6 +12,7 @@ import {
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
 import { createPersistentStorage } from './persistentStorage.js';
+import { registerPersistentStorageIpc } from './persistentStorageIpc.js';
 import {
   classifyMime,
   classifyNavigation,
@@ -91,23 +92,6 @@ function broadcastPersistentStorageChange(change, sourceWebContentsId) {
     }
     webContents.send('persistent-storage-changed', change);
   }
-}
-
-function commitPersistentStorageMutation(event, mutation, excludedKey) {
-  let changes;
-  try {
-    const storage = getPersistentStorage();
-    mutation(storage);
-    changes = storage.drainPendingChanges();
-  } catch {
-    event.returnValue = false;
-    return;
-  }
-  for (const change of changes) {
-    const excludedSenderId = change.key === excludedKey ? event.sender.id : undefined;
-    broadcastPersistentStorageChange(change, excludedSenderId);
-  }
-  event.returnValue = true;
 }
 
 function assertTrustedRenderer(event) {
@@ -232,47 +216,47 @@ if (!hasSingleInstanceLock) {
       closeLocalFiles: () => localFileEditor.closeAll(),
     });
 
-  protocol.handle('app', async (request) => {
-    const { pathname } = new URL(request.url);
-    const relativePath = resolveAppRelativePath(pathname);
-    if (relativePath === null) {
+    protocol.handle('app', async (request) => {
+      const { pathname } = new URL(request.url);
+      const relativePath = resolveAppRelativePath(pathname);
+      if (relativePath === null) {
+        return new Response('Not Found', { status: 404 });
+      }
+      // Support both unpacked (dev/preview) and asar-packed (production) layouts
+      const roots = [
+        path.join(__dirname, '..', 'dist'),
+        path.join(process.resourcesPath, 'app.asar.unpacked', 'dist'),
+      ];
+      for (const root of roots) {
+        const filePath = path.join(root, relativePath);
+        // Final containment check: the resolved path must stay beneath the
+        // resolved dist root (defense-in-depth behind resolveAppRelativePath).
+        const resolvedRoot = path.resolve(root);
+        const resolvedPath = path.resolve(filePath);
+        if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(resolvedRoot + path.sep)) {
+          continue;
+        }
+        try {
+          const data = await fs.promises.readFile(filePath);
+          return new Response(data, {
+            headers: { 'Content-Type': classifyMime(relativePath) },
+          });
+        } catch {
+          // try next candidate
+        }
+      }
       return new Response('Not Found', { status: 404 });
-    }
-    // Support both unpacked (dev/preview) and asar-packed (production) layouts
-    const roots = [
-      path.join(__dirname, '..', 'dist'),
-      path.join(process.resourcesPath, 'app.asar.unpacked', 'dist'),
-    ];
-    for (const root of roots) {
-      const filePath = path.join(root, relativePath);
-      // Final containment check: the resolved path must stay beneath the
-      // resolved dist root (defense-in-depth behind resolveAppRelativePath).
-      const resolvedRoot = path.resolve(root);
-      const resolvedPath = path.resolve(filePath);
-      if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(resolvedRoot + path.sep)) {
-        continue;
-      }
-      try {
-        const data = await fs.promises.readFile(filePath);
-        return new Response(data, {
-          headers: { 'Content-Type': classifyMime(relativePath) },
-        });
-      } catch {
-        // try next candidate
-      }
-    }
-    return new Response('Not Found', { status: 404 });
-  });
+    });
 
-  createWindow();
+    createWindow();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    } else {
-      desktopRuntime?.restore();
-    }
-  });
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      } else {
+        desktopRuntime?.restore();
+      }
+    });
   });
 }
 
@@ -284,7 +268,7 @@ app.on('window-all-closed', () => {
 
 installAsyncQuitCleanup(
   app,
-  () => Promise.all([localFileEditor.closeAll(), desktopRuntime?.dispose()]),
+  () => cleanupAsyncQuitOwners(localFileEditor, desktopRuntime),
   (error) => {
     console.error('[electron] Failed to clean desktop resources before quit:', error);
   },
@@ -394,74 +378,12 @@ ipcMain.handle('local-file-close', async (event, sessionId) => {
   );
 });
 
-ipcMain.on('persistent-storage-get', (event, key) => {
-  assertTrustedRenderer(event);
-  if (typeof key !== 'string') {
-    event.returnValue = { ok: true, value: null };
-    return;
-  }
-  if (key === LOCAL_APPLICATION_PATH_KEY) {
-    event.returnValue = { ok: true, value: approvedLocalApplicationPath };
-    return;
-  }
-  try {
-    event.returnValue = { ok: true, value: getPersistentStorage().getItem(key) };
-  } catch (error) {
-    event.returnValue = {
-      ok: false,
-      error: {
-        name: typeof error?.name === 'string' ? error.name : 'Error',
-        message: typeof error?.message === 'string' ? error.message : String(error),
-      },
-    };
-  }
-});
-
-ipcMain.on('persistent-storage-set', (event, payload) => {
-  assertTrustedRenderer(event);
-  const key = payload?.key;
-  const value = payload?.value;
-  if (typeof key !== 'string' || typeof value !== 'string') {
-    event.returnValue = false;
-    return;
-  }
-  if (key === LOCAL_APPLICATION_PATH_KEY) {
-    event.returnValue = true;
-    return;
-  }
-
-  commitPersistentStorageMutation(event, (storage) => storage.setItem(key, value), key);
-});
-
-ipcMain.on('persistent-storage-remove', (event, key) => {
-  assertTrustedRenderer(event);
-  if (typeof key !== 'string') {
-    event.returnValue = false;
-    return;
-  }
-  if (key === LOCAL_APPLICATION_PATH_KEY) {
-    event.returnValue = true;
-    return;
-  }
-
-  commitPersistentStorageMutation(event, (storage) => storage.removeItem(key), key);
-});
-
-ipcMain.on('persistent-storage-migrate', (event, entries) => {
-  assertTrustedRenderer(event);
-  if (!entries || typeof entries !== 'object' || Array.isArray(entries)) {
-    event.returnValue = false;
-    return;
-  }
-
-  const migrationEntries = {};
-  for (const [key, value] of Object.entries(entries)) {
-    if (!key.startsWith(RENDERER_STORAGE_PREFIX) || typeof value !== 'string') {
-      event.returnValue = false;
-      return;
-    }
-    if (key !== LOCAL_APPLICATION_PATH_KEY) migrationEntries[key] = value;
-  }
-
-  commitPersistentStorageMutation(event, (storage) => storage.migrate(migrationEntries));
+registerPersistentStorageIpc({
+  ipcMain,
+  assertTrustedRenderer,
+  getStorage: getPersistentStorage,
+  broadcastChange: broadcastPersistentStorageChange,
+  getLocalApplicationPath: () => approvedLocalApplicationPath,
+  localApplicationPathKey: LOCAL_APPLICATION_PATH_KEY,
+  rendererStoragePrefix: RENDERER_STORAGE_PREFIX,
 });

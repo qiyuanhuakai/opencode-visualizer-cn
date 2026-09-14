@@ -1,9 +1,10 @@
-import { createApp, defineComponent, h, nextTick } from 'vue';
-import { createI18n } from 'vue-i18n';
+import { nextTick } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import InputPanel from './InputPanel.vue';
 import type { TextTransformer } from '../utils/textTransformers';
-import en from '../locales/en';
+import {
+  cleanupInputPanelFixtures,
+  mountInputPanel as mountSharedInputPanel,
+} from './inputPanel.test-helpers';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 const settings = vi.hoisted(() => ({
@@ -15,51 +16,12 @@ vi.mock('../composables/useSettings', () => ({
   useSettings: () => settings,
 }));
 
-const mountedApps: Array<() => void> = [];
-
 function mountInputPanel(messageInput: string) {
-  const root = document.createElement('div');
-  document.body.appendChild(root);
   const onSend = vi.fn();
-  const app = createApp(
-    defineComponent({
-      setup() {
-        return () =>
-          h(InputPanel, {
-            messageInput,
-            canSend: true,
-            selectedMode: 'build',
-            agentOptions: [{ id: 'build', label: 'Build' }],
-            hasAgentOptions: true,
-            selectedModel: 'openai/gpt',
-            selectedThinking: undefined,
-            modelOptions: [
-              {
-                id: 'openai/gpt',
-                modelID: 'gpt',
-                label: 'GPT',
-                displayName: 'GPT',
-                providerID: 'openai',
-              },
-            ],
-            thinkingOptions: [undefined],
-            hasModelOptions: true,
-            hasThinkingOptions: true,
-            isThinking: false,
-            canAbort: false,
-            commands: [{ name: 'goal' }],
-            attachments: [],
-            onSend,
-          });
-      },
-    }),
-  );
-  app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
-  app.provide('showConfirm', async () => true);
-  app.mount(root);
-  mountedApps.push(() => {
-    app.unmount();
-    root.remove();
+  const { root } = mountSharedInputPanel({
+    messageInput,
+    commands: [{ name: 'goal' }],
+    onSend,
   });
   return { root, onSend };
 }
@@ -76,7 +38,7 @@ function pressEnter(root: HTMLElement, options: { ctrlKey?: boolean } = {}) {
 }
 
 afterEach(() => {
-  while (mountedApps.length > 0) mountedApps.pop()?.();
+  cleanupInputPanelFixtures();
   settings.enterToSend.value = true;
   document.body.innerHTML = '';
 });

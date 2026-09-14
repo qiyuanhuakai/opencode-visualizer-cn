@@ -1,10 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
-import {
-  createAcpAgentList,
-  createAcpPermissionModeList,
-  createAcpUiModeState,
-  resolveAcpModeSelection,
-} from './configOptions';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { initializeAdapter, MockAcpWebSocket, sent } from './acpTestHarness';
 
 const modeConfig = {
@@ -24,31 +18,6 @@ const modeConfig = {
 describe('ACP mode and command adaptation', () => {
   beforeEach(() => {
     MockAcpWebSocket.instances = [];
-  });
-
-  it('separates agent modes from permission policies', () => {
-    expect(createAcpAgentList([modeConfig], 'Oh My Pi')).toEqual([
-      expect.objectContaining({ name: 'default' }),
-      expect.objectContaining({ name: 'plan' }),
-    ]);
-    expect(createAcpPermissionModeList([modeConfig])).toEqual({
-      current: 'acceptEdits',
-      options: [
-        { id: 'normal', name: 'Normal' },
-        { id: 'acceptEdits', name: 'Accept Edits' },
-        { id: 'bypassPermissions', name: 'Bypass Permissions' },
-      ],
-    });
-    expect(resolveAcpModeSelection('default', 'bypassPermissions')).toBe('bypassPermissions');
-    expect(resolveAcpModeSelection('plan', 'bypassPermissions')).toBe('plan');
-    expect(createAcpUiModeState([modeConfig], 'normal')).toEqual({
-      agent: 'default',
-      permissionMode: 'acceptEdits',
-    });
-    expect(createAcpUiModeState([{ ...modeConfig, currentValue: 'plan' }], 'acceptEdits')).toEqual({
-      agent: 'plan',
-      permissionMode: 'acceptEdits',
-    });
   });
 
   it('publishes live slash commands and dispatches them through session/prompt', async () => {

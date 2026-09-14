@@ -1,34 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, defineComponent } from 'vue';
-import { createI18n } from 'vue-i18n';
-import { getFloatingWindowDragBounds, useFloatingWindows } from './useFloatingWindows';
-
-function mountFloatingWindows() {
-  let api: ReturnType<typeof useFloatingWindows> | undefined;
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-  const app = createApp(
-    defineComponent({
-      setup() {
-        api = useFloatingWindows();
-        return () => null;
-      },
-    }),
-  );
-  app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} } }));
-  app.mount(root);
-  if (!api) throw new Error('Floating window composable did not mount.');
-  return {
-    api,
-    unmount() {
-      app.unmount();
-      root.remove();
-    },
-  };
-}
+import { getFloatingWindowDragBounds } from './useFloatingWindows';
+import {
+  cleanupFloatingWindows,
+  createExtent,
+  mountFloatingWindows,
+} from './useFloatingWindows.test-helpers';
 
 describe('useFloatingWindows responsive geometry', () => {
   afterEach(() => {
+    cleanupFloatingWindows();
     vi.restoreAllMocks();
     document.body.innerHTML = '';
   });
@@ -36,7 +16,8 @@ describe('useFloatingWindows responsive geometry', () => {
   it('keeps an oversized window inside a narrow viewport when opening', async () => {
     // Given: a mobile-sized floating canvas
     const mounted = mountFloatingWindows();
-    mounted.api.setExtent(375, 500);
+    const extent = createExtent(375, 500);
+    mounted.api.setExtent(extent.width, extent.height);
 
     // When: a desktop-sized window opens with stale desktop coordinates
     await mounted.api.open('mobile-window', {

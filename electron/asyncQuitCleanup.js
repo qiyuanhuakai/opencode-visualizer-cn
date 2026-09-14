@@ -1,3 +1,7 @@
+export function cleanupAsyncQuitOwners(localFileEditor, desktopRuntime) {
+  return Promise.all([localFileEditor.closeAll(), desktopRuntime?.dispose()]);
+}
+
 export function installAsyncQuitCleanup(app, cleanup, onError = () => {}) {
   let cleanupPromise = null;
   let quittingAfterCleanup = false;

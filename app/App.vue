@@ -615,6 +615,7 @@ import {
 } from './components/ToolWindow/utils';
 import { useAutoScroller, type ScrollMode } from './composables/useAutoScroller';
 import { fetchAcpBridgeAgents, type AcpAgentStatus } from './composables/useAcpBridge';
+import { useAcpTerminalAction } from './composables/useAcpTerminalAction';
 import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
@@ -647,6 +648,10 @@ import {
 import { useGlobalEvents } from './composables/useGlobalEvents';
 import { useLiveDescendantHistoryHydration } from './composables/useLiveDescendantHistoryHydration';
 import { useMessages } from './composables/useMessages';
+import { useMessageCacheAuthInvalidation } from './composables/useMessageCacheAuthInvalidation';
+import { useProviderModelSync } from './composables/useProviderModelSync';
+import { usePtyWindowOwner } from './composables/usePtyWindowOwner';
+import { useRootHistoryLoader, type UserMessageMeta } from './composables/useRootHistoryLoader';
 import { useCodexWorkspaceSync } from './composables/useCodexWorkspaceSync';
 import { pendingWorkerRenders } from './composables/useRenderState';
 import { useOpenCodeApi } from './composables/useOpenCodeApi';
@@ -658,7 +663,8 @@ import { useServerState } from './composables/useServerState';
 import { useOpenCodeSelectionBootstrap } from './composables/useOpenCodeSelectionBootstrap';
 import { useSessionSelection } from './composables/useSessionSelection';
 import { useSubagentWindows } from './composables/useSubagentWindows';
-import { renderWorkerHtml, type RenderRequest } from './utils/workerRenderer';
+import { renderWorkerHtml } from './utils/workerRenderer';
+import { createLocalizedRenderRequest } from './utils/localizedRenderRequest';
 import type { HistoryWindowEntry, MessageDiffEntry } from './types/message';
 import type {
   BackendProviderConfigState,
@@ -692,6 +698,7 @@ import { reconcileDialogRequests } from './utils/reconcileDialogRequests';
 import { migrateCodexPinsToUnifiedStore } from './utils/codexPinMigration';
 import { resolveProjectColorHex } from './utils/stateBuilder';
 import { createBackendRequestFence } from './utils/backendRequestFence';
+import { createBackendAuthFailureHandler } from './utils/backendAuthFailureHandler';
 import { resolveThreadSubagentSessions, type SessionHistoryMeta } from './utils/threadSubagents';
 import { requestWorkerResult, retryReferencedSessionIds } from './utils/retryReferencedSessions';
 import { resumeOutputFollowing } from './utils/resumeOutputFollowing';
@@ -727,7 +734,7 @@ import {
   resolveAcpModeSelection,
 } from './backends/acp/configOptions';
 import { ACP_PROJECT_ID } from './backends/acp/bridgeUrl';
-import type { BackendKind, ConfigMergeStrategy } from './backends/types';
+import type { BackendKind } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
 import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
 import {
@@ -766,7 +773,6 @@ import {
   type DeletedSandboxStore,
 } from './utils/deletedSandboxes';
 import { shouldSkipAutoOpenWebTool } from './utils/codexToolWindows';
-import { cloneNullPrototypeRecord } from './utils/historyMaps';
 import { persistExternalFileChange, type ExternalFileSyncTarget } from './utils/externalFileSync';
 import {
   captureTrackedLocalFileChange,
@@ -1583,7 +1589,6 @@ const sidePanelResizeState = ref<{
 const sidePanelWidth = ref<number | null>(null);
 const appBodyEl = ref<HTMLDivElement | null>(null);
 const sidePanelAreaEl = ref<HTMLDivElement | null>(null);
-let primaryHistoryRequestId = 0;
 const sessionReloadRequestId = ref(0);
 let outputAnchorRequestId = 0;
 type ReferencedSubagentHydrationResult = Extract<
@@ -3151,38 +3156,16 @@ function parseProviderModelKey(value: string) {
   return { providerID, modelID };
 }
 
-async function syncCodexActiveProviderModel(
-  providerID: string,
-  modelID: string,
-): Promise<ProviderConfigState | null> {
-  const normalizedProvider = providerID.trim();
-  const normalizedModel = modelID.trim();
-  if (!normalizedProvider || !normalizedModel) return providerConfig.value;
-
-  const codexProvider = codexAppServerProviderId(normalizedProvider);
-  const edits: Array<{ keyPath: string; value: unknown; mergeStrategy: ConfigMergeStrategy }> = [];
-
-  edits.push({ keyPath: 'model_provider', value: codexProvider, mergeStrategy: 'replace' });
-  edits.push({ keyPath: 'model', value: normalizedModel, mergeStrategy: 'replace' });
-  await codexApi.batchWriteConfig(edits);
-  return (codexApi.config.value?.config as ProviderConfigState | undefined) ?? providerConfig.value;
-}
-
-function codexAppServerProviderId(providerID: string) {
-  const normalizedProvider = providerID.trim();
-  return normalizedProvider === CODEX_PROJECT_ID
-    ? CODEX_OFFICIAL_MODEL_PROVIDER
-    : normalizedProvider;
-}
-
-function shouldStartNewCodexThreadForProvider(sessionId: string, providerID: string) {
-  const desiredProvider = codexAppServerProviderId(providerID);
-  if (!sessionId || !desiredProvider) return false;
-  const currentProvider = codexApi.threads.value
-    .find((thread) => thread.id === sessionId)
-    ?.modelProvider?.trim();
-  return Boolean(currentProvider && currentProvider !== desiredProvider);
-}
+const { syncCodexActiveProviderModel, shouldStartNewCodexThreadForProvider } = useProviderModelSync(
+  {
+    codexProjectId: CODEX_PROJECT_ID,
+    officialProviderId: CODEX_OFFICIAL_MODEL_PROVIDER,
+    providerConfig,
+    config: codexApi.config,
+    threads: codexApi.threads,
+    batchWriteConfig: codexApi.batchWriteConfig,
+  },
+);
 
 function normalizeIdList(values?: string[]) {
   return Array.isArray(values)
@@ -5184,13 +5167,6 @@ function handleWindowAttentionChange() {
   syncActiveSelectionToWorker();
 }
 
-type UserMessageMeta = {
-  agent?: string;
-  providerId?: string;
-  modelId?: string;
-  variant?: string;
-};
-
 type MessageTokens = {
   input: number;
   output: number;
@@ -5200,45 +5176,6 @@ type MessageTokens = {
     write: number;
   };
 };
-
-function parseMessageTime(info?: Record<string, unknown>): number | undefined {
-  if (!info) return undefined;
-  const time = info.time as Record<string, unknown> | undefined;
-  if (!time || typeof time !== 'object') return undefined;
-  const created = time.created;
-  return typeof created === 'number' ? created : undefined;
-}
-
-function parseUserMessageMeta(info?: Record<string, unknown>): UserMessageMeta | null {
-  if (!info) return null;
-  const agent = typeof info.agent === 'string' ? info.agent.trim() : '';
-  const model = (info.model as Record<string, unknown> | undefined) ?? undefined;
-  const providerId =
-    typeof info.providerID === 'string'
-      ? info.providerID.trim()
-      : typeof model?.providerID === 'string'
-        ? model.providerID.trim()
-        : '';
-  const modelId =
-    typeof info.modelID === 'string'
-      ? String(info.modelID).trim()
-      : typeof model?.modelID === 'string'
-        ? String(model.modelID).trim()
-        : '';
-  const variant =
-    typeof model?.variant === 'string'
-      ? model.variant.trim()
-      : typeof info.variant === 'string'
-        ? info.variant.trim()
-        : '';
-  if (!agent && !modelId && !providerId && !variant) return null;
-  return {
-    agent: agent || undefined,
-    providerId: providerId || undefined,
-    modelId: modelId || undefined,
-    variant: variant || undefined,
-  };
-}
 
 function resolveProviderModelLimit(providerId?: string, modelId?: string) {
   const normalizedProvider = providerId?.trim() ?? '';
@@ -5261,75 +5198,45 @@ function computeContextPercent(tokens: MessageTokens, providerId?: string, model
   return Math.round((total / contextLimit) * 100);
 }
 
+const rootHistoryLoader = useRootHistoryLoader({
+  selectedSessionId,
+  activeBackendKind,
+  userMessageMetaById,
+  userMessageTimeById,
+  getSelectedDirectory: getSelectedWorktreeDirectory,
+  listSessionMessages: (sessionId, options) => {
+    const listSessionMessages = requireBackendMethod(
+      backend().listSessionMessages,
+      'session messages',
+    );
+    return listSessionMessages(sessionId, options);
+  },
+  loadHistoryIncrementally: (entries, options) => msg.loadHistoryIncrementally(entries, options),
+  refreshAcpMetadata: async () => {
+    await Promise.allSettled([fetchAgents(), fetchCommands()]);
+  },
+  log,
+});
+
 async function fetchHistory(
   sessionId: string,
   isSubagentMessage = false,
   rootRequestId?: number,
   rootSessionId?: string,
 ) {
-  if (!sessionId) return false;
-  const requestId = !isSubagentMessage ? ++primaryHistoryRequestId : 0;
-  const requestedDirectory = getSelectedWorktreeDirectory();
-  const expectedRootRequestId = isSubagentMessage ? (rootRequestId ?? 0) : requestId;
-  const expectedRootSessionId = rootSessionId ?? sessionId;
-  try {
-    const directory = getSelectedWorktreeDirectory();
-    const listSessionMessages = requireBackendMethod(
-      backend().listSessionMessages,
-      'session messages',
-    );
-    const data = (await listSessionMessages(sessionId, {
-      directory: directory || undefined,
-    })) as Array<Record<string, unknown>>;
-    if (activeBackendKind.value === 'acp') {
-      await Promise.allSettled([fetchAgents(), fetchCommands()]);
-    }
-    if (!Array.isArray(data)) return false;
-    if (expectedRootRequestId !== primaryHistoryRequestId) return false;
-    if (selectedSessionId.value !== expectedRootSessionId) return false;
-    if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
-    // The loading mask keeps partial cards hidden while chunking yields the
-    // renderer task queue so settings, session actions, and window drag remain responsive.
-    await msg.loadHistoryIncrementally(data, {
-      shouldContinue: () => {
-        if (expectedRootRequestId !== primaryHistoryRequestId) return false;
-        if (selectedSessionId.value !== expectedRootSessionId) return false;
-        return getSelectedWorktreeDirectory() === requestedDirectory;
-      },
-    });
-
-    if (expectedRootRequestId !== primaryHistoryRequestId) return false;
-    if (selectedSessionId.value !== expectedRootSessionId) return false;
-    if (getSelectedWorktreeDirectory() !== requestedDirectory) return false;
-
-    const nextUserMessageMetaById = cloneNullPrototypeRecord(userMessageMetaById.value);
-    const nextUserMessageTimeById = cloneNullPrototypeRecord(userMessageTimeById.value);
-    data.forEach((message) => {
-      const info = message.info as Record<string, unknown> | undefined;
-      const id = typeof info?.id === 'string' ? info.id : undefined;
-      if (!id) return;
-      const meta = parseUserMessageMeta(info);
-      const messageTime = parseMessageTime(info);
-      if (meta) nextUserMessageMetaById[id] = meta;
-      if (typeof messageTime === 'number') nextUserMessageTimeById[id] = messageTime;
-    });
-    userMessageMetaById.value = nextUserMessageMetaById;
-    userMessageTimeById.value = nextUserMessageTimeById;
-    return true;
-  } catch (error) {
-    log('History load failed', error);
-    return false;
-  }
+  return rootHistoryLoader.fetchHistory(sessionId, {
+    isSubagentMessage,
+    rootRequestId,
+    rootSessionId,
+  });
 }
 
 async function fetchRootSessionHistory(rootSessionId: string) {
-  const loaded = await fetchHistory(rootSessionId);
-  return { requestId: primaryHistoryRequestId, loaded };
+  return rootHistoryLoader.fetchRootSessionHistory(rootSessionId);
 }
 
 function reserveRootHistoryRequestId() {
-  primaryHistoryRequestId += 1;
-  return primaryHistoryRequestId;
+  return rootHistoryLoader.reserveRootHistoryRequestId();
 }
 
 function collectReferencedSubagentSessionIds(rootSessionId: string): string[] {
@@ -5439,7 +5346,7 @@ useLiveDescendantHistoryHydration({
   selectedSessionId,
   allowedSessionIds,
   async hydrate(rootSessionId, descendantSessionIds) {
-    const rootRequestId = primaryHistoryRequestId;
+    const rootRequestId = rootHistoryLoader.currentRootRequestId();
     const loaded = await fetchDescendantSessionHistories(
       rootSessionId,
       rootRequestId,
@@ -5499,87 +5406,28 @@ async function createPtySession(
   return parsePtyInfo(data);
 }
 
-async function openAcpAuthTerminal() {
-  if (activeBackendKind.value !== 'acp') return;
-  try {
-    const listMethods = requireBackendMethod(
-      backend().listAgentAuthMethods,
-      'ACP authentication methods',
-    );
-    const methods = await listMethods();
-    const method =
-      methods.find(
-        (candidate) =>
-          candidate.type === 'terminal' && (candidate.args?.length || candidate.initialInput),
-      ) ??
-      (credentials.acpAgentId.value === 'oh-my-pi'
-        ? {
-            type: 'terminal',
-            id: 'terminal',
-            name: 'Set up Oh My Pi in terminal',
-            args: [],
-            initialInput: '/providers\r',
-          }
-        : undefined);
-    if (!method) throw new Error(t('providerManager.acp.unavailable'));
+const { openAcpAuthTerminal } = useAcpTerminalAction({
+  activeBackendKind,
+  acpAgentId: credentials.acpAgentId,
+  backend,
+  closeProviderManager: () => {
     isProviderManagerOpen.value = false;
+  },
+  afterProviderManagerClose: async () => {
     await nextTick();
-    const createAuthPty = requireBackendMethod(
-      backend().createAgentAuthPty,
-      'ACP terminal authentication',
-    );
-    const pty = parsePtyInfo(await createAuthPty(method.id));
-    if (!pty) throw new Error('ACP authentication PTY response is invalid.');
-    await ensureShellWindow(pty, {
-      title: method.name,
-      onExit: async (exitCode) => {
-        if (exitCode !== 0) {
-          setSendStatusKey('app.error.providerLoadFailed', {
-            message: t('providerManager.acp.failed', { exitCode }),
-          });
-          return;
-        }
-        if (!method.initialInput) {
-          const authenticate = requireBackendMethod(
-            backend().authenticateAgent,
-            'ACP authentication completion',
-          );
-          await authenticate(method.id);
-        }
-        await Promise.all([fetchProviders(), fetchAgents()]);
-        setSendStatusText(t('providerManager.acp.completed'));
-      },
-    });
-    if (method.initialInput) {
-      const initialInput = method.initialInput;
-      const socket = shellSessionsByPtyId.get(pty.id)?.socket;
-      const sendInitialInput = () => {
-        // Give the interactive TUI a moment to boot, then deliver the command
-        // text and its carriage return separately — a \r sent too early is
-        // swallowed while the TUI is still switching into raw mode.
-        window.setTimeout(() => {
-          if (!socket || socket.readyState !== WebSocket.OPEN) return;
-          const text = initialInput.replace(/\r$/u, '');
-          if (text) socket.send(text);
-          if (initialInput.endsWith('\r')) {
-            window.setTimeout(() => {
-              if (socket.readyState === WebSocket.OPEN) socket.send('\r');
-            }, 800);
-          }
-        }, 1500);
-      };
-      if (socket) {
-        if (socket.readyState === WebSocket.OPEN) {
-          sendInitialInput();
-        } else {
-          socket.addEventListener('open', sendInitialInput, { once: true });
-        }
-      }
-    }
-  } catch (error) {
-    setSendStatusKey('app.error.providerLoadFailed', { message: toErrorMessage(error) });
-  }
-}
+  },
+  parsePty: parsePtyInfo,
+  ensureShellWindow,
+  socketForPty: (ptyId) => shellSessionsByPtyId.get(ptyId)?.socket,
+  refreshProviders: fetchProviders,
+  refreshAgents: fetchAgents,
+  setErrorStatus: (message) => {
+    setSendStatusKey('app.error.providerLoadFailed', { message });
+  },
+  setStatus: setSendStatusText,
+  translate: t,
+  errorMessage: toErrorMessage,
+});
 
 function buildOpenInEditorCommand(absolutePath: string) {
   const escapedPath = absolutePath.replace(/'/g, "'\"'\"'");
@@ -5982,15 +5830,30 @@ type ShellWindowOptions = {
   onExit?: (exitCode: number) => void | Promise<void>;
 };
 
-async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {}) {
-  if (shellSessionsByPtyId.has(pty.id)) return;
-  await pendingShellWindowCreates.getOrCreate(pty.id, async (isCurrent) => {
-    if (shellSessionsByPtyId.has(pty.id)) return;
-    const key = `shell:${pty.id}`;
-
+const ptyWindowOwner = usePtyWindowOwner({
+  sessions: shellSessionsByPtyId,
+  pendingCreates: pendingShellWindowCreates,
+  loadTerminal: async () => {
     const { Terminal } = await import('@xterm/xterm');
-    if (!isCurrent()) return;
-
+    return (options: ConstructorParameters<typeof Terminal>[0]) => new Terminal(options);
+  },
+  createTerminalOptions: () => ({
+    cols: TERM_COLUMNS,
+    rows: TERM_ROWS,
+    fontFamily: terminalFontFamily.value,
+    fontSize: TERM_FONT_SIZE_PX.value,
+    lineHeight: TERM_LINE_HEIGHT,
+    cursorBlink: true,
+    allowTransparency: true,
+    theme: {
+      background: TRANSPARENT_TERMINAL_BACKGROUND,
+      foreground: '#e2e8f0',
+      cursor: '#e2e8f0',
+      selectionBackground: 'rgba(148, 163, 184, 0.3)',
+    },
+  }),
+  prepareWindow: (pty: PtyInfo, options: ShellWindowOptions) => {
+    const key = `shell:${pty.id}`;
     if (options.onExit) shellExitCallbacks.set(pty.id, options.onExit);
     if (options.minWidth !== undefined || options.minHeight !== undefined) {
       shellWindowMinimums.set(key, {
@@ -5998,9 +5861,11 @@ async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {})
         height: options.minHeight ?? 0,
       });
     }
+  },
+  openWindow: (pty: PtyInfo, options: ShellWindowOptions) => {
+    const key = `shell:${pty.id}`;
     const { width, height } = getTerminalWindowSize();
     const randomPosition = getRandomWindowPosition({ width, height });
-
     fw.open(key, {
       component: options.component ?? ShellContent,
       props: options.props ?? { shellId: pty.id },
@@ -6020,49 +5885,53 @@ async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {})
       expiry: Infinity,
       onResize: () => scheduleShellFit(pty.id),
     });
-
-    const terminal = new Terminal({
-      cols: TERM_COLUMNS,
-      rows: TERM_ROWS,
-      fontFamily: terminalFontFamily.value,
-      fontSize: TERM_FONT_SIZE_PX.value,
-      lineHeight: TERM_LINE_HEIGHT,
-      cursorBlink: true,
-      allowTransparency: true,
-      theme: {
-        background: TRANSPARENT_TERMINAL_BACKGROUND,
-        foreground: '#e2e8f0',
-        cursor: '#e2e8f0',
-        selectionBackground: 'rgba(148, 163, 184, 0.3)',
-      },
-    });
-    if (!isCurrent()) {
-      terminal.dispose();
-      fw.close(key);
-      return;
+  },
+  closeWindow: (ptyId: string) => {
+    fw.close(`shell:${ptyId}`);
+  },
+  createSession: (pty: PtyInfo, terminal: Terminal): ShellSession => ({ pty, terminal }),
+  connectSession: connectShellSocket,
+  queueAfterRender: (callback: () => void) => {
+    nextTick(callback);
+  },
+  waitForFontsReady: waitForTerminalFontsReady,
+  findTerminalHost: (ptyId: string) =>
+    toolWindowCanvasEl.value?.querySelector<HTMLElement>(`[data-shell-id="${ptyId}"]`) ?? null,
+  openTerminal: (terminal: Terminal, host: HTMLElement) => {
+    terminal.open(host);
+  },
+  requestFrame: (callback: () => void) => {
+    requestAnimationFrame(callback);
+  },
+  resizeWindow: (ptyId: string, terminal: Terminal, host: HTMLElement) => {
+    resizeWindowToFitTerminal(`shell:${ptyId}`, terminal, host);
+  },
+  cleanupSession: (ptyId: string, session: ShellSession, options: { readonly kill: boolean }) => {
+    pendingShellFits.delete(ptyId);
+    session.socket?.close();
+    session.terminal.dispose();
+    shellSessionsByPtyId.delete(ptyId);
+    if (forgePtyId === ptyId) {
+      forgePtyId = '';
+      if (options.kill) storageRemove(StorageKeys.state.forgePtyId);
     }
-    shellSessionsByPtyId.set(pty.id, {
-      pty,
-      terminal,
-    });
-    connectShellSocket(pty.id);
-    nextTick(() => {
-      void waitForTerminalFontsReady().then(() => {
-        if (shellSessionsByPtyId.get(pty.id)?.terminal !== terminal) {
-          terminal.dispose();
-          return;
-        }
-        const host = toolWindowCanvasEl.value?.querySelector(
-          `[data-shell-id="${pty.id}"]`,
-        ) as HTMLElement | null;
-        if (!host) return;
-        terminal.open(host);
-        requestAnimationFrame(() => {
-          resizeWindowToFitTerminal(key, terminal, host);
-        });
+    shellWindowMinimums.delete(`shell:${ptyId}`);
+    shellExitWaiters.delete(ptyId);
+    shellExitCallbacks.delete(ptyId);
+    ptyToFileMap.delete(ptyId);
+    fw.close(`shell:${ptyId}`);
+    if (options.kill) {
+      const directory = session.pty.cwd || activeDirectory.value || undefined;
+      const deletePty = backend().deletePty;
+      deletePty?.(ptyId, directory).catch((error) => {
+        log('PTY delete failed', error);
       });
-    });
-  });
+    }
+  },
+});
+
+async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {}) {
+  await ptyWindowOwner.ensureWindow(pty, options);
 }
 
 function resizeWindowToFitTerminal(key: string, terminal: Terminal, _host: HTMLElement) {
@@ -6327,29 +6196,7 @@ function connectShellSocket(ptyId: string) {
 }
 
 function removeShellWindow(ptyId: string, options?: { kill?: boolean }) {
-  pendingShellWindowCreates.invalidate(ptyId);
-  const session = shellSessionsByPtyId.get(ptyId);
-  if (!session) return;
-  pendingShellFits.delete(ptyId);
-  session.socket?.close();
-  session.terminal.dispose();
-  shellSessionsByPtyId.delete(ptyId);
-  if (forgePtyId === ptyId) {
-    forgePtyId = '';
-    if (options?.kill) storageRemove(StorageKeys.state.forgePtyId);
-  }
-  shellWindowMinimums.delete(`shell:${ptyId}`);
-  shellExitWaiters.delete(ptyId);
-  shellExitCallbacks.delete(ptyId);
-  ptyToFileMap.delete(ptyId);
-  fw.close(`shell:${ptyId}`);
-  if (options?.kill) {
-    const directory = session.pty.cwd || activeDirectory.value || undefined;
-    const deletePty = backend().deletePty;
-    deletePty?.(ptyId, directory).catch((error) => {
-      log('PTY delete failed', error);
-    });
-  }
+  ptyWindowOwner.removeWindow(ptyId, options);
 }
 
 function lingerAndRemoveShellWindow(ptyId: string) {
@@ -6457,10 +6304,7 @@ function restoreFloatingWindow(key: string) {
 }
 
 function disposeShellWindows() {
-  const ids = Array.from(shellSessionsByPtyId.keys());
-  for (const ptyId of ids) {
-    removeShellWindow(ptyId);
-  }
+  ptyWindowOwner.dispose();
 }
 
 let shellDirectory = '';
@@ -7476,15 +7320,7 @@ const toolRendererReadTypesKey = `FILE_${'READ'}_EVENT_TYPES`;
 const toolRendererWriteTypesKey = `FILE_${'WRITE'}_EVENT_TYPES`;
 const toolRendererMessageTypesKey = `MESSAGE_${'EVENT_TYPES'}`;
 
-function renderWorkerHtmlWithI18n(args: RenderRequest) {
-  return renderWorkerHtml({
-    copyButtonLabel: t('render.copyCode'),
-    copiedLabel: t('render.copied'),
-    copyCodeAriaLabel: t('render.copyCodeAria'),
-    copyMarkdownAriaLabel: t('render.copyMarkdownAria'),
-    ...args,
-  });
-}
+const renderWorkerHtmlWithI18n = createLocalizedRenderRequest(t, renderWorkerHtml);
 
 const toolRendererHelpers = {
   [toolRendererReadTypesKey]: TOOL_RENDERER_READ_EVENT_TYPES,
@@ -8001,20 +7837,15 @@ const backendSessionReload = useBackendSessionReload({
   focusInput,
 });
 
-watch(
-  [
-    () => credentials.authHeader.value,
-    () => credentials.codexBridgeToken.value,
-    () => credentials.acpBridgeToken.value,
-  ],
-  () => {
-    messageCacheAuthGeneration.value += 1;
-    sessionReloadRequestId.value += 1;
-    msg.clearSessionCache();
-    backendSessionReload.invalidateMessageCacheContext();
-  },
-  { flush: 'sync' },
-);
+useMessageCacheAuthInvalidation({
+  authHeader: credentials.authHeader,
+  codexBridgeToken: credentials.codexBridgeToken,
+  acpBridgeToken: credentials.acpBridgeToken,
+  messageCacheAuthGeneration,
+  sessionReloadRequestId,
+  clearSessionCache: msg.clearSessionCache,
+  invalidateMessageCacheContext: backendSessionReload.invalidateMessageCacheContext,
+});
 
 async function reloadSelectedSessionAndAcpOptions(newId?: string, oldId?: string) {
   await backendSessionReload.reloadSelectedSessionState(newId, oldId);
@@ -9518,6 +9349,17 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   handleOpenCodeUnauthorized,
 });
 
+const handleBackendConnectionError = createBackendAuthFailureHandler({
+  uiInitState,
+  initErrorMessage,
+  connectionState,
+  reconnectingMessage,
+  abortInitialization,
+  persistAuthError: (message) => storageSet(StorageKeys.state.lastAuthError, message),
+  clearCredentials: credentials.clear,
+  translate: t,
+});
+
 function handleLogin() {
   if (loginBackendKind.value === 'codex') {
     credentials.saveCodex(loginCodexBridgeUrl.value, loginCodexBridgeToken.value);
@@ -9629,28 +9471,7 @@ onMounted(() => {
       void Promise.all([fetchGlobalProviderConfig(), fetchProviders(true)]);
     }),
   );
-  globalEventUnsubscribers.push(
-    ge.on('connection.error', (payload) => {
-      if (payload.statusCode === 401 || payload.statusCode === 403) {
-        const msg = `${payload.message} (HTTP ${payload.statusCode})`;
-        abortInitialization();
-        storageSet(StorageKeys.state.lastAuthError, msg);
-        credentials.clear();
-        uiInitState.value = 'login';
-        initErrorMessage.value = msg;
-        connectionState.value = 'error';
-        return;
-      }
-      if (uiInitState.value === 'loading') {
-        connectionState.value = 'error';
-        initErrorMessage.value = t('app.errors.sseConnectFailed');
-        uiInitState.value = 'login';
-        return;
-      }
-      connectionState.value = 'reconnecting';
-      reconnectingMessage.value = t('app.connection.reconnecting');
-    }),
-  );
+  globalEventUnsubscribers.push(ge.on('connection.error', handleBackendConnectionError));
   globalEventUnsubscribers.push(
     sessionScope.on('permission.asked', (packet) => {
       const request = packet as PermissionRequest;
@@ -9775,7 +9596,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   desktopNotifications?.dispose();
   composerDraftPersistence.flush();
-  pendingShellWindowCreates.invalidateAll();
   for (const pending of Array.from(pendingReferencedSubagentHydrations.values())) {
     pending.resolve(undefined);
   }

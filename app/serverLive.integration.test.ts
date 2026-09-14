@@ -22,7 +22,7 @@ beforeAll(() => {
     { cwd: process.cwd(), stdio: 'inherit', timeout: 180_000 },
   );
   expect(res.status, 'ensure-production-dist must produce dist/index.html').toBe(0);
-});
+}, 190_000);
 
 interface HttpResponse {
   status: number;

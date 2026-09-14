@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useBackendMessageSend } from './useBackendMessageSend';
-import { createBaseParams } from './useBackendMessageSend.test-helpers';
+import { createBaseParams, createCodexApi } from './useBackendMessageSend.test-helpers';
 
 describe('useBackendMessageSend', () => {
   it('sends Codex prompts with image attachments through runtime', async () => {
@@ -9,14 +9,7 @@ describe('useBackendMessageSend', () => {
     base.attachments.value = [
       { id: 'a1', filename: 'img.png', mime: 'image/png', dataUrl: 'data:image/png;base64,AA==' },
     ];
-    const codexApi = {
-      activeThreadId: ref('session-1'),
-      threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
-      collaborationModes: ref([]),
-      sendPrompt: vi.fn().mockResolvedValue(undefined),
-      refreshThreads: vi.fn().mockResolvedValue(undefined),
-      selectModel: vi.fn(),
-    };
+    const codexApi = createCodexApi();
     const runtime = useBackendMessageSend({
       ...base,
       activeBackendKind: ref('codex'),
@@ -39,14 +32,9 @@ describe('useBackendMessageSend', () => {
   it('passes selected collaboration mode to Codex when switcher value matches a collaboration mode id', async () => {
     const base = createBaseParams();
     base.selectedMode.value = 'plan';
-    const codexApi = {
-      activeThreadId: ref('session-1'),
-      threads: ref([{ id: 'session-1', modelProvider: 'provider' }]),
-      collaborationModes: ref([{ mode: 'plan', name: 'Plan' }]),
-      sendPrompt: vi.fn().mockResolvedValue(undefined),
-      refreshThreads: vi.fn().mockResolvedValue(undefined),
-      selectModel: vi.fn(),
-    };
+    const codexApi = createCodexApi({
+      collaborationModes: [{ mode: 'plan', name: 'Plan' }],
+    });
     const runtime = useBackendMessageSend({
       ...base,
       activeBackendKind: ref('codex'),
@@ -73,14 +61,7 @@ describe('useBackendMessageSend', () => {
       ...base,
       activeBackendKind: ref('opencode'),
       openCodeApi: { sendPromptAsync },
-      codexApi: {
-        activeThreadId: ref(''),
-        threads: ref([]),
-        collaborationModes: ref([]),
-        sendPrompt: vi.fn(),
-        refreshThreads: vi.fn(),
-        selectModel: vi.fn(),
-      },
+      codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
       sendCommand,
     });
 
@@ -97,14 +78,7 @@ describe('useBackendMessageSend', () => {
       ...base,
       activeBackendKind: ref('opencode'),
       openCodeApi: { sendPromptAsync },
-      codexApi: {
-        activeThreadId: ref(''),
-        threads: ref([]),
-        collaborationModes: ref([]),
-        sendPrompt: vi.fn(),
-        refreshThreads: vi.fn(),
-        selectModel: vi.fn(),
-      },
+      codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
     });
 
     await runtime.sendMessage();
@@ -138,14 +112,7 @@ describe('useBackendMessageSend', () => {
       ...base,
       activeBackendKind: ref('opencode'),
       openCodeApi: { sendPromptAsync },
-      codexApi: {
-        activeThreadId: ref(''),
-        threads: ref([]),
-        collaborationModes: ref([]),
-        sendPrompt: vi.fn(),
-        refreshThreads: vi.fn(),
-        selectModel: vi.fn(),
-      },
+      codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
     });
 
     // When: the prompt is sent without selecting the candidate with Enter or a click.

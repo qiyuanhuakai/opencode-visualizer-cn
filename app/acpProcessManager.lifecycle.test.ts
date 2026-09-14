@@ -44,39 +44,51 @@ describe('ACP process generation lifecycle', () => {
       args: ['-e', agentScript],
       enabled: true,
     };
-    await manager.reconcile([original]);
-    const client = new TestClient();
-    manager.attach('replacement', client);
+    let replacing: ReturnType<typeof manager.reconcile> | undefined;
+    try {
+      await manager.reconcile([original]);
+      const client = new TestClient();
+      manager.attach('replacement', client);
 
-    const replacing = manager.reconcile([{ ...original, args: ['-e', agentScript, 'next'] }]);
-    await vi.waitFor(() => expect(releaseAgent).toHaveBeenCalledOnce());
+      replacing = manager.reconcile([{ ...original, args: ['-e', agentScript, 'next'] }]);
+      await vi.waitFor(() => expect(releaseAgent).toHaveBeenCalledOnce());
 
-    expect(client.closed).toBe(true);
-    expect(events).toEqual(['resume', 'release']);
-    finishRelease();
-    await replacing;
-    expect(events).toEqual(['resume', 'release', 'resume']);
-    await manager.stopAll();
+      expect(client.closed).toBe(true);
+      expect(events).toEqual(['resume', 'release']);
+      finishRelease();
+      await replacing;
+      expect(events).toEqual(['resume', 'release', 'resume']);
+    } finally {
+      finishRelease();
+      try {
+        await replacing;
+      } finally {
+        await manager.stopAll();
+      }
+    }
   });
 
   it('drops an oversized unterminated stdout frame without growing the buffer indefinitely', async () => {
     const manager = createAcpProcessManager();
-    await manager.reconcile([
-      {
-        id: 'oversized-frame',
-        name: 'Oversized Frame ACP',
-        command: process.execPath,
-        args: [
-          '-e',
-          "process.stdout.write('x'.repeat(2*1024*1024+1));setInterval(()=>{},1000)",
-        ],
-        enabled: true,
-      },
-    ]);
+    try {
+      await manager.reconcile([
+        {
+          id: 'oversized-frame',
+          name: 'Oversized Frame ACP',
+          command: process.execPath,
+          args: [
+            '-e',
+            "process.stdout.write('x'.repeat(2*1024*1024+1));setInterval(()=>{},1000)",
+          ],
+          enabled: true,
+        },
+      ]);
 
-    await vi.waitFor(() => {
-      expect(manager.getStatus()[0]?.droppedFrames).toBeGreaterThan(0);
-    });
-    await manager.stopAll();
+      await vi.waitFor(() => {
+        expect(manager.getStatus()[0]?.droppedFrames).toBeGreaterThan(0);
+      });
+    } finally {
+      await manager.stopAll();
+    }
   });
 });

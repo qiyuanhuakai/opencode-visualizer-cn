@@ -1,10 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, nextTick } from 'vue';
 import { createI18n } from 'vue-i18n';
-import { getFloatingWindowSnapPosition, useFloatingWindows } from '../composables/useFloatingWindows';
+import {
+  getFloatingWindowSnapPosition,
+  useFloatingWindows,
+} from '../composables/useFloatingWindows';
 import FloatingWindow from './FloatingWindow.vue';
+import {
+  cleanupFloatingWindowApps,
+  emitPointer,
+  FloatingWindowTestContent,
+  registerFloatingWindowApp,
+  unregisterFloatingWindowApp,
+} from './floatingWindow.test-helpers';
 
-const TestContent = defineComponent(() => () => h('div', 'content'));
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
 async function mountFloatingWindow() {
   let manager: ReturnType<typeof useFloatingWindows> | undefined;
@@ -24,6 +34,7 @@ async function mountFloatingWindow() {
       },
     }),
   );
+  registerFloatingWindowApp(app, target);
   app.use(
     createI18n({
       legacy: false,
@@ -35,7 +46,7 @@ async function mountFloatingWindow() {
   if (!manager) throw new Error('Floating window manager did not mount.');
   manager.setExtent(375, 500);
   await manager.open('gesture-window', {
-    component: TestContent,
+    component: FloatingWindowTestContent,
     width: 300,
     height: 300,
     x: 50,
@@ -54,22 +65,14 @@ async function mountFloatingWindow() {
     manager,
     target,
     unmount() {
-      app.unmount();
-      target.remove();
+      unregisterFloatingWindowApp(app);
     },
   };
 }
 
-function emitPointer(target: HTMLElement, type: string, x: number, y: number) {
-  if (!target.setPointerCapture) target.setPointerCapture = () => undefined;
-  if (!target.releasePointerCapture) target.releasePointerCapture = () => undefined;
-  const event = new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1 });
-  Reflect.set(event, '_vts', Date.now() + 1);
-  target.dispatchEvent(event);
-}
-
 describe('FloatingWindow gestures', () => {
   afterEach(() => {
+    cleanupFloatingWindowApps();
     document.body.innerHTML = '';
   });
 
@@ -98,9 +101,7 @@ describe('FloatingWindow gestures', () => {
       minimized: false,
     });
     const windowElement = mounted.target.querySelector<HTMLElement>('.floating-window');
-    const resizeHandle = mounted.target.querySelector<HTMLElement>(
-      '.floating-window-resizer',
-    );
+    const resizeHandle = mounted.target.querySelector<HTMLElement>('.floating-window-resizer');
     if (!windowElement || !resizeHandle) throw new Error('Expected floating resize elements.');
 
     // When: the resize pointer moves far beyond the canvas

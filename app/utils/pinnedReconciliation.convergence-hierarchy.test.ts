@@ -31,9 +31,6 @@ describe('pinned session hierarchy retention', () => {
     expect(confirmed).toMatchObject(store);
     expect(lazyReload).toMatchObject(store);
   });
-});
-
-describe('pinned session hierarchy retention', () => {
   it('retains confirmed leaf state under repo and worktree hierarchy keys', () => {
     const store: LocalPinnedSessionStore = {
       'repo:p1:/home/user/repo': 555,
@@ -71,9 +68,6 @@ describe('pinned session hierarchy retention', () => {
     expect(pendingMetadata).toMatchObject(store);
     expect(confirmed).toMatchObject(store);
   });
-});
-
-describe('pinned session hierarchy retention', () => {
   it('retains unresolved repo membership, then converges when metadata resolves elsewhere', () => {
     const store: LocalPinnedSessionStore = {
       'repo:p1:/home/user/repo': 555,
@@ -153,9 +147,6 @@ describe('pinned session archived and child lifecycle', () => {
 
     expect(next['p1:child']).toBeUndefined();
   });
-});
-
-describe('pinned session archived and child lifecycle', () => {
   it('deletes an archived override even under incomplete hydration', () => {
     const store: LocalPinnedSessionStore = { 'project:p1': 555, 'p1:s1': 555 };
     const projects = {

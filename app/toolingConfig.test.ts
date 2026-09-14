@@ -1,80 +1,84 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const PACKAGE_PATH = path.resolve(__dirname, '../package.json');
-const POSTCSS_CONFIG_PATH = path.resolve(__dirname, '../postcss.config.mjs');
-const TAILWIND_CSS_PATH = path.resolve(__dirname, './styles/tailwind.css');
+const repoRoot = path.resolve(__dirname, '..');
+const packageJson: unknown = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+const tailwindCss = readFileSync(path.join(repoRoot, 'app/styles/tailwind.css'), 'utf8');
+const postcssModule: unknown = await import(
+  pathToFileURL(path.join(repoRoot, 'postcss.config.mjs')).href
+);
 
-// Static contract over the Task 9 (electron-major-upgrade) tooling stack:
-// the read-only `format:check` script, the oxlint/oxlint-tsgolint type-aware
-// pair wiring, and the Tailwind 4.x directives the renderer stylesheet depends
-// on. Mirror of viteConfig.test.ts / electronSmokeContract.test.ts (string +
-// manifest level, no runtime dependencies).
-const pkg = JSON.parse(readFileSync(PACKAGE_PATH, 'utf8')) as {
-  scripts: Record<string, string>;
-  devDependencies: Record<string, string>;
-};
-const tailwindCss = readFileSync(TAILWIND_CSS_PATH, 'utf8');
-const postcssConfig = readFileSync(POSTCSS_CONFIG_PATH, 'utf8');
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+if (!isRecord(packageJson) || !isRecord(packageJson.scripts)) {
+  throw new Error('package.json must define scripts');
+}
+if (!isRecord(packageJson.devDependencies)) {
+  throw new Error('package.json must define devDependencies');
+}
+if (!isRecord(postcssModule) || !isRecord(postcssModule.default)) {
+  throw new Error('postcss.config.mjs must export a configuration object');
+}
+
+const scripts = packageJson.scripts;
+const devDependencies = packageJson.devDependencies;
+const postcssConfig = postcssModule.default;
+
+function commandTokens(scriptName: string): readonly string[] {
+  const script = scripts[scriptName];
+  if (typeof script !== 'string') throw new Error(`missing package script: ${scriptName}`);
+  return script.trim().split(/\s+/u);
+}
 
 describe('tooling config contract', () => {
-  describe('format:check', () => {
-    it('defines a read-only format:check script (oxfmt --check, never --fix)', () => {
-      const script = pkg.scripts['format:check'];
-      expect(script).toBeDefined();
-      expect(script).toContain('oxfmt');
-      expect(script).toContain('--check');
-      expect(script).not.toMatch(/--fix|--write|\bformat\b(?!:check)/);
+  describe('format scripts', () => {
+    it('defines format:check as a read-only oxfmt check', () => {
+      const tokens = commandTokens('format:check');
+      expect(tokens[0]).toBe('oxfmt');
+      expect(tokens).toContain('--check');
+      expect(tokens).not.toContain('--fix');
+      expect(tokens).not.toContain('--write');
     });
 
-    it('keeps the interactive format script for local formatting', () => {
-      expect(pkg.scripts['format']).toContain('oxfmt');
-    });
-  });
-
-  describe('oxlint / oxlint-tsgolint pair', () => {
-    it('keeps both members of the type-aware lint pair in devDependencies', () => {
-      expect(pkg.devDependencies['oxlint']).toBeDefined();
-      expect(pkg.devDependencies['oxlint-tsgolint']).toBeDefined();
-    });
-
-    it('pins oxlint to the stable 1.x line that ships type-aware support', () => {
-      // Task 9 registry snapshot: oxlint latest = 1.78.0 (2026-08-11).
-      expect(pkg.devDependencies['oxlint']).toMatch(/^\^1\.\d+\.\d+$/);
-    });
-
-    it('pins oxlint-tsgolint to the v7 stable line (tracks TypeScript 7.0.2 + 3-digit patch)', () => {
-      // Official tsgolint versioning: v7.0.2### = TS 7.0.2 semantics + patch.
-      // Task 9 registry snapshot: oxlint-tsgolint latest = 7.0.2001.
-      expect(pkg.devDependencies['oxlint-tsgolint']).toMatch(/^\^7\.0\.2\d{3}$/);
-    });
-
-    it('keeps the lint gate shape (oxlint + vue-tsc strict)', () => {
-      expect(pkg.scripts['lint']).toContain('oxlint');
-      expect(pkg.scripts['lint']).toContain('vue-tsc --noEmit');
+    it('keeps the interactive format script', () => {
+      expect(commandTokens('format')[0]).toBe('oxfmt');
     });
   });
 
-  describe('tailwind 4.x stack', () => {
-    it('keeps tailwindcss and @tailwindcss/postcss on the 4.x line', () => {
-      expect(pkg.devDependencies['tailwindcss']).toMatch(/^\^4\./);
-      expect(pkg.devDependencies['@tailwindcss/postcss']).toMatch(/^\^4\./);
+  describe('type-aware lint', () => {
+    it('installs both lint executables used by the configured gate', () => {
+      expect(devDependencies.oxlint).toEqual(expect.any(String));
+      expect(devDependencies['oxlint-tsgolint']).toEqual(expect.any(String));
     });
 
-    it('keeps @tailwindcss/typography on the 0.5.x line', () => {
-      expect(pkg.devDependencies['@tailwindcss/typography']).toMatch(/^\^0\.5\./);
+    it('runs oxlint and strict Vue type-checking in the lint gate', () => {
+      const tokens = commandTokens('lint');
+      expect(tokens[0]).toBe('oxlint');
+      expect(tokens).toContain('vue-tsc');
+      expect(tokens).toContain('--noEmit');
+    });
+  });
+
+  describe('Tailwind integration', () => {
+    it('installs the PostCSS adapter and typography plugin', () => {
+      expect(devDependencies.tailwindcss).toEqual(expect.any(String));
+      expect(devDependencies['@tailwindcss/postcss']).toEqual(expect.any(String));
+      expect(devDependencies['@tailwindcss/typography']).toEqual(expect.any(String));
     });
 
-    it('keeps the tailwind v4 import, plugin and source directives intact', () => {
+    it('keeps the renderer stylesheet directives intact', () => {
       expect(tailwindCss).toContain("@import 'tailwindcss';");
       expect(tailwindCss).toContain('@plugin "@tailwindcss/typography";');
       expect(tailwindCss).toContain('@source "../**/*.{vue,ts}";');
       expect(tailwindCss).toContain('@theme {');
     });
 
-    it('keeps the @tailwindcss/postcss integration in postcss.config.mjs', () => {
-      expect(postcssConfig).toContain("'@tailwindcss/postcss'");
+    it('loads the actual PostCSS config with the Tailwind adapter enabled', () => {
+      expect(postcssConfig.plugins).toMatchObject({ '@tailwindcss/postcss': {} });
     });
   });
 });

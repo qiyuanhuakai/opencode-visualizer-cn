@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, nextTick, type App as VueApp } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { useCodexApi } from '../composables/useCodexApi';
 import { StorageKeys, storageRemove } from '../utils/storageKeys';
 import CodexPanel from './CodexPanel.vue';
+
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
 const apps: VueApp[] = [];
 
@@ -17,6 +19,7 @@ function mountPanel(api: ReturnType<typeof useCodexApi>) {
   const target = document.createElement('div');
   document.body.append(target);
   const app = createApp(CodexPanel, { api });
+  apps.push(app);
   app.use(
     createI18n({
       legacy: false,
@@ -26,7 +29,6 @@ function mountPanel(api: ReturnType<typeof useCodexApi>) {
       messages: { en: {} },
     }),
   );
-  apps.push(app);
   app.mount(target);
   return target;
 }

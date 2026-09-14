@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import i18n from '../i18n';
 import ProviderManagerModal from './ProviderManagerModal.vue';
 
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
+
 const mounted: Array<{ app: ReturnType<typeof createApp>; host: HTMLElement }> = [];
 
 afterEach(() => {
@@ -30,9 +32,9 @@ describe('ProviderManagerModal ACP setup', () => {
           onOpenAcpAuthTerminal: onOpen,
         }),
     });
+    mounted.push({ app, host });
     app.use(i18n);
     app.mount(host);
-    mounted.push({ app, host });
     await nextTick();
 
     const button = host.querySelector<HTMLButtonElement>('.ghost-action');

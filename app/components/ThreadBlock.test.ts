@@ -4,7 +4,8 @@ import { createI18n } from 'vue-i18n';
 
 import ThreadBlock from './ThreadBlock.vue';
 import { useMessages } from '../composables/useMessages';
-import type { MessageInfo, MessagePart } from '../types/sse';
+import type { MessageInfo } from '../types/sse';
+import { makeAssistantMessage, makeTextPart, makeUserMessage } from './historyTestBuilders';
 
 const workerState = vi.hoisted(() => {
   class FakeWorker {
@@ -17,6 +18,14 @@ const workerState = vi.hoisted(() => {
 });
 
 vi.mock('../workers/render-worker?worker', () => ({ default: workerState.FakeWorker }));
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
+
+const mountedApps = new Set<ReturnType<typeof createApp>>();
+
+function unmount(app: ReturnType<typeof createApp>) {
+  if (!mountedApps.delete(app)) return;
+  app.unmount();
+}
 
 function createMessages() {
   return {
@@ -33,50 +42,6 @@ function createMessages() {
         viewSubagentTitle: 'Open subagent history for {sessionId}',
       },
     },
-  };
-}
-
-function makeUserMessage(sessionId: string, id: string, time: number): MessageInfo {
-  return {
-    id,
-    sessionID: sessionId,
-    role: 'user',
-    time: { created: time },
-    agent: 'build',
-    model: { providerID: 'test', modelID: 'test-model' },
-  };
-}
-
-function makeAssistantMessage(
-  sessionId: string,
-  id: string,
-  parentId: string,
-  time: number,
-  agent: string,
-): MessageInfo {
-  return {
-    id,
-    sessionID: sessionId,
-    role: 'assistant',
-    parentID: parentId,
-    time: { created: time, completed: time + 10 },
-    agent,
-    modelID: 'codex',
-    providerID: 'codex',
-    mode: 'codex',
-    path: { cwd: '/repo', root: '/repo' },
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-  };
-}
-
-function makeTextPart(messageId: string, sessionId: string, text: string): MessagePart {
-  return {
-    id: `text-${messageId}`,
-    sessionID: sessionId,
-    messageID: messageId,
-    type: 'text',
-    text,
   };
 }
 
@@ -120,6 +85,7 @@ function mount(
       },
     }),
   );
+  mountedApps.add(app);
   const i18n = createI18n({ legacy: false, locale: 'en', messages: createMessages() });
   app.use(i18n);
   app.mount(root);
@@ -127,16 +93,27 @@ function mount(
 }
 
 describe('ThreadBlock history wiring', () => {
-  it.each([false, true])('shows revert on Codex cards while limiting fork to latest=%s', async (isLatestRoot) => {
-    const user = makeUserMessage('main', 'u1', 1);
-    useMessages().loadHistory([{ info: user, parts: [] }]);
-    const view = mount({ root: user, currentSessionId: 'main', backendKind: 'codex', isLatestRoot }, vi.fn());
-    await flushRender();
-    expect(view.root.querySelector('.ib-footer .ib-action-danger')).not.toBeNull();
-    expect([...view.root.querySelectorAll('button')].some(button => button.textContent?.trim() === 'FORK')).toBe(isLatestRoot);
-    view.app.unmount();
-  });
+  it.each([false, true])(
+    'shows revert on Codex cards while limiting fork to latest=%s',
+    async (isLatestRoot) => {
+      const user = makeUserMessage('main', 'u1', 1);
+      useMessages().loadHistory([{ info: user, parts: [] }]);
+      const view = mount(
+        { root: user, currentSessionId: 'main', backendKind: 'codex', isLatestRoot },
+        vi.fn(),
+      );
+      await flushRender();
+      expect(view.root.querySelector('.ib-footer .ib-action-danger')).not.toBeNull();
+      expect(
+        [...view.root.querySelectorAll('button')].some(
+          (button) => button.textContent?.trim() === 'FORK',
+        ),
+      ).toBe(isLatestRoot);
+      unmount(view.app);
+    },
+  );
   afterEach(() => {
+    mountedApps.forEach(unmount);
     document.body.innerHTML = '';
     useMessages().reset();
   });
@@ -145,17 +122,30 @@ describe('ThreadBlock history wiring', () => {
     const user = makeUserMessage('main', 'u1', 1);
     useMessages().loadHistory([
       { info: user, parts: [] },
-      { info: makeAssistantMessage('main', 'turn-tools', 'u1', 2, 'codex'), parts: [{
-        id: 'image-1', sessionID: 'main', messageID: 'turn-tools', type: 'file',
-        mime: 'image/png', filename: 'preview.png', url: 'data:image/png;base64,AA==',
-      }] },
-      { info: makeAssistantMessage('main', 'reply-2', 'u1', 3, 'codex'), parts: [makeTextPart('reply-2', 'main', 'Final answer')] },
+      {
+        info: makeAssistantMessage('main', 'turn-tools', 'u1', 2, 'codex'),
+        parts: [
+          {
+            id: 'image-1',
+            sessionID: 'main',
+            messageID: 'turn-tools',
+            type: 'file',
+            mime: 'image/png',
+            filename: 'preview.png',
+            url: 'data:image/png;base64,AA==',
+          },
+        ],
+      },
+      {
+        info: makeAssistantMessage('main', 'reply-2', 'u1', 3, 'codex'),
+        parts: [makeTextPart('reply-2', 'main', 'Final answer')],
+      },
     ]);
     const view = mount({ root: user, currentSessionId: 'main', backendKind: 'codex' }, vi.fn());
     await flushRender();
     expect(view.root.querySelectorAll('.thread-assistant img')).toHaveLength(1);
     expect(view.root.querySelector('img')?.getAttribute('alt')).toBe('preview.png');
-    view.app.unmount();
+    unmount(view.app);
   });
 
   it('Given a thread with a subagent-session assistant message, When the history button is clicked, Then the emitted entry carries isSubagent true and the agent name', async () => {
@@ -195,7 +185,7 @@ describe('ThreadBlock history wiring', () => {
       content: 'reply',
     });
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 
@@ -229,7 +219,7 @@ describe('ThreadBlock history wiring', () => {
     const messageEntry = payload.entries.find((entry) => entry.kind === 'message');
     expect(messageEntry).toMatchObject({ isSubagent: false, agent: 'build' });
 
-    app.unmount();
+    unmount(app);
     root.remove();
   });
 });

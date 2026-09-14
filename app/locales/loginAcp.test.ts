@@ -1,18 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import en from './en';
-import eo from './eo';
-import ja from './ja';
-import zhCN from './zh-CN';
-import zhTW from './zh-TW';
-
-const locales = [
-  ['en', en],
-  ['zh-CN', zhCN],
-  ['zh-TW', zhTW],
-  ['ja', ja],
-  ['eo', eo],
-] as const;
+import { acpLocales, expectNonEmptyString } from './test-helpers';
 
 const acpLoginKeys = [
   'acpTitle',
@@ -23,13 +11,8 @@ const acpLoginKeys = [
   'acpBridgeToken',
 ] as const;
 
-function expectNonEmptyString(value: unknown) {
-  expect(typeof value).toBe('string');
-  if (typeof value === 'string') expect(value.trim()).not.toBe('');
-}
-
 describe('ACP login locale completeness', () => {
-  it.each(locales)('%s exposes every ACP login key', (_locale, messages) => {
+  it.each(acpLocales)('%s exposes every ACP login key', (_locale, messages) => {
     expectNonEmptyString(messages.app.login.acpTitle);
     expectNonEmptyString(messages.app.login.acpBackend);
     expectNonEmptyString(messages.app.login.acpAgentId);
@@ -40,7 +23,7 @@ describe('ACP login locale completeness', () => {
 
   it('keeps the ACP login key set identical across locales', () => {
     const expectedKeys = [...acpLoginKeys].sort();
-    for (const [_locale, messages] of locales) {
+    for (const [_locale, messages] of acpLocales) {
       expect(
         Object.keys(messages.app.login)
           .filter((key) => key.startsWith('acp'))

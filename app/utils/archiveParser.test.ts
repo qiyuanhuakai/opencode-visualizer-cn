@@ -1,7 +1,43 @@
 import { gzipSync } from 'fflate';
-import { describe, expect, it } from 'vitest';
+import JSZip from 'jszip';
+import { createTar } from 'nanotar';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseArchive } from './archiveParser';
+
+const libarchiveMock = vi.hoisted(() => {
+  const constructorBytes: Uint8Array[] = [];
+
+  class MockArchiveReader {
+    constructor(_libarchive: unknown, bytes: Int8Array) {
+      constructorBytes.push(new Uint8Array(bytes));
+    }
+
+    *entries() {
+      yield {
+        getPathname: () => 'libarchive-entry.txt',
+        getSize: () => 19,
+      };
+    }
+
+    free() {}
+  }
+
+  return {
+    ArchiveReader: MockArchiveReader,
+    constructorBytes,
+    libarchiveWasm: vi.fn(async () => ({})),
+  };
+});
+
+vi.mock('libarchive-wasm', () => ({
+  ArchiveReader: libarchiveMock.ArchiveReader,
+  libarchiveWasm: libarchiveMock.libarchiveWasm,
+}));
+
+beforeEach(() => {
+  libarchiveMock.constructorBytes.splice(0);
+});
 
 describe('parseArchive format detection and parsing', () => {
   it('detects the zip signature and routes to the zip parser', async () => {
@@ -11,28 +47,18 @@ describe('parseArchive format detection and parsing', () => {
     expect(result.format).toBe('ZIP');
   });
 
-  it('detects the rar signature', async () => {
-    const result = await parseArchive(new Uint8Array([0x52, 0x61, 0x72, 0x21]), 'dat');
+  it.each([
+    ['RAR', new Uint8Array([0x52, 0x61, 0x72, 0x21])],
+    ['7z', new Uint8Array([0x37, 0x7a, 0xbc, 0xaf])],
+    ['XZ', new Uint8Array([0xfd, 0x37, 0x7a, 0x58])],
+    ['BZIP2', new Uint8Array([0x42, 0x5a, 0x68])],
+  ])('routes the %s signature in a dat file through ArchiveReader with its original bytes', async (_kind, bytes) => {
+    const result = await parseArchive(bytes, 'dat');
 
-    expect(result.unsupported).toBeUndefined();
-  });
-
-  it('detects the 7z signature', async () => {
-    const result = await parseArchive(new Uint8Array([0x37, 0x7a, 0xbc, 0xaf]), 'dat');
-
-    expect(result.unsupported).toBeUndefined();
-  });
-
-  it('detects the xz signature', async () => {
-    const result = await parseArchive(new Uint8Array([0xfd, 0x37, 0x7a, 0x58]), 'dat');
-
-    expect(result.unsupported).toBeUndefined();
-  });
-
-  it('detects the bzip2 signature', async () => {
-    const result = await parseArchive(new Uint8Array([0x42, 0x5a, 0x68]), 'dat');
-
-    expect(result.unsupported).toBeUndefined();
+    expect(libarchiveMock.constructorBytes).toEqual([bytes]);
+    expect(result).toEqual({
+      entries: [{ name: 'libarchive-entry.txt', size: 19, isDirectory: false }],
+    });
   });
 
   it('detects the gzip signature and routes to the gzip parser', async () => {
@@ -79,6 +105,30 @@ describe('parseArchive format detection and parsing', () => {
 });
 
 describe('parseArchive', () => {
+  it('parses valid zip content through the real JSZip library', async () => {
+    const zip = new JSZip();
+    zip.file('zip-entry.txt', 'zip payload');
+
+    const result = await parseArchive(await zip.generateAsync({ type: 'uint8array' }), 'dat');
+
+    expect(result.error).toBeUndefined();
+    expect(result.unsupported).toBeUndefined();
+    expect(result.format).toBe('ZIP');
+    expect(result.entries).toMatchObject([{ name: 'zip-entry.txt', isDirectory: false }]);
+  });
+
+  it('parses valid tar content through the real nanotar library', async () => {
+    const result = await parseArchive(
+      createTar([{ name: 'tar-entry.txt', data: 'tar payload' }], { attrs: { mtime: 0 } }),
+      'dat',
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.unsupported).toBeUndefined();
+    expect(result.format).toBe('TAR');
+    expect(result.entries).toEqual([{ name: 'tar-entry.txt', size: 11, isDirectory: false }]);
+  });
+
   it('falls back to detected archive type when extension is wrong', async () => {
     const gzipBytes = gzipSync(new TextEncoder().encode('hello world'));
     const result = await parseArchive(gzipBytes, 'zip');

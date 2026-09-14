@@ -1,10 +1,54 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createAcpAgentList,
   createAcpAgentSelectorOptions,
+  createAcpPermissionModeList,
   createAcpProviderResponse,
   createAcpUiModeState,
+  resolveAcpModeSelection,
   syncAcpPromptConfig,
 } from './configOptions';
+
+const modeConfig = {
+  id: 'mode',
+  name: 'Mode',
+  category: 'mode',
+  type: 'select',
+  currentValue: 'acceptEdits',
+  options: [
+    { value: 'normal', name: 'Normal' },
+    { value: 'acceptEdits', name: 'Accept Edits' },
+    { value: 'plan', name: 'Plan' },
+    { value: 'bypassPermissions', name: 'Bypass Permissions' },
+  ],
+};
+
+describe('ACP mode policy', () => {
+  it('separates agent modes from permission policies', () => {
+    expect(createAcpAgentList([modeConfig], 'Oh My Pi')).toEqual([
+      expect.objectContaining({ name: 'default' }),
+      expect.objectContaining({ name: 'plan' }),
+    ]);
+    expect(createAcpPermissionModeList([modeConfig])).toEqual({
+      current: 'acceptEdits',
+      options: [
+        { id: 'normal', name: 'Normal' },
+        { id: 'acceptEdits', name: 'Accept Edits' },
+        { id: 'bypassPermissions', name: 'Bypass Permissions' },
+      ],
+    });
+    expect(resolveAcpModeSelection('default', 'bypassPermissions')).toBe('bypassPermissions');
+    expect(resolveAcpModeSelection('plan', 'bypassPermissions')).toBe('plan');
+    expect(createAcpUiModeState([modeConfig], 'normal')).toEqual({
+      agent: 'default',
+      permissionMode: 'acceptEdits',
+    });
+    expect(createAcpUiModeState([{ ...modeConfig, currentValue: 'plan' }], 'acceptEdits')).toEqual({
+      agent: 'plan',
+      permissionMode: 'acceptEdits',
+    });
+  });
+});
 
 describe('syncAcpPromptConfig', () => {
   it('does not forward a stale synthetic selection when the session does not offer it', async () => {

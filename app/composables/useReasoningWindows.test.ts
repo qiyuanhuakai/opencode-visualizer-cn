@@ -1,47 +1,13 @@
 import { createApp, defineComponent, ref } from 'vue';
-import { createI18n } from 'vue-i18n';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { MessageInfo, MessagePart } from '../types/sse';
+import type { MessagePart } from '../types/sse';
 import { useFloatingWindows } from './useFloatingWindows';
 import type { SessionScope } from './useGlobalEvents';
 import { useReasoningWindows } from './useReasoningWindows';
+import { assistantInfo, createFakeSessionScope } from './streamingWindow.test-helpers';
 
-function createFakeScope() {
-  const listeners = new Map<string, Array<(payload: unknown) => void>>();
-  const scope: SessionScope = {
-    on(event: string, listener: (payload: unknown) => void) {
-      const list = listeners.get(event) ?? [];
-      list.push(listener);
-      listeners.set(event, list);
-      return () => {};
-    },
-    dispose() {},
-  };
-  return {
-    scope,
-    emit(event: string, payload: unknown) {
-      for (const listener of listeners.get(event) ?? []) listener(payload);
-    },
-  };
-}
-
-function assistantInfo(sessionID: string, id: string, completed?: number): MessageInfo {
-  return {
-    id,
-    sessionID,
-    role: 'assistant',
-    time: { created: 1, ...(completed === undefined ? {} : { completed }) },
-    parentID: 'parent-1',
-    modelID: 'model-1',
-    providerID: 'provider-1',
-    mode: 'build',
-    agent: 'build',
-    path: { cwd: '/', root: '/' },
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-  };
-}
+vi.mock('../i18n/useI18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }));
 
 const mountedApps: Array<() => void> = [];
 
@@ -66,7 +32,6 @@ function mountReasoningWindows(scope: SessionScope) {
       },
     }),
   );
-  app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} } }));
   app.mount(root);
   mountedApps.push(() => {
     app.unmount();
@@ -77,14 +42,40 @@ function mountReasoningWindows(scope: SessionScope) {
 }
 
 describe('useReasoningWindows message-level completion', () => {
-  afterEach(() => {
+  beforeEach(() => { vi.useFakeTimers(); });
+
+  afterEach(async () => {
     while (mountedApps.length > 0) mountedApps.pop()?.();
     document.body.innerHTML = '';
+    await vi.runOnlyPendingTimersAsync();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('removes a fake scope listener when its unsubscribe function runs', () => {
+    const fake = createFakeSessionScope();
+    let received = 0;
+    const unsubscribe = fake.scope.on('message.updated', () => { received += 1; });
+    unsubscribe();
+    fake.emit('message.updated', { info: assistantInfo('session-1', 'message-1') });
+    expect(fake.listenerCount('message.updated')).toBe(0);
+    expect(received).toBe(0);
+  });
+
+  it('stops receiving scope events after the fake scope is disposed', () => {
+    const fake = createFakeSessionScope();
+    const api = mountReasoningWindows(fake.scope);
+    fake.scope.dispose();
+    fake.emit('message.part.updated', { part: {
+      id: 'part-1', sessionID: 'session-1', messageID: 'message-1', type: 'reasoning', text: 'thinking…', time: { start: 1 },
+    } satisfies MessagePart });
+    expect(fake.listenerCount('message.part.updated')).toBe(0);
+    expect(api.entriesBySession?.get('session-1')).toBeUndefined();
   });
 
   it('marks the streaming entry completed when completion arrives at message level without a part-level time.end', () => {
     // Given: a reasoning part still streaming (no part-level time.end)
-    const fake = createFakeScope();
+    const fake = createFakeSessionScope();
     const api = mountReasoningWindows(fake.scope);
     const part: MessagePart = {
       id: 'part-1',
@@ -108,7 +99,7 @@ describe('useReasoningWindows message-level completion', () => {
 
   it('marks the streaming entry completed when an error arrives at message level', () => {
     // Given: a reasoning part still streaming
-    const fake = createFakeScope();
+    const fake = createFakeSessionScope();
     const api = mountReasoningWindows(fake.scope);
     const part: MessagePart = {
       id: 'part-1',

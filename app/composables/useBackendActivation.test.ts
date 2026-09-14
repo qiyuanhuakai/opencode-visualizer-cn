@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useBackendActivation } from './useBackendActivation';
 import type { BackendKind } from '../backends/types';
@@ -186,6 +186,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
 }
 
 describe('useBackendActivation', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it.each(['opencode', 'acp'] as const)(
     'keeps the independent Codex panel client connected while activating %s',
     async (backendKind) => {
@@ -304,8 +310,9 @@ describe('useBackendActivation', () => {
 
   it('reaches Ready while resource hydration is still pending', async () => {
     // Given: hydration never settles
+    let finishHydration = () => {};
     const harness = createHarness('opencode', {
-      hydrateActiveWorktreeResources: () => new Promise<void>(() => {}),
+      hydrateActiveWorktreeResources: () => new Promise<void>((resolve) => { finishHydration = resolve; }),
     });
 
     // When: OpenCode activation runs
@@ -318,6 +325,7 @@ describe('useBackendActivation', () => {
     });
     await initPromise;
     expect(harness.activation.initializationInFlight.value).toBe(false);
+    finishHydration();
   });
 
   it('keeps an aborted OpenCode bootstrap on the login screen after its work settles', async () => {

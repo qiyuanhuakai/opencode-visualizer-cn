@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import en from '../locales/en';
 import { useMessages } from '../composables/useMessages';
 import OutputPanel from './OutputPanel.vue';
+import { makeUserHistoryEntry } from './historyTestBuilders';
 
 const outputWorkerState = vi.hoisted(() => ({
   startRenderWorkerHtml: vi.fn(() => ({
@@ -26,10 +27,18 @@ vi.mock('../composables/useFileTree', async () => {
   return { useFileTree: () => ({ files: ref<string[]>([]) }) };
 });
 
+const mountedApps = new Set<ReturnType<typeof createApp>>();
+
+function unmount(app: ReturnType<typeof createApp>) {
+  if (!mountedApps.delete(app)) return;
+  app.unmount();
+}
+
 describe('OutputPanel card continuity', () => {
   const messages = useMessages();
 
   afterEach(() => {
+    mountedApps.forEach(unmount);
     messages.reset();
     outputWorkerState.startRenderWorkerHtml.mockClear();
     vi.unstubAllGlobals();
@@ -37,29 +46,7 @@ describe('OutputPanel card continuity', () => {
   });
 
   it('renders every thread continuously without virtual spacer gaps', async () => {
-    messages.loadHistory(
-      Array.from({ length: 25 }, (_, index) => {
-        const messageId = `message-${index}`;
-        return {
-          info: {
-            id: messageId,
-            sessionID: 'root-session',
-            role: 'user' as const,
-            time: { created: index + 1 },
-            model: { providerID: 'openai', modelID: 'gpt' },
-          },
-          parts: [
-            {
-              id: `part-${index}`,
-              sessionID: 'root-session',
-              messageID: messageId,
-              type: 'text' as const,
-              text: `Prompt ${index}`,
-            },
-          ],
-        };
-      }),
-    );
+    messages.loadHistory(Array.from({ length: 25 }, (_, index) => makeUserHistoryEntry(index)));
     const host = document.createElement('div');
     document.body.appendChild(host);
     const app = createApp(OutputPanel, {
@@ -70,6 +57,7 @@ describe('OutputPanel card continuity', () => {
       theme: 'github-dark',
       currentSessionId: 'root-session',
     });
+    mountedApps.add(app);
     app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
     app.provide('showConfirm', async () => true);
     app.mount(host);
@@ -88,10 +76,14 @@ describe('OutputPanel card continuity', () => {
       return frames.length;
     });
     panel.scrollTop = 50;
-    const anchorDocumentTop = () => panel.querySelector('.thread-card-item')?.getAttribute('data-root-id') === 'message-0' ? 200 : 100;
+    const anchorDocumentTop = () =>
+      panel.querySelector('.thread-card-item')?.getAttribute('data-root-id') === 'message-0'
+        ? 200
+        : 100;
     const anchor = panel.querySelector<HTMLElement>('[data-root-id="message-5"]');
     if (!anchor) throw new Error('missing retained card');
-    anchor.getBoundingClientRect = () => new DOMRect(0, anchorDocumentTop() - panel.scrollTop, 100, 60);
+    anchor.getBoundingClientRect = () =>
+      new DOMRect(0, anchorDocumentTop() - panel.scrollTop, 100, 60);
     panel?.dispatchEvent(new Event('scroll'));
     await nextTick();
     await nextTick();
@@ -109,33 +101,11 @@ describe('OutputPanel card continuity', () => {
       await nextTick();
     }
     expect(panel.scrollTop).toBe(100);
-    app.unmount();
+    unmount(app);
   });
 
   it('reveals the newest window when follow-to-bottom starts several batches behind', async () => {
-    messages.loadHistory(
-      Array.from({ length: 250 }, (_, index) => {
-        const messageId = `message-${index}`;
-        return {
-          info: {
-            id: messageId,
-            sessionID: 'root-session',
-            role: 'user' as const,
-            time: { created: index + 1 },
-            model: { providerID: 'openai', modelID: 'gpt' },
-          },
-          parts: [
-            {
-              id: `part-${index}`,
-              sessionID: 'root-session',
-              messageID: messageId,
-              type: 'text' as const,
-              text: `Prompt ${index}`,
-            },
-          ],
-        };
-      }),
-    );
+    messages.loadHistory(Array.from({ length: 250 }, (_, index) => makeUserHistoryEntry(index)));
     const host = document.createElement('div');
     document.body.appendChild(host);
     const app = createApp(OutputPanel, {
@@ -146,6 +116,7 @@ describe('OutputPanel card continuity', () => {
       theme: 'github-dark',
       currentSessionId: 'root-session',
     });
+    mountedApps.add(app);
     app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
     app.provide('showConfirm', async () => true);
     const panelComponent = app.mount(host);
@@ -175,28 +146,11 @@ describe('OutputPanel card continuity', () => {
 
     expect(document.querySelector('[data-root-id="message-249"]')).not.toBeNull();
     expect(document.querySelectorAll('.thread-block').length).toBeLessThanOrEqual(100);
-    app.unmount();
+    unmount(app);
   });
 
   it('shows the current progressive history window while history is loading', async () => {
-    const historyEntry = (index: number) => ({
-      info: {
-        id: `user-${index}`,
-        sessionID: 'root-session',
-        role: 'user' as const,
-        time: { created: index + 1 },
-        model: { providerID: 'openai', modelID: 'gpt' },
-      },
-      parts: [
-        {
-          id: `user-part-${index}`,
-          sessionID: 'root-session',
-          messageID: `user-${index}`,
-          type: 'text' as const,
-          text: `Prompt ${index}`,
-        },
-      ],
-    });
+    const historyEntry = makeUserHistoryEntry;
 
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -216,6 +170,7 @@ describe('OutputPanel card continuity', () => {
           });
       },
     });
+    mountedApps.add(app);
     app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
     app.provide('showConfirm', async () => true);
     app.mount(host);
@@ -238,7 +193,9 @@ describe('OutputPanel card continuity', () => {
     isLoading.value = false;
     await nextTick();
     expect(host.querySelectorAll('.thread-block').length).toBeLessThanOrEqual(100);
-    expect(host.querySelector('.output-panel-messages')?.classList.contains('is-anchor-pending')).toBe(false);
-    app.unmount();
+    expect(
+      host.querySelector('.output-panel-messages')?.classList.contains('is-anchor-pending'),
+    ).toBe(false);
+    unmount(app);
   });
 });

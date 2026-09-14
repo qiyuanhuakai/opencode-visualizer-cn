@@ -34,9 +34,6 @@ describe('pinned session hydration authority', () => {
 
     expect(next).toEqual({});
   });
-});
-
-describe('pinned session hydration authority', () => {
   it('preserves pins when a project has mixed loaded and loading directories', () => {
     const store: LocalPinnedSessionStore = { 'p1:s1': 123 };
     const projects = {
@@ -62,9 +59,6 @@ describe('pinned session hydration authority', () => {
 
     expect(next).toEqual(store);
   });
-});
-
-describe('pinned session hydration authority', () => {
   it('assumes a project is complete when the inventory authority is assume-complete', () => {
     const store: LocalPinnedSessionStore = { 'p1:stale': 123 };
     const projects = { p1: { id: 'p1', worktree: '/loaded', sandboxes: {} } };
@@ -84,9 +78,6 @@ describe('pinned session hydration authority', () => {
     expect(complete).toEqual({});
     expect(pending).toEqual(store);
   });
-});
-
-describe('pinned session hydration authority', () => {
   it('preserves ambiguous session keys when any matching project is incomplete', () => {
     const store: LocalPinnedSessionStore = { 'p1:child:s1': 123 };
     const projects = {
@@ -143,9 +134,6 @@ describe('pinned session legacy hierarchy migration', () => {
       'p1:s1': 123,
     });
   });
-});
-
-describe('pinned session legacy hierarchy migration', () => {
   it('expands legacy sandbox-only pins into explicit session entries', () => {
     const next = reconcile({ 'sandbox:p1:/': 123 }, createProjects(), 10);
 
@@ -154,9 +142,6 @@ describe('pinned session legacy hierarchy migration', () => {
       'p1:s1': 123,
     });
   });
-});
-
-describe('pinned session legacy hierarchy migration', () => {
   it('expands missing project descendants while preserving sandbox overrides', () => {
     const next = reconcile(
       { 'project:p1': 123, 'sandbox:p1:/two': -50 },
@@ -173,9 +158,6 @@ describe('pinned session legacy hierarchy migration', () => {
     });
     expect(next['p1:two-a']).toBeUndefined();
   });
-});
-
-describe('pinned session legacy hierarchy migration', () => {
   it('expands missing sandbox sessions while preserving session overrides', () => {
     const next = reconcile({ 'sandbox:p1:/one': 123, 'p1:one-a': -50 }, createLegacyProjects(), 20);
 
@@ -185,9 +167,6 @@ describe('pinned session legacy hierarchy migration', () => {
       'p1:one-b': 123,
     });
   });
-});
-
-describe('pinned session legacy hierarchy migration', () => {
   it('expands a matching-timestamp migration once and marks it one-shot', () => {
     const store: LocalPinnedSessionStore = { 'project:p1': 555 };
     const projects = createProjects(555);
@@ -202,9 +181,6 @@ describe('pinned session legacy hierarchy migration', () => {
     });
     expect(second).toMatchObject(first);
   });
-});
-
-describe('pinned session legacy hierarchy migration', () => {
   it('does not inherit a legacy pin into descendants discovered after migration', () => {
     const migrated = reconcile({ 'project:p1': 555 }, createProjects(555), 10);
     const projectsWithLaterDescendant = createProjects(555);

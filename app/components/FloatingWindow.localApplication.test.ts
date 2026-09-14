@@ -5,9 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useFloatingWindows } from '../composables/useFloatingWindows';
 import { useSettings } from '../composables/useSettings';
 import FloatingWindow from './FloatingWindow.vue';
+import {
+  cleanupFloatingWindowApps,
+  FloatingWindowTestContent,
+  registerFloatingWindowApp,
+} from './floatingWindow.test-helpers';
 
-const mountedApps: Array<() => void> = [];
-const TestContent = defineComponent(() => () => h('div', 'content'));
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 
 async function mountFileViewer(fileProps: Record<string, unknown> = {}) {
   const onOpenLocal = vi.fn();
@@ -18,7 +22,7 @@ async function mountFileViewer(fileProps: Record<string, unknown> = {}) {
       setup() {
         const manager = useFloatingWindows();
         void manager.open('file-viewer:test.ts', {
-          component: TestContent,
+          component: FloatingWindowTestContent,
           props: {
             fileContent: 'content',
             fileSizeBytes: 7,
@@ -41,6 +45,7 @@ async function mountFileViewer(fileProps: Record<string, unknown> = {}) {
       },
     }),
   );
+  registerFloatingWindowApp(app, target);
   app.use(
     createI18n({
       legacy: false,
@@ -59,16 +64,12 @@ async function mountFileViewer(fileProps: Record<string, unknown> = {}) {
     }),
   );
   app.mount(target);
-  mountedApps.push(() => {
-    app.unmount();
-    target.remove();
-  });
   await nextTick();
   return { target, onOpenLocal };
 }
 
 afterEach(() => {
-  while (mountedApps.length > 0) mountedApps.pop()?.();
+  cleanupFloatingWindowApps();
   useSettings().localApplicationPath.value = '';
   useSettings().editInVis.value = false;
   Reflect.deleteProperty(window, 'electronAPI');

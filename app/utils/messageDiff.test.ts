@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import type { MessageDiffEntry } from '../types/message';
 import { hasCompleteBeforeAfter, toMessageDiffViewerEntry } from './messageDiff';
-import { reconstructSourcesFromDiff } from './unifiedDiff';
 
 describe('messageDiff viewer mapping', () => {
   it('prefers local before/after diff generation when both sides exist', () => {
@@ -53,31 +52,27 @@ describe('messageDiff viewer mapping', () => {
     });
   });
 
-  it('reconstructSourcesFromDiff preserves line positions for mixed hunks', () => {
-    expect(reconstructSourcesFromDiff('@@ -2,3 +2,4 @@\n keep\n-old\n+new\n stay\n+tail')).toEqual({
-      before: '\nkeep\nold\nstay',
-      after: '\nkeep\nnew\nstay\ntail',
-    });
-  });
+  it('maps an Index-style patch through the viewer entry point', () => {
+    const diff: MessageDiffEntry = {
+      file: 'scripts/electron-start.mjs',
+      diff: [
+        'Index: scripts/electron-start.mjs',
+        '============================================================',
+        '--- scripts/electron-start.mjs',
+        '+++ scripts/electron-start.mjs',
+        '@@ -1,2 +1,3 @@',
+        " import { spawn } from 'node:child_process';",
+        " import http from 'node:http';",
+        "+import net from 'node:net';",
+      ].join('\n'),
+    };
 
-  it('reconstructSourcesFromDiff ignores diff metadata headers', () => {
-    expect(
-      reconstructSourcesFromDiff(
-        [
-          'Index: scripts/electron-start.mjs',
-          '============================================================',
-          '--- scripts/electron-start.mjs',
-          '+++ scripts/electron-start.mjs',
-          '@@ -1,2 +1,3 @@',
-          " import { spawn } from 'node:child_process';",
-          " import http from 'node:http';",
-          "+import net from 'node:net';",
-        ].join('\n'),
-      ),
-    ).toEqual({
+    expect(toMessageDiffViewerEntry(diff)).toEqual({
+      file: 'scripts/electron-start.mjs',
       before: "import { spawn } from 'node:child_process';\nimport http from 'node:http';",
       after:
         "import { spawn } from 'node:child_process';\nimport http from 'node:http';\nimport net from 'node:net';",
+      patch: undefined,
     });
   });
 });

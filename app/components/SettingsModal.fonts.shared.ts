@@ -1,5 +1,6 @@
 import { createApp, nextTick } from 'vue';
 import { afterEach, beforeEach, expect, vi } from 'vitest';
+import en from '../locales/en';
 
 const mountedApps: Array<() => void> = [];
 
@@ -45,7 +46,11 @@ export function pageRows(host: HTMLElement) {
 }
 
 export async function openFontsPage(host: HTMLElement) {
-  (pageRows(host)[9] as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  const control = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(
+    (button) => button.getAttribute('aria-label') === en.settings.fontSettings.label,
+  );
+  expect(control).toBeDefined();
+  control!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await nextTick();
   const rows = pageRows(host);
   expect(rows).toHaveLength(2);
@@ -61,26 +66,4 @@ export function sections(row: Element) {
 export async function click(el: Element) {
   (el as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true }));
   await nextTick();
-}
-
-/**
- * Canonical serialization of a rendered row: tag names, attributes (sorted,
- * scope ids excluded), and trimmed text — insensitive to attribute order and
- * Vue scope-id churn, sensitive to any structural or content change.
- */
-export function canonical(node: Node): string {
-  if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? '').trim();
-  if (node.nodeType !== Node.ELEMENT_NODE) return '';
-  const el = node as Element;
-  const attrs = Array.from(el.attributes)
-    .filter((attr) => !attr.name.startsWith('data-v-'))
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((attr) => `${attr.name}="${attr.value}"`)
-    .join(' ');
-  const children = Array.from(el.childNodes)
-    .map(canonical)
-    .filter((part) => part.length > 0);
-  const open =
-    attrs.length > 0 ? `<${el.tagName.toLowerCase()} ${attrs}>` : `<${el.tagName.toLowerCase()}>`;
-  return `${open}${children.join('')}</${el.tagName.toLowerCase()}>`;
 }

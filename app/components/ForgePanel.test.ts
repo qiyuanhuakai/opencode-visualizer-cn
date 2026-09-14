@@ -2,7 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, nextTick } from 'vue';
 import { createI18n } from 'vue-i18n';
 
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
+
 import ForgePanel from './ForgePanel.vue';
+
+const mountedApps = new Set<ReturnType<typeof createApp>>();
+
+function unmount(app: ReturnType<typeof createApp>) {
+  if (!mountedApps.delete(app)) return;
+  app.unmount();
+}
 
 function createMessages() {
   return {
@@ -158,6 +167,7 @@ function mountForgePanelWithOptions(
       });
     },
   }));
+  mountedApps.add(app);
   app.use(i18n);
   app.mount(root);
   return { app, root };
@@ -165,6 +175,7 @@ function mountForgePanelWithOptions(
 
 describe('ForgePanel', () => {
   afterEach(() => {
+    mountedApps.forEach(unmount);
     document.body.innerHTML = '';
     vi.restoreAllMocks();
   });
@@ -179,7 +190,7 @@ describe('ForgePanel', () => {
 
     // Then: xterm can attach to the exact host used by App.vue terminal plumbing.
     expect(host).toBeInstanceOf(HTMLElement);
-    app.unmount();
+    unmount(app);
   });
 
   it('sends typed prompts through Forge zsh colon syntax', async () => {
@@ -201,7 +212,7 @@ describe('ForgePanel', () => {
     // Then: Forge receives a zsh ':' command and the input clears.
     expect(onSendLine).toHaveBeenCalledWith(': summarize this repository\n');
     expect(input.value).toBe('');
-    app.unmount();
+    unmount(app);
   });
 
   it('keeps the prompt at the bottom and prefixes prompts with the selected Forge function', async () => {
@@ -227,7 +238,7 @@ describe('ForgePanel', () => {
     // Then: the prompt follows the terminal body and sends the selected colon command.
     expect(body.compareDocumentPosition(form) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
     expect(onSendLine).toHaveBeenCalledWith(':sage inspect current repo\n');
-    app.unmount();
+    unmount(app);
   });
 
   it('does not duplicate a leading Forge colon command', async () => {
@@ -245,7 +256,7 @@ describe('ForgePanel', () => {
 
     // Then: the exact command is sent once.
     expect(onSendLine).toHaveBeenCalledWith(':sage inspect the config\n');
-    app.unmount();
+    unmount(app);
   });
 
   it('keeps Forge commands in dedicated menus and the bottom function selector without duplicate toolbar shortcuts', async () => {
@@ -264,7 +275,7 @@ describe('ForgePanel', () => {
     expect(conversationClone).toBeInstanceOf(HTMLButtonElement);
     expect(root.querySelector('.forge-shortcuts')).toBeNull();
     expect(root.querySelector('button[data-forge-action="sage"]')).toBeNull();
-    app.unmount();
+    unmount(app);
   });
 
   it('sends command menu actions for config, temporary settings, status, workspace, and conversation groups', async () => {
@@ -312,7 +323,7 @@ describe('ForgePanel', () => {
     expect(onSendLine).toHaveBeenCalledWith(':retry\n');
     expect(document.activeElement).toBe(terminalInput);
     expect(root.querySelectorAll('.forge-command-dropdown.is-right-aligned')).toHaveLength(2);
-    app.unmount();
+    unmount(app);
   });
 
   it('renders structured Forge reads as sidebar metadata and preview panes', async () => {
@@ -345,7 +356,7 @@ describe('ForgePanel', () => {
     expect(preview?.textContent).toContain('Last assistant markdown preview');
     expect(dump?.textContent).toContain('{"id":"conv-1"}');
     expect(terminalHost).toBeInstanceOf(HTMLElement);
-    app.unmount();
+    unmount(app);
   });
 
   it('requests structured Forge list, show, dump, and info reads through auxiliary callbacks', async () => {
@@ -375,7 +386,7 @@ describe('ForgePanel', () => {
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(onSelectConversation).toHaveBeenCalledWith('conv-1');
     expect(onDumpConversation).toHaveBeenCalledWith('conv-1');
-    app.unmount();
+    unmount(app);
   });
 
   it('lets the auxiliary sidebar hide and reopen through drag gestures while preserving conversation commands', async () => {
@@ -427,6 +438,6 @@ describe('ForgePanel', () => {
     expect(root.querySelector('[data-forge-action="show-sidebar"]')).toBeNull();
     expect(root.querySelector('.forge-auxiliary-panel')).toBeInstanceOf(HTMLElement);
     expect(root.querySelector('[data-shell-id="pty-forge"]')).toBeInstanceOf(HTMLElement);
-    app.unmount();
+    unmount(app);
   });
 });

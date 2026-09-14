@@ -1,24 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useBackendMessageSend } from './useBackendMessageSend';
-import { createBaseParams, createCodexApi } from './useBackendMessageSend.test-helpers';
-
-function deferred<T>() {
-  let resolve: (value: T | PromiseLike<T>) => void = () => undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
-
-function imageAttachment() {
-  return {
-    id: 'image',
-    filename: 'image.png',
-    mime: 'image/png',
-    dataUrl: 'data:image/png;base64,AA==',
-  };
-}
+import {
+  createBaseParams,
+  createCodexApi,
+  deferred,
+  imageAttachment,
+} from './useBackendMessageSend.test-helpers';
 
 describe('useBackendMessageSend behavior', () => {
   it('orders sending status before backend dispatch', async () => {

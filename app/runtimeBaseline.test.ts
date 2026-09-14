@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -8,6 +9,35 @@ const workspaceYaml = readFileSync(path.join(root, 'pnpm-workspace.yaml'), 'utf8
 const bridgeBuildScript = readFileSync(path.join(root, 'scripts/build-vis-bridge.mjs'), 'utf8');
 const buildWorkflow = readFileSync(path.join(root, '.github/workflows/build-electron.yml'), 'utf8');
 const deployWorkflow = readFileSync(path.join(root, '.github/workflows/deploy.yml'), 'utf8');
+const requireFromRepo = createRequire(path.join(root, 'runtime-baseline-test.cjs'));
+const yamlModule: unknown = requireFromRepo('./node_modules/.pnpm/node_modules/js-yaml');
+
+interface WorkflowStep {
+  readonly uses?: string;
+  readonly with?: Readonly<Record<string, unknown>>;
+}
+
+interface WorkflowJob {
+  readonly steps?: readonly WorkflowStep[];
+}
+
+interface WorkflowDocument {
+  readonly jobs?: Readonly<Record<string, WorkflowJob>>;
+}
+
+function isYamlModule(value: unknown): value is { readonly load: (text: string) => unknown } {
+  return typeof value === 'object' && value !== null && 'load' in value;
+}
+
+if (!isYamlModule(yamlModule)) throw new Error('js-yaml loader is unavailable');
+const yaml = yamlModule;
+
+function setupNodeSteps(source: string): readonly WorkflowStep[] {
+  const parsed = yaml.load(source) as WorkflowDocument;
+  return Object.values(parsed.jobs ?? {}).flatMap(({ steps }) =>
+    (steps ?? []).filter(({ uses }) => uses?.startsWith('actions/setup-node@')),
+  );
+}
 
 describe('runtime-baseline', () => {
   it('locks the package manager to the approved pnpm 11 line', () => {
@@ -24,13 +54,16 @@ describe('runtime-baseline', () => {
   });
 
   it('runs every CI workflow step on node 24', () => {
-    // Every setup-node step (one per job: validate, five electron lanes, bridge)
-    // must pin node 24 — count-agnostic so adding lanes cannot silently downgrade.
-    expect(buildWorkflow.match(/uses: actions\/setup-node@v4/g)).toHaveLength(7);
-    expect(buildWorkflow.match(/node-version: '24'/g)).toHaveLength(7);
-    expect(deployWorkflow.match(/node-version: '24'/g)).toHaveLength(1);
-    expect(buildWorkflow).not.toContain("node-version: '22'");
-    expect(deployWorkflow).not.toContain("node-version: '22'");
+    for (const [name, source] of [
+      ['build-electron', buildWorkflow],
+      ['deploy', deployWorkflow],
+    ] as const) {
+      const steps = setupNodeSteps(source);
+      expect(steps.length, `${name} must contain setup-node steps`).toBeGreaterThan(0);
+      for (const step of steps) {
+        expect(step.with?.['node-version'], `${name} setup-node version`).toBe('24');
+      }
+    }
   });
 
   it('targets the SEA bundle at node 24', () => {

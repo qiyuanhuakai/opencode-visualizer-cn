@@ -1,31 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createApp, defineComponent, nextTick } from 'vue';
-import { createI18n } from 'vue-i18n';
-import { useFloatingWindows } from './useFloatingWindows';
-
-function mountFloatingWindows() {
-  let api: ReturnType<typeof useFloatingWindows> | undefined;
-  const root = document.createElement('div');
-  document.body.appendChild(root);
-  const app = createApp(
-    defineComponent({
-      setup() {
-        api = useFloatingWindows();
-        return () => null;
-      },
-    }),
-  );
-  app.use(createI18n({ legacy: false, locale: 'en', messages: { en: {} } }));
-  app.mount(root);
-  if (!api) throw new Error('Floating window composable did not mount.');
-  return {
-    api,
-    unmount() {
-      app.unmount();
-      root.remove();
-    },
-  };
-}
+import { nextTick } from 'vue';
+import {
+  cleanupFloatingWindows,
+  createExtent,
+  mountFloatingWindows,
+} from './useFloatingWindows.test-helpers';
 
 function mountWindowBody(key: string): HTMLElement {
   const host = document.createElement('div');
@@ -40,13 +19,15 @@ function mountWindowBody(key: string): HTMLElement {
 
 describe('useFloatingWindows explicit activation', () => {
   afterEach(() => {
+    cleanupFloatingWindows();
     document.body.innerHTML = '';
   });
 
   it('restores a minimized window and brings it forward on explicit activation', async () => {
     // Given: a minimized manual panel sits behind a later window
     const mounted = mountFloatingWindows();
-    mounted.api.setExtent(1280, 720);
+    const extent = createExtent(1280, 720);
+    mounted.api.setExtent(extent.width, extent.height);
     await mounted.api.open('codex-panel', {
       title: 'Panel',
       closable: true,

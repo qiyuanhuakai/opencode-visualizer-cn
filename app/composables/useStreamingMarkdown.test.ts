@@ -1,6 +1,6 @@
 import MarkdownIt from 'markdown-it';
 import { nextTick, ref, type Ref } from 'vue';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { clearMarkdownSegmentCache } from '../utils/markdownSegmentCache';
 import { useStreamingMarkdown } from './useStreamingMarkdown';
@@ -13,6 +13,20 @@ type Harness = {
   readonly container: Ref<HTMLElement | null>;
   readonly dispose: () => void;
 };
+
+const disposerCallbacks = new Set<() => void>();
+
+function trackDispose(dispose: () => void): () => void {
+  let active = true;
+  const trackedDispose = () => {
+    if (!active) return;
+    active = false;
+    disposerCallbacks.delete(trackedDispose);
+    dispose();
+  };
+  disposerCallbacks.add(trackedDispose);
+  return trackedDispose;
+}
 
 async function settle(): Promise<void> {
   for (let index = 0; index < 8; index += 1) {
@@ -45,12 +59,19 @@ function createHarness(
     containerRef: container,
   });
   enabled.value = true;
-  return { text, theme, context, enabled, container, dispose };
+  return { text, theme, context, enabled, container, dispose: trackDispose(dispose) };
 }
 
 describe('useStreamingMarkdown', () => {
   beforeEach(() => {
     clearMarkdownSegmentCache();
+  });
+
+  afterEach(() => {
+    [...disposerCallbacks].forEach(dispose => dispose());
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('re-renders with fresh output when the render context changes mid-stream', async () => {
@@ -85,7 +106,7 @@ describe('useStreamingMarkdown', () => {
     const context = ref('');
     const enabled = ref(true);
     const container = ref<HTMLElement | null>(document.createElement('div'));
-    const { dispose } = useStreamingMarkdown({
+    const { dispose: untrackedDispose } = useStreamingMarkdown({
       text,
       theme,
       renderContext: context,
@@ -94,6 +115,7 @@ describe('useStreamingMarkdown', () => {
       containerRef: container,
       onApplied,
     });
+    const dispose = trackDispose(untrackedDispose);
 
     await settle();
     const callsAfterFirst = onApplied.mock.calls.length;
@@ -113,7 +135,7 @@ describe('useStreamingMarkdown', () => {
     const context = ref('');
     const enabled = ref(true);
     const container = ref<HTMLElement | null>(document.createElement('div'));
-    const { dispose } = useStreamingMarkdown({
+    const { dispose: untrackedDispose } = useStreamingMarkdown({
       text,
       theme,
       renderContext: context,
@@ -122,6 +144,7 @@ describe('useStreamingMarkdown', () => {
       containerRef: container,
       onApplied,
     });
+    const dispose = trackDispose(untrackedDispose);
 
     await settle();
     dispose();
