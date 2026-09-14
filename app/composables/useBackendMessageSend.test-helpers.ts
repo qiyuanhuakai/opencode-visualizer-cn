@@ -53,6 +53,7 @@ export function createBaseParams() {
     runDebugCommand: (args: string) => ({ ok: true, message: args }),
     openShellFromInput: vi.fn().mockResolvedValue(true),
     clearComposerDraftForCurrentContext: vi.fn(),
+    persistComposerDraftForCurrentContext: vi.fn(),
     enableFollow: vi.fn(),
     setSendStatusKey: vi.fn(),
     setSendStatusText: vi.fn(),

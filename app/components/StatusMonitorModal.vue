@@ -14,12 +14,15 @@ import type { useCodexApi } from '../composables/useCodexApi';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 import type { MagicContextWorker } from '../utils/pluginCompatibility';
+import CodexAccountTokenUsage from './codex/CodexAccountTokenUsage.vue';
 import AcpManagerPanel from './AcpManagerPanel.vue';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
 
 const props = defineProps<{
   open: boolean;
+  initialTab?: TabId;
+  initialUsageView?: 'daily' | 'weekly' | 'cumulative';
   sessionId?: string;
   codexApi: CodexApi;
   preload: boolean;
@@ -44,7 +47,24 @@ function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T
 }
 
 type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp' | 'codex';
-const activeTab = ref<TabId>('server');
+const activeTab = ref<TabId>(props.initialTab ?? 'server');
+const tablistRef = ref<HTMLDivElement | null>(null);
+function revealActiveTab() {
+  tablistRef.value?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+}
+watch(tablistRef, (tablist, _previous, onCleanup) => {
+  if (!tablist) return;
+  const observer = new ResizeObserver(revealActiveTab);
+  observer.observe(tablist);
+  onCleanup(() => observer.disconnect());
+});
+watch([() => props.open, activeTab], async ([open]) => {
+  if (!open) return;
+  await nextTick();
+  revealActiveTab();
+}, { immediate: true, flush: 'post' });
+const accountUsageRef = ref<InstanceType<typeof CodexAccountTokenUsage> | null>(null);
+watch(() => props.initialTab, (tab) => { if (props.open && tab) activeTab.value = tab; });
 const acpManagerRef = ref<{ refresh: () => Promise<void> } | null>(null);
 
 const serverHealth = ref<{ healthy: boolean; version: string } | null>(null);
@@ -141,6 +161,7 @@ function unbindEvents() {
 
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
+    if (props.initialTab) activeTab.value = props.initialTab;
     if (!showCodexInStatusMonitor.value && activeTab.value === 'codex') {
       activeTab.value = 'server';
     }
@@ -322,6 +343,7 @@ function finishRefresh(requestId: number, completedRefresh: Promise<void>) {
 }
 
 async function handleRefresh() {
+  if (activeTab.value === 'token') void accountUsageRef.value?.refresh();
   if (activeTab.value === 'acp') {
     await acpManagerRef.value?.refresh();
     return;
@@ -716,7 +738,7 @@ function handleTabKeydown(event: KeyboardEvent, index: number) {
   event.preventDefault();
   activeTab.value = tabs.value[nextIndex]?.id ?? activeTab.value;
   void nextTick(() => {
-    popoverRef.value?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus();
+    tablistRef.value?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[nextIndex]?.focus();
   });
 }
 
@@ -788,7 +810,7 @@ function formatPercent(value: number, total: number): string {
       </button>
     </header>
 
-    <div class="status-monitor-tabs" role="tablist" :aria-label="$t('statusMonitor.title')">
+    <div ref="tablistRef" class="status-monitor-tabs" role="tablist" :aria-label="$t('statusMonitor.title')">
       <button
         v-for="(tab, index) in tabs"
         :key="tab.id"
@@ -1096,6 +1118,7 @@ function formatPercent(value: number, total: number): string {
               <span class="token-value">{{ tokenAssistantMessages }}</span>
             </div>
           </div>
+          <CodexAccountTokenUsage v-if="activeBackendKind === 'codex'" ref="accountUsageRef" :api="codexApi" :initial-view="initialUsageView" />
         </div>
 
         <div v-if="activeTab === 'acp'" class="status-monitor-content">

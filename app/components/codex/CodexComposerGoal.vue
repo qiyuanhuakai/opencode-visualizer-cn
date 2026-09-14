@@ -46,11 +46,16 @@ const summary = computed(() => {
   }
   return loadError.value || copy.value.loading;
 });
-watch([() => props.api.activeThreadId.value, () => props.api.connected.value], async ([threadId, connected], _, onCleanup) => {
+watch([
+  () => props.api.activeThreadId.value,
+  () => props.api.connected.value,
+  () => props.api.threadGoalThreadId.value === props.api.activeThreadId.value,
+], async ([threadId, connected, goalCurrent], previous, onCleanup) => {
   let current = true;
   onCleanup(() => { current = false; });
   loadError.value = '';
   if (!connected || !threadId) return;
+  if (goalCurrent && previous[0] === threadId && previous[1] === connected) return;
   try {
     await props.api.refreshThreadGoal(threadId);
   } catch (error) {

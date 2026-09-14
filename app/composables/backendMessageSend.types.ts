@@ -8,6 +8,7 @@ import type {
 } from '../backends/codex/codexAdapter';
 import type { ParsedSkill } from '../utils/parseSkill';
 import type { TextTransformer } from '../utils/textTransformers';
+import type { ParsedCodexSlashCommand } from '../utils/codexSlashCommands';
 
 export type ModelOption = {
   readonly id: string;
@@ -84,6 +85,9 @@ export type CodexApiLike = {
 };
 
 export type BackendMessageSendParams = {
+  readonly executeCodexSlashCommand?: (
+    command: ParsedCodexSlashCommand,
+  ) => Promise<'handled' | 'not-handled'>;
   readonly activeBackendKind: Ref<BackendKind>;
   readonly codexProjectId: string;
   readonly selectedSessionId: Ref<string>;
@@ -118,6 +122,7 @@ export type BackendMessageSendParams = {
   readonly runDebugCommand: (args: string) => { readonly ok: boolean; readonly message: string };
   readonly openShellFromInput: (input: string) => Promise<boolean>;
   readonly clearComposerDraftForCurrentContext: () => void;
+  readonly persistComposerDraftForCurrentContext: () => void;
   readonly enableFollow: () => void;
   readonly setSendStatusKey: (key: string, params?: Record<string, unknown>) => void;
   readonly setSendStatusText: (text: string) => void;

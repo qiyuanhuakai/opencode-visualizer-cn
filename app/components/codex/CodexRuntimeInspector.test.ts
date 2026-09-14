@@ -132,8 +132,8 @@ describe('CodexRuntimeInspector', () => {
     const { api, target } = mountInspector();
     await nextTick();
 
-    expect(api.refreshAccountUsage).toHaveBeenCalledOnce();
-    expect(target.textContent).toContain('1,200');
+    expect(api.refreshAccountUsage).not.toHaveBeenCalled();
+    expect(target.textContent).not.toContain('1,200');
     expect(target.textContent).toContain('Default profile');
 
     const objective = target.querySelector<HTMLTextAreaElement>('textarea[name="objective"]');

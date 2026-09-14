@@ -78,7 +78,7 @@ function clickTab(root: HTMLElement, label: string) {
   button?.click();
 }
 
-function mountStatusMonitor() {
+function mountStatusMonitor(initialTab?: 'token' | 'skills') {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const open = ref(false);
@@ -88,6 +88,7 @@ function mountStatusMonitor() {
         return () =>
           h(StatusMonitorModal, {
             open: open.value,
+            initialTab,
             preload: false,
             activeBackendKind: 'codex',
             sessionId: 'thread-1',
@@ -108,6 +109,8 @@ describe('StatusMonitorModal Codex status isolation', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     document.body.innerHTML = '';
   });
 
@@ -120,6 +123,52 @@ describe('StatusMonitorModal Codex status isolation', () => {
     await vi.waitFor(() => expect(root.textContent).toContain('321'));
     expect(root.textContent).not.toContain('Loading...');
     app.unmount();
+  });
+
+  it('opens the requested Token tab without creating or selecting a session', async () => {
+    const { app, root } = mountStatusMonitor('token');
+    await nextTick();
+    expect(root.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Token');
+    expect(root.textContent).toContain('Codex account token activity');
+    expect(root.textContent).toContain('Connect Codex');
+    app.unmount();
+  });
+
+  it('scrolls only the active tab into view when opened and when tabs change', async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => undefined);
+    const { app, root } = mountStatusMonitor('token');
+    await nextTick();
+    await nextTick();
+    expect(scroll).toHaveBeenLastCalledWith({ inline: 'nearest', block: 'nearest' });
+    expect(scroll.mock.contexts.at(-1)).toBe(root.querySelector('#status-monitor-tab-token'));
+    clickTab(root, 'Skills');
+    await nextTick();
+    await nextTick();
+    expect(scroll.mock.contexts.at(-1)).toBe(root.querySelector('#status-monitor-tab-skills'));
+    app.unmount();
+  });
+
+  it('keeps the selected tab visible on container resize and disconnects its observer', async () => {
+    let resize = () => undefined;
+    const disconnect = vi.fn();
+    const observe = vi.fn();
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { resize = () => { callback(); return undefined; }; }
+      observe = observe;
+      unobserve = vi.fn();
+      disconnect = disconnect;
+    });
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => undefined);
+    const { app, root } = mountStatusMonitor('token');
+    await nextTick();
+    await nextTick();
+    expect(observe).toHaveBeenCalledWith(root.querySelector('[role="tablist"]'));
+    scroll.mockClear();
+    resize();
+    expect(scroll).toHaveBeenCalledOnce();
+    expect(scroll.mock.contexts[0]).toBe(root.querySelector('#status-monitor-tab-token'));
+    app.unmount();
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 
   it('implements complete keyboard tab semantics', async () => {

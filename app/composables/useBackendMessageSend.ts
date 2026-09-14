@@ -4,6 +4,8 @@ import { runCodexSend, type CodexExecutionResult } from './backendMessageSend.co
 import { runOpenCodeSend, type OpenCodeExecutionResult } from './backendMessageSend.openCode';
 import { prepareSendPreflight } from './backendMessageSend.preflight';
 import { runLocalSlashCommand } from './backendMessageSend.local';
+import { createCodexSlashDispatcher } from './backendMessageSend.slash';
+import { parseLeadingSlashCommand } from '../utils/codexSlashCommands';
 import type {
   BackendMessageSendParams,
   RequestGuard,
@@ -11,6 +13,7 @@ import type {
 } from './backendMessageSend.types';
 
 export function useBackendMessageSend(params: BackendMessageSendParams) {
+  const dispatchCodexSlash = createCodexSlashDispatcher(params);
   const requestFence = createBackendRequestFence(() => params.activeBackendKind.value);
   let sendingOwner: object | null = null;
   watch(params.activeBackendKind, () => requestFence.invalidate(), { flush: 'sync' });
@@ -81,6 +84,12 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
   }
 
   async function sendMessage() {
+    if (
+      params.activeBackendKind.value === 'codex' &&
+      parseLeadingSlashCommand(params.messageInput.value) &&
+      (await dispatchCodexSlash())
+    )
+      return;
     if (!params.ensureConnectionReady(params.translate('app.actions.sending'))) return;
     if (!params.canSend.value) return;
     const preflight = prepareSendPreflight(params);
