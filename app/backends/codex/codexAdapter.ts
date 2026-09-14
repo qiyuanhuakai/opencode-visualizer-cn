@@ -2213,7 +2213,7 @@ export class CodexAdapter implements BackendAdapter {
             'core.quotePath=false',
             'check-ignore',
             '--',
-            ...result.entries.map((entry) => entry.fileName),
+            ...result.entries.map((entry) => `./${entry.fileName}`),
           ],
           cwd: absolutePath,
         });
@@ -2226,7 +2226,7 @@ export class CodexAdapter implements BackendAdapter {
       name: entry.fileName,
       path: relativePrefix ? `${relativePrefix}/${entry.fileName}` : entry.fileName,
       type: entry.isDirectory ? 'directory' : 'file',
-      ...(ignoredPaths.has(entry.fileName) ? { ignored: true } : {}),
+      ...(ignoredPaths.has(`./${entry.fileName}`) ? { ignored: true } : {}),
     }));
   }
 

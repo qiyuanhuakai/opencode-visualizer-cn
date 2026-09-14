@@ -49,6 +49,7 @@ it('marks ignored files and directories, including nested entries and unusual na
     '中文.log',
     'line\nquote"\\.log',
     '-option.log',
+    ':(glob)note.log',
   ]) {
     await writeFile(path.join(root, name), 'test');
   }
@@ -61,7 +62,7 @@ it('marks ignored files and directories, including nested entries and unusual na
       .filter((entry) => 'ignored' in entry && entry.ignored)
       .map((entry) => entry.name)
       .sort(),
-  ).toEqual(['cache', '中文.log', 'line\nquote"\\.log', '-option.log'].sort());
+  ).toEqual(['cache', '中文.log', 'line\nquote"\\.log', '-option.log', ':(glob)note.log'].sort());
   expect(await adapter.listFiles({ directory: root, path: 'cache' })).toEqual([
     { name: 'nested.txt', path: 'cache/nested.txt', type: 'file', ignored: true },
   ]);

@@ -143,7 +143,7 @@ describe('CodexAdapter', () => {
     expect(JSON.parse(socket.sent[3] ?? '{}')).toMatchObject({
       method: 'command/exec',
       params: {
-        command: ['git', '-c', 'core.quotePath=false', 'check-ignore', '--', 'index.ts'],
+        command: ['git', '-c', 'core.quotePath=false', 'check-ignore', '--', './index.ts'],
         cwd: '/subdir',
       },
     });
