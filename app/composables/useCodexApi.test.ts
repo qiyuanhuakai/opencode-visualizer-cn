@@ -134,6 +134,53 @@ function createAdapterMock() {
 }
 
 describe('useCodexApi', () => {
+  it.each([
+    { provider: 'openai', expected: 'astra-choice' },
+    { provider: 'proxy', expected: 'proxy/gpt-6-astra' },
+  ])('initializes models from configured provider $provider', async ({ provider, expected }) => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    mock.adapter.readConfig = vi.fn().mockResolvedValue({
+      config: { model: 'gpt-6-astra', model_provider: provider },
+    });
+    mock.adapter.listModels = vi.fn().mockResolvedValue({ data: [
+      { id: 'codex-auto-review', model: 'codex-auto-review', isDefault: true },
+      { id: 'astra-choice', model: 'gpt-6-astra' },
+    ], nextCursor: null });
+    api.config.value = null;
+    api.selectModel('');
+
+    await api.refreshModels();
+
+    expect(api.selectedModel.value).toBe(expected);
+    api.disconnect();
+  });
+
+  it('retains a model selected while initial model configuration is loading', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    const pendingConfig = deferred<{ config: Record<string, unknown> }>();
+    mock.adapter.readConfig = vi.fn(() => pendingConfig.promise);
+    mock.adapter.listModels = vi.fn().mockResolvedValue({
+      data: [{ id: 'catalog-default', model: 'catalog-default', isDefault: true }], nextCursor: null,
+    });
+    api.config.value = null;
+    api.selectModel('');
+
+    const refresh = api.refreshModels();
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    api.selectModel('user-choice');
+    pendingConfig.resolve({ config: { model: 'catalog-default' } });
+    await refresh;
+
+    expect(api.selectedModel.value).toBe('user-choice');
+    api.disconnect();
+  });
+
   it('does not unsubscribe a newer child subscription when an older resume finishes late', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({adapterFactory:()=>mock.adapter});
@@ -174,6 +221,101 @@ describe('useCodexApi', () => {
     expect(api.realtimeHistoryQueue.value.every(entry => entry.info.sessionID === parent)).toBe(true);
     api.disconnect();
   });
+  it('subscribes a child before its history is materialized', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    mock.adapter.readThread = vi.fn()
+      .mockRejectedValueOnce(new CodexJsonRpcError(-32600,
+        'thread child is not materialized yet; includeTurns is unavailable before first user message'))
+      .mockResolvedValue({ thread: { id: 'child', turns: [] } });
+    mock.adapter.resumeThread = vi.fn().mockResolvedValue({ thread: { id: 'child', turns: [] } });
+
+    mock.emit({ method: 'item/completed', params: { threadId: parent, turnId: 'parent-turn',
+      item: { id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' } } });
+
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledWith({ threadId: 'child' }));
+    expect(mock.adapter.readThread).toHaveBeenCalledWith({ threadId: 'child', includeTurns: false });
+    mock.emit({ method: 'item/agentMessage/delta', params: {
+      threadId: 'child', turnId: 'child-turn', itemId: 'answer', delta: 'Working',
+    } });
+    expect(api.realtimeSubagentPart.value).toMatchObject({ parentThreadId: parent,
+      info: { sessionID: 'child' }, part: { text: 'Working' } });
+    api.disconnect();
+  });
+
+  it('catches up child commentary when resume returns metadata without turns', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'child', turns: [
+      { id: 'child-turn', status: 'completed', items: [
+        { id: 'answer', type: 'agentMessage', phase: 'commentary', text: 'Finished checking' },
+      ] },
+    ] } });
+    mock.adapter.resumeThread = vi.fn().mockResolvedValue({
+      thread: { id: 'child', model: 'resumed-model', turns: [] },
+    });
+
+    mock.emit({ method: 'item/completed', params: { threadId: parent, turnId: 'parent-turn',
+      item: { id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' } } });
+
+    await vi.waitFor(() => expect(api.realtimeSubagentPart.value).toMatchObject({
+      parentThreadId: parent, info: { sessionID: 'child', modelID: 'resumed-model' },
+      part: { text: 'Finished checking' },
+    }));
+    api.disconnect();
+  });
+
+  it('keeps historical child commentary quiet when selecting a parent', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    mock.adapter.readThread = vi.fn(async ({ threadId }) => ({ thread: { id: threadId,
+      status: { type: 'active' }, turns: [{ id: `${threadId}-turn`, status: 'completed', items:
+        threadId === 'child'
+          ? [{ id: 'answer', type: 'agentMessage', phase: 'commentary', text: 'Historical answer' }]
+          : [{ id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' }],
+      }],
+    } }));
+    mock.adapter.resumeThread = vi.fn(async ({ threadId }) => ({ thread: { id: threadId, turns: [] } }));
+
+    await api.selectThread('historical-parent');
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledWith({ threadId: 'child' }));
+    await Promise.resolve();
+
+    expect(api.realtimeSubagentPart.value).toBeNull();
+    api.disconnect();
+  });
+
+  it('retries a failed child resume when later activity rediscovers it', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const parent = api.activeThreadId.value;
+    mock.adapter.readThread = vi.fn().mockResolvedValue({ thread: { id: 'child', turns: [] } });
+    mock.adapter.resumeThread = vi.fn()
+      .mockRejectedValueOnce(new CodexJsonRpcError(-32603, 'Child temporarily unavailable'))
+      .mockResolvedValue({ thread: { id: 'child', turns: [] } });
+    const spawn = () => mock.emit({ method: 'item/completed', params: {
+      threadId: parent, turnId: 'parent-turn',
+      item: { id: 'spawn', type: 'subAgentActivity', agentThreadId: 'child' },
+    } });
+    spawn();
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledTimes(1));
+    await Promise.resolve();
+    spawn();
+
+    await vi.waitFor(() => expect(mock.adapter.resumeThread).toHaveBeenCalledTimes(2));
+    mock.emit({ method: 'item/agentMessage/delta', params: {
+      threadId: 'child', turnId: 'child-turn', itemId: 'answer', delta: 'Recovered',
+    } });
+    expect(api.realtimeSubagentPart.value?.part).toMatchObject({ text: 'Recovered' });
+    api.disconnect();
+  });
+
   it('bridges subAgentActivity notifications and restores reviewer history after hydration', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
@@ -484,6 +626,60 @@ describe('useCodexApi', () => {
     expect(parent('answer-b')).toMatchObject({ parentID: users[1]?.info.id });
     expect(users.map(entry => entry.info.variant)).toEqual(['high', 'low']);
     api.disconnect();
+  });
+
+  it.each(['before', 'after'] as const)('retains a plan mode when the server echo arrives %s acknowledgement', async (echoTiming) => {
+    const mock = createAdapterMock();
+    const reply = deferred<CodexPromptResult>();
+    mock.adapter.sendPrompt = vi.fn(() => reply.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    const sending = api.sendPrompt('Explain', { collaborationMode: { mode: 'plan', settings: { model: 'gpt-6-astra', developer_instructions: null } } });
+    const clientId = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    expect(api.realtimeHistoryQueue.value.find(entry => entry.info.role === 'user')?.info.agent).toBe('plan');
+    if (echoTiming === 'after') {
+      reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn_mode', status: 'inProgress' } });
+      await sending;
+    }
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_mode', item: { type: 'userMessage', id: 'u', clientId, content: [{ type: 'text', text: 'Explain' }] } } });
+    expect(api.realtimeHistoryQueue.value.filter(entry => entry.info.role === 'user').map(entry => entry.info.agent)).toEqual(['plan']);
+    mock.emit({ method: 'item/agentMessage/delta', params: { threadId: 'thr_existing', turnId: 'turn_mode', itemId: 'a', delta: 'Answer' } });
+    expect(api.realtimeStreamingPart.value?.info).toMatchObject({ agent: 'plan', mode: 'codex' });
+    if (echoTiming === 'before') {
+      reply.resolve({ threadId: 'thr_existing', turn: { id: 'turn_mode', status: 'inProgress' } });
+      await sending;
+    }
+    mock.emit({ method: 'item/completed', params: { threadId: 'thr_existing', turnId: 'turn_mode', item: { type: 'agentMessage', id: 'a', text: 'Answer' } } });
+    expect(api.realtimeHistoryQueue.value.map(entry => entry.info.agent)).toEqual(['plan', 'plan']);
+    api.disconnect();
+  });
+
+  it('restores plan and default prompts in a shared turn without relabelling unknown history', async () => {
+    const mock = createAdapterMock();
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.sendPrompt('Plan', { collaborationMode: { mode: 'plan', settings: { model: 'gpt-6-astra', developer_instructions: null } } });
+    const planClient = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    await api.sendPrompt('Implement');
+    const defaultClient = vi.mocked(mock.adapter.sendPrompt).mock.lastCall?.[0].clientUserMessageId;
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', name: 'Existing', turns: [
+      { id: 'turn_1', items: [
+        { type: 'userMessage', id: 'p', clientId: planClient, content: [{ type: 'text', text: 'Plan' }] },
+        { type: 'agentMessage', id: 'pa', text: 'Plan answer' },
+        { type: 'userMessage', id: 'd', clientId: defaultClient, content: [{ type: 'text', text: 'Implement' }] },
+        { type: 'agentMessage', id: 'da', text: 'Implementation answer' },
+      ] },
+      { id: 'unknown', items: [
+        { type: 'userMessage', id: 'u', content: [{ type: 'text', text: 'Legacy' }] },
+        { type: 'agentMessage', id: 'a', text: 'Legacy answer' },
+      ] },
+    ] } });
+    api.disconnect();
+    const restored = useCodexApi({ adapterFactory: () => mock.adapter });
+    await restored.connect();
+    await restored.selectThread('thr_existing');
+    expect(restored.canonicalHistory.value.map(entry => entry.info.agent)).toEqual(['plan', 'plan', 'default', 'default', 'codex', 'codex']);
+    restored.disconnect();
   });
 
   it('retains selected effort through the pending prompt and server echo', async () => {

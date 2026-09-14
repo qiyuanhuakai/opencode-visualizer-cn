@@ -1103,6 +1103,31 @@ describe('CodexAdapter', () => {
     ]);
   });
 
+  it.each([undefined, 'openai', 'codex'])('prefers the configured built-in model for provider %s', async (modelProvider) => {
+    // Given: the catalog default differs from the configured model.
+    MockWebSocket.instances = [];
+    const adapter = createCodexAdapter({ url: 'ws://localhost:4500', webSocketCtor: MockWebSocket });
+    const providers = adapter.listProviders();
+    const socket = MockWebSocket.instances[0];
+    if (!socket) throw new Error('Expected adapter socket');
+    socket.emitOpen();
+    await waitForSent(socket, 1);
+    socket.respond(1, {});
+    await waitForSent(socket, 3);
+    socket.respond(2, {
+      data: [
+        { id: 'codex-auto-review', model: 'codex-auto-review', isDefault: true },
+        { id: 'astra-choice', model: 'gpt-6-astra' },
+      ],
+      nextCursor: null,
+    });
+    await waitForSent(socket, 4);
+    // When: the resolved configuration selects Astra.
+    socket.respond(3, { config: { model: 'gpt-6-astra', model_provider: modelProvider } });
+    // Then: the UI receives the selectable catalog identifier for Astra.
+    expect((await providers).default).toEqual({ codex: 'astra-choice' });
+  });
+
   it('maps Codex models to provider options for the shared UI', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
@@ -1173,6 +1198,7 @@ describe('CodexAdapter', () => {
       ],
     });
 
+    expect(Object.entries((await providers).default)[0]).toEqual(['proxy', 'proxy-model']);
     await expect(providers).resolves.toEqual({
       all: [
         {

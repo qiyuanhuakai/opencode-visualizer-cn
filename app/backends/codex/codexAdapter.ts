@@ -2110,9 +2110,7 @@ export class CodexAdapter implements BackendAdapter {
       allModels[0];
     const providers = [provider];
     const connected = new Set([CODEX_PROJECT_ID]);
-    const defaults: Record<string, string> = defaultModel
-      ? { [CODEX_PROJECT_ID]: defaultModel.id }
-      : {};
+    const defaults: Record<string, string> = {};
     const configuredProviders = isRecord(config.model_providers) ? config.model_providers : {};
     Object.entries(configuredProviders).forEach(([providerID, rawProviderConfig]) => {
       const id = providerID.trim();
@@ -2127,11 +2125,19 @@ export class CodexAdapter implements BackendAdapter {
       });
       connected.add(id);
     });
-    const activeProvider = stringValue(config.model_provider);
+    const configuredProvider = stringValue(config.model_provider);
+    const activeProvider = !configuredProvider || configuredProvider === 'openai'
+      ? CODEX_PROJECT_ID
+      : configuredProvider;
     const activeModel = stringValue(config.model);
-    if (activeProvider && activeModel && providers.some((item) => item.id === activeProvider)) {
-      defaults[activeProvider] = activeModel;
+    const configuredModel = activeProvider === CODEX_PROJECT_ID
+      ? allModels.find((model) => model.id === activeModel) ??
+        allModels.find((model) => model.model === activeModel)
+      : providers.find((item) => item.id === activeProvider)?.models[activeModel];
+    if (activeModel && configuredModel) {
+      defaults[activeProvider] = configuredModel.id;
     }
+    if (defaultModel) defaults[CODEX_PROJECT_ID] ??= defaultModel.id;
     return {
       all: providers,
       connected: Array.from(connected),

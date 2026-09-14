@@ -656,7 +656,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (!request || !parentId) return;
     const current = () => isCurrentConnection(request) && activeThreadId.value === parentId && generation === subagentStreamGeneration;
     try {
-      const read = await request.sourceAdapter.readThread({ threadId, includeTurns: true });
+      const read = await readThreadForHistory(threadId, request.sourceAdapter);
       if (!current() || read.thread.id !== threadId) return;
       subagentStreams.registerHistory(read.thread);
       if (!live && extractStatusType(read.thread.status) !== 'active') return;
@@ -668,9 +668,16 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         }
         return;
       }
-      subagentStreams.registerHistory(resumed.thread, undefined, live);
-    } catch {
-      if (current()) console.warn('[codex] Unable to subscribe to subagent activity', threadId);
+      subagentStreams.registerHistory({
+        ...resumed.thread,
+        turns: resumed.thread.turns?.length ? resumed.thread.turns : read.thread.turns,
+      }, undefined, live);
+    } catch (error) {
+      if (current()) {
+        subagentStreams.subscriptionFailed(threadId);
+        console.warn('[codex] Unable to subscribe to subagent activity', threadId,
+          error instanceof Error ? error.message : 'Unknown subscription error');
+      }
     }
   }
 
@@ -1022,7 +1029,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       providerID: parent?.info.role === 'user' ? parent.info.model.providerID : model.providerID,
       variant: parent?.info.variant,
       mode: 'codex',
-      agent: 'codex',
+      agent: parent?.info.role === 'user' ? parent.info.agent : 'codex',
       path: { cwd: '', root: '' },
       cost: 0,
       tokens: {
@@ -1050,6 +1057,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function finalizeRealtimeUser(provisionalId: string, messageId: string, sessionId: string, variant?: string) {
+    const provisional = realtimeHistoryQueue.value.find(entry => entry.info.id === provisionalId);
+    if (provisional) messageModels.save(sessionId, { ...provisional.info, id: messageId, sessionID: sessionId });
     realtimeHistoryQueue.value = dedupeRealtimeHistoryQueue(realtimeHistoryQueue.value.map(entry => {
       if (entry.info.id === messageId) return { ...entry, info: { ...entry.info, variant: variant ?? entry.info.variant } };
       if (entry.info.id !== provisionalId) return entry;
@@ -1064,8 +1073,13 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       };
     }));
     realtimeMessageAliases.value = { ...realtimeMessageAliases.value, [provisionalId]: messageId };
-    const reparent = (info: MessageInfo): MessageInfo => info.role === 'assistant' && info.parentID === provisionalId
-      ? { ...info, parentID: messageId } : info;
+    const reparent = (info: MessageInfo): MessageInfo => {
+      const next = info.role === 'assistant' && info.parentID === provisionalId
+        ? { ...info, parentID: messageId } : info;
+      if (next.sessionID !== sessionId) return next;
+      if (next.id !== messageId && (next.role !== 'assistant' || next.parentID !== messageId)) return next;
+      return messageModels.restore(sessionId, [{ info: next, parts: [] }])[0]?.info ?? next;
+    };
     realtimeHistoryQueue.value = realtimeHistoryQueue.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
     realtimeToolParts.value = realtimeToolParts.value.map(entry => ({ ...entry, info: reparent(entry.info) }));
     if (realtimeReasoningPart.value) realtimeReasoningPart.value = { ...realtimeReasoningPart.value, info: reparent(realtimeReasoningPart.value.info) };
@@ -3070,7 +3084,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       sessionID: sessionId,
       role: 'user',
       time: { created: now },
-      agent: 'codex',
+      agent: options.collaborationMode?.mode || 'default',
       variant: options.effort,
       model: {
         providerID: selectedModelInfo.providerID,
@@ -3373,7 +3387,20 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       if (!isCurrentConnection(request)) return;
       models.value = result.data;
       if (!selectedModel.value) {
-        const defaultModel = result.data.find((m) => m.isDefault);
+        if (!config.value) await refreshConfig();
+        if (!isCurrentConnection(request) || selectedModel.value) return;
+        const configuredModel = typeof config.value?.config.model === 'string'
+          ? config.value.config.model.trim() : '';
+        const configuredProvider = typeof config.value?.config.model_provider === 'string'
+          ? config.value.config.model_provider.trim() : '';
+        if (configuredModel && configuredProvider &&
+            configuredProvider !== 'openai' && configuredProvider !== 'codex') {
+          selectedModel.value = `${configuredProvider}/${configuredModel}`;
+          return;
+        }
+        const defaultModel = result.data.find((m) => m.id === configuredModel) ??
+          result.data.find((m) => m.model === configuredModel) ??
+          result.data.find((m) => m.isDefault);
         if (defaultModel) {
           selectedModel.value = defaultModel.id;
         } else if (result.data[0]) {

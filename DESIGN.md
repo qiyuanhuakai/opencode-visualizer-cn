@@ -99,6 +99,7 @@ All spacing derives from a 4px base.
 - **Motion**: color/background transition only.
 
 ### Codex Collaboration and Goal Controls
+- Composer collaboration modes reuse the OpenCode agent dropdown: mode name, 10px muted description, 2px row gap, ellipsis with full-description tooltip, and the existing selected checkmark/keyboard behavior. Default uses the OpenCode `success` palette token; Plan uses `accent`; other server modes use `secondary`. The same resolved color identifies the per-message mode and user quote border on history cards. Mode IDs remain stable across sends and refreshes; unknown legacy attribution is not guessed from the current selection.
 - Reuse the compact panel, border, text and accent tokens above; preserve existing floating-window chrome.
 - Collaboration presets are native selectable buttons with a visible selected label and `aria-pressed`. Explain that selection applies to the next message; distinguish this from running multiple agents.
 - Show disconnected, loading, empty and failed mode discovery separately. A failed refresh must never look like an empty successful result.

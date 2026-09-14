@@ -66,5 +66,6 @@ export type BackendProviderConfigState = {
   provider?: Record<string, unknown>;
   model_providers?: Record<string, unknown>;
   model_provider?: string;
+  model_reasoning_effort?: string;
   model?: string;
 };

@@ -5,6 +5,7 @@ import type { BackendKind } from '../backends/types';
 
 type HarnessOverrides = {
   codexConnect?: () => Promise<void>;
+  fetchGlobalProviderConfig?: () => Promise<void>;
   connectOpenCode?: () => Promise<void>;
   bootstrapAcpWorkspace?: () => Promise<void>;
   bootstrapSelections?: () => Promise<void>;
@@ -122,6 +123,7 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
       }),
     fetchGlobalProviderConfig: async () => {
       calls.push('fetchGlobalProviderConfig');
+      await overrides.fetchGlobalProviderConfig?.();
     },
     fetchProviders: async () => {
       calls.push('fetchProviders');
@@ -194,6 +196,18 @@ describe('useBackendActivation', () => {
       expect(harness.codexApi.disconnect).not.toHaveBeenCalled();
     },
   );
+
+  it('loads Codex configuration before resolving composer model and effort defaults', async () => {
+    let finishConfig = () => {};
+    const pendingConfig = new Promise<void>(resolve => { finishConfig = resolve; });
+    const harness = createHarness('codex', { fetchGlobalProviderConfig: () => pendingConfig });
+    const initializing = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(harness.calls).toContain('fetchGlobalProviderConfig'));
+    expect(harness.calls).not.toContain('fetchProviders');
+    finishConfig();
+    await initializing;
+    expect(harness.calls).toContain('fetchProviders');
+  });
 
   it('resets shared OpenCode state and runs the shared activation sequence', async () => {
     const harness = createHarness('opencode');
