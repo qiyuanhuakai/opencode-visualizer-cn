@@ -5,20 +5,13 @@
 ## [In Progress]
 
 
-- [x] 改善插件兼容性
-  - [x] omo：尝试识别Sisyphus Junior的类别（category）
-  - [x] omo：特殊处理工具lsp-_、codegraph-_
-  - [x] magic context：特殊处理子代理magic-context-*
-  - [x] magic context：特殊处理工具ctx-*
-
 - [ ] 修复已知问题
 
 - [ ] 改善codex后端兼容性
-
   - [ ] 状态监控-token
   - [ ] 小修小补
-- [ ] 调查性能问题
 
+- [ ] 调查性能问题
   - [ ] 输入框输入延迟巨大，按键好一段时间才有反应
   - [ ] codex会话加载速度瓶颈
   - [ ] codex后端render超时
@@ -30,8 +23,13 @@
     - [?] kimicode cli
     - [?] oh-my-pi
     - [?] pi
-  - [ ] astrcodey web
+    - [ ] minimax
+    - [ ] dsh
+    - [ ] cursor cli
+  - [ ] omo codex app-server
   - [ ] kimi web
+  - [ ] dsh web
+  - [ ] astrcodey web
   - [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
   - [ ] [gnhf](https://github.com/kunchenguid/gnhf)
   - [ ] [tokscale](https://github.com/junhoyeo/tokscale)
