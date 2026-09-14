@@ -16,24 +16,34 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkThread' | 'startTurn' | 'interruptTurn' | 'unsubscribeThread'> | null) {
-  const sideChat = ref<CodexSideChat | null>(null);
+  const sideChat = ref<(CodexSideChat & { settings: Omit<CodexPromptInput, 'text'> }) | null>(null);
   const sideThreadIds = new Set<string>();
+  const pendingUnsubscribes = new Map<string, NonNullable<ReturnType<typeof getAdapter>>>();
   let generation = 0;
+  async function unsubscribe(threadId: string, adapter: NonNullable<ReturnType<typeof getAdapter>>) {
+    pendingUnsubscribes.set(threadId, adapter);
+    await adapter.unsubscribeThread({ threadId });
+    pendingUnsubscribes.delete(threadId);
+  }
   async function closeSideChat() {
     const state = sideChat.value;
     generation += 1;
     sideChat.value = null;
     const adapter = getAdapter();
-    if (!state || !adapter) return;
-    if (state.pending && state.turnId) {
-      await adapter.interruptTurn({ threadId: state.threadId, turnId: state.turnId });
+    if (state && adapter) pendingUnsubscribes.set(state.threadId, adapter);
+    try {
+      if (state?.pending && state.turnId && adapter) {
+        await adapter.interruptTurn({ threadId: state.threadId, turnId: state.turnId });
+      }
+    } finally {
+      for (const [threadId, owner] of pendingUnsubscribes) await unsubscribe(threadId, owner);
     }
-    await adapter.unsubscribeThread({ threadId: state.threadId });
   }
-  async function sendSidePrompt(text: string, settings: Omit<CodexPromptInput, 'text'> = {}) {
+  async function sendSidePrompt(text: string) {
     const state = sideChat.value;
     const adapter = getAdapter();
     if (!state || !adapter) throw new Error('请先打开侧聊。');
+    const settings = state.settings;
     if (state.pending) throw new Error('侧聊正在运行，请等待完成。');
     if (!text.trim()) return;
     state.messages.push({ id: `user:${Date.now()}`, role: 'user', text: text.trim() });
@@ -60,7 +70,7 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
       throw error;
     }
   }
-  async function startSideChat(parentThreadId: string) {
+  async function startSideChat(parentThreadId: string, settings: Omit<CodexPromptInput, 'text'> = {}) {
     if (!parentThreadId) throw new Error('请先开始一个主会话。');
     await closeSideChat();
     const adapter = getAdapter();
@@ -69,10 +79,10 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
     const result = await adapter.forkThread({ threadId: parentThreadId, ephemeral: true, excludeTurns: true });
     sideThreadIds.add(result.thread.id);
     if (currentGeneration !== generation) {
-      await adapter.unsubscribeThread({ threadId: result.thread.id });
+      await unsubscribe(result.thread.id, adapter);
       return;
     }
-    sideChat.value = { threadId: result.thread.id, parentThreadId, messages: [], pending: false, error: '', turnId: '' };
+    sideChat.value = { threadId: result.thread.id, parentThreadId, settings, messages: [], pending: false, error: '', turnId: '' };
   }
   function handleNotification(notification: CodexJsonRpcNotification) {
     if (notification.method === 'serverRequest/resolved') return false;
@@ -108,6 +118,6 @@ export function createCodexSideChat(getAdapter: () => Pick<CodexAdapter, 'forkTh
     }
     return true;
   }
-  function reset() { generation += 1; sideChat.value = null; sideThreadIds.clear(); }
+  function reset() { generation += 1; sideChat.value = null; sideThreadIds.clear(); pendingUnsubscribes.clear(); }
   return { sideChat, startSideChat, sendSidePrompt, closeSideChat, handleNotification, reset };
 }

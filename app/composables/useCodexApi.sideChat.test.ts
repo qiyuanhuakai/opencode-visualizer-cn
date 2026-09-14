@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useCodexApi } from './useCodexApi';
-import { createAdapterMock, resetCodexApiTestState } from './useCodexApi.test-helpers';
+import { createAdapterMock, deferred, resetCodexApiTestState } from './useCodexApi.test-helpers';
 
 describe('Codex side chat routing', () => {
   beforeEach(resetCodexApiTestState);
@@ -75,4 +75,52 @@ it('includes selected permissions on the first new-thread send before clearing t
     thread: { approvalPolicy: 'on-request', sandbox: 'read-only' },
   }));
   expect(api.selectedPermissionMode.value).toBe('');
+});
+
+it.each(['same parent', 'other parent', 'delayed fork'])('keeps creation permissions for side prompts after changing main controls: %s', async (scenario) => {
+  // Given a side fork created with read-only permissions.
+  resetCodexApiTestState();
+  const mock = createAdapterMock();
+  const startTurn = vi.fn(async () => ({ turn: { id: 'side-turn', status: 'completed' } }));
+  Object.assign(mock.adapter, { startTurn, readConfigRequirements: vi.fn(async () => ({ requirements: null })) });
+  const api = useCodexApi({ adapterFactory: () => mock.adapter });
+  await api.connect();
+  await api.setPermissionMode('read-only');
+  const fork = deferred<{ thread: { id: string } }>();
+  if (scenario === 'delayed fork') vi.mocked(mock.adapter.forkThread).mockReturnValue(fork.promise);
+  const opening = api.startSideChat('first question');
+  if (scenario !== 'delayed fork') await opening;
+  // When main controls change, including navigation while the fork is unresolved.
+  if (scenario !== 'same parent') await api.selectThread('thread-B');
+  await api.setPermissionMode('full-access');
+  fork.resolve({ thread: { id: 'thr_fork' } });
+  await opening;
+  await api.sendSidePrompt('follow-up');
+  // Then every side turn retains the parent settings captured at creation.
+  expect(startTurn).toHaveBeenCalledTimes(2);
+  for (const call of [1, 2]) {
+    expect(startTurn).toHaveBeenNthCalledWith(call, expect.objectContaining({
+      threadId: 'thr_fork', approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly', networkAccess: false },
+    }));
+  }
+});
+
+it('retains side permissions after a failed turn and captures new permissions after reopening', async () => {
+  // Given a read-only side chat and a failed first turn.
+  resetCodexApiTestState();
+  const mock = createAdapterMock();
+  const startTurn = vi.fn().mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValue({ turn: { id: 'side-turn', status: 'completed' } });
+  Object.assign(mock.adapter, { startTurn, readConfigRequirements: vi.fn(async () => ({ requirements: null })) });
+  const api = useCodexApi({ adapterFactory: () => mock.adapter });
+  await api.connect();
+  await api.setPermissionMode('read-only');
+  await expect(api.startSideChat('first')).rejects.toThrow('Unavailable');
+  await api.setPermissionMode('full-access');
+  // When retrying the failed side turn, then explicitly opening a fresh side chat.
+  await api.sendSidePrompt('retry');
+  await api.closeSideChat();
+  await api.startSideChat('fresh');
+  // Then only the new side chat gets the newly selected permissions.
+  expect(startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({ approvalPolicy: 'on-request', sandboxPolicy: { type: 'readOnly', networkAccess: false } }));
+  expect(startTurn).toHaveBeenNthCalledWith(3, expect.objectContaining({ approvalPolicy: 'never', sandboxPolicy: { type: 'dangerFullAccess' } }));
 });

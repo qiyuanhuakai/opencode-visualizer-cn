@@ -18,7 +18,7 @@ vis interprets Codex commands before sending ordinary chat input. Commands open 
 | `/compact` | Request native thread compaction. |
 | `/new [name]`, `/resume` | Create a thread or open the session picker. |
 | `/fork` | Create and select a persistent conversation fork. |
-| `/btw [question]`, `/side [question]` | Create an ephemeral fork and open an independent side-chat window. The main thread continues; closing interrupts/unsubscribes only the side thread. Approval and question dialogs retain the side thread's identity. |
+| `/btw [question]`, `/side [question]` | Create an ephemeral fork and open an independent side-chat window. The main thread continues; closing interrupts/unsubscribes only the side thread. Approval and question dialogs retain the side thread's identity. Model, tier, and permission overrides are captured when opening the side chat; later main-thread changes do not alter them. |
 | `/rename [name]` | Rename the current thread, prompting for a name when omitted. |
 | `/archive` | Archive with native `thread/archive` and select a remaining thread. This is distinct from the existing session menu's local hiding behavior. |
 | `/diff`, `/review [instructions]` | Open the existing worktree diff viewer or run a native review. |

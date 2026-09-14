@@ -38,3 +38,42 @@ it('interrupts only the side turn when close races with its start response', asy
   expect(adapter.interruptTurn).toHaveBeenCalledWith({ threadId: 'side', turnId: 'late-turn' });
   expect(controller.sideChat.value).toBeNull();
 });
+
+it('unsubscribes and suppresses closed notifications when interruption fails', async () => {
+  // Given a side turn whose interrupt races with completion.
+  const adapter = {
+    forkThread: vi.fn(async () => ({ thread: { id: 'side' } })),
+    startTurn: vi.fn(async () => ({ turn: { id: 'turn', status: 'inProgress' } })),
+    interruptTurn: vi.fn().mockRejectedValue(new Error('Turn is no longer running')),
+    unsubscribeThread: vi.fn(async () => ({})),
+  };
+  const controller = createCodexSideChat(() => adapter);
+  await controller.startSideChat('main');
+  await controller.sendSidePrompt('question');
+  // When closing encounters the interrupt failure.
+  await expect(controller.closeSideChat()).rejects.toThrow('Turn is no longer running');
+  // Then the subscription is still released and late events remain isolated.
+  expect(adapter.unsubscribeThread).toHaveBeenCalledWith({ threadId: 'side' });
+  expect(controller.sideChat.value).toBeNull();
+  expect(controller.handleNotification({ method: 'turn/completed', params: { threadId: 'side', turn: { id: 'turn' } } })).toBe(true);
+  await controller.closeSideChat();
+  expect(adapter.unsubscribeThread).toHaveBeenCalledTimes(1);
+});
+
+it('retries failed unsubscribe after the side panel is closed', async () => {
+  // Given a side subscription that cannot be released on the first attempt.
+  const adapter = {
+    forkThread: vi.fn(async () => ({ thread: { id: 'side' } })),
+    startTurn: vi.fn(async () => ({ turn: { id: 'turn', status: 'completed' } })),
+    interruptTurn: vi.fn(async () => ({})),
+    unsubscribeThread: vi.fn().mockRejectedValueOnce(new Error('Disconnected')).mockResolvedValue({}),
+  };
+  const controller = createCodexSideChat(() => adapter);
+  await controller.startSideChat('main');
+  await expect(controller.closeSideChat()).rejects.toThrow('Disconnected');
+  // When close is retried.
+  await controller.closeSideChat();
+  // Then cleanup retries even though the panel is already hidden.
+  expect(adapter.unsubscribeThread).toHaveBeenCalledTimes(2);
+  expect(controller.sideChat.value).toBeNull();
+});

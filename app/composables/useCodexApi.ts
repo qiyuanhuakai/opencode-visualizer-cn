@@ -641,14 +641,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     { flush: 'sync' },
   );
   async function startSideChat(text = '') {
-    await sideChatController.startSideChat(activeThreadId.value);
-    if (text.trim()) await sendSidePrompt(text);
-  }
-  async function sendSidePrompt(text: string) {
-    await sideChatController.sendSidePrompt(text, {
+    await sideChatController.startSideChat(activeThreadId.value, {
       ...sessionControls.promptSettings(),
       model: parseSelectedCodexModel(selectedModel.value).modelID || undefined,
     });
+    if (text.trim()) await sendSidePrompt(text);
+  }
+  async function sendSidePrompt(text: string) {
+    await sideChatController.sendSidePrompt(text);
   }
   const externalAgentConfigItems = ref<CodexExternalAgentConfigItem[]>([]);
   const externalAgentConfigLoading = ref(false);
