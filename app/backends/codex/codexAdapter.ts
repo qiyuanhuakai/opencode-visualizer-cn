@@ -1,3 +1,4 @@
+import { parseIgnoredPaths } from './ignoredPaths';
 import {
   CodexJsonRpcClient,
   CodexJsonRpcError,
@@ -2202,10 +2203,30 @@ export class CodexAdapter implements BackendAdapter {
     const absolutePath = resolveCodexFsPath(payload.directory, payload.path);
     const relativePrefix = normalizeRelativePath(payload.path);
     const result = await this.readDirectory({ path: absolutePath });
+    let ignoredPaths = new Set<string>();
+    if (result.entries.length) {
+      try {
+        const ignored = await this.commandExec({
+          command: [
+            'git',
+            '-c',
+            'core.quotePath=false',
+            'check-ignore',
+            '--',
+            ...result.entries.map((entry) => `./${entry.fileName}`),
+          ],
+          cwd: absolutePath,
+        });
+        if (ignored.exitCode === 0) ignoredPaths = parseIgnoredPaths(ignored.stdout);
+      } catch {
+        // File browsing also works when Git or command execution is unavailable.
+      }
+    }
     return result.entries.map((entry) => ({
       name: entry.fileName,
       path: relativePrefix ? `${relativePrefix}/${entry.fileName}` : entry.fileName,
       type: entry.isDirectory ? 'directory' : 'file',
+      ...(ignoredPaths.has(`./${entry.fileName}`) ? { ignored: true } : {}),
     }));
   }
 

@@ -139,6 +139,15 @@ describe('CodexAdapter', () => {
     socket.respond(1, {});
     await waitForSent(socket, 3);
     socket.respond(2, { entries: [{ fileName: 'index.ts', isDirectory: false }] });
+    await waitForSent(socket, 4);
+    expect(JSON.parse(socket.sent[3] ?? '{}')).toMatchObject({
+      method: 'command/exec',
+      params: {
+        command: ['git', '-c', 'core.quotePath=false', 'check-ignore', '--', './index.ts'],
+        cwd: '/subdir',
+      },
+    });
+    socket.respond(3, { exitCode: 1, stdout: '', stderr: '' });
 
     await expect(result).resolves.toEqual([
       { name: 'index.ts', path: 'subdir/index.ts', type: 'file' },

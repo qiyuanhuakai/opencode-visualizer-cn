@@ -128,6 +128,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
       await options.codexApi.connect(options.credentials.codexBridgeUrl.value, (phase) => {
+        if (!ownsInitialization(generation)) return;
         if (phase === 'home')
           options.initLoadingMessage.value = options.t('app.status.loadingCodexHome');
         else if (phase === 'handshake')
@@ -138,6 +139,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
           options.initLoadingMessage.value = options.t('app.status.loadingCodexWorkspace');
         else options.initLoadingMessage.value = options.t('app.status.loadingCodexModels');
       });
+      if (!ownsInitialization(generation)) return;
 
       const existingThreadId =
         options.codexApi.activeThreadId.value || options.codexApi.visibleThreads.value[0]?.id || '';
@@ -150,12 +152,14 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       // blocking the rest of the boot sequence.
       await Promise.allSettled([
         existingThreadId ? options.codexApi.selectThread(existingThreadId) : Promise.resolve(),
-        options.fetchGlobalProviderConfig().then(() => Promise.all([
-          options.fetchProviders(true),
-          options.fetchAgents(),
-        ])),
+        options.fetchGlobalProviderConfig().then(async () => {
+          if (!ownsInitialization(generation)) return;
+          await Promise.all([options.fetchProviders(true), options.fetchAgents()]);
+        }),
       ]);
+      if (!ownsInitialization(generation)) return;
       await options.hydrateActiveWorktreeResources();
+      if (!ownsInitialization(generation)) return;
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
 
@@ -163,6 +167,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
         await options.reloadSelectedSessionState(options.selectedSessionId.value);
       }
     } catch (error) {
+      if (!ownsInitialization(generation)) return;
       options.codexApi.disconnectTransport();
       options.disconnectCodexBackend();
       options.connectionState.value = 'error';
@@ -237,7 +242,9 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
       await options.bootstrapAcpWorkspace();
+      if (!ownsInitialization(generation)) return;
       await Promise.all([options.fetchAgents(), options.fetchCommands()]);
+      if (!ownsInitialization(generation)) return;
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
       void (async () => {
@@ -246,16 +253,21 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
             await options.reloadSelectedSessionState(options.selectedSessionId.value);
           }
         } finally {
-          await Promise.all([
-            options.fetchGlobalProviderConfig(),
-            options.fetchProviders(true),
-            options.fetchAgents(),
-            options.fetchCommands(),
-          ]);
-          await options.hydrateActiveWorktreeResources();
+          if (generation === initializationGeneration) {
+            await Promise.all([
+              options.fetchGlobalProviderConfig(),
+              options.fetchProviders(true),
+              options.fetchAgents(),
+              options.fetchCommands(),
+            ]);
+            if (generation === initializationGeneration) {
+              await options.hydrateActiveWorktreeResources();
+            }
+          }
         }
       })().catch(() => {});
     } catch (error) {
+      if (!ownsInitialization(generation)) return;
       options.disconnectAcpBackend();
       options.connectionState.value = 'error';
       options.initErrorMessage.value = options.toErrorMessage(error);
