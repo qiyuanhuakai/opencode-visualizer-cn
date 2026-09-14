@@ -164,6 +164,7 @@
             <div class="input-resizer" @pointerdown="startInputResize"></div>
             <InputPanel
               ref="inputPanelRef"
+              :codex-commands-enabled="activeBackendKind === 'codex'"
               :disabled="connectionState !== 'ready'"
               :current-session-id="selectedSessionId"
               :session-parent-by-id="sessionParentById"
@@ -210,6 +211,7 @@
               @status-error="setSendStatusErrorText"
             >
               <template v-if="activeBackendKind === 'codex'" #after-thinking>
+                <CodexComposerFast :api="codexApi" @error="setSendStatusErrorText" />
                 <CodexComposerGoal :api="codexApi" @open="openCodexThreadGoal" />
               </template>
             </InputPanel>
@@ -461,6 +463,8 @@
     />
     <StatusMonitorModal
       :open="isStatusMonitorOpen"
+      :initial-tab="statusMonitorTab"
+      :initial-usage-view="statusMonitorUsageView"
       :preload="connectionState === 'ready'"
       :session-id="selectedSessionId"
       :codex-api="codexApi"
@@ -582,6 +586,12 @@ import ProviderManagerModal from './components/ProviderManagerModal.vue';
 import SettingsModal from './components/SettingsModal.vue';
 import { createDesktopNotificationRouter } from './utils/desktopNotifications';
 import StatusMonitorModal from './components/StatusMonitorModal.vue';
+import { listCodexSlashCommands } from './utils/codexSlashCommands';
+import { useCodexSlashActions } from './composables/useCodexSlashActions';
+import { fitCodexCommandWindow } from './utils/codexCommandWindow';
+import CodexPermissionPicker from './components/codex/CodexPermissionPicker.vue';
+import CodexSideChat from './components/codex/CodexSideChat.vue';
+import CodexBackgroundTerminals from './components/codex/CodexBackgroundTerminals.vue';
 import ProjectSettingsDialog from './components/ProjectSettingsDialog.vue';
 import ThemeInjector from './components/ThemeInjector.vue';
 import CodexPanel from './components/CodexPanel.vue';
@@ -597,6 +607,7 @@ import CodexModelManager from './components/codex/CodexModelManager.vue';
 import CodexPluginManager from './components/codex/CodexPluginManager.vue';
 import CodexRuntimeInspector from './components/codex/CodexRuntimeInspector.vue';
 import CodexComposerGoal from './components/codex/CodexComposerGoal.vue';
+import CodexComposerFast from './components/codex/CodexComposerFast.vue';
 import CodexThreadGoalWindow from './components/codex/CodexThreadGoalWindow.vue';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
 import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
@@ -1492,7 +1503,7 @@ const topPanelRef = ref<{
   closeSessionDropdown: () => void;
   toggleSessionDropdown: () => void;
 } | null>(null);
-const inputPanelRef = ref<{ focus: () => void; reset: () => void } | null>(null);
+const inputPanelRef = ref<{ focus: () => void; reset: () => void; openModelPicker: () => boolean } | null>(null);
 const outputPanelContainerEl = computed(() => outputPanelRef.value?.panelEl ?? undefined);
 const outputPanelScrollMode = computed<ScrollMode>(() => 'follow');
 const {
@@ -1979,6 +1990,8 @@ function openSettings(page: 'root' | 'transformers' = 'root') {
 }
 const isProviderManagerOpen = ref(false);
 const isStatusMonitorOpen = ref(false);
+const statusMonitorTab = ref<'server' | 'token' | 'codex' | 'skills' | 'mcp' | 'plugins'>('server');
+const statusMonitorUsageView = ref<'daily' | 'weekly' | 'cumulative'>('cumulative');
 
 const promptDialogRef = ref<HTMLDialogElement | null>(null);
 const promptInputRef = ref<HTMLInputElement | null>(null);
@@ -2324,6 +2337,13 @@ const allowedSessionIds = computed(() => {
   return allowed;
 });
 
+const allowedRequestSessionIds = computed(() => {
+  const ids = new Set(allowedSessionIds.value);
+  const sideId = activeBackendKind.value === 'codex' ? codexApi.sideChat.value?.threadId : undefined;
+  if (sideId) ids.add(sideId);
+  return ids;
+});
+
 const {
   upsertPermissionEntry,
   removePermissionEntry,
@@ -2332,7 +2352,7 @@ const {
   fetchPendingPermissions,
 } = usePermissions({
   fw,
-  allowedSessionIds,
+  allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
   ensureConnectionReady,
   sendReply: async (requestId, reply) => {
@@ -2372,7 +2392,7 @@ const {
   fetchPendingQuestions,
 } = useQuestions({
   fw,
-  allowedSessionIds,
+  allowedSessionIds: allowedRequestSessionIds,
   activeDirectory,
   ensureConnectionReady,
   getTextContent: (messageId: string) => msg.getTextContent(messageId) || '',
@@ -3002,7 +3022,9 @@ const attachmentAccept = computed(() =>
   activeBackendCapabilities.value.imageAttachmentsOnly ? 'image/*' : '*/*',
 );
 const commandOptions = computed(() => {
-  const list = commands.value.slice();
+  const list: CommandInfo[] = activeBackendKind.value === 'codex'
+    ? listCodexSlashCommands(locale.value)
+    : commands.value.slice();
   const hasShell = list.some((command) => command.name.toLowerCase() === 'shell');
   if (!hasShell) {
     list.push({
@@ -4335,6 +4357,15 @@ function syncFloatingExtent() {
   );
   const rect = canvas.getBoundingClientRect();
   fw.setExtent(rect.width, rect.height);
+  if (rect.width > 0 && rect.height > 0) {
+    for (const entry of fw.entries.value) {
+      if (!entry.key.startsWith('codex-command-')) continue;
+      const fitted = fitCodexCommandWindow({ x: entry.x, y: entry.y, width: entry.width ?? 560, height: entry.height ?? 560 }, rect);
+      if (fitted.x !== entry.x || fitted.y !== entry.y || fitted.width !== entry.width || fitted.height !== entry.height) {
+        fw.updateOptions(entry.key, fitted);
+      }
+    }
+  }
 }
 
 function updateFloatingExtentObserver() {
@@ -7221,7 +7252,7 @@ watch(
 );
 
 watch(
-  allowedSessionIds,
+  allowedRequestSessionIds,
   () => {
     prunePermissionEntries();
     pruneQuestionEntries();
@@ -7250,6 +7281,10 @@ watch(
   },
   { immediate: true },
 );
+
+watch([activeBackendKind, selectedModel], ([backend, model]) => {
+  if (backend === 'codex' && model) codexApi.selectModel(model);
+});
 
 watch(selectedModel, () => {
   // During bootstrap, modelOptions may not be loaded yet.
@@ -7757,8 +7792,8 @@ const backendSessionActions = useBackendSessionActions({
   clearLocalPinnedSessionOverride,
   restoreLocalPinnedSessionOverride,
   switchSessionSelection,
-  reloadSelectedSessionState: async (newId?: string, oldId?: string) => {
-    await reloadSelectedSessionAndAcpOptions(newId, oldId);
+  reloadSelectedSessionState: async (newId?: string, oldId?: string, forceReset = false) => {
+    await reloadSelectedSessionAndAcpOptions(newId, oldId, forceReset);
   },
   seedForkedSessionComposerDraft,
   setSendStatusKey,
@@ -7858,8 +7893,8 @@ useMessageCacheAuthInvalidation({
   invalidateMessageCacheContext: backendSessionReload.invalidateMessageCacheContext,
 });
 
-async function reloadSelectedSessionAndAcpOptions(newId?: string, oldId?: string) {
-  await backendSessionReload.reloadSelectedSessionState(newId, oldId);
+async function reloadSelectedSessionAndAcpOptions(newId?: string, oldId?: string, forceReset = false) {
+  await backendSessionReload.reloadSelectedSessionState(newId, oldId, forceReset);
   if (activeBackendKind.value !== 'acp' || !newId) return;
   await Promise.all([fetchProviders(true), fetchAgents()]);
 }
@@ -7906,7 +7941,52 @@ watch(selectedSessionId, (newId, oldId) => reloadSelectedSessionAndAcpOptions(ne
   immediate: true,
 });
 
+function openCodexCommandPanel(panel: 'permissions' | 'side' | 'terminals') {
+  const key = `codex-command-${panel}`;
+  if (fw.has(key)) { fw.activate(key); return; }
+  const definitions = {
+    permissions: { component: CodexPermissionPicker, title: locale.value.startsWith('zh') ? 'Codex 权限' : 'Codex permissions' },
+    side: { component: CodexSideChat, title: locale.value.startsWith('zh') ? 'Codex 临时侧聊' : 'Codex side chat' },
+    terminals: { component: CodexBackgroundTerminals, title: locale.value.startsWith('zh') ? 'Codex 后台终端' : 'Codex background terminals' },
+  };
+  const definition = definitions[panel];
+  const extent = fw.getExtent();
+  const bounds = fitCodexCommandWindow({ x: (extent.width - 560) / 2, y: 24, width: 560, height: 560 }, extent);
+  void fw.open(key, {
+    component: definition.component,
+    props: markRaw({ api: codexApi, onClose: () => fw.close(key) }),
+    title: definition.title, ...bounds,
+    closable: true, resizable: true, scroll: 'none', focusOnOpen: true, expiry: Infinity,
+    beforeClose: panel === 'side' ? () => codexApi.closeSideChat() : undefined,
+  });
+}
+
+const codexSlashActions = useCodexSlashActions({
+  api: codexApi, locale, messageInput, selectedSessionId, selectedModel, selectedMode,
+  openMonitor: (tab, view) => {
+    statusMonitorTab.value = tab;
+    if (view) statusMonitorUsageView.value = view;
+    isStatusMonitorOpen.value = true;
+  },
+  openModel: () => { inputPanelRef.value?.openModelPicker(); },
+  openPermissions: () => openCodexCommandPanel('permissions'),
+  openSide: () => openCodexCommandPanel('side'),
+  openGoal: openCodexThreadGoal,
+  openSessions: () => topPanelRef.value?.openSessionDropdown(),
+  openTerminals: () => openCodexCommandPanel('terminals'),
+  openDiff: () => openAllGitDiff(),
+  createSession: () => backendSessionLifecycle.createNewSession(),
+  renameSession: (id) => backendSessionActions.renameSession(id),
+  selectSession: async (id) => {
+    if (id) await switchSessionSelection(CODEX_PROJECT_ID, id);
+    else selectedSessionId.value = '';
+  },
+  selectMode: handleSelectedModeUpdate,
+});
+
 const backendMessageSend = useBackendMessageSend({
+  executeCodexSlashCommand: codexSlashActions.execute,
+  persistComposerDraftForCurrentContext,
   activeBackendKind,
   codexProjectId: CODEX_PROJECT_ID,
   selectedSessionId,

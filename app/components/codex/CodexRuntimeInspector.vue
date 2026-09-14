@@ -29,13 +29,6 @@
 
       <CodexThreadGoalEditor ref="goalEditor" :api="api" />
 
-      <article class="rounded-xl border border-slate-700/60 bg-slate-900/70 p-3">
-        <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">{{ t('codexPanel.runtime.usage') }}</h3>
-        <dl class="grid grid-cols-2 gap-3 text-xs">
-          <div><dt class="text-slate-500">{{ t('codexPanel.runtime.lifetimeTokens') }}</dt><dd class="mt-1 text-base text-slate-100">{{ formatNumber(api.accountUsage.value?.summary.lifetimeTokens) }}</dd></div>
-          <div><dt class="text-slate-500">{{ t('codexPanel.runtime.streakDays') }}</dt><dd class="mt-1 text-base text-slate-100">{{ formatNumber(api.accountUsage.value?.summary.currentStreakDays) }}</dd></div>
-        </dl>
-      </article>
 
       <article class="rounded-xl border border-slate-700/60 bg-slate-900/70 p-3">
         <h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">{{ t('codexPanel.runtime.provider') }}</h3>
@@ -93,16 +86,11 @@ function capabilityClass(state: CodexCapabilityState) {
   return 'bg-slate-700 text-slate-400';
 }
 
-function formatNumber(value: number | null | undefined) {
-  return typeof value === 'number' ? new Intl.NumberFormat().format(value) : '—';
-}
-
 async function refreshAll() {
   refreshing.value = true;
   try {
     await Promise.allSettled([
       goalEditor.value?.refresh(),
-      props.api.refreshAccountUsage(),
       props.api.refreshModelProviderCapabilities(),
       props.api.refreshPermissionProfiles(),
       props.api.refreshConfigRequirements(),

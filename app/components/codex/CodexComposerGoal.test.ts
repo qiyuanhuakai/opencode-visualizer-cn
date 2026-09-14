@@ -76,4 +76,17 @@ describe('CodexComposerGoal', () => {
     await nextTick();
     expect(target.querySelector('[role="alert"]')?.textContent).toContain('Read failed');
   });
+  it('reloads a goal invalidated by same-thread undo and does not reload its successful result', async () => {
+    const { api, button } = mountGoal();
+    await nextTick();
+    api.refreshThreadGoal.mockImplementationOnce(async () => {
+      api.threadGoalThreadId.value = 'thread-a';
+      return { goal: null };
+    });
+    api.threadGoalThreadId.value = null;
+    await nextTick();
+    await nextTick();
+    expect(api.refreshThreadGoal).toHaveBeenCalledTimes(2);
+    expect(button.textContent).not.toContain('Loading');
+  });
 });

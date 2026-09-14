@@ -107,7 +107,7 @@ All spacing derives from a 4px base.
 - Goal objectives support multiline text up to 4,000 characters. Token budget is optional; blank means no budget, otherwise require a positive safe integer.
 - Save/clear feedback uses an announced status or alert. Show token/time usage alongside the goal. Delayed results must not report success on a different thread.
 - All controls have translated visible labels, keyboard focus, wrapping helper text and no added motion. At narrow widths, forms remain readable without horizontal scrolling.
-- In the Codex composer, a flexible goal bar sits immediately after reasoning effort and before message actions. It uses a 120px minimum width and 28px height, grows into available toolbar space, truncates the objective with an ellipsis, and exposes full text in its tooltip. Narrow toolbars may wrap the bar while keeping send controls reachable.
+- In the Codex composer, a compact Fast status sits after reasoning effort and before the flexible goal bar. Fast uses the same 28px height, 8px radius and input theme tokens, with a translated on/off label and an accent only when enabled. Its tooltip explains the /fast toggle and next-message scope. The goal bar uses a 120px minimum width and 28px height, grows into available toolbar space, truncates the objective with an ellipsis, and exposes full text in its tooltip. Narrow toolbars may wrap while keeping send controls reachable.
 - Clicking the bar opens a dedicated, reusable floating goal window sized to the canvas; reopening restores its focus. The bar reflects current-thread updates and never shows another thread's goal while loading.
 - The goal bar uses the composer's transparent resting surface, 8px control radius and `--theme-input-*` text/hover/focus tokens. Goal windows use `--theme-floating-*` surfaces and text, with 12px form panels and 8px controls; no fixed black/slate fills. Status selection reuses `Dropdown`/`DropdownItem` and the shared dropdown theme, including keyboard navigation and active states.
 
@@ -115,6 +115,13 @@ All spacing derives from a 4px base.
 - **Structure**: branch selector yields horizontal space to the file search control before any toolbar overflow occurs.
 - **Spacing**: file search keeps a 96px minimum inline size; long branch names truncate with an ellipsis.
 - **States**: search-result directories start expanded and remain independently collapsible without changing the non-search tree state.
+
+### Codex Slash Controls
+- Commands reuse the composer dropdown and existing status monitor navigation. Account Token activity belongs to the Token tab; Codex quota windows belong to the Codex tab.
+- The Fast status is a native toggle button with `aria-pressed`, a visible keyboard focus ring, translated click/command guidance, and disabled/busy state while saving. The confirmed tier remains visible on failure and errors use the existing status surface. Clicking it preserves composer text and attachments.
+- Permission and side-chat windows reuse the goal window's floating theme, 12px panel padding, 8px control spacing and radii, wrapping helper text and visible keyboard focus. No new color or motion tokens.
+- Permission choices use native buttons with `aria-pressed`, explaining their effective scope and showing loading, disconnected and rejected changes.
+- Side chat retains the main conversation, with an independent live transcript, labelled multiline composer, pending/error states and a close action. Narrow windows wrap content without horizontal overflow.
 
 ## 6. Motion & Interaction
 
