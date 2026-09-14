@@ -143,6 +143,8 @@ export type CodexThreadArchiveParams = {
 
 export type CodexThreadForkParams = {
   threadId: string;
+  ephemeral?: boolean;
+  excludeTurns?: boolean;
 };
 
 type CodexThreadForkResult = {
@@ -235,6 +237,7 @@ export type CodexTurnStartParams = {
   approvalPolicy?: string;
   sandboxPolicy?: unknown;
   model?: string;
+  serviceTier?: string;
   effort?: string;
   summary?: string;
   personality?: string;
@@ -472,6 +475,8 @@ export type CodexModel = {
   id: string;
   model: string;
   displayName: string;
+  serviceTiers?: Array<{ id: string; name: string; description: string }>;
+  defaultServiceTier?: string | null;
   hidden?: boolean;
   defaultReasoningEffort?: string;
   supportedReasoningEfforts?: CodexModelReasoningEffort[];
@@ -1607,6 +1612,11 @@ export class CodexAdapter implements BackendAdapter {
     return this.client.request<CodexThreadRollbackResult>('thread/rollback', params);
   }
 
+  async revertThread(params: { readonly threadId: string; readonly beforeTurnId: string }) {
+    await this.ensureInitialized();
+    return this.client.request<CodexThreadRollbackResult>('thread/revert', params);
+  }
+
   async readDirectory(params: CodexFsReadDirectoryParams) {
     await this.ensureInitialized();
     return this.requestRead<CodexFsReadDirectoryResult>('fs/readDirectory', params);
@@ -1701,6 +1711,7 @@ export class CodexAdapter implements BackendAdapter {
       approvalPolicy: input.approvalPolicy,
       sandboxPolicy: input.sandboxPolicy,
       model: input.model,
+      serviceTier: input.serviceTier,
       effort: input.effort,
       summary: input.summary,
       personality: input.personality,

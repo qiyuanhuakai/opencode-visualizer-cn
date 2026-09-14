@@ -1,4 +1,6 @@
 import { codexReasoningText } from '../backends/codex/reasoning';
+import { createCodexSideChat } from '../backends/codex/sideChat';
+import { createCodexSessionControls } from '../backends/codex/sessionControls';
 import { createCodexSubagentStreams } from '../backends/codex/subagentStreams';
 import { createCodexThreadActivity } from '../backends/codex/threadActivity';
 import { migrateCodexAuxiliaryHistory } from '../backends/codex/auxiliaryHistoryIdentity';
@@ -625,6 +627,29 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const collaborationModesError = ref<string | null>(null);
   const configRequirements = ref<CodexConfigRequirementsReadResult['requirements']>(null);
   const configRequirementsLoading = ref(false);
+  const sideChatController = createCodexSideChat(() => adapter);
+  const sessionControls = createCodexSessionControls({
+    models, modelId: () => parseSelectedCodexModel(selectedModel.value).modelID,
+    config, requirements: configRequirements,
+    writeTier: (tier) => writeConfigValue('service_tier', tier, 'replace'),
+    refreshRequirements: async () => { await refreshConfigRequirements(); },
+  });
+  watch(activeThreadId, () => sessionControls.resetPermissions(), { flush: 'sync' });
+  watch(
+    () => [sideChatController.sideChat.value?.threadId, sideChatController.sideChat.value?.turnId, sideChatController.sideChat.value?.pending],
+    () => pruneServerRequestsForActiveContext(),
+    { flush: 'sync' },
+  );
+  async function startSideChat(text = '') {
+    await sideChatController.startSideChat(activeThreadId.value);
+    if (text.trim()) await sendSidePrompt(text);
+  }
+  async function sendSidePrompt(text: string) {
+    await sideChatController.sendSidePrompt(text, {
+      ...sessionControls.promptSettings(),
+      model: parseSelectedCodexModel(selectedModel.value).modelID || undefined,
+    });
+  }
   const externalAgentConfigItems = ref<CodexExternalAgentConfigItem[]>([]);
   const externalAgentConfigLoading = ref(false);
   const externalAgentImportStatus = ref<{ success: boolean; error?: string } | null>(null);
@@ -1353,6 +1378,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   function handleNotification(notification: CodexJsonRpcNotification, request: ConnectionRequest) {
     if (!isCurrentConnection(request)) return;
+    if (sideChatController.handleNotification(notification)) return;
     events.value.push({
       id: nextEventId,
       method: notification.method,
@@ -2008,10 +2034,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       return;
     }
 
+    const side = sideChatController.sideChat.value;
+    const params = isRecord(request.params) ? request.params : null;
+    const sideRequest = side?.pending && params?.threadId === side.threadId;
+    if (sideRequest && !side.turnId && typeof params?.turnId === 'string') side.turnId = params.turnId;
     const scopedRequest = extractScopedApprovalRequest(
       request,
-      activeThreadId.value,
-      activeTurn.value?.id,
+      sideRequest ? side.threadId : activeThreadId.value,
+      sideRequest ? side.turnId : activeTurn.value?.id,
     );
     if (!scopedRequest) return;
 
@@ -2033,21 +2063,25 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   function pruneServerRequestsForActiveContext() {
     const threadId = activeThreadId.value;
     const turnId = activeTurn.value?.id;
+    const side = sideChatController.sideChat.value;
+    const belongsToSide = (requestThreadId: string, requestTurnId: string | null) =>
+      side?.pending === true && requestThreadId === side.threadId
+      && (!side.turnId || requestTurnId === null || requestTurnId === side.turnId);
     serverRequests.value = serverRequests.value.filter(
-      (request) => request.threadId === threadId && request.turnId === turnId,
+      (request) => (request.threadId === threadId && request.turnId === turnId) || belongsToSide(request.threadId, request.turnId),
     );
     permissionRequests.value = permissionRequests.value.filter(
-      (request) => request.sessionID === threadId && request.turnId === turnId,
+      (request) => (request.sessionID === threadId && request.turnId === turnId) || belongsToSide(request.sessionID, request.turnId),
     );
     elicitationRequests.value = elicitationRequests.value.filter(
       (request) =>
-        request.sessionID === threadId && (request.turnId === null || request.turnId === turnId),
+        (request.sessionID === threadId && (request.turnId === null || request.turnId === turnId)) || belongsToSide(request.sessionID, request.turnId),
     );
     toolUserInputRequests.value = toolUserInputRequests.value.filter(
-      (request) => request.threadId === threadId && request.turnId === turnId,
+      (request) => (request.threadId === threadId && request.turnId === turnId) || belongsToSide(request.threadId, request.turnId),
     );
     dynamicToolCalls.value = dynamicToolCalls.value.filter(
-      (request) => request.threadId === threadId && request.turnId === turnId,
+      (request) => (request.threadId === threadId && request.turnId === turnId) || belongsToSide(request.threadId, request.turnId),
     );
   }
 
@@ -2154,6 +2188,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (adapter) historyReaders.delete(adapter);
     adapter?.disconnect();
     adapter = null;
+    sideChatController.reset();
+    sessionControls.reset();
     capabilityRegistry.reset();
     initialized.value = false;
     activeTurn.value = null;
@@ -2761,10 +2797,17 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (!adapter) throw new Error('Codex is not connected.');
     const request = captureConnection();
     if (!request) throw new Error('Codex is not connected.');
-    const numTurns = typeof target === 'number' ? target : codexRollbackCount(threadId,
-      (await readThreadForHistory(threadId, request.sourceAdapter)).thread.turns ?? [], target);
+    const { thread } = await readThreadForHistory(threadId, request.sourceAdapter);
+    const turns = thread.turns ?? [];
+    const numTurns = typeof target === 'number' ? target : codexRollbackCount(threadId, turns, target);
     if (!isCurrentConnection(request)) throw new Error('Codex connection changed.');
-    const result = await request.sourceAdapter.rollbackThread({ threadId, numTurns });
+    const beforeTurnId = turns[turns.length - numTurns]?.id;
+    if (thread.historyMode === 'paginated' && !beforeTurnId) {
+      throw new Error('Codex revert target is no longer present in this thread.');
+    }
+    const result = thread.historyMode === 'paginated' && beforeTurnId
+      ? await request.sourceAdapter.revertThread({ threadId, beforeTurnId })
+      : await request.sourceAdapter.rollbackThread({ threadId, numTurns });
     if (!isCurrentConnection(request)) return result.thread;
     if (activeThreadId.value === threadId) resetSubagentStreams();
     invalidateRecentTurnIds(threadId, numTurns);
@@ -3005,10 +3048,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   function resolveServerRequest(id: CodexJsonRpcId, decision: string) {
     if (!adapter) throw new Error('Codex is not connected.');
     const request = serverRequests.value.find((item) => item.id === id);
+    const side = sideChatController.sideChat.value;
+    const belongsToSide = side?.pending && request?.threadId === side.threadId && request?.turnId === side.turnId;
     if (
       !request ||
-      request.threadId !== activeThreadId.value ||
-      request.turnId !== activeTurn.value?.id ||
+      (!belongsToSide && (request.threadId !== activeThreadId.value || request.turnId !== activeTurn.value?.id)) ||
       !request.availableDecisions.includes(decision)
     )
       return;
@@ -3101,7 +3145,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const model =
         options.model?.trim() || parseSelectedCodexModel(selectedModel.value).modelID || undefined;
       const cwd = resolvePromptCwd(options.cwd, targetThreadId);
-      const input: CodexPromptInput = { text: prompt, summary: 'auto', clientUserMessageId };
+      const input: CodexPromptInput = { ...sessionControls.promptSettings(), text: prompt, summary: 'auto', clientUserMessageId };
       if (inputItems.length > 0) input.input = inputItems;
       if (targetThreadId) input.threadId = targetThreadId;
       if (model) input.model = model;
@@ -3155,11 +3199,32 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (!activeThreadId.value) throw new Error('No active thread.');
     reviewState.value = 'idle';
     reviewResult.value = '';
-    await adapter.reviewStart({
-      threadId: activeThreadId.value,
+    const request = captureConnection();
+    if (!request) throw new Error('Codex is not connected.');
+    const threadId = activeThreadId.value;
+    const selectionGeneration = threadSelectionGeneration;
+    const statusRevision = threadStatusRevision;
+    const result = await request.sourceAdapter.reviewStart({
+      threadId,
       delivery,
       target,
     });
+    if (!isCurrentConnection(request) || selectionGeneration !== threadSelectionGeneration ||
+      activeThreadId.value !== result.reviewThreadId) return;
+    recordObservedTurnId(result.reviewThreadId, result.turn.id);
+    threadActivity.markParticipated(result.reviewThreadId);
+    if ((liveThreadStatuses.get(result.reviewThreadId)?.revision ?? 0) <= statusRevision) {
+      activeTurn.value = result.turn;
+      const completed = ['completed', 'failed', 'interrupted'].includes(result.turn.status ?? '');
+      updateThreadStatus(result.reviewThreadId, completed ? 'idle' : 'active');
+      reviewState.value = completed ? 'completed' : 'reviewing';
+    }
+    mergeRealtimeHistoryBundle(normalizeCodexTurnItems({
+      sessionId: result.reviewThreadId,
+      turnId: result.turn.id,
+      items: result.turn.items ?? [],
+      turnStatus: activeTurn.value?.status ?? result.turn.status,
+    }), request, result.turn.id);
   }
 
   // Command execution functions
@@ -3985,6 +4050,15 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     modelsLoading,
     modelProviderCapabilities,
     modelProviderCapabilitiesLoading,
+    sideChat: sideChatController.sideChat,
+    startSideChat,
+    sendSidePrompt,
+    closeSideChat: sideChatController.closeSideChat,
+    selectedServiceTier: sessionControls.selectedServiceTier,
+    selectedPermissionMode: sessionControls.selectedPermissionMode,
+    permissionModes: sessionControls.permissionModes,
+    setFastMode: sessionControls.setFastMode,
+    setPermissionMode: sessionControls.setPermissionMode,
     permissionProfiles,
     permissionProfilesLoading,
     threadGoal,

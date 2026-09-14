@@ -74,6 +74,11 @@ export function createAdapterMock() {
     rollbackThread: vi.fn().mockResolvedValue({
       thread: { id: 'thr_existing', name: 'Existing named thread' },
     }),
+    revertThread: vi.fn().mockResolvedValue({
+      thread: { id: 'thr_existing', historyMode: 'paginated' },
+      turnsBackwardsCursor: null,
+      itemsBackwardsCursor: null,
+    }),
     readDirectory: vi.fn().mockResolvedValue({ entries: [{ name: 'file.txt', type: 'file' }] }),
     readFile: vi.fn().mockResolvedValue({ dataBase64: 'aGVsbG8=' }),
     listCollaborationModes: vi.fn().mockResolvedValue({ data: [] }),
