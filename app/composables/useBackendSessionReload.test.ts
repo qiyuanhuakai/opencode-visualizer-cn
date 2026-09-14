@@ -3,6 +3,24 @@ import { ref } from 'vue';
 import { createSessionReloadFixture } from './useBackendSessionReload.test-helpers';
 
 describe('useBackendSessionReload', () => {
+  it('keeps Codex history loading until the final output anchor settles', async () => {
+    let finishAnchor = () => {};
+    const anchorOutputToBottom = vi.fn(() => new Promise<void>((resolve) => {
+      finishAnchor = resolve;
+    }));
+    const { reload, options } = createSessionReloadFixture({
+      activeBackendKind: ref('codex'),
+      anchorOutputToBottom,
+    });
+    const loading = reload.reloadSelectedSessionState('thread-1');
+    expect(options.isLoadingHistory.value).toBe(true);
+    await vi.waitFor(() => expect(anchorOutputToBottom).toHaveBeenCalledOnce());
+    expect(options.isLoadingHistory.value).toBe(true);
+    finishAnchor();
+    await loading;
+    expect(options.isLoadingHistory.value).toBe(false);
+  });
+
   it('keeps a completed root snapshot cacheable when child hydration fails', async () => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
       callback(0);

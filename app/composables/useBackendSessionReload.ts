@@ -90,7 +90,7 @@ export function useBackendSessionReload(params: {
 
   async function reloadSelectedSessionState(newId?: string, oldId?: string, forceReset = false) {
     const reloadRequestId = ++params.sessionReloadRequestId.value;
-    params.isLoadingHistory.value = false;
+    params.isLoadingHistory.value = Boolean(newId) && params.activeBackendKind.value === 'codex';
     const previousCacheContext = loadedMessageCacheContext;
     const nextCacheContext: LoadedMessageCacheContext | null = newId
       ? {
@@ -139,13 +139,12 @@ export function useBackendSessionReload(params: {
           if (reloadRequestId !== params.sessionReloadRequestId.value) return;
           params.msg.loadHistory(nextHistory);
           params.codexReapplyBackfill();
+          await params.anchorOutputToBottom();
         } finally {
           if (reloadRequestId === params.sessionReloadRequestId.value) {
             params.isLoadingHistory.value = false;
           }
         }
-        if (reloadRequestId !== params.sessionReloadRequestId.value) return;
-        await params.anchorOutputToBottom();
         if (reloadRequestId !== params.sessionReloadRequestId.value) return;
         params.focusInput();
         return;

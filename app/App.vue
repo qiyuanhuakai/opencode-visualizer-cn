@@ -1485,7 +1485,7 @@ const appEl = ref<HTMLDivElement | null>(null);
 const toolWindowCanvasEl = ref<HTMLDivElement | null>(null);
 const outputPanelRef = ref<{
   panelEl: HTMLDivElement | null;
-  scrollToBottom: () => Promise<void>;
+  scrollToBottom: (waitForRenders?: () => Promise<void>) => Promise<void>;
 } | null>(null);
 const topPanelRef = ref<{
   openSessionDropdown: () => void;
@@ -1519,12 +1519,12 @@ async function handleOutputPanelResumeFollow() {
 }
 
 function handleOutputPanelMessageRendered() {
-  if (isOutputAnchoring.value) return;
+  if (isOutputAnchoring.value || isLoadingHistory.value) return;
   notifyContentChange();
 }
 
 function handleOutputPanelContentResized() {
-  if (isOutputAnchoring.value) return;
+  if (isOutputAnchoring.value || isLoadingHistory.value) return;
   notifyContentChange();
 }
 
@@ -1534,11 +1534,11 @@ async function anchorOutputToBottom() {
   pauseTracking();
   try {
     await nextTick();
-    await outputPanelRef.value?.scrollToBottom();
+    await outputPanelRef.value?.scrollToBottom(waitForPendingRenders);
   } finally {
     if (requestId === outputAnchorRequestId) {
       isOutputAnchoring.value = false;
-      resumeTracking({ syncToBottom: false });
+      if (!isLoadingHistory.value) resumeTracking({ syncToBottom: false });
     }
   }
 }
@@ -1570,6 +1570,14 @@ const userMessageMetaById = ref<Record<string, UserMessageMeta>>({});
 const userMessageTimeById = ref<Record<string, number>>({});
 const isLoadingHistory = ref(false);
 const isOutputAnchoring = ref(false);
+watch(
+  isLoadingHistory,
+  (loading) => {
+    if (loading) pauseTracking();
+    else if (!isOutputAnchoring.value) resumeTracking({ syncToBottom: false });
+  },
+  { flush: 'sync' },
+);
 const deferredSessionReloadId = ref<string | null>(null);
 const globalEventUnsubscribers: Array<() => void> = [];
 
@@ -7811,7 +7819,10 @@ const backendSessionReload = useBackendSessionReload({
   fwCloseAll: () => {
     fw.closeAll({ exclude: (key) => key.startsWith('shell:') });
   },
-  resetFollow,
+  resetFollow: () => {
+    resetFollow();
+    if (isLoadingHistory.value) pauseTracking();
+  },
   reasoningReset: () => {
     reasoning.reset();
   },

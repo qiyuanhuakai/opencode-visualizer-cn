@@ -426,12 +426,17 @@ onBeforeUnmount(() => {
   fileRefPopupRef.value?.closeFilePopup();
 });
 
-async function scrollToBottom(): Promise<void> {
+async function scrollToBottom(waitForRenders?: () => Promise<void>): Promise<void> {
   windowShiftGeneration += 1;
   windowShiftInProgress = false;
   windowShiftQueued = false;
-  rootWindow.value = initialProgressiveRootWindow(renderableRoots.value.length, THREAD_WINDOW_MAX);
+  const generation = windowShiftGeneration;
+  const windowSize = Math.max(THREAD_BATCH_SIZE, rootWindow.value.end - rootWindow.value.start);
+  rootWindow.value = initialProgressiveRootWindow(renderableRoots.value.length, windowSize);
   await nextTick();
+  await waitForRenders?.();
+  await nextTick();
+  if (generation !== windowShiftGeneration) return;
   const panel = panelEl.value;
   if (!panel) return;
 
@@ -470,6 +475,7 @@ async function scrollToBottom(): Promise<void> {
 
       attempts += 1;
       const target = Math.max(0, currentPanel.scrollHeight - currentPanel.clientHeight);
+      const targetStable = target === lastTarget;
       if (target !== lastTarget || Math.abs(currentPanel.scrollTop - target) > 0.5) {
         currentPanel.scrollTop = target;
       }
@@ -479,7 +485,7 @@ async function scrollToBottom(): Promise<void> {
         0,
         currentPanel.scrollHeight - currentPanel.clientHeight - currentPanel.scrollTop,
       );
-      stableFrames = gap <= 0.5 ? stableFrames + 1 : 0;
+      stableFrames = gap <= 0.5 && targetStable ? stableFrames + 1 : 0;
       if (stableFrames >= 2 || attempts >= maxAttempts) {
         finish();
         return;
