@@ -660,7 +660,7 @@ import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
 import { useFloatingWindows, type FloatingWindowEntry } from './composables/useFloatingWindows';
-import { usePermissions, type PermissionRequest } from './composables/usePermissions';
+import { usePermissions, type PermissionReply, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
 import type { QuestionRequest } from './types/sse';
@@ -793,6 +793,23 @@ import { useKimiWebMessageBridge } from './composables/useKimiWebMessageBridge';
 import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
 import { KimiWebAdapter } from './backends/kimiWeb/kimiWebAdapter';
 import { kimiWebMessagesToHistoryEntries } from './backends/kimiWeb/historyEntries';
+import {
+  answerKimiWebApproval,
+  answerKimiWebQuestion,
+  attachKimiWebInteractions,
+  createKimiWebInteractionStore,
+  dismissKimiWebQuestion,
+  kimiWebApprovalAnswerFromReply,
+  kimiWebApprovalToPermissionRequest,
+  kimiWebQuestionAnswersFromLabels,
+  kimiWebQuestionToQuestionRequest,
+  kimiWebSessionOpNeedsReconcile,
+  parseKimiWebApprovalRequestId,
+  parseKimiWebQuestionRequestId,
+  reconcileKimiWebInteractions,
+  type KimiWebInteractionClient,
+  type KimiWebPendingInteraction,
+} from './backends/kimiWeb/interactions';
 import { createKimiWebWsClient, kimiWebProxyHttpUrl, kimiWebWsUrl, type KimiWebWsClient } from './utils/kimiWebWs';
 import { useSettings } from './composables/useSettings';
 import { createComposerDraftScheduler } from './utils/composerDraftScheduler';
@@ -2415,6 +2432,13 @@ const {
       codexApi.replyPermissionRequest(requestId, reply);
       return;
     }
+    if (activeBackendKind.value === 'kimi-web') {
+      const approvalId = parseKimiWebApprovalRequestId(requestId);
+      if (approvalId) {
+        await replyKimiWebApproval(approvalId, reply as PermissionReply);
+        return;
+      }
+    }
     const replyPermission = getActiveBackendAdapter().replyPermission;
     if (!replyPermission) throw new Error('Active backend does not support permission replies.');
     await replyPermission(requestId, {
@@ -2462,6 +2486,13 @@ const {
       );
       return;
     }
+    if (activeBackendKind.value === 'kimi-web') {
+      const questionId = parseKimiWebQuestionRequestId(requestId);
+      if (questionId) {
+        await replyKimiWebQuestion(questionId, answers as string[][]);
+        return;
+      }
+    }
     const replyQuestion = getActiveBackendAdapter().replyQuestion;
     if (!replyQuestion) throw new Error('Active backend does not support question replies.');
     await replyQuestion(requestId, {
@@ -2483,6 +2514,13 @@ const {
     if (dynamicRequest) {
       await codexApi.respondToDynamicToolCall(dynamicRequest.requestId, [], false);
       return;
+    }
+    if (activeBackendKind.value === 'kimi-web') {
+      const questionId = parseKimiWebQuestionRequestId(requestId);
+      if (questionId) {
+        await dismissKimiWebQuestionRequest(questionId);
+        return;
+      }
     }
     const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
     if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
@@ -2707,6 +2745,11 @@ watch(activeBackendKind, () => {
   codexElicitationDialogIds.value.forEach((id) => fw.close(codexElicitationWindowKey(id)));
   codexQuestionDialogIds.value.forEach(removeQuestionEntry);
   codexDynamicQuestionDialogIds.value.forEach(removeQuestionEntry);
+  kimiWebApprovalDialogIds.value.forEach(removePermissionEntry);
+  kimiWebQuestionDialogIds.value.forEach(removeQuestionEntry);
+  kimiWebApprovalDialogIds.value = new Set();
+  kimiWebQuestionDialogIds.value = new Set();
+  kimiWebInteractions.clearAll();
   codexPermissionDialogIds.value = new Set();
   codexStructuredPermissionDialogIds.value = new Set();
   codexElicitationDialogIds.value = new Set();
@@ -7756,6 +7799,18 @@ const kimiWebApi = {
     kimiWebRestClient().steer(...args),
   abortPrompt: (...args: Parameters<KimiWebAdapter['restClient']['abortPrompt']>) =>
     kimiWebRestClient().abortPrompt(...args),
+  listApprovals: (...args: Parameters<KimiWebAdapter['restClient']['listApprovals']>) =>
+    kimiWebRestClient().listApprovals(...args),
+  answerApproval: (...args: Parameters<KimiWebAdapter['restClient']['answerApproval']>) =>
+    kimiWebRestClient().answerApproval(...args),
+  listQuestions: (...args: Parameters<KimiWebAdapter['restClient']['listQuestions']>) =>
+    kimiWebRestClient().listQuestions(...args),
+  answerQuestion: (...args: Parameters<KimiWebAdapter['restClient']['answerQuestion']>) =>
+    kimiWebRestClient().answerQuestion(...args),
+  dismissQuestion: (...args: Parameters<KimiWebAdapter['restClient']['dismissQuestion']>) =>
+    kimiWebRestClient().dismissQuestion(...args),
+  getSessionStatus: (...args: Parameters<KimiWebAdapter['restClient']['getSessionStatus']>) =>
+    kimiWebRestClient().getSessionStatus(...args),
 };
 
 const kimiWebAbortChannel = {
@@ -7784,6 +7839,169 @@ function disconnectKimiWebBackend() {
   kimiWebWsClient.value?.disconnect();
   kimiWebMessageBridge.value = undefined;
   kimiWebWsClient.value = undefined;
+  detachKimiWebInteractionFrames?.();
+  detachKimiWebInteractionFrames = undefined;
+  kimiWebInteractions.clearAll();
+  refreshKimiWebPendingInteractions();
+}
+
+// ---------------------------------------------------------------------------
+// Todo 19: kimi-web approvals / questions wired into the EXISTING shared
+// permission/question surfaces (usePermissions / useQuestions — the same
+// floating windows OpenCode/Codex/ACP use; no new UI primitives).
+//
+// Reconciliation is AUTHORITATIVE, not unconditional cleanup: the pending set
+// is keyed by {session_id, interaction_id}; resolved/answered/dismissed
+// events clear ONLY the matching id (a late event cannot drop a newer
+// pending item); the set itself is rebuilt from the server lists
+// (listApprovals / listQuestions) on session live (initial load, reconnect,
+// resync), on session switch and after an answer that failed (404/already
+// resolved). Turn completion and the session-level pending declaration stay
+// separate from the item set: turn.ended never implies "no pending", and a
+// session-level declaration never fabricates or clears an item.
+//
+// The bridge drops interaction ops (kimiWebMessageOps.ts only applies
+// message/part/session ops), so the frames are consumed from the App-owned
+// WS client through the Todo 9 `onFrame` seam and normalized by the same
+// Todo 13/14 normalizer; `session.pendingInteraction` arrives through the
+// bridge session state. Permission payloads stay memory-only (rule: never
+// persist) — the store holds them in RAM only.
+//
+// The integration contract is pinned by
+// app/composables/useKimiWebInteractions.integration.test.ts, whose harness
+// mirrors this block line-for-line.
+// ---------------------------------------------------------------------------
+const kimiWebInteractions = createKimiWebInteractionStore();
+let detachKimiWebInteractionFrames: (() => void) | undefined;
+const kimiWebPendingInteractions = ref<KimiWebPendingInteraction[]>([]);
+const kimiWebApprovalDialogIds = ref<Set<string>>(new Set());
+const kimiWebQuestionDialogIds = ref<Set<string>>(new Set());
+const kimiWebReconcileInFlight = new Set<string>();
+let lastKimiWebPendingSignature = '';
+
+function kimiWebInteractionClient(): KimiWebInteractionClient {
+  return kimiWebApi;
+}
+
+function refreshKimiWebPendingInteractions() {
+  const sessionId = activeBackendKind.value === 'kimi-web' ? selectedSessionId.value : '';
+  const items = sessionId ? kimiWebInteractions.pendingFor(sessionId) : [];
+  const signature = items.map((item) => `${item.kind}:${item.id}`).join('|');
+  if (signature === lastKimiWebPendingSignature) return;
+  lastKimiWebPendingSignature = signature;
+  kimiWebPendingInteractions.value = items;
+}
+
+async function reconcileKimiWebSelectedSession() {
+  if (activeBackendKind.value !== 'kimi-web') return;
+  const sessionId = selectedSessionId.value;
+  if (!sessionId || !configuredKimiWebAdapter) return;
+  if (kimiWebReconcileInFlight.has(sessionId)) return;
+  kimiWebReconcileInFlight.add(sessionId);
+  try {
+    await reconcileKimiWebInteractions({
+      client: kimiWebInteractionClient(),
+      store: kimiWebInteractions,
+      sessionId,
+      isCurrent: () =>
+        activeBackendKind.value === 'kimi-web' && selectedSessionId.value === sessionId,
+    });
+  } catch {
+    // A failed reconcile leaves the local set untouched; the next trigger retries.
+  } finally {
+    kimiWebReconcileInFlight.delete(sessionId);
+  }
+  refreshKimiWebPendingInteractions();
+}
+
+// Same reconcile-against-current-list order as the Codex dialog watchers
+// (reconcileDialogRequests): stale ids close first, current items upsert.
+watch(kimiWebPendingInteractions, (items) => {
+  if (activeBackendKind.value !== 'kimi-web') return;
+  const approvalIds = new Set<string>();
+  const questionIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind === 'approval') {
+      const request = kimiWebApprovalToPermissionRequest(item);
+      approvalIds.add(request.id);
+      upsertPermissionEntry(request);
+    } else {
+      const request = kimiWebQuestionToQuestionRequest(item);
+      questionIds.add(request.id);
+      upsertQuestionEntry(request);
+    }
+  }
+  kimiWebApprovalDialogIds.value.forEach((id) => {
+    if (!approvalIds.has(id)) removePermissionEntry(id);
+  });
+  kimiWebQuestionDialogIds.value.forEach((id) => {
+    if (!questionIds.has(id)) removeQuestionEntry(id);
+  });
+  kimiWebApprovalDialogIds.value = approvalIds;
+  kimiWebQuestionDialogIds.value = questionIds;
+});
+
+watch(selectedSessionId, (nextId, previousId) => {
+  if (activeBackendKind.value !== 'kimi-web') return;
+  if (previousId && previousId !== nextId) kimiWebInteractions.clearSession(previousId);
+  refreshKimiWebPendingInteractions();
+  void reconcileKimiWebSelectedSession();
+});
+
+async function replyKimiWebApproval(approvalId: string, reply: PermissionReply) {
+  const pending = kimiWebInteractions.findById(approvalId);
+  const answer = kimiWebApprovalAnswerFromReply(reply);
+  if (!pending || pending.kind !== 'approval' || !answer) {
+    throw new Error('Kimi Web approval request is no longer available.');
+  }
+  const outcome = await answerKimiWebApproval({
+    client: kimiWebInteractionClient(),
+    store: kimiWebInteractions,
+    sessionId: pending.sessionId,
+    approvalId,
+    answer,
+  });
+  refreshKimiWebPendingInteractions();
+  if (outcome.kind === 'failed') {
+    throw outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
+  }
+}
+
+async function replyKimiWebQuestion(questionId: string, labelAnswers: string[][]) {
+  const pending = kimiWebInteractions.findById(questionId);
+  if (!pending || pending.kind !== 'question') {
+    throw new Error('Kimi Web question request is no longer available.');
+  }
+  const answer = kimiWebQuestionAnswersFromLabels(pending, labelAnswers);
+  if (!answer) throw new Error('Kimi Web question answer is empty.');
+  const outcome = await answerKimiWebQuestion({
+    client: kimiWebInteractionClient(),
+    store: kimiWebInteractions,
+    sessionId: pending.sessionId,
+    questionId,
+    answer,
+  });
+  refreshKimiWebPendingInteractions();
+  if (outcome.kind === 'failed') {
+    throw outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
+  }
+}
+
+async function dismissKimiWebQuestionRequest(questionId: string) {
+  const pending = kimiWebInteractions.findById(questionId);
+  if (!pending || pending.kind !== 'question') {
+    throw new Error('Kimi Web question request is no longer available.');
+  }
+  const outcome = await dismissKimiWebQuestion({
+    client: kimiWebInteractionClient(),
+    store: kimiWebInteractions,
+    sessionId: pending.sessionId,
+    questionId,
+  });
+  refreshKimiWebPendingInteractions();
+  if (outcome.kind === 'failed') {
+    throw outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
+  }
 }
 
 watchEffect(() => {
@@ -7877,6 +8095,32 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
           subagentWindows.handlePart(part, info);
         },
         onReconcilePart: reconcileKimiWebPopup,
+        onSyncStateChange: (sessionId, state) => {
+          // Entering live covers initial load, plain reconnect and snapshot
+          // resync completion: rebuild the pending set from the server lists.
+          if (state.kind !== 'live') return;
+          if (activeBackendKind.value !== 'kimi-web') return;
+          if (sessionId !== selectedSessionId.value) return;
+          void reconcileKimiWebSelectedSession();
+        },
+        onSessionEvent: (op) => {
+          // `session.pendingInteraction` is a reconcile trigger only: a
+          // declaration the local set disagrees with asks the authoritative
+          // lists to be re-read (it never fabricates or clears an item).
+          if (activeBackendKind.value !== 'kimi-web') return;
+          if (op.sessionId !== selectedSessionId.value) return;
+          if (!kimiWebSessionOpNeedsReconcile(op, kimiWebInteractions)) return;
+          void reconcileKimiWebSelectedSession();
+        },
+      });
+      detachKimiWebInteractionFrames?.();
+      detachKimiWebInteractionFrames = attachKimiWebInteractions({
+        client,
+        store: kimiWebInteractions,
+        onInteractionsChanged: refreshKimiWebPendingInteractions,
+        onReconnected: () => {
+          void reconcileKimiWebSelectedSession();
+        },
       });
       return bridge;
     },
