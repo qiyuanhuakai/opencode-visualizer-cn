@@ -10,6 +10,7 @@ import type { BackendKind } from '../backends/types';
 import {
   DEFAULT_ACP_BRIDGE_URL,
   DEFAULT_CODEX_BRIDGE_URL,
+  DEFAULT_KIMI_WEB_BRIDGE_URL,
   getPersistedAcpBridgeToken,
   getPersistedAcpBridgeUrl,
 } from '../backends/registry';
@@ -28,8 +29,10 @@ const password = ref('');
 const backendKind = ref<BackendKind>('opencode');
 const codexBridgeUrl = ref(DEFAULT_CODEX_BRIDGE_URL);
 const acpBridgeUrl = ref(DEFAULT_ACP_BRIDGE_URL);
+const kimiWebBridgeUrl = ref(DEFAULT_KIMI_WEB_BRIDGE_URL);
 const codexBridgeToken = ref('');
 const acpBridgeToken = ref('');
+const kimiWebBridgeToken = ref('');
 const acpAgentId = ref('');
 
 function applyCredentials(next: Credentials) {
@@ -56,6 +59,7 @@ export function useCredentials() {
     if (backendKind.value === 'acp') {
       return acpBridgeUrl.value.trim().length > 0 && acpAgentId.value.trim().length > 0;
     }
+    if (backendKind.value === 'kimi-web') return kimiWebBridgeUrl.value.trim().length > 0;
     return url.value.trim().length > 0;
   });
 
@@ -114,6 +118,17 @@ export function useCredentials() {
     else storageRemove(StorageKeys.auth.acpBridgeToken);
   }
 
+  function saveKimiWeb(newBridgeUrl: string, newBridgeToken: string) {
+    const bridgeUrl = newBridgeUrl.trim();
+    if (!bridgeUrl) throw new Error('Kimi Web bridge URL is required.');
+    saveBackendKind('kimi-web');
+    kimiWebBridgeUrl.value = bridgeUrl;
+    kimiWebBridgeToken.value = newBridgeToken;
+    storageSet(StorageKeys.auth.kimiWebBridgeUrl, bridgeUrl);
+    if (newBridgeToken.trim()) storageSet(StorageKeys.auth.kimiWebBridgeToken, newBridgeToken);
+    else storageRemove(StorageKeys.auth.kimiWebBridgeToken);
+  }
+
   function load() {
     if (typeof window === 'undefined') return;
 
@@ -135,7 +150,9 @@ export function useCredentials() {
         password: storedCredentials?.password ?? '',
       });
       backendKind.value =
-        storedBackendKind === 'codex' || (storedBackendKind === 'acp' && storedAcpAgentId)
+        storedBackendKind === 'codex' ||
+        storedBackendKind === 'kimi-web' ||
+        (storedBackendKind === 'acp' && storedAcpAgentId)
           ? storedBackendKind
           : 'opencode';
       codexBridgeUrl.value =
@@ -153,6 +170,9 @@ export function useCredentials() {
         storageSet(StorageKeys.auth.acpBridgeToken, acpBridgeToken.value);
       }
       codexBridgeToken.value = storageGet(StorageKeys.auth.codexBridgeToken) ?? '';
+      kimiWebBridgeUrl.value =
+        storageGet(StorageKeys.auth.kimiWebBridgeUrl) ?? DEFAULT_KIMI_WEB_BRIDGE_URL;
+      kimiWebBridgeToken.value = storageGet(StorageKeys.auth.kimiWebBridgeToken) ?? '';
       acpAgentId.value = storedAcpAgentId;
     } catch {
       return;
@@ -164,6 +184,7 @@ export function useCredentials() {
     const preservedBackendKind = backendKind.value;
     const preservedCodexUrl = codexBridgeUrl.value;
     const preservedAcpUrl = acpBridgeUrl.value;
+    const preservedKimiWebUrl = kimiWebBridgeUrl.value;
     url.value = preservedUrl;
     username.value = '';
     password.value = '';
@@ -185,6 +206,10 @@ export function useCredentials() {
         storageSet(StorageKeys.auth.acpBridgeUrl, preservedAcpUrl);
         storageRemove(StorageKeys.auth.acpBridgeToken);
         acpBridgeToken.value = '';
+      } else if (preservedBackendKind === 'kimi-web') {
+        storageSet(StorageKeys.auth.kimiWebBridgeUrl, preservedKimiWebUrl);
+        storageRemove(StorageKeys.auth.kimiWebBridgeToken);
+        kimiWebBridgeToken.value = '';
       }
     } catch {
       return;
@@ -195,7 +220,9 @@ export function useCredentials() {
     window.addEventListener('storage', (event) => {
       if (event.key === storageKey(StorageKeys.auth.backendKind)) {
         backendKind.value =
-          event.newValue === 'codex' || event.newValue === 'acp' ? event.newValue : 'opencode';
+          event.newValue === 'codex' || event.newValue === 'acp' || event.newValue === 'kimi-web'
+            ? event.newValue
+            : 'opencode';
         return;
       }
 
@@ -218,6 +245,16 @@ export function useCredentials() {
 
       if (event.key === storageKey(StorageKeys.auth.acpBridgeToken)) {
         acpBridgeToken.value = event.newValue ?? '';
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.kimiWebBridgeUrl)) {
+        kimiWebBridgeUrl.value = event.newValue ?? DEFAULT_KIMI_WEB_BRIDGE_URL;
+        return;
+      }
+
+      if (event.key === storageKey(StorageKeys.auth.kimiWebBridgeToken)) {
+        kimiWebBridgeToken.value = event.newValue ?? '';
         return;
       }
 
@@ -254,8 +291,10 @@ export function useCredentials() {
     backendKind,
     codexBridgeUrl,
     acpBridgeUrl,
+    kimiWebBridgeUrl,
     codexBridgeToken,
     acpBridgeToken,
+    kimiWebBridgeToken,
     acpAgentId,
     authHeader,
     baseUrl,
@@ -264,6 +303,7 @@ export function useCredentials() {
     saveBackendKind,
     saveCodex,
     saveAcp,
+    saveKimiWeb,
     load,
     clear,
   };
