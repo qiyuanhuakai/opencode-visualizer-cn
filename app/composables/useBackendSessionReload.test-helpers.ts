@@ -20,6 +20,11 @@ export function createSessionReloadFixture(overrides: Partial<ReloadOptions> = {
   const scheduleDescendantSessionHistoryHydration =
     vi.fn<ReloadOptions['scheduleDescendantSessionHistoryHydration']>();
   const selectThread = vi.fn<ReloadOptions['codexApi']['selectThread']>(async () => {});
+  const kimiWebGetMessages = vi.fn<NonNullable<ReloadOptions['kimiWebApi']>['getMessages']>(
+    async () => ({ items: [], has_more: false }),
+  );
+  const onKimiWebHistoryTruncated =
+    vi.fn<NonNullable<ReloadOptions['onKimiWebHistoryTruncated']>>();
   const options = {
     activeBackendKind: ref('opencode'),
     activeDirectory: ref('/repo'),
@@ -42,6 +47,8 @@ export function createSessionReloadFixture(overrides: Partial<ReloadOptions> = {
     },
     codexHistory: ref<unknown[]>([]),
     codexReapplyBackfill: vi.fn<ReloadOptions['codexReapplyBackfill']>(),
+    kimiWebApi: { getMessages: kimiWebGetMessages },
+    onKimiWebHistoryTruncated,
     fetchRootSessionHistory,
     waitForPendingRenders,
     reserveRootHistoryRequestId,
@@ -65,6 +72,9 @@ export function createSessionReloadFixture(overrides: Partial<ReloadOptions> = {
       reserveRootHistoryRequestId,
       scheduleDescendantSessionHistoryHydration,
       selectThread,
+      kimiWebGetMessages,
+      onKimiWebHistoryTruncated,
+      codexReapplyBackfill: options.codexReapplyBackfill,
     },
   };
 }

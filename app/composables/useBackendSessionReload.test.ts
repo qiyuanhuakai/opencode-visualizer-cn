@@ -1,6 +1,30 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
+import type { KimiWebMessage } from '../utils/kimiWeb';
+import { KimiWebError } from '../utils/kimiWeb';
 import { createSessionReloadFixture } from './useBackendSessionReload.test-helpers';
+
+const KIMI_FIXTURES_DIR = [
+  join(process.cwd(), 'app', 'backends', 'kimiWeb', 'fixtures'),
+  join(process.cwd(), 'backends', 'kimiWeb', 'fixtures'),
+].find((directory) => existsSync(directory)) ?? join(process.cwd(), 'app', 'backends', 'kimiWeb', 'fixtures');
+
+function kimiFixtureMessages(): KimiWebMessage[] {
+  const raw = JSON.parse(
+    readFileSync(join(KIMI_FIXTURES_DIR, 'rest-messages-after-p3.json'), 'utf8'),
+  ) as { data: { items: KimiWebMessage[] } };
+  return raw.data.items;
+}
+
+function kimiEntryIds(messages: KimiWebMessage[]): string[] {
+  return [...messages]
+    .reverse()
+    .filter((message) => message.metadata?.origin?.kind !== 'injection')
+    .filter((message) => message.role !== 'tool')
+    .map((message) => message.id);
+}
 
 describe('useBackendSessionReload', () => {
   it('keeps Codex history loading until the final output anchor settles', async () => {
@@ -224,5 +248,113 @@ describe('useBackendSessionReload', () => {
       namespace: 'acp:agent-b:/repo-b',
       sessionId: 'next-session',
     });
+  });
+});
+
+describe('useBackendSessionReload kimi-web history', () => {
+  it('pages backwards and feeds chronological, injection-free entries to loadHistory', async () => {
+    const newestFirst = kimiFixtureMessages();
+    const pageOne = newestFirst.slice(0, 6);
+    const pageTwo = newestFirst.slice(6);
+    const getMessages = vi.fn(
+      async (_sessionId: string, query?: { before_id?: string }) =>
+        query?.before_id
+          ? { items: pageTwo, has_more: false }
+          : { items: pageOne, has_more: true },
+    );
+    const { reload, mocks } = createSessionReloadFixture({
+      activeBackendKind: ref<'kimi-web'>('kimi-web'),
+      kimiWebApi: { getMessages },
+    });
+
+    await reload.reloadSelectedSessionState('kimi-session');
+
+    expect(getMessages).toHaveBeenCalledTimes(2);
+    expect(getMessages.mock.calls[1]?.[1]?.before_id).toBe(pageOne.at(-1)?.id);
+    expect(mocks.msg.loadHistory).toHaveBeenCalledTimes(1);
+    const entries = mocks.msg.loadHistory.mock.calls[0]?.[0] as Array<{ info: { id: string } }>;
+    expect(entries.map((entry) => entry.info.id)).toEqual(kimiEntryIds(newestFirst));
+    expect(entries.some((entry) => entry.info.id.endsWith('_000001'))).toBe(false);
+  });
+
+  it('never invokes popup or descendant callbacks during a kimi-web history load', async () => {
+    const getMessages = vi.fn(async () => ({ items: kimiFixtureMessages(), has_more: false }));
+    const hydrateReferencedSubagents = vi.fn();
+    const { reload, mocks } = createSessionReloadFixture({
+      activeBackendKind: ref<'kimi-web'>('kimi-web'),
+      kimiWebApi: { getMessages },
+      hydrateReferencedSubagents,
+    });
+
+    await reload.reloadSelectedSessionState('kimi-session');
+
+    expect(mocks.msg.loadHistory).toHaveBeenCalledTimes(1);
+    expect(hydrateReferencedSubagents).not.toHaveBeenCalled();
+    expect(mocks.scheduleDescendantSessionHistoryHydration).not.toHaveBeenCalled();
+    expect(mocks.codexReapplyBackfill).not.toHaveBeenCalled();
+    expect(mocks.msg.tryLoadFromCache).not.toHaveBeenCalled();
+  });
+
+  it('discards kimi-web pages that resolve after a session switch', async () => {
+    const newestFirst = kimiFixtureMessages();
+    let resolveSlow: (value: { items: KimiWebMessage[]; has_more: boolean }) => void = () => {};
+    const getMessages = vi.fn((sessionId: string) =>
+      sessionId === 'slow'
+        ? new Promise<{ items: KimiWebMessage[]; has_more: boolean }>((resolve) => {
+            resolveSlow = resolve;
+          })
+        : Promise.resolve({ items: [], has_more: false }),
+    );
+    const { reload, mocks } = createSessionReloadFixture({
+      activeBackendKind: ref<'kimi-web'>('kimi-web'),
+      kimiWebApi: { getMessages },
+    });
+
+    const pending = reload.reloadSelectedSessionState('slow');
+    await vi.waitFor(() => expect(getMessages).toHaveBeenCalledWith('slow', expect.anything()));
+    await reload.reloadSelectedSessionState('current', 'slow');
+    mocks.msg.loadHistory.mockClear();
+
+    resolveSlow({ items: newestFirst, has_more: false });
+    await pending;
+
+    expect(mocks.msg.loadHistory).not.toHaveBeenCalled();
+  });
+
+  it('reports a bounded history when the kimi-web page cap is reached', async () => {
+    const sample = kimiFixtureMessages()[1]!;
+    const getMessages = vi.fn(async () => ({ items: [sample], has_more: true }));
+    const { reload, mocks } = createSessionReloadFixture({
+      activeBackendKind: ref<'kimi-web'>('kimi-web'),
+      kimiWebApi: { getMessages },
+      kimiWebHistoryMaxPages: 3,
+    });
+
+    await reload.reloadSelectedSessionState('kimi-session');
+
+    expect(getMessages).toHaveBeenCalledTimes(3);
+    expect(mocks.onKimiWebHistoryTruncated).toHaveBeenCalledWith({
+      sessionId: 'kimi-session',
+      pages: 3,
+    });
+  });
+
+  it('surfaces a mid-pagination envelope failure without publishing a truncated view', async () => {
+    const newestFirst = kimiFixtureMessages();
+    let calls = 0;
+    const getMessages = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) return { items: newestFirst.slice(0, 6), has_more: true };
+      throw new KimiWebError(40401, 'session missing');
+    });
+    const { reload, mocks } = createSessionReloadFixture({
+      activeBackendKind: ref<'kimi-web'>('kimi-web'),
+      kimiWebApi: { getMessages },
+    });
+
+    await expect(reload.reloadSelectedSessionState('kimi-session')).rejects.toBeInstanceOf(
+      KimiWebError,
+    );
+    expect(mocks.msg.loadHistory).not.toHaveBeenCalled();
   });
 });
