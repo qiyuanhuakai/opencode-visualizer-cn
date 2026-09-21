@@ -62,3 +62,19 @@ export function kimiWebTokenUsageFromReport(
     contextLimit: finiteOrZero(maxContextTokens),
   };
 }
+
+/**
+ * Context-only mapping for the Todo 23 REST fallback: the session status
+ * endpoint reports no token counts, so the zeros are placeholders the caller
+ * must suppress (tokenUsageContextOnly) instead of rendering as real values.
+ */
+export function kimiWebContextOnlyUsage(
+  contextTokens?: number,
+  maxContextTokens?: number,
+): KimiWebTokenUsage {
+  return {
+    usage: { tokens: { input: 0, output: 0, reasoning: 0, total: 0 } },
+    contextUsed: finiteOrZero(contextTokens),
+    contextLimit: finiteOrZero(maxContextTokens),
+  };
+}

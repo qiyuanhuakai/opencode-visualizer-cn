@@ -365,6 +365,7 @@ const messages: LocaleMessages = {
       outputTokens: '輸出 Token',
       reasoningTokens: '推理 Token',
       cacheTokens: '快取 Token（讀/寫）',
+      contextOnlyNote: '上下文來自工作階段狀態；Kimi Web 不報告 Token 用量',
       userMessages: '使用者訊息',
       assistantMessages: '助手訊息',
       totalCost: '總成本',

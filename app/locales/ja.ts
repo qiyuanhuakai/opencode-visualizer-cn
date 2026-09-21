@@ -371,6 +371,7 @@ const messages: LocaleMessages = {
       outputTokens: '出力トークン',
       reasoningTokens: '推論トークン',
       cacheTokens: 'キャッシュトークン（読み取り/書き込み）',
+      contextOnlyNote: 'コンテキストはセッションステータス由来。Kimi Web はトークン数を報告しません',
       userMessages: 'ユーザーメッセージ',
       assistantMessages: 'アシスタントメッセージ',
       totalCost: '総コスト',

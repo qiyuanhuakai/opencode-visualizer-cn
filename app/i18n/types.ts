@@ -362,6 +362,7 @@ export interface LocaleMessages {
       outputTokens: string;
       reasoningTokens: string;
       cacheTokens: string;
+      contextOnlyNote: string;
       userMessages: string;
       assistantMessages: string;
       totalCost: string;

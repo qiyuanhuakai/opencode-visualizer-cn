@@ -369,6 +369,7 @@ const messages: LocaleMessages = {
       outputTokens: 'Eligaj tokenoj',
       reasoningTokens: 'Rezonaj tokenoj',
       cacheTokens: 'Kaŝmemoraj tokenoj (lego/skribo)',
+      contextOnlyNote: 'Kunteksto el sesia statuso; Kimi Web ne raportas tokenkvantojn',
       userMessages: 'Uzantaj mesaĝoj',
       assistantMessages: 'Asistantaj mesaĝoj',
       totalCost: 'Entuta kosto',

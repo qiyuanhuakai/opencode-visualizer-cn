@@ -107,6 +107,7 @@ function defaultKimiWire(): {
   health: { ok: boolean; service: string; version: string };
   meta: KimiEnvelope;
   auth: KimiEnvelope;
+  status: KimiEnvelope | null;
 } {
   return {
     health: { ok: true, service: 'vis_bridge', version: '0.43.0' },
@@ -135,6 +136,17 @@ function defaultKimiWire(): {
       request_id: 'req-auth',
       data: { models_ready: true } as Record<string, unknown>,
     },
+    status: {
+      code: 0,
+      msg: 'success',
+      request_id: 'req-status',
+      data: {
+        busy: false,
+        model: 'kimi-code/kimi-for-coding',
+        context_tokens: 20787,
+        max_context_tokens: 1048576,
+      } as Record<string, unknown>,
+    },
   };
 }
 
@@ -151,6 +163,10 @@ const fetchMock = vi.fn<(input: unknown, init?: { headers?: Record<string, strin
     }
     if (url.endsWith('/api/v1/auth')) {
       return { ok: true, status: 200, text: async () => JSON.stringify(kimiWire.auth) };
+    }
+    if (url.endsWith('/status')) {
+      if (!kimiWire.status) return { ok: false, status: 500 };
+      return { ok: true, status: 200, text: async () => JSON.stringify(kimiWire.status) };
     }
     throw new Error(`unexpected fetch: ${url}`);
   },
@@ -327,7 +343,8 @@ describe('StatusMonitorModal kimi-web token tab', () => {
     app.unmount();
   });
 
-  it('shows no token data when the bridge has no session state for the session', async () => {
+  it('shows no token data when the bridge has no session state and the status fetch fails', async () => {
+    kimiWire.status = null;
     const { root, app } = await mountKimiWebModal({ bridge: bridgeStub(undefined) });
     await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
 
@@ -338,12 +355,79 @@ describe('StatusMonitorModal kimi-web token tab', () => {
   });
 
   it('shows no token data when the bridge is not wired yet (pre Todo 25 seam)', async () => {
+    kimiWire.status = null;
     const { root, app } = await mountKimiWebModal();
     await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
 
     clickTab(root, 'Token');
     await nextTick();
     await vi.waitFor(() => expect(root.textContent).toContain('No token data available'));
+    app.unmount();
+  });
+});
+
+/**
+ * Todo 23 — REST fallback for the token tab: `agent.status.updated` is volatile
+ * and never replayed, so a fresh page has no bridge usage state and the live
+ * session status endpoint is the honest fallback for the context bar. Kimi
+ * reports no token counts there, so the fallback never fabricates token rows.
+ */
+describe('StatusMonitorModal kimi-web token tab REST fallback', () => {
+  it('falls back to the session status context when the bridge state is empty', async () => {
+    const { root, app } = await mountKimiWebModal({ bridge: bridgeStub(undefined) });
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('1,048,576'));
+
+    // Context occupancy comes from the live session status endpoint: the limit
+    // renders and the percent bar is computed from context_tokens (20,787).
+    expect(root.textContent).not.toContain('No token data available');
+    expect(root.querySelector('.token-usage-percent')?.textContent).toBe('2%');
+    expect(root.querySelector<HTMLElement>('.token-usage-fill')?.style.width).toBe('2%');
+    // The source is labeled and the unreported token rows are not fabricated.
+    expect(root.textContent).toContain('session status');
+    expect(root.textContent).not.toContain('Input tokens');
+
+    // The status call goes through the bridge proxy with the bridge token; the
+    // kimi bearer never reaches the browser.
+    const statusCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/status'));
+    expect(String(statusCall?.[0])).toBe(
+      'http://localhost:23004/kimi-web/api/v1/sessions/session-1/status',
+    );
+    const statusInit = statusCall?.[1] as { headers?: Record<string, string> } | undefined;
+    expect(statusInit?.headers?.Authorization).toBe(`Bearer ${BRIDGE_TOKEN}`);
+    app.unmount();
+  });
+
+  it('keeps the bridge session state as the primary source (no status call)', async () => {
+    const bridge = bridgeStub(
+      bridgeState(
+        { total: { inputOther: 1200, output: 340, inputCacheRead: 800, inputCacheCreation: 200 } },
+        1280,
+        2560,
+      ),
+    );
+    const { root, app } = await mountKimiWebModal({ bridge });
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('1,200'));
+
+    expect(root.textContent).toContain('Input tokens');
+    expect(root.textContent).not.toContain('session status');
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/status'))).toBe(false);
+    app.unmount();
+  });
+
+  it('shows no token data when the bridge state is empty and the status fetch fails', async () => {
+    kimiWire.status = null;
+    const { root, app } = await mountKimiWebModal({ bridge: bridgeStub(undefined) });
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('No token data available'));
+    expect(root.textContent).not.toContain('session status');
     app.unmount();
   });
 });

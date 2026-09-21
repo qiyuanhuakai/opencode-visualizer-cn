@@ -12,7 +12,11 @@ import {
   KIMI_WEB_CAPABILITIES,
   getActiveBackendAdapter,
 } from '../backends/registry';
-import { kimiWebTokenUsageFromReport } from '../backends/kimiWeb/tokenUsage';
+import {
+  kimiWebContextOnlyUsage,
+  kimiWebTokenUsageFromReport,
+  type KimiWebTokenUsage,
+} from '../backends/kimiWeb/tokenUsage';
 import { useMessages } from '../composables/useMessages';
 import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
@@ -147,6 +151,8 @@ const tokenContextLimit = ref<number>(0);
 const tokenContextUsed = ref<number>(0);
 const tokenUserMessages = ref<number>(0);
 const tokenAssistantMessages = ref<number>(0);
+/** True when the context bar came from the REST session-status fallback. */
+const tokenUsageContextOnly = ref(false);
 const tokenLoading = ref(false);
 const kimiMeta = ref<KimiWebMeta | null>(null);
 const kimiAuth = ref<KimiWebAuth | null>(null);
@@ -260,6 +266,7 @@ function resetTokenData() {
   tokenContextUsed.value = 0;
   tokenUserMessages.value = 0;
   tokenAssistantMessages.value = 0;
+  tokenUsageContextOnly.value = false;
 }
 
 function resetLoadedState() {
@@ -506,6 +513,15 @@ function kimiWebBridgeCredentials() {
   };
 }
 
+/** REST goes through the bridge proxy root; the bridge injects the kimi bearer. */
+function createKimiWebStatusClient() {
+  const { bridgeUrl, bridgeToken } = kimiWebBridgeCredentials();
+  return createKimiWebClient({
+    baseUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(bridgeUrl, bridgeToken)),
+    getToken: () => bridgeToken,
+  });
+}
+
 /** Bridge `/healthz` (vis_bridge shape: `{ok, service, version}`) via the kimi-web proxy URL. */
 async function fetchKimiWebBridgeHealth(healthUrl: string) {
   try {
@@ -534,12 +550,7 @@ async function refreshKimiWebStatus(requestId: number) {
     kimiWebBridgeUrl: bridgeUrl,
     kimiWebBridgeToken: bridgeToken,
   });
-  // REST goes through the bridge proxy root; the bridge injects the kimi bearer,
-  // the browser only ever sees the bridge token.
-  const client = createKimiWebClient({
-    baseUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(bridgeUrl, bridgeToken)),
-    getToken: () => bridgeToken,
-  });
+  const client = createKimiWebStatusClient();
   const [health, meta, auth] = await Promise.allSettled([
     fetchKimiWebBridgeHealth(healthUrl),
     client.getMeta(),
@@ -566,17 +577,41 @@ async function refreshKimiWebStatus(requestId: number) {
  * message store: `agent.status.updated` is latest-wins state, while the
  * normalizer's message tokens are a snapshot taken when a turn group opens.
  * The store still supplies the model name and message counts (history load,
- * Todo 15); there is no adapter `listSessionMessages` fallback yet (Todo 25).
+ * Todo 15). Todo 23 adds the REST fallback below for the fresh-page case
+ * where the volatile status frames have no replay to rebuild from.
  */
 function fetchKimiWebTokenData(sessionId: string) {
   const requestId = ++tokenRequestId;
   tokenLoading.value = true;
   const state = props.kimiWebBridge?.sessionState(sessionId);
-  const mapped = kimiWebTokenUsageFromReport(
+  let mapped = kimiWebTokenUsageFromReport(
     state?.usage,
     state?.contextTokens,
     state?.maxContextTokens,
   );
+  let contextOnly = false;
+  if (!mapped) {
+    // Todo 23: agent.status.updated is volatile and never replayed, so a fresh
+    // page has no bridge usage state; the session status endpoint carries the
+    // live context occupancy (kimi reports no token counts there).
+    void fetchKimiWebSessionStatusContext(sessionId).then((status) => {
+      if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
+      applyKimiWebTokenData(sessionId, requestId, status ? kimiWebContextOnlyUsage(
+        status.context_tokens,
+        status.max_context_tokens,
+      ) : null, Boolean(status));
+    });
+    return;
+  }
+  applyKimiWebTokenData(sessionId, requestId, mapped, contextOnly);
+}
+
+function applyKimiWebTokenData(
+  sessionId: string,
+  requestId: number,
+  mapped: KimiWebTokenUsage | null,
+  contextOnly: boolean,
+) {
   let userCount = 0;
   let assistantCount = 0;
   let modelName = '';
@@ -599,10 +634,19 @@ function fetchKimiWebTokenData(sessionId: string) {
   tokenUsage.value = mapped.usage;
   tokenContextLimit.value = mapped.contextLimit;
   tokenContextUsed.value = mapped.contextUsed;
+  tokenUsageContextOnly.value = contextOnly;
   tokenModelName.value = modelName;
   tokenUserMessages.value = userCount;
   tokenAssistantMessages.value = assistantCount;
   tokenLoading.value = false;
+}
+
+async function fetchKimiWebSessionStatusContext(sessionId: string) {
+  try {
+    return await createKimiWebStatusClient().getSessionStatus(sessionId);
+  } catch {
+    return null;
+  }
 }
 
 async function fetchTokenData() {
@@ -948,7 +992,7 @@ const currentTotalInfo = computed(() => {
         ? { label: t('statusMonitor.common.totalLabel'), count: skillEntries.value.length }
         : null;
     case 'token':
-      return tokenUsage.value
+      return tokenUsage.value && !tokenUsageContextOnly.value
         ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
         : null;
     case 'mc':
@@ -1337,22 +1381,27 @@ const kimiModelsReadyDotClass = computed(() => {
               <span class="token-label">{{ $t('statusMonitor.token.contextLimit') }}</span>
               <span class="token-value">{{ tokenContextLimit > 0 ? formatTokenCount(tokenContextLimit) : '-' }}</span>
             </div>
-            <div class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.inputTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.input) }}</span>
+            <div v-if="tokenUsageContextOnly" class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.contextOnlyNote') }}</span>
             </div>
-            <div class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.outputTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.output) }}</span>
-            </div>
-            <div class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.reasoningTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.reasoning) }}</span>
-            </div>
-            <div v-if="tokenUsage.tokens.cache" class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.cacheTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.cache.read) }} / {{ formatTokenCount(tokenUsage.tokens.cache.write) }}</span>
-            </div>
+            <template v-else>
+              <div class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.inputTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.input) }}</span>
+              </div>
+              <div class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.outputTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.output) }}</span>
+              </div>
+              <div class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.reasoningTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.reasoning) }}</span>
+              </div>
+              <div v-if="tokenUsage.tokens.cache" class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.cacheTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.cache.read) }} / {{ formatTokenCount(tokenUsage.tokens.cache.write) }}</span>
+              </div>
+            </template>
             <div class="status-monitor-row token-row">
               <span class="token-label">{{ $t('statusMonitor.token.userMessages') }}</span>
               <span class="token-value">{{ tokenUserMessages }}</span>

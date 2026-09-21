@@ -368,6 +368,7 @@ const messages: LocaleMessages = {
       outputTokens: 'Output tokens',
       reasoningTokens: 'Reasoning tokens',
       cacheTokens: 'Cache tokens (read/write)',
+      contextOnlyNote: 'Context from session status; Kimi Web does not report token counts',
       userMessages: 'User messages',
       assistantMessages: 'Assistant messages',
       totalCost: 'Total cost',
