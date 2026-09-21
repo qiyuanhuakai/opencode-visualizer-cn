@@ -8,10 +8,12 @@ export interface LocaleMessages {
       title: string;
       codexTitle: string;
       acpTitle: string;
+      kimiWebTitle: string;
       backendLabel: string;
       openCodeBackend: string;
       codexBackend: string;
       acpBackend: string;
+      kimiWebBackend: string;
       username: string;
       password: string;
       url: string;
@@ -22,6 +24,9 @@ export interface LocaleMessages {
       acpBridgeHint: string;
       acpBridgeUrl: string;
       acpBridgeToken: string;
+      kimiWebBridgeUrl: string;
+      kimiWebBridgeToken: string;
+      kimiWebBridgeHint: string;
       authRequired: string;
       connect: string;
       retry: string;
@@ -291,6 +296,12 @@ export interface LocaleMessages {
       unhealthy: string;
       version: string;
       noData: string;
+      capabilities: string;
+      modelsReady: string;
+      modelsReadyYes: string;
+      modelsReadyNo: string;
+      unavailable: string;
+      none: string;
     };
     mcp: {
       total: string;
@@ -304,6 +315,7 @@ export interface LocaleMessages {
       noData: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -315,6 +327,7 @@ export interface LocaleMessages {
       noData: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
     };
     plugins: {
       marketplaces: string;
@@ -326,12 +339,14 @@ export interface LocaleMessages {
       hiddenUnavailable: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
     };
     skills: {
       total: string;
       noData: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
       enable: string;
       disable: string;
       toggleFailed: string;

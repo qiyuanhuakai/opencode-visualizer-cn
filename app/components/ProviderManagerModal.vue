@@ -554,6 +554,7 @@ import { computed, inject, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getActiveBackendAdapter } from '../backends/registry';
+import type { BackendKind } from '../backends/types';
 import {
   buildProviderDisabledPatch,
   normalizeProviderIds,
@@ -714,7 +715,7 @@ const props = defineProps<{
   selectedModel: string;
   hiddenModels: string[];
   providerConfig: ProviderConfigState | null;
-  backendKind?: 'opencode' | 'codex' | 'acp';
+  backendKind?: BackendKind;
 }>();
 
 const emit = defineEmits<{

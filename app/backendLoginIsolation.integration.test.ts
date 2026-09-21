@@ -122,4 +122,98 @@ describe('App backend login isolation', () => {
       expect.objectContaining({ bridgeToken: 'codex-token-only' }),
     );
   });
+
+  it('Given distinct Codex and Kimi Web bridge tokens entered through one real login form, When Kimi Web is selected and submitted, Then Kimi Web receives only its own credentials', async () => {
+    const kimiFixture = await mountLoginApp();
+    mountedApps.push(kimiFixture);
+    kimiFixture.configureCodexBackend.mockClear();
+    kimiFixture.configureKimiWebBackend.mockClear();
+
+    clickBackend(kimiFixture.host, 'Codex');
+    await nextTick();
+    await fillInput(kimiFixture.host, 'codexBridgeToken', 'codex-token-only');
+    clickBackend(kimiFixture.host, 'Kimi Web');
+    await nextTick();
+    await fillInput(kimiFixture.host, 'kimiWebBridgeUrl', 'ws://127.0.0.1:23004/kimi-web/ws');
+    await fillInput(kimiFixture.host, 'kimiWebBridgeToken', 'kimi-token-only');
+    clickBackend(kimiFixture.host, 'Codex');
+    await nextTick();
+
+    expect(
+      kimiFixture.host.querySelector<HTMLInputElement>('input[name="codexBridgeToken"]')?.value,
+    ).toBe('codex-token-only');
+    clickBackend(kimiFixture.host, 'Kimi Web');
+    await nextTick();
+
+    expect(
+      kimiFixture.host.querySelector<HTMLInputElement>('input[name="kimiWebBridgeToken"]')?.value,
+    ).toBe('kimi-token-only');
+    expect(
+      kimiFixture.host.querySelector<HTMLInputElement>('input[name="kimiWebBridgeUrl"]')?.value,
+    ).toBe('ws://127.0.0.1:23004/kimi-web/ws');
+
+    const kimiConnect = kimiFixture.host.querySelector<HTMLButtonElement>('.app-loading-connect');
+    expect(kimiConnect).toBeInstanceOf(HTMLButtonElement);
+    kimiConnect?.click();
+    await nextTick();
+
+    expect(kimiFixture.configureKimiWebBackend).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        bridgeUrl: 'ws://127.0.0.1:23004/kimi-web/ws',
+        bridgeToken: 'kimi-token-only',
+      }),
+    );
+    expect(kimiFixture.configureKimiWebBackend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ bridgeToken: 'codex-token-only' }),
+    );
+    expect(kimiFixture.configureCodexBackend).not.toHaveBeenCalledWith(
+      expect.objectContaining({ bridgeToken: 'kimi-token-only' }),
+    );
+  });
+
+  it('Given a Kimi Web bridge URL entered on the login form, When the bridge precheck answers 401, Then the app falls back to login with the URL preserved', async () => {
+    const kimiFixture = await mountLoginApp();
+    mountedApps.push(kimiFixture);
+    kimiFixture.configureKimiWebBackend.mockClear();
+
+    clickBackend(kimiFixture.host, 'Kimi Web');
+    await nextTick();
+    await fillInput(kimiFixture.host, 'kimiWebBridgeUrl', 'ws://127.0.0.1:23004/kimi-web/ws');
+    await fillInput(kimiFixture.host, 'kimiWebBridgeToken', 'stale-bridge-token');
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('', { status: 401 })),
+    );
+
+    kimiFixture.host.querySelector<HTMLButtonElement>('.app-loading-connect')?.click();
+
+    await vi.waitFor(() => {
+      expect(kimiFixture.readSetupBinding('uiInitState')).toBe('login');
+    });
+    expect(kimiFixture.readSetupBinding('connectionState')).toBe('error');
+    expect(String(kimiFixture.readSetupBinding('initErrorMessage'))).toContain('401');
+    expect(
+      kimiFixture.host.querySelector<HTMLInputElement>('input[name="kimiWebBridgeUrl"]')?.value,
+    ).toBe('ws://127.0.0.1:23004/kimi-web/ws');
+    expect(
+      kimiFixture.host.querySelector<HTMLInputElement>('input[name="kimiWebBridgeToken"]')?.value,
+    ).toBe('stale-bridge-token');
+  });
+
+  it('Given an emptied Kimi Web bridge URL, When the login form is submitted, Then no Kimi Web backend configuration is attempted', async () => {
+    const kimiFixture = await mountLoginApp();
+    mountedApps.push(kimiFixture);
+    kimiFixture.configureKimiWebBackend.mockClear();
+
+    clickBackend(kimiFixture.host, 'Kimi Web');
+    await nextTick();
+    await fillInput(kimiFixture.host, 'kimiWebBridgeUrl', '');
+    await fillInput(kimiFixture.host, 'kimiWebBridgeToken', '   ');
+
+    kimiFixture.host.querySelector<HTMLButtonElement>('.app-loading-connect')?.click();
+    await nextTick();
+
+    expect(kimiFixture.configureKimiWebBackend).not.toHaveBeenCalled();
+    expect(kimiFixture.readSetupBinding('uiInitState')).toBe('login');
+  });
 });

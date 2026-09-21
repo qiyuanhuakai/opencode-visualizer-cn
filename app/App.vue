@@ -310,6 +310,15 @@
             >
               {{ t('app.login.acpBackend') }}
             </button>
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'kimi-web' }"
+              :aria-pressed="loginBackendKind === 'kimi-web'"
+              @click="loginBackendKind = 'kimi-web'"
+            >
+              {{ t('app.login.kimiWebBackend') }}
+            </button>
           </div>
           <div class="app-login-fields">
             <template v-if="loginBackendKind === 'opencode'">
@@ -361,6 +370,25 @@
                 @keydown.enter="handleLogin"
               />
               <p class="app-login-hint">{{ t('app.login.codexBridgeHint') }}</p>
+            </template>
+            <template v-else-if="loginBackendKind === 'kimi-web'">
+              <input
+                v-model="loginKimiWebBridgeUrl"
+                type="text"
+                class="app-login-input"
+                :placeholder="t('app.login.kimiWebBridgeUrl')"
+                name="kimiWebBridgeUrl"
+                @keydown.enter="handleLogin"
+              />
+              <input
+                v-model="loginKimiWebBridgeToken"
+                type="password"
+                class="app-login-input"
+                :placeholder="t('app.login.kimiWebBridgeToken')"
+                name="kimiWebBridgeToken"
+                @keydown.enter="handleLogin"
+              />
+              <p class="app-login-hint">{{ t('app.login.kimiWebBridgeHint') }}</p>
             </template>
             <template v-else>
               <input
@@ -732,6 +760,7 @@ import {
   disconnectAcpBackend,
   configureCodexBackend,
   disconnectCodexBackend,
+  configureKimiWebBackend,
   configureOpenCodeBackend,
   getActiveBackendAdapter,
   getBackendAdapter,
@@ -2105,6 +2134,8 @@ const connectedBridgeHealthUrl = computed(() => {
     acpBridgeToken: credentials.acpBridgeToken.value,
     codexBridgeUrl: credentials.codexBridgeUrl.value,
     codexBridgeToken: credentials.codexBridgeToken.value,
+    kimiWebBridgeUrl: credentials.kimiWebBridgeUrl.value,
+    kimiWebBridgeToken: credentials.kimiWebBridgeToken.value,
   });
 });
 const desktopBridgeVersion = useDesktopBridgeVersion(connectedBridgeHealthUrl, desktopApi);
@@ -2129,8 +2160,10 @@ let commandLoadingOwner = 0;
 const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
 const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
+const loginKimiWebBridgeUrl = ref(credentials.kimiWebBridgeUrl.value);
 const loginCodexBridgeToken = ref(credentials.codexBridgeToken.value);
 const loginAcpBridgeToken = ref(credentials.acpBridgeToken.value);
+const loginKimiWebBridgeToken = ref(credentials.kimiWebBridgeToken.value);
 const loginAcpAgentId = ref(credentials.acpAgentId.value);
 const loginAcpAgents = ref<AcpAgentStatus[]>([]);
 let loginAcpAgentsGeneration = 0;
@@ -2193,7 +2226,9 @@ const loginTitle = computed(() =>
     ? t('app.login.codexTitle')
     : loginBackendKind.value === 'acp'
       ? t('app.login.acpTitle')
-      : t('app.login.title'),
+      : loginBackendKind.value === 'kimi-web'
+        ? t('app.login.kimiWebTitle')
+        : t('app.login.title'),
 );
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
@@ -5650,6 +5685,8 @@ function currentBackendIdentity() {
       return `codex:${credentials.codexBridgeUrl.value}`;
     case 'acp':
       return `acp:${credentials.acpBridgeUrl.value}:${credentials.acpAgentId.value}`;
+    case 'kimi-web':
+      return `kimi-web:${credentials.kimiWebBridgeUrl.value}`;
     case 'opencode':
       return `opencode:${credentials.url.value}`;
   }
@@ -9426,6 +9463,7 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   setActiveBackendKind,
   configureCodexBackend,
   configureAcpBackend,
+  configureKimiWebBackend,
   disconnectAcpBackend,
   disconnectCodexBackend,
   bootstrapAcpWorkspace,
@@ -9462,6 +9500,18 @@ function handleLogin() {
     void startInitialization();
     return;
   }
+  if (loginBackendKind.value === 'kimi-web') {
+    // saveKimiWeb rejects an empty bridge URL (Todo 7 contract); surface it on
+    // the login form instead of letting the native click handler throw.
+    try {
+      credentials.saveKimiWeb(loginKimiWebBridgeUrl.value, loginKimiWebBridgeToken.value);
+    } catch (error) {
+      initErrorMessage.value = toErrorMessage(error);
+      return;
+    }
+    void startInitialization();
+    return;
+  }
   const u = loginRequiresAuth.value ? loginUsername.value : '';
   const p = loginRequiresAuth.value ? loginPassword.value : '';
   credentials.save(loginUrl.value, u, p);
@@ -9484,8 +9534,10 @@ function handleLogout() {
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
   loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
+  loginKimiWebBridgeUrl.value = credentials.kimiWebBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
+  loginKimiWebBridgeToken.value = credentials.kimiWebBridgeToken.value;
   loginAcpAgentId.value = credentials.acpAgentId.value;
   disposeShellWindows();
   initErrorMessage.value = '';
@@ -9511,8 +9563,10 @@ onMounted(() => {
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
   loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
+  loginKimiWebBridgeUrl.value = credentials.kimiWebBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
+  loginKimiWebBridgeToken.value = credentials.kimiWebBridgeToken.value;
   loginAcpAgentId.value = credentials.acpAgentId.value;
 
   if (credentials.isConfigured.value) {
@@ -9928,7 +9982,8 @@ body {
 
 .app-login-backends {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
