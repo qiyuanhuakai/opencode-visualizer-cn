@@ -11,7 +11,7 @@
  *   4. every entry carries a registered owner todo and a kimi-web disposition
  *      (`handled` / `rejected` / `pending`); entries owned by already-done todos
  *      must be `handled`/`rejected` and prove it with a kimi signal,
- *   5. the placeholder adapter in `registry.ts` still explicitly rejects
+ *   5. the real adapter in `registry.ts` is explicitly registered for
  *      `'kimi-web'` (no silent OpenCode fallback at the registry seam).
  *
  * HARD GATE IS DEFERRED TO TODO 23. At Todo 12 the acceptance bar is inventory
@@ -162,8 +162,9 @@ const BRANCHES: BranchEntry[] = [
   { file: 'composables/useBackendSessionLifecycle.ts', fp: "params.activeBackendKind.value==='acp'", occurrences: 4, classification: 'ui-required', owner: 17, handling: 'handled', sites: 'create/reuse/create/openPicker 111/122/128/199', kimiSignal: "activeBackendKind.value === 'kimi-web'" },
   { file: 'composables/useBackendSessionLifecycle.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 4, classification: 'ui-required', owner: 17, handling: 'handled', sites: 'create/openPicker/abort 89/141/188/211', kimiSignal: "activeBackendKind.value === 'kimi-web'" },
   { file: 'composables/useBackendSessionLifecycle.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 3, classification: 'ui-required', owner: 17, handling: 'handled', sites: 'create/reuse 109; handleProjectDirectorySelect 199; abort 211', kimiSignal: 'createKimiWebSessionInDirectory' },
-  { file: 'composables/useBackendSessionTrees.ts', fp: "params.activeBackendKind.value==='acp'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'tree routing 65/87' },
-  { file: 'composables/useBackendSessionTrees.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'tree routing 54/87' },
+  { file: 'composables/useBackendSessionTrees.ts', fp: "params.activeBackendKind.value==='acp'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'tree routing 65/88', kimiSignal: "activeBackendKind.value === 'kimi-web'" },
+  { file: 'composables/useBackendSessionTrees.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'tree routing 54/87', kimiSignal: "activeBackendKind.value === 'kimi-web'" },
+  { file: 'composables/useBackendSessionTrees.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'kimi-web mapped-project tree routing 65/89', kimiSignal: 'buildAcpTopPanelTreeData' },
   // ----- composables — history (Todo 15) -----
   { file: 'composables/useBackendSessionReload.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 2, classification: 'ui-required', owner: 15, handling: 'pending', sites: 'reloadSelectedSessionState 93/121' },
   { file: 'composables/useBackendSessionReload.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 15, handling: 'handled', sites: 'reloadSelectedSessionState kimi Web history branch 169' },
@@ -202,11 +203,11 @@ const UNIONS: UnionEntry[] = [
   { file: 'composables/useAcpMessageBridge.ts', fp: "backendKind:'opencode'|'codex'|'acp'", owner: 25, classification: 'ui-required', handling: 'pending', sites: 'syncAcpMessageBridge param 16 omits kimi-web' },
 ];
 
-const REJECTION = {
+const REGISTRATION = {
   file: 'backends/registry.ts',
   owner: 25,
-  signals: ["'kimi-web': undefined", 'Backend adapter is not registered'],
-  sites: "adapters['kimi-web'] placeholder + getBackendAdapter throw (lines ~90/178)",
+  signals: ["'kimi-web': kimiWebAdapter", 'createKimiWebAdapter'],
+  sites: "adapters['kimi-web'] production registration + fail-closed getBackendAdapter",
 };
 
 // ---------------------------------------------------------------------------
@@ -343,9 +344,9 @@ describe('kimi-web backend branch guard (Todo 12)', () => {
     expect(violations).toEqual([]);
   });
 
-  it('registry placeholder still explicitly rejects kimi-web (no silent OpenCode fallback)', () => {
-    const content = fileContents.get(REJECTION.file) ?? '';
-    const missing = REJECTION.signals.filter((s) => !content.includes(s));
+  it('registry explicitly registers kimi-web without an OpenCode fallback', () => {
+    const content = fileContents.get(REGISTRATION.file) ?? '';
+    const missing = REGISTRATION.signals.filter((s) => !content.includes(s));
     expect(missing).toEqual([]);
   });
 
