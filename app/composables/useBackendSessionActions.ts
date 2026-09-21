@@ -9,6 +9,7 @@ import type { SandboxState, ProjectState } from '../types/worker-state';
 import type { LocalPinnedSessionStore } from '../utils/pinnedSessions';
 import { mapWithConcurrency } from '../utils/mapWithConcurrency';
 import { isBatchSessionAction, normalizeBatchSessionTargets } from '../utils/batchSessionTargets';
+import type { KimiWebSessionApiLike } from './useBackendSessionLifecycle';
 
 export type OpenCodeApiLike = {
   deleteSession: (payload: {
@@ -121,6 +122,7 @@ export function useBackendSessionActions(params: {
     payload: { time?: { archived?: number } },
     directory?: string,
   ) => Promise<unknown>;
+  kimiWebApi?: KimiWebSessionApiLike;
 }) {
   type MutationRollback = () => void;
   type SessionOperationHints = { projectId?: string; directory?: string };
@@ -219,6 +221,12 @@ export function useBackendSessionActions(params: {
           await deleteAcpSession(sessionId, hints);
           return;
         }
+        if (backendKind === 'kimi-web') {
+          const api = params.kimiWebApi;
+          if (!api?.deleteSession) throw new Error('Kimi Web session deletion is unavailable.');
+          await api.deleteSession(sessionId);
+          return;
+        }
         await runOpenCodeSessionMutation(
           sessionId,
           hints,
@@ -265,6 +273,12 @@ export function useBackendSessionActions(params: {
         }
         if (backendKind === 'codex') {
           await archiveCodexSession(sessionId);
+          return;
+        }
+        if (backendKind === 'kimi-web') {
+          const api = params.kimiWebApi;
+          if (!api?.archiveSession) throw new Error('Kimi Web session archive is unavailable.');
+          await api.archiveSession(sessionId);
           return;
         }
         await runOpenCodeSessionMutation(
@@ -317,6 +331,12 @@ export function useBackendSessionActions(params: {
           await unarchiveCodexSession(sessionId);
           return;
         }
+        if (backendKind === 'kimi-web') {
+          const api = params.kimiWebApi;
+          if (!api?.restoreSession) throw new Error('Kimi Web session restore is unavailable.');
+          await api.restoreSession(sessionId);
+          return;
+        }
         await runOpenCodeSessionMutation(
           sessionId,
           hints,
@@ -352,6 +372,12 @@ export function useBackendSessionActions(params: {
       if (!trimmedTitle || trimmedTitle === currentTitle) return;
       if (backendKind === 'codex') {
         await params.codexApi.setThreadName(sessionId, trimmedTitle);
+        return;
+      }
+      if (backendKind === 'kimi-web') {
+        const api = params.kimiWebApi;
+        if (!api?.updateProfile) throw new Error('Kimi Web session rename is unavailable.');
+        await api.updateProfile(sessionId, { title: trimmedTitle });
         return;
       }
       const { projectId, directory } = params.resolveSessionOperationPayload(

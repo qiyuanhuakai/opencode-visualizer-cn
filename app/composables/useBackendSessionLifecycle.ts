@@ -1,10 +1,49 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { BackendSessionInfo } from '../types/backend-domain';
+import type { KimiWebSessionProfileInput } from '../utils/kimiWeb';
 
 type OpenCodeApiLike = {
   createSession: (directory: string) => Promise<BackendSessionInfo | undefined>;
 };
+
+/**
+ * Structural view of the kimi web REST client (`app/utils/kimiWeb.ts`) that
+ * the session lifecycle/action composables depend on. Every method is optional
+ * so a partially wired host fails closed per action instead of silently
+ * falling through to the OpenCode path. Todo 25 injects the real client.
+ */
+export type KimiWebSessionApiLike = {
+  createSession?: (input: { metadata: { cwd: string } }) => Promise<unknown>;
+  updateProfile?: (
+    sessionId: string,
+    input: KimiWebSessionProfileInput,
+  ) => Promise<unknown>;
+  deleteSession?: (sessionId: string) => Promise<unknown>;
+  archiveSession?: (sessionId: string) => Promise<unknown>;
+  restoreSession?: (sessionId: string) => Promise<unknown>;
+  abortSession?: (sessionId: string) => Promise<unknown>;
+};
+
+function parseKimiWebCreatedSession(
+  value: unknown,
+  directory: string,
+): BackendSessionInfo | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === 'string' ? record.id.trim() : '';
+  if (!id) return undefined;
+  const workspaceId =
+    typeof record.workspace_id === 'string' ? record.workspace_id.trim() : '';
+  const title =
+    typeof record.title === 'string' && record.title.trim() ? record.title : id;
+  return {
+    id,
+    projectID: workspaceId || undefined,
+    directory,
+    title,
+  } satisfies BackendSessionInfo;
+}
 
 type CodexApiLike = {
   homeDir: Ref<string>;
@@ -46,6 +85,8 @@ export function sessionProjectIdForBackend(
       return codexProjectId;
     case 'acp':
       return acpProjectId;
+    case 'kimi-web':
+      throw new Error('Kimi Web sessions use their workspace id, not a synthetic project id.');
     case 'opencode':
       throw new Error('OpenCode sessions do not use a synthetic project id.');
   }
@@ -79,8 +120,40 @@ export function useBackendSessionLifecycle(params: {
   backendCreateSession: (directory: string) => Promise<unknown>;
   findAcpSessionByDirectory?: (directory: string) => BackendSessionInfo | undefined;
   backendAbortSession: ((sessionId: string, directory?: string) => Promise<unknown>) | undefined;
+  kimiWebApi?: KimiWebSessionApiLike;
+  kimiWebCreateProfile?: (directory: string) => KimiWebSessionProfileInput | undefined;
 }) {
+  async function createKimiWebSessionInDirectory(directory: string) {
+    const api = params.kimiWebApi;
+    if (!api?.createSession || !api.updateProfile) {
+      throw new Error('Kimi Web session creation is unavailable.');
+    }
+    const created = parseKimiWebCreatedSession(
+      await api.createSession({ metadata: { cwd: directory } }),
+      directory,
+    );
+    if (!created?.id) throw new Error('Kimi Web session creation returned no session id.');
+    const previousProjectId = params.selectedProjectId.value;
+    const previousSessionId = params.selectedSessionId.value;
+    if (created.projectID) params.selectedProjectId.value = created.projectID;
+    params.selectedSessionId.value = created.id;
+    try {
+      const updated = parseKimiWebCreatedSession(
+        await api.updateProfile(created.id, params.kimiWebCreateProfile?.(directory) ?? {}),
+        directory,
+      );
+      return updated ?? created;
+    } catch (error) {
+      params.selectedProjectId.value = previousProjectId;
+      params.selectedSessionId.value = previousSessionId;
+      throw error;
+    }
+  }
+
   async function createSessionInDirectory(directory: string, options?: { reuseExisting?: boolean }) {
+    if (params.activeBackendKind.value === 'kimi-web') {
+      return createKimiWebSessionInDirectory(directory);
+    }
     if (params.activeBackendKind.value === 'codex') {
       const codexDirectory = params.normalizeProjectDirectoryForActiveBackend(directory);
       const existing = params.codexSessionCreationByDirectory.get(codexDirectory);
@@ -176,6 +249,9 @@ export function useBackendSessionLifecycle(params: {
     if (params.activeBackendKind.value === 'acp') {
       return (await createSessionInDirectory(targetDirectory))?.id ?? '';
     }
+    if (params.activeBackendKind.value === 'kimi-web') {
+      return (await createSessionInDirectory(targetDirectory))?.id ?? '';
+    }
     return targetDirectory;
   }
 
@@ -188,6 +264,13 @@ export function useBackendSessionLifecycle(params: {
     try {
       if (params.activeBackendKind.value === 'codex') {
         await params.codexApi.interruptActiveTurn();
+        params.setSendStatusKey('app.status.stopped');
+        return;
+      }
+      if (params.activeBackendKind.value === 'kimi-web') {
+        const kimiAbort = params.kimiWebApi?.abortSession;
+        if (!kimiAbort) throw new Error('Session abort is unavailable.');
+        await kimiAbort(sessionId);
         params.setSendStatusKey('app.status.stopped');
         return;
       }
