@@ -121,6 +121,48 @@ export function mapKimiWebSessionsToProjects(
   return projects;
 }
 
+/**
+ * Insert (or refresh) ONE mapped session inside an existing projects record.
+ * Live-created kimi sessions never pass through `listSessions`; without this
+ * upsert `validateSelectedSession` (App.vue) bounces the selection back to a
+ * listed session and the composer sends prompts to the stale session.
+ */
+export function upsertKimiWebSessionIntoProjects(
+  projects: Record<string, ProjectState>,
+  session: KimiWebMappedSession,
+): void {
+  const projectId = session.workspaceId.trim();
+  if (!projectId) throw new Error(`Kimi Web session ${session.id} has no workspace id.`);
+  const directory = session.directory?.trim() || '/';
+  const name = directory.split('/').filter(Boolean).at(-1) || projectId;
+  const project = projects[projectId] ?? {
+    id: projectId,
+    name,
+    worktree: directory,
+    sandboxes: {},
+  };
+  projects[projectId] = project;
+  const sandbox = project.sandboxes[directory] ?? {
+    directory,
+    name,
+    rootSessions: [],
+    sessions: {},
+  };
+  project.sandboxes[directory] = sandbox;
+  if (!sandbox.sessions[session.id]) {
+    sandbox.rootSessions.push(session.id);
+  }
+  sandbox.sessions[session.id] = {
+    id: session.id,
+    title: session.title,
+    status: session.status,
+    directory,
+    timeCreated: session.time?.created,
+    timeUpdated: session.time?.updated,
+    timeArchived: session.time?.archived,
+  };
+}
+
 function modelResponse(models: KimiWebModel[]): BackendProviderResponse {
   const providers = new Map<string, NonNullable<BackendProviderResponse['all']>[number]>();
   for (const model of models) {

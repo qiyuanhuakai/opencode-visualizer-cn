@@ -4,6 +4,7 @@ import {
   createKimiWebAdapter,
   mapKimiWebSession,
   mapKimiWebSessionsToProjects,
+  upsertKimiWebSessionIntoProjects,
 } from './kimiWebAdapter';
 
 function session(overrides: Partial<KimiWebSession> = {}): KimiWebSession {
@@ -90,5 +91,53 @@ describe('KimiWebAdapter', () => {
     expect(mapped.directory).toBe('/work/repo');
     expect(mapped.time?.archived).toBe(Date.parse('2026-09-21T00:00:00.000Z'));
     expect(mapped.time?.created).toBe(Date.parse('2026-09-20T00:00:00.000Z'));
+  });
+
+  it('upserts a live-created session into an existing project without dropping siblings', () => {
+    const projects = mapKimiWebSessionsToProjects([
+      mapKimiWebSession(session({ id: 'session-old', title: 'Old' })),
+    ]);
+
+    upsertKimiWebSessionIntoProjects(
+      projects,
+      mapKimiWebSession(
+        session({
+          id: 'session-new',
+          title: 'New',
+          created_at: '2026-09-21T02:00:00.000Z',
+          updated_at: '2026-09-21T03:00:00.000Z',
+        }),
+      ),
+    );
+
+    expect(projects['workspace-1'].sandboxes['/work/repo']).toMatchObject({
+      rootSessions: ['session-old', 'session-new'],
+      sessions: {
+        'session-old': { title: 'Old' },
+        'session-new': { title: 'New', status: 'idle' },
+      },
+    });
+    expect(projects['workspace-1'].sandboxes['/work/repo'].sessions['session-new'].timeCreated).toBe(
+      Date.parse('2026-09-21T02:00:00.000Z'),
+    );
+  });
+
+  it('upsert is idempotent and creates the project/sandbox for a brand-new workspace', () => {
+    const projects = mapKimiWebSessionsToProjects([]);
+    const mapped = mapKimiWebSession(
+      session({ id: 'session-x', workspace_id: 'workspace-2', metadata: { cwd: '/work/other' } }),
+    );
+
+    upsertKimiWebSessionIntoProjects(projects, mapped);
+    upsertKimiWebSessionIntoProjects(projects, mapped);
+
+    expect(projects['workspace-2']).toMatchObject({
+      sandboxes: { '/work/other': { rootSessions: ['session-x'] } },
+    });
+  });
+
+  it('upsert rejects a session without a workspace id instead of guessing a project', () => {
+    const mapped = mapKimiWebSession(session({ workspace_id: '' }));
+    expect(() => upsertKimiWebSessionIntoProjects({}, mapped)).toThrow(/no workspace id/);
   });
 });

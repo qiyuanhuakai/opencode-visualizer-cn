@@ -791,7 +791,7 @@ import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
 import { useKimiWebMessageBridge } from './composables/useKimiWebMessageBridge';
 import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
-import { KimiWebAdapter } from './backends/kimiWeb/kimiWebAdapter';
+import { KimiWebAdapter, upsertKimiWebSessionIntoProjects } from './backends/kimiWeb/kimiWebAdapter';
 import { kimiWebMessagesToHistoryEntries } from './backends/kimiWeb/historyEntries';
 import {
   answerKimiWebApproval,
@@ -5156,6 +5156,11 @@ async function fetchAgents() {
   agentLoadingOwner = request.generation;
   agentsLoading.value = true;
   try {
+    if (activeBackendKind.value === 'kimi-web') {
+      // Kimi Web runs the single main agent per session; no agent picker applies.
+      agentOptions.value = [];
+      return;
+    }
     if (activeBackendKind.value === 'codex') {
       if (codexApi.connected.value) {
         await codexApi.refreshCollaborationModes();
@@ -7639,6 +7644,20 @@ function setAcpSessionArchived(sessionId: string, archived?: number) {
   }
 }
 
+// Kimi Web turns never emit OpenCode-style `session.status` events, so the
+// shared store keeps the bootstrap-time status unless the live bridge session
+// ops write it back. Without this sync `isThinking` never turns true for
+// kimi-web and the composer stop button / double-Esc abort stay unreachable.
+function syncKimiWebSessionStatus(sessionId: string, busy: boolean) {
+  const status = busy ? 'busy' : 'idle';
+  for (const project of Object.values(serverState.projects)) {
+    for (const sandbox of Object.values(project.sandboxes)) {
+      const session = sandbox.sessions[sessionId];
+      if (session && session.status !== status) session.status = status;
+    }
+  }
+}
+
 function updateAcpCommands(values: Array<Record<string, unknown>>) {
   commands.value = values
     .flatMap((value): CommandInfo[] => {
@@ -8036,11 +8055,7 @@ watchEffect(() => {
   activeBackendKind.value = effectiveBackendKind;
   loginBackendKind.value = credentials.backendKind.value;
   setActiveBackendKind(effectiveBackendKind);
-  syncAcpMessageBridge(
-    acpMessageBridge,
-    effectiveBackendKind === 'kimi-web' ? 'opencode' : effectiveBackendKind,
-    configuredAcp,
-  );
+  syncAcpMessageBridge(acpMessageBridge, effectiveBackendKind, configuredAcp);
 });
 
 async function bootstrapAcpWorkspace() {
@@ -8109,6 +8124,7 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
           // lists to be re-read (it never fabricates or clears an item).
           if (activeBackendKind.value !== 'kimi-web') return;
           if (op.sessionId !== selectedSessionId.value) return;
+          syncKimiWebSessionStatus(op.sessionId, Boolean(op.busy || op.mainTurnActive));
           if (!kimiWebSessionOpNeedsReconcile(op, kimiWebInteractions)) return;
           void reconcileKimiWebSelectedSession();
         },
@@ -8343,6 +8359,15 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
     metadata: { cwd: directory },
     ...(selectedModel.value ? { agent_config: { model: selectedModel.value } } : {}),
   }),
+  onKimiWebSessionCreated: (session) => {
+    const workspaceId = (session.projectID ?? '').trim();
+    if (!workspaceId) return;
+    upsertKimiWebSessionIntoProjects(serverState.projects, {
+      ...session,
+      workspaceId,
+      status: 'idle',
+    });
+  },
 });
 
 const backendSessionReload = useBackendSessionReload({

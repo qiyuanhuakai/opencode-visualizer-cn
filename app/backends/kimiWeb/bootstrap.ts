@@ -34,7 +34,7 @@ export async function bootstrapKimiWebWorkspace(options: {
   };
 
   try {
-    await options.adapter.initialize();
+    const [, , modelPage] = await options.adapter.initialize();
     if (!options.isCurrent()) return {};
     const sessions = await options.adapter.listSessions();
     if (!options.isCurrent()) return {};
@@ -66,11 +66,16 @@ export async function bootstrapKimiWebWorkspace(options: {
       }
     }
 
+    const availableModels = new Set(modelPage.items.map((model) => model.model));
+    const selectedModel =
+      first?.model && availableModels.has(first.model)
+        ? first.model
+        : (modelPage.items[0]?.model ?? '');
     options.commit({
       projects,
       selectedProjectId: first?.workspaceId ?? '',
       selectedSessionId: first?.id ?? '',
-      selectedModel: first?.model ?? '',
+      selectedModel,
     });
     return { client, bridge };
   } catch (error) {

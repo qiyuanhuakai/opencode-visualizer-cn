@@ -101,6 +101,59 @@ describe('useBackendSessionLifecycle kimi-web', () => {
     expect(selectedSessionId.value).toBe('kimi-1');
   });
 
+  it('Given a kimi-web create succeeds, When createNewSession runs, Then the host is handed the created session for store registration', async () => {
+    const onKimiWebSessionCreated = vi.fn();
+    const created = {
+      id: 'kimi-1',
+      workspace_id: 'ws-1',
+      title: 'New session',
+      created_at: '2026-09-21T02:00:00.000Z',
+      updated_at: '2026-09-21T03:00:00.000Z',
+    };
+    const { lifecycle } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'),
+      activeDirectory: ref('/repo'),
+      kimiWebApi: {
+        createSession: vi.fn().mockResolvedValue(created),
+        updateProfile: vi.fn().mockResolvedValue(created),
+      },
+      kimiWebCreateProfile: () => ({ agent_config: { model: 'kimi-code/k3' } }),
+      onKimiWebSessionCreated,
+    });
+
+    await lifecycle.createNewSession();
+
+    expect(onKimiWebSessionCreated).toHaveBeenCalledTimes(1);
+    expect(onKimiWebSessionCreated).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'kimi-1',
+        projectID: 'ws-1',
+        directory: '/repo',
+        time: {
+          created: Date.parse('2026-09-21T02:00:00.000Z'),
+          updated: Date.parse('2026-09-21T03:00:00.000Z'),
+        },
+      }),
+    );
+  });
+
+  it('Given the kimi-web profile write fails, When createNewSession runs, Then the host is not handed a session for registration', async () => {
+    const onKimiWebSessionCreated = vi.fn();
+    const { lifecycle } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'),
+      activeDirectory: ref('/repo'),
+      kimiWebApi: {
+        createSession: vi.fn().mockResolvedValue({ id: 'kimi-1', workspace_id: 'ws-1' }),
+        updateProfile: vi.fn().mockRejectedValue(new Error('profile boom')),
+      },
+      onKimiWebSessionCreated,
+    });
+
+    await lifecycle.createNewSession();
+
+    expect(onKimiWebSessionCreated).not.toHaveBeenCalled();
+  });
+
   it('Given the kimi-web profile write fails, When createNewSession runs, Then the optimistic selection rolls back and the error surfaces', async () => {
     const createSession = vi.fn().mockResolvedValue({ id: 'kimi-1', workspace_id: 'ws-1' });
     const updateProfile = vi.fn().mockRejectedValue(new Error('profile boom'));

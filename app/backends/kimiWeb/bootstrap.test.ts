@@ -18,11 +18,17 @@ function rawSession(): KimiWebSession {
   };
 }
 
-function restClient(items: KimiWebSession[]) {
+function restClient(items: KimiWebSession[], models = ['kimi-k2']) {
   return {
     getMeta: vi.fn(async () => ({ server_version: '1', capabilities: {} })),
     getAuth: vi.fn(async () => ({ models_ready: true })),
-    listModels: vi.fn(async () => ({ items: [] })),
+    listModels: vi.fn(async () => ({
+      items: models.map((model) => ({
+        provider: 'managed:kimi-code',
+        model,
+        display_name: model,
+      })),
+    })),
     listSessions: vi.fn(async () => ({ items })),
     getMessages: vi.fn(async () => ({ items: [] })),
   } as unknown as KimiWebClient;
@@ -94,8 +100,30 @@ describe('bootstrapKimiWebWorkspace', () => {
       projects: {},
       selectedProjectId: '',
       selectedSessionId: '',
-      selectedModel: '',
+        selectedModel: 'kimi-k2',
+      });
+  });
+
+  it('falls back to a live model when an existing session has an invalid legacy model', async () => {
+    const session = rawSession();
+    session.agent_config = { model: 'opencode' };
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient([session], ['kimi-code/k3']),
     });
+    const commit = vi.fn();
+
+    await bootstrapKimiWebWorkspace({
+      adapter,
+      isCurrent: () => true,
+      createClient: transport,
+      createBridge: messageBridge,
+      commit,
+    });
+
+    expect(commit).toHaveBeenCalledWith(
+      expect.objectContaining({ selectedModel: 'kimi-code/k3' }),
+    );
   });
 
   it('disposes the transport and discards commit when a backend switch interrupts bootstrap', async () => {

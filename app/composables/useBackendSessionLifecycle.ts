@@ -37,11 +37,17 @@ function parseKimiWebCreatedSession(
     typeof record.workspace_id === 'string' ? record.workspace_id.trim() : '';
   const title =
     typeof record.title === 'string' && record.title.trim() ? record.title : id;
+  const created = typeof record.created_at === 'string' ? Date.parse(record.created_at) : NaN;
+  const updated = typeof record.updated_at === 'string' ? Date.parse(record.updated_at) : NaN;
   return {
     id,
     projectID: workspaceId || undefined,
     directory,
     title,
+    time: {
+      created: Number.isFinite(created) ? created : undefined,
+      updated: Number.isFinite(updated) ? updated : undefined,
+    },
   } satisfies BackendSessionInfo;
 }
 
@@ -122,6 +128,7 @@ export function useBackendSessionLifecycle(params: {
   backendAbortSession: ((sessionId: string, directory?: string) => Promise<unknown>) | undefined;
   kimiWebApi?: KimiWebSessionApiLike;
   kimiWebCreateProfile?: (directory: string) => KimiWebSessionProfileInput | undefined;
+  onKimiWebSessionCreated?: (session: BackendSessionInfo) => void;
 }) {
   async function createKimiWebSessionInDirectory(directory: string) {
     const api = params.kimiWebApi;
@@ -142,7 +149,9 @@ export function useBackendSessionLifecycle(params: {
         await api.updateProfile(created.id, params.kimiWebCreateProfile?.(directory) ?? {}),
         directory,
       );
-      return updated ?? created;
+      const session = updated ?? created;
+      params.onKimiWebSessionCreated?.(session);
+      return session;
     } catch (error) {
       params.selectedProjectId.value = previousProjectId;
       params.selectedSessionId.value = previousSessionId;
