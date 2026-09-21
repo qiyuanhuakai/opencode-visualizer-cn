@@ -232,18 +232,18 @@ kimi web rotate-token    # 轮换持久 token，旧 token 立即失效
 | --- | --- | --- |
 | 登录与连接 | 登录页填 bridge URL + bridge token；预检（bridge `/healthz` + 转发 `/api/v1/meta`）→ 引导 → WS `client_hello` → `subscribe`(+cursors) → ack → 应用层 ping/pong 全链路通 | `04-frontend/01-login-kimiweb-fields.png`、`03-proxy-checks/proxy-checks.txt`、`04-frontend/ws-after-login.json` |
 | 建/选会话 | 固定两次调用顺序：`POST /api/v1/sessions` → `POST …/profile` 写 model（坑位 1 的规避手段）；新建会话即时进入 `serverState.projects`，选中不再被弹回旧会话 | `05-checklist/a-create-session-writes.json`、`a-new-session-state.json`、`a-new-session-created.png` |
-| 流式 text + thinking | 回合内 `assistant.delta`/`thinking.delta` 实时进消息区；推理悬浮窗在运行中的回合打开、随终结 part 关闭（窗口关闭快，需在回合中抓取） | `05-checklist/b-p1-events.json`、`c-p2-running.png` |
+| 流式 text + thinking | 回合内 `assistant.delta`/`thinking.delta` 实时进消息区；推理悬浮窗在运行中的回合打开、随终结 part 关闭（窗口关闭快，需在回合中抓取）。delta 帧由 F3 独立复跑的线据捕获证明（`b-p1-events.json` 是首次冒烟第 1 个 prompt 的失败路径，不含 delta） | `05-checklist/b-wire-frames-f3.jsonl`、`b-wire-relevant-f3.json`、`c-p2-running.png` |
 | 历史 + 注入过滤 | `GET …/messages` 倒序分页拼接（6 页同集合、无重复、顺序保持）；`metadata.origin.kind === "injection"` 由加载器过滤（实测同一会话识别出 2 条注入消息） | `05-checklist/h-multipage-stitching.txt`、`h-smoke-session.har` |
-| 审批 | 通过与驳回各一次，`event.approval.resolved` 回填；pending 集合以 `…/approvals?status=pending` 列表为权威，WS 事件只作对账触发 | `05-checklist/d-approval-pending.png`、`d-rejected.png` |
+| 审批 | 通过与驳回各一次，`event.approval.resolved` 回填；pending 集合以 `…/approvals?status=pending` 列表为权威，WS 事件只作对账触发（"通过"一次的 POST 线据见 F3 复跑捕获） | `05-checklist/d-approval-pending.png`、`d-rejected.png`、`d-approval-poll-f3.txt`、`../f3/01-live/live-smoke.har` |
 | 提问 | 应答与 dismiss 均通（同一回合内连续两个提问，各自应答/dismiss） | `05-checklist/e-question-dialog.png`、`e-question-2.png`、`e-question-2-dismissed.png` |
-| steer | `POST …/prompts:steer {prompt_ids}` → `{"steered":true}`，WS `turn.steer`/`prompt.steered` | `05-checklist/f-steer-response.json`、`f-steer-ui.png` |
-| 附件 | `POST /api/v1/files` 先于 `POST …/prompts` 发出（HAR 顺序证明），模型当回合读到文件内容 | `05-checklist/g-attachment-attached.png`、`h-smoke-session.har` |
+| steer | `POST …/prompts:steer {prompt_ids}` → `{"steered":true}`，UI 侧生效（WS `turn.steer`/`prompt.steered` 帧未捕获，不作声明） | `05-checklist/f-steer-response.json`、`f-steer-ui.png` |
+| 附件 | `POST /api/v1/files` 先于 `POST …/prompts` 发出（HAR 顺序证明），prompt 引用返回的 `file_id`/`name`/`size`（模型当回合读取文件的内容未捕获，不作声明） | `05-checklist/g-attachment-attached.png`、`h-smoke-session.har` |
 | 重命名/归档/恢复/删除 | 四项均通；删除后服务端 `40401` | `05-checklist/i-renamed.png`、`i-archived.png`、`i-archive-restore.txt`、`i-restored.png`、`i-deleted.png` |
 | 中止 | 双击 Esc → `POST …:abort` 200 → `turn.ended` reason `cancelled`（interruptReason `user_cancelled`），UI 回 Idle | `05-checklist/j-abort-midflight-wire.json`、`j-abort-midflight.png` |
 | Token 用量 | 主源为 bridge 会话状态；状态为空时回退 `GET …/status`（经桥）读 `context_tokens`/`max_context_tokens` | `05-checklist/k-token-usage-live.png`、`k-token-usage-live-rest.json` |
 | 状态监视器 | server 页显示 Healthy、版本、capabilities（取自 `/api/v1/meta`）与 models ready（取自 `/api/v1/auth`）；MCP、LSP、PLUGINS、SKILLS 页显示 kimi-web 不支持 | `05-checklist/k-server-tab.png` |
 | 能力门控 | 一级门 `/api/v1/meta.capabilities` + `/api/v1/auth.models_ready`；探测失败一律 unknown（fail-closed），`experimental_flags` 只展示不做门 | `03-proxy-checks/proxy-checks.txt`、`app/backends/kimiWeb/capabilityRegistry.ts` |
-| 三路自动弹窗 | 工具/推理/子代理悬浮窗均自动弹出并正确关闭（DOM 级断言 + 250 ms 轮询标题），遵循禁止自动弹窗设置 | `05-checklist/c-p2-running.png`、`c-p2-subagent.png` |
+| 三路自动弹窗 | 工具/推理/子代理悬浮窗均自动弹出并正确关闭（DOM 级断言 + 约 1 s 轮询标题；子代理弹窗无专门截图，以 F3 复跑的 DOM 轮询日志为证——第 10/11 次轮询三窗同现），遵循禁止自动弹窗设置 | `05-checklist/c-live-poll-f3.txt`、`c-p2-running.png` |
 
 **传输与托管面（同样实测）**
 
