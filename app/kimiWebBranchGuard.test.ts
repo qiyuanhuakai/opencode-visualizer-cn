@@ -31,11 +31,12 @@ import { describe, expect, it } from 'vitest';
 
 const APP_DIR = dirname(fileURLToPath(import.meta.url));
 
-// TODO-23: flip to true once every UI-required branch has its kimi-web case.
-const STRICT_KIMI_COVERAGE = false;
+// TODO-23: strict mode — every UI-required branch handles kimi-web explicitly.
+const STRICT_KIMI_COVERAGE = true;
 
 const OWNER_TODOS = [6, 7, 10, 11, 15, 16, 17, 18, 19, 20, 21, 25] as const;
-const DONE_TODOS = new Set<number>([6, 7]);
+// Todo 23: all implementation todos are committed, so every entry proves its kimi disposition.
+const DONE_TODOS = new Set<number>([6, 7, 10, 11, 15, 16, 17, 18, 19, 20, 21, 25]);
 
 const KIND_LITERALS = `(?:opencode|codex|acp|kimi-web)`;
 const OPERAND = `(?:[A-Za-z_$][\\w$]*(?:\\([^()]*\\))?(?:\\.[A-Za-z_$][\\w$]*)*)`;
@@ -99,18 +100,19 @@ const BRANCHES: BranchEntry[] = [
   { file: 'App.vue', fp: "activeBackendKind.value!=='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 16, handling: 'handled', sites: 'kimi popup session fence isKimiWebPopupSession 7656 (tool/reasoning/subagent auto-popups + reconcile seam)', kimiSignal: "activeBackendKind.value !== 'kimi-web'" },
   { file: 'App.vue', fp: "activeBackendKind.value==='kimi-web'", occurrences: 5, classification: 'ui-required', owner: 19, handling: 'handled', sites: 'approval sendReply 2434; question sendReply 2488; question sendReject 2517; refresh gate 7886; reconcile isCurrent fence 7906 (approvals/questions wiring)', kimiSignal: 'reconcileKimiWebInteractions' },
   { file: 'App.vue', fp: "activeBackendKind.value!=='kimi-web'", occurrences: 5, classification: 'ui-required', owner: 19, handling: 'handled', sites: 'refresh gate 7895; pending watcher 7919; session-switch watch 7944; onSyncStateChange live 8101; onSessionEvent pending_interaction trigger (approvals/questions wiring)', kimiSignal: 'kimiWebInteractions' },
+  { file: 'App.vue', fp: "activeBackendKind.value==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'fetchAgents kimi-web branch (single main agent, no agent picker)', kimiSignal: 'agentOptions.value = \\[\\]' },
   { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 7, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'codex-only 2342/2904/3025/3154/5058/7278/8027' },
-  { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: '5075 fetchProviders codex-else-OpenCode provider fetch' },
+  { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'fetchAgents codex branch (kimi-web explicit: no agent options)', kimiSignal: 'agentOptions.value = \\[\\]' },
   { file: 'App.vue', fp: "activeBackendKind.value==='opencode'", occurrences: 2, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'opencode-only 3596/3687' },
   { file: 'App.vue', fp: "activeBackendKind.value==='opencode'", occurrences: 1, classification: 'capability-optional', owner: 15, handling: 'handled', sites: 'opencode-only hydration 5328' },
   { file: 'App.vue', fp: "activeBackendKind==='acp'", occurrences: 3, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'composer acp props 175/195/196' },
   { file: 'App.vue', fp: "activeBackendKind==='codex'", occurrences: 5, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'composer codex props 74/167/172/188/213' },
   { file: 'App.vue', fp: "backend==='codex'", occurrences: 1, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'selectModel watch 7286' },
   { file: 'App.vue', fp: "backendKind!=='codex'", occurrences: 1, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'codex connection watch 7460' },
-  { file: 'App.vue', fp: "case:'codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'currentBackendIdentity switch 5684 (no default)' },
-  { file: 'App.vue', fp: "case:'acp'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'currentBackendIdentity switch 5686 (no default)' },
+  { file: 'App.vue', fp: "case:'codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'currentBackendIdentity switch (kimi case present)', kimiSignal: "case 'kimi-web'" },
+  { file: 'App.vue', fp: "case:'acp'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'currentBackendIdentity switch (kimi case present)', kimiSignal: "case 'kimi-web'" },
   { file: 'App.vue', fp: "case:'kimi-web'", occurrences: 1, classification: 'ui-required', owner: 11, handling: 'handled', sites: 'currentBackendIdentity switch 5688 (kimi bridge url identity)', kimiSignal: 'kimiWebBridgeUrl' },
-  { file: 'App.vue', fp: "case:'opencode'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'currentBackendIdentity switch 5690 (no default)' },
+  { file: 'App.vue', fp: "case:'opencode'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'currentBackendIdentity switch (kimi case present)', kimiSignal: "case 'kimi-web'" },
   { file: 'App.vue', fp: "configuredBackendKind==='acp'", occurrences: 1, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'effectiveBackendKind fallback 7614' },
   // ----- app/App.vue — login surface (Todo 11) -----
   { file: 'App.vue', fp: "loginBackendKind.value!=='acp'", occurrences: 1, classification: 'ui-required', owner: 11, handling: 'handled', sites: 'acp login agent refresh 2211 (kimi-web needs no agent fetch)', kimiSignal: "loginBackendKind.value !== 'acp'" },
@@ -122,9 +124,11 @@ const BRANCHES: BranchEntry[] = [
   { file: 'App.vue', fp: "loginBackendKind==='kimi-web'", occurrences: 3, classification: 'ui-required', owner: 11, handling: 'handled', sites: 'login toggle 316/317 + fields 374 (bridge url + bridge token + hint)', kimiSignal: 'kimiWebBridgeHint' },
   { file: 'App.vue', fp: "loginBackendKind==='opencode'", occurrences: 3, classification: 'ui-required', owner: 11, handling: 'handled', sites: 'login toggle 289/290 + fields 324', kimiSignal: "loginBackendKind === 'kimi-web'" },
   // ----- components -----
-  { file: 'components/ProjectPicker.vue', fp: "getActiveBackendKind()==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'listDirectory path split 263' },
-  { file: 'components/ProviderManagerModal.vue', fp: "active.kind==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'supportsProviderConfigUpdates 979' },
-  { file: 'components/ProviderManagerModal.vue', fp: "backend().kind==='codex'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'validateCustomProvider 1038; submit 1180' },
+  { file: 'components/ProjectPicker.vue', fp: "getActiveBackendKind()==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'rejected', sites: 'listDirectory path split 263 (kimi-web explicit reject)', kimiSignal: 'Kimi Web does not support the project directory picker' },
+  { file: 'components/ProjectPicker.vue', fp: "getActiveBackendKind()==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'rejected', sites: 'listDirectory kimi-web fail-closed', kimiSignal: 'Kimi Web does not support the project directory picker' },
+  { file: 'components/ProviderManagerModal.vue', fp: "active.kind==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'supportsProviderConfigUpdates 979 (kimi-web explicit false)', kimiSignal: "active.kind === 'kimi-web'" },
+  { file: 'components/ProviderManagerModal.vue', fp: "active.kind==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'supportsProviderConfigUpdates kimi-web gate (providers owned by kimi)', kimiSignal: "active.kind === 'kimi-web'" },
+  { file: 'components/ProviderManagerModal.vue', fp: "backend().kind==='codex'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'rejected', sites: 'validateCustomProvider 1038; submit 1180 (unreachable for kimi: config surface gated off)', kimiSignal: "active.kind === 'kimi-web'" },
   { file: 'components/ProviderManagerModal.vue', fp: "props.backendKind!=='acp'", occurrences: 1, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'tabs 19' },
   { file: 'components/ProviderManagerModal.vue', fp: "props.backendKind==='acp'", occurrences: 1, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'acp auth pane 44' },
   { file: 'components/StatusMonitorModal.vue', fp: "activeBackendKind==='codex'", occurrences: 2, classification: 'ui-required', owner: 20, handling: 'handled', sites: 'codex summary grid / token usage 971/1121', kimiSignal: 'unsupportedKimiWeb' },
@@ -148,11 +152,13 @@ const BRANCHES: BranchEntry[] = [
   { file: 'composables/useBackendMessageSend.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 1, classification: 'capability-optional', owner: 18, handling: 'handled', sites: 'codex slash pre-dispatch 118' },
   { file: 'utils/defaultComposerMode.ts', fp: "backend==='codex'", occurrences: 1, classification: 'capability-optional', owner: 18, handling: 'handled', sites: 'default mode 4' },
   // ----- composables — activation (Todo 10) -----
-  { file: 'composables/useBackendActivation.ts', fp: "options.credentials.backendKind.value==='codex'", occurrences: 2, classification: 'ui-required', owner: 10, handling: 'pending', sites: 'startInitialization 284; abortInitialization 304' },
-  { file: 'composables/useBackendActivation.ts', fp: "options.credentials.backendKind.value==='acp'", occurrences: 1, classification: 'ui-required', owner: 10, handling: 'pending', sites: 'startInitialization 288' },
+  { file: 'composables/useBackendActivation.ts', fp: "options.credentials.backendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 10, handling: 'handled', sites: 'startInitialization kimi-web dispatch present', kimiSignal: "backendKind.value === 'kimi-web'" },
+  { file: 'composables/useBackendActivation.ts', fp: "options.credentials.backendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 10, handling: 'handled', sites: 'abortInitialization (kimi transport disconnected before the codex check)', kimiSignal: 'disconnectKimiWebBackend' },
+  { file: 'composables/useBackendActivation.ts', fp: "options.credentials.backendKind.value==='acp'", occurrences: 1, classification: 'ui-required', owner: 10, handling: 'handled', sites: 'startInitialization kimi-web dispatch present', kimiSignal: "backendKind.value === 'kimi-web'" },
   { file: 'composables/useBackendActivation.ts', fp: "options.credentials.backendKind.value==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 10, handling: 'handled', sites: 'startInitialization kimi-web dispatch', kimiSignal: 'activateKimiWeb' },
   // ----- composables — session lifecycle / actions / trees (Todo 17 / 25) -----
-  { file: 'composables/useBackendSelectionBootstrap.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: 'bootstrapSelection 24' },
+  { file: 'composables/useBackendSelectionBootstrap.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'bootstrapSelection 24 (kimi-web explicit early return)', kimiSignal: "activeBackendKind.value === 'kimi-web'" },
+  { file: 'composables/useBackendSelectionBootstrap.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'bootstrapSelection kimi-web early return (bootstraps via bootstrapKimiWebWorkspace)', kimiSignal: "params.activeBackendKind.value === 'kimi-web'" },
   { file: 'composables/useBackendSessionActions.ts', fp: "backendKind==='acp'", occurrences: 4, classification: 'ui-required', owner: 17, handling: 'handled', sites: 'delete/archive/unarchive/rename 221/275/325/372', kimiSignal: "backendKind === 'kimi-web'" },
   { file: 'composables/useBackendSessionActions.ts', fp: "backendKind==='codex'", occurrences: 4, classification: 'ui-required', owner: 17, handling: 'handled', sites: 'delete/archive/unarchive/rename 217/279/329/377', kimiSignal: "backendKind === 'kimi-web'" },
   { file: 'composables/useBackendSessionActions.ts', fp: "backendKind==='kimi-web'", occurrences: 4, classification: 'ui-required', owner: 17, handling: 'handled', sites: 'delete/archive/unarchive/rename kimi branch (kimiWebApi :delete/:archive/:restore/profile)', kimiSignal: 'Kimi Web session' },
@@ -169,7 +175,7 @@ const BRANCHES: BranchEntry[] = [
   { file: 'composables/useBackendSessionTrees.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'tree routing 54/87', kimiSignal: "activeBackendKind.value === 'kimi-web'" },
   { file: 'composables/useBackendSessionTrees.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'kimi-web mapped-project tree routing 65/89', kimiSignal: 'buildAcpTopPanelTreeData' },
   // ----- composables — history (Todo 15) -----
-  { file: 'composables/useBackendSessionReload.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 2, classification: 'ui-required', owner: 15, handling: 'pending', sites: 'reloadSelectedSessionState 93/121' },
+  { file: 'composables/useBackendSessionReload.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 2, classification: 'ui-required', owner: 15, handling: 'handled', sites: 'reloadSelectedSessionState 93/121 (kimi history branch 169 present)', kimiSignal: "activeBackendKind.value === 'kimi-web'" },
   { file: 'composables/useBackendSessionReload.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 15, handling: 'handled', sites: 'reloadSelectedSessionState kimi Web history branch 169' },
   { file: 'composables/useBackendSessionReload.ts', fp: "previousCacheContext.backend!=='codex'", occurrences: 1, classification: 'capability-optional', owner: 15, handling: 'handled', sites: 'cache save guard 111' },
   { file: 'composables/useRootHistoryLoader.ts', fp: "options.activeBackendKind.value==='acp'", occurrences: 1, classification: 'capability-optional', owner: 15, handling: 'handled', sites: 'acp metadata refresh 108' },
@@ -203,7 +209,7 @@ const BRANCHES: BranchEntry[] = [
 
 const UNIONS: UnionEntry[] = [
   { file: 'components/ProviderManagerModal.vue', fp: "backendKind?:'opencode'|'codex'|'acp'", owner: 11, classification: 'ui-required', handling: 'handled', sites: 'prop 717 widened to BackendKind by Todo 11; union no longer present, kept as the decision record' },
-  { file: 'composables/useAcpMessageBridge.ts', fp: "backendKind:'opencode'|'codex'|'acp'", owner: 25, classification: 'ui-required', handling: 'pending', sites: 'syncAcpMessageBridge param 16 omits kimi-web' },
+  { file: 'composables/useAcpMessageBridge.ts', fp: "backendKind:'opencode'|'codex'|'acp'", owner: 25, classification: 'ui-required', handling: 'handled', sites: 'syncAcpMessageBridge param widened to BackendKind by Todo 23; union no longer present, kept as the decision record' },
 ];
 
 const REGISTRATION = {

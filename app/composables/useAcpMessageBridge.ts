@@ -1,3 +1,4 @@
+import type { BackendKind } from '../backends/types';
 import type { BackendSessionInfo } from '../types/backend-domain';
 import type { MessageInfo, MessagePart } from '../types/sse';
 import type { AcpClientEvent, AcpPermissionRequest } from '../backends/acp/acpClient';
@@ -13,7 +14,7 @@ type AcpMessageBridgeBinding = {
 
 export function syncAcpMessageBridge(
   bridge: AcpMessageBridgeBinding,
-  backendKind: 'opencode' | 'codex' | 'acp',
+  backendKind: BackendKind,
   source?: AcpEventSource,
 ) {
   if (backendKind === 'acp' && source) bridge.bind(source);

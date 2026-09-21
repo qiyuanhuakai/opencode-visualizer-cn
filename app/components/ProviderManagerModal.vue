@@ -978,6 +978,8 @@ function isBackendManagedProvider(provider: ProviderInfo) {
 function supportsProviderConfigUpdates() {
   const active = backend();
   if (active.kind === 'codex') return Boolean(active.updateGlobalConfig);
+  // Kimi Web providers (managed:kimi-code) are owned by kimi itself, not editable here.
+  if (active.kind === 'kimi-web') return false;
   return Boolean(active.updateGlobalConfig && active.setProviderAuth);
 }
 
