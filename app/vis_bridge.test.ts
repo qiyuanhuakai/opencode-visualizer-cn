@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { request as httpRequest } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import { createConnection } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -706,6 +706,72 @@ describe('vis_bridge', () => {
     );
     const persisted = await runtime.getConfig();
     expect(persisted.acpAgents.find((agent) => agent.id === 'echo')?.enabled).toBe(false);
+  });
+
+  it('routes /kimi-web/* to the kimi proxy while /api/v1/* stays on the supervisor', async () => {
+    const runtime = await createTestRuntime();
+    const upstreamRequests: Array<{
+      method: string | undefined;
+      url: string | undefined;
+      authorization: string | undefined;
+    }> = [];
+    const kimiUpstream = createServer((request, response) => {
+      upstreamRequests.push({
+        method: request.method,
+        url: request.url,
+        authorization: request.headers.authorization,
+      });
+      response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      response.end(
+        JSON.stringify({ code: 0, msg: 'from-fake-kimi', data: { source: 'fake-kimi' } }),
+      );
+    });
+    await new Promise<void>((resolve) => kimiUpstream.listen(0, '127.0.0.1', resolve));
+    const address = kimiUpstream.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Fake kimi upstream address unavailable.');
+    }
+
+    try {
+      const server = createVisBridgeServer({
+        path: '/codex',
+        target: 'ws://127.0.0.1:1',
+        bridgeToken: 'secret-token',
+        runtime,
+        kimiWeb: {
+          upstreamOrigin: `http://127.0.0.1:${address.port}`,
+          getUpstreamAuthorization: () => 'Bearer fake-kimi-token',
+        },
+      });
+      const port = await listen(server);
+
+      const kimi = await readHttpBody(port, '/kimi-web/api/v1/supervisor', {
+        Authorization: 'Bearer secret-token',
+      });
+      expect(kimi).toEqual({
+        status: 200,
+        body: { code: 0, msg: 'from-fake-kimi', data: { source: 'fake-kimi' } },
+      });
+      expect(upstreamRequests).toEqual([
+        { method: 'GET', url: '/api/v1/supervisor', authorization: 'Bearer fake-kimi-token' },
+      ]);
+
+      const supervisor = await readHttpBody(port, '/api/v1/supervisor', {
+        Authorization: 'Bearer secret-token',
+      });
+      expect(supervisor.status).toBe(200);
+      expect(supervisor.body).toEqual(
+        expect.objectContaining({
+          services: [],
+          acpAgents: expect.arrayContaining([
+            expect.objectContaining({ id: 'echo', enabled: true, state: 'running' }),
+          ]),
+        }),
+      );
+    } finally {
+      kimiUpstream.closeAllConnections();
+      await new Promise<void>((resolve) => kimiUpstream.close(() => resolve()));
+    }
   });
 
   it.each(['0.0.0.0', ''])(
