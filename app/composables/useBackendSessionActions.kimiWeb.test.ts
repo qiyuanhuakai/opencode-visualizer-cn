@@ -1,11 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
+import { reactive, ref } from 'vue';
+import type { ProjectState } from '../types/worker-state';
 import { KimiWebError } from '../utils/kimiWeb';
+import { useBackendSessionTrees } from './useBackendSessionTrees';
 import { createSessionActionsFixture } from './useBackendSessionActions.test-helpers';
 
 function createKimiFixture(
   overrides: Parameters<typeof createSessionActionsFixture>[0] = {},
 ) {
   return createSessionActionsFixture({ activeBackendKind: 'kimi-web', ...overrides });
+}
+
+function createKimiProjects(): Record<string, ProjectState> {
+  return reactive({
+    workspace: {
+      id: 'workspace',
+      name: 'Workspace',
+      worktree: '/repo',
+      sandboxes: {
+        '/repo': {
+          directory: '/repo',
+          name: 'repo',
+          rootSessions: ['session-1', 'session-2'],
+          sessions: {
+            'session-1': {
+              id: 'session-1',
+              title: 'Archived session',
+              directory: '/repo',
+              timeUpdated: 2,
+              timeArchived: 1,
+            },
+            'session-2': {
+              id: 'session-2',
+              title: 'Other session',
+              directory: '/repo',
+              timeUpdated: 1,
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+function createKimiTrees(projects: Record<string, ProjectState>) {
+  return useBackendSessionTrees({
+    activeBackendKind: ref('kimi-web'),
+    projects,
+    pinnedStore: ref({}),
+    deletedSandboxStore: ref({}),
+    homePath: ref('/home/test'),
+    replaceHomePrefix: (path) => path,
+    resolveProjectColor: () => undefined,
+  });
 }
 
 describe('useBackendSessionActions kimi-web', () => {
@@ -21,6 +68,43 @@ describe('useBackendSessionActions kimi-web', () => {
 
     expect(deleteSession).toHaveBeenCalledWith('session-1');
     expect(openCodeDelete).not.toHaveBeenCalled();
+  });
+
+  it('Given a selected archived kimi-web session, When deletion succeeds, Then local trees drop it and selection clears', async () => {
+    const projects = createKimiProjects();
+    const trees = createKimiTrees(projects);
+    const deleteSession = vi.fn().mockResolvedValue(undefined);
+    const { actions, params } = createKimiFixture({
+      serverProjects: projects,
+      kimiWebApi: { deleteSession },
+    });
+
+    expect(
+      trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions.map((session) => session.id),
+    ).toContain('session-1');
+
+    await actions.deleteSession('session-1');
+
+    expect(projects.workspace.sandboxes['/repo'].sessions['session-1']).toBeUndefined();
+    expect(projects.workspace.sandboxes['/repo'].rootSessions).toEqual(['session-2']);
+    expect(params.selectedSessionId.value).toBe('');
+    expect(
+      trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions.map((session) => session.id),
+    ).not.toContain('session-1');
+  });
+
+  it('Given another kimi-web session is selected, When deletion succeeds, Then the existing selection remains', async () => {
+    const projects = createKimiProjects();
+    const deleteSession = vi.fn().mockResolvedValue(undefined);
+    const { actions, params } = createKimiFixture({
+      serverProjects: projects,
+      selectedSessionId: ref('session-2'),
+      kimiWebApi: { deleteSession },
+    });
+
+    await actions.deleteSession('session-1');
+
+    expect(params.selectedSessionId.value).toBe('session-2');
   });
 
   it('Given a kimi-web session, When archiveSession runs, Then it calls :archive and not OpenCode', async () => {
@@ -71,13 +155,20 @@ describe('useBackendSessionActions kimi-web', () => {
     const deleteSession = vi
       .fn()
       .mockRejectedValue(new KimiWebError(40401, 'Session not found.'));
-    const { actions, mocks } = createKimiFixture({ kimiWebApi: { deleteSession } });
+    const projects = createKimiProjects();
+    const { actions, mocks, params } = createKimiFixture({
+      serverProjects: projects,
+      kimiWebApi: { deleteSession },
+    });
 
     await actions.deleteSession('session-1');
 
     expect(deleteSession).toHaveBeenCalledWith('session-1');
     expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionDeleteFailed');
     expect(mocks.clearLocalPinnedSessionOverride).not.toHaveBeenCalled();
+    expect(projects.workspace.sandboxes['/repo'].sessions['session-1']).toBeDefined();
+    expect(projects.workspace.sandboxes['/repo'].rootSessions).toContain('session-1');
+    expect(params.selectedSessionId.value).toBe('session-1');
   });
 
   it('Given a kimi archive failure, When archiveSession runs, Then the failure surfaces', async () => {

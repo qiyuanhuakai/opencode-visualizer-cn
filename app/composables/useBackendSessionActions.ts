@@ -159,6 +159,19 @@ export function useBackendSessionActions(params: {
     );
   }
 
+  function removeKimiWebSession(sessionId: string) {
+    for (const project of Object.values(params.serverProjects)) {
+      for (const sandbox of Object.values(project.sandboxes)) {
+        if (!sandbox.sessions[sessionId]) continue;
+        delete sandbox.sessions[sessionId];
+        sandbox.rootSessions = sandbox.rootSessions.filter((id) => id !== sessionId);
+      }
+    }
+    if (params.selectedSessionId.value === sessionId) {
+      params.selectedSessionId.value = '';
+    }
+  }
+
   async function deleteCodexSession(sessionId: string) {
     await params.codexApi.archiveThread(sessionId);
     if (params.selectedSessionId.value === sessionId) {
@@ -225,6 +238,7 @@ export function useBackendSessionActions(params: {
           const api = params.kimiWebApi;
           if (!api?.deleteSession) throw new Error('Kimi Web session deletion is unavailable.');
           await api.deleteSession(sessionId);
+          removeKimiWebSession(sessionId);
           return;
         }
         await runOpenCodeSessionMutation(
