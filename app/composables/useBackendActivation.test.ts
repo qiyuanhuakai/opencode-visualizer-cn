@@ -11,6 +11,7 @@ type HarnessOverrides = {
   bootstrapSelections?: () => Promise<void>;
   hydrateActiveWorktreeResources?: () => Promise<void>;
   precheckKimiWebConnection?: () => Promise<void>;
+  bootstrapKimiWebWorkspace?: (isCurrent: () => boolean) => Promise<void>;
 };
 
 function createHarness(initialBackend: BackendKind = 'opencode', overrides: HarnessOverrides = {}) {
@@ -89,6 +90,9 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
   const disconnectCodexBackend = vi.fn(() => {
     calls.push('disconnectCodexBackend');
   });
+  const disconnectKimiWebBackend = vi.fn(() => {
+    calls.push('disconnectKimiWebBackend');
+  });
 
   const activation = useBackendActivation({
     credentials,
@@ -121,12 +125,18 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     configureKimiWebBackend,
     disconnectAcpBackend,
     disconnectCodexBackend,
+    disconnectKimiWebBackend,
     bootstrapAcpWorkspace:
       overrides.bootstrapAcpWorkspace ??
       (async () => {
         calls.push('bootstrapAcpWorkspace');
         selectedProjectId.value = 'acp';
         selectedSessionId.value = 'acp-session';
+      }),
+    bootstrapKimiWebWorkspace:
+      overrides.bootstrapKimiWebWorkspace ??
+      (async () => {
+        calls.push('bootstrapKimiWebWorkspace');
       }),
     fetchGlobalProviderConfig: async () => {
       calls.push('fetchGlobalProviderConfig');
@@ -194,6 +204,7 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     serverState,
     configureAcpBackend,
     configureKimiWebBackend,
+    disconnectKimiWebBackend,
     activation,
   };
 }
@@ -247,6 +258,7 @@ describe('useBackendActivation', () => {
     expect(harness.calls).toEqual([
       'disconnectAcpBackend',
       'disconnectCodexBackend',
+      'disconnectKimiWebBackend',
       'setActiveBackendKind:opencode',
       'ge.connect',
       'fetchHomePath',
@@ -269,6 +281,7 @@ describe('useBackendActivation', () => {
     expect(harness.calls).toEqual([
       'ge.disconnect',
       'disconnectAcpBackend',
+      'disconnectKimiWebBackend',
       'setActiveBackendKind:codex',
       'configureCodexBackend',
       'codex.connect',
@@ -303,6 +316,7 @@ describe('useBackendActivation', () => {
     expect(harness.calls).toEqual([
       'ge.disconnect',
       'disconnectCodexBackend',
+      'disconnectKimiWebBackend',
       'configureAcpBackend',
       'setActiveBackendKind:acp',
       'bootstrapAcpWorkspace',
@@ -577,10 +591,42 @@ describe('useBackendActivation', () => {
       'configureKimiWebBackend',
       'setActiveBackendKind:kimi-web',
       'precheckKimiWebConnection',
+      'bootstrapKimiWebWorkspace',
     ]);
     expect(harness.connectionState.value).toBe('ready');
     expect(harness.uiInitState.value).toBe('ready');
     expect(harness.activation.initializationInFlight.value).toBe(false);
+  });
+
+  it('disposes the kimi-web transport when switching to another backend', async () => {
+    const harness = createHarness('opencode');
+
+    await harness.activation.startInitialization();
+
+    expect(harness.disconnectKimiWebBackend).toHaveBeenCalledOnce();
+  });
+
+  it('gives kimi-web bootstrap a stale fence so an interrupted list cannot commit', async () => {
+    let finishBootstrap: (() => void) | undefined;
+    let bootstrapFence: (() => boolean) | undefined;
+    const harness = createHarness('kimi-web', {
+      bootstrapKimiWebWorkspace: (isCurrent) => {
+        bootstrapFence = isCurrent;
+        return new Promise<void>((resolve) => {
+          finishBootstrap = resolve;
+        });
+      },
+    });
+    const staleInitialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(bootstrapFence).toBeTypeOf('function'));
+
+    harness.activation.abortInitialization();
+    expect(bootstrapFence?.()).toBe(false);
+    finishBootstrap?.();
+    await staleInitialization;
+
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('connecting');
   });
 
   it('keeps an aborted kimi-web precheck on the login screen', async () => {

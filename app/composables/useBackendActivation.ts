@@ -80,7 +80,9 @@ export type UseBackendActivationOptions = {
   precheckKimiWebConnection?: (request: KimiWebPrecheckRequest) => Promise<void>;
   disconnectAcpBackend: () => void;
   disconnectCodexBackend: () => void;
+  disconnectKimiWebBackend: () => void;
   bootstrapAcpWorkspace: () => Promise<void>;
+  bootstrapKimiWebWorkspace: (isCurrent: () => boolean) => Promise<void>;
   fetchGlobalProviderConfig: () => Promise<void>;
   fetchProviders: (force?: boolean) => Promise<void>;
   fetchAgents: () => Promise<void>;
@@ -151,6 +153,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   async function activateCodex(generation: number) {
     options.ge.disconnect();
     options.disconnectAcpBackend();
+    options.disconnectKimiWebBackend();
     options.activeBackendKind.value = 'codex';
     options.setActiveBackendKind('codex');
     options.configureCodexBackend({
@@ -218,6 +221,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   async function activateOpenCode(generation: number) {
     options.disconnectAcpBackend();
     options.disconnectCodexBackend();
+    options.disconnectKimiWebBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
     resetOpenCodeSelectionState();
@@ -267,6 +271,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     try {
       options.ge.disconnect();
       options.disconnectCodexBackend();
+      options.disconnectKimiWebBackend();
       options.activeBackendKind.value = 'acp';
       options.configureAcpBackend({
         bridgeUrl: options.credentials.acpBridgeUrl.value,
@@ -337,10 +342,15 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await precheck({ bridgeUrl, bridgeToken });
       if (!isCurrent()) return;
 
+      options.connectionState.value = 'bootstrapping';
+      await options.bootstrapKimiWebWorkspace(isCurrent);
+      if (!isCurrent()) return;
+
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
     } catch (error) {
       if (!isCurrent()) return;
+      options.disconnectKimiWebBackend();
       options.connectionState.value = 'error';
       options.initErrorMessage.value = options.toErrorMessage(error);
       options.uiInitState.value = 'login';
@@ -378,6 +388,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     cancelInitialization();
     options.ge.disconnect();
     options.disconnectAcpBackend();
+    options.disconnectKimiWebBackend();
     if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnectTransport();
     options.disconnectCodexBackend();
     options.connectionState.value = 'connecting';

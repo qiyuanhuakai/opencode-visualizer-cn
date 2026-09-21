@@ -6,7 +6,10 @@ import type {
   CodexSkill,
   CodexTurnInputItem,
 } from '../backends/codex/codexAdapter';
-import type { KimiWebSendApi } from '../backends/kimiWeb/backendMessageSend.kimiWeb';
+import type {
+  KimiWebAbortChannel,
+  KimiWebSendApi,
+} from '../backends/kimiWeb/backendMessageSend.kimiWeb';
 import type { ParsedSkill } from '../utils/parseSkill';
 import type { TextTransformer } from '../utils/textTransformers';
 import type { ParsedCodexSlashCommand } from '../utils/codexSlashCommands';
@@ -114,6 +117,7 @@ export type BackendMessageSendParams = {
    * When absent the kimi-web dispatch fails closed instead of using OpenCode.
    */
   readonly kimiWebApi?: KimiWebSendApi;
+  readonly kimiWebAbortChannel?: KimiWebAbortChannel;
   readonly ensureConnectionReady: (action: string) => boolean;
   readonly translate: (key: string, params?: Record<string, unknown>) => string;
   readonly toErrorMessage: (error: unknown) => string;

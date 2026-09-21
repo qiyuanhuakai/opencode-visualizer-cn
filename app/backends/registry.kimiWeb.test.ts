@@ -45,20 +45,17 @@ describe('Kimi Web backend registry', () => {
     );
   });
 
-  it('accepts a valid kimi-web configuration without exposing a production adapter', () => {
-    // Given: a configured Kimi Web bridge whose adapter is still the Todo 25 placeholder.
+  it('configures and exposes the production kimi-web adapter', () => {
+    // Given: valid Kimi Web bridge credentials.
     // When: the bridge credentials are configured.
-    expect(() =>
-      configureKimiWebBackend({
+    const adapter = configureKimiWebBackend({
         bridgeUrl: DEFAULT_KIMI_WEB_BRIDGE_URL,
         bridgeToken: 'bridge-secret',
-      }),
-    ).not.toThrow();
+      });
 
-    // Then: no production path can obtain the placeholder adapter.
-    expect(() => getBackendAdapter('kimi-web')).toThrow(
-      'Backend adapter is not registered: kimi-web',
-    );
+    // Then: the registry exposes that exact adapter without changing active identity.
+    expect(getBackendAdapter('kimi-web')).toBe(adapter);
+    expect(adapter).toEqual(expect.objectContaining({ kind: 'kimi-web', label: 'Kimi Web' }));
     expect(getActiveBackendKind()).toBe('opencode');
   });
 
@@ -101,15 +98,14 @@ describe('Kimi Web backend registry', () => {
     expect(KIMI_WEB_CAPABILITIES.sessionManagementMode).toBe('standard');
   });
 
-  it('keeps kimi-web unactivatable so getActiveBackendAdapter keeps rejecting', () => {
+  it('activates kimi-web after its adapter is configured', () => {
     // Given: a configured kimi-web bridge.
     configureKimiWebBackend({ bridgeUrl: DEFAULT_KIMI_WEB_BRIDGE_URL });
 
-    // When: a caller tries to activate the unregistered backend.
-    // Then: activation is rejected and the active adapter is untouched.
-    expect(() => setActiveBackendKind('kimi-web')).toThrow(
-      'Backend adapter is not registered: kimi-web',
-    );
-    expect(getActiveBackendAdapter()).toEqual(expect.objectContaining({ kind: 'opencode' }));
+    // When: a caller activates the registered backend.
+    setActiveBackendKind('kimi-web');
+
+    // Then: the active adapter is the real Kimi Web implementation.
+    expect(getActiveBackendAdapter()).toEqual(expect.objectContaining({ kind: 'kimi-web' }));
   });
 });

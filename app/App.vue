@@ -498,6 +498,7 @@
       :codex-api="codexApi"
       :active-backend-kind="activeBackendKind"
       :magic-context-workers="magicContextWorkers"
+      :kimi-web-bridge="kimiWebMessageBridge"
       @close="isStatusMonitorOpen = false"
     />
     <ProjectSettingsDialog
@@ -788,6 +789,11 @@ import { resolveTerminalScrollTarget } from './utils/terminalScroll';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
+import { useKimiWebMessageBridge } from './composables/useKimiWebMessageBridge';
+import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
+import { KimiWebAdapter } from './backends/kimiWeb/kimiWebAdapter';
+import { kimiWebMessagesToHistoryEntries } from './backends/kimiWeb/historyEntries';
+import { createKimiWebWsClient, kimiWebProxyHttpUrl, kimiWebWsUrl, type KimiWebWsClient } from './utils/kimiWebWs';
 import { useSettings } from './composables/useSettings';
 import { createComposerDraftScheduler } from './utils/composerDraftScheduler';
 import {
@@ -7626,6 +7632,68 @@ const acpMessageBridge = useAcpMessageBridge({
   },
 });
 
+let configuredKimiWebAdapter: KimiWebAdapter | undefined;
+const kimiWebWsClient = shallowRef<KimiWebWsClient>();
+const kimiWebMessageBridge = shallowRef<ReturnType<typeof useKimiWebMessageBridge>>();
+
+function kimiWebRestClient() {
+  if (!configuredKimiWebAdapter) throw new Error('Kimi Web backend is not configured.');
+  return configuredKimiWebAdapter.restClient;
+}
+
+const kimiWebApi = {
+  createSession: (...args: Parameters<KimiWebAdapter['restClient']['createSession']>) =>
+    kimiWebRestClient().createSession(...args),
+  updateProfile: (...args: Parameters<KimiWebAdapter['restClient']['updateProfile']>) =>
+    kimiWebRestClient().updateProfile(...args),
+  deleteSession: (...args: Parameters<KimiWebAdapter['restClient']['deleteSession']>) =>
+    kimiWebRestClient().deleteSession(...args),
+  archiveSession: (...args: Parameters<KimiWebAdapter['restClient']['archiveSession']>) =>
+    kimiWebRestClient().archiveSession(...args),
+  restoreSession: (...args: Parameters<KimiWebAdapter['restClient']['restoreSession']>) =>
+    kimiWebRestClient().restoreSession(...args),
+  abortSession: (...args: Parameters<KimiWebAdapter['restClient']['abortSession']>) =>
+    kimiWebRestClient().abortSession(...args),
+  getMessages: (...args: Parameters<KimiWebAdapter['restClient']['getMessages']>) =>
+    kimiWebRestClient().getMessages(...args),
+  sendPrompt: (...args: Parameters<KimiWebAdapter['restClient']['sendPrompt']>) =>
+    kimiWebRestClient().sendPrompt(...args),
+  uploadFile: (...args: Parameters<KimiWebAdapter['restClient']['uploadFile']>) =>
+    kimiWebRestClient().uploadFile(...args),
+  steer: (...args: Parameters<KimiWebAdapter['restClient']['steer']>) =>
+    kimiWebRestClient().steer(...args),
+  abortPrompt: (...args: Parameters<KimiWebAdapter['restClient']['abortPrompt']>) =>
+    kimiWebRestClient().abortPrompt(...args),
+};
+
+const kimiWebAbortChannel = {
+  abort: (sessionId: string, promptId: string) => {
+    if (!kimiWebWsClient.value) return Promise.reject(new Error('Kimi Web WebSocket is unavailable.'));
+    return kimiWebWsClient.value.abort(sessionId, promptId);
+  },
+  isConnected: () => kimiWebWsClient.value?.isConnected() ?? false,
+};
+
+const kimiWebBridgeLifecycle = {
+  subscribe: (sessionIds: string[]) => {
+    if (!kimiWebMessageBridge.value) {
+      return Promise.reject(new Error('Kimi Web message bridge is unavailable.'));
+    }
+    return kimiWebMessageBridge.value.subscribe(sessionIds);
+  },
+  applyHistory: (entries: unknown[]) => {
+    if (!kimiWebMessageBridge.value) throw new Error('Kimi Web message bridge is unavailable.');
+    kimiWebMessageBridge.value.applyHistory(entries);
+  },
+};
+
+function disconnectKimiWebBackend() {
+  kimiWebMessageBridge.value?.stop();
+  kimiWebWsClient.value?.disconnect();
+  kimiWebMessageBridge.value = undefined;
+  kimiWebWsClient.value = undefined;
+}
+
 watchEffect(() => {
   configureOpenCodeBackend({
     baseUrl: credentials.baseUrl.value,
@@ -7642,6 +7710,10 @@ watchEffect(() => {
         agentId: credentials.acpAgentId.value,
       })
     : undefined;
+  configuredKimiWebAdapter = configureKimiWebBackend({
+    bridgeUrl: credentials.kimiWebBridgeUrl.value,
+    bridgeToken: credentials.kimiWebBridgeToken.value,
+  });
   codexApi.url.value = credentials.codexBridgeUrl.value;
   codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
   const configuredBackendKind = credentials.backendKind.value;
@@ -7654,7 +7726,11 @@ watchEffect(() => {
   activeBackendKind.value = effectiveBackendKind;
   loginBackendKind.value = credentials.backendKind.value;
   setActiveBackendKind(effectiveBackendKind);
-  syncAcpMessageBridge(acpMessageBridge, effectiveBackendKind, configuredAcp);
+  syncAcpMessageBridge(
+    acpMessageBridge,
+    effectiveBackendKind === 'kimi-web' ? 'opencode' : effectiveBackendKind,
+    configuredAcp,
+  );
 });
 
 async function bootstrapAcpWorkspace() {
@@ -7670,6 +7746,47 @@ async function bootstrapAcpWorkspace() {
   selectedProjectId.value = first ? ACP_PROJECT_ID : '';
   selectedSessionId.value = first?.id ?? '';
   bootstrapReady.value = true;
+}
+
+async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
+  const adapter = getActiveBackendAdapter();
+  if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is not configured.');
+  disconnectKimiWebBackend();
+  const result = await runKimiWebBootstrap({
+    adapter,
+    isCurrent,
+    createClient: () =>
+      createKimiWebWsClient({
+        url: kimiWebWsUrl(adapter.bridgeUrl, adapter.bridgeToken),
+        proxyHttpUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(adapter.bridgeUrl, adapter.bridgeToken)),
+        getToken: () => adapter.bridgeToken,
+      }),
+    createBridge: (client) => {
+      let bridge: ReturnType<typeof useKimiWebMessageBridge>;
+      bridge = useKimiWebMessageBridge({
+        client,
+        restClient: adapter.restClient,
+        msg,
+        applySnapshot: (snapshot) =>
+          bridge.applyHistory(kimiWebMessagesToHistoryEntries(snapshot.messages.items)),
+        onToolPart: () => undefined,
+        onLiveReasoning: () => undefined,
+        onLiveSubagent: () => undefined,
+      });
+      return bridge;
+    },
+    commit: ({ projects, selectedProjectId: projectId, selectedSessionId: sessionId, selectedModel: model }) => {
+      Object.keys(serverState.projects).forEach((key) => delete serverState.projects[key]);
+      Object.assign(serverState.projects, projects);
+      selectedProjectId.value = projectId;
+      selectedSessionId.value = sessionId;
+      selectedModel.value = model;
+      bootstrapReady.value = true;
+    },
+  });
+  if (!isCurrent()) return;
+  kimiWebWsClient.value = result.client;
+  kimiWebMessageBridge.value = result.bridge as ReturnType<typeof useKimiWebMessageBridge> | undefined;
 }
 
 watch(selectedSessionId, () => {
@@ -7839,6 +7956,7 @@ const backendSessionActions = useBackendSessionActions({
   backendDeleteSession: (sessionId, directory) => backend().deleteSession(sessionId, directory),
   backendUpdateSession: (sessionId, payload, directory) =>
     backend().updateSession(sessionId, payload, directory),
+  kimiWebApi,
 });
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
@@ -7870,6 +7988,11 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
   backendCreateSession: (directory) => backend().createSession(directory),
   findAcpSessionByDirectory,
   backendAbortSession: createDynamicBackendAbortSession(backend),
+  kimiWebApi,
+  kimiWebCreateProfile: (directory) => ({
+    metadata: { cwd: directory },
+    ...(selectedModel.value ? { agent_config: { model: selectedModel.value } } : {}),
+  }),
 });
 
 const backendSessionReload = useBackendSessionReload({
@@ -7907,6 +8030,8 @@ const backendSessionReload = useBackendSessionReload({
   codexApi,
   codexHistory: computed(() => codexWorkspace.history.value),
   codexReapplyBackfill: codexMessageBridge.reapplyCodexSharedBackfill,
+  kimiWebApi,
+  kimiWebBridge: kimiWebBridgeLifecycle,
   fetchRootSessionHistory,
   waitForPendingRenders,
   reserveRootHistoryRequestId,
@@ -8052,6 +8177,8 @@ const backendMessageSend = useBackendMessageSend({
     },
   },
   codexApi,
+  kimiWebApi,
+  kimiWebAbortChannel,
   ensureConnectionReady,
   translate: t,
   toErrorMessage,
@@ -9466,7 +9593,9 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   configureKimiWebBackend,
   disconnectAcpBackend,
   disconnectCodexBackend,
+  disconnectKimiWebBackend,
   bootstrapAcpWorkspace,
+  bootstrapKimiWebWorkspace,
   fetchGlobalProviderConfig,
   fetchProviders,
   fetchAgents,
@@ -9527,6 +9656,7 @@ function handleLogout() {
   initialQuery.projectId = '';
   initialQuery.sessionId = '';
   acpMessageBridge.stop();
+  disconnectKimiWebBackend();
   disconnectAcpBackend();
   credentials.clear();
   ge.disconnect();
@@ -9748,6 +9878,7 @@ onBeforeUnmount(() => {
   }
   pendingReferencedSubagentHydrations.clear();
   acpMessageBridge.stop();
+  disconnectKimiWebBackend();
   disconnectAcpBackend();
   window.removeEventListener('keydown', handleGlobalKeydown);
   window.electronAPI?.localFile?.offChanged(handleLocalApplicationChange);
