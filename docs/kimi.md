@@ -31,12 +31,14 @@ kimi web rotate-token    # 轮换持久 token，旧 token 立即失效
 - 非环回绑定默认要求 TLS 终止代理（`--insecure-no-tls` 可放宽）；非环回时 `POST /api/v1/shutdown` 默认 404，需 `--allow-remote-shutdown`。
 - Host 头做 DNS-rebinding 校验，`--allowed-host` 追加白名单（前导 `.` 匹配域名后缀）。
 - 启动横幅打印 `http://127.0.0.1:58627/#token=<token>`；fragment 中的 token 只给捆绑 Web UI 自用，不作为接口认证方式。
+- `GET /api/v1/healthz`（免认证）实测响应为 `{"code":0,"msg":"success","data":{"ok":true},"request_id":"01M3129HA60G8N5AGSN1CA78FM"}`：业务字段在 `data.ok`，就绪判定必须看它而不是 HTTP 状态码（进程托管据此写探测条件，见 `.omo/evidence/kimi-web-adapt/task-5.txt`）。
 - 每个实例注册在 `~/.kimi-code/server/instances/`；与 CLI 共享 `~/.kimi-code` 主目录（config.toml、sessions、credentials）。
 - 同一端口同时服务 REST、WebSocket 与捆绑的 Web UI 静态资源。
 
 ### 认证模型
 
 - 持久 token 存放在 **`~/.kimi-code/server.token`**（0600），首次启动生成（32 字节 base64url），跨重启复用；`rotate-token` 原子替换并立即使旧 token 失效。服务端按文件 mtime/inode 变化重读 token，轮换无需重启；比较使用常数时间比较。
+- **轮换对已建立连接的影响（2026-09-21 实测，`.omo/evidence/kimi-web-adapt/task-23/06-fault-injection/rotate-token.txt`）**：已用旧 bearer 建立的 WebSocket **不会被关闭**，应用层 ping 在轮换后继续流动（25 秒观察窗内 115 次 ping，`lastPingAge` 1798 ms）；旧 bearer 直连上游 REST 返回 401；经 vis_bridge 转发的 REST 与**新拨号**的 WS 都拿到新 bearer（新拨号 101），且**不需要重启 bridge**——token 由 bridge 按请求惰性读取并注入上游，浏览器侧始终只见 bridge 自己的凭据。
 - **REST**：`Authorization: Bearer <token>`。
 - **WebSocket**：`Authorization` 头 **或** 子协议 `kimi-code.bearer.<token>`。**实测 `?token=` 查询参数不被接受**（连接直接 1006），浏览器侧必须用子协议方式。
 - `--dangerous-bypass-auth` 关闭所有 REST/WS 认证，并通过 `/api/v1/meta` 的 `dangerous_bypass_auth: true` 告知 Web UI 免 token 连接。仅限可信网络。
@@ -129,6 +131,17 @@ kimi web rotate-token    # 轮换持久 token，旧 token 立即失效
 
 **Transcript 协议（subscribe_v2）**：`subscribe_v2{session_id, transcript: {agentId: "off|turn|block|delta"}, transcript_since?}` 按代理粒度订阅转录流；服务端推 `transcript.reset` / `transcript.ops`；断线用 `transcript_since` 续传，REST `…/transcript/ops?since_seq=` 兜底（`complete:false` 表示需全量刷新）。
 
+**回放边界契约（2026-09-21 实测，`.omo/evidence/kimi-web-adapt/task-26/REPLAY-BOUNDARY-CONTRACT.md`）**
+
+带 `cursors` 的 `subscribe`/`client_hello` 的补发边界与恢复语义已逐条实测，客户端按以下契约实现：
+
+- **`ack` 是补发→实时的切换点**：补发帧（durable、seq 严格递增）全部先到，**最后**才回 `ack`；不存在 `replay_upto_seq` 之类的独立结束帧。`ack.payload.cursors[sid] = {seq:U, epoch}` 即补发上界 U（6 组实测均等于最后一条补发帧的 seq，也等于 ack 时刻的 `session.last_seq`）。不带 `cursors` 的 `subscribe` 不补发、ack 立即到达；同一 cursor 重复订阅会**重复补发**同一段，durable 必须按 `(session_id, seq)` 去重。
+- **volatile 永不补发**：断线期间产生的 delta 只能靠 REST 对账（snapshot / `…/messages`）恢复，WS 不补。同 seq 的 volatile 帧（seq 来自打开该 step 的 durable 事件）**不得**因 `seq <= cursor/U` 被丢弃，那会丢 live 内容。
+- **`resync_required` 触发条件**（均已实测）：`cursor.epoch` 与会话 epoch 不匹配、`cursor.seq < last_seq - 1000`（缓冲溢出，边界精确等于 `max_event_buffer_size`）、`cursor.seq > last_seq`（未来游标，reason 被服务端误标为 `epoch_changed`）。触发时 `resync_required{session_id, reason, current_seq, epoch}` 先到、`ack` 仍回 `code:0`——**必须看 `ack.payload.resync_required[]`**，不能只凭 ack 的 code 判断成功。resync 后连接保持订阅，**无需重订阅**；`reason` 不可信，任何 resync 一律按重建处理。
+- **snapshot 语义**：`GET /api/v1/sessions/{id}/snapshot` 返回 `{as_of_seq, epoch, session, messages{items,has_more}, in_flight_turn, subagents, pending_approvals, pending_questions}`；`as_of_seq` = 已含的最大 durable seq = `session.last_seq`，是权威重建边界（`epoch` 为**每会话独立**，同一服务端不同会话 epoch 不同）。**快照不携带任何 offset 水位**：同 seq 的 volatile 片段已并入 `in_flight_turn.thinking_text` / `assistant_text`（字符串）。
+- **同 seq offset 规则**：恢复点用**内容替换**（快照字符串权威），offset 只作**当前连接内**同一 `(session_id, seq)` run 的排序/去重，禁止跨连接比较（服务端是否跨重连续编号未实测，规则对此保持无关）。
+- **完成判据**：`turn.ended.reason` 是唯一完成权威；`prompt.completed` 对失败回合同样会到达，不能当作成功。
+
 ### 会话与消息模型
 
 概念层级：**workspace**（`wd_<slug>_<hash12>`，按 cwd 自动创建/复用）→ **session**（`session_<uuid>`）→ **agent**（`main` 主代理 + `subagent.spawned` 产生的子代理，经 `…/children` 查询）→ **turn** → **step**；一次用户输入是 **prompt**（`prompt_id` 与 `user_message_id` 同值，`msg_01…`）。
@@ -146,7 +159,7 @@ kimi web rotate-token    # 轮换持久 token，旧 token 立即失效
 2. **WS 不接受 `?token=` 查询参数**（1006 无说明关闭）；浏览器只能走子协议 `kimi-code.bearer.<token>`。
 3. **应用层 ping 必须回 JSON pong**（携带 nonce），否则约 20 秒后 `1001 heartbeat timeout`。
 4. **大小写惯例分裂**：REST snake_case、WS payload camelCase（含嵌套 `sessionId`），帧信封本身（`session_id`、`request_id`）又是 snake_case。类型定义须分层建模。
-5. `GET …/messages` 倒序 + `has_more` 分页；assistant 内容含 `thinking` part；user 消息可能含 `origin.kind:"injection"` 的注入消息。
+5. `GET …/messages` 倒序 + `has_more` 分页；assistant 内容含 `thinking` part；user 消息可能含 `metadata.origin.kind:"injection"` 的注入消息（实测样例还带 `variant:"date_change"` 等附加字段，权威路径是 `metadata.origin.kind`，不是顶层 `origin.kind`）。
 6. volatile delta 不可重放，共享 seq、以 offset 排序；durable 事件才可 cursor 重放。
 7. `model.not_configured` 失败路径：turn 以 `turn.step.interrupted(reason:"error")` → `turn.ended(reason:"failed")` → `error` 事件结束，`prompt.completed` 仍会到达——完成不等于成功，须看 `turn.ended.reason` / `last_turn_reason`。
 
@@ -204,10 +217,65 @@ kimi web rotate-token    # 轮换持久 token，旧 token 立即失效
 3. **凭据与登录**：浏览器侧只见 bridge——登录页复用 Codex/ACP 的「bridge URL + bridge token」字段模式（storage keys 与 `useCredentials` 增 `kimi-web` 分支即可）；kimi 的 bearer token 不下发到页面，由 bridge 从 `~/.kimi-code/server.token` 读取并注入上游请求。`app/App.vue` 登录页增后端按钮；`app/locales/*` 增文案。
 4. **激活与围栏**：`app/composables/useBackendActivation.ts` 增 `activateKimiWeb`；所有异步预检/提交继续走 `createBackendRequestFence()`（backend identity + generation 双匹配，见既有约束）。
 5. **事件→状态桥**：新建 `useKimiWebMessageBridge`（参照 `app/composables/useAcpMessageBridge.ts`）：durable 事件驱动 `serverState`/会话列表，`assistant.delta`/`thinking.delta` 流式进 `useMessages.updatePart`（经 `useDeltaAccumulator`），`turn.ended`/`prompt.completed` 驱动完成态（**以 `turn.ended.reason` 为准，不用完成事件冒充成功**），`event.approval.*`/`event.question.*` 接现有权限/提问 UI。`app/types/worker-state.ts` 与 `MessageInfo`/`MessagePart` 契约**保持不变**，在桥边界做 camelCase→现有形状的归一化。
-6. **会话动作分支**：`useBackendSessionActions.ts`（delete/archive 用 `:delete`/`:archive`/`:restore`，rename 用 `POST …/profile`）、`useBackendSessionLifecycle.ts`（create 后**必须补 profile 写 model**；abort 用 WS abort/REST `:abort`）、`useBackendMessageSend.ts` + 新建 `backendMessageSend.kimiWeb.ts`（content part 构造、附件上传走 `POST /api/v1/files`）、`useBackendSessionReload.ts`（历史用 `GET …/messages` 倒序分页 + `GET …/transcript`，注入消息按 `origin.kind` 过滤）。
+6. **会话动作分支**：`useBackendSessionActions.ts`（delete/archive 用 `:delete`/`:archive`/`:restore`，rename 用 `POST …/profile`）、`useBackendSessionLifecycle.ts`（create 后**必须补 profile 写 model**；abort 用 WS abort/REST `:abort`）、`useBackendMessageSend.ts` + 新建 `backendMessageSend.kimiWeb.ts`（content part 构造、附件上传走 `POST /api/v1/files`）、`useBackendSessionReload.ts`（历史用 `GET …/messages` 倒序分页 + `GET …/transcript`，注入消息按 `metadata.origin.kind` 过滤）。
 7. **能力门控**：遵循既有规则——UI 暴露前做运行时探测。以 `/api/v1/meta.capabilities` + `/api/v1/auth`（`models_ready`、managed provider 状态）为一级门，具体动作（fork/compact/undo/btw、transcript 级别、终端）以实测响应为准；`experimental_flags` 只做展示不做门。
 8. **进程托管**：`bridge/processSupervisor.js` 增服务定义 `{id:'kimi-web', command:'kimi', args:['web','--port','58627','--no-open'], probe:{type:'http', url:'http://127.0.0.1:58627/api/v1/healthz'}}`（healthz 免认证，适配现有 HTTP 探测）；token 由 `~/.kimi-code/server.token` 读取，不经命令行传递。桌面端版本显示/更新检查语义不变，kimi web 不进 bridge 版本通道。
 9. **测试**：WS 事件 fixture 必须来自真实线数据（本文档信封样例 + 现场 asyncapi），禁止手写不匹配的形状；REST mock 需覆盖信封非 0 `code` 而 HTTP 200 的路径。冒烟脚本可复用本次调研的建会话→订阅→prompt→读回链路。
+
+### VIS 适配状态（2026-09-21 真机冒烟，Alpha）
+
+本节记录 kimi-web 作为**第四个后端**在 vis 中的实际落地状态。全部结论来自 Todo 23 真机冒烟（真 `kimi web` 0.43.0 + vis_bridge + 前端全链路），证据目录 `.omo/evidence/kimi-web-adapt/task-23/`（索引见其 `README.md`）。本节只列**实测通过**的面；服务端有路由但 vis 未接入的面显式列为「未接入」，不拿协议存在当能力。
+
+**主会话功能面（冒烟逐项通过）**
+
+| 面 | 实测结论 | 证据 |
+| --- | --- | --- |
+| 登录与连接 | 登录页填 bridge URL + bridge token；预检（bridge `/healthz` + 转发 `/api/v1/meta`）→ 引导 → WS `client_hello` → `subscribe`(+cursors) → ack → 应用层 ping/pong 全链路通 | `04-frontend/01-login-kimiweb-fields.png`、`03-proxy-checks/proxy-checks.txt`、`04-frontend/ws-after-login.json` |
+| 建/选会话 | 固定两次调用顺序：`POST /api/v1/sessions` → `POST …/profile` 写 model（坑位 1 的规避手段）；新建会话即时进入 `serverState.projects`，选中不再被弹回旧会话 | `05-checklist/a-create-session-writes.json`、`a-new-session-state.json`、`a-new-session-created.png` |
+| 流式 text + thinking | 回合内 `assistant.delta`/`thinking.delta` 实时进消息区；推理悬浮窗在运行中的回合打开、随终结 part 关闭（窗口关闭快，需在回合中抓取） | `05-checklist/b-p1-events.json`、`c-p2-running.png` |
+| 历史 + 注入过滤 | `GET …/messages` 倒序分页拼接（6 页同集合、无重复、顺序保持）；`metadata.origin.kind === "injection"` 由加载器过滤（实测同一会话识别出 2 条注入消息） | `05-checklist/h-multipage-stitching.txt`、`h-smoke-session.har` |
+| 审批 | 通过与驳回各一次，`event.approval.resolved` 回填；pending 集合以 `…/approvals?status=pending` 列表为权威，WS 事件只作对账触发 | `05-checklist/d-approval-pending.png`、`d-rejected.png` |
+| 提问 | 应答与 dismiss 均通（同一回合内连续两个提问，各自应答/dismiss） | `05-checklist/e-question-dialog.png`、`e-question-2.png`、`e-question-2-dismissed.png` |
+| steer | `POST …/prompts:steer {prompt_ids}` → `{"steered":true}`，WS `turn.steer`/`prompt.steered` | `05-checklist/f-steer-response.json`、`f-steer-ui.png` |
+| 附件 | `POST /api/v1/files` 先于 `POST …/prompts` 发出（HAR 顺序证明），模型当回合读到文件内容 | `05-checklist/g-attachment-attached.png`、`h-smoke-session.har` |
+| 重命名/归档/恢复/删除 | 四项均通；删除后服务端 `40401` | `05-checklist/i-renamed.png`、`i-archived.png`、`i-archive-restore.txt`、`i-restored.png`、`i-deleted.png` |
+| 中止 | 双击 Esc → `POST …:abort` 200 → `turn.ended` reason `cancelled`（interruptReason `user_cancelled`），UI 回 Idle | `05-checklist/j-abort-midflight-wire.json`、`j-abort-midflight.png` |
+| Token 用量 | 主源为 bridge 会话状态；状态为空时回退 `GET …/status`（经桥）读 `context_tokens`/`max_context_tokens` | `05-checklist/k-token-usage-live.png`、`k-token-usage-live-rest.json` |
+| 状态监视器 | server 页显示 Healthy、版本、capabilities（取自 `/api/v1/meta`）与 models ready（取自 `/api/v1/auth`）；MCP、LSP、PLUGINS、SKILLS 页显示 kimi-web 不支持 | `05-checklist/k-server-tab.png` |
+| 能力门控 | 一级门 `/api/v1/meta.capabilities` + `/api/v1/auth.models_ready`；探测失败一律 unknown（fail-closed），`experimental_flags` 只展示不做门 | `03-proxy-checks/proxy-checks.txt`、`app/backends/kimiWeb/capabilityRegistry.ts` |
+| 三路自动弹窗 | 工具/推理/子代理悬浮窗均自动弹出并正确关闭（DOM 级断言 + 250 ms 轮询标题），遵循禁止自动弹窗设置 | `05-checklist/c-p2-running.png`、`c-p2-subagent.png` |
+
+**传输与托管面（同样实测）**
+
+| 面 | 实测结论 | 证据 |
+| --- | --- | --- |
+| bridge 转发 | REST 与 WS 全部经 vis_bridge `/kimi-web/*` 转发（浏览器直连会被 Origin 白名单 403，原因见上节）；kimi bearer 由 bridge 惰性注入、不下发浏览器；错误 bridge token 401 | `03-proxy-checks/proxy-checks.txt`、`ws-upgrade.txt` |
+| rotate-token | 已建立 WS 不被关闭、ping 继续流动；新拨号 101；REST 经桥无 bridge 重启即恢复 | `06-fault-injection/rotate-token.txt` |
+| 断线重连 | 1006 → 退避阶梯（约 1/2/4/8 s）→ cursor 重订阅 → `resync_required` → snapshot 重建，历史完好、无错误横幅 | `06-fault-injection/reconnect-cursors.json`、`reconnected.png` |
+| supervisor 三态 | 端口被外人占用 → state error 且**不 spawn**，外人监听保持；端口释放后 spawn 自有子进程并实际绑定 58627 | `06-fault-injection/port-occupancy.txt`、`supervisor-error-state.json` |
+| Pages 源跨源 | 经桥取 JSON + 二进制（fs 下载，`Content-Type` 保留）+ WS 101 均带 ACAO（直连路径会被 403） | `06-fault-injection/cors-pages-origin.txt` |
+| token 文件不可读 | chmod 000 → 502 `KIMI_TOKEN_UNREADABLE`（带 CORS）→ chmod 600 后无重启恢复 | `06-fault-injection/token-file-permissions.txt` |
+| 双客户端 | 两个 vis 客户端共享同一 kimi web（服务端 2 条 WS 连接）；会话列表变更不在客户端间传播，需重载 | `06-fault-injection/two-clients-a.png`、`two-clients-b.png` |
+
+**未接入（kimi 独有面，vis 不暴露）**
+
+服务端有这些路由/帧，vis **故意不接**，UI 也不留入口：
+
+- **终端**：`…/terminals` REST 与 `terminal_attach/detach/input/resize/close` WS 帧（仅环回可用）。
+- **任务管理**：`…/tasks[/{task_id}]`、`POST …/tasks/{id}:{cancel,detach}` 与 `task.started/terminated`、`background.task.*` 事件。
+- **文件历史 / fork / compact / undo / btw**：kimi 服务端会话动作；`KimiWebAdapter` 对 fork/revert 显式返回 unsupported，其余不进 UI。
+- **`subscribe_v2` transcript 分级订阅**：协议存在（见「WebSocket 协议」节），vis 只用一级 `subscribe` + cursor 重放。
+- **GUI store**：`/api/v1/gui/store/*`（Web UI 服务端 KV）。
+- **`/remote-control`** 与 `--debug-endpoints` 调试面（`/api/v1/debug/*`、`/api/v1/debug/ws`）。
+- **项目目录选择器 / provider 配置编辑 / worktree**：kimi 侧无对应语义，UI 对这些入口 fail-closed（显式分支见 `07-guard-strict/SUMMARY.md`）。
+
+**已知限制（实测观察，不是缺陷承诺）**
+
+1. **Token 页在新页面上先是「仅上下文」**：`agent.status.updated` 是 volatile、不重放，刷新后 bridge 会话状态为空，于是走 `GET …/status` 回退——该端点只报 `context_tokens`/`max_context_tokens`，没有 token 计数，UI 显示来源说明并**不编造** token 行；本回合跑起来后 bridge 状态重新成为主源。证据：`05-checklist/k-token-usage-live.png`、`k-token-usage-live-rest.json`。
+2. **`getSessionStatus()` 在 0.43.0 上没有 `pending_interaction`**：会话级 pending 声明缺失，对账只能以 `…/approvals`、`…/questions` 列表为权威（实现见 `app/backends/kimiWeb/interactions.ts` 的 `declaredPendingInteraction`）。
+3. **volatile 帧永不重放**：断线期间产生的 delta 只能靠 snapshot / `…/messages` 对账补齐，契约见「WebSocket 协议」节。
+4. **steer 只有线路级路径**：`POST …/prompts:steer` 实测可用，但 kimi-web 输入框没有 steer 按钮。
+5. **会话列表元数据不实时**：重命名/归档状态在刷新或重新引导前不传播（双客户端场景同样如此）。
 
 ### 参考
 

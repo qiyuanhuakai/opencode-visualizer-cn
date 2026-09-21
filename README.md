@@ -53,6 +53,7 @@
 | **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板，内置模型、技能、插件市场、MCP 服务器与本地文件管理；运行时检查器按方法探测 app-server 能力（支持/不支持/需开启实验开关）；设置中开启实验性功能 | 🅰️ Alpha |
 | **ACP Agent 集成 (Alpha)** | ACP v1 作为第三后端复用主会话界面；状态监控中管理 Pi、Oh My Pi、Kimi Code 等 ACP Agent | 🅰️ Alpha |
 | **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
+| **Kimi Web 集成 (Alpha)** | kimi web 作为第四后端，REST 与 WS 经 vis_bridge 转发、kimi bearer 由 bridge 惰性注入（浏览器不直连上游）；复用主会话界面，覆盖建/选会话、流式文本与思考、历史（含注入消息过滤）、审批与提问、重命名/归档/恢复/删除/中止、steer、附件、Token 用量与状态监控；工具、推理、子代理三路悬浮窗自动弹出；能力探测通过前不暴露对应入口 | 🅰️ Alpha |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **路线图与计划**：请参阅 [RoadMap.md](./RoadMap.md)
@@ -394,6 +395,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel with built-in model, skill, plugin marketplace, MCP server, and local file management; runtime inspector probes app-server capabilities per method (supported/unsupported/gated); experimental features toggle in settings | 🅰️ Alpha |
 | **ACP Agent Integration (Alpha)** | ACP v1 as a third backend using the shared main chat UI; manage Pi, Oh My Pi, Kimi Code, and other ACP agents in Status Monitor | 🅰️ Alpha |
 | **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
+| **Kimi Web Integration (Alpha)** | kimi web as the fourth backend; REST and WebSocket are forwarded through vis_bridge with the kimi bearer injected lazily by the bridge (the browser never dials upstream); reuses the main chat UI for session create/select, streaming text and thinking, history with injection filtering, approvals and questions, rename/archive/restore/delete/abort, steer, attachments, token usage, and status monitoring; tool, reasoning, and subagent popups open automatically; entry points stay hidden until capability probing succeeds | 🅰️ Alpha |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **Roadmap & Plans**: [RoadMap.md](./RoadMap.md)

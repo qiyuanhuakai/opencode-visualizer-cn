@@ -11,6 +11,14 @@
 - [x] 新增 `docs/kimi.md`：Kimi Code 0.43.0 `kimi web` 服务器接口调研与 VIS 适配方案，与 `docs/codex.md` 同构；全部结论经本机实测验证——现场拉取 `/openapi.json` 与 `/asyncapi.json`，并完成建会话、WS 订阅、发 prompt、收流式事件、读回消息的全链路冒烟。
 - [x] 实测确认关键事实：产品线为 TypeScript/Fastify 5（端口 58627，非旧 Python 版的 FastAPI/5494）；REST 统一 `{code,msg,data,request_id}` 信封；WS `/api/v1/ws` 带 59 类事件、seq+epoch 重放与应用层心跳；建会话时 `agent_config.model` 不生效须走 `POST …/profile`；REST CORS 与 WS 升级均做只认环回源的 Origin 白名单且无配置放开，Pages 与 Electron 直连被拒，适配须统一经 vis_bridge 转发。
 
+### Kimi Web Integration (Alpha)
+
+- [x] Add kimi web as the fourth backend: REST and WebSocket traffic is forwarded through vis_bridge `/kimi-web/*` with the kimi bearer injected lazily from `~/.kimi-code/server.token`, so the browser only ever holds bridge credentials, an established WebSocket survives token rotation, and rotation takes effect without a bridge restart.
+- [x] Wire the main chat surface on top of the kimi web WebSocket protocol: session create/select with the required profile model write, streaming text and thinking deltas, history reload with reverse pagination and injection filtering, approvals and questions with authoritative list reconciliation, rename/archive/restore/delete/abort, steer, attachments, token usage, and the status monitor.
+- [x] Open the tool, reasoning, and subagent floating windows automatically from the live event stream, honoring the existing suppress-auto-popup setting; recover disconnects with cursor replay plus snapshot rebuild.
+- [x] Gate every entry point behind runtime capability probing (`meta.capabilities` plus `auth.models_ready`, fail-closed) and supervise `kimi web` with the three-state port contract (spawn, adopt, error without spawning).
+- [x] Record the measured adaptation status, protocol limits, and replay boundary contract in `docs/kimi.md`, and list the integration in both README feature tables.
+
 ### OMO App Server 适配预备文档
 
 - [x] 新增 `docs/omo.md`：OMO（senpi）codex app-server 协议兼容文档，与 `docs/codex.md` 同构，官方文档原文与上游逐字节校验一致；全部结论经两轮对本机 senpi app-server 的实连线 JSON-RPC 探针验证。
