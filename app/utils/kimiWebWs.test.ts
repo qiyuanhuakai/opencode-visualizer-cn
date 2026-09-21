@@ -8,6 +8,7 @@ import {
   type RawWebSocketSocket,
 } from '../../bridge/webSocketFrames.js';
 import {
+  type KimiWebWsAck,
   KimiWebWsError,
   createKimiWebWsClient,
   kimiWebProxyHttpUrl,
@@ -520,7 +521,11 @@ describe('kimiWebWs', () => {
     const bridge = await startBridge();
     const client = makeClient(bridge, { autoReconnect: true, reconnectDelaysMs: [0] });
     const frames: KimiWebWsFrame[] = [];
+    const reconnectStarts: number[] = [];
+    const reconnectAcks: KimiWebWsAck[] = [];
     client.onFrame((frame) => frames.push(frame));
+    client.onReconnectStart(() => reconnectStarts.push(reconnectStarts.length + 1));
+    client.onReconnectReady((readyAck) => reconnectAcks.push(readyAck));
     await client.connect();
 
     const first = await bridge.waitForConnection();
@@ -555,6 +560,14 @@ describe('kimiWebWs', () => {
     await waitFor(() => deliveredSeqs().join(',') === '11,12,13,14', 3000, 'replayed frames');
     expect(deliveredSeqs()).toEqual([11, 12, 13, 14]);
     expect(client.cursors()).toEqual({ [SID_A]: { seq: 14, epoch: EPOCH_A } });
+    expect(reconnectStarts).toEqual([1]);
+    expect(reconnectAcks).toEqual([
+      expect.objectContaining({
+        id: secondHello.id,
+        code: 0,
+        payload: expect.objectContaining({ cursors: { [SID_A]: { seq: 14, epoch: EPOCH_A } } }),
+      }),
+    ]);
   });
 
   it('replays the gap again on a duplicate subscribe and honors caller-provided cursors', async () => {

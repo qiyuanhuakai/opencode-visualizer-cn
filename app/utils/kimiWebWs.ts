@@ -86,6 +86,10 @@ export type KimiWebWsClient = {
   onFrame(listener: (frame: KimiWebWsFrame) => void): () => void;
   /** Snapshot rebuild signal; must trigger `GET …/snapshot` in the upper layer. */
   onResyncRequired(listener: (request: KimiWebWsResyncRequest) => void): () => void;
+  /** Auto-reconnect socket opened and is about to send its cursor-bearing `client_hello`. */
+  onReconnectStart(listener: () => void): () => void;
+  /** Auto-reconnect replay ended at the matching `client_hello` ack (contract §5.1, lines 159-165). */
+  onReconnectReady(listener: (ack: KimiWebWsAck) => void): () => void;
   onClose(listener: (info: KimiWebWsCloseInfo) => void): () => void;
 };
 
@@ -103,6 +107,8 @@ export function createKimiWebWsClient(options: KimiWebWsClientOptions): KimiWebW
   const frameListeners = new Set<(frame: KimiWebWsFrame) => void>();
   const resyncListeners = new Set<(request: KimiWebWsResyncRequest) => void>();
   const closeListeners = new Set<(info: KimiWebWsCloseInfo) => void>();
+  const reconnectStartListeners = new Set<() => void>();
+  const reconnectReadyListeners = new Set<(ack: KimiWebWsAck) => void>();
   let helloFrame: KimiWebWsHello | null = null;
 
   const connection = createKimiWebWsConnection({
@@ -110,14 +116,22 @@ export function createKimiWebWsClient(options: KimiWebWsClientOptions): KimiWebW
     webSocketCtor: options.webSocketCtor,
     autoReconnect: options.autoReconnect ?? true,
     reconnectDelaysMs: options.reconnectDelaysMs,
-    onOpen: () => {
+    onOpen: (reconnecting) => {
       notifiedResync.clear();
       const sessions = [...subscriptions];
-      void control.send('client_hello', {
+      if (reconnecting) {
+        for (const listener of reconnectStartListeners) listener();
+      }
+      const helloAck = control.send('client_hello', {
         client_id: clientId,
         subscriptions: sessions,
         ...cursorsFor(cursors, sessions),
       });
+      if (reconnecting) {
+        void helloAck.then((ack) => {
+          for (const listener of reconnectReadyListeners) listener(ack);
+        }).catch(() => undefined);
+      }
     },
     onMessage: handleMessage,
     onClose: (event, manual) => {
@@ -264,6 +278,14 @@ export function createKimiWebWsClient(options: KimiWebWsClientOptions): KimiWebW
     onResyncRequired: (listener) => {
       resyncListeners.add(listener);
       return () => resyncListeners.delete(listener);
+    },
+    onReconnectStart: (listener) => {
+      reconnectStartListeners.add(listener);
+      return () => reconnectStartListeners.delete(listener);
+    },
+    onReconnectReady: (listener) => {
+      reconnectReadyListeners.add(listener);
+      return () => reconnectReadyListeners.delete(listener);
     },
     onClose: (listener) => {
       closeListeners.add(listener);

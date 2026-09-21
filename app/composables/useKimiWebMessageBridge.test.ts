@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { KimiWebSnapshot } from '../utils/kimiWeb';
+import type { KimiWebMessage, KimiWebPage, KimiWebSnapshot } from '../utils/kimiWeb';
 import type {
   KimiWebWsAck,
   KimiWebWsCloseInfo,
@@ -57,6 +57,8 @@ class FakeSource implements KimiWebMessageSource {
   private readonly frameListeners = new Set<(value: KimiWebWsFrame) => void>();
   private readonly resyncListeners = new Set<(value: KimiWebWsResyncRequest) => void>();
   private readonly closeListeners = new Set<(value: KimiWebWsCloseInfo) => void>();
+  private readonly reconnectStartListeners = new Set<() => void>();
+  private readonly reconnectReadyListeners = new Set<(value: KimiWebWsAck) => void>();
   readonly pendingAck = deferred<KimiWebWsAck>();
 
   subscribe(_sessionIds: string[], _cursors?: Record<string, KimiWebWsCursor>) {
@@ -82,6 +84,16 @@ class FakeSource implements KimiWebMessageSource {
     return () => this.closeListeners.delete(listener);
   }
 
+  onReconnectStart(listener: () => void) {
+    this.reconnectStartListeners.add(listener);
+    return () => this.reconnectStartListeners.delete(listener);
+  }
+
+  onReconnectReady(listener: (value: KimiWebWsAck) => void) {
+    this.reconnectReadyListeners.add(listener);
+    return () => this.reconnectReadyListeners.delete(listener);
+  }
+
   emitFrame(value: KimiWebWsFrame) {
     for (const listener of this.frameListeners) listener(value);
   }
@@ -90,6 +102,31 @@ class FakeSource implements KimiWebMessageSource {
     for (const listener of this.resyncListeners) {
       listener({ sessionId: SESSION_ID, reason: 'buffer_overflow', currentSeq: 21, epoch: EPOCH, source: 'frame' });
     }
+  }
+
+  emitClose() {
+    for (const listener of this.closeListeners) {
+      listener({
+        code: 1001,
+        reason: 'heartbeat timeout',
+        wasClean: true,
+        manual: false,
+        classification: { kind: 'heartbeat-timeout', detail: 'heartbeat timeout' },
+      });
+    }
+  }
+
+  emitReconnectStart() {
+    for (const listener of this.reconnectStartListeners) listener();
+  }
+
+  emitReconnectReady(seq: number, epoch = EPOCH) {
+    const value: KimiWebWsAck = {
+      id: 'reconnect-hello',
+      code: 0,
+      payload: { cursors: { [SESSION_ID]: { seq, epoch } }, resync_required: [] },
+    };
+    for (const listener of this.reconnectReadyListeners) listener(value);
   }
 
   ack(seq: number) {
@@ -101,27 +138,101 @@ class FakeSource implements KimiWebMessageSource {
   }
 }
 
-function createHarness(getSnapshot = vi.fn<() => Promise<KimiWebSnapshot>>()) {
+function createHarness(options: {
+  getSnapshot?: () => Promise<KimiWebSnapshot>;
+  getMessages?: () => Promise<KimiWebPage<KimiWebMessage>>;
+  maxBufferedFrames?: number;
+} = {}) {
   const source = new FakeSource();
   const messages = new Map<string, MessageInfo>();
   const parts = new Map<string, MessagePart>();
   const updateMessage = vi.fn((info: MessageInfo) => messages.set(info.id, info));
   const updatePart = vi.fn((part: MessagePart) => parts.set(part.id, part));
-  const loadHistory = vi.fn();
+  const loadHistory = vi.fn((entries: Array<{ info: MessageInfo; parts: MessagePart[] }>) => {
+    for (const entry of entries) {
+      if (!entry.info || !Array.isArray(entry.parts)) continue;
+      messages.set(entry.info.id, entry.info);
+      for (const part of entry.parts) parts.set(part.id, part);
+    }
+  });
+  const removeMessage = vi.fn((messageId: string) => {
+    messages.delete(messageId);
+    for (const [partId, part] of parts) {
+      if (part.messageID === messageId) parts.delete(partId);
+    }
+  });
   const applySnapshot = vi.fn();
   const onToolPart = vi.fn();
   const onLiveReasoning = vi.fn();
   const onLiveSubagent = vi.fn();
+  const onReconcilePart = vi.fn();
+  const onSyncStateChange = vi.fn();
   const bridge = useKimiWebMessageBridge({
     client: source,
-    restClient: { getSnapshot },
-    msg: { updateMessage, updatePart, loadHistory },
+    restClient: {
+      getSnapshot: options.getSnapshot ?? vi.fn<() => Promise<KimiWebSnapshot>>(),
+      getMessages: options.getMessages ?? vi.fn(async () => ({ items: [], has_more: false })),
+    },
+    msg: { updateMessage, updatePart, loadHistory, removeMessage },
     applySnapshot,
     onToolPart,
     onLiveReasoning,
     onLiveSubagent,
+    onReconcilePart,
+    onSyncStateChange,
+    maxBufferedFrames: options.maxBufferedFrames,
   });
-  return { source, bridge, messages, parts, loadHistory, applySnapshot, onToolPart, onLiveReasoning, onLiveSubagent };
+  return {
+    source, bridge, messages, parts, loadHistory, removeMessage, applySnapshot,
+    onToolPart, onLiveReasoning, onLiveSubagent, onReconcilePart, onSyncStateChange,
+  };
+}
+
+function restAssistant(text: string, id = 'msg_server_assistant'): KimiWebMessage {
+  return {
+    id,
+    session_id: SESSION_ID,
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+    created_at: '2026-09-21T03:27:08.130Z',
+  };
+}
+
+function snapshot(overrides: Partial<KimiWebSnapshot> = {}): KimiWebSnapshot {
+  return {
+    as_of_seq: 21,
+    epoch: EPOCH,
+    session: {
+      id: SESSION_ID,
+      workspace_id: 'workspace-1',
+      title: 'Fixture',
+      busy: true,
+      main_turn_active: true,
+      pending_interaction: 'none',
+      archived: false,
+    },
+    messages: { items: [] },
+    in_flight_turn: null,
+    ...overrides,
+  };
+}
+
+function delta(seq: number, text: string, offset = 0, epoch = EPOCH): KimiWebWsFrame {
+  const base = frame('assistant.delta');
+  return {
+    ...base,
+    seq,
+    epoch,
+    offset,
+    session_id: SESSION_ID,
+    payload: {
+      ...(base.payload && typeof base.payload === 'object' ? base.payload : {}),
+      sessionId: SESSION_ID,
+      agentId: 'main',
+      turnId: 0,
+      delta: text,
+    },
+  };
 }
 
 async function enterLive(source: FakeSource, bridge: ReturnType<typeof useKimiWebMessageBridge>, seq: number) {
@@ -194,7 +305,7 @@ describe('useKimiWebMessageBridge', () => {
   it('buffers during snapshot rebuild, suppresses callbacks, then resumes live', async () => {
     const snapshotRequest = deferred<KimiWebSnapshot>();
     const getSnapshot = vi.fn(() => snapshotRequest.promise);
-    const { source, bridge, parts, applySnapshot, onToolPart } = createHarness(getSnapshot);
+    const { source, bridge, parts, applySnapshot, onToolPart } = createHarness({ getSnapshot });
     await enterLive(source, bridge, 21);
     source.emitResync();
     source.emitFrame(frame('assistant.delta'));
@@ -227,5 +338,141 @@ describe('useKimiWebMessageBridge', () => {
     expect(onToolPart).not.toHaveBeenCalled();
     expect(onLiveReasoning).not.toHaveBeenCalled();
     expect(onLiveSubagent).not.toHaveBeenCalled();
+  });
+
+  it('reconciles a plain reconnect from the REST tail without duplicates and keeps recovery non-busy', async () => {
+    const tailRequest = deferred<KimiWebPage<KimiWebMessage>>();
+    const getMessages = vi.fn(() => tailRequest.promise);
+    const { source, bridge, parts, onSyncStateChange } = createHarness({ getMessages });
+    await enterLive(source, bridge, 9);
+    source.emitFrame(frame('event.session.work_changed'));
+    source.emitFrame(delta(10, 'speculative'));
+    onSyncStateChange.mockClear();
+
+    source.emitClose();
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({ busy: false, mainTurnActive: false });
+    source.emitReconnectStart();
+    source.emitReconnectReady(10);
+    expect(bridge.syncState(SESSION_ID).kind).toBe('degraded');
+
+    tailRequest.resolve({ items: [restAssistant('authoritative')], has_more: false });
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+
+    const textParts = [...parts.values()].filter((part) => part.type === 'text');
+    expect(textParts).toEqual([expect.objectContaining({ text: 'authoritative' })]);
+    expect(onSyncStateChange.mock.calls.map(([, state]) => state.kind)).toEqual([
+      'disconnected', 'replaying', 'degraded', 'live',
+    ]);
+  });
+
+  it('uses snapshot content replacement then appends buffered same-seq volatile deltas in arrival order', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge, parts } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 20);
+    source.emitResync();
+    source.emitFrame(delta(21, 'Snapshot prefix'));
+    source.emitFrame(delta(21, ' + later', 1));
+
+    snapshotRequest.resolve(snapshot({
+      in_flight_turn: {
+        turn_id: 0,
+        assistant_text: 'Snapshot prefix',
+        current_prompt_id: 'prompt-1',
+      },
+    }));
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+
+    expect([...parts.values()].filter((part) => part.type === 'text')).toContainEqual(
+      expect.objectContaining({ text: 'Snapshot prefix + later' }),
+    );
+  });
+
+  it('drops a stale-epoch snapshot and rebuilds from the new epoch', async () => {
+    const oldRequest = deferred<KimiWebSnapshot>();
+    const newRequest = deferred<KimiWebSnapshot>();
+    const getSnapshot = vi.fn()
+      .mockImplementationOnce(() => oldRequest.promise)
+      .mockImplementationOnce(() => newRequest.promise);
+    const { source, bridge, applySnapshot } = createHarness({ getSnapshot });
+    await enterLive(source, bridge, 20);
+    source.emitResync();
+    source.emitFrame({ ...frame('turn.started'), seq: 1, epoch: 'ep_new' });
+
+    oldRequest.resolve(snapshot());
+    await vi.waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(2));
+    expect(applySnapshot).not.toHaveBeenCalled();
+
+    newRequest.resolve(snapshot({ as_of_seq: 1, epoch: 'ep_new' }));
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID)).toMatchObject({
+      kind: 'live', cursor: { seq: 1, epoch: 'ep_new' },
+    }));
+    expect(applySnapshot).toHaveBeenCalledOnce();
+  });
+
+  it('drops snapshot responses after the bridge is stopped', async () => {
+    const snapshotRequest = deferred<KimiWebSnapshot>();
+    const { source, bridge, applySnapshot } = createHarness({ getSnapshot: () => snapshotRequest.promise });
+    await enterLive(source, bridge, 20);
+    source.emitResync();
+    bridge.stop();
+
+    snapshotRequest.resolve(snapshot());
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(applySnapshot).not.toHaveBeenCalled();
+    expect(bridge.syncState(SESSION_ID).kind).toBe('disconnected');
+  });
+
+  it('restarts snapshot recovery when the rebuilding buffer overflows', async () => {
+    const first = deferred<KimiWebSnapshot>();
+    const second = deferred<KimiWebSnapshot>();
+    const getSnapshot = vi.fn()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise);
+    const { source, bridge } = createHarness({ getSnapshot, maxBufferedFrames: 2 });
+    await enterLive(source, bridge, 20);
+    source.emitResync();
+    source.emitFrame(delta(21, 'a'));
+    source.emitFrame(delta(21, 'b', 1));
+    source.emitFrame(delta(21, 'c', 2));
+
+    await vi.waitFor(() => expect(getSnapshot).toHaveBeenCalledTimes(2));
+    first.resolve(snapshot());
+    second.resolve(snapshot({ in_flight_turn: { turn_id: 0, assistant_text: 'abc' } }));
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+  });
+
+  it('fences a late REST tail so it cannot overwrite newer live frames', async () => {
+    const tailRequest = deferred<KimiWebPage<KimiWebMessage>>();
+    const { source, bridge, parts } = createHarness({ getMessages: () => tailRequest.promise });
+    await enterLive(source, bridge, 9);
+    source.emitClose();
+    source.emitReconnectStart();
+    source.emitReconnectReady(10);
+    source.emitFrame(delta(11, 'new live'));
+    tailRequest.resolve({ items: [restAssistant('stale REST')], has_more: false });
+    await vi.waitFor(() => expect(bridge.syncState(SESSION_ID).kind).toBe('live'));
+
+    const texts = [...parts.values()]
+      .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text);
+    expect(texts).toContain('new live');
+    expect(texts).not.toContain('stale REST');
+  });
+
+  it('routes terminal replay parts through reconcile-only without opening new windows', async () => {
+    const { source, bridge, onToolPart, onReconcilePart } = createHarness();
+    const subscribing = bridge.subscribe([SESSION_ID], { [SESSION_ID]: { seq: 20, epoch: EPOCH } });
+    source.emitFrame(frame('tool.call.started'));
+    source.emitFrame(frame('tool.result'));
+
+    expect(onToolPart).not.toHaveBeenCalled();
+    expect(onReconcilePart).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ type: 'tool', state: expect.objectContaining({ status: 'completed' }) }),
+      'tool',
+    );
+    source.ack(22);
+    await subscribing;
   });
 });

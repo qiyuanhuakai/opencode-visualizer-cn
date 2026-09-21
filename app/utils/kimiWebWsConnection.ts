@@ -20,7 +20,7 @@ export type KimiWebWsConnectionOptions = {
   autoReconnect: boolean;
   /** Backoff schedule in ms; the last entry repeats. Defaults to 500→8000. */
   reconnectDelaysMs?: readonly number[];
-  onOpen(): void;
+  onOpen(reconnecting: boolean): void;
   onMessage(event: KimiWebWsSocketEvent): void;
   onClose(event: KimiWebWsSocketEvent, manual: boolean): void;
 };
@@ -43,6 +43,7 @@ export function createKimiWebWsConnection(options: KimiWebWsConnectionOptions): 
   let disposed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
+  let hasOpened = false;
   const manualSockets = new WeakSet<object>();
 
   function scheduleReconnect() {
@@ -85,7 +86,9 @@ export function createKimiWebWsConnection(options: KimiWebWsConnectionOptions): 
 
       ws.addEventListener('open', () => {
         reconnectAttempt = 0;
-        options.onOpen();
+        const reconnecting = hasOpened;
+        hasOpened = true;
+        options.onOpen(reconnecting);
         settle(() => resolve());
       });
 
