@@ -1,5 +1,12 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
+import { appendCodexBridgeToken } from '../backends/codex/bridgeUrl';
+import { createKimiWebClient } from '../utils/kimiWeb';
+import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../utils/kimiWebWs';
+import { createBackendRequestFence } from '../utils/backendRequestFence';
+
+// allow: SIZE_OK — one composable owns the shared generation/lock lifecycle closure
+// for four backend activation flows; extraction would thread >3 closure params.
 
 type UiInitState = 'loading' | 'ready' | 'error' | 'login';
 type ConnectionState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error';
@@ -11,6 +18,13 @@ type CredentialsLike = {
   codexBridgeToken: Ref<string>;
   acpBridgeToken: Ref<string>;
   acpAgentId: Ref<string>;
+  kimiWebBridgeUrl: Ref<string>;
+  kimiWebBridgeToken: Ref<string>;
+};
+
+export type KimiWebPrecheckRequest = {
+  bridgeUrl: string;
+  bridgeToken: string;
 };
 
 type CodexApiLike = {
@@ -62,6 +76,8 @@ export type UseBackendActivationOptions = {
     bridgeToken?: string;
     agentId: string;
   }) => void;
+  configureKimiWebBackend?: (options: { bridgeUrl: string; bridgeToken?: string }) => void;
+  precheckKimiWebConnection?: (request: KimiWebPrecheckRequest) => Promise<void>;
   disconnectAcpBackend: () => void;
   disconnectCodexBackend: () => void;
   bootstrapAcpWorkspace: () => Promise<void>;
@@ -76,9 +92,30 @@ export type UseBackendActivationOptions = {
   handleOpenCodeUnauthorized: (message: string) => void;
 };
 
+function kimiWebBridgeHealthUrl(request: KimiWebPrecheckRequest) {
+  const bridgeUrl = new URL(kimiWebProxyHttpUrl(kimiWebWsUrl(request.bridgeUrl, request.bridgeToken)));
+  bridgeUrl.pathname = '/healthz';
+  bridgeUrl.search = '';
+  bridgeUrl.hash = '';
+  return appendCodexBridgeToken(bridgeUrl.toString(), request.bridgeToken);
+}
+
+async function runKimiWebPrecheck(request: KimiWebPrecheckRequest) {
+  const bridgeHealth = await fetch(kimiWebBridgeHealthUrl(request), { method: 'GET' });
+  if (!bridgeHealth.ok) {
+    throw new Error(`Kimi Web bridge health check failed (HTTP ${bridgeHealth.status}).`);
+  }
+  const client = createKimiWebClient({
+    baseUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(request.bridgeUrl, request.bridgeToken)),
+    getToken: () => request.bridgeToken,
+  });
+  await client.getMeta();
+}
+
 export function useBackendActivation(options: UseBackendActivationOptions) {
   const initializationInFlight = { value: false } as Ref<boolean>;
   let initializationGeneration = 0;
+  const requestFence = createBackendRequestFence(() => options.credentials.backendKind.value);
 
   function ownsInitialization(generation: number) {
     return initializationInFlight.value && generation === initializationGeneration;
@@ -277,6 +314,41 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
+  async function activateKimiWeb(generation: number) {
+    const requestToken = requestFence.start();
+    const isCurrent = () =>
+      ownsInitialization(generation) && requestFence.isCurrent(requestToken);
+
+    try {
+      options.ge.disconnect();
+      options.disconnectAcpBackend();
+      options.disconnectCodexBackend();
+      options.activeBackendKind.value = 'kimi-web';
+      const bridgeUrl = options.credentials.kimiWebBridgeUrl.value;
+      const bridgeToken = options.credentials.kimiWebBridgeToken.value;
+      options.configureKimiWebBackend?.({ bridgeUrl, bridgeToken });
+      options.setActiveBackendKind('kimi-web');
+      resetOpenCodeSelectionState();
+      resetSharedUiState();
+      options.connectionState.value = 'connecting';
+      options.initLoadingMessage.value = options.t('app.connection.connecting');
+
+      const precheck = options.precheckKimiWebConnection ?? runKimiWebPrecheck;
+      await precheck({ bridgeUrl, bridgeToken });
+      if (!isCurrent()) return;
+
+      options.connectionState.value = 'ready';
+      options.uiInitState.value = 'ready';
+    } catch (error) {
+      if (!isCurrent()) return;
+      options.connectionState.value = 'error';
+      options.initErrorMessage.value = options.toErrorMessage(error);
+      options.uiInitState.value = 'login';
+    } finally {
+      if (generation === initializationGeneration) initializationInFlight.value = false;
+    }
+  }
+
   async function startInitialization() {
     if (initializationInFlight.value) return;
     initializationInFlight.value = true;
@@ -289,12 +361,17 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await activateAcp(generation);
       return;
     }
+    if (options.credentials.backendKind.value === 'kimi-web') {
+      await activateKimiWeb(generation);
+      return;
+    }
     await activateOpenCode(generation);
   }
 
   function cancelInitialization() {
     initializationGeneration += 1;
     initializationInFlight.value = false;
+    requestFence.invalidate();
   }
 
   function abortInitialization() {

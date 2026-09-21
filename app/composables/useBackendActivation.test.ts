@@ -10,6 +10,7 @@ type HarnessOverrides = {
   bootstrapAcpWorkspace?: () => Promise<void>;
   bootstrapSelections?: () => Promise<void>;
   hydrateActiveWorktreeResources?: () => Promise<void>;
+  precheckKimiWebConnection?: () => Promise<void>;
 };
 
 function createHarness(initialBackend: BackendKind = 'opencode', overrides: HarnessOverrides = {}) {
@@ -21,6 +22,8 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     codexBridgeToken: ref('token'),
     acpBridgeToken: ref('acp-token'),
     acpAgentId: ref('oh-my-pi'),
+    kimiWebBridgeUrl: ref('ws://localhost:23004/kimi-web/ws'),
+    kimiWebBridgeToken: ref('kimi-bridge-token'),
   };
   const codexApi = {
     url: ref(''),
@@ -77,6 +80,9 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
   const configureAcpBackend = vi.fn(() => {
     calls.push('configureAcpBackend');
   });
+  const configureKimiWebBackend = vi.fn(() => {
+    calls.push('configureKimiWebBackend');
+  });
   const disconnectAcpBackend = vi.fn(() => {
     calls.push('disconnectAcpBackend');
   });
@@ -112,6 +118,7 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
       calls.push('configureCodexBackend');
     },
     configureAcpBackend,
+    configureKimiWebBackend,
     disconnectAcpBackend,
     disconnectCodexBackend,
     bootstrapAcpWorkspace:
@@ -156,6 +163,11 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     reloadSelectedSessionState: async () => {
       calls.push('reloadSelectedSessionState');
     },
+    precheckKimiWebConnection:
+      overrides.precheckKimiWebConnection ??
+      (async () => {
+        calls.push('precheckKimiWebConnection');
+      }),
     handleOpenCodeUnauthorized: (message: string) => {
       calls.push(`handleOpenCodeUnauthorized:${message}`);
     },
@@ -181,6 +193,7 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     selectedModel,
     serverState,
     configureAcpBackend,
+    configureKimiWebBackend,
     activation,
   };
 }
@@ -542,5 +555,129 @@ describe('useBackendActivation', () => {
     expect(harness.codexApi.disconnectTransport).toHaveBeenCalledOnce();
     expect(harness.codexApi.disconnect).not.toHaveBeenCalled();
     expect(harness.uiInitState.value).toBe('login');
+  });
+
+  it('activates the kimi-web backend after the bridge and meta prechecks pass', async () => {
+    // Given: the kimi-web backend is selected with bridge credentials
+    const harness = createHarness('kimi-web');
+
+    // When: activation runs the fenced precheck sequence
+    await harness.activation.startInitialization();
+
+    // Then: configuration, active identity, and Ready state are committed
+    expect(harness.activeBackendKind.value).toBe('kimi-web');
+    expect(harness.configureKimiWebBackend).toHaveBeenCalledWith({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      bridgeToken: 'kimi-bridge-token',
+    });
+    expect(harness.calls).toEqual([
+      'ge.disconnect',
+      'disconnectAcpBackend',
+      'disconnectCodexBackend',
+      'configureKimiWebBackend',
+      'setActiveBackendKind:kimi-web',
+      'precheckKimiWebConnection',
+    ]);
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.uiInitState.value).toBe('ready');
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+  });
+
+  it('keeps an aborted kimi-web precheck on the login screen', async () => {
+    // Given: the bridge/meta precheck is still pending
+    let finishPrecheck: (() => void) | undefined;
+    const harness = createHarness('kimi-web', {
+      precheckKimiWebConnection: () =>
+        new Promise<void>((resolve) => {
+          finishPrecheck = resolve;
+        }),
+    });
+    const initialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(finishPrecheck).toBeTypeOf('function'));
+
+    // When: the user aborts startup before the precheck settles
+    harness.activation.abortInitialization();
+    finishPrecheck?.();
+    await initialization;
+
+    // Then: the obsolete precheck cannot publish Ready
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('connecting');
+    expect(harness.initErrorMessage.value).toBe('');
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+  });
+
+  it('holds the kimi-web initialization lock against a concurrent start', async () => {
+    // Given: a kimi-web precheck is pending and owns the initialization lock
+    let finishPrecheck: (() => void) | undefined;
+    const precheck = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishPrecheck = resolve;
+        }),
+    );
+    const harness = createHarness('kimi-web', { precheckKimiWebConnection: precheck });
+    const first = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(precheck).toHaveBeenCalledTimes(1));
+
+    // When: a second initialization is requested while the first is in flight
+    await harness.activation.startInitialization();
+
+    // Then: the second request is ignored and the lock is still held
+    expect(precheck).toHaveBeenCalledTimes(1);
+    expect(harness.activation.initializationInFlight.value).toBe(true);
+
+    finishPrecheck?.();
+    await first;
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+    expect(harness.uiInitState.value).toBe('ready');
+  });
+
+  it('drops a stale-generation kimi-web precheck without mutating the current backend state', async () => {
+    // Given: a kimi-web precheck is pending when the user switches to OpenCode
+    let finishStalePrecheck: (() => void) | undefined;
+    const harness = createHarness('kimi-web', {
+      precheckKimiWebConnection: () =>
+        new Promise<void>((resolve) => {
+          finishStalePrecheck = resolve;
+        }),
+    });
+    const staleInitialization = harness.activation.startInitialization();
+    await vi.waitFor(() => expect(finishStalePrecheck).toBeTypeOf('function'));
+
+    harness.activation.abortInitialization();
+    harness.credentials.backendKind.value = 'opencode';
+    const currentInitialization = harness.activation.startInitialization();
+    await currentInitialization;
+    expect(harness.uiInitState.value).toBe('ready');
+
+    // When: the obsolete kimi-web precheck finally resolves "successfully"
+    const callsAfterCurrent = [...harness.calls];
+    finishStalePrecheck?.();
+    await staleInitialization;
+
+    // Then: the stale response commits nothing
+    expect(harness.calls).toEqual(callsAfterCurrent);
+    expect(harness.activeBackendKind.value).toBe('opencode');
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.uiInitState.value).toBe('ready');
+  });
+
+  it('returns a failed kimi-web precheck to the login screen', async () => {
+    // Given: the fenced precheck rejects (bridge healthz or kimi meta not usable)
+    const harness = createHarness('kimi-web', {
+      precheckKimiWebConnection: async () => {
+        throw new Error('kimi web precheck failed');
+      },
+    });
+
+    // When: kimi-web activation runs
+    await harness.activation.startInitialization();
+
+    // Then: the failure is surfaced and the lock is released back to login
+    expect(harness.uiInitState.value).toBe('login');
+    expect(harness.connectionState.value).toBe('error');
+    expect(harness.initErrorMessage.value).toContain('kimi web precheck failed');
+    expect(harness.activation.initializationInFlight.value).toBe(false);
   });
 });
