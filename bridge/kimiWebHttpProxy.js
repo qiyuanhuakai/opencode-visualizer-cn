@@ -47,6 +47,10 @@ function canonicalHeaderName(lowerCaseName) {
 
 function rewriteUpstreamTarget(requestUrl) {
   const url = new URL(requestUrl ?? '/', 'http://localhost');
+  // The bridge accepts its own credential via `?token=`, but kimi web gets its
+  // bearer through the injected Authorization header, so the bridge token must
+  // never leak upstream as a query key. Every other query key is preserved.
+  url.searchParams.delete('token');
   if (url.pathname === '/kimi-web') return { path: '/', search: url.search };
   if (!url.pathname.startsWith(KIMI_WEB_PROXY_PREFIX)) return null;
   return {

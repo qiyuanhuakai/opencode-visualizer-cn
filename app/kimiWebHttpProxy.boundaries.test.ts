@@ -258,6 +258,33 @@ describe('proxyKimiWebHttp boundaries', () => {
     expect(JSON.parse(result.body.toString())).toEqual(envelope);
   });
 
+  it('strips the bridge token query key from the upstream URL while keeping other query keys', async () => {
+    const upstream = await createUpstream((_captured, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"code":0,"msg":"success","data":null,"request_id":"req_token"}');
+    });
+    const port = await createProxy({
+      upstreamOrigin: upstream.origin,
+      getUpstreamAuthorization: () => 'Bearer kimi-upstream-bearer',
+    });
+
+    const result = await clientRequest(port, {
+      path: '/kimi-web/api/v1/meta?token=bridge-secret&verbose=1',
+      method: 'GET',
+      headers: { authorization: 'Bearer bridge-secret' },
+    });
+
+    expect(result.status).toBe(200);
+    expect(upstream.requests).toHaveLength(1);
+    const captured = upstream.requests[0];
+    expect(captured?.url).toBe('/api/v1/meta?verbose=1');
+    expect(captured?.url).not.toContain('token');
+    const upstreamQuery = new URL(captured?.url ?? '/', 'http://localhost');
+    expect(upstreamQuery.searchParams.has('token')).toBe(false);
+    expect(upstreamQuery.searchParams.get('verbose')).toBe('1');
+    expect(captured?.headers.authorization).toBe('Bearer kimi-upstream-bearer');
+  });
+
   it('strips origin/authorization/host and injects a fresh upstream bearer per request', async () => {
     const tokenPath = createTokenPath();
     writeToken(tokenPath, 'upstream-token-1');
