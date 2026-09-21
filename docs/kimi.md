@@ -251,11 +251,11 @@ kimi web rotate-token    # 轮换持久 token，旧 token 立即失效
 | --- | --- | --- |
 | bridge 转发 | REST 与 WS 全部经 vis_bridge `/kimi-web/*` 转发（浏览器直连会被 Origin 白名单 403，原因见上节）；kimi bearer 由 bridge 惰性注入、不下发浏览器；错误 bridge token 401 | `03-proxy-checks/proxy-checks.txt`、`ws-upgrade.txt` |
 | rotate-token | 已建立 WS 不被关闭、ping 继续流动；新拨号 101；REST 经桥无 bridge 重启即恢复 | `06-fault-injection/rotate-token.txt` |
-| 断线重连 | 1006 → 退避阶梯（约 1/2/4/8 s）→ cursor 重订阅 → `resync_required` → snapshot 重建，历史完好、无错误横幅 | `06-fault-injection/reconnect-cursors.json`、`reconnected.png` |
+| 断线重连 | 中断后重连链路分两段取证：WS 关闭与退避阶梯见 `port-occupancy.txt`（1006/1005 关闭，关闭时间戳间隔约 0.5/1/2/4 s）；重订阅与重建见 `reconnect-cursors.json`（client_hello 带 cursors + pong + ack 回 `resync_required`，该文件本身不含 1006 与退避帧、捕获串被截断）；重连后历史完好、无错误横幅 | `06-fault-injection/port-occupancy.txt`、`reconnect-cursors.json`、`reconnected.png` |
 | supervisor 三态 | 端口被外人占用 → state error 且**不 spawn**，外人监听保持；端口释放后 spawn 自有子进程并实际绑定 58627 | `06-fault-injection/port-occupancy.txt`、`supervisor-error-state.json` |
 | Pages 源跨源 | 经桥取 JSON + 二进制（fs 下载，`Content-Type` 保留）+ WS 101 均带 ACAO（直连路径会被 403） | `06-fault-injection/cors-pages-origin.txt` |
 | token 文件不可读 | chmod 000 → 502 `KIMI_TOKEN_UNREADABLE`（带 CORS）→ chmod 600 后无重启恢复 | `06-fault-injection/token-file-permissions.txt` |
-| 双客户端 | 两个 vis 客户端共享同一 kimi web（服务端 2 条 WS 连接）；会话列表变更不在客户端间传播，需重载 | `06-fault-injection/two-clients-a.png`、`two-clients-b.png` |
+| 双客户端 | 两个 vis 客户端实例并行操作同一 kimi web（截图证明）；服务端连接数读取（`/api/v1/connections`）未留存，不作声明；会话列表变更不在客户端间传播，需重载 | `06-fault-injection/two-clients-a.png`、`two-clients-b.png` |
 
 **未接入（kimi 独有面，vis 不暴露）**
 
