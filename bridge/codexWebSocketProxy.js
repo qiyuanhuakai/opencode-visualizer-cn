@@ -24,6 +24,10 @@ function connectRawSocket(targetUrl) {
   throw new Error(`Unsupported Codex WebSocket protocol: ${targetUrl.protocol}`);
 }
 
+function resolveAuthorization(authorization) {
+  return typeof authorization === 'function' ? authorization() : authorization;
+}
+
 function buildUpstreamHandshake(targetUrl, authorization) {
   const path = `${targetUrl.pathname || '/'}${targetUrl.search || ''}`;
   const host = targetUrl.port ? `${targetUrl.hostname}:${targetUrl.port}` : targetUrl.hostname;
@@ -36,15 +40,24 @@ function buildUpstreamHandshake(targetUrl, authorization) {
     `Sec-WebSocket-Key: ${key}`,
     'Sec-WebSocket-Version: 13',
   ];
-  if (authorization) headers.push(`Authorization: ${authorization}`);
+  const resolvedAuthorization = resolveAuthorization(authorization);
+  if (resolvedAuthorization) headers.push(`Authorization: ${resolvedAuthorization}`);
   headers.push('', '');
   return { text: headers.join('\r\n'), key };
 }
 
+// authorization: static header value, or a provider invoked once per dial
+// (kimi web rotates its bearer token without a bridge restart). A provider
+// that throws rejects the promise before any upstream socket is opened.
 export function connectUpstreamWebSocket(target, authorization, options = {}) {
   const targetUrl = new URL(target);
+  let handshake;
+  try {
+    handshake = buildUpstreamHandshake(targetUrl, authorization);
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  }
   const upstream = connectRawSocket(targetUrl);
-  const handshake = buildUpstreamHandshake(targetUrl, authorization);
   const handshakeTimeoutMs = options.handshakeTimeoutMs ?? UPSTREAM_HANDSHAKE_TIMEOUT_MS;
   const maxHeaderBytes = options.maxHeaderBytes ?? UPSTREAM_HEADER_LIMIT;
 
