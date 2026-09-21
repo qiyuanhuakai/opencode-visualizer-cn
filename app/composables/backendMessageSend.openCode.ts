@@ -103,6 +103,7 @@ export async function runOpenCodeSend(
   preflight: SendPreflight,
   guard: RequestGuard,
 ): Promise<OpenCodeExecutionResult> {
+  if (preflight.backend === 'kimi-web') return { kind: 'stale' };
   if (preflight.slash && preflight.commandMatch) {
     if (!guard.isCurrent()) return { kind: 'stale' };
     const command = buildOpenCodeCommand(

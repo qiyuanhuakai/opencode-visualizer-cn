@@ -1,5 +1,9 @@
 import { watch } from 'vue';
 import { createBackendRequestFence } from '../utils/backendRequestFence';
+import {
+  runKimiWebSend,
+  type KimiWebSendExecutionResult,
+} from '../backends/kimiWeb/backendMessageSend.kimiWeb';
 import { runCodexSend, type CodexExecutionResult } from './backendMessageSend.codex';
 import { runOpenCodeSend, type OpenCodeExecutionResult } from './backendMessageSend.openCode';
 import { prepareSendPreflight } from './backendMessageSend.preflight';
@@ -11,6 +15,10 @@ import type {
   RequestGuard,
   SendPreflight,
 } from './backendMessageSend.types';
+
+function assertNever(value: never): never {
+  throw new Error(`Unhandled send status: ${String(value)}`);
+}
 
 export function useBackendMessageSend(params: BackendMessageSendParams) {
   const dispatchCodexSlash = createCodexSlashDispatcher(params);
@@ -60,6 +68,33 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
     params.clearComposerDraftForCurrentContext();
   }
 
+  function commitKimiWebResult(
+    params: BackendMessageSendParams,
+    result: KimiWebSendExecutionResult,
+    guard: RequestGuard,
+  ) {
+    if (!guard.isCurrent() || result.kind === 'stale') return;
+    // Only `running` is a confirmed send; queued stays pending and blocked is
+    // surfaced as a refusal so the composer never reports a false success.
+    switch (result.status) {
+      case 'running':
+        params.setSendStatusKey('app.status.sent');
+        break;
+      case 'queued':
+        params.setSendStatusKey('app.status.sending');
+        break;
+      case 'blocked':
+        params.setSendStatusKey('app.error.actionDisabled', {
+          action: params.translate('app.actions.sending'),
+        });
+        break;
+      default:
+        return assertNever(result.status);
+    }
+    params.attachments.value = [];
+    params.clearComposerDraftForCurrentContext();
+  }
+
   async function runTransaction(
     params: BackendMessageSendParams,
     preflight: SendPreflight,
@@ -77,6 +112,16 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
         if (guard.isCurrent()) params.providerConfig.value = providerConfig;
       });
       commitCodexResult(params, result, guard);
+      return;
+    }
+    if (preflight.backend === 'kimi-web') {
+      const kimiWebApi = params.kimiWebApi;
+      if (!kimiWebApi) {
+        params.setSendStatusKey('app.error.unavailable', { action: 'Kimi Web' });
+        return;
+      }
+      const result = await runKimiWebSend(params, preflight, guard, kimiWebApi);
+      commitKimiWebResult(params, result, guard);
       return;
     }
     const result = await runOpenCodeSend(params, preflight, guard);
