@@ -1,4 +1,4 @@
-export type BackendKind = 'opencode' | 'codex' | 'acp';
+export type BackendKind = 'opencode' | 'codex' | 'acp' | 'kimi-web';
 
 export type BackendCapabilities = {
   projects: boolean;

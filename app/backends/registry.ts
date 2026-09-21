@@ -3,11 +3,42 @@ import { createCodexAdapter } from './codex/codexAdapter';
 import { appendCodexBridgeToken } from './codex/bridgeUrl';
 import { createAcpAdapter } from './acp/acpAdapter';
 import { acpBridgeWebSocketUrl, normalizeAcpBridgeUrl } from './acp/bridgeUrl';
-import type { BackendAdapter, BackendKind } from './types';
+import type { BackendAdapter, BackendCapabilities, BackendKind } from './types';
 import { StorageKeys, storageGet } from '../utils/storageKeys';
 
 export const DEFAULT_CODEX_BRIDGE_URL = 'ws://localhost:23004/codex';
 export const DEFAULT_ACP_BRIDGE_URL = 'ws://localhost:23004';
+export const DEFAULT_KIMI_WEB_BRIDGE_URL = 'ws://localhost:23004/kimi-web/ws';
+
+// Only bits with a measured basis in docs/kimi.md are enabled. Actions that Todo 21
+// gates behind runtime probing (fork/compact/undo, tasks, terminal) stay off.
+export const KIMI_WEB_CAPABILITIES: BackendCapabilities = {
+  projects: true,
+  worktrees: false,
+  sessions: true,
+  sessionFork: false,
+  sessionRevert: false,
+  sessionRename: true,
+  sessionArchive: true,
+  sessionUnarchive: true,
+  sessionDelete: true,
+  sessionPin: false,
+  sessionUnpin: false,
+  sessionCompact: false,
+  files: true,
+  terminal: false,
+  permissions: true,
+  questions: true,
+  todos: false,
+  status: true,
+  providerConfig: true,
+  imageAttachmentsOnly: false,
+  projectPickerCreatesSession: false,
+  ptyExitRequiresSyntheticEvent: false,
+  ptyRefreshArtifactsOnSuccess: false,
+  strictSandboxPaths: false,
+  sessionManagementMode: 'standard',
+};
 
 export function getPersistedCodexBridgeUrl() {
   const value = storageGet(StorageKeys.auth.codexBridgeUrl)?.trim();
@@ -24,6 +55,16 @@ export function getPersistedAcpBridgeUrl() {
 
 export function getPersistedCodexBridgeToken() {
   return storageGet(StorageKeys.auth.codexBridgeToken) ?? '';
+}
+
+export function kimiWebBridgeHttpUrl(bridgeUrl: string) {
+  const parsed = new URL(bridgeUrl);
+  if (parsed.protocol === 'ws:') parsed.protocol = 'http:';
+  else if (parsed.protocol === 'wss:') parsed.protocol = 'https:';
+  else {
+    throw new Error(`Unsupported Kimi Web bridge URL protocol: ${parsed.protocol}`);
+  }
+  return parsed.toString();
 }
 
 export function getPersistedAcpBridgeToken() {
@@ -46,6 +87,7 @@ let adapters: Record<BackendKind, BackendAdapter | undefined> = {
   opencode: createOpenCodeAdapter(),
   codex: codexAdapter,
   acp: acpAdapter,
+  'kimi-web': undefined,
 };
 
 let activeBackendKind: BackendKind = 'opencode';
@@ -84,6 +126,15 @@ export function configureCodexBackend(options: { bridgeUrl: string; bridgeToken?
     codex: codexAdapter,
   };
   return codexAdapter;
+}
+
+// Placeholder until Todo 25 registers the real adapter: validates the transport
+// but intentionally leaves adapters['kimi-web'] unset so no production path can
+// obtain it and getActiveBackendAdapter keeps rejecting.
+export function configureKimiWebBackend(options: { bridgeUrl: string; bridgeToken?: string }) {
+  const bridgeUrl = options.bridgeUrl.trim();
+  if (!bridgeUrl) throw new Error('Kimi Web bridge URL is required.');
+  kimiWebBridgeHttpUrl(bridgeUrl);
 }
 
 export function configureAcpBackend(options: {
