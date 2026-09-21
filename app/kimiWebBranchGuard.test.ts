@@ -96,6 +96,7 @@ const BRANCHES: BranchEntry[] = [
   { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 1, classification: 'capability-optional', owner: 20, handling: 'handled', sites: 'completion notification 1725' },
   { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 2, classification: 'capability-optional', owner: 19, handling: 'handled', sites: 'codex approval replies 2359/2373' },
   { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 1, classification: 'capability-optional', owner: 16, handling: 'handled', sites: 'subagent history loadHistory 8898' },
+  { file: 'App.vue', fp: "activeBackendKind.value!=='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 16, handling: 'handled', sites: 'kimi popup session fence isKimiWebPopupSession 7656 (tool/reasoning/subagent auto-popups + reconcile seam)', kimiSignal: "activeBackendKind.value !== 'kimi-web'" },
   { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 7, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'codex-only 2342/2904/3025/3154/5058/7278/8027' },
   { file: 'App.vue', fp: "activeBackendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'pending', sites: '5075 fetchProviders codex-else-OpenCode provider fetch' },
   { file: 'App.vue', fp: "activeBackendKind.value==='opencode'", occurrences: 2, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'opencode-only 3596/3687' },

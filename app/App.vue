@@ -716,7 +716,7 @@ import type {
 import type { ComposerAttachment, LineCommentData } from './types/composer';
 import type { ForgePanelAuxiliary } from './types/forge';
 import type { ContainerPinPayload } from './types/pin';
-import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
+import type { MessageInfo, MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { WorkerToTabMessage } from './types/sse-worker';
 import type { TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
@@ -7636,6 +7636,98 @@ let configuredKimiWebAdapter: KimiWebAdapter | undefined;
 const kimiWebWsClient = shallowRef<KimiWebWsClient>();
 const kimiWebMessageBridge = shallowRef<ReturnType<typeof useKimiWebMessageBridge>>();
 
+// ---------------------------------------------------------------------------
+// Todo 16: kimi-web auto-popup wiring (core visual feature, Codex parity).
+// WS backends cannot use the OpenCode sessionScope route, so the three popup
+// producers are wired through the message bridge's explicit callbacks exactly
+// like the Codex path (useCodexMessageBridge.ts L197-211 + App.vue L7510-7521).
+// The integration contract is pinned by
+// app/composables/useKimiWebPopups.integration.test.ts, whose harness mirrors
+// this block line-for-line.
+// ---------------------------------------------------------------------------
+const lastKimiWebToolWindowSignature = new Map<string, string>();
+
+// Only the currently selected session and its descendants may drive popups.
+// Kimi subagent parts carry the synthesized identity `{session}:{agent}:{turn}`
+// (normalize.ts kimiWebSubagentSessionId — agent_id alone is NOT a session id),
+// so a descendant is a prefixed extension of the selected session: the Codex
+// parent filter (useCodexMessageBridge.ts L197-209) without a thread tree.
+function isKimiWebPopupSession(sessionID: string): boolean {
+  if (activeBackendKind.value !== 'kimi-web') return false;
+  const selected = selectedSessionId.value;
+  if (!selected || !sessionID) return false;
+  return sessionID === selected || sessionID.startsWith(`${selected}:`);
+}
+
+function kimiWebToolWindowStatus(part: ToolPart): 'running' | 'completed' | 'error' | undefined {
+  return part.state.status === 'running' || part.state.status === 'completed' || part.state.status === 'error'
+    ? part.state.status
+    : undefined;
+}
+
+// Live tool parts: same allow-list gate, signature dedup and fw.updateOptions
+// state sync as syncRealtimeCodexToolWindows (L8905).
+function syncKimiWebToolWindow(part: MessagePart) {
+  if (part.type !== 'tool') return;
+  if (suppressAutoWindows.value) return;
+  if (!isKimiWebPopupSession(part.sessionID)) return;
+  if (!shouldRenderToolWindow(part.tool)) return;
+  const contentSignature =
+    part.state.status === 'completed'
+      ? part.state.output
+      : part.state.status === 'error'
+        ? part.state.error
+        : part.state.status === 'running'
+          ? part.state.metadata?.output || ''
+          : '';
+  const windowKey = part.callID || part.id;
+  const signature = `${part.tool}:${part.state.status}:${contentSignature}:${JSON.stringify(part.state.input ?? {})}`;
+  if (lastKimiWebToolWindowSignature.get(windowKey) === signature) return;
+  lastKimiWebToolWindowSignature.set(windowKey, signature);
+  openToolPartAsWindow(part);
+  fw.updateOptions(windowKey, { status: kimiWebToolWindowStatus(part) });
+}
+
+// Restore-period reconciliation (Todo 22 seam). Strategy chosen: route terminal
+// replay/rebuild parts through onReconcilePart and let them update/close ONLY
+// windows that are already open (fw.has gate) — never open a new one. The
+// alternative (closing transient auto-windows when entering rebuilding) was
+// rejected because a rebuild does not mean the subagent finished: force-closing
+// would destroy review context for still-running work, while this seam closes
+// precisely the windows whose parts actually terminated, including minimized
+// ones (fw.close removes dock entries; fw.open never un-minimizes an entry).
+function reconcileKimiWebPopup(info: MessageInfo, part: MessagePart, kind: 'tool' | 'reasoning' | 'subagent') {
+  if (kind === 'tool') {
+    if (part.type !== 'tool') return;
+    const windowKey = part.callID || part.id;
+    if (!fw.has(windowKey)) return;
+    openToolPartAsWindow(part);
+    fw.updateOptions(windowKey, { status: kimiWebToolWindowStatus(part) });
+    return;
+  }
+  if (part.type === 'reasoning') {
+    // The kimi bridge delivers subagent reasoning through onLiveSubagent
+    // (kimiWebMessageOps.ts applyLivePart) where Codex delivers it through
+    // onLiveReasoning; splitting by type here keeps the visual result identical
+    // (reasoning window with the [subagent] tag).
+    const windowKey = `reasoning:${part.sessionID || selectedSessionId.value || 'main'}`;
+    if (fw.has(windowKey)) reasoning.handlePart(part, info);
+  } else {
+    const windowKey = `subagent:${part.sessionID}`;
+    if (fw.has(windowKey)) subagentWindows.handlePart(part, info);
+  }
+  if (kind !== 'subagent') return;
+  // Subagent deltas are volatile and never replayed, so after the reconnect
+  // normalizer reset the bridge can no longer deliver a terminal part for the
+  // subagent's sibling window — close it here or it stays open forever.
+  const siblingKey = part.type === 'reasoning'
+    ? `subagent:${part.sessionID}`
+    : `reasoning:${part.sessionID}`;
+  if (!fw.has(siblingKey)) return;
+  if (part.type === 'reasoning') void fw.close(siblingKey);
+  else reasoning.scheduleReasoningClose(part.sessionID);
+}
+
 function kimiWebRestClient() {
   if (!configuredKimiWebAdapter) throw new Error('Kimi Web backend is not configured.');
   return configuredKimiWebAdapter.restClient;
@@ -7769,9 +7861,22 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
         msg,
         applySnapshot: (snapshot) =>
           bridge.applyHistory(kimiWebMessagesToHistoryEntries(snapshot.messages.items)),
-        onToolPart: () => undefined,
-        onLiveReasoning: () => undefined,
-        onLiveSubagent: () => undefined,
+        onToolPart: (part) => syncKimiWebToolWindow(part),
+        onLiveReasoning: (info, part) => {
+          if (!isKimiWebPopupSession(part.sessionID)) return;
+          reasoning.handlePart(part, info);
+        },
+        onLiveSubagent: (info, part) => {
+          if (!isKimiWebPopupSession(part.sessionID)) return;
+          // Codex splits child parts by type (useCodexMessageBridge.ts L207-208);
+          // the kimi bridge routes both through this callback.
+          if (part.type === 'reasoning') {
+            reasoning.handlePart(part, info);
+            return;
+          }
+          subagentWindows.handlePart(part, info);
+        },
+        onReconcilePart: reconcileKimiWebPopup,
       });
       return bridge;
     },
@@ -7792,6 +7897,7 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
 watch(selectedSessionId, () => {
   codexMessageBridge.resetRealtimeQueueSignature();
   lastCodexRealtimeToolWindowSignature.clear();
+  lastKimiWebToolWindowSignature.clear();
 });
 
 function backend() {
