@@ -601,6 +601,7 @@ const messages: LocaleMessages = {
   inputPanel: {
     placeholder: 'メッセージを送信…',
     loadingAgents: 'エージェントを読み込み中…',
+    agentUnsupported: 'このバックエンドはエージェントの選択に対応していません。',
     defaultAgent: 'デフォルト',
     defaultAgentDescription: 'デフォルトの Codex エージェントモード',
     loadingModels: 'モデルを読み込み中…',

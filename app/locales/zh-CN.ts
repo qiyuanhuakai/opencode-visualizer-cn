@@ -591,6 +591,7 @@ const messages: LocaleMessages = {
   inputPanel: {
     placeholder: '发送消息...',
     loadingAgents: '加载代理中...',
+    agentUnsupported: '当前后端不支持选择代理。',
     defaultAgent: '默认',
     defaultAgentDescription: '默认 Codex 代理模式',
     loadingModels: '加载模型中...',

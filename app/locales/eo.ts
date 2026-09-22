@@ -597,6 +597,7 @@ const messages: LocaleMessages = {
   inputPanel: {
     placeholder: 'Sendu mesaĝon…',
     loadingAgents: 'Ŝargas agentojn…',
+    agentUnsupported: 'Ĉi tiu backend ne subtenas la elektadon de agento.',
     defaultAgent: 'Defaŭlta',
     defaultAgentDescription: 'Defaŭlta reĝimo de Codex-agentilo',
     loadingModels: 'Ŝargas modelojn…',

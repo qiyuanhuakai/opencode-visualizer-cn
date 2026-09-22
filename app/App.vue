@@ -174,6 +174,7 @@
               :mention-files="acpMentionFiles"
               :prefer-file-mentions="activeBackendKind === 'acp'"
               :has-agent-options="hasAgentOptions"
+              :agent-picker-state="agentPickerState"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
               :model-options="availableModelOptions"
@@ -3065,6 +3066,15 @@ const canAbort = computed(() =>
   ),
 );
 const hasAgentOptions = computed(() => agentOptions.value.length > 0);
+// The composer's agent selector has three honest states. Backends whose
+// fetchAgents deliberately lists nothing (kimi-web runs a single main agent per
+// session) settle on 'unsupported' instead of showing the loading placeholder
+// forever; every other backend keeps `hasAgentOptions ? 'ready' : 'loading'`.
+const agentPickerState = computed<'loading' | 'unsupported' | 'ready'>(() => {
+  if (hasAgentOptions.value) return 'ready';
+  if (activeBackendKind.value === 'kimi-web') return 'unsupported';
+  return 'loading';
+});
 function isProviderConnected(providerId: string) {
   return connectedProviderIds.value.includes(providerId);
 }

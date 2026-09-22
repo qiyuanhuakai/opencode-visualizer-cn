@@ -580,6 +580,7 @@ export interface LocaleMessages {
   inputPanel: {
     placeholder: string;
     loadingAgents: string;
+    agentUnsupported: string;
     defaultAgent: string;
     defaultAgentDescription: string;
     loadingModels: string;
