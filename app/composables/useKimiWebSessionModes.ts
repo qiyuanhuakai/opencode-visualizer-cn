@@ -1,9 +1,11 @@
+import { KimiWebTowerExperimentUnavailableError } from '../backends/kimiWeb/kimiWebAdapter';
 import {
   isKimiWebPermissionMode,
   isTowerExperimentEnabled,
   type KimiWebPermissionMode,
   type KimiWebSessionModeChange,
 } from '../backends/kimiWeb/sessionModes';
+import { KimiWebError } from '../utils/kimiWeb';
 import type { KimiWebFrameContext, KimiWebSessionModePatch } from './kimiWebMessageBridgeTypes';
 
 export type KimiWebModeConfidence = 'unknown' | 'accepted-locally' | 'confirmed' | 'stale';
@@ -45,9 +47,9 @@ function emptyFieldVersions(): Record<ModeField, number> {
 }
 
 function isBusinessRejection(error: unknown): boolean {
-  if (typeof error !== 'object' || error === null || !('status' in error)) return false;
-  const status = error.status;
-  return typeof status === 'number' && status >= 400 && status < 500;
+  return (
+    error instanceof KimiWebError || error instanceof KimiWebTowerExperimentUnavailableError
+  );
 }
 
 function errorMessage(error: unknown): string {

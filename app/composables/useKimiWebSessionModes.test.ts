@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { KimiWebTowerExperimentUnavailableError } from '../backends/kimiWeb/kimiWebAdapter';
 import type { KimiWebSessionModeChange } from '../backends/kimiWeb/sessionModes';
+import { KimiWebError, KimiWebTransportError } from '../utils/kimiWeb';
 import { useKimiWebSessionModes } from './useKimiWebSessionModes';
 
 function deferred<T = void>() {
@@ -37,8 +39,11 @@ describe('useKimiWebSessionModes', () => {
     });
   });
 
-  it('rolls back only the rejected field', async () => {
-    const rejected = Object.assign(new Error('plan mode denied'), { status: 409 });
+  it('classifies a real KimiWebError business rejection as rejected', async () => {
+    const rejected = new KimiWebError(
+      40001,
+      'agent_config.permission_mode: Invalid option: expected one of "manual"|"yolo"|"auto"',
+    );
     const writeMode = vi.fn(async (_sessionId: string, change: KimiWebSessionModeChange) => {
       if (change.field === 'planMode') throw rejected;
     });
@@ -56,12 +61,30 @@ describe('useKimiWebSessionModes', () => {
     expect(controller.sessionState('session-a')).toMatchObject({
       planMode: false,
       swarmMode: true,
-      error: { kind: 'rejected', message: 'plan mode denied' },
+      error: { kind: 'rejected', message: rejected.message },
     });
   });
 
-  it('marks network-uncertain writes unconfirmed without automatic replay', async () => {
-    const networkError = new TypeError('Failed to fetch');
+  it('classifies a tower-experiment rejection as rejected', async () => {
+    const rejected = new KimiWebTowerExperimentUnavailableError('session-a');
+    const controller = createController(vi.fn().mockRejectedValue(rejected));
+
+    await expect(
+      controller.changeMode('session-a', { field: 'towerMode', value: true }),
+    ).rejects.toBe(rejected);
+
+    expect(controller.sessionState('session-a')).toMatchObject({
+      confidence: 'unknown',
+      error: { kind: 'rejected', message: rejected.message },
+    });
+    expect(controller.sessionState('session-a')).not.toHaveProperty('towerMode');
+  });
+
+  it('keeps KimiWebTransportError classified as uncertain', async () => {
+    const networkError = new KimiWebTransportError('boom', {
+      kind: 'network',
+      path: '/api/v1/x',
+    });
     const writeMode = vi.fn().mockRejectedValue(networkError);
     const controller = createController(writeMode);
 
@@ -73,6 +96,21 @@ describe('useKimiWebSessionModes', () => {
     expect(writeMode).toHaveBeenCalledTimes(1);
     expect(controller.sessionState('session-a')).toMatchObject({
       permissionMode: 'yolo',
+      confidence: 'accepted-locally',
+      error: { kind: 'uncertain' },
+    });
+  });
+
+  it('keeps a generic Error classified as uncertain', async () => {
+    const genericError = new Error('boom');
+    const controller = createController(vi.fn().mockRejectedValue(genericError));
+
+    await expect(
+      controller.changeMode('session-a', { field: 'swarmMode', value: true }),
+    ).rejects.toBe(genericError);
+
+    expect(controller.sessionState('session-a')).toMatchObject({
+      swarmMode: true,
       confidence: 'accepted-locally',
       error: { kind: 'uncertain' },
     });
