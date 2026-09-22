@@ -459,6 +459,16 @@ describe('kimiWeb REST client', () => {
       );
     });
 
+    it('profile updates accept a mode patch without a model', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({ id: SID })));
+
+      await client.updateProfile(SID, { agent_config: { permission_mode: 'auto' } });
+
+      const body = JSON.parse(String(lastCall(fetchMock).init.body));
+      expect(body).toEqual({ agent_config: { permission_mode: 'auto' } });
+      expect(body.agent_config).not.toHaveProperty('model');
+    });
+
     it('sends the approval answer payload verbatim', async () => {
       fetchMock.mockResolvedValue(jsonResponse(envelope({ resolved: true })));
 

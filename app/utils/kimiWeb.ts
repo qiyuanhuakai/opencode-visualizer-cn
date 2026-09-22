@@ -338,7 +338,7 @@ export type KimiWebCreateSessionInput = {
 export type KimiWebSessionProfileInput = {
   title?: string;
   metadata?: { cwd: string };
-  agent_config?: KimiWebAgentConfig;
+  agent_config?: Partial<KimiWebAgentConfig>;
   permission_rules?: KimiWebPermissionRule[];
 };
 
