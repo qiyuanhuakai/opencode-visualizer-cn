@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { KimiWebClient, KimiWebSession } from '../../utils/kimiWeb';
+import type { KimiWebClient, KimiWebMeta, KimiWebSession } from '../../utils/kimiWeb';
 import {
   createKimiWebAdapter,
   mapKimiWebSession,
@@ -23,9 +23,24 @@ function session(overrides: Partial<KimiWebSession> = {}): KimiWebSession {
   };
 }
 
-function client(items: KimiWebSession[] = [], models: string[] = []) {
+function meta(overrides: Partial<KimiWebMeta> = {}): KimiWebMeta {
   return {
-    getMeta: vi.fn(async () => ({ server_version: '1', capabilities: {} })),
+    server_version: '1',
+    server_id: 'server-1',
+    backend: 'kimi-web',
+    capabilities: {},
+    dangerous_bypass_auth: false,
+    ...overrides,
+  };
+}
+
+function client(
+  items: KimiWebSession[] = [],
+  models: string[] = [],
+  serverMeta: KimiWebMeta = meta(),
+) {
+  return {
+    getMeta: vi.fn(async () => serverMeta),
     getAuth: vi.fn(async () => ({ models_ready: true })),
     listModels: vi.fn(async () => ({
       items: models.map((model) => ({
@@ -109,6 +124,111 @@ describe('KimiWebAdapter', () => {
       ],
       connected: ['managed:kimi-code'],
     });
+  });
+
+  it('writes only the selected permission field', async () => {
+    const restClient = client();
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient,
+    });
+    expect(adapter.updateSessionMode).toBeTypeOf('function');
+    const updateSessionMode = adapter.updateSessionMode;
+
+    await updateSessionMode('session-1', { field: 'permissionMode', value: 'auto' });
+
+    expect(restClient.updateProfile).toHaveBeenCalledOnce();
+    expect(restClient.updateProfile).toHaveBeenCalledWith('session-1', {
+      agent_config: { permission_mode: 'auto' },
+    });
+  });
+
+  it('blocks tower enable when the experiment is unavailable', async () => {
+    const restClient = client(
+      [],
+      [],
+      meta({
+        experimental_flags: { tower: false },
+        features: [{ name: 'tower', state: 'Active' }],
+      }),
+    );
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient,
+    });
+    expect(adapter.updateSessionMode).toBeTypeOf('function');
+
+    await expect(
+      adapter.updateSessionMode('session-1', { field: 'towerMode', value: true }),
+    ).rejects.toMatchObject({ name: 'KimiWebTowerExperimentUnavailableError' });
+    expect(restClient.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('allows permission changes while tower is unavailable', async () => {
+    const restClient = client([], [], meta({ experimental_flags: { tower: false } }));
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient,
+    });
+    expect(adapter.updateSessionMode).toBeTypeOf('function');
+
+    await adapter.updateSessionMode('session-1', { field: 'permissionMode', value: 'auto' });
+
+    expect(restClient.getMeta).not.toHaveBeenCalled();
+    expect(restClient.updateProfile).toHaveBeenCalledOnce();
+    expect(restClient.updateProfile).toHaveBeenCalledWith('session-1', {
+      agent_config: { permission_mode: 'auto' },
+    });
+  });
+
+  it('allows tower disable while the experiment is unavailable', async () => {
+    const restClient = client([], [], meta({ experimental_flags: { tower: false } }));
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient,
+    });
+    expect(adapter.updateSessionMode).toBeTypeOf('function');
+
+    await adapter.updateSessionMode('session-1', { field: 'towerMode', value: false });
+
+    expect(restClient.getMeta).not.toHaveBeenCalled();
+    expect(restClient.updateProfile).toHaveBeenCalledOnce();
+    expect(restClient.updateProfile).toHaveBeenCalledWith('session-1', {
+      agent_config: { tower_mode: false },
+    });
+  });
+
+  it('rejects an invalid permission value without calling the profile endpoint', async () => {
+    const restClient = client();
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient,
+    });
+    expect(adapter.updateSessionMode).toBeTypeOf('function');
+
+    await expect(
+      Reflect.apply(adapter.updateSessionMode, adapter, [
+        'session-1',
+        { field: 'permissionMode', value: 'invalid' },
+      ]),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(restClient.updateProfile).not.toHaveBeenCalled();
+  });
+
+  it('preserves existing rename archive and restore behavior', async () => {
+    const restClient = client();
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient,
+    });
+
+    await adapter.updateSession('session-1', { title: 'Renamed' });
+    await adapter.updateSession('session-1', { time: { archived: 1 } });
+    await adapter.updateSession('session-1', { time: { archived: 0 } });
+
+    expect(restClient.updateProfile).toHaveBeenCalledWith('session-1', { title: 'Renamed' });
+    expect(restClient.archiveSession).toHaveBeenCalledWith('session-1');
+    expect(restClient.restoreSession).toHaveBeenCalledWith('session-1');
   });
 
   it('maps archive, timestamps, workspace, and directory into shared session fields', () => {

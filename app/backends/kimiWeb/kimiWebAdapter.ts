@@ -18,6 +18,12 @@ import {
 } from '../../utils/kimiWeb';
 import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../../utils/kimiWebWs';
 import type { ProviderConfigState } from '../../utils/providerConfig';
+import {
+  isKimiWebPermissionMode,
+  isTowerExperimentEnabled,
+  serializeKimiWebSessionModeChange,
+  type KimiWebSessionModeChange,
+} from './sessionModes';
 
 export const KIMI_WEB_CAPABILITIES: BackendCapabilities = {
   projects: true,
@@ -58,6 +64,16 @@ export type KimiWebAdapterOptions = {
   bridgeToken?: string;
   client?: KimiWebClient;
 };
+
+export class KimiWebTowerExperimentUnavailableError extends Error {
+  readonly sessionId: string;
+
+  constructor(sessionId: string) {
+    super('Kimi Web tower mode requires the tower experiment to be enabled.');
+    this.name = 'KimiWebTowerExperimentUnavailableError';
+    this.sessionId = sessionId;
+  }
+}
 
 function unsupported(operation: string): Promise<never> {
   return Promise.reject(new Error(`Kimi Web does not support ${operation}.`));
@@ -213,6 +229,7 @@ export class KimiWebAdapter implements BackendAdapter {
     this.getVcsInfo = this.getVcsInfo.bind(this);
     this.getGlobalConfig = this.getGlobalConfig.bind(this);
     this.listProviders = this.listProviders.bind(this);
+    this.updateSessionMode = this.updateSessionMode.bind(this);
   }
 
   initialize() {
@@ -241,6 +258,19 @@ export class KimiWebAdapter implements BackendAdapter {
         : this.restClient.restoreSession(sessionId);
     }
     return unsupported('this session update');
+  }
+
+  async updateSessionMode(sessionId: string, change: KimiWebSessionModeChange): Promise<void> {
+    if (change.field === 'permissionMode' && !isKimiWebPermissionMode(change.value)) {
+      throw new TypeError(`Invalid Kimi Web permission mode: ${String(change.value)}`);
+    }
+    if (change.field === 'towerMode' && change.value === true) {
+      const meta = await this.restClient.getMeta();
+      if (!isTowerExperimentEnabled(meta)) {
+        throw new KimiWebTowerExperimentUnavailableError(sessionId);
+      }
+    }
+    await this.restClient.updateProfile(sessionId, serializeKimiWebSessionModeChange(change));
   }
 
   deleteSession(sessionId: string) {
