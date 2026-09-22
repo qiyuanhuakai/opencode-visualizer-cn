@@ -158,7 +158,13 @@ async function mountKimiFileTree(fakeFetch: ReturnType<typeof createFakeFetch>) 
   await vi.advanceTimersByTimeAsync(400);
   await flushAsyncWork();
   if (!fileTree) throw new Error('useFileTree did not initialize');
-  return { fileTree, unmount: () => (app.unmount(), root.remove()) };
+  return {
+    fileTree,
+    unmount: () => {
+      app.unmount();
+      root.remove();
+    },
+  };
 }
 
 beforeEach(() => {

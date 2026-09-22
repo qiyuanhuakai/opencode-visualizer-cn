@@ -186,6 +186,7 @@ const BRANCHES: BranchEntry[] = [
   { file: 'composables/useBackendSessionStatus.ts', fp: "params.activeBackendKind.value==='codex'", occurrences: 1, classification: 'capability-optional', owner: 21, handling: 'handled', sites: 'codex turn active 16' },
   { file: 'composables/useCodexMessageBridge.ts', fp: "params.activeBackendKind.value!=='codex'", occurrences: 10, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'codex-only bridge 137-259 (kimi must not wire)' },
   { file: 'composables/useCodexWorkspaceSync.ts', fp: "backendKind!=='codex'", occurrences: 1, classification: 'capability-optional', owner: 25, handling: 'handled', sites: 'codex-only workspace sync 27' },
+  { file: 'composables/useFileTree.ts', fp: "backendKind==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'usesAdapterFileTreeStatus keeps kimi file hydration on REST fs actions and out of PTY git scripts', kimiSignal: 'usesAdapterFileTreeStatus' },
   // ----- composables — credentials (Todo 7 DONE) -----
   { file: 'composables/useCredentials.ts', fp: "backendKind.value==='codex'", occurrences: 1, classification: 'ui-required', owner: 7, handling: 'handled', sites: 'isConfigured 58', kimiSignal: "backendKind.value === 'kimi-web'" },
   { file: 'composables/useCredentials.ts', fp: "backendKind.value==='acp'", occurrences: 1, classification: 'ui-required', owner: 7, handling: 'handled', sites: 'isConfigured 59', kimiSignal: "backendKind.value === 'kimi-web'" },

@@ -145,6 +145,11 @@ function getOptions(): UseFileTreeOptions {
   return boundOptions;
 }
 
+function usesAdapterFileTreeStatus() {
+  const backendKind = getOptions().activeBackendKind?.value;
+  return backendKind === 'kimi-web';
+}
+
 function normalizeRelativePath(path: string) {
   const trimmed = path.trim();
   if (!trimmed || trimmed === '.') return '.';
@@ -801,6 +806,7 @@ function buildFullTreeFromPaths(allPaths: string[]): TreeNode[] {
 }
 
 async function detectFileTreeStrategy(directory: string): Promise<FileTreeStrategy> {
+  if (usesAdapterFileTreeStatus()) return 'filesystem';
   const refreshToken = workspaceRefreshToken;
   try {
     const raw = await retryOnce(
@@ -1014,6 +1020,20 @@ async function refreshGitStatusOnly(refreshToken = workspaceRefreshToken) {
   }
 
   if (!isRefreshCurrent(directory, refreshToken)) return;
+  if (usesAdapterFileTreeStatus()) {
+    const getVcsInfo = getActiveBackendAdapter().getVcsInfo;
+    if (!getVcsInfo) {
+      setGitStatus(null);
+      return;
+    }
+    const raw = await getVcsInfo(directory);
+    if (!isRefreshCurrent(directory, refreshToken)) return;
+    const snapshot =
+      raw && typeof raw === 'object' ? (raw as { snapshot?: GitStatus }).snapshot : undefined;
+    setGitStatus(snapshot ?? null);
+    cacheCurrentDirectoryState(directory);
+    return;
+  }
   const { runOneShotPtyCommand } = usePtyOneshot();
   const generation = ++gitStatusGeneration;
   await retryOnce(
@@ -1055,6 +1075,7 @@ async function refreshUntrackedEligibleCount(refreshToken = workspaceRefreshToke
   const { activeDirectory } = getOptions();
   const directory = activeDirectory.value.trim();
   if (!directory || !gitStatus.value || !isRefreshCurrent(directory, refreshToken)) return;
+  if (usesAdapterFileTreeStatus()) return;
   if (untrackedCountRefreshInFlight) return untrackedCountRefreshInFlight;
 
   updateUntrackedSummary((current) => ({
