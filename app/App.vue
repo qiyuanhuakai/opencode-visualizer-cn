@@ -3099,17 +3099,15 @@ const kimiWebAgentOptions = computed(() =>
 );
 const hasAgentOptions = computed(() =>
   activeBackendKind.value === 'kimi-web'
-    ? kimiWebAgentOptions.value.length === 3
+    ? kimiWebAgentOptions.value.length > 0
     : agentOptions.value.length > 0,
 );
-// The composer's agent selector keeps the generic loading/unsupported/ready API;
-// kimi-web supplies its permission modes through a dedicated option list.
+// The composer's agent selector is ready when its active option list is populated,
+// loading only while discovery is in flight, and otherwise unsupported.
 const agentPickerState = computed<'loading' | 'unsupported' | 'ready'>(() => {
   if (hasAgentOptions.value) return 'ready';
-  if (activeBackendKind.value === 'kimi-web' && kimiWebAgentOptions.value.length === 3) {
-    return 'ready';
-  }
-  return 'loading';
+  if (agentsLoading.value) return 'loading';
+  return 'unsupported';
 });
 function isProviderConnected(providerId: string) {
   return connectedProviderIds.value.includes(providerId);

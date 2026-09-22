@@ -1,10 +1,63 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useKimiWebSessionModes } from './composables/useKimiWebSessionModes';
+import { kimiWebAgentModeOptions } from './utils/kimiWebModeOptions';
 
 const APP_SOURCE = readFileSync(join(process.cwd(), 'app', 'App.vue'), 'utf8');
+const APP_SCRIPT_SOURCE = APP_SOURCE.match(/<script lang="ts" setup>([\s\S]*?)<\/script>/)?.[1];
+
+if (!APP_SCRIPT_SOURCE) throw new Error('App.vue script setup block was not found');
+
+const APP_SCRIPT = ts.createSourceFile(
+  'App.vue.ts',
+  APP_SCRIPT_SOURCE,
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TS,
+);
+
+function appVariableDeclaration(name: string): string {
+  for (const statement of APP_SCRIPT.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    const declaration = statement.declarationList.declarations.find(
+      (candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === name,
+    );
+    if (declaration) return `const ${declaration.getText(APP_SCRIPT)};`;
+  }
+  throw new Error(`App.vue variable ${name} was not found`);
+}
+
+const AGENT_PICKER_PROGRAM = ts.transpileModule(
+  [
+    appVariableDeclaration('hasAgentOptions'),
+    appVariableDeclaration('agentPickerState'),
+    'agentPickerState.value;',
+  ].join('\n'),
+  { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+).outputText;
+
+type AgentPickerState = 'loading' | 'unsupported' | 'ready';
+
+function appAgentPickerState(input: {
+  backendKind: string;
+  agentOptions?: Array<{ id: string }>;
+  kimiWebAgentOptions?: Array<{ id: string }>;
+  agentsLoading: boolean;
+}): AgentPickerState {
+  const result: unknown = runInNewContext(AGENT_PICKER_PROGRAM, {
+    computed,
+    activeBackendKind: ref(input.backendKind),
+    agentOptions: ref(input.agentOptions ?? []),
+    kimiWebAgentOptions: ref(input.kimiWebAgentOptions ?? []),
+    agentsLoading: ref(input.agentsLoading),
+  });
+  if (result === 'loading' || result === 'unsupported' || result === 'ready') return result;
+  throw new Error(`Unexpected App.vue agent picker state: ${String(result)}`);
+}
 
 function createController(meta: unknown = { experimental_flags: { tower: false } }) {
   const writeMode = vi.fn().mockResolvedValue(undefined);
@@ -24,9 +77,8 @@ describe('kimi-web composer integration', () => {
     expect(APP_SOURCE).toMatch(
       /<template #after-thinking>[\s\S]*v-if="activeBackendKind === 'codex'"[\s\S]*<KimiWebComposerModes[\s\S]*v-else-if="activeBackendKind === 'kimi-web'"/,
     );
-    expect(APP_SOURCE).toMatch(
-      /activeBackendKind\.value === 'kimi-web'[\s\S]*kimiWebAgentOptions\.value\.length === 3[\s\S]*return 'ready'/,
-    );
+    expect(APP_SOURCE).toMatch(/kimiWebAgentOptions\.value\.length > 0/);
+    expect(APP_SOURCE).not.toContain('kimiWebAgentOptions.value.length === 3');
     expect(APP_SOURCE).not.toMatch(
       /activeBackendKind\.value === 'kimi-web'\) return '(?:unsupported|loading)'/,
     );
@@ -98,5 +150,40 @@ describe('kimi-web composer integration', () => {
     await enabled.controller.changeMode('session-a', { field: 'towerMode', value: true });
     expect(enabled.controller.towerEnabled).toBe(true);
     expect(APP_SOURCE).toContain(':tower-enabled="kimiWebTowerEnabled"');
+  });
+});
+
+describe('App.vue agent picker state machine', () => {
+  it('kimi-web agent picker resolves ready with its three permission modes', () => {
+    const options = kimiWebAgentModeOptions().map(({ id }) => ({ id }));
+
+    expect(options.map(({ id }) => id)).toEqual(['manual', 'auto', 'yolo']);
+    expect(
+      appAgentPickerState({
+        backendKind: 'kimi-web',
+        kimiWebAgentOptions: options,
+        agentsLoading: false,
+      }),
+    ).toBe('ready');
+  });
+
+  it('a backend without agent options resolves unsupported rather than loading forever', () => {
+    expect(
+      appAgentPickerState({
+        backendKind: 'acp',
+        agentOptions: [],
+        agentsLoading: false,
+      }),
+    ).toBe('unsupported');
+  });
+
+  it('a still-loading backend resolves loading', () => {
+    expect(
+      appAgentPickerState({
+        backendKind: 'opencode',
+        agentOptions: [],
+        agentsLoading: true,
+      }),
+    ).toBe('loading');
   });
 });
