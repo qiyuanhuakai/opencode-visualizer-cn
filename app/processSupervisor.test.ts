@@ -210,8 +210,8 @@ describe('processSupervisor', () => {
       spawnProcess,
       probeKimiWebHealth,
       ...kimiDependencies(),
-      readinessAttempts: 10,
-      readinessIntervalMs: 5,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
     });
 
     await supervisor.start();
@@ -230,8 +230,31 @@ describe('processSupervisor', () => {
       spawnProcess,
       probeKimiWebHealth: vi.fn().mockResolvedValue({ state: 'idle' }),
       ...kimiDependencies(),
-      readinessAttempts: 10,
-      readinessIntervalMs: 5,
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
+    });
+
+    await supervisor.start();
+
+    expect(supervisor.getStatus()[0]).toEqual(
+      expect.objectContaining({
+        state: 'error',
+        owned: false,
+        error: expect.stringContaining('58628'),
+      }),
+    );
+    expectChildStopped(spawnedChildren[0]);
+  });
+
+  it('reports the drifted port when the startup line arrives after the readiness window', async () => {
+    const spawnProcess = fakeKimiSpawn('http://127.0.0.1:58628/#token=secret', 250);
+    const supervisor = createProcessSupervisor({
+      services: [kimiService()],
+      spawnProcess,
+      probeKimiWebHealth: vi.fn().mockResolvedValue({ state: 'idle' }),
+      ...kimiDependencies(),
+      readinessAttempts: 100,
+      readinessIntervalMs: 20,
     });
 
     await supervisor.start();
