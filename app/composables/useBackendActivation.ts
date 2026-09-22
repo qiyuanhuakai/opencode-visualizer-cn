@@ -335,8 +335,9 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   async function activateKimiWeb(generation: number) {
     resetCrossBackendState();
     const requestToken = requestFence.start();
-    const isCurrent = () =>
-      ownsInitialization(generation) && requestFence.isCurrent(requestToken);
+    const hasCurrentRequest = () => requestFence.isCurrent(requestToken);
+    const isCurrent = () => ownsInitialization(generation) && hasCurrentRequest();
+    const remainsCurrent = () => generation === initializationGeneration && hasCurrentRequest();
 
     try {
       options.ge.disconnect();
@@ -361,6 +362,13 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
 
       options.connectionState.value = 'ready';
       options.uiInitState.value = 'ready';
+      setTimeout(() => {
+        if (!remainsCurrent()) return;
+        void Promise.allSettled([
+          options.fetchGlobalProviderConfig(),
+          options.fetchProviders(true),
+        ]);
+      }, 0);
     } catch (error) {
       if (!isCurrent()) return;
       options.disconnectKimiWebBackend();
