@@ -372,6 +372,30 @@ export type KimiWebGetMessagesOptions = {
 
 export type KimiWebListOptions = { signal?: AbortSignal };
 
+export type KimiWebFsEntry = {
+  path: string;
+  name: string;
+  kind: 'directory' | 'file';
+  modified_at: string;
+  etag: string;
+  size?: number;
+};
+
+export type KimiWebFsList = {
+  items: KimiWebFsEntry[];
+  truncated: boolean;
+};
+
+export type KimiWebGitStatus = {
+  branch: string;
+  ahead: number;
+  behind: number;
+  entries: Record<string, unknown>;
+  additions: number;
+  deletions: number;
+  pullRequest?: { number: number; state: string; url: string } | null;
+};
+
 export type KimiWebDownloadFileOptions = { runtime_id?: string; signal?: AbortSignal };
 
 export type KimiWebUploadFileInput = {
@@ -522,6 +546,19 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
   const sessionPath = (sessionId: string) =>
     `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
 
+  const sessionFsAction = <T>(
+    sessionId: string,
+    action: 'list' | 'git_status',
+    body: unknown,
+    signal?: AbortSignal,
+  ) =>
+    requestJson<T>({
+      method: 'POST',
+      path: `${sessionPath(sessionId)}/fs:${action}`,
+      body,
+      signal,
+    });
+
   return {
     getMeta: () => requestJson<KimiWebMeta>({ method: 'GET', path: '/api/v1/meta' }),
     getAuth: () => requestJson<KimiWebAuth>({ method: 'GET', path: '/api/v1/auth' }),
@@ -623,6 +660,11 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
       }),
     getSnapshot: (sessionId: string) =>
       requestJson<KimiWebSnapshot>({ method: 'GET', path: `${sessionPath(sessionId)}/snapshot` }),
+
+    listFiles: (sessionId: string, path = '.', listOptions: KimiWebListOptions = {}) =>
+      sessionFsAction<KimiWebFsList>(sessionId, 'list', { path }, listOptions.signal),
+    getGitStatus: (sessionId: string, listOptions: KimiWebListOptions = {}) =>
+      sessionFsAction<KimiWebGitStatus>(sessionId, 'git_status', {}, listOptions.signal),
 
     uploadFile: (input: KimiWebUploadFileInput) => {
       const formData = new FormData();

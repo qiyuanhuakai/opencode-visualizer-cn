@@ -1,10 +1,12 @@
 import type {
   BackendAdapter,
   BackendCapabilities,
+  BackendRequestOptions,
   ListSessionsOptions,
   ProjectUpdatePayload,
   SessionUpdatePayload,
 } from '../types';
+import type { GitStatus } from '../../types/git';
 import type { BackendProviderResponse, BackendSessionInfo } from '../../types/backend-domain';
 import type { ProjectState } from '../../types/worker-state';
 import {
@@ -205,6 +207,8 @@ export class KimiWebAdapter implements BackendAdapter {
         baseUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(this.bridgeUrl, this.bridgeToken)),
         getToken: () => this.bridgeToken,
       });
+    this.listFiles = this.listFiles.bind(this);
+    this.getVcsInfo = this.getVcsInfo.bind(this);
   }
 
   initialize() {
@@ -262,6 +266,56 @@ export class KimiWebAdapter implements BackendAdapter {
   async listProviders() {
     const page = await this.restClient.listModels();
     return modelResponse(page.items);
+  }
+
+  private async sessionIdForDirectory(directory: string, options?: BackendRequestOptions) {
+    const normalizedDirectory = directory.trim() || '/';
+    const page = await this.restClient.listSessions({
+      include_archive: true,
+      signal: options?.signal,
+    });
+    const session = page.items.find(
+      (item) => (item.metadata?.cwd?.trim() || '/') === normalizedDirectory,
+    );
+    if (!session) {
+      throw new Error(`No Kimi Web session found for directory ${normalizedDirectory}.`);
+    }
+    return session.id;
+  }
+
+  async listFiles(
+    payload: { directory: string; path?: string },
+    options?: BackendRequestOptions,
+  ) {
+    const sessionId = await this.sessionIdForDirectory(payload.directory, options);
+    const page = await this.restClient.listFiles(sessionId, payload.path ?? '.', options);
+    return page.items.map((item) => ({
+      path: item.path,
+      name: item.name,
+      type: item.kind,
+    }));
+  }
+
+  async getVcsInfo(directory: string, options?: BackendRequestOptions) {
+    const sessionId = await this.sessionIdForDirectory(directory, options);
+    const status = await this.restClient.getGitStatus(sessionId, options);
+    const snapshot: GitStatus = {
+      branch: {
+        branch: status.branch,
+        ahead: status.ahead,
+        behind: status.behind,
+      },
+      files: [],
+      diffStats: {
+        staged: { additions: 0, deletions: 0 },
+        unstaged: { additions: status.additions, deletions: status.deletions },
+      },
+      untracked: {
+        eligibleFileCount: 0,
+        pending: false,
+      },
+    };
+    return { root: directory, branch: status.branch, entries: status.entries, snapshot };
   }
 
   async abortSession(sessionId: string) {
