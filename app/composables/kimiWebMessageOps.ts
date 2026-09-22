@@ -1,9 +1,13 @@
 import type { KimiWebNormalizeOp, KimiWebNormalizeResult } from '../backends/kimiWeb/normalize';
 import type { MessageInfo } from '../types/sse';
 import { reconcilePartKind } from './kimiWebMessageReconcile';
-import type { KimiWebMessageBridgeOptions, KimiWebSessionPatch } from './kimiWebMessageBridgeTypes';
-
-export type KimiWebFrameOrigin = 'live' | 'durable-replay' | 'snapshot-rebuild';
+import type {
+  KimiWebFrameContext,
+  KimiWebFrameOrigin,
+  KimiWebMessageBridgeOptions,
+  KimiWebSessionModePatch,
+  KimiWebSessionPatch,
+} from './kimiWebMessageBridgeTypes';
 
 type OpApplierOptions = {
   bridge: KimiWebMessageBridgeOptions;
@@ -38,7 +42,10 @@ export function createKimiWebOpApplier(context: OpApplierOptions) {
     if (info && kind) context.bridge.onReconcilePart?.(info, op.part, kind);
   }
 
-  function applySessionOp(op: Exclude<KimiWebNormalizeOp, { kind: 'message' | 'part' }>) {
+  function applySessionOp(
+    op: Exclude<KimiWebNormalizeOp, { kind: 'message' | 'part' }>,
+    frameContext: KimiWebFrameContext,
+  ) {
     if (op.kind === 'turn') {
       if (op.phase === 'ended' && (op.reason === 'completed' || op.reason === 'cancelled' || op.reason === 'failed')) {
         context.mergeSession(op.sessionId, { completion: { reason: op.reason, error: op.error } });
@@ -51,12 +58,21 @@ export function createKimiWebOpApplier(context: OpApplierOptions) {
     }
     if (op.kind === 'agent') {
       if (op.phase === 'status' && op.status) {
+        const modePatch = op.agentId === 'main' ? {
+          ...(op.status.permission === undefined ? {} : { permission: op.status.permission }),
+          ...(op.status.planMode === undefined ? {} : { planMode: op.status.planMode }),
+          ...(op.status.swarmMode === undefined ? {} : { swarmMode: op.status.swarmMode }),
+          ...(op.status.towerMode === undefined ? {} : { towerMode: op.status.towerMode }),
+        } satisfies KimiWebSessionModePatch : {};
         context.mergeSession(op.sessionId, {
           usage: op.status.usage,
           contextTokens: op.status.contextTokens,
           maxContextTokens: op.status.maxContextTokens,
-          planMode: op.status.planMode,
+          ...modePatch,
         });
+        if (Object.keys(modePatch).length > 0) {
+          context.bridge.onSessionModeChange?.(op.sessionId, modePatch, frameContext);
+        }
       }
       return;
     }
@@ -73,7 +89,7 @@ export function createKimiWebOpApplier(context: OpApplierOptions) {
     }
   }
 
-  return (op: KimiWebNormalizeOp, result: KimiWebNormalizeResult, origin: KimiWebFrameOrigin) => {
+  return (op: KimiWebNormalizeOp, result: KimiWebNormalizeResult, frameContext: KimiWebFrameContext) => {
     if (op.kind === 'message') {
       context.messages.set(op.message.id, op.message);
       context.ownMessage(result.sessionId ?? op.message.sessionID, op.message);
@@ -81,9 +97,9 @@ export function createKimiWebOpApplier(context: OpApplierOptions) {
       return;
     }
     if (op.kind === 'part') {
-      applyPart(op, result, origin);
+      applyPart(op, result, frameContext.origin);
       return;
     }
-    applySessionOp(op);
+    applySessionOp(op, frameContext);
   };
 }

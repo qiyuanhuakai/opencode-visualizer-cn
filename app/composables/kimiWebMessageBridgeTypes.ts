@@ -33,6 +33,20 @@ export type KimiWebSyncState =
 
 export type KimiWebStepOp = Extract<KimiWebNormalizeOp, { kind: 'step' }>;
 export type KimiWebSessionOp = Extract<KimiWebNormalizeOp, { kind: 'session' }>;
+export type KimiWebFrameOrigin = 'live' | 'durable-replay' | 'snapshot-rebuild';
+
+export type KimiWebFrameContext = {
+  readonly epoch?: string;
+  readonly sequence?: number;
+  readonly origin: KimiWebFrameOrigin;
+};
+
+export type KimiWebSessionModePatch = {
+  readonly permission?: string;
+  readonly planMode?: boolean;
+  readonly swarmMode?: boolean;
+  readonly towerMode?: boolean;
+};
 
 export type KimiWebBridgeSessionState = {
   readonly sessionId: string;
@@ -40,7 +54,10 @@ export type KimiWebBridgeSessionState = {
   readonly usage?: KimiWebUsageReport;
   readonly contextTokens?: number;
   readonly maxContextTokens?: number;
+  readonly permission?: string;
   readonly planMode?: boolean;
+  readonly swarmMode?: boolean;
+  readonly towerMode?: boolean;
   readonly busy?: boolean;
   readonly mainTurnActive?: boolean;
   readonly pendingInteraction?: string;
@@ -65,6 +82,11 @@ export type KimiWebMessageBridgeOptions = {
   };
   readonly applySnapshot: (snapshot: KimiWebSnapshot) => void | Promise<void>;
   readonly onSessionEvent?: (event: KimiWebSessionOp) => void;
+  readonly onSessionModeChange?: (
+    sessionId: string,
+    patch: KimiWebSessionModePatch,
+    context: KimiWebFrameContext,
+  ) => void;
   readonly onToolPart?: (part: MessagePart) => void;
   readonly onLiveReasoning?: (info: MessageInfo, part: MessagePart) => void;
   readonly onLiveSubagent?: (info: MessageInfo, part: MessagePart) => void;

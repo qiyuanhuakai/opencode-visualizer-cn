@@ -10,9 +10,10 @@ import {
   snapshotBoundaryFrames,
   tailEntries,
 } from './kimiWebMessageReconcile';
-import { createKimiWebOpApplier, type KimiWebFrameOrigin } from './kimiWebMessageOps';
+import { createKimiWebOpApplier } from './kimiWebMessageOps';
 import type {
   KimiWebBridgeSessionState,
+  KimiWebFrameOrigin,
   KimiWebMessageBridgeOptions,
   KimiWebSessionPatch,
   KimiWebSyncState,
@@ -104,7 +105,8 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
   function normalize(frame: KimiWebWsFrame, origin: KimiWebFrameOrigin) {
     const sessionId = frame.session_id ?? '__global__';
     const result = normalizerFor(sessionId).ingest(frame);
-    for (const op of result.ops) applyOp(op, result, origin);
+    const frameContext = { epoch: frame.epoch, sequence: frame.seq, origin };
+    for (const op of result.ops) applyOp(op, result, frameContext);
   }
 
   function nextRecoveryGeneration(sessionId: string) {

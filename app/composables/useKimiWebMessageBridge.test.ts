@@ -167,6 +167,7 @@ function createHarness(options: {
   const onLiveSubagent = vi.fn();
   const onReconcilePart = vi.fn();
   const onSyncStateChange = vi.fn();
+  const onSessionModeChange = vi.fn();
   const bridge = useKimiWebMessageBridge({
     client: source,
     restClient: {
@@ -180,11 +181,12 @@ function createHarness(options: {
     onLiveSubagent,
     onReconcilePart,
     onSyncStateChange,
+    onSessionModeChange,
     maxBufferedFrames: options.maxBufferedFrames,
   });
   return {
     source, bridge, messages, parts, loadHistory, removeMessage, applySnapshot,
-    onToolPart, onLiveReasoning, onLiveSubagent, onReconcilePart, onSyncStateChange,
+    onToolPart, onLiveReasoning, onLiveSubagent, onReconcilePart, onSyncStateChange, onSessionModeChange,
   };
 }
 
@@ -231,6 +233,26 @@ function delta(seq: number, text: string, offset = 0, epoch = EPOCH): KimiWebWsF
       agentId: 'main',
       turnId: 0,
       delta: text,
+    },
+  };
+}
+
+function statusFrame(
+  seq: number,
+  status: Readonly<Record<string, unknown>>,
+  agentId = 'main',
+  volatile = true,
+): KimiWebWsFrame {
+  const base = derivedFrame('agent.status.updated');
+  return {
+    ...base,
+    seq,
+    volatile,
+    payload: {
+      type: 'agent.status.updated',
+      ...status,
+      agentId,
+      sessionId: SESSION_ID,
     },
   };
 }
@@ -300,6 +322,87 @@ describe('useKimiWebMessageBridge', () => {
       step: { phase: 'completed', step: 1 },
       usage: { total: { output: 32 } },
     });
+  });
+
+  it('publishes permission plan swarm and tower from main-agent status', async () => {
+    const { source, bridge, onSessionModeChange } = createHarness();
+    await enterLive(source, bridge, 75);
+
+    source.emitFrame(statusFrame(76, {
+      permission: 'manual',
+      planMode: true,
+      swarmMode: false,
+      towerMode: true,
+    }));
+
+    const patch = { permission: 'manual', planMode: true, swarmMode: false, towerMode: true };
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject(patch);
+    expect(onSessionModeChange).toHaveBeenCalledWith(
+      SESSION_ID,
+      patch,
+      { epoch: EPOCH, sequence: 76, origin: 'live' },
+    );
+  });
+
+  it('preserves known modes when a later status omits them', async () => {
+    const { source, bridge, onSessionModeChange } = createHarness();
+    await enterLive(source, bridge, 75);
+    const modes = { permission: 'auto', planMode: true, swarmMode: true, towerMode: false };
+    source.emitFrame(statusFrame(76, modes));
+
+    source.emitFrame(statusFrame(77, { contextTokens: 42, usage: { total: { output: 1 } } }));
+
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject(modes);
+    expect(onSessionModeChange).toHaveBeenCalledOnce();
+  });
+
+  it('preserves explicit false', async () => {
+    const { source, bridge, onSessionModeChange } = createHarness();
+    await enterLive(source, bridge, 75);
+    source.emitFrame(statusFrame(76, { planMode: true, swarmMode: true, towerMode: true }));
+
+    source.emitFrame(statusFrame(77, { planMode: false, swarmMode: false, towerMode: false }));
+
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject({ planMode: false, swarmMode: false, towerMode: false });
+    expect(onSessionModeChange).toHaveBeenLastCalledWith(
+      SESSION_ID,
+      { planMode: false, swarmMode: false, towerMode: false },
+      { epoch: EPOCH, sequence: 77, origin: 'live' },
+    );
+  });
+
+  it('does not apply subagent modes to the session composer', async () => {
+    const { source, bridge, onSessionModeChange } = createHarness();
+    await enterLive(source, bridge, 75);
+    const mainModes = { permission: 'manual', planMode: false, swarmMode: false, towerMode: false };
+    source.emitFrame(statusFrame(76, mainModes));
+    onSessionModeChange.mockClear();
+
+    source.emitFrame(statusFrame(77, {
+      permission: 'yolo',
+      planMode: true,
+      swarmMode: true,
+      towerMode: true,
+    }, 'agent-0'));
+
+    expect(bridge.sessionState(SESSION_ID)).toMatchObject(mainModes);
+    expect(onSessionModeChange).not.toHaveBeenCalled();
+  });
+
+  it('publishes event ordering context without duplicating rejected replay frames', async () => {
+    const { source, bridge, onSessionModeChange } = createHarness();
+    await enterLive(source, bridge, 75);
+    const update = statusFrame(76, { permission: 'manual', planMode: true }, 'main', false);
+
+    source.emitFrame(update);
+    source.emitFrame(update);
+
+    expect(onSessionModeChange).toHaveBeenCalledOnce();
+    expect(onSessionModeChange).toHaveBeenCalledWith(
+      SESSION_ID,
+      { permission: 'manual', planMode: true },
+      { epoch: EPOCH, sequence: 76, origin: 'live' },
+    );
   });
 
   it('buffers during snapshot rebuild, suppresses callbacks, then resumes live', async () => {
