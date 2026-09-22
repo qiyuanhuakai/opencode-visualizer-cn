@@ -127,6 +127,7 @@ export function useBackendSessionReload(params: {
       });
     }
     loadedMessageCacheContext = nextCacheContext;
+    if (!newId) params.msg.reset();
 
     if (newId) {
       const sessionId = newId;
