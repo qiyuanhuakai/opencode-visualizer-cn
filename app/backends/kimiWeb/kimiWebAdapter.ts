@@ -11,11 +11,13 @@ import type { BackendProviderResponse, BackendSessionInfo } from '../../types/ba
 import type { ProjectState } from '../../types/worker-state';
 import {
   createKimiWebClient,
+  KimiWebTransportError,
   type KimiWebClient,
   type KimiWebModel,
   type KimiWebSession,
 } from '../../utils/kimiWeb';
 import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../../utils/kimiWebWs';
+import type { ProviderConfigState } from '../../utils/providerConfig';
 
 export const KIMI_WEB_CAPABILITIES: BackendCapabilities = {
   projects: true,
@@ -209,6 +211,7 @@ export class KimiWebAdapter implements BackendAdapter {
       });
     this.listFiles = this.listFiles.bind(this);
     this.getVcsInfo = this.getVcsInfo.bind(this);
+    this.getGlobalConfig = this.getGlobalConfig.bind(this);
   }
 
   initialize() {
@@ -266,6 +269,21 @@ export class KimiWebAdapter implements BackendAdapter {
   async listProviders() {
     const page = await this.restClient.listModels();
     return modelResponse(page.items);
+  }
+
+  async getGlobalConfig(): Promise<ProviderConfigState> {
+    try {
+      const page = await this.restClient.listModels();
+      return {
+        enabled_providers: [...new Set(page.items.map((model) => model.provider))],
+        disabled_providers: [],
+      };
+    } catch (error) {
+      if (error instanceof KimiWebTransportError && error.kind === 'network') {
+        return { enabled_providers: [], disabled_providers: [] };
+      }
+      throw error;
+    }
   }
 
   private async sessionIdForDirectory(directory: string, options?: BackendRequestOptions) {
