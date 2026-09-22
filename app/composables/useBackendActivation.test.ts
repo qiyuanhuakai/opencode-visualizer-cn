@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref, type Ref } from 'vue';
 import { useBackendActivation } from './useBackendActivation';
 import type { BackendAdapter, BackendKind } from '../backends/types';
 import { createKimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
@@ -76,6 +76,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
   const connectedProviderIds = ref<string[]>(['old-provider']);
   const modelOptions = ref<unknown[]>(['old-model']);
   const selectedModel = ref('old-model');
+  const agents = ref<unknown[]>([]);
+  const agentOptions = ref<unknown[]>([]);
+  const commands = ref<unknown[]>([]);
+  const thinkingOptions = ref<Array<string | undefined>>([]);
+  const providerDefaults = ref<unknown>({});
+  const modelMetaByPath = ref<unknown>(new Map());
   const serverState = {
     bootstrapped: ref(true),
     projects: { stale: {} as unknown },
@@ -114,6 +120,12 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     connectedProviderIds,
     modelOptions,
     selectedModel,
+    agents,
+    agentOptions,
+    commands,
+    thinkingOptions,
+    providerDefaults,
+    modelMetaByPath,
     serverState,
     t: (key: string) => key,
     toErrorMessage: (error: unknown) => String(error),
@@ -300,6 +312,8 @@ function createKimiWebActivationHarness(
   const commands = ref<Array<{ id: string; name: string }>>([]);
   const thinkingOptions = ref<Array<string | undefined>>([]);
   const providerDefaults = ref<Record<string, string>>({});
+  const agents = ref<unknown[]>([]);
+  const modelMetaByPath = ref<unknown>(new Map());
 
   const activation = useBackendActivation({
     credentials,
@@ -319,6 +333,12 @@ function createKimiWebActivationHarness(
     connectedProviderIds,
     modelOptions,
     selectedModel,
+    agents,
+    agentOptions,
+    commands,
+    thinkingOptions,
+    providerDefaults,
+    modelMetaByPath,
     serverState,
     t: (key: string) => key,
     toErrorMessage: (error: unknown) => String(error),
@@ -1042,12 +1062,12 @@ describe('kimi-web global provider config contract (R9/S3b)', () => {
 // (App.vue:2127) is persisted user preference and is deliberately NOT part of
 // the reset contract.
 type CrossBackendSharedState = {
-  agents: ReturnType<typeof ref<unknown[]>>;
-  agentOptions: ReturnType<typeof ref<unknown[]>>;
-  commands: ReturnType<typeof ref<unknown[]>>;
-  thinkingOptions: ReturnType<typeof ref<Array<string | undefined>>>;
-  providerDefaults: ReturnType<typeof ref<unknown>>;
-  modelMetaByPath: ReturnType<typeof ref<unknown>>;
+  agents: Ref<unknown[]>;
+  agentOptions: Ref<unknown[]>;
+  commands: Ref<unknown[]>;
+  thinkingOptions: Ref<Array<string | undefined>>;
+  providerDefaults: Ref<unknown>;
+  modelMetaByPath: Ref<unknown>;
 };
 
 type CrossBackendHarness = CrossBackendSharedState & {

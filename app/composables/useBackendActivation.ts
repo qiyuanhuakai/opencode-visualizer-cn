@@ -66,6 +66,12 @@ export type UseBackendActivationOptions = {
   connectedProviderIds: Ref<string[]>;
   modelOptions: Ref<unknown[]>;
   selectedModel: Ref<string>;
+  agents: Ref<unknown[]>;
+  agentOptions: Ref<unknown[]>;
+  commands: Ref<unknown[]>;
+  thinkingOptions: Ref<Array<string | undefined>>;
+  providerDefaults: Ref<unknown>;
+  modelMetaByPath: Ref<unknown>;
   serverState: ServerStateLike;
   t: (key: string) => string;
   toErrorMessage: (error: unknown) => string;
@@ -135,7 +141,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     options.reconnectingMessage.value = '';
   }
 
-  function resetOpenCodeSelectionState() {
+  function resetCrossBackendState() {
     options.serverState.bootstrapped.value = false;
     Object.keys(options.serverState.projects).forEach((key) => {
       delete options.serverState.projects[key];
@@ -148,9 +154,16 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     options.connectedProviderIds.value = [];
     options.modelOptions.value = [];
     options.selectedModel.value = '';
+    options.agents.value = [];
+    options.agentOptions.value = [];
+    options.commands.value = [];
+    options.thinkingOptions.value = [];
+    options.providerDefaults.value = {};
+    options.modelMetaByPath.value = new Map();
   }
 
   async function activateCodex(generation: number) {
+    resetCrossBackendState();
     options.ge.disconnect();
     options.disconnectAcpBackend();
     options.disconnectKimiWebBackend();
@@ -219,12 +232,12 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   }
 
   async function activateOpenCode(generation: number) {
+    resetCrossBackendState();
     options.disconnectAcpBackend();
     options.disconnectCodexBackend();
     options.disconnectKimiWebBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
-    resetOpenCodeSelectionState();
     resetSharedUiState();
 
     try {
@@ -268,6 +281,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   }
 
   async function activateAcp(generation: number) {
+    resetCrossBackendState();
     try {
       options.ge.disconnect();
       options.disconnectCodexBackend();
@@ -279,7 +293,6 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
         agentId: options.credentials.acpAgentId.value,
       });
       options.setActiveBackendKind('acp');
-      resetOpenCodeSelectionState();
       resetSharedUiState();
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
@@ -320,6 +333,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   }
 
   async function activateKimiWeb(generation: number) {
+    resetCrossBackendState();
     const requestToken = requestFence.start();
     const isCurrent = () =>
       ownsInitialization(generation) && requestFence.isCurrent(requestToken);
@@ -333,7 +347,6 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       const bridgeToken = options.credentials.kimiWebBridgeToken.value;
       options.configureKimiWebBackend?.({ bridgeUrl, bridgeToken });
       options.setActiveBackendKind('kimi-web');
-      resetOpenCodeSelectionState();
       resetSharedUiState();
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
