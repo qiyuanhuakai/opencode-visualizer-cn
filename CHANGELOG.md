@@ -19,6 +19,22 @@
 - [x] 所有入口经运行时能力探测后方可暴露（`/api/v1/meta.capabilities` 加 `/api/v1/auth.models_ready`，fail-closed）；`kimi web` 进程托管采用三态端口契约（空闲且凭据可读才 spawn、可用实例 adopt、端口被占但不可用则报错且不 spawn）。
 - [x] 实测适配状态、协议限制与回放边界契约记录于 `docs/kimi.md`，集成条目列入 README 中英功能表。
 
+### Kimi Web 真实界面缺陷修复
+
+- [x] 修复 kimi web 后端五类真实界面缺陷：文件树为空（适配器 `listFiles` 未实现且回退触发 PTY 陷阱）、输入栏 agent 与模型选择器不加载（`App.vue` 以未绑定方式取出适配器方法，`listProviders` 漏绑致内部 `this.restClient` 解引用抛错）、提供商与模型为空（激活后未加载）、状态监控 MCP/Skill/Plugin 恒显不支持且版本行显示 bridge 版本而非 kimi `server_version`、切换后端时其他后端配置残留。
+- [x] 跨后端残留修复覆盖完整四向切换矩阵：新增 `resetCrossBackendState()` 清理全部 16 个选择与 composer 字段，并在 opencode/codex/acp/kimi-web 四个激活函数顶部同步调用；持久化用户偏好 `hiddenModels` 与 Codex 合法把选择重指向自有 thread 的行为不纳入清理契约。
+- [x] 文件树改用 kimi 会话级 `POST /sessions/{id}/fs:list` 与 `fs:git_status`（cwd 相对路径，条目判别字段为 `kind` 而非 `type`），并为 kimi-web 采用恒定 filesystem 策略使 PTY 脚本零调用，codex/opencode/acp 行为不变。
+- [x] 提供商与模型加载改在 Ready 之后 detached 并行拉取，不再阻塞界面进入 Ready；适配器补齐未绑定方法的构造器绑定与回归测试，与 codex/acp 同构。
+- [x] 状态监控改从实时 `/api/v1/meta.capabilities` 派生 MCP 等条目（探测失败一律 unknown，fail-closed），版本行取 `meta.server_version`；同时修复空会话重载不清空消息 store、`kimiWebBridgeToken` 变更不失效消息缓存两处缺陷。
+
+### Kimi Web 会话模式与提供方管理
+
+- [x] 左下角 agent 切换器接入 kimi 权限模式 manual/auto/yolo；实测服务端 `permission_mode` 只接受该三值（`plan`/`default` 被 `40001` 拒绝），故 kimi 的四态界面实为 `permission_mode`（manual/auto/yolo）与 `plan_mode`（布尔）两轴的组合。写入走 `POST /sessions/{id}/profile` 的 `agent_config` 字段级更新，读回经 `agent.status.updated` 事件的 `permission` 字段。
+- [x] 思考强度右侧新增 Plan/Swarm/Tower 三个开关，复用既有 `#after-thinking` 扩展点并与 Codex 的 Fast/Goal 互斥；Tower 按服务端 `meta.experimental_flags.tower` 门控——实测未开实验时写入被 `40001` 拒绝，且组合写入原子失败会连带丢失同笔的权限模式，故门控关闭时不暴露该开关。
+- [x] 模式状态采用乐观更新：in-flight 互斥、generation 栅栏丢弃过期响应、epoch 取代过期重放帧；业务拒绝仅回滚该字段且受字段版本保护（不回滚更新的服务端事件），网络不确定时保留乐观值且不自动重放，由用户显式重试。
+- [x] 提供方管理全面接入 kimi REST 契约（列表/创建/更新/删除/刷新/目录/设默认模型），接进既有提供方管理弹窗。实测语义：`POST /providers` 仅创建（重复 id 返回 `40921`），`PUT /providers/{id}` 为更新且省略 `api_key` 保留原键、空串清除、`null` 被拒，`POST /models/{id}:set_default` 的 id 含 `/` 必须 URL 编码否则 404。
+- [x] API 键操作采用显式三态（保留/替换/移除）判别联合，避免界面缺陷静默清除用户凭据；`40921` 冲突转为可操作的「已存在，请改用更新」提示，业务错误与传输失败分别呈现，配置拉取失败仍渲染提供方列表而非空白。
+
 ### OMO App Server 适配预备文档
 
 - [x] 新增 `docs/omo.md`：OMO（senpi）codex app-server 协议兼容文档，与 `docs/codex.md` 同构，官方文档原文与上游逐字节校验一致；全部结论经两轮对本机 senpi app-server 的实连线 JSON-RPC 探针验证。
@@ -40,6 +56,7 @@
 ### 回归验证
 
 - [x] 补充命令分发、侧聊权限隔离与异常清理、审查撤销和草稿导航回归；全量测试通过 2,675 项，6 项跳过，lint、类型检查与构建通过。真实 Chromium 配合模拟 App Server 协议完成 20 项操作验证，覆盖 375/768/1280 像素布局，不消耗真实账号额度。
+- [x] 五类真实界面缺陷全部先落 RED 复现测试再修复（含完整四向切换矩阵），会话模式与提供方管理按 TDD 推进；全量测试通过 3,176 项、6 项跳过，lint 与构建通过，分支与 main 同负载对比确认无新增回归（共有失败均为 App 挂载测试并行互斥与一处既有 e2e 环境问题）。后端分支守卫登记提供方管理界面的新分支点，并实测确认守卫对未登记分支仍然失败。
 
 ## [v0.7.18 released]
 
