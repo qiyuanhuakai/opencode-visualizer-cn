@@ -779,8 +779,7 @@ const connectedProviderIdSet = computed(() => new Set(props.connectedProviderIds
 
 // Kimi Web owns its providers through the REST surface, not the shared config
 // tabs, so it gets a dedicated branch instead of the provider/model tabs.
-const KIMI_WEB_BACKEND_KIND: BackendKind = 'kimi-web';
-const isKimiWebBackend = computed(() => props.backendKind === KIMI_WEB_BACKEND_KIND);
+const isKimiWebBackend = computed(() => props.backendKind === 'kimi-web');
 const kimiWebProvidersClient = ref<KimiWebProvidersClient | null>(null);
 
 watch(
