@@ -16,7 +16,11 @@
       </header>
 
       <div class="provider-manager-body">
-        <div v-if="props.backendKind !== 'acp'" class="provider-manager-tabs" role="tablist">
+        <div
+          v-if="props.backendKind !== 'acp' && !isKimiWebBackend"
+          class="provider-manager-tabs"
+          role="tablist"
+        >
           <button
             type="button"
             class="provider-manager-tab"
@@ -54,6 +58,13 @@
               {{ $t('providerManager.acp.openTerminal') }}
             </button>
           </section>
+        </template>
+
+        <template v-else-if="isKimiWebBackend && props.open">
+          <KimiWebProviderManager
+            v-if="kimiWebProvidersClient"
+            :client="kimiWebProvidersClient"
+          />
         </template>
 
         <template v-else-if="showCustomProviderForm">
@@ -554,6 +565,12 @@ import { computed, inject, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getActiveBackendAdapter } from '../backends/registry';
+import { KimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
+import {
+  createKimiWebProvidersClient,
+  type KimiWebProvidersClient,
+} from '../composables/useKimiWebProviders';
+import KimiWebProviderManager from './kimiWeb/KimiWebProviderManager.vue';
 import type { BackendKind } from '../backends/types';
 import {
   buildProviderDisabledPatch,
@@ -759,6 +776,32 @@ const customProviderErrors = ref({
 
 const hiddenModelSet = computed(() => new Set(props.hiddenModels));
 const connectedProviderIdSet = computed(() => new Set(props.connectedProviderIds));
+
+// Kimi Web owns its providers through the REST surface, not the shared config
+// tabs, so it gets a dedicated branch instead of the provider/model tabs.
+const KIMI_WEB_BACKEND_KIND: BackendKind = 'kimi-web';
+const isKimiWebBackend = computed(() => props.backendKind === KIMI_WEB_BACKEND_KIND);
+const kimiWebProvidersClient = ref<KimiWebProvidersClient | null>(null);
+
+watch(
+  () => props.open,
+  (open) => {
+    if (!open) {
+      kimiWebProvidersClient.value = null;
+      return;
+    }
+    // Rebuilt on every open so a reconfigured bridge is always picked up.
+    const active = backend();
+    kimiWebProvidersClient.value =
+      active instanceof KimiWebAdapter
+        ? createKimiWebProvidersClient({
+            bridgeUrl: active.bridgeUrl,
+            bridgeToken: active.bridgeToken,
+          })
+        : null;
+  },
+  { immediate: true },
+);
 
 const sortedProviders = computed(() =>
   [...props.providers].sort((a, b) => {
