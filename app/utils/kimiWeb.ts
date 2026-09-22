@@ -103,6 +103,59 @@ export type KimiWebModel = {
   default_effort?: string;
 };
 
+export type KimiWebProviderType =
+  | 'kimi'
+  | 'openai'
+  | 'openai_responses'
+  | 'anthropic'
+  | 'google-genai'
+  | 'vertexai';
+
+export type KimiWebModelObjectWire = {
+  model: string;
+  name?: string;
+  max_context_size: number;
+  capabilities?: string[];
+};
+
+export type KimiWebProviderWire = {
+  id: string;
+  type: KimiWebProviderType;
+  base_url?: string;
+  default_model?: string;
+  has_api_key: boolean;
+  status: 'connected' | 'unconfigured' | (string & {});
+  models: string[];
+};
+
+export type KimiWebProviderCatalogEntryWire = {
+  id: string;
+  name?: string;
+  env_key?: string;
+  models: KimiWebModelObjectWire[];
+};
+
+export type KimiWebProviderCreateInput = {
+  id: string;
+  type: KimiWebProviderType;
+  base_url?: string;
+  api_key?: string;
+  models: KimiWebModelObjectWire[];
+};
+
+export type KimiWebProviderUpdateInput = {
+  type: KimiWebProviderType;
+  base_url?: string;
+  api_key?: string;
+  models: KimiWebModelObjectWire[];
+};
+
+export type KimiWebProviderRefreshResult = {
+  changed: string[];
+  unchanged: string[];
+  failed: string[];
+};
+
 export type KimiWebAgentConfig = {
   model: string;
   system_prompt?: string;
@@ -546,6 +599,9 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
   const sessionPath = (sessionId: string) =>
     `/api/v1/sessions/${encodeURIComponent(sessionId)}`;
 
+  const providerPath = (providerId: string) =>
+    `/api/v1/providers/${encodeURIComponent(providerId)}`;
+
   const sessionFsAction = <T>(
     sessionId: string,
     action: 'list' | 'git_status',
@@ -564,6 +620,54 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
     getAuth: () => requestJson<KimiWebAuth>({ method: 'GET', path: '/api/v1/auth' }),
     listModels: () =>
       requestJson<KimiWebPage<KimiWebModel>>({ method: 'GET', path: '/api/v1/models' }),
+
+    listKimiWebProviders: () =>
+      requestJson<KimiWebPage<KimiWebProviderWire>>({
+        method: 'GET',
+        path: '/api/v1/providers',
+      }),
+    createKimiWebProvider: (input: KimiWebProviderCreateInput) =>
+      requestJson<KimiWebProviderWire>({
+        method: 'POST',
+        path: '/api/v1/providers',
+        body: input,
+      }),
+    updateKimiWebProvider: (providerId: string, input: KimiWebProviderUpdateInput) =>
+      requestJson<KimiWebProviderWire>({
+        method: 'PUT',
+        path: providerPath(providerId),
+        body: input,
+      }),
+    deleteKimiWebProvider: (providerId: string) =>
+      requestJson<void>({ method: 'DELETE', path: providerPath(providerId) }),
+    refreshKimiWebProvider: (providerId: string) =>
+      requestJson<KimiWebProviderRefreshResult>({
+        method: 'POST',
+        path: `${providerPath(providerId)}:refresh`,
+      }),
+    refreshAllKimiWebProviders: () =>
+      requestJson<KimiWebProviderRefreshResult>({
+        method: 'POST',
+        path: '/api/v1/providers:refresh',
+      }),
+    listKimiWebProviderCatalog: () =>
+      requestJson<KimiWebPage<KimiWebProviderCatalogEntryWire>>({
+        method: 'GET',
+        path: '/api/v1/catalog/providers',
+      }),
+    getKimiWebProviderCatalogEntry: (providerId: string) =>
+      requestJson<KimiWebProviderCatalogEntryWire>({
+        method: 'GET',
+        path: `/api/v1/catalog/providers/${encodeURIComponent(providerId)}`,
+      }),
+    importKimiWebProviderCatalog: () =>
+      requestJson<void>({ method: 'POST', path: '/api/v1/providers:import_catalog' }),
+    setKimiWebDefaultModel: (modelId: string) =>
+      requestJson<void>({
+        method: 'POST',
+        path: `/api/v1/models/${encodeURIComponent(modelId)}:set_default`,
+        body: {},
+      }),
 
     createSession: (input: KimiWebCreateSessionInput) =>
       requestJson<KimiWebSession>({ method: 'POST', path: '/api/v1/sessions', body: input }),

@@ -493,4 +493,160 @@ describe('kimiWeb REST client', () => {
       );
     });
   });
+
+  describe('provider management', () => {
+    const model = {
+      model: 'gpt-4.1',
+      name: 'GPT-4.1',
+      max_context_size: 128_000,
+      capabilities: ['tool_use'],
+    };
+
+    it('lists providers from the measured wire endpoint', async () => {
+      const items = [
+        {
+          id: 'custom/openai',
+          type: 'openai',
+          has_api_key: false,
+          status: 'unconfigured',
+          models: [],
+        },
+      ];
+      fetchMock.mockResolvedValue(jsonResponse(envelope({ items })));
+
+      expect(client.listKimiWebProviders).toBeTypeOf('function');
+      await expect(client.listKimiWebProviders()).resolves.toEqual({ items });
+      expect(lastCall(fetchMock).url).toBe(`${BASE}/api/v1/providers`);
+      expect(lastCall(fetchMock).init.method).toBe('GET');
+    });
+
+    it('creates a provider with snake_case model objects', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({ id: 'custom-openai' }), 201));
+
+      expect(client.createKimiWebProvider).toBeTypeOf('function');
+      await client.createKimiWebProvider({
+        id: 'custom-openai',
+        type: 'openai',
+        base_url: 'https://api.example.com/v1',
+        api_key: 'secret',
+        models: [model],
+      });
+
+      expect(lastCall(fetchMock).init.body).toBe(
+        JSON.stringify({
+          id: 'custom-openai',
+          type: 'openai',
+          base_url: 'https://api.example.com/v1',
+          api_key: 'secret',
+          models: [model],
+        }),
+      );
+    });
+
+    it('updates without sending a key and preserves the existing one', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({ id: 'custom/openai' })));
+
+      expect(client.updateKimiWebProvider).toBeTypeOf('function');
+      await client.updateKimiWebProvider('custom/openai', {
+        type: 'openai',
+        base_url: 'https://api.example.com/v2',
+        models: [model],
+      });
+
+      const { url, init } = lastCall(fetchMock);
+      expect(url).toBe(`${BASE}/api/v1/providers/custom%2Fopenai`);
+      expect(JSON.parse(String(init.body))).toEqual({
+        type: 'openai',
+        base_url: 'https://api.example.com/v2',
+        models: [model],
+      });
+      expect(JSON.parse(String(init.body))).not.toHaveProperty('api_key');
+    });
+
+    it('clears a key with an empty string', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({ id: 'custom-openai' })));
+
+      expect(client.updateKimiWebProvider).toBeTypeOf('function');
+      await client.updateKimiWebProvider('custom-openai', {
+        type: 'openai',
+        api_key: '',
+        models: [model],
+      });
+
+      expect(JSON.parse(String(lastCall(fetchMock).init.body))).toEqual({
+        type: 'openai',
+        api_key: '',
+        models: [model],
+      });
+    });
+
+    it('deletes and refreshes through the action routes', async () => {
+      fetchMock
+        .mockResolvedValueOnce(emptyResponse())
+        .mockResolvedValueOnce(jsonResponse(envelope({ changed: [], unchanged: [], failed: [] })))
+        .mockResolvedValueOnce(jsonResponse(envelope({})))
+        .mockResolvedValueOnce(emptyResponse(200));
+
+      expect(client.deleteKimiWebProvider).toBeTypeOf('function');
+      expect(client.refreshKimiWebProvider).toBeTypeOf('function');
+      expect(client.refreshAllKimiWebProviders).toBeTypeOf('function');
+      expect(client.importKimiWebProviderCatalog).toBeTypeOf('function');
+      await client.deleteKimiWebProvider('custom/openai');
+      await client.refreshKimiWebProvider('custom/openai');
+      await client.refreshAllKimiWebProviders();
+      await client.importKimiWebProviderCatalog();
+
+      expect(fetchMock.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+        [`${BASE}/api/v1/providers/custom%2Fopenai`, 'DELETE'],
+        [`${BASE}/api/v1/providers/custom%2Fopenai:refresh`, 'POST'],
+        [`${BASE}/api/v1/providers:refresh`, 'POST'],
+        [`${BASE}/api/v1/providers:import_catalog`, 'POST'],
+      ]);
+    });
+
+    it('lists provider catalog entries and fetches encoded ids', async () => {
+      const entry = { id: 'custom/openai', name: 'Custom OpenAI', models: [model] };
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(envelope({ items: [entry] })))
+        .mockResolvedValueOnce(jsonResponse(envelope(entry)));
+
+      expect(client.listKimiWebProviderCatalog).toBeTypeOf('function');
+      expect(client.getKimiWebProviderCatalogEntry).toBeTypeOf('function');
+      await expect(client.listKimiWebProviderCatalog()).resolves.toEqual({ items: [entry] });
+      await expect(client.getKimiWebProviderCatalogEntry('custom/openai')).resolves.toEqual(entry);
+
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `${BASE}/api/v1/catalog/providers`,
+        `${BASE}/api/v1/catalog/providers/custom%2Fopenai`,
+      ]);
+    });
+
+    it('sets the global default model through an encoded id', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({})));
+
+      expect(client.setKimiWebDefaultModel).toBeTypeOf('function');
+      await client.setKimiWebDefaultModel('custom-openai/gpt-4.1');
+
+      const { url, init } = lastCall(fetchMock);
+      expect(url).toBe(`${BASE}/api/v1/models/custom-openai%2Fgpt-4.1:set_default`);
+      expect(url).not.toContain('/models/custom-openai/gpt-4.1:set_default');
+      expect(init.body).toBe(JSON.stringify({}));
+    });
+
+    it('surfaces business errors as KimiWebError and transport failures as KimiWebTransportError', async () => {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(envelope(null, 40001, 'models are required')))
+        .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+      expect(client.listKimiWebProviders).toBeTypeOf('function');
+      await expect(client.listKimiWebProviders()).rejects.toMatchObject({
+        name: 'KimiWebError',
+        code: 40001,
+      });
+      await expect(client.listKimiWebProviders()).rejects.toMatchObject({
+        name: 'KimiWebTransportError',
+        kind: 'network',
+      });
+    });
+  });
 });
