@@ -95,3 +95,58 @@ describe('useMessageCacheAuthInvalidation', () => {
     expect(fixture.invalidateMessageCacheContext).not.toHaveBeenCalled();
   });
 });
+
+// R8/S5c: kimiWebBridgeToken is missing from the invalidation watcher, so a kimi-web
+// session loaded under token A survives in the message cache after the token changes.
+describe('kimi-web bridge token invalidates the message cache (R8/S5c)', () => {
+  function createKimiWebFixture() {
+    const username = ref('user-a');
+    const codexBridgeToken = ref('codex-a');
+    const acpBridgeToken = ref('acp-a');
+    const kimiWebBridgeToken = ref('kimi-a');
+    const messageCacheAuthGeneration = ref(4);
+    const sessionReloadRequestId = ref(8);
+    const clearSessionCache = vi.fn();
+    const invalidateMessageCacheContext = vi.fn();
+    // Bound to a local first so RED stays a runtime assertion failure rather than a
+    // type error until kimiWebBridgeToken is added to the options type in Wave 2.
+    const invalidationOptions = {
+      authHeader: computed(() => (username.value ? `Basic ${username.value}` : undefined)),
+      codexBridgeToken,
+      acpBridgeToken,
+      kimiWebBridgeToken,
+      messageCacheAuthGeneration,
+      sessionReloadRequestId,
+      clearSessionCache,
+      invalidateMessageCacheContext,
+    };
+    const dispose = useMessageCacheAuthInvalidation(invalidationOptions);
+
+    return {
+      username,
+      codexBridgeToken,
+      acpBridgeToken,
+      kimiWebBridgeToken,
+      messageCacheAuthGeneration,
+      sessionReloadRequestId,
+      clearSessionCache,
+      invalidateMessageCacheContext,
+      dispose,
+    };
+  }
+
+  it('Given a warm message cache, When the Kimi Web bridge token changes, Then all invalidation effects run synchronously', () => {
+    const fixture = createKimiWebFixture();
+
+    fixture.kimiWebBridgeToken.value = 'kimi-b';
+
+    expect(
+      fixture.messageCacheAuthGeneration.value,
+      'changing the Kimi Web bridge token must bump the message cache auth generation (R8/S5c)',
+    ).toBe(5);
+    expect(fixture.sessionReloadRequestId.value).toBe(9);
+    expect(fixture.clearSessionCache).toHaveBeenCalledOnce();
+    expect(fixture.invalidateMessageCacheContext).toHaveBeenCalledOnce();
+    fixture.dispose();
+  });
+});

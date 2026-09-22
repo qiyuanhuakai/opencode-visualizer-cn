@@ -5,6 +5,7 @@ import { ref } from 'vue';
 import type { KimiWebMessage } from '../utils/kimiWeb';
 import { KimiWebError } from '../utils/kimiWeb';
 import { createSessionReloadFixture } from './useBackendSessionReload.test-helpers';
+import { useMessages } from './useMessages';
 
 const KIMI_FIXTURES_DIR = [
   join(process.cwd(), 'app', 'backends', 'kimiWeb', 'fixtures'),
@@ -356,5 +357,53 @@ describe('useBackendSessionReload kimi-web history', () => {
       KimiWebError,
     );
     expect(mocks.msg.loadHistory).not.toHaveBeenCalled();
+  });
+});
+
+// R7/S5b: an empty-id reload is never reached by the `if (newId)` reset, so stale messages survive.
+describe('empty session reload clears stale messages (R7/S5b)', () => {
+  it('clears the previous backend messages when the reload targets an empty session id', async () => {
+    const store = useMessages();
+    store.reset();
+    store.loadHistory([
+      {
+        info: { id: 'stale-prev-backend-message', sessionID: 'codex-session', role: 'user' },
+      },
+    ]);
+    expect(store.messages.value.size).toBe(1);
+    expect(store.get('stale-prev-backend-message')).toBeDefined();
+
+    const { reload } = createSessionReloadFixture({
+      activeBackendKind: ref<'codex'>('codex'),
+      msg: store,
+    });
+
+    await reload.reloadSelectedSessionState('');
+
+    expect(
+      store.get('stale-prev-backend-message'),
+      'reloading an empty session id must clear the previous backend messages (R7/S5b)',
+    ).toBeUndefined();
+    expect(store.messages.value.size).toBe(0);
+  });
+
+  it('characterization: a Codex session switch still resets before loading history', async () => {
+    const selectThread = vi.fn().mockResolvedValue(undefined);
+    const { reload, mocks } = createSessionReloadFixture({
+      activeBackendKind: ref('codex'),
+      codexApi: {
+        activeThreadId: ref('other-thread'),
+        selectThread,
+      },
+      codexHistory: ref([{ id: 'history-1' }]),
+    });
+
+    await reload.reloadSelectedSessionState('thread-1', 'thread-old');
+
+    expect(mocks.msg.reset).toHaveBeenCalledTimes(1);
+    expect(mocks.msg.loadHistory).toHaveBeenCalledWith([{ id: 'history-1' }]);
+    expect(mocks.msg.reset.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.msg.loadHistory.mock.invocationCallOrder[0]!,
+    );
   });
 });

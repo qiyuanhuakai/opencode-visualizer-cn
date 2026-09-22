@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ref } from 'vue';
 import { useBackendActivation } from './useBackendActivation';
-import type { BackendKind } from '../backends/types';
+import type { BackendAdapter, BackendKind } from '../backends/types';
+import { createKimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
+import { createKimiWebClient } from '../utils/kimiWeb';
 
 type HarnessOverrides = {
   codexConnect?: () => Promise<void>;
@@ -205,6 +207,220 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
     configureAcpBackend,
     configureKimiWebBackend,
     disconnectKimiWebBackend,
+    activation,
+  };
+}
+
+// R3/S2, R6/S5a, R9/S3b: additive harness for the new failing describes.
+function createKimiWebActivationHarness(
+  overrides: {
+    precheckKimiWebConnection?: () => Promise<void>;
+    bootstrapKimiWebWorkspace?: (isCurrent: () => boolean) => Promise<void>;
+  } = {},
+) {
+  const calls: string[] = [];
+  const fetchProviderArgs: Array<boolean | undefined> = [];
+
+  const restFetcher = vi.fn(async (_input: unknown) => {
+    const url = String(_input);
+    const payload = url.includes('/api/v1/models')
+      ? {
+          code: 0,
+          msg: 'ok',
+          request_id: 'test',
+          data: {
+            items: [
+              { provider: 'kimi', model: 'kimi-k2', display_name: 'Kimi K2' },
+              { provider: 'kimi', model: 'kimi-k2-thinking', display_name: 'Kimi K2 Thinking' },
+            ],
+          },
+        }
+      : { code: 0, msg: 'ok', request_id: 'test', data: {} };
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  const restClient = createKimiWebClient({
+    baseUrl: 'http://localhost:23004/kimi-web',
+    getToken: () => 'kimi-bridge-token',
+    fetcher: restFetcher as unknown as typeof fetch,
+  });
+  const adapter = createKimiWebAdapter({
+    bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+    client: restClient,
+  });
+  const adapterContract: BackendAdapter = adapter;
+
+  const credentials = {
+    backendKind: ref<BackendKind>('kimi-web'),
+    codexBridgeUrl: ref('http://localhost:4040'),
+    acpBridgeUrl: ref('ws://localhost:23004'),
+    codexBridgeToken: ref('token'),
+    acpBridgeToken: ref('acp-token'),
+    acpAgentId: ref('oh-my-pi'),
+    kimiWebBridgeUrl: ref('ws://localhost:23004/kimi-web/ws'),
+    kimiWebBridgeToken: ref('kimi-bridge-token'),
+  };
+  const codexApi = {
+    url: ref(''),
+    bridgeToken: ref(''),
+    activeThreadId: ref(''),
+    visibleThreads: ref<Array<{ id: string }>>([]),
+    connect: vi.fn(async () => {}),
+    disconnectTransport: vi.fn(() => {}),
+    disconnect: vi.fn(() => {}),
+    selectThread: vi.fn(async () => {}),
+  };
+  const ge = {
+    connect: vi.fn(async () => {}),
+    disconnect: vi.fn(() => {}),
+  };
+  const activeBackendKind = ref<BackendKind>('opencode');
+  const uiInitState = ref<'loading' | 'ready' | 'error' | 'login'>('login');
+  const initLoadingMessage = ref('');
+  const initErrorMessage = ref('');
+  const connectionState = ref<'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error'>(
+    'connecting',
+  );
+  const reconnectingMessage = ref('');
+  const selectedProjectId = ref('');
+  const selectedSessionId = ref('');
+  const providerConfig = ref<unknown>(null);
+  const providersLoaded = ref(false);
+  const providers = ref<unknown[]>([]);
+  const connectedProviderIds = ref<string[]>([]);
+  const modelOptions = ref<unknown[]>([]);
+  const selectedModel = ref('');
+  const serverState = {
+    bootstrapped: ref(false),
+    projects: {} as Record<string, unknown>,
+  };
+  const agentOptions = ref<Array<{ id: string; label: string }>>([]);
+  const commands = ref<Array<{ id: string; name: string }>>([]);
+  const thinkingOptions = ref<Array<string | undefined>>([]);
+  const providerDefaults = ref<Record<string, string>>({});
+
+  const activation = useBackendActivation({
+    credentials,
+    codexApi,
+    ge,
+    activeBackendKind,
+    uiInitState,
+    initLoadingMessage,
+    initErrorMessage,
+    connectionState,
+    reconnectingMessage,
+    selectedProjectId,
+    selectedSessionId,
+    providerConfig,
+    providersLoaded,
+    providers,
+    connectedProviderIds,
+    modelOptions,
+    selectedModel,
+    serverState,
+    t: (key: string) => key,
+    toErrorMessage: (error: unknown) => String(error),
+    setActiveBackendKind: (kind) => {
+      calls.push(`setActiveBackendKind:${kind}`);
+    },
+    configureCodexBackend: () => {
+      calls.push('configureCodexBackend');
+    },
+    configureAcpBackend: () => {
+      calls.push('configureAcpBackend');
+    },
+    configureKimiWebBackend: () => {
+      calls.push('configureKimiWebBackend');
+    },
+    disconnectAcpBackend: () => {
+      calls.push('disconnectAcpBackend');
+    },
+    disconnectCodexBackend: () => {
+      calls.push('disconnectCodexBackend');
+    },
+    disconnectKimiWebBackend: () => {
+      calls.push('disconnectKimiWebBackend');
+    },
+    bootstrapAcpWorkspace: async () => {
+      calls.push('bootstrapAcpWorkspace');
+    },
+    bootstrapKimiWebWorkspace:
+      overrides.bootstrapKimiWebWorkspace ??
+      (async () => {
+        calls.push('bootstrapKimiWebWorkspace');
+      }),
+    fetchGlobalProviderConfig: async () => {
+      calls.push('fetchGlobalProviderConfig');
+      const getGlobalConfig = adapterContract.getGlobalConfig?.bind(adapterContract);
+      providerConfig.value = getGlobalConfig ? await getGlobalConfig() : { model: 'kimi-k2' };
+    },
+    fetchProviders: async (force?: boolean) => {
+      calls.push('fetchProviders');
+      fetchProviderArgs.push(force);
+      const data = await adapter.listProviders();
+      providerDefaults.value = data.default ?? {};
+      providers.value = data.all ?? [];
+      connectedProviderIds.value = data.connected ?? [];
+      modelOptions.value = (data.all ?? []).flatMap((provider) =>
+        Object.values(provider.models ?? {}).map((model) => ({
+          id: `${provider.id}/${model.id}`,
+          modelID: model.id,
+          label: model.name ?? model.id,
+        })),
+      );
+      thinkingOptions.value = [];
+      providersLoaded.value = true;
+    },
+    fetchAgents: async () => {
+      calls.push('fetchAgents');
+      if (activeBackendKind.value === 'kimi-web') agentOptions.value = [];
+    },
+    fetchCommands: async () => {
+      calls.push('fetchCommands');
+      if (activeBackendKind.value === 'kimi-web') commands.value = [];
+    },
+    fetchHomePath: async () => {
+      calls.push('fetchHomePath');
+    },
+    bootstrapSelections: async () => {
+      calls.push('bootstrapSelections');
+    },
+    hydrateActiveWorktreeResources: async () => {
+      calls.push('hydrateActiveWorktreeResources');
+    },
+    reloadSelectedSessionState: async () => {
+      calls.push('reloadSelectedSessionState');
+    },
+    precheckKimiWebConnection:
+      overrides.precheckKimiWebConnection ??
+      (async () => {
+        calls.push('precheckKimiWebConnection');
+      }),
+    handleOpenCodeUnauthorized: (message: string) => {
+      calls.push(`handleOpenCodeUnauthorized:${message}`);
+    },
+  });
+
+  return {
+    calls,
+    fetchProviderArgs,
+    adapterContract,
+    activeBackendKind,
+    uiInitState,
+    initErrorMessage,
+    connectionState,
+    providerConfig,
+    providersLoaded,
+    providers,
+    connectedProviderIds,
+    modelOptions,
+    selectedModel,
+    agentOptions,
+    commands,
+    thinkingOptions,
+    providerDefaults,
     activation,
   };
 }
@@ -726,4 +942,343 @@ describe('useBackendActivation', () => {
     expect(harness.initErrorMessage.value).toContain('kimi web precheck failed');
     expect(harness.activation.initializationInFlight.value).toBe(false);
   });
+});
+
+describe('kimi-web activation loads providers and global config (R3/S2)', () => {
+  it('calls fetchProviders(true) and populates providers, modelOptions, connectedProviderIds, and providerConfig', async () => {
+    const harness = createKimiWebActivationHarness();
+
+    await harness.activation.startInitialization();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      harness.fetchProviderArgs,
+      'kimi-web activation must call fetchProviders(true) (R3/S2)',
+    ).toContain(true);
+    expect(
+      harness.providers.value.length,
+      'kimi-web activation must populate providers from /api/v1/models (R3/S2)',
+    ).toBeGreaterThan(0);
+    expect(
+      harness.modelOptions.value.length,
+      'kimi-web activation must populate modelOptions from /api/v1/models (R3/S2)',
+    ).toBeGreaterThan(0);
+    expect(
+      harness.connectedProviderIds.value.length,
+      'kimi-web activation must populate connectedProviderIds from /api/v1/models (R3/S2)',
+    ).toBeGreaterThan(0);
+    expect(
+      harness.providerConfig.value,
+      'kimi-web activation must load the global provider config (R3/S2)',
+    ).not.toBeNull();
+  });
+});
+
+describe('kimi-web activation clears stale Codex/ACP composer state (R6/S5a)', () => {
+  it('empties agentOptions, commands, thinkingOptions, and providerDefaults on switch', async () => {
+    const harness = createKimiWebActivationHarness();
+    harness.agentOptions.value = [{ id: 'oh-my-pi', label: 'Oh My Pi' }];
+    harness.commands.value = [{ id: 'codex:review', name: 'review' }];
+    harness.thinkingOptions.value = ['high'];
+    harness.providerDefaults.value = { 'gpt-5': 'high' };
+
+    await harness.activation.startInitialization();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      harness.agentOptions.value,
+      'switching to kimi-web must clear the previous backend agentOptions (R6/S5a)',
+    ).toEqual([]);
+    expect(
+      harness.commands.value,
+      'switching to kimi-web must clear the previous backend commands (R6/S5a)',
+    ).toEqual([]);
+    expect(
+      harness.thinkingOptions.value,
+      'switching to kimi-web must clear the previous backend thinkingOptions (R6/S5a)',
+    ).toEqual([]);
+    expect(
+      harness.providerDefaults.value,
+      'switching to kimi-web must clear the previous backend providerDefaults (R6/S5a)',
+    ).toEqual({});
+  });
+});
+
+describe('kimi-web global provider config contract (R9/S3b)', () => {
+  function requireBackendMethod<T>(method: T | undefined, name: string): T {
+    if (!method) throw new Error(`Active backend does not support ${name}.`);
+    return method;
+  }
+
+  it('resolves the shared global provider config load instead of throwing', async () => {
+    const adapter: BackendAdapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+    });
+
+    let thrown: unknown;
+    try {
+      const getGlobalConfig = requireBackendMethod(adapter.getGlobalConfig, 'global config');
+      await getGlobalConfig();
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(
+      thrown,
+      'KimiWebAdapter must implement getGlobalConfig so App.vue fetchGlobalProviderConfig does not throw (R9/S3b)',
+    ).toBeUndefined();
+  });
+});
+
+// R6b/S5a: the cross-backend residue is BIDIRECTIONAL. The first pass only
+// pinned Codex/ACP -> kimi-web, but the shared surface is owned by App.vue and
+// is backend-scoped, so every activation must clear it:
+//   - resetOpenCodeSelectionState() (useBackendActivation.ts:138-151) clears
+//     only 10 selection fields and never touches the composer/picker surface.
+//   - activateCodex() (:153) calls no reset at all, so an OpenCode ->
+//     Codex switch leaks projects, providers, models and selection verbatim.
+// The full surface lives at App.vue:1758-1767 (providerDefaults, agents,
+// commands, modelMetaByPath, agentOptions, thinkingOptions). hiddenModels
+// (App.vue:2127) is persisted user preference and is deliberately NOT part of
+// the reset contract.
+type CrossBackendSharedState = {
+  agents: ReturnType<typeof ref<unknown[]>>;
+  agentOptions: ReturnType<typeof ref<unknown[]>>;
+  commands: ReturnType<typeof ref<unknown[]>>;
+  thinkingOptions: ReturnType<typeof ref<Array<string | undefined>>>;
+  providerDefaults: ReturnType<typeof ref<unknown>>;
+  modelMetaByPath: ReturnType<typeof ref<unknown>>;
+};
+
+type CrossBackendHarness = CrossBackendSharedState & {
+  activation: ReturnType<typeof useBackendActivation>;
+  credentials: { backendKind: ReturnType<typeof ref<BackendKind>> };
+  uiInitState: ReturnType<typeof ref<'loading' | 'ready' | 'error' | 'login'>>;
+  selectedProjectId: ReturnType<typeof ref<string>>;
+  selectedSessionId: ReturnType<typeof ref<string>>;
+  providerConfig: ReturnType<typeof ref<unknown>>;
+  providersLoaded: ReturnType<typeof ref<boolean>>;
+  providers: ReturnType<typeof ref<unknown[]>>;
+  connectedProviderIds: ReturnType<typeof ref<string[]>>;
+  modelOptions: ReturnType<typeof ref<unknown[]>>;
+  selectedModel: ReturnType<typeof ref<string>>;
+  serverState: { bootstrapped: ReturnType<typeof ref<boolean>>; projects: Record<string, unknown> };
+};
+
+function createCrossBackendHarness(target: BackendKind): CrossBackendHarness {
+  const credentials = {
+    backendKind: ref<BackendKind>(target),
+    codexBridgeUrl: ref('http://localhost:4040'),
+    acpBridgeUrl: ref('ws://localhost:23004'),
+    codexBridgeToken: ref('token'),
+    acpBridgeToken: ref('acp-token'),
+    acpAgentId: ref('oh-my-pi'),
+    kimiWebBridgeUrl: ref('ws://localhost:23004/kimi-web/ws'),
+    kimiWebBridgeToken: ref('kimi-bridge-token'),
+  };
+  const codexApi = {
+    url: ref(''),
+    bridgeToken: ref(''),
+    activeThreadId: ref('thread-1'),
+    visibleThreads: ref([{ id: 'thread-1' }]),
+    connect: vi.fn(async () => {}),
+    disconnect: vi.fn(),
+    disconnectTransport: vi.fn(),
+    selectThread: vi.fn(async () => {}),
+  };
+  const ge = {
+    connect: vi.fn(async () => {}),
+    disconnect: vi.fn(),
+  };
+  const activeBackendKind = ref<BackendKind>('opencode');
+  const uiInitState = ref<'loading' | 'ready' | 'error' | 'login'>('login');
+  const initLoadingMessage = ref('');
+  const initErrorMessage = ref('');
+  const connectionState = ref<'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error'>(
+    'connecting',
+  );
+  const reconnectingMessage = ref('');
+  const selectedProjectId = ref('');
+  const selectedSessionId = ref('');
+  const providerConfig = ref<unknown>(null);
+  const providersLoaded = ref(false);
+  const providers = ref<unknown[]>([]);
+  const connectedProviderIds = ref<string[]>([]);
+  const modelOptions = ref<unknown[]>([]);
+  const selectedModel = ref('');
+  const serverState = { bootstrapped: ref(false), projects: {} as Record<string, unknown> };
+
+  // The shared cross-backend surface App.vue owns. useBackendActivation does
+  // not accept these yet — that missing contract is exactly what R6b pins.
+  // Built as a variable so the absent option keys stay a runtime assertion
+  // failure instead of a type error in the RED state.
+  const sharedState: CrossBackendSharedState = {
+    agents: ref<unknown[]>([]),
+    agentOptions: ref<unknown[]>([]),
+    commands: ref<unknown[]>([]),
+    thinkingOptions: ref<Array<string | undefined>>([]),
+    providerDefaults: ref<unknown>({}),
+    modelMetaByPath: ref<unknown>(new Map()),
+  };
+
+  const options = {
+    credentials,
+    codexApi,
+    ge,
+    activeBackendKind,
+    uiInitState,
+    initLoadingMessage,
+    initErrorMessage,
+    connectionState,
+    reconnectingMessage,
+    selectedProjectId,
+    selectedSessionId,
+    providerConfig,
+    providersLoaded,
+    providers,
+    connectedProviderIds,
+    modelOptions,
+    selectedModel,
+    serverState,
+    t: (key: string) => key,
+    toErrorMessage: (error: unknown) => String(error),
+    setActiveBackendKind: () => {},
+    configureCodexBackend: () => {},
+    configureAcpBackend: () => {},
+    configureKimiWebBackend: () => {},
+    disconnectAcpBackend: () => {},
+    disconnectCodexBackend: () => {},
+    disconnectKimiWebBackend: () => {},
+    bootstrapAcpWorkspace: async () => {},
+    bootstrapKimiWebWorkspace: async () => {},
+    fetchGlobalProviderConfig: async () => {},
+    fetchProviders: async () => {},
+    fetchAgents: async () => {},
+    fetchCommands: async () => {},
+    fetchHomePath: async () => {},
+    bootstrapSelections: async () => {},
+    hydrateActiveWorktreeResources: async () => {},
+    reloadSelectedSessionState: async () => {},
+    precheckKimiWebConnection: async () => {},
+    handleOpenCodeUnauthorized: () => {},
+    ...sharedState,
+  };
+
+  return {
+    ...sharedState,
+    activation: useBackendActivation(options),
+    credentials,
+    uiInitState,
+    selectedProjectId,
+    selectedSessionId,
+    providerConfig,
+    providersLoaded,
+    providers,
+    connectedProviderIds,
+    modelOptions,
+    selectedModel,
+    serverState,
+  };
+}
+
+function seedCrossBackendState(harness: CrossBackendHarness) {
+  harness.serverState.projects['stale-project'] = {} as unknown;
+  harness.serverState.bootstrapped.value = true;
+  harness.selectedProjectId.value = 'stale-project';
+  harness.selectedSessionId.value = 'stale-session';
+  harness.providerConfig.value = { stale: true };
+  harness.providersLoaded.value = true;
+  harness.providers.value = [{ id: 'stale-provider' }];
+  harness.connectedProviderIds.value = ['stale-provider'];
+  harness.modelOptions.value = [{ id: 'stale-model' }];
+  harness.selectedModel.value = 'stale-model';
+  harness.agents.value = [{ id: 'stale-agent' }];
+  harness.agentOptions.value = [{ id: 'oh-my-pi', label: 'Oh My Pi' }];
+  harness.commands.value = [{ id: 'codex:review', name: 'review' }];
+  harness.thinkingOptions.value = ['high'];
+  harness.providerDefaults.value = { 'stale-model': 'high' };
+  harness.modelMetaByPath.value = new Map([['stale-model', { path: 'stale-model' }]]);
+}
+
+function expectCrossBackendStateCleared(harness: CrossBackendHarness, target: BackendKind) {
+  expect(
+    harness.agentOptions.value,
+    `switching to ${target} must clear the previous backend agentOptions (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.commands.value,
+    `switching to ${target} must clear the previous backend commands (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.thinkingOptions.value,
+    `switching to ${target} must clear the previous backend thinkingOptions (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.providerDefaults.value,
+    `switching to ${target} must clear the previous backend providerDefaults (R6b/S5a)`,
+  ).toEqual({});
+  expect(
+    harness.agents.value,
+    `switching to ${target} must clear the previous backend agents (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.modelMetaByPath.value,
+    `switching to ${target} must clear the previous backend modelMetaByPath (R6b/S5a)`,
+  ).toEqual(new Map());
+  expect(
+    harness.selectedProjectId.value,
+    `switching to ${target} must clear the previous backend selectedProjectId (R6b/S5a)`,
+  ).toBe('');
+  // Codex legitimately re-points the selection at its own thread, so the
+  // contract is "no stale value survives", not "empty".
+  expect(
+    harness.selectedSessionId.value,
+    `switching to ${target} must not keep the previous backend selectedSessionId (R6b/S5a)`,
+  ).not.toBe('stale-session');
+  expect(
+    harness.providerConfig.value,
+    `switching to ${target} must clear the previous backend providerConfig (R6b/S5a)`,
+  ).toBeNull();
+  expect(
+    harness.providersLoaded.value,
+    `switching to ${target} must clear the previous backend providersLoaded (R6b/S5a)`,
+  ).toBe(false);
+  expect(
+    harness.providers.value,
+    `switching to ${target} must clear the previous backend providers (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.connectedProviderIds.value,
+    `switching to ${target} must clear the previous backend connectedProviderIds (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.modelOptions.value,
+    `switching to ${target} must clear the previous backend modelOptions (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.selectedModel.value,
+    `switching to ${target} must clear the previous backend selectedModel (R6b/S5a)`,
+  ).toBe('');
+  expect(
+    Object.keys(harness.serverState.projects),
+    `switching to ${target} must clear the previous backend serverState.projects (R6b/S5a)`,
+  ).toEqual([]);
+  expect(
+    harness.serverState.bootstrapped.value,
+    `switching to ${target} must clear the previous backend serverState.bootstrapped (R6b/S5a)`,
+  ).toBe(false);
+}
+
+describe('every backend switch clears the shared cross-backend surface (R6b/S5a)', () => {
+  for (const target of ['codex', 'opencode', 'acp', 'kimi-web'] as BackendKind[]) {
+    it(`switching to ${target} clears the previous backend's composer and selection state`, async () => {
+      const harness = createCrossBackendHarness(target);
+      seedCrossBackendState(harness);
+
+      await harness.activation.startInitialization();
+
+      expect(harness.uiInitState.value, `switching to ${target} must reach ready`).toBe('ready');
+      expectCrossBackendStateCleared(harness, target);
+    });
+  }
 });
