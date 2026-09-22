@@ -84,6 +84,81 @@ function imageAttachment(): ComposerAttachment {
 }
 
 describe('kimi-web send module', () => {
+  it('does not post a prompt while the selected sessions mode mutation is pending', async () => {
+    // Given: the selected session has a pending mode write.
+    const readiness = vi.fn(() => false);
+    const params: BackendMessageSendParams = {
+      ...createParams(),
+      isKimiWebSessionModeReady: readiness,
+    };
+    params.attachments.value = [imageAttachment()];
+    params.messageInput.value = '';
+    const { api, uploadFile, sendPrompt } = createApi();
+
+    // When: send reaches the kimi boundary while the mode write is pending.
+    const refused = await runKimiWebSend(
+      params,
+      createPreflight({ attachments: params.attachments.value }),
+      { isCurrent: () => true },
+      api,
+    );
+
+    // Then: neither uploads nor the prompt overtake the mode mutation, and the draft is intact.
+    expect(refused).toEqual({ kind: 'stale' });
+    expect(uploadFile).not.toHaveBeenCalled();
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(params.messageInput.value).toBe('hello world');
+    expect(params.attachments.value).toEqual([imageAttachment()]);
+
+    // Given: a later send starts ready, but a mode write begins during attachment upload.
+    const upload = deferred<KimiWebUploadedFile>();
+    uploadFile.mockReturnValueOnce(upload.promise);
+    readiness.mockReturnValue(true);
+    params.messageInput.value = '';
+    const sending = runKimiWebSend(
+      params,
+      createPreflight({ attachments: params.attachments.value }),
+      { isCurrent: () => true },
+      api,
+    );
+    await vi.waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(1));
+
+    // When: readiness changes before the prompt request is posted.
+    readiness.mockReturnValue(false);
+    upload.resolve({ id: 'file-x', name: 'shot.png', media_type: 'image/png', size: 3 });
+
+    // Then: readiness is re-evaluated immediately before sendPrompt.
+    await expect(sending).resolves.toEqual({ kind: 'stale' });
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(params.messageInput.value).toBe('hello world');
+    expect(params.attachments.value).toEqual([imageAttachment()]);
+  });
+
+  it('a failed mode change does not silently send a waiting prompt', async () => {
+    // Given: a send attempt observes a pending mode mutation that will fail.
+    let modePending = true;
+    const params: BackendMessageSendParams = {
+      ...createParams(),
+      isKimiWebSessionModeReady: () => !modePending,
+    };
+    const { api, sendPrompt } = createApi();
+    const failedModeWrite = deferred<void>();
+    params.messageInput.value = '';
+
+    // When: send is refused and the mode write subsequently rejects.
+    const sending = runKimiWebSend(params, createPreflight(), { isCurrent: () => true }, api);
+    const modeFailure = failedModeWrite.promise.catch(() => {
+      modePending = false;
+    });
+    failedModeWrite.reject(new KimiWebError(40001, 'mode rejected'));
+    await modeFailure;
+
+    // Then: the refused attempt is never queued or posted after failure.
+    await expect(sending).resolves.toEqual({ kind: 'stale' });
+    expect(sendPrompt).not.toHaveBeenCalled();
+    expect(params.messageInput.value).toBe('hello world');
+  });
+
   it('builds a text part plus a formatted note for line-comment attachments without uploading', async () => {
     // Given: a prompt with an editor-selection attachment (no bytes, only a range).
     const params = createParams();

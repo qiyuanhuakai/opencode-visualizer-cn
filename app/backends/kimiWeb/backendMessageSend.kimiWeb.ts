@@ -51,6 +51,15 @@ export type KimiWebAbortResult =
 
 const DATA_URL_RE = /^data:([^;,]*)(;base64)?,(.*)$/su;
 
+function refusePendingModeSend(
+  params: BackendMessageSendParams,
+  preflight: SendPreflight,
+): KimiWebSendExecutionResult {
+  if (!params.messageInput.value) params.messageInput.value = preflight.text;
+  params.persistComposerDraftForCurrentContext();
+  return { kind: 'stale' };
+}
+
 function decodeAttachmentBlob(attachment: ComposerAttachment): Blob {
   const match = DATA_URL_RE.exec(attachment.dataUrl);
   if (!match) {
@@ -130,8 +139,14 @@ export async function runKimiWebSend(
   api: KimiWebSendApi,
 ): Promise<KimiWebSendExecutionResult> {
   if (!guard.isCurrent()) return { kind: 'stale' };
+  if (params.isKimiWebSessionModeReady?.(preflight.sessionId) === false) {
+    return refusePendingModeSend(params, preflight);
+  }
   const parts = await buildKimiWebContentParts(params, preflight, guard, api);
   if (!parts || !guard.isCurrent()) return { kind: 'stale' };
+  if (params.isKimiWebSessionModeReady?.(preflight.sessionId) === false) {
+    return refusePendingModeSend(params, preflight);
+  }
   const accepted: KimiWebPromptAccepted = await api.sendPrompt(preflight.sessionId, {
     content: parts,
   });

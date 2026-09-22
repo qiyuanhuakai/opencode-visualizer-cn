@@ -118,6 +118,7 @@ export type BackendMessageSendParams = {
    */
   readonly kimiWebApi?: KimiWebSendApi;
   readonly kimiWebAbortChannel?: KimiWebAbortChannel;
+  readonly isKimiWebSessionModeReady?: (sessionId: string) => boolean;
   readonly ensureConnectionReady: (action: string) => boolean;
   readonly translate: (key: string, params?: Record<string, unknown>) => string;
   readonly toErrorMessage: (error: unknown) => string;

@@ -130,5 +130,36 @@ describe(
       expect(text).toContain(LOADING_AGENTS_COPY);
       expect(text).not.toContain(AGENT_UNSUPPORTED_COPY);
     });
+
+    it('shows the selected kimi permission label and all three options in ready state', async () => {
+      const { root } = mountAgentPicker({
+        activeBackendKind: 'kimi-web',
+        selectedMode: 'manual',
+        agentOptions: [
+          { id: 'manual', label: 'Manual' },
+          { id: 'auto', label: 'Auto' },
+          { id: 'yolo', label: 'YOLO' },
+        ],
+        hasAgentOptions: true,
+        agentPickerState: 'ready',
+      });
+      await nextTick();
+
+      const region = agentSelectorRegion(root);
+      expect(region).not.toBeNull();
+      expect(region?.querySelector('.ui-dropdown-button')?.textContent).toContain('Manual');
+
+      const options = Array.from(
+        region?.querySelectorAll<HTMLElement>('.ui-input-candidate-item') ?? [],
+        (item) => ({
+          value: JSON.parse(item.dataset.value ?? 'null'),
+          label: item.textContent?.trim(),
+        }),
+      );
+      expect(options.map((option) => option.value)).toEqual(['manual', 'auto', 'yolo']);
+      expect(options.map((option) => option.label)).toEqual(['Manual✓', 'Auto', 'YOLO']);
+      expect(region?.textContent).not.toContain(AGENT_UNSUPPORTED_COPY);
+      expect(region?.textContent).not.toContain(LOADING_AGENTS_COPY);
+    });
   },
 );
