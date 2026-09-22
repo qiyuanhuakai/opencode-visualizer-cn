@@ -308,14 +308,12 @@ async function refresh() {
   const tokenRefresh = props.sessionId ? fetchTokenData() : Promise.resolve();
 
   if (isKimiWebBackend.value) {
-    // Kimi Web has no registered adapter yet (registry placeholder, Todo 6):
-    // the Server tab reads the bridge proxy directly, and every structured
-    // status surface is unsupported because KIMI_WEB_CAPABILITIES carries no
-    // MCP/LSP/skills/plugins bit.
-    mcpUnsupported.value = !kimiWebStatusSurfaceSupported('mcp');
-    lspUnsupported.value = !kimiWebStatusSurfaceSupported('lsp');
-    skillUnsupported.value = !kimiWebStatusSurfaceSupported('skills');
-    pluginUnsupported.value = !kimiWebStatusSurfaceSupported('plugins');
+    // Kimi Web reads its status surfaces from the live REST envelope: the
+    // version comes from the registered adapter's `getGlobalHealth()`
+    // (`meta.server_version`, D3) and MCP support follows the live
+    // `meta.capabilities.mcp` bit (D4). Fail closed until the meta lands;
+    // `refreshKimiWebStatus` re-applies the flags once it has.
+    applyKimiWebStatusSurfaceSupport();
     const currentRefresh = (async () => {
       try {
         await refreshKimiWebStatus(requestId);
@@ -496,14 +494,39 @@ async function fetchContextLimit(
 }
 
 /**
- * Kimi Web status-surface support. `KIMI_WEB_CAPABILITIES` (backends/registry.ts,
- * Todo 6) is the measured subset and carries no MCP/LSP/skills/plugins bit, so
- * every lookup is false today and the tabs show the unsupported copy. Todo 21's
- * runtime probing is the only path that may flip a bit — never claim support
- * without measured evidence.
+ * Kimi Web status-surface support (D4). Support is derived from the LIVE
+ * `meta.capabilities` where a key exists: the measured envelope carries
+ * `websocket, file_upload, fs_query, mcp, tasks, terminal`, so today only
+ * `mcp` can flip on. `lsp`, `skills` and `plugins` have no live key, so they
+ * fall through to the static `KIMI_WEB_CAPABILITIES` lookup — which carries
+ * no bit for them — and keep the fail-closed unsupported copy until a live
+ * key or a wired adapter method says otherwise. Never claim support without
+ * measured evidence.
  */
 function kimiWebStatusSurfaceSupported(surface: 'mcp' | 'lsp' | 'skills' | 'plugins'): boolean {
+  const liveCapabilities = kimiMeta.value?.capabilities;
+  if (
+    liveCapabilities &&
+    typeof liveCapabilities === 'object' &&
+    !Array.isArray(liveCapabilities) &&
+    surface in liveCapabilities
+  ) {
+    return liveCapabilities[surface] === true;
+  }
   return (KIMI_WEB_CAPABILITIES as unknown as Record<string, unknown>)[surface] === true;
+}
+
+/**
+ * Applies the D4 surface flags from whatever live meta is currently held.
+ * Runs before a kimi refresh (fail closed on stale/absent meta) and again
+ * once the fresh meta lands, so a live `mcp: true` flips the MCP tab to the
+ * supported-but-empty state and a failed meta keeps the unsupported copy.
+ */
+function applyKimiWebStatusSurfaceSupport() {
+  mcpUnsupported.value = !kimiWebStatusSurfaceSupported('mcp');
+  lspUnsupported.value = !kimiWebStatusSurfaceSupported('lsp');
+  skillUnsupported.value = !kimiWebStatusSurfaceSupported('skills');
+  pluginUnsupported.value = !kimiWebStatusSurfaceSupported('plugins');
 }
 
 function kimiWebBridgeCredentials() {
@@ -539,6 +562,25 @@ async function fetchKimiWebBridgeHealth(healthUrl: string) {
   }
 }
 
+/**
+ * D3 version source: the registered kimi-web adapter answers
+ * `getGlobalHealth()` from live `meta.server_version`, never from the bridge.
+ * Returns null when no adapter is registered or the call fails, so the caller
+ * can fall back to the bridge `/healthz` version.
+ */
+async function fetchKimiWebGlobalHealth(): Promise<{ healthy: boolean; version: string } | null> {
+  try {
+    const adapter = backend();
+    const getGlobalHealth = adapter.getGlobalHealth;
+    if (typeof getGlobalHealth !== 'function') return null;
+    const health = await getGlobalHealth.call(adapter);
+    if (!health || typeof health.version !== 'string') return null;
+    return { healthy: health.healthy !== false, version: health.version };
+  } catch {
+    return null;
+  }
+}
+
 async function refreshKimiWebStatus(requestId: number) {
   const { bridgeUrl, bridgeToken } = kimiWebBridgeCredentials();
   const healthUrl = resolveDesktopBridgeHealthUrl({
@@ -551,17 +593,27 @@ async function refreshKimiWebStatus(requestId: number) {
     kimiWebBridgeToken: bridgeToken,
   });
   const client = createKimiWebStatusClient();
-  const [health, meta, auth] = await Promise.allSettled([
+  const [adapterHealth, health, meta, auth] = await Promise.allSettled([
+    fetchKimiWebGlobalHealth(),
     fetchKimiWebBridgeHealth(healthUrl),
     client.getMeta(),
     client.getAuth(),
   ]);
   if (requestId !== refreshRequestId) return;
-  serverHealth.value = health.status === 'fulfilled' ? health.value : null;
   // A failed meta/auth keeps the previous values (stale) instead of blanking
   // the tab; only an explicit reset (backend switch / modal close) clears them.
   if (meta.status === 'fulfilled') kimiMeta.value = meta.value;
   if (auth.status === 'fulfilled') kimiAuth.value = auth.value;
+  // The adapter answers from `meta.server_version`; the bridge `/healthz`
+  // version is only the fallback for when no adapter answered.
+  serverHealth.value =
+    adapterHealth.status === 'fulfilled' && adapterHealth.value !== null
+      ? adapterHealth.value
+      : health.status === 'fulfilled'
+        ? health.value
+        : null;
+  // MCP support follows the live capabilities we just read (D4).
+  applyKimiWebStatusSurfaceSupport();
   const allFailed =
     health.status === 'rejected' && meta.status === 'rejected' && auth.status === 'rejected';
   if (allFailed) {
@@ -1049,6 +1101,25 @@ const kimiCapabilitiesText = computed(() => {
   return enabled.length > 0 ? enabled.join(', ') : t('statusMonitor.server.none');
 });
 
+/**
+ * Kimi Server rows render once the live meta/auth envelope has landed, so a
+ * rejected bridge `/healthz` no longer swallows them behind the generic
+ * "no server status information" state.
+ */
+const kimiStatusLoaded = computed(() => kimiMeta.value !== null || kimiAuth.value !== null);
+
+/**
+ * Server-tab Version value. For kimi-web the adapter's `getGlobalHealth()`
+ * already answers from `meta.server_version` (D3), so `serverHealth.version`
+ * IS the kimi version; the live meta is the last-resort source when no health
+ * call answered. Other backends keep reading `serverHealth` alone.
+ */
+const serverVersionText = computed(() => {
+  if (serverHealth.value) return serverHealth.value.version;
+  if (isKimiWebBackend.value) return kimiMeta.value?.server_version ?? '';
+  return '';
+});
+
 const kimiModelsReadyText = computed(() => {
   if (kimiAuth.value?.models_ready === true) return t('statusMonitor.server.modelsReadyYes');
   if (kimiAuth.value?.models_ready === false) return t('statusMonitor.server.modelsReadyNo');
@@ -1123,27 +1194,29 @@ const kimiModelsReadyDotClass = computed(() => {
 
         <!-- Server Tab -->
         <div v-if="activeTab === 'server'" class="status-monitor-content">
-          <div v-if="loading && !serverHealth" class="status-monitor-empty">
+          <div v-if="loading && !serverHealth && !kimiStatusLoaded" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="!serverHealth" class="status-monitor-empty">
+          <div v-else-if="!serverHealth && !kimiStatusLoaded" class="status-monitor-empty">
             {{ $t('statusMonitor.server.noData') }}
           </div>
           <div v-else class="status-monitor-list">
-            <div class="status-monitor-row">
-              <div class="status-monitor-row-main">
-                <span class="status-dot" :class="serverHealth.healthy ? 'status-dot-success' : 'status-dot-error'" />
-                <span class="status-monitor-name">{{ $t('statusMonitor.server.status') }}</span>
+            <template v-if="serverHealth">
+              <div class="status-monitor-row">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="serverHealth.healthy ? 'status-dot-success' : 'status-dot-error'" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.server.status') }}</span>
+                </div>
+                <span class="status-monitor-meta">
+                  {{ serverHealth.healthy ? $t('statusMonitor.server.healthy') : $t('statusMonitor.server.unhealthy') }}
+                </span>
               </div>
-              <span class="status-monitor-meta">
-                {{ serverHealth.healthy ? $t('statusMonitor.server.healthy') : $t('statusMonitor.server.unhealthy') }}
-              </span>
-            </div>
-            <div class="status-monitor-row">
+            </template>
+            <div v-if="serverHealth || serverVersionText" class="status-monitor-row">
               <div class="status-monitor-row-main">
                 <span class="status-monitor-name">{{ $t('statusMonitor.server.version') }}</span>
               </div>
-              <span class="status-monitor-meta">{{ serverHealth.version }}</span>
+              <span class="status-monitor-meta">{{ serverVersionText }}</span>
             </div>
             <template v-if="activeBackendKind === 'kimi-web'">
               <div class="status-monitor-row">

@@ -8,13 +8,16 @@ import { createI18n } from 'vue-i18n';
  * Covers the two surfaces the plan assigns to this todo:
  *   1. the Token tab (context limit / input / output / reasoning / cache rows +
  *      usage progress bar) fed from the Todo 14 bridge session state, and
- *   2. the Server tab (bridge-proxy health + `/api/v1/meta.capabilities` +
+ *   2. the Server tab (adapter health via `meta.server_version` with the
+ *      bridge `/healthz` fallback + `/api/v1/meta.capabilities` +
  *      `/api/v1/auth.models_ready`) plus the capability-gated unsupported copy
- *      on the MCP/LSP/Skills/Plugins tabs.
+ *      on the LSP/Skills/Plugins tabs.
  *
- * The registry adapter for kimi-web is still the Todo 6 placeholder that
- * rejects, so `getActiveBackendAdapter` is mocked to throw exactly like
- * production: the kimi-web paths must render without an adapter.
+ * The registry now registers a real kimi-web adapter, whose
+ * `getGlobalHealth()` is the D3 version source. This file keeps
+ * `getActiveBackendAdapter` mocked to THROW so the "no adapter registered"
+ * fallback (bridge `/healthz` version) stays pinned; the adapter-wins path is
+ * covered by `StatusMonitorModal.kimiWebStatus.realAdapter.test.ts`.
  */
 
 const SESSION_ID = 'session-1';
@@ -124,8 +127,8 @@ function defaultKimiWire(): {
           file_upload: true,
           fs_query: true,
           mcp: true,
-          tasks: false,
-          terminal: false,
+          tasks: true,
+          terminal: true,
         },
         dangerous_bypass_auth: false,
       } as Record<string, unknown>,
@@ -447,8 +450,10 @@ describe('StatusMonitorModal kimi-web server tab', () => {
     expect(root.textContent).toContain('Healthy');
     expect(root.textContent).toContain('0.43.0');
 
-    // The kimi-web path must not need the (still unregistered) adapter.
-    expect(adapterMock.getAdapter).not.toHaveBeenCalled();
+    // D3: the kimi-web path consults the registered adapter first for the
+    // version; with this file's throwing mock it falls back to the bridge
+    // /healthz version (0.43.0 in this fixture).
+    expect(adapterMock.getAdapter).toHaveBeenCalled();
 
     // REST goes through the bridge proxy with the bridge token; the kimi
     // bearer never reaches the browser.
@@ -463,8 +468,8 @@ describe('StatusMonitorModal kimi-web server tab', () => {
     const { root, app } = await mountKimiWebModal();
     await vi.waitFor(() => expect(root.textContent).toContain('Ready'));
 
-    expect(root.textContent).toContain('websocket, file_upload, fs_query, mcp');
-    expect(root.textContent).not.toContain('terminal,');
+    // Live-measured envelope (w0-p3-meta-ledger.md): all six keys report true.
+    expect(root.textContent).toContain('websocket, file_upload, fs_query, mcp, tasks, terminal');
     const readyDot = [...root.querySelectorAll('.status-monitor-row')]
       .find((row) => row.textContent?.includes('Models ready'))
       ?.querySelector('.status-dot');
@@ -519,7 +524,6 @@ describe('StatusMonitorModal kimi-web server tab', () => {
 
 describe('StatusMonitorModal kimi-web capability-gated unsupported copy', () => {
   it.each([
-    ['MCP', 'Structured MCP status is not exposed by Kimi Web.'],
     ['LSP', 'Structured LSP status is not exposed by Kimi Web.'],
     ['Plugins', 'Structured plugin status is not exposed by Kimi Web.'],
     ['Skills', 'Structured skill status is not exposed by Kimi Web.'],
@@ -532,6 +536,18 @@ describe('StatusMonitorModal kimi-web capability-gated unsupported copy', () => 
     await vi.waitFor(() => expect(root.textContent).toContain(message));
     expect(root.textContent).not.toContain('not exposed by this backend');
     expect(root.textContent).not.toContain('not exposed by this ACP agent');
+    app.unmount();
+  });
+
+  it('shows the supported-but-empty copy on the MCP tab (live meta.capabilities.mcp)', async () => {
+    const { root, app } = await mountKimiWebModal();
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+
+    clickTab(root, 'MCP');
+    await nextTick();
+    await vi.waitFor(() => expect(root.textContent).toContain('No MCP servers configured.'));
+    expect(root.textContent).not.toContain('Structured MCP status is not exposed by Kimi Web.');
+    expect(root.querySelector('.retry-button')).toBeNull();
     app.unmount();
   });
 
