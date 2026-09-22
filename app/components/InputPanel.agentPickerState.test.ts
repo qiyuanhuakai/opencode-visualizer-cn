@@ -91,6 +91,28 @@ describe(
       expect(text).not.toContain(LOADING_AGENTS_COPY);
     });
 
+    it('visible trigger (agentOptions [], agentPickerState "unsupported") labels the button with the not-supported copy, not the raw capitalised selectedMode', async () => {
+      const { root } = mountAgentPicker({
+        activeBackendKind: 'kimi-web',
+        agentOptions: [],
+        hasAgentOptions: false,
+        agentPickerState: 'unsupported',
+      });
+      await nextTick();
+
+      const region = agentSelectorRegion(root);
+      expect(region).not.toBeNull();
+
+      // The trigger button the user actually sees. The dropdown itself is
+      // disabled (`!hasAgentOptions`), so its popup can never open — the copy
+      // must live on the button, not only in the hidden popup.
+      const button = region?.querySelector<HTMLElement>('.ui-dropdown-button');
+      expect(button).not.toBeNull();
+      // RED today: the visible label is the raw capitalised selectedMode
+      // (`'build'` -> `'Build'`) because findAgentOption matches nothing.
+      expect((button?.textContent ?? '').trim()).toBe(AGENT_UNSUPPORTED_COPY);
+    });
+
     it('characterization: opencode (agentOptions [], agentPickerState "loading") still shows the loading placeholder', async () => {
       const { root } = mountAgentPicker({
         activeBackendKind: 'opencode',

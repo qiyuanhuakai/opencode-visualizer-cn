@@ -311,8 +311,8 @@
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
-                <span :style="agentValueStyle(id)" :title="modeButtonLabel(id)">{{
-                  modeButtonLabel(id)
+                <span :style="agentValueStyle(id)" :title="agentTriggerLabel(id)">{{
+                  agentTriggerLabel(id)
                 }}</span>
               </template>
               <template #default>
@@ -750,6 +750,13 @@ function modeButtonLabel(id: unknown) {
   const normalizedId = extractAgentOptionId(id);
   if (!normalizedId) return t('inputPanel.defaultAgent');
   return normalizedId.charAt(0).toUpperCase() + normalizedId.slice(1);
+}
+
+// While unsupported the dropdown stays disabled (no agents to pick), so the
+// popup never opens; the trigger itself must carry the not-supported copy.
+function agentTriggerLabel(id: unknown) {
+  if (agentPickerState.value === 'unsupported') return agentPickerEmptyCopy.value;
+  return modeButtonLabel(id);
 }
 
 function historyEntryColor(entry: HistoryEntry) {
