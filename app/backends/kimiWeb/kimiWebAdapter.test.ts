@@ -23,11 +23,17 @@ function session(overrides: Partial<KimiWebSession> = {}): KimiWebSession {
   };
 }
 
-function client(items: KimiWebSession[] = []) {
+function client(items: KimiWebSession[] = [], models: string[] = []) {
   return {
     getMeta: vi.fn(async () => ({ server_version: '1', capabilities: {} })),
     getAuth: vi.fn(async () => ({ models_ready: true })),
-    listModels: vi.fn(async () => ({ items: [] })),
+    listModels: vi.fn(async () => ({
+      items: models.map((model) => ({
+        provider: 'managed:kimi-code',
+        model,
+        display_name: model,
+      })),
+    })),
     listSessions: vi.fn(async () => ({ items })),
     createSession: vi.fn(),
     updateProfile: vi.fn(),
@@ -75,6 +81,34 @@ describe('KimiWebAdapter', () => {
 
     expect(sessions).toEqual([]);
     expect(mapKimiWebSessionsToProjects(sessions)).toEqual({});
+  });
+
+  it('lists providers when the method is called without its adapter instance', async () => {
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: client([], ['kimi-k2']),
+    });
+
+    const listProviders = adapter.listProviders;
+
+    await expect(listProviders()).resolves.toEqual({
+      all: [
+        {
+          id: 'managed:kimi-code',
+          name: 'managed:kimi-code',
+          models: {
+            'kimi-k2': {
+              id: 'kimi-k2',
+              name: 'kimi-k2',
+              providerID: 'managed:kimi-code',
+              limit: undefined,
+              capabilities: { attachment: false, reasoning: false, toolcall: true },
+            },
+          },
+        },
+      ],
+      connected: ['managed:kimi-code'],
+    });
   });
 
   it('maps archive, timestamps, workspace, and directory into shared session fields', () => {

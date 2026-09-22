@@ -212,6 +212,7 @@ export class KimiWebAdapter implements BackendAdapter {
     this.listFiles = this.listFiles.bind(this);
     this.getVcsInfo = this.getVcsInfo.bind(this);
     this.getGlobalConfig = this.getGlobalConfig.bind(this);
+    this.listProviders = this.listProviders.bind(this);
   }
 
   initialize() {
