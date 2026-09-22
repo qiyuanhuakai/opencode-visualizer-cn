@@ -8424,6 +8424,7 @@ useMessageCacheAuthInvalidation({
   authHeader: credentials.authHeader,
   codexBridgeToken: credentials.codexBridgeToken,
   acpBridgeToken: credentials.acpBridgeToken,
+  kimiWebBridgeToken: credentials.kimiWebBridgeToken,
   messageCacheAuthGeneration,
   sessionReloadRequestId,
   clearSessionCache: msg.clearSessionCache,

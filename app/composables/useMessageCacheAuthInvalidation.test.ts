@@ -6,6 +6,7 @@ function createFixture() {
   const username = ref('user-a');
   const codexBridgeToken = ref('codex-a');
   const acpBridgeToken = ref('acp-a');
+  const kimiWebBridgeToken = ref('kimi-a');
   const messageCacheAuthGeneration = ref(4);
   const sessionReloadRequestId = ref(8);
   const clearSessionCache = vi.fn();
@@ -14,6 +15,7 @@ function createFixture() {
     authHeader: computed(() => (username.value ? `Basic ${username.value}` : undefined)),
     codexBridgeToken,
     acpBridgeToken,
+    kimiWebBridgeToken,
     messageCacheAuthGeneration,
     sessionReloadRequestId,
     clearSessionCache,

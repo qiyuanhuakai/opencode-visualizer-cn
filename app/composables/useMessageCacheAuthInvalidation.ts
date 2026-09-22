@@ -4,6 +4,7 @@ export type MessageCacheAuthInvalidationOptions = {
   readonly authHeader: ComputedRef<string | undefined>;
   readonly codexBridgeToken: Ref<string>;
   readonly acpBridgeToken: Ref<string>;
+  readonly kimiWebBridgeToken: Ref<string>;
   readonly messageCacheAuthGeneration: Ref<number>;
   readonly sessionReloadRequestId: Ref<number>;
   readonly clearSessionCache: () => void;
@@ -14,7 +15,12 @@ export function useMessageCacheAuthInvalidation(
   options: MessageCacheAuthInvalidationOptions,
 ): () => void {
   return watch(
-    [options.authHeader, options.codexBridgeToken, options.acpBridgeToken],
+    [
+      options.authHeader,
+      options.codexBridgeToken,
+      options.acpBridgeToken,
+      options.kimiWebBridgeToken,
+    ],
     () => {
       options.messageCacheAuthGeneration.value += 1;
       options.sessionReloadRequestId.value += 1;
