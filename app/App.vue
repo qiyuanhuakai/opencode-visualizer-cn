@@ -169,11 +169,18 @@
               :current-session-id="selectedSessionId"
               :session-parent-by-id="sessionParentById"
               :can-send="canSend"
-              :agent-options="activeBackendKind === 'codex' ? codexAgentOptions : agentOptions"
+              :agent-options="
+                activeBackendKind === 'codex'
+                  ? codexAgentOptions
+                  : activeBackendKind === 'kimi-web'
+                    ? kimiWebAgentOptions
+                    : agentOptions
+              "
               :subagent-options="subagentOptions"
               :mention-files="acpMentionFiles"
               :prefer-file-mentions="activeBackendKind === 'acp'"
               :has-agent-options="hasAgentOptions"
+              :agent-picker-state="agentPickerState"
               :agent-color="currentAgentColor"
               :resolve-agent-color="resolveAgentColorForName"
               :model-options="availableModelOptions"
@@ -210,9 +217,20 @@
               @open-snippet-settings="openSettings('transformers')"
               @status-error="setSendStatusErrorText"
             >
-              <template v-if="activeBackendKind === 'codex'" #after-thinking>
-                <CodexComposerFast :api="codexApi" @error="setSendStatusErrorText" />
-                <CodexComposerGoal :api="codexApi" @open="openCodexThreadGoal" />
+              <template #after-thinking>
+                <template v-if="activeBackendKind === 'codex'">
+                  <CodexComposerFast :api="codexApi" @error="setSendStatusErrorText" />
+                  <CodexComposerGoal :api="codexApi" @open="openCodexThreadGoal" />
+                </template>
+                <KimiWebComposerModes
+                  v-else-if="activeBackendKind === 'kimi-web'"
+                  v-bind="kimiWebSelectedModeState"
+                  :tower-enabled="kimiWebTowerEnabled"
+                  :disabled="connectionState !== 'ready'"
+                  @toggle-plan="changeKimiWebBooleanMode('planMode', $event)"
+                  @toggle-swarm="changeKimiWebBooleanMode('swarmMode', $event)"
+                  @toggle-tower="changeKimiWebBooleanMode('towerMode', $event)"
+                />
               </template>
             </InputPanel>
           </footer>
@@ -310,6 +328,15 @@
             >
               {{ t('app.login.acpBackend') }}
             </button>
+            <button
+              type="button"
+              class="app-login-backend"
+              :class="{ active: loginBackendKind === 'kimi-web' }"
+              :aria-pressed="loginBackendKind === 'kimi-web'"
+              @click="loginBackendKind = 'kimi-web'"
+            >
+              {{ t('app.login.kimiWebBackend') }}
+            </button>
           </div>
           <div class="app-login-fields">
             <template v-if="loginBackendKind === 'opencode'">
@@ -361,6 +388,25 @@
                 @keydown.enter="handleLogin"
               />
               <p class="app-login-hint">{{ t('app.login.codexBridgeHint') }}</p>
+            </template>
+            <template v-else-if="loginBackendKind === 'kimi-web'">
+              <input
+                v-model="loginKimiWebBridgeUrl"
+                type="text"
+                class="app-login-input"
+                :placeholder="t('app.login.kimiWebBridgeUrl')"
+                name="kimiWebBridgeUrl"
+                @keydown.enter="handleLogin"
+              />
+              <input
+                v-model="loginKimiWebBridgeToken"
+                type="password"
+                class="app-login-input"
+                :placeholder="t('app.login.kimiWebBridgeToken')"
+                name="kimiWebBridgeToken"
+                @keydown.enter="handleLogin"
+              />
+              <p class="app-login-hint">{{ t('app.login.kimiWebBridgeHint') }}</p>
             </template>
             <template v-else>
               <input
@@ -470,6 +516,7 @@
       :codex-api="codexApi"
       :active-backend-kind="activeBackendKind"
       :magic-context-workers="magicContextWorkers"
+      :kimi-web-bridge="kimiWebMessageBridge"
       @close="isStatusMonitorOpen = false"
     />
     <ProjectSettingsDialog
@@ -608,6 +655,7 @@ import CodexPluginManager from './components/codex/CodexPluginManager.vue';
 import CodexRuntimeInspector from './components/codex/CodexRuntimeInspector.vue';
 import CodexComposerGoal from './components/codex/CodexComposerGoal.vue';
 import CodexComposerFast from './components/codex/CodexComposerFast.vue';
+import KimiWebComposerModes from './components/kimiWeb/KimiWebComposerModes.vue';
 import CodexThreadGoalWindow from './components/codex/CodexThreadGoalWindow.vue';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
 import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
@@ -631,7 +679,7 @@ import { useFileTree, type FileNode } from './composables/useFileTree';
 import { useForgeAuxiliary } from './composables/useForgeAuxiliary';
 import { usePtyOneshot } from './composables/usePtyOneshot';
 import { useFloatingWindows, type FloatingWindowEntry } from './composables/useFloatingWindows';
-import { usePermissions, type PermissionRequest } from './composables/usePermissions';
+import { usePermissions, type PermissionReply, type PermissionRequest } from './composables/usePermissions';
 import { useQuestions } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
 import type { QuestionRequest } from './types/sse';
@@ -687,7 +735,7 @@ import type {
 import type { ComposerAttachment, LineCommentData } from './types/composer';
 import type { ForgePanelAuxiliary } from './types/forge';
 import type { ContainerPinPayload } from './types/pin';
-import type { MessagePart, ReasoningPart, ToolPart } from './types/sse';
+import type { MessageInfo, MessagePart, ReasoningPart, ToolPart } from './types/sse';
 import type { WorkerToTabMessage } from './types/sse-worker';
 import type { TopPanelNotificationSession } from './types/top-panel';
 import type { ProjectState, SandboxState, SessionState } from './types/worker-state';
@@ -732,6 +780,7 @@ import {
   disconnectAcpBackend,
   configureCodexBackend,
   disconnectCodexBackend,
+  configureKimiWebBackend,
   configureOpenCodeBackend,
   getActiveBackendAdapter,
   getBackendAdapter,
@@ -759,8 +808,37 @@ import { resolveTerminalScrollTarget } from './utils/terminalScroll';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
+import { useKimiWebMessageBridge } from './composables/useKimiWebMessageBridge';
+import { useKimiWebSessionModes } from './composables/useKimiWebSessionModes';
+import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
+import { KimiWebAdapter, upsertKimiWebSessionIntoProjects } from './backends/kimiWeb/kimiWebAdapter';
+import {
+  isKimiWebPermissionMode,
+  isTowerExperimentEnabled,
+  type KimiWebSessionModeChange,
+} from './backends/kimiWeb/sessionModes';
+import { kimiWebMessagesToHistoryEntries } from './backends/kimiWeb/historyEntries';
+import {
+  answerKimiWebApproval,
+  answerKimiWebQuestion,
+  attachKimiWebInteractions,
+  createKimiWebInteractionStore,
+  dismissKimiWebQuestion,
+  kimiWebApprovalAnswerFromReply,
+  kimiWebApprovalToPermissionRequest,
+  kimiWebQuestionAnswersFromLabels,
+  kimiWebQuestionToQuestionRequest,
+  kimiWebSessionOpNeedsReconcile,
+  parseKimiWebApprovalRequestId,
+  parseKimiWebQuestionRequestId,
+  reconcileKimiWebInteractions,
+  type KimiWebInteractionClient,
+  type KimiWebPendingInteraction,
+} from './backends/kimiWeb/interactions';
+import { createKimiWebWsClient, kimiWebProxyHttpUrl, kimiWebWsUrl, type KimiWebWsClient } from './utils/kimiWebWs';
 import { useSettings } from './composables/useSettings';
 import { createComposerDraftScheduler } from './utils/composerDraftScheduler';
+import { kimiWebAgentModeOptions } from './utils/kimiWebModeOptions';
 import {
   clearOpenCodeLastSelection,
   readOpenCodeLastSelection,
@@ -2105,6 +2183,8 @@ const connectedBridgeHealthUrl = computed(() => {
     acpBridgeToken: credentials.acpBridgeToken.value,
     codexBridgeUrl: credentials.codexBridgeUrl.value,
     codexBridgeToken: credentials.codexBridgeToken.value,
+    kimiWebBridgeUrl: credentials.kimiWebBridgeUrl.value,
+    kimiWebBridgeToken: credentials.kimiWebBridgeToken.value,
   });
 });
 const desktopBridgeVersion = useDesktopBridgeVersion(connectedBridgeHealthUrl, desktopApi);
@@ -2129,8 +2209,10 @@ let commandLoadingOwner = 0;
 const loginBackendKind = ref<BackendKind>('opencode');
 const loginCodexBridgeUrl = ref(credentials.codexBridgeUrl.value);
 const loginAcpBridgeUrl = ref(credentials.acpBridgeUrl.value);
+const loginKimiWebBridgeUrl = ref(credentials.kimiWebBridgeUrl.value);
 const loginCodexBridgeToken = ref(credentials.codexBridgeToken.value);
 const loginAcpBridgeToken = ref(credentials.acpBridgeToken.value);
+const loginKimiWebBridgeToken = ref(credentials.kimiWebBridgeToken.value);
 const loginAcpAgentId = ref(credentials.acpAgentId.value);
 const loginAcpAgents = ref<AcpAgentStatus[]>([]);
 let loginAcpAgentsGeneration = 0;
@@ -2193,7 +2275,9 @@ const loginTitle = computed(() =>
     ? t('app.login.codexTitle')
     : loginBackendKind.value === 'acp'
       ? t('app.login.acpTitle')
-      : t('app.login.title'),
+      : loginBackendKind.value === 'kimi-web'
+        ? t('app.login.kimiWebTitle')
+        : t('app.login.title'),
 );
 
 function setSendStatusKey(key: string, params?: Record<string, unknown>) {
@@ -2374,6 +2458,13 @@ const {
       codexApi.replyPermissionRequest(requestId, reply);
       return;
     }
+    if (activeBackendKind.value === 'kimi-web') {
+      const approvalId = parseKimiWebApprovalRequestId(requestId);
+      if (approvalId) {
+        await replyKimiWebApproval(approvalId, reply as PermissionReply);
+        return;
+      }
+    }
     const replyPermission = getActiveBackendAdapter().replyPermission;
     if (!replyPermission) throw new Error('Active backend does not support permission replies.');
     await replyPermission(requestId, {
@@ -2421,6 +2512,13 @@ const {
       );
       return;
     }
+    if (activeBackendKind.value === 'kimi-web') {
+      const questionId = parseKimiWebQuestionRequestId(requestId);
+      if (questionId) {
+        await replyKimiWebQuestion(questionId, answers as string[][]);
+        return;
+      }
+    }
     const replyQuestion = getActiveBackendAdapter().replyQuestion;
     if (!replyQuestion) throw new Error('Active backend does not support question replies.');
     await replyQuestion(requestId, {
@@ -2442,6 +2540,13 @@ const {
     if (dynamicRequest) {
       await codexApi.respondToDynamicToolCall(dynamicRequest.requestId, [], false);
       return;
+    }
+    if (activeBackendKind.value === 'kimi-web') {
+      const questionId = parseKimiWebQuestionRequestId(requestId);
+      if (questionId) {
+        await dismissKimiWebQuestionRequest(questionId);
+        return;
+      }
     }
     const rejectQuestion = getActiveBackendAdapter().rejectQuestion;
     if (!rejectQuestion) throw new Error('Active backend does not support question rejection.');
@@ -2666,6 +2771,11 @@ watch(activeBackendKind, () => {
   codexElicitationDialogIds.value.forEach((id) => fw.close(codexElicitationWindowKey(id)));
   codexQuestionDialogIds.value.forEach(removeQuestionEntry);
   codexDynamicQuestionDialogIds.value.forEach(removeQuestionEntry);
+  kimiWebApprovalDialogIds.value.forEach(removePermissionEntry);
+  kimiWebQuestionDialogIds.value.forEach(removeQuestionEntry);
+  kimiWebApprovalDialogIds.value = new Set();
+  kimiWebQuestionDialogIds.value = new Set();
+  kimiWebInteractions.clearAll();
   codexPermissionDialogIds.value = new Set();
   codexStructuredPermissionDialogIds.value = new Set();
   codexElicitationDialogIds.value = new Set();
@@ -2980,7 +3090,25 @@ const canAbort = computed(() =>
     !isAborting.value,
   ),
 );
-const hasAgentOptions = computed(() => agentOptions.value.length > 0);
+const kimiWebAgentOptions = computed(() =>
+  kimiWebAgentModeOptions().map((option) => ({
+    id: option.id,
+    label: t(option.labelKey),
+    description: t(option.descriptionKey),
+  })),
+);
+const hasAgentOptions = computed(() =>
+  activeBackendKind.value === 'kimi-web'
+    ? kimiWebAgentOptions.value.length > 0
+    : agentOptions.value.length > 0,
+);
+// The composer's agent selector is ready when its active option list is populated,
+// loading only while discovery is in flight, and otherwise unsupported.
+const agentPickerState = computed<'loading' | 'unsupported' | 'ready'>(() => {
+  if (hasAgentOptions.value) return 'ready';
+  if (agentsLoading.value) return 'loading';
+  return 'unsupported';
+});
 function isProviderConnected(providerId: string) {
   return connectedProviderIds.value.includes(providerId);
 }
@@ -3814,6 +3942,15 @@ function applyComposerDraftToComposerState(draft: ComposerDraft, contextKey: str
   messageInput.value = draft.messageInput;
   attachments.value = draft.attachments.slice();
 
+  if (activeBackendKind.value === 'kimi-web') {
+    const modelToApply =
+      draft.model && availableModelOptions.value.some((model) => model.id === draft.model)
+        ? draft.model
+        : undefined;
+    applyModelVariantSelection(modelToApply, draft.variant);
+    return;
+  }
+
   // Bootstrap guard: if options not loaded yet, apply draft values as-is
   if (agentOptions.value.length === 0 || modelOptions.value.length === 0) {
     if (draft.agent) selectedMode.value = draft.agent;
@@ -3868,7 +4005,7 @@ function persistComposerDraftForCurrentContext() {
       mime: item.mime,
       dataUrl: item.dataUrl,
     })),
-    agent: selectedMode.value,
+    agent: activeBackendKind.value === 'kimi-web' ? '' : selectedMode.value,
     model: selectedModel.value,
     variant: selectedThinking.value,
     updatedAt: Date.now(),
@@ -3892,7 +4029,7 @@ function scheduleComposerDraftPersistence() {
       mime: item.mime,
       dataUrl: item.dataUrl,
     })),
-    agent: selectedMode.value,
+    agent: activeBackendKind.value === 'kimi-web' ? '' : selectedMode.value,
     model: selectedModel.value,
     variant: selectedThinking.value,
     updatedAt: Date.now(),
@@ -3941,7 +4078,7 @@ function resolveDefaultAgentModel(): { agent: string; model: string; variant: st
 
   // Set the agent and apply its defaults (model + variant)
   selectedMode.value = defaultAgent;
-  applyAgentDefaults(defaultAgent);
+  if (activeBackendKind.value !== 'kimi-web') applyAgentDefaults(defaultAgent);
 
   // If model is still empty after applyAgentDefaults, fall back to provider default or first model
   if (!selectedModel.value && modelOptions.value.length > 0) {
@@ -3957,6 +4094,12 @@ function resolveDefaultAgentModel(): { agent: string; model: string; variant: st
 
 function handleSelectedModeUpdate(value: string) {
   selectedMode.value = value;
+  if (activeBackendKind.value === 'kimi-web') {
+    if (isKimiWebPermissionMode(value)) {
+      void changeKimiWebMode({ field: 'permissionMode', value });
+    }
+    return;
+  }
   if (activeBackendKind.value !== 'codex') applyAgentDefaults(value);
   persistComposerDraftForCurrentContext();
   syncAcpSelectionToSession();
@@ -5072,6 +5215,14 @@ async function fetchAgents() {
   agentLoadingOwner = request.generation;
   agentsLoading.value = true;
   try {
+    if (activeBackendKind.value === 'kimi-web') {
+      agentOptions.value = [];
+      selectedMode.value =
+        kimiWebSessionModes.sessionState(selectedSessionId.value).permissionMode ??
+        kimiWebAgentOptions.value[0]?.id ??
+        'manual';
+      return;
+    }
     if (activeBackendKind.value === 'codex') {
       if (codexApi.connected.value) {
         await codexApi.refreshCollaborationModes();
@@ -5650,6 +5801,8 @@ function currentBackendIdentity() {
       return `codex:${credentials.codexBridgeUrl.value}`;
     case 'acp':
       return `acp:${credentials.acpBridgeUrl.value}:${credentials.acpAgentId.value}`;
+    case 'kimi-web':
+      return `kimi-web:${credentials.kimiWebBridgeUrl.value}`;
     case 'opencode':
       return `opencode:${credentials.url.value}`;
   }
@@ -7553,6 +7706,20 @@ function setAcpSessionArchived(sessionId: string, archived?: number) {
   }
 }
 
+// Kimi Web turns never emit OpenCode-style `session.status` events, so the
+// shared store keeps the bootstrap-time status unless the live bridge session
+// ops write it back. Without this sync `isThinking` never turns true for
+// kimi-web and the composer stop button / double-Esc abort stay unreachable.
+function syncKimiWebSessionStatus(sessionId: string, busy: boolean) {
+  const status = busy ? 'busy' : 'idle';
+  for (const project of Object.values(serverState.projects)) {
+    for (const sandbox of Object.values(project.sandboxes)) {
+      const session = sandbox.sessions[sessionId];
+      if (session && session.status !== status) session.status = status;
+    }
+  }
+}
+
 function updateAcpCommands(values: Array<Record<string, unknown>>) {
   commands.value = values
     .flatMap((value): CommandInfo[] => {
@@ -7589,6 +7756,392 @@ const acpMessageBridge = useAcpMessageBridge({
   },
 });
 
+let configuredKimiWebAdapter: KimiWebAdapter | undefined;
+const kimiWebWsClient = shallowRef<KimiWebWsClient>();
+const kimiWebMessageBridge = shallowRef<ReturnType<typeof useKimiWebMessageBridge>>();
+const kimiWebModeRevision = ref(0);
+const kimiWebTowerEnabled = ref(false);
+let detachKimiWebModeReconnect: (() => void) | undefined;
+
+async function loadKimiWebModeMeta() {
+  const meta = await kimiWebRestClient().getMeta();
+  kimiWebTowerEnabled.value = isTowerExperimentEnabled(meta);
+  return meta;
+}
+
+const kimiWebSessionModes = useKimiWebSessionModes({
+  writeMode: async (sessionId, change) => {
+    const active = backend();
+    if (!(active instanceof KimiWebAdapter)) {
+      throw new Error('Kimi Web backend is not active.');
+    }
+    await active.updateSessionMode(sessionId, change);
+  },
+  loadMeta: loadKimiWebModeMeta,
+});
+
+const kimiWebSelectedModeState = computed(() => {
+  void kimiWebModeRevision.value;
+  return kimiWebSessionModes.sessionState(selectedSessionId.value);
+});
+
+function refreshKimiWebModeState() {
+  kimiWebModeRevision.value += 1;
+  const permissionMode = kimiWebSessionModes.sessionState(selectedSessionId.value).permissionMode;
+  if (permissionMode) selectedMode.value = permissionMode;
+}
+
+async function changeKimiWebMode(change: KimiWebSessionModeChange) {
+  const sessionId = selectedSessionId.value.trim();
+  if (!sessionId) return;
+  const pending = kimiWebSessionModes.changeMode(sessionId, change);
+  refreshKimiWebModeState();
+  try {
+    await pending;
+  } catch (error) {
+    setSendStatusErrorText(toErrorMessage(error));
+  } finally {
+    if (sessionId === selectedSessionId.value) refreshKimiWebModeState();
+  }
+}
+
+function changeKimiWebBooleanMode(
+  field: Exclude<KimiWebSessionModeChange['field'], 'permissionMode'>,
+  value: boolean,
+) {
+  void changeKimiWebMode({ field, value });
+}
+
+// ---------------------------------------------------------------------------
+// Todo 16: kimi-web auto-popup wiring (core visual feature, Codex parity).
+// WS backends cannot use the OpenCode sessionScope route, so the three popup
+// producers are wired through the message bridge's explicit callbacks exactly
+// like the Codex path (useCodexMessageBridge.ts L197-211 + App.vue L7510-7521).
+// The integration contract is pinned by
+// app/composables/useKimiWebPopups.integration.test.ts, whose harness mirrors
+// this block line-for-line.
+// ---------------------------------------------------------------------------
+const lastKimiWebToolWindowSignature = new Map<string, string>();
+
+// Only the currently selected session and its descendants may drive popups.
+// Kimi subagent parts carry the synthesized identity `{session}:{agent}:{turn}`
+// (normalize.ts kimiWebSubagentSessionId — agent_id alone is NOT a session id),
+// so a descendant is a prefixed extension of the selected session: the Codex
+// parent filter (useCodexMessageBridge.ts L197-209) without a thread tree.
+function isKimiWebPopupSession(sessionID: string): boolean {
+  if (activeBackendKind.value !== 'kimi-web') return false;
+  const selected = selectedSessionId.value;
+  if (!selected || !sessionID) return false;
+  return sessionID === selected || sessionID.startsWith(`${selected}:`);
+}
+
+function kimiWebToolWindowStatus(part: ToolPart): 'running' | 'completed' | 'error' | undefined {
+  return part.state.status === 'running' || part.state.status === 'completed' || part.state.status === 'error'
+    ? part.state.status
+    : undefined;
+}
+
+// Live tool parts: same allow-list gate, signature dedup and fw.updateOptions
+// state sync as syncRealtimeCodexToolWindows (L8905).
+function syncKimiWebToolWindow(part: MessagePart) {
+  if (part.type !== 'tool') return;
+  if (suppressAutoWindows.value) return;
+  if (!isKimiWebPopupSession(part.sessionID)) return;
+  if (!shouldRenderToolWindow(part.tool)) return;
+  const contentSignature =
+    part.state.status === 'completed'
+      ? part.state.output
+      : part.state.status === 'error'
+        ? part.state.error
+        : part.state.status === 'running'
+          ? part.state.metadata?.output || ''
+          : '';
+  const windowKey = part.callID || part.id;
+  const signature = `${part.tool}:${part.state.status}:${contentSignature}:${JSON.stringify(part.state.input ?? {})}`;
+  if (lastKimiWebToolWindowSignature.get(windowKey) === signature) return;
+  lastKimiWebToolWindowSignature.set(windowKey, signature);
+  openToolPartAsWindow(part);
+  fw.updateOptions(windowKey, { status: kimiWebToolWindowStatus(part) });
+}
+
+// Restore-period reconciliation (Todo 22 seam). Strategy chosen: route terminal
+// replay/rebuild parts through onReconcilePart and let them update/close ONLY
+// windows that are already open (fw.has gate) — never open a new one. The
+// alternative (closing transient auto-windows when entering rebuilding) was
+// rejected because a rebuild does not mean the subagent finished: force-closing
+// would destroy review context for still-running work, while this seam closes
+// precisely the windows whose parts actually terminated, including minimized
+// ones (fw.close removes dock entries; fw.open never un-minimizes an entry).
+function reconcileKimiWebPopup(info: MessageInfo, part: MessagePart, kind: 'tool' | 'reasoning' | 'subagent') {
+  if (kind === 'tool') {
+    if (part.type !== 'tool') return;
+    const windowKey = part.callID || part.id;
+    if (!fw.has(windowKey)) return;
+    openToolPartAsWindow(part);
+    fw.updateOptions(windowKey, { status: kimiWebToolWindowStatus(part) });
+    return;
+  }
+  if (part.type === 'reasoning') {
+    // The kimi bridge delivers subagent reasoning through onLiveSubagent
+    // (kimiWebMessageOps.ts applyLivePart) where Codex delivers it through
+    // onLiveReasoning; splitting by type here keeps the visual result identical
+    // (reasoning window with the [subagent] tag).
+    const windowKey = `reasoning:${part.sessionID || selectedSessionId.value || 'main'}`;
+    if (fw.has(windowKey)) reasoning.handlePart(part, info);
+  } else {
+    const windowKey = `subagent:${part.sessionID}`;
+    if (fw.has(windowKey)) subagentWindows.handlePart(part, info);
+  }
+  if (kind !== 'subagent') return;
+  // Subagent deltas are volatile and never replayed, so after the reconnect
+  // normalizer reset the bridge can no longer deliver a terminal part for the
+  // subagent's sibling window — close it here or it stays open forever.
+  const siblingKey = part.type === 'reasoning'
+    ? `subagent:${part.sessionID}`
+    : `reasoning:${part.sessionID}`;
+  if (!fw.has(siblingKey)) return;
+  if (part.type === 'reasoning') void fw.close(siblingKey);
+  else reasoning.scheduleReasoningClose(part.sessionID);
+}
+
+function kimiWebRestClient() {
+  if (!configuredKimiWebAdapter) throw new Error('Kimi Web backend is not configured.');
+  return configuredKimiWebAdapter.restClient;
+}
+
+const kimiWebApi = {
+  createSession: (...args: Parameters<KimiWebAdapter['restClient']['createSession']>) =>
+    kimiWebRestClient().createSession(...args),
+  updateProfile: (...args: Parameters<KimiWebAdapter['restClient']['updateProfile']>) =>
+    kimiWebRestClient().updateProfile(...args),
+  deleteSession: (...args: Parameters<KimiWebAdapter['restClient']['deleteSession']>) =>
+    kimiWebRestClient().deleteSession(...args),
+  archiveSession: (...args: Parameters<KimiWebAdapter['restClient']['archiveSession']>) =>
+    kimiWebRestClient().archiveSession(...args),
+  restoreSession: (...args: Parameters<KimiWebAdapter['restClient']['restoreSession']>) =>
+    kimiWebRestClient().restoreSession(...args),
+  abortSession: (...args: Parameters<KimiWebAdapter['restClient']['abortSession']>) =>
+    kimiWebRestClient().abortSession(...args),
+  getMessages: (...args: Parameters<KimiWebAdapter['restClient']['getMessages']>) =>
+    kimiWebRestClient().getMessages(...args),
+  sendPrompt: (...args: Parameters<KimiWebAdapter['restClient']['sendPrompt']>) =>
+    kimiWebRestClient().sendPrompt(...args),
+  uploadFile: (...args: Parameters<KimiWebAdapter['restClient']['uploadFile']>) =>
+    kimiWebRestClient().uploadFile(...args),
+  steer: (...args: Parameters<KimiWebAdapter['restClient']['steer']>) =>
+    kimiWebRestClient().steer(...args),
+  abortPrompt: (...args: Parameters<KimiWebAdapter['restClient']['abortPrompt']>) =>
+    kimiWebRestClient().abortPrompt(...args),
+  listApprovals: (...args: Parameters<KimiWebAdapter['restClient']['listApprovals']>) =>
+    kimiWebRestClient().listApprovals(...args),
+  answerApproval: (...args: Parameters<KimiWebAdapter['restClient']['answerApproval']>) =>
+    kimiWebRestClient().answerApproval(...args),
+  listQuestions: (...args: Parameters<KimiWebAdapter['restClient']['listQuestions']>) =>
+    kimiWebRestClient().listQuestions(...args),
+  answerQuestion: (...args: Parameters<KimiWebAdapter['restClient']['answerQuestion']>) =>
+    kimiWebRestClient().answerQuestion(...args),
+  dismissQuestion: (...args: Parameters<KimiWebAdapter['restClient']['dismissQuestion']>) =>
+    kimiWebRestClient().dismissQuestion(...args),
+  getSessionStatus: (...args: Parameters<KimiWebAdapter['restClient']['getSessionStatus']>) =>
+    kimiWebRestClient().getSessionStatus(...args),
+};
+
+const kimiWebAbortChannel = {
+  abort: (sessionId: string, promptId: string) => {
+    if (!kimiWebWsClient.value) return Promise.reject(new Error('Kimi Web WebSocket is unavailable.'));
+    return kimiWebWsClient.value.abort(sessionId, promptId);
+  },
+  isConnected: () => kimiWebWsClient.value?.isConnected() ?? false,
+};
+
+const kimiWebBridgeLifecycle = {
+  subscribe: (sessionIds: string[]) => {
+    if (!kimiWebMessageBridge.value) {
+      return Promise.reject(new Error('Kimi Web message bridge is unavailable.'));
+    }
+    return kimiWebMessageBridge.value.subscribe(sessionIds);
+  },
+  applyHistory: (entries: unknown[]) => {
+    if (!kimiWebMessageBridge.value) throw new Error('Kimi Web message bridge is unavailable.');
+    kimiWebMessageBridge.value.applyHistory(entries);
+  },
+};
+
+function disconnectKimiWebBackend() {
+  detachKimiWebModeReconnect?.();
+  detachKimiWebModeReconnect = undefined;
+  kimiWebMessageBridge.value?.stop();
+  kimiWebWsClient.value?.disconnect();
+  kimiWebMessageBridge.value = undefined;
+  kimiWebWsClient.value = undefined;
+  detachKimiWebInteractionFrames?.();
+  detachKimiWebInteractionFrames = undefined;
+  kimiWebInteractions.clearAll();
+  refreshKimiWebPendingInteractions();
+}
+
+// ---------------------------------------------------------------------------
+// Todo 19: kimi-web approvals / questions wired into the EXISTING shared
+// permission/question surfaces (usePermissions / useQuestions — the same
+// floating windows OpenCode/Codex/ACP use; no new UI primitives).
+//
+// Reconciliation is AUTHORITATIVE, not unconditional cleanup: the pending set
+// is keyed by {session_id, interaction_id}; resolved/answered/dismissed
+// events clear ONLY the matching id (a late event cannot drop a newer
+// pending item); the set itself is rebuilt from the server lists
+// (listApprovals / listQuestions) on session live (initial load, reconnect,
+// resync), on session switch and after an answer that failed (404/already
+// resolved). Turn completion and the session-level pending declaration stay
+// separate from the item set: turn.ended never implies "no pending", and a
+// session-level declaration never fabricates or clears an item.
+//
+// The bridge drops interaction ops (kimiWebMessageOps.ts only applies
+// message/part/session ops), so the frames are consumed from the App-owned
+// WS client through the Todo 9 `onFrame` seam and normalized by the same
+// Todo 13/14 normalizer; `session.pendingInteraction` arrives through the
+// bridge session state. Permission payloads stay memory-only (rule: never
+// persist) — the store holds them in RAM only.
+//
+// The integration contract is pinned by
+// app/composables/useKimiWebInteractions.integration.test.ts, whose harness
+// mirrors this block line-for-line.
+// ---------------------------------------------------------------------------
+const kimiWebInteractions = createKimiWebInteractionStore();
+let detachKimiWebInteractionFrames: (() => void) | undefined;
+const kimiWebPendingInteractions = ref<KimiWebPendingInteraction[]>([]);
+const kimiWebApprovalDialogIds = ref<Set<string>>(new Set());
+const kimiWebQuestionDialogIds = ref<Set<string>>(new Set());
+const kimiWebReconcileInFlight = new Set<string>();
+let lastKimiWebPendingSignature = '';
+
+function kimiWebInteractionClient(): KimiWebInteractionClient {
+  return kimiWebApi;
+}
+
+function refreshKimiWebPendingInteractions() {
+  const sessionId = activeBackendKind.value === 'kimi-web' ? selectedSessionId.value : '';
+  const items = sessionId ? kimiWebInteractions.pendingFor(sessionId) : [];
+  const signature = items.map((item) => `${item.kind}:${item.id}`).join('|');
+  if (signature === lastKimiWebPendingSignature) return;
+  lastKimiWebPendingSignature = signature;
+  kimiWebPendingInteractions.value = items;
+}
+
+async function reconcileKimiWebSelectedSession() {
+  if (activeBackendKind.value !== 'kimi-web') return;
+  const sessionId = selectedSessionId.value;
+  if (!sessionId || !configuredKimiWebAdapter) return;
+  if (kimiWebReconcileInFlight.has(sessionId)) return;
+  kimiWebReconcileInFlight.add(sessionId);
+  try {
+    await reconcileKimiWebInteractions({
+      client: kimiWebInteractionClient(),
+      store: kimiWebInteractions,
+      sessionId,
+      isCurrent: () =>
+        activeBackendKind.value === 'kimi-web' && selectedSessionId.value === sessionId,
+    });
+  } catch {
+    // A failed reconcile leaves the local set untouched; the next trigger retries.
+  } finally {
+    kimiWebReconcileInFlight.delete(sessionId);
+  }
+  refreshKimiWebPendingInteractions();
+}
+
+// Same reconcile-against-current-list order as the Codex dialog watchers
+// (reconcileDialogRequests): stale ids close first, current items upsert.
+watch(kimiWebPendingInteractions, (items) => {
+  if (activeBackendKind.value !== 'kimi-web') return;
+  const approvalIds = new Set<string>();
+  const questionIds = new Set<string>();
+  for (const item of items) {
+    if (item.kind === 'approval') {
+      const request = kimiWebApprovalToPermissionRequest(item);
+      approvalIds.add(request.id);
+      upsertPermissionEntry(request);
+    } else {
+      const request = kimiWebQuestionToQuestionRequest(item);
+      questionIds.add(request.id);
+      upsertQuestionEntry(request);
+    }
+  }
+  kimiWebApprovalDialogIds.value.forEach((id) => {
+    if (!approvalIds.has(id)) removePermissionEntry(id);
+  });
+  kimiWebQuestionDialogIds.value.forEach((id) => {
+    if (!questionIds.has(id)) removeQuestionEntry(id);
+  });
+  kimiWebApprovalDialogIds.value = approvalIds;
+  kimiWebQuestionDialogIds.value = questionIds;
+});
+
+watch(selectedSessionId, (nextId, previousId) => {
+  if (activeBackendKind.value !== 'kimi-web') return;
+  kimiWebSessionModes.resetSession(nextId);
+  refreshKimiWebModeState();
+  selectedMode.value = kimiWebAgentOptions.value[0]?.id ?? 'manual';
+  if (previousId && previousId !== nextId) kimiWebInteractions.clearSession(previousId);
+  refreshKimiWebPendingInteractions();
+  void reconcileKimiWebSelectedSession();
+});
+
+async function replyKimiWebApproval(approvalId: string, reply: PermissionReply) {
+  const pending = kimiWebInteractions.findById(approvalId);
+  const answer = kimiWebApprovalAnswerFromReply(reply);
+  if (!pending || pending.kind !== 'approval' || !answer) {
+    throw new Error('Kimi Web approval request is no longer available.');
+  }
+  const outcome = await answerKimiWebApproval({
+    client: kimiWebInteractionClient(),
+    store: kimiWebInteractions,
+    sessionId: pending.sessionId,
+    approvalId,
+    answer,
+  });
+  refreshKimiWebPendingInteractions();
+  if (outcome.kind === 'failed') {
+    throw outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
+  }
+}
+
+async function replyKimiWebQuestion(questionId: string, labelAnswers: string[][]) {
+  const pending = kimiWebInteractions.findById(questionId);
+  if (!pending || pending.kind !== 'question') {
+    throw new Error('Kimi Web question request is no longer available.');
+  }
+  const answer = kimiWebQuestionAnswersFromLabels(pending, labelAnswers);
+  if (!answer) throw new Error('Kimi Web question answer is empty.');
+  const outcome = await answerKimiWebQuestion({
+    client: kimiWebInteractionClient(),
+    store: kimiWebInteractions,
+    sessionId: pending.sessionId,
+    questionId,
+    answer,
+  });
+  refreshKimiWebPendingInteractions();
+  if (outcome.kind === 'failed') {
+    throw outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
+  }
+}
+
+async function dismissKimiWebQuestionRequest(questionId: string) {
+  const pending = kimiWebInteractions.findById(questionId);
+  if (!pending || pending.kind !== 'question') {
+    throw new Error('Kimi Web question request is no longer available.');
+  }
+  const outcome = await dismissKimiWebQuestion({
+    client: kimiWebInteractionClient(),
+    store: kimiWebInteractions,
+    sessionId: pending.sessionId,
+    questionId,
+  });
+  refreshKimiWebPendingInteractions();
+  if (outcome.kind === 'failed') {
+    throw outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error));
+  }
+}
+
 watchEffect(() => {
   configureOpenCodeBackend({
     baseUrl: credentials.baseUrl.value,
@@ -7605,6 +8158,10 @@ watchEffect(() => {
         agentId: credentials.acpAgentId.value,
       })
     : undefined;
+  configuredKimiWebAdapter = configureKimiWebBackend({
+    bridgeUrl: credentials.kimiWebBridgeUrl.value,
+    bridgeToken: credentials.kimiWebBridgeToken.value,
+  });
   codexApi.url.value = credentials.codexBridgeUrl.value;
   codexApi.bridgeToken.value = credentials.codexBridgeToken.value;
   const configuredBackendKind = credentials.backendKind.value;
@@ -7635,9 +8192,103 @@ async function bootstrapAcpWorkspace() {
   bootstrapReady.value = true;
 }
 
+async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
+  const adapter = getActiveBackendAdapter();
+  if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is not configured.');
+  disconnectKimiWebBackend();
+  const result = await runKimiWebBootstrap({
+    adapter,
+    isCurrent,
+    createClient: () =>
+      createKimiWebWsClient({
+        url: kimiWebWsUrl(adapter.bridgeUrl, adapter.bridgeToken),
+        proxyHttpUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(adapter.bridgeUrl, adapter.bridgeToken)),
+        getToken: () => adapter.bridgeToken,
+      }),
+    createBridge: (client) => {
+      detachKimiWebModeReconnect?.();
+      detachKimiWebModeReconnect = client.onReconnectStart?.(() => {
+        for (const sessionId of client.subscriptions()) {
+          kimiWebSessionModes.markStale(sessionId);
+        }
+        refreshKimiWebModeState();
+      });
+      let bridge: ReturnType<typeof useKimiWebMessageBridge>;
+      bridge = useKimiWebMessageBridge({
+        client,
+        restClient: adapter.restClient,
+        msg,
+        applySnapshot: (snapshot) =>
+          bridge.applyHistory(kimiWebMessagesToHistoryEntries(snapshot.messages.items)),
+        onSessionModeChange: (sessionId, patch, context) => {
+          kimiWebSessionModes.applyEvent(sessionId, patch, context);
+          if (sessionId === selectedSessionId.value) refreshKimiWebModeState();
+        },
+        onToolPart: (part) => syncKimiWebToolWindow(part),
+        onLiveReasoning: (info, part) => {
+          if (!isKimiWebPopupSession(part.sessionID)) return;
+          reasoning.handlePart(part, info);
+        },
+        onLiveSubagent: (info, part) => {
+          if (!isKimiWebPopupSession(part.sessionID)) return;
+          // Codex splits child parts by type (useCodexMessageBridge.ts L207-208);
+          // the kimi bridge routes both through this callback.
+          if (part.type === 'reasoning') {
+            reasoning.handlePart(part, info);
+            return;
+          }
+          subagentWindows.handlePart(part, info);
+        },
+        onReconcilePart: reconcileKimiWebPopup,
+        onSyncStateChange: (sessionId, state) => {
+          // Entering live covers initial load, plain reconnect and snapshot
+          // resync completion: rebuild the pending set from the server lists.
+          if (state.kind !== 'live') return;
+          if (activeBackendKind.value !== 'kimi-web') return;
+          if (sessionId !== selectedSessionId.value) return;
+          void reconcileKimiWebSelectedSession();
+        },
+        onSessionEvent: (op) => {
+          // `session.pendingInteraction` is a reconcile trigger only: a
+          // declaration the local set disagrees with asks the authoritative
+          // lists to be re-read (it never fabricates or clears an item).
+          if (activeBackendKind.value !== 'kimi-web') return;
+          if (op.sessionId !== selectedSessionId.value) return;
+          syncKimiWebSessionStatus(op.sessionId, Boolean(op.busy || op.mainTurnActive));
+          if (!kimiWebSessionOpNeedsReconcile(op, kimiWebInteractions)) return;
+          void reconcileKimiWebSelectedSession();
+        },
+      });
+      detachKimiWebInteractionFrames?.();
+      detachKimiWebInteractionFrames = attachKimiWebInteractions({
+        client,
+        store: kimiWebInteractions,
+        onInteractionsChanged: refreshKimiWebPendingInteractions,
+        onReconnected: () => {
+          void reconcileKimiWebSelectedSession();
+        },
+      });
+      return bridge;
+    },
+    commit: ({ projects, selectedProjectId: projectId, selectedSessionId: sessionId, selectedModel: model }) => {
+      Object.keys(serverState.projects).forEach((key) => delete serverState.projects[key]);
+      Object.assign(serverState.projects, projects);
+      selectedProjectId.value = projectId;
+      selectedSessionId.value = sessionId;
+      selectedModel.value = model;
+      bootstrapReady.value = true;
+    },
+  });
+  if (!isCurrent()) return;
+  kimiWebWsClient.value = result.client;
+  kimiWebMessageBridge.value = result.bridge as ReturnType<typeof useKimiWebMessageBridge> | undefined;
+  void loadKimiWebModeMeta().catch((error) => log('Kimi Web mode meta load failed', error));
+}
+
 watch(selectedSessionId, () => {
   codexMessageBridge.resetRealtimeQueueSignature();
   lastCodexRealtimeToolWindowSignature.clear();
+  lastKimiWebToolWindowSignature.clear();
 });
 
 function backend() {
@@ -7802,6 +8453,7 @@ const backendSessionActions = useBackendSessionActions({
   backendDeleteSession: (sessionId, directory) => backend().deleteSession(sessionId, directory),
   backendUpdateSession: (sessionId, payload, directory) =>
     backend().updateSession(sessionId, payload, directory),
+  kimiWebApi,
 });
 
 const backendSessionLifecycle = useBackendSessionLifecycle({
@@ -7833,6 +8485,20 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
   backendCreateSession: (directory) => backend().createSession(directory),
   findAcpSessionByDirectory,
   backendAbortSession: createDynamicBackendAbortSession(backend),
+  kimiWebApi,
+  kimiWebCreateProfile: (directory) => ({
+    metadata: { cwd: directory },
+    ...(selectedModel.value ? { agent_config: { model: selectedModel.value } } : {}),
+  }),
+  onKimiWebSessionCreated: (session) => {
+    const workspaceId = (session.projectID ?? '').trim();
+    if (!workspaceId) return;
+    upsertKimiWebSessionIntoProjects(serverState.projects, {
+      ...session,
+      workspaceId,
+      status: 'idle',
+    });
+  },
 });
 
 const backendSessionReload = useBackendSessionReload({
@@ -7870,6 +8536,8 @@ const backendSessionReload = useBackendSessionReload({
   codexApi,
   codexHistory: computed(() => codexWorkspace.history.value),
   codexReapplyBackfill: codexMessageBridge.reapplyCodexSharedBackfill,
+  kimiWebApi,
+  kimiWebBridge: kimiWebBridgeLifecycle,
   fetchRootSessionHistory,
   waitForPendingRenders,
   reserveRootHistoryRequestId,
@@ -7887,6 +8555,7 @@ useMessageCacheAuthInvalidation({
   authHeader: credentials.authHeader,
   codexBridgeToken: credentials.codexBridgeToken,
   acpBridgeToken: credentials.acpBridgeToken,
+  kimiWebBridgeToken: credentials.kimiWebBridgeToken,
   messageCacheAuthGeneration,
   sessionReloadRequestId,
   clearSessionCache: msg.clearSessionCache,
@@ -8015,6 +8684,10 @@ const backendMessageSend = useBackendMessageSend({
     },
   },
   codexApi,
+  kimiWebApi,
+  kimiWebAbortChannel,
+  isKimiWebSessionModeReady: (sessionId) =>
+    kimiWebSessionModes.sessionState(sessionId).pendingField === undefined,
   ensureConnectionReady,
   translate: t,
   toErrorMessage,
@@ -9420,15 +10093,24 @@ const { startInitialization, abortInitialization } = useBackendActivation({
   connectedProviderIds,
   modelOptions,
   selectedModel,
+  agents,
+  agentOptions,
+  commands,
+  thinkingOptions,
+  providerDefaults,
+  modelMetaByPath,
   serverState,
   t,
   toErrorMessage,
   setActiveBackendKind,
   configureCodexBackend,
   configureAcpBackend,
+  configureKimiWebBackend,
   disconnectAcpBackend,
   disconnectCodexBackend,
+  disconnectKimiWebBackend,
   bootstrapAcpWorkspace,
+  bootstrapKimiWebWorkspace,
   fetchGlobalProviderConfig,
   fetchProviders,
   fetchAgents,
@@ -9462,6 +10144,18 @@ function handleLogin() {
     void startInitialization();
     return;
   }
+  if (loginBackendKind.value === 'kimi-web') {
+    // saveKimiWeb rejects an empty bridge URL (Todo 7 contract); surface it on
+    // the login form instead of letting the native click handler throw.
+    try {
+      credentials.saveKimiWeb(loginKimiWebBridgeUrl.value, loginKimiWebBridgeToken.value);
+    } catch (error) {
+      initErrorMessage.value = toErrorMessage(error);
+      return;
+    }
+    void startInitialization();
+    return;
+  }
   const u = loginRequiresAuth.value ? loginUsername.value : '';
   const p = loginRequiresAuth.value ? loginPassword.value : '';
   credentials.save(loginUrl.value, u, p);
@@ -9477,6 +10171,7 @@ function handleLogout() {
   initialQuery.projectId = '';
   initialQuery.sessionId = '';
   acpMessageBridge.stop();
+  disconnectKimiWebBackend();
   disconnectAcpBackend();
   credentials.clear();
   ge.disconnect();
@@ -9484,8 +10179,10 @@ function handleLogout() {
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
   loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
+  loginKimiWebBridgeUrl.value = credentials.kimiWebBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
+  loginKimiWebBridgeToken.value = credentials.kimiWebBridgeToken.value;
   loginAcpAgentId.value = credentials.acpAgentId.value;
   disposeShellWindows();
   initErrorMessage.value = '';
@@ -9511,8 +10208,10 @@ onMounted(() => {
   loginBackendKind.value = credentials.backendKind.value;
   loginCodexBridgeUrl.value = credentials.codexBridgeUrl.value;
   loginAcpBridgeUrl.value = credentials.acpBridgeUrl.value;
+  loginKimiWebBridgeUrl.value = credentials.kimiWebBridgeUrl.value;
   loginCodexBridgeToken.value = credentials.codexBridgeToken.value;
   loginAcpBridgeToken.value = credentials.acpBridgeToken.value;
+  loginKimiWebBridgeToken.value = credentials.kimiWebBridgeToken.value;
   loginAcpAgentId.value = credentials.acpAgentId.value;
 
   if (credentials.isConfigured.value) {
@@ -9688,12 +10387,14 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   desktopNotifications?.dispose();
+  kimiWebSessionModes.dispose();
   composerDraftPersistence.flush();
   for (const pending of Array.from(pendingReferencedSubagentHydrations.values())) {
     pending.resolve(undefined);
   }
   pendingReferencedSubagentHydrations.clear();
   acpMessageBridge.stop();
+  disconnectKimiWebBackend();
   disconnectAcpBackend();
   window.removeEventListener('keydown', handleGlobalKeydown);
   window.electronAPI?.localFile?.offChanged(handleLocalApplicationChange);
@@ -9928,7 +10629,8 @@ body {
 
 .app-login-backends {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 6px;
 }
 

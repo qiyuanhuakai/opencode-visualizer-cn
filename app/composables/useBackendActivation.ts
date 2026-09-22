@@ -1,5 +1,12 @@
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
+import { appendCodexBridgeToken } from '../backends/codex/bridgeUrl';
+import { createKimiWebClient } from '../utils/kimiWeb';
+import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../utils/kimiWebWs';
+import { createBackendRequestFence } from '../utils/backendRequestFence';
+
+// allow: SIZE_OK — one composable owns the shared generation/lock lifecycle closure
+// for four backend activation flows; extraction would thread >3 closure params.
 
 type UiInitState = 'loading' | 'ready' | 'error' | 'login';
 type ConnectionState = 'connecting' | 'bootstrapping' | 'ready' | 'reconnecting' | 'error';
@@ -11,6 +18,13 @@ type CredentialsLike = {
   codexBridgeToken: Ref<string>;
   acpBridgeToken: Ref<string>;
   acpAgentId: Ref<string>;
+  kimiWebBridgeUrl: Ref<string>;
+  kimiWebBridgeToken: Ref<string>;
+};
+
+export type KimiWebPrecheckRequest = {
+  bridgeUrl: string;
+  bridgeToken: string;
 };
 
 type CodexApiLike = {
@@ -52,6 +66,12 @@ export type UseBackendActivationOptions = {
   connectedProviderIds: Ref<string[]>;
   modelOptions: Ref<unknown[]>;
   selectedModel: Ref<string>;
+  agents: Ref<unknown[]>;
+  agentOptions: Ref<unknown[]>;
+  commands: Ref<unknown[]>;
+  thinkingOptions: Ref<Array<string | undefined>>;
+  providerDefaults: Ref<unknown>;
+  modelMetaByPath: Ref<unknown>;
   serverState: ServerStateLike;
   t: (key: string) => string;
   toErrorMessage: (error: unknown) => string;
@@ -62,9 +82,13 @@ export type UseBackendActivationOptions = {
     bridgeToken?: string;
     agentId: string;
   }) => void;
+  configureKimiWebBackend?: (options: { bridgeUrl: string; bridgeToken?: string }) => void;
+  precheckKimiWebConnection?: (request: KimiWebPrecheckRequest) => Promise<void>;
   disconnectAcpBackend: () => void;
   disconnectCodexBackend: () => void;
+  disconnectKimiWebBackend: () => void;
   bootstrapAcpWorkspace: () => Promise<void>;
+  bootstrapKimiWebWorkspace: (isCurrent: () => boolean) => Promise<void>;
   fetchGlobalProviderConfig: () => Promise<void>;
   fetchProviders: (force?: boolean) => Promise<void>;
   fetchAgents: () => Promise<void>;
@@ -76,9 +100,30 @@ export type UseBackendActivationOptions = {
   handleOpenCodeUnauthorized: (message: string) => void;
 };
 
+function kimiWebBridgeHealthUrl(request: KimiWebPrecheckRequest) {
+  const bridgeUrl = new URL(kimiWebProxyHttpUrl(kimiWebWsUrl(request.bridgeUrl, request.bridgeToken)));
+  bridgeUrl.pathname = '/healthz';
+  bridgeUrl.search = '';
+  bridgeUrl.hash = '';
+  return appendCodexBridgeToken(bridgeUrl.toString(), request.bridgeToken);
+}
+
+async function runKimiWebPrecheck(request: KimiWebPrecheckRequest) {
+  const bridgeHealth = await fetch(kimiWebBridgeHealthUrl(request), { method: 'GET' });
+  if (!bridgeHealth.ok) {
+    throw new Error(`Kimi Web bridge health check failed (HTTP ${bridgeHealth.status}).`);
+  }
+  const client = createKimiWebClient({
+    baseUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(request.bridgeUrl, request.bridgeToken)),
+    getToken: () => request.bridgeToken,
+  });
+  await client.getMeta();
+}
+
 export function useBackendActivation(options: UseBackendActivationOptions) {
   const initializationInFlight = { value: false } as Ref<boolean>;
   let initializationGeneration = 0;
+  const requestFence = createBackendRequestFence(() => options.credentials.backendKind.value);
 
   function ownsInitialization(generation: number) {
     return initializationInFlight.value && generation === initializationGeneration;
@@ -96,7 +141,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     options.reconnectingMessage.value = '';
   }
 
-  function resetOpenCodeSelectionState() {
+  function resetCrossBackendState() {
     options.serverState.bootstrapped.value = false;
     Object.keys(options.serverState.projects).forEach((key) => {
       delete options.serverState.projects[key];
@@ -109,11 +154,19 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     options.connectedProviderIds.value = [];
     options.modelOptions.value = [];
     options.selectedModel.value = '';
+    options.agents.value = [];
+    options.agentOptions.value = [];
+    options.commands.value = [];
+    options.thinkingOptions.value = [];
+    options.providerDefaults.value = {};
+    options.modelMetaByPath.value = new Map();
   }
 
   async function activateCodex(generation: number) {
+    resetCrossBackendState();
     options.ge.disconnect();
     options.disconnectAcpBackend();
+    options.disconnectKimiWebBackend();
     options.activeBackendKind.value = 'codex';
     options.setActiveBackendKind('codex');
     options.configureCodexBackend({
@@ -179,11 +232,12 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   }
 
   async function activateOpenCode(generation: number) {
+    resetCrossBackendState();
     options.disconnectAcpBackend();
     options.disconnectCodexBackend();
+    options.disconnectKimiWebBackend();
     options.activeBackendKind.value = 'opencode';
     options.setActiveBackendKind('opencode');
-    resetOpenCodeSelectionState();
     resetSharedUiState();
 
     try {
@@ -227,9 +281,11 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
   }
 
   async function activateAcp(generation: number) {
+    resetCrossBackendState();
     try {
       options.ge.disconnect();
       options.disconnectCodexBackend();
+      options.disconnectKimiWebBackend();
       options.activeBackendKind.value = 'acp';
       options.configureAcpBackend({
         bridgeUrl: options.credentials.acpBridgeUrl.value,
@@ -237,7 +293,6 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
         agentId: options.credentials.acpAgentId.value,
       });
       options.setActiveBackendKind('acp');
-      resetOpenCodeSelectionState();
       resetSharedUiState();
       options.connectionState.value = 'connecting';
       options.initLoadingMessage.value = options.t('app.connection.connecting');
@@ -277,6 +332,54 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
     }
   }
 
+  async function activateKimiWeb(generation: number) {
+    resetCrossBackendState();
+    const requestToken = requestFence.start();
+    const hasCurrentRequest = () => requestFence.isCurrent(requestToken);
+    const isCurrent = () => ownsInitialization(generation) && hasCurrentRequest();
+    const remainsCurrent = () => generation === initializationGeneration && hasCurrentRequest();
+
+    try {
+      options.ge.disconnect();
+      options.disconnectAcpBackend();
+      options.disconnectCodexBackend();
+      options.activeBackendKind.value = 'kimi-web';
+      const bridgeUrl = options.credentials.kimiWebBridgeUrl.value;
+      const bridgeToken = options.credentials.kimiWebBridgeToken.value;
+      options.configureKimiWebBackend?.({ bridgeUrl, bridgeToken });
+      options.setActiveBackendKind('kimi-web');
+      resetSharedUiState();
+      options.connectionState.value = 'connecting';
+      options.initLoadingMessage.value = options.t('app.connection.connecting');
+
+      const precheck = options.precheckKimiWebConnection ?? runKimiWebPrecheck;
+      await precheck({ bridgeUrl, bridgeToken });
+      if (!isCurrent()) return;
+
+      options.connectionState.value = 'bootstrapping';
+      await options.bootstrapKimiWebWorkspace(isCurrent);
+      if (!isCurrent()) return;
+
+      options.connectionState.value = 'ready';
+      options.uiInitState.value = 'ready';
+      setTimeout(() => {
+        if (!remainsCurrent()) return;
+        void Promise.allSettled([
+          options.fetchGlobalProviderConfig(),
+          options.fetchProviders(true),
+        ]);
+      }, 0);
+    } catch (error) {
+      if (!isCurrent()) return;
+      options.disconnectKimiWebBackend();
+      options.connectionState.value = 'error';
+      options.initErrorMessage.value = options.toErrorMessage(error);
+      options.uiInitState.value = 'login';
+    } finally {
+      if (generation === initializationGeneration) initializationInFlight.value = false;
+    }
+  }
+
   async function startInitialization() {
     if (initializationInFlight.value) return;
     initializationInFlight.value = true;
@@ -289,18 +392,24 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       await activateAcp(generation);
       return;
     }
+    if (options.credentials.backendKind.value === 'kimi-web') {
+      await activateKimiWeb(generation);
+      return;
+    }
     await activateOpenCode(generation);
   }
 
   function cancelInitialization() {
     initializationGeneration += 1;
     initializationInFlight.value = false;
+    requestFence.invalidate();
   }
 
   function abortInitialization() {
     cancelInitialization();
     options.ge.disconnect();
     options.disconnectAcpBackend();
+    options.disconnectKimiWebBackend();
     if (options.credentials.backendKind.value === 'codex') options.codexApi.disconnectTransport();
     options.disconnectCodexBackend();
     options.connectionState.value = 'connecting';

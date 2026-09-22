@@ -62,7 +62,7 @@ export function useBackendSessionTrees(params: {
               })
             : [];
         })()
-          : params.activeBackendKind.value === 'acp'
+          : params.activeBackendKind.value === 'acp' || params.activeBackendKind.value === 'kimi-web'
             ? buildAcpTopPanelTreeData({
                 projects: params.projects,
                 pinnedStore: params.pinnedStore.value,
@@ -84,7 +84,9 @@ export function useBackendSessionTrees(params: {
   });
 
   const sessionTreeData = computed<SessionTreeData>(() => {
-    return params.activeBackendKind.value === 'codex' || params.activeBackendKind.value === 'acp'
+    return params.activeBackendKind.value === 'codex' ||
+      params.activeBackendKind.value === 'acp' ||
+      params.activeBackendKind.value === 'kimi-web'
       ? buildCodexSessionTreeData(topPanelTreeData.value)
       : buildOpenCodeSessionTreeData({
           projects: params.projects,

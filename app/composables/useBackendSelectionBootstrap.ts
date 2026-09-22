@@ -30,6 +30,11 @@ export function useBackendSelectionBootstrap(params: {
       return;
     }
 
+    if (params.activeBackendKind.value === 'kimi-web') {
+      // Kimi Web bootstraps through bootstrapKimiWebWorkspace, never this scan.
+      return;
+    }
+
     if (params.bootstrapOpenCodeSelection) {
       await params.bootstrapOpenCodeSelection();
       return;

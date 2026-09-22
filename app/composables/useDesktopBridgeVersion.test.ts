@@ -121,6 +121,36 @@ describe('resolveDesktopBridgeHealthUrl', () => {
     expect(url).toBe('http://acp.example.com:9400/healthz?token=acp-token');
   });
 
+  it('uses the kimi-web bridge for the Kimi Web backend, reusing bridge /healthz', () => {
+    // Given: a Kimi Web backend whose bridge credential is distinct from Codex.
+    const url = resolveDesktopBridgeHealthUrl({
+      backendKind: 'kimi-web',
+      acpBridgeUrl: 'ws://localhost:23004',
+      acpBridgeToken: '',
+      codexBridgeUrl: 'ws://localhost:23004/codex',
+      codexBridgeToken: 'codex-token',
+      kimiWebBridgeUrl: 'wss://bridge.example.com:9300/kimi-web/ws',
+      kimiWebBridgeToken: 'kimi-token',
+    });
+
+    // Then: health targets the bridge /healthz with the kimi-web token, not kimi meta.
+    expect(url).toBe('https://bridge.example.com:9300/healthz?token=kimi-token');
+    expect(url).not.toContain('/kimi-web');
+    expect(url).not.toContain('/api/v1/meta');
+  });
+
+  it('returns no health url for kimi-web without its own bridge url instead of falling back to codex', () => {
+    const url = resolveDesktopBridgeHealthUrl({
+      backendKind: 'kimi-web',
+      acpBridgeUrl: 'ws://localhost:23004',
+      acpBridgeToken: '',
+      codexBridgeUrl: 'ws://localhost:23004/codex',
+      codexBridgeToken: 'codex-token',
+    });
+
+    expect(url).toBe('');
+  });
+
   it('returns no health url when the configured bridge url is invalid', () => {
     const url = resolveDesktopBridgeHealthUrl({
       backendKind: 'opencode',

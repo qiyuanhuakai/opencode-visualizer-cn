@@ -1,0 +1,12 @@
+{"type":"client_hello","id":"c1","payload":{"client_id":"vis-todo13-probe","subscriptions":["session_e0158012-f869-4d98-b4d4-5921a8686e24"],"cursors":{}}}
+{"type":"subscribe","id":"c2","payload":{"session_ids":["session_e0158012-f869-4d98-b4d4-5921a8686e24"]}}
+{"type":"pong","payload":{"nonce":"01M30ZQ3YMVCJZ5FSZX0RFQ72W"}}
+{"type":"pong","payload":{"nonce":"01M30ZQDQ4CFW5CY3G3YQC1CDF"}}
+{"type":"pong","payload":{"nonce":"01M30ZQQFNR1Z1W3E8GCZNK7ZN"}}
+{"type":"pong","payload":{"nonce":"01M30ZR186GXHY2K9N5DVPFAR0"}}
+{"type":"pong","payload":{"nonce":"01M30ZRB0PRNG3Q53R8E78ZTVY"}}
+{"type":"client_hello","id":"k1","payload":{"client_id":"vis-todo13-probe2","subscriptions":["session_e0158012-f869-4d98-b4d4-5921a8686e24"],"cursors":{}}}
+{"type":"subscribe","id":"k2","payload":{"session_ids":["session_00000000-0000-0000-0000-000000000000"]}}
+{"type":"subscribe","id":"k3","payload":{"session_ids":["session_e0158012-f869-4d98-b4d4-5921a8686e24"]}}
+{"type":"bogus.unknown.frame","id":"k900","payload":{"hello":true}}
+{oops-not-json

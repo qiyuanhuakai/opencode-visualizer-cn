@@ -8,10 +8,12 @@ export interface LocaleMessages {
       title: string;
       codexTitle: string;
       acpTitle: string;
+      kimiWebTitle: string;
       backendLabel: string;
       openCodeBackend: string;
       codexBackend: string;
       acpBackend: string;
+      kimiWebBackend: string;
       username: string;
       password: string;
       url: string;
@@ -22,6 +24,9 @@ export interface LocaleMessages {
       acpBridgeHint: string;
       acpBridgeUrl: string;
       acpBridgeToken: string;
+      kimiWebBridgeUrl: string;
+      kimiWebBridgeToken: string;
+      kimiWebBridgeHint: string;
       authRequired: string;
       connect: string;
       retry: string;
@@ -291,6 +296,12 @@ export interface LocaleMessages {
       unhealthy: string;
       version: string;
       noData: string;
+      capabilities: string;
+      modelsReady: string;
+      modelsReadyYes: string;
+      modelsReadyNo: string;
+      unavailable: string;
+      none: string;
     };
     mcp: {
       total: string;
@@ -304,6 +315,7 @@ export interface LocaleMessages {
       noData: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -315,6 +327,7 @@ export interface LocaleMessages {
       noData: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
     };
     plugins: {
       marketplaces: string;
@@ -326,12 +339,14 @@ export interface LocaleMessages {
       hiddenUnavailable: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
     };
     skills: {
       total: string;
       noData: string;
       unsupported: string;
       unsupportedAcp: string;
+      unsupportedKimiWeb: string;
       enable: string;
       disable: string;
       toggleFailed: string;
@@ -347,6 +362,7 @@ export interface LocaleMessages {
       outputTokens: string;
       reasoningTokens: string;
       cacheTokens: string;
+      contextOnlyNote: string;
       userMessages: string;
       assistantMessages: string;
       totalCost: string;
@@ -564,6 +580,7 @@ export interface LocaleMessages {
   inputPanel: {
     placeholder: string;
     loadingAgents: string;
+    agentUnsupported: string;
     defaultAgent: string;
     defaultAgentDescription: string;
     loadingModels: string;
@@ -610,6 +627,92 @@ export interface LocaleMessages {
     suppressWindows: {
       suppressed: string;
       suppress: string;
+    };
+  };
+  kimiWeb: {
+    composer: {
+      manual: string;
+      auto: string;
+      yolo: string;
+      manualDescription: string;
+      autoDescription: string;
+      yoloDescription: string;
+      plan: string;
+      swarm: string;
+      tower: string;
+      planDescription: string;
+      swarmDescription: string;
+      towerDescription: string;
+      towerDisabled: string;
+      unknown: string;
+      unconfirmed: string;
+      stale: string;
+      saving: string;
+      saveFailed: string;
+      saveUncertain: string;
+      retry: string;
+      modeChangePending: string;
+      modeChangeFailedBeforeSend: string;
+    };
+    providers: {
+      title: string;
+      installed: string;
+      catalog: string;
+      models: string;
+      add: string;
+      edit: string;
+      save: string;
+      cancel: string;
+      delete: string;
+      deleteConfirm: string;
+      refresh: string;
+      refreshing: string;
+      importCatalog: string;
+      importConfirm: string;
+      id: string;
+      type: string;
+      baseUrl: string;
+      status: string;
+      defaultModel: string;
+      setDefault: string;
+      defaultUpdated: string;
+      apiKey: string;
+      keyConfigured: string;
+      keyMissing: string;
+      keepKey: string;
+      replaceKey: string;
+      removeKey: string;
+      removeKeyConfirm: string;
+      keyMemoryOnly: string;
+      keyReentryRequired: string;
+      environmentKey: string;
+      environmentKeyHint: string;
+      addModel: string;
+      removeModel: string;
+      modelId: string;
+      modelName: string;
+      contextSize: string;
+      capabilities: string;
+      managed: string;
+      managedReadOnly: string;
+      loading: string;
+      empty: string;
+      catalogEmpty: string;
+      saving: string;
+      saved: string;
+      loadFailed: string;
+      saveFailed: string;
+      deleteFailed: string;
+      refreshFailed: string;
+      importFailed: string;
+      savedRefreshFailed: string;
+      invalidId: string;
+      duplicateId: string;
+      invalidUrl: string;
+      invalidModel: string;
+      dependentModels: string;
+      replaceDefaultBeforeDelete: string;
+      unsavedChanges: string;
     };
   };
   settings: {

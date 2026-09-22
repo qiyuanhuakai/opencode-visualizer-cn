@@ -44,11 +44,12 @@ export function prepareSendPreflight(params: BackendMessageSendParams): SendPref
   const selectedMode = params.selectedMode.value;
   const selectedThinking = params.selectedThinking.value;
   const model =
-    backend === 'codex'
+    backend === 'codex' || backend === 'kimi-web'
       ? { providerID: undefined, modelID: undefined }
       : resolveOpenCodeModel(params, selectedModel);
   if (
     backend !== 'codex' &&
+    backend !== 'kimi-web' &&
     (!model.providerID ||
       !model.modelID ||
       !params.isProviderEnabled(model.providerID) ||

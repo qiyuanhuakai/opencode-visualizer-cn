@@ -7,17 +7,41 @@ import {
   type CodexPlugin,
 } from '../backends/codex/codexAdapter';
 import type { BackendKind } from '../backends/types';
-import { getActiveBackendAdapter } from '../backends/registry';
+import {
+  DEFAULT_KIMI_WEB_BRIDGE_URL,
+  KIMI_WEB_CAPABILITIES,
+  getActiveBackendAdapter,
+} from '../backends/registry';
+import {
+  kimiWebContextOnlyUsage,
+  kimiWebTokenUsageFromReport,
+  type KimiWebTokenUsage,
+} from '../backends/kimiWeb/tokenUsage';
 import { useMessages } from '../composables/useMessages';
 import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
+import type { KimiWebBridgeSessionState } from '../composables/kimiWebMessageBridgeTypes';
+import { resolveDesktopBridgeHealthUrl } from '../composables/useDesktopBridgeVersion';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
 import type { MagicContextWorker } from '../utils/pluginCompatibility';
+import { createKimiWebClient, type KimiWebAuth, type KimiWebMeta } from '../utils/kimiWeb';
+import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../utils/kimiWebWs';
+import { StorageKeys, storageGet } from '../utils/storageKeys';
 import CodexAccountTokenUsage from './codex/CodexAccountTokenUsage.vue';
 import AcpManagerPanel from './AcpManagerPanel.vue';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
+
+/**
+ * Kimi Web seam (Todo 20 → Todo 25): the bridge instance
+ * (`useKimiWebMessageBridge`, Todo 14) is owned by App.vue's serial chain, so
+ * the modal only consumes the per-session state it exposes. Until App.vue
+ * passes it, the kimi-web Token tab shows "no data" instead of guessing.
+ */
+type KimiWebSessionStateReader = {
+  sessionState(sessionId: string): KimiWebBridgeSessionState | undefined;
+};
 
 const props = defineProps<{
   open: boolean;
@@ -28,6 +52,7 @@ const props = defineProps<{
   preload: boolean;
   activeBackendKind: BackendKind;
   magicContextWorkers?: readonly MagicContextWorker[];
+  kimiWebBridge?: KimiWebSessionStateReader;
 }>();
 const emit = defineEmits<{ close: [] }>();
 
@@ -87,24 +112,29 @@ const mcpUnsupported = ref(false);
 const lspUnsupported = ref(false);
 const pluginUnsupported = ref(false);
 const isAcpBackend = computed(() => props.activeBackendKind === 'acp');
-const mcpUnsupportedText = computed(() =>
-  t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported'),
-);
-const lspUnsupportedText = computed(() =>
-  t(isAcpBackend.value ? 'statusMonitor.lsp.unsupportedAcp' : 'statusMonitor.lsp.unsupported'),
-);
-const skillUnsupportedText = computed(() =>
-  t(
+const isKimiWebBackend = computed(() => props.activeBackendKind === 'kimi-web');
+const mcpUnsupportedText = computed(() => {
+  if (isKimiWebBackend.value) return t('statusMonitor.mcp.unsupportedKimiWeb');
+  return t(isAcpBackend.value ? 'statusMonitor.mcp.unsupportedAcp' : 'statusMonitor.mcp.unsupported');
+});
+const lspUnsupportedText = computed(() => {
+  if (isKimiWebBackend.value) return t('statusMonitor.lsp.unsupportedKimiWeb');
+  return t(isAcpBackend.value ? 'statusMonitor.lsp.unsupportedAcp' : 'statusMonitor.lsp.unsupported');
+});
+const skillUnsupportedText = computed(() => {
+  if (isKimiWebBackend.value) return t('statusMonitor.skills.unsupportedKimiWeb');
+  return t(
     isAcpBackend.value ? 'statusMonitor.skills.unsupportedAcp' : 'statusMonitor.skills.unsupported',
-  ),
-);
-const pluginUnsupportedText = computed(() =>
-  t(
+  );
+});
+const pluginUnsupportedText = computed(() => {
+  if (isKimiWebBackend.value) return t('statusMonitor.plugins.unsupportedKimiWeb');
+  return t(
     isAcpBackend.value
       ? 'statusMonitor.plugins.unsupportedAcp'
       : 'statusMonitor.plugins.unsupported',
-  ),
-);
+  );
+});
 const configData = ref<Record<string, unknown> | null>(null);
 const codexPluginData = ref<CodexPlugin[]>([]);
 const backendPluginData = ref<Array<{
@@ -117,9 +147,15 @@ const backendPluginData = ref<Array<{
 const tokenUsage = ref<MessageUsage | null>(null);
 const tokenModelName = ref<string>('');
 const tokenContextLimit = ref<number>(0);
+/** Kimi Web context occupancy (`contextTokens`); 0 for every other backend. */
+const tokenContextUsed = ref<number>(0);
 const tokenUserMessages = ref<number>(0);
 const tokenAssistantMessages = ref<number>(0);
+/** True when the context bar came from the REST session-status fallback. */
+const tokenUsageContextOnly = ref(false);
 const tokenLoading = ref(false);
+const kimiMeta = ref<KimiWebMeta | null>(null);
+const kimiAuth = ref<KimiWebAuth | null>(null);
 const codexApiKeyInput = ref('');
 
 const loading = ref(false);
@@ -227,8 +263,10 @@ function resetTokenData() {
   tokenUsage.value = null;
   tokenModelName.value = '';
   tokenContextLimit.value = 0;
+  tokenContextUsed.value = 0;
   tokenUserMessages.value = 0;
   tokenAssistantMessages.value = 0;
+  tokenUsageContextOnly.value = false;
 }
 
 function resetLoadedState() {
@@ -249,6 +287,8 @@ function resetLoadedState() {
   configData.value = null;
   codexPluginData.value = [];
   backendPluginData.value = [];
+  kimiMeta.value = null;
+  kimiAuth.value = null;
   resetTokenData();
 }
 
@@ -265,8 +305,38 @@ async function refresh() {
   const requestId = ++refreshRequestId;
   loading.value = true;
   errorMessage.value = '';
-  const activeBackend = backend();
   const tokenRefresh = props.sessionId ? fetchTokenData() : Promise.resolve();
+
+  if (isKimiWebBackend.value) {
+    // Kimi Web reads its status surfaces from the live REST envelope: the
+    // version comes from the registered adapter's `getGlobalHealth()`
+    // (`meta.server_version`, D3) and MCP support follows the live
+    // `meta.capabilities.mcp` bit (D4). Fail closed until the meta lands;
+    // `refreshKimiWebStatus` re-applies the flags once it has.
+    applyKimiWebStatusSurfaceSupport();
+    const currentRefresh = (async () => {
+      try {
+        await refreshKimiWebStatus(requestId);
+        if (requestId !== refreshRequestId) return;
+        await tokenRefresh;
+        if (requestId !== refreshRequestId) return;
+      } catch {
+        if (requestId === refreshRequestId) {
+          errorMessage.value = t('statusMonitor.error');
+          hasLoaded.value = false;
+        }
+      }
+    })();
+    refreshPromise = currentRefresh;
+    refreshPromiseRequestId = requestId;
+    void currentRefresh.then(
+      () => finishRefresh(requestId, currentRefresh),
+      () => finishRefresh(requestId, currentRefresh),
+    );
+    return currentRefresh;
+  }
+
+  const activeBackend = backend();
   mcpUnsupported.value = typeof activeBackend.getMcpStatus !== 'function';
   lspUnsupported.value = typeof activeBackend.getLspStatus !== 'function';
   skillUnsupported.value = typeof activeBackend.getSkillStatus !== 'function';
@@ -423,10 +493,223 @@ async function fetchContextLimit(
   return 0;
 }
 
+/**
+ * Kimi Web status-surface support (D4). Support is derived from the LIVE
+ * `meta.capabilities` where a key exists: the measured envelope carries
+ * `websocket, file_upload, fs_query, mcp, tasks, terminal`, so today only
+ * `mcp` can flip on. `lsp`, `skills` and `plugins` have no live key, so they
+ * fall through to the static `KIMI_WEB_CAPABILITIES` lookup — which carries
+ * no bit for them — and keep the fail-closed unsupported copy until a live
+ * key or a wired adapter method says otherwise. Never claim support without
+ * measured evidence.
+ */
+function kimiWebStatusSurfaceSupported(surface: 'mcp' | 'lsp' | 'skills' | 'plugins'): boolean {
+  const liveCapabilities = kimiMeta.value?.capabilities;
+  if (
+    liveCapabilities &&
+    typeof liveCapabilities === 'object' &&
+    !Array.isArray(liveCapabilities) &&
+    surface in liveCapabilities
+  ) {
+    return liveCapabilities[surface] === true;
+  }
+  return (KIMI_WEB_CAPABILITIES as unknown as Record<string, unknown>)[surface] === true;
+}
+
+/**
+ * Applies the D4 surface flags from whatever live meta is currently held.
+ * Runs before a kimi refresh (fail closed on stale/absent meta) and again
+ * once the fresh meta lands, so a live `mcp: true` flips the MCP tab to the
+ * supported-but-empty state and a failed meta keeps the unsupported copy.
+ */
+function applyKimiWebStatusSurfaceSupport() {
+  mcpUnsupported.value = !kimiWebStatusSurfaceSupported('mcp');
+  lspUnsupported.value = !kimiWebStatusSurfaceSupported('lsp');
+  skillUnsupported.value = !kimiWebStatusSurfaceSupported('skills');
+  pluginUnsupported.value = !kimiWebStatusSurfaceSupported('plugins');
+}
+
+function kimiWebBridgeCredentials() {
+  return {
+    bridgeUrl: storageGet(StorageKeys.auth.kimiWebBridgeUrl) ?? DEFAULT_KIMI_WEB_BRIDGE_URL,
+    bridgeToken: storageGet(StorageKeys.auth.kimiWebBridgeToken) ?? '',
+  };
+}
+
+/** REST goes through the bridge proxy root; the bridge injects the kimi bearer. */
+function createKimiWebStatusClient() {
+  const { bridgeUrl, bridgeToken } = kimiWebBridgeCredentials();
+  return createKimiWebClient({
+    baseUrl: kimiWebProxyHttpUrl(kimiWebWsUrl(bridgeUrl, bridgeToken)),
+    getToken: () => bridgeToken,
+  });
+}
+
+/** Bridge `/healthz` (vis_bridge shape: `{ok, service, version}`) via the kimi-web proxy URL. */
+async function fetchKimiWebBridgeHealth(healthUrl: string) {
+  try {
+    const response = await fetch(healthUrl, { credentials: 'omit' });
+    if (!response.ok) return null;
+    const body = await response.json().catch(() => null);
+    if (!body || typeof body !== 'object') return null;
+    const record = body as { ok?: unknown; version?: unknown };
+    return {
+      healthy: record.ok === true,
+      version: typeof record.version === 'string' ? record.version : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * D3 version source: the registered kimi-web adapter answers
+ * `getGlobalHealth()` from live `meta.server_version`, never from the bridge.
+ * Returns null when no adapter is registered or the call fails, so the caller
+ * can fall back to the bridge `/healthz` version.
+ */
+async function fetchKimiWebGlobalHealth(): Promise<{ healthy: boolean; version: string } | null> {
+  try {
+    const adapter = backend();
+    const getGlobalHealth = adapter.getGlobalHealth;
+    if (typeof getGlobalHealth !== 'function') return null;
+    const health = await getGlobalHealth.call(adapter);
+    if (!health || typeof health.version !== 'string') return null;
+    return { healthy: health.healthy !== false, version: health.version };
+  } catch {
+    return null;
+  }
+}
+
+async function refreshKimiWebStatus(requestId: number) {
+  const { bridgeUrl, bridgeToken } = kimiWebBridgeCredentials();
+  const healthUrl = resolveDesktopBridgeHealthUrl({
+    backendKind: 'kimi-web',
+    acpBridgeUrl: '',
+    acpBridgeToken: '',
+    codexBridgeUrl: '',
+    codexBridgeToken: '',
+    kimiWebBridgeUrl: bridgeUrl,
+    kimiWebBridgeToken: bridgeToken,
+  });
+  const client = createKimiWebStatusClient();
+  const [adapterHealth, health, meta, auth] = await Promise.allSettled([
+    fetchKimiWebGlobalHealth(),
+    fetchKimiWebBridgeHealth(healthUrl),
+    client.getMeta(),
+    client.getAuth(),
+  ]);
+  if (requestId !== refreshRequestId) return;
+  // A failed meta/auth keeps the previous values (stale) instead of blanking
+  // the tab; only an explicit reset (backend switch / modal close) clears them.
+  if (meta.status === 'fulfilled') kimiMeta.value = meta.value;
+  if (auth.status === 'fulfilled') kimiAuth.value = auth.value;
+  // The adapter answers from `meta.server_version`; the bridge `/healthz`
+  // version is only the fallback for when no adapter answered.
+  serverHealth.value =
+    adapterHealth.status === 'fulfilled' && adapterHealth.value !== null
+      ? adapterHealth.value
+      : health.status === 'fulfilled'
+        ? health.value
+        : null;
+  // MCP support follows the live capabilities we just read (D4).
+  applyKimiWebStatusSurfaceSupport();
+  const allFailed =
+    health.status === 'rejected' && meta.status === 'rejected' && auth.status === 'rejected';
+  if (allFailed) {
+    errorMessage.value = t('statusMonitor.error');
+    hasLoaded.value = false;
+  } else {
+    hasLoaded.value = true;
+  }
+}
+
+/**
+ * Kimi Web token data comes from the Todo 14 bridge session state, not the
+ * message store: `agent.status.updated` is latest-wins state, while the
+ * normalizer's message tokens are a snapshot taken when a turn group opens.
+ * The store still supplies the model name and message counts (history load,
+ * Todo 15). Todo 23 adds the REST fallback below for the fresh-page case
+ * where the volatile status frames have no replay to rebuild from.
+ */
+function fetchKimiWebTokenData(sessionId: string) {
+  const requestId = ++tokenRequestId;
+  tokenLoading.value = true;
+  const state = props.kimiWebBridge?.sessionState(sessionId);
+  let mapped = kimiWebTokenUsageFromReport(
+    state?.usage,
+    state?.contextTokens,
+    state?.maxContextTokens,
+  );
+  let contextOnly = false;
+  if (!mapped) {
+    // Todo 23: agent.status.updated is volatile and never replayed, so a fresh
+    // page has no bridge usage state; the session status endpoint carries the
+    // live context occupancy (kimi reports no token counts there).
+    void fetchKimiWebSessionStatusContext(sessionId).then((status) => {
+      if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
+      applyKimiWebTokenData(sessionId, requestId, status ? kimiWebContextOnlyUsage(
+        status.context_tokens,
+        status.max_context_tokens,
+      ) : null, Boolean(status));
+    });
+    return;
+  }
+  applyKimiWebTokenData(sessionId, requestId, mapped, contextOnly);
+}
+
+function applyKimiWebTokenData(
+  sessionId: string,
+  requestId: number,
+  mapped: KimiWebTokenUsage | null,
+  contextOnly: boolean,
+) {
+  let userCount = 0;
+  let assistantCount = 0;
+  let modelName = '';
+  for (const root of msg.roots.value.filter((root) => root.sessionID === sessionId)) {
+    for (const info of msg.getThread(root.id)) {
+      if (info.role === 'user') {
+        userCount++;
+      } else if (info.role === 'assistant') {
+        assistantCount++;
+        const usage = msg.getUsage(info.id);
+        if (usage?.modelId) modelName = usage.modelId;
+      }
+    }
+  }
+  if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
+  if (!mapped) {
+    resetTokenData();
+    return;
+  }
+  tokenUsage.value = mapped.usage;
+  tokenContextLimit.value = mapped.contextLimit;
+  tokenContextUsed.value = mapped.contextUsed;
+  tokenUsageContextOnly.value = contextOnly;
+  tokenModelName.value = modelName;
+  tokenUserMessages.value = userCount;
+  tokenAssistantMessages.value = assistantCount;
+  tokenLoading.value = false;
+}
+
+async function fetchKimiWebSessionStatusContext(sessionId: string) {
+  try {
+    return await createKimiWebStatusClient().getSessionStatus(sessionId);
+  } catch {
+    return null;
+  }
+}
+
 async function fetchTokenData() {
   const sessionId = props.sessionId;
   if (!sessionId) {
     resetTokenData();
+    return;
+  }
+
+  if (isKimiWebBackend.value) {
+    fetchKimiWebTokenData(sessionId);
     return;
   }
 
@@ -761,7 +1044,7 @@ const currentTotalInfo = computed(() => {
         ? { label: t('statusMonitor.common.totalLabel'), count: skillEntries.value.length }
         : null;
     case 'token':
-      return tokenUsage.value
+      return tokenUsage.value && !tokenUsageContextOnly.value
         ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
         : null;
     case 'mc':
@@ -787,6 +1070,67 @@ function formatPercent(value: number, total: number): string {
   if (total <= 0) return '0%';
   return `${Math.round((value / total) * 100)}%`;
 }
+
+/**
+ * Usage progress for the token tab. Kimi Web reports context occupancy
+ * directly (`contextTokens` / `maxContextTokens` from `agent.status.updated`),
+ * which is the honest bar; the other backends approximate it with the usage
+ * total over the model context limit.
+ */
+const tokenUsagePercent = computed(() => {
+  if (isKimiWebBackend.value) {
+    return formatPercent(tokenContextUsed.value, tokenContextLimit.value);
+  }
+  if (!tokenUsage.value) return '0%';
+  const total =
+    tokenUsage.value.tokens.total ??
+    (tokenUsage.value.tokens.input +
+      tokenUsage.value.tokens.output +
+      tokenUsage.value.tokens.reasoning);
+  return formatPercent(total, tokenContextLimit.value);
+});
+
+const kimiCapabilitiesText = computed(() => {
+  const capabilities = kimiMeta.value?.capabilities;
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) {
+    return t('statusMonitor.server.unavailable');
+  }
+  const enabled = Object.entries(capabilities)
+    .filter(([, value]) => value === true)
+    .map(([name]) => name);
+  return enabled.length > 0 ? enabled.join(', ') : t('statusMonitor.server.none');
+});
+
+/**
+ * Kimi Server rows render once the live meta/auth envelope has landed, so a
+ * rejected bridge `/healthz` no longer swallows them behind the generic
+ * "no server status information" state.
+ */
+const kimiStatusLoaded = computed(() => kimiMeta.value !== null || kimiAuth.value !== null);
+
+/**
+ * Server-tab Version value. For kimi-web the adapter's `getGlobalHealth()`
+ * already answers from `meta.server_version` (D3), so `serverHealth.version`
+ * IS the kimi version; the live meta is the last-resort source when no health
+ * call answered. Other backends keep reading `serverHealth` alone.
+ */
+const serverVersionText = computed(() => {
+  if (serverHealth.value) return serverHealth.value.version;
+  if (isKimiWebBackend.value) return kimiMeta.value?.server_version ?? '';
+  return '';
+});
+
+const kimiModelsReadyText = computed(() => {
+  if (kimiAuth.value?.models_ready === true) return t('statusMonitor.server.modelsReadyYes');
+  if (kimiAuth.value?.models_ready === false) return t('statusMonitor.server.modelsReadyNo');
+  return t('statusMonitor.server.unavailable');
+});
+
+const kimiModelsReadyDotClass = computed(() => {
+  if (kimiAuth.value?.models_ready === true) return 'status-dot-success';
+  if (kimiAuth.value?.models_ready === false) return 'status-dot-error';
+  return 'status-dot-muted';
+});
 
 </script>
 
@@ -850,28 +1194,45 @@ function formatPercent(value: number, total: number): string {
 
         <!-- Server Tab -->
         <div v-if="activeTab === 'server'" class="status-monitor-content">
-          <div v-if="loading && !serverHealth" class="status-monitor-empty">
+          <div v-if="loading && !serverHealth && !kimiStatusLoaded" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
-          <div v-else-if="!serverHealth" class="status-monitor-empty">
+          <div v-else-if="!serverHealth && !kimiStatusLoaded" class="status-monitor-empty">
             {{ $t('statusMonitor.server.noData') }}
           </div>
           <div v-else class="status-monitor-list">
-            <div class="status-monitor-row">
-              <div class="status-monitor-row-main">
-                <span class="status-dot" :class="serverHealth.healthy ? 'status-dot-success' : 'status-dot-error'" />
-                <span class="status-monitor-name">{{ $t('statusMonitor.server.status') }}</span>
+            <template v-if="serverHealth">
+              <div class="status-monitor-row">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="serverHealth.healthy ? 'status-dot-success' : 'status-dot-error'" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.server.status') }}</span>
+                </div>
+                <span class="status-monitor-meta">
+                  {{ serverHealth.healthy ? $t('statusMonitor.server.healthy') : $t('statusMonitor.server.unhealthy') }}
+                </span>
               </div>
-              <span class="status-monitor-meta">
-                {{ serverHealth.healthy ? $t('statusMonitor.server.healthy') : $t('statusMonitor.server.unhealthy') }}
-              </span>
-            </div>
-            <div class="status-monitor-row">
+            </template>
+            <div v-if="serverHealth || serverVersionText" class="status-monitor-row">
               <div class="status-monitor-row-main">
                 <span class="status-monitor-name">{{ $t('statusMonitor.server.version') }}</span>
               </div>
-              <span class="status-monitor-meta">{{ serverHealth.version }}</span>
+              <span class="status-monitor-meta">{{ serverVersionText }}</span>
             </div>
+            <template v-if="activeBackendKind === 'kimi-web'">
+              <div class="status-monitor-row">
+                <div class="status-monitor-row-main">
+                  <span class="status-monitor-name">{{ $t('statusMonitor.server.capabilities') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ kimiCapabilitiesText }}</span>
+              </div>
+              <div class="status-monitor-row">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="kimiModelsReadyDotClass" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.server.modelsReady') }}</span>
+                </div>
+                <span class="status-monitor-meta">{{ kimiModelsReadyText }}</span>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -1078,11 +1439,11 @@ function formatPercent(value: number, total: number): string {
               <div class="token-usage-track">
                 <div
                   class="token-usage-fill"
-                  :style="{ width: formatPercent(tokenUsage.tokens.total ?? (tokenUsage.tokens.input + tokenUsage.tokens.output + tokenUsage.tokens.reasoning), tokenContextLimit) }"
+                  :style="{ width: tokenUsagePercent }"
                 />
               </div>
               <span class="token-usage-percent">
-                {{ formatPercent(tokenUsage.tokens.total ?? (tokenUsage.tokens.input + tokenUsage.tokens.output + tokenUsage.tokens.reasoning), tokenContextLimit) }}
+                {{ tokenUsagePercent }}
               </span>
             </div>
             <div class="status-monitor-row token-row">
@@ -1093,22 +1454,27 @@ function formatPercent(value: number, total: number): string {
               <span class="token-label">{{ $t('statusMonitor.token.contextLimit') }}</span>
               <span class="token-value">{{ tokenContextLimit > 0 ? formatTokenCount(tokenContextLimit) : '-' }}</span>
             </div>
-            <div class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.inputTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.input) }}</span>
+            <div v-if="tokenUsageContextOnly" class="status-monitor-row token-row">
+              <span class="token-label">{{ $t('statusMonitor.token.contextOnlyNote') }}</span>
             </div>
-            <div class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.outputTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.output) }}</span>
-            </div>
-            <div class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.reasoningTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.reasoning) }}</span>
-            </div>
-            <div v-if="tokenUsage.tokens.cache" class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.cacheTokens') }}</span>
-              <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.cache.read) }} / {{ formatTokenCount(tokenUsage.tokens.cache.write) }}</span>
-            </div>
+            <template v-else>
+              <div class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.inputTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.input) }}</span>
+              </div>
+              <div class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.outputTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.output) }}</span>
+              </div>
+              <div class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.reasoningTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.reasoning) }}</span>
+              </div>
+              <div v-if="tokenUsage.tokens.cache" class="status-monitor-row token-row">
+                <span class="token-label">{{ $t('statusMonitor.token.cacheTokens') }}</span>
+                <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.cache.read) }} / {{ formatTokenCount(tokenUsage.tokens.cache.write) }}</span>
+              </div>
+            </template>
             <div class="status-monitor-row token-row">
               <span class="token-label">{{ $t('statusMonitor.token.userMessages') }}</span>
               <span class="token-value">{{ tokenUserMessages }}</span>

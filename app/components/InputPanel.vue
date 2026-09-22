@@ -302,9 +302,7 @@
           <div class="input-field compact">
             <Dropdown
               v-model="modeValue"
-              :placeholder="
-                hasAgentOptions ? $t('inputPanel.selectAgent') : $t('inputPanel.loadingAgents')
-              "
+              :placeholder="agentPickerPlaceholder"
               :disabled="props.disabled || !hasAgentOptions"
               button-class="input-control input-dropdown-button"
               popup-class="input-dropdown-popup"
@@ -313,14 +311,14 @@
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
-                <span :style="agentValueStyle(id)" :title="modeButtonLabel(id)">{{
-                  modeButtonLabel(id)
+                <span :style="agentValueStyle(id)" :title="agentTriggerLabel(id)">{{
+                  agentTriggerLabel(id)
                 }}</span>
               </template>
               <template #default>
                 <div class="dropdown-list">
                   <div v-if="!hasAgentOptions" class="dropdown-empty">
-                    {{ $t('inputPanel.loadingAgents') }}
+                    {{ agentPickerEmptyCopy }}
                   </div>
                   <DropdownItem v-for="agent in agentOptions" :key="agent.id" :value="agent.id">
                     <div
@@ -581,6 +579,12 @@ type AgentOption = {
 };
 type SkillOption = CodexSkill;
 type ThinkingChoice = { key: string; value: string | undefined; label: string };
+/**
+ * Three-way state of the agent selector: some backends (kimi-web) run a single
+ * main agent per session and never list agents, so an empty list is the settled
+ * truth rather than a pending fetch.
+ */
+type AgentPickerState = 'loading' | 'unsupported' | 'ready';
 
 const { t } = useI18n();
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
@@ -598,6 +602,7 @@ const props = defineProps<{
   mentionFiles?: string[];
   preferFileMentions?: boolean;
   hasAgentOptions: boolean;
+  agentPickerState?: AgentPickerState;
   selectedModel: string;
   selectedThinking: string | undefined;
   modelOptions: ModelOption[];
@@ -658,6 +663,21 @@ const permissionModeOptions = computed(() => props.permissionModeOptions ?? []);
 const permissionModeValue = computed({
   get: () => props.selectedPermissionMode ?? '',
   set: (value) => emit('update:selected-permission-mode', value),
+});
+
+// Omitted prop keeps the historical derivation, so backends that do not pass
+// `agentPickerState` behave exactly as before.
+const agentPickerState = computed<AgentPickerState>(
+  () => props.agentPickerState ?? (props.hasAgentOptions ? 'ready' : 'loading'),
+);
+const agentPickerEmptyCopy = computed(() =>
+  agentPickerState.value === 'unsupported'
+    ? t('inputPanel.agentUnsupported')
+    : t('inputPanel.loadingAgents'),
+);
+const agentPickerPlaceholder = computed(() => {
+  if (agentPickerState.value === 'unsupported') return t('inputPanel.agentUnsupported');
+  return props.hasAgentOptions ? t('inputPanel.selectAgent') : t('inputPanel.loadingAgents');
 });
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
@@ -730,6 +750,13 @@ function modeButtonLabel(id: unknown) {
   const normalizedId = extractAgentOptionId(id);
   if (!normalizedId) return t('inputPanel.defaultAgent');
   return normalizedId.charAt(0).toUpperCase() + normalizedId.slice(1);
+}
+
+// While unsupported the dropdown stays disabled (no agents to pick), so the
+// popup never opens; the trigger itself must carry the not-supported copy.
+function agentTriggerLabel(id: unknown) {
+  if (agentPickerState.value === 'unsupported') return agentPickerEmptyCopy.value;
+  return modeButtonLabel(id);
 }
 
 function historyEntryColor(entry: HistoryEntry) {

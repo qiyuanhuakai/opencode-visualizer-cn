@@ -11,6 +11,14 @@
 - [x] 新增 `docs/kimi.md`：Kimi Code 0.43.0 `kimi web` 服务器接口调研与 VIS 适配方案，与 `docs/codex.md` 同构；全部结论经本机实测验证——现场拉取 `/openapi.json` 与 `/asyncapi.json`，并完成建会话、WS 订阅、发 prompt、收流式事件、读回消息的全链路冒烟。
 - [x] 实测确认关键事实：产品线为 TypeScript/Fastify 5（端口 58627，非旧 Python 版的 FastAPI/5494）；REST 统一 `{code,msg,data,request_id}` 信封；WS `/api/v1/ws` 带 59 类事件、seq+epoch 重放与应用层心跳；建会话时 `agent_config.model` 不生效须走 `POST …/profile`；REST CORS 与 WS 升级均做只认环回源的 Origin 白名单且无配置放开，Pages 与 Electron 直连被拒，适配须统一经 vis_bridge 转发。
 
+### Kimi Web 集成（Alpha）
+
+- [x] 新增 kimi web 作为第四后端：REST 与 WebSocket 全部经 vis_bridge `/kimi-web/*` 转发，kimi bearer 由 bridge 从 `~/.kimi-code/server.token` 惰性读取并注入上游，浏览器侧只持有 bridge 凭据；已建立的 WebSocket 不受 token 轮换影响，轮换后无需重启 bridge 即对新请求生效。
+- [x] 主会话界面接入 kimi web WebSocket 协议：建/选会话（创建后必须补 `POST …/profile` 写模型）、流式文本与思考 delta、历史重载（倒序分页拼接 + 注入消息过滤）、审批与提问（以权威列表对账）、重命名/归档/恢复/删除/中止、steer、附件、Token 用量与状态监视器。
+- [x] 工具、推理、子代理三路悬浮窗随 live 事件流自动弹出，遵循既有「禁止自动弹窗」设置；断线恢复采用 cursor 重订阅加 snapshot 权威重建。
+- [x] 所有入口经运行时能力探测后方可暴露（`/api/v1/meta.capabilities` 加 `/api/v1/auth.models_ready`，fail-closed）；`kimi web` 进程托管采用三态端口契约（空闲且凭据可读才 spawn、可用实例 adopt、端口被占但不可用则报错且不 spawn）。
+- [x] 实测适配状态、协议限制与回放边界契约记录于 `docs/kimi.md`，集成条目列入 README 中英功能表。
+
 ### OMO App Server 适配预备文档
 
 - [x] 新增 `docs/omo.md`：OMO（senpi）codex app-server 协议兼容文档，与 `docs/codex.md` 同构，官方文档原文与上游逐字节校验一致；全部结论经两轮对本机 senpi app-server 的实连线 JSON-RPC 探针验证。

@@ -260,6 +260,10 @@ async function fetchDirectory(dir: string) {
 
 async function listDirectory(dir: string, signal: AbortSignal) {
   const cleanDir = cleanDirectoryPath(dir);
+  if (getActiveBackendKind() === 'kimi-web') {
+    // Kimi Web sessions live in the current workspace; no directory picker applies.
+    throw new Error('Kimi Web does not support the project directory picker.');
+  }
   const { directory, path } = getActiveBackendKind() === 'codex'
     ? { directory: cleanDir, path: '.' }
     : splitFileContentDirectoryAndPath(cleanDir, null);

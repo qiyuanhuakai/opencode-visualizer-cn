@@ -2,7 +2,7 @@ import { createApp, defineComponent, h, nextTick } from 'vue';
 import { vi } from 'vitest';
 import type { CodexPromptInput, CodexPromptResult } from '../backends/codex/codexAdapter';
 import type { CodexJsonRpcNotification } from '../backends/codex/jsonRpcClient';
-import type { BackendAdapter, BackendCapabilities } from '../backends/types';
+import type { BackendAdapter, BackendCapabilities, BackendKind } from '../backends/types';
 import { i18n } from '../i18n';
 import type { ConnectionErrorPacket } from '../types/sse';
 import type { WorkerToTabMessage } from '../types/sse-worker';
@@ -75,6 +75,7 @@ const harness = vi.hoisted(() => {
   const deletePty = vi.fn(async () => undefined);
   const configureCodexBackend = vi.fn();
   const configureAcpBackend = vi.fn();
+  const configureKimiWebBackend = vi.fn();
   const listProviders = vi.fn<() => Promise<ProviderListResult>>(async () => emptyProviderList);
   const getGlobalConfig = vi.fn(async () => ({}));
   const updateGlobalConfig = vi.fn(async (payload: Record<string, unknown>) => payload);
@@ -90,7 +91,7 @@ const harness = vi.hoisted(() => {
     }),
   );
   const codexBatchWriteConfig = vi.fn(async () => ({}));
-  let activeBackendKind: 'opencode' | 'codex' | 'acp' = 'opencode';
+  let activeBackendKind: BackendKind = 'opencode';
   const acpEventHandlers = new Set<(event: unknown) => void>();
 
   class HarnessTerminal {
@@ -180,6 +181,7 @@ const harness = vi.hoisted(() => {
     },
     configureCodexBackend,
     configureAcpBackend,
+    configureKimiWebBackend,
     acpEventHandlers,
     listProviders,
     getGlobalConfig,
@@ -187,7 +189,7 @@ const harness = vi.hoisted(() => {
     codexAdapterSendPrompt,
     codexBatchWriteConfig,
     activeBackendKind: () => activeBackendKind,
-    setActiveBackendKind(kind: 'opencode' | 'codex' | 'acp') {
+    setActiveBackendKind(kind: BackendKind) {
       activeBackendKind = kind;
     },
   };
@@ -377,15 +379,16 @@ harness.configureAcpBackend.mockImplementation(() => acpAdapter);
 vi.mock('../backends/registry', () => ({
   DEFAULT_ACP_BRIDGE_URL: 'ws://127.0.0.1:23004',
   DEFAULT_CODEX_BRIDGE_URL: 'ws://127.0.0.1:23004/codex',
+  DEFAULT_KIMI_WEB_BRIDGE_URL: 'ws://127.0.0.1:23004/kimi-web/ws',
   configureAcpBackend: harness.configureAcpBackend,
   configureCodexBackend: harness.configureCodexBackend,
+  configureKimiWebBackend: harness.configureKimiWebBackend,
   configureOpenCodeBackend: vi.fn(),
   disconnectAcpBackend: vi.fn(),
   disconnectCodexBackend: vi.fn(),
   getActiveBackendAdapter: () => (harness.activeBackendKind() === 'acp' ? acpAdapter : adapter),
   getActiveBackendKind: harness.activeBackendKind,
-  getBackendAdapter: (kind: 'opencode' | 'codex' | 'acp') =>
-    kind === 'acp' ? acpAdapter : adapter,
+  getBackendAdapter: (kind: BackendKind) => (kind === 'acp' ? acpAdapter : adapter),
   getPersistedAcpBridgeToken: () => '',
   getPersistedAcpBridgeUrl: () => 'ws://127.0.0.1:23004',
   getPersistedCodexBridgeToken: () => '',
@@ -514,6 +517,7 @@ async function mountApp(
   harness.getPathInfo.mockClear();
   harness.configureCodexBackend.mockClear();
   harness.configureAcpBackend.mockClear();
+  harness.configureKimiWebBackend.mockClear();
   harness.listProviders.mockReset();
   harness.listProviders.mockResolvedValue(emptyProviderList);
   harness.getGlobalConfig.mockReset();
@@ -591,6 +595,7 @@ async function mountApp(
     terminalInstances: harness.terminalInstances,
     configureCodexBackend: harness.configureCodexBackend,
     configureAcpBackend: harness.configureAcpBackend,
+    configureKimiWebBackend: harness.configureKimiWebBackend,
     listProviders: harness.listProviders,
     getGlobalConfig: harness.getGlobalConfig,
     updateGlobalConfig: harness.updateGlobalConfig,

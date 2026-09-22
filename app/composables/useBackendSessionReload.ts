@@ -1,5 +1,7 @@
 import { nextTick, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
+import { loadKimiWebHistoryEntries } from '../backends/kimiWeb/history';
+import type { KimiWebClient } from '../utils/kimiWeb';
 import type { MessageCacheIdentity } from './useMessages';
 
 type MessageStoreLike = {
@@ -39,6 +41,16 @@ export function useBackendSessionReload(params: {
   codexApi: CodexApiLike;
   codexHistory: Ref<unknown[]>;
   codexReapplyBackfill: () => void;
+  /** Kimi Web session-history REST pager; absent until the adapter is wired. */
+  kimiWebApi?: Pick<KimiWebClient, 'getMessages'>;
+  kimiWebBridge?: {
+    subscribe(sessionIds: string[]): Promise<unknown>;
+    applyHistory(entries: unknown[]): void;
+  };
+  kimiWebHistoryMaxPages?: number;
+  kimiWebHistoryPageSize?: number;
+  /** Fires when the page cap bounded a history load (never silent). */
+  onKimiWebHistoryTruncated?: (info: { sessionId: string; pages: number }) => void;
   fetchRootSessionHistory: (
     rootSessionId: string,
   ) => Promise<{ requestId: number; loaded: boolean }>;
@@ -115,6 +127,7 @@ export function useBackendSessionReload(params: {
       });
     }
     loadedMessageCacheContext = nextCacheContext;
+    if (!newId) params.msg.reset();
 
     if (newId) {
       const sessionId = newId;
@@ -157,6 +170,39 @@ export function useBackendSessionReload(params: {
       params.clearRetryStatus();
       await nextTick();
       if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+
+      if (params.activeBackendKind.value === 'kimi-web') {
+        if (params.kimiWebApi) {
+          params.isLoadingHistory.value = true;
+          try {
+            const result = await loadKimiWebHistoryEntries({
+              sessionId,
+              getMessages: params.kimiWebApi.getMessages,
+              maxPages: params.kimiWebHistoryMaxPages,
+              pageSize: params.kimiWebHistoryPageSize,
+              isCurrent: () => reloadRequestId === params.sessionReloadRequestId.value,
+            });
+            if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+            if (result.truncated) {
+              params.onKimiWebHistoryTruncated?.({ sessionId, pages: result.pages });
+            }
+            if (params.kimiWebBridge) {
+              params.kimiWebBridge.applyHistory(result.entries);
+              await params.kimiWebBridge.subscribe([sessionId]);
+            } else {
+              params.msg.loadHistory(result.entries);
+            }
+            await params.anchorOutputToBottom();
+          } finally {
+            if (reloadRequestId === params.sessionReloadRequestId.value) {
+              params.isLoadingHistory.value = false;
+            }
+          }
+        }
+        if (reloadRequestId !== params.sessionReloadRequestId.value) return;
+        params.focusInput();
+        return;
+      }
 
       const cacheHit = params.msg.tryLoadFromCache({
         namespace: nextCacheContext?.namespace ?? params.getMessageCacheNamespace(),

@@ -20,6 +20,9 @@ import {
   readJsonBody,
 } from './bridgeHttpRoutes.js';
 import { proxyWebSocket } from './codexWebSocketProxy.js';
+import { proxyKimiWebHttp } from './kimiWebHttpProxy.js';
+import { createKimiWebTokenProvider } from './kimiWebToken.js';
+import { handleKimiWebUpgrade } from './kimiWebWsProxy.js';
 import { createPtyManager } from './ptyManager.js';
 import { handleAcpUpgrade, handlePtyUpgrade } from './bridgeWebSocketRoutes.js';
 import { createWorkspaceCommandRunner } from './workspaceCommand.js';
@@ -29,6 +32,29 @@ const DEFAULT_HOST = '127.0.0.1';
 
 export function createVisBridgeServer(options) {
   const bridgeOptions = { host: DEFAULT_HOST, ...options };
+  // Kimi web forwards through the bridge's own `/kimi-web/*` prefix (distinct
+  // from the supervisor's `/api/v1/*`). The bearer is resolved lazily per
+  // request/dial so a rotated `~/.kimi-code/server.token` takes effect at once.
+  const kimiWebOptions = options.kimiWeb ?? {};
+  const kimiWebTokenProvider =
+    kimiWebOptions.tokenProvider ??
+    createKimiWebTokenProvider({ tokenPath: kimiWebOptions.tokenPath });
+  const getKimiWebAuthorization =
+    kimiWebOptions.getUpstreamAuthorization ?? (() => kimiWebTokenProvider.getAuthorization());
+  const kimiWebHttpOptions = {
+    getUpstreamAuthorization: getKimiWebAuthorization,
+    upstreamOrigin: kimiWebOptions.upstreamOrigin,
+    upstreamTimeoutMs: kimiWebOptions.upstreamTimeoutMs,
+  };
+  // Never reuse the Codex bridgeOptions target for kimi; only the bridge-level
+  // host/token are shared so requiresPtyToken/isAuthorized semantics match.
+  const kimiWebUpgradeOptions = {
+    host: bridgeOptions.host,
+    bridgeToken: bridgeOptions.bridgeToken,
+    target: kimiWebOptions.target,
+    getUpstreamAuthorization: getKimiWebAuthorization,
+    handshakeTimeoutMs: kimiWebOptions.handshakeTimeoutMs,
+  };
   const ptyManager = createPtyManager(bridgeOptions);
   const fsManager = createWorkspaceFsManager();
   const commandRunner = createWorkspaceCommandRunner();
@@ -107,6 +133,16 @@ export function createVisBridgeServer(options) {
       return;
     }
 
+    if (requestUrl.pathname === '/kimi-web' || requestUrl.pathname.startsWith('/kimi-web/')) {
+      if (requiresPtyToken(bridgeOptions)) {
+        rejectUnprotectedBridgeControlHttp(response);
+        return;
+      }
+      if (!authorizeHttpRequest(request, response, bridgeOptions.bridgeToken)) return;
+      proxyKimiWebHttp(request, response, kimiWebHttpOptions);
+      return;
+    }
+
     if (requestUrl.pathname.startsWith('/api/v1/')) {
       if (requiresPtyToken(bridgeOptions)) {
         rejectUnprotectedBridgeControlHttp(response);
@@ -147,6 +183,7 @@ export function createVisBridgeServer(options) {
   server.on('upgrade', (request, socket, head) => {
     if (handlePtyUpgrade(request, socket, head, bridgeOptions, ptyManager)) return;
     if (handleAcpUpgrade(request, socket, head, bridgeOptions)) return;
+    if (handleKimiWebUpgrade(request, socket, head, kimiWebUpgradeOptions)) return;
     if (requiresPtyToken(bridgeOptions)) {
       rejectUnprotectedBridgeControlUpgrade(socket);
       return;

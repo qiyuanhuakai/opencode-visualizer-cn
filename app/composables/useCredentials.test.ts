@@ -206,4 +206,117 @@ describe('useCredentials', () => {
     expect(credentials.backendKind.value).toBe('opencode');
     expect(credentials.isConfigured.value).toBe(false);
   });
+
+  it('persists and restores kimi-web bridge credentials', async () => {
+    const first = await importFresh();
+    first.saveKimiWeb('ws://localhost:23004/kimi-web/ws', 'kimi-bridge-secret');
+
+    expect(first.backendKind.value).toBe('kimi-web');
+    expect(first.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
+    expect(first.kimiWebBridgeToken.value).toBe('kimi-bridge-secret');
+    expect(first.isConfigured.value).toBe(true);
+    expect(electronStore.get('opencode.auth.backendKind.v1')).toBe('kimi-web');
+    expect(electronStore.get('opencode.auth.kimiWebBridgeUrl.v1')).toBe(
+      'ws://localhost:23004/kimi-web/ws',
+    );
+    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBe('kimi-bridge-secret');
+
+    vi.resetModules();
+    const second = await importFresh();
+    second.load();
+
+    expect(second.backendKind.value).toBe('kimi-web');
+    expect(second.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
+    expect(second.kimiWebBridgeToken.value).toBe('kimi-bridge-secret');
+    expect(second.isConfigured.value).toBe(true);
+  });
+
+  it('trims the kimi-web bridge URL and drops a blank bridge token from storage', async () => {
+    const credentials = await importFresh();
+
+    credentials.saveKimiWeb('  ws://localhost:23004/kimi-web/ws  ', '   ');
+
+    expect(credentials.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
+    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
+
+    credentials.saveKimiWeb('ws://localhost:23004/kimi-web/ws', '');
+    expect(credentials.kimiWebBridgeToken.value).toBe('');
+    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
+  });
+
+  it('rejects an empty kimi-web bridge URL before activating the backend', async () => {
+    const credentials = await importFresh();
+
+    expect(() => credentials.saveKimiWeb('   ', 'token')).toThrow(
+      'Kimi Web bridge URL is required.',
+    );
+    expect(credentials.backendKind.value).toBe('opencode');
+    expect(electronStore.get('opencode.auth.backendKind.v1')).toBeUndefined();
+    expect(electronStore.get('opencode.auth.kimiWebBridgeUrl.v1')).toBeUndefined();
+  });
+
+  it('clears the kimi-web bridge token but keeps the persisted URL', async () => {
+    const credentials = await importFresh();
+
+    credentials.saveKimiWeb('ws://localhost:23004/kimi-web/ws', 'secret');
+    credentials.clear();
+
+    expect(credentials.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
+    expect(credentials.kimiWebBridgeToken.value).toBe('');
+    expect(credentials.isConfigured.value).toBe(true);
+    expect(electronStore.get('opencode.auth.kimiWebBridgeToken.v1')).toBeUndefined();
+    expect(electronStore.get('opencode.auth.kimiWebBridgeUrl.v1')).toBe(
+      'ws://localhost:23004/kimi-web/ws',
+    );
+  });
+
+  it('reacts to cross-window kimi-web credential updates and ignores unrelated keys', async () => {
+    const credentials = await importFresh();
+    credentials.saveKimiWeb('ws://localhost:23004/kimi-web/ws', 'old-secret');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.codexBridgeToken.v1',
+        newValue: 'codex-secret',
+      } as StorageEvent);
+    }
+    expect(credentials.kimiWebBridgeToken.value).toBe('old-secret');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.kimiWebBridgeToken.v1',
+        newValue: 'new-secret',
+      } as StorageEvent);
+    }
+    expect(credentials.kimiWebBridgeToken.value).toBe('new-secret');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.kimiWebBridgeUrl.v1',
+        newValue: 'ws://bridge.test:23004/kimi-web/ws',
+      } as StorageEvent);
+    }
+    expect(credentials.kimiWebBridgeUrl.value).toBe('ws://bridge.test:23004/kimi-web/ws');
+
+    for (const listener of storageListeners) {
+      listener({ key: 'opencode.auth.backendKind.v1', newValue: 'kimi-web' } as StorageEvent);
+    }
+    expect(credentials.backendKind.value).toBe('kimi-web');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.kimiWebBridgeUrl.v1',
+        newValue: null,
+      } as StorageEvent);
+    }
+    expect(credentials.kimiWebBridgeUrl.value).toBe('ws://localhost:23004/kimi-web/ws');
+
+    for (const listener of storageListeners) {
+      listener({
+        key: 'opencode.auth.kimiWebBridgeToken.v1',
+        newValue: null,
+      } as StorageEvent);
+    }
+    expect(credentials.kimiWebBridgeToken.value).toBe('');
+  });
 });

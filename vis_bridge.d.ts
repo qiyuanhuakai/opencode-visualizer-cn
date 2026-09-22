@@ -2,6 +2,16 @@ import type { Server } from 'node:http';
 import type { BridgeRuntime } from './bridge/bridgeRuntime.js';
 export { parseBridgeUpdateArgs } from './bridge/updateCli.js';
 
+export type VisBridgeKimiWebOptions = {
+  upstreamOrigin?: string;
+  target?: string;
+  getUpstreamAuthorization?: () => string;
+  tokenProvider?: { getAuthorization(): string };
+  tokenPath?: string;
+  handshakeTimeoutMs?: number;
+  upstreamTimeoutMs?: number;
+};
+
 export type VisBridgeServerOptions = {
   host?: string;
   port?: number;
@@ -11,6 +21,7 @@ export type VisBridgeServerOptions = {
   upstreamAuthorization?: string;
   ptyModule?: unknown;
   runtime?: BridgeRuntime;
+  kimiWeb?: VisBridgeKimiWebOptions;
 };
 
 export type VisBridgeServer = Server & {

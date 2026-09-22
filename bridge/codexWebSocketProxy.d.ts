@@ -5,9 +5,11 @@ export type UpstreamWebSocket = {
   readonly head: Buffer;
 };
 
+export type UpstreamAuthorization = string | (() => string);
+
 export function connectUpstreamWebSocket(
   target: string,
-  authorization?: string,
+  authorization?: UpstreamAuthorization,
   options?: {
     readonly handshakeTimeoutMs?: number;
     readonly maxHeaderBytes?: number;

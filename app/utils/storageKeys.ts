@@ -217,8 +217,10 @@ export const StorageKeys = {
     serverUrl: 'auth.serverUrl.v1',
     codexBridgeUrl: 'auth.codexBridgeUrl.v1',
     acpBridgeUrl: 'auth.acpBridgeUrl.v1',
+    kimiWebBridgeUrl: 'auth.kimiWebBridgeUrl.v1',
     codexBridgeToken: 'auth.codexBridgeToken.v1',
     acpBridgeToken: 'auth.acpBridgeToken.v1',
+    kimiWebBridgeToken: 'auth.kimiWebBridgeToken.v1',
     acpAgentId: 'auth.acpAgentId.v1',
   },
 } as const;

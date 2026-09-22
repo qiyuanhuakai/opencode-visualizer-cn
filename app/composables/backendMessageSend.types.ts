@@ -6,6 +6,10 @@ import type {
   CodexSkill,
   CodexTurnInputItem,
 } from '../backends/codex/codexAdapter';
+import type {
+  KimiWebAbortChannel,
+  KimiWebSendApi,
+} from '../backends/kimiWeb/backendMessageSend.kimiWeb';
 import type { ParsedSkill } from '../utils/parseSkill';
 import type { TextTransformer } from '../utils/textTransformers';
 import type { ParsedCodexSlashCommand } from '../utils/codexSlashCommands';
@@ -108,6 +112,13 @@ export type BackendMessageSendParams = {
   readonly providerConfig: Ref<Record<string, unknown> | null>;
   readonly openCodeApi: OpenCodeApiLike;
   readonly codexApi: CodexApiLike;
+  /**
+   * Kimi Web REST surface; optional until Todo 25 passes the real client.
+   * When absent the kimi-web dispatch fails closed instead of using OpenCode.
+   */
+  readonly kimiWebApi?: KimiWebSendApi;
+  readonly kimiWebAbortChannel?: KimiWebAbortChannel;
+  readonly isKimiWebSessionModeReady?: (sessionId: string) => boolean;
   readonly ensureConnectionReady: (action: string) => boolean;
   readonly translate: (key: string, params?: Record<string, unknown>) => string;
   readonly toErrorMessage: (error: unknown) => string;

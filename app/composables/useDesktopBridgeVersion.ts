@@ -1,6 +1,7 @@
 import type { Ref } from 'vue';
 import { acpBridgeHttpUrl } from '../backends/acp/bridgeUrl';
 import { appendCodexBridgeToken, codexBridgeHttpUrl } from '../backends/codex/bridgeUrl';
+import { kimiWebBridgeHttpUrl } from '../backends/registry';
 import type { BackendKind } from '../backends/types';
 import type { DesktopApi, DesktopBridgeEndpointLocality } from '../types/desktop';
 import {
@@ -14,6 +15,8 @@ export interface DesktopBridgeHealthTarget {
   readonly acpBridgeToken: string;
   readonly codexBridgeUrl: string;
   readonly codexBridgeToken: string;
+  readonly kimiWebBridgeUrl?: string;
+  readonly kimiWebBridgeToken?: string;
 }
 
 export function resolveDesktopBridgeHealthUrl(target: DesktopBridgeHealthTarget): string {
@@ -23,6 +26,12 @@ export function resolveDesktopBridgeHealthUrl(target: DesktopBridgeHealthTarget)
         acpBridgeHttpUrl(target.acpBridgeUrl, '/healthz'),
         target.acpBridgeToken,
       );
+    }
+    if (target.backendKind === 'kimi-web') {
+      const bridgeHttpUrl = new URL(kimiWebBridgeHttpUrl(target.kimiWebBridgeUrl ?? ''));
+      bridgeHttpUrl.pathname = '/healthz';
+      bridgeHttpUrl.search = '';
+      return appendCodexBridgeToken(bridgeHttpUrl.toString(), target.kimiWebBridgeToken);
     }
     // Codex and OpenCode share the configured common bridge; the OpenCode server
     // URL is never a bridge health endpoint.
