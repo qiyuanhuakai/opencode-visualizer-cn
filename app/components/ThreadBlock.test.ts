@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, defineComponent, h, nextTick } from 'vue';
+import { createApp, defineComponent, h, nextTick, reactive } from 'vue';
 import { createI18n } from 'vue-i18n';
 
 import ThreadBlock from './ThreadBlock.vue';
@@ -168,6 +168,33 @@ describe('ThreadBlock history wiring', () => {
     expect(availability).toHaveBeenCalledWith('main', 'u1');
     expect(view.root.querySelector('.ib-action-diff')).toBeNull();
     expect(loader).not.toHaveBeenCalled();
+  });
+
+  it('shows newly recorded Kimi file differences after an active turn completes', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    let hasDiffs = false;
+    const availability = vi.fn(async () => hasDiffs);
+    const props = reactive({
+      root: user,
+      backendKind: 'kimi-web' as const,
+      isLatestRoot: true,
+      cardActionsDisabled: true,
+      hasMessageDiffs: availability,
+    });
+    const view = mount(props, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-action-diff')).toBeNull();
+
+    hasDiffs = true;
+    useMessages().loadHistory([
+      { info: user, parts: [] },
+      { info: makeAssistantMessage('main', 'a1', 'u1', 2), parts: [makeTextPart('a1', 'main', 'File updated')] },
+    ]);
+    props.cardActionsDisabled = false;
+    await flushRender();
+    expect(availability).toHaveBeenCalledTimes(2);
+    expect(view.root.querySelector('.ib-action-diff')).not.toBeNull();
   });
 
   it('shows the Kimi permission mode and per-turn tokens under the card', async () => {
