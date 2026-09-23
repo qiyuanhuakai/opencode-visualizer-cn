@@ -12,6 +12,7 @@ type HarnessOverrides = {
   bootstrapAcpWorkspace?: () => Promise<void>;
   bootstrapSelections?: () => Promise<void>;
   hydrateActiveWorktreeResources?: () => Promise<void>;
+  reloadSelectedSessionState?: () => Promise<void>;
   precheckKimiWebConnection?: () => Promise<void>;
   bootstrapKimiWebWorkspace?: (isCurrent: () => boolean) => Promise<void>;
 };
@@ -184,9 +185,9 @@ function createHarness(initialBackend: BackendKind = 'opencode', overrides: Harn
           performance.mark('vis:opencode-full-tree');
         }
       }),
-    reloadSelectedSessionState: async () => {
+    reloadSelectedSessionState: overrides.reloadSelectedSessionState ?? (async () => {
       calls.push('reloadSelectedSessionState');
-    },
+    }),
     precheckKimiWebConnection:
       overrides.precheckKimiWebConnection ??
       (async () => {
@@ -569,6 +570,21 @@ describe('useBackendActivation', () => {
       markSpy.mock.calls.map(([name]) => name).filter((name) => name.startsWith('vis:opencode-')),
     ).toEqual([]);
     markSpy.mockRestore();
+  });
+
+  it('keeps Codex connected when the first history render times out', async () => {
+    const harness = createHarness('codex', {
+      reloadSelectedSessionState: async () => { throw new Error('Render timeout'); },
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await harness.activation.startInitialization();
+
+    expect(harness.uiInitState.value).toBe('ready');
+    expect(harness.connectionState.value).toBe('ready');
+    expect(harness.calls).not.toContain('codex.disconnectTransport');
+    expect(errorSpy).toHaveBeenCalledWith('[codex] Initial session reload failed:', expect.objectContaining({ message: 'Render timeout' }));
+    errorSpy.mockRestore();
   });
 
   it('reaches Ready while resource hydration is still pending', async () => {

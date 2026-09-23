@@ -217,7 +217,13 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       options.uiInitState.value = 'ready';
 
       if (options.selectedSessionId.value) {
-        await options.reloadSelectedSessionState(options.selectedSessionId.value);
+        try {
+          await options.reloadSelectedSessionState(options.selectedSessionId.value);
+        } catch (error) {
+          if (ownsInitialization(generation)) {
+            console.error('[codex] Initial session reload failed:', error);
+          }
+        }
       }
     } catch (error) {
       if (!ownsInitialization(generation)) return;

@@ -44,6 +44,25 @@ describe('useBackendSessionReload', () => {
     finishAnchor();
     await loading;
     expect(options.isLoadingHistory.value).toBe(false);
+    expect(anchorOutputToBottom).toHaveBeenCalledWith(false);
+  });
+
+  it('keeps Codex history usable when output anchoring times out', async () => {
+    const { reload, options, mocks } = createSessionReloadFixture({
+      activeBackendKind: ref('codex'),
+      codexHistory: ref([{ id: 'history-1' }]),
+      anchorOutputToBottom: vi.fn().mockRejectedValue(new Error('Render timeout')),
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await reload.reloadSelectedSessionState('thread-1');
+      expect(mocks.msg.loadHistory).toHaveBeenCalledWith([{ id: 'history-1' }]);
+      expect(options.isLoadingHistory.value).toBe(false);
+      expect(options.focusInput).toHaveBeenCalledOnce();
+      expect(errorSpy).toHaveBeenCalledWith('[codex] Output anchoring failed:', expect.objectContaining({ message: 'Render timeout' }));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   it('keeps a completed root snapshot cacheable when child hydration fails', async () => {

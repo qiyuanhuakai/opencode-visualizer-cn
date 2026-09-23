@@ -68,6 +68,27 @@ describe('useCodexApi', () => {
     expect(api.activeTurn.value?.status).toBe('completed');
   });
 
+  it('keeps the latest assistant reply when an old hydration finishes after a new turn starts', async () => {
+    const mock = createAdapterMock();
+    const oldTurn = { id: 'old', items: [{ type: 'userMessage', id: 'u-old', content: [{ type: 'text', text: 'old' }] }, { type: 'agentMessage', id: 'a-old', text: 'old reply' }] };
+    const recentTurn = { id: 'recent', items: [{ type: 'userMessage', id: 'u-recent', content: [{ type: 'text', text: 'recent' }] }, { type: 'agentMessage', id: 'a-recent', text: 'recent reply' }] };
+    vi.mocked(mock.adapter.readThread).mockResolvedValue({ thread: { id: 'thr_existing', turns: [oldTurn, recentTurn] } });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    const reply = deferred<Awaited<ReturnType<CodexAdapter['readThread']>>>();
+    vi.mocked(mock.adapter.readThread).mockImplementationOnce(() => reply.promise);
+
+    mock.emit({ method: 'turn/completed', params: { threadId: 'thr_existing', turn: { id: 'recent', status: 'completed', items: recentTurn.items } } });
+    await vi.waitFor(() => expect(mock.adapter.readThread).toHaveBeenCalledTimes(2));
+    mock.emit({ method: 'turn/started', params: { threadId: 'thr_existing', turn: { id: 'next', status: 'inProgress', items: [] } } });
+    reply.resolve({ thread: { id: 'thr_existing', turns: [oldTurn] } });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(api.activeTurn.value?.id).toBe('next');
+
+    expect(api.canonicalHistory.value.some((entry) => entry.parts.some((part) => part.type === 'text' && part.text === 'recent reply'))).toBe(true);
+  });
+
   it('does not restore a historical completed turn as active', async () => {
     const mock = createAdapterMock();
     vi.mocked(mock.adapter.readThread).mockResolvedValue({

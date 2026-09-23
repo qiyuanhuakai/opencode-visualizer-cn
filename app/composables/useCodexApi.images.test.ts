@@ -5,6 +5,45 @@ import { createAdapterMock, deferred, resetCodexApiTestState } from './useCodexA
 describe('useCodexApi', () => {
   beforeEach(resetCodexApiTestState);
 
+  it('opens text history while historical images are still loading', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn().mockResolvedValue({
+      thread: { id: 'thr_existing', turns: [{ id: 'turn_img', items: [{ id: 'shot', type: 'imageView', path: '/tmp/shot.png' }] }] },
+    });
+    const image = deferred<{ dataBase64: string }>();
+    mock.adapter.readFile = vi.fn(() => image.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+
+    const selecting = api.selectThread('thr_existing');
+    await vi.waitFor(() => expect(mock.adapter.readFile).toHaveBeenCalled());
+    await selecting;
+    expect(mock.adapter.resumeThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
+    expect(api.loadingThread.value).toBe(false);
+    image.resolve({ dataBase64: 'AA==' });
+    await vi.waitFor(() => expect(api.canonicalHistory.value.flatMap(entry => entry.parts)).toContainEqual(
+      expect.objectContaining({ type: 'file', url: 'data:image/png;base64,AA==' }),
+    ));
+  });
+
+  it('does not attach a late historical image to another selected thread', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.readThread = vi.fn()
+      .mockResolvedValueOnce({ thread: { id: 'thr_existing', turns: [{ id: 'turn_img', items: [{ id: 'shot', type: 'imageView', path: '/tmp/shot.png' }] }] } })
+      .mockResolvedValueOnce({ thread: { id: 'thr_other', turns: [] } });
+    const image = deferred<{ dataBase64: string }>();
+    mock.adapter.readFile = vi.fn(() => image.promise);
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+    await api.connect();
+    await api.selectThread('thr_existing');
+    await api.selectThread('thr_other');
+
+    image.resolve({ dataBase64: 'AA==' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(api.activeThreadId.value).toBe('thr_other');
+    expect(api.canonicalHistory.value.flatMap(entry => entry.parts)).toEqual([]);
+  });
+
   it('sends Codex image input items without degrading them to file text', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });

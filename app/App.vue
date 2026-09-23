@@ -1699,13 +1699,13 @@ function handleOutputPanelContentResized() {
   notifyContentChange();
 }
 
-async function anchorOutputToBottom() {
+async function anchorOutputToBottom(waitForRenders = true) {
   const requestId = ++outputAnchorRequestId;
   isOutputAnchoring.value = true;
   pauseTracking();
   try {
     await nextTick();
-    await outputPanelRef.value?.scrollToBottom(waitForPendingRenders);
+    await outputPanelRef.value?.scrollToBottom(waitForRenders ? waitForPendingRenders : undefined);
   } finally {
     if (requestId === outputAnchorRequestId) {
       isOutputAnchoring.value = false;

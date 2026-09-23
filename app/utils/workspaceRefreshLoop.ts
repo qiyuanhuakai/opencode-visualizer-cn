@@ -1,4 +1,4 @@
-const WORKSPACE_REFRESH_INTERVAL_MS = 5_000;
+const WORKSPACE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
 export type WorkspaceRefreshLoop = {
   readonly start: () => void;
