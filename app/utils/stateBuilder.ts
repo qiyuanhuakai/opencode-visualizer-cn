@@ -893,7 +893,6 @@ export function createStateBuilder() {
     recordSessionMutation(info.id);
     const changed = upsertSession({
       ...info,
-      revert: info.revert,
     });
     pruneEphemeralChildren();
     return changed;

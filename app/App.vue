@@ -713,6 +713,7 @@ import { usePermissions, type PermissionReply, type PermissionRequest } from './
 import { useQuestions } from './composables/useQuestions';
 import { useTodos, type TodoItem } from './composables/useTodos';
 import type { QuestionRequest } from './types/sse';
+import { isSessionInfo } from './workers/sse-state-packet';
 import { codexPlansToTodoSessions } from './utils/codexPlanTodos';
 import { createCodexSubpanelProps } from './utils/codexSubpanelProps';
 import { defaultComposerMode } from './utils/defaultComposerMode';
@@ -2124,6 +2125,29 @@ const { bootstrapOpenCodeSelection } = useOpenCodeSelectionBootstrap({
   clearStoredSelection: () => clearOpenCodeLastSelection(currentServerUrl.value),
   loadDirectorySessions: (directory) => {
     ge.sendToWorker({ type: 'load-sessions', directory });
+  },
+  lookupGlobalSessionById: async (sessionId, directoryHint) => {
+    const getSession = backend().getSession;
+    if (!getSession) return false;
+    const directories = directoryHint.trim() ? [directoryHint.trim(), undefined] : [undefined];
+    for (const directory of directories) {
+      let result: unknown;
+      try {
+        result = await getSession(sessionId, directory);
+      } catch (error) {
+        if (error instanceof Error && error.message.endsWith('(404)')) continue;
+        throw error;
+      }
+      if (!isSessionInfo(result) || result.id !== sessionId || result.projectID !== 'global') continue;
+      ge.sendToWorker({ type: 'hydrate-session', session: result });
+      await waitForState(
+        () => serverState.projects,
+        (projects) => Object.values(projects.global?.sandboxes ?? {}).some((sandbox) => Boolean(sandbox.sessions[sessionId])),
+        5_000,
+      );
+      return true;
+    }
+    return false;
   },
   selectedProjectId,
   selectedSessionId,
@@ -5114,6 +5138,8 @@ async function handleUndoRevert() {
       projectId: selectedProjectId.value,
       directory: activeDirectory.value.trim() || undefined,
     });
+    const directory = activeDirectory.value.trim();
+    if (directory) ge.sendToWorker({ type: 'refresh-session', sessionId, directory });
     setSendStatusKey('app.status.undone');
   } catch (error) {
     sessionError.value = t('app.error.sessionUndoFailed', { message: toErrorMessage(error) });

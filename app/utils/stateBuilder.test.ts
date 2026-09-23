@@ -4,6 +4,20 @@ import type { ProjectInfo, SessionInfo } from '../types/sse';
 import { createStateBuilder } from './stateBuilder';
 
 describe('createStateBuilder regression', () => {
+  it('preserves a revert marker when a later session update omits it', () => {
+    const builder = createStateBuilder();
+    builder.processSessionUpdated({
+      id: 's1', projectID: 'p1', title: 'Test', slug: 'test', directory: '/',
+      version: '1', time: { created: 1, updated: 1 }, revert: { messageID: 'm1' },
+    });
+
+    builder.processSessionUpdated({
+      id: 's1', projectID: 'p1', title: 'Test', slug: 'test', directory: '/',
+      version: '1', time: { created: 1, updated: 2 },
+    });
+
+    expect(builder.getState().projects.p1.sandboxes['/'].sessions.s1.revert).toEqual({ messageID: 'm1' });
+  });
   it('preserves pinned and archived timestamps on partial session update', () => {
     const builder = createStateBuilder();
 

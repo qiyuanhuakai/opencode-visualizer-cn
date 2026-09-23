@@ -93,6 +93,54 @@ afterEach(() => {
 });
 
 describe('SSE SharedWorker bootstrap and hydration', () => {
+  it('refreshes an existing session marker from the authoritative session endpoint', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const reverted = { ...sessionInfo('s1', 'Session', undefined, '/a'), revert: { messageID: 'msg-2' } };
+    mocks.adapter.listSessions.mockResolvedValue([reverted]);
+    post(worker, { type: 'load-sessions', directory: '/a' });
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']?.sessions.s1?.revert).toEqual({ messageID: 'msg-2' }));
+
+    mocks.adapter.getSession.mockResolvedValue(sessionInfo('s1', 'Session', undefined, '/a'));
+    latestCallbacks().onPacket(sessionPacket('session.updated', sessionInfo('s1', 'Session', undefined, '/a')));
+
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']?.sessions.s1?.revert).toBeUndefined());
+    expect(mocks.adapter.getSession).toHaveBeenCalledWith('s1', '/a');
+  });
+
+  it('keeps a revert marker when an update omits it but the session endpoint retains it', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const reverted = { ...sessionInfo('s1', 'Session', undefined, '/a'), revert: { messageID: 'msg-2' } };
+    mocks.adapter.listSessions.mockResolvedValue([reverted]);
+    post(worker, { type: 'load-sessions', directory: '/a' });
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']?.sessions.s1?.revert).toEqual(reverted.revert));
+    mocks.adapter.getSession.mockResolvedValue(reverted);
+    const updatesBeforeRefresh = messagesOf(worker.messages, 'state.project-updated').length;
+
+    latestCallbacks().onPacket(sessionPacket('session.updated', sessionInfo('s1', 'Session', undefined, '/a')));
+
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.project-updated').length).toBeGreaterThan(updatesBeforeRefresh));
+    expect(mocks.adapter.getSession).toHaveBeenCalledWith('s1', '/a');
+    expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']?.sessions.s1?.revert).toEqual(reverted.revert);
+  });
+
+  it('runs a later session refresh after an earlier refresh is still in flight', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const first = deferred<unknown>();
+    mocks.adapter.getSession
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce(sessionInfo('s1', 'Session', undefined, '/a'));
+
+    post(worker, { type: 'refresh-session', sessionId: 's1', directory: '/a' });
+    await vi.waitFor(() => expect(mocks.adapter.getSession).toHaveBeenCalledTimes(1));
+    post(worker, { type: 'refresh-session', sessionId: 's1', directory: '/a' });
+    first.resolve({ ...sessionInfo('s1', 'Session', undefined, '/a'), revert: { messageID: 'msg-2' } });
+
+    await vi.waitFor(() => expect(mocks.adapter.getSession).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/a']?.sessions.s1?.revert).toBeUndefined());
+  });
   it('passes an explicit undefined authorization into an unauthenticated worker read', async () => {
     const authenticated = await connectWorker('http://authenticated', 'Bearer TOP-SECRET');
     await vi.waitFor(() =>
@@ -163,6 +211,17 @@ describe('SSE SharedWorker bootstrap and hydration', () => {
         'global-session'
       ],
     ).toBeDefined();
+  });
+
+  it('places a directly found global session into a previously unknown directory', async () => {
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const session = { ...sessionInfo('global-existing', 'Existing', undefined, '/outside'), projectID: 'global' };
+
+    post(worker, { type: 'hydrate-session', session });
+
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/outside']?.sessions['global-existing']).toBeDefined());
+    expect(messagesOf(worker.messages, 'state.directory-hydration-updated').some((entry) => entry.directory === '/outside')).toBe(true);
   });
 
   it('loads only the requested directory once and never reads targeted VCS', async () => {
