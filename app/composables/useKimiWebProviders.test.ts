@@ -84,9 +84,7 @@ function routeProviderList(
 ) {
   harness.route('GET', '/kimi-web/api/v1/providers', () => jsonResponse(envelope({ items })));
   harness.route('GET', '/kimi-web/api/v1/config', () =>
-    jsonResponse(
-      envelope({ default_model: 'custom-openai/gpt-4.1', models: CONFIG_MODELS }),
-    ),
+    jsonResponse(envelope({ default_model: 'custom-openai/gpt-4.1', models: CONFIG_MODELS })),
   );
   harness.route('GET', '/kimi-web/api/v1/catalog/providers', () =>
     jsonResponse(envelope({ items: [] })),
@@ -94,6 +92,28 @@ function routeProviderList(
 }
 
 describe('useKimiWebProviders', () => {
+  it('resolves config model aliases by qualified key instead of upstream model name', async () => {
+    const harness = createTestClient();
+    routeProviderList(harness);
+    const source = {
+      model: 'vendor/upstream-model',
+      name: 'Aliased model',
+      max_context_size: 64000,
+      capabilities: ['vision'],
+    };
+    harness.route('GET', '/kimi-web/api/v1/config', () =>
+      jsonResponse(envelope({ models: { 'custom-openai/gpt-4.1': source } })),
+    );
+    const store = useKimiWebProviders({ client: harness.client });
+    await store.load();
+    expect(store.providers.value[0]?.models[0]).toMatchObject({
+      id: 'gpt-4.1',
+      name: 'Aliased model',
+      maxContextSize: 64000,
+      capabilities: { attachment: true },
+      source,
+    });
+  });
   it('loads providers merged with config model details', async () => {
     const harness = createTestClient();
     routeProviderList(harness);
@@ -309,6 +329,16 @@ describe('useKimiWebProviders', () => {
     expect(providers.busyProviderId.value).toBeNull();
   });
 
+  it('updates the provider default shown after a successful selection', async () => {
+    const harness = createTestClient();
+    routeProviderList(harness);
+    harness.route('POST', '/kimi-web/api/v1/models/custom-openai%2Fgpt-4.1-mini:set_default', () => jsonResponse(envelope({})));
+    const store = useKimiWebProviders({ client: harness.client });
+    await store.load();
+    await store.setDefaultModel('custom-openai/gpt-4.1-mini');
+    expect(store.providers.value[0]?.defaultModel).toBe('custom-openai/gpt-4.1-mini');
+  });
+
   it('distinguishes a business error from a transport failure', async () => {
     const business = createTestClient();
     business.route('GET', '/kimi-web/api/v1/providers', () =>
@@ -335,8 +365,10 @@ describe('useKimiWebProviders', () => {
   it('deletes, refreshes one, refreshes all, and imports through the action routes', async () => {
     const harness = createTestClient();
     routeProviderList(harness);
-    harness.route('DELETE', '/kimi-web/api/v1/providers/custom-openai', () =>
-      new Response(null, { status: 204 }),
+    harness.route(
+      'DELETE',
+      '/kimi-web/api/v1/providers/custom-openai',
+      () => new Response(null, { status: 204 }),
     );
     harness.route('POST', '/kimi-web/api/v1/providers/custom-openai:refresh', () =>
       jsonResponse(envelope({ changed: [], unchanged: [], failed: [] })),
@@ -344,8 +376,10 @@ describe('useKimiWebProviders', () => {
     harness.route('POST', '/kimi-web/api/v1/providers:refresh', () =>
       jsonResponse(envelope({ changed: [], unchanged: [], failed: [] })),
     );
-    harness.route('POST', '/kimi-web/api/v1/providers:import_catalog', () =>
-      new Response(null, { status: 200 }),
+    harness.route(
+      'POST',
+      '/kimi-web/api/v1/providers:import_catalog',
+      () => new Response(null, { status: 200 }),
     );
     const providers = useKimiWebProviders({ client: harness.client });
 
@@ -402,8 +436,10 @@ describe('useKimiWebProviders', () => {
     harness.route('GET', '/kimi-web/api/v1/catalog/providers', () =>
       jsonResponse(envelope({ items: [] })),
     );
-    harness.route('DELETE', '/kimi-web/api/v1/providers/custom-openai', () =>
-      new Response(null, { status: 204 }),
+    harness.route(
+      'DELETE',
+      '/kimi-web/api/v1/providers/custom-openai',
+      () => new Response(null, { status: 204 }),
     );
     const providers = useKimiWebProviders({ client: harness.client });
     await providers.load();

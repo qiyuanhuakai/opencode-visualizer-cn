@@ -7,6 +7,10 @@
  * to the app's camelCase shapes happens in the backend adapter, not here.
  */
 
+import { parseKimiWebGoal } from '../backends/kimiWeb/goal';
+import { createKimiWebAgentClient } from './kimiWebAgents';
+import { createKimiWebCheckpointClient } from './kimiWebCheckpoints';
+
 const JSON_CONTENT_TYPE = 'application/json';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -103,6 +107,15 @@ export type KimiWebModel = {
   default_effort?: string;
 };
 
+export type KimiWebConfig = {
+  default_model?: string;
+  secondary_model?: {
+    default_model?: string;
+    models?: Record<string, string>;
+    force?: boolean;
+  };
+};
+
 export type KimiWebProviderType =
   | 'kimi'
   | 'openai'
@@ -114,6 +127,7 @@ export type KimiWebProviderType =
 export type KimiWebModelObjectWire = {
   model: string;
   name?: string;
+  display_name?: string;
   max_context_size: number;
   capabilities?: string[];
 };
@@ -131,8 +145,14 @@ export type KimiWebProviderWire = {
 export type KimiWebProviderCatalogEntryWire = {
   id: string;
   name?: string;
-  env_key?: string;
-  models: KimiWebModelObjectWire[];
+  env_key?: string | null;
+  wire_type: KimiWebProviderType | null;
+  base_url: string | null;
+  needs_base_url: boolean;
+  rejected: boolean;
+  reject_reason: string | null;
+  guessed: boolean;
+  models: Array<{ id: string; name?: string; max_context_size: number; capabilities?: string[]; reasoning: boolean }>;
 };
 
 export type KimiWebProviderCreateInput = {
@@ -140,6 +160,7 @@ export type KimiWebProviderCreateInput = {
   type: KimiWebProviderType;
   base_url?: string;
   api_key?: string;
+  api_key_env?: string;
   models: KimiWebModelObjectWire[];
 };
 
@@ -205,7 +226,7 @@ export type KimiWebSession = {
   archived_at?: string | null;
   current_prompt_id?: string;
   last_prompt?: string;
-  metadata?: { cwd: string };
+  metadata?: { cwd: string; parent_session_id?: string; child_session_kind?: string };
   agent_config?: KimiWebAgentConfig;
   usage?: KimiWebUsage;
   permission_rules?: KimiWebPermissionRule[];
@@ -237,7 +258,7 @@ export type KimiWebContentPart =
     };
 
 export type KimiWebMessageOrigin = {
-  kind?: 'user' | 'injection';
+  kind?: 'user' | 'injection' | 'skill_activation' | 'plugin_command' | 'compaction_summary';
   [key: string]: unknown;
 };
 
@@ -616,10 +637,15 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
     });
 
   return {
+    ...createKimiWebAgentClient(requestJson),
+    ...createKimiWebCheckpointClient(requestJson),
     getMeta: () => requestJson<KimiWebMeta>({ method: 'GET', path: '/api/v1/meta' }),
     getAuth: () => requestJson<KimiWebAuth>({ method: 'GET', path: '/api/v1/auth' }),
     listModels: () =>
       requestJson<KimiWebPage<KimiWebModel>>({ method: 'GET', path: '/api/v1/models' }),
+    getConfig: () => requestJson<KimiWebConfig>({ method: 'GET', path: '/api/v1/config' }),
+    updateConfig: (patch: KimiWebConfig) =>
+      requestJson<KimiWebConfig>({ method: 'POST', path: '/api/v1/config', body: patch }),
 
     listKimiWebProviders: () =>
       requestJson<KimiWebPage<KimiWebProviderWire>>({
@@ -671,12 +697,27 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
 
     createSession: (input: KimiWebCreateSessionInput) =>
       requestJson<KimiWebSession>({ method: 'POST', path: '/api/v1/sessions', body: input }),
+    forkSession: (sessionId: string) =>
+      requestJson<KimiWebSession>({
+        method: 'POST',
+        path: `${sessionPath(sessionId)}:fork`,
+        body: {},
+      }),
+    compactSession: (sessionId: string) =>
+      requestJson<unknown>({
+        method: 'POST',
+        path: `${sessionPath(sessionId)}:compact`,
+        body: {},
+      }),
     updateProfile: (sessionId: string, input: KimiWebSessionProfileInput) =>
       requestJson<KimiWebSession>({
         method: 'POST',
         path: `${sessionPath(sessionId)}/profile`,
         body: input,
       }),
+    getGoal: async (sessionId: string) => parseKimiWebGoal(await requestJson<unknown>({
+      method: 'GET', path: `${sessionPath(sessionId)}/goal`,
+    })),
     listSessions: (listOptions: KimiWebListSessionsOptions = {}) => {
       const { signal, ...query } = listOptions;
       return requestJson<KimiWebPage<KimiWebSession>>({
@@ -765,8 +806,13 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
     getSnapshot: (sessionId: string) =>
       requestJson<KimiWebSnapshot>({ method: 'GET', path: `${sessionPath(sessionId)}/snapshot` }),
 
-    listFiles: (sessionId: string, path = '.', listOptions: KimiWebListOptions = {}) =>
-      sessionFsAction<KimiWebFsList>(sessionId, 'list', { path }, listOptions.signal),
+    listFiles: (sessionId: string, path = '.', listOptions: KimiWebListOptions & {
+      show_hidden?: boolean;
+      follow_gitignore?: boolean;
+    } = {}) => {
+      const { signal, ...listing } = listOptions;
+      return sessionFsAction<KimiWebFsList>(sessionId, 'list', { path, ...listing }, signal);
+    },
     getGitStatus: (sessionId: string, listOptions: KimiWebListOptions = {}) =>
       sessionFsAction<KimiWebGitStatus>(sessionId, 'git_status', {}, listOptions.signal),
 

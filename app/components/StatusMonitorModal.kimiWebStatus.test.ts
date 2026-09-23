@@ -167,6 +167,19 @@ const fetchMock = vi.fn<(input: unknown, init?: { headers?: Record<string, strin
     if (url.endsWith('/api/v1/auth')) {
       return { ok: true, status: 200, text: async () => JSON.stringify(kimiWire.auth) };
     }
+    if (url.endsWith('/api/v1/models')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ code: 0, data: { items: [{ provider: 'kimi-code', model: 'kimi-for-coding', display_name: 'Kimi K2.7' }] } }) };
+    }
+    if (url.endsWith('/snapshot')) {
+      if (!kimiWire.status) return { ok: false, status: 500 };
+      return { ok: true, status: 200, text: async () => JSON.stringify({ code: 0, data: { session: { usage: { input_tokens: 450, output_tokens: 120, cache_read_tokens: 80, cache_creation_tokens: 20 } } } }) };
+    }
+    if (url.endsWith('/api/v1/plugins')) {
+      return { ok: true, status: 200, json: async () => ({ code: 0, data: { plugins: [] } }) };
+    }
+    if (url.endsWith('/api/v1/plugins/marketplace')) {
+      return { ok: true, status: 200, json: async () => ({ code: 0, data: { entries: [] } }) };
+    }
     if (url.endsWith('/status')) {
       if (!kimiWire.status) return { ok: false, status: 500 };
       return { ok: true, status: 200, text: async () => JSON.stringify(kimiWire.status) };
@@ -315,13 +328,14 @@ describe('StatusMonitorModal kimi-web token tab', () => {
     await nextTick();
     await vi.waitFor(() => expect(root.textContent).toContain('1,200'));
 
-    expect(root.textContent).toContain('kimi-code/k3');
-    expect(root.textContent).toContain('2,560'); // context limit
+    expect(root.textContent).toContain('Kimi K2.7');
+    expect(root.textContent).not.toContain('kimi-code/k3');
+    expect(root.textContent).toContain('1,048,576'); // context limit
     expect(root.textContent).toContain('340'); // output
     expect(root.textContent).toContain('800 / 200'); // cache read / write
     const fill = root.querySelector<HTMLElement>('.token-usage-fill');
-    expect(fill?.style.width).toBe('50%'); // contextTokens / maxContextTokens
-    expect(root.querySelector('.token-usage-percent')?.textContent).toBe('50%');
+    expect(fill?.style.width).toBe('2%'); // REST context_tokens / max_context_tokens
+    expect(root.querySelector('.token-usage-percent')?.textContent).toBe('2%');
     app.unmount();
   });
 
@@ -342,7 +356,19 @@ describe('StatusMonitorModal kimi-web token tab', () => {
     state.contextTokens = 2000;
     root.querySelector<HTMLButtonElement>('.refresh-button')?.click();
     await vi.waitFor(() => expect(root.textContent).toContain('999'));
-    expect(root.querySelector('.token-usage-percent')?.textContent).toBe('78%');
+    expect(root.querySelector('.token-usage-percent')?.textContent).toBe('2%');
+    app.unmount();
+  });
+
+  it('does not present stale live context as current when session status fails', async () => {
+    kimiWire.status = null;
+    const bridge = bridgeStub(bridgeState({ total: { inputOther: 123, output: 456 } }, 900, 1000));
+    const { root, app } = await mountKimiWebModal({ bridge });
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('456'));
+    expect(root.querySelector('.token-usage-percent')).toBeNull();
+    expect(root.textContent).not.toContain('900');
+    expect(root.textContent).not.toContain('kimi-code/k3');
     app.unmount();
   });
 
@@ -389,8 +415,8 @@ describe('StatusMonitorModal kimi-web token tab REST fallback', () => {
     expect(root.querySelector('.token-usage-percent')?.textContent).toBe('2%');
     expect(root.querySelector<HTMLElement>('.token-usage-fill')?.style.width).toBe('2%');
     // The source is labeled and the unreported token rows are not fabricated.
-    expect(root.textContent).toContain('session status');
-    expect(root.textContent).not.toContain('Input tokens');
+    expect(root.textContent).toContain('450');
+    expect(root.textContent).toContain('Input tokens');
 
     // The status call goes through the bridge proxy with the bridge token; the
     // kimi bearer never reaches the browser.
@@ -403,7 +429,18 @@ describe('StatusMonitorModal kimi-web token tab REST fallback', () => {
     app.unmount();
   });
 
-  it('keeps the bridge session state as the primary source (no status call)', async () => {
+  it('renders persisted cumulative input/output/cache when no live usage exists', async () => {
+    const { root, app } = await mountKimiWebModal({ bridge: bridgeStub(undefined) });
+    clickTab(root, 'Token');
+    await vi.waitFor(() => expect(root.textContent).toContain('450'));
+    expect(root.textContent).toContain('120');
+    expect(root.textContent).toContain('80 / 20');
+    expect(root.textContent).toContain('Kimi K2.7');
+    expect(root.textContent).not.toContain('does not report token');
+    app.unmount();
+  });
+
+  it('uses live cumulative usage but always reads authoritative session context', async () => {
     const bridge = bridgeStub(
       bridgeState(
         { total: { inputOther: 1200, output: 340, inputCacheRead: 800, inputCacheCreation: 200 } },
@@ -419,7 +456,7 @@ describe('StatusMonitorModal kimi-web token tab REST fallback', () => {
 
     expect(root.textContent).toContain('Input tokens');
     expect(root.textContent).not.toContain('session status');
-    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/status'))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/status'))).toBe(true);
     app.unmount();
   });
 
@@ -525,7 +562,6 @@ describe('StatusMonitorModal kimi-web server tab', () => {
 describe('StatusMonitorModal kimi-web capability-gated unsupported copy', () => {
   it.each([
     ['LSP', 'Structured LSP status is not exposed by Kimi Web.'],
-    ['Plugins', 'Structured plugin status is not exposed by Kimi Web.'],
     ['Skills', 'Structured skill status is not exposed by Kimi Web.'],
   ] as const)('shows the Kimi Web copy on the %s tab', async (label, message) => {
     const { root, app } = await mountKimiWebModal();
@@ -536,6 +572,17 @@ describe('StatusMonitorModal kimi-web capability-gated unsupported copy', () => 
     await vi.waitFor(() => expect(root.textContent).toContain(message));
     expect(root.textContent).not.toContain('not exposed by this backend');
     expect(root.textContent).not.toContain('not exposed by this ACP agent');
+    app.unmount();
+  });
+
+  it('opens live Kimi plugin management from the existing Plugins tab', async () => {
+    const { root, app } = await mountKimiWebModal();
+    await vi.waitFor(() => expect(root.textContent).toContain('0.43.0'));
+    clickTab(root, 'Plugins');
+    await nextTick();
+    await vi.waitFor(() => expect(root.querySelector('.kimi-plugins')?.getAttribute('aria-busy')).toBe('false'));
+    await vi.waitFor(() => expect(root.textContent).toContain('No installed plugins'));
+    expect(root.querySelector('.kimi-plugins form')).not.toBeNull();
     app.unmount();
   });
 

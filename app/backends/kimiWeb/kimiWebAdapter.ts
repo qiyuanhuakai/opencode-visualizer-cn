@@ -18,6 +18,7 @@ import {
 } from '../../utils/kimiWeb';
 import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../../utils/kimiWebWs';
 import type { ProviderConfigState } from '../../utils/providerConfig';
+import { normalizeDirectory } from '../../utils/path';
 import {
   isKimiWebPermissionMode,
   isTowerExperimentEnabled,
@@ -35,11 +36,11 @@ export const KIMI_WEB_CAPABILITIES: BackendCapabilities = {
   sessionArchive: true,
   sessionUnarchive: true,
   sessionDelete: true,
-  sessionPin: false,
-  sessionUnpin: false,
-  sessionCompact: false,
+  sessionPin: true,
+  sessionUnpin: true,
+  sessionCompact: true,
   files: true,
-  terminal: false,
+  terminal: true,
   permissions: true,
   questions: true,
   todos: false,
@@ -86,14 +87,15 @@ function timestamp(value?: string | null): number | undefined {
 }
 
 export function mapKimiWebSession(session: KimiWebSession): KimiWebMappedSession {
-  const directory = session.metadata?.cwd?.trim() || '/';
+  const directory = normalizeDirectory(session.metadata?.cwd?.trim() || '/');
   return {
     id: session.id,
     projectID: session.workspace_id,
     projectId: session.workspace_id,
     workspaceId: session.workspace_id,
+    parentID: session.metadata?.parent_session_id,
     title: session.title || session.id,
-    status: session.busy ? 'busy' : 'idle',
+    status: session.busy ? 'busy' : session.last_turn_reason ? 'idle' : 'unknown',
     directory,
     time: {
       created: timestamp(session.created_at),
@@ -109,10 +111,11 @@ export function mapKimiWebSessionsToProjects(
   sessions: readonly KimiWebMappedSession[],
 ): Record<string, ProjectState> {
   const projects: Record<string, ProjectState> = {};
-  for (const session of sessions) {
+  for (const session of [...sessions].sort((left, right) =>
+    (left.directory || '/').localeCompare(right.directory || '/') || left.id.localeCompare(right.id))) {
     const projectId = session.workspaceId.trim();
     if (!projectId) throw new Error(`Kimi Web session ${session.id} has no workspace id.`);
-    const directory = session.directory?.trim() || '/';
+    const directory = normalizeDirectory(session.directory?.trim() || '/');
     const project = projects[projectId] ?? {
       id: projectId,
       name: directory.split('/').filter(Boolean).at(-1) || projectId,
@@ -127,9 +130,10 @@ export function mapKimiWebSessionsToProjects(
       sessions: {},
     };
     project.sandboxes[directory] = sandbox;
-    sandbox.rootSessions.push(session.id);
+    if (!session.parentID) sandbox.rootSessions.push(session.id);
     sandbox.sessions[session.id] = {
       id: session.id,
+      parentID: session.parentID,
       title: session.title,
       status: session.status,
       directory,
@@ -138,7 +142,26 @@ export function mapKimiWebSessionsToProjects(
       timeArchived: session.time?.archived,
     };
   }
+  for (const session of sessions) {
+    if (session.parentID) upsertKimiWebSessionIntoProjects(projects, session);
+  }
   return projects;
+}
+
+function kimiWebParentLocation(projects: Record<string, ProjectState>, parentId?: string) {
+  let nextId = parentId;
+  let location: { projectId: string; directory: string } | undefined;
+  const visited = new Set<string>();
+  while (nextId && !visited.has(nextId)) {
+    visited.add(nextId);
+    const owner = Object.values(projects).flatMap((project) =>
+      Object.values(project.sandboxes).map((sandbox) => ({ project, sandbox })))
+      .find(({ sandbox }) => Boolean(nextId && sandbox.sessions[nextId]));
+    if (!owner) break;
+    location = { projectId: owner.project.id, directory: owner.sandbox.directory };
+    nextId = owner.sandbox.sessions[nextId].parentID;
+  }
+  return location;
 }
 
 /**
@@ -151,9 +174,22 @@ export function upsertKimiWebSessionIntoProjects(
   projects: Record<string, ProjectState>,
   session: KimiWebMappedSession,
 ): void {
-  const projectId = session.workspaceId.trim();
+  const parent = kimiWebParentLocation(projects, session.parentID);
+  const projectId = parent?.projectId || session.workspaceId.trim();
   if (!projectId) throw new Error(`Kimi Web session ${session.id} has no workspace id.`);
-  const directory = session.directory?.trim() || '/';
+  const directory = parent?.directory || normalizeDirectory(session.directory?.trim() || '/');
+  for (const existingProject of Object.values(projects)) {
+    for (const [key, existingSandbox] of Object.entries(existingProject.sandboxes)) {
+      if (existingProject.id === projectId && key === directory) continue;
+      if (!existingSandbox.sessions[session.id]) continue;
+      delete existingSandbox.sessions[session.id];
+      existingSandbox.rootSessions = existingSandbox.rootSessions.filter((id) => id !== session.id);
+      if (Object.keys(existingSandbox.sessions).length === 0) delete existingProject.sandboxes[key];
+    }
+    if (existingProject.id !== projectId && Object.keys(existingProject.sandboxes).length === 0) {
+      delete projects[existingProject.id];
+    }
+  }
   const name = directory.split('/').filter(Boolean).at(-1) || projectId;
   const project = projects[projectId] ?? {
     id: projectId,
@@ -162,6 +198,10 @@ export function upsertKimiWebSessionIntoProjects(
     sandboxes: {},
   };
   projects[projectId] = project;
+  if (!project.sandboxes[project.worktree]) {
+    project.worktree = directory;
+    project.name = name;
+  }
   const sandbox = project.sandboxes[directory] ?? {
     directory,
     name,
@@ -169,11 +209,14 @@ export function upsertKimiWebSessionIntoProjects(
     sessions: {},
   };
   project.sandboxes[directory] = sandbox;
-  if (!sandbox.sessions[session.id]) {
+  if (!sandbox.sessions[session.id] && !session.parentID) {
     sandbox.rootSessions.push(session.id);
   }
+  if (session.parentID) sandbox.rootSessions = sandbox.rootSessions.filter((id) => id !== session.id);
   sandbox.sessions[session.id] = {
+    ...sandbox.sessions[session.id],
     id: session.id,
+    parentID: session.parentID,
     title: session.title,
     status: session.status,
     directory,
@@ -188,19 +231,20 @@ function modelResponse(models: KimiWebModel[]): BackendProviderResponse {
   for (const model of models) {
     const provider = providers.get(model.provider) ?? {
       id: model.provider,
-      name: model.provider,
+      name: model.provider === 'managed:kimi-code' ? 'Kimi Code' : model.provider,
       models: {},
     };
     provider.models ??= {};
     provider.models[model.model] = {
       id: model.model,
       name: model.display_name,
+      ...(model.support_efforts?.length ? { variants: Object.fromEntries(model.support_efforts.map((effort) => [effort, { default: effort === model.default_effort }])) } : {}),
       providerID: model.provider,
       limit: model.max_context_size ? { context: model.max_context_size } : undefined,
       capabilities: {
-        attachment: model.capabilities?.includes('vision') ?? false,
+        attachment: model.capabilities?.some((capability) => ['vision', 'image_in', 'video_in'].includes(capability)) ?? false,
         reasoning: model.capabilities?.includes('thinking') ?? false,
-        toolcall: model.capabilities?.includes('tools') ?? true,
+        toolcall: model.capabilities?.some((capability) => ['tools', 'tool_use'].includes(capability)) ?? true,
       },
     };
     providers.set(model.provider, provider);
@@ -226,10 +270,65 @@ export class KimiWebAdapter implements BackendAdapter {
         getToken: () => this.bridgeToken,
       });
     this.listFiles = this.listFiles.bind(this);
+    this.readFileContent = this.readFileContent.bind(this);
+    this.readFileContentBytes = this.readFileContentBytes.bind(this);
     this.getVcsInfo = this.getVcsInfo.bind(this);
     this.getGlobalConfig = this.getGlobalConfig.bind(this);
     this.listProviders = this.listProviders.bind(this);
     this.updateSessionMode = this.updateSessionMode.bind(this);
+    this.listPtys = this.listPtys.bind(this);
+    this.createPty = this.createPty.bind(this);
+    this.updatePtySize = this.updatePtySize.bind(this);
+    this.deletePty = this.deletePty.bind(this);
+    this.createPtyWebSocketUrl = this.createPtyWebSocketUrl.bind(this);
+  }
+
+  private async ptyRequest(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
+    const url = new URL(kimiWebWsUrl(this.bridgeUrl, this.bridgeToken));
+    url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+    url.pathname = path;
+    url.search = '';
+    const response = await fetch(url.toString(), {
+      method,
+      headers: {
+        ...(this.bridgeToken ? { Authorization: `Bearer ${this.bridgeToken}` } : {}),
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal,
+    });
+    const result: unknown = await response.json();
+    if (!response.ok) {
+      const message = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+        ? result.error : `PTY request failed (${response.status}).`;
+      throw new Error(message);
+    }
+    return result;
+  }
+
+  listPtys(_directory?: string) {
+    return this.ptyRequest('/pty', 'GET');
+  }
+
+  createPty(
+    payload: { directory?: string; cwd?: string; command?: string; args?: string[]; title?: string },
+    options?: BackendRequestOptions,
+  ) {
+    return this.ptyRequest('/pty', 'POST', payload, options?.signal);
+  }
+
+  updatePtySize(ptyId: string, payload: { directory?: string; rows: number; cols: number }) {
+    return this.ptyRequest(`/pty/${encodeURIComponent(ptyId)}`, 'PUT', { size: { rows: payload.rows, cols: payload.cols } });
+  }
+
+  deletePty(ptyId: string, _directory?: string) {
+    return this.ptyRequest(`/pty/${encodeURIComponent(ptyId)}`, 'DELETE');
+  }
+
+  createPtyWebSocketUrl(path: string) {
+    const url = new URL(kimiWebWsUrl(this.bridgeUrl, this.bridgeToken));
+    url.pathname = path;
+    return url.toString();
   }
 
   initialize() {
@@ -286,15 +385,36 @@ export class KimiWebAdapter implements BackendAdapter {
   }
 
   async listSessions(options?: ListSessionsOptions) {
-    const page = await this.restClient.listSessions({
-      include_archive: true,
-      page_size: options?.limit,
-      signal: options?.signal,
-    });
+    const limit = options?.limit;
+    if (limit !== undefined && limit <= 0) return [];
     const directory = options?.directory?.trim();
-    return page.items
-      .map(mapKimiWebSession)
-      .filter((session) => !directory || session.directory === directory);
+    const normalizedDirectory = directory ? normalizeDirectory(directory) : undefined;
+    const sessions = new Map<string, KimiWebMappedSession>();
+    const cursors = new Set<string>();
+    let beforeId: string | undefined;
+    do {
+      const page = await this.restClient.listSessions({
+        include_archive: true,
+        page_size: limit === undefined ? undefined : Math.min(limit, 100),
+        before_id: beforeId,
+        signal: options?.signal,
+      });
+      for (const session of page.items) {
+        const mapped = mapKimiWebSession(session);
+        if (!normalizedDirectory || mapped.directory === normalizedDirectory) {
+          sessions.set(session.id, mapped);
+        }
+      }
+      if (limit !== undefined && sessions.size >= limit) break;
+      if (!page.has_more) break;
+      const nextCursor = page.items.at(-1)?.id;
+      if (!nextCursor || cursors.has(nextCursor)) {
+        throw new Error('Kimi Web session pagination did not advance.');
+      }
+      cursors.add(nextCursor);
+      beforeId = nextCursor;
+    } while (beforeId !== undefined);
+    return [...sessions.values()].slice(0, limit);
   }
 
   async listProviders() {
@@ -318,14 +438,12 @@ export class KimiWebAdapter implements BackendAdapter {
   }
 
   private async sessionIdForDirectory(directory: string, options?: BackendRequestOptions) {
-    const normalizedDirectory = directory.trim() || '/';
-    const page = await this.restClient.listSessions({
-      include_archive: true,
+    const normalizedDirectory = normalizeDirectory(directory.trim() || '/');
+    const sessions = await this.listSessions({
+      directory: normalizedDirectory,
       signal: options?.signal,
     });
-    const session = page.items.find(
-      (item) => (item.metadata?.cwd?.trim() || '/') === normalizedDirectory,
-    );
+    const session = sessions[0];
     if (!session) {
       throw new Error(`No Kimi Web session found for directory ${normalizedDirectory}.`);
     }
@@ -337,12 +455,54 @@ export class KimiWebAdapter implements BackendAdapter {
     options?: BackendRequestOptions,
   ) {
     const sessionId = await this.sessionIdForDirectory(payload.directory, options);
-    const page = await this.restClient.listFiles(sessionId, payload.path ?? '.', options);
+    const [page, visiblePage] = await Promise.all([
+      this.restClient.listFiles(sessionId, payload.path ?? '.', {
+      ...options,
+      show_hidden: true,
+      follow_gitignore: false,
+      }),
+      this.restClient.listFiles(sessionId, payload.path ?? '.', {
+        ...options,
+        show_hidden: true,
+        follow_gitignore: true,
+      }),
+    ]);
+    const visiblePaths = new Set(visiblePage.items.map((item) => item.path));
     return page.items.map((item) => ({
       path: item.path,
       name: item.name,
       type: item.kind,
+      ignored: !visiblePaths.has(item.path),
     }));
+  }
+
+  async readFileContentBytes(
+    payload: { directory: string; path: string },
+    options?: BackendRequestOptions,
+  ): Promise<Uint8Array> {
+    const sessionId = await this.sessionIdForDirectory(payload.directory, options);
+    return this.restClient.downloadFile(sessionId, payload.path, { signal: options?.signal });
+  }
+
+  async readFileContent(
+    payload: { directory: string; path: string },
+    options?: BackendRequestOptions,
+  ): Promise<{ type: 'text' | 'binary'; encoding: 'utf-8' | 'base64'; content: string }> {
+    const bytes = await this.readFileContentBytes(payload, options);
+    let textContent: string | undefined;
+    try {
+      textContent = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } catch {
+      textContent = undefined;
+    }
+    if (textContent !== undefined && !textContent.includes('\0')) {
+      return { type: 'text', encoding: 'utf-8', content: textContent };
+    }
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    }
+    return { type: 'binary', encoding: 'base64', content: btoa(binary) };
   }
 
   async getVcsInfo(directory: string, options?: BackendRequestOptions) {

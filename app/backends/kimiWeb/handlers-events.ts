@@ -2,6 +2,7 @@
  * Session / prompt / interaction / subagent / compaction / error handlers.
  */
 import type { KimiWebNormalizeOp } from './ops';
+import { submittedPromptOps } from './promptEntries';
 import {
   asBoolean,
   asNumber,
@@ -117,6 +118,11 @@ function handlePrompt(core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiW
   const sessionId = sessionOf(frame, payload);
   const agentId = asString(payload.agentId) || 'main';
   const promptId = asString(payload.promptId);
+  const userMessageId = asString(payload.userMessageId);
+  if (promptId && userMessageId) core.promptUserMessageIds.set(`${sessionId}|${promptId}`, userMessageId);
+  if (frame.type === 'prompt.submitted') {
+    ops.push(...submittedPromptOps(payload, core.subagentIdentity(sessionId, agentId), core.now));
+  }
   if (promptId && (frame.type === 'prompt.submitted' || frame.type === 'prompt.started')) {
     core.promptIds.set(`${sessionId}|${agentId}`, promptId);
   }
@@ -168,7 +174,9 @@ function handleSubagentStarted(core: KimiWebCore, frame: KimiWebWireFrame, paylo
 }
 
 function handleSubagentTerminal(core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiWebPayload, ops: KimiWebNormalizeOp[]) {
-  const phase = frame.type.slice('subagent.'.length) as 'suspended' | 'completed' | 'failed';
+  const phase = frame.type === 'subagent.cancelled' ? 'cancelled'
+    : frame.type === 'subagent.failed' ? 'failed'
+    : frame.type === 'subagent.suspended' ? 'suspended' : 'completed';
   const sessionId = sessionOf(frame, payload);
   const subagentId = asString(payload.subagentId);
   if (!subagentId) return;
@@ -250,6 +258,7 @@ export const EVENT_HANDLERS: Record<string, KimiWebHandler> = {
   'subagent.suspended': handleSubagentTerminal,
   'subagent.completed': handleSubagentTerminal,
   'subagent.failed': handleSubagentTerminal,
+  'subagent.cancelled': handleSubagentTerminal,
   'compaction.started': handleCompaction,
   'compaction.blocked': handleCompaction,
   'compaction.cancelled': handleCompaction,

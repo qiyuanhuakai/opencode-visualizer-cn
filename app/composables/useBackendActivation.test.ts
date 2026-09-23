@@ -834,6 +834,21 @@ describe('useBackendActivation', () => {
     expect(harness.activation.initializationInFlight.value).toBe(false);
   });
 
+  it('keeps the Kimi live-event fence valid after initialization and invalidates it on disconnect', async () => {
+    // Given
+    let liveFence: (() => boolean) | undefined;
+    const harness = createHarness('kimi-web', {
+      bootstrapKimiWebWorkspace: async (isCurrent) => { liveFence = isCurrent; },
+    });
+    // When
+    await harness.activation.startInitialization();
+    // Then
+    expect(harness.activation.initializationInFlight.value).toBe(false);
+    expect(liveFence?.()).toBe(true);
+    harness.activation.abortInitialization();
+    expect(liveFence?.()).toBe(false);
+  });
+
   it('disposes the kimi-web transport when switching to another backend', async () => {
     const harness = createHarness('opencode');
 
@@ -1033,6 +1048,11 @@ describe('kimi-web global provider config contract (R9/S3b)', () => {
   it('resolves the shared global provider config load instead of throwing', async () => {
     const adapter: BackendAdapter = createKimiWebAdapter({
       bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: createKimiWebClient({ baseUrl: 'http://activation.test',
+        fetcher: async () => new Response(JSON.stringify({
+          code: 0, msg: 'success', data: { items: [] }, request_id: 'activation-config',
+        }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      }),
     });
 
     let thrown: unknown;

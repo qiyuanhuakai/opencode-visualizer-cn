@@ -82,8 +82,27 @@ function handleTurnEnded(core: KimiWebCore, frame: KimiWebWireFrame, payload: Ki
   });
 }
 
-function handleTurnStep(_core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiWebPayload, ops: KimiWebNormalizeOp[]) {
+function handleTurnStep(core: KimiWebCore, frame: KimiWebWireFrame, payload: KimiWebPayload, ops: KimiWebNormalizeOp[]) {
   const phase = frame.type.slice('turn.step.'.length) as 'started' | 'completed' | 'retrying' | 'interrupted';
+  if (phase === 'completed' && isRecord(payload.usage)) {
+    const sessionId = sessionOf(frame, payload);
+    const agentId = asString(payload.agentId) || 'main';
+    const turnId = asNumber(payload.turnId) ?? 0;
+    const group = ensureGroup(core, sessionId, agentId, turnId, payload, ops);
+    const stepId = asString(payload.stepId) || String(asNumber(payload.step) ?? 0);
+    if (!group.usageStepIds.has(stepId)) {
+      group.usageStepIds.add(stepId);
+      const usage = payload.usage;
+      const previous = group.usage;
+      group.usage = {
+        inputOther: (previous?.inputOther ?? 0) + (asNumber(usage.inputOther) ?? 0),
+        output: (previous?.output ?? 0) + (asNumber(usage.output) ?? 0),
+        inputCacheRead: (previous?.inputCacheRead ?? 0) + (asNumber(usage.inputCacheRead) ?? 0),
+        inputCacheCreation: (previous?.inputCacheCreation ?? 0) + (asNumber(usage.inputCacheCreation) ?? 0),
+      };
+      ops.push({ kind: 'message', message: buildMessage(core, group) });
+    }
+  }
   ops.push({
     kind: 'step',
     phase,

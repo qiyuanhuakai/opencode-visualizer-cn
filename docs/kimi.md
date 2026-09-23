@@ -1,5 +1,7 @@
 # Kimi Web Server（`kimi web`）
 
+最新适配检查见 [Kimi Code 2.0.2 适配检查](./kimi-2.0.2.md)。以下保留 0.43.0 的历史协议调研与实测记录。
+
 ## VIS 适配调研与实测（2026-09-15，Kimi Code 0.43.0）
 
 本节以本机 **Kimi Code 0.43.0** 的真实服务为准：启动 `kimi web --no-open --debug-endpoints`，拉取现场 `/openapi.json`（OpenAPI 3.0.3，`Kimi Code Server API 0.43.0`）与 `/asyncapi.json`（AsyncAPI 3.1.0，`Kimi Code WebSocket API 0.43.0`），并完成 REST + WebSocket 全链路冒烟（建会话 → 订阅 → 发 prompt → 收流式事件 → 读回消息）。与 [docs/codex.md](./codex.md) 相同：文档描述存在不代表当前版本实际支持，能力一律以现场 spec 与实测响应为准。

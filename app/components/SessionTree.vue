@@ -303,7 +303,7 @@ function sessionStatusIcon(status: 'busy' | 'idle' | 'retry' | 'unknown'): strin
 
 .session-tree-row.is-active {
   background: var(--theme-side-active-bg, rgba(30, 64, 175, 0.25));
-  border-left: 2px solid var(--theme-side-accent, rgba(96, 165, 250, 0.8));
+  box-shadow: inset 2px 0 var(--theme-side-accent, rgba(96, 165, 250, 0.8));
 }
 
 .session-tree-toggle {

@@ -56,6 +56,57 @@ function createKimiTrees(projects: Record<string, ProjectState>) {
 }
 
 describe('useBackendSessionActions kimi-web', () => {
+  it('updates the archive projection immediately after the server confirms archiving', async () => {
+    // Given
+    const projects = createKimiProjects();
+    const trees = createKimiTrees(projects);
+    const { actions, mocks } = createKimiFixture({
+      serverProjects: projects,
+      kimiWebApi: { archiveSession: async () => ({ id: 'session-2', archived: true }) },
+      setLocalSessionArchived: (id, archived) => {
+        projects.workspace.sandboxes['/repo'].sessions[id].timeArchived = archived;
+      },
+    });
+    // When
+    await actions.archiveSession('session-2');
+    // Then
+    expect(trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions.find((item) => item.id === 'session-2')?.archivedAt).toBeGreaterThan(0);
+    expect(trees.navigableTree.value).toEqual([]);
+    expect(mocks.setSendStatusKey).toHaveBeenLastCalledWith('app.status.archived');
+  });
+
+  it('returns restored sessions to the navigable tree immediately', async () => {
+    // Given
+    const projects = createKimiProjects();
+    const trees = createKimiTrees(projects);
+    const { actions } = createKimiFixture({
+      serverProjects: projects,
+      kimiWebApi: { restoreSession: async () => ({ id: 'session-1', archived: false }) },
+      setLocalSessionArchived: (id, archived) => {
+        projects.workspace.sandboxes['/repo'].sessions[id].timeArchived = archived;
+      },
+    });
+    // When
+    await actions.unarchiveSession('session-1');
+    // Then
+    expect(trees.navigableTree.value[0]?.sandboxes[0]?.sessions.map((item) => item.id)).toContain('session-1');
+  });
+
+  it('updates session titles in the tree after a successful rename', async () => {
+    // Given
+    const projects = createKimiProjects();
+    const trees = createKimiTrees(projects);
+    const { actions } = createKimiFixture({
+      serverProjects: projects,
+      kimiWebApi: { updateProfile: async () => ({ id: 'session-2', title: 'Renamed' }) },
+      showPrompt: async () => 'Renamed',
+    });
+    // When
+    await actions.renameSession('session-2');
+    // Then
+    expect(trees.topPanelTreeData.value[0]?.sandboxes[0]?.sessions.find((item) => item.id === 'session-2')?.title).toBe('Renamed');
+  });
+
   it('Given a kimi-web session, When deleteSession runs, Then it calls the :delete endpoint and not OpenCode', async () => {
     const deleteSession = vi.fn().mockResolvedValue(undefined);
     const openCodeDelete = vi.fn();

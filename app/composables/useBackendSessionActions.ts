@@ -5,11 +5,13 @@ import type {
   TopPanelBatchSessionActionPayload,
   TopPanelBatchSessionTarget,
 } from '../types/top-panel';
-import type { SandboxState, ProjectState } from '../types/worker-state';
+import type { SandboxState, ProjectState, SessionState } from '../types/worker-state';
 import type { LocalPinnedSessionStore } from '../utils/pinnedSessions';
 import { mapWithConcurrency } from '../utils/mapWithConcurrency';
 import { isBatchSessionAction, normalizeBatchSessionTargets } from '../utils/batchSessionTargets';
 import type { KimiWebSessionApiLike } from './useBackendSessionLifecycle';
+import type { KimiWebSession } from '../utils/kimiWeb';
+import { mapKimiWebSession, upsertKimiWebSessionIntoProjects } from '../backends/kimiWeb/kimiWebAdapter';
 
 export type OpenCodeApiLike = {
   deleteSession: (payload: {
@@ -122,7 +124,12 @@ export function useBackendSessionActions(params: {
     payload: { time?: { archived?: number } },
     directory?: string,
   ) => Promise<unknown>;
-  kimiWebApi?: KimiWebSessionApiLike;
+  kimiWebApi?: KimiWebSessionApiLike & {
+    forkSession?: (sessionId: string) => Promise<KimiWebSession>;
+    compactSession?: (sessionId: string) => Promise<unknown>;
+    forkSessionAtMessage?: (sessionId: string, messageId: string) => Promise<KimiWebSession>;
+    undoSessionFromMessage?: (sessionId: string, messageId: string) => Promise<void>;
+  };
 }) {
   type MutationRollback = () => void;
   type SessionOperationHints = { projectId?: string; directory?: string };
@@ -169,6 +176,16 @@ export function useBackendSessionActions(params: {
     }
     if (params.selectedSessionId.value === sessionId) {
       params.selectedSessionId.value = '';
+    }
+  }
+
+  function updateKimiWebSession(sessionId: string, patch: Partial<SessionState>) {
+    if (params.activeBackendKind.value !== 'kimi-web') return;
+    for (const project of Object.values(params.serverProjects)) {
+      for (const sandbox of Object.values(project.sandboxes)) {
+        const session = sandbox.sessions[sessionId];
+        if (session) Object.assign(session, patch);
+      }
     }
   }
 
@@ -292,7 +309,10 @@ export function useBackendSessionActions(params: {
         if (backendKind === 'kimi-web') {
           const api = params.kimiWebApi;
           if (!api?.archiveSession) throw new Error('Kimi Web session archive is unavailable.');
+          params.setSendStatusKey('app.status.archiving');
           await api.archiveSession(sessionId);
+          updateKimiWebSession(sessionId, { timeArchived: Date.now() });
+          params.setSendStatusKey('app.status.archived');
           return;
         }
         await runOpenCodeSessionMutation(
@@ -348,7 +368,10 @@ export function useBackendSessionActions(params: {
         if (backendKind === 'kimi-web') {
           const api = params.kimiWebApi;
           if (!api?.restoreSession) throw new Error('Kimi Web session restore is unavailable.');
+          params.setSendStatusKey('app.status.unarchiving');
           await api.restoreSession(sessionId);
+          updateKimiWebSession(sessionId, { timeArchived: undefined });
+          params.setSendStatusKey('app.status.unarchived');
           return;
         }
         await runOpenCodeSessionMutation(
@@ -392,6 +415,7 @@ export function useBackendSessionActions(params: {
         const api = params.kimiWebApi;
         if (!api?.updateProfile) throw new Error('Kimi Web session rename is unavailable.');
         await api.updateProfile(sessionId, { title: trimmedTitle });
+        updateKimiWebSession(sessionId, { title: trimmedTitle });
         return;
       }
       const { projectId, directory } = params.resolveSessionOperationPayload(
@@ -540,12 +564,62 @@ export function useBackendSessionActions(params: {
     }
   }
 
+  async function handleForkSession(sessionId: string) {
+    await runSessionMutation({
+      sessionId,
+      actionLabel: 'app.actions.fork',
+      errorKey: 'app.error.sessionForkFailed',
+      apply: async () => {
+        const api = params.kimiWebApi;
+        if (params.activeBackendKind.value !== 'kimi-web' || !api?.forkSession) {
+          throw new Error('Whole-session fork is unavailable for this backend.');
+        }
+        const session = mapKimiWebSession(await api.forkSession(sessionId));
+        upsertKimiWebSessionIntoProjects(params.serverProjects, session);
+        await params.switchSessionSelection(session.workspaceId, session.id);
+      },
+    });
+  }
+
+  async function handleCompactSession(sessionId: string) {
+    await runSessionMutation({
+      sessionId,
+      actionLabel: 'codex.compactThread',
+      errorKey: 'app.error.sendFailed',
+      apply: async () => {
+        const api = params.kimiWebApi;
+        if (params.activeBackendKind.value !== 'kimi-web' || !api?.compactSession) {
+          throw new Error('Session compaction is unavailable for this backend.');
+        }
+        await api.compactSession(sessionId);
+      },
+    });
+  }
+
+  const pendingCardMutations = new Set<string>();
+
   async function handleForkMessage(payload: { sessionId: string; messageId: string }) {
+    if (pendingCardMutations.has(payload.sessionId)) return;
     if (!params.ensureConnectionReady(params.translate('app.actions.fork'))) return;
+    const requestBackend = params.activeBackendKind.value;
+    const requestSelection = params.selectedSessionId.value;
+    const ownsRequest = () => requestBackend !== 'kimi-web' ||
+      (params.activeBackendKind.value === requestBackend && params.selectedSessionId.value === requestSelection);
+    pendingCardMutations.add(payload.sessionId);
     params.clearSessionError();
     try {
       params.setSendStatusKey('app.status.forking');
-      if (params.activeBackendKind.value === 'codex') {
+      if (params.activeBackendKind.value === 'kimi-web') {
+        const api = params.kimiWebApi;
+        if (!api?.forkSessionAtMessage) throw new Error('Kimi checkpoint forks are unavailable.');
+        const raw = await api.forkSessionAtMessage(payload.sessionId, payload.messageId);
+        if (!ownsRequest()) return;
+        const session = mapKimiWebSession(raw);
+        upsertKimiWebSessionIntoProjects(params.serverProjects, session);
+        params.seedForkedSessionComposerDraft(payload, { id: session.id });
+        await params.switchSessionSelection(session.workspaceId, session.id);
+        if (params.activeBackendKind.value !== requestBackend) return;
+      } else if (params.activeBackendKind.value === 'codex') {
         const thread = await params.codexApi.forkThread(payload.sessionId);
         if (thread?.id) {
           params.selectedProjectId.value = params.codexProjectId;
@@ -565,18 +639,34 @@ export function useBackendSessionActions(params: {
       }
       params.setSendStatusKey('app.status.forked');
     } catch (error) {
+      if (!ownsRequest()) return;
       params.setSessionError(
         params.translate('app.error.sessionForkFailed', { message: params.toErrorMessage(error) }),
       );
+    } finally {
+      pendingCardMutations.delete(payload.sessionId);
     }
   }
 
   async function handleRevertMessage(payload: { sessionId: string; messageId: string }) {
+    if (pendingCardMutations.has(payload.sessionId)) return;
     if (!params.ensureConnectionReady(params.translate('app.actions.revert'))) return;
+    const requestBackend = params.activeBackendKind.value;
+    const requestSelection = params.selectedSessionId.value;
+    const ownsRequest = () => requestBackend !== 'kimi-web' ||
+      (params.activeBackendKind.value === requestBackend && params.selectedSessionId.value === requestSelection);
+    pendingCardMutations.add(payload.sessionId);
     params.clearSessionError();
     try {
       params.setSendStatusKey('app.status.reverting');
-      if (params.activeBackendKind.value === 'codex') {
+      if (params.activeBackendKind.value === 'kimi-web') {
+        const api = params.kimiWebApi;
+        if (!api?.undoSessionFromMessage) throw new Error('Kimi checkpoint undo is unavailable.');
+        await api.undoSessionFromMessage(payload.sessionId, payload.messageId);
+        if (!ownsRequest()) return;
+        if (params.selectedSessionId.value === payload.sessionId)
+          await params.reloadSelectedSessionState(payload.sessionId, undefined, true);
+      } else if (params.activeBackendKind.value === 'codex') {
         const thread = await params.codexApi.rollbackThread(payload.sessionId, payload.messageId);
         if (thread?.id) {
           params.selectedProjectId.value = params.codexProjectId;
@@ -594,13 +684,17 @@ export function useBackendSessionActions(params: {
         if (params.selectedSessionId.value === payload.sessionId)
           await params.reloadSelectedSessionState();
       }
+      if (!ownsRequest()) return;
       params.setSendStatusKey('app.status.reverted');
     } catch (error) {
+      if (!ownsRequest()) return;
       params.setSessionError(
         params.translate('app.error.sessionRevertFailed', {
           message: params.toErrorMessage(error),
         }),
       );
+    } finally {
+      pendingCardMutations.delete(payload.sessionId);
     }
   }
 
@@ -613,6 +707,8 @@ export function useBackendSessionActions(params: {
     unpinSession,
     handleTopPanelBatchSessionAction,
     handleForkMessage,
+    handleForkSession,
+    handleCompactSession,
     handleRevertMessage,
   };
 }

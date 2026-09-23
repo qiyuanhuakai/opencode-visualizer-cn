@@ -5,6 +5,7 @@ import {
 
 export type KimiWebAgentModeOption = {
   readonly id: KimiWebPermissionMode;
+  readonly label: KimiWebPermissionMode;
   readonly labelKey: string;
   readonly descriptionKey: string;
 };
@@ -30,6 +31,7 @@ const KIMI_WEB_AGENT_MODE_KEYS: Readonly<
 export function kimiWebAgentModeOptions(): readonly KimiWebAgentModeOption[] {
   return KIMI_WEB_PERMISSION_MODES.map((id) => ({
     id,
+    label: id,
     labelKey: KIMI_WEB_AGENT_MODE_KEYS[id].label,
     descriptionKey: KIMI_WEB_AGENT_MODE_KEYS[id].description,
   }));

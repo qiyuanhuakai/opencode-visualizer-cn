@@ -7,6 +7,7 @@ import {
   deferred,
   imageAttachment,
 } from './useBackendMessageSend.test-helpers';
+import type { KimiWebSlashAction } from '../backends/kimiWeb/slashCommands';
 import type { BackendKind } from '../backends/types';
 import {
   KimiWebError,
@@ -160,12 +161,13 @@ function createKimiWebApi() {
     prompt_ids: promptIds,
   }));
   const abortPrompt = vi.fn(async () => ({ aborted: true, at_seq: 12 }));
-  return { uploadFile, sendPrompt, steer, abortPrompt };
+  return { uploadFile, sendPrompt, steer, abortPrompt, updateProfile: vi.fn().mockResolvedValue({}) };
 }
 
 function createKimiRuntime(
   options: {
     readonly api?: ReturnType<typeof createKimiWebApi>;
+    readonly executeKimiWebSlashCommand?: (action: KimiWebSlashAction) => Promise<void>;
     readonly activeBackendKind?: Ref<BackendKind>;
   } = {},
 ) {
@@ -178,11 +180,90 @@ function createKimiRuntime(
     openCodeApi: { sendPromptAsync: vi.fn().mockResolvedValue(undefined) },
     codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
     kimiWebApi: api,
+    executeKimiWebSlashCommand: options.executeKimiWebSlashCommand,
   });
   return { base, runtime, api, activeBackendKind };
 }
 
 describe('useBackendMessageSend kimi-web', () => {
+  it('retains the existing local shell and debug commands', async () => {
+    const { base, runtime, api } = createKimiRuntime();
+    base.messageInput.value = '/shell pwd';
+    await runtime.sendMessage();
+    expect(base.openShellFromInput).toHaveBeenCalledWith('pwd');
+    expect(api.sendPrompt).not.toHaveBeenCalled();
+    base.messageInput.value = '/debug status';
+    await runtime.sendMessage();
+    expect(base.setSendStatusText).toHaveBeenCalledWith('status');
+    expect(api.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('executes slash controls without a prompt or model, preserving attachments', async () => {
+    const execute = vi.fn().mockResolvedValue(undefined);
+    const { base, runtime, api } = createKimiRuntime({ executeKimiWebSlashCommand: execute });
+    base.messageInput.value = '/plan on'; base.canSend.value = false;
+    base.attachments.value = [imageAttachment()];
+    await runtime.sendMessage();
+    expect(execute).toHaveBeenCalledWith({ kind: 'toggle', field: 'planMode', value: true });
+    expect(api.sendPrompt).not.toHaveBeenCalled(); expect(api.updateProfile).not.toHaveBeenCalled();
+    expect(base.messageInput.value).toBe(''); expect(base.attachments.value).toHaveLength(1);
+  });
+  it('rejects unknown commands explicitly and retains input', async () => {
+    const { base, runtime, api } = createKimiRuntime();
+    base.messageInput.value = '/unknown';
+    await runtime.sendMessage();
+    expect(api.sendPrompt).not.toHaveBeenCalled(); expect(base.messageInput.value).toBe('/unknown');
+    expect(base.setSendStatusKey).toHaveBeenLastCalledWith('app.error.sendFailed', expect.objectContaining({ message: expect.stringContaining('Unsupported Kimi Web command') }));
+  });
+  it('does not clear a new sessions draft after a delayed slash action', async () => {
+    const pending = deferred<void>();
+    const { base, runtime } = createKimiRuntime({ executeKimiWebSlashCommand: () => pending.promise });
+    base.messageInput.value = '/compact';
+    const sending = runtime.sendMessage();
+    base.selectedSessionId.value = 'session-2'; base.messageInput.value = 'new draft';
+    pending.resolve(); await sending;
+    expect(base.messageInput.value).toBe('new draft');
+  });
+
+  it('sends the wire model alias without the UI provider prefix', async () => {
+    const { base, runtime, api } = createKimiRuntime();
+    base.selectedModel.value = 'managed:kimi-code/kimi-code/kimi-for-coding-highspeed';
+    base.modelOptions.value = [{ id: base.selectedModel.value, providerID: 'managed:kimi-code', modelID: 'kimi-code/kimi-for-coding-highspeed' }];
+    await runtime.sendMessage();
+    expect(api.updateProfile).toHaveBeenCalledWith('session-1', { agent_config: { model: 'kimi-code/kimi-for-coding-highspeed', thinking: 'high' } });
+  });
+
+  it('resets an explicit effort to the selected models server default', async () => {
+    const { base, runtime, api } = createKimiRuntime();
+    base.selectedThinking.value = undefined;
+    const model = { id: base.selectedModel.value, providerID: 'kimi', modelID: 'k3', variants: { low: { default: false }, high: { default: true } } };
+    base.modelOptions.value = [model];
+    await runtime.sendMessage();
+    expect(api.updateProfile).toHaveBeenCalledWith('session-1', { agent_config: { model: 'k3', thinking: 'high' } });
+  });
+
+  it('does not send into a newly selected session after an old profile update', async () => {
+    const { base, runtime, api } = createKimiRuntime();
+    api.updateProfile.mockImplementationOnce(async () => {
+      base.selectedSessionId.value = 'session-2';
+      base.messageInput.value = 'new draft';
+      return {};
+    });
+    await runtime.sendMessage();
+    expect(api.sendPrompt).not.toHaveBeenCalled();
+    expect(base.messageInput.value).toBe('new draft');
+    expect(base.clearComposerDraftForCurrentContext).not.toHaveBeenCalled();
+  });
+
+  it('shows a profile error without posting a prompt', async () => {
+    const { base, runtime, api } = createKimiRuntime();
+    api.updateProfile.mockRejectedValueOnce(new KimiWebError(40001, 'model rejected'));
+    await runtime.sendMessage();
+    expect(api.sendPrompt).not.toHaveBeenCalled();
+    expect(base.setSendStatusKey).toHaveBeenLastCalledWith('app.error.sendFailed', { message: 'KimiWebError: model rejected' });
+    expect(base.messageInput.value).toBe('hello world');
+  });
+
   it('uploads attachments before dispatching the kimi-web prompt parts', async () => {
     const { base, runtime, api } = createKimiRuntime();
     base.messageInput.value = 'hi';

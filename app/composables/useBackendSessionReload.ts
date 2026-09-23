@@ -42,7 +42,7 @@ export function useBackendSessionReload(params: {
   codexHistory: Ref<unknown[]>;
   codexReapplyBackfill: () => void;
   /** Kimi Web session-history REST pager; absent until the adapter is wired. */
-  kimiWebApi?: Pick<KimiWebClient, 'getMessages'>;
+  kimiWebApi?: Pick<KimiWebClient, 'getMessages'> & Partial<Pick<KimiWebClient, 'getSessionStatus' | 'listModels'>>;
   kimiWebBridge?: {
     subscribe(sessionIds: string[]): Promise<unknown>;
     applyHistory(entries: unknown[]): void;
@@ -175,12 +175,24 @@ export function useBackendSessionReload(params: {
         if (params.kimiWebApi) {
           params.isLoadingHistory.value = true;
           try {
+            const [status, catalog] = params.kimiWebApi.getSessionStatus && params.kimiWebApi.listModels
+              ? await Promise.all([
+                  params.kimiWebApi.getSessionStatus(sessionId).catch(() => undefined),
+                  params.kimiWebApi.listModels().catch(() => undefined),
+                ])
+              : [undefined, undefined];
             const result = await loadKimiWebHistoryEntries({
               sessionId,
               getMessages: params.kimiWebApi.getMessages,
               maxPages: params.kimiWebHistoryMaxPages,
               pageSize: params.kimiWebHistoryPageSize,
               isCurrent: () => reloadRequestId === params.sessionReloadRequestId.value,
+              profile: {
+                model: status?.model,
+                provider: catalog?.items.find((item) => item.model === status?.model)?.provider,
+                effort: status?.thinking_level,
+                permission: status?.permission,
+              },
             });
             if (reloadRequestId !== params.sessionReloadRequestId.value) return;
             if (result.truncated) {

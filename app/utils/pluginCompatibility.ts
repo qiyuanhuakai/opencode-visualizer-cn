@@ -69,6 +69,7 @@ export function collectMagicContextWorkers(
     busy: 0,
     retry: 1,
     idle: 2,
+    unknown: 3,
   };
   return Object.entries(metaById)
     .flatMap(([sessionId, meta]) => {

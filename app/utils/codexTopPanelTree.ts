@@ -28,6 +28,7 @@ export type BuildCodexTopPanelTreeOptions = {
 
 export type CodexTopPanelSession = {
   id: string;
+  projectId?: string;
   title?: string;
   slug?: string;
   status: 'busy' | 'idle' | 'retry' | 'unknown';
@@ -312,7 +313,7 @@ export function buildCodexSessionTreeData(worktrees: CodexTopPanelWorktree[]): S
         .map((session) => ({
           type: 'session' as const,
           sessionId: session.id,
-          projectId: worktree.projectId ?? '',
+          projectId: session.projectId ?? worktree.projectId ?? '',
           directory: sandbox.directory,
           title: session.title || session.slug || session.id,
           status: session.status,

@@ -238,17 +238,21 @@ export function useKimiWebProviders(options: KimiWebProvidersOptions) {
     const entries: KimiWebManagedProviderEntry[] = [];
     for (const item of items) {
       const details = modelDetailsFor(item, configModels);
-      const source: KimiWebManagedProviderSource = { ...item, modelDetails: details };
+      const source: KimiWebManagedProviderSource = {
+        ...item,
+        modelDetails: details,
+        modelDetailsById: configModels,
+      };
       const [mapped] = mapKimiWebProvidersToProviderInfo([source]);
       if (!mapped) continue;
       const models = mapped.models.map((model, index) => {
         const qualifiedId = item.models[index] ?? `${item.id}/${model.id}`;
-        const object = details.find(
-          (candidate) => candidate.model === model.id || candidate.model === qualifiedId,
-        );
-        return object
-          ? { ...model, qualifiedId, source: object }
-          : { ...model, qualifiedId };
+        const object =
+          configModels[qualifiedId] ??
+          details.find(
+            (candidate) => candidate.model === model.id || candidate.model === qualifiedId,
+          );
+        return object ? { ...model, qualifiedId, source: object } : { ...model, qualifiedId };
       });
       entries.push({ ...mapped, type: item.type, models });
     }
@@ -419,6 +423,11 @@ export function useKimiWebProviders(options: KimiWebProvidersOptions) {
       busyProviderId.value = null;
       return false;
     }
+    providers.value = providers.value.map((provider) =>
+      provider.models.some((model) => model.qualifiedId === modelId)
+        ? { ...provider, defaultModel: modelId }
+        : provider,
+    );
     busyProviderId.value = null;
     return true;
   }

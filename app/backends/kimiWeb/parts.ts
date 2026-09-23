@@ -31,6 +31,8 @@ export type KimiWebGroup = {
   startedAt: number;
   endedAt?: number;
   parentId: string;
+  usage?: { inputOther: number; output: number; inputCacheRead: number; inputCacheCreation: number };
+  usageStepIds: Set<string>;
   error?: MessageError;
   text: DeltaBucket;
   reasoning: DeltaBucket;
@@ -44,7 +46,9 @@ export type KimiWebCore = {
   agentTurns: Map<string, number>;
   agentModels: Map<string, { providerID: string; modelID: string }>;
   agentUsage: Map<string, KimiWebUsageReport>;
+  agentProfiles: Map<string, { effort?: string; permission?: string }>;
   promptIds: Map<string, string>;
+  promptUserMessageIds: Map<string, string>;
   subagentIdentity: (sessionId: string, agentId: string, turnId?: number) => string;
 };
 
@@ -92,7 +96,8 @@ export function applyDelta(
 }
 
 export function buildMessage(core: KimiWebCore, group: KimiWebGroup): MessageInfo {
-  const usage = core.agentUsage.get(`${group.sessionId}|${group.agentId}`)?.total;
+  const profile = core.agentProfiles.get(`${group.sessionId}|${group.agentId}`);
+  const usage = group.usage;
   const model = core.agentModels.get(`${group.sessionId}|${group.agentId}`) ?? {
     providerID: 'kimi-code',
     modelID: 'unknown',
@@ -105,8 +110,9 @@ export function buildMessage(core: KimiWebCore, group: KimiWebGroup): MessageInf
     parentID: group.parentId,
     modelID: model.modelID,
     providerID: model.providerID,
-    mode: 'kimi-web',
+    mode: profile?.permission ?? 'manual',
     agent: group.agentId,
+    ...(profile?.effort ? { variant: profile.effort } : {}),
     path: { cwd: '', root: '' },
     cost: 0,
     tokens: {
@@ -132,6 +138,7 @@ export function ensureGroup(
   const key = `${sessionID}|${turnId}`;
   let group = core.groups.get(key);
   if (!group) {
+    const promptId = asString(payload.promptId) || core.promptIds.get(`${sessionId}|${agentId}`) || '';
     group = {
       sessionId,
       agentId,
@@ -139,7 +146,8 @@ export function ensureGroup(
       sessionID,
       messageID: `${sessionID}:${agentId}:${turnId}`,
       startedAt: asNumber(payload.time) ?? core.now(),
-      parentId: asString(payload.promptId) || core.promptIds.get(`${sessionId}|${agentId}`) || '',
+      parentId: core.promptUserMessageIds.get(`${sessionId}|${promptId}`) || promptId,
+      usageStepIds: new Set(),
       text: newBucket(),
       reasoning: newBucket(),
     };

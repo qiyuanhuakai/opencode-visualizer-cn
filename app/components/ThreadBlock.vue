@@ -12,6 +12,7 @@
       v-else-if="canForkThread(root)"
       type="button"
       class="ib-action ib-top-right"
+      :disabled="cardActionsDisabled"
       @click="confirmFork()"
     >
       {{ t('threadBlock.fork') }}
@@ -55,9 +56,9 @@
       :agent-style="threadTargetAgentStyle"
     />
 
-    <div v-if="!isRevertedPreview && hasAssistantText" class="thread-assistant">
-      <Transition :name="assistantTransitionName" :mode="assistantTransitionMode">
-        <div class="ib-msg-block ib-msg-assistant" :key="deferredTransitionKey">
+    <div v-if="!isRevertedPreview" class="thread-assistant">
+      <Transition name="ib-fade">
+        <div v-if="hasAssistantText" class="ib-msg-block ib-msg-assistant" :key="root.id">
           <div class="ib-msg-body">
             <MessageViewer
               class="message-viewer-context-assistant"
@@ -115,6 +116,8 @@
       :context-percent="threadContextPercent"
       :tokens="threadTokens"
       :has-diffs="hasThreadDiffs"
+      :diff-pending="diffLoading"
+      :actions-disabled="cardActionsDisabled"
       :can-revert="canRevertThread(root)"
       @show-diff="showThreadDiff(root)"
       @revert="confirmRevert(root)"
@@ -123,7 +126,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, Transition } from 'vue';
+import { computed, inject, onBeforeUnmount, ref, Transition, watch } from 'vue';
+import { kimiWebCardCopy } from '../utils/kimiWebCardCopy';
 import { useI18n } from 'vue-i18n';
 import MessageViewer from './MessageViewer.vue';
 import ThreadFooter from './ThreadFooter.vue';
@@ -152,7 +156,12 @@ import {
   toHistoryWindowEntry,
 } from '../utils/historyEntries';
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
+const cardCopy = computed(() => kimiWebCardCopy(locale.value));
+const diffLoading = ref(false);
+const kimiHasDiffs = ref(false);
+let disposed = false;
+onBeforeUnmount(() => { disposed = true; });
 const showConfirm = inject('showConfirm') as ((message: string) => Promise<boolean>) | undefined;
 
 const props = defineProps<{
@@ -177,9 +186,13 @@ const props = defineProps<{
     diff?: string;
   } | null;
   backendKind?: BackendKind;
+  kimiPermissionMode?: string;
+  kimiCardActionsReady?: boolean;
+  cardActionsDisabled?: boolean;
+  loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
+  hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
   isLatestRoot?: boolean;
   assistantHtml?: string;
-  deferredTransitionKey: string;
 }>();
 
 const emit = defineEmits<{
@@ -187,6 +200,7 @@ const emit = defineEmits<{
   (event: 'revert-message', payload: { sessionId: string; messageId: string }): void;
   (event: 'undo-revert'): void;
   (event: 'show-message-diff', payload: { messageKey: string; diffs: MessageDiffEntry[] }): void;
+  (event: 'card-notice', message: string): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
   (event: 'show-thread-history', payload: { entries: HistoryWindowEntry[] }): void;
   (event: 'show-subagent-history', payload: { sessionId: string; label: string }): void;
@@ -210,21 +224,22 @@ const historyCount = computed(() => historyEntries.value.length);
 const hasHistory = computed(() => historyCount.value > 0);
 const threadError = computed(() => getThreadError());
 const userBoxStyle = computed(() => getUserBoxStyle());
-const assistantStatus = computed(() => {
-  const final = finalAnswer.value;
-  return final ? msg.getStatus(final.id) : 'complete';
-});
 const threadTokens = computed(() => getThreadTokens());
 const threadContextPercent = computed(() => getThreadContextPercent());
 const threadDiffs = computed(() => getThreadDiffs());
-const hasThreadDiffs = computed(() => threadDiffs.value.length > 0);
-const assistantTransitionName = computed(() =>
-  assistantStatus.value === 'streaming' ? undefined : 'ib-fade',
-);
-const assistantTransitionMode = computed(() =>
-  assistantStatus.value === 'streaming' ? undefined : 'out-in',
-);
-
+const hasThreadDiffs = computed(() => props.backendKind === 'kimi-web' ? kimiHasDiffs.value : threadDiffs.value.length > 0);
+watch(() => [props.root.sessionID, props.root.id, props.backendKind, props.hasMessageDiffs] as const, async ([sessionId, messageId, backendKind, hasMessageDiffs], _, onCleanup) => {
+  kimiHasDiffs.value = false;
+  if (backendKind !== 'kimi-web' || !hasMessageDiffs || !sessionId || !messageId) return;
+  let cancelled = false;
+  onCleanup(() => { cancelled = true; });
+  try {
+    const hasDiffs = await hasMessageDiffs(sessionId, messageId);
+    if (!cancelled) kimiHasDiffs.value = hasDiffs;
+  } catch {
+    if (!cancelled) kimiHasDiffs.value = false;
+  }
+}, { immediate: true });
 const threadTarget = computed<ThreadTargetType>(() => buildThreadTarget(props.root));
 const threadTargetAgentStyle = computed(() => {
   const color = props.resolveAgentColor
@@ -344,18 +359,35 @@ function getThreadDiffs(): MessageDiffEntry[] {
   return getMessageDiffEntries(props.root);
 }
 
-function showThreadDiff(root: MessageInfo) {
-  const diffs = threadDiffs.value;
-  if (diffs.length === 0) return;
-  emit('show-message-diff', { messageKey: root.id, diffs });
+async function showThreadDiff(root: MessageInfo) {
+  if (diffLoading.value || props.cardActionsDisabled) return;
+  const messageId = root.id;
+  const sessionId = root.sessionID;
+  const ownsRequest = () => !disposed && props.root.id === messageId && props.root.sessionID === sessionId;
+  diffLoading.value = true;
+  try {
+    const diffs = props.backendKind === 'kimi-web' && props.loadMessageDiffs && root.sessionID
+      ? await props.loadMessageDiffs(root.sessionID, root.id) : threadDiffs.value;
+    if (!ownsRequest()) return;
+    if (diffs.length === 0) {
+      kimiHasDiffs.value = false;
+      emit('card-notice', cardCopy.value.empty);
+    }
+    else emit('show-message-diff', { messageKey: root.id, diffs });
+  } catch (error) {
+    if (!ownsRequest()) return;
+    emit('card-notice', error instanceof Error ? error.message : String(error));
+  } finally { diffLoading.value = false; }
 }
 
 function canRevertThread(root: MessageInfo): boolean {
+  if (props.backendKind === 'kimi-web' && !props.kimiCardActionsReady) return false;
   if (props.sessionRevert) return false;
   return root.role === 'user' && Boolean(root.sessionID);
 }
 
 function canForkThread(root: MessageInfo): boolean {
+  if (props.backendKind === 'kimi-web' && !props.kimiCardActionsReady) return false;
   if (props.backendKind === 'codex' && !props.isLatestRoot) return false;
   return root.role === 'user' && Boolean(root.sessionID);
 }
@@ -368,15 +400,15 @@ defineExpose({ getSubagentHistoryEntries, showSubagentHistory });
 
 async function confirmFork() {
   const root = props.root;
-  if (root.role !== 'user' || !root.sessionID || !root.id) return;
-  const confirmed = showConfirm ? await showConfirm(t('threadBlock.confirmFork')) : true;
+  if (props.cardActionsDisabled || root.role !== 'user' || !root.sessionID || !root.id) return;
+  const confirmed = showConfirm ? await showConfirm(props.backendKind === 'kimi-web' ? cardCopy.value.fork : t('threadBlock.confirmFork')) : true;
   if (!confirmed) return;
   emit('fork-message', { sessionId: root.sessionID, messageId: root.id });
 }
 
 async function confirmRevert(root: MessageInfo) {
-  if (root.role !== 'user' || !root.sessionID || !root.id) return;
-  const confirmed = showConfirm ? await showConfirm(t(props.backendKind === 'codex' ? 'threadBlock.confirmCodexRevert' : 'threadBlock.confirmRevert')) : true;
+  if (props.cardActionsDisabled || root.role !== 'user' || !root.sessionID || !root.id) return;
+  const confirmed = showConfirm ? await showConfirm(props.backendKind === 'kimi-web' ? cardCopy.value.undo : t(props.backendKind === 'codex' ? 'threadBlock.confirmCodexRevert' : 'threadBlock.confirmRevert')) : true;
   if (!confirmed) return;
   emit('revert-message', { sessionId: root.sessionID, messageId: root.id });
 }
@@ -390,7 +422,11 @@ async function confirmUndoRevert() {
 
 function buildThreadTarget(root: MessageInfo): ThreadTargetType {
   const final = finalAnswer.value;
-  const agent = root.agent ?? final?.agent;
+  const agent = props.backendKind === 'kimi-web'
+    ? final?.role === 'assistant' && ['manual', 'auto', 'yolo'].includes(final.mode)
+      ? final.mode
+      : props.kimiPermissionMode ?? 'manual'
+    : root.agent ?? final?.agent;
   const modelPath = getMessageModelPath(root) || getMessageModelPath(final);
   const modelMeta = props.resolveModelMeta?.(modelPath);
   const variant = getMessageVariant(root) ?? (final ? getMessageVariant(final) : undefined);
@@ -403,9 +439,8 @@ function buildThreadTarget(root: MessageInfo): ThreadTargetType {
 }
 
 function getUserBoxStyle() {
-  const final = finalAnswer.value;
   const color = props.resolveAgentColor
-    ? props.resolveAgentColor(props.root.agent ?? final?.agent)
+    ? props.resolveAgentColor(threadTarget.value.agent)
     : '#334155';
   if (color.startsWith('#') && color.length === 7) {
     return { borderLeftColor: `${color}99` };
@@ -487,6 +522,7 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 </script>
 
 <style scoped>
+.ib-action:disabled { opacity: 0.5; cursor: not-allowed; }
 .thread-block {
   --ui-chip-border-neutral: var(
     --theme-chip-border-neutral,
@@ -728,12 +764,19 @@ function getThreadUserRenderKey(root: MessageInfo): string {
 
 .ib-fade-enter-active,
 .ib-fade-leave-active {
-  transition: opacity 0.3s ease;
+  transition: opacity 0.18s ease-in-out;
 }
 
 .ib-fade-enter-from,
 .ib-fade-leave-to {
   opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ib-fade-enter-active,
+  .ib-fade-leave-active {
+    transition: none;
+  }
 }
 
 .output-entry-attachments {

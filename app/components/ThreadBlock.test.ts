@@ -57,21 +57,24 @@ function mount(
   props: {
     root: MessageInfo;
     currentSessionId?: string;
-    backendKind?: 'codex' | 'opencode';
+    backendKind?: 'codex' | 'opencode' | 'kimi-web';
     isLatestRoot?: boolean;
+    kimiCardActionsReady?: boolean;
+    cardActionsDisabled?: boolean;
+    loadMessageDiffs?: () => Promise<[]>;
+    hasMessageDiffs?: () => Promise<boolean>;
+    kimiPermissionMode?: string;
+    onCardNotice?: (message: string) => void;
   },
   onShowThreadHistory: (payload: { entries: unknown[] }) => void,
 ) {
   const root = document.createElement('div');
   document.body.appendChild(root);
-  // Cast to any to avoid Vue's strict component instance type narrowing in tests.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const Child = ThreadBlock as any;
   const app = createApp(
     defineComponent({
       setup() {
         return () =>
-          h(Child, {
+          h(ThreadBlock, {
             root: props.root,
             theme: 'github-dark',
             filesWithBasenames: [],
@@ -79,7 +82,12 @@ function mount(
             currentSessionId: props.currentSessionId,
             backendKind: props.backendKind,
             isLatestRoot: props.isLatestRoot,
-            deferredTransitionKey: 'test',
+            kimiCardActionsReady: props.kimiCardActionsReady,
+            cardActionsDisabled: props.cardActionsDisabled,
+            loadMessageDiffs: props.loadMessageDiffs,
+            hasMessageDiffs: props.hasMessageDiffs,
+            kimiPermissionMode: props.kimiPermissionMode,
+            onCardNotice: props.onCardNotice,
             onShowThreadHistory,
           });
       },
@@ -116,6 +124,66 @@ describe('ThreadBlock history wiring', () => {
     mountedApps.forEach(unmount);
     document.body.innerHTML = '';
     useMessages().reset();
+  });
+
+  it('hides Kimi checkpoint actions until the adapter is ready', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const view = mount({ root: user, currentSessionId: 'main', backendKind: 'kimi-web' }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-top-right')).toBeNull();
+    expect(view.root.querySelector('.ib-footer .ib-action-danger')).toBeNull();
+  });
+
+  it('shows checkpoint actions when ready and disables them during a turn', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const view = mount({ root: user, backendKind: 'kimi-web', kimiCardActionsReady: true, cardActionsDisabled: true, loadMessageDiffs: async () => [], hasMessageDiffs: async () => true }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector<HTMLButtonElement>('.ib-top-right')?.disabled).toBe(true);
+    expect(view.root.querySelector<HTMLButtonElement>('.ib-action-danger')?.disabled).toBe(true);
+    expect(view.root.querySelector<HTMLButtonElement>('.ib-action-diff')?.disabled).toBe(true);
+  });
+
+  it('hides the diff action when a turn has no file changes', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const loader = vi.fn<() => Promise<[]>>().mockResolvedValue([]);
+    const availability = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
+    const view = mount({ root: user, backendKind: 'kimi-web', loadMessageDiffs: loader, hasMessageDiffs: availability }, vi.fn());
+    await flushRender();
+    expect(availability).toHaveBeenCalledWith('main', 'u1');
+    expect(view.root.querySelector('.ib-action-diff')).toBeNull();
+    expect(loader).not.toHaveBeenCalled();
+  });
+
+  it('shows the Kimi permission mode and per-turn tokens under the card', async () => {
+    const user = { ...makeUserMessage('main', 'u1', 1), agent: 'main' } as MessageInfo;
+    const assistant = { ...makeAssistantMessage('main', 'a1', 'u1', 2, 'main'), mode: 'yolo', tokens: { input: 382, output: 266, reasoning: 0, cache: { read: 0, write: 0 } } } as MessageInfo;
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const view = mount({ root: user, backendKind: 'kimi-web', kimiPermissionMode: 'manual' }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('yolo');
+    expect(view.root.querySelector('.ib-meta-tokens')?.textContent?.replace(/\s/g, '')).toContain('3822660');
+  });
+
+  it('keeps the assistant card mounted when a later reply replaces the displayed answer', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const first = { info: makeAssistantMessage('main', 'a1', 'u1', 2), parts: [makeTextPart('a1', 'main', 'First reply')] };
+    useMessages().loadHistory([{ info: user, parts: [] }, first]);
+    const view = mount({ root: user, currentSessionId: 'main' }, vi.fn());
+    await flushRender();
+    const card = view.root.querySelector('.ib-msg-assistant');
+    expect(card).not.toBeNull();
+
+    useMessages().loadHistory([
+      { info: user, parts: [] }, first,
+      { info: makeAssistantMessage('main', 'a2', 'u1', 3), parts: [makeTextPart('a2', 'main', 'Final reply')] },
+    ]);
+    await flushRender();
+
+    expect(view.root.querySelector('.ib-msg-assistant')).toBe(card);
+    expect(card?.classList.contains('ib-fade-leave-active')).toBe(false);
   });
 
   it('shows Codex turn attachments when the latest reply is a separate assistant message', async () => {

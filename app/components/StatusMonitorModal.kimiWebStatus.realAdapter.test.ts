@@ -124,7 +124,6 @@ const SESSION_STATUS = {
 const MCP_UNSUPPORTED_KIMI_WEB = 'Structured MCP status is not exposed by Kimi Web.';
 const LSP_UNSUPPORTED_KIMI_WEB = 'Structured LSP status is not exposed by Kimi Web.';
 const SKILLS_UNSUPPORTED_KIMI_WEB = 'Structured skill status is not exposed by Kimi Web.';
-const PLUGINS_UNSUPPORTED_KIMI_WEB = 'Structured plugin status is not exposed by Kimi Web.';
 /** Shared "supported but nothing to list" copy — the honest post-fix MCP state. */
 const MCP_NO_DATA = 'No MCP servers configured.';
 const LIVE_CAPABILITIES_TEXT = 'websocket, file_upload, fs_query, mcp, tasks, terminal';
@@ -147,6 +146,14 @@ const fetchMock = vi.fn<
   (input: unknown, init?: { headers?: Record<string, string> }) => Promise<FakeResponse>
 >(async (input) => {
   const url = String(input);
+  if (url.endsWith('/api/v1/plugins')) {
+    return { ok: true, status: 200, json: async () => ({ code: 0, data: { plugins: [
+      { id: 'demo', displayName: 'Demo plugin', enabled: true, state: 'ok' },
+    ] } }) };
+  }
+  if (url.endsWith('/api/v1/plugins/marketplace')) {
+    return { ok: true, status: 200, json: async () => ({ code: 0, data: { entries: [] } }) };
+  }
   if (url.includes('/healthz')) {
     if (healthMode === 'reject') throw new Error('bridge health unreachable');
     return { ok: true, status: 200, json: async () => BRIDGE_HEALTH };
@@ -466,11 +473,10 @@ describe('R5 (c) Capabilities + Models ready survive a rejected /healthz', () =>
   });
 });
 
-describe('R5 (d) LSP / Skills / Plugins keep the fail-closed unsupported copy', () => {
+describe('R5 (d) LSP / Skills keep the fail-closed unsupported copy', () => {
   it.each([
     ['LSP', LSP_UNSUPPORTED_KIMI_WEB],
     ['Skills', SKILLS_UNSUPPORTED_KIMI_WEB],
-    ['Plugins', PLUGINS_UNSUPPORTED_KIMI_WEB],
   ] as const)('GUARD: the %s tab keeps the unsupportedKimiWeb copy', async (label, message) => {
     const { root, app } = await mountKimiWebModal();
     await waitForKimiStatusFetches();
@@ -482,6 +488,19 @@ describe('R5 (d) LSP / Skills / Plugins keep the fail-closed unsupported copy', 
     // key and no wired adapter method exists for these surfaces, so the honest
     // fail-closed presentation is unchanged.
     expect(panel(root)?.textContent).toContain(message);
+    app.unmount();
+  });
+});
+
+describe('Kimi plugin management with a registered adapter', () => {
+  it('loads installed plugins and exposes management controls in the Plugins tab', async () => {
+    const { root, app } = await mountKimiWebModal();
+    await waitForKimiStatusFetches();
+    clickTab(root, 'Plugins');
+    await flushDom();
+    await vi.waitFor(() => expect(root.querySelector('[data-plugin-id="demo"]')).not.toBeNull());
+    expect(root.querySelector('[data-plugin-id="demo"] [aria-pressed]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(root.querySelector('.kimi-plugins form')).not.toBeNull();
     app.unmount();
   });
 });

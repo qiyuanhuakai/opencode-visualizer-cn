@@ -3,6 +3,7 @@ import type { KimiWebModelObjectWire, KimiWebProviderWire } from '../../utils/ki
 export type KimiWebManagedProviderSource = KimiWebProviderWire & {
   readonly name?: string;
   readonly modelDetails: readonly KimiWebModelObjectWire[];
+  readonly modelDetailsById?: Readonly<Record<string, KimiWebModelObjectWire>>;
 };
 
 export type KimiWebManagedProviderModel = {
@@ -36,7 +37,7 @@ function modelIdForProvider(providerId: string, qualifiedModelId: string): strin
 
 function mapCapabilities(capabilities: readonly string[] = []) {
   return {
-    attachment: capabilities.includes('vision'),
+    attachment: capabilities.some((capability) => ['image_in', 'video_in', 'vision'].includes(capability)),
     reasoning: capabilities.includes('thinking') || capabilities.includes('reasoning'),
     toolcall: capabilities.includes('tool_use') || capabilities.includes('tools'),
   };
@@ -47,12 +48,14 @@ function mapProviderModel(
   qualifiedModelId: string,
 ): KimiWebManagedProviderModel {
   const modelId = modelIdForProvider(provider.id, qualifiedModelId);
-  const details = provider.modelDetails.find(
-    (model) => model.model === modelId || model.model === qualifiedModelId,
-  );
+  const details =
+    provider.modelDetailsById?.[qualifiedModelId] ??
+    provider.modelDetails.find(
+      (model) => model.model === modelId || model.model === qualifiedModelId,
+    );
   return {
     id: modelId,
-    name: details?.name || modelId,
+    name: details?.display_name || details?.name || modelId,
     providerID: provider.id,
     maxContextSize: details?.max_context_size,
     capabilities: mapCapabilities(details?.capabilities),

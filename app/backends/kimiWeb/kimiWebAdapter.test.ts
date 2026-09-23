@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { BackendAdapter } from '../types';
 import type { KimiWebClient, KimiWebMeta, KimiWebSession } from '../../utils/kimiWeb';
 import {
   createKimiWebAdapter,
@@ -14,6 +15,7 @@ function session(overrides: Partial<KimiWebSession> = {}): KimiWebSession {
     title: 'Existing session',
     busy: false,
     main_turn_active: false,
+    last_turn_reason: 'completed',
     pending_interaction: 'none',
     archived: false,
     metadata: { cwd: '/work/repo' },
@@ -60,6 +62,50 @@ function client(
 }
 
 describe('KimiWebAdapter', () => {
+  it('shows an untouched session as unknown until it has run a turn', () => {
+    expect(mapKimiWebSession(session({ last_turn_reason: undefined })).status).toBe('unknown');
+    expect(mapKimiWebSession(session({ last_turn_reason: undefined, busy: true })).status).toBe('busy');
+    expect(mapKimiWebSession(session()).status).toBe('idle');
+  });
+
+  it('routes shell creation and the PTY socket through the Kimi bridge', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ id: 'pty-1' }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const adapter = createKimiWebAdapter({ bridgeUrl: 'ws://127.0.0.1:23005/kimi-web/ws', client: client([session()]) });
+      const backend: BackendAdapter = adapter;
+      await expect(backend.createPty?.({ directory: '/work/repo', command: '/bin/sh', args: ['-c', 'pwd'] })).resolves.toEqual({ id: 'pty-1' });
+      expect(fetcher).toHaveBeenCalledWith('http://127.0.0.1:23005/pty', expect.objectContaining({ method: 'POST' }));
+      expect(backend.createPtyWebSocketUrl?.('/pty/pty-1/connect')).toBe('ws://127.0.0.1:23005/pty/pty-1/connect');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it('reads listed text and binary files through the Kimi download endpoint', async () => {
+    const restClient = client([session()]);
+    restClient.downloadFile = vi.fn(async (_sessionId, path) =>
+      path === 'src/index.ts' ? new TextEncoder().encode('export const ok = true;') : new Uint8Array([0, 255, 1]));
+    const adapter = createKimiWebAdapter({ bridgeUrl: 'ws://localhost/kimi-web/ws', client: restClient });
+    const backend: BackendAdapter = adapter;
+    await expect(backend.readFileContent?.({ directory: '/work/repo', path: 'src/index.ts' })).resolves.toEqual({
+      type: 'text', encoding: 'utf-8', content: 'export const ok = true;',
+    });
+    await expect(backend.readFileContent?.({ directory: '/work/repo', path: 'image.png' })).resolves.toEqual({
+      type: 'binary', encoding: 'base64', content: 'AP8B',
+    });
+    expect(restClient.downloadFile).toHaveBeenCalledWith('session-1', 'src/index.ts', { signal: undefined });
+  });
+  it('preserves supported thinking efforts and the server default in model variants', async () => {
+    const restClient = client();
+    vi.mocked(restClient.listModels).mockResolvedValue({ items: [{ provider: 'kimi', model: 'k3', display_name: 'K3', support_efforts: ['low', 'high'], default_effort: 'high', capabilities: ['image_in', 'video_in', 'tool_use'] }] });
+    const adapter = createKimiWebAdapter({ bridgeUrl: 'ws://localhost/kimi-web/ws', client: restClient });
+    const response = await adapter.listProviders();
+    expect(response.all?.[0]?.models?.['k3']?.capabilities).toMatchObject({ attachment: true, toolcall: true });
+    expect(response.all?.[0]?.models?.['k3']?.variants).toEqual({ low: { default: false }, high: { default: true } });
+  });
+
   it('maps existing workspace sessions into selectable project state', async () => {
     const restClient = client([session()]);
     const adapter = createKimiWebAdapter({
@@ -110,7 +156,7 @@ describe('KimiWebAdapter', () => {
       all: [
         {
           id: 'managed:kimi-code',
-          name: 'managed:kimi-code',
+          name: 'Kimi Code',
           models: {
             'kimi-k2': {
               id: 'kimi-k2',

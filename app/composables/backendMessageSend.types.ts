@@ -1,3 +1,4 @@
+import type { KimiWebSlashAction } from '../backends/kimiWeb/slashCommands';
 import type { Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { ComposerAttachment } from '../types/composer';
@@ -15,6 +16,7 @@ import type { TextTransformer } from '../utils/textTransformers';
 import type { ParsedCodexSlashCommand } from '../utils/codexSlashCommands';
 
 export type ModelOption = {
+  readonly variants?: Record<string, unknown>;
   readonly id: string;
   readonly modelID: string;
   readonly providerID?: string;
@@ -89,6 +91,7 @@ export type CodexApiLike = {
 };
 
 export type BackendMessageSendParams = {
+  readonly executeKimiWebSlashCommand?: (action: KimiWebSlashAction) => Promise<void>;
   readonly executeCodexSlashCommand?: (
     command: ParsedCodexSlashCommand,
   ) => Promise<'handled' | 'not-handled'>;

@@ -21,8 +21,17 @@ export type KimiWebHistoryEntry = {
   parts: MessagePart[];
 };
 
+export type KimiWebHistoryProfile = {
+  model?: string;
+  provider?: string;
+  effort?: string;
+  permission?: string;
+};
+
 export function isInjectionMessage(message: KimiWebMessage): boolean {
-  return message.metadata?.origin?.kind === 'injection';
+  const origin = message.metadata?.origin;
+  return origin?.kind === 'injection' ||
+    ((origin?.kind === 'skill_activation' || origin?.kind === 'plugin_command') && origin.trigger !== 'user-slash');
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -52,14 +61,15 @@ function partBase(message: KimiWebMessage, id: string) {
   return { id, sessionID: message.session_id, messageID: message.id };
 }
 
-function createUserInfo(message: KimiWebMessage, createdAt: number): UserMessageInfo {
+function createUserInfo(message: KimiWebMessage, createdAt: number, profile: KimiWebHistoryProfile): UserMessageInfo {
   return {
     id: message.id,
     sessionID: message.session_id,
     role: 'user',
     time: { created: createdAt },
-    agent: 'kimi-web',
-    model: { providerID: 'kimi-web', modelID: 'kimi-web' },
+    agent: 'main',
+    model: { providerID: profile.provider ?? '', modelID: profile.model ?? '' },
+    ...(profile.effort ? { variant: profile.effort } : {}),
   };
 }
 
@@ -67,6 +77,7 @@ function createAssistantInfo(
   message: KimiWebMessage,
   createdAt: number,
   parentId: string,
+  profile: KimiWebHistoryProfile,
 ): AssistantMessageInfo {
   return {
     id: message.id,
@@ -74,10 +85,11 @@ function createAssistantInfo(
     role: 'assistant',
     time: { created: createdAt },
     parentID: parentId,
-    modelID: 'kimi-web',
-    providerID: 'kimi-web',
-    mode: 'kimi-web',
-    agent: 'kimi-web',
+    modelID: profile.model ?? '',
+    providerID: profile.provider ?? '',
+    mode: profile.permission ?? 'manual',
+    agent: 'main',
+    ...(profile.effort ? { variant: profile.effort } : {}),
     path: { cwd: '', root: '' },
     cost: 0,
     tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -184,7 +196,7 @@ function userParts(message: KimiWebMessage, createdAt: number): MessagePart[] {
   );
 }
 
-export function kimiWebMessagesToHistoryEntries(messages: KimiWebMessage[]): KimiWebHistoryEntry[] {
+export function kimiWebMessagesToHistoryEntries(messages: KimiWebMessage[], profile: KimiWebHistoryProfile = {}): KimiWebHistoryEntry[] {
   const entries: KimiWebHistoryEntry[] = [];
   const toolParts = new Map<string, ToolPart>();
   let lastUserId = '';
@@ -194,14 +206,14 @@ export function kimiWebMessagesToHistoryEntries(messages: KimiWebMessage[]): Kim
     if (message.role === 'user') {
       lastUserId = message.id;
       entries.push({
-        info: createUserInfo(message, createdAt),
+        info: createUserInfo(message, createdAt, profile),
         parts: userParts(message, createdAt),
       });
       return;
     }
     if (message.role === 'assistant') {
       entries.push({
-        info: createAssistantInfo(message, createdAt, lastUserId || message.id),
+        info: createAssistantInfo(message, createdAt, lastUserId || message.id, profile),
         parts: assistantParts(message, createdAt, toolParts),
       });
       return;

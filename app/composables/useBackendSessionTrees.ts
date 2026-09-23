@@ -6,7 +6,11 @@ import type { ProjectState, SessionState } from '../types/worker-state';
 import { buildCodexSessionTreeData, buildCodexTopPanelTreeData } from '../utils/codexTopPanelTree';
 import { isSandboxMarkedDeleted, type DeletedSandboxStore } from '../utils/deletedSandboxes';
 import type { LocalPinnedSessionStore } from '../utils/pinnedSessions';
-import { buildNativeOpenCodeTopPanelTreeData, buildOpenCodeSessionTreeData } from './openCodeSessionTrees';
+import {
+  buildNativeOpenCodeTopPanelTreeData,
+  buildOpenCodeSessionTreeData,
+} from './openCodeSessionTrees';
+import { buildKimiWebTopPanelTreeData } from './kimiWebSessionTrees';
 
 const NAVIGABLE_MAX_SESSIONS = 5;
 
@@ -19,24 +23,53 @@ function buildAcpTopPanelTreeData(params: {
   replaceHomePrefix: (path: string) => string;
   resolveProjectColor: (color?: string) => string | undefined;
 }): TopPanelWorktree[] {
-  const { projects, pinnedStore, deletedSandboxStore, gitInfoByDirectory, homePath, replaceHomePrefix, resolveProjectColor } = params;
-  return Object.values(projects).flatMap((project) => {
-    const sandboxes = Object.fromEntries(Object.entries(project.sandboxes)
-      .filter(([, sandbox]) => sandbox.directory === project.worktree || !isSandboxMarkedDeleted(deletedSandboxStore, project.id, sandbox.directory))
-      .map(([directory, sandbox]) => [directory, {
-        ...sandbox,
-        sessions: Object.fromEntries(Object.entries(sandbox.sessions).map(([id, session]) => {
-          const gitInfo = session.gitInfo ?? gitInfoByDirectory[session.directory || sandbox.directory];
-          return [id, gitInfo ? { ...session, gitInfo } : session];
-        })),
-      }]));
-    return buildCodexTopPanelTreeData({ ...project, sandboxes }, {
-      pinnedStore, homePath, defaultDirectory: '/', keyPrefix: `backend:${project.id}`, resolveProjectColor,
-    });
-  }).map((worktree) => ({
-    ...worktree,
-    label: worktree.kind === 'global' ? worktree.label : replaceHomePrefix(worktree.directory),
-  }));
+  const {
+    projects,
+    pinnedStore,
+    deletedSandboxStore,
+    gitInfoByDirectory,
+    homePath,
+    replaceHomePrefix,
+    resolveProjectColor,
+  } = params;
+  return Object.values(projects)
+    .flatMap((project) => {
+      const sandboxes = Object.fromEntries(
+        Object.entries(project.sandboxes)
+          .filter(
+            ([, sandbox]) =>
+              sandbox.directory === project.worktree ||
+              !isSandboxMarkedDeleted(deletedSandboxStore, project.id, sandbox.directory),
+          )
+          .map(([directory, sandbox]) => [
+            directory,
+            {
+              ...sandbox,
+              sessions: Object.fromEntries(
+                Object.entries(sandbox.sessions).map(([id, session]) => {
+                  const gitInfo =
+                    session.gitInfo ?? gitInfoByDirectory[session.directory || sandbox.directory];
+                  return [id, gitInfo ? { ...session, gitInfo } : session];
+                }),
+              ),
+            },
+          ]),
+      );
+      return buildCodexTopPanelTreeData(
+        { ...project, sandboxes },
+        {
+          pinnedStore,
+          homePath,
+          defaultDirectory: '/',
+          keyPrefix: `backend:${project.id}`,
+          resolveProjectColor,
+        },
+      );
+    })
+    .map((worktree) => ({
+      ...worktree,
+      label: worktree.kind === 'global' ? worktree.label : replaceHomePrefix(worktree.directory),
+    }));
 }
 
 export function useBackendSessionTrees(params: {
@@ -62,25 +95,35 @@ export function useBackendSessionTrees(params: {
               })
             : [];
         })()
-          : params.activeBackendKind.value === 'acp' || params.activeBackendKind.value === 'kimi-web'
-            ? buildAcpTopPanelTreeData({
-                projects: params.projects,
-                pinnedStore: params.pinnedStore.value,
-                deletedSandboxStore: params.deletedSandboxStore.value,
-                gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
-                homePath: params.homePath.value,
-                replaceHomePrefix: params.replaceHomePrefix,
-                resolveProjectColor: params.resolveProjectColor,
-              })
-            : buildNativeOpenCodeTopPanelTreeData({
-          projects: params.projects,
-          pinnedStore: params.pinnedStore.value,
-          deletedSandboxStore: params.deletedSandboxStore.value,
-          gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
-          homePath: params.homePath.value,
-          replaceHomePrefix: params.replaceHomePrefix,
-          resolveProjectColor: params.resolveProjectColor,
-        });
+      : params.activeBackendKind.value === 'kimi-web'
+        ? buildKimiWebTopPanelTreeData({
+            projects: params.projects,
+            pinnedStore: params.pinnedStore.value,
+            deletedSandboxStore: params.deletedSandboxStore.value,
+            gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
+            homePath: params.homePath.value,
+            replaceHomePrefix: params.replaceHomePrefix,
+            resolveProjectColor: params.resolveProjectColor,
+          })
+        : params.activeBackendKind.value === 'acp'
+          ? buildAcpTopPanelTreeData({
+              projects: params.projects,
+              pinnedStore: params.pinnedStore.value,
+              deletedSandboxStore: params.deletedSandboxStore.value,
+              gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
+              homePath: params.homePath.value,
+              replaceHomePrefix: params.replaceHomePrefix,
+              resolveProjectColor: params.resolveProjectColor,
+            })
+          : buildNativeOpenCodeTopPanelTreeData({
+              projects: params.projects,
+              pinnedStore: params.pinnedStore.value,
+              deletedSandboxStore: params.deletedSandboxStore.value,
+              gitInfoByDirectory: params.gitInfoByDirectory?.value ?? {},
+              homePath: params.homePath.value,
+              replaceHomePrefix: params.replaceHomePrefix,
+              resolveProjectColor: params.resolveProjectColor,
+            });
   });
 
   const sessionTreeData = computed<SessionTreeData>(() => {
@@ -95,17 +138,21 @@ export function useBackendSessionTrees(params: {
         });
   });
 
-  const navigableTree = computed(() => topPanelTreeData.value
-    .map((worktree) => ({
-      ...worktree,
-      sandboxes: worktree.sandboxes
-        .map((sandbox) => ({
-          ...sandbox,
-          sessions: sandbox.sessions.filter((session) => !session.archivedAt).slice(0, NAVIGABLE_MAX_SESSIONS),
-        }))
-        .filter((sandbox) => worktree.projectId !== 'global' || sandbox.sessions.length > 0),
-    }))
-    .filter((worktree) => worktree.sandboxes.some((sandbox) => sandbox.sessions.length > 0)));
+  const navigableTree = computed(() =>
+    topPanelTreeData.value
+      .map((worktree) => ({
+        ...worktree,
+        sandboxes: worktree.sandboxes
+          .map((sandbox) => ({
+            ...sandbox,
+            sessions: sandbox.sessions
+              .filter((session) => !session.archivedAt)
+              .slice(0, NAVIGABLE_MAX_SESSIONS),
+          }))
+          .filter((sandbox) => worktree.projectId !== 'global' || sandbox.sessions.length > 0),
+      }))
+      .filter((worktree) => worktree.sandboxes.some((sandbox) => sandbox.sessions.length > 0)),
+  );
 
   return {
     topPanelTreeData,

@@ -42,9 +42,15 @@ export function prepareSendPreflight(params: BackendMessageSendParams): SendPref
   const slash = hasText ? params.parseSlashCommand(text) : null;
   const commandMatch = slash ? params.findCommandByName(slash.name) : null;
   const selectedMode = params.selectedMode.value;
-  const selectedThinking = params.selectedThinking.value;
+  const variants = params.modelOptions.value.find((option) => option.id === selectedModel)?.variants;
+  const defaultThinking = backend === 'kimi-web'
+    ? Object.entries(variants ?? {}).find(([, value]) =>
+        typeof value === 'object' && value !== null && 'default' in value && value.default === true,
+      )?.[0]
+    : undefined;
+  const selectedThinking = params.selectedThinking.value ?? defaultThinking;
   const model =
-    backend === 'codex' || backend === 'kimi-web'
+    backend === 'codex'
       ? { providerID: undefined, modelID: undefined }
       : resolveOpenCodeModel(params, selectedModel);
   if (

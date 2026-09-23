@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import {
   sessionProjectIdForBackend,
   useBackendSessionLifecycle,
@@ -45,6 +45,63 @@ function createLifecycleFixture(overrides: Partial<LifecycleOptions> = {}) {
 }
 
 describe('useBackendSessionLifecycle kimi-web', () => {
+  it('registers the session before publishing its selection', async () => {
+    // Given
+    const registered = new Set<string>();
+    const selectedSessionId = ref('old-session');
+    const invalidSelections: string[] = [];
+    const stop = watch(
+      selectedSessionId,
+      (id) => {
+        if (!registered.has(id)) invalidSelections.push(id);
+      },
+      { flush: 'sync' },
+    );
+    const created = {
+      id: 'new-session',
+      workspace_id: 'workspace',
+      metadata: { cwd: '/canonical' },
+    };
+    const { lifecycle } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'),
+      selectedSessionId,
+      kimiWebApi: { createSession: async () => created, updateProfile: async () => created },
+      onKimiWebSessionCreated: (session) => registered.add(session.id),
+    });
+    // When
+    const createdSession = await lifecycle.createNewSession();
+    stop();
+    // Then
+    expect(invalidSelections).toEqual([]);
+    expect(createdSession?.directory).toBe('/canonical');
+  });
+
+  it('preserves a newer user selection when a pending profile fails', async () => {
+    // Given
+    const profile = Promise.withResolvers<unknown>();
+    const started = Promise.withResolvers<void>();
+    const { lifecycle, params } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'),
+      kimiWebApi: {
+        createSession: async () => ({ id: 'created', workspace_id: 'workspace' }),
+        updateProfile: () => {
+          started.resolve();
+          return profile.promise;
+        },
+      },
+    });
+    const pending = lifecycle.createNewSession();
+    await started.promise;
+    // When
+    params.selectedProjectId.value = 'new-choice';
+    params.selectedSessionId.value = 'new-choice';
+    profile.reject(new Error('profile failed'));
+    await pending;
+    // Then
+    expect(params.selectedSessionId.value).toBe('new-choice');
+    expect(params.selectedProjectId.value).toBe('new-choice');
+  });
+
   it('Given a kimi-web backend, When createNewSession runs, Then it creates first and writes the model through profile second', async () => {
     const calls: string[] = [];
     const created = { id: 'kimi-1', workspace_id: 'ws-1', title: 'New session' };
@@ -60,12 +117,10 @@ describe('useBackendSessionLifecycle kimi-web', () => {
       title: 'New session',
       agent_config: { model: 'kimi-code/k3' },
     };
-    const updateProfile = vi
-      .fn()
-      .mockImplementation(async (sessionId: string, input: unknown) => {
-        calls.push(`profile:${sessionId}:${JSON.stringify(input)}`);
-        return updated;
-      });
+    const updateProfile = vi.fn().mockImplementation(async (sessionId: string, input: unknown) => {
+      calls.push(`profile:${sessionId}:${JSON.stringify(input)}`);
+      return updated;
+    });
     const openCodeCreateSession = vi.fn();
     const selectedProjectId = ref('old-project');
     const selectedSessionId = ref('old-session');
@@ -129,6 +184,7 @@ describe('useBackendSessionLifecycle kimi-web', () => {
         id: 'kimi-1',
         projectID: 'ws-1',
         directory: '/repo',
+        status: 'unknown',
         time: {
           created: Date.parse('2026-09-21T02:00:00.000Z'),
           updated: Date.parse('2026-09-21T03:00:00.000Z'),

@@ -28,6 +28,12 @@ function handleAgentStatus(core: KimiWebCore, frame: KimiWebWireFrame, payload: 
   const agentId = asString(payload.agentId) || 'main';
   const model = asString(payload.model);
   if (model) core.agentModels.set(`${sessionId}|${agentId}`, splitModel(model));
+  const profileKey = `${sessionId}|${agentId}`;
+  const previousProfile = core.agentProfiles.get(profileKey);
+  core.agentProfiles.set(profileKey, {
+    effort: asString(payload.thinkingEffort) || previousProfile?.effort,
+    permission: asString(payload.permission) || previousProfile?.permission,
+  });
   const usage = isRecord(payload.usage) ? payload.usage : undefined;
   if (usage) core.agentUsage.set(`${sessionId}|${agentId}`, usage);
   ops.push({

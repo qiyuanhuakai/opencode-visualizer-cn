@@ -39,20 +39,29 @@ export async function bootstrapKimiWebWorkspace(options: {
     const sessions = await options.adapter.listSessions();
     if (!options.isCurrent()) return {};
     const projects = mapKimiWebSessionsToProjects(sessions);
-    const first = sessions[0];
+    const first = sessions.find((session) => !session.parentID && !session.time?.archived);
 
+    client = options.createClient();
+    bridge = options.createBridge(client);
+    await client.connect();
+    if (!options.isCurrent()) {
+      dispose();
+      return {};
+    }
     if (first) {
-      client = options.createClient();
-      bridge = options.createBridge(client);
-      await client.connect();
-      if (!options.isCurrent()) {
-        dispose();
-        return {};
-      }
+      const status = await options.adapter.restClient.getSessionStatus(first.id).catch(() => undefined);
+      const modelId = status?.model ?? first.model;
+      const activeModel = modelPage.items.find((candidate) => candidate.model === modelId);
       const history = await loadKimiWebHistoryEntries({
         sessionId: first.id,
         getMessages: options.adapter.restClient.getMessages,
         isCurrent: options.isCurrent,
+        profile: {
+          model: modelId,
+          provider: activeModel?.provider,
+          effort: status?.thinking_level,
+          permission: status?.permission,
+        },
       });
       if (!options.isCurrent()) {
         dispose();
@@ -66,11 +75,9 @@ export async function bootstrapKimiWebWorkspace(options: {
       }
     }
 
-    const availableModels = new Set(modelPage.items.map((model) => model.model));
-    const selectedModel =
-      first?.model && availableModels.has(first.model)
-        ? first.model
-        : (modelPage.items[0]?.model ?? '');
+    const model = modelPage.items.find((candidate) => candidate.model === first?.model)
+      ?? modelPage.items[0];
+    const selectedModel = model ? `${model.provider}/${model.model}` : '';
     options.commit({
       projects,
       selectedProjectId: first?.workspaceId ?? '',

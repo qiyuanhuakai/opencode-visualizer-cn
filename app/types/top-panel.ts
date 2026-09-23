@@ -2,6 +2,7 @@ import type { ContainerPinScope } from './pin';
 
 export type TopPanelSession = {
   id: string;
+  projectId?: string;
   title?: string;
   slug?: string;
   status: 'busy' | 'idle' | 'retry' | 'unknown';

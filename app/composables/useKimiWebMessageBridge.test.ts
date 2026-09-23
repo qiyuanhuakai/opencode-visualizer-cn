@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { watch, nextTick } from 'vue';
 
+import { kimiWebMessagesToHistoryEntries } from '../backends/kimiWeb/historyEntries';
 import type { KimiWebMessage, KimiWebPage, KimiWebSnapshot } from '../utils/kimiWeb';
 import type {
   KimiWebWsAck,
@@ -168,6 +170,7 @@ function createHarness(options: {
   const onReconcilePart = vi.fn();
   const onSyncStateChange = vi.fn();
   const onSessionModeChange = vi.fn();
+  const onSessionEvent = vi.fn();
   const bridge = useKimiWebMessageBridge({
     client: source,
     restClient: {
@@ -182,10 +185,11 @@ function createHarness(options: {
     onReconcilePart,
     onSyncStateChange,
     onSessionModeChange,
+    onSessionEvent,
     maxBufferedFrames: options.maxBufferedFrames,
   });
   return {
-    source, bridge, messages, parts, loadHistory, removeMessage, applySnapshot,
+    source, bridge, messages, parts, loadHistory, removeMessage, applySnapshot, onSessionEvent,
     onToolPart, onLiveReasoning, onLiveSubagent, onReconcilePart, onSyncStateChange, onSessionModeChange,
   };
 }
@@ -264,6 +268,53 @@ async function enterLive(source: FakeSource, bridge: ReturnType<typeof useKimiWe
 }
 
 describe('useKimiWebMessageBridge', () => {
+  it('forwards global lifecycle events for sessions that were never selected', () => {
+    // Given
+    const harness = createHarness();
+    // When
+    harness.source.emitFrame({ type: 'event.session.archived', session_id: '__global__',
+      seq: 5, epoch: 'global-epoch', payload: { sessionId: 'other', workspace_id: 'workspace' } });
+    // Then
+    expect(harness.onSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'other', phase: 'archived' }));
+    expect(harness.messages.size).toBe(0);
+    harness.bridge.stop();
+  });
+
+  it('forwards a newly created session before it has a subscription', () => {
+    // Given
+    const harness = createHarness();
+    // When
+    harness.source.emitFrame({ type: 'event.session.created', session_id: 'other', seq: 1,
+      epoch: 'other-epoch', payload: { session: { id: 'other', workspace_id: 'workspace' } } });
+    // Then
+    expect(harness.onSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'other', phase: 'created' }));
+    harness.bridge.stop();
+  });
+  it('keeps a live response under its submitted user root before and after history replay', async () => {
+    const { source, bridge, messages, parts, loadHistory } = createHarness();
+    const ready = bridge.subscribe([SESSION_ID]);
+    source.ack(0);
+    await ready;
+    const user = { id: 'msg-live-user', session_id: SESSION_ID, role: 'user' as const,
+      content: [{ type: 'text' as const, text: 'Reply only VIS_KIMI_202_OK.' }],
+      created_at: '2026-09-22T13:22:47.892Z' };
+    source.emitFrame({ type: 'prompt.submitted', seq: 1, epoch: EPOCH, session_id: SESSION_ID, payload: {
+      agentId: 'main', promptId: user.id, userMessageId: user.id, status: 'running',
+      content: user.content, createdAt: user.created_at, time: 1790083367893,
+    } });
+    source.emitFrame({ type: 'turn.started', seq: 2, epoch: EPOCH, session_id: SESSION_ID,
+      payload: { agentId: 'main', turnId: 2, promptId: user.id, time: 1790083367903 } });
+    const assistant = [...messages.values()].find((message) => message.role === 'assistant');
+    expect(messages.get(user.id)).toMatchObject({ role: 'user' });
+    expect(assistant).toMatchObject({ parentID: user.id });
+    expect(parts.get(user.id + ':text:0')).toMatchObject({ text: user.content[0]?.text });
+    expect(loadHistory).not.toHaveBeenCalled();
+    bridge.applyHistory(kimiWebMessagesToHistoryEntries([user]));
+    expect([...messages.values()].filter((message) => message.role === 'user')).toHaveLength(1);
+    expect(messages.get(assistant?.id ?? '')).toMatchObject({ parentID: user.id });
+    bridge.stop();
+  });
+
   it('writes a live fixture delta into the message store', async () => {
     const { source, bridge, parts } = createHarness();
     await enterLive(source, bridge, 9);
@@ -322,6 +373,17 @@ describe('useKimiWebMessageBridge', () => {
       step: { phase: 'completed', step: 1 },
       usage: { total: { output: 32 } },
     });
+  });
+
+  it('notifies context consumers when live agent usage changes', async () => {
+    const { source, bridge } = createHarness();
+    await enterLive(source, bridge, 9);
+    const changed = vi.fn();
+    const stop = watch(() => bridge.sessionState(SESSION_ID)?.contextTokens, changed);
+    source.emitFrame(frame('agent.status.updated', 4));
+    await nextTick();
+    expect(changed).toHaveBeenCalledWith(20379, undefined, expect.any(Function));
+    stop();
   });
 
   it('publishes permission plan swarm and tower from main-agent status', async () => {
