@@ -29,10 +29,12 @@ describe('Kimi plugin management', () => {
     try {
       await vi.waitFor(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
       expect(host.textContent).not.toContain('No installed plugins');
+      expect(host.querySelector('form')).toBeNull();
       reachable = true;
       host.querySelector<HTMLButtonElement>('header button')?.click();
       await vi.waitFor(() => expect(host.textContent).toContain('No installed plugins'));
       expect(host.querySelector('[role="alert"]')).toBeNull();
+      expect(host.querySelector('form')).not.toBeNull();
     } finally {
       app.unmount();
       host.remove();

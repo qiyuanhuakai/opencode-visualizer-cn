@@ -28,6 +28,7 @@ const source = ref('');
 const busy = ref(false);
 const feedback = ref('');
 const failed = ref(false);
+const listReady = ref(false);
 const catalogFailed = ref(false);
 const available = computed(() =>
   catalog.value.filter((entry) => !plugins.value.some((plugin) => plugin.id === entry.id)),
@@ -38,8 +39,12 @@ async function load() {
     props.client.list(),
     props.client.marketplace(),
   ]);
-  if (installed.status === 'rejected') throw installed.reason;
+  if (installed.status === 'rejected') {
+    listReady.value = false;
+    throw installed.reason;
+  }
   plugins.value = installed.value;
+  listReady.value = true;
   catalogFailed.value = market.status === 'rejected';
   catalog.value = market.status === 'fulfilled' ? market.value : [];
 }
@@ -60,7 +65,7 @@ async function refresh() {
 }
 
 async function mutate(operation: () => Promise<unknown>) {
-  if (busy.value) return;
+  if (busy.value || !listReady.value) return;
   busy.value = true;
   feedback.value = '';
   failed.value = false;
@@ -88,6 +93,7 @@ function install(value: string) {
 }
 
 async function remove(id: string) {
+  if (!listReady.value) return;
   const accepted = confirm
     ? await confirm(copy.value.removeConfirm)
     : window.confirm(copy.value.removeConfirm);
@@ -103,7 +109,7 @@ onMounted(refresh);
       <strong>{{ copy.title }}</strong>
       <button type="button" :disabled="busy" @click="refresh">{{ copy.refresh }}</button>
     </header>
-    <form @submit.prevent="install(source)">
+    <form v-if="listReady" @submit.prevent="install(source)">
       <label
         >{{ copy.source }}<input v-model="source" :placeholder="copy.sourceHint" :disabled="busy"
       /></label>
@@ -134,19 +140,19 @@ onMounted(refresh);
       <div class="actions">
         <button
           type="button"
-          :disabled="busy"
+          :disabled="busy || !listReady"
           :aria-pressed="plugin.enabled"
           @click="mutate(() => client.action(plugin.id, plugin.enabled ? 'disable' : 'enable'))"
         >
           {{ plugin.enabled ? copy.disable : copy.enable }}
         </button>
-        <button type="button" class="is-danger" :disabled="busy" @click="remove(plugin.id)">
+        <button type="button" class="is-danger" :disabled="busy || !listReady" @click="remove(plugin.id)">
           {{ copy.remove }}
         </button>
       </div>
     </article>
     <p v-if="catalogFailed" role="status">{{ copy.catalogFailed }}</p>
-    <details v-if="available.length">
+    <details v-if="listReady && available.length">
       <summary>{{ copy.marketplace }} ({{ available.length }})</summary>
       <article v-for="entry in available" :key="entry.id">
         <div class="identity">
