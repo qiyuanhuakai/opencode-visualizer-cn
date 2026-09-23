@@ -237,6 +237,9 @@ export interface LocaleMessages {
       archived: string;
     };
     sessionActions: {
+      agents: string;
+      fork: string;
+      compact: string;
       unpin: string;
       pin: string;
       unarchive: string;
@@ -630,6 +633,7 @@ export interface LocaleMessages {
     };
   };
   kimiWeb: {
+    commands: { help: string; compact: string; applied: string };
     composer: {
       manual: string;
       auto: string;

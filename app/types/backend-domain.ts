@@ -5,7 +5,7 @@ export type BackendSessionInfo = {
   parentID?: string;
   title?: string;
   slug?: string;
-  status?: 'busy' | 'idle' | 'retry';
+  status?: 'busy' | 'idle' | 'retry' | 'unknown';
   directory?: string;
   time?: {
     created?: number;

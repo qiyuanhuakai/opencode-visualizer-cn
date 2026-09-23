@@ -21,7 +21,7 @@ export type SessionState = {
   title?: string;
   slug?: string;
   parentID?: string;
-  status?: 'busy' | 'idle' | 'retry';
+  status?: 'busy' | 'idle' | 'retry' | 'unknown';
   directory?: string;
   gitInfo?: {
     branch?: string;

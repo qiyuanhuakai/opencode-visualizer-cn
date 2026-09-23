@@ -8,6 +8,7 @@ import { mapKimiWebProvidersToProviderInfo } from './kimiWebProviderMapping';
 type ManagedProviderFixture = KimiWebProviderWire & {
   readonly name?: string;
   readonly modelDetails: readonly KimiWebModelObjectWire[];
+  readonly modelDetailsById?: Readonly<Record<string, KimiWebModelObjectWire>>;
 };
 
 function provider(overrides: Partial<ManagedProviderFixture> = {}): ManagedProviderFixture {
@@ -130,6 +131,24 @@ describe('mapKimiWebProvidersToProviderInfo', () => {
     ]);
   });
 
+  it('preserves managed aliases and maps the Kimi 2.0.2 input capabilities', () => {
+    const result = mapped({
+      id: 'managed:kimi-code',
+      models: ['kimi-code/k3'],
+      modelDetails: [],
+      modelDetailsById: {
+        'kimi-code/k3': {
+          model: 'k3', display_name: 'Kimi K3', max_context_size: 262144,
+          capabilities: ['thinking', 'always_thinking', 'image_in', 'video_in', 'tool_use'],
+        },
+      },
+    });
+    expect(result?.models).toEqual([{
+      id: 'kimi-code/k3', name: 'Kimi K3', providerID: 'managed:kimi-code', maxContextSize: 262144,
+      capabilities: { attachment: true, reasoning: true, toolcall: true },
+    }]);
+  });
+
   it('strips only the matching provider prefix from qualified model ids', () => {
     const result = mapped({
       models: ['custom-openai/gpt-4.1', 'other-provider/foreign-model'],
@@ -183,7 +202,7 @@ describe('mapKimiWebProvidersToProviderInfo', () => {
       all: [
         {
           id: 'managed:kimi-code',
-          name: 'managed:kimi-code',
+          name: 'Kimi Code',
           models: {
             'kimi-k2': {
               id: 'kimi-k2',

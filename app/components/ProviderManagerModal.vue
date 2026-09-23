@@ -16,11 +16,7 @@
       </header>
 
       <div class="provider-manager-body">
-        <div
-          v-if="props.backendKind !== 'acp' && !isKimiWebBackend"
-          class="provider-manager-tabs"
-          role="tablist"
-        >
+        <div v-if="props.backendKind !== 'acp'" class="provider-manager-tabs" role="tablist">
           <button
             type="button"
             class="provider-manager-tab"
@@ -60,10 +56,11 @@
           </section>
         </template>
 
-        <template v-else-if="isKimiWebBackend && props.open">
+        <template v-else-if="isKimiWebBackend && props.open && activeTab === 'providers'">
           <KimiWebProviderManager
             v-if="kimiWebProvidersClient"
             :client="kimiWebProvidersClient"
+            @providers-changed="emit('providers-changed')"
           />
         </template>
 
@@ -777,8 +774,7 @@ const customProviderErrors = ref({
 const hiddenModelSet = computed(() => new Set(props.hiddenModels));
 const connectedProviderIdSet = computed(() => new Set(props.connectedProviderIds));
 
-// Kimi Web owns its providers through the REST surface, not the shared config
-// tabs, so it gets a dedicated branch instead of the provider/model tabs.
+// Provider writes use Kimi REST; model visibility uses the shared local controls.
 const isKimiWebBackend = computed(() => props.backendKind === 'kimi-web');
 const kimiWebProvidersClient = ref<KimiWebProvidersClient | null>(null);
 

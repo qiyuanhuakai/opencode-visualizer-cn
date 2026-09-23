@@ -1,3 +1,4 @@
+import { shallowReactive } from 'vue';
 import {
   createKimiWebNormalizer,
   type KimiWebNormalizer,
@@ -46,7 +47,7 @@ function ackNeedsResync(ack: KimiWebWsAck, sessionId: string): boolean {
 
 export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
   const syncStates = new Map<string, KimiWebSyncState>();
-  const sessionStates = new Map<string, KimiWebBridgeSessionState>();
+  const sessionStates = shallowReactive(new Map<string, KimiWebBridgeSessionState>());
   const normalizers = new Map<string, KimiWebNormalizer>();
   const messages = new Map<string, MessageInfo>();
   const ownedMessageIds = new Map<string, Set<string>>();
@@ -175,7 +176,18 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
       return;
     }
     const sync = syncStates.get(sessionId) ?? { kind: 'disconnected' as const };
-    if (sync.kind === 'disconnected' && !forcedOrigin) return;
+    if (sync.kind === 'disconnected' && !forcedOrigin) {
+      if (frame.type.startsWith('event.session.') || frame.type === 'session.meta.updated') {
+        const key = `${sessionId}:${frame.epoch ?? ''}:${frame.seq}`;
+        if (typeof frame.seq === 'number' && appliedDurable.has(key)) return;
+        if (typeof frame.seq === 'number') appliedDurable.add(key);
+        const result = normalizerFor(sessionId).ingest(frame);
+        for (const op of result.ops) {
+          if (op.kind === 'session') options.onSessionEvent?.(op);
+        }
+      }
+      return;
+    }
     if (sync.kind === 'rebuilding' && !forcedOrigin) {
       bufferRebuildingFrame(sessionId, sync, frame);
       return;

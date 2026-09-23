@@ -29,7 +29,10 @@ import { createKimiWebClient, type KimiWebAuth, type KimiWebMeta } from '../util
 import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../utils/kimiWebWs';
 import { StorageKeys, storageGet } from '../utils/storageKeys';
 import CodexAccountTokenUsage from './codex/CodexAccountTokenUsage.vue';
+import KimiAccountUsage from './kimiWeb/KimiAccountUsage.vue';
 import AcpManagerPanel from './AcpManagerPanel.vue';
+import KimiWebPluginManager from './kimiWeb/KimiWebPluginManager.vue';
+import { createKimiWebPluginsClient } from '../utils/kimiWebPlugins';
 
 type CodexApi = ReturnType<typeof useCodexApi>;
 
@@ -56,7 +59,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ close: [] }>();
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 const { showCodexInStatusMonitor } = useSettings();
 const popoverRef = ref<HTMLDivElement | null>(null);
 const msg = useMessages();
@@ -89,6 +92,7 @@ watch([() => props.open, activeTab], async ([open]) => {
   revealActiveTab();
 }, { immediate: true, flush: 'post' });
 const accountUsageRef = ref<InstanceType<typeof CodexAccountTokenUsage> | null>(null);
+const kimiAccountUsageRef = ref<InstanceType<typeof KimiAccountUsage> | null>(null);
 watch(() => props.initialTab, (tab) => { if (props.open && tab) activeTab.value = tab; });
 const acpManagerRef = ref<{ refresh: () => Promise<void> } | null>(null);
 
@@ -149,9 +153,10 @@ const tokenModelName = ref<string>('');
 const tokenContextLimit = ref<number>(0);
 /** Kimi Web context occupancy (`contextTokens`); 0 for every other backend. */
 const tokenContextUsed = ref<number>(0);
+const tokenContextAvailable = ref(false);
 const tokenUserMessages = ref<number>(0);
 const tokenAssistantMessages = ref<number>(0);
-/** True when the context bar came from the REST session-status fallback. */
+/** True when neither live nor persisted cumulative token usage is available. */
 const tokenUsageContextOnly = ref(false);
 const tokenLoading = ref(false);
 const kimiMeta = ref<KimiWebMeta | null>(null);
@@ -264,6 +269,7 @@ function resetTokenData() {
   tokenModelName.value = '';
   tokenContextLimit.value = 0;
   tokenContextUsed.value = 0;
+  tokenContextAvailable.value = false;
   tokenUserMessages.value = 0;
   tokenAssistantMessages.value = 0;
   tokenUsageContextOnly.value = false;
@@ -413,6 +419,7 @@ function finishRefresh(requestId: number, completedRefresh: Promise<void>) {
 }
 
 async function handleRefresh() {
+  if (activeTab.value === 'token') void kimiAccountUsageRef.value?.refresh();
   if (activeTab.value === 'token') void accountUsageRef.value?.refresh();
   if (activeTab.value === 'acp') {
     await acpManagerRef.value?.refresh();
@@ -536,6 +543,11 @@ function kimiWebBridgeCredentials() {
   };
 }
 
+const kimiWebPluginsClient = computed(() => {
+  if (!props.open || !isKimiWebBackend.value) return null;
+  return createKimiWebPluginsClient(kimiWebBridgeCredentials());
+});
+
 /** REST goes through the bridge proxy root; the bridge injects the kimi bearer. */
 function createKimiWebStatusClient() {
   const { bridgeUrl, bridgeToken } = kimiWebBridgeCredentials();
@@ -624,57 +636,71 @@ async function refreshKimiWebStatus(requestId: number) {
   }
 }
 
-/**
- * Kimi Web token data comes from the Todo 14 bridge session state, not the
- * message store: `agent.status.updated` is latest-wins state, while the
- * normalizer's message tokens are a snapshot taken when a turn group opens.
- * The store still supplies the model name and message counts (history load,
- * Todo 15). Todo 23 adds the REST fallback below for the fresh-page case
- * where the volatile status frames have no replay to rebuild from.
- */
-function fetchKimiWebTokenData(sessionId: string) {
+// Context and the active model come from session status; cumulative usage is
+// latest-wins live data or the persisted snapshot, never their sum.
+async function fetchKimiWebTokenData(sessionId: string) {
   const requestId = ++tokenRequestId;
   tokenLoading.value = true;
-  const state = props.kimiWebBridge?.sessionState(sessionId);
-  let mapped = kimiWebTokenUsageFromReport(
-    state?.usage,
-    state?.contextTokens,
-    state?.maxContextTokens,
+  const client = createKimiWebStatusClient();
+  const initialUsage = props.kimiWebBridge?.sessionState(sessionId)?.usage;
+  const [statusResult, modelsResult, snapshotResult] = await Promise.allSettled([
+    client.getSessionStatus(sessionId),
+    client.listModels(),
+    initialUsage?.total ? Promise.resolve(null) : client.getSnapshot(sessionId),
+  ]);
+  if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
+  const status = statusResult.status === 'fulfilled' ? statusResult.value : null;
+  tokenContextAvailable.value = status !== null;
+  const liveUsage = props.kimiWebBridge?.sessionState(sessionId)?.usage;
+  const savedUsage = snapshotResult.status === 'fulfilled' ? snapshotResult.value?.session.usage : undefined;
+  const usage = liveUsage?.total ? liveUsage : savedUsage ? { total: {
+    inputOther: savedUsage.input_tokens,
+    output: savedUsage.output_tokens,
+    inputCacheRead: savedUsage.cache_read_tokens,
+    inputCacheCreation: savedUsage.cache_creation_tokens,
+  } } : undefined;
+  const mapped = kimiWebTokenUsageFromReport(usage, status?.context_tokens, status?.max_context_tokens);
+  const contextOnly = !mapped;
+  const models = modelsResult.status === 'fulfilled' ? modelsResult.value.items : [];
+  const model = models.find((item) => item.model === status?.model || `${item.provider}/${item.model}` === status?.model);
+  applyKimiWebTokenData(sessionId, requestId,
+    mapped ?? (status ? kimiWebContextOnlyUsage(status.context_tokens, status.max_context_tokens) : null),
+    contextOnly, model?.display_name || status?.model || '',
   );
-  let contextOnly = false;
-  if (!mapped) {
-    // Todo 23: agent.status.updated is volatile and never replayed, so a fresh
-    // page has no bridge usage state; the session status endpoint carries the
-    // live context occupancy (kimi reports no token counts there).
-    void fetchKimiWebSessionStatusContext(sessionId).then((status) => {
-      if (requestId !== tokenRequestId || props.sessionId !== sessionId) return;
-      applyKimiWebTokenData(sessionId, requestId, status ? kimiWebContextOnlyUsage(
-        status.context_tokens,
-        status.max_context_tokens,
-      ) : null, Boolean(status));
-    });
-    return;
-  }
-  applyKimiWebTokenData(sessionId, requestId, mapped, contextOnly);
 }
+
+const kimiUsageState = computed(() => {
+  if (!isKimiWebBackend.value || !props.sessionId) return undefined;
+  return props.kimiWebBridge?.sessionState(props.sessionId);
+});
+watch(activeTab, (tab) => {
+  if (tab === 'token' && isKimiWebBackend.value && props.open && props.sessionId) {
+    void fetchKimiWebTokenData(props.sessionId);
+  }
+});
+watch([
+  () => kimiUsageState.value?.usage,
+  () => kimiUsageState.value?.contextTokens,
+  () => kimiUsageState.value?.maxContextTokens,
+], () => {
+  if (props.sessionId && (props.open || props.preload)) fetchKimiWebTokenData(props.sessionId);
+});
 
 function applyKimiWebTokenData(
   sessionId: string,
   requestId: number,
   mapped: KimiWebTokenUsage | null,
   contextOnly: boolean,
+  modelName: string,
 ) {
   let userCount = 0;
   let assistantCount = 0;
-  let modelName = '';
   for (const root of msg.roots.value.filter((root) => root.sessionID === sessionId)) {
     for (const info of msg.getThread(root.id)) {
       if (info.role === 'user') {
         userCount++;
       } else if (info.role === 'assistant') {
         assistantCount++;
-        const usage = msg.getUsage(info.id);
-        if (usage?.modelId) modelName = usage.modelId;
       }
     }
   }
@@ -693,13 +719,6 @@ function applyKimiWebTokenData(
   tokenLoading.value = false;
 }
 
-async function fetchKimiWebSessionStatusContext(sessionId: string) {
-  try {
-    return await createKimiWebStatusClient().getSessionStatus(sessionId);
-  } catch {
-    return null;
-  }
-}
 
 async function fetchTokenData() {
   const sessionId = props.sessionId;
@@ -709,7 +728,7 @@ async function fetchTokenData() {
   }
 
   if (isKimiWebBackend.value) {
-    fetchKimiWebTokenData(sessionId);
+    await fetchKimiWebTokenData(sessionId);
     return;
   }
 
@@ -1219,7 +1238,7 @@ const kimiModelsReadyDotClass = computed(() => {
               <span class="status-monitor-meta">{{ serverVersionText }}</span>
             </div>
             <template v-if="activeBackendKind === 'kimi-web'">
-              <div class="status-monitor-row">
+              <div class="status-monitor-row is-capabilities">
                 <div class="status-monitor-row-main">
                   <span class="status-monitor-name">{{ $t('statusMonitor.server.capabilities') }}</span>
                 </div>
@@ -1323,7 +1342,8 @@ const kimiModelsReadyDotClass = computed(() => {
 
         <!-- Plugins Tab -->
         <div v-if="activeTab === 'plugins'" class="status-monitor-content">
-          <div v-if="loading && !configData" class="status-monitor-empty">
+          <KimiWebPluginManager v-if="isKimiWebBackend && kimiWebPluginsClient" :client="kimiWebPluginsClient" />
+          <div v-else-if="loading && !configData" class="status-monitor-empty">
             {{ $t('statusMonitor.loading') }}
           </div>
           <div v-else-if="pluginUnsupported" class="status-monitor-empty">
@@ -1454,8 +1474,12 @@ const kimiModelsReadyDotClass = computed(() => {
               <span class="token-label">{{ $t('statusMonitor.token.contextLimit') }}</span>
               <span class="token-value">{{ tokenContextLimit > 0 ? formatTokenCount(tokenContextLimit) : '-' }}</span>
             </div>
+            <div v-if="isKimiWebBackend" class="status-monitor-row token-row">
+              <span class="token-label">{{ locale.startsWith('zh') ? '上下文已使用' : 'Context used' }}</span>
+              <span class="token-value">{{ tokenContextAvailable ? formatTokenCount(tokenContextUsed) : '-' }}</span>
+            </div>
             <div v-if="tokenUsageContextOnly" class="status-monitor-row token-row">
-              <span class="token-label">{{ $t('statusMonitor.token.contextOnlyNote') }}</span>
+              <span class="token-label token-context-note">{{ $t('statusMonitor.token.contextOnlyNote') }}</span>
             </div>
             <template v-else>
               <div class="status-monitor-row token-row">
@@ -1466,7 +1490,7 @@ const kimiModelsReadyDotClass = computed(() => {
                 <span class="token-label">{{ $t('statusMonitor.token.outputTokens') }}</span>
                 <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.output) }}</span>
               </div>
-              <div class="status-monitor-row token-row">
+              <div v-if="!isKimiWebBackend" class="status-monitor-row token-row">
                 <span class="token-label">{{ $t('statusMonitor.token.reasoningTokens') }}</span>
                 <span class="token-value">{{ formatTokenCount(tokenUsage.tokens.reasoning) }}</span>
               </div>
@@ -1485,6 +1509,7 @@ const kimiModelsReadyDotClass = computed(() => {
             </div>
           </div>
           <CodexAccountTokenUsage v-if="activeBackendKind === 'codex'" ref="accountUsageRef" :api="codexApi" :initial-view="initialUsageView" />
+          <KimiAccountUsage v-if="isKimiWebBackend" ref="kimiAccountUsageRef" />
         </div>
 
         <div v-if="activeTab === 'acp'" class="status-monitor-content">
@@ -1963,6 +1988,18 @@ const kimiModelsReadyDotClass = computed(() => {
   color: var(--theme-list-row-text-muted, var(--theme-modal-text-muted, #94a3b8));
 }
 
+.status-monitor-row.is-capabilities {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.status-monitor-row.is-capabilities .status-monitor-meta {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
 .status-monitor-meta.is-error {
   color: var(--theme-text-danger, #fca5a5);
 }
@@ -2109,6 +2146,12 @@ const kimiModelsReadyDotClass = computed(() => {
   color: var(--theme-modal-text, #e2e8f0);
   text-align: right;
   word-break: break-all;
+}
+
+.token-context-note {
+  flex-shrink: 1;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .token-usage-bar-row {

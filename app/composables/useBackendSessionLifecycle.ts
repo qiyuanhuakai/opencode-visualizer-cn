@@ -1,4 +1,4 @@
-import type { Ref } from 'vue';
+import { watch, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { BackendSessionInfo } from '../types/backend-domain';
 import type { KimiWebSessionProfileInput } from '../utils/kimiWeb';
@@ -15,10 +15,7 @@ type OpenCodeApiLike = {
  */
 export type KimiWebSessionApiLike = {
   createSession?: (input: { metadata: { cwd: string } }) => Promise<unknown>;
-  updateProfile?: (
-    sessionId: string,
-    input: KimiWebSessionProfileInput,
-  ) => Promise<unknown>;
+  updateProfile?: (sessionId: string, input: KimiWebSessionProfileInput) => Promise<unknown>;
   deleteSession?: (sessionId: string) => Promise<unknown>;
   archiveSession?: (sessionId: string) => Promise<unknown>;
   restoreSession?: (sessionId: string) => Promise<unknown>;
@@ -33,17 +30,18 @@ function parseKimiWebCreatedSession(
   const record = value as Record<string, unknown>;
   const id = typeof record.id === 'string' ? record.id.trim() : '';
   if (!id) return undefined;
-  const workspaceId =
-    typeof record.workspace_id === 'string' ? record.workspace_id.trim() : '';
-  const title =
-    typeof record.title === 'string' && record.title.trim() ? record.title : id;
+  const workspaceId = typeof record.workspace_id === 'string' ? record.workspace_id.trim() : '';
+  const title = typeof record.title === 'string' && record.title.trim() ? record.title : id;
   const created = typeof record.created_at === 'string' ? Date.parse(record.created_at) : NaN;
   const updated = typeof record.updated_at === 'string' ? Date.parse(record.updated_at) : NaN;
+  const metadata = Reflect.get(record, 'metadata');
+  const cwd = metadata && typeof metadata === 'object' ? Reflect.get(metadata, 'cwd') : undefined;
   return {
     id,
     projectID: workspaceId || undefined,
-    directory,
+    directory: typeof cwd === 'string' && cwd.trim() ? cwd.trim() : directory,
     title,
+    status: 'unknown',
     time: {
       created: Number.isFinite(created) ? created : undefined,
       updated: Number.isFinite(updated) ? updated : undefined,
@@ -130,36 +128,46 @@ export function useBackendSessionLifecycle(params: {
   kimiWebCreateProfile?: (directory: string) => KimiWebSessionProfileInput | undefined;
   onKimiWebSessionCreated?: (session: BackendSessionInfo) => void;
 }) {
+  let kimiWebCreationGeneration = 0;
+  watch(
+    [params.selectedProjectId, params.selectedSessionId, params.activeBackendKind],
+    () => {
+      kimiWebCreationGeneration += 1;
+    },
+    { flush: 'sync' },
+  );
+
   async function createKimiWebSessionInDirectory(directory: string) {
     const api = params.kimiWebApi;
     if (!api?.createSession || !api.updateProfile) {
       throw new Error('Kimi Web session creation is unavailable.');
     }
+    const generation = ++kimiWebCreationGeneration;
+    const profile = params.kimiWebCreateProfile?.(directory) ?? {};
     const created = parseKimiWebCreatedSession(
       await api.createSession({ metadata: { cwd: directory } }),
       directory,
     );
     if (!created?.id) throw new Error('Kimi Web session creation returned no session id.');
-    const previousProjectId = params.selectedProjectId.value;
-    const previousSessionId = params.selectedSessionId.value;
-    if (created.projectID) params.selectedProjectId.value = created.projectID;
-    params.selectedSessionId.value = created.id;
-    try {
-      const updated = parseKimiWebCreatedSession(
-        await api.updateProfile(created.id, params.kimiWebCreateProfile?.(directory) ?? {}),
-        directory,
-      );
-      const session = updated ?? created;
+    const updated = parseKimiWebCreatedSession(
+      await api.updateProfile(created.id, profile),
+      created.directory || directory,
+    );
+    const session = updated ?? created;
+    if (params.activeBackendKind.value === 'kimi-web') {
       params.onKimiWebSessionCreated?.(session);
-      return session;
-    } catch (error) {
-      params.selectedProjectId.value = previousProjectId;
-      params.selectedSessionId.value = previousSessionId;
-      throw error;
+      if (generation === kimiWebCreationGeneration) {
+        if (session.projectID) params.selectedProjectId.value = session.projectID;
+        params.selectedSessionId.value = session.id;
+      }
     }
+    return session;
   }
 
-  async function createSessionInDirectory(directory: string, options?: { reuseExisting?: boolean }) {
+  async function createSessionInDirectory(
+    directory: string,
+    options?: { reuseExisting?: boolean },
+  ) {
     if (params.activeBackendKind.value === 'kimi-web') {
       return createKimiWebSessionInDirectory(directory);
     }

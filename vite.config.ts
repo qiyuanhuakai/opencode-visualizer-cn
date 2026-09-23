@@ -65,7 +65,7 @@ export default defineConfig({
     globals: false,
     include: ['**/*.test.ts'],
     pool: 'forks',
-    maxWorkers: 6,
+    maxWorkers: process.env.CI === 'true' ? 2 : 6,
     execArgv: ['--max-old-space-size=2048'],
   },
 });

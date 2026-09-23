@@ -5,6 +5,7 @@ import { createI18n } from 'vue-i18n';
 function createMessages() {
   return {
     en: {
+      app: { windowTitles: { subagentHistory: 'Subagents' } },
       dropdown: { selectPlaceholder: 'Select' },
       topPanel: {
         title: 'Vis',
@@ -12,6 +13,7 @@ function createMessages() {
         noNotifications: 'No notifications',
         selectSession: 'Select session',
         searchPlaceholder: 'Search',
+        badges: { archived: '已归档', pinned: '已置顶' },
         empty: { noMatchingSessions: 'No matches', noWorktrees: 'No worktrees' },
         newSessionShortcut: 'New session',
         openShell: 'Open shell',
@@ -40,6 +42,9 @@ function createMessages() {
           archiveCodex: 'Archive Codex',
         },
         sessionActions: {
+          agents: 'Subagent management',
+          fork: 'Fork entire session',
+          compact: 'Compact session context',
           unpin: 'Unpin',
           pin: 'Pin',
           rename: 'Rename',
@@ -64,6 +69,7 @@ function createMessages() {
         },
       },
       codexPanel: {
+        runtime: { goal: 'Thread goal', title: 'Runtime' },
         title: 'Codex',
         connectToLoad: 'Connect to load',
         modelsTitle: 'Models',
@@ -218,82 +224,145 @@ describe('TopPanel', () => {
     expect(root.querySelector('.session-rename')).toBeNull();
     expect(root.querySelector('.session-del')).toBeNull();
     expect(root.querySelector('.session-pin')).not.toBeNull();
+    expect(root.querySelector('.session-fork')).toBeNull();
+    expect(root.querySelector('.session-compact')).toBeNull();
+    expect(root.querySelector('.session-goal')).toBeNull();
     app.unmount();
   });
 
-  it('hides archived-only forks until archived sessions are searched', async () => {
-    const { default: TopPanel } = await import('./TopPanel.vue');
-    const root = document.createElement('div');
-    document.body.appendChild(root);
-    const app = createApp(
-      defineComponent({
-        setup() {
-          return () =>
-            h(TopPanel, {
-              treeData: [
-                {
-                  directory: '/repo',
-                  label: 'repo',
-                  name: 'repo',
-                  projectId: 'codex',
-                  kind: 'sandbox',
-                  sandboxes: [
-                    {
-                      directory: '/repo',
-                      branch: 'main',
-                      kind: 'branch',
-                      sessions: [{ id: 'active', title: 'Active session', status: 'idle' }],
-                    },
-                    {
-                      directory: '/repo-archived-fork',
-                      branch: 'archived-fork',
-                      kind: 'branch',
-                      sessions: [
-                        {
-                          id: 'archived',
-                          title: 'Archived session',
-                          status: 'idle',
-                          archivedAt: 123,
-                        },
-                      ],
-                    },
-                  ],
-                },
-              ],
-              notificationSessions: [],
-              projectDirectory: '/repo',
-              activeDirectory: '/repo',
-              selectedSessionId: '',
-              sandboxFirstMode: true,
-            });
+  it.each([false, true])(
+    'keeps Kimi session pin controls when pinned=%s without composer actions',
+    async (isPinned) => {
+      const { default: TopPanel } = await import('./TopPanel.vue');
+      const { KIMI_WEB_CAPABILITIES } = await import('../backends/kimiWeb/kimiWebAdapter');
+      const root = document.createElement('div');
+      document.body.appendChild(root);
+      const pin = vi.fn();
+      const unpin = vi.fn();
+      const select = vi.fn();
+      const app = createApp(TopPanel, {
+        treeData: [
+          {
+            directory: '/repo',
+            label: 'repo',
+            projectId: 'kimi-web',
+            sandboxes: [
+              {
+                directory: '/repo',
+                sessions: [{ id: 'session-1', title: 'Session', status: 'idle', isPinned }],
+              },
+            ],
+          },
+        ],
+        notificationSessions: [],
+        projectDirectory: '/repo',
+        activeDirectory: '/repo',
+        selectedSessionId: 'session-1',
+        sessionActionCapabilities: {
+          rename: KIMI_WEB_CAPABILITIES.sessionRename,
+          pin: KIMI_WEB_CAPABILITIES.sessionPin,
+          unpin: KIMI_WEB_CAPABILITIES.sessionUnpin,
+          archive: KIMI_WEB_CAPABILITIES.sessionArchive,
+          unarchive: KIMI_WEB_CAPABILITIES.sessionUnarchive,
+          delete: KIMI_WEB_CAPABILITIES.sessionDelete,
         },
-      }),
-    );
-    app.provide('showConfirm', vi.fn());
-    app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
-    app.mount(root);
-    requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
-    await nextTick();
+        onPinSession: pin,
+        onUnpinSession: unpin,
+        onSelectSession: select,
+      });
+      app.provide('showConfirm', vi.fn());
+      app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+      app.mount(root);
+      requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+      await nextTick();
+      const pinButton = requireButton(root, '.session-pin');
+      expect(pinButton.title).toBe(isPinned ? 'Unpin' : 'Pin');
+      pinButton.click();
+      expect(isPinned ? unpin : pin).toHaveBeenCalledWith('session-1');
+      expect(select).not.toHaveBeenCalled();
+      expect(
+        root.querySelector('.session-goal, .session-agents, .session-fork, .session-compact'),
+      ).toBeNull();
+      app.unmount();
+    },
+  );
 
-    const visibleBranches = () =>
-      Array.from(root.querySelectorAll('.tree-sandbox .tree-label-name')).map((element) =>
-        element.textContent?.trim(),
+  it.each(['archived', 'Archived session', '已归档'])(
+    'finds archived-only forks by the search query %s',
+    async (query) => {
+      const { default: TopPanel } = await import('./TopPanel.vue');
+      const root = document.createElement('div');
+      document.body.appendChild(root);
+      const app = createApp(
+        defineComponent({
+          setup() {
+            return () =>
+              h(TopPanel, {
+                treeData: [
+                  {
+                    directory: '/repo',
+                    label: 'repo',
+                    name: 'repo',
+                    projectId: 'codex',
+                    kind: 'sandbox',
+                    sandboxes: [
+                      {
+                        directory: '/repo',
+                        branch: 'main',
+                        kind: 'branch',
+                        sessions: [{ id: 'active', title: 'Active session', status: 'idle' }],
+                      },
+                      {
+                        directory: '/repo-archived-fork',
+                        branch: 'archived-fork',
+                        kind: 'branch',
+                        sessions: [
+                          {
+                            id: 'archived',
+                            title: 'Archived session',
+                            status: 'idle',
+                            archivedAt: 123,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+                notificationSessions: [],
+                projectDirectory: '/repo',
+                activeDirectory: '/repo',
+                selectedSessionId: '',
+                sandboxFirstMode: true,
+              });
+          },
+        }),
       );
-    expect(visibleBranches()).toEqual(['main']);
+      app.provide('showConfirm', vi.fn());
+      app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+      app.mount(root);
+      requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+      await nextTick();
 
-    const search = root.querySelector<HTMLInputElement>('.ui-dropdown-search-input');
-    expect(search).not.toBeNull();
-    if (!search) throw new Error('Missing session search input');
-    search.value = 'archived';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
-    await nextTick();
+      const visibleBranches = () =>
+        Array.from(root.querySelectorAll('.tree-sandbox .tree-label-name')).map((element) =>
+          element.textContent?.trim(),
+        );
+      expect(visibleBranches()).toEqual(['main']);
 
-    expect(visibleBranches()).toEqual(['archived-fork']);
-    expect(root.querySelector('.tree-session-row .session-title')?.textContent?.trim()).toBe(
-      'Archived session',
-    );
-    app.unmount();
-  });
+      const search = root.querySelector<HTMLInputElement>('.ui-dropdown-search-input');
+      expect(search).not.toBeNull();
+      if (!search) throw new Error('Missing session search input');
+      search.value = query;
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      await nextTick();
+
+      expect(visibleBranches()).toEqual(['archived-fork']);
+      expect(root.querySelector('.tree-session-row .session-title')?.textContent?.trim()).toBe(
+        'Archived session',
+      );
+      app.unmount();
+    },
+  );
 
   it('emits explicit repository and branch pin scopes with accessible labels', async () => {
     const { default: TopPanel } = await import('./TopPanel.vue');

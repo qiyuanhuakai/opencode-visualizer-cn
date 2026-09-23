@@ -40,13 +40,20 @@
                   :compute-context-percent="computeContextPercent"
                   :session-revert="sessionRevert"
                   :backend-kind="backendKind"
+                  :kimi-permission-mode="kimiPermissionMode"
+                  :kimi-card-actions-ready="kimiCardActionsReady"
+                  :kimi-fork-available="kimiForkAvailable"
+                  :kimi-undo-available="kimiUndoAvailable"
+                  :load-message-diffs="loadMessageDiffs"
+                  :has-message-diffs="hasMessageDiffs"
+                  :card-actions-disabled="backendKind === 'kimi-web' && isThinking"
                   :is-latest-root="root.id === latestRootId"
                   :assistant-html="getAssistantHtml(root.id)"
-                  :deferred-transition-key="getDeferredTransitionKey(root)"
                   @fork-message="emit('fork-message', $event)"
                   @revert-message="emit('revert-message', $event)"
                   @undo-revert="emit('undo-revert')"
                   @show-message-diff="emit('show-message-diff', $event)"
+                  @card-notice="emit('card-notice', $event)"
                   @open-image="emit('open-image', $event)"
                   @show-thread-history="emit('show-thread-history', $event)"
                   @show-subagent-history="emit('show-subagent-history', $event)"
@@ -127,7 +134,7 @@ const props = defineProps<{
   currentSessionId?: string;
   sessionHistoryMetaById?: Record<
     string,
-    { parentID?: string; label: string; status?: 'busy' | 'idle' | 'retry' }
+    { parentID?: string; label: string; status?: 'busy' | 'idle' | 'retry' | 'unknown' }
   >;
   isLoading?: boolean;
   isAnchoring?: boolean;
@@ -138,6 +145,12 @@ const props = defineProps<{
     diff?: string;
   } | null;
   backendKind?: BackendKind;
+  kimiPermissionMode?: string;
+  kimiCardActionsReady?: boolean;
+  kimiForkAvailable?: boolean;
+  kimiUndoAvailable?: boolean;
+  loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
+  hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
 }>();
 
 const emit = defineEmits<{
@@ -149,6 +162,7 @@ const emit = defineEmits<{
   (event: 'revert-message', payload: { sessionId: string; messageId: string }): void;
   (event: 'undo-revert'): void;
   (event: 'show-message-diff', payload: { messageKey: string; diffs: MessageDiffEntry[] }): void;
+  (event: 'card-notice', message: string): void;
   (event: 'open-image', payload: { url: string; filename: string }): void;
   (event: 'show-thread-history', payload: { entries: HistoryWindowEntry[] }): void;
   (event: 'show-subagent-history', payload: { sessionId: string; label: string }): void;
@@ -308,7 +322,7 @@ let resizeNotifyFrameId: number | null = null;
 let scrollToBottomFrameId: number | null = null;
 let settleScrollToBottom: (() => void) | null = null;
 
-const { getAssistantHtml, getDeferredTransitionKey } = useAssistantPreRenderer({
+const { getAssistantHtml } = useAssistantPreRenderer({
   visibleRoots: visibleThreadRoots,
   theme: computed(() => props.theme),
   filesWithBasenames,

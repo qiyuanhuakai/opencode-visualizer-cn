@@ -357,7 +357,7 @@ export function useBackendActivation(options: UseBackendActivationOptions) {
       if (!isCurrent()) return;
 
       options.connectionState.value = 'bootstrapping';
-      await options.bootstrapKimiWebWorkspace(isCurrent);
+      await options.bootstrapKimiWebWorkspace(remainsCurrent);
       if (!isCurrent()) return;
 
       options.connectionState.value = 'ready';

@@ -1,4 +1,5 @@
 import { watch } from 'vue';
+import { createKimiWebSlashDispatcher } from './backendMessageSend.kimiSlash';
 import { createBackendRequestFence } from '../utils/backendRequestFence';
 import {
   runKimiWebSend,
@@ -22,9 +23,13 @@ function assertNever(value: never): never {
 
 export function useBackendMessageSend(params: BackendMessageSendParams) {
   const dispatchCodexSlash = createCodexSlashDispatcher(params);
+  const dispatchKimiWebSlash = createKimiWebSlashDispatcher(params);
   const requestFence = createBackendRequestFence(() => params.activeBackendKind.value);
   let sendingOwner: object | null = null;
   watch(params.activeBackendKind, () => requestFence.invalidate(), { flush: 'sync' });
+  watch(params.selectedSessionId, () => {
+    if (params.activeBackendKind.value === 'kimi-web') requestFence.invalidate();
+  }, { flush: 'sync' });
 
   function beginSend(text: string, owner: object) {
     if (text) {
@@ -136,6 +141,7 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
     )
       return;
     if (!params.ensureConnectionReady(params.translate('app.actions.sending'))) return;
+    if (params.activeBackendKind.value === 'kimi-web' && await dispatchKimiWebSlash()) return;
     if (!params.canSend.value) return;
     const preflight = prepareSendPreflight(params);
     if (!preflight || preflight.backend !== params.activeBackendKind.value) return;
@@ -148,6 +154,10 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
       await runTransaction(params, preflight, guard);
     } catch (error) {
       if (guard.isCurrent()) {
+        if (preflight.backend === 'kimi-web' && !params.messageInput.value) {
+          params.messageInput.value = preflight.text;
+          params.persistComposerDraftForCurrentContext();
+        }
         params.setSendStatusKey('app.error.sendFailed', { message: params.toErrorMessage(error) });
       }
     } finally {

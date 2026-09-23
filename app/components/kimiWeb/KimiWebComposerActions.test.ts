@@ -1,0 +1,40 @@
+import { createApp, defineComponent, h, nextTick, ref } from 'vue';
+import { createI18n } from 'vue-i18n';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import KimiWebComposerActions from './KimiWebComposerActions.vue';
+import en from '../../locales/en';
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
+const cleanups: Array<() => void> = [];
+afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
+describe('Kimi composer actions', () => {
+  it('hides unprobed session mutations while keeping agent management available', async () => {
+    const root = document.createElement('div'); document.body.append(root);
+    const app = createApp(KimiWebComposerActions);
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en } })); app.mount(root);
+    cleanups.push(() => { app.unmount(); root.remove(); });
+    root.querySelector('button')?.click(); await nextTick();
+    expect(Array.from(root.querySelectorAll('[role="option"]')).map((item) => item.textContent?.trim())).toEqual(['Subagent management']);
+  });
+
+  it('uses an upward shared menu and blocks mutations while retaining agent management during work', async () => {
+    const busy = ref(true); const disabled = ref(false);
+    const agents = vi.fn(); const compact = vi.fn(); const fork = vi.fn();
+    const root = document.createElement('div'); document.body.append(root);
+    const app = createApp(defineComponent({ setup: () => () => h(KimiWebComposerActions, { busy: busy.value, disabled: disabled.value, compactAvailable: true, forkAvailable: true, onAgents: agents, onCompact: compact, onFork: fork }) }));
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en } })); app.mount(root);
+    cleanups.push(() => { app.unmount(); root.remove(); });
+    await nextTick();
+    const items = () => Array.from(root.querySelectorAll<HTMLElement>('[role="option"]'));
+    root.querySelector('button')?.click(); await nextTick();
+    expect(root.querySelector('[role="listbox"]')?.classList.contains('is-open')).toBe(true);
+    items()[1]?.click(); items()[2]?.click();
+    expect(compact).not.toHaveBeenCalled(); expect(fork).not.toHaveBeenCalled();
+    items()[0]?.click(); expect(agents).toHaveBeenCalledOnce();
+    busy.value = false; await nextTick();
+    root.querySelector('button')?.click(); await nextTick(); items()[1]?.click();
+    expect(compact).toHaveBeenCalledOnce();
+    root.querySelector('button')?.click(); await nextTick(); items()[2]?.click();
+    expect(fork).toHaveBeenCalledOnce();
+    disabled.value = true; await nextTick(); expect(root.querySelector('button')?.disabled).toBe(true);
+  });
+});

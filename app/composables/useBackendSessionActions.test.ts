@@ -182,20 +182,26 @@ describe('useBackendSessionActions mutation skeleton', () => {
     expect(mocks.setSessionError).not.toHaveBeenCalled();
   });
 
-  it('Given an acp backend, When pinSession runs, Then the optimistic pin is applied without a server call', async () => {
-    const { actions, mocks } = createSessionActionsFixture({ activeBackendKind: 'acp' });
+  it.each(['acp', 'kimi-web'] as const)(
+    'Given a %s backend, pinning and unpinning persist locally without an OpenCode request',
+    async (activeBackendKind) => {
+      const { actions, mocks } = createSessionActionsFixture({ activeBackendKind });
 
-    await actions.pinSession('session-1');
+      await actions.pinSession('session-1');
 
-    expect(mocks.setLocalPinnedSession).toHaveBeenCalledWith(
-      'proj-1',
-      'session-1',
-      expect.any(Number),
-    );
-    expect(mocks.openCodeApi.pinSession).not.toHaveBeenCalled();
-    expect(mocks.restoreLocalPinnedSessionOverride).not.toHaveBeenCalled();
-    expect(mocks.setSessionError).not.toHaveBeenCalled();
-  });
+      expect(mocks.setLocalPinnedSession).toHaveBeenCalledWith(
+        'proj-1',
+        'session-1',
+        expect.any(Number),
+      );
+      expect(mocks.openCodeApi.pinSession).not.toHaveBeenCalled();
+      expect(mocks.restoreLocalPinnedSessionOverride).not.toHaveBeenCalled();
+      expect(mocks.setSessionError).not.toHaveBeenCalled();
+      await actions.unpinSession('session-1');
+      expect(mocks.setLocalUnpinnedSession).toHaveBeenCalledWith('proj-1', 'session-1');
+      expect(mocks.openCodeApi.unpinSession).not.toHaveBeenCalled();
+    },
+  );
 
   it('Given a successful opencode deleteSession, When deleteSession runs, Then the optimistic pin override is cleared without a rollback', async () => {
     const { actions, mocks } = createSessionActionsFixture({

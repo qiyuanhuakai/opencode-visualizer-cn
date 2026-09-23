@@ -31,6 +31,7 @@ function restClient(items: KimiWebSession[], models = ['kimi-k2']) {
     })),
     listSessions: vi.fn(async () => ({ items })),
     getMessages: vi.fn(async () => ({ items: [] })),
+    getSessionStatus: vi.fn(async () => ({ busy: false, model: models[0], thinking_level: 'high', permission: 'manual' })),
   } as unknown as KimiWebClient;
 }
 
@@ -50,6 +51,25 @@ function messageBridge() {
 }
 
 describe('bootstrapKimiWebWorkspace', () => {
+  it('selects an active root when newer entries are archived or child sessions', async () => {
+    // Given
+    const adapter = createKimiWebAdapter({
+      bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
+      client: restClient([
+        { ...rawSession(), id: 'archived', archived: true },
+        { ...rawSession(), id: 'child', metadata: { cwd: '/work/repo', parent_session_id: 'session-1' } },
+        rawSession(),
+      ]),
+    });
+    const bridge = messageBridge();
+    const commit = vi.fn();
+    // When
+    await bootstrapKimiWebWorkspace({ adapter, isCurrent: () => true,
+      createClient: transport, createBridge: () => bridge, commit });
+    // Then
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ selectedSessionId: 'session-1' }));
+    expect(bridge.subscribe).toHaveBeenCalledWith(['session-1']);
+  });
   it('commits, selects, hydrates, and subscribes an existing workspace session', async () => {
     const adapter = createKimiWebAdapter({
       bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
@@ -71,7 +91,7 @@ describe('bootstrapKimiWebWorkspace', () => {
       expect.objectContaining({
         selectedProjectId: 'workspace-1',
         selectedSessionId: 'session-1',
-        selectedModel: 'kimi-k2',
+        selectedModel: 'managed:kimi-code/kimi-k2',
       }),
     );
     expect(bridge.applyHistory).toHaveBeenCalledWith([]);
@@ -79,28 +99,34 @@ describe('bootstrapKimiWebWorkspace', () => {
     expect(result).toEqual({ client, bridge });
   });
 
-  it('commits an empty tree without opening a websocket', async () => {
+  it('keeps a connected bridge for the first session created in an empty workspace', async () => {
     const adapter = createKimiWebAdapter({
       bridgeUrl: 'ws://localhost:23004/kimi-web/ws',
       client: restClient([]),
     });
-    const createClient = vi.fn(transport);
+    const client = transport();
+    const bridge = messageBridge();
+    const createClient = vi.fn(() => client);
     const commit = vi.fn();
 
-    await bootstrapKimiWebWorkspace({
+    const result = await bootstrapKimiWebWorkspace({
       adapter,
       isCurrent: () => true,
       createClient,
-      createBridge: messageBridge,
+      createBridge: () => bridge,
       commit,
     });
 
-    expect(createClient).not.toHaveBeenCalled();
+    expect(client.connect).toHaveBeenCalledOnce();
+    expect(result.bridge).toBe(bridge);
+    expect(bridge.subscribe).not.toHaveBeenCalled();
+    await result.bridge?.subscribe(['first-created-session']);
+    expect(bridge.subscribe).toHaveBeenCalledWith(['first-created-session']);
     expect(commit).toHaveBeenCalledWith({
       projects: {},
       selectedProjectId: '',
       selectedSessionId: '',
-        selectedModel: 'kimi-k2',
+        selectedModel: 'managed:kimi-code/kimi-k2',
       });
   });
 
@@ -122,7 +148,7 @@ describe('bootstrapKimiWebWorkspace', () => {
     });
 
     expect(commit).toHaveBeenCalledWith(
-      expect.objectContaining({ selectedModel: 'kimi-code/k3' }),
+      expect.objectContaining({ selectedModel: 'managed:kimi-code/kimi-code/k3' }),
     );
   });
 

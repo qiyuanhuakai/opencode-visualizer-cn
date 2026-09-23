@@ -39,6 +39,8 @@ Vis feels like a compact terminal command center: dense, local-first, and precis
 | Body/sm | 12px | 400 | 1.45 | 0 | Sidebar, top panel, modal helper copy |
 | Caption | 10px | 500 | 1.3 | 0.02em | Chips, badges, compressed metadata |
 
+Compact Kimi surfaces use the executable `--type-caption`, `--type-sm`, `--type-body`, and `--type-heading` variables declared in `app/styles/tailwind.css`.
+
 ### Font Stack
 
 - Primary: `var(--app-monospace-font-family)`.
@@ -63,10 +65,13 @@ All spacing derives from a 4px base.
 | `--space-4` | 16px | Modal rows and card spacing |
 | `--space-6` | 24px | Larger floating panels |
 
+These tokens are defined on `:root` in `app/styles/tailwind.css`; compact Kimi panels also use `--radius-control` (8px) and `--radius-panel` (10px).
+
 ### Grid
 
 - Layout is application chrome, not a marketing grid.
 - Floating windows fit inside the canvas when created, then keep a reachable titlebar after drag or resize ends.
+- On a fresh viewport at or below 600px, the side panel starts collapsed so the workspace remains usable; a saved user choice takes precedence.
 - Terminal panels should default to approximately 80x24 cells and then resize around measured xterm cell dimensions.
 
 ## 5. Components
@@ -97,6 +102,7 @@ All spacing derives from a 4px base.
 - **States**: hover, active, focus-visible, disabled.
 - **Accessibility**: every icon-only button has a translated title or aria-label.
 - **Motion**: color/background transition only.
+- **Narrow header**: below 1024px, the brand and global controls share the first row; the session selector and session controls wrap below. All actions remain visible and independently clickable, with no overlap or clipped dropdowns.
 
 ### Codex Collaboration and Goal Controls
 - Composer collaboration modes reuse the OpenCode agent dropdown: mode name, 10px muted description, 2px row gap, ellipsis with full-description tooltip, and the existing selected checkmark/keyboard behavior. Default uses the OpenCode `success` palette token; Plan uses `accent`; other server modes use `secondary`. The same resolved color identifies the per-message mode and user quote border on history cards. Mode IDs remain stable across sends and refreshes; unknown legacy attribution is not guessed from the current selection.
@@ -123,7 +129,18 @@ All spacing derives from a 4px base.
 - Permission choices use native buttons with `aria-pressed`, explaining their effective scope and showing loading, disconnected and rejected changes.
 - Side chat retains the main conversation, with an independent live transcript, labelled multiline composer, pending/error states and a close action. Narrow windows wrap content without horizontal overflow.
 
+### Kimi Thread Goals
+- Reuse the goal editor's floating surfaces, form controls, spacing and focus styles. The existing session menu opens a window bound to that session and connection; its identifier remains visible while other sessions are selected.
+- Display server-confirmed goal status, usage and terminal reason. Loading or failed reads disable changes; repeated writes are blocked. Resume explicitly explains that it continues work and can consume tokens.
+- Goal controls add no animation. Errors wrap and use an alert; status updates are announced.
+
+### Kimi Account Quota
+- Account quota lives in the existing status monitor Token tab and reuses quota bars and theme tokens. Show the server-provided 5-hour and 7-day usage windows with their reset times; keep loading, failed reads and successful empty responses distinct.
+
 ## 6. Motion & Interaction
+
+### Conversation Cards and Session Selection
+- Streaming and later assistant replies within the same user root update the existing card in place. The first assistant reply fades in with opacity over 180ms using ease-in-out; reduced-motion preference sets the transition to 0ms. Session selection uses an inset accent without changing row or label geometry.
 
 ### Desktop Settings
 - Reuse SettingsModal navigation and ToggleSettingRow for persisted native preferences.
@@ -152,3 +169,20 @@ Mixed tonal-shift and thin borders.
 | Shell base | `var(--theme-floating-shell-background-color, #050505)` | Terminal body backing |
 
 Shadows are reserved for existing modal/floating chrome; Forge integration must reuse the same floating-window shell surface rather than inventing a new material.
+
+### Kimi Agent Management
+- Reuse floating-window surfaces, compact control buttons, 12px panel padding and 8px gaps. No added motion or colors.
+- Child conversations and agents running inside the same conversation occupy separately labelled sections; only child conversations may be opened as a conversation.
+- Settings use labelled native selects; model and thinking choices come from the server. Task stop targets the displayed task in its owning session.
+- Loading, failure, empty and saving states stay distinct; edits disable during requests and errors are announced. Long titles wrap on narrow screens.
+
+### Kimi Plugin Management
+- Plugin management lives in the existing status monitor Plugins tab and reuses modal surface, text, border and accent tokens.
+- Installed plugins expose enable/disable and confirmed removal; a labelled source field and collapsible marketplace expose installation. Use 12px panels, 8px gaps/radii, wrapping content and visible keyboard focus, with no added motion.
+- Keep installed state visible when an action fails. Distinguish unavailable marketplace, pending requests, action errors and a successful write whose refresh failed; announce feedback and disable concurrent mutations.
+
+### Kimi Compact Controls (follow-up)
+- Installed providers use the same compact rows as OpenCode; model detail expands on demand. Catalog uses dense two-column rows and one column on narrow screens. Controls are 28px, metadata 12px, and gaps use the shared spacing tokens.
+- `manual`, `yolo`, `auto`, `tower`, `plan`, and `swarm` are protocol names and remain lowercase in every locale. The independent tower/plan/swarm toggles share one upward-opening composer dropdown labeled Mode (模式 in Chinese), with visible selected states in its menu.
+- The Kimi goal bar belongs beside composer modes, following the Codex 28px flexible goal bar. Child management, whole-session copy and compact move to a compact upward composer actions menu. The top session tree keeps navigation, pin, rename, archive and delete.
+- Plugin and quota rows use the status monitor's existing list-row, progress and action-button theme tokens in both light and dark themes, matching compact typography rather than independent cards.

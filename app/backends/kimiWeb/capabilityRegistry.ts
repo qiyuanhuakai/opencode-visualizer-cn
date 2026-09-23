@@ -25,7 +25,7 @@
  * and App.vue action entry points read `isAvailable(action)` to decide visibility.
  */
 import { shallowRef } from 'vue';
-import { KimiWebError, type KimiWebAuth, type KimiWebMeta } from '../../utils/kimiWeb';
+import { KimiWebError, type KimiWebAuth, type KimiWebClient, type KimiWebMeta } from '../../utils/kimiWeb';
 
 export type KimiWebCapabilityState = 'unknown' | 'supported' | 'unsupported' | 'gated';
 
@@ -280,3 +280,24 @@ export function createKimiWebCapabilityRegistry(options: KimiWebCapabilityRegist
 }
 
 export type KimiWebCapabilityRegistry = ReturnType<typeof createKimiWebCapabilityRegistry>;
+
+export async function probeKimiWebSessionActions(
+  registry: KimiWebCapabilityRegistry,
+  client: Pick<KimiWebClient, 'forkSession' | 'compactSession' | 'undoSession'>,
+): Promise<void> {
+  if (!registry.isConnectionReady()) return;
+  const missingSessionId = `session_${crypto.randomUUID()}`;
+  const check = async (operation: () => Promise<unknown>) => {
+    try {
+      await operation();
+    } catch (error) {
+      if (error instanceof KimiWebError && error.code === 40401 && /\bsession\b.*\b(?:not found|does not exist)\b/iu.test(error.msg)) return;
+      throw error;
+    }
+  };
+  await Promise.allSettled([
+    registry.probe('fork', () => check(() => client.forkSession(missingSessionId))),
+    registry.probe('compact', () => check(() => client.compactSession(missingSessionId))),
+    registry.probe('undo', () => check(() => client.undoSession(missingSessionId, 1))),
+  ]);
+}

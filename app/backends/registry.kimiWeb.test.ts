@@ -89,10 +89,10 @@ describe('Kimi Web backend registry', () => {
     // ...while actions gated by runtime probing (Todo 21) and out-of-scope surfaces stay off.
     expect(KIMI_WEB_CAPABILITIES.sessionFork).toBe(false);
     expect(KIMI_WEB_CAPABILITIES.sessionRevert).toBe(false);
-    expect(KIMI_WEB_CAPABILITIES.sessionCompact).toBe(false);
-    expect(KIMI_WEB_CAPABILITIES.sessionPin).toBe(false);
-    expect(KIMI_WEB_CAPABILITIES.sessionUnpin).toBe(false);
-    expect(KIMI_WEB_CAPABILITIES.terminal).toBe(false);
+    expect(KIMI_WEB_CAPABILITIES.sessionCompact).toBe(true);
+    expect(KIMI_WEB_CAPABILITIES.sessionPin).toBe(true);
+    expect(KIMI_WEB_CAPABILITIES.sessionUnpin).toBe(true);
+    expect(KIMI_WEB_CAPABILITIES.terminal).toBe(true);
     expect(KIMI_WEB_CAPABILITIES.worktrees).toBe(false);
     expect(KIMI_WEB_CAPABILITIES.todos).toBe(false);
     expect(KIMI_WEB_CAPABILITIES.sessionManagementMode).toBe('standard');

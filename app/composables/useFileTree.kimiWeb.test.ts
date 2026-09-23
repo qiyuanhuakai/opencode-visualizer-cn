@@ -82,7 +82,7 @@ function jsonResponse(payload: unknown) {
   });
 }
 
-function createFakeFetch() {
+function createFakeFetch(withHidden = false) {
   return vi.fn<typeof fetch>(async (input, init) => {
     const rawUrl =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
@@ -98,8 +98,20 @@ function createFakeFetch() {
     }
     if (path.endsWith(`/api/v1/sessions/${SESSION_ID}/fs:list`)) {
       const body = init?.body;
-      if (body === JSON.stringify({ path: '.' })) return jsonResponse(rootListEnvelope);
-      if (body === JSON.stringify({ path: 'app' })) {
+      const query: Record<string, unknown> = typeof body === 'string' ? JSON.parse(body) : {};
+      if (withHidden) {
+        const hidden = query.show_hidden === true && query.follow_gitignore === false;
+        const names = query.path === '.'
+          ? (hidden ? ['.git', '.config', '.env', 'visible.txt'] : ['visible.txt'])
+          : query.path === '.git' ? ['config'] : query.path === '.config' && hidden ? ['.settings'] : [];
+        return jsonResponse({ code: 0, data: { items: names.map((name) => ({
+          path: query.path === '.' ? name : `${query.path}/${name}`, name,
+          kind: name === '.git' || name === '.config' ? 'directory' : 'file',
+          modified_at: '2026-09-22T00:00:00Z', etag: name,
+        })), truncated: false } });
+      }
+      if (query.path === '.') return jsonResponse(rootListEnvelope);
+      if (query.path === 'app') {
         return jsonResponse({
           code: 0,
           msg: 'success',
@@ -181,6 +193,19 @@ afterEach(() => {
 });
 
 describe('useFileTree with the real Kimi Web registry adapter', () => {
+  it('includes dotfiles and hidden directories in the tree and searchable file cache', async () => {
+    // Given / When
+    const mounted = await mountKimiFileTree(createFakeFetch(true));
+    // Then
+    expect(mounted.fileTree.treeNodes.value.map((node) => node.name)).toEqual(['.config', '.git', '.env', 'visible.txt']);
+    expect(mounted.fileTree.files.value).toEqual(['.env', 'visible.txt']);
+    expect(mounted.fileTree.treeNodes.value.filter((node) => node.ignored).map((node) => node.name)).toEqual(['.config', '.git', '.env']);
+    mounted.fileTree.toggleTreeDirectory('.git');
+    for (let index = 0; index < 3; index++) await flushAsyncWork();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mounted.fileTree.treeNodes.value.find((node) => node.name === '.git')?.children).toMatchObject([{ path: '.git/config' }]);
+    mounted.unmount();
+  });
   it('loads cwd-relative kind-discriminated entries from session fs:list', async () => {
     const mounted = await mountKimiFileTree(createFakeFetch());
 

@@ -25,6 +25,7 @@ defineProps<{
 .statusbar {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -48,10 +49,11 @@ defineProps<{
 }
 
 .statusbar-right {
+  flex: 1 1 280px;
   margin-left: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-align: right;
+  justify-content: flex-end;
 }
 
 .statusbar-right.is-error,

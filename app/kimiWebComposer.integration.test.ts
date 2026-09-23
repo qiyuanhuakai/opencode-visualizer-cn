@@ -75,7 +75,7 @@ describe('kimi-web composer integration', () => {
       /activeBackendKind === 'kimi-web'\s*\? kimiWebAgentOptions\s*:\s*agentOptions/,
     );
     expect(APP_SOURCE).toMatch(
-      /<template #after-thinking>[\s\S]*v-if="activeBackendKind === 'codex'"[\s\S]*<KimiWebComposerModes[\s\S]*v-else-if="activeBackendKind === 'kimi-web'"/,
+      /<template #after-thinking>[\s\S]*v-if="activeBackendKind === 'codex'"[\s\S]*v-else-if="activeBackendKind === 'kimi-web'"[\s\S]*<KimiWebComposerModes/,
     );
     expect(APP_SOURCE).toMatch(/kimiWebAgentOptions\.value\.length > 0/);
     expect(APP_SOURCE).not.toContain('kimiWebAgentOptions.value.length === 3');

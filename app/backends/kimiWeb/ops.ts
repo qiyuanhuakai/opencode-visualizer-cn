@@ -31,7 +31,7 @@ export type KimiWebNormalizeOp =
       sessionId: string; agentId: string; id: string; turnId?: number; toolCallId?: string; toolName?: string; action?: string;
       questions?: unknown[]; decision?: string; scope?: string; feedback?: string; selectedLabel?: string; answers?: unknown;
       createdAt?: string; expiresAt?: string; resolvedAt?: string }
-  | { kind: 'subagent'; phase: 'spawned' | 'started' | 'suspended' | 'completed' | 'failed'; sessionId: string; agentId: string;
+  | { kind: 'subagent'; phase: 'spawned' | 'started' | 'suspended' | 'completed' | 'failed' | 'cancelled'; sessionId: string; agentId: string;
       subagentId: string; subagentSessionId: string; name?: string; description?: string; parentToolCallId?: string;
       runInBackground?: boolean; model?: string; resultSummary?: string; error?: string; usage?: KimiWebUsage;
       contextTokens?: number; time: number }

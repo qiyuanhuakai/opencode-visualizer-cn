@@ -5,6 +5,7 @@ import { Icon } from '@iconify/vue';
 import type {
   KimiWebModelObjectWire,
   KimiWebProviderCreateInput,
+  KimiWebProviderCatalogEntryWire,
   KimiWebProviderType,
 } from '../../utils/kimiWeb';
 import {
@@ -19,6 +20,7 @@ import {
 } from '../../composables/useKimiWebProviders';
 
 const props = defineProps<{ client: KimiWebProvidersClient }>();
+const emit = defineEmits<{ (event: 'providers-changed'): void }>();
 
 const { t } = useI18n();
 const providerStore = useKimiWebProviders({ client: props.client });
@@ -63,7 +65,9 @@ type ModelRow = {
 let modelRowCounter = 0;
 
 function createModelRow(
-  seed: Partial<Pick<KimiWebModelObjectWire, 'model' | 'name' | 'max_context_size' | 'capabilities'>> = {},
+  seed: Partial<
+    Pick<KimiWebModelObjectWire, 'model' | 'name' | 'max_context_size' | 'capabilities'>
+  > = {},
 ): ModelRow {
   modelRowCounter += 1;
   return {
@@ -166,6 +170,7 @@ function applyResult(action: ProviderAction, result: KimiWebProviderSaveResult) 
     showFailure(action, result.error);
     return;
   }
+  emit('providers-changed');
   if (result.status === 'saved-refresh-failed') {
     setNotice(t('kimiWeb.providers.savedRefreshFailed'));
     return;
@@ -208,6 +213,7 @@ async function removeProvider(providerId: string) {
 async function setDefault(qualifiedModelId: string) {
   const ok = await providerStore.setDefaultModel(qualifiedModelId);
   if (ok) {
+    emit('providers-changed');
     setSuccess('default');
     return;
   }
@@ -237,7 +243,7 @@ function openEditForm(provider: KimiWebManagedProviderEntry) {
   const rows = provider.models.map((model) =>
     createModelRow({
       model: model.id,
-      name: model.source?.name ?? model.name,
+      name: model.source?.display_name ?? model.source?.name ?? model.name,
       max_context_size: model.source?.max_context_size ?? model.maxContextSize,
       capabilities: model.source?.capabilities,
     }),
@@ -250,6 +256,23 @@ function openEditForm(provider: KimiWebManagedProviderEntry) {
     keyValue: '',
     models: rows.length > 0 ? rows : [createModelRow()],
   };
+}
+
+function connectCatalogProvider(entry: KimiWebProviderCatalogEntryWire) {
+  if (entry.rejected || !entry.wire_type) return;
+  openCreateForm();
+  form.value.id = entry.id;
+  form.value.type = entry.wire_type;
+  form.value.baseUrl = entry.base_url ?? '';
+  form.value.models = entry.models.map((model) =>
+    createModelRow({
+      model: model.id,
+      name: model.name,
+      max_context_size: model.max_context_size,
+      capabilities: model.capabilities,
+    }),
+  );
+  if (!form.value.models.length) form.value.models = [createModelRow()];
 }
 
 function closeForm() {
@@ -284,9 +307,7 @@ function validateForm(): boolean {
     if (model) seen.add(model);
   }
   return (
-    !formErrors.value.id &&
-    !formErrors.value.baseUrl &&
-    form.value.models.every((row) => !row.err)
+    !formErrors.value.id && !formErrors.value.baseUrl && form.value.models.every((row) => !row.err)
   );
 }
 
@@ -301,7 +322,7 @@ function keyChoiceForSave(): KimiWebApiKeyChoice {
 function modelsForSave(): KimiWebModelObjectWire[] {
   return form.value.models.map((row) => ({
     model: row.model.trim(),
-    ...(row.name.trim() ? { name: row.name.trim() } : {}),
+    ...(row.name.trim() ? { display_name: row.name.trim() } : {}),
     max_context_size: Number(row.contextSize),
     ...(row.capabilities ? { capabilities: [...row.capabilities] } : {}),
   }));
@@ -350,6 +371,14 @@ onMounted(() => {
 
 <template>
   <section class="kimi-web-provider-manager" :aria-label="$t('kimiWeb.providers.title')">
+    <header v-if="formMode !== 'closed'" class="kimi-web-provider-toolbar">
+      <button type="button" class="kimi-web-provider-action" @click="closeForm">
+        <Icon icon="lucide:arrow-left" :width="14" :height="14" aria-hidden="true" />
+        {{ $t('kimiWeb.providers.cancel') }}
+      </button>
+      <span class="kimi-web-provider-title">{{ formMode === 'create' ? $t('kimiWeb.providers.add') : $t('kimiWeb.providers.edit') }}</span>
+    </header>
+    <template v-if="formMode === 'closed'">
     <header class="kimi-web-provider-toolbar">
       <div class="kimi-web-provider-heading">
         <span class="kimi-web-provider-title">{{ $t('kimiWeb.providers.installed') }}</span>
@@ -419,10 +448,11 @@ onMounted(() => {
         </div>
 
         <div class="kimi-web-provider-meta">
-          <span class="kimi-web-provider-meta-base-url">{{
+          <span class="kimi-web-provider-meta-base-url" :title="provider.baseUrl">{{
             provider.baseUrl || '—'
           }}</span>
           <span
+            v-if="!isManaged(provider)"
             class="kimi-web-provider-meta-key"
             :class="provider.hasApiKey ? 'is-configured' : 'is-missing'"
           >
@@ -432,48 +462,57 @@ onMounted(() => {
                 : $t('kimiWeb.providers.keyMissing')
             }}
           </span>
-          <span v-if="provider.defaultModel" class="kimi-web-provider-meta-default">
+          <span
+            v-if="provider.defaultModel"
+            class="kimi-web-provider-meta-default"
+            :title="provider.defaultModel"
+          >
             {{ $t('kimiWeb.providers.defaultModel') }}: {{ provider.defaultModel }}
           </span>
         </div>
 
-        <ul v-if="provider.models.length > 0" class="kimi-web-provider-models">
-          <li
-            v-for="model in provider.models"
-            :key="model.qualifiedId"
-            class="kimi-web-provider-model"
-            :data-model-id="model.id"
-          >
-            <div class="kimi-web-provider-model-main">
-              <span class="kimi-web-provider-model-name">{{ model.name }}</span>
-              <span class="kimi-web-provider-model-id">{{ model.qualifiedId }}</span>
-              <span v-if="model.maxContextSize" class="kimi-web-provider-model-context">
-                {{ $t('kimiWeb.providers.contextSize') }}: {{ formatCount(model.maxContextSize) }}
-              </span>
-            </div>
-            <div
-              class="kimi-web-provider-model-badges"
-              :aria-label="$t('kimiWeb.providers.capabilities')"
+        <details v-if="provider.models.length > 0" class="kimi-web-provider-model-details">
+          <summary>
+            {{ $t('kimiWeb.providers.models') }} <span>{{ provider.models.length }}</span>
+          </summary>
+          <ul class="kimi-web-provider-models">
+            <li
+              v-for="model in provider.models"
+              :key="model.qualifiedId"
+              class="kimi-web-provider-model"
+              :data-model-id="model.id"
             >
-              <span
-                v-for="field in capabilityBadges(model)"
-                :key="field"
-                class="kimi-web-provider-capability"
-                :data-capability="field"
+              <div class="kimi-web-provider-model-main">
+                <span class="kimi-web-provider-model-name">{{ model.name }}</span>
+                <span class="kimi-web-provider-model-id">{{ model.qualifiedId }}</span>
+                <span v-if="model.maxContextSize" class="kimi-web-provider-model-context">
+                  {{ $t('kimiWeb.providers.contextSize') }}: {{ formatCount(model.maxContextSize) }}
+                </span>
+              </div>
+              <div
+                class="kimi-web-provider-model-badges"
+                :aria-label="$t('kimiWeb.providers.capabilities')"
               >
-                {{ field }}
-              </span>
-            </div>
-            <button
-              type="button"
-              class="kimi-web-provider-action"
-              :disabled="isBusy(provider.id)"
-              @click="setDefault(model.qualifiedId)"
-            >
-              {{ $t('kimiWeb.providers.setDefault') }}
-            </button>
-          </li>
-        </ul>
+                <span
+                  v-for="field in capabilityBadges(model)"
+                  :key="field"
+                  class="kimi-web-provider-capability"
+                  :data-capability="field"
+                >
+                  {{ field }}
+                </span>
+              </div>
+              <button
+                type="button"
+                class="kimi-web-provider-action"
+                :disabled="isBusy(provider.id)"
+                @click="setDefault(model.qualifiedId)"
+              >
+                {{ $t('kimiWeb.providers.setDefault') }}
+              </button>
+            </li>
+          </ul>
+        </details>
 
         <div class="kimi-web-provider-card-actions">
           <button
@@ -509,6 +548,15 @@ onMounted(() => {
     <section class="kimi-web-provider-catalog">
       <header class="kimi-web-provider-catalog-head">
         <span class="kimi-web-provider-title">{{ $t('kimiWeb.providers.catalog') }}</span>
+        <button
+          type="button"
+          class="kimi-web-provider-action"
+          :disabled="catalogBusy"
+          :title="$t('kimiWeb.providers.environmentKeyHint')"
+          @click="importFromCatalog"
+        >
+          {{ $t('kimiWeb.providers.importCatalog') }}
+        </button>
       </header>
       <div v-if="catalog.length === 0" class="kimi-web-provider-state">
         {{ $t('kimiWeb.providers.catalogEmpty') }}
@@ -521,11 +569,13 @@ onMounted(() => {
           :data-catalog-id="entry.id"
         >
           <div class="kimi-web-provider-catalog-identity">
-            <span class="kimi-web-provider-catalog-name">{{ entry.name || entry.id }}</span>
-            <span class="kimi-web-provider-id">{{ entry.id }}</span>
+            <span class="kimi-web-provider-catalog-name" :title="entry.name || entry.id">{{
+              entry.name || entry.id
+            }}</span>
+            <span class="kimi-web-provider-id" :title="entry.id">{{ entry.id }}</span>
           </div>
           <div class="kimi-web-provider-catalog-meta">
-            <span v-if="entry.env_key" class="kimi-web-provider-catalog-env">
+            <span v-if="entry.env_key" class="kimi-web-provider-catalog-env" :title="entry.env_key">
               {{ $t('kimiWeb.providers.environmentKey') }}: {{ entry.env_key }}
             </span>
             <span class="kimi-web-provider-catalog-models">
@@ -535,17 +585,24 @@ onMounted(() => {
           <button
             type="button"
             class="kimi-web-provider-action"
-            :disabled="catalogBusy"
-            :title="$t('kimiWeb.providers.environmentKeyHint')"
-            @click="importFromCatalog"
+            :disabled="
+              catalogBusy ||
+              entry.rejected ||
+              !entry.wire_type ||
+              providers.some((provider) => provider.id === entry.id)
+            "
+            :title="entry.reject_reason || undefined"
+            @click="connectCatalogProvider(entry)"
           >
-            {{ $t('kimiWeb.providers.importCatalog') }}
+            {{ $t('providerManager.actions.connect') }}
           </button>
         </article>
       </div>
     </section>
 
+    </template>
     <form v-if="formMode !== 'closed'" class="kimi-web-provider-form" @submit.prevent="submitForm">
+      <div v-if="feedbackMessage" class="kimi-web-provider-feedback" :class="[`is-${feedbackTone}`, { 'is-transport': feedbackKind === 'transport' }]" :data-error-kind="feedbackKind" role="alert">{{ feedbackMessage }}</div>
       <label class="kimi-web-provider-field">
         <span>{{ $t('kimiWeb.providers.id') }}</span>
         <input v-model="form.id" type="text" :disabled="formMode === 'edit'" />
@@ -567,20 +624,20 @@ onMounted(() => {
 
       <fieldset class="kimi-web-provider-key">
         <legend>{{ $t('kimiWeb.providers.apiKey') }}</legend>
-        <label class="kimi-web-provider-key-choice">
+        <label v-if="formMode === 'edit'" class="kimi-web-provider-key-choice">
           <input v-model="form.keyChoice" type="radio" value="keep" />
           <span>{{ $t('kimiWeb.providers.keepKey') }}</span>
         </label>
-        <label class="kimi-web-provider-key-choice">
+        <label v-if="formMode === 'edit'" class="kimi-web-provider-key-choice">
           <input v-model="form.keyChoice" type="radio" value="replace" />
           <span>{{ $t('kimiWeb.providers.replaceKey') }}</span>
         </label>
-        <label class="kimi-web-provider-key-choice">
+        <label v-if="formMode === 'edit'" class="kimi-web-provider-key-choice">
           <input v-model="form.keyChoice" type="radio" value="remove" />
           <span>{{ $t('kimiWeb.providers.removeKey') }}</span>
         </label>
         <input
-          v-if="form.keyChoice === 'replace'"
+          v-if="formMode === 'create' || form.keyChoice === 'replace'"
           v-model="form.keyValue"
           class="kimi-web-provider-key-value"
           type="text"
@@ -595,22 +652,14 @@ onMounted(() => {
 
       <div class="kimi-web-provider-model-rows">
         <div class="kimi-web-provider-row-header">{{ $t('kimiWeb.providers.models') }}</div>
-        <div
-          v-for="(row, index) in form.models"
-          :key="row.row"
-          class="kimi-web-provider-model-row"
-        >
+        <div v-for="(row, index) in form.models" :key="row.row" class="kimi-web-provider-model-row">
           <input
             v-model="row.model"
             type="text"
             :aria-label="$t('kimiWeb.providers.modelId')"
             :class="{ 'is-error': row.err }"
           />
-          <input
-            v-model="row.name"
-            type="text"
-            :aria-label="$t('kimiWeb.providers.modelName')"
-          />
+          <input v-model="row.name" type="text" :aria-label="$t('kimiWeb.providers.modelName')" />
           <input
             v-model.number="row.contextSize"
             type="number"
@@ -640,7 +689,10 @@ onMounted(() => {
         <button
           type="submit"
           class="kimi-web-provider-action is-primary"
-          :disabled="saving || busyProviderId === (formMode === 'create' ? form.id.trim() : editingProviderId)"
+          :disabled="
+            saving ||
+            busyProviderId === (formMode === 'create' ? form.id.trim() : editingProviderId)
+          "
         >
           {{ saving ? $t('kimiWeb.providers.saving') : $t('kimiWeb.providers.save') }}
         </button>
@@ -660,7 +712,7 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding-right: 4px;
+  padding-right: var(--space-1);
 }
 
 .kimi-web-provider-toolbar,
@@ -674,17 +726,17 @@ onMounted(() => {
 .kimi-web-provider-heading {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .kimi-web-provider-title {
-  font-size: 14px;
+  font-size: var(--type-heading);
   font-weight: 700;
   color: var(--theme-modal-text, var(--theme-text-primary, #f8fafc));
 }
 
 .kimi-web-provider-count {
-  font-size: 12px;
+  font-size: var(--type-sm);
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
@@ -697,14 +749,14 @@ onMounted(() => {
 
 .kimi-web-provider-state {
   padding: 14px 12px;
-  font-size: 12px;
+  font-size: var(--type-sm);
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .kimi-web-provider-feedback {
   padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 12px;
+  border-radius: var(--radius-panel);
+  font-size: var(--type-sm);
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
   background: var(
     --theme-modal-control-bg,
@@ -731,27 +783,100 @@ onMounted(() => {
 
 .kimi-web-provider-list,
 .kimi-web-provider-catalog-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.kimi-web-provider-catalog {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
+}
+
+.kimi-web-provider-catalog-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .kimi-web-provider-card,
 .kimi-web-provider-catalog-entry {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) 8px;
+  padding: 8px 10px;
+  min-width: 0;
   border: 1px solid
     var(
       --theme-card-border,
       var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)))
     );
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   background: var(
     --theme-card-bg,
     var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46)))
   );
+}
+
+.kimi-web-provider-card-head {
+  grid-column: 1;
+}
+
+.kimi-web-provider-card-actions {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+
+.kimi-web-provider-meta {
+  grid-column: 1;
+  min-width: 0;
+}
+
+.kimi-web-provider-meta-base-url,
+.kimi-web-provider-meta-default {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kimi-web-provider-model-details {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.kimi-web-provider-model-details summary {
+  width: fit-content;
+  padding: 4px 0;
+  font-size: 11px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+  cursor: pointer;
+}
+
+.kimi-web-provider-model-details summary span {
+  margin-left: 4px;
+}
+
+.kimi-web-provider-catalog-entry {
+  padding: 6px 8px;
+  min-height: 42px;
+}
+
+.kimi-web-provider-catalog-identity,
+.kimi-web-provider-catalog-meta {
+  grid-column: 1;
+}
+
+.kimi-web-provider-catalog-entry > .kimi-web-provider-action {
+  grid-column: 2;
+  grid-row: 1 / 3;
+}
+
+.kimi-web-provider-catalog-name,
+.kimi-web-provider-catalog-identity .kimi-web-provider-id,
+.kimi-web-provider-catalog-env {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kimi-web-provider-card[aria-busy='true'] {
@@ -760,9 +885,9 @@ onMounted(() => {
 
 .kimi-web-provider-card-head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }
 
 .kimi-web-provider-identity,
@@ -776,7 +901,7 @@ onMounted(() => {
 
 .kimi-web-provider-name,
 .kimi-web-provider-catalog-name {
-  font-size: 13px;
+  font-size: var(--type-body);
   font-weight: 700;
   color: var(--theme-modal-text, var(--theme-text-primary, #f8fafc));
   word-break: break-word;
@@ -800,11 +925,11 @@ onMounted(() => {
 .kimi-web-provider-capability {
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 8px;
+  min-height: 18px;
+  padding: 0 6px;
   border-radius: 999px;
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
-  font-size: 11px;
+  font-size: var(--type-caption);
   color: var(--theme-badge-text, var(--theme-modal-text, var(--theme-text-secondary, #cbd5e1)));
   background: var(
     --theme-badge-bg,
@@ -827,9 +952,18 @@ onMounted(() => {
 .kimi-web-provider-catalog-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-2);
   font-size: 11px;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
+}
+
+.kimi-web-provider-catalog-meta {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.kimi-web-provider-catalog-models {
+  flex-shrink: 0;
 }
 
 .kimi-web-provider-meta-key.is-configured {
@@ -846,25 +980,21 @@ onMounted(() => {
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
+  border-top: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
 }
 
 .kimi-web-provider-model {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 1px solid
-    var(
-      --theme-card-border,
-      var(--theme-modal-border, var(--theme-border-default, rgba(51, 65, 85, 0.8)))
-    );
-  border-radius: 10px;
-  background: var(
-    --theme-card-bg,
-    var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46)))
-  );
+  gap: var(--space-2);
+  padding: 6px 0;
+  border-bottom: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+}
+
+.kimi-web-provider-model:last-child {
+  border-bottom: 0;
 }
 
 .kimi-web-provider-model-main {
@@ -873,11 +1003,11 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .kimi-web-provider-model-name {
-  font-size: 12px;
+  font-size: var(--type-sm);
   font-weight: 700;
   color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
 }
@@ -886,6 +1016,7 @@ onMounted(() => {
 .kimi-web-provider-model-context {
   font-size: 11px;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #64748b));
+  overflow-wrap: anywhere;
 }
 
 .kimi-web-provider-card-actions {
@@ -905,7 +1036,7 @@ onMounted(() => {
       --theme-action-button-border,
       var(--theme-modal-border, var(--theme-border-default, #334155))
     );
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: var(
     --theme-action-button-bg,
     var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82)))
@@ -914,10 +1045,18 @@ onMounted(() => {
     --theme-action-button-text,
     var(--theme-modal-text, var(--theme-text-primary, #e2e8f0))
   );
-  font-size: 12px;
+  font-size: var(--type-sm);
   font-family: inherit;
-  padding: 7px 10px;
+  min-height: 28px;
+  padding: 4px 8px;
   cursor: pointer;
+}
+
+.kimi-web-provider-action:focus-visible,
+.kimi-web-provider-model-details summary:focus-visible,
+.kimi-web-provider-remove:focus-visible {
+  outline: 2px solid var(--theme-focus-ring, var(--theme-modal-accent, #3b82f6));
+  outline-offset: 2px;
 }
 
 .kimi-web-provider-action:hover:not(:disabled) {
@@ -962,7 +1101,7 @@ onMounted(() => {
 .kimi-web-provider-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-3);
   padding: 12px;
   border: 1px solid
     var(
@@ -982,7 +1121,7 @@ onMounted(() => {
   gap: 6px;
   min-width: 0;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
-  font-size: 12px;
+  font-size: var(--type-sm);
 }
 
 .kimi-web-provider-field input,
@@ -999,7 +1138,7 @@ onMounted(() => {
     var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(15, 23, 42, 0.82)))
   );
   color: var(--theme-search-text, var(--theme-modal-text, var(--theme-text-primary, #e2e8f0)));
-  font-size: 13px;
+  font-size: var(--type-body);
   font-family: inherit;
   padding: 0 12px;
   outline: none;
@@ -1038,9 +1177,9 @@ onMounted(() => {
   margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
-  border-radius: 10px;
+  border-radius: var(--radius-panel);
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
-  font-size: 12px;
+  font-size: var(--type-sm);
 }
 
 .kimi-web-provider-key legend {
@@ -1054,17 +1193,17 @@ onMounted(() => {
 .kimi-web-provider-key-choice {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .kimi-web-provider-model-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .kimi-web-provider-row-header {
-  font-size: 12px;
+  font-size: var(--type-sm);
   font-weight: 700;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
@@ -1073,7 +1212,7 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px auto;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .kimi-web-provider-model-row small {
@@ -1087,7 +1226,7 @@ onMounted(() => {
   width: 34px;
   height: 38px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: transparent;
   color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
   cursor: pointer;
@@ -1102,20 +1241,31 @@ onMounted(() => {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 @media (max-width: 760px) {
+  .kimi-web-provider-catalog-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .kimi-web-provider-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .kimi-web-provider-card-actions {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
   .kimi-web-provider-model-row {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .kimi-web-provider-card-actions,
   .kimi-web-provider-toolbar-actions {
     justify-content: stretch;
   }
 
-  .kimi-web-provider-card-actions > *,
   .kimi-web-provider-toolbar-actions > * {
     flex: 1 1 auto;
   }

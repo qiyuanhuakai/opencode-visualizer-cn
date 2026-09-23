@@ -22,6 +22,17 @@
 }
 
 :root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --type-caption: 10px;
+  --type-sm: 12px;
+  --type-body: 13px;
+  --type-heading: 14px;
+  --radius-control: 8px;
+  --radius-panel: 10px;
   --app-monospace-font-family:
     'SF Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, 'SFMono-Regular', Menlo, Monaco,
     Consolas, 'Liberation Mono', 'Courier New', monospace;

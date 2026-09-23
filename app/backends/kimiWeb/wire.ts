@@ -69,8 +69,9 @@ export function turnReason(value: unknown): KimiWebTurnReason {
 
 export function splitModel(model: string) {
   const index = model.indexOf('/');
-  if (index <= 0) return { providerID: 'kimi-code', modelID: model };
-  return { providerID: model.slice(0, index), modelID: model.slice(index + 1) };
+  if (index <= 0) return { providerID: '', modelID: model };
+  const provider = model.slice(0, index);
+  return { providerID: provider === 'kimi-code' ? 'managed:kimi-code' : provider, modelID: model };
 }
 
 /** Event types with a mapping in this module (every one has a fixture in ./fixtures). */
@@ -86,7 +87,7 @@ export const KIMI_WEB_SUPPORTED_EVENTS: ReadonlySet<string> = new Set([
   'event.approval.requested', 'event.approval.resolved',
   'event.question.requested', 'event.question.answered', 'event.question.dismissed',
   'prompt.submitted', 'prompt.started', 'prompt.completed', 'prompt.aborted', 'prompt.steered',
-  'subagent.spawned', 'subagent.started', 'subagent.suspended', 'subagent.completed', 'subagent.failed',
+  'subagent.spawned', 'subagent.started', 'subagent.suspended', 'subagent.completed', 'subagent.failed', 'subagent.cancelled',
   'compaction.started', 'compaction.blocked', 'compaction.cancelled', 'compaction.completed',
   'error', 'warning', 'context.spliced',
 ]);

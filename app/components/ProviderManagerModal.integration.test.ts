@@ -15,6 +15,37 @@ import {
 } from './providerManagerModal.test-helpers';
 
 describe('ProviderManagerModal integration contracts', () => {
+  it('keeps shared model visibility controls available for Kimi Web', async () => {
+    setProviderBackend(openCodeBackend());
+    const { host, events } = await mountProviderManager({
+      backendKind: 'kimi-web',
+      providers: [{ id: 'kimi', models: { k3: { id: 'k3' } } }],
+      connectedProviderIds: ['kimi'],
+    });
+    buttonByText(host, 'Model management').click();
+    await flushUi();
+    changeCheckbox(requireElement<HTMLInputElement>(host, '.model-row .toggle-input'), false);
+    expect(events.modelVisibility).toHaveBeenCalledExactlyOnceWith([
+      { providerID: 'kimi', modelID: 'k3', visibility: 'hide' },
+    ]);
+  });
+
+  it('preserves Kimi managed model aliases when hiding models', async () => {
+    setProviderBackend(openCodeBackend());
+    const { host, events } = await mountProviderManager({
+      backendKind: 'kimi-web',
+      providers: [{ id: 'managed:kimi-code', models: { 'kimi-code/k3': { id: 'kimi-code/k3' } } }],
+      connectedProviderIds: ['managed:kimi-code'],
+      selectedModel: 'managed:kimi-code/kimi-code/k3',
+    });
+    buttonByText(host, 'Model management').click();
+    await flushUi();
+    expect(host.querySelector('.model-row')?.classList.contains('is-selected')).toBe(true);
+    changeCheckbox(requireElement<HTMLInputElement>(host, '.model-row .toggle-input'), false);
+    expect(events.modelVisibility).toHaveBeenCalledExactlyOnceWith([
+      { providerID: 'managed:kimi-code', modelID: 'kimi-code/k3', visibility: 'hide' },
+    ]);
+  });
   it('emits model visibility updates with slash-containing model ids intact', async () => {
     const backend = openCodeBackend();
     setProviderBackend(backend);

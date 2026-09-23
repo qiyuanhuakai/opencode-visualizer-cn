@@ -14,6 +14,7 @@ import {
   isInjectionMessage,
   kimiWebMessagesToHistoryEntries,
   type KimiWebHistoryEntry,
+  type KimiWebHistoryProfile,
 } from './historyEntries';
 
 export type KimiWebHistoryPage = {
@@ -96,6 +97,7 @@ export async function loadKimiWebHistoryEntries(params: {
   pageSize?: number;
   signal?: AbortSignal;
   isCurrent?: () => boolean;
+  profile?: KimiWebHistoryProfile;
 }): Promise<{ entries: KimiWebHistoryEntry[]; pages: number; truncated: boolean }> {
   const collection = await collectKimiWebHistoryMessages({
     sessionId: params.sessionId,
@@ -106,7 +108,7 @@ export async function loadKimiWebHistoryEntries(params: {
     shouldContinue: params.isCurrent,
   });
   return {
-    entries: kimiWebMessagesToHistoryEntries(collection.messages),
+    entries: kimiWebMessagesToHistoryEntries(collection.messages, params.profile),
     pages: collection.pages,
     truncated: collection.truncated,
   };

@@ -400,9 +400,9 @@
                     >
                       <DropdownItem
                         v-if="!managementMode"
-                        :href="sessionShareHref(worktree.projectId, session.id)"
+                        :href="sessionShareHref(session.projectId ?? worktree.projectId, session.id)"
                         :value="{
-                          projectId: worktree.projectId,
+                          projectId: session.projectId ?? worktree.projectId,
                           worktree: worktree.directory,
                           directory: sandbox.directory,
                           sessionId: session.id,
@@ -538,14 +538,14 @@
                         class="ui-dropdown-item ui-input-candidate-item management-session-item"
                         :class="{
                           'is-active': isManagedSessionSelected(
-                            worktree.projectId,
+                            session.projectId ?? worktree.projectId,
                             sandbox.directory,
                             session.id,
                           ),
                         }"
                         :title="session.id"
                         @click.stop="
-                          toggleManagedSession(worktree.projectId, sandbox.directory, session.id)
+                          toggleManagedSession(session.projectId ?? worktree.projectId, sandbox.directory, session.id)
                         "
                       >
                         <button
@@ -553,14 +553,14 @@
                           class="management-check"
                           :class="{
                             'is-selected': isManagedSessionSelected(
-                              worktree.projectId,
+                              session.projectId ?? worktree.projectId,
                               sandbox.directory,
                               session.id,
                             ),
                           }"
                           :title="
                             isManagedSessionSelected(
-                              worktree.projectId,
+                              session.projectId ?? worktree.projectId,
                               sandbox.directory,
                               session.id,
                             )
@@ -568,13 +568,13 @@
                               : $t('topPanel.sessionActions.select')
                           "
                           @click.stop="
-                            toggleManagedSession(worktree.projectId, sandbox.directory, session.id)
+                            toggleManagedSession(session.projectId ?? worktree.projectId, sandbox.directory, session.id)
                           "
                         >
                           <Icon
                             :icon="
                               isManagedSessionSelected(
-                                worktree.projectId,
+                                session.projectId ?? worktree.projectId,
                                 sandbox.directory,
                                 session.id,
                               )
@@ -1048,11 +1048,11 @@ const sessionTargetMapByKey = computed(() => {
   props.treeData.forEach((worktree) => {
     worktree.sandboxes.forEach((sandbox) => {
       sandbox.sessions.forEach((session) => {
-        const key = managedSessionKey(worktree.projectId, sandbox.directory, session.id);
+        const key = managedSessionKey(session.projectId ?? worktree.projectId, sandbox.directory, session.id);
         map.set(key, {
           target: {
             sessionId: session.id,
-            projectId: worktree.projectId,
+            projectId: session.projectId ?? worktree.projectId,
             directory: sandbox.directory,
           },
           session,
@@ -1082,7 +1082,7 @@ const visibleSessionKeys = computed(() =>
   displayedTree.value.flatMap((worktree) =>
     worktree.sandboxes.flatMap((sandbox) =>
       sandbox.sessions.map((session) =>
-        managedSessionKey(worktree.projectId, sandbox.directory, session.id),
+        managedSessionKey(session.projectId ?? worktree.projectId, sandbox.directory, session.id),
       ),
     ),
   ),
@@ -1183,6 +1183,7 @@ const displayedTree = computed(() => {
                 session.slug,
                 session.id,
                 session.archivedAt ? 'archived' : undefined,
+                session.archivedAt ? t('topPanel.badges.archived') : undefined,
                 session.pinnedAt ? 'pinned' : undefined,
                 session.timeCreated ? formatSessionTime(session.timeCreated) : undefined,
                 session.timeUpdated ? formatSessionTime(session.timeUpdated) : undefined,
@@ -1608,6 +1609,33 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   flex: 0 1 680px;
   width: min(680px, 70vw);
   min-width: 260px;
+}
+
+@media (max-width: 1023px) {
+  .top-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .top-right {
+    margin-left: auto;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .top-center {
+    order: 1;
+    flex-basis: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .tree-dropdown-root {
+    flex: 1 1 calc(100% - 40px);
+    width: auto;
+    min-width: 0;
+    max-width: calc(100% - 40px);
+  }
 }
 
 .tree-menu {
@@ -2120,6 +2148,11 @@ function emitOpenCodexSubpanel(panel: TopPanelCodexSubpanel, close: () => void) 
   align-items: center;
   gap: var(--ui-action-gap);
   flex: 0 0 auto;
+}
+
+.tree-action-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .session-status-icon {

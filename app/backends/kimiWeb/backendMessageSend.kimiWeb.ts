@@ -21,7 +21,7 @@ import { KimiWebTransportError } from '../../utils/kimiWeb';
 /** REST surface the send path needs; Todo 25 passes the real client. */
 export type KimiWebSendApi = Pick<
   KimiWebClient,
-  'sendPrompt' | 'uploadFile' | 'steer' | 'abortPrompt'
+  'sendPrompt' | 'uploadFile' | 'steer' | 'abortPrompt' | 'updateProfile'
 >;
 
 /** Todo 9 WS client subset used for the abort frame. */
@@ -144,6 +144,16 @@ export async function runKimiWebSend(
   }
   const parts = await buildKimiWebContentParts(params, preflight, guard, api);
   if (!parts || !guard.isCurrent()) return { kind: 'stale' };
+  if (params.isKimiWebSessionModeReady?.(preflight.sessionId) === false) {
+    return refusePendingModeSend(params, preflight);
+  }
+  await api.updateProfile(preflight.sessionId, {
+    agent_config: {
+      model: preflight.modelId ?? preflight.selectedModel,
+      ...(preflight.selectedThinking ? { thinking: preflight.selectedThinking } : {}),
+    },
+  });
+  if (!guard.isCurrent()) return { kind: 'stale' };
   if (params.isKimiWebSessionModeReady?.(preflight.sessionId) === false) {
     return refusePendingModeSend(params, preflight);
   }

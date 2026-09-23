@@ -135,7 +135,11 @@ async function mountManager(
   const showConfirm = vi.fn(async () => options.confirmResult?.() ?? true);
   const host = document.createElement('div');
   document.body.append(host);
-  const app = createApp(KimiWebProviderManager, { client: harness.client });
+  const providersChanged = vi.fn();
+  const app = createApp(KimiWebProviderManager, {
+    client: harness.client,
+    onProvidersChanged: providersChanged,
+  });
   app.use(
     createI18n({
       legacy: false,
@@ -149,7 +153,7 @@ async function mountManager(
   app.mount(host);
   mountedApps.push({ app, host });
   await flushUi();
-  return { harness, host, showConfirm };
+  return { harness, host, showConfirm, providersChanged };
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {
@@ -188,6 +192,29 @@ function cardByProviderId(host: HTMLElement, providerId: string) {
 }
 
 describe('KimiWebProviderManager', () => {
+  it('keeps model details collapsed while leaving provider actions accessible', async () => {
+    const { host } = await mountManager((harness) => routeProviderList(harness, [OPENAI_PROVIDER]));
+    const card = cardByProviderId(host, OPENAI_PROVIDER.id);
+    const details = card.querySelector('details');
+    expect(details).not.toBeNull();
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector('summary')?.textContent).toContain('2');
+    expect(card.querySelector('.kimi-web-provider-card-actions')?.closest('details')).toBeNull();
+    if (!details) throw new Error('Missing model disclosure');
+    details.open = true;
+    expect(details.querySelectorAll('.kimi-web-provider-model')).toHaveLength(2);
+  });
+  it('notifies the shared model picker after changing the default', async () => {
+    const { host, providersChanged } = await mountManager((harness) => {
+      routeProviderList(harness, [OPENAI_PROVIDER]);
+      harness.route('POST', '/kimi-web/api/v1/models/custom-openai%2Fgpt-4.1:set_default', () =>
+        jsonResponse(envelope({})),
+      );
+    });
+    buttonByText(host, en.kimiWeb.providers.setDefault).click();
+    await flushUi();
+    expect(providersChanged).toHaveBeenCalledOnce();
+  });
   it('renders provider status key state base url and default model', async () => {
     const { host } = await mountManager((harness) =>
       routeProviderList(harness, [MANAGED_PROVIDER, OPENAI_PROVIDER, ANTHROPIC_PROVIDER]),
@@ -227,9 +254,7 @@ describe('KimiWebProviderManager', () => {
   });
 
   it('renders models with context size and capability badges', async () => {
-    const { host } = await mountManager((harness) =>
-      routeProviderList(harness, [OPENAI_PROVIDER]),
-    );
+    const { host } = await mountManager((harness) => routeProviderList(harness, [OPENAI_PROVIDER]));
 
     const card = cardByProviderId(host, 'custom-openai');
     const model = card.querySelector<HTMLElement>('[data-model-id="gpt-4.1"]');
@@ -297,8 +322,10 @@ describe('KimiWebProviderManager', () => {
     const { host, harness, showConfirm } = await mountManager(
       (harness) => {
         routeProviderList(harness, [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]);
-        harness.route('DELETE', '/kimi-web/api/v1/providers/custom-openai', () =>
-          new Response(null, { status: 204 }),
+        harness.route(
+          'DELETE',
+          '/kimi-web/api/v1/providers/custom-openai',
+          () => new Response(null, { status: 204 }),
         );
       },
       { confirmResult: () => confirmed },
@@ -318,7 +345,7 @@ describe('KimiWebProviderManager', () => {
     expect(harness.calls.some((call) => call.method === 'DELETE')).toBe(true);
   });
 
-  it('exposes the catalog with an import action', async () => {
+  it('connects only the chosen catalog provider through a prefilled form', async () => {
     const { host, harness } = await mountManager((harness) => {
       routeProviderList(harness, [OPENAI_PROVIDER]);
       harness.route('GET', '/kimi-web/api/v1/catalog/providers', () =>
@@ -329,14 +356,20 @@ describe('KimiWebProviderManager', () => {
                 id: 'openrouter',
                 name: 'OpenRouter',
                 env_key: 'OPENROUTER_API_KEY',
-                models: [{ model: 'gpt-4.1', max_context_size: 128_000 }],
+                wire_type: 'openai',
+                base_url: 'https://openrouter.ai/api/v1',
+                rejected: false,
+                needs_base_url: false,
+                models: [{ id: 'gpt-4.1', max_context_size: 128_000 }],
               },
             ],
           }),
         ),
       );
-      harness.route('POST', '/kimi-web/api/v1/providers:import_catalog', () =>
-        new Response(null, { status: 200 }),
+      harness.route(
+        'POST',
+        '/kimi-web/api/v1/providers:import_catalog',
+        () => new Response(null, { status: 200 }),
       );
     });
 
@@ -346,20 +379,28 @@ describe('KimiWebProviderManager', () => {
       'OPENROUTER_API_KEY',
     );
 
-    buttonByText(entry as ParentNode, en.kimiWeb.providers.importCatalog).click();
+    buttonByText(entry as ParentNode, en.providerManager.actions.connect).click();
     await flushUi();
+
+    expect(host.querySelector('.kimi-web-provider-catalog')).toBeNull();
+    expect(host.querySelector('.kimi-web-provider-list')).toBeNull();
+    expect(host.querySelector('.kimi-web-provider-form')).toBeTruthy();
 
     expect(
       harness.calls.some(
         (call) => call.method === 'POST' && call.url.endsWith('/api/v1/providers:import_catalog'),
       ),
-    ).toBe(true);
+    ).toBe(false);
+    expect(host.querySelector<HTMLInputElement>('.kimi-web-provider-field input')?.value).toBe(
+      'openrouter',
+    );
+    expect(host.querySelector<HTMLInputElement>('.kimi-web-provider-model-row input')?.value).toBe(
+      'gpt-4.1',
+    );
   });
 
   it('is keyboard operable and exposes accessible names', async () => {
-    const { host } = await mountManager((harness) =>
-      routeProviderList(harness, [OPENAI_PROVIDER]),
-    );
+    const { host } = await mountManager((harness) => routeProviderList(harness, [OPENAI_PROVIDER]));
 
     const buttons = Array.from(host.querySelectorAll<HTMLButtonElement>('button'));
     expect(buttons.length).toBeGreaterThan(0);
@@ -442,13 +483,13 @@ describe('KimiWebProviderManager', () => {
       models: [
         {
           model: 'gpt-4.1',
-          name: 'GPT 4.1',
+          display_name: 'GPT 4.1',
           max_context_size: 128_000,
           capabilities: ['tool_use'],
         },
         {
           model: 'gpt-4.1-mini',
-          name: 'GPT 4.1 mini',
+          display_name: 'GPT 4.1 mini',
           max_context_size: 32_000,
           capabilities: ['vision', 'thinking'],
         },
@@ -492,7 +533,9 @@ describe('KimiWebProviderManager', () => {
     expect(post?.body).toEqual({
       id: 'custom-anthropic',
       type: 'anthropic',
-      models: [{ model: 'claude-sonnet-4', name: 'Claude Sonnet 4', max_context_size: 200_000 }],
+      models: [
+        { model: 'claude-sonnet-4', display_name: 'Claude Sonnet 4', max_context_size: 200_000 },
+      ],
     });
     expect(post?.body).not.toHaveProperty('api_key');
     expect(host.querySelector('.kimi-web-provider-form')).toBeNull();

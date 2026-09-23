@@ -40,6 +40,8 @@
         v-if="hasDiffs"
         type="button"
         class="ib-action ib-action-diff"
+        :disabled="diffPending || actionsDisabled"
+        :aria-busy="diffPending"
         @click="$emit('show-diff')"
       >
         {{ t('threadFooter.diff') }}
@@ -48,6 +50,7 @@
         v-if="canRevert"
         type="button"
         class="ib-action ib-action-danger"
+        :disabled="actionsDisabled"
         @click="$emit('revert')"
       >
         {{ t('threadFooter.revert') }}
@@ -70,6 +73,8 @@ defineProps<{
   contextPercent: number | null;
   tokens: MessageTokens | null;
   hasDiffs: boolean;
+  diffPending?: boolean;
+  actionsDisabled?: boolean;
   canRevert: boolean;
 }>();
 
@@ -80,6 +85,7 @@ defineEmits<{
 </script>
 
 <style scoped>
+.ib-action:disabled { opacity: 0.5; cursor: not-allowed; }
 .ib-footer {
   --ui-chip-border-neutral: var(--theme-chip-border-neutral, var(--theme-chat-border, var(--theme-border-muted, rgba(148, 163, 184, 0.65))));
   --ui-chip-bg-neutral: var(--theme-chip-bg-neutral, var(--theme-chat-control-bg, var(--theme-surface-chip, rgba(15, 23, 42, 0.75))));

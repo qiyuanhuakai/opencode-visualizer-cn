@@ -248,6 +248,21 @@ describe('kimiWeb/normalize', () => {
     expect(opsOfKind(lifecycle.ops, 'agent').map((op) => op.phase)).toEqual(['created', 'disposed', 'disposed']);
   });
 
+  it('adds completed step usage to its own turn without repeating a step or borrowing session totals', () => {
+    const normalizer = createKimiWebNormalizer();
+    const base = { sessionId: 'session-test', agentId: 'main', turnId: 2 };
+    normalizer.ingest({ type: 'turn.started', payload: { ...base, promptId: 'prompt-2' } });
+    normalizer.ingest({ type: 'agent.status.updated', payload: { ...base, usage: { total: { inputOther: 999, output: 999 } } } });
+    const first = { type: 'turn.step.completed', payload: { ...base, step: 1, stepId: 'step-1', usage: { inputOther: 382, output: 266, inputCacheRead: 20, inputCacheCreation: 0 } } };
+    normalizer.ingest(first);
+    normalizer.ingest(first);
+    const ended = normalizer.ingest({ type: 'turn.ended', payload: { ...base, reason: 'completed' } });
+    const message = opsOfKind(ended.ops, 'message')[0]?.message;
+    expect(message?.role).toBe('assistant');
+    if (message?.role !== 'assistant') throw new Error('expected assistant message');
+    expect(message.tokens).toEqual({ input: 382, output: 266, reasoning: 0, cache: { read: 20, write: 0 } });
+  });
+
   it('produces an error completion for turn.ended reason failed and never treats prompt.completed as success', () => {
     const failed = derivedOfType('turn.ended').find((frame) => payloadOf(frame).reason === 'failed')!;
     const { ops } = ingest([failed]);

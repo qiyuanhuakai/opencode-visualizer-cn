@@ -70,8 +70,9 @@ function createApi() {
     prompt_ids: promptIds,
   }));
   const abortPrompt = vi.fn(async () => ({ aborted: true, at_seq: 12 }));
-  const api: KimiWebSendApi = { uploadFile, sendPrompt, steer, abortPrompt };
-  return { api, uploadFile, sendPrompt, steer, abortPrompt };
+  const updateProfile = vi.fn().mockResolvedValue({});
+  const api = { uploadFile, sendPrompt, steer, abortPrompt, updateProfile } satisfies KimiWebSendApi;
+  return { api, uploadFile, sendPrompt, steer, abortPrompt, updateProfile };
 }
 
 function imageAttachment(): ComposerAttachment {
@@ -84,6 +85,36 @@ function imageAttachment(): ComposerAttachment {
 }
 
 describe('kimi-web send module', () => {
+  it('applies the captured model and thinking before sending', async () => {
+    const params = createParams();
+    const { api, updateProfile, sendPrompt } = createApi();
+    await runKimiWebSend(params, createPreflight({ selectedThinking: 'high' }), { isCurrent: () => true }, api);
+    expect(updateProfile).toHaveBeenCalledWith('session-1', { agent_config: { model: 'kimi-code/k3', thinking: 'high' } });
+    expect(updateProfile.mock.invocationCallOrder[0]).toBeLessThan(sendPrompt.mock.invocationCallOrder[0] ?? 0);
+  });
+
+  it('does not send when profile configuration fails', async () => {
+    const { api, updateProfile, sendPrompt } = createApi();
+    updateProfile.mockRejectedValueOnce(new KimiWebError(40001, 'model rejected'));
+    await expect(runKimiWebSend(createParams(), createPreflight(), { isCurrent: () => true }, api)).rejects.toThrow('model rejected');
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it('does not send or read a new selection when the profile response becomes stale', async () => {
+    const params = createParams();
+    const { api, updateProfile, sendPrompt } = createApi();
+    let current = true;
+    updateProfile.mockImplementationOnce(async () => {
+      current = false;
+      params.selectedSessionId.value = 'session-2';
+      params.selectedModel.value = 'other/model';
+      return {};
+    });
+    await expect(runKimiWebSend(params, createPreflight(), { isCurrent: () => current }, api)).resolves.toEqual({ kind: 'stale' });
+    expect(updateProfile).toHaveBeenCalledWith('session-1', { agent_config: { model: 'kimi-code/k3' } });
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
   it('does not post a prompt while the selected sessions mode mutation is pending', async () => {
     // Given: the selected session has a pending mode write.
     const readiness = vi.fn(() => false);
