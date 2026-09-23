@@ -60,6 +60,8 @@ function mount(
     backendKind?: 'codex' | 'opencode' | 'kimi-web';
     isLatestRoot?: boolean;
     kimiCardActionsReady?: boolean;
+    kimiForkAvailable?: boolean;
+    kimiUndoAvailable?: boolean;
     cardActionsDisabled?: boolean;
     loadMessageDiffs?: () => Promise<[]>;
     hasMessageDiffs?: () => Promise<boolean>;
@@ -83,6 +85,8 @@ function mount(
             backendKind: props.backendKind,
             isLatestRoot: props.isLatestRoot,
             kimiCardActionsReady: props.kimiCardActionsReady,
+            kimiForkAvailable: props.kimiForkAvailable,
+            kimiUndoAvailable: props.kimiUndoAvailable,
             cardActionsDisabled: props.cardActionsDisabled,
             loadMessageDiffs: props.loadMessageDiffs,
             hasMessageDiffs: props.hasMessageDiffs,
@@ -135,10 +139,19 @@ describe('ThreadBlock history wiring', () => {
     expect(view.root.querySelector('.ib-footer .ib-action-danger')).toBeNull();
   });
 
+  it('hides Kimi checkpoint mutations until fork and undo probes pass', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const view = mount({ root: user, backendKind: 'kimi-web', kimiCardActionsReady: true }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-top-right')).toBeNull();
+    expect(view.root.querySelector('.ib-action-danger')).toBeNull();
+  });
+
   it('shows checkpoint actions when ready and disables them during a turn', async () => {
     const user = makeUserMessage('main', 'u1', 1);
     useMessages().loadHistory([{ info: user, parts: [] }]);
-    const view = mount({ root: user, backendKind: 'kimi-web', kimiCardActionsReady: true, cardActionsDisabled: true, loadMessageDiffs: async () => [], hasMessageDiffs: async () => true }, vi.fn());
+    const view = mount({ root: user, backendKind: 'kimi-web', kimiCardActionsReady: true, kimiForkAvailable: true, kimiUndoAvailable: true, cardActionsDisabled: true, loadMessageDiffs: async () => [], hasMessageDiffs: async () => true }, vi.fn());
     await flushRender();
     expect(view.root.querySelector<HTMLButtonElement>('.ib-top-right')?.disabled).toBe(true);
     expect(view.root.querySelector<HTMLButtonElement>('.ib-action-danger')?.disabled).toBe(true);

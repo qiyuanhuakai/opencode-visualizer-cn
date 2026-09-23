@@ -42,6 +42,8 @@
                   :backend-kind="backendKind"
                   :kimi-permission-mode="kimiPermissionMode"
                   :kimi-card-actions-ready="kimiCardActionsReady"
+                  :kimi-fork-available="kimiForkAvailable"
+                  :kimi-undo-available="kimiUndoAvailable"
                   :load-message-diffs="loadMessageDiffs"
                   :has-message-diffs="hasMessageDiffs"
                   :card-actions-disabled="backendKind === 'kimi-web' && isThinking"
@@ -145,6 +147,8 @@ const props = defineProps<{
   backendKind?: BackendKind;
   kimiPermissionMode?: string;
   kimiCardActionsReady?: boolean;
+  kimiForkAvailable?: boolean;
+  kimiUndoAvailable?: boolean;
   loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
   hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
 }>();

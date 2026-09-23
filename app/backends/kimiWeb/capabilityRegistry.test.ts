@@ -1,5 +1,5 @@
 import { computed } from 'vue';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   KimiWebError,
   KimiWebTransportError,
@@ -12,6 +12,7 @@ import {
   KIMI_WEB_PROBE_ONLY_ACTIONS,
   classifyKimiWebCapabilityError,
   createKimiWebCapabilityRegistry,
+  probeKimiWebSessionActions,
 } from './capabilityRegistry';
 import metaFixture from './fixtures/rest-meta.json';
 
@@ -40,6 +41,21 @@ function makeRegistry(
 }
 
 describe('Kimi Web runtime capability registry', () => {
+  it('probes session actions without mutating a real session and gates unsupported routes', async () => {
+    const registry = makeRegistry();
+    await registry.refreshFirstLevel();
+    const forkSession = vi.fn(async (id: string) => { throw new KimiWebError(40401, `session ${id} does not exist`); });
+    const compactSession = vi.fn(async () => { throw new KimiWebError(40001, 'unsupported action'); });
+    const undoSession = vi.fn(async (id: string) => { throw new KimiWebError(40401, `session ${id} does not exist`); });
+
+    await probeKimiWebSessionActions(registry, { forkSession, compactSession, undoSession });
+
+    expect(forkSession.mock.calls[0]?.[0]).toMatch(/^session_[0-9a-f-]{36}$/u);
+    expect(registry.isAvailable('fork')).toBe(true);
+    expect(registry.isAvailable('undo')).toBe(true);
+    expect(registry.isAvailable('compact')).toBe(false);
+  });
+
   it('starts fully unknown and hides every action (no UI before probing)', () => {
     const registry = makeRegistry();
 

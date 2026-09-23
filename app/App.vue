@@ -137,6 +137,8 @@
                     :backend-kind="activeBackendKind"
                     :kimi-permission-mode="activeBackendKind === 'kimi-web' ? selectedMode : undefined"
                     :kimi-card-actions-ready="activeBackendKind === 'kimi-web' && connectionState === 'ready'"
+                    :kimi-fork-available="kimiWebCapabilities.isAvailable('fork') && kimiWebCapabilities.isAvailable('undo')"
+                    :kimi-undo-available="kimiWebCapabilities.isAvailable('undo')"
                     :load-message-diffs="activeBackendKind === 'kimi-web' ? loadKimiMessageDiffs : undefined"
                     :has-message-diffs="activeBackendKind === 'kimi-web' ? hasKimiMessageDiffs : undefined"
                     :is-loading="isLoadingHistory"
@@ -239,9 +241,11 @@
                   <KimiWebComposerActions
                     :disabled="connectionState !== 'ready' || !selectedSessionId"
                     :busy="isThinking || isSending"
+                    :compact-available="kimiWebCapabilities.isAvailable('compact')"
+                    :fork-available="kimiWebCapabilities.isAvailable('fork')"
                     @agents="openKimiSessionAgents(selectedSessionId)"
-                    @compact="backendSessionActions.handleCompactSession(selectedSessionId)"
-                    @fork="backendSessionActions.handleForkSession(selectedSessionId)"
+                    @compact="kimiWebCapabilities.isAvailable('compact') && backendSessionActions.handleCompactSession(selectedSessionId)"
+                    @fork="kimiWebCapabilities.isAvailable('fork') && backendSessionActions.handleForkSession(selectedSessionId)"
                   />
                   <KimiWebComposerGoal
                     :client="kimiWebComposerClient"
@@ -841,6 +845,7 @@ import { useKimiWebSessionModes } from './composables/useKimiWebSessionModes';
 import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
 import { kimiWebComposerProfile } from './backends/kimiWeb/modelSelection';
 import { KimiWebAdapter, mapKimiWebSession, upsertKimiWebSessionIntoProjects } from './backends/kimiWeb/kimiWebAdapter';
+import { createKimiWebCapabilityRegistry, probeKimiWebSessionActions } from './backends/kimiWeb/capabilityRegistry';
 import {
   isKimiWebPermissionMode,
   isTowerExperimentEnabled,
@@ -7825,6 +7830,10 @@ const acpMessageBridge = useAcpMessageBridge({
 });
 
 let configuredKimiWebAdapter: KimiWebAdapter | undefined;
+const kimiWebCapabilities = createKimiWebCapabilityRegistry({
+  getMeta: () => kimiWebRestClient().getMeta(),
+  getAuth: () => kimiWebRestClient().getAuth(),
+});
 const kimiWebWsClient = shallowRef<KimiWebWsClient>();
 const kimiWebMessageBridge = shallowRef<ReturnType<typeof useKimiWebMessageBridge>>();
 const kimiWebModeRevision = ref(0);
@@ -8269,6 +8278,19 @@ watchEffect(() => {
   setActiveBackendKind(effectiveBackendKind);
   syncAcpMessageBridge(acpMessageBridge, effectiveBackendKind, configuredAcp);
 });
+
+watch(
+  [activeBackendKind, connectionState, uiInitState, credentials.kimiWebBridgeUrl, credentials.kimiWebBridgeToken],
+  async () => {
+    kimiWebCapabilities.invalidate();
+    const adapter = configuredKimiWebAdapter;
+    if (activeBackendKind.value !== 'kimi-web' || connectionState.value !== 'ready' || uiInitState.value !== 'ready' || !adapter) return;
+    await kimiWebCapabilities.refreshFirstLevel();
+    if (adapter !== configuredKimiWebAdapter) return;
+    await probeKimiWebSessionActions(kimiWebCapabilities, adapter.restClient);
+  },
+  { immediate: true },
+);
 
 async function bootstrapAcpWorkspace() {
   const adapter = getActiveBackendAdapter();
@@ -8790,6 +8812,7 @@ async function executeKimiWebSlashCommand(action: KimiWebSlashAction) {
   const client = kimiWebRestClient();
   const current = () => activeBackendKind.value === 'kimi-web' && selectedSessionId.value === sessionId && configuredKimiWebAdapter?.restClient === client;
   if (action.kind === 'compact') {
+    if (!kimiWebCapabilities.isAvailable('compact')) throw new Error(t('app.error.unavailable', { action: 'Kimi Web compact' }));
     await client.compactSession(sessionId);
     if (current()) await backendSessionReload.reloadSelectedSessionState(sessionId, sessionId, true);
   } else {

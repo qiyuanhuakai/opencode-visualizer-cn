@@ -7,11 +7,20 @@ vi.mock('@iconify/vue', () => ({ Icon: () => null }));
 const cleanups: Array<() => void> = [];
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup(); });
 describe('Kimi composer actions', () => {
+  it('hides unprobed session mutations while keeping agent management available', async () => {
+    const root = document.createElement('div'); document.body.append(root);
+    const app = createApp(KimiWebComposerActions);
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en } })); app.mount(root);
+    cleanups.push(() => { app.unmount(); root.remove(); });
+    root.querySelector('button')?.click(); await nextTick();
+    expect(Array.from(root.querySelectorAll('[role="option"]')).map((item) => item.textContent?.trim())).toEqual(['Subagent management']);
+  });
+
   it('uses an upward shared menu and blocks mutations while retaining agent management during work', async () => {
     const busy = ref(true); const disabled = ref(false);
     const agents = vi.fn(); const compact = vi.fn(); const fork = vi.fn();
     const root = document.createElement('div'); document.body.append(root);
-    const app = createApp(defineComponent({ setup: () => () => h(KimiWebComposerActions, { busy: busy.value, disabled: disabled.value, onAgents: agents, onCompact: compact, onFork: fork }) }));
+    const app = createApp(defineComponent({ setup: () => () => h(KimiWebComposerActions, { busy: busy.value, disabled: disabled.value, compactAvailable: true, forkAvailable: true, onAgents: agents, onCompact: compact, onFork: fork }) }));
     app.use(createI18n({ legacy: false, locale: 'en', messages: { en } })); app.mount(root);
     cleanups.push(() => { app.unmount(); root.remove(); });
     await nextTick();

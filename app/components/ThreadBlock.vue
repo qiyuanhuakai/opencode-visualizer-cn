@@ -188,6 +188,8 @@ const props = defineProps<{
   backendKind?: BackendKind;
   kimiPermissionMode?: string;
   kimiCardActionsReady?: boolean;
+  kimiForkAvailable?: boolean;
+  kimiUndoAvailable?: boolean;
   cardActionsDisabled?: boolean;
   loadMessageDiffs?: (sessionId: string, messageId: string) => Promise<MessageDiffEntry[]>;
   hasMessageDiffs?: (sessionId: string, messageId: string) => Promise<boolean>;
@@ -382,12 +384,14 @@ async function showThreadDiff(root: MessageInfo) {
 
 function canRevertThread(root: MessageInfo): boolean {
   if (props.backendKind === 'kimi-web' && !props.kimiCardActionsReady) return false;
+  if (props.backendKind === 'kimi-web' && !props.kimiUndoAvailable) return false;
   if (props.sessionRevert) return false;
   return root.role === 'user' && Boolean(root.sessionID);
 }
 
 function canForkThread(root: MessageInfo): boolean {
   if (props.backendKind === 'kimi-web' && !props.kimiCardActionsReady) return false;
+  if (props.backendKind === 'kimi-web' && !props.kimiForkAvailable) return false;
   if (props.backendKind === 'codex' && !props.isLatestRoot) return false;
   return root.role === 'user' && Boolean(root.sessionID);
 }
@@ -402,14 +406,14 @@ async function confirmFork() {
   const root = props.root;
   if (props.cardActionsDisabled || root.role !== 'user' || !root.sessionID || !root.id) return;
   const confirmed = showConfirm ? await showConfirm(props.backendKind === 'kimi-web' ? cardCopy.value.fork : t('threadBlock.confirmFork')) : true;
-  if (!confirmed) return;
+  if (!confirmed || (props.backendKind === 'kimi-web' && !props.kimiForkAvailable)) return;
   emit('fork-message', { sessionId: root.sessionID, messageId: root.id });
 }
 
 async function confirmRevert(root: MessageInfo) {
   if (props.cardActionsDisabled || root.role !== 'user' || !root.sessionID || !root.id) return;
   const confirmed = showConfirm ? await showConfirm(props.backendKind === 'kimi-web' ? cardCopy.value.undo : t(props.backendKind === 'codex' ? 'threadBlock.confirmCodexRevert' : 'threadBlock.confirmRevert')) : true;
-  if (!confirmed) return;
+  if (!confirmed || (props.backendKind === 'kimi-web' && !props.kimiUndoAvailable)) return;
   emit('revert-message', { sessionId: root.sessionID, messageId: root.id });
 }
 
