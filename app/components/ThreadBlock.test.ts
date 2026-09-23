@@ -186,8 +186,11 @@ describe('ThreadBlock history wiring', () => {
     await flushRender();
     expect(view.root.querySelector('.ib-action-diff')).toBeNull();
 
-    hasDiffs = true;
     props.isLatestRoot = false;
+    await flushRender();
+    expect(availability).toHaveBeenCalledTimes(1);
+
+    hasDiffs = true;
     useMessages().loadHistory([
       { info: user, parts: [] },
       { info: makeAssistantMessage('main', 'a1', 'u1', 2), parts: [makeTextPart('a1', 'main', 'File updated')] },
