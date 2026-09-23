@@ -170,7 +170,7 @@ describe('ThreadBlock history wiring', () => {
     expect(loader).not.toHaveBeenCalled();
   });
 
-  it('shows newly recorded Kimi file differences after an active turn completes', async () => {
+  it('shows newly recorded Kimi file differences when a queued prompt replaces the latest root', async () => {
     const user = makeUserMessage('main', 'u1', 1);
     useMessages().loadHistory([{ info: user, parts: [] }]);
     let hasDiffs = false;
@@ -187,6 +187,7 @@ describe('ThreadBlock history wiring', () => {
     expect(view.root.querySelector('.ib-action-diff')).toBeNull();
 
     hasDiffs = true;
+    props.isLatestRoot = false;
     useMessages().loadHistory([
       { info: user, parts: [] },
       { info: makeAssistantMessage('main', 'a1', 'u1', 2), parts: [makeTextPart('a1', 'main', 'File updated')] },
@@ -195,6 +196,25 @@ describe('ThreadBlock history wiring', () => {
     await flushRender();
     expect(availability).toHaveBeenCalledTimes(2);
     expect(view.root.querySelector('.ib-action-diff')).not.toBeNull();
+  });
+
+  it('does not refresh historical Kimi cards when another turn completes', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const availability = vi.fn(async () => false);
+    const props = reactive({
+      root: user,
+      backendKind: 'kimi-web' as const,
+      isLatestRoot: false,
+      cardActionsDisabled: true,
+      hasMessageDiffs: availability,
+    });
+    const view = mount(props, vi.fn());
+    await flushRender();
+    props.cardActionsDisabled = false;
+    await flushRender();
+    expect(availability).toHaveBeenCalledTimes(1);
+    expect(view.root.querySelector('.ib-action-diff')).toBeNull();
   });
 
   it('shows the Kimi permission mode and per-turn tokens under the card', async () => {

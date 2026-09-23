@@ -230,7 +230,16 @@ const threadTokens = computed(() => getThreadTokens());
 const threadContextPercent = computed(() => getThreadContextPercent());
 const threadDiffs = computed(() => getThreadDiffs());
 const hasThreadDiffs = computed(() => props.backendKind === 'kimi-web' ? kimiHasDiffs.value : threadDiffs.value.length > 0);
-watch(() => [props.root.sessionID, props.root.id, props.backendKind, props.hasMessageDiffs, props.isLatestRoot && props.cardActionsDisabled] as const, async ([sessionId, messageId, backendKind, hasMessageDiffs], _, onCleanup) => {
+const diffRefresh = ref(0);
+let refreshDiffWhenIdle = false;
+watch(() => [props.isLatestRoot, props.cardActionsDisabled] as const, ([isLatestRoot, actionsDisabled]) => {
+  if (isLatestRoot && actionsDisabled) refreshDiffWhenIdle = true;
+  else if (!actionsDisabled && refreshDiffWhenIdle) {
+    refreshDiffWhenIdle = false;
+    diffRefresh.value += 1;
+  }
+}, { immediate: true });
+watch(() => [props.root.sessionID, props.root.id, props.backendKind, props.hasMessageDiffs, diffRefresh.value] as const, async ([sessionId, messageId, backendKind, hasMessageDiffs], _, onCleanup) => {
   kimiHasDiffs.value = false;
   if (backendKind !== 'kimi-web' || !hasMessageDiffs || !sessionId || !messageId) return;
   let cancelled = false;
