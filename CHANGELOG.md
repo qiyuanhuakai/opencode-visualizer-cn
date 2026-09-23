@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.8.0 released]
 
 ### Kimi Web 适配预备文档
 
