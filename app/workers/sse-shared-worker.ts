@@ -367,6 +367,7 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
     const [rawSessions, rawStatuses] = await Promise.all([
       opencodeBackend.listSessions({
         directory: normalizedDirectory,
+        ...(normalizedDirectory === '/' ? { scope: 'project' as const, limit: 1000 } : {}),
         roots: true,
         signal: controller.signal,
       }),
@@ -384,6 +385,7 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
 
     const sessions = asObjectArray(rawSessions) as Parameters<typeof snapshotBuilder.applySessions>[0];
     snapshotBuilder.applySessionSnapshot(sessions, mutationSnapshot);
+    if (normalizedDirectory === '/') rebuildKnownSessionDirectories(state);
     snapshotBuilder.applyStatusSnapshot(
       sessions.map((session) => session.id),
       asStatusMap(rawStatuses),

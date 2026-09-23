@@ -180,6 +180,7 @@ export function getCurrentProject(directory?: string, options?: BackendRequestOp
 export function listSessions(
   options: {
     directory?: string;
+    scope?: 'project';
     roots?: boolean;
     search?: string;
     limit?: number;
@@ -191,6 +192,7 @@ export function listSessions(
     '/session',
     {
       directory: options.directory,
+      scope: options.scope,
       roots: options.roots ? 'true' : undefined,
       search: options.search,
       limit: options.limit,

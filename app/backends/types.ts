@@ -48,6 +48,7 @@ export type ConfigMergeStrategy = 'replace' | 'upsert';
 
 export type ListSessionsOptions = {
   directory?: string;
+  scope?: 'project';
   instanceDirectory?: string;
   signal?: AbortSignal;
   roots?: boolean;

@@ -213,6 +213,23 @@ describe('SSE SharedWorker bootstrap and hydration', () => {
     ).toBeDefined();
   });
 
+  it('loads sessions from non-git directories through the global project root', async () => {
+    mocks.adapter.listProjects.mockResolvedValue([{ ...project([]), id: 'global', worktree: '/', sandboxes: [] }]);
+    const worker = await connectWorker();
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
+    const session = { ...sessionInfo('global-outside', 'Outside', undefined, '/home/user/notes'), projectID: 'global' };
+    mocks.adapter.listSessions.mockImplementation((options: { directory: string; scope?: string }) =>
+      Promise.resolve(options.directory === '/' && options.scope === 'project' ? [session] : []),
+    );
+
+    post(worker, { type: 'load-sessions', directory: '/' });
+
+    await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.directory-hydration-updated').some((entry) => entry.directory === '/' && entry.hydration.status === 'loaded')).toBe(true));
+    expect(messagesOf(worker.messages, 'state.project-updated').at(-1)?.project.sandboxes['/home/user/notes']?.sessions['global-outside']).toBeDefined();
+    expect(messagesOf(worker.messages, 'state.directory-hydration-updated').some((entry) => entry.directory === '/home/user/notes')).toBe(true);
+    expect(mocks.adapter.listSessions).toHaveBeenCalledWith(expect.objectContaining({ directory: '/', scope: 'project', roots: true }));
+  });
+
   it('places a directly found global session into a previously unknown directory', async () => {
     const worker = await connectWorker();
     await vi.waitFor(() => expect(messagesOf(worker.messages, 'state.bootstrap')).toHaveLength(1));
