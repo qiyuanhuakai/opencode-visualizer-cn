@@ -4,15 +4,16 @@
 
 ---
 
-## [v0.8.0 released]
-
+## [v0.8.1released]
 ### Codex 与 OpenCode 会话加载修复
 
 - [x] 优化 Codex 历史会话加载：将非首屏所需的图片与子代理引用延后处理，减少主线程等待和无效轮询；修复渲染请求超时后退出到登录页、显示 `renderer timeout` 的问题，并避免过期响应覆盖当前会话。
 - [x] 修复 OpenCode 撤销后消息暂时全部隐藏、继续发送的消息也不可见的问题，无需刷新页面即可恢复正确显示。
 - [x] 修复 OpenCode 大量消息卡片加载完成后停在列表中间的问题，稳定定位到会话底部。
 - [x] 修复 Global 会话查找遗漏，支持加载无 Git 文件夹中的 OpenCode 会话，避免误建空会话。
+- [x] 回退文件树高频率刷新，降低性能开销 
 
+## [v0.8.0 released]
 ### Kimi Web 适配预备文档
 
 - [x] 新增 `docs/kimi.md`：Kimi Code 0.43.0 `kimi web` 服务器接口调研与 VIS 适配方案，与 `docs/codex.md` 同构；全部结论经本机实测验证——现场拉取 `/openapi.json` 与 `/asyncapi.json`，并完成建会话、WS 订阅、发 prompt、收流式事件、读回消息的全链路冒烟。
