@@ -1,4 +1,4 @@
-import type { SsePacket } from './sse';
+import type { SessionInfo, SsePacket } from './sse';
 import type { ProjectState, WorkerNotificationEntry } from './worker-state';
 
 /**
@@ -34,6 +34,15 @@ export type TabToWorkerMessage =
   | {
       type: 'load-sessions';
       directory: string;
+    }
+  | {
+      type: 'refresh-session';
+      sessionId: string;
+      directory: string;
+    }
+  | {
+      type: 'hydrate-session';
+      session: SessionInfo;
     }
   | {
       type: 'hydrate-referenced-subagents';

@@ -1479,8 +1479,11 @@ async function rebuildFileCache() {
 
     if (buildId !== fileCacheBuildId) return;
     if (options.activeDirectory.value.trim() !== directory) return;
-    files.value = uniqueBy(collected, (x) => x).sort((a, b) => a.localeCompare(b));
-    fileCacheVersion.value += 1;
+    const nextFiles = uniqueBy(collected, (x) => x).sort((a, b) => a.localeCompare(b));
+    if (nextFiles.length !== files.value.length || nextFiles.some((path, index) => path !== files.value[index])) {
+      files.value = nextFiles;
+      fileCacheVersion.value += 1;
+    }
     cacheCurrentDirectoryState(directory);
   } catch (error) {
     if (buildId !== fileCacheBuildId) return;

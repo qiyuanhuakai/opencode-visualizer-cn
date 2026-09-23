@@ -336,6 +336,7 @@ const { getAssistantHtml } = useAssistantPreRenderer({
 
 async function onPanelScroll(event: Event) {
   emit('scroll');
+  if (props.isAnchoring) return;
   const panel = event.currentTarget;
   if (!(panel instanceof HTMLDivElement)) return;
   if (windowShiftInProgress) {

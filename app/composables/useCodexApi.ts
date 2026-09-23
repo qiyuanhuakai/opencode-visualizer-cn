@@ -2601,6 +2601,21 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       adapter === sourceAdapter &&
       threadSelectionGeneration === selectionGeneration &&
       activeThreadId.value === threadId;
+    const hydrateImagesInBackground = (history: CodexCanonicalHistoryEntry[]) => {
+      void hydrateThreadImages(history, sourceAdapter).then((hydrated) => {
+        if (!isCurrentSelection()) return;
+        const imageUrls = new Map(hydrated.flatMap(entry => entry.parts.filter(part => part.type === 'file').map(part => [part.id, part.url])));
+        let changed = false;
+        const nextHistory = canonicalHistory.value.map(entry => ({ ...entry, parts: entry.parts.map(part => {
+          if (part.type !== 'file') return part;
+          const url = imageUrls.get(part.id);
+          if (!url || url === part.url) return part;
+          changed = true;
+          return { ...part, url };
+        }) }));
+        if (changed) canonicalHistory.value = nextHistory;
+      }).catch(() => {});
+    };
     persistRealtimeAuxiliaryHistory(activeThreadId.value);
     activeThreadId.value = threadId;
     activeTurn.value = null;
@@ -2628,9 +2643,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       restoreRunningTurn(read.thread.turns, null);
       upsertThread(read.thread, true, statusRevision);
       setTranscriptFromTurns(read.thread.turns ?? []);
-      const hydratedHistory = await hydrateThreadImages(canonicalHistory.value, sourceAdapter);
-      if (!isCurrentSelection()) return;
-      canonicalHistory.value = hydratedHistory;
+      hydrateImagesInBackground(canonicalHistory.value);
       try {
         const previousTurn = activeTurn.value;
         statusRevision = threadStatusRevision;
@@ -2646,9 +2659,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
           restoreRunningTurn(read.thread.turns, previousTurn);
           upsertThread(read.thread, true, statusRevision);
           setTranscriptFromTurns(read.thread.turns ?? []);
-          const resumedHistory = await hydrateThreadImages(canonicalHistory.value);
-          if (!isCurrentSelection()) return;
-          canonicalHistory.value = resumedHistory;
+          hydrateImagesInBackground(canonicalHistory.value);
         }
       } catch (error) {
         if (!isUnmaterializedThreadError(error)) throw error;
@@ -2683,6 +2694,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     if (!sourceAdapter) return;
     const selectionGeneration = threadSelectionGeneration;
     const statusRevision = threadStatusRevision;
+    const liveStatusRevision = liveThreadStatuses.get(threadId)?.revision;
     const read = await readThreadForHistory(threadId, sourceAdapter);
     if (
       adapter !== sourceAdapter ||
@@ -2694,7 +2706,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     const hydrated = await hydrateThreadImages(normalizeCodexTurnsToHistory({
       sessionId: threadId, turns: read.thread.turns ?? [],
     }), sourceAdapter);
-    if (adapter !== sourceAdapter || threadSelectionGeneration !== selectionGeneration || activeThreadId.value !== threadId) return;
+    if (adapter !== sourceAdapter || threadSelectionGeneration !== selectionGeneration || activeThreadId.value !== threadId || liveThreadStatuses.get(threadId)?.revision !== liveStatusRevision) return;
     upsertThread(read.thread, true, statusRevision);
     setTranscriptFromTurns(read.thread.turns ?? []);
     const imageUrls = new Map(hydrated.flatMap(entry => entry.parts.filter(part => part.type === 'file').map(part => [part.id, part.url])));

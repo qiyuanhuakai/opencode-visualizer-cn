@@ -2,6 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWorkspaceRefreshLoop } from './workspaceRefreshLoop';
 
 describe('createWorkspaceRefreshLoop', () => {
+  it('uses a ten minute default interval for a focused window', async () => {
+    vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const refresh = vi.fn(async () => {});
+    const loop = createWorkspaceRefreshLoop(refresh);
+    loop.start();
+
+    await vi.advanceTimersByTimeAsync(599_999);
+    expect(refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refresh).toHaveBeenCalledOnce();
+    loop.stop();
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });

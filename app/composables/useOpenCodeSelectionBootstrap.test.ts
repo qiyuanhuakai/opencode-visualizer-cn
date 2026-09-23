@@ -45,6 +45,7 @@ type HarnessOptions = {
   // Directories whose hydration fails with the given error message.
   loadErrors?: Record<string, string>;
   useRealDirectorySession?: boolean;
+  globalLookup?: Record<string, SessionState & { directory: string }>;
 };
 
 type EnsureDirectorySessionFn = (projectId: string, directory: string) => Promise<string>;
@@ -130,6 +131,18 @@ function createHarness(options: HarnessOptions) {
     selectedSessionId.value = sessionId;
   });
 
+  const lookupGlobalSessionById = vi.fn(async (sessionId: string, _directoryHint: string) => {
+    const session = options.globalLookup?.[sessionId];
+    if (!session) return false;
+    const global = projects.value.global;
+    if (!global) return false;
+    const sandbox = global.sandboxes[session.directory] ?? makeSandbox(session.directory, []);
+    sandbox.sessions[session.id] = session;
+    sandbox.rootSessions.push(session.id);
+    global.sandboxes[session.directory] = sandbox;
+    return true;
+  });
+
   const runtime = useOpenCodeSelectionBootstrap({
     projects,
     sessionHydrationByDirectory: () => hydration,
@@ -143,6 +156,7 @@ function createHarness(options: HarnessOptions) {
     selectedSessionId,
     switchSessionSelection,
     ensureDirectorySession,
+    lookupGlobalSessionById,
     translate: (key: string) => key,
   });
 
@@ -156,6 +170,7 @@ function createHarness(options: HarnessOptions) {
     clearStoredSelection,
     switchSessionSelection,
     ensureDirectorySessionSpy,
+    lookupGlobalSessionById,
     selectedProjectId,
     selectedSessionId,
     bootstrap: runtime.bootstrapOpenCodeSelection,
@@ -208,6 +223,36 @@ describe('useOpenCodeSelectionBootstrap', () => {
     expect(harness.loadCalls.some((directory) => directory.startsWith('/p2'))).toBe(false);
     expect(harness.createSessionFn).not.toHaveBeenCalled();
     expect(harness.ensureDirectorySessionSpy).not.toHaveBeenCalled();
+  });
+
+  it('finds an explicit global session whose directory is absent from the topology', async () => {
+    const harness = createHarness({
+      projects: { global: makeProject('global', '/', ['/']) },
+      initialProjectId: 'global',
+      initialSessionId: 's-global',
+      globalLookup: { 's-global': makeSession('s-global', { directory: '/outside' }) as SessionState & { directory: string } },
+    });
+
+    await harness.bootstrap();
+
+    expect(harness.lookupGlobalSessionById).toHaveBeenCalledWith('s-global', '');
+    expect(harness.switchSessionSelection).toHaveBeenCalledWith('global', 's-global');
+    expect(harness.loadCalls).toEqual([]);
+    expect(harness.createSessionFn).not.toHaveBeenCalled();
+  });
+
+  it('recovers a stored global session even when its saved directory is unknown', async () => {
+    const harness = createHarness({
+      projects: { global: makeProject('global', '/', ['/']) },
+      stored: { projectId: 'global', sessionId: 's-global', directory: '/outside' },
+      globalLookup: { 's-global': makeSession('s-global', { directory: '/outside' }) as SessionState & { directory: string } },
+    });
+
+    await harness.bootstrap();
+
+    expect(harness.switchSessionSelection).toHaveBeenCalledWith('global', 's-global');
+    expect(harness.loadCalls).toEqual([]);
+    expect(harness.clearStoredSelection).not.toHaveBeenCalled();
   });
 
   it('selects an explicit session already present without any directory loads', async () => {
@@ -439,6 +484,61 @@ describe('useOpenCodeSelectionBootstrap', () => {
     expect(harness.createSessionFn).toHaveBeenCalledTimes(1);
     expect(harness.createSessionFn).toHaveBeenCalledWith('proj-2', '/p2');
     expect(harness.selectedSessionId.value).toBe('created-1');
+  });
+
+  it('selects an existing session instead of creating a fallback session at root', async () => {
+    const harness = createHarness({
+      projects: {
+        root: makeProject('root', '/', ['/']),
+        work: makeProject('work', '/repo', ['/repo'], { '/repo': [makeSession('existing', { timeUpdated: 10 })] }),
+      },
+      worktree: '/',
+      useRealDirectorySession: true,
+    });
+    harness.hydration['/'] = { status: 'loaded' };
+
+    await harness.bootstrap();
+
+    expect(harness.selectedProjectId.value).toBe('work');
+    expect(harness.selectedSessionId.value).toBe('existing');
+    expect(harness.createSessionFn).not.toHaveBeenCalled();
+  });
+
+  it('loads the root directory before choosing a session from another project', async () => {
+    const harness = createHarness({
+      projects: {
+        root: makeProject('root', '/', ['/']),
+        work: makeProject('work', '/repo', ['/repo'], { '/repo': [makeSession('other', { timeUpdated: 20 })] }),
+      },
+      worktree: '/',
+      useRealDirectorySession: true,
+      loadEffects: { '/': [makeSession('root-existing', { timeUpdated: 10 })] },
+    });
+
+    await harness.bootstrap();
+
+    expect(harness.loadCalls).toEqual(['/']);
+    expect(harness.selectedProjectId.value).toBe('root');
+    expect(harness.selectedSessionId.value).toBe('root-existing');
+    expect(harness.createSessionFn).not.toHaveBeenCalled();
+  });
+
+  it('hydrates other directories before creating a fallback session at root', async () => {
+    const harness = createHarness({
+      projects: {
+        root: makeProject('root', '/', ['/']),
+        work: makeProject('work', '/repo', ['/repo']),
+      },
+      worktree: '/',
+      useRealDirectorySession: true,
+      loadEffects: { '/repo': [makeSession('existing', { timeUpdated: 10 })] },
+    });
+    harness.hydration['/'] = { status: 'loaded' };
+
+    await harness.bootstrap();
+
+    expect(harness.selectedSessionId.value).toBe('existing');
+    expect(harness.createSessionFn).not.toHaveBeenCalled();
   });
 
   it('falls back to the first project worktree when no project matches the current worktree', async () => {

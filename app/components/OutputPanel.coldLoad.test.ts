@@ -23,6 +23,7 @@ it('waits for cold rendering and stable geometry without expanding the initial h
   document.body.append(host);
   const app = createApp(OutputPanel, {
     isFollowing: true,
+    isAnchoring: true,
     statusText: '',
     isStatusError: false,
     isThinking: false,
@@ -70,6 +71,7 @@ it('waits for cold rendering and stable geometry without expanding the initial h
     });
     await nextTick();
     expect(waitForRenders).toHaveBeenCalledOnce();
+    panel.dispatchEvent(new Event('scroll'));
     await frame();
     expect(panel.scrollTop).toBe(0);
     finishRenders();

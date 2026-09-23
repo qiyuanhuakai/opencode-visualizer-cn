@@ -145,6 +145,46 @@ describe('worker rendering', () => {
 });
 
 describe('single-shot regression', () => {
+  it('releases a stalled worker request before the UI render wait expires', async () => {
+    vi.useFakeTimers();
+    try {
+      const mod = await import('../utils/workerRenderer');
+      const renderState = await import('../composables/useRenderState');
+      const task = mod.startRenderWorkerHtml({ id: 'stalled', code: 'text', lang: 'text', theme: 'github-dark' });
+      const worker = TestRenderWorker.instances[0];
+      if (!worker) throw new Error('expected a worker');
+      const failure = expect(task.promise).rejects.toThrow('Render worker timed out');
+
+      await vi.advanceTimersByTimeAsync(25_000);
+
+      await failure;
+      expect(worker.terminated).toBe(true);
+      expect(renderState.pendingWorkerRenders.value).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('settles both tasks when a render id is reused before the first response', async () => {
+    const mod = await import('../utils/workerRenderer');
+    const renderState = await import('../composables/useRenderState');
+    const first = mod.startRenderWorkerHtml({ id: 'reused', code: 'first', lang: 'text', theme: 'github-dark' });
+    const second = mod.startRenderWorkerHtml({ id: 'reused', code: 'second', lang: 'text', theme: 'github-dark' });
+    const firstWorker = TestRenderWorker.instances[0];
+    const secondWorker = TestRenderWorker.instances[1];
+    if (!firstWorker || !secondWorker) throw new Error('expected two render workers');
+
+    const firstRequest = firstWorker.posted[0];
+    const secondRequest = secondWorker.posted[0];
+    if (!firstRequest || typeof firstRequest !== 'object' || !('id' in firstRequest) || typeof firstRequest.id !== 'string') throw new Error('missing first request id');
+    if (!secondRequest || typeof secondRequest !== 'object' || !('id' in secondRequest) || typeof secondRequest.id !== 'string') throw new Error('missing second request id');
+    expect(secondRequest.id).not.toBe(firstRequest.id);
+    firstWorker.emit({ id: firstRequest.id, ok: true, html: '<first />' });
+    secondWorker.emit({ id: secondRequest.id, ok: true, html: '<second />' });
+
+    await expect(first.promise).resolves.toBe('<first />');
+    await expect(second.promise).resolves.toBe('<second />');
+    expect(renderState.pendingWorkerRenders.value).toBe(0);
+  });
   it('caps the single-shot render pool at the memory ceiling', async () => {
     const mod = await import('../utils/workerRenderer');
     const render = mod.renderWorkerHtml({

@@ -682,7 +682,7 @@ export function useBackendSessionActions(params: {
           directory: params.activeDirectory.value.trim() || undefined,
         });
         if (params.selectedSessionId.value === payload.sessionId)
-          await params.reloadSelectedSessionState();
+          await params.reloadSelectedSessionState(payload.sessionId, undefined, true);
       }
       if (!ownsRequest()) return;
       params.setSendStatusKey('app.status.reverted');

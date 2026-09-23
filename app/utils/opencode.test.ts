@@ -194,6 +194,21 @@ describe('opencode utilities', () => {
       );
     });
 
+    it('listSessions requests all directories in the global project', async () => {
+      const mockFetch = vi.mocked(fetch).mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: async () => '[]',
+      } as Response);
+
+      await listSessions({ directory: '/', scope: 'project', roots: true, limit: 1000 });
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://localhost:8080/session?directory=%2F&scope=project&roots=true&limit=1000',
+        expect.anything(),
+      );
+    });
+
     it('listSessions omits undefined query values', async () => {
       const mockFetch = vi.mocked(fetch).mockResolvedValue({
         ok: true,

@@ -139,6 +139,18 @@ afterEach(async () => {
 });
 
 describe('useFileTree initial git hydration and selective refresh', () => {
+  it('keeps the file list reference stable when a filesystem refresh finds no changes', async () => {
+    mockGetVcsInfo.mockResolvedValue(null);
+    mockListFiles.mockResolvedValue([{ name: 'same.txt', type: 'file' }]);
+    const mounted = await mountComposable();
+    await mounted.settle();
+    const initialFiles = mounted.api.files.value;
+
+    await mounted.api.reloadTree();
+
+    expect(mounted.api.files.value).toBe(initialFiles);
+    mounted.unmount();
+  });
   it('auto-runs git status with diff stats during initial directory hydration', async () => {
     const mounted = await mountComposable();
     await mounted.settle();
@@ -378,7 +390,7 @@ describe('useFileTree expanded/ignored child reconciliation', () => {
     await mounted.settle();
 
     snapshot = 1;
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     await mounted.settle();
 
     const cache = mounted.api.treeNodes.value.find((node) => node.path === 'cache');
@@ -436,7 +448,7 @@ describe('useFileTree expanded/ignored child reconciliation', () => {
     await mounted.settle();
 
     snapshot = 1;
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     await mounted.settle();
 
     const src = mounted.api.treeNodes.value.find((node) => node.path === 'src');
@@ -563,7 +575,7 @@ describe('useFileTree scheduler ownership/disable/polling', () => {
       return '';
     });
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     await mounted.settle();
 
     expect(mounted.api.gitStatus.value?.branch.headShort).toBe('def456');
@@ -594,7 +606,7 @@ describe('useFileTree scheduler ownership/disable/polling', () => {
       return [{ path: '/repo/src/a.ts', type: 'file' }];
     });
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     await mounted.settle();
 
     expect(mounted.api.files.value).toEqual(['new.txt', 'src/a.ts']);
@@ -634,7 +646,7 @@ describe('useFileTree scheduler ownership/disable/polling', () => {
       return '';
     });
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     mounted.activeBackendKind.value = 'codex';
     await nextTick();
     if (!releasePreviousBackend) throw new Error('expected the old backend refresh to be waiting');

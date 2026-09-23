@@ -69,6 +69,8 @@ type ConnectionState = {
   ] | null;
   sessionHydrationByDirectory: Map<string, DirectorySessionHydration>;
   sessionHydrationInFlightByDirectory: Map<string, Promise<void>>;
+  sessionRefreshInFlightById: Map<string, Promise<void>>;
+  sessionRefreshPendingIds: Set<string>;
   sessionHydrationRequestByDirectory: Map<string, symbol>;
   sessionHydrationControllerByDirectory: Map<string, AbortController>;
   vcsHydratedDirectories: Set<string>;
@@ -105,7 +107,6 @@ const portToKey = new Map<MessagePort, string>();
 const MAX_UNKNOWN_SESSION_DIRECTORIES = 32;
 const MAX_PENDING_UNKNOWN_SESSIONS = 2_000;
 const MAX_PENDING_DIRECT_HYDRATIONS = 128;
-const MAX_REFERENCED_SUBAGENT_IDS = 128;
 const INITIAL_BOOTSTRAP_RETRY_MS = 50;
 const MAX_BOOTSTRAP_RETRY_MS = 2_000;
 const opencodeBackend = createOpenCodeWorkerAdapter();
@@ -217,70 +218,19 @@ async function hydrateReferencedSubagents(
   state: ConnectionState,
   port: MessagePort,
   request: Extract<TabToWorkerMessage, { type: 'hydrate-referenced-subagents' }>,
-) {
+): Promise<void> {
   cancelReferencedSubagentHydration(state, port);
-
-  const requestId = request.requestId.trim();
-  const rootSessionId = request.rootSessionId.trim();
-  const directory = normalizeDirectory(request.directory);
-  const sessionIds = Array.from(
-    new Set(
-      request.sessionIds
-        .slice(0, MAX_REFERENCED_SUBAGENT_IDS)
-        .map((sessionId) => sessionId.trim())
-        .filter(Boolean),
-    ),
-  ).filter((sessionId) => sessionId !== rootSessionId);
-  const hydration: ReferencedSubagentHydration = {
-    requestId,
-    rootSessionId,
-    generation: state.hydrationGeneration,
-    controller: new AbortController(),
-  };
-  const getSession = opencodeBackend.getSession;
-
-  if (!requestId || !rootSessionId || !directory || sessionIds.length === 0 || !getSession) {
-    sendReferencedSubagentHydrationResult(port, hydration, [], false);
-    return;
-  }
-
-  state.referencedSubagentHydrationByPort.set(port, hydration);
-  const results = await mapWithConcurrency(sessionIds, 2, async (sessionId) => {
-    const rawSession = await runOpencodeReadTask(state, () =>
-      getSession(sessionId, directory, { signal: hydration.controller.signal }),
-      { signal: hydration.controller.signal, generation: hydration.generation },
-    );
-    if (!isSessionInfo(rawSession)) return null;
-    if (rawSession.id !== sessionId || rawSession.parentID?.trim() !== rootSessionId) return null;
-    if (normalizeDirectory(rawSession.directory) !== directory) return null;
-    return rawSession;
+  if (!isCurrentConnection(state)) return;
+  const { hydrateReferencedSubagents: hydrate } = await import('./referenced-subagent-hydration');
+  if (!isCurrentConnection(state)) return;
+  await hydrate(state, port, request, {
+    getSession: opencodeBackend.getSession,
+    runTask: runOpencodeReadTask,
+    isCurrent: isCurrentConnection,
+    emitProjectUpdated,
+    cancel: cancelReferencedSubagentHydration,
+    sendResult: sendReferencedSubagentHydrationResult,
   });
-
-  const activeHydration = state.referencedSubagentHydrationByPort.get(port);
-  if (activeHydration !== hydration) return;
-  if (
-    hydration.controller.signal.aborted ||
-    hydration.generation !== state.hydrationGeneration ||
-    !isCurrentConnection(state)
-  ) {
-    cancelReferencedSubagentHydration(state, port);
-    return;
-  }
-
-  const sessions = results.flatMap((result) =>
-    result.status === 'fulfilled' && result.value ? [result.value] : [],
-  );
-  state.stateBuilder.applyAuthoritativeSessions(sessions);
-  const projectIds = new Set(sessions.map((session) => session.projectID.trim()).filter(Boolean));
-  for (const projectId of projectIds) emitProjectUpdated(state, projectId);
-
-  state.referencedSubagentHydrationByPort.delete(port);
-  sendReferencedSubagentHydrationResult(
-    port,
-    hydration,
-    sessions.map((session) => session.id),
-    false,
-  );
 }
 
 function rebuildKnownSessionDirectories(
@@ -417,6 +367,7 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
     const [rawSessions, rawStatuses] = await Promise.all([
       opencodeBackend.listSessions({
         directory: normalizedDirectory,
+        ...(normalizedDirectory === '/' ? { scope: 'project' as const, limit: 1000 } : {}),
         roots: true,
         signal: controller.signal,
       }),
@@ -434,6 +385,7 @@ async function loadDirectorySessions(state: ConnectionState, directory: string) 
 
     const sessions = asObjectArray(rawSessions) as Parameters<typeof snapshotBuilder.applySessions>[0];
     snapshotBuilder.applySessionSnapshot(sessions, mutationSnapshot);
+    if (normalizedDirectory === '/') rebuildKnownSessionDirectories(state);
     snapshotBuilder.applyStatusSnapshot(
       sessions.map((session) => session.id),
       asStatusMap(rawStatuses),
@@ -626,6 +578,20 @@ function requestDirectSessionHydration(state: ConnectionState, directory: string
     return;
   }
   void loadDirectorySessions(state, normalizedDirectory).catch(() => {});
+}
+
+function refreshSession(state: ConnectionState, sessionId: string, directory: string): void {
+  const getSession = opencodeBackend.getSession;
+  if (!getSession) return;
+  void import('./session-refresh').then(({ refreshSession: runRefresh }) => {
+    if (!isCurrentConnection(state)) return;
+    runRefresh(state, sessionId, directory, {
+      getSession,
+      runTask: runOpencodeReadTask,
+      isCurrent: isCurrentConnection,
+      emitProjectUpdated,
+    });
+  }).catch(() => {});
 }
 
 function drainPendingHydrationRequests(state: ConnectionState): void {
@@ -929,10 +895,12 @@ function handleStatePacket(state: ConnectionState, packet: SsePacket) {
     case 'session.updated': {
       const info = parsedPacket.payload.properties.info;
       const needsResolution = !hasKnownSessionDirectory(state, info);
+      const hadRevert = Boolean(state.stateBuilder.getProject(info.projectID)?.sandboxes[normalizeDirectory(info.directory)]?.sessions[info.id]?.revert);
       projectId = state.stateBuilder.processSessionUpdated(info);
       notificationsChanged =
         reconcileIdleNotification(state, projectId, info.id) || notificationsChanged;
       if (needsResolution) startUnknownSessionDirectoryResolution(state, info);
+      if (hadRevert && !info.revert) refreshSession(state, info.id, info.directory);
       break;
     }
     case 'session.deleted': {
@@ -1261,6 +1229,8 @@ function createConnectionState(
     activeSelection: null,
     sessionHydrationByDirectory: new Map(),
     sessionHydrationInFlightByDirectory: new Map(),
+    sessionRefreshInFlightById: new Map(),
+    sessionRefreshPendingIds: new Set(),
     sessionHydrationRequestByDirectory: new Map(),
     sessionHydrationControllerByDirectory: new Map(),
     vcsHydratedDirectories: new Set(),
@@ -1385,6 +1355,19 @@ function handleMessage(port: MessagePort, event: MessageEvent<TabToWorkerMessage
 
   if (message.type === 'load-sessions') {
     requestDirectSessionHydration(state, message.directory);
+    return;
+  }
+
+  if (message.type === 'refresh-session') {
+    refreshSession(state, message.sessionId, message.directory);
+    return;
+  }
+
+  if (message.type === 'hydrate-session') {
+    if (!isSessionInfo(message.session) || message.session.projectID !== 'global') return;
+    state.stateBuilder.applyAuthoritativeSessions([message.session]);
+    rebuildKnownSessionDirectories(state);
+    emitProjectUpdated(state, 'global');
     return;
   }
 

@@ -282,6 +282,16 @@ describe('useBackendSessionActions mutation skeleton', () => {
 });
 
 describe('useBackendSessionActions', () => {
+  it('reloads the selected OpenCode session after reverting a message', async () => {
+    const fixture = createSessionActionsFixture();
+
+    await fixture.actions.handleRevertMessage({ sessionId: 'session-1', messageId: 'message-2' });
+
+    expect(fixture.mocks.openCodeApi.revertSession).toHaveBeenCalledWith({
+      sessionId: 'session-1', messageId: 'message-2', projectId: 'proj-1', directory: '/repo',
+    });
+    expect(fixture.params.reloadSelectedSessionState).toHaveBeenCalledWith('session-1', undefined, true);
+  });
   it('pins Codex sessions and cancels a rename when the backend changes', async () => {
     const setLocalPinnedSession = vi.fn();
     const activeBackendKind = ref<'codex' | 'opencode'>('codex');

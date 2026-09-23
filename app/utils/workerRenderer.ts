@@ -44,6 +44,7 @@ type PendingEntry = {
   reject: (reason: Error) => void;
   worker: Worker;
   errorLabel?: string;
+  timeoutId: ReturnType<typeof setTimeout>;
 };
 
 type RenderTask = {
@@ -52,6 +53,7 @@ type RenderTask = {
 };
 
 const RENDER_WORKER_POOL_CEILING = 4;
+const RENDER_REQUEST_TIMEOUT_MS = 25_000;
 const WORKER_POOL_SIZE =
   typeof navigator !== 'undefined'
     ? Math.min(RENDER_WORKER_POOL_CEILING, Math.max(2, navigator.hardwareConcurrency || 2))
@@ -60,6 +62,7 @@ const WORKER_POOL_SIZE =
 const workers: Worker[] = [];
 let workerIndex = 0;
 const pending = new Map<string, PendingEntry>();
+let nextCollisionId = 0;
 const completedCache = new ByteWeightedLruCache<string, string>({
   maxBytes: 16 * 1024 * 1024,
   weigh: (key, html) => (key.length + html.length) * 2,
@@ -118,24 +121,36 @@ function createWorker(slotIndex: number): Worker {
     const entry = pending.get(data.id);
     if (!entry || entry.worker !== worker) return;
     pending.delete(data.id);
+    clearTimeout(entry.timeoutId);
     decrementPendingRenders();
     if (data.ok) entry.resolve(data.html);
     else entry.reject(new Error(data.error || entry.errorLabel || 'Render failed'));
   };
   worker.onerror = (error) => {
-    if (workers[slotIndex] !== worker) return;
-    const renderError = errorFromWorkerEvent(error);
-    for (const [requestId, entry] of pending) {
-      if (entry.worker !== worker) continue;
-      pending.delete(requestId);
-      entry.reject(renderError);
-      decrementPendingRenders();
-    }
-    const replacement = createWorker(slotIndex);
-    workers[slotIndex] = replacement;
-    worker.terminate();
+    failWorker(slotIndex, worker, errorFromWorkerEvent(error));
   };
   return worker;
+}
+
+function failWorker(slotIndex: number, worker: Worker, error: Error) {
+  if (workers[slotIndex] !== worker) return;
+  for (const [requestId, entry] of pending) {
+    if (entry.worker !== worker) continue;
+    pending.delete(requestId);
+    clearTimeout(entry.timeoutId);
+    entry.reject(error);
+    decrementPendingRenders();
+  }
+  workers[slotIndex] = createWorker(slotIndex);
+  worker.terminate();
+}
+
+function requestTimeout(id: string, worker: Worker) {
+  return setTimeout(() => {
+    if (pending.get(id)?.worker !== worker) return;
+    const slotIndex = workers.indexOf(worker);
+    if (slotIndex >= 0) failWorker(slotIndex, worker, new Error('Render worker timed out'));
+  }, RENDER_REQUEST_TIMEOUT_MS);
 }
 
 function getWorker(): Worker {
@@ -149,13 +164,22 @@ function getWorker(): Worker {
   return worker;
 }
 
+function uniqueRequestId(requestId: string) {
+  if (!pending.has(requestId)) return requestId;
+  let id: string;
+  do {
+    id = `${requestId}:${++nextCollisionId}`;
+  } while (pending.has(id));
+  return id;
+}
+
 export function renderWorkerHtml(payload: RenderRequest) {
   const cacheKey = getCacheKey(payload);
   const cached = completedCache.get(cacheKey);
   if (cached !== undefined) {
     return Promise.resolve(cached);
   }
-  const id = payload.id;
+  const id = uniqueRequestId(payload.id);
   incrementPendingRenders();
   return new Promise<string>((resolve, reject) => {
     let worker: Worker;
@@ -174,8 +198,19 @@ export function renderWorkerHtml(payload: RenderRequest) {
       reject,
       worker,
       errorLabel: payload.errorLabel,
+      timeoutId: requestTimeout(id, worker),
     });
-    worker.postMessage(payload);
+    try {
+      worker.postMessage(id === payload.id ? payload : { ...payload, id });
+    } catch (error) {
+      const entry = pending.get(id);
+      if (entry) {
+        pending.delete(id);
+        clearTimeout(entry.timeoutId);
+        decrementPendingRenders();
+        entry.reject(errorFromWorkerEvent(error));
+      }
+    }
   });
 }
 
@@ -189,7 +224,7 @@ export function startRenderWorkerHtml(payload: RenderRequest): RenderTask {
     };
   }
 
-  const id = payload.id;
+  const id = uniqueRequestId(payload.id);
   let settled = false;
   incrementPendingRenders();
 
@@ -217,8 +252,19 @@ export function startRenderWorkerHtml(payload: RenderRequest): RenderTask {
       },
       worker,
       errorLabel: payload.errorLabel,
+      timeoutId: requestTimeout(id, worker),
     });
-    worker.postMessage(payload);
+    try {
+      worker.postMessage(id === payload.id ? payload : { ...payload, id });
+    } catch (error) {
+      const entry = pending.get(id);
+      if (entry) {
+        pending.delete(id);
+        clearTimeout(entry.timeoutId);
+        decrementPendingRenders();
+        entry.reject(errorFromWorkerEvent(error));
+      }
+    }
   });
 
   return {
@@ -228,6 +274,7 @@ export function startRenderWorkerHtml(payload: RenderRequest): RenderTask {
       const entry = pending.get(id);
       if (!entry) return;
       pending.delete(id);
+      clearTimeout(entry.timeoutId);
       decrementPendingRenders();
       entry.reject(new RenderCancelledError());
     },

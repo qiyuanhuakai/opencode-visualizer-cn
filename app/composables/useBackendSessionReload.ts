@@ -66,7 +66,7 @@ export function useBackendSessionReload(params: {
     sessionId: string,
     reloadRequestId: number,
   ) => Promise<string[] | undefined>;
-  anchorOutputToBottom: () => Promise<void>;
+  anchorOutputToBottom: (waitForRenders?: boolean) => Promise<void>;
   restoreShellSessions: () => Promise<void>;
   reloadTodosForAllowedSessions: () => Promise<void> | void;
   fetchPendingPermissions: (directory?: string) => Promise<void> | void;
@@ -152,7 +152,11 @@ export function useBackendSessionReload(params: {
           if (reloadRequestId !== params.sessionReloadRequestId.value) return;
           params.msg.loadHistory(nextHistory);
           params.codexReapplyBackfill();
-          await params.anchorOutputToBottom();
+          try {
+            await params.anchorOutputToBottom(false);
+          } catch (error) {
+            console.error('[codex] Output anchoring failed:', error);
+          }
         } finally {
           if (reloadRequestId === params.sessionReloadRequestId.value) {
             params.isLoadingHistory.value = false;
