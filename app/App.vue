@@ -830,6 +830,7 @@ import {
 } from './utils/path';
 import { parseSkill as parseSkillFromText } from './utils/parseSkill';
 import { clampShellWindowSize, type ShellWindowSize } from './utils/shellWindowSize';
+import { OPEN_IN_EDITOR_SHELL_COMMAND } from './utils/openInEditorCommand';
 import { resolveTerminalScrollTarget } from './utils/terminalScroll';
 import { useCredentials } from './composables/useCredentials';
 import { useBackendActivation } from './composables/useBackendActivation';
@@ -5705,11 +5706,6 @@ const { openAcpAuthTerminal } = useAcpTerminalAction({
   errorMessage: toErrorMessage,
 });
 
-function buildOpenInEditorCommand(absolutePath: string) {
-  const escapedPath = absolutePath.replace(/'/g, "'\"'\"'");
-  return `editor_cmd=\${VISUAL:-\${EDITOR:-}}; if [ -z "$editor_cmd" ]; then printf '%s\\n' 'VISUAL/EDITOR is not set.'; exit 127; fi; eval "$editor_cmd '${escapedPath}'"; status=$?; exit $status`;
-}
-
 type FileViewerLocation = {
   readonly directory: string;
   readonly path: string;
@@ -6551,7 +6547,7 @@ async function handleFloatingWindowOpen(key: string) {
   if (!directory) return;
 
   try {
-    const pty = await createPtySession('/bin/sh', ['-c', buildOpenInEditorCommand(absolutePath)]);
+    const pty = await createPtySession('/bin/sh', ['-c', OPEN_IN_EDITOR_SHELL_COMMAND, 'vis-open-editor', absolutePath]);
     if (!pty) {
       setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
       return;
