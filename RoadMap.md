@@ -5,22 +5,24 @@
 ## [In Progress]
 
 
-- [ ] 修复已知问题
+- [x] 修复已知问题
 
-  - [ ] opencode：撤销opencode会话后再发送一条消息，虽然会话已经被撤销，但是vis显示会恢复成未撤销状态
-  - [ ] opencode：经常触发在/上创建一个新会话的兜底策略，尽管有很多已有的会话
-  - [ ] codex：idel后，user发送一条新消息会导致上一条assistant消息消失（变为上上条assistant消息），刷新后恢复
+  - [x] opencode：撤销opencode会话后再发送一条消息，虽然会话已经被撤销，但是vis显示会恢复成未撤销状态
+  - [x] opencode：经常触发在/上创建一个新会话的兜底策略，尽管有很多已有的会话
+  - [x] codex：idel后，user发送一条新消息会导致上一条assistant消息消失（变为上上条assistant消息），刷新后恢复
+
+- [x] 调查性能问题
+  - [x] all：electron输入框输入延迟巨大，按键好一段时间才有反应（但是pnpm dev又好像没有问题）
+  - [x] all：长期使用后，鼠标滚动存在延迟（但是拖动滚动条却没有延迟）
+  - [x] all：怀疑文件树轮询导致长期问题。建议改为：每十分钟刷新一次
+  - [x] codex：会话加载速度需要优化
+  - [x] codex：偶现后端render超时
 
 - [ ] 改善codex后端兼容性
   - [ ] 状态监控-token
   - [ ] 小修小补
+- [ ] 改善kimi web后端兼容性
 
-- [ ] 调查性能问题
-  - [ ] all：electron输入框输入延迟巨大，按键好一段时间才有反应（但是pnpm dev又好像没有问题）
-  - [ ] all：长期使用后，鼠标滚动存在延迟（但是拖动滚动条却没有延迟）
-  - [ ] all：怀疑文件树轮询导致长期问题。建议改为：每十分钟刷新一次
-  - [ ] codex：会话加载速度需要优化
-  - [ ] codex：偶现后端render超时
 
 
 
@@ -33,7 +35,6 @@
     - [ ] dsh
     - [ ] cursor cli
   - [ ] omo codex app-server
-  - [ ] kimi web
   - [ ] dsh web
   - [ ] astrcodey web
   - [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
