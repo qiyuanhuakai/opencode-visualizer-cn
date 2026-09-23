@@ -291,7 +291,7 @@ export async function probeKimiWebSessionActions(
     try {
       await operation();
     } catch (error) {
-      if (error instanceof KimiWebError && error.code === 40401 && error.msg.includes(missingSessionId)) return;
+      if (error instanceof KimiWebError && error.code === 40401 && /\bsession\b.*\b(?:not found|does not exist)\b/iu.test(error.msg)) return;
       throw error;
     }
   };
