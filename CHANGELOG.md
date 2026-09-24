@@ -3,6 +3,14 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [Unreleased]
+### Codex Token 状态监控与 Forge 命令
+
+- [x] 将 Codex 会话 Token 用量和模型上下文窗口接入 App Server 通知，在“状态监控 → Token”中展示；账户 Token 活动及额度也统一放在该页，移除独立的 Codex 状态页和显示开关，并适配 Vis 主题与紧凑字号。
+- [x] 账户额度在 Token 页按账号类型显示：Plus 账号可见 5 小时额度，所有账号在服务端返回数据时可见周额度；修复 App Server 省略缓存写入量或上下文窗口字段时，会话 Token 数据被丢弃的问题。
+- [x] “状态监控 → MC”仅在 OpenCode 后端显示；新增全局 `/forge` 斜杠命令，在当前目录打开 Forge 面板，不向模型发送消息。
+- [x] 在 `RoadMap.md` 记录轻量级多账户额度显示器的后续计划，本次未实现（[#143](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/143)）。
+
 ## [v0.8.2 released]
 ### Windows Electron 性能与会话加载修复
 
