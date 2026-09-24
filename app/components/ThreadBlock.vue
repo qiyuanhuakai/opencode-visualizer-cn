@@ -95,7 +95,7 @@
       <span class="ib-error-text">{{ formatMessageError(threadError, (key) => t(key)) }}</span>
     </div>
 
-    <div v-if="!isRevertedPreview && subagentSessions.length > 0" class="ib-subagent-section">
+    <div v-if="!isRevertedPreview && backendKind !== 'kimi-web' && subagentSessions.length > 0" class="ib-subagent-section">
       <div v-for="session in subagentSessions" :key="session.sessionId" class="ib-subagent-row">
         <span class="ib-subagent-label">🤖 {{ session.label }}</span>
         <button

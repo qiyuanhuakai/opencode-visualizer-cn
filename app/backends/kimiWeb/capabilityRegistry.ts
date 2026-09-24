@@ -283,10 +283,11 @@ export type KimiWebCapabilityRegistry = ReturnType<typeof createKimiWebCapabilit
 
 export async function probeKimiWebSessionActions(
   registry: KimiWebCapabilityRegistry,
-  client: Pick<KimiWebClient, 'forkSession' | 'compactSession' | 'undoSession'>,
+  client: Pick<KimiWebClient, 'forkSession' | 'compactSession' | 'undoSession'> & Partial<Pick<KimiWebClient, 'btwSession'>>,
 ): Promise<void> {
   if (!registry.isConnectionReady()) return;
   const missingSessionId = `session_${crypto.randomUUID()}`;
+  const btwSession = client.btwSession;
   const check = async (operation: () => Promise<unknown>) => {
     try {
       await operation();
@@ -299,5 +300,6 @@ export async function probeKimiWebSessionActions(
     registry.probe('fork', () => check(() => client.forkSession(missingSessionId))),
     registry.probe('compact', () => check(() => client.compactSession(missingSessionId))),
     registry.probe('undo', () => check(() => client.undoSession(missingSessionId, 1))),
+    ...(btwSession ? [registry.probe('btw', () => check(() => btwSession(missingSessionId)))] : []),
   ]);
 }

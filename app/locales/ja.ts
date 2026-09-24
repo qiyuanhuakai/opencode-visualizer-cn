@@ -654,7 +654,7 @@ const messages: LocaleMessages = {
     },
   },
   kimiWeb: {
-    commands: { help: '対応する Kimi コマンドを表示', compact: '会話コンテキストを圧縮', applied: 'コマンドを実行しました。' },
+    commands: { help: '対応する Kimi コマンドを表示', compact: '会話コンテキストを圧縮', copyall: '会話全文を Markdown でコピー', new: '新しい会話を作成', clear: 'コンテキストを消去して新しい会話を作成', btw: '独立したサイド会話で質問', fork: '会話を分岐', undo: '直前のターンを取り消す', status: '状態モニターを開く', subagent: 'サブエージェントを管理', applied: 'コマンドを実行しました。' },
     composer: {
       manual: 'manual',
       auto: 'auto',

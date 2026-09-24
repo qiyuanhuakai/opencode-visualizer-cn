@@ -4,6 +4,14 @@ export type KimiWebSlashAction =
   | { readonly kind: 'permission'; readonly mode: KimiWebPermissionMode }
   | { readonly kind: 'toggle'; readonly field: 'planMode' | 'swarmMode' | 'towerMode'; readonly value?: boolean }
   | { readonly kind: 'compact' }
+  | { readonly kind: 'new' }
+  | { readonly kind: 'clear' }
+  | { readonly kind: 'fork' }
+  | { readonly kind: 'undo' }
+  | { readonly kind: 'status' }
+  | { readonly kind: 'subagent' }
+  | { readonly kind: 'copyall' }
+  | { readonly kind: 'btw'; readonly prompt?: string }
   | { readonly kind: 'help' };
 
 export const KIMI_WEB_SLASH_COMMANDS = [
@@ -15,6 +23,14 @@ export const KIMI_WEB_SLASH_COMMANDS = [
   { name: 'swarm', descriptionKey: 'kimiWeb.composer.swarmDescription', usage: '/swarm [on|off]' },
   { name: 'tower', descriptionKey: 'kimiWeb.composer.towerDescription', usage: '/tower on|off' },
   { name: 'compact', descriptionKey: 'kimiWeb.commands.compact', usage: '/compact' },
+  { name: 'copyall', descriptionKey: 'kimiWeb.commands.copyall', usage: '/copyall' },
+  { name: 'new', descriptionKey: 'kimiWeb.commands.new', usage: '/new' },
+  { name: 'clear', descriptionKey: 'kimiWeb.commands.clear', usage: '/clear' },
+  { name: 'btw', descriptionKey: 'kimiWeb.commands.btw', usage: '/btw [question]' },
+  { name: 'fork', descriptionKey: 'kimiWeb.commands.fork', usage: '/fork' },
+  { name: 'undo', descriptionKey: 'kimiWeb.commands.undo', usage: '/undo' },
+  { name: 'status', descriptionKey: 'kimiWeb.commands.status', usage: '/status' },
+  { name: 'subagent', descriptionKey: 'kimiWeb.commands.subagent', usage: '/subagent' },
 ] as const;
 
 export class KimiWebSlashCommandError extends Error {
@@ -31,14 +47,17 @@ export function parseKimiWebSlashCommand(input: string): KimiWebSlashAction | nu
   const name = rawName.toLowerCase();
   const command = KIMI_WEB_SLASH_COMMANDS.find((item) => item.name === name);
   if (!command) throw new KimiWebSlashCommandError(name);
-  const argument = args.join(' ').toLowerCase();
+  const rawArgument = args.join(' ');
+  const argument = rawArgument.toLowerCase();
   switch (name) {
     case 'manual': case 'yolo': case 'auto':
       if (argument) throw new KimiWebSlashCommandError(name, command.usage);
       return { kind: 'permission', mode: name };
-    case 'help': case 'compact':
+    case 'help': case 'compact': case 'copyall': case 'new': case 'clear': case 'fork': case 'undo': case 'status': case 'subagent':
       if (argument) throw new KimiWebSlashCommandError(name, command.usage);
       return { kind: name };
+    case 'btw':
+      return { kind: 'btw', ...(rawArgument.trim() ? { prompt: rawArgument.trim() } : {}) };
     case 'plan': case 'swarm': case 'tower':
       if ((argument && argument !== 'on' && argument !== 'off') || (!argument && name === 'tower')) {
         throw new KimiWebSlashCommandError(name, command.usage);

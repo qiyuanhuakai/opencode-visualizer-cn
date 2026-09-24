@@ -4,6 +4,8 @@
 
 Vis feels like a compact terminal command center: dense, local-first, and precise. The recognizable signature is a layered dark workspace where every surface reads as a terminal-adjacent control plane, using muted slate panels, blue interaction accents, and monospace typography throughout.
 
+Every new page or view must follow the Vis visual language and adapt to the active Vis theme. Reuse existing components, spacing, typography, and `--theme-*` tokens for its surfaces, text, borders, controls, and interaction states; verify the result in both light and dark themes before delivery.
+
 ## 2. Color
 
 ### Palette
@@ -75,6 +77,8 @@ These tokens are defined on `:root` in `app/styles/tailwind.css`; compact Kimi p
 - Terminal panels should default to approximately 80x24 cells and then resize around measured xterm cell dimensions.
 
 ## 5. Components
+
+Do not use system-native dropdowns such as HTML `<select>` in Vis interfaces. Use the shared `Dropdown`/`DropdownItem` components or another Vis-themed selector so the closed control and expanded options follow the active theme.
 
 ### Floating Window
 - **Structure**: draggable titlebar, compact actions, scrollable or terminal body.
@@ -171,10 +175,9 @@ Mixed tonal-shift and thin borders.
 Shadows are reserved for existing modal/floating chrome; Forge integration must reuse the same floating-window shell surface rather than inventing a new material.
 
 ### Kimi Agent Management
-- Reuse floating-window surfaces, compact control buttons, 12px panel padding and 8px gaps. No added motion or colors.
-- Child conversations and agents running inside the same conversation occupy separately labelled sections; only child conversations may be opened as a conversation.
-- Settings use labelled native selects; model and thinking choices come from the server. Task stop targets the displayed task in its owning session.
-- Loading, failure, empty and saving states stay distinct; edits disable during requests and errors are announced. Long titles wrap on narrow screens.
+- The Mode-adjacent icon opens a compact upward settings popover using dropdown surface, border, focus and option tokens.
+- Default subagent model and thinking effort use themed dropdown choices from the server; the independent tower experiment uses a compact switch.
+- The popover contains no child-conversation browser or subagent run viewer. Loading, failure and saving states stay distinct; edits disable during requests and errors are announced.
 
 ### Kimi Plugin Management
 - Plugin management lives in the existing status monitor Plugins tab and reuses modal surface, text, border and accent tokens.
@@ -184,5 +187,5 @@ Shadows are reserved for existing modal/floating chrome; Forge integration must 
 ### Kimi Compact Controls (follow-up)
 - Installed providers use the same compact rows as OpenCode; model detail expands on demand. Catalog uses dense two-column rows and one column on narrow screens. Controls are 28px, metadata 12px, and gaps use the shared spacing tokens.
 - `manual`, `yolo`, `auto`, `tower`, `plan`, and `swarm` are protocol names and remain lowercase in every locale. The independent tower/plan/swarm toggles share one upward-opening composer dropdown labeled Mode (模式 in Chinese), with visible selected states in its menu.
-- The Kimi goal bar belongs beside composer modes, following the Codex 28px flexible goal bar. Child management, whole-session copy and compact move to a compact upward composer actions menu. The top session tree keeps navigation, pin, rename, archive and delete.
+- The Kimi goal bar belongs beside composer modes, following the Codex 28px flexible goal bar. A 28px icon-only settings button sits immediately after Mode. `/copyall` copies the complete session as Markdown, while `/compact` performs compaction. Every `/btw` opens a new, initially blank side-conversation window with inherited context available to the model. The top session tree keeps navigation, pin, rename, archive and delete.
 - Plugin and quota rows use the status monitor's existing list-row, progress and action-button theme tokens in both light and dark themes, matching compact typography rather than independent cards.

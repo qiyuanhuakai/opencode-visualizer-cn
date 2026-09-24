@@ -239,13 +239,11 @@
                     @toggle-tower="changeKimiWebBooleanMode('towerMode', $event)"
                   />
                   <KimiWebComposerActions
+                    ref="kimiWebSettingsRef"
                     :disabled="connectionState !== 'ready' || !selectedSessionId"
-                    :busy="isThinking || isSending"
-                    :compact-available="kimiWebCapabilities.isAvailable('compact')"
-                    :fork-available="kimiWebCapabilities.isAvailable('fork')"
-                    @agents="openKimiSessionAgents(selectedSessionId)"
-                    @compact="kimiWebCapabilities.isAvailable('compact') && backendSessionActions.handleCompactSession(selectedSessionId)"
-                    @fork="kimiWebCapabilities.isAvailable('fork') && backendSessionActions.handleForkSession(selectedSessionId)"
+                    :session-id="selectedSessionId"
+                    :client="kimiWebComposerClient"
+                    @tower-experiment-updated="handleKimiTowerExperimentUpdated"
                   />
                   <KimiWebComposerGoal
                     :client="kimiWebComposerClient"
@@ -684,8 +682,8 @@ import KimiWebComposerActions from './components/kimiWeb/KimiWebComposerActions.
 import KimiWebComposerGoal from './components/kimiWeb/KimiWebComposerGoal.vue';
 import CodexThreadGoalWindow from './components/codex/CodexThreadGoalWindow.vue';
 import KimiWebThreadGoalWindow from './components/kimiWeb/KimiWebThreadGoalWindow.vue';
-import KimiWebAgentManager from './components/kimiWeb/KimiWebAgentManager.vue';
-import type { KimiWebSession } from './utils/kimiWeb';
+import KimiWebBtwWindow from './components/kimiWeb/KimiWebBtwWindow.vue';
+import type { KimiWebClient } from './utils/kimiWeb';
 import { createKimiWebCardActions } from './utils/kimiWebCardActions';
 import CodexSkillsManager from './components/codex/CodexSkillsManager.vue';
 import CodexWorkspaceToolsPanel from './components/codex/CodexWorkspaceToolsPanel.vue';
@@ -875,6 +873,7 @@ import { useSettings } from './composables/useSettings';
 import { createComposerDraftScheduler } from './utils/composerDraftScheduler';
 import { kimiWebAgentModeOptions } from './utils/kimiWebModeOptions';
 import { KIMI_WEB_SLASH_COMMANDS, type KimiWebSlashAction } from './backends/kimiWeb/slashCommands';
+import { copyKimiWebSessionMarkdown } from './backends/kimiWeb/copyAll';
 import {
   clearOpenCodeLastSelection,
   readOpenCodeLastSelection,
@@ -1519,32 +1518,27 @@ function openKimiThreadGoal(sessionId: string) {
   });
 }
 
+const kimiWebSettingsRef = ref<InstanceType<typeof KimiWebComposerActions> | null>(null);
+function handleKimiTowerExperimentUpdated() {
+  void loadKimiWebModeMeta().catch((cause: unknown) => {
+    setSendStatusErrorText(cause instanceof Error ? cause.message : String(cause));
+  });
+}
 function openKimiSessionAgents(sessionId: string) {
   if (activeBackendKind.value !== 'kimi-web' || !sessionId) return;
-  const key = `kimi-session-agents:${sessionId}`;
+  kimiWebSettingsRef.value?.open();
+}
+
+async function openKimiBtwWindow(sessionId: string, agentId: string, client: KimiWebClient, initialPrompt?: string) {
+  const key = `kimi-btw:${sessionId}:${agentId}`;
   if (fw.has(key)) { fw.activate(key); return; }
   const extent = fw.getExtent();
-  const width = Math.min(640, Math.max(280, extent.width - 32));
-  const height = Math.min(520, Math.max(280, extent.height - 48));
-  const client = kimiWebRestClient();
-  void fw.open(key, {
-    component: KimiWebAgentManager,
-    props: markRaw({
-      sessionId, client,
-      onSessionUpdated: (session: KimiWebSession) => {
-        if (activeBackendKind.value !== 'kimi-web' || client !== configuredKimiWebAdapter?.restClient) return;
-        upsertKimiWebSessionIntoProjects(serverState.projects, mapKimiWebSession(session));
-        scheduleKimiTopPanelGitInfoHydration();
-      },
-      onOpenSession: (session: KimiWebSession) => {
-        if (activeBackendKind.value !== 'kimi-web' || client !== configuredKimiWebAdapter?.restClient) return;
-        upsertKimiWebSessionIntoProjects(serverState.projects, mapKimiWebSession(session));
-        scheduleKimiTopPanelGitInfoHydration();
-        const owner = findSessionInProjects(session.id);
-        if (owner) void switchSessionSelection(owner.projectId, session.id);
-      },
-    }),
-    title: `${t('topPanel.sessionActions.agents')} · ${sessionId}`,
+  const width = Math.min(680, Math.max(280, extent.width - 32));
+  const height = Math.min(560, Math.max(280, extent.height - 48));
+  await fw.open(key, {
+    component: KimiWebBtwWindow,
+    props: markRaw({ sessionId, agentId, client, initialPrompt }),
+    title: `btw · ${agentId}`,
     width, height, x: Math.max(16, (extent.width - width) / 2), y: 24,
     closable: true, resizable: true, scroll: 'none', focusOnOpen: true, expiry: Infinity,
   });
@@ -8833,14 +8827,49 @@ async function executeKimiWebSlashCommand(action: KimiWebSlashAction) {
     setSendStatusText(KIMI_WEB_SLASH_COMMANDS.map((command) => command.usage).join(' · '));
     return;
   }
+  if (action.kind === 'status') {
+    statusMonitorTab.value = 'server';
+    isStatusMonitorOpen.value = true;
+    return;
+  }
+  if (action.kind === 'new' || action.kind === 'clear') {
+    const session = await backendSessionLifecycle.createNewSession();
+    if (!session) throw new Error(t('app.error.unavailable', { action: 'Kimi Web session' }));
+    return;
+  }
   const sessionId = selectedSessionId.value;
   if (connectionState.value !== 'ready' || !sessionId) throw new Error(t('app.error.unavailable', { action: 'Kimi Web' }));
   const client = kimiWebRestClient();
   const current = () => activeBackendKind.value === 'kimi-web' && selectedSessionId.value === sessionId && configuredKimiWebAdapter?.restClient === client;
-  if (action.kind === 'compact') {
+  if (action.kind === 'subagent') {
+    openKimiSessionAgents(sessionId);
+  } else if (action.kind === 'copyall') {
+    const clipboard = (window as unknown as { electronAPI?: { clipboard?: { writeText: (content: string) => Promise<void> } } }).electronAPI?.clipboard;
+    await copyKimiWebSessionMarkdown(sessionId, client.getMessages, (text) => {
+      if (!current()) return Promise.resolve();
+      return clipboard ? clipboard.writeText(text) : navigator.clipboard.writeText(text);
+    });
+  } else if (action.kind === 'fork') {
+    if (!kimiWebCapabilities.isAvailable('fork')) throw new Error(t('app.error.unavailable', { action: 'Kimi Web fork' }));
+    if (isThinking.value || isSending.value) throw new Error(t('app.error.unavailable', { action: 'Kimi Web fork' }));
+    const forked = mapKimiWebSession(await client.forkSession(sessionId));
+    if (!current()) return;
+    upsertKimiWebSessionIntoProjects(serverState.projects, forked);
+    scheduleKimiTopPanelGitInfoHydration();
+  } else if (action.kind === 'undo') {
+    if (!kimiWebCapabilities.isAvailable('undo')) throw new Error(t('app.error.unavailable', { action: 'Kimi Web undo' }));
+    if (isThinking.value || isSending.value) throw new Error(t('app.error.unavailable', { action: 'Kimi Web undo' }));
+    await client.undoSession(sessionId, 1);
+    if (current()) await backendSessionReload.reloadSelectedSessionState(sessionId, sessionId, true);
+  } else if (action.kind === 'compact') {
     if (!kimiWebCapabilities.isAvailable('compact')) throw new Error(t('app.error.unavailable', { action: 'Kimi Web compact' }));
     await client.compactSession(sessionId);
     if (current()) await backendSessionReload.reloadSelectedSessionState(sessionId, sessionId, true);
+  } else if (action.kind === 'btw') {
+    if (!kimiWebCapabilities.isAvailable('btw')) throw new Error(t('app.error.unavailable', { action: 'Kimi Web btw' }));
+    const side = await client.btwSession(sessionId);
+    if (!side.agent_id) throw new Error('Kimi Web did not return a side agent.');
+    await openKimiBtwWindow(sessionId, side.agent_id, client, action.prompt);
   } else {
     let change: KimiWebSessionModeChange;
     if (action.kind === 'permission') change = { field: 'permissionMode', value: action.mode };

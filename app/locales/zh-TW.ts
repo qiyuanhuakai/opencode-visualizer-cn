@@ -644,7 +644,7 @@ const messages: LocaleMessages = {
     },
   },
   kimiWeb: {
-    commands: { help: '顯示支援的 Kimi 命令', compact: '壓縮工作階段上下文', applied: '命令已執行。' },
+    commands: { help: '顯示支援的 Kimi 命令', compact: '壓縮工作階段上下文', copyall: '複製完整對話為 Markdown', new: '建立對話', clear: '清除上下文並建立對話', btw: '在隔離的旁支對話中提問', fork: '複製為新對話', undo: '復原上一輪', status: '開啟狀態監控', subagent: '管理子智慧體', applied: '命令已執行。' },
     composer: {
       manual: 'manual',
       auto: 'auto',

@@ -47,12 +47,14 @@ describe('Kimi Web runtime capability registry', () => {
     const forkSession = vi.fn(async (_id: string) => { throw new KimiWebError(40401, 'Session not found'); });
     const compactSession = vi.fn(async () => { throw new KimiWebError(40001, 'unsupported action'); });
     const undoSession = vi.fn(async (_id: string) => { throw new KimiWebError(40401, 'session does not exist'); });
+    const btwSession = vi.fn(async (_id: string) => { throw new KimiWebError(40401, 'session does not exist'); });
 
-    await probeKimiWebSessionActions(registry, { forkSession, compactSession, undoSession });
+    await probeKimiWebSessionActions(registry, { forkSession, compactSession, undoSession, btwSession });
 
     expect(forkSession.mock.calls[0]?.[0]).toMatch(/^session_[0-9a-f-]{36}$/u);
     expect(registry.isAvailable('fork')).toBe(true);
     expect(registry.isAvailable('undo')).toBe(true);
+    expect(registry.isAvailable('btw')).toBe(true);
     expect(registry.isAvailable('compact')).toBe(false);
   });
 
@@ -64,10 +66,12 @@ describe('Kimi Web runtime capability registry', () => {
       forkSession: missingFile,
       compactSession: missingFile,
       undoSession: missingFile,
+      btwSession: missingFile,
     });
     expect(registry.isAvailable('fork')).toBe(false);
     expect(registry.isAvailable('compact')).toBe(false);
     expect(registry.isAvailable('undo')).toBe(false);
+    expect(registry.isAvailable('btw')).toBe(false);
   });
 
   it('starts fully unknown and hides every action (no UI before probing)', () => {

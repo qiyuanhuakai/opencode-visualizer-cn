@@ -15,6 +15,7 @@ import type {
   UserMessageInfo,
 } from '../../types/sse';
 import type { KimiWebContentPart, KimiWebMessage } from '../../utils/kimiWeb';
+import { resolveKimiWebToolName } from './wire';
 
 export type KimiWebHistoryEntry = {
   info: UserMessageInfo | AssistantMessageInfo;
@@ -104,7 +105,7 @@ function createToolPart(
     ...partBase(message, `${message.id}:tool:${part.tool_call_id}`),
     type: 'tool',
     callID: part.tool_call_id,
-    tool: part.tool_name,
+    tool: resolveKimiWebToolName(part.tool_name),
     state: { status: 'pending', input: isRecord(part.input) ? part.input : {}, raw: '' },
     metadata: { source: 'kimi-web' },
   };

@@ -225,6 +225,21 @@ describe('useBackendMessageSend kimi-web', () => {
     expect(base.messageInput.value).toBe('new draft');
   });
 
+  it('restores a failed new-session command and clears a successful fork command', async () => {
+    const execute = vi.fn(async (action: KimiWebSlashAction) => {
+      if (action.kind === 'new') throw new Error('Could not create session');
+    });
+    const { base, runtime, api } = createKimiRuntime({ executeKimiWebSlashCommand: execute });
+    base.messageInput.value = '/new';
+    await runtime.sendMessage();
+    expect(base.messageInput.value).toBe('/new');
+    expect(api.sendPrompt).not.toHaveBeenCalled();
+    base.messageInput.value = '/fork';
+    await runtime.sendMessage();
+    expect(base.messageInput.value).toBe('');
+    expect(execute).toHaveBeenCalledWith({ kind: 'fork' });
+  });
+
   it('sends the wire model alias without the UI provider prefix', async () => {
     const { base, runtime, api } = createKimiRuntime();
     base.selectedModel.value = 'managed:kimi-code/kimi-code/kimi-for-coding-highspeed';
