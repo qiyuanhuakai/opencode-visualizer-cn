@@ -10,7 +10,7 @@ vis interprets Codex commands before sending ordinary chat input. Commands open 
 | `/fast`, `/fast on`, `/fast off` | Select the current model's catalog-provided Fast tier and persist `service_tier`. The Fast on/off button between reasoning effort and Goal also toggles by click or keyboard without changing the draft. Untouched settings preserve the server default; explicit off sends `default` on subsequent turns. |
 | `/permissions [read-only\|workspace-write\|full-access]` | Open the permission picker, or select a preset constrained by server requirements. Applies to subsequent turns in the current thread, not an already running command. |
 | `/status` | Open the status monitor. |
-| `/usage [daily\|weekly\|cumulative]` | Open **Status monitor → Token** and focus the requested activity view. Account Token activity and current conversation consumption are separate. Codex quota consumption remains in the **Codex** tab. |
+| `/usage [daily\|weekly\|cumulative]` | Open **Status monitor → Token** and focus the requested activity view. Current-session usage, account Token activity, and Codex quota windows appear in separate sections of the Token tab. |
 | `/skills`, `/mcp`, `/plugins` | Open the corresponding status monitor tab. |
 | `/init` | Expand the unchanged official Codex initialization prompt into a normal request. The upstream prompt instructs Codex not to overwrite an existing `AGENTS.md`. |
 | `/plan [task]` | Without a task, toggle between Plan and Default for subsequent messages, including while a turn is running. Inline text enters Plan and sends the task when idle. |
@@ -26,7 +26,7 @@ vis interprets Codex commands before sending ordinary chat input. Commands open 
 | `/stop` | Ask Codex to clean up the current thread's background terminals. |
 | `/copy` | Copy the latest completed assistant response. |
 
-Appearance commands, `/mention`, `/agent`, `/subagent`, and `/subagents` are intentionally not registered. Local `/shell` and `/debug` remain available. Attachments are preserved when executing a local command.
+Appearance commands, `/mention`, `/agent`, `/subagent`, and `/subagents` are intentionally not registered. Local `/shell` and `/debug` remain available. `/forge` is a global local command that opens the Forge panel in the current directory on every backend, without sending a model prompt. Attachments are preserved when executing a local command.
 
 Navigation commands (`/new`, `/fork`, `/archive`) consume and save the source session's command input before switching. Returning to that session restores an empty command input and preserves any attachments. A failed navigation restores the command if the source input is still empty; it never overwrites a newer draft or the destination session's draft.
 
