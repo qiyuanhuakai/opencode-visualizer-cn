@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { MessageInfo } from '../types/sse';
 import { useAssistantPreRenderer } from './useAssistantPreRenderer';
+import { pendingWorkerRenders } from './useRenderState';
 
 const workerState = vi.hoisted(() => {
   class FakeWorker {
     static instances: FakeWorker[] = [];
+    static requests: unknown[] = [];
     onmessage: ((event: { data: unknown }) => void) | null = null;
     onerror: ((error: unknown) => void) | null = null;
     posted: unknown[] = [];
@@ -15,6 +17,7 @@ const workerState = vi.hoisted(() => {
     }
     postMessage(message: unknown) {
       this.posted.push(message);
+      FakeWorker.requests.push(message);
     }
     emit(data: unknown) {
       this.onmessage?.({ data });
@@ -35,16 +38,16 @@ type PostedRequest = {
 
 type MountedRenderer = {
   readonly content: Ref<string>;
+  readonly visibleRoots: Ref<MessageInfo[]>;
   readonly rendered: ReturnType<typeof vi.fn>;
   readonly getHtml: (rootId: string) => string | undefined;
 };
 
 const mountedApps: Array<() => void> = [];
+let mountSequence = 0;
 
 function postedRequests(): PostedRequest[] {
-  return workerState.FakeWorker.instances.flatMap(
-    (worker) => worker.posted as PostedRequest[],
-  );
+  return workerState.FakeWorker.requests as PostedRequest[];
 }
 
 async function settle(): Promise<void> {
@@ -73,7 +76,7 @@ function mountRenderer(): MountedRenderer {
       setup() {
         const renderer = useAssistantPreRenderer({
           visibleRoots,
-          theme: ref('github-dark'),
+          theme: ref(`github-dark-${++mountSequence}`),
           filesWithBasenames: ref<string[]>([]),
           getFinalAnswer: () => undefined,
           hasAssistantMessages: () => true,
@@ -93,7 +96,7 @@ function mountRenderer(): MountedRenderer {
     target.remove();
   });
   if (!getHtml) throw new Error('assistant renderer did not mount');
-  return { content, rendered, getHtml };
+  return { content, visibleRoots, rendered, getHtml };
 }
 
 function emitRequest(request: PostedRequest, html: string): void {
@@ -107,7 +110,8 @@ function emitRequest(request: PostedRequest, html: string): void {
 }
 
 beforeEach(() => {
-  workerState.FakeWorker.instances = [];
+  workerState.FakeWorker.requests = [];
+  for (const worker of workerState.FakeWorker.instances) worker.posted = [];
 });
 
 afterEach(() => {
@@ -116,6 +120,68 @@ afterEach(() => {
 });
 
 describe('useAssistantPreRenderer render queue', () => {
+  it('cancels removed session renders and discards their queued updates', async () => {
+    const mounted = mountRenderer();
+    const initialRequest = postedRequests()[0];
+    if (!initialRequest) throw new Error('initial render was not posted');
+    mounted.content.value = 'queued content from previous session';
+    await nextTick();
+
+    mounted.visibleRoots.value = [];
+    await settle();
+    expect(pendingWorkerRenders.value).toBe(0);
+
+    emitRequest(initialRequest, '<p>old session</p>');
+    await settle();
+    expect(postedRequests()).toHaveLength(1);
+    expect(mounted.getHtml('root')).toBeUndefined();
+    expect(mounted.rendered).not.toHaveBeenCalled();
+  });
+
+  it('releases cached HTML when its root leaves the visible session', async () => {
+    const mounted = mountRenderer();
+    const request = postedRequests()[0];
+    if (!request) throw new Error('initial render was not posted');
+    emitRequest(request, '<p>previous session html</p>');
+    await settle();
+    expect(mounted.getHtml('root')).toBe('<p>previous session html</p>');
+
+    mounted.visibleRoots.value = [];
+    await settle();
+    expect(mounted.getHtml('root')).toBeUndefined();
+  });
+
+  it('shows escaped answer text and finishes loading when the render worker fails', async () => {
+    const mounted = mountRenderer();
+    const initialRequest = postedRequests()[0];
+    if (!initialRequest) throw new Error('initial render was not posted');
+    mounted.content.value = '<script>alert("x")</script>\nanswer & details';
+    await nextTick();
+    emitRequest(initialRequest, '<p>outdated answer</p>');
+    await settle();
+    const request = postedRequests()[1];
+    if (!request) throw new Error('updated render was not posted');
+    const worker = workerState.FakeWorker.instances.find((candidate) =>
+      candidate.posted.some((message) => (message as PostedRequest).id === request.id),
+    );
+    if (!worker) throw new Error('render worker was not found');
+    worker.emit({ id: request.id, ok: false, error: 'Render worker timed out' });
+    await settle();
+
+    expect(mounted.getHtml('root')).toContain('&lt;script&gt;alert("x")&lt;/script&gt;\nanswer &amp; details');
+    expect(mounted.getHtml('root')).not.toContain('<script>');
+    expect(mounted.rendered).toHaveBeenLastCalledWith('root:root');
+    expect(pendingWorkerRenders.value).toBe(0);
+
+    mounted.content.value = 'recovered answer';
+    await nextTick();
+    const retry = postedRequests()[2];
+    if (!retry) throw new Error('next content update was not rendered');
+    emitRequest(retry, '<p>recovered answer</p>');
+    await settle();
+    expect(mounted.getHtml('root')).toBe('<p>recovered answer</p>');
+  });
+
   it('keeps one posted render and one newest follow-up while workers stay unresolved', async () => {
     // Given: the current html has completed and a root receives many updates
     const mounted = mountRenderer();

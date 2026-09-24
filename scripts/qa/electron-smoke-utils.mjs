@@ -20,7 +20,7 @@ export const EXPECTED_PRELOAD_SCHEMA = {
   ],
   clipboard: ['readText', 'writeText'],
   desktop: ['check', 'configure', 'download', 'getState', 'install', 'notify', 'onNotificationClick', 'onState', 'reportBridgeVersion'],
-  persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem'],
+  persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem', 'setItemAsync'],
   localFile: [
     'clearApplication',
     'close',

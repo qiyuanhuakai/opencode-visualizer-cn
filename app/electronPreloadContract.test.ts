@@ -38,6 +38,7 @@ interface ElectronApiSchema {
     offError: (listener: (error: LocalFileError) => void) => void;
   };
   persistentStorage: {
+    setItemAsync: (key: string, value: string | null) => Promise<unknown>;
     getItem: (key: string) => string | null;
     setItem: (key: string, value: string) => unknown;
     removeItem: (key: string) => unknown;
@@ -244,7 +245,15 @@ describe('electron preload contract', () => {
       'migrate',
       'removeItem',
       'setItem',
+      'setItemAsync',
     ]);
+  });
+
+  it('sends auxiliary history mutations through asynchronous IPC', async () => {
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    await api.persistentStorage.setItemAsync('history', 'snapshot');
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith('persistent-storage-set-async', { key: 'history', value: 'snapshot' });
+    expect(ipcRenderer.sendSync).not.toHaveBeenCalled();
   });
 
   it('exposes the platform and version metadata', () => {

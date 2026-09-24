@@ -23,6 +23,7 @@ interface Window {
     getPlatform: () => Promise<string>;
     desktop: import('./types/desktop').DesktopApi;
     persistentStorage?: {
+      setItemAsync?: (key: string, value: string | null) => Promise<boolean>;
       getItem: (key: string) => string | null;
       setItem: (key: string, value: string) => boolean;
       removeItem: (key: string) => boolean;

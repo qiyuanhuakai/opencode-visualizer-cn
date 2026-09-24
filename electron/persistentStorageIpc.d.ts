@@ -7,6 +7,7 @@ export interface PersistentStorageIpcEvent {
 
 export interface PersistentStorageIpcOptions {
   readonly ipcMain: {
+    handle(channel: string, listener: (event: PersistentStorageIpcEvent, payload: unknown) => Promise<boolean>): unknown;
     on(
       channel: string,
       listener: (event: PersistentStorageIpcEvent, payload: unknown) => void,

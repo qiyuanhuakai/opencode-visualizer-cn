@@ -5,6 +5,22 @@ import { createComposerDraftScheduler } from './composerDraftScheduler';
 describe('composerDraftScheduler', () => {
   afterEach(() => vi.useRealTimers());
 
+  it('exposes pending local input until persistence, cancellation, or flush', () => {
+    vi.useFakeTimers();
+    const scheduler = createComposerDraftScheduler(vi.fn(), 150);
+    expect(scheduler.pending).toBe(false);
+    scheduler.schedule();
+    expect(scheduler.pending).toBe(true);
+    vi.advanceTimersByTime(150);
+    expect(scheduler.pending).toBe(false);
+    scheduler.schedule();
+    scheduler.cancel();
+    expect(scheduler.pending).toBe(false);
+    scheduler.schedule();
+    scheduler.flush();
+    expect(scheduler.pending).toBe(false);
+  });
+
   it('coalesces a typing burst into one trailing persistence task', () => {
     // Given: a composer persistence scheduler uses the interactive debounce interval.
     vi.useFakeTimers();

@@ -6,6 +6,7 @@ const PREFIX = `${storageKey(StorageKeys.state.codexAuxiliaryHistory)}.`;
 const snapshots = new Map<string, string | null>();
 const generations = new Map<string, number>();
 const pending = new Set<Promise<void>>();
+const electronPending = new Map<string, string | null>();
 let database: IDBDatabase | null = null;
 let initialization: Promise<void> | null = null;
 let channel: BroadcastChannel | null = null;
@@ -171,6 +172,10 @@ function update(key: string, value: string | null) {
 
 export function readCodexAuxiliarySnapshot(threadId: string): unknown {
   const key = keyFor(threadId);
+  if (electronPending.has(storageKey(key))) {
+    const raw = electronPending.get(storageKey(key));
+    return raw ? JSON.parse(raw) : null;
+  }
   if (!useIndexedDB() || !snapshots.has(storageKey(key))) return storageGetJSON<unknown>(key);
   const raw = snapshots.get(storageKey(key));
   if (!raw) return null;
@@ -185,6 +190,10 @@ export function readCodexAuxiliarySnapshot(threadId: string): unknown {
 
 export function writeCodexAuxiliarySnapshot(threadId: string, snapshot: unknown): void {
   const key = keyFor(threadId);
+  if (typeof window !== 'undefined' && window.electronAPI?.persistentStorage?.setItemAsync) {
+    persistElectron(storageKey(key), JSON.stringify(snapshot) ?? null);
+    return;
+  }
   if (!useIndexedDB()) {
     if (!storageSetJSON(key, snapshot)) console.error('[Codex] Auxiliary history storage write failed');
     return;
@@ -195,11 +204,25 @@ export function writeCodexAuxiliarySnapshot(threadId: string, snapshot: unknown)
 
 export function removeCodexAuxiliarySnapshot(threadId: string): void {
   const key = keyFor(threadId);
+  if (persistElectron(storageKey(key), null)) return;
   if (!useIndexedDB()) {
     storageRemove(key);
     return;
   }
   update(storageKey(key), null);
+}
+
+function persistElectron(key: string, value: string | null): boolean {
+  const setItemAsync = typeof window !== 'undefined' && window.electronAPI?.persistentStorage?.setItemAsync;
+  if (!setItemAsync) return false;
+  const generation = (generations.get(key) ?? 0) + 1;
+  generations.set(key, generation);
+  electronPending.set(key, value);
+  track(setItemAsync(key, value).then((ok) => {
+    if (!ok) throw new Error('Native auxiliary history write failed');
+    if (generations.get(key) === generation) electronPending.delete(key);
+  }));
+  return true;
 }
 
 export async function flushCodexAuxiliaryStorage(): Promise<void> {

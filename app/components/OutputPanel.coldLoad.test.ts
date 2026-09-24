@@ -16,6 +16,56 @@ vi.mock('../composables/useFileTree', async () => {
 });
 vi.mock('@iconify/vue', () => ({ Icon: { template: '<span />' } }));
 
+it('finishes anchoring when a hidden Electron window stops producing animation frames', async () => {
+  // Given: the window can receive history while Chromium suspends animation frames.
+  vi.useFakeTimers();
+  vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+  vi.stubGlobal('cancelAnimationFrame', vi.fn());
+  const host = document.createElement('div');
+  document.body.append(host);
+  const app = createApp(OutputPanel, {
+    isFollowing: true,
+    isAnchoring: true,
+    statusText: '',
+    isStatusError: false,
+    isThinking: false,
+    theme: 'github-dark',
+    currentSessionId: 'root-session',
+    backendKind: 'codex',
+  });
+  app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
+  app.provide('showConfirm', async () => true);
+  const instance = app.mount(host);
+  try {
+    await nextTick();
+    const panel = host.querySelector<HTMLElement>('.output-panel-scroll');
+    if (!panel) throw new Error('Output panel missing');
+    Object.defineProperties(panel, {
+      scrollHeight: { value: 2600 },
+      clientHeight: { value: 600 },
+    });
+    const scrollToBottom = Reflect.get(instance, 'scrollToBottom');
+    if (typeof scrollToBottom !== 'function') throw new Error('Scroll API missing');
+
+    // When: history is ready but no animation frame ever fires.
+    let settled = false;
+    void Promise.resolve(scrollToBottom()).then(() => { settled = true; });
+    await nextTick();
+    await nextTick();
+    await nextTick();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    // Then: scrolling completes so the caller can release the history loading state.
+    expect(settled).toBe(true);
+    expect(panel.scrollTop).toBe(2000);
+  } finally {
+    app.unmount();
+    host.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
 it('waits for cold rendering and stable geometry without expanding the initial history window', async () => {
   const messages = useMessages();
   messages.loadHistory(Array.from({ length: 100 }, (_, index) => makeUserHistoryEntry(index)));

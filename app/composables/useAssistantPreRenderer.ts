@@ -39,8 +39,8 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
   const queuedRenderByRootId = new Map<string, AssistantRenderInput>();
   let deferredRenderBatchId: number | null = null;
 
-  const submitSeqMap = new Map<string, number>();
-  const appliedSeqMap = new Map<string, number>();
+  const submittedRootIds = new Set<string>();
+  let submitSequence = 0;
   const lastSubmitted = new Map<
     string,
     { answerId: string; content: string; theme: string; locale: string }
@@ -59,8 +59,8 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
   }
 
   function startAssistantRender(rootId: string, input: AssistantRenderInput) {
-    const seq = (submitSeqMap.get(rootId) ?? 0) + 1;
-    submitSeqMap.set(rootId, seq);
+    const seq = ++submitSequence;
+    submittedRootIds.add(rootId);
 
     const requestId = `assistant-${rootId}-${seq}`;
     const task = startRenderWorkerHtml({
@@ -86,9 +86,6 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
           startAssistantRender(rootId, queued);
           return;
         }
-        const applied = appliedSeqMap.get(rootId) ?? 0;
-        if (seq <= applied) return;
-        appliedSeqMap.set(rootId, seq);
         assistantHtmlCache.set(rootId, html);
         deferredKeyCache.set(rootId, input.answerId);
         options.onRendered(options.getThreadAssistantRenderKeyById(rootId, input.answerId));
@@ -103,6 +100,13 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
           return;
         }
         if (error instanceof RenderCancelledError) return;
+        const escaped = input.content
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+        assistantHtmlCache.set(rootId, `<div class="whitespace-pre-wrap">${escaped}</div>`);
+        deferredKeyCache.set(rootId, input.answerId);
+        options.onRendered(options.getThreadAssistantRenderKeyById(rootId, input.answerId));
       });
   }
 
@@ -165,12 +169,23 @@ export function useAssistantPreRenderer(options: UseAssistantPreRendererOptions)
   }
 
   watchEffect(() => {
+    const visibleRoots = options.visibleRoots.value.filter(options.hasAssistantMessages);
+    const visibleRootIds = new Set(visibleRoots.map((root) => root.id));
+    for (const rootId of submittedRootIds) {
+      if (visibleRootIds.has(rootId)) continue;
+      activeRenderByRootId.get(rootId)?.task.cancel();
+      activeRenderByRootId.delete(rootId);
+      queuedRenderByRootId.delete(rootId);
+      assistantHtmlCache.delete(rootId);
+      deferredKeyCache.delete(rootId);
+      lastSubmitted.delete(rootId);
+      submittedRootIds.delete(rootId);
+    }
     invalidateForFileRefsIfNeeded();
     const theme = options.theme.value;
     const localeKey = String(locale.value);
     const pendingRoots: Array<{ root: MessageInfo; answerId: string; content: string }> = [];
-    for (const root of options.visibleRoots.value) {
-      if (!options.hasAssistantMessages(root)) continue;
+    for (const root of visibleRoots) {
       const final = options.getFinalAnswer(root);
       const answerId = final?.id ?? root.id;
       const content = options.getFinalAnswerContent(root);

@@ -10,6 +10,100 @@ afterEach(() => {
 });
 
 describe('Electron main wiring', () => {
+  it('drains writes accepted while desktop shutdown is still pending', async () => {
+    const harness = await loadElectronMainHarness();
+    cleanupCallbacks.push(harness.cleanup);
+    let releaseOwner: () => void = () => {};
+    let releaseWrite: () => void = () => {};
+    let enteredWrite: () => void = () => {};
+    const ownerHeld = new Promise<void>((resolve) => { releaseOwner = resolve; });
+    const writeHeld = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeStarted = new Promise<void>((resolve) => { enteredWrite = resolve; });
+    const runtime = harness.createDesktopRuntime.mock.results[0]?.value;
+    runtime?.dispose.mockImplementation(() => ownerHeld);
+    const liveFileSystem = (await import('node:fs')).default;
+    const originalRename = liveFileSystem.promises.rename;
+    const rename = vi.spyOn(liveFileSystem.promises, 'rename').mockImplementation(async (from, to) => {
+      enteredWrite();
+      await writeHeld;
+      await originalRename(from, to);
+    });
+    harness.appListeners.get('before-quit')?.[0]?.({ preventDefault: vi.fn() });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.late-quit';
+    const write = harness.invoke('persistent-storage-set-async', { key, value: 'late' });
+    try {
+      await writeStarted;
+      releaseOwner();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(harness.app.quit).not.toHaveBeenCalled();
+    } finally {
+      releaseOwner();
+      releaseWrite();
+      await write.result;
+      await vi.waitFor(() => expect(harness.app.quit).toHaveBeenCalledOnce());
+      rename.mockRestore();
+    }
+  });
+
+  it('waits for history persistence when desktop cleanup fails during quit', async () => {
+    const harness = await loadElectronMainHarness();
+    cleanupCallbacks.push(harness.cleanup);
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const liveFileSystem = (await import('node:fs')).default;
+    const originalRename = liveFileSystem.promises.rename;
+    const rename = vi.spyOn(liveFileSystem.promises, 'rename').mockImplementation(async (from, to) => {
+      entered();
+      await held;
+      await originalRename(from, to);
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const runtime = harness.createDesktopRuntime.mock.results[0]?.value;
+    runtime?.dispose.mockRejectedValue(new Error('desktop cleanup failed'));
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.held-quit';
+    const write = harness.invoke('persistent-storage-set-async', { key, value: 'durable' });
+    try {
+      await started;
+      harness.appListeners.get('before-quit')?.[0]?.({ preventDefault: vi.fn() });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(harness.app.quit).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await write.result;
+      await vi.waitFor(() => expect(harness.app.quit).toHaveBeenCalledOnce());
+      rename.mockRestore();
+      log.mockRestore();
+    }
+    expect(harness.invoke('persistent-storage-get', key).event.returnValue).toEqual({ ok: true, value: 'durable' });
+  });
+
+  it('waits for a queued auxiliary history write before quitting', async () => {
+    const harness = await loadElectronMainHarness();
+    cleanupCallbacks.push(harness.cleanup);
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.quit-test';
+    const write = harness.invoke('persistent-storage-set-async', { key, value: 'durable' });
+    const beforeQuit = harness.appListeners.get('before-quit')?.[0];
+    const event = { preventDefault: vi.fn() };
+    beforeQuit?.(event);
+    await vi.waitFor(() => expect(harness.app.quit).toHaveBeenCalledOnce());
+    await expect(write.result).resolves.toBe(true);
+    expect(harness.invoke('persistent-storage-get', key).event.returnValue).toEqual({ ok: true, value: 'durable' });
+  });
+
+  it('rejects asynchronous history writes from an untrusted renderer or to a settings key', async () => {
+    const harness = await loadElectronMainHarness();
+    cleanupCallbacks.push(harness.cleanup);
+    const untrusted = harness.invoke('persistent-storage-set-async', {
+      key: 'opencode.state.codexAuxiliaryHistory.v1.thread', value: 'text',
+    }, 2);
+    const setting = harness.invoke('persistent-storage-set-async', { key: 'opencode.setting', value: 'text' });
+    await expect(untrusted.result).rejects.toThrow('Untrusted renderer');
+    await expect(setting.result).rejects.toThrow('restricted to auxiliary history');
+  });
+
   it('binds the production persistent storage registration to the actual main module', async () => {
     // Given: the actual main module has started with isolated Electron and filesystem infrastructure.
     const harness = await loadElectronMainHarness();

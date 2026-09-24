@@ -5,6 +5,9 @@ export type PersistentStorageChange = Readonly<{
 }>;
 
 export interface PersistentStorage {
+  prepare(): Promise<void>;
+  setItemAsync(key: string, value: string | null): Promise<string | null>;
+  flush(): Promise<void>;
   getItem(key: string): string | null;
   setItem(key: string, value: string): string | null;
   removeItem(key: string): string | null;
@@ -13,6 +16,7 @@ export interface PersistentStorage {
 }
 
 export interface PersistentStorageFileSystem {
+  readonly promises?: typeof import('node:fs').promises;
   readFileSync(filePath: string, encoding: 'utf8'): string;
   writeFileSync(
     filePath: string,

@@ -58,6 +58,153 @@ afterEach(() => {
 });
 
 describe('Electron persistent storage', () => {
+  it('keeps legacy settings readable after migration fails and retries only when explicitly prepared', async () => {
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
+    const { filePath } = createStorageFile({ [key]: 'history', draft: 'kept' });
+    fs.writeFileSync(`${filePath}.history`, 'blocked');
+    const original = fs.readFileSync(filePath, 'utf8');
+    const storage = createPersistentStorage(filePath);
+    await expect(storage.prepare()).rejects.toThrow();
+    expect(storage.getItem('draft')).toBe('kept');
+    expect(storage.getItem(key)).toBe('history');
+    expect(() => storage.setItem('draft', 'new')).toThrow();
+    expect(fs.readFileSync(filePath, 'utf8')).toBe(original);
+    fs.rmSync(`${filePath}.history`);
+    await storage.prepare();
+    storage.setItem('draft', 'new');
+    expect(storage.getItem('draft')).toBe('new');
+    expect(storage.getItem(key)).toBe('history');
+  });
+
+  it('waits for healthy history writes before reporting a failed shard during flush', async () => {
+    const { filePath } = createStorageFile({});
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const storage = createPersistentStorage(filePath, {
+      ...fs,
+      promises: {
+        ...fs.promises,
+        rename: async (from: fs.PathLike, to: fs.PathLike) => {
+          const contents = await fs.promises.readFile(from, 'utf8');
+          if (contents.includes('failing-value')) throw new Error('failed shard');
+          entered();
+          await held;
+          await fs.promises.rename(from, to);
+        },
+      },
+    });
+    const prefix = 'opencode.state.codexAuxiliaryHistory.v1.';
+    const failing = storage.setItemAsync(`${prefix}failed`, 'failing-value');
+    const observedFailure = failing.catch((error: unknown) => error);
+    const healthy = storage.setItemAsync(`${prefix}healthy`, 'saved');
+    let flushFinished = false;
+    const flushed = storage.flush().then(
+      () => { flushFinished = true; return null; },
+      (error: unknown) => { flushFinished = true; return error; },
+    );
+    try {
+      await started;
+      await observedFailure;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(flushFinished).toBe(false);
+    } finally {
+      release();
+      await healthy;
+      await flushed;
+    }
+    expect(await flushed).toBeInstanceOf(AggregateError);
+    expect(createPersistentStorage(filePath).getItem(`${prefix}healthy`)).toBe('saved');
+  });
+
+  it('keeps migrated history durable without rewriting it when saving a draft', async () => {
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
+    const history = 'large-history-'.repeat(100_000);
+    const { filePath } = createStorageFile({ [key]: history, draft: 'old' });
+    const storage = createPersistentStorage(filePath);
+    await storage.prepare();
+    storage.setItem('draft', 'new');
+    expect(fs.statSync(filePath).size).toBeLessThan(1000);
+    expect(createPersistentStorage(filePath).getItem(key)).toBe(history);
+  });
+
+  it('orders asynchronous history writes and removals and preserves the final value on restart', async () => {
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
+    const { filePath } = createStorageFile({});
+    const storage = createPersistentStorage(filePath);
+    await Promise.all([
+      storage.setItemAsync(key, 'first'),
+      storage.setItemAsync(key, null),
+      storage.setItemAsync(key, 'last'),
+    ]);
+    expect(createPersistentStorage(filePath).getItem(key)).toBe('last');
+    expect(fs.readFileSync(filePath, 'utf8')).not.toContain(key);
+  });
+
+  it('retains the legacy file when asynchronous migration cannot publish a shard', async () => {
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
+    const { filePath } = createStorageFile({ [key]: 'history', draft: 'text' });
+    const original = fs.readFileSync(filePath, 'utf8');
+    const storage = createPersistentStorage(filePath, {
+      ...fs,
+      promises: { ...fs.promises, rename: async () => { throw new Error('injected rename failure'); } },
+    });
+    await expect(storage.prepare()).rejects.toThrow('injected rename failure');
+    expect(fs.readFileSync(filePath, 'utf8')).toBe(original);
+    const retry = createPersistentStorage(filePath);
+    await retry.prepare();
+    expect(retry.getItem(key)).toBe('history');
+  });
+
+  it('coalesces queued snapshots and rejects conflicting synchronous mutations', async () => {
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
+    const { filePath } = createStorageFile({});
+    const rename = vi.fn(fs.promises.rename);
+    const storage = createPersistentStorage(filePath, { ...fs, promises: { ...fs.promises, rename } });
+    const writes = Array.from({ length: 100 }, (_, index) => storage.setItemAsync(key, String(index)));
+    expect(() => storage.setItem(key, 'stale')).toThrow('asynchronous write');
+    expect(() => storage.removeItem(key)).toThrow('asynchronous write');
+    await Promise.all(writes);
+    expect(rename).toHaveBeenCalledTimes(1);
+    expect(createPersistentStorage(filePath).getItem(key)).toBe('99');
+  });
+
+  it('preserves the previous durable history when an asynchronous write fails', async () => {
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
+    const { filePath } = createStorageFile({ [key]: 'old' });
+    await createPersistentStorage(filePath).prepare();
+    const storage = createPersistentStorage(filePath, {
+      ...fs,
+      promises: { ...fs.promises, rename: async () => { throw new Error('injected write failure'); } },
+    });
+    await expect(storage.setItemAsync(key, 'new')).rejects.toThrow('injected write failure');
+    expect(createPersistentStorage(filePath).getItem(key)).toBe('old');
+    expect(storage.drainPendingChanges()).toEqual([]);
+  });
+
+  it('persists the latest queued snapshot after an in-flight write completes', async () => {
+    const key = 'opencode.state.codexAuxiliaryHistory.v1.thread';
+    const { filePath } = createStorageFile({});
+    let release: () => void = () => {};
+    let entered: () => void = () => {};
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { entered = resolve; });
+    const rename = vi.fn(async (from: fs.PathLike, to: fs.PathLike) => {
+      entered();
+      await blocked;
+      await fs.promises.rename(from, to);
+    });
+    const storage = createPersistentStorage(filePath, { ...fs, promises: { ...fs.promises, rename } });
+    const first = storage.setItemAsync(key, 'initial');
+    await started;
+    const queued = Array.from({ length: 100 }, (_, index) => storage.setItemAsync(key, String(index)));
+    release();
+    await Promise.all([first, ...queued]);
+    expect(rename).toHaveBeenCalledTimes(2);
+    expect(createPersistentStorage(filePath).getItem(key)).toBe('99');
+  });
+
   it('does not cache a transient read failure as an empty store', () => {
     // Given: a native store contains unrelated data and its first read fails transiently.
     const { filePath } = createStorageFile({ preserved: 'value' });
