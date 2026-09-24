@@ -26,14 +26,15 @@ function nonnegative(value: unknown): value is number {
 
 function breakdown(value: unknown): CodexTokenBreakdown | null {
   const data = record(value);
+  const cacheWriteInputTokens = data?.cacheWriteInputTokens === undefined ? 0 : data.cacheWriteInputTokens;
   if (!data || !nonnegative(data.totalTokens) || !nonnegative(data.inputTokens)
-    || !nonnegative(data.cachedInputTokens) || !nonnegative(data.cacheWriteInputTokens)
+    || !nonnegative(data.cachedInputTokens) || !nonnegative(cacheWriteInputTokens)
     || !nonnegative(data.outputTokens) || !nonnegative(data.reasoningOutputTokens)) return null;
   return {
     totalTokens: data.totalTokens,
     inputTokens: data.inputTokens,
     cachedInputTokens: data.cachedInputTokens,
-    cacheWriteInputTokens: data.cacheWriteInputTokens,
+    cacheWriteInputTokens,
     outputTokens: data.outputTokens,
     reasoningOutputTokens: data.reasoningOutputTokens,
   };
@@ -47,7 +48,7 @@ export function parseCodexThreadTokenUsage(value: unknown, threadId: string): Co
   const total = breakdown(usage.total);
   const last = breakdown(usage.last);
   if (!total || !last) return null;
-  const modelContextWindow = usage.modelContextWindow;
+  const modelContextWindow = usage.modelContextWindow === undefined ? null : usage.modelContextWindow;
   if (modelContextWindow !== null && !nonnegative(modelContextWindow)) return null;
   return { threadId, turnId: notification.turnId, total, last, modelContextWindow };
 }

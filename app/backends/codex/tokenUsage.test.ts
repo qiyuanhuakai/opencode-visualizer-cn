@@ -15,6 +15,24 @@ describe('Codex thread token usage', () => {
     expect(result?.modelContextWindow).toBe(128000);
   });
 
+  it('defaults optional App Server usage fields when omitted', () => {
+    const breakdown = {
+      totalTokens: 300,
+      inputTokens: 240,
+      cachedInputTokens: 80,
+      outputTokens: 60,
+      reasoningOutputTokens: 20,
+    };
+    const result = parseCodexThreadTokenUsage({
+      threadId: 'thread-1', turnId: 'turn-2',
+      tokenUsage: { total: breakdown, last: breakdown },
+    }, 'thread-1');
+
+    expect(result?.total.cacheWriteInputTokens).toBe(0);
+    expect(result?.last.cacheWriteInputTokens).toBe(0);
+    expect(result?.modelContextWindow).toBeNull();
+  });
+
   it('ignores another thread and malformed usage', () => {
     const notification = { threadId: 'other', tokenUsage: { total: {}, last: {}, modelContextWindow: 128000 } };
     expect(parseCodexThreadTokenUsage(notification, 'thread-1')).toBeNull();
