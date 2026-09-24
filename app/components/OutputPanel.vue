@@ -40,7 +40,7 @@
                   :compute-context-percent="computeContextPercent"
                   :session-revert="sessionRevert"
                   :backend-kind="backendKind"
-                  :kimi-permission-mode="kimiPermissionMode"
+                  :kimi-turn-permission-for-user="kimiTurnPermissionForUser"
                   :kimi-card-actions-ready="kimiCardActionsReady"
                   :kimi-fork-available="kimiForkAvailable"
                   :kimi-undo-available="kimiUndoAvailable"
@@ -145,7 +145,7 @@ const props = defineProps<{
     diff?: string;
   } | null;
   backendKind?: BackendKind;
-  kimiPermissionMode?: string;
+  kimiTurnPermissionForUser?: (sessionId: string, userMessageId: string) => string | undefined;
   kimiCardActionsReady?: boolean;
   kimiForkAvailable?: boolean;
   kimiUndoAvailable?: boolean;

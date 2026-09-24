@@ -17,6 +17,7 @@ import type {
   KimiWebUploadedFile,
 } from '../../utils/kimiWeb';
 import { KimiWebTransportError } from '../../utils/kimiWeb';
+import { isKimiWebPermissionMode } from './sessionModes';
 
 /** REST surface the send path needs; Todo 25 passes the real client. */
 export type KimiWebSendApi = Pick<
@@ -151,6 +152,7 @@ export async function runKimiWebSend(
     agent_config: {
       model: preflight.modelId ?? preflight.selectedModel,
       ...(preflight.selectedThinking ? { thinking: preflight.selectedThinking } : {}),
+      ...(isKimiWebPermissionMode(preflight.selectedMode) ? { permission_mode: preflight.selectedMode } : {}),
     },
   });
   if (!guard.isCurrent()) return { kind: 'stale' };

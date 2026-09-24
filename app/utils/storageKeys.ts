@@ -202,6 +202,7 @@ export const StorageKeys = {
     acpArchivedSessions: 'state.acpArchivedSessions.v1',
     acpMessageAttribution: 'state.acpMessageAttribution.v1',
     openCodeLastSelection: 'state.openCodeLastSelection.v1',
+    kimiWebTurnPermissions: 'state.kimiWebTurnPermissions.v1',
   },
   drafts: {
     composer: 'drafts.composer.v1',

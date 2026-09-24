@@ -110,7 +110,7 @@ export function buildMessage(core: KimiWebCore, group: KimiWebGroup): MessageInf
     parentID: group.parentId,
     modelID: model.modelID,
     providerID: model.providerID,
-    mode: profile?.permission ?? 'manual',
+    mode: profile?.permission ?? '',
     agent: group.agentId,
     ...(profile?.effort ? { variant: profile.effort } : {}),
     path: { cwd: '', root: '' },

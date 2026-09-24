@@ -435,7 +435,7 @@
                           <div class="model-dropdown-item">
                             <span class="model-dropdown-name">{{ model.displayName }}</span>
                             <span class="model-dropdown-path"
-                              >{{ model.providerID }}/{{ model.modelID }}</span
+                              >{{ formatProviderModelPath(model.providerID ?? '', model.modelID) }}</span
                             >
                           </div>
                         </DropdownItem>
@@ -547,6 +547,7 @@ import DropdownLabel from './Dropdown/Label.vue';
 import DropdownSearch from './Dropdown/Search.vue';
 import SnippetCompletion from './SnippetCompletion.vue';
 import { useMessages } from '../composables/useMessages';
+import { formatProviderModelPath } from '../utils/providerSelection';
 import { useFavoriteMessages } from '../composables/useFavoriteMessages';
 import { getMessageVariant } from '../types/sse';
 import { useSettings } from '../composables/useSettings';

@@ -67,6 +67,7 @@ import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import { getActiveBackendAdapter, getActiveBackendKind } from '../backends/registry';
+import { KimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
 import { splitFileContentDirectoryAndPath } from '../utils/path';
 
 type FileNode = {
@@ -261,8 +262,16 @@ async function fetchDirectory(dir: string) {
 async function listDirectory(dir: string, signal: AbortSignal) {
   const cleanDir = cleanDirectoryPath(dir);
   if (getActiveBackendKind() === 'kimi-web') {
-    // Kimi Web sessions live in the current workspace; no directory picker applies.
-    throw new Error('Kimi Web does not support the project directory picker.');
+    const adapter = getActiveBackendAdapter();
+    if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is unavailable.');
+    const page = await adapter.restClient.browseDirectories(cleanDir, signal);
+    return page.entries.map((entry) => ({
+      name: entry.name,
+      path: entry.path,
+      absolute: entry.path,
+      type: 'directory' as const,
+      ignored: false,
+    }));
   }
   const { directory, path } = getActiveBackendKind() === 'codex'
     ? { directory: cleanDir, path: '.' }

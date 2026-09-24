@@ -45,6 +45,70 @@ function createLifecycleFixture(overrides: Partial<LifecycleOptions> = {}) {
 }
 
 describe('useBackendSessionLifecycle kimi-web', () => {
+  it('opens the project picker at the Kimi host home directory', async () => {
+    const homePath = ref('/home/other-backend');
+    const pickerOpen = ref(false);
+    const getFsHome = vi.fn(async () => ({ home: '/home/kimi', recent_roots: [] }));
+    const { lifecycle } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'), homePath,
+      kimiWebApi: { getFsHome },
+    });
+    await lifecycle.openProjectPicker(pickerOpen);
+    expect(getFsHome).toHaveBeenCalledOnce();
+    expect(homePath.value).toBe('/home/kimi');
+    expect(pickerOpen.value).toBe(true);
+  });
+
+  it('still opens the project picker if the home endpoint is unavailable', async () => {
+    const homePath = ref('/home/other-backend');
+    const pickerOpen = ref(false);
+    const { lifecycle } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'), homePath,
+      kimiWebApi: { getFsHome: vi.fn().mockRejectedValue(new Error('unsupported')) },
+    });
+    await lifecycle.openProjectPicker(pickerOpen);
+    expect(pickerOpen.value).toBe(true);
+    expect(homePath.value).toBe('');
+  });
+
+  it('switches to a new Kimi session after registering it', async () => {
+    const registered = new Set<string>();
+    const selectedProjectId = ref('old-project');
+    const selectedSessionId = ref('old-session');
+    const selectKimiWebSession = vi.fn(async (projectId: string, sessionId: string) => {
+      expect(registered.has(sessionId)).toBe(true);
+      selectedProjectId.value = projectId;
+      selectedSessionId.value = sessionId;
+    });
+    const created = { id: 'new-session', workspace_id: 'new-workspace', metadata: { cwd: '/repo' } };
+    const { lifecycle } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'), selectedProjectId, selectedSessionId,
+      kimiWebApi: { createSession: async () => created, updateProfile: async () => created },
+      onKimiWebSessionCreated: (session) => { registered.add(session.id); },
+      selectKimiWebSession,
+    });
+    await lifecycle.createNewSession();
+    expect(selectKimiWebSession).toHaveBeenCalledWith('new-workspace', 'new-session');
+    expect(selectedSessionId.value).toBe('new-session');
+  });
+
+  it('keeps the created workspace when the profile response omits it', async () => {
+    const registered: string[] = [];
+    const selectedProjectId = ref('old-project');
+    const selectedSessionId = ref('old-session');
+    const { lifecycle } = createLifecycleFixture({
+      activeBackendKind: ref('kimi-web'), selectedProjectId, selectedSessionId,
+      kimiWebApi: {
+        createSession: async () => ({ id: 'new-session', workspace_id: 'new-workspace', metadata: { cwd: '/repo' } }),
+        updateProfile: async () => ({ id: 'new-session', agent_config: { model: 'kimi-code/k3' } }),
+      },
+      onKimiWebSessionCreated: (session) => { registered.push(session.projectID ?? ''); },
+    });
+    await lifecycle.createNewSession();
+    expect(registered).toEqual(['new-workspace']);
+    expect(selectedProjectId.value).toBe('new-workspace');
+    expect(selectedSessionId.value).toBe('new-session');
+  });
   it('registers the session before publishing its selection', async () => {
     // Given
     const registered = new Set<string>();

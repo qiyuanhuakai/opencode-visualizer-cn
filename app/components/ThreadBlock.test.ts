@@ -65,7 +65,7 @@ function mount(
     cardActionsDisabled?: boolean;
     loadMessageDiffs?: () => Promise<[]>;
     hasMessageDiffs?: () => Promise<boolean>;
-    kimiPermissionMode?: string;
+    kimiTurnPermissionForUser?: (sessionId: string, userMessageId: string) => string | undefined;
     onCardNotice?: (message: string) => void;
   },
   onShowThreadHistory: (payload: { entries: unknown[] }) => void,
@@ -90,7 +90,7 @@ function mount(
             cardActionsDisabled: props.cardActionsDisabled,
             loadMessageDiffs: props.loadMessageDiffs,
             hasMessageDiffs: props.hasMessageDiffs,
-            kimiPermissionMode: props.kimiPermissionMode,
+            kimiTurnPermissionForUser: props.kimiTurnPermissionForUser,
             onCardNotice: props.onCardNotice,
             onShowThreadHistory,
           });
@@ -224,10 +224,30 @@ describe('ThreadBlock history wiring', () => {
     const user = { ...makeUserMessage('main', 'u1', 1), agent: 'main' } as MessageInfo;
     const assistant = { ...makeAssistantMessage('main', 'a1', 'u1', 2, 'main'), mode: 'yolo', tokens: { input: 382, output: 266, reasoning: 0, cache: { read: 0, write: 0 } } } as MessageInfo;
     useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
-    const view = mount({ root: user, backendKind: 'kimi-web', kimiPermissionMode: 'manual' }, vi.fn());
+    const view = mount({ root: user, backendKind: 'kimi-web', kimiTurnPermissionForUser: () => undefined }, vi.fn());
     await flushRender();
     expect(view.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('yolo');
     expect(view.root.querySelector('.ib-meta-tokens')?.textContent?.replace(/\s/g, '')).toContain('3822660');
+  });
+
+  it('uses the accepted turn permission across live and reloaded cards', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = { ...makeAssistantMessage('main', 'a1', 'u1', 2), mode: 'manual' } as MessageInfo;
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const perTurn = vi.fn(() => 'yolo');
+    const view = mount({ root: user, backendKind: 'kimi-web', kimiTurnPermissionForUser: perTurn }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('yolo');
+    expect(perTurn).toHaveBeenCalledWith('main', 'u1');
+  });
+
+  it('does not borrow the current Kimi permission for a past card without an attributed mode', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = { ...makeAssistantMessage('main', 'a1', 'u1', 2), mode: '' } as MessageInfo;
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const view = mount({ root: user, backendKind: 'kimi-web', kimiTurnPermissionForUser: () => undefined }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelector('.ib-target-agent')).toBeNull();
   });
 
   it('keeps the assistant card mounted when a later reply replaces the displayed answer', async () => {

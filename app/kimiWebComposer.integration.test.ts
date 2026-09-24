@@ -31,6 +31,28 @@ function appVariableDeclaration(name: string): string {
   throw new Error(`App.vue variable ${name} was not found`);
 }
 
+function appFunctionDeclaration(name: string): string {
+  const declaration = APP_SCRIPT.statements.find(
+    (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+  );
+  if (!declaration) throw new Error(`App.vue function ${name} was not found`);
+  return declaration.getText(APP_SCRIPT);
+}
+
+function kimiSessionSelectionWatcher(): string {
+  const statement = APP_SCRIPT.statements.find((candidate) =>
+    ts.isExpressionStatement(candidate)
+    && ts.isCallExpression(candidate.expression)
+    && candidate.expression.expression.getText(APP_SCRIPT) === 'watch'
+    && candidate.expression.arguments[0]?.getText(APP_SCRIPT) === 'selectedSessionId'
+    && candidate.getText(APP_SCRIPT).includes('refreshKimiWebModeState()'),
+  );
+  if (!statement || !ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) {
+    throw new Error('Kimi session selection watcher was not found');
+  }
+  return statement.expression.arguments[1].getText(APP_SCRIPT);
+}
+
 const AGENT_PICKER_PROGRAM = ts.transpileModule(
   [
     appVariableDeclaration('hasAgentOptions'),
@@ -69,6 +91,79 @@ function createController(meta: unknown = { experimental_flags: { tower: false }
 }
 
 describe('kimi-web composer integration', () => {
+  it('keeps permission in a scheduled Kimi draft after typing', () => {
+    const writes: Array<{ agent: string }> = [];
+    const program = ts.transpileModule(
+      `${appFunctionDeclaration('scheduleComposerDraftPersistence')}\nscheduleComposerDraftPersistence();`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText;
+    runInNewContext(program, {
+      draftKeyForSelectedContext: () => 'session-a',
+      messageInput: ref('Typed'), attachments: ref([]), selectedMode: ref('auto'),
+      selectedModel: ref('kimi-code/k3'), selectedThinking: ref(undefined),
+      activeBackendKind: ref('kimi-web'), composerDraftTabId: 'tab-1',
+      composerDraftPersistence: { schedule: (callback: () => void) => callback() },
+      readComposerDraft: () => undefined,
+      nextComposerDraftRevision: () => 1,
+      writeComposerDraft: (_key: string, draft: { agent: string }) => { writes.push(draft); },
+    });
+    expect(writes.at(-1)?.agent).toBe('auto');
+  });
+  it('restores the current session draft permission before the global default', () => {
+    const mode = ref('yolo');
+    const program = ts.transpileModule(
+      `const onSelection = ${kimiSessionSelectionWatcher()}; onSelection('session-b', 'session-a');`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText;
+    runInNewContext(program, {
+      activeBackendKind: ref('kimi-web'), selectedMode: mode,
+      kimiWebSessionModes: { sessionState: () => ({ confidence: 'unknown' }) },
+      lastKimiPermissionMode: ref('manual'),
+      readComposerDraft: () => ({ agent: 'auto' }),
+      isKimiWebPermissionMode: (value: unknown) => value === 'manual' || value === 'auto' || value === 'yolo',
+      refreshKimiWebModeState: vi.fn(),
+      kimiWebInteractions: { clearSession: vi.fn() },
+      refreshKimiWebPendingInteractions: vi.fn(),
+      reconcileKimiWebSelectedSession: vi.fn(),
+    });
+    expect(mode.value).toBe('auto');
+  });
+  it('provider refresh preserves the session draft permission', async () => {
+    const mode = ref('yolo');
+    const program = ts.transpileModule(
+      `${appFunctionDeclaration('fetchAgents')}\nfetchAgents();`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText;
+    await runInNewContext(program, {
+      agentsRequestFence: { start: () => ({ generation: 1 }) },
+      agentLoadingOwner: 0, agentsLoading: ref(false), agentOptions: ref([]),
+      activeBackendKind: ref('kimi-web'), selectedMode: mode, selectedSessionId: ref('session-b'),
+      kimiWebSessionModes: { sessionState: () => ({ confidence: 'unknown' }) },
+      lastKimiPermissionMode: ref('manual'), readComposerDraft: () => ({ agent: 'auto' }),
+      isKimiWebPermissionMode: (value: unknown) => value === 'manual' || value === 'auto' || value === 'yolo',
+    });
+    expect(mode.value).toBe('auto');
+  });
+  it('slash permission changes remember the choice and save its draft', async () => {
+    const remember = vi.fn();
+    const persist = vi.fn();
+    const client = {};
+    const program = ts.transpileModule(
+      `${appFunctionDeclaration('executeKimiWebSlashCommand')}\nexecuteKimiWebSlashCommand({kind:'permission',mode:'yolo'});`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText;
+    await runInNewContext(program, {
+      selectedSessionId: ref('session-a'), connectionState: ref('ready'),
+      activeBackendKind: ref('kimi-web'), configuredKimiWebAdapter: { restClient: client },
+      kimiWebRestClient: () => client,
+      kimiWebSessionModes: { changeMode: vi.fn().mockResolvedValue(undefined), sessionState: () => ({}) },
+      refreshKimiWebModeState: vi.fn(), rememberKimiPermissionMode: remember,
+      persistComposerDraftForCurrentContext: persist,
+      setSendStatusKey: vi.fn(), t: (key: string) => key,
+    });
+    expect(remember).toHaveBeenCalledWith('yolo');
+    expect(persist).toHaveBeenCalledOnce();
+  });
   it('kimi mounts ready permission options and switches after thinking', () => {
     expect(APP_SOURCE).toContain('kimiWebAgentModeOptions()');
     expect(APP_SOURCE).toMatch(
@@ -106,13 +201,22 @@ describe('kimi-web composer integration', () => {
     );
   });
 
-  it('restoring a kimi draft does not restore permission or apply agent defaults', () => {
-    expect(APP_SOURCE).toMatch(
-      /function applyComposerDraftToComposerState[\s\S]*activeBackendKind\.value === 'kimi-web'[\s\S]*applyModelVariantSelection/,
-    );
-    expect(APP_SOURCE).toMatch(
-      /agent:\s*activeBackendKind\.value === 'kimi-web'\s*\? ''\s*:\s*selectedMode\.value/,
-    );
+  it('restoring a kimi draft restores its permission without applying agent defaults', () => {
+    const mode = ref('manual');
+    const model = ref('kimi-code/k3');
+    const applyVariant = vi.fn();
+    const program = ts.transpileModule(
+      `${appFunctionDeclaration('applyComposerDraftToComposerState')}\napplyComposerDraftToComposerState({rev:2,messageInput:'Saved',attachments:[],agent:'auto',model:'kimi-code/k3',variant:'high'},'session-b');`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText;
+    runInNewContext(program, {
+      composerDraftRevisionByContext: new Map(), messageInput: ref(''), attachments: ref([]),
+      activeBackendKind: ref('kimi-web'), selectedMode: mode,
+      isKimiWebPermissionMode: (value: unknown) => value === 'manual' || value === 'auto' || value === 'yolo',
+      availableModelOptions: ref([{ id: model.value }]), applyModelVariantSelection: applyVariant,
+    });
+    expect(mode.value).toBe('auto');
+    expect(applyVariant).toHaveBeenCalledWith('kimi-code/k3', 'high');
   });
 
   it('switching sessions never displays the previous sessions optimistic mode', async () => {
@@ -124,9 +228,7 @@ describe('kimi-web composer integration', () => {
 
     expect(controller.sessionState('session-b')).toEqual({ confidence: 'unknown' });
     await pending;
-    expect(APP_SOURCE).toMatch(
-      /watch\(selectedSessionId,[\s\S]*kimiWebSessionModes\.resetSession\(nextId\)/,
-    );
+    expect(controller.sessionState('session-b')).toEqual({ confidence: 'unknown' });
   });
 
   it('codex retains Fast and Goal and other backends retain their pickers', () => {

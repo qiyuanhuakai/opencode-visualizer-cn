@@ -77,6 +77,7 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
   function commitKimiWebResult(
     params: BackendMessageSendParams,
     result: KimiWebSendExecutionResult,
+    preflight: SendPreflight,
     guard: RequestGuard,
   ) {
     if (!guard.isCurrent() || result.kind === 'stale') return;
@@ -84,9 +85,11 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
     // surfaced as a refusal so the composer never reports a false success.
     switch (result.status) {
       case 'running':
+        params.recordKimiWebTurnPermission?.(preflight.sessionId, result.userMessageId, preflight.selectedMode);
         params.setSendStatusKey('app.status.sent');
         break;
       case 'queued':
+        params.recordKimiWebTurnPermission?.(preflight.sessionId, result.userMessageId, preflight.selectedMode);
         params.setSendStatusKey('app.status.sending');
         break;
       case 'blocked':
@@ -127,7 +130,7 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
         return;
       }
       const result = await runKimiWebSend(params, preflight, guard, kimiWebApi);
-      commitKimiWebResult(params, result, guard);
+      commitKimiWebResult(params, result, preflight, guard);
       return;
     }
     const result = await runOpenCodeSend(params, preflight, guard);

@@ -62,6 +62,51 @@ function client(
 }
 
 describe('KimiWebAdapter', () => {
+  it('resolves a worktree git pointer to the shared repository root', async () => {
+    const directory = '/home/user/vis.thirdend';
+    const restClient = client([session({ metadata: { cwd: directory } })]);
+    restClient.getGitStatus = vi.fn(async () => ({
+      branch: 'thirdend', ahead: 0, behind: 0, entries: {}, additions: 0, deletions: 0,
+    }));
+    restClient.downloadFile = vi.fn(async () => new TextEncoder().encode(
+      'gitdir: /home/user/vis/.git/worktrees/vis.thirdend\n',
+    ));
+    const adapter = createKimiWebAdapter({ bridgeUrl: 'ws://localhost/kimi-web/ws', client: restClient });
+
+    await expect(adapter.getVcsInfo(directory)).resolves.toMatchObject({
+      root: directory,
+      worktreeRoot: directory,
+      commonRoot: '/home/user/vis',
+      branch: 'thirdend',
+    });
+    expect(restClient.downloadFile).toHaveBeenCalledWith('session-1', '.git', { signal: undefined });
+  });
+
+  it('keeps the main checkout available when .git is a directory', async () => {
+    const directory = '/home/user/vis';
+    const restClient = client([session({ metadata: { cwd: directory } })]);
+    restClient.getGitStatus = vi.fn(async () => ({
+      branch: 'main', ahead: 0, behind: 0, entries: {}, additions: 0, deletions: 0,
+    }));
+    restClient.downloadFile = vi.fn(async () => { throw new Error('.git is a directory'); });
+    const adapter = createKimiWebAdapter({ bridgeUrl: 'ws://localhost/kimi-web/ws', client: restClient });
+
+    await expect(adapter.getVcsInfo(directory)).resolves.toMatchObject({
+      root: directory,
+      branch: 'main',
+    });
+  });
+
+  it('lists prospective project directories without an existing session', async () => {
+    const restClient = client();
+    restClient.browseDirectories = vi.fn(async () => ({
+      path: '/work', parent: '/', entries: [{ name: 'new-project', path: '/work/new-project', is_dir: true as const }],
+    }));
+    const adapter = createKimiWebAdapter({ bridgeUrl: 'ws://localhost/kimi-web/ws', client: restClient });
+    await expect(adapter.listFiles({ directory: '/work', path: '.' })).resolves.toEqual([
+      { name: 'new-project', path: '/work/new-project', absolute: '/work/new-project', type: 'directory', ignored: false },
+    ]);
+  });
   it('shows an untouched session as unknown until it has run a turn', () => {
     expect(mapKimiWebSession(session({ last_turn_reason: undefined })).status).toBe('unknown');
     expect(mapKimiWebSession(session({ last_turn_reason: undefined, busy: true })).status).toBe('busy');

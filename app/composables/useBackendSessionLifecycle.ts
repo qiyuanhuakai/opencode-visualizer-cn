@@ -14,6 +14,7 @@ type OpenCodeApiLike = {
  * falling through to the OpenCode path. Todo 25 injects the real client.
  */
 export type KimiWebSessionApiLike = {
+  getFsHome?: () => Promise<{ home: string; recent_roots: string[] }>;
   createSession?: (input: { metadata: { cwd: string } }) => Promise<unknown>;
   updateProfile?: (sessionId: string, input: KimiWebSessionProfileInput) => Promise<unknown>;
   deleteSession?: (sessionId: string) => Promise<unknown>;
@@ -127,6 +128,7 @@ export function useBackendSessionLifecycle(params: {
   kimiWebApi?: KimiWebSessionApiLike;
   kimiWebCreateProfile?: (directory: string) => KimiWebSessionProfileInput | undefined;
   onKimiWebSessionCreated?: (session: BackendSessionInfo) => void;
+  selectKimiWebSession?: (projectId: string, sessionId: string) => Promise<void>;
 }) {
   let kimiWebCreationGeneration = 0;
   watch(
@@ -153,12 +155,28 @@ export function useBackendSessionLifecycle(params: {
       await api.updateProfile(created.id, profile),
       created.directory || directory,
     );
-    const session = updated ?? created;
+    const session = updated
+      ? {
+          ...created,
+          ...updated,
+          projectID: updated.projectID || created.projectID,
+          directory: updated.directory || created.directory,
+          title: updated.title === updated.id ? created.title : updated.title,
+          time: {
+            created: updated.time?.created ?? created.time?.created,
+            updated: updated.time?.updated ?? created.time?.updated,
+          },
+        }
+      : created;
     if (params.activeBackendKind.value === 'kimi-web') {
       params.onKimiWebSessionCreated?.(session);
       if (generation === kimiWebCreationGeneration) {
-        if (session.projectID) params.selectedProjectId.value = session.projectID;
-        params.selectedSessionId.value = session.id;
+        if (session.projectID && params.selectKimiWebSession) {
+          await params.selectKimiWebSession(session.projectID, session.id);
+        } else {
+          if (session.projectID) params.selectedProjectId.value = session.projectID;
+          params.selectedSessionId.value = session.id;
+        }
       }
     }
     return session;
@@ -226,6 +244,13 @@ export function useBackendSessionLifecycle(params: {
     if (params.activeBackendKind.value === 'codex') {
       const home = await params.codexApi.refreshHomeDir(true);
       if (home) params.homePath.value = home;
+    } else if (params.activeBackendKind.value === 'kimi-web' && params.kimiWebApi?.getFsHome) {
+      try {
+        const landing = await params.kimiWebApi.getFsHome();
+        params.homePath.value = landing.home.trim();
+      } catch {
+        params.homePath.value = '';
+      }
     }
     isProjectPickerOpen.value = true;
   }
