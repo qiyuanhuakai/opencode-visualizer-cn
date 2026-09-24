@@ -2170,7 +2170,7 @@ function openSettings(page: 'root' | 'transformers' = 'root') {
 }
 const isProviderManagerOpen = ref(false);
 const isStatusMonitorOpen = ref(false);
-const statusMonitorTab = ref<'server' | 'token' | 'codex' | 'skills' | 'mcp' | 'plugins'>('server');
+const statusMonitorTab = ref<'server' | 'token' | 'skills' | 'mcp' | 'plugins'>('server');
 const statusMonitorUsageView = ref<'daily' | 'weekly' | 'cumulative'>('cumulative');
 
 const promptDialogRef = ref<HTMLDialogElement | null>(null);

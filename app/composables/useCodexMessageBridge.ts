@@ -1,6 +1,7 @@
 import { computed, ref, watch, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { CodexCanonicalHistoryEntry } from '../backends/codex/normalize';
+import { parseCodexThreadTokenUsage } from '../backends/codex/tokenUsage';
 import { codexSubagentWindowEntries } from '../utils/codexSubagentWindowEntries';
 import { useCodexMessageDiffs } from './useCodexMessageDiffs';
 import type { AssistantMessageInfo, MessagePart, ReasoningPart, TextPart, ToolPart, UserMessageInfo } from '../types/sse';
@@ -112,14 +113,14 @@ export function useCodexMessageBridge(params: {
   }
 
   function applyCodexTokenUsageToSharedMessages(rawUsage: unknown) {
-    const usage = rawUsage && typeof rawUsage === 'object' ? rawUsage as Record<string, unknown> : null;
+    const usage = parseCodexThreadTokenUsage(rawUsage, params.selectedSessionId.value);
     if (!usage) return;
     const assistantInfo = findCodexHistoryMessage((info): info is AssistantMessageInfo => info.role === 'assistant');
     if (!assistantInfo) return;
-    const input = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
-    const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
-    const reasoning = typeof usage.reasoningTokens === 'number' ? usage.reasoningTokens : 0;
-    const total = typeof usage.totalTokens === 'number' ? usage.totalTokens : input + output + reasoning;
+    const input = usage.last.inputTokens;
+    const output = usage.last.outputTokens;
+    const reasoning = usage.last.reasoningOutputTokens;
+    const total = usage.last.totalTokens;
     params.msg.updateMessage({
       ...assistantInfo,
       tokens: {
@@ -128,7 +129,7 @@ export function useCodexMessageBridge(params: {
         output,
         reasoning,
         total,
-        cache: assistantInfo.tokens.cache,
+        cache: { read: usage.last.cachedInputTokens, write: usage.last.cacheWriteInputTokens },
       },
     });
   }

@@ -74,18 +74,15 @@ describe('useSettings persistence', () => {
     expect(settings.suppressAutoWindows.value).toBe(false);
     expect(settings.showMinimizeButtons.value).toBe(true);
     expect(settings.showCodexButton.value).toBe(false);
-    expect(settings.showCodexInStatusMonitor.value).toBe(true);
 
     // When: each toggle flips away from its default and the sync watch flushes.
     settings.suppressAutoWindows.value = true;
     settings.showMinimizeButtons.value = false;
     settings.showCodexButton.value = true;
-    settings.showCodexInStatusMonitor.value = false;
 
     // Then: the flipped value is persisted to its exact storage key.
     expect(harness.storage.getItem('opencode.settings.suppressAutoWindows.v1')).toBe('true');
     expect(harness.storage.getItem('opencode.settings.showMinimizeButtons.v1')).toBe('false');
     expect(harness.storage.getItem('opencode.settings.showCodexButton.v1')).toBe('true');
-    expect(harness.storage.getItem('opencode.settings.showCodexInStatusMonitor.v1')).toBe('false');
   });
 });

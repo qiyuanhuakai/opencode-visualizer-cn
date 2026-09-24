@@ -291,7 +291,6 @@ export interface LocaleMessages {
       token: string;
       mc: string;
       acp: string;
-      codex: string;
     };
     server: {
       status: string;
@@ -418,6 +417,7 @@ export interface LocaleMessages {
       loginDeviceCode: string;
       logout: string;
       rateLimitUsed: string;
+      rateLimitFiveHourUsed: string;
     };
   };
   providerManager: {
@@ -977,10 +977,6 @@ export interface LocaleMessages {
         description: string;
       };
       showForgeButton: {
-        label: string;
-        description: string;
-      };
-      showCodexInStatusMonitor: {
         label: string;
         description: string;
       };

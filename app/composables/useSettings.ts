@@ -289,9 +289,6 @@ const showMinimizeButtons = ref(storageGet(StorageKeys.settings.showMinimizeButt
 const showCodexButton = ref(storageGet(StorageKeys.settings.showCodexButton) === 'true');
 const showForgePanelButton = ref(readForgePanelButton());
 const showForgeButton = showForgePanelButton;
-const showCodexInStatusMonitor = ref(
-  storageGet(StorageKeys.settings.showCodexInStatusMonitor) !== 'false',
-);
 const editInVis = ref(storageGet(StorageKeys.settings.editInVis) === 'true');
 const dockAlwaysOpen = ref(storageGet(StorageKeys.settings.dockAlwaysOpen) === 'true');
 const terminalFontFamily = ref(readTerminalFontFamily());
@@ -340,7 +337,6 @@ persistBooleanSetting(enterToSend, StorageKeys.settings.enterToSend);
 persistBooleanSetting(suppressAutoWindows, StorageKeys.settings.suppressAutoWindows);
 persistBooleanSetting(showMinimizeButtons, StorageKeys.settings.showMinimizeButtons);
 persistBooleanSetting(showCodexButton, StorageKeys.settings.showCodexButton);
-persistBooleanSetting(showCodexInStatusMonitor, StorageKeys.settings.showCodexInStatusMonitor);
 persistBooleanSetting(editInVis, StorageKeys.settings.editInVis);
 
 watch(
@@ -660,12 +656,6 @@ const settingsStorageHandlers = new Map<string, SettingsStorageEventHandler>([
     },
   ],
   [
-    storageKey(StorageKeys.settings.showCodexInStatusMonitor),
-    (event) => {
-      showCodexInStatusMonitor.value = event.newValue !== 'false';
-    },
-  ],
-  [
     storageKey(StorageKeys.settings.editInVis),
     (event) => {
       editInVis.value = event.newValue === 'true';
@@ -848,7 +838,6 @@ export function useSettings() {
     showCodexButton,
     showForgePanelButton,
     showForgeButton,
-    showCodexInStatusMonitor,
     editInVis,
     dockAlwaysOpen,
     terminalFontFamily,

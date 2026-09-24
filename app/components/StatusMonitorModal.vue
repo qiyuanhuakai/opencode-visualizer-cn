@@ -18,12 +18,12 @@ import {
   type KimiWebTokenUsage,
 } from '../backends/kimiWeb/tokenUsage';
 import { useMessages } from '../composables/useMessages';
-import { useSettings } from '../composables/useSettings';
 import type { useCodexApi } from '../composables/useCodexApi';
 import type { KimiWebBridgeSessionState } from '../composables/kimiWebMessageBridgeTypes';
 import { resolveDesktopBridgeHealthUrl } from '../composables/useDesktopBridgeVersion';
 import type { MessageUsage } from '../types/message';
 import type { MessageInfo } from '../types/sse';
+import { parseCodexThreadTokenUsage } from '../backends/codex/tokenUsage';
 import type { MagicContextWorker } from '../utils/pluginCompatibility';
 import { createKimiWebClient, type KimiWebAuth, type KimiWebMeta } from '../utils/kimiWeb';
 import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../utils/kimiWebWs';
@@ -60,10 +60,26 @@ const props = defineProps<{
 const emit = defineEmits<{ close: [] }>();
 
 const { t, locale } = useI18n();
-const { showCodexInStatusMonitor } = useSettings();
 const popoverRef = ref<HTMLDivElement | null>(null);
 const msg = useMessages();
 const codexApi = props.codexApi;
+const codexSessionUsage = computed(() => props.activeBackendKind === 'codex' && props.sessionId
+  ? parseCodexThreadTokenUsage(codexApi.tokenUsage.value, props.sessionId) : null);
+const codexSessionCopy = computed(() => locale.value.startsWith('zh') ? {
+  title: '当前会话', unavailable: '暂无当前会话的 Token 数据；完成一次请求后会更新。',
+  total: '会话累计', latest: '最近一次请求', input: '输入', output: '输出',
+  reasoning: '推理输出', cache: '缓存输入（读 / 写）', window: '模型上下文窗口',
+  context: '最近一次输入 / 窗口',
+} : {
+  title: 'Current session', unavailable: 'No token data for this session yet. It updates after a request completes.',
+  total: 'Session total', latest: 'Latest request', input: 'Input', output: 'Output',
+  reasoning: 'Reasoning output', cache: 'Cached input (read / write)', window: 'Model context window',
+  context: 'Latest input / window',
+});
+const codexContextPercent = computed(() => {
+  const usage = codexSessionUsage.value;
+  return usage?.modelContextWindow ? Math.round(usage.last.inputTokens / usage.modelContextWindow * 100) : null;
+});
 
 function backend() {
   return getActiveBackendAdapter();
@@ -74,8 +90,11 @@ function requireBackendMethod<T extends (...args: never[]) => unknown>(method: T
   return method;
 }
 
-type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp' | 'codex';
-const activeTab = ref<TabId>(props.initialTab ?? 'server');
+type TabId = 'server' | 'mcp' | 'lsp' | 'plugins' | 'skills' | 'token' | 'mc' | 'acp';
+function availableTab(tab: TabId | undefined): TabId {
+  return tab === 'mc' && props.activeBackendKind !== 'opencode' ? 'server' : tab ?? 'server';
+}
+const activeTab = ref<TabId>(availableTab(props.initialTab));
 const tablistRef = ref<HTMLDivElement | null>(null);
 function revealActiveTab() {
   tablistRef.value?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
@@ -93,7 +112,7 @@ watch([() => props.open, activeTab], async ([open]) => {
 }, { immediate: true, flush: 'post' });
 const accountUsageRef = ref<InstanceType<typeof CodexAccountTokenUsage> | null>(null);
 const kimiAccountUsageRef = ref<InstanceType<typeof KimiAccountUsage> | null>(null);
-watch(() => props.initialTab, (tab) => { if (props.open && tab) activeTab.value = tab; });
+watch(() => props.initialTab, (tab) => { if (props.open && tab) activeTab.value = availableTab(tab); });
 const acpManagerRef = ref<{ refresh: () => Promise<void> } | null>(null);
 
 const serverHealth = ref<{ healthy: boolean; version: string } | null>(null);
@@ -202,10 +221,7 @@ function unbindEvents() {
 
 watch(() => props.open, (isOpen) => {
   if (isOpen) {
-    if (props.initialTab) activeTab.value = props.initialTab;
-    if (!showCodexInStatusMonitor.value && activeTab.value === 'codex') {
-      activeTab.value = 'server';
-    }
+    if (props.initialTab) activeTab.value = availableTab(props.initialTab);
     // Defer click binding to skip the current click event that opened the panel
     clickTimeoutId = setTimeout(() => {
       clickTimeoutId = null;
@@ -244,6 +260,7 @@ watch(
 
 watch(() => props.activeBackendKind, (newKind, oldKind) => {
   if (newKind === oldKind) return;
+  if (newKind !== 'opencode' && activeTab.value === 'mc') activeTab.value = 'server';
   // Backend switched while modal is mounted: mcpData/lspData/skillData are
   // from the OLD backend, so wipe and re-fetch with the NEW backend.
   resetLoadedState();
@@ -254,12 +271,6 @@ watch(() => props.activeBackendKind, (newKind, oldKind) => {
 
 onBeforeUnmount(() => {
   unbindEvents();
-});
-
-watch(showCodexInStatusMonitor, (enabled) => {
-  if (!enabled && activeTab.value === 'codex') {
-    activeTab.value = 'server';
-  }
 });
 
 function resetTokenData() {
@@ -472,11 +483,18 @@ async function handleCodexLogout() {
 const codexWeeklyRateLimit = computed(() =>
   getCodexWeeklyRateLimitWindow(codexApi.accountRateLimits.value),
 );
-const codexRateLimitPercent = computed(() => {
-  const usedPercent = codexWeeklyRateLimit.value?.usedPercent;
-  if (typeof usedPercent !== 'number') return 0;
+const codexPlanType = computed(() => codexApi.accountPlanType.value
+  ?? (codexApi.account.value?.type === 'chatgpt' ? codexApi.account.value.planType : null));
+const codexFiveHourRateLimit = computed(() =>
+  codexPlanType.value?.toLowerCase() === 'plus'
+    ? [codexApi.accountRateLimits.value?.primary, codexApi.accountRateLimits.value?.secondary]
+      .find((window) => window?.windowDurationMins === 5 * 60) ?? null
+    : null,
+);
+function rateLimitPercent(usedPercent: number | undefined): number {
+  if (typeof usedPercent !== 'number' || !Number.isFinite(usedPercent)) return 0;
   return Math.max(0, Math.min(100, Math.round(usedPercent)));
-});
+}
 
 async function fetchContextLimit(
   activeBackend: ReturnType<typeof backend>,
@@ -724,6 +742,11 @@ async function fetchTokenData() {
   const sessionId = props.sessionId;
   if (!sessionId) {
     resetTokenData();
+    return;
+  }
+
+  if (props.activeBackendKind === 'codex') {
+    tokenLoading.value = false;
     return;
   }
 
@@ -1010,12 +1033,11 @@ const tabs = computed<{ id: TabId; labelKey: string }[]>(() => {
     { id: 'plugins', labelKey: 'statusMonitor.tabs.plugins' },
     { id: 'skills', labelKey: 'statusMonitor.tabs.skills' },
     { id: 'token', labelKey: 'statusMonitor.tabs.token' },
-    { id: 'mc', labelKey: 'statusMonitor.tabs.mc' },
-    { id: 'acp', labelKey: 'statusMonitor.tabs.acp' },
   ];
-  if (showCodexInStatusMonitor.value) {
-    base.push({ id: 'codex', labelKey: 'statusMonitor.tabs.codex' });
+  if (props.activeBackendKind === 'opencode') {
+    base.push({ id: 'mc', labelKey: 'statusMonitor.tabs.mc' });
   }
+  base.push({ id: 'acp', labelKey: 'statusMonitor.tabs.acp' });
   return base;
 });
 
@@ -1063,6 +1085,7 @@ const currentTotalInfo = computed(() => {
         ? { label: t('statusMonitor.common.totalLabel'), count: skillEntries.value.length }
         : null;
     case 'token':
+      if (props.activeBackendKind === 'codex') return null;
       return tokenUsage.value && !tokenUsageContextOnly.value
         ? { label: t('statusMonitor.token.totalTokens'), count: tokenUsage.value.tokens.total ?? (tokenUsage.value.tokens.input + tokenUsage.value.tokens.output + tokenUsage.value.tokens.reasoning) }
         : null;
@@ -1072,10 +1095,6 @@ const currentTotalInfo = computed(() => {
         : null;
     case 'acp':
       return null;
-    case 'codex':
-      return codexWeeklyRateLimit.value
-        ? { label: t('statusMonitor.codex.rateLimitUsed'), count: codexRateLimitPercent.value }
-        : null;
     default:
       return null;
   }
@@ -1444,7 +1463,28 @@ const kimiModelsReadyDotClass = computed(() => {
 
         <!-- Token Tab -->
         <div v-if="activeTab === 'token'" class="status-monitor-content">
-          <div v-if="!sessionId" class="status-monitor-empty">
+          <section v-if="activeBackendKind === 'codex'" class="codex-session-usage" :aria-label="codexSessionCopy.title">
+            <h3 class="codex-session-title">{{ codexSessionCopy.title }}</h3>
+            <div v-if="!sessionId" class="status-monitor-empty">{{ $t('statusMonitor.token.noSession') }}</div>
+            <div v-else-if="!codexSessionUsage" class="status-monitor-empty">{{ codexSessionCopy.unavailable }}</div>
+            <template v-else>
+              <div v-if="codexContextPercent !== null" class="token-usage-bar-row">
+                <div class="codex-context-caption"><span>{{ codexSessionCopy.context }}</span><span>{{ codexContextPercent }}%</span></div>
+                <div class="token-usage-track" role="meter" :aria-label="codexSessionCopy.context" :aria-valuenow="Math.min(codexContextPercent, 100)" aria-valuemin="0" aria-valuemax="100">
+                  <div class="token-usage-fill" :style="{ width: `${Math.min(codexContextPercent, 100)}%` }" />
+                </div>
+              </div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.window }}</span><span class="token-value">{{ codexSessionUsage.modelContextWindow ? formatTokenCount(codexSessionUsage.modelContextWindow) : '—' }}</span></div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.total }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.total.totalTokens) }}</span></div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.input }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.total.inputTokens) }}</span></div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.output }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.total.outputTokens) }}</span></div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.reasoning }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.total.reasoningOutputTokens) }}</span></div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.cache }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.total.cachedInputTokens) }} / {{ formatTokenCount(codexSessionUsage.total.cacheWriteInputTokens) }}</span></div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.latest }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.last.totalTokens) }}</span></div>
+              <div class="status-monitor-row token-row"><span class="token-label">{{ codexSessionCopy.context }}</span><span class="token-value">{{ formatTokenCount(codexSessionUsage.last.inputTokens) }} / {{ codexSessionUsage.modelContextWindow ? formatTokenCount(codexSessionUsage.modelContextWindow) : '—' }}</span></div>
+            </template>
+          </section>
+          <div v-else-if="!sessionId" class="status-monitor-empty">
             {{ $t('statusMonitor.token.noSession') }}
           </div>
           <div v-else-if="tokenLoading && !tokenUsage" class="status-monitor-empty">
@@ -1509,6 +1549,97 @@ const kimiModelsReadyDotClass = computed(() => {
             </div>
           </div>
           <CodexAccountTokenUsage v-if="activeBackendKind === 'codex'" ref="accountUsageRef" :api="codexApi" :initial-view="initialUsageView" />
+          <section v-if="activeBackendKind === 'codex'" class="codex-account-status">
+            <div v-if="codexApi.status.value !== 'connected'" class="status-monitor-empty">
+              {{ $t('statusMonitor.codex.notConnected') }}
+            </div>
+            <div v-else class="status-monitor-list">
+              <div v-if="codexFiveHourRateLimit || codexWeeklyRateLimit" class="codex-rate-limits">
+                <h3>{{ $t('codexPanel.rateLimits') }}</h3>
+                <div v-if="codexFiveHourRateLimit" class="token-usage-bar-row codex-usage-bar">
+                  <div class="codex-context-caption"><span>{{ $t('statusMonitor.codex.rateLimitFiveHourUsed') }}</span><span>{{ rateLimitPercent(codexFiveHourRateLimit.usedPercent) }}%</span></div>
+                  <div class="token-usage-track" role="meter" :aria-label="$t('statusMonitor.codex.rateLimitFiveHourUsed')" :aria-valuenow="rateLimitPercent(codexFiveHourRateLimit.usedPercent)" aria-valuemin="0" aria-valuemax="100">
+                    <div class="token-usage-fill" :style="{ width: `${rateLimitPercent(codexFiveHourRateLimit.usedPercent)}%` }" />
+                  </div>
+                </div>
+                <div v-if="codexWeeklyRateLimit" class="token-usage-bar-row codex-usage-bar">
+                  <div class="codex-context-caption"><span>{{ $t('statusMonitor.codex.rateLimitUsed') }}</span><span>{{ rateLimitPercent(codexWeeklyRateLimit.usedPercent) }}%</span></div>
+                  <div class="token-usage-track" role="meter" :aria-label="$t('statusMonitor.codex.rateLimitUsed')" :aria-valuenow="rateLimitPercent(codexWeeklyRateLimit.usedPercent)" aria-valuemin="0" aria-valuemax="100">
+                    <div class="token-usage-fill" :style="{ width: `${rateLimitPercent(codexWeeklyRateLimit.usedPercent)}%` }" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="status-monitor-row">
+                <div class="status-monitor-row-main">
+                  <span class="status-dot" :class="codexApi.account.value ? 'status-dot-success' : 'status-dot-warning'" />
+                  <span class="status-monitor-name">{{ $t('statusMonitor.codex.account') }}</span>
+                </div>
+                <div class="status-monitor-row-actions">
+                  <div class="status-monitor-meta-column">
+                    <span class="status-monitor-meta">
+                      {{ codexApi.account.value?.type || $t('statusMonitor.codex.notLoggedIn') }}
+                    </span>
+                    <span v-if="codexPlanType" class="status-monitor-meta">
+                      {{ codexPlanType }}
+                    </span>
+                  </div>
+                  <button
+                    v-if="codexApi.account.value"
+                    type="button"
+                    class="status-monitor-action-button"
+                    :disabled="codexApi.loginPending.value"
+                    @click="handleCodexLogout"
+                  >
+                    {{ $t('statusMonitor.codex.logout') }}
+                  </button>
+                </div>
+              </div>
+
+              <div v-if="!codexApi.account.value" class="codex-login-card">
+                <input
+                  v-model="codexApiKeyInput"
+                  class="codex-login-input"
+                  type="password"
+                  :placeholder="$t('codexPanel.apiKeyPlaceholder')"
+                  @keydown.enter="handleCodexApiKeyLogin"
+                />
+                <div class="codex-login-actions">
+                  <button
+                    type="button"
+                    class="status-monitor-action-button"
+                    :disabled="codexApi.loginPending.value || !codexApiKeyInput.trim()"
+                    @click="handleCodexApiKeyLogin"
+                  >
+                    {{ $t('statusMonitor.codex.loginApiKey') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="status-monitor-action-button"
+                    :disabled="codexApi.loginPending.value"
+                    @click="codexApi.loginWithChatgpt"
+                  >
+                    {{ $t('statusMonitor.codex.loginChatgpt') }}
+                  </button>
+                  <button
+                    type="button"
+                    class="status-monitor-action-button"
+                    :disabled="codexApi.loginPending.value"
+                    @click="codexApi.loginWithDeviceCode"
+                  >
+                    {{ $t('statusMonitor.codex.loginDeviceCode') }}
+                  </button>
+                </div>
+                <div v-if="codexApi.deviceCodeInfo.value" class="status-monitor-meta-column codex-device-code">
+                  <span class="status-monitor-meta">{{ codexApi.deviceCodeInfo.value.verificationUrl }}</span>
+                  <span class="status-monitor-name">{{ codexApi.deviceCodeInfo.value.userCode }}</span>
+                </div>
+                <div v-if="codexApi.loginError.value" class="status-monitor-error">
+                  {{ codexApi.loginError.value }}
+                </div>
+              </div>
+            </div>
+          </section>
           <KimiAccountUsage v-if="isKimiWebBackend" ref="kimiAccountUsageRef" />
         </div>
 
@@ -1517,7 +1648,7 @@ const kimiModelsReadyDotClass = computed(() => {
         </div>
 
         <!-- Magic Context Tab -->
-        <div v-if="activeTab === 'mc'" class="status-monitor-content">
+        <div v-if="activeTab === 'mc' && activeBackendKind === 'opencode'" class="status-monitor-content">
           <div v-if="!magicContextWorkers?.length" class="status-monitor-empty">
             {{ $t('statusMonitor.mc.noData') }}
           </div>
@@ -1534,90 +1665,6 @@ const kimiModelsReadyDotClass = computed(() => {
               <span class="status-monitor-meta">
                 {{ magicContextStatusText(worker.status) }}
               </span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Codex Tab -->
-        <div v-if="activeTab === 'codex'" class="status-monitor-content">
-          <div v-if="codexApi.status.value !== 'connected'" class="status-monitor-empty">
-            {{ $t('statusMonitor.codex.notConnected') }}
-          </div>
-          <div v-else class="status-monitor-list">
-            <div v-if="codexApi.account.value && codexWeeklyRateLimit" class="token-usage-bar-row codex-usage-bar">
-              <div class="token-usage-track">
-                <div class="token-usage-fill" :style="{ width: `${codexRateLimitPercent}%` }" />
-              </div>
-              <span class="token-usage-percent">{{ codexRateLimitPercent }}%</span>
-            </div>
-
-            <div class="status-monitor-row">
-              <div class="status-monitor-row-main">
-                <span class="status-dot" :class="codexApi.account.value ? 'status-dot-success' : 'status-dot-warning'" />
-                <span class="status-monitor-name">{{ $t('statusMonitor.codex.account') }}</span>
-              </div>
-              <div class="status-monitor-row-actions">
-                <div class="status-monitor-meta-column">
-                  <span class="status-monitor-meta">
-                    {{ codexApi.account.value?.type || $t('statusMonitor.codex.notLoggedIn') }}
-                  </span>
-                  <span v-if="codexApi.accountPlanType.value" class="status-monitor-meta">
-                    {{ codexApi.accountPlanType.value }}
-                  </span>
-                </div>
-                <button
-                  v-if="codexApi.account.value"
-                  type="button"
-                  class="status-monitor-action-button"
-                  :disabled="codexApi.loginPending.value"
-                  @click="handleCodexLogout"
-                >
-                  {{ $t('statusMonitor.codex.logout') }}
-                </button>
-              </div>
-            </div>
-
-            <div v-if="!codexApi.account.value" class="codex-login-card">
-              <input
-                v-model="codexApiKeyInput"
-                class="codex-login-input"
-                type="password"
-                :placeholder="$t('codexPanel.apiKeyPlaceholder')"
-                @keydown.enter="handleCodexApiKeyLogin"
-              />
-              <div class="codex-login-actions">
-                <button
-                  type="button"
-                  class="status-monitor-action-button"
-                  :disabled="codexApi.loginPending.value || !codexApiKeyInput.trim()"
-                  @click="handleCodexApiKeyLogin"
-                >
-                  {{ $t('statusMonitor.codex.loginApiKey') }}
-                </button>
-                <button
-                  type="button"
-                  class="status-monitor-action-button"
-                  :disabled="codexApi.loginPending.value"
-                  @click="codexApi.loginWithChatgpt"
-                >
-                  {{ $t('statusMonitor.codex.loginChatgpt') }}
-                </button>
-                <button
-                  type="button"
-                  class="status-monitor-action-button"
-                  :disabled="codexApi.loginPending.value"
-                  @click="codexApi.loginWithDeviceCode"
-                >
-                  {{ $t('statusMonitor.codex.loginDeviceCode') }}
-                </button>
-              </div>
-              <div v-if="codexApi.deviceCodeInfo.value" class="status-monitor-meta-column codex-device-code">
-                <span class="status-monitor-meta">{{ codexApi.deviceCodeInfo.value.verificationUrl }}</span>
-                <span class="status-monitor-name">{{ codexApi.deviceCodeInfo.value.userCode }}</span>
-              </div>
-              <div v-if="codexApi.loginError.value" class="status-monitor-error">
-                {{ codexApi.loginError.value }}
-              </div>
             </div>
           </div>
         </div>
@@ -1674,7 +1721,7 @@ const kimiModelsReadyDotClass = computed(() => {
 .status-monitor-title {
   font-size: 14px;
   font-weight: 600;
-  color: var(--theme-text-primary, #e2e8f0);
+  color: var(--theme-modal-text, #e2e8f0);
   letter-spacing: 0.02em;
 }
 
@@ -2128,6 +2175,12 @@ const kimiModelsReadyDotClass = computed(() => {
   border-radius: 0;
   border-bottom: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12));
 }
+
+.codex-session-title { margin: 0; padding: 8px 12px; font-size: 14px; font-weight: 600; color: var(--theme-modal-text, #e2e8f0); }
+.codex-context-caption { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--theme-modal-text-muted, #94a3b8); font-variant-numeric: tabular-nums; }
+.codex-session-usage .token-label { flex-shrink: 1; overflow-wrap: anywhere; }
+.codex-account-status { border-top: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12)); margin-top: 16px; padding-top: 8px; }
+.codex-rate-limits h3 { margin: 0; padding: 8px 12px; font-size: 13px; font-weight: 600; }
 
 .token-row:last-child {
   border-bottom: none;

@@ -46,9 +46,6 @@ vi.mock('../composables/useMessages', () => ({
     loadHistory: () => undefined,
   }),
 }));
-vi.mock('../composables/useSettings', () => ({
-  useSettings: () => ({ showCodexInStatusMonitor: { value: false, __v_isRef: true } }),
-}));
 vi.mock('../composables/useAcpBridge', () => ({
   useAcpBridge: () => ({
     services: { value: [] },
@@ -142,7 +139,7 @@ describe('StatusMonitorModal stale request isolation', () => {
         listProviders: () => (++providerCalls === 1 ? firstProviders.promise : secondProviders.promise),
       }),
     );
-    const { app, root, sessionId } = mountStatusMonitor();
+    const { app, root, sessionId } = mountStatusMonitor({ backendKind: 'opencode' });
     await vi.waitFor(() => expect(providerCalls).toBe(1));
 
     sessionId.value = 'thread-2';
@@ -174,7 +171,7 @@ describe('StatusMonitorModal stale request isolation', () => {
         },
       }),
     );
-    const { app, root, sessionId } = mountStatusMonitor();
+    const { app, root, sessionId } = mountStatusMonitor({ backendKind: 'opencode' });
     await vi.waitFor(() => expect(providerCalls).toBe(1));
 
     sessionId.value = undefined;

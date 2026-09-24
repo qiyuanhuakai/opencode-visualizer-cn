@@ -108,7 +108,6 @@ describe('useSettings editor', () => {
       suppressAutoWindows: settings.suppressAutoWindows.value,
       showMinimizeButtons: settings.showMinimizeButtons.value,
       showCodexButton: settings.showCodexButton.value,
-      showCodexInStatusMonitor: settings.showCodexInStatusMonitor.value,
       editInVis: settings.editInVis.value,
       dockAlwaysOpen: settings.dockAlwaysOpen.value,
       terminalFontFamily: settings.terminalFontFamily.value,
@@ -128,7 +127,6 @@ describe('useSettings editor', () => {
     expect(settings.suppressAutoWindows.value).toBe(before.suppressAutoWindows);
     expect(settings.showMinimizeButtons.value).toBe(before.showMinimizeButtons);
     expect(settings.showCodexButton.value).toBe(before.showCodexButton);
-    expect(settings.showCodexInStatusMonitor.value).toBe(before.showCodexInStatusMonitor);
     expect(settings.editInVis.value).toBe(before.editInVis);
     expect(settings.dockAlwaysOpen.value).toBe(before.dockAlwaysOpen);
     expect(settings.terminalFontFamily.value).toBe(before.terminalFontFamily);

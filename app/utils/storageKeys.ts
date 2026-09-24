@@ -174,7 +174,6 @@ export const StorageKeys = {
     showCodexButton: 'settings.showCodexButton.v1',
     showForgePanelButton: 'settings.showForgePanelButton.v1',
     showForgeButton: 'settings.showForgeButton.v1',
-    showCodexInStatusMonitor: 'settings.showCodexInStatusMonitor.v1',
     editInVis: 'settings.editInVis.v1',
     editorFontSizePx: 'settings.editorFontSizePx.v1',
     editorTabSize: 'settings.editorTabSize.v1',

@@ -298,7 +298,6 @@ const messages: LocaleMessages = {
       token: 'Token',
       mc: 'MC',
       acp: 'ACP',
-      codex: 'Codex',
     },
     server: {
       status: 'Servila stato',
@@ -425,6 +424,7 @@ const messages: LocaleMessages = {
       loginDeviceCode: 'Aparata kodo',
       logout: 'Elsaluti',
       rateLimitUsed: 'Uzita (semajna)',
+      rateLimitFiveHourUsed: 'Uzita (5 horoj)',
     },
   },
   providerManager: {
@@ -1020,10 +1020,6 @@ const messages: LocaleMessages = {
       showForgeButton: {
         label: 'Montri Forge-panelbutonon',
         description: 'Montri la malpezan Forge-PTY-panelbutonon dekstre de administra reĝimo.',
-      },
-      showCodexInStatusMonitor: {
-        label: 'Montri Codex en stato-monitoro',
-        description: 'Montri apartan Codex-langeton en la stato-monitoro.',
       },
     },
   },

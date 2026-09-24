@@ -300,7 +300,6 @@ const messages: LocaleMessages = {
       token: 'Token',
       mc: 'MC',
       acp: 'ACP',
-      codex: 'Codex',
     },
     server: {
       status: 'サーバー状態',
@@ -427,6 +426,7 @@ const messages: LocaleMessages = {
       loginDeviceCode: 'デバイスコード',
       logout: 'ログアウト',
       rateLimitUsed: '使用済み（週間）',
+      rateLimitFiveHourUsed: '使用済み（5時間）',
     },
   },
   providerManager: {
@@ -1023,10 +1023,6 @@ const messages: LocaleMessages = {
       showForgeButton: {
         label: 'Forge パネルボタンを表示',
         description: '管理モードの右側に軽量 Forge PTY パネルボタンを表示します。',
-      },
-      showCodexInStatusMonitor: {
-        label: 'ステータスモニターに Codex を表示',
-        description: 'ステータスモニターのポップオーバーに Codex 専用タブを表示します。',
       },
     },
   },

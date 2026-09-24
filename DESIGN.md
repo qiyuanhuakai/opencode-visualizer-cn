@@ -127,7 +127,8 @@ Do not use system-native dropdowns such as HTML `<select>` in Vis interfaces. Us
 - **States**: search-result directories start expanded and remain independently collapsible without changing the non-search tree state.
 
 ### Codex Slash Controls
-- Commands reuse the composer dropdown and existing status monitor navigation. Account Token activity belongs to the Token tab; Codex quota windows belong to the Codex tab.
+- Commands reuse the composer dropdown and existing status monitor navigation. Account Token activity and Codex quota windows belong to the Token tab, with quota windows below account activity.
+- Codex Token status uses the App Server thread usage notification: compact themed rows for cumulative input/output/cache and the latest request, and a context-window meter based on latest input. Account activity stays a separate section below. Empty, disconnected, and thread-switch states never reuse another thread's usage.
 - The Fast status is a native toggle button with `aria-pressed`, a visible keyboard focus ring, translated click/command guidance, and disabled/busy state while saving. The confirmed tier remains visible on failure and errors use the existing status surface. Clicking it preserves composer text and attachments.
 - Permission and side-chat windows reuse the goal window's floating theme, 12px panel padding, 8px control spacing and radii, wrapping helper text and visible keyboard focus. No new color or motion tokens.
 - Permission choices use native buttons with `aria-pressed`, explaining their effective scope and showing loading, disconnected and rejected changes.

@@ -49,9 +49,6 @@ vi.mock('../composables/useMessages', () => ({
     loadHistory: () => undefined,
   }),
 }));
-vi.mock('../composables/useSettings', () => ({
-  useSettings: () => ({ showCodexInStatusMonitor: { value: false, __v_isRef: true } }),
-}));
 vi.mock('../composables/useAcpBridge', () => ({
   useAcpBridge: () => ({
     services: { value: [] },
@@ -78,10 +75,11 @@ function clickTab(root: HTMLElement, label: string) {
   button?.click();
 }
 
-function mountStatusMonitor(initialTab?: 'token' | 'skills') {
+function mountStatusMonitor(initialTab?: 'token' | 'skills' | 'mc') {
   const root = document.createElement('div');
   document.body.appendChild(root);
   const open = ref(false);
+  const codexApi = useCodexApi();
   const app = createApp(
     defineComponent({
       setup() {
@@ -92,7 +90,7 @@ function mountStatusMonitor(initialTab?: 'token' | 'skills') {
             preload: false,
             activeBackendKind: 'codex',
             sessionId: 'thread-1',
-            codexApi: useCodexApi(),
+            codexApi,
           });
       },
     }),
@@ -100,7 +98,7 @@ function mountStatusMonitor(initialTab?: 'token' | 'skills') {
   app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
   app.mount(root);
   open.value = true;
-  return { app, root };
+  return { app, root, codexApi };
 }
 
 describe('StatusMonitorModal Codex status isolation', () => {
@@ -120,8 +118,40 @@ describe('StatusMonitorModal Codex status isolation', () => {
     clickTab(root, 'Token');
     await nextTick();
 
-    await vi.waitFor(() => expect(root.textContent).toContain('321'));
+    await vi.waitFor(() => expect(root.textContent).toContain('No token data for this session yet'));
     expect(root.textContent).not.toContain('Loading...');
+    app.unmount();
+  });
+
+  it('shows current thread totals and last input from App Server without using message estimates', async () => {
+    const { app, root, codexApi } = mountStatusMonitor('token');
+    codexApi.tokenUsage.value = {
+      threadId: 'thread-1', turnId: 'turn-2', tokenUsage: {
+        total: { totalTokens: 1900, inputTokens: 1300, cachedInputTokens: 400, cacheWriteInputTokens: 0, outputTokens: 600, reasoningOutputTokens: 100 },
+        last: { totalTokens: 350, inputTokens: 280, cachedInputTokens: 80, cacheWriteInputTokens: 0, outputTokens: 70, reasoningOutputTokens: 20 },
+        modelContextWindow: 1000,
+      },
+    };
+    await nextTick();
+    expect(root.querySelector('.codex-session-usage')?.textContent).toContain('1,900');
+    expect(root.querySelector('.codex-session-usage')?.textContent).toContain('280');
+    expect(root.querySelector('.codex-session-usage')?.textContent).toContain('28%');
+    expect(root.querySelector('.codex-session-usage')?.textContent).not.toContain('321');
+    app.unmount();
+  });
+
+  it('does not show a notification from another thread', async () => {
+    const { app, root, codexApi } = mountStatusMonitor('token');
+    codexApi.tokenUsage.value = {
+      threadId: 'other', turnId: 'turn-1', tokenUsage: {
+        total: { totalTokens: 9000, inputTokens: 8000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 1000, reasoningOutputTokens: 0 },
+        last: { totalTokens: 9000, inputTokens: 8000, cachedInputTokens: 0, cacheWriteInputTokens: 0, outputTokens: 1000, reasoningOutputTokens: 0 },
+        modelContextWindow: 10000,
+      },
+    };
+    await nextTick();
+    expect(root.querySelector('.codex-session-usage')?.textContent).not.toContain('9,000');
+    expect(root.querySelector('.codex-session-usage')?.textContent).toContain('No token data for this session yet');
     app.unmount();
   });
 
@@ -131,6 +161,48 @@ describe('StatusMonitorModal Codex status isolation', () => {
     expect(root.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toContain('Token');
     expect(root.textContent).toContain('Codex account token activity');
     expect(root.textContent).toContain('Connect Codex');
+    app.unmount();
+  });
+
+  it('shows Plus five-hour and weekly limits beneath account tokens, with weekly for other plans', async () => {
+    const { app, root, codexApi } = mountStatusMonitor('token');
+    codexApi.status.value = 'connected';
+    codexApi.account.value = { type: 'chatgpt', planType: 'plus' };
+    codexApi.accountPlanType.value = 'plus';
+    codexApi.accountRateLimits.value = {
+      limitId: 'codex',
+      primary: { usedPercent: 23, windowDurationMins: 300, resetsAt: 1 },
+      secondary: { usedPercent: 61, windowDurationMins: 10080, resetsAt: 2 },
+    };
+    await nextTick();
+
+    expect(root.querySelector('#status-monitor-tab-codex')).toBeNull();
+    const accountUsage = root.querySelector('.account-token-usage');
+    const quotas = root.querySelector('.codex-rate-limits');
+    expect(accountUsage).not.toBeNull();
+    expect(quotas).not.toBeNull();
+    expect(accountUsage && quotas ? accountUsage.compareDocumentPosition(quotas) & Node.DOCUMENT_POSITION_FOLLOWING : 0).toBeTruthy();
+    expect(quotas?.textContent).toContain('Used (5 hours)');
+    expect(quotas?.textContent).toContain('23%');
+    expect(quotas?.textContent).toContain('Used (weekly)');
+    expect(quotas?.textContent).toContain('61%');
+
+    codexApi.accountPlanType.value = 'pro';
+    await nextTick();
+    expect(quotas?.textContent).not.toContain('Used (5 hours)');
+    expect(quotas?.textContent).toContain('Used (weekly)');
+
+    codexApi.account.value = { type: 'apiKey' };
+    await nextTick();
+    expect(quotas?.textContent).toContain('Used (weekly)');
+    app.unmount();
+  });
+
+  it('does not select the hidden MC tab when Codex requests it initially', async () => {
+    const { app, root } = mountStatusMonitor('mc');
+    await nextTick();
+    expect(root.querySelector('#status-monitor-tab-mc')).toBeNull();
+    expect(root.querySelector('[role="tab"][aria-selected="true"]')?.id).toBe('status-monitor-tab-server');
     app.unmount();
   });
 
@@ -176,7 +248,8 @@ describe('StatusMonitorModal Codex status isolation', () => {
     await nextTick();
 
     const tabs = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-    expect(tabs).toHaveLength(8);
+    expect(tabs).toHaveLength(7);
+    expect(tabs.some((tab) => tab.textContent?.trim() === 'MC')).toBe(false);
     expect(tabs[0]?.getAttribute('aria-selected')).toBe('true');
     tabs[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     await nextTick();
