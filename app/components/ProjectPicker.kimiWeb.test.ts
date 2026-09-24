@@ -11,27 +11,30 @@ const fake = vi.hoisted(() => {
     '/.git': [{ name: 'objects', path: '/.git/objects', is_dir: true }],
     '/home/user': [{ name: 'apps', path: '/home/user/apps', is_dir: true }],
     '/home/user/.git': [{ name: 'objects', path: '/home/user/.git/objects', is_dir: true }],
-    '/home/user/apps': [{ name: 'src', path: '/home/user/apps/src', is_dir: true }],
-    '/home/user/apps/.git': [{ name: 'objects', path: '/home/user/apps/.git/objects', is_dir: true }],
+    '/home/user/apps': [
+      { name: 'src', path: '/home/user/apps/src', is_dir: true },
+      { name: '.git', path: '/home/user/apps/.git', is_dir: false },
+    ],
   };
   const browseDirectories = vi.fn(async (path: string) => ({
     path,
     parent: '/home',
-    entries: entriesByPath[path] ?? [],
+    entries: (entriesByPath[path] ?? []).filter((entry) => entry.is_dir),
   }));
-  class KimiWebAdapter {
-    restClient = { browseDirectories };
-  }
   const listFiles = vi.fn(async ({ directory, path }: { directory: string; path: string }) => {
     const fullPath = path === '.' ? directory : `${directory.replace(/\/$/, '')}/${path}`;
     return (entriesByPath[fullPath] ?? []).map((entry) => ({
       name: entry.name,
       path: entry.path,
       absolute: entry.path,
-      type: 'directory' as const,
+      type: entry.is_dir ? 'directory' as const : 'file' as const,
       ignored: false,
     }));
   });
+  class KimiWebAdapter {
+    restClient = { browseDirectories };
+    listFiles = listFiles;
+  }
   return {
     browseDirectories,
     listFiles,

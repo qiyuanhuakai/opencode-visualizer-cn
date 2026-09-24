@@ -248,9 +248,23 @@ async function fetchDirectory(dir: string) {
       if ((gitError as Error).name === 'AbortError') throw gitError;
       gitEntries = [];
     }
+    let hasGitEntry = data.some((entry) => entry.name === '.git');
+    if (!hasGitEntry && gitEntries.length === 0 && getActiveBackendKind() === 'kimi-web') {
+      try {
+        const files = await getActiveBackendAdapter().listFiles?.(
+          { directory: cleanDir, path: '.' },
+          { signal: controller.signal },
+        );
+        hasGitEntry = Array.isArray(files) && files.some((entry: unknown) =>
+          typeof entry === 'object' && entry !== null && 'name' in entry && entry.name === '.git',
+        );
+      } catch (fileError) {
+        if ((fileError as Error).name === 'AbortError') throw fileError;
+      }
+    }
     if (requestId !== fetchRequestId) return;
     allEntries.value = data;
-    hasGitDirectory.value = gitEntries.length > 0;
+    hasGitDirectory.value = hasGitEntry || gitEntries.length > 0;
   } catch (err) {
     if ((err as Error).name === 'AbortError') return;
     if (requestId !== fetchRequestId) return;
