@@ -1,4 +1,5 @@
 export type ComposerDraftScheduler = {
+  readonly pending: boolean;
   schedule: (task?: () => void) => void;
   flush: () => void;
   cancel: () => void;
@@ -36,5 +37,12 @@ export function createComposerDraftScheduler(
     }, delayMs);
   }
 
-  return { schedule, flush, cancel };
+  return {
+    get pending() {
+      return timer !== null;
+    },
+    schedule,
+    flush,
+    cancel,
+  };
 }

@@ -4399,8 +4399,11 @@ function handleComposerDraftStorage(event: StorageEvent) {
   if (event.key !== storageKey(StorageKeys.drafts.composer)) return;
   const contextKey = draftKeyForSelectedContext();
   if (!contextKey) return;
+  if (composerDraftPersistence.pending) return;
   const store = parseComposerDraftStore(event.newValue);
   const draft = store[contextKey] ?? null;
+  const previousDraft = parseComposerDraftStore(event.oldValue)[contextKey] ?? null;
+  if (JSON.stringify(previousDraft) === JSON.stringify(draft)) return;
   const knownRev = composerDraftRevisionByContext.get(contextKey) ?? 0;
   if (!draft) {
     composerDraftRevisionByContext.delete(contextKey);
