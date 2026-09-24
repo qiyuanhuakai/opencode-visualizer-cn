@@ -18,6 +18,9 @@ function createIpcFixture() {
   const values = new Map<string, string>([['opencode.saved', 'old']]);
   const pendingChanges: StorageChange[] = [];
   const storage = {
+    prepare: vi.fn(async () => {}),
+    flush: vi.fn(async () => {}),
+    setItemAsync: vi.fn(async (_key: string, _value: string | null) => null),
     getItem: vi.fn((key: string) => values.get(key) ?? null),
     setItem: vi.fn((key: string, value: string) => {
       const oldValue = values.get(key) ?? null;
@@ -49,6 +52,7 @@ function createIpcFixture() {
 
   registerPersistentStorageIpc({
     ipcMain: {
+      handle: vi.fn(),
       on: (channel: string, handler: (event: IpcEvent, payload: unknown) => void) => {
         handlers.set(channel, handler);
       },

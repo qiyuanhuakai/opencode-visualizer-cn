@@ -7,6 +7,19 @@ export function registerPersistentStorageIpc({
   localApplicationPathKey,
   rendererStoragePrefix,
 }) {
+  ipcMain.handle('persistent-storage-set-async', async (event, payload) => {
+    assertTrustedRenderer(event);
+    if (typeof payload?.key !== 'string' || (typeof payload.value !== 'string' && payload.value !== null)) {
+      throw new TypeError('Invalid asynchronous storage mutation');
+    }
+    const storage = getStorage();
+    await storage.setItemAsync(payload.key, payload.value);
+    for (const change of storage.drainPendingChanges()) {
+      broadcastChange(change, change.key === payload.key ? event.sender.id : undefined);
+    }
+    return true;
+  });
+
   function commitMutation(event, mutation, excludedKey) {
     let changes;
     try {

@@ -110,6 +110,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   persistentStorage: {
+    setItemAsync: (key, value) => ipcRenderer.invoke('persistent-storage-set-async', { key, value }),
     getItem: (key) =>
       decodePersistentStorageGetResponse(ipcRenderer.sendSync('persistent-storage-get', key)),
     setItem: (key, value) => ipcRenderer.sendSync('persistent-storage-set', { key, value }),

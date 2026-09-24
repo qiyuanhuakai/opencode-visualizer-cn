@@ -208,7 +208,12 @@ if (!hasSingleInstanceLock) {
     desktopRuntime?.restore();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    try {
+      await getPersistentStorage().prepare();
+    } catch (error) {
+      console.error('[electron] Failed to prepare persistent storage; original data retained:', error);
+    }
     approvedLocalApplicationPath = loadApprovedLocalApplication(localApplicationApprovalFilePath());
     desktopRuntime = createDesktopRuntime({
       getWindow: () => mainWindow,
@@ -268,7 +273,20 @@ app.on('window-all-closed', () => {
 
 installAsyncQuitCleanup(
   app,
-  () => cleanupAsyncQuitOwners(localFileEditor, desktopRuntime),
+  async () => {
+    const failures = [];
+    try {
+      await cleanupAsyncQuitOwners(localFileEditor, desktopRuntime);
+    } catch (error) {
+      failures.push(error);
+    }
+    try {
+      await persistentStorage?.flush();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length) throw new AggregateError(failures, 'Desktop shutdown failed');
+  },
   (error) => {
     console.error('[electron] Failed to clean desktop resources before quit:', error);
   },
