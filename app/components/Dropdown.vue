@@ -44,7 +44,8 @@
       :class="[{ 'is-open': isActive }, props.popupClass]"
       :style="[props.popupStyle, menuStyle]"
       :inert="!isActive || undefined"
-      role="listbox"
+      :role="props.menuRole ?? 'listbox'"
+      :aria-label="props.menuRole === 'dialog' ? props.label : undefined"
       title=""
       tabindex="-1"
       @click.stop
@@ -99,6 +100,7 @@ const props = withDefaults(
     autoFocus?: boolean;
     autoHighlight?: boolean;
     menuId?: string;
+    menuRole?: 'listbox' | 'dialog';
   }>(),
   {
     autoFocus: true,
@@ -283,6 +285,8 @@ function onKeyDown(e: KeyboardEvent) {
     }
     return;
   }
+
+  if (props.menuRole === 'dialog') return;
 
   if (e.key === 'ArrowDown') {
     e.preventDefault();

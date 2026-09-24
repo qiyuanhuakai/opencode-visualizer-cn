@@ -345,6 +345,12 @@ describe('kimiWeb REST client', () => {
         run: (c) => c.getMessages(SID),
       },
       {
+        name: 'btwSession',
+        method: 'POST',
+        path: `/api/v1/sessions/${SID}:btw`,
+        run: (c) => c.btwSession(SID),
+      },
+      {
         name: 'sendPrompt',
         method: 'POST',
         path: `/api/v1/sessions/${SID}/prompts`,
@@ -445,6 +451,13 @@ describe('kimiWeb REST client', () => {
       expect(lastCall(fetchMock).url).toBe(
         `${BASE}/api/v1/sessions/${SID}/fs/a%20b/c%23d.txt:download`,
       );
+    });
+
+    it('addresses a native btw prompt to the returned child agent', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({})));
+      await client.sendPrompt(SID, { agent_id: 'agent-0', content: [{ type: 'text', text: 'side question' }] });
+      const { init } = lastCall(fetchMock);
+      expect(JSON.parse(String(init.body))).toEqual({ agent_id: 'agent-0', content: [{ type: 'text', text: 'side question' }] });
     });
   });
 

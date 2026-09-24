@@ -651,7 +651,7 @@ const messages: LocaleMessages = {
     },
   },
   kimiWeb: {
-    commands: { help: 'Show supported Kimi commands', compact: 'Compact session context', applied: 'Command applied.' },
+    commands: { help: 'Show supported Kimi commands', compact: 'Compact session context', copyall: 'Copy the full session as Markdown', new: 'Start a new session', clear: 'Clear context in a new session', btw: 'Ask in an isolated side conversation', fork: 'Fork this session', undo: 'Undo the last turn', status: 'Open status monitor', subagent: 'Manage subagents', applied: 'Command applied.' },
     composer: {
       manual: 'manual',
       auto: 'auto',

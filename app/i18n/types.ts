@@ -633,7 +633,7 @@ export interface LocaleMessages {
     };
   };
   kimiWeb: {
-    commands: { help: string; compact: string; applied: string };
+    commands: { help: string; compact: string; copyall: string; new: string; clear: string; btw: string; fork: string; undo: string; status: string; subagent: string; applied: string };
     composer: {
       manual: string;
       auto: string;

@@ -23,13 +23,24 @@ export function createKimiWebSlashDispatcher(params: BackendMessageSendParams) {
         params.setSendStatusKey('app.error.unavailable', { action: 'Kimi Web command' });
         return true;
       }
+      const changesSession = action.kind === 'new' || action.kind === 'clear';
+      if (changesSession && isCurrent() && params.messageInput.value === input) {
+        params.messageInput.value = '';
+        params.persistComposerDraftForCurrentContext();
+      }
       await params.executeKimiWebSlashCommand(action);
       if (isCurrent() && params.messageInput.value === input) {
         params.messageInput.value = '';
         params.persistComposerDraftForCurrentContext();
       }
     } catch (error) {
-      if (isCurrent()) params.setSendStatusKey('app.error.sendFailed', { message: params.toErrorMessage(error) });
+      if (isCurrent()) {
+        if (!params.messageInput.value) {
+          params.messageInput.value = input;
+          params.persistComposerDraftForCurrentContext();
+        }
+        params.setSendStatusKey('app.error.sendFailed', { message: params.toErrorMessage(error) });
+      }
     } finally {
       pending = false;
     }

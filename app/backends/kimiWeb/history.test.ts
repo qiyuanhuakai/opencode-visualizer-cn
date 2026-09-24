@@ -6,6 +6,8 @@ import type { KimiWebMessage } from '../../utils/kimiWeb';
 import { KimiWebError, KimiWebTransportError } from '../../utils/kimiWeb';
 import { collectKimiWebHistoryMessages, type KimiWebHistoryPage } from './history';
 import { isInjectionMessage, kimiWebMessagesToHistoryEntries } from './historyEntries';
+import { buildHistoryEntries } from '../../utils/historyEntries';
+import { copyKimiWebSessionMarkdown, formatKimiWebSessionMarkdown } from './copyAll';
 
 // The fixture is a verbatim capture of kimi web 0.43.0 `GET …/messages`
 // (Todo 13 live capture) — reverse-chronological, `has_more:false`, one
@@ -161,5 +163,54 @@ describe('kimiWebMessagesToHistoryEntries', () => {
     if (toolPart?.type === 'tool' && toolPart.state.status === 'completed') {
       expect(toolPart.state.output).toContain('agent_id: agent-0');
     }
+  });
+
+  it('shows completed Kimi tool calls in history, including shell and web search', () => {
+    const messages = [...fixtureMessages()].reverse().filter((message) => !isInjectionMessage(message));
+    messages.push({ id: 'assistant-extra', session_id: SESSION_ID, role: 'assistant', created_at: '2026-09-21T04:00:00Z', content: [
+      { type: 'tool_use', tool_call_id: 'shell-1', tool_name: 'Shell', input: { command: 'pwd' } },
+      { type: 'tool_use', tool_call_id: 'search-1', tool_name: 'WebSearch', input: { query: 'kimi' } },
+      { type: 'tool_use', tool_call_id: 'other-1', tool_name: 'CustomTool', input: {} },
+    ] });
+    messages.push({ id: 'results-extra', session_id: SESSION_ID, role: 'tool', created_at: '2026-09-21T04:00:01Z', content: [
+      { type: 'tool_result', tool_call_id: 'shell-1', output: '/repo' },
+      { type: 'tool_result', tool_call_id: 'search-1', output: 'Found a result' },
+      { type: 'tool_result', tool_call_id: 'other-1', output: 'Done' },
+    ] });
+    const converted = kimiWebMessagesToHistoryEntries(messages);
+    const parts = new Map(converted.map((entry) => [entry.info.id, entry.parts]));
+    const history = buildHistoryEntries({
+      messages: converted.map((entry) => entry.info),
+      hasTextContent: (message) => parts.get(message.id)?.some((part) => part.type === 'text') ?? false,
+      getParts: (id) => parts.get(id) ?? [],
+    });
+    expect(history.filter((entry) => entry.kind === 'tool').map((entry) => entry.part.tool)).toEqual(['read', 'task', 'bash', 'websearch', 'CustomTool']);
+  });
+});
+
+describe('formatKimiWebSessionMarkdown', () => {
+  it('copies the complete conversation as Markdown with tool calls and results, without injected messages', async () => {
+    const collected = await collectKimiWebHistoryMessages({ sessionId: SESSION_ID, fetchPage: async () => ({ items: fixtureMessages(), has_more: false }) });
+    const copied = formatKimiWebSessionMarkdown(collected.messages);
+    expect(copied).toContain('# Session transcript\n\n## Turn 1\n\n### User\n\nhi');
+    expect(copied).toContain('### Assistant');
+    expect(copied).toContain('#### Tool Call: Read\n\n```json');
+    expect(copied).toContain('<details><summary>Tool Result: Read</summary>\n\n1\tok');
+    expect(copied).toContain('#### Tool Call: Agent');
+    expect(copied).not.toContain("Today's date is 2026-09-21");
+  });
+
+  it('copies every page as text and never writes a truncated conversation', async () => {
+    const messages = fixtureMessages();
+    const writeText = vi.fn(async (_text: string) => {});
+    const getMessages = vi.fn(async (_id: string, query?: { before_id?: string }) => query?.before_id
+      ? { items: messages.slice(4), has_more: false }
+      : { items: messages.slice(0, 4), has_more: true });
+    await copyKimiWebSessionMarkdown(SESSION_ID, getMessages, writeText);
+    expect(getMessages).toHaveBeenCalledTimes(2);
+    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText.mock.calls[0]?.[0]).toContain('#### Tool Call: Read');
+    await expect(copyKimiWebSessionMarkdown(SESSION_ID, async () => ({ items: [messages[0]!], has_more: true }), writeText)).rejects.toThrow('full session');
+    expect(writeText).toHaveBeenCalledOnce();
   });
 });

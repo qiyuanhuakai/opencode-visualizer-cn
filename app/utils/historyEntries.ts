@@ -93,7 +93,7 @@ function toolEntry(part: ToolPart): HistoryEntry | null {
   if (part.tool === 'question') {
     return { kind: 'question', part, time: getToolPartTime(part) };
   }
-  if (!isHistoryToolName(part.tool)) return null;
+  if (!isHistoryToolName(part.tool) && part.metadata?.source !== 'kimi-web') return null;
   return { kind: 'tool', part, time: getToolPartTime(part) };
 }
 

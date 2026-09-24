@@ -171,10 +171,9 @@ Mixed tonal-shift and thin borders.
 Shadows are reserved for existing modal/floating chrome; Forge integration must reuse the same floating-window shell surface rather than inventing a new material.
 
 ### Kimi Agent Management
-- Reuse floating-window surfaces, compact control buttons, 12px panel padding and 8px gaps. No added motion or colors.
-- Child conversations and agents running inside the same conversation occupy separately labelled sections; only child conversations may be opened as a conversation.
-- Settings use labelled native selects; model and thinking choices come from the server. Task stop targets the displayed task in its owning session.
-- Loading, failure, empty and saving states stay distinct; edits disable during requests and errors are announced. Long titles wrap on narrow screens.
+- The Mode-adjacent icon opens a compact upward settings popover using dropdown surface, border, focus and option tokens.
+- Default subagent model and thinking effort use themed dropdown choices from the server; the independent tower experiment uses a compact switch.
+- The popover contains no child-conversation browser or subagent run viewer. Loading, failure and saving states stay distinct; edits disable during requests and errors are announced.
 
 ### Kimi Plugin Management
 - Plugin management lives in the existing status monitor Plugins tab and reuses modal surface, text, border and accent tokens.
@@ -184,5 +183,5 @@ Shadows are reserved for existing modal/floating chrome; Forge integration must 
 ### Kimi Compact Controls (follow-up)
 - Installed providers use the same compact rows as OpenCode; model detail expands on demand. Catalog uses dense two-column rows and one column on narrow screens. Controls are 28px, metadata 12px, and gaps use the shared spacing tokens.
 - `manual`, `yolo`, `auto`, `tower`, `plan`, and `swarm` are protocol names and remain lowercase in every locale. The independent tower/plan/swarm toggles share one upward-opening composer dropdown labeled Mode (模式 in Chinese), with visible selected states in its menu.
-- The Kimi goal bar belongs beside composer modes, following the Codex 28px flexible goal bar. Child management, whole-session copy and compact move to a compact upward composer actions menu. The top session tree keeps navigation, pin, rename, archive and delete.
+- The Kimi goal bar belongs beside composer modes, following the Codex 28px flexible goal bar. A 28px icon-only settings button sits immediately after Mode. `/copyall` copies the complete session as Markdown, while `/compact` performs compaction. Every `/btw` opens a new, initially blank side-conversation window with inherited context available to the model. The top session tree keeps navigation, pin, rename, archive and delete.
 - Plugin and quota rows use the status monitor's existing list-row, progress and action-button theme tokens in both light and dark themes, matching compact typography rather than independent cards.

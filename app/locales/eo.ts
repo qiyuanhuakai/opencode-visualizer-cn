@@ -650,7 +650,7 @@ const messages: LocaleMessages = {
     },
   },
   kimiWeb: {
-    commands: { help: 'Montri subtenatajn Kimi-komandojn', compact: 'Kompakti kuntekston de seanco', applied: 'Komando plenumita.' },
+    commands: { help: 'Montri subtenatajn Kimi-komandojn', compact: 'Kompakti kuntekston de seanco', copyall: 'Kopii la tutan seancon kiel Markdown', new: 'Krei novan seancon', clear: 'Forviŝi kuntekston en nova seanco', btw: 'Demandi en izolita flanka konversacio', fork: 'Forkigi la seancon', undo: 'Malfari la lastan vicon', status: 'Malfermi statan monitoron', subagent: 'Administri subagentojn', applied: 'Komando plenumita.' },
     composer: {
       manual: 'manual',
       auto: 'auto',

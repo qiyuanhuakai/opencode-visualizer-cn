@@ -109,11 +109,29 @@ export type KimiWebModel = {
 
 export type KimiWebConfig = {
   default_model?: string;
+  experimental?: Record<string, boolean>;
   secondary_model?: {
     default_model?: string;
+    default_effort?: string;
+    defaultModel?: string;
+    defaultEffort?: string;
     models?: Record<string, string>;
     force?: boolean;
   };
+};
+
+export type KimiWebTranscriptFrame =
+  | { kind: 'text'; role: 'user' | 'assistant'; text: string; frameId: string }
+  | { kind: 'thinking'; text: string; frameId: string }
+  | { kind: 'tool'; name: string; state: string; input?: unknown; output?: unknown; error?: string; frameId: string }
+  | { kind: 'notice'; message: string; level: string; frameId: string };
+export type KimiWebTranscriptTurn = {
+  kind: 'turn'; turnId: string; ordinal: number; state: string; prompt?: string; error?: string;
+  steps: Array<{ stepId: string; frames: KimiWebTranscriptFrame[] }>;
+};
+export type KimiWebAgentTranscript = {
+  agent_id: string; items: Array<KimiWebTranscriptTurn | { kind: 'marker' | 'taskref' }>;
+  has_more: boolean;
 };
 
 export type KimiWebProviderType =
@@ -416,7 +434,7 @@ export type KimiWebSessionProfileInput = {
   permission_rules?: KimiWebPermissionRule[];
 };
 
-export type KimiWebSendPromptInput = { content: KimiWebContentPart[] };
+export type KimiWebSendPromptInput = { content: KimiWebContentPart[]; agent_id?: string };
 
 export type KimiWebListSessionsOptions = {
   before_id?: string;
@@ -708,6 +726,18 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
         method: 'POST',
         path: `${sessionPath(sessionId)}:compact`,
         body: {},
+      }),
+    btwSession: (sessionId: string) =>
+      requestJson<{ agent_id: string }>({
+        method: 'POST',
+        path: `${sessionPath(sessionId)}:btw`,
+        body: {},
+      }),
+    getAgentTranscript: (sessionId: string, agentId: string, beforeTurn?: string) =>
+      requestJson<KimiWebAgentTranscript>({
+        method: 'GET',
+        path: `${sessionPath(sessionId)}/transcript`,
+        query: { agent_id: agentId, page_size: 100, before_turn: beforeTurn },
       }),
     updateProfile: (sessionId: string, input: KimiWebSessionProfileInput) =>
       requestJson<KimiWebSession>({

@@ -87,7 +87,7 @@ type UnionEntry = {
 // INVENTORY (mirrors task-12-branches.md)
 // ---------------------------------------------------------------------------
 const BRANCHES: BranchEntry[] = [
-  { file: 'App.vue', fp: "activeBackendKind.value!=='kimi-web'", occurrences: 4, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'goal/agent manager launch and stale-session callback guards', kimiSignal: 'KimiWebAgentManager' },
+  { file: 'App.vue', fp: "activeBackendKind.value!=='kimi-web'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'goal and settings popup launch guards', kimiSignal: 'KimiWebComposerActions' },
   { file: 'App.vue', fp: "activeBackendKind.value!=='kimi-web'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'Kimi Git metadata hydration queue and probe guard', kimiSignal: 'scheduleKimiTopPanelGitInfoHydration' },
   { file: 'App.vue', fp: "activeBackendKind.value==='kimi-web'", occurrences: 2, classification: 'ui-required', owner: 25, handling: 'handled', sites: 'Kimi Git metadata probe backend and result fence', kimiSignal: 'hydrateKimiTopPanelGitInfo' },
   { file: 'composables/useBackendMessageSend.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 18, handling: 'handled', sites: 'invalidate in-flight send on Kimi session switch', kimiSignal: 'requestFence.invalidate' },
@@ -151,7 +151,7 @@ const BRANCHES: BranchEntry[] = [
   { file: 'components/ThreadBlock.vue', fp: "props.backendKind==='codex'", occurrences: 3, classification: 'capability-optional', owner: 21, handling: 'handled', sites: 'attachments/revert codex variants 205/359/379' },
   { file: 'components/ThreadBlock.vue', fp: "props.backendKind==='kimi-web'", occurrences: 7, classification: 'ui-required', owner: 21, handling: 'handled', sites: 'checkpoint fork/undo, permission display, and per-turn file diff controls', kimiSignal: 'loadMessageDiffs' },
   { file: 'components/ThreadBlock.vue', fp: "props.backendKind==='kimi-web'", occurrences: 4, classification: 'ui-required', owner: 21, handling: 'handled', sites: 'fork and undo controls remain hidden until the action probes succeed', kimiSignal: 'kimiForkAvailable' },
-  { file: 'components/ThreadBlock.vue', fp: "backendKind!=='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 21, handling: 'handled', sites: 'file diff availability guard', kimiSignal: 'hasMessageDiffs' },
+  { file: 'components/ThreadBlock.vue', fp: "backendKind!=='kimi-web'", occurrences: 2, classification: 'ui-required', owner: 21, handling: 'handled', sites: 'file diff availability and subagent-history action guards', kimiSignal: 'hasMessageDiffs' },
   { file: 'components/OutputPanel.vue', fp: "backendKind==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 21, handling: 'handled', sites: 'propagate checkpoint action readiness to message cards', kimiSignal: 'kimiCardActionsReady' },
   { file: 'composables/backendMessageSend.kimiSlash.ts', fp: "params.activeBackendKind.value==='kimi-web'", occurrences: 1, classification: 'ui-required', owner: 18, handling: 'handled', sites: 'fence slash commands to the selected Kimi session', kimiSignal: 'parseKimiWebSlashCommand' },
   // ----- composables — message send (Todo 18) -----
