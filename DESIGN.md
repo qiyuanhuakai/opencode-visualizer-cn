@@ -78,6 +78,8 @@ These tokens are defined on `:root` in `app/styles/tailwind.css`; compact Kimi p
 
 ## 5. Components
 
+Do not use system-native dropdowns such as HTML `<select>` in Vis interfaces. Use the shared `Dropdown`/`DropdownItem` components or another Vis-themed selector so the closed control and expanded options follow the active theme.
+
 ### Floating Window
 - **Structure**: draggable titlebar, compact actions, scrollable or terminal body.
 - **Variants**: code, diff, message, binary, term, plain.
