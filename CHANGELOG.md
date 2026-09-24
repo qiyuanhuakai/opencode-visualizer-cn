@@ -3,7 +3,7 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [Unreleased]
+## [v0.8.2 released]
 ### Windows Electron 性能与会话加载修复
 
 - [x] 将 Codex 辅助历史按会话拆分存储，并通过异步 IPC 合并写入，避免输入草稿或修改设置时同步重写全部历史，修复按钮响应迟缓、输入周期性卡顿的问题（[#142](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/142)）。
