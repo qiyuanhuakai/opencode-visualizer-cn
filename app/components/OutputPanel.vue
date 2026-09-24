@@ -467,8 +467,10 @@ async function scrollToBottom(waitForRenders?: () => Promise<void>): Promise<voi
     let stableFrames = 0;
     let lastTarget = -1;
     const maxAttempts = 12;
+    let settlementTimer: ReturnType<typeof setTimeout> | undefined;
 
     const finish = () => {
+      clearTimeout(settlementTimer);
       if (scrollToBottomFrameId !== null) {
         cancelAnimationFrame(scrollToBottomFrameId);
         scrollToBottomFrameId = null;
@@ -510,6 +512,13 @@ async function scrollToBottom(waitForRenders?: () => Promise<void>): Promise<voi
     };
 
     scrollToBottomFrameId = requestAnimationFrame(tick);
+    settlementTimer = setTimeout(() => {
+      const currentPanel = panelEl.value;
+      if (currentPanel && generation === windowShiftGeneration) {
+        currentPanel.scrollTop = Math.max(0, currentPanel.scrollHeight - currentPanel.clientHeight);
+      }
+      finish();
+    }, 250);
   });
 }
 
