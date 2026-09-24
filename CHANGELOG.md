@@ -11,6 +11,14 @@
 - [x] “状态监控 → MC”仅在 OpenCode 后端显示
 - [x] 新增全局 `/forge` 斜杠命令，在当前目录打开 Forge 面板，不向模型发送消息。
 
+### Kimi Web 兼容性、提供商选择与 CI 修复
+
+- [x] 修复 Kimi Web 会话权限：按发送时的选项执行并保存每轮权限，记住上次选择，避免旧卡片权限随当前选项变化；新建会话后自动切换，并以主目录作为打开项目的默认路径。
+- [x] 合并相邻的思考片段并清除服务端重复返回的完整片段，避免一次思考产生大量重复历史记录；缩短模型显示名称，避免重复显示提供商。
+- [x] 将同一 Git 仓库的分支与 worktree 归到同一沙盒；Kimi Web、OpenCode 和 Codex 在 `/` 与 `~/` 可继续浏览，在其他包含 `.git` 目录或 worktree `.git` 文件的仓库目录停止下钻。
+- [x] 为 Kimi Web 与 OpenCode 提供商列表增加搜索、A–Z 排序和首字母导航；将自定义提供商入口放在搜索框上方，移除 Kimi Web 无效的目录导入与刷新按钮。
+- [x] 放宽 Windows 更新器启动确认及冷启动测试的超时边界，降低 CI 偶发失败；PR 构建使用更快的安装包压缩设置，正式构建保留原设置（[#144](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/144)）。
+
 
 ## [v0.8.2 released]
 ### Windows Electron 性能与会话加载修复
