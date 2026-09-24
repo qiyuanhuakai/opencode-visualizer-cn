@@ -26,6 +26,7 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
   const dispatchKimiWebSlash = createKimiWebSlashDispatcher(params);
   const requestFence = createBackendRequestFence(() => params.activeBackendKind.value);
   let sendingOwner: object | null = null;
+  let openingForge = false;
   watch(params.activeBackendKind, () => requestFence.invalidate(), { flush: 'sync' });
   watch(params.selectedSessionId, () => {
     if (params.activeBackendKind.value === 'kimi-web') requestFence.invalidate();
@@ -134,6 +135,32 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
   }
 
   async function sendMessage() {
+    if (parseLeadingSlashCommand(params.messageInput.value)?.name === 'forge') {
+      if (openingForge) return;
+      openingForge = true;
+      const input = params.messageInput.value;
+      const backend = params.activeBackendKind.value;
+      const sessionId = params.selectedSessionId.value;
+      const directory = params.activeDirectory.value;
+      try {
+        const opened = await params.openForgePanel();
+        if (
+          opened &&
+          params.activeBackendKind.value === backend &&
+          params.selectedSessionId.value === sessionId &&
+          params.activeDirectory.value === directory &&
+          params.messageInput.value === input
+        ) {
+          params.messageInput.value = '';
+          params.persistComposerDraftForCurrentContext();
+        }
+      } catch (error) {
+        params.setSendStatusKey('app.error.shellFailed', { message: params.toErrorMessage(error) });
+      } finally {
+        openingForge = false;
+      }
+      return;
+    }
     if (
       params.activeBackendKind.value === 'codex' &&
       parseLeadingSlashCommand(params.messageInput.value) &&

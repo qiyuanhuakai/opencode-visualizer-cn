@@ -135,6 +135,7 @@ export type BackendMessageSendParams = {
   readonly availableSkills?: Ref<CodexSkill[]>;
   readonly runDebugCommand: (args: string) => { readonly ok: boolean; readonly message: string };
   readonly openShellFromInput: (input: string) => Promise<boolean>;
+  readonly openForgePanel: () => Promise<boolean>;
   readonly clearComposerDraftForCurrentContext: () => void;
   readonly persistComposerDraftForCurrentContext: () => void;
   readonly enableFollow: () => void;

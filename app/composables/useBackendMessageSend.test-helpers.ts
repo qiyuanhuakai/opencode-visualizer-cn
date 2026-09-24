@@ -52,6 +52,7 @@ export function createBaseParams() {
     parseAtAgent: (_input: string): { agent: string; text: string } | null => null,
     runDebugCommand: (args: string) => ({ ok: true, message: args }),
     openShellFromInput: vi.fn().mockResolvedValue(true),
+    openForgePanel: vi.fn().mockResolvedValue(true),
     clearComposerDraftForCurrentContext: vi.fn(),
     persistComposerDraftForCurrentContext: vi.fn(),
     enableFollow: vi.fn(),
