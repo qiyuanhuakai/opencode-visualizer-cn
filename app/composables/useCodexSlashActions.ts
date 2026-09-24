@@ -3,7 +3,7 @@ import type { useCodexApi } from './useCodexApi';
 import type { ParsedCodexSlashCommand } from '../utils/codexSlashCommands';
 import initPrompt from '../assets/codex/prompt_for_init_command.md?raw';
 
-type MonitorTab = 'server' | 'token' | 'codex' | 'skills' | 'mcp' | 'plugins';
+type MonitorTab = 'server' | 'token' | 'skills' | 'mcp' | 'plugins';
 type Api = ReturnType<typeof useCodexApi>;
 type Actions = {
   readonly api: Api;

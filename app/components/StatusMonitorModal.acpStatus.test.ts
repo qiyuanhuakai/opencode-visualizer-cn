@@ -37,9 +37,6 @@ vi.mock('../composables/useMessages', () => ({
     loadHistory: () => {},
   }),
 }));
-vi.mock('../composables/useSettings', () => ({
-  useSettings: () => ({ showCodexInStatusMonitor: { value: false, __v_isRef: true } }),
-}));
 vi.mock('../composables/useAcpBridge', () => ({
   useAcpBridge: () => ({
     services: { value: [] },

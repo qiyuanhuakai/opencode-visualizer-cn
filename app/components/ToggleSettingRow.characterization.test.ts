@@ -144,7 +144,7 @@ describe('SettingsModal toggle rows characterization', () => {
     const { host, settings } = await mountModal();
     await openPage(host, 10);
     const rows = pageRows(host);
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(2);
 
     // When: each experimental toggle is flipped from its current value.
     // Then: each bound model updates to the flipped value after one tick.
@@ -156,8 +156,5 @@ describe('SettingsModal toggle rows characterization', () => {
     await flip(toggleInput(rows[1]), !forgeBefore);
     expect(settings.showForgePanelButton.value).toBe(!forgeBefore);
 
-    const statusBefore = settings.showCodexInStatusMonitor.value;
-    await flip(toggleInput(rows[2]), !statusBefore);
-    expect(settings.showCodexInStatusMonitor.value).toBe(!statusBefore);
   });
 });

@@ -294,7 +294,6 @@ const messages: LocaleMessages = {
       token: 'Token',
       mc: 'MC',
       acp: 'ACP',
-      codex: 'Codex',
     },
     server: {
       status: '伺服器狀態',
@@ -421,6 +420,7 @@ const messages: LocaleMessages = {
       loginDeviceCode: '裝置碼',
       logout: '登出',
       rateLimitUsed: '已用（每週）',
+      rateLimitFiveHourUsed: '已用（5 小時）',
     },
   },
   providerManager: {
@@ -1002,10 +1002,6 @@ const messages: LocaleMessages = {
       showForgeButton: {
         label: '顯示 Forge 面板按鈕',
         description: '在管理模式右側顯示輕量 Forge PTY 面板按鈕。',
-      },
-      showCodexInStatusMonitor: {
-        label: '在狀態監控中顯示 Codex',
-        description: '在狀態監控懸浮窗中顯示獨立的 Codex 分頁。',
       },
     },
   },

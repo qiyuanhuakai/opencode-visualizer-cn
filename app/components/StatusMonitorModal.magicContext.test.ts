@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createApp, defineComponent, h, nextTick } from 'vue';
+import { createApp, defineComponent, h, nextTick, ref } from 'vue';
 import { createI18n } from 'vue-i18n';
 
 vi.mock('@iconify/vue', () => ({ Icon: () => null }));
@@ -21,9 +21,6 @@ vi.mock('../composables/useMessages', () => ({
     getUsage: () => undefined,
     loadHistory: () => undefined,
   }),
-}));
-vi.mock('../composables/useSettings', () => ({
-  useSettings: () => ({ showCodexInStatusMonitor: { value: false, __v_isRef: true } }),
 }));
 vi.mock('../composables/useAcpBridge', () => ({
   useAcpBridge: () => ({
@@ -86,6 +83,35 @@ describe('StatusMonitorModal Magic Context status', () => {
     expect(root.textContent).toContain('Running');
     expect(root.textContent).toContain('Idle');
     expect(root.textContent).toContain('Retrying');
+    app.unmount();
+  });
+
+  it('returns to Server when switching away from OpenCode on the MC tab', async () => {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const backend = ref<'opencode' | 'codex'>('opencode');
+    const app = createApp(defineComponent({
+      setup() {
+        const codexApi = useCodexApi();
+        return () => h(StatusMonitorModal, {
+          open: true,
+          preload: false,
+          activeBackendKind: backend.value,
+          initialTab: 'mc',
+          sessionId: 'ses-parent',
+          codexApi,
+        });
+      },
+    }));
+    app.use(createI18n({ legacy: false, locale: 'en', messages: { en } }));
+    app.mount(root);
+    await nextTick();
+    expect(root.querySelector('#status-monitor-tab-mc')?.getAttribute('aria-selected')).toBe('true');
+
+    backend.value = 'codex';
+    await nextTick();
+    expect(root.querySelector('#status-monitor-tab-mc')).toBeNull();
+    expect(root.querySelector('[role="tab"][aria-selected="true"]')?.id).toBe('status-monitor-tab-server');
     app.unmount();
   });
 });

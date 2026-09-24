@@ -736,11 +736,6 @@
             :description="$t('settings.experimentalFeatures.showForgeButton.description')"
           />
 
-          <ToggleSettingRow
-            v-model="showCodexInStatusMonitor"
-            :label="$t('settings.experimentalFeatures.showCodexInStatusMonitor.label')"
-            :description="$t('settings.experimentalFeatures.showCodexInStatusMonitor.description')"
-          />
         </template>
 
         <template v-else-if="activePage === 'desktop'">
@@ -1059,7 +1054,6 @@ const {
   showMinimizeButtons,
   showCodexButton,
   showForgePanelButton,
-  showCodexInStatusMonitor,
   editInVis,
   dockAlwaysOpen,
   terminalFontFamily,

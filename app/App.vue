@@ -1307,38 +1307,40 @@ async function openForgePanel() {
     setSendStatusKey('app.error.shellFailed', {
       message: t('app.error.unavailable', { action: t('topPanel.openForge') }),
     });
-    return;
+    return false;
+  }
+
+  const directory = activeDirectory.value.trim();
+  if (!directory) {
+    setSendStatusKey('app.error.shellFailed', { message: t('app.error.noWorktreeSelected') });
+    return false;
   }
 
   const existingSession = forgePtyId ? shellSessionsByPtyId.get(forgePtyId) : undefined;
-  if (existingSession) {
+  if (existingSession && normalizeDirectory(existingSession.pty.cwd) === normalizeDirectory(directory)) {
     const key = `shell:${forgePtyId}`;
     fw.restore(key);
     fw.bringToFront(key);
     scheduleShellFit(forgePtyId);
     existingSession.terminal.focus();
     void forgeAuxiliary.refreshAll();
-    return;
-  }
-
-  const directory = activeDirectory.value.trim();
-  if (!directory) {
-    setSendStatusKey('app.error.shellFailed', { message: t('app.error.noWorktreeSelected') });
-    return;
+    return true;
   }
 
   try {
     const pty = await createPtySession('/usr/bin/env', ['zsh', '-l'], t('forgePanel.title'));
     if (!pty) {
       setSendStatusKey('app.error.shellFailed', { message: 'PTY creation returned no session.' });
-      return;
+      return false;
     }
     forgePtyId = pty.id;
     storageSet(StorageKeys.state.forgePtyId, pty.id);
     await ensureShellWindow(pty, getForgeShellWindowOptions(pty, directory));
     void forgeAuxiliary.refreshAll();
+    return true;
   } catch (error) {
     setSendStatusKey('app.error.shellFailed', { message: toErrorMessage(error) });
+    return false;
   }
 }
 
@@ -2168,7 +2170,7 @@ function openSettings(page: 'root' | 'transformers' = 'root') {
 }
 const isProviderManagerOpen = ref(false);
 const isStatusMonitorOpen = ref(false);
-const statusMonitorTab = ref<'server' | 'token' | 'codex' | 'skills' | 'mcp' | 'plugins'>('server');
+const statusMonitorTab = ref<'server' | 'token' | 'skills' | 'mcp' | 'plugins'>('server');
 const statusMonitorUsageView = ref<'daily' | 'weekly' | 'cumulative'>('cumulative');
 
 const promptDialogRef = ref<HTMLDialogElement | null>(null);
@@ -3257,6 +3259,13 @@ const commandOptions = computed(() => {
     : activeBackendKind.value === 'kimi-web'
       ? KIMI_WEB_SLASH_COMMANDS.map((command) => ({ name: command.name, description: `${t(command.descriptionKey)} · ${command.usage}`, source: 'local' }))
       : commands.value.slice();
+  const forgeIndex = list.findIndex((command) => command.name.toLowerCase() === 'forge');
+  if (forgeIndex >= 0) list.splice(forgeIndex, 1);
+  list.push({
+    name: 'forge',
+    description: t('topPanel.openForge'),
+    source: 'local',
+  });
   const hasShell = list.some((command) => command.name.toLowerCase() === 'shell');
   if (!hasShell) {
     list.push({
@@ -8946,6 +8955,7 @@ const backendMessageSend = useBackendMessageSend({
   ),
   runDebugCommand,
   openShellFromInput,
+  openForgePanel,
   clearComposerDraftForCurrentContext,
   enableFollow,
   setSendStatusKey,

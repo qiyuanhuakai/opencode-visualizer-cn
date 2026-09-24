@@ -59,6 +59,22 @@ function liveHistory() {
 }
 
 describe('useCodexMessageBridge', () => {
+  it('backfills the latest assistant with this thread latest request usage', async () => {
+    const params = bridgeFixture();
+    params.history.value = liveHistory();
+    await nextTick();
+    params.msg.updateMessage.mockClear();
+    params.codexApi.tokenUsage.value = {
+      threadId: 'thread-1', turnId: 'turn-1', tokenUsage: {
+        total: { totalTokens: 1000, inputTokens: 800, cachedInputTokens: 300, cacheWriteInputTokens: 0, outputTokens: 200, reasoningOutputTokens: 50 },
+        last: { totalTokens: 200, inputTokens: 160, cachedInputTokens: 60, cacheWriteInputTokens: 0, outputTokens: 40, reasoningOutputTokens: 10 },
+        modelContextWindow: 128000,
+      },
+    };
+    await nextTick();
+    expect(params.msg.updateMessage).toHaveBeenCalledWith(expect.objectContaining({ tokens: expect.objectContaining({ input: 160, output: 40, reasoning: 10, total: 200, cache: { read: 60, write: 0 } }) }));
+  });
+
   it('stops fixture watchers so later realtime events cannot update messages', async () => {
     const params = bridgeFixture();
     params.stop();

@@ -512,7 +512,7 @@
             <Icon icon="lucide:paperclip" :width="16" :height="16" />
           </button>
           <button
-            v-if="isThinking && !canRunCodexCommand"
+            v-if="isThinking && !canRunCodexCommand && !canRunForgeCommand"
             type="button"
             class="input-button stop send-button"
             :disabled="props.disabled || !canAbort"
@@ -525,7 +525,7 @@
             v-else
             type="button"
             class="input-button primary send-button"
-            :disabled="!canRunCodexCommand && (props.disabled || !canSend)"
+            :disabled="!canRunCodexCommand && !canRunForgeCommand && (props.disabled || !canSend)"
             :title="sendTooltip"
             @click="$emit('send')"
           >
@@ -1725,6 +1725,9 @@ function reset() {
 
 const canRunCodexCommand = computed(() =>
   props.codexCommandsEnabled === true && parseLeadingSlashCommand(props.messageInput) !== null,
+);
+const canRunForgeCommand = computed(() =>
+  parseLeadingSlashCommand(props.messageInput)?.name === 'forge',
 );
 
 defineExpose({ focus, reset, openModelPicker });

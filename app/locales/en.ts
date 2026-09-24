@@ -297,7 +297,6 @@ const messages: LocaleMessages = {
       token: 'Token',
       mc: 'MC',
       acp: 'ACP',
-      codex: 'Codex',
     },
     server: {
       status: 'Server Status',
@@ -424,6 +423,7 @@ const messages: LocaleMessages = {
       loginDeviceCode: 'Device Code',
       logout: 'Logout',
       rateLimitUsed: 'Used (weekly)',
+      rateLimitFiveHourUsed: 'Used (5 hours)',
     },
   },
   providerManager: {
@@ -1022,10 +1022,6 @@ const messages: LocaleMessages = {
       showForgeButton: {
         label: 'Show Forge panel button',
         description: 'Display the lightweight Forge PTY panel button next to management mode.',
-      },
-      showCodexInStatusMonitor: {
-        label: 'Show Codex in status monitor',
-        description: 'Display a dedicated Codex tab in the status monitor popover.',
       },
     },
   },

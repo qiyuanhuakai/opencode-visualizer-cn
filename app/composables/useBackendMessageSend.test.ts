@@ -17,6 +17,74 @@ import {
 } from '../utils/kimiWeb';
 
 describe('useBackendMessageSend', () => {
+  it.each<BackendKind>(['opencode', 'codex', 'acp', 'kimi-web'])(
+    'opens Forge locally for %s without a connected session or model',
+    async (kind) => {
+      const base = createBaseParams();
+      base.messageInput.value = '/forge';
+      base.selectedSessionId.value = '';
+      base.selectedModel.value = '';
+      base.canSend.value = false;
+      base.attachments.value = [imageAttachment()];
+      const ensureConnectionReady = vi.fn(() => false);
+      const sendPromptAsync = vi.fn();
+      const codexApi = createCodexApi({ activeThreadId: '', threads: [] });
+      const runtime = useBackendMessageSend({
+        ...base,
+        activeBackendKind: ref(kind),
+        ensureConnectionReady,
+        openCodeApi: { sendPromptAsync },
+        codexApi,
+      });
+
+      await runtime.sendMessage();
+
+      expect(base.openForgePanel).toHaveBeenCalledTimes(1);
+      expect(ensureConnectionReady).not.toHaveBeenCalled();
+      expect(sendPromptAsync).not.toHaveBeenCalled();
+      expect(codexApi.sendPrompt).not.toHaveBeenCalled();
+      expect(base.messageInput.value).toBe('');
+      expect(base.attachments.value).toHaveLength(1);
+    },
+  );
+
+  it('keeps /forge in the composer when the panel cannot open', async () => {
+    const base = createBaseParams();
+    base.messageInput.value = '/forge';
+    base.openForgePanel.mockResolvedValue(false);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('opencode'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi: createCodexApi(),
+    });
+
+    await runtime.sendMessage();
+
+    expect(base.messageInput.value).toBe('/forge');
+  });
+
+  it('does not clear a newer draft after opening Forge', async () => {
+    const pending = deferred<boolean>();
+    const base = createBaseParams();
+    base.messageInput.value = '/forge';
+    base.openForgePanel.mockReturnValue(pending.promise);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref('opencode'),
+      openCodeApi: { sendPromptAsync: vi.fn() },
+      codexApi: createCodexApi(),
+    });
+
+    const opening = runtime.sendMessage();
+    base.selectedSessionId.value = 'session-2';
+    base.messageInput.value = 'new draft';
+    pending.resolve(true);
+    await opening;
+
+    expect(base.messageInput.value).toBe('new draft');
+  });
+
   it('sends Codex prompts with image attachments through runtime', async () => {
     const base = createBaseParams();
     base.attachments.value = [
