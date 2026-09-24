@@ -167,7 +167,9 @@ const hasDirectoryEntries = computed(() =>
 
 const canOpen = computed(() => Boolean(resolveOpenDirectory()));
 
-const isDrillDownLocked = computed(() => hasGitDirectory.value);
+const isDrillDownLocked = computed(() =>
+  getActiveBackendKind() !== 'kimi-web' && hasGitDirectory.value,
+);
 
 // ---------------------------------------------------------------------------
 // Watchers
