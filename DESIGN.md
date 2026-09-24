@@ -4,6 +4,8 @@
 
 Vis feels like a compact terminal command center: dense, local-first, and precise. The recognizable signature is a layered dark workspace where every surface reads as a terminal-adjacent control plane, using muted slate panels, blue interaction accents, and monospace typography throughout.
 
+Every new page or view must follow the Vis visual language and adapt to the active Vis theme. Reuse existing components, spacing, typography, and `--theme-*` tokens for its surfaces, text, borders, controls, and interaction states; verify the result in both light and dark themes before delivery.
+
 ## 2. Color
 
 ### Palette
