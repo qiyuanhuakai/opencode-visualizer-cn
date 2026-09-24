@@ -186,7 +186,7 @@ const props = defineProps<{
     diff?: string;
   } | null;
   backendKind?: BackendKind;
-  kimiPermissionMode?: string;
+  kimiTurnPermissionForUser?: (sessionId: string, userMessageId: string) => string | undefined;
   kimiCardActionsReady?: boolean;
   kimiForkAvailable?: boolean;
   kimiUndoAvailable?: boolean;
@@ -435,10 +435,11 @@ async function confirmUndoRevert() {
 
 function buildThreadTarget(root: MessageInfo): ThreadTargetType {
   const final = finalAnswer.value;
+  const recordedKimiMode = props.kimiTurnPermissionForUser?.(root.sessionID, root.id);
   const agent = props.backendKind === 'kimi-web'
-    ? final?.role === 'assistant' && ['manual', 'auto', 'yolo'].includes(final.mode)
+    ? recordedKimiMode ?? (final?.role === 'assistant' && ['manual', 'auto', 'yolo'].includes(final.mode)
       ? final.mode
-      : props.kimiPermissionMode ?? 'manual'
+      : undefined)
     : root.agent ?? final?.agent;
   const modelPath = getMessageModelPath(root) || getMessageModelPath(final);
   const modelMeta = props.resolveModelMeta?.(modelPath);

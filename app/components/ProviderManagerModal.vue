@@ -392,10 +392,10 @@
                     {{ $t('providerManager.actions.connect') }}
                   </button>
                 </div>
-                <div class="provider-view-all-list">
+                <ProviderDiscoveryList :entries="providers" v-slot="{ entry: provider, letter }">
                   <article
-                    v-for="provider in allProvidersForView"
-                    :key="`all-${provider.id}`"
+                    :data-provider-letter="letter"
+                    tabindex="-1"
                     class="provider-mini-row"
                     :class="{ 'is-disabled': !isProviderEnabled(provider.id) }"
                   >
@@ -427,7 +427,7 @@
                       </button>
                     </div>
                   </article>
-                </div>
+                </ProviderDiscoveryList>
               </div>
             </section>
           </div>
@@ -558,7 +558,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, inject, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import { getActiveBackendAdapter } from '../backends/registry';
@@ -567,7 +567,8 @@ import {
   createKimiWebProvidersClient,
   type KimiWebProvidersClient,
 } from '../composables/useKimiWebProviders';
-import KimiWebProviderManager from './kimiWeb/KimiWebProviderManager.vue';
+const KimiWebProviderManager = defineAsyncComponent(() => import('./kimiWeb/KimiWebProviderManager.vue'));
+import ProviderDiscoveryList from './ProviderDiscoveryList.vue';
 import type { BackendKind } from '../backends/types';
 import {
   buildProviderDisabledPatch,
@@ -699,14 +700,6 @@ type CustomProviderValidationResult = {
   config: CustomProviderConfig | CodexCustomProviderConfig;
 };
 
-const POPULAR_PROVIDER_IDS = [
-  'opencode',
-  'opencode-go',
-  'openai',
-  'github-copilot',
-  'anthropic',
-  'google',
-];
 const CUSTOM_PROVIDER_NPM = '@ai-sdk/openai-compatible';
 const CUSTOM_PROVIDER_BUSY_ID = '__custom_provider__';
 const CUSTOM_PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/;
@@ -808,19 +801,6 @@ const sortedProviders = computed(() =>
 
 const connectedProviders = computed(() =>
   sortedProviders.value.filter((provider) => !isProviderDisconnected(provider)),
-);
-
-const allProvidersForView = computed(() =>
-  [...props.providers].sort((a, b) => {
-    const connectedDelta =
-      Number(connectedProviderIdSet.value.has(b.id)) -
-      Number(connectedProviderIdSet.value.has(a.id));
-    if (connectedDelta !== 0) return connectedDelta;
-    const popularDelta =
-      Number(POPULAR_PROVIDER_IDS.includes(a.id)) - Number(POPULAR_PROVIDER_IDS.includes(b.id));
-    if (popularDelta !== 0) return popularDelta;
-    return (a.name?.trim() || a.id).localeCompare(b.name?.trim() || b.id);
-  }),
 );
 
 const allModels = computed(() =>
@@ -2065,12 +2045,6 @@ async function disconnectProvider(provider: ProviderInfo) {
   gap: 10px;
 }
 
-.provider-view-all-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-}
-
 .provider-mini-row {
   display: flex;
   align-items: center;
@@ -2528,10 +2502,6 @@ async function disconnectProvider(provider: ProviderInfo) {
 
   .provider-mini-row {
     align-items: flex-start;
-  }
-
-  .provider-view-all-list {
-    grid-template-columns: 1fr;
   }
 
   .provider-mini-row-status {

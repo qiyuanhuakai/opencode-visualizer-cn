@@ -67,6 +67,7 @@ import { Icon } from '@iconify/vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import { getActiveBackendAdapter, getActiveBackendKind } from '../backends/registry';
+import { KimiWebAdapter } from '../backends/kimiWeb/kimiWebAdapter';
 import { splitFileContentDirectoryAndPath } from '../utils/path';
 
 type FileNode = {
@@ -166,7 +167,10 @@ const hasDirectoryEntries = computed(() =>
 
 const canOpen = computed(() => Boolean(resolveOpenDirectory()));
 
-const isDrillDownLocked = computed(() => hasGitDirectory.value);
+const isDrillDownLocked = computed(() => {
+  const dir = currentDir.value;
+  return hasGitDirectory.value && dir !== '/' && dir !== homePrefix.value;
+});
 
 // ---------------------------------------------------------------------------
 // Watchers
@@ -244,9 +248,23 @@ async function fetchDirectory(dir: string) {
       if ((gitError as Error).name === 'AbortError') throw gitError;
       gitEntries = [];
     }
+    let hasGitEntry = data.some((entry) => entry.name === '.git');
+    if (!hasGitEntry && gitEntries.length === 0 && getActiveBackendKind() === 'kimi-web') {
+      try {
+        const files = await getActiveBackendAdapter().listFiles?.(
+          { directory: cleanDir, path: '.' },
+          { signal: controller.signal },
+        );
+        hasGitEntry = Array.isArray(files) && files.some((entry: unknown) =>
+          typeof entry === 'object' && entry !== null && 'name' in entry && entry.name === '.git',
+        );
+      } catch (fileError) {
+        if ((fileError as Error).name === 'AbortError') throw fileError;
+      }
+    }
     if (requestId !== fetchRequestId) return;
     allEntries.value = data;
-    hasGitDirectory.value = gitEntries.length > 0;
+    hasGitDirectory.value = hasGitEntry || gitEntries.length > 0;
   } catch (err) {
     if ((err as Error).name === 'AbortError') return;
     if (requestId !== fetchRequestId) return;
@@ -261,8 +279,16 @@ async function fetchDirectory(dir: string) {
 async function listDirectory(dir: string, signal: AbortSignal) {
   const cleanDir = cleanDirectoryPath(dir);
   if (getActiveBackendKind() === 'kimi-web') {
-    // Kimi Web sessions live in the current workspace; no directory picker applies.
-    throw new Error('Kimi Web does not support the project directory picker.');
+    const adapter = getActiveBackendAdapter();
+    if (!(adapter instanceof KimiWebAdapter)) throw new Error('Kimi Web backend is unavailable.');
+    const page = await adapter.restClient.browseDirectories(cleanDir, signal);
+    return page.entries.map((entry) => ({
+      name: entry.name,
+      path: entry.path,
+      absolute: entry.path,
+      type: 'directory' as const,
+      ignored: false,
+    }));
   }
   const { directory, path } = getActiveBackendKind() === 'codex'
     ? { directory: cleanDir, path: '.' }

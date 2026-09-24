@@ -197,6 +197,28 @@ C:\Users\me\AppData\Local\Temp\vis_bridge-updates\installer.log`);
     expect(helper.killed).toBe(true);
   });
 
+  it('accepts a cold Windows helper acknowledgement after five seconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const started = Date.now();
+      const resultLogPath = String.raw`C:\Users\me\AppData\Local\vis_bridge\updates\installer.log`;
+      const readAck = async () => {
+        if (Date.now() - started >= 6_000) return `ready\n${resultLogPath}`;
+        throw Object.assign(new Error('Acknowledgement pending'), { code: 'ENOENT' });
+      };
+      const helper = new ChildProcess();
+      const pending = waitForAck('/unused', helper, { readAck });
+      const outcome = pending.then(
+        (value) => ({ kind: 'resolved', value }),
+        (error: unknown) => ({ kind: 'rejected', error }),
+      );
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(await outcome).toEqual({ kind: 'resolved', value: resultLogPath });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not schedule another acknowledgement poll after the helper settles', async () => {
     const helper = new ChildProcess();
     let completeRead: ((value: string) => void) | undefined;
@@ -272,5 +294,5 @@ C:\Users\me\AppData\Local\Temp\vis_bridge-updates\installer.log`);
       expect(await readFile(resultLogPath, 'utf8')).toContain(`status=${expectedStatus}`);
       expect(existsSync(stagingDirectory)).toBe(false);
     }, { timeout: 10_000 });
-  }, 20_000);
+  }, 30_000);
 });

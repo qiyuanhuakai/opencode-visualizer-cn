@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
+import ProviderDiscoveryList from '../ProviderDiscoveryList.vue';
 import type {
   KimiWebModelObjectWire,
   KimiWebProviderCreateInput,
@@ -40,7 +41,7 @@ const CAPABILITY_FIELDS = ['attachment', 'reasoning', 'toolcall'] as const;
 const URL_PATTERN = /^https?:\/\//u;
 
 type KeyChoiceKind = KimiWebApiKeyChoice['kind'];
-type ProviderAction = 'load' | 'create' | 'update' | 'delete' | 'refresh' | 'import' | 'default';
+type ProviderAction = 'load' | 'create' | 'update' | 'delete' | 'default';
 type FormMode = 'closed' | 'create' | 'edit';
 
 const FAILURE_MESSAGE_KEYS: Record<ProviderAction, string> = {
@@ -48,8 +49,6 @@ const FAILURE_MESSAGE_KEYS: Record<ProviderAction, string> = {
   create: 'kimiWeb.providers.saveFailed',
   update: 'kimiWeb.providers.saveFailed',
   delete: 'kimiWeb.providers.deleteFailed',
-  refresh: 'kimiWeb.providers.refreshFailed',
-  import: 'kimiWeb.providers.importFailed',
   default: 'kimiWeb.providers.saveFailed',
 };
 
@@ -190,18 +189,6 @@ async function confirmMessage(message: string): Promise<boolean> {
 async function reload() {
   const ok = await providerStore.load();
   if (!ok) showFailure('load', error.value);
-}
-
-async function refreshEverything() {
-  applyResult('refresh', await providerStore.refreshAll());
-}
-
-async function refreshOne(providerId: string) {
-  applyResult('refresh', await providerStore.refreshProvider(providerId));
-}
-
-async function importFromCatalog() {
-  applyResult('import', await providerStore.importCatalog());
 }
 
 async function removeProvider(providerId: string) {
@@ -384,21 +371,6 @@ onMounted(() => {
         <span class="kimi-web-provider-title">{{ $t('kimiWeb.providers.installed') }}</span>
         <span class="kimi-web-provider-count">{{ providers.length }}</span>
       </div>
-      <div class="kimi-web-provider-toolbar-actions">
-        <button
-          type="button"
-          class="kimi-web-provider-action"
-          :disabled="allBusy || loading"
-          @click="refreshEverything"
-        >
-          <Icon icon="lucide:refresh-cw" :width="13" :height="13" aria-hidden="true" />
-          {{ $t('kimiWeb.providers.refresh') }}
-        </button>
-        <button type="button" class="kimi-web-provider-action is-primary" @click="openCreateForm">
-          <Icon icon="lucide:plus" :width="13" :height="13" aria-hidden="true" />
-          {{ $t('kimiWeb.providers.add') }}
-        </button>
-      </div>
     </header>
 
     <div
@@ -533,14 +505,6 @@ onMounted(() => {
           >
             {{ $t('kimiWeb.providers.delete') }}
           </button>
-          <button
-            type="button"
-            class="kimi-web-provider-action"
-            :disabled="isBusy(provider.id)"
-            @click="refreshOne(provider.id)"
-          >
-            {{ $t('kimiWeb.providers.refresh') }}
-          </button>
         </div>
       </article>
     </div>
@@ -548,29 +512,32 @@ onMounted(() => {
     <section class="kimi-web-provider-catalog">
       <header class="kimi-web-provider-catalog-head">
         <span class="kimi-web-provider-title">{{ $t('kimiWeb.providers.catalog') }}</span>
-        <button
-          type="button"
-          class="kimi-web-provider-action"
-          :disabled="catalogBusy"
-          :title="$t('kimiWeb.providers.environmentKeyHint')"
-          @click="importFromCatalog"
-        >
-          {{ $t('kimiWeb.providers.importCatalog') }}
-        </button>
       </header>
+      <div class="kimi-web-provider-custom-entry">
+        <span class="kimi-web-provider-custom-icon" aria-hidden="true">
+          <Icon icon="lucide:sparkles" :width="16" :height="16" />
+        </span>
+        <span class="kimi-web-provider-custom-copy">
+          <strong>{{ $t('providerManager.custom.title') }}</strong>
+          <small>{{ $t('providerManager.custom.entryDescription') }}</small>
+        </span>
+        <button type="button" class="kimi-web-provider-action" @click="openCreateForm">
+          {{ $t('providerManager.actions.connect') }}
+        </button>
+      </div>
       <div v-if="catalog.length === 0" class="kimi-web-provider-state">
         {{ $t('kimiWeb.providers.catalogEmpty') }}
       </div>
-      <div v-else class="kimi-web-provider-catalog-list">
+      <ProviderDiscoveryList v-else :entries="catalog" v-slot="{ entry, letter }">
         <article
-          v-for="entry in catalog"
-          :key="entry.id"
+          :data-provider-letter="letter"
+          tabindex="-1"
           class="kimi-web-provider-catalog-entry"
           :data-catalog-id="entry.id"
         >
           <div class="kimi-web-provider-catalog-identity">
-            <span class="kimi-web-provider-catalog-name" :title="entry.name || entry.id">{{
-              entry.name || entry.id
+            <span class="kimi-web-provider-catalog-name" :title="entry.name?.trim() || entry.id">{{
+              entry.name?.trim() || entry.id
             }}</span>
             <span class="kimi-web-provider-id" :title="entry.id">{{ entry.id }}</span>
           </div>
@@ -597,7 +564,7 @@ onMounted(() => {
             {{ $t('providerManager.actions.connect') }}
           </button>
         </article>
-      </div>
+      </ProviderDiscoveryList>
     </section>
 
     </template>
@@ -781,8 +748,7 @@ onMounted(() => {
   border-style: dashed;
 }
 
-.kimi-web-provider-list,
-.kimi-web-provider-catalog-list {
+.kimi-web-provider-list {
   display: grid;
   gap: var(--space-2);
 }
@@ -793,8 +759,37 @@ onMounted(() => {
   gap: var(--space-2);
 }
 
-.kimi-web-provider-catalog-list {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.kimi-web-provider-custom-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border-radius: var(--radius-panel);
+  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.46)));
+}
+
+.kimi-web-provider-custom-icon {
+  flex: 0 0 auto;
+  color: var(--theme-modal-accent, var(--theme-text-accent, #60a5fa));
+}
+
+.kimi-web-provider-custom-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  color: var(--theme-modal-text, var(--theme-text-primary, #f8fafc));
+}
+
+.kimi-web-provider-custom-copy strong {
+  font-size: var(--type-body);
+  font-weight: 700;
+}
+
+.kimi-web-provider-custom-copy small {
+  font-size: 11px;
+  color: var(--theme-modal-text-muted, var(--theme-text-muted, #94a3b8));
 }
 
 .kimi-web-provider-card,
@@ -1245,10 +1240,6 @@ onMounted(() => {
 }
 
 @media (max-width: 760px) {
-  .kimi-web-provider-catalog-list {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .kimi-web-provider-card {
     grid-template-columns: minmax(0, 1fr);
   }

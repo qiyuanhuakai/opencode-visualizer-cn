@@ -93,6 +93,15 @@ describe('kimi-web send module', () => {
     expect(updateProfile.mock.invocationCallOrder[0]).toBeLessThan(sendPrompt.mock.invocationCallOrder[0] ?? 0);
   });
 
+  it('applies the captured permission before posting a yolo prompt', async () => {
+    const { api, updateProfile, sendPrompt } = createApi();
+    await runKimiWebSend(createParams(), createPreflight({ selectedMode: 'yolo' }), { isCurrent: () => true }, api);
+    expect(updateProfile).toHaveBeenCalledWith('session-1', {
+      agent_config: { model: 'kimi-code/k3', permission_mode: 'yolo' },
+    });
+    expect(updateProfile.mock.invocationCallOrder[0]).toBeLessThan(sendPrompt.mock.invocationCallOrder[0] ?? 0);
+  });
+
   it('does not send when profile configuration fails', async () => {
     const { api, updateProfile, sendPrompt } = createApi();
     updateProfile.mockRejectedValueOnce(new KimiWebError(40001, 'model rejected'));

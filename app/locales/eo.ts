@@ -428,6 +428,12 @@ const messages: LocaleMessages = {
     },
   },
   providerManager: {
+    discovery: {
+      search: 'Serĉi provizantojn…',
+      empty: 'Neniu kongrua provizanto.',
+      letters: 'Foliumi provizantojn laŭ komenclitero',
+      jump: 'Iri al {letter}',
+    },
     title: 'Provizantoj kaj modeloj (beta)',
     close: 'Fermi provizantan administrilon',
     acp: {

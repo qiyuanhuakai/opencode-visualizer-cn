@@ -185,6 +185,12 @@ function buttonByText(root: ParentNode, text: string) {
   return button;
 }
 
+function customProviderButton(host: HTMLElement) {
+  const entry = host.querySelector('.kimi-web-provider-custom-entry');
+  if (!entry) throw new Error('Missing custom provider entry');
+  return buttonByText(entry, en.providerManager.actions.connect);
+}
+
 function cardByProviderId(host: HTMLElement, providerId: string) {
   const card = host.querySelector<HTMLElement>(`[data-provider-id="${providerId}"]`);
   if (!card) throw new Error(`Missing provider card: ${providerId}`);
@@ -192,6 +198,60 @@ function cardByProviderId(host: HTMLElement, providerId: string) {
 }
 
 describe('KimiWebProviderManager', () => {
+  async function mountCatalog() {
+    return mountManager((harness) => {
+      routeProviderList(harness, [OPENAI_PROVIDER]);
+      harness.route('GET', '/kimi-web/api/v1/catalog/providers', () => jsonResponse(envelope({
+        items: [
+          { id: 'zulu', name: 'Zulu' },
+          { id: 'beta-id', name: 'beta' },
+          { id: 'alpha-id', name: 'Alpha' },
+          { id: 'fallback', name: '  ' },
+        ].map((entry) => ({ ...entry, wire_type: 'openai', models: [], rejected: false, needs_base_url: false })),
+      })));
+    });
+  }
+
+  function catalogNames(host: HTMLElement) {
+    return Array.from(host.querySelectorAll('.kimi-web-provider-catalog-name'), (row) => row.textContent?.trim());
+  }
+
+  it('sorts catalog providers A-Z by display name with id fallback', async () => {
+    const { host } = await mountCatalog();
+    expect(catalogNames(host)).toEqual(['Alpha', 'beta', 'fallback', 'Zulu']);
+  });
+
+  it.each([
+    ['  ALPha ', ['Alpha']],
+    ['BETA-ID', ['beta']],
+    ['absent', []],
+    ['', ['Alpha', 'beta', 'fallback', 'Zulu']],
+  ])('searches catalog names and ids for %s without filtering installed providers', async (query, expected) => {
+    const { host } = await mountCatalog();
+    const input = host.querySelector<HTMLInputElement>('.provider-discovery-search');
+    expect(input).not.toBeNull();
+    if (!input) throw new Error('Missing catalog search');
+    setInputValue(input, query);
+    await flushUi();
+    expect(catalogNames(host)).toEqual(expected);
+    expect(host.querySelectorAll('.kimi-web-provider-card')).toHaveLength(1);
+    expect(host.querySelector('.provider-discovery-empty') !== null).toBe(expected.length === 0);
+  });
+
+  it('moves keyboard focus to the first catalog provider for a letter', async () => {
+    const { host } = await mountCatalog();
+    const rail = host.querySelector<HTMLElement>('.provider-letter-nav');
+    expect(rail).not.toBeNull();
+    if (!rail) throw new Error('Missing letter navigation');
+    expect(Array.from(rail.querySelectorAll('button'), (button) => button.textContent?.trim())).toEqual(['A', 'B', 'F', 'Z']);
+    const target = host.querySelector<HTMLElement>('[data-provider-letter="Z"]');
+    if (!target) throw new Error('Missing Z provider');
+    target.scrollIntoView = vi.fn();
+    buttonByText(rail, 'Z').click();
+    await flushUi();
+    expect(document.activeElement?.getAttribute('data-catalog-id')).toBe('zulu');
+  });
+
   it('keeps model details collapsed while leaving provider actions accessible', async () => {
     const { host } = await mountManager((harness) => routeProviderList(harness, [OPENAI_PROVIDER]));
     const card = cardByProviderId(host, OPENAI_PROVIDER.id);
@@ -281,13 +341,13 @@ describe('KimiWebProviderManager', () => {
     });
     const { host, harness } = await mountManager((harness) => {
       routeProviderList(harness, [OPENAI_PROVIDER, ANTHROPIC_PROVIDER]);
-      harness.route('POST', '/kimi-web/api/v1/providers/custom-openai:refresh', async () => {
+      harness.route('DELETE', '/kimi-web/api/v1/providers/custom-openai', async () => {
         await gate;
-        return jsonResponse(envelope({ changed: [], unchanged: [], failed: [] }));
+        return new Response(null, { status: 204 });
       });
     });
 
-    buttonByText(cardByProviderId(host, 'custom-openai'), en.kimiWeb.providers.refresh).click();
+    buttonByText(cardByProviderId(host, 'custom-openai'), en.kimiWeb.providers.delete).click();
     await flushUi();
 
     const busyCard = cardByProviderId(host, 'custom-openai');
@@ -303,18 +363,16 @@ describe('KimiWebProviderManager', () => {
         (button) => button.disabled,
       ),
     ).toBe(false);
-    expect(harness.calls.some((call) => call.url.endsWith('custom-openai:refresh'))).toBe(true);
+    expect(harness.calls.some((call) => call.method === 'DELETE' && call.url.endsWith('/custom-openai'))).toBe(true);
 
     release();
     await flushUi();
 
     expect(
-      Array.from(
-        cardByProviderId(host, 'custom-openai').querySelectorAll<HTMLButtonElement>(
-          '.kimi-web-provider-action',
-        ),
-      ).every((button) => button.disabled),
-    ).toBe(false);
+      Array.from(cardByProviderId(host, 'custom-openai').querySelectorAll<HTMLButtonElement>('button')).every(
+        (button) => !button.disabled,
+      ),
+    ).toBe(true);
   });
 
   it('confirms before delete', async () => {
@@ -397,6 +455,23 @@ describe('KimiWebProviderManager', () => {
     expect(host.querySelector<HTMLInputElement>('.kimi-web-provider-model-row input')?.value).toBe(
       'gpt-4.1',
     );
+  });
+
+  it('places custom provider creation above search without bulk import or refresh actions', async () => {
+    const { host, harness } = await mountCatalog();
+    const catalog = host.querySelector('.kimi-web-provider-catalog');
+    const custom = catalog?.querySelector('.kimi-web-provider-custom-entry');
+    expect(custom?.textContent).toContain(en.providerManager.custom.title);
+    expect(custom?.textContent).toContain(en.providerManager.custom.entryDescription);
+    const search = catalog?.querySelector('.provider-discovery-search');
+    expect(Boolean(custom && search && custom.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(host.querySelector('.kimi-web-provider-toolbar .is-primary')).toBeNull();
+    expect(catalog?.textContent).not.toContain(en.kimiWeb.providers.importCatalog);
+    expect(Array.from(host.querySelectorAll('button')).some((button) => button.textContent?.trim() === en.kimiWeb.providers.refresh)).toBe(false);
+    custom?.querySelector<HTMLButtonElement>('button')?.click();
+    await flushUi();
+    expect(host.querySelector('.kimi-web-provider-form')).not.toBeNull();
+    expect(harness.calls.some((call) => call.url.endsWith('/api/v1/providers:import_catalog'))).toBe(false);
   });
 
   it('is keyboard operable and exposes accessible names', async () => {
@@ -508,7 +583,7 @@ describe('KimiWebProviderManager', () => {
       );
     });
 
-    buttonByText(host, en.kimiWeb.providers.add).click();
+    customProviderButton(host).click();
     await flushUi();
 
     const form = host.querySelector<HTMLFormElement>('.kimi-web-provider-form');
@@ -549,7 +624,7 @@ describe('KimiWebProviderManager', () => {
       );
     });
 
-    buttonByText(host, en.kimiWeb.providers.add).click();
+    customProviderButton(host).click();
     await flushUi();
     const form = host.querySelector<HTMLFormElement>('.kimi-web-provider-form');
     const inputs = Array.from(form?.querySelectorAll<HTMLInputElement>('input') ?? []);

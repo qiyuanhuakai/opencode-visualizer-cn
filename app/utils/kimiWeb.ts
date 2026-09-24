@@ -275,6 +275,14 @@ export type KimiWebContentPart =
       size?: number;
     };
 
+export type KimiWebDirectoryBrowse = {
+  path: string;
+  parent: string | null;
+  entries: Array<{ name: string; path: string; is_dir: true }>;
+};
+
+export type KimiWebFsHome = { home: string; recent_roots: string[] };
+
 export type KimiWebMessageOrigin = {
   kind?: 'user' | 'injection' | 'skill_activation' | 'plugin_command' | 'compaction_summary';
   [key: string]: unknown;
@@ -843,6 +851,11 @@ export function createKimiWebClient(options: KimiWebClientOptions) {
       const { signal, ...listing } = listOptions;
       return sessionFsAction<KimiWebFsList>(sessionId, 'list', { path, ...listing }, signal);
     },
+    browseDirectories: (path: string, signal?: AbortSignal) =>
+      requestJson<KimiWebDirectoryBrowse>({
+        method: 'GET', path: '/api/v1/fs:browse', query: { path }, signal,
+      }),
+    getFsHome: () => requestJson<KimiWebFsHome>({ method: 'GET', path: '/api/v1/fs:home' }),
     getGitStatus: (sessionId: string, listOptions: KimiWebListOptions = {}) =>
       sessionFsAction<KimiWebGitStatus>(sessionId, 'git_status', {}, listOptions.signal),
 

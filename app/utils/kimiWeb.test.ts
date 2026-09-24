@@ -79,6 +79,21 @@ describe('kimiWeb REST client', () => {
   });
 
   describe('envelope + status-first semantics', () => {
+    it('browses host project directories without a session id', async () => {
+      const page = { path: '/work', parent: '/', entries: [{ name: 'new-project', path: '/work/new-project', is_dir: true }] };
+      fetchMock.mockResolvedValue(jsonResponse(envelope(page)));
+      await expect(client.browseDirectories('/work')).resolves.toEqual(page);
+      const { url, init } = lastCall(fetchMock);
+      expect(url).toBe(`${BASE}/api/v1/fs:browse?path=%2Fwork`);
+      expect(init.method).toBe('GET');
+    });
+    it('loads the Kimi host home directory for the project picker', async () => {
+      fetchMock.mockResolvedValue(jsonResponse(envelope({ home: '/home/kimi', recent_roots: [] })));
+      await expect(client.getFsHome()).resolves.toEqual({ home: '/home/kimi', recent_roots: [] });
+      const { url, init } = lastCall(fetchMock);
+      expect(url).toBe(`${BASE}/api/v1/fs:home`);
+      expect(init.method).toBe('GET');
+    });
     it('unwraps code=0 envelope data on HTTP 200', async () => {
       fetchMock.mockResolvedValue(jsonResponse(envelope({ server_version: '0.43.0' })));
 

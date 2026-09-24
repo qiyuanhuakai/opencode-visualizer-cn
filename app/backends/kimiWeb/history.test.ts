@@ -165,6 +165,48 @@ describe('kimiWebMessagesToHistoryEntries', () => {
     }
   });
 
+  it('combines adjacent thinking chunks into one history record without crossing text', () => {
+    const messages: KimiWebMessage[] = [{
+      id: 'assistant-chunks', session_id: SESSION_ID, role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'First ' },
+        { type: 'thinking', thinking: 'thought.' },
+        { type: 'text', text: 'Visible answer.' },
+        { type: 'thinking', thinking: 'Second thought.' },
+      ],
+    }];
+    const [entry] = kimiWebMessagesToHistoryEntries(messages);
+    expect(entry?.parts.filter((part) => part.type === 'reasoning').map((part) => part.text))
+      .toEqual(['First thought.', 'Second thought.']);
+  });
+
+  it('collapses complete paired duplicate thinking chunks from history', () => {
+    const messages: KimiWebMessage[] = [{
+      id: 'assistant-paired-thinking', session_id: SESSION_ID, role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'Read ' },
+        { type: 'thinking', thinking: 'Read ' },
+        { type: 'thinking', thinking: 'README.' },
+        { type: 'thinking', thinking: 'README.' },
+        { type: 'text', text: 'Done.' },
+        { type: 'thinking', thinking: 'yes' },
+        { type: 'thinking', thinking: 'yes' },
+        { type: 'thinking', thinking: 'yes' },
+      ],
+    }];
+    const [entry] = kimiWebMessagesToHistoryEntries(messages);
+    expect(entry?.parts.filter((part) => part.type === 'reasoning').map((part) => part.text))
+      .toEqual(['Read README.', 'yesyesyes']);
+  });
+
+  it('does not relabel past assistant turns with the current session permission', () => {
+    const [entry] = kimiWebMessagesToHistoryEntries([{
+      id: 'past-assistant', session_id: SESSION_ID, role: 'assistant',
+      content: [{ type: 'text', text: 'Earlier response' }],
+    }], { permission: 'yolo' });
+    expect(entry?.info.role === 'assistant' && entry.info.mode).toBe('');
+  });
+
   it('shows completed Kimi tool calls in history, including shell and web search', () => {
     const messages = [...fixtureMessages()].reverse().filter((message) => !isInjectionMessage(message));
     messages.push({ id: 'assistant-extra', session_id: SESSION_ID, role: 'assistant', created_at: '2026-09-21T04:00:00Z', content: [

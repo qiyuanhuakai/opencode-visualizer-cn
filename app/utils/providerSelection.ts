@@ -2,6 +2,15 @@ import type { BackendProviderResponse } from '../types/backend-domain';
 
 type ModelChoice = { readonly id: string; readonly providerID?: string; readonly modelID: string };
 
+export function formatProviderModelPath(providerID: string, modelID: string): string {
+  if (!providerID) return modelID;
+  if (!modelID) return providerID;
+  if (modelID.startsWith(`${providerID}/`)) return modelID;
+  const managedProvider = providerID.startsWith('managed:') ? providerID.slice('managed:'.length) : '';
+  if (managedProvider && modelID.startsWith(`${managedProvider}/`)) return modelID;
+  return `${providerID}/${modelID}`;
+}
+
 export function preferredProviderModel(models: readonly ModelChoice[], defaults: BackendProviderResponse['default']): string {
   for (const [providerID, modelID] of Object.entries(defaults ?? {})) {
     const match = models.find(model => model.providerID === providerID && model.modelID === modelID);

@@ -19,11 +19,10 @@
   - [x] codex：偶现后端render超时
 
 - [ ] 改善codex后端兼容性
-  - [ ] 状态监控-token
-  - [ ] 添加轻量级多账户额度显示器：在状态监控中汇总多个 Codex 账户的 5 小时（仅 Plus）与周额度。本轮仅记录计划，不实现。
-  - [ ] 小修小补
+
 - [ ] 改善kimi web后端兼容性
 
+- [ ] 添加轻量级多账户额度显示器：在状态监控中汇总多个账户的 5 小时与周额度。
 
 
 
@@ -34,9 +33,8 @@
     - [?] pi
     - [ ] minimax
     - [ ] dsh
-    - [ ] cursor cli
-  - [ ] omo codex app-server
   - [ ] dsh web
+  - [ ] omo codex app-server
   - [ ] astrcodey web
   - [ ] [opencode-magic-context](https://github.com/cortexkit/opencode-magic-context)
   - [ ] [gnhf](https://github.com/kunchenguid/gnhf)

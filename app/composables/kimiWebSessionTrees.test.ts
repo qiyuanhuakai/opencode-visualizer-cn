@@ -16,6 +16,26 @@ function project(id: string, directory: string): ProjectState {
 }
 
 describe('Kimi Web top panel groups', () => {
+  it('places main and linked worktree branches under one repository sandbox', () => {
+    const main = '/home/user/vis';
+    const linked = '/home/user/vis.thirdend';
+    const groups = buildKimiWebTopPanelTreeData({
+      projects: { main: project('main', main), linked: project('linked', linked) },
+      pinnedStore: {}, deletedSandboxStore: {}, homePath: '/home/user',
+      replaceHomePrefix: (path) => path,
+      resolveProjectColor: () => undefined,
+      gitInfoByDirectory: {
+        [main]: { root: main, branch: 'main' },
+        [linked]: { root: linked, commonRoot: main, worktreeRoot: linked, branch: 'thirdend' },
+      },
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.directory).toBe(main);
+    expect(groups[0]?.sandboxes.map((branch) => [branch.directory, branch.branch])).toEqual([
+      [main, 'main'], [linked, 'thirdend'],
+    ]);
+  });
+
   it('puts every non-Git project in one Global and gives Git roots their own sandbox', () => {
     const groups = buildKimiWebTopPanelTreeData({
       projects: {

@@ -421,6 +421,12 @@ export interface LocaleMessages {
     };
   };
   providerManager: {
+    discovery: {
+      search: string;
+      empty: string;
+      letters: string;
+      jump: string;
+    };
     title: string;
     close: string;
     acp: {

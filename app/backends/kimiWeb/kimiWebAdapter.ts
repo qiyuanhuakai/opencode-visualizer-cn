@@ -18,7 +18,7 @@ import {
 } from '../../utils/kimiWeb';
 import { kimiWebProxyHttpUrl, kimiWebWsUrl } from '../../utils/kimiWebWs';
 import type { ProviderConfigState } from '../../utils/providerConfig';
-import { normalizeDirectory } from '../../utils/path';
+import { normalizeAbsolutePathNoParent, normalizeDirectory } from '../../utils/path';
 import {
   isKimiWebPermissionMode,
   isTowerExperimentEnabled,
@@ -84,6 +84,17 @@ function timestamp(value?: string | null): number | undefined {
   if (!value) return undefined;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function commonRootFromGitFile(contents: Uint8Array, directory: string): string {
+  const pointer = new TextDecoder().decode(contents).match(/^gitdir:\s*(.+?)\s*$/mu)?.[1];
+  if (!pointer) return '';
+  const gitDir = normalizeAbsolutePathNoParent(
+    pointer.startsWith('/') ? pointer : `${directory}/${pointer}`,
+  );
+  const marker = '/.git/worktrees/';
+  const markerIndex = gitDir.indexOf(marker);
+  return markerIndex > 0 ? gitDir.slice(0, markerIndex) : '';
 }
 
 export function mapKimiWebSession(session: KimiWebSession): KimiWebMappedSession {
@@ -454,7 +465,19 @@ export class KimiWebAdapter implements BackendAdapter {
     payload: { directory: string; path?: string },
     options?: BackendRequestOptions,
   ) {
-    const sessionId = await this.sessionIdForDirectory(payload.directory, options);
+    const normalizedDirectory = normalizeDirectory(payload.directory.trim() || '/');
+    const sessions = await this.listSessions({ directory: normalizedDirectory, signal: options?.signal });
+    const sessionId = sessions[0]?.id;
+    if (!sessionId) {
+      const page = await this.restClient.browseDirectories(normalizedDirectory, options?.signal);
+      return page.entries.map((entry) => ({
+        name: entry.name,
+        path: entry.path,
+        absolute: entry.path,
+        type: 'directory' as const,
+        ignored: false,
+      }));
+    }
     const [page, visiblePage] = await Promise.all([
       this.restClient.listFiles(sessionId, payload.path ?? '.', {
       ...options,
@@ -508,6 +531,15 @@ export class KimiWebAdapter implements BackendAdapter {
   async getVcsInfo(directory: string, options?: BackendRequestOptions) {
     const sessionId = await this.sessionIdForDirectory(directory, options);
     const status = await this.restClient.getGitStatus(sessionId, options);
+    let commonRoot = '';
+    try {
+      commonRoot = commonRootFromGitFile(
+        await this.restClient.downloadFile(sessionId, '.git', { signal: options?.signal }),
+        directory,
+      );
+    } catch {
+      commonRoot = '';
+    }
     const snapshot: GitStatus = {
       branch: {
         branch: status.branch,
@@ -524,7 +556,13 @@ export class KimiWebAdapter implements BackendAdapter {
         pending: false,
       },
     };
-    return { root: directory, branch: status.branch, entries: status.entries, snapshot };
+    return {
+      root: directory,
+      branch: status.branch,
+      ...(commonRoot ? { commonRoot, worktreeRoot: directory } : {}),
+      entries: status.entries,
+      snapshot,
+    };
   }
 
   async abortSession(sessionId: string) {

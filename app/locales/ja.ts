@@ -430,6 +430,12 @@ const messages: LocaleMessages = {
     },
   },
   providerManager: {
+    discovery: {
+      search: 'プロバイダーを検索…',
+      empty: '一致するプロバイダーはありません。',
+      letters: '頭文字でプロバイダーを探す',
+      jump: '{letter} に移動',
+    },
     title: 'プロバイダーとモデル（ベータ版）',
     close: 'プロバイダーマネージャーを閉じる',
     acp: {

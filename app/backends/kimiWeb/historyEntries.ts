@@ -9,7 +9,6 @@
 import type {
   AssistantMessageInfo,
   MessagePart,
-  ReasoningPart,
   TextPart,
   ToolPart,
   UserMessageInfo,
@@ -88,7 +87,7 @@ function createAssistantInfo(
     parentID: parentId,
     modelID: profile.model ?? '',
     providerID: profile.provider ?? '',
-    mode: profile.permission ?? 'manual',
+    mode: '',
     agent: 'main',
     ...(profile.effort ? { variant: profile.effort } : {}),
     path: { cwd: '', root: '' },
@@ -117,18 +116,38 @@ function assistantParts(
   toolParts: Map<string, ToolPart>,
 ): MessagePart[] {
   const parts: MessagePart[] = [];
-  message.content.forEach((part, index) => {
-    if (part.type === 'thinking' && part.thinking.trim()) {
-      const reasoning: ReasoningPart = {
-        ...partBase(message, `${message.id}:reasoning:${index}`),
-        type: 'reasoning',
-        text: part.thinking,
-        metadata: { source: 'kimi-web' },
-        time: { start: createdAt, end: createdAt },
-      };
-      parts.push(reasoning);
+  let thinkingChunks: string[] = [];
+  let thinkingStart = -1;
+  const flushThinking = () => {
+    // Some Kimi history responses repeat every thinking part in consecutive pairs.
+    // Require the whole run to match before removing copies, so ordinary repetition survives.
+    const pairedDuplicates = thinkingChunks.length >= 4 && thinkingChunks.length % 2 === 0 &&
+      thinkingChunks.every((chunk, index) => index % 2 === 0 || chunk === thinkingChunks[index - 1]);
+    const thinking = (pairedDuplicates
+      ? thinkingChunks.filter((_, index) => index % 2 === 0)
+      : thinkingChunks).join('');
+    if (!thinking.trim()) {
+      thinkingChunks = [];
+      thinkingStart = -1;
       return;
     }
+    parts.push({
+      ...partBase(message, `${message.id}:reasoning:${thinkingStart}`),
+      type: 'reasoning',
+      text: thinking,
+      metadata: { source: 'kimi-web' },
+      time: { start: createdAt, end: createdAt },
+    });
+    thinkingChunks = [];
+    thinkingStart = -1;
+  };
+  message.content.forEach((part, index) => {
+    if (part.type === 'thinking') {
+      if (thinkingStart < 0) thinkingStart = index;
+      thinkingChunks.push(part.thinking);
+      return;
+    }
+    flushThinking();
     if (part.type === 'text' && part.text.trim()) {
       const text: TextPart = {
         ...partBase(message, `${message.id}:text:${index}`),
@@ -146,6 +165,7 @@ function assistantParts(
       parts.push(toolPart);
     }
   });
+  flushThinking();
   return parts;
 }
 

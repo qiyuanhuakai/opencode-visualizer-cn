@@ -135,7 +135,7 @@
                     :compute-context-percent="computeContextPercent"
                     :session-revert="sessionRevert"
                     :backend-kind="activeBackendKind"
-                    :kimi-permission-mode="activeBackendKind === 'kimi-web' ? selectedMode : undefined"
+                    :kimi-turn-permission-for-user="kimiTurnPermissions.get"
                     :kimi-card-actions-ready="activeBackendKind === 'kimi-web' && connectionState === 'ready'"
                     :kimi-fork-available="kimiWebCapabilities.isAvailable('fork') && kimiWebCapabilities.isAvailable('undo')"
                     :kimi-undo-available="kimiWebCapabilities.isAvailable('undo')"
@@ -633,7 +633,7 @@ import {
 } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { codexModeColor, codexModeOptions } from './utils/codexModePresentation';
-import { preferredProviderModel, restoredReasoningEffort } from './utils/providerSelection';
+import { formatProviderModelPath, preferredProviderModel, restoredReasoningEffort } from './utils/providerSelection';
 import { bundledThemes } from 'shiki/bundle/web';
 import InputPanel from './components/InputPanel.vue';
 import Dropdown from './components/Dropdown.vue';
@@ -848,9 +848,11 @@ import { createKimiWebCapabilityRegistry, probeKimiWebSessionActions } from './b
 import {
   isKimiWebPermissionMode,
   isTowerExperimentEnabled,
+  type KimiWebPermissionMode,
   type KimiWebSessionModeChange,
 } from './backends/kimiWeb/sessionModes';
 import { kimiWebMessagesToHistoryEntries } from './backends/kimiWeb/historyEntries';
+import { createKimiWebTurnPermissionStore } from './backends/kimiWeb/turnPermissions';
 import {
   answerKimiWebApproval,
   answerKimiWebQuestion,
@@ -2248,6 +2250,21 @@ provide('showPrompt', showPrompt);
 provide('showConfirm', showConfirm);
 
 const selectedMode = ref('build');
+const KIMI_PERMISSION_STORAGE_KEY = 'vis:kimi-web:last-permission-mode';
+function readLastKimiPermissionMode() {
+  try {
+    const value = window.localStorage.getItem(KIMI_PERMISSION_STORAGE_KEY);
+    return isKimiWebPermissionMode(value) ? value : 'manual';
+  } catch {
+    return 'manual';
+  }
+}
+const lastKimiPermissionMode = ref(readLastKimiPermissionMode());
+const kimiTurnPermissions = createKimiWebTurnPermissionStore();
+function rememberKimiPermissionMode(value: KimiWebPermissionMode) {
+  lastKimiPermissionMode.value = value;
+  try { window.localStorage.setItem(KIMI_PERMISSION_STORAGE_KEY, value); } catch { /* unavailable storage */ }
+}
 const selectedAcpPermissionMode = ref('normal');
 const acpPermissionModeOptions = ref<Array<{ id: string; label: string }>>([]);
 const selectedModel = ref('');
@@ -4062,6 +4079,7 @@ function applyComposerDraftToComposerState(draft: ComposerDraft, contextKey: str
   attachments.value = draft.attachments.slice();
 
   if (activeBackendKind.value === 'kimi-web') {
+    if (isKimiWebPermissionMode(draft.agent)) selectedMode.value = draft.agent;
     const modelToApply =
       draft.model && availableModelOptions.value.some((model) => model.id === draft.model)
         ? draft.model
@@ -4124,7 +4142,7 @@ function persistComposerDraftForCurrentContext() {
       mime: item.mime,
       dataUrl: item.dataUrl,
     })),
-    agent: activeBackendKind.value === 'kimi-web' ? '' : selectedMode.value,
+    agent: selectedMode.value,
     model: selectedModel.value,
     variant: selectedThinking.value,
     updatedAt: Date.now(),
@@ -4148,7 +4166,7 @@ function scheduleComposerDraftPersistence() {
       mime: item.mime,
       dataUrl: item.dataUrl,
     })),
-    agent: activeBackendKind.value === 'kimi-web' ? '' : selectedMode.value,
+    agent: selectedMode.value,
     model: selectedModel.value,
     variant: selectedThinking.value,
     updatedAt: Date.now(),
@@ -4215,8 +4233,10 @@ function handleSelectedModeUpdate(value: string) {
   selectedMode.value = value;
   if (activeBackendKind.value === 'kimi-web') {
     if (isKimiWebPermissionMode(value)) {
-      void changeKimiWebMode({ field: 'permissionMode', value });
+      if (selectedSessionId.value.trim()) void changeKimiWebMode({ field: 'permissionMode', value });
+      else rememberKimiPermissionMode(value);
     }
+    persistComposerDraftForCurrentContext();
     return;
   }
   if (activeBackendKind.value !== 'codex') applyAgentDefaults(value);
@@ -5281,7 +5301,7 @@ async function fetchProviders(force = false) {
         const providerID = model.providerID?.trim() || provider.id?.trim() || 'unknown';
         const providerLabel = provider.name?.trim() || providerID;
         const modelDisplayName = model.name?.trim() || model.id;
-        const label = `${modelDisplayName} [${providerID}/${model.id}]`;
+        const label = `${modelDisplayName} [${formatProviderModelPath(providerID, model.id)}]`;
         const id = buildProviderModelKey(providerID, model.id);
         if (!id) return;
         models.push({
@@ -5341,10 +5361,10 @@ async function fetchAgents() {
   try {
     if (activeBackendKind.value === 'kimi-web') {
       agentOptions.value = [];
+      const draftMode = readComposerDraft(selectedSessionId.value)?.agent;
       selectedMode.value =
         kimiWebSessionModes.sessionState(selectedSessionId.value).permissionMode ??
-        kimiWebAgentOptions.value[0]?.id ??
-        'manual';
+        (isKimiWebPermissionMode(draftMode) ? draftMode : lastKimiPermissionMode.value);
       return;
     }
     if (activeBackendKind.value === 'codex') {
@@ -7907,10 +7927,14 @@ async function changeKimiWebMode(change: KimiWebSessionModeChange) {
   refreshKimiWebModeState();
   try {
     await pending;
+    if (change.field === 'permissionMode') rememberKimiPermissionMode(change.value);
   } catch (error) {
     setSendStatusErrorText(toErrorMessage(error));
   } finally {
-    if (sessionId === selectedSessionId.value) refreshKimiWebModeState();
+    if (sessionId === selectedSessionId.value) {
+      refreshKimiWebModeState();
+      if (change.field === 'permissionMode') persistComposerDraftForCurrentContext();
+    }
   }
 }
 
@@ -8032,6 +8056,7 @@ const kimiWebApi = {
     createKimiWebCardActions(kimiWebRestClient()).undoSessionFromMessage(sessionId, messageId),
   createSession: (...args: Parameters<KimiWebAdapter['restClient']['createSession']>) =>
     kimiWebRestClient().createSession(...args),
+  getFsHome: () => kimiWebRestClient().getFsHome(),
   updateProfile: (...args: Parameters<KimiWebAdapter['restClient']['updateProfile']>) =>
     kimiWebRestClient().updateProfile(...args),
   deleteSession: (...args: Parameters<KimiWebAdapter['restClient']['deleteSession']>) =>
@@ -8212,9 +8237,10 @@ watch(kimiWebPendingInteractions, (items) => {
 
 watch(selectedSessionId, (nextId, previousId) => {
   if (activeBackendKind.value !== 'kimi-web') return;
-  kimiWebSessionModes.resetSession(nextId);
   refreshKimiWebModeState();
-  selectedMode.value = kimiWebAgentOptions.value[0]?.id ?? 'manual';
+  const draftMode = readComposerDraft(nextId)?.agent;
+  selectedMode.value = kimiWebSessionModes.sessionState(nextId).permissionMode
+    ?? (isKimiWebPermissionMode(draftMode) ? draftMode : lastKimiPermissionMode.value);
   if (previousId && previousId !== nextId) kimiWebInteractions.clearSession(previousId);
   refreshKimiWebPendingInteractions();
   void reconcileKimiWebSelectedSession();
@@ -8669,7 +8695,11 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
   kimiWebApi,
   kimiWebCreateProfile: (directory) => ({
     metadata: { cwd: directory },
-    ...kimiWebComposerProfile(selectedModel.value, selectedThinking.value),
+    ...kimiWebComposerProfile(
+      selectedModel.value,
+      selectedThinking.value,
+      isKimiWebPermissionMode(selectedMode.value) ? selectedMode.value : lastKimiPermissionMode.value,
+    ),
   }),
   onKimiWebSessionCreated: (session) => {
     const workspaceId = (session.projectID ?? '').trim();
@@ -8680,6 +8710,7 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
     });
     scheduleKimiTopPanelGitInfoHydration();
   },
+  selectKimiWebSession: switchSessionSelection,
 });
 
 const backendSessionReload = useBackendSessionReload({
@@ -8898,8 +8929,15 @@ async function executeKimiWebSlashCommand(action: KimiWebSlashAction) {
     }
     const pending = kimiWebSessionModes.changeMode(sessionId, change);
     refreshKimiWebModeState();
-    try { await pending; }
-    finally { if (current()) refreshKimiWebModeState(); }
+    try {
+      await pending;
+      if (change.field === 'permissionMode') rememberKimiPermissionMode(change.value);
+    } finally {
+      if (current()) {
+        refreshKimiWebModeState();
+        if (change.field === 'permissionMode') persistComposerDraftForCurrentContext();
+      }
+    }
   }
   if (current()) setSendStatusKey('kimiWeb.commands.applied');
 }
@@ -8940,6 +8978,7 @@ const backendMessageSend = useBackendMessageSend({
   kimiWebAbortChannel,
   isKimiWebSessionModeReady: (sessionId) =>
     kimiWebSessionModes.sessionState(sessionId).pendingField === undefined,
+  recordKimiWebTurnPermission: kimiTurnPermissions.record,
   ensureConnectionReady,
   translate: t,
   toErrorMessage,

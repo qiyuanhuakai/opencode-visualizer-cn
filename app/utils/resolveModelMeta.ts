@@ -3,6 +3,8 @@ export type ModelMeta = {
   providerLabel?: string;
 };
 
+import { formatProviderModelPath } from './providerSelection';
+
 export type ModelOption = {
   id: string;
   modelID: string;
@@ -17,15 +19,16 @@ export type ModelOption = {
 export function buildModelMetaIndex(
   modelOptions: ReadonlyArray<ModelOption>,
 ): ReadonlyMap<string, ModelMeta> {
-  return new Map(
-    modelOptions.map((model) => [
-      model.id,
-      {
-        displayName: model.displayName,
-        providerLabel: model.providerLabel,
-      },
-    ]),
-  );
+  const index = new Map<string, ModelMeta>();
+  for (const model of modelOptions) {
+    const meta = { displayName: model.displayName, providerLabel: model.providerLabel };
+    index.set(model.id, meta);
+    if (model.providerID) {
+      const displayPath = formatProviderModelPath(model.providerID, model.modelID);
+      if (!index.has(displayPath)) index.set(displayPath, meta);
+    }
+  }
+  return index;
 }
 
 export function resolveModelMetaForPath(

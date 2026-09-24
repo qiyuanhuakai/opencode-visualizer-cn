@@ -316,6 +316,28 @@ describe('useBackendMessageSend kimi-web', () => {
     expect(api.updateProfile).toHaveBeenCalledWith('session-1', { agent_config: { model: 'kimi-code/kimi-for-coding-highspeed', thinking: 'high' } });
   });
 
+  it('records the accepted Kimi turn permission from the send snapshot', async () => {
+    const record = vi.fn();
+    const { base, api } = createKimiRuntime();
+    base.selectedMode.value = 'yolo';
+    const profile = deferred<unknown>();
+    api.updateProfile.mockReturnValueOnce(profile.promise);
+    const runtime = useBackendMessageSend({
+      ...base,
+      activeBackendKind: ref<BackendKind>('kimi-web'),
+      openCodeApi: { sendPromptAsync: vi.fn().mockResolvedValue(undefined) },
+      codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
+      kimiWebApi: api,
+      recordKimiWebTurnPermission: record,
+    });
+    const sending = runtime.sendMessage();
+    await vi.waitFor(() => expect(api.updateProfile).toHaveBeenCalledOnce());
+    base.selectedMode.value = 'manual';
+    profile.resolve({});
+    await sending;
+    expect(record).toHaveBeenCalledWith('session-1', 'msg_01', 'yolo');
+  });
+
   it('resets an explicit effort to the selected models server default', async () => {
     const { base, runtime, api } = createKimiRuntime();
     base.selectedThinking.value = undefined;

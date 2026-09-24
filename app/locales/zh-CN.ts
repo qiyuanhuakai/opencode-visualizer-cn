@@ -424,6 +424,12 @@ const messages: LocaleMessages = {
     },
   },
   providerManager: {
+    discovery: {
+      search: '搜索提供商…',
+      empty: '没有匹配的提供商。',
+      letters: '按首字母浏览提供商',
+      jump: '跳转到 {letter}',
+    },
     title: '提供商与模型 (beta)',
     close: '关闭提供商管理器',
     acp: {

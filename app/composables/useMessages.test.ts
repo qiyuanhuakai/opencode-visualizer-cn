@@ -4,6 +4,13 @@ import { useMessages } from './useMessages';
 import { assistantMessage, textPart, toolPart, userMessage } from './useMessages.test-helpers';
 
 describe('useMessages history and realtime state', () => {
+  it('shows a qualified model id only once in message metadata', () => {
+    const messages = useMessages();
+    messages.updateMessage(userMessage('model-1', {
+      model: { providerID: 'stepfun-step-plan', modelID: 'stepfun-step-plan/step-5-preview' },
+    }));
+    expect(messages.getModelPath('model-1')).toBe('stepfun-step-plan/step-5-preview');
+  });
   beforeEach(() => {
     useMessages().reset();
   });

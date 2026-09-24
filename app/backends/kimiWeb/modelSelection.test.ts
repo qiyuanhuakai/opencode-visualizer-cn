@@ -10,4 +10,9 @@ describe('kimiWebComposerProfile', () => {
   it('does not write an empty model when the model list has not loaded', () => {
     expect(kimiWebComposerProfile('', undefined)).toEqual({});
   });
+  it('includes the selected permission even before the model list loads', () => {
+    expect(kimiWebComposerProfile('', undefined, 'auto')).toEqual({
+      agent_config: { permission_mode: 'auto' },
+    });
+  });
 });

@@ -427,6 +427,12 @@ const messages: LocaleMessages = {
     },
   },
   providerManager: {
+    discovery: {
+      search: 'Search providers…',
+      empty: 'No matching providers.',
+      letters: 'Browse providers by initial',
+      jump: 'Jump to {letter}',
+    },
     title: 'Providers & models (beta)',
     close: 'Close provider manager',
     acp: {

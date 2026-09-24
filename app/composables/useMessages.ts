@@ -16,6 +16,7 @@ import type {
 import type { SessionScope } from './useGlobalEvents';
 import { useDeltaAccumulator } from './useDeltaAccumulator';
 import { ByteWeightedLruCache } from '../utils/byteWeightedLru';
+import { formatProviderModelPath } from '../utils/providerSelection';
 
 export type MessageCacheIdentity = {
   namespace: string;
@@ -471,7 +472,7 @@ function getModelPath(id: string): string | undefined {
   if (!info) return undefined;
   const providerId = getProviderId(info);
   const modelId = getModelId(info);
-  if (providerId && modelId) return `${providerId}/${modelId}`;
+  if (providerId && modelId) return formatProviderModelPath(providerId, modelId);
   return modelId || providerId;
 }
 

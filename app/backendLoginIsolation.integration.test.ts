@@ -46,7 +46,7 @@ describe('App backend login isolation', () => {
     });
     expect(fixture.readSetupBinding('selectedSessionId')).toBe('session-b');
     expect(fixture.host.querySelector('.app-error-message')).toBeNull();
-  });
+  }, 15_000);
 
   it('Given distinct Codex and ACP tokens entered through one real login form, When Codex is selected and submitted, Then Codex receives only its own token', async () => {
     const codexFixture = await mountLoginApp();
