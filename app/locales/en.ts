@@ -629,6 +629,7 @@ const messages: LocaleMessages = {
     agentTitle: 'Agent (Tab)',
     modelTitle: 'Model (Ctrl-M)',
     permissionModeTitle: 'Permission policy',
+    planModeTitle: 'Plan mode',
     variantTitle: 'Variant (Ctrl-, / Ctrl-.)',
     selectAtAgent: 'Select agent via @',
     atAgentTitle: 'Agent via @',

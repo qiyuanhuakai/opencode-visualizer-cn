@@ -90,7 +90,14 @@ export function createAcpProviderResponse(values: unknown[], label: string) {
   };
 }
 
-const ACP_PERMISSION_MODE_VALUES = new Set(['normal', 'acceptEdits', 'bypassPermissions']);
+const ACP_PERMISSION_MODE_VALUES = new Set([
+  'normal',
+  'default',
+  'acceptEdits',
+  'bypassPermissions',
+  'auto',
+  'yolo',
+]);
 
 function isAcpPermissionMode(value: string) {
   return ACP_PERMISSION_MODE_VALUES.has(value);
@@ -135,13 +142,13 @@ export function createAcpPermissionModeList(values: unknown[]) {
     .filter((option) => isAcpPermissionMode(option.value))
     .map((option) => ({ id: option.value, name: option.name }));
   const current = options.some((option) => option.id === mode?.currentValue)
-    ? (mode?.currentValue ?? 'normal')
-    : (options[0]?.id ?? 'normal');
+    ? (mode?.currentValue ?? '')
+    : (options[0]?.id ?? '');
   return { current, options };
 }
 
 export function resolveAcpModeSelection(agent: string, permissionMode: string) {
-  return agent === 'default' ? permissionMode : agent;
+  return agent === 'default' ? permissionMode || 'default' : agent;
 }
 
 export function createAcpUiModeState(

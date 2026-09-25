@@ -286,4 +286,24 @@ describe('CodexJsonRpcClient', () => {
     await vi.advanceTimersByTimeAsync(100);
     await rejection;
   });
+
+  it('keeps a request with a zero timeout pending until the agent responds', async () => {
+    const client = new CodexJsonRpcClient({
+      url: 'ws://localhost:4500',
+      webSocketCtor: MockWebSocket,
+    });
+    const connected = client.connect();
+    const socket = MockWebSocket.instances[0]!;
+    socket.emitOpen();
+    await connected;
+
+    const settled = vi.fn();
+    const request = client.request('session/prompt', {}, { timeoutMs: 0 });
+    void request.then(settled, settled);
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    socket.respond(1, { stopReason: 'end_turn' });
+    await expect(request).resolves.toEqual({ stopReason: 'end_turn' });
+  });
 });

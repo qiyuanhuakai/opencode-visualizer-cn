@@ -299,7 +299,32 @@
       </div>
       <div class="input-toolbar">
         <div class="input-selects">
-          <div class="input-field compact">
+          <div v-if="props.acpPermissionControls" class="input-field compact">
+            <Dropdown
+              v-model="permissionModeValue"
+              :placeholder="$t('inputPanel.selectPermissionMode')"
+              :disabled="props.disabled || props.permissionModeDisabled || permissionModeOptions.length < 2"
+              button-class="input-control input-dropdown-button"
+              popup-class="input-dropdown-popup"
+              auto-close
+              :title="$t('inputPanel.permissionModeTitle')"
+              @update:open="handleModelDropdownOpenChange"
+            >
+              <template #value="{ value: id }">
+                <span :class="{ 'input-light-mode-color': props.lightPermissionColors }" :style="resolveAgentStyle(id)">{{
+                  permissionModeOptions.find((option) => option.id === id)?.label ?? $t('inputPanel.defaultAgent')
+                }}</span>
+              </template>
+              <template #default>
+                <div class="dropdown-list">
+                  <DropdownItem v-for="option in permissionModeOptions" :key="option.id" :value="option.id">
+                    <span class="dropdown-item-label" :class="{ 'input-light-mode-color': props.lightPermissionColors }" :style="resolveAgentStyle(option.id)">{{ option.label }}</span>
+                  </DropdownItem>
+                </div>
+              </template>
+            </Dropdown>
+          </div>
+          <div v-else class="input-field compact">
             <Dropdown
               v-model="modeValue"
               :placeholder="agentPickerPlaceholder"
@@ -311,7 +336,7 @@
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
-                <span :style="agentValueStyle(id)" :title="agentTriggerLabel(id)">{{
+                <span :class="{ 'input-light-mode-color': props.lightPermissionColors }" :style="agentValueStyle(id)" :title="agentTriggerLabel(id)">{{
                   agentTriggerLabel(id)
                 }}</span>
               </template>
@@ -325,7 +350,7 @@
                       class="agent-dropdown-item"
                       :class="{ 'is-current': agent.id === props.selectedMode }"
                     >
-                      <span class="agent-dropdown-name" :style="agentOptionNameStyle(agent)">
+                      <span class="agent-dropdown-name" :class="{ 'input-light-mode-color': props.lightPermissionColors }" :style="agentOptionNameStyle(agent)">
                         {{ agent.label }}
                       </span>
                       <span
@@ -348,7 +373,7 @@
               </template>
             </Dropdown>
           </div>
-          <div v-if="permissionModeOptions.length > 0" class="input-field compact">
+          <div v-if="!props.acpPermissionControls && permissionModeOptions.length > 1" class="input-field compact">
             <Dropdown
               v-model="permissionModeValue"
               :placeholder="$t('inputPanel.selectPermissionMode')"
@@ -360,7 +385,7 @@
               @update:open="handleModelDropdownOpenChange"
             >
               <template #value="{ value: id }">
-                <span>{{
+                <span>{{ $t('inputPanel.selectPermissionMode') }}: {{
                   permissionModeOptions.find((option) => option.id === id)?.label ?? id
                 }}</span>
               </template>
@@ -480,6 +505,17 @@
           </Dropdown>
         </div>
         <slot name="after-thinking" />
+        <button
+          v-if="props.planModeAvailable"
+          type="button"
+          class="input-plan-toggle"
+          :class="{ 'is-active': props.selectedMode === 'plan' }"
+          :aria-label="$t('inputPanel.planModeTitle')"
+          :aria-pressed="props.selectedMode === 'plan'"
+          :title="$t('kimiWeb.composer.planDescription')"
+          :disabled="props.disabled"
+          @click="emit('toggle-plan', props.selectedMode !== 'plan')"
+        >{{ $t('kimiWeb.composer.plan') }}</button>
         <div class="input-actions">
           <button
             type="button"
@@ -598,6 +634,9 @@ const props = defineProps<{
   selectedPermissionMode?: string;
   permissionModeOptions?: Array<{ id: string; label: string }>;
   permissionModeDisabled?: boolean;
+  acpPermissionControls?: boolean;
+  planModeAvailable?: boolean;
+  lightPermissionColors?: boolean;
   agentOptions: AgentOption[];
   subagentOptions?: AgentOption[];
   mentionFiles?: string[];
@@ -636,6 +675,7 @@ const emit = defineEmits<{
   (event: 'update:message-input', value: string): void;
   (event: 'update:selected-mode', value: string): void;
   (event: 'update:selected-permission-mode', value: string): void;
+  (event: 'toggle-plan', enabled: boolean): void;
   (event: 'update:selected-model', value: string): void;
   (event: 'update:selected-thinking', value: string | undefined): void;
   (
@@ -1118,6 +1158,12 @@ const fileMatches = computed(() => {
   if (/\s/.test(afterAt)) return [];
   return (props.mentionFiles ?? [])
     .filter((file) => file.toLowerCase().includes(query))
+    .sort((a, b) => {
+      const aName = a.slice(a.lastIndexOf('/') + 1);
+      const bName = b.slice(b.lastIndexOf('/') + 1);
+      const dotOrder = Number(aName.includes('.')) - Number(bName.includes('.'));
+      return dotOrder || aName.localeCompare(bName, 'en', { sensitivity: 'base' }) || a.localeCompare(b);
+    })
     .slice(0, 30);
 });
 
@@ -1317,6 +1363,9 @@ function applyFileSelection(path: string) {
   const atIndex = beforeCursor.lastIndexOf('@');
   if (atIndex < 0) return;
   messageValue.value = `${messageValue.value.slice(0, atIndex)}@${path} ${messageValue.value.slice(cursorPos)}`;
+  nextTick(() => {
+    nextTick(() => { filePopupDismissed.value = true; });
+  });
   nextTick(() => {
     const nextCursor = atIndex + path.length + 2;
     textareaRef.value?.focus();
@@ -1623,7 +1672,8 @@ function findAgent(id: unknown): AgentOption | undefined {
 
 function resolveAgentStyle(name?: string, explicitColor?: string) {
   const color = explicitColor || props.resolveAgentColor?.(name);
-  return color ? { color } : undefined;
+  if (!color) return undefined;
+  return props.lightPermissionColors ? { '--input-mode-color': color } : { color };
 }
 
 function agentValueStyle(id: unknown) {
@@ -1806,9 +1856,41 @@ const inputMessageStyle = computed(() => {
   height: 28px;
 }
 
+.input-light-mode-color {
+  color: color-mix(in srgb, var(--input-mode-color) 50%, var(--theme-input-text) 50%);
+}
+
 .input-selects > .input-field.compact:first-child {
   flex: 0 1 auto;
   min-width: 110px;
+}
+
+.input-plan-toggle {
+  height: 28px;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--theme-input-text-muted);
+  font: inherit;
+  font-size: var(--type-sm);
+  cursor: pointer;
+}
+
+.input-plan-toggle:hover:not(:disabled),
+.input-plan-toggle.is-active {
+  background: var(--theme-input-active-bg);
+  color: var(--theme-input-accent);
+}
+
+.input-plan-toggle:focus-visible {
+  outline: 2px solid var(--theme-input-accent);
+  outline-offset: 2px;
+}
+
+.input-plan-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .input-dropdown-root {

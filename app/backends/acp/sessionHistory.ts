@@ -34,9 +34,11 @@ export async function loadAcpSessionHistory(options: {
   let result: unknown;
   if (method) {
     const previous = state;
-    state = createAcpSessionState(previous.info, previous.configOptions);
-    state.availableCommands = previous.availableCommands;
-    options.sessions.set(options.sessionId, state);
+    if (method === 'session/load') {
+      state = createAcpSessionState(previous.info, previous.configOptions);
+      state.availableCommands = previous.availableCommands;
+      options.sessions.set(options.sessionId, state);
+    }
     try {
       result = await options.request(method, params);
     } catch (error) {

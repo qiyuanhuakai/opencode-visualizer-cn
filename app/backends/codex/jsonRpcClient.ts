@@ -25,7 +25,7 @@ export type {
 type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
+  timeoutId?: ReturnType<typeof setTimeout>;
 };
 
 export type { CodexWebSocketConstructor } from './jsonRpcProtocol';
@@ -192,10 +192,12 @@ export class CodexJsonRpcClient {
     if (params !== undefined) message.params = params;
 
     return new Promise<T>((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`${this.connectionLabel} JSON-RPC request timed out: ${method}`));
-      }, timeoutMs);
+      const timeoutId = timeoutMs > 0
+        ? setTimeout(() => {
+            this.pending.delete(id);
+            reject(new Error(`${this.connectionLabel} JSON-RPC request timed out: ${method}`));
+          }, timeoutMs)
+        : undefined;
 
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),

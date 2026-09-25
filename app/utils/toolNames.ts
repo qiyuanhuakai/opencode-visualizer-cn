@@ -12,6 +12,7 @@ const HISTORY_TOOL_NAMES = new Set([
   'read',
   'grep',
   'glob',
+  'list',
   'webfetch',
   'codesearch',
 ]);

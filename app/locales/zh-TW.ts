@@ -622,6 +622,7 @@ const messages: LocaleMessages = {
     agentTitle: '代理 (Tab)',
     modelTitle: '模型 (Ctrl-M)',
     permissionModeTitle: '權限策略',
+    planModeTitle: '計畫模式',
     variantTitle: '變體 (Ctrl-, / Ctrl-.)',
     selectAtAgent: '使用@選擇代理',
     atAgentTitle: '透過@指定代理',

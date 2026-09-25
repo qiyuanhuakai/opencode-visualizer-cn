@@ -611,6 +611,7 @@ export interface LocaleMessages {
     agentTitle: string;
     modelTitle: string;
     permissionModeTitle: string;
+    planModeTitle: string;
     variantTitle: string;
     selectAtAgent: string;
     atAgentTitle: string;

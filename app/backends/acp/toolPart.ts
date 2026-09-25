@@ -1,4 +1,5 @@
 import type { ToolPart } from '../../types/sse';
+import { isHistoryToolName } from '../../utils/toolNames';
 import { toRecord } from './wire';
 
 function stringify(value: unknown) {
@@ -9,6 +10,12 @@ function stringify(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+function historyToolNameFromTitle(title: unknown): string | undefined {
+  if (typeof title !== 'string') return undefined;
+  const name = title.trim().match(/^[a-z_]+/iu)?.[0]?.toLowerCase();
+  return name && isHistoryToolName(name) ? name : undefined;
 }
 
 function createToolState(
@@ -57,13 +64,16 @@ export function createAcpToolPart(
   existing: ToolPart | undefined,
   now: number,
 ): ToolPart {
+  const titleName = historyToolNameFromTitle(update.title);
+  const existingTitleName = historyToolNameFromTitle(existing?.metadata?.title);
   return {
     id: `${messageId}:tool:${update.toolCallId}`,
     sessionID: sessionId,
     messageID: messageId,
     type: 'tool',
     callID: update.toolCallId,
-    tool: typeof update.kind === 'string' ? update.kind : existing?.tool ?? 'other',
+    tool: titleName ?? existingTitleName ??
+      (typeof update.kind === 'string' ? update.kind : existing?.tool ?? 'other'),
     state: createToolState(update.status, update, existing, now),
     metadata: typeof update.title === 'string' ? { title: update.title } : existing?.metadata,
   };

@@ -632,6 +632,7 @@ const messages: LocaleMessages = {
     agentTitle: 'エージェント（Tab）',
     modelTitle: 'モデル（Ctrl-M）',
     permissionModeTitle: '権限ポリシー',
+    planModeTitle: 'プランモード',
     variantTitle: 'バリアント（Ctrl-, / Ctrl-.）',
     selectAtAgent: '@でエージェントを選択',
     atAgentTitle: '@でエージェント',

@@ -91,6 +91,25 @@ describe('ACP session_info_update', () => {
   });
 });
 
+describe('Kimi Code ACP thought chunks', () => {
+  it('keeps one copy of each repeated wire chunk without dropping repeated prose', () => {
+    const state = createState();
+    applyAcpUpdate(state, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'read' } }, 1000, 'kimi-code');
+    for (const text of ['Read', 'Read', ' the', ' the', ' README', ' README', ' README', ' README']) {
+      applyAcpUpdate(state, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } }, 1001, 'kimi-code');
+    }
+    const assistant = state.entries.find((entry) => entry.info.role === 'assistant');
+    expect(assistant?.parts.find((part) => part.type === 'reasoning')).toMatchObject({ text: 'Read the README README' });
+  });
+
+  it('preserves ordinary repeated thought chunks from other ACP agents', () => {
+    const state = createState();
+    applyAcpUpdate(state, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'ha' } }, 1000, 'oh-my-pi');
+    applyAcpUpdate(state, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'ha' } }, 1001, 'oh-my-pi');
+    expect(state.entries[0]?.parts.find((part) => part.type === 'reasoning')).toMatchObject({ text: 'haha' });
+  });
+});
+
 describe('reattributeAcpEntries', () => {
   it('re-attributes entries created before config options arrived', () => {
     const state = createState();
@@ -160,9 +179,36 @@ describe('applyAcpAttribution', () => {
     expect(user.info.agent).toBe('build');
     expect(user.info.time.created).toBe(5000);
   });
+
+  it('restores recorded turn time on reasoning parts as well as the message', () => {
+    const state = createState();
+    applyAcpUpdate(state, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Think' } }, 9000, 'oh-my-pi');
+    applyAcpAttribution(state, {
+      'acp:session-1:assistant:1': { created: 1000 },
+    });
+    const assistant = state.entries[0];
+    expect(assistant?.info.time.created).toBe(1000);
+    const thought = assistant?.parts.find((part) => part.type === 'reasoning');
+    expect(thought?.type === 'reasoning' ? thought.time.start : undefined).toBe(1000);
+  });
 });
 
 describe('applyAcpSessionMeta', () => {
+  it('moves replayed thought and tool timestamps with the restored assistant turn', () => {
+    const state = createState();
+    applyAcpUpdate(state, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'read file' } }, 9000, 'oh-my-pi');
+    applyAcpUpdate(state, { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'I will read it.' } }, 9001, 'oh-my-pi');
+    applyAcpUpdate(state, { sessionUpdate: 'tool_call', toolCallId: 'read-1', title: 'Read', kind: 'read', status: 'in_progress', rawInput: { path: 'hello.txt' } }, 9002, 'oh-my-pi');
+    applyAcpUpdate(state, { sessionUpdate: 'tool_call_update', toolCallId: 'read-1', status: 'completed', rawOutput: 'hello' }, 9003, 'oh-my-pi');
+    applyAcpSessionMeta(state, [{ userText: 'read file', userTime: 1000, assistantTime: 1100, assistantCompletedTime: 1200 }]);
+
+    const assistant = state.entries.find((entry) => entry.info.role === 'assistant');
+    const thought = assistant?.parts.find((part) => part.type === 'reasoning');
+    const tool = assistant?.parts.find((part) => part.type === 'tool');
+    expect(thought?.type === 'reasoning' ? thought.time.start : undefined).toBe(1100);
+    expect(tool?.type === 'tool' && tool.state.status === 'completed' ? tool.state.time.start : undefined).toBe(1101);
+  });
+
   it('backfills time/agent/model for entries without local records, anchored by user text', () => {
     const state = createState();
     applyAcpUpdate(state, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'kimi测试消息' } }, 9000, 'kimi-code');

@@ -392,6 +392,7 @@ async function showThreadDiff(root: MessageInfo) {
 }
 
 function canRevertThread(root: MessageInfo): boolean {
+  if (props.backendKind === 'acp') return false;
   if (props.backendKind === 'kimi-web' && !props.kimiCardActionsReady) return false;
   if (props.backendKind === 'kimi-web' && !props.kimiUndoAvailable) return false;
   if (props.sessionRevert) return false;
@@ -399,6 +400,7 @@ function canRevertThread(root: MessageInfo): boolean {
 }
 
 function canForkThread(root: MessageInfo): boolean {
+  if (props.backendKind === 'acp') return false;
   if (props.backendKind === 'kimi-web' && !props.kimiCardActionsReady) return false;
   if (props.backendKind === 'kimi-web' && !props.kimiForkAvailable) return false;
   if (props.backendKind === 'codex' && !props.isLatestRoot) return false;
