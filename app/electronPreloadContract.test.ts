@@ -44,6 +44,13 @@ interface ElectronApiSchema {
     removeItem: (key: string) => unknown;
     migrate: (entries: Record<string, string>) => unknown;
   };
+  sessionDatabase: {
+    readHistory: (payload: { threadId: string }) => Promise<unknown>;
+    upsertHistory: (payload: { threadId: string; entries: unknown[] }) => Promise<unknown>;
+    clearHistory: (payload: { threadId: string }) => Promise<unknown>;
+    flush: () => Promise<unknown>;
+    onHistoryChanged: (listener: (threadId: string) => void) => () => void;
+  };
 }
 
 type IpcListener = (event: unknown, payload?: unknown) => void;
@@ -63,7 +70,10 @@ function createIpcRendererMock() {
   const emit = (channel: string, event: unknown, payload?: unknown) => {
     for (const listener of listenersByChannel.get(channel) ?? []) listener(event, payload);
   };
-  return { invoke, sendSync, on, emit };
+  const removeListener = (channel: string, listener: IpcListener) => {
+    listenersByChannel.set(channel, (listenersByChannel.get(channel) ?? []).filter((candidate) => candidate !== listener));
+  };
+  return { invoke, sendSync, on, emit, removeListener };
 }
 
 interface LoadedPreload {
@@ -149,6 +159,27 @@ function loadPreloadWithMocks(): LoadedPreload {
 }
 
 describe('electron preload contract', () => {
+  it('routes native database methods and unsubscribes identity-only invalidations', async () => {
+    const { api, ipcRenderer } = loadPreloadWithMocks();
+    expect(Object.keys(api.sessionDatabase).sort()).toEqual(['clearHistory', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory']);
+    await api.sessionDatabase.readHistory({ threadId: 'thread' });
+    await api.sessionDatabase.upsertHistory({ threadId: 'thread', entries: [] });
+    await api.sessionDatabase.clearHistory({ threadId: 'thread' });
+    await api.sessionDatabase.flush();
+    expect(ipcRenderer.invoke.mock.calls).toEqual([
+      ['session-database-readHistory', { threadId: 'thread' }],
+      ['session-database-upsertHistory', { threadId: 'thread', entries: [] }],
+      ['session-database-clearHistory', { threadId: 'thread' }],
+      ['session-database-flush'],
+    ]);
+    const listener = vi.fn();
+    const unsubscribe = api.sessionDatabase.onHistoryChanged(listener);
+    ipcRenderer.emit('session-database-history-changed', { sender: 'private' }, 'thread');
+    unsubscribe();
+    ipcRenderer.emit('session-database-history-changed', {}, 'second');
+    expect(listener.mock.calls).toEqual([['thread']]);
+  });
+
   it('exposes exactly the trusted top-level api names', () => {
     const { api } = loadPreloadWithMocks();
     expect(Object.keys(api).sort()).toEqual([
@@ -159,6 +190,7 @@ describe('electron preload contract', () => {
       'localFile',
       'persistentStorage',
       'platform',
+      'sessionDatabase',
       'versions',
     ]);
   });

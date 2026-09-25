@@ -96,6 +96,7 @@ import {
 } from '../backends/codex/auxiliaryHistory';
 import { restoreCodexMessageEfforts, saveCodexTurnEffort } from '../backends/codex/messageEffort';
 import { initializeCodexAuxiliaryStorage } from '../backends/codex/auxiliaryStorage';
+import { nativeAuxiliaryDatabase, onNativeAuxiliaryHistoryChanged } from '../backends/codex/nativeAuxiliaryStorage';
 import { createCodexMessageModels } from '../backends/codex/messageModels';
 import { codexRollbackCount } from '../backends/codex/rollbackTarget';
 import type { ConfigMergeStrategy } from '../backends/types';
@@ -756,6 +757,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   let adapter: CodexAdapter | null = null;
   const historyReaders = new WeakMap<CodexAdapter, ReturnType<typeof createCodexHistoryReader>>();
   let unsubscribeNotifications: (() => void) | null = null;
+  let unsubscribeAuxiliaryHistory: (() => void) | null = null;
   let unsubscribeServerRequests: (() => void) | null = null;
   let nextEventId = 1;
   let nextTranscriptId = 1;
@@ -1372,7 +1374,9 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     }));
     saveCodexAuxiliaryHistory(
       threadId,
-      mergeCodexAuxiliaryHistory(threadId, loadCodexAuxiliaryHistory(threadId), entries),
+      nativeAuxiliaryDatabase()
+        ? entries
+        : mergeCodexAuxiliaryHistory(threadId, loadCodexAuxiliaryHistory(threadId), entries),
     );
   }
 
@@ -2131,6 +2135,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     try {
       await initializeCodexAuxiliaryStorage();
       if (!isCurrentConnection(request)) return;
+      unsubscribeAuxiliaryHistory = onNativeAuxiliaryHistoryChanged((threadId) => {
+        if (isCurrentConnection(request) && activeThreadId.value === threadId && !loadingThread.value) {
+          restoreAuxiliaryHistory(threadId, false);
+        }
+      });
       onPhase?.('home');
       await refreshHomeDir(false, request);
       if (!isCurrentConnection(request)) return;
@@ -2183,6 +2192,8 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     pluginsRefreshGeneration += 1;
     unsubscribeNotifications?.();
     unsubscribeNotifications = null;
+    unsubscribeAuxiliaryHistory?.();
+    unsubscribeAuxiliaryHistory = null;
     unsubscribeServerRequests?.();
     unsubscribeServerRequests = null;
     if (adapter) historyReaders.delete(adapter);
@@ -2578,7 +2589,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     return nextEntries;
   }
 
-  function restoreAuxiliaryHistory(threadId: string) {
+  function restoreAuxiliaryHistory(threadId: string, preserveAuxiliaryUpdates = true) {
     const serverParts = new Set(
       canonicalHistory.value.flatMap((entry) => entry.parts.map((part) => part.id)),
     );
@@ -2589,7 +2600,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         parts: entry.parts.filter((part) => !serverParts.has(part.id)),
       }))
       .filter((entry) => entry.parts.length > 0);
-    realtimeHistoryQueue.value = mergeCodexAuxiliaryHistory(threadId, missingEntries);
+    const restored = new Map(missingEntries.map((entry) => [entry.info.id, entry]));
+    for (const live of realtimeHistoryQueue.value) {
+      if (live.info.sessionID !== threadId) continue;
+      const liveParts = preserveAuxiliaryUpdates
+        ? live.parts
+        : live.parts.filter((part) => part.type !== 'tool' && part.type !== 'reasoning');
+      if (liveParts.length === 0) continue;
+      const parts = new Map(restored.get(live.info.id)?.parts.map((part) => [part.id, part]));
+      for (const part of liveParts) parts.set(part.id, part);
+      restored.set(live.info.id, { info: live.info, parts: [...parts.values()] });
+    }
+    realtimeHistoryQueue.value = [...restored.values()];
   }
 
   async function selectThread(threadId: string) {
@@ -2638,7 +2660,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     };
     try {
       let statusRevision = threadStatusRevision;
-      let read = await readThreadForHistory(threadId, sourceAdapter);
+      let [read] = await Promise.all([
+        readThreadForHistory(threadId, sourceAdapter),
+        initializeCodexAuxiliaryStorage(threadId),
+      ]);
       if (!isCurrentSelection()) return;
       restoreRunningTurn(read.thread.turns, null);
       upsertThread(read.thread, true, statusRevision);

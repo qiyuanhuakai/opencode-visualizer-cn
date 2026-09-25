@@ -21,20 +21,23 @@ export function registerPersistentStorageIpc({
   });
 
   function commitMutation(event, mutation, excludedKey) {
-    let changes;
+    const complete = (storage) => {
+      for (const change of storage.drainPendingChanges()) {
+        const excludedSenderId = change.key === excludedKey ? event.sender.id : undefined;
+        broadcastChange(change, excludedSenderId);
+      }
+      event.returnValue = true;
+    };
     try {
       const storage = getStorage();
-      mutation(storage);
-      changes = storage.drainPendingChanges();
+      const result = mutation(storage);
+      if (result && typeof result.then === 'function') {
+        return result.then(() => complete(storage), () => { event.returnValue = false; });
+      }
+      complete(storage);
     } catch {
       event.returnValue = false;
-      return;
     }
-    for (const change of changes) {
-      const excludedSenderId = change.key === excludedKey ? event.sender.id : undefined;
-      broadcastChange(change, excludedSenderId);
-    }
-    event.returnValue = true;
   }
 
   ipcMain.on('persistent-storage-get', (event, key) => {
@@ -48,7 +51,13 @@ export function registerPersistentStorageIpc({
       return;
     }
     try {
-      event.returnValue = { ok: true, value: getStorage().getItem(key) };
+      const value = getStorage().getItem(key);
+      if (value && typeof value.then === 'function') {
+        return value.then((resolved) => { event.returnValue = { ok: true, value: resolved }; }, (error) => {
+          event.returnValue = { ok: false, error: { name: error.name, message: error.message } };
+        });
+      }
+      event.returnValue = { ok: true, value };
     } catch (error) {
       event.returnValue = {
         ok: false,
@@ -72,7 +81,7 @@ export function registerPersistentStorageIpc({
       event.returnValue = true;
       return;
     }
-    commitMutation(event, (storage) => storage.setItem(key, value), key);
+    return commitMutation(event, (storage) => storage.setItem(key, value), key);
   });
 
   ipcMain.on('persistent-storage-remove', (event, key) => {
@@ -85,7 +94,7 @@ export function registerPersistentStorageIpc({
       event.returnValue = true;
       return;
     }
-    commitMutation(event, (storage) => storage.removeItem(key), key);
+    return commitMutation(event, (storage) => storage.removeItem(key), key);
   });
 
   ipcMain.on('persistent-storage-migrate', (event, entries) => {
@@ -102,6 +111,6 @@ export function registerPersistentStorageIpc({
       }
       if (key !== localApplicationPathKey) migrationEntries[key] = value;
     }
-    commitMutation(event, (storage) => storage.migrate(migrationEntries));
+    return commitMutation(event, (storage) => storage.migrate(migrationEntries));
   });
 }

@@ -28,6 +28,7 @@ files:
 asar: true
 asarUnpack:
   - "**/*.node"
+  - "electron/sessionDatabaseWorker.mjs"
 
 extraResources:
   - from: build/icon.png
