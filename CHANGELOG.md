@@ -3,7 +3,7 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [Unreleased]
+## [v0.8.3 released]
 ### Codex 历史分组与 Electron SQLite 存储
 
 - [x] 修复 Codex 无新用户消息的续行被拆成孤立卡片的问题，将其归入上一条用户消息；保留工具与思考记录，并为没有正文的历史卡片显示查看入口。
