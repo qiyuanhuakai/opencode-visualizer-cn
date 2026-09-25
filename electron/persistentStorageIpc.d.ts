@@ -1,4 +1,5 @@
 import type { PersistentStorage, PersistentStorageChange } from './persistentStorage.js';
+import type { SessionStorage } from './sessionStorage.js';
 
 export interface PersistentStorageIpcEvent {
   readonly sender: { readonly id: number };
@@ -14,7 +15,7 @@ export interface PersistentStorageIpcOptions {
     ): unknown;
   };
   readonly assertTrustedRenderer: (event: PersistentStorageIpcEvent) => void;
-  readonly getStorage: () => PersistentStorage;
+  readonly getStorage: () => PersistentStorage | SessionStorage;
   readonly broadcastChange: (change: PersistentStorageChange, sourceWebContentsId?: number) => void;
   readonly getLocalApplicationPath: () => string | null;
   readonly localApplicationPathKey: string;

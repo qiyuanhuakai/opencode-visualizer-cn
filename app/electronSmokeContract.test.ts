@@ -24,11 +24,13 @@ const EXPECTED_PRELOAD_SCHEMA = {
     'localFile',
     'persistentStorage',
     'platform',
+    'sessionDatabase',
     'versions',
   ],
   clipboard: ['readText', 'writeText'],
   desktop: ['check', 'configure', 'download', 'getState', 'install', 'notify', 'onNotificationClick', 'onState', 'reportBridgeVersion'],
   persistentStorage: ['getItem', 'migrate', 'removeItem', 'setItem', 'setItemAsync'],
+  sessionDatabase: ['clearHistory', 'flush', 'onHistoryChanged', 'readHistory', 'upsertHistory'],
   localFile: [
     'clearApplication',
     'close',

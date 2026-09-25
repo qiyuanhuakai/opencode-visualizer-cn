@@ -1,4 +1,5 @@
 import { StorageKeys, storageGetJSON, storageKey, storageRemove, storageSetJSON } from '../../utils/storageKeys';
+import { clearNativeAuxiliaryHistory, flushNativeAuxiliaryStorage, hydrateNativeAuxiliaryHistory, initializeNativeAuxiliaryStorage, nativeAuxiliaryDatabase, readNativeAuxiliarySnapshot, writeNativeAuxiliarySnapshot } from './nativeAuxiliaryStorage';
 
 const DATABASE = 'opencode.codexAuxiliaryHistory';
 const STORE = 'snapshots';
@@ -127,7 +128,11 @@ function hydrateAndMigrate(connection: IDBDatabase): Promise<void> {
   });
 }
 
-export function initializeCodexAuxiliaryStorage(): Promise<void> {
+export function initializeCodexAuxiliaryStorage(threadId?: string): Promise<void> {
+  if (nativeAuxiliaryDatabase()) {
+    initializeNativeAuxiliaryStorage();
+    return threadId ? hydrateNativeAuxiliaryHistory(threadId) : Promise.resolve();
+  }
   if (!useIndexedDB()) return Promise.resolve();
   if (initialization) return initialization;
   initialization = (async () => {
@@ -171,6 +176,7 @@ function update(key: string, value: string | null) {
 }
 
 export function readCodexAuxiliarySnapshot(threadId: string): unknown {
+  if (nativeAuxiliaryDatabase()) return readNativeAuxiliarySnapshot(threadId);
   const key = keyFor(threadId);
   if (electronPending.has(storageKey(key))) {
     const raw = electronPending.get(storageKey(key));
@@ -189,6 +195,10 @@ export function readCodexAuxiliarySnapshot(threadId: string): unknown {
 }
 
 export function writeCodexAuxiliarySnapshot(threadId: string, snapshot: unknown): void {
+  if (nativeAuxiliaryDatabase()) {
+    writeNativeAuxiliarySnapshot(threadId, snapshot);
+    return;
+  }
   const key = keyFor(threadId);
   if (typeof window !== 'undefined' && window.electronAPI?.persistentStorage?.setItemAsync) {
     persistElectron(storageKey(key), JSON.stringify(snapshot) ?? null);
@@ -203,6 +213,10 @@ export function writeCodexAuxiliarySnapshot(threadId: string, snapshot: unknown)
 }
 
 export function removeCodexAuxiliarySnapshot(threadId: string): void {
+  if (nativeAuxiliaryDatabase()) {
+    clearNativeAuxiliaryHistory(threadId);
+    return;
+  }
   const key = keyFor(threadId);
   if (persistElectron(storageKey(key), null)) return;
   if (!useIndexedDB()) {
@@ -226,6 +240,7 @@ function persistElectron(key: string, value: string | null): boolean {
 }
 
 export async function flushCodexAuxiliaryStorage(): Promise<void> {
+  if (nativeAuxiliaryDatabase()) await flushNativeAuxiliaryStorage();
   await initialization;
   while (pending.size > 0) await Promise.all(pending);
 }

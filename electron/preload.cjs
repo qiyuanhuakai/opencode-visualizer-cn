@@ -117,4 +117,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     removeItem: (key) => ipcRenderer.sendSync('persistent-storage-remove', key),
     migrate: (entries) => ipcRenderer.sendSync('persistent-storage-migrate', entries),
   },
+  sessionDatabase: {
+    readHistory: (payload) => ipcRenderer.invoke('session-database-readHistory', payload),
+    upsertHistory: (payload) => ipcRenderer.invoke('session-database-upsertHistory', payload),
+    clearHistory: (payload) => ipcRenderer.invoke('session-database-clearHistory', payload),
+    flush: () => ipcRenderer.invoke('session-database-flush'),
+    onHistoryChanged: (listener) => {
+      const handler = (_event, threadId) => listener(threadId);
+      ipcRenderer.on('session-database-history-changed', handler);
+      return () => ipcRenderer.removeListener('session-database-history-changed', handler);
+    },
+  },
 });

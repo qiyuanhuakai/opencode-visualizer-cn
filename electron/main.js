@@ -11,7 +11,8 @@ import {
 } from './localApplicationApproval.js';
 import { createLocalFileEditor } from './localFileEditor.js';
 import { closeOwnedLocalFileSession } from './localFileSessionOwnership.js';
-import { createPersistentStorage } from './persistentStorage.js';
+import { createSessionStorage } from './sessionStorage.js';
+import { registerSessionDatabaseIpc } from './sessionDatabaseIpc.js';
 import { registerPersistentStorageIpc } from './persistentStorageIpc.js';
 import {
   classifyMime,
@@ -80,7 +81,7 @@ function localApplicationApprovalFilePath() {
 }
 
 function getPersistentStorage() {
-  persistentStorage ??= createPersistentStorage(persistentStorageFilePath());
+  persistentStorage ??= createSessionStorage(persistentStorageFilePath());
   return persistentStorage;
 }
 
@@ -281,7 +282,7 @@ installAsyncQuitCleanup(
       failures.push(error);
     }
     try {
-      await persistentStorage?.flush();
+      await persistentStorage?.close();
     } catch (error) {
       failures.push(error);
     }
@@ -404,4 +405,17 @@ registerPersistentStorageIpc({
   getLocalApplicationPath: () => approvedLocalApplicationPath,
   localApplicationPathKey: LOCAL_APPLICATION_PATH_KEY,
   rendererStoragePrefix: RENDERER_STORAGE_PREFIX,
+});
+
+registerSessionDatabaseIpc({
+  ipcMain,
+  assertTrustedRenderer,
+  getStorage: getPersistentStorage,
+  broadcastHistoryChange: (threadId, sourceId) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.webContents.isDestroyed() && window.webContents.id !== sourceId) {
+        window.webContents.send('session-database-history-changed', threadId);
+      }
+    }
+  },
 });

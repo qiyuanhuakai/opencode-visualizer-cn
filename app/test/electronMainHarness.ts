@@ -106,6 +106,16 @@ vi.mock('../../electron/desktopRuntime.js', () => ({
   createDesktopRuntime: harness.createDesktopRuntime,
 }));
 
+vi.mock('../../electron/sessionStorage.js', async () => {
+  const { createPersistentStorage } = await import('../../electron/persistentStorage.js');
+  return {
+    createSessionStorage: (filePath: string) => {
+      const storage = createPersistentStorage(filePath);
+      return { ...storage, close: () => storage.flush() };
+    },
+  };
+});
+
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
   const actualFileSystem = actual;

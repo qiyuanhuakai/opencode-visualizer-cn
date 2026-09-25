@@ -58,8 +58,8 @@
 
     <div v-if="!isRevertedPreview" class="thread-assistant">
       <Transition name="ib-fade">
-        <div v-if="hasAssistantText" class="ib-msg-block ib-msg-assistant" :key="root.id">
-          <div class="ib-msg-body">
+        <div v-if="hasAssistantText || hasHistory" class="ib-msg-block ib-msg-assistant" :key="root.id">
+          <div v-if="hasAssistantText" class="ib-msg-body">
             <MessageViewer
               class="message-viewer-context-assistant"
               :html="assistantHtml"

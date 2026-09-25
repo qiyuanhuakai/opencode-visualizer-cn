@@ -22,6 +22,7 @@ interface Window {
     getAppVersion: () => Promise<string>;
     getPlatform: () => Promise<string>;
     desktop: import('./types/desktop').DesktopApi;
+    sessionDatabase?: import('./types/sessionDatabase').SessionDatabaseApi;
     persistentStorage?: {
       setItemAsync?: (key: string, value: string | null) => Promise<boolean>;
       getItem: (key: string) => string | null;
