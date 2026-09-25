@@ -24,6 +24,45 @@ const modeConfig = {
 };
 
 describe('ACP mode policy', () => {
+  it('classifies Kimi Code approval modes as permissions and preserves the server default', () => {
+    const kimiMode = {
+      id: 'mode',
+      name: 'Mode',
+      category: 'mode',
+      type: 'select',
+      currentValue: 'auto',
+      options: [
+        { value: 'default', name: 'Default' },
+        { value: 'plan', name: 'Plan' },
+        { value: 'auto', name: 'Auto' },
+        { value: 'yolo', name: 'YOLO' },
+      ],
+    };
+
+    expect(createAcpPermissionModeList([kimiMode])).toEqual({
+      current: 'auto',
+      options: [
+        { id: 'default', name: 'Default' },
+        { id: 'auto', name: 'Auto' },
+        { id: 'yolo', name: 'YOLO' },
+      ],
+    });
+    expect(createAcpAgentSelectorOptions([kimiMode], 'Kimi Code').map(({ id }) => id)).toEqual([
+      'default',
+      'plan',
+    ]);
+    expect(createAcpUiModeState([kimiMode], 'default')).toEqual({
+      agent: 'default',
+      permissionMode: 'auto',
+    });
+    expect(resolveAcpModeSelection('default', 'auto')).toBe('auto');
+  });
+
+  it('uses the actual agent default when no permission option is advertised', () => {
+    expect(resolveAcpModeSelection('default', '')).toBe('default');
+    expect(createAcpPermissionModeList([])).toEqual({ current: '', options: [] });
+  });
+
   it('separates agent modes from permission policies', () => {
     expect(createAcpAgentList([modeConfig], 'Oh My Pi')).toEqual([
       expect.objectContaining({ name: 'default' }),

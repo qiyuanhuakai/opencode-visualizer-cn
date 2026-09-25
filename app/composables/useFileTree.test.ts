@@ -46,7 +46,7 @@ function statusRefreshCount() {
   return ptyScripts().filter((script) => script.includes('status --porcelain')).length;
 }
 
-async function mountComposable() {
+async function mountComposable(backendKind = 'opencode') {
   vi.resetModules();
 
   let api!: Awaited<typeof import('./useFileTree')>['useFileTree'] extends (
@@ -55,7 +55,7 @@ async function mountComposable() {
     ? T
     : never;
   const activeDirectory = ref('/repo');
-  const activeBackendKind = ref('opencode');
+  const activeBackendKind = ref(backendKind);
   const refreshEnabled = ref(true);
   const { useFileTree } = await import('./useFileTree');
 
@@ -139,6 +139,20 @@ afterEach(async () => {
 });
 
 describe('useFileTree initial git hydration and selective refresh', () => {
+  it('keeps the ACP Git file index when HEAD is detached', async () => {
+    mockGetVcsInfo.mockResolvedValue({ root: '/repo', branch: '', sha: 'abc123' });
+    mockListFiles.mockResolvedValue([{ name: 'ignored.log', type: 'file', ignored: true }]);
+    const mounted = await mountComposable('acp');
+    try {
+      await vi.waitFor(() => expect(mounted.api.treeLoading.value).toBe(false));
+      expect(mounted.api.files.value).toEqual(['src/a.ts', 'src/b.ts']);
+      expect(ptyScripts().some((script) => script.includes('ls-files --cached --others'))).toBe(
+        true,
+      );
+    } finally {
+      mounted.unmount();
+    }
+  });
   it('keeps the file list reference stable when a filesystem refresh finds no changes', async () => {
     mockGetVcsInfo.mockResolvedValue(null);
     mockListFiles.mockResolvedValue([{ name: 'same.txt', type: 'file' }]);
@@ -342,7 +356,6 @@ describe('useFileTree initial git hydration and selective refresh', () => {
 
     mounted.unmount();
   });
-
 });
 
 describe('useFileTree expanded/ignored child reconciliation', () => {
@@ -462,7 +475,6 @@ describe('useFileTree expanded/ignored child reconciliation', () => {
 
     mounted.unmount();
   });
-
 });
 
 describe('useFileTree scheduler ownership/disable/polling', () => {

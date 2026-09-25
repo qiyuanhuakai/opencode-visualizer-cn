@@ -232,7 +232,7 @@ export class AcpWorkspaceClient {
       return { root: '', branch: '' };
     }
     const [commonDirectory, branch, sha] = await Promise.all([
-      git(['rev-parse', '--git-common-dir']).catch(() => ''),
+      git(['rev-parse', '--path-format=absolute', '--git-common-dir']).catch(() => ''),
       git(['branch', '--show-current']).catch(() => ''),
       git(['rev-parse', '--short', 'HEAD']).catch(() => ''),
     ]);

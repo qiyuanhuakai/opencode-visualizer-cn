@@ -25,6 +25,7 @@ export type AcpSessionState = {
   availableCommands: unknown[];
   status: 'busy' | 'idle';
   clock: number;
+  pendingKimiThoughtChunk?: string;
 };
 
 export function createAcpSessionState(
@@ -168,6 +169,7 @@ export function beginAcpPrompt(
   attribution?: { agent?: string; modelID?: string },
 ) {
   state.turn += 1;
+  state.pendingKimiThoughtChunk = undefined;
   state.status = 'busy';
   const userId = `acp:${state.info.id}:user:${state.turn}`;
   const assistantId = `acp:${state.info.id}:assistant:${state.turn}`;
@@ -228,6 +230,35 @@ export type AcpEntryAttributionInput = {
   completed?: number;
 };
 
+function moveEntryPartTimes(entry: AcpHistoryEntry, created: number) {
+  const offset = created - entry.info.time.created;
+  if (!offset) return;
+  entry.parts = entry.parts.map((part): MessagePart => {
+    if (part.type === 'reasoning') {
+      return {
+        ...part,
+        time: {
+          ...part.time,
+          start: part.time.start + offset,
+          ...(typeof part.time.end === 'number' ? { end: part.time.end + offset } : {}),
+        },
+      };
+    }
+    if (part.type !== 'tool' || part.state.status === 'pending') return part;
+    const state = part.state;
+    if (state.status === 'running') {
+      return { ...part, state: { ...state, time: { start: state.time.start + offset } } };
+    }
+    return {
+      ...part,
+      state: {
+        ...state,
+        time: { ...state.time, start: state.time.start + offset, end: state.time.end + offset },
+      },
+    };
+  });
+}
+
 export function applyAcpAttribution(
   state: AcpSessionState,
   attributions: Record<string, AcpEntryAttributionInput>,
@@ -240,7 +271,10 @@ export function applyAcpAttribution(
     if (!recorded) continue;
     restored.add(entry.info.id);
     const next = { ...entry.info };
-    if (typeof recorded.created === 'number') next.time.created = recorded.created;
+    if (typeof recorded.created === 'number') {
+      moveEntryPartTimes(entry, recorded.created);
+      next.time.created = recorded.created;
+    }
     if (next.role === 'user') {
       if (recorded.agent) next.agent = recorded.agent;
       if (recorded.modelID) next.model = { providerID: 'acp', modelID: recorded.modelID };
@@ -308,6 +342,7 @@ export function applyAcpSessionMeta(
     if (assistantEntry && !skipIds.has(assistantEntry.info.id) && assistantEntry.info.role === 'assistant') {
       const next = { ...assistantEntry.info };
       if (typeof turn.assistantTime === 'number') {
+        moveEntryPartTimes(assistantEntry, turn.assistantTime);
         next.time.created = turn.assistantTime;
       }
       const completedTime = turn.assistantCompletedTime ?? turn.assistantTime;
@@ -354,6 +389,7 @@ export function applyAcpUpdate(
   now: number,
   agentId: string,
 ): AcpHistoryEntry | null {
+  if (update.sessionUpdate !== 'agent_thought_chunk') state.pendingKimiThoughtChunk = undefined;
   if (update.sessionUpdate === 'user_message_chunk' || update.sessionUpdate === 'agent_message_chunk') {
     const role = update.sessionUpdate === 'user_message_chunk' ? 'user' : 'assistant';
     const entry = ensureReplayEntry(state, role, now, agentId);
@@ -363,7 +399,14 @@ export function applyAcpUpdate(
   if (update.sessionUpdate === 'agent_thought_chunk') {
     const entry = ensureReplayEntry(state, 'assistant', now, agentId);
     const content = toRecord(update.content);
-    if (content?.type === 'text' && typeof content.text === 'string') appendText(entry, 'reasoning', content.text, now);
+    if (content?.type === 'text' && typeof content.text === 'string') {
+      if (agentId === 'kimi-code' && state.pendingKimiThoughtChunk === content.text) {
+        state.pendingKimiThoughtChunk = undefined;
+        return null;
+      }
+      state.pendingKimiThoughtChunk = agentId === 'kimi-code' ? content.text : undefined;
+      appendText(entry, 'reasoning', content.text, now);
+    }
     return entry;
   }
   if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {

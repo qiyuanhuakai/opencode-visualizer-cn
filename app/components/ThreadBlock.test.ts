@@ -57,7 +57,7 @@ function mount(
   props: {
     root: MessageInfo;
     currentSessionId?: string;
-    backendKind?: 'codex' | 'opencode' | 'kimi-web';
+    backendKind?: 'codex' | 'opencode' | 'acp' | 'kimi-web';
     isLatestRoot?: boolean;
     kimiCardActionsReady?: boolean;
     kimiForkAvailable?: boolean;
@@ -105,6 +105,18 @@ function mount(
 }
 
 describe('ThreadBlock history wiring', () => {
+  it('hides unsupported checkpoint actions on ACP history cards', async () => {
+    const user = makeUserMessage('acp-session', 'u1', 1);
+    useMessages().loadHistory([{ info: user, parts: [] }]);
+    const view = mount(
+      { root: user, currentSessionId: 'acp-session', backendKind: 'acp', isLatestRoot: true },
+      vi.fn(),
+    );
+    await flushRender();
+    expect(view.root.querySelector('.ib-top-right')).toBeNull();
+    expect(view.root.querySelector('.ib-footer .ib-action-danger')).toBeNull();
+  });
+
   it.each([false, true])(
     'shows revert on Codex cards while limiting fork to latest=%s',
     async (isLatestRoot) => {

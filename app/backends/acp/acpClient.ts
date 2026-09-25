@@ -163,6 +163,10 @@ export class AcpClient {
         mcpServers: [],
       }),
     );
+    return this.registerSession(result, directory, true);
+  }
+
+  private registerSession(result: ReturnType<typeof parseNewSessionResult>, directory: string, loaded: boolean) {
     const now = this.now();
     const info: BackendSessionInfo = {
       id: result.sessionId,
@@ -175,11 +179,60 @@ export class AcpClient {
     this.sessions.set(info.id, createAcpSessionState(info, result.configOptions));
     this.deletedSessions.delete(info.id);
     this.activatedSessions.add(info.id);
-    this.loadedSessions.add(info.id);
+    if (loaded) this.loadedSessions.add(info.id);
     this.activeSessionId = info.id;
     this.emit({ type: 'session.updated', info });
     this.emit({ type: 'config.updated', options: result.configOptions });
     return info;
+  }
+
+  async forkSession(sessionId: string, directory = '') {
+    await this.initialize();
+    if (!this.supports('session/fork')) {
+      throw new Error('ACP agent does not support session/fork.');
+    }
+    const cwd = directory || this.sessions.get(sessionId)?.info.directory || '';
+    const result = parseNewSessionResult(
+      await this.client.request('session/fork', { sessionId, cwd, mcpServers: [] }),
+    );
+    return this.registerSession(result, cwd, false);
+  }
+
+  async closeSession(sessionId: string) {
+    await this.initialize();
+    if (!this.supports('session/close')) {
+      throw new Error('ACP agent does not support session/close.');
+    }
+    await this.client.request('session/close', { sessionId });
+    this.loadedSessions.delete(sessionId);
+    this.activatedSessions.delete(sessionId);
+    if (this.activeSessionId === sessionId) this.activeSessionId = null;
+    const state = this.sessions.get(sessionId);
+    if (state) {
+      state.status = 'idle';
+      state.info = { ...state.info, status: undefined };
+      this.emit({ type: 'session.updated', info: state.info });
+    }
+  }
+
+  private async requestSessionList(directory?: string) {
+    const sessions: BackendSessionInfo[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const result = await this.client.request('session/list', {
+        ...(directory ? { cwd: directory } : {}),
+        ...(cursor !== undefined ? { cursor } : {}),
+      });
+      sessions.push(...parseAcpSessionList(result));
+      const nextCursor = toRecord(result)?.nextCursor;
+      cursor = typeof nextCursor === 'string' ? nextCursor : undefined;
+      if (cursor !== undefined) {
+        if (cursors.has(cursor)) throw new Error('ACP session/list repeated a pagination cursor.');
+        cursors.add(cursor);
+      }
+    } while (cursor !== undefined);
+    return sessions;
   }
 
   async deleteSession(sessionId: string) {
@@ -209,11 +262,9 @@ export class AcpClient {
       await this.client.request('session/prompt', {
         sessionId,
         prompt: [{ type: 'text', text: '/session delete' }],
-      }),
+      }, { timeoutMs: 0 }),
     );
-    const remaining = parseAcpSessionList(
-      await this.client.request('session/list', directory ? { cwd: directory } : {}),
-    );
+    const remaining = await this.requestSessionList(directory);
     if (remaining.some((session) => session.id === sessionId)) {
       throw new Error(`Oh My Pi did not remove session: ${sessionId}`);
     }
@@ -239,11 +290,7 @@ export class AcpClient {
   async listSessions(options?: { directory?: string }) {
     await this.initialize();
     if (this.supports('session/list')) {
-      const result = await this.client.request(
-        'session/list',
-        options?.directory ? { cwd: options.directory } : {},
-      );
-      for (const info of parseAcpSessionList(result)) {
+      for (const info of await this.requestSessionList(options?.directory)) {
         if (this.deletedSessions.has(info.id)) continue;
         const existing = this.sessions.get(info.id);
         if (existing) {
@@ -292,7 +339,7 @@ export class AcpClient {
       );
       try {
         const result = parsePromptResult(
-          await this.client.request('session/prompt', { sessionId, prompt }),
+          await this.client.request('session/prompt', { sessionId, prompt }, { timeoutMs: 0 }),
         );
         const completed = completeAcpPrompt(state, result.stopReason, this.now(), result.usage);
         if (completed) {

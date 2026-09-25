@@ -818,6 +818,8 @@ async function detectFileTreeStrategy(directory: string): Promise<FileTreeStrate
       () => isRefreshCurrent(directory, refreshToken),
     );
     if (!raw || typeof raw !== 'object') return 'filesystem';
+    const root = (raw as Record<string, unknown>).root;
+    if (typeof root === 'string' && root.trim()) return 'git';
     const branch = (raw as Record<string, unknown>).branch;
     if (typeof branch !== 'string' || !branch.trim()) return 'filesystem';
     return 'git';
