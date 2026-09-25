@@ -4,6 +4,12 @@
 
 ---
 ## [Unreleased]
+### ACP 后端适配与文件引用
+
+- [x] 修复 ACP 文件树与顶部 Git 信息：正确识别仓库子目录、worktree 和分离 HEAD，切换分支后同步分支与提交信息；非 Git 目录继续显示文件。
+- [x] 完善 ACP 会话与历史：分页读取会话列表，恢复会话时保留已有消息，在客户端按能力实现会话级 fork/close；校正思考与工具时间、Kimi Code 重复思考片段和 Glob/Grep 等工具名称，并隐藏不支持的卡片回退操作。
+- [x] ACP 输入栏将权限模式放在原 agent 位置，沿用 Kimi Web 的颜色，并提供独立的 Plan 开关；权限请求等待超过 30 秒仍可完成。Kimi Web 与 Codex 增加 `@` 文件选择，候选文件按无点文件名 A–Z、含点文件名 A–Z 排序（[#145](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/145)）。
+
 ### Codex Token 状态监控与 Forge 命令
 
 - [x] 将 Codex 会话 Token 用量和模型上下文窗口接入 App Server 通知，在“状态监控 → Token”中展示；账户 Token 活动及额度也统一放在该页，移除独立的 Codex 状态页和显示开关，并适配 Vis 主题与紧凑字号。
