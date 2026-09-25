@@ -4,6 +4,12 @@
 
 ---
 ## [Unreleased]
+### Codex 历史分组与 Electron SQLite 存储
+
+- [x] 修复 Codex 无新用户消息的续行被拆成孤立卡片的问题，将其归入上一条用户消息；保留工具与思考记录，并为没有正文的历史卡片显示查看入口。
+- [x] Electron 使用独立 worker 管理 SQLite，按消息和片段增量保存辅助历史、异步分页读取；草稿、收藏及部分 Codex / ACP / Kimi 本地元数据一并迁移，小设置保留独立 JSON，浏览器继续使用 IndexedDB。
+- [x] 首次启动事务导入旧 JSON 与历史分片并保留原文件备份；完善删除防复活、退出排空、跨窗口同步及加载期间实时消息保护，修复响应式对象原地修改导致的漏存（[#146](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/146)）。
+
 ### ACP 后端适配与文件引用
 
 - [x] 修复 ACP 文件树与顶部 Git 信息：正确识别仓库子目录、worktree 和分离 HEAD，切换分支后同步分支与提交信息；非 Git 目录继续显示文件。
