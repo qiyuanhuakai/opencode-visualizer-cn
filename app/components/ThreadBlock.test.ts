@@ -6,6 +6,7 @@ import ThreadBlock from './ThreadBlock.vue';
 import { useMessages } from '../composables/useMessages';
 import type { MessageInfo } from '../types/sse';
 import { makeAssistantMessage, makeTextPart, makeUserMessage } from './historyTestBuilders';
+import { normalizeCodexTurnsToHistory } from '../backends/codex/normalize';
 
 const workerState = vi.hoisted(() => {
   class FakeWorker {
@@ -105,6 +106,34 @@ function mount(
 }
 
 describe('ThreadBlock history wiring', () => {
+  it.each([
+    { kind: 'tool', item: { id: 'tool', type: 'commandExecution', command: 'ls', status: 'completed', aggregatedOutput: 'files' } },
+    { kind: 'reasoning', item: { id: 'reasoning', type: 'reasoning', summary: ['Inspecting the repository'] } },
+  ])('opens leading userless $kind history without an assistant text reply', async ({ kind, item }) => {
+    const history = normalizeCodexTurnsToHistory({
+      sessionId: 'main',
+      turns: [{ id: 'leading', createdAt: 100, items: [item] }],
+    });
+    const store = useMessages();
+    store.loadHistory(history);
+    const root = store.roots.value[0];
+    if (!root) throw new Error('Expected the original assistant root');
+    expect(root.role).toBe('assistant');
+    expect(store.hasTextContent(root.id)).toBe(false);
+    const onShowThreadHistory = vi.fn();
+    const view = mount({ root, currentSessionId: 'main', backendKind: 'codex' }, onShowThreadHistory);
+    await flushRender();
+
+    expect(view.root.querySelector('.ib-msg-user')).toBeNull();
+    expect(view.root.querySelector('.message-viewer-context-assistant')).toBeNull();
+    const button = view.root.querySelector<HTMLButtonElement>('.ib-action-history');
+    expect(button).not.toBeNull();
+    button?.click();
+    expect(onShowThreadHistory).toHaveBeenCalledWith({
+      entries: [expect.objectContaining({ kind, part: expect.objectContaining({ id: item.id }) })],
+    });
+  });
+
   it('hides unsupported checkpoint actions on ACP history cards', async () => {
     const user = makeUserMessage('acp-session', 'u1', 1);
     useMessages().loadHistory([{ info: user, parts: [] }]);

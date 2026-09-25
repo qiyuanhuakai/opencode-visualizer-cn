@@ -655,6 +655,7 @@ export function normalizeCodexTurnsToHistory(params: {
   model?: CodexNormalizeModel;
 }): CodexCanonicalHistoryEntry[] {
   const entries: CodexCanonicalHistoryEntry[] = [];
+  let parentMessageId: string | undefined;
   for (const [index, turn] of params.turns.entries()) {
     const turnId = stringValue(turn.id, `${params.sessionId}:turn:${index}`);
     const items = Array.isArray(turn.items) ? turn.items : [];
@@ -665,15 +666,23 @@ export function normalizeCodexTurnsToHistory(params: {
       sessionId: params.sessionId,
       turnId,
       items,
+      parentMessageId,
       createdAt: startedMs ?? numberValue(turn.createdAt, params.createdAt ?? Date.now() + index),
       model: params.model,
       turnStatus,
       turn: completedMs !== undefined ? { ...turn, completedAt: completedMs } : turn,
     });
+    const partsByMessage = new Map<string, MessagePart[]>();
+    for (const part of bundle.parts) {
+      const messageParts = partsByMessage.get(part.messageID);
+      if (messageParts) messageParts.push(part);
+      else partsByMessage.set(part.messageID, [part]);
+    }
     for (const info of bundle.messages) {
+      if (info.role === 'user') parentMessageId = info.id;
       entries.push({
         info,
-        parts: bundle.parts.filter((part) => part.messageID === info.id),
+        parts: partsByMessage.get(info.id) ?? [],
       });
     }
   }
