@@ -184,8 +184,8 @@
                     : agentOptions
               "
               :subagent-options="subagentOptions"
-              :mention-files="acpMentionFiles"
-              :prefer-file-mentions="activeBackendKind === 'acp'"
+              :mention-files="composerMentionFiles"
+              :prefer-file-mentions="activeBackendKind === 'acp' || activeBackendKind === 'kimi-web' || activeBackendKind === 'codex'"
               :has-agent-options="hasAgentOptions"
               :agent-picker-state="agentPickerState"
               :agent-color="currentAgentColor"
@@ -207,12 +207,15 @@
               :selected-mode="selectedMode"
               :selected-permission-mode="selectedAcpPermissionMode"
               :permission-mode-options="activeBackendKind === 'acp' ? acpPermissionModeOptions : []"
-              :permission-mode-disabled="activeBackendKind === 'acp' && selectedMode === 'plan'"
+              :acp-permission-controls="activeBackendKind === 'acp'"
+              :plan-mode-available="activeBackendKind === 'acp' && agentOptions.some((option) => option.id === 'plan')"
+              :light-permission-colors="lightPermissionColors"
               :selected-model="selectedModel"
               :selected-thinking="selectedThinking"
               @update:message-input="handleMessageInputUpdate"
               @update:selected-mode="handleSelectedModeUpdate"
               @update:selected-permission-mode="handleSelectedPermissionModeUpdate"
+              @toggle-plan="handleAcpPlanToggle"
               @update:selected-model="handleSelectedModelUpdate"
               @update:selected-thinking="handleSelectedThinkingUpdate"
               @apply-history-entry="handleApplyHistoryEntry"
@@ -633,6 +636,7 @@ import {
 } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { codexModeColor, codexModeOptions } from './utils/codexModePresentation';
+import { isLightResolvedColor } from './utils/resolvedColor';
 import { formatProviderModelPath, preferredProviderModel, restoredReasoningEffort } from './utils/providerSelection';
 import { bundledThemes } from 'shiki/bundle/web';
 import InputPanel from './components/InputPanel.vue';
@@ -943,6 +947,7 @@ const {
   localApplicationPath,
   textTransformersEnabled,
   textTransformers,
+  themeStorage,
 } = useSettings();
 const FOLLOW_THRESHOLD_PX = 24;
 const FILE_VIEWER_WINDOW_WIDTH = 840;
@@ -3044,6 +3049,18 @@ const {
   ),
 });
 
+watch(gitStatus, (status) => {
+  if (activeBackendKind.value !== 'acp' || !status) return;
+  const directory = activeDirectory.value.trim();
+  const current = acpGitInfoByDirectory.value[directory];
+  const branch = status.branch.branch;
+  if (!current || !branch || current.branch === branch) return;
+  acpGitInfoByDirectory.value = {
+    ...acpGitInfoByDirectory.value,
+    [directory]: { ...current, branch, sha: status.branch.headShort ?? current.sha },
+  };
+});
+
 const treeDirectoryName = computed(() => {
   const raw = activeDirectory.value.trim();
   if (!raw) return '';
@@ -3408,11 +3425,29 @@ const visibleAgents = computed(() => agents.value.filter((a) => !a.hidden));
 
 const codexAgentOptions = computed(() => codexModeOptions(codexApi.collaborationModes.value, locale.value));
 
+const lightPermissionColors = ref(false);
+watch([themeStorage, activeBackendKind, uiInitState], async () => {
+  if (uiInitState.value !== 'ready' ||
+    (activeBackendKind.value !== 'acp' && activeBackendKind.value !== 'kimi-web')) {
+    lightPermissionColors.value = false;
+    return;
+  }
+  await nextTick();
+  const input = appEl.value?.querySelector<HTMLElement>('.input-message');
+  lightPermissionColors.value = input
+    ? isLightResolvedColor(getComputedStyle(input).backgroundColor)
+    : false;
+}, { deep: true, immediate: true, flush: 'post' });
+
 function resolveAgentColorForName(agentName?: string) {
   if (activeBackendKind.value === 'codex') return codexModeColor(agentName ?? '', resolvedTheme.value);
-  if (activeBackendKind.value === 'kimi-web') {
+  if (activeBackendKind.value === 'kimi-web' || activeBackendKind.value === 'acp' && (
+    agentName === 'normal' || agentName === 'default' || agentName === 'acceptEdits' ||
+    agentName === 'bypassPermissions' || agentName === 'auto' || agentName === 'yolo'
+  )) {
     const mode = agentName === 'main' ? selectedMode.value : agentName;
-    const token = mode === 'yolo' ? 'warning' : mode === 'auto' ? 'success' : 'info';
+    const token = mode === 'yolo' || mode === 'bypassPermissions' ? 'warning'
+      : mode === 'auto' || mode === 'acceptEdits' ? 'success' : 'info';
     return resolveAgentColor(mode ?? '', token, [], resolvedTheme.value);
   }
   const agent = agentName ? agents.value.find((a) => a.name === agentName) : undefined;
@@ -3423,7 +3458,9 @@ function resolveModelMetaForPath(modelPath?: string) {
   return resolveModelMetaForPathUtil(modelPath, modelMetaByPath.value);
 }
 
-const currentAgentColor = computed(() => resolveAgentColorForName(selectedMode.value));
+const currentAgentColor = computed(() => resolveAgentColorForName(
+  activeBackendKind.value === 'acp' ? selectedAcpPermissionMode.value : selectedMode.value,
+));
 
 function buildThinkingOptions(variants?: Record<string, unknown>) {
   const keys = Object.keys(variants ?? {}).sort();
@@ -4246,6 +4283,11 @@ function handleSelectedModeUpdate(value: string) {
 
 function handleSelectedPermissionModeUpdate(value: string) {
   selectedAcpPermissionMode.value = value;
+  syncAcpSelectionToSession();
+}
+
+function handleAcpPlanToggle(enabled: boolean) {
+  handleSelectedModeUpdate(enabled ? 'plan' : 'default');
 }
 
 function hydrateAcpModeConfiguration(options: unknown[]) {
@@ -4289,7 +4331,7 @@ const ACP_MENTION_FILE_LIMIT = 3;
 const ACP_MENTION_FILE_BYTE_LIMIT = 48 * 1024;
 const ACP_MENTION_TOTAL_BYTE_LIMIT = 96 * 1024;
 
-const acpMentionFiles = computed(() => {
+const composerMentionFiles = computed(() => {
   const paths = new Set(fileTreeFiles.value);
   const stack = [...treeNodes.value];
   while (stack.length > 0) {
@@ -4303,7 +4345,7 @@ const acpMentionFiles = computed(() => {
 
 async function buildAcpMentionContextParts(text: string) {
   if (activeBackendKind.value !== 'acp') return [];
-  const knownFiles = new Set(acpMentionFiles.value);
+  const knownFiles = new Set(composerMentionFiles.value);
   const paths = [...text.matchAll(/@([^\s]+)/gu)]
     .map((match) => match[1]?.replace(/[),.;:!?]+$/u, '') ?? '')
     .filter((path, index, values) => knownFiles.has(path) && values.indexOf(path) === index)
@@ -10462,6 +10504,12 @@ function handleLogout() {
   abortInitialization();
   initialQuery.projectId = '';
   initialQuery.sessionId = '';
+  if (activeBackendKind.value === 'acp') {
+    selectedSessionId.value = '';
+    selectedProjectId.value = '';
+    msg.clearSessionCache();
+    backendSessionReload.invalidateMessageCacheContext();
+  }
   acpMessageBridge.stop();
   disconnectKimiWebBackend();
   disconnectAcpBackend();

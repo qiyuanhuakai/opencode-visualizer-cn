@@ -24,6 +24,7 @@ type InputPanelEventProps = {
   onOpenSnippetSettings?: () => void;
   onSend?: () => void;
   onStatusError?: (message: string) => void;
+  onTogglePlan?: (enabled: boolean) => void;
   'onUpdate:messageInput'?: (value: string) => void;
 };
 type InputPanelMountProps = InputPanelProps & InputPanelEventProps;

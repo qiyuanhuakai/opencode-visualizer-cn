@@ -628,6 +628,7 @@ const messages: LocaleMessages = {
     agentTitle: 'Agent (Tab)',
     modelTitle: 'Modelo (Ctrl-M)',
     permissionModeTitle: 'Permesa politiko',
+    planModeTitle: 'Plana reĝimo',
     variantTitle: 'Varianto (Ctrl-, / Ctrl-.)',
     selectAtAgent: 'Elekti agenton per @',
     atAgentTitle: 'Agent per @',
