@@ -4,6 +4,7 @@ import { getPersistedAcpBridgeToken, getPersistedAcpBridgeUrl } from '../backend
 
 export type AcpAgentState = 'disabled' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error';
 export type BridgeServiceState =
+  | 'disabled'
   | 'stopped'
   | 'starting'
   | 'running'
@@ -83,6 +84,7 @@ const AGENT_STATES = new Set<AcpAgentState>([
   'error',
 ]);
 const SERVICE_STATES = new Set<BridgeServiceState>([
+  'disabled',
   'stopped',
   'starting',
   'running',

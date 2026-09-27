@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { parseCliOptions, usage } from './bridge/visBridgeCli.js';
+import { parseCliOptions, runBridgeConfigCommand, usage } from './bridge/visBridgeCli.js';
 import { createVisBridgeServer } from './bridge/visBridgeServer.js';
 import { createDaemonController } from './bridge/daemonController.js';
 import { runDaemonProcess } from './bridge/daemonProcess.js';
@@ -25,6 +25,10 @@ export async function main() {
   const options = parseCliOptions();
   if (options.help || !options.command) {
     console.log(usage());
+    return;
+  }
+  if (options.command === 'config') {
+    await runBridgeConfigCommand(options);
     return;
   }
   if (options.command === '__daemon') {

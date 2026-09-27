@@ -15,6 +15,25 @@ import {
 import { parseCliOptions } from '../vis_bridge';
 
 describe('vis_bridge lifecycle commands', () => {
+  it('selects the current config path for the editor command without parsing daemon credentials', () => {
+    expect(parseCliOptions(['config', '--config', '/tmp/custom bridge.json'], {
+      EDITOR: 'vi',
+      VIS_BRIDGE_CODEX_TOKEN_FILE: '/missing/stale-token-file',
+    })).toMatchObject({
+      command: 'config',
+      configPath: '/tmp/custom bridge.json',
+    });
+    expect(parseCliOptions(['config'], {
+      EDITOR: 'vi', VIS_BRIDGE_CONFIG: '/tmp/env-bridge.json',
+    })).toMatchObject({ command: 'config', configPath: '/tmp/env-bridge.json' });
+    expect(() => parseCliOptions(['config', '--port', '23005'], {})).toThrow(
+      'vis_bridge config does not accept --port',
+    );
+    expect(() => parseCliOptions(['config', '--config', ''], {})).toThrow(
+      'vis_bridge config path must not be empty',
+    );
+  });
+
   it('maps legacy no-command and option-first invocations to daemon start', () => {
     expect(parseCliOptions([], {})).toMatchObject({ command: 'start', serverArgs: [] });
     expect(parseCliOptions(['--port', '23120'], {})).toMatchObject({

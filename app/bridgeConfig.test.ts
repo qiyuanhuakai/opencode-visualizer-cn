@@ -23,6 +23,11 @@ async function createConfigPath() {
 
 describe('bridgeConfig', () => {
   it('provides ACP presets with verified launch commands', () => {
+    expect(createDefaultBridgeConfig().nativeServices).toEqual({
+      opencode: true,
+      codex: true,
+      'kimi-web': true,
+    });
     expect(createDefaultBridgeConfig().acpAgents).toEqual([
       {
         id: 'pi',
@@ -64,6 +69,37 @@ describe('bridgeConfig', () => {
     const reloaded = await createBridgeConfigStore({ configPath }).load();
     expect(reloaded.acpAgents.find((agent: { id: string }) => agent.id === 'oh-my-pi')?.enabled).toBe(true);
     await expect(readFile(configPath, 'utf8')).resolves.toContain('"version": 1');
+  });
+
+  it('defaults legacy configs to enabled services and preserves disabled choices during ACP edits', async () => {
+    const configPath = await createConfigPath();
+    const store = createBridgeConfigStore({ configPath });
+    expect(parseBridgeConfig({ version: 1, acpAgents: [] }).nativeServices).toEqual({
+      opencode: true,
+      codex: true,
+      'kimi-web': true,
+    });
+    await store.save({
+      version: 1,
+      nativeServices: { opencode: false, codex: true, 'kimi-web': false },
+      acpAgents: [],
+    });
+    await store.upsertAgent({
+      id: 'pi', name: 'Pi', command: 'pi-acp', args: [], enabled: false,
+    });
+    expect((await createBridgeConfigStore({ configPath }).load()).nativeServices).toEqual({
+      opencode: false,
+      codex: true,
+      'kimi-web': false,
+    });
+  });
+
+  it('rejects non-boolean native service settings', () => {
+    expect(() => parseBridgeConfig({
+      version: 1,
+      nativeServices: { opencode: 'false', codex: true, 'kimi-web': true },
+      acpAgents: [],
+    })).toThrow('nativeServices.opencode must be a boolean');
   });
 
   it('rejects malformed external config at the system boundary', () => {

@@ -27,7 +27,7 @@ export function createBridgeRuntime(options = {}) {
     try {
       const config = await configStore.load();
       await Promise.all([
-        nativeSupervisor.start(),
+        nativeSupervisor.start(config.nativeServices),
         acpManager.reconcile(config.acpAgents),
       ]);
       acceptingMutations = true;

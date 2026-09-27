@@ -3,6 +3,11 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 
 const CONFIG_VERSION = 1;
+const DEFAULT_NATIVE_SERVICES = Object.freeze({
+  opencode: true,
+  codex: true,
+  'kimi-web': true,
+});
 
 const ACP_PRESETS = [
   { id: 'pi', name: 'Pi', command: 'pi-acp', args: [], enabled: true },
@@ -51,8 +56,28 @@ function parseAgent(input) {
 export function createDefaultBridgeConfig() {
   return {
     version: CONFIG_VERSION,
+    nativeServices: { ...DEFAULT_NATIVE_SERVICES },
     acpAgents: ACP_PRESETS.map((agent) => ({ ...agent, args: [...agent.args] })),
   };
+}
+
+function parseNativeServices(input) {
+  if (input === undefined) return { ...DEFAULT_NATIVE_SERVICES };
+  if (!isRecord(input)) throw new Error('Bridge config nativeServices must be an object.');
+  for (const key of Object.keys(input)) {
+    if (!Object.hasOwn(DEFAULT_NATIVE_SERVICES, key)) {
+      throw new Error(`Unknown native service: ${key}.`);
+    }
+  }
+  const services = { ...DEFAULT_NATIVE_SERVICES };
+  for (const key of Object.keys(services)) {
+    if (input[key] === undefined) continue;
+    if (typeof input[key] !== 'boolean') {
+      throw new Error(`nativeServices.${key} must be a boolean.`);
+    }
+    services[key] = input[key];
+  }
+  return services;
 }
 
 export function parseBridgeConfig(input) {
@@ -65,7 +90,7 @@ export function parseBridgeConfig(input) {
     if (ids.has(agent.id)) throw new Error(`Duplicate ACP agent id: ${agent.id}.`);
     ids.add(agent.id);
   }
-  return { version: CONFIG_VERSION, acpAgents };
+  return { version: CONFIG_VERSION, nativeServices: parseNativeServices(input.nativeServices), acpAgents };
 }
 
 export function defaultBridgeConfigPath(env = process.env) {

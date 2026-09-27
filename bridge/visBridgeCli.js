@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import { parseArgs } from 'node:util';
+import { createBridgeConfigStore } from './bridgeConfig.js';
+import { createDaemonPaths, isProcessAlive, readDaemonState } from './daemonState.js';
 import { assertSafeDaemonTarget } from './daemonCredentials.js';
 
 const DEFAULT_PORT = 23004;
@@ -20,6 +24,7 @@ Usage:
   vis_bridge start [options]
   vis_bridge stop
   vis_bridge restart [options]
+  vis_bridge config [--config <path>]
   vis_bridge update [--check] [--yes|-y]
   vis_bridge upgrade [--check] [--yes|-y]
   vis_bridge --version
@@ -45,6 +50,7 @@ Environment:
   VIS_BRIDGE_CODEX_TOKEN_FILE       Same as --upstream-token-file.
   VIS_BRIDGE_CODEX_AUTHORIZATION    Raw Authorization header for upstream.
   VIS_BRIDGE_CONFIG                 Same as --config.
+  EDITOR                            Editor command used by vis_bridge config.
   VIS_BRIDGE_STATE_DIR              Override the per-user daemon state directory.
 `;
 }
@@ -82,7 +88,7 @@ function createDaemonArgs(options) {
 
 export function parseCliOptions(argv = process.argv.slice(2), env = process.env) {
   const explicitCommand = argv[0]?.startsWith('-') ? undefined : argv[0];
-  if (explicitCommand && !['start', 'stop', 'restart', '__daemon'].includes(explicitCommand)) {
+  if (explicitCommand && !['start', 'stop', 'restart', 'config', '__daemon'].includes(explicitCommand)) {
     throw new Error(`Unknown vis_bridge command: ${explicitCommand}`);
   }
   const command = explicitCommand ?? 'start';
@@ -107,6 +113,19 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
     const unexpectedOption = Object.keys(values).find((key) => key !== 'help');
     if (unexpectedOption) throw new Error(`vis_bridge stop does not accept --${unexpectedOption}.`);
     return { command, help: Boolean(values.help), serverArgs: [] };
+  }
+
+  if (command === 'config') {
+    const unexpectedOption = Object.keys(values).find((key) => key !== 'help' && key !== 'config');
+    if (unexpectedOption) throw new Error(`vis_bridge config does not accept --${unexpectedOption}.`);
+    if (values.config !== undefined && !values.config.trim()) {
+      throw new Error('vis_bridge config path must not be empty.');
+    }
+    return {
+      command,
+      help: Boolean(values.help),
+      configPath: values.config ?? (env.VIS_BRIDGE_CONFIG?.trim() || undefined),
+    };
   }
 
   const tokenFile = values['upstream-token-file'] ?? env.VIS_BRIDGE_CODEX_TOKEN_FILE;
@@ -147,4 +166,65 @@ export function parseCliOptions(argv = process.argv.slice(2), env = process.env)
       ['target', 'host', 'port', 'path', 'config'].some((name) => values[name] !== undefined) ||
       DAEMON_CONFIGURATION_ENV_NAMES.some((name) => typeof env[name] === 'string'),
   };
+}
+
+function parseEditorCommand(value) {
+  const tokens = [];
+  let token = '';
+  let quoted;
+  let started = false;
+  for (const character of value) {
+    if (quoted) {
+      if (character === quoted) quoted = undefined;
+      else token += character;
+    } else if (character === '"' || character === "'") {
+      quoted = character;
+      started = true;
+    } else if (/\s/u.test(character)) {
+      if (started) tokens.push(token);
+      token = '';
+      started = false;
+    } else {
+      token += character;
+      started = true;
+    }
+  }
+  if (quoted) throw new Error('EDITOR contains an unmatched quote.');
+  if (started) tokens.push(token);
+  if (!tokens[0]) throw new Error('EDITOR must name an executable.');
+  return tokens;
+}
+
+export async function runBridgeConfigCommand(options, env = process.env) {
+  const editor = env.EDITOR?.trim();
+  if (!editor) throw new Error('EDITOR is not set. Set EDITOR to a terminal editor or an editor command.');
+  const [command, ...args] = parseEditorCommand(editor);
+  let configPath = options.configPath;
+  if (!configPath) {
+    const daemon = await readDaemonState(createDaemonPaths(env));
+    if (daemon?.state === 'running' && isProcessAlive(daemon.pid)) {
+      const configOption = daemon.launchArgs.find((argument) => argument.startsWith('--config='));
+      const separatedIndex = daemon.launchArgs.indexOf('--config');
+      configPath = configOption?.slice('--config='.length) ||
+        (separatedIndex >= 0 ? daemon.launchArgs[separatedIndex + 1] : undefined);
+    }
+  }
+  const store = createBridgeConfigStore({ configPath });
+  try {
+    await access(store.configPath);
+  } catch (error) {
+    if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+    await store.load();
+  }
+  await new Promise((resolve, reject) => {
+    const child = spawn(command, [...args, store.configPath], { stdio: 'inherit' });
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`EDITOR exited with ${signal ?? `code ${code}`}.`));
+    });
+  });
+  console.log(`Config saved at ${store.configPath}. Run vis_bridge restart to apply service changes.`);
 }
