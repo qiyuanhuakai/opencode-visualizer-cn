@@ -4,7 +4,7 @@ import { createCodexThreadActivity } from './threadActivity';
 describe('Codex thread participation', () => {
   beforeEach(() => localStorage.clear());
 
-  it('preserves observed and locally sent participation after reload, leaving untouched idle unknown', () => {
+  it('forgets observed and locally sent participation after a new login', () => {
     const activity = createCodexThreadActivity();
     activity.setConnection('ws://localhost:4500/ws');
     activity.observe('observed', { type: 'active' });
@@ -14,10 +14,11 @@ describe('Codex thread participation', () => {
     activity.observe('retrying', { type: 'retry' });
     const restored = createCodexThreadActivity();
     restored.setConnection('ws://localhost:4500/ws');
-    expect([...restored.participatedThreadIds.value]).toEqual(['observed', 'sent', 'retrying']);
+    expect([...restored.participatedThreadIds.value]).toEqual([]);
+    expect(activity.participatedThreadIds.value.has('observed')).toBe(true);
   });
 
-  it('isolates different endpoints and restores participation when returning', () => {
+  it('resets participation on every connection, including the same endpoint', () => {
     const activity = createCodexThreadActivity();
     activity.setConnection('ws://localhost:4500/one/ws');
     activity.markParticipated('same-id');
@@ -26,15 +27,18 @@ describe('Codex thread participation', () => {
       expect(activity.participatedThreadIds.value.size).toBe(0);
     }
     activity.setConnection('ws://localhost:4500/one/ws');
-    expect(activity.participatedThreadIds.value.has('same-id')).toBe(true);
+    expect(activity.participatedThreadIds.value.has('same-id')).toBe(false);
+    activity.markParticipated('same-id');
+    activity.setConnection('ws://localhost:4500/one/ws');
+    expect(activity.participatedThreadIds.value.has('same-id')).toBe(false);
   });
 
-  it('canonicalizes the connection without storing credentials', () => {
+  it('does not persist thread participation or connection credentials', () => {
     const activity = createCodexThreadActivity();
     activity.setConnection('ws://user:secret@LOCALHOST:4500/ws?token=secret#secret');
     activity.markParticipated('thread');
     activity.setConnection('ws://localhost:4500/ws?token=replaced');
-    expect(activity.participatedThreadIds.value.has('thread')).toBe(true);
+    expect(activity.participatedThreadIds.value.has('thread')).toBe(false);
     expect(Object.keys(localStorage).join(' ')).not.toContain('secret');
   });
 });

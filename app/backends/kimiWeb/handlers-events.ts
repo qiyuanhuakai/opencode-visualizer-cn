@@ -150,12 +150,32 @@ function handleSubagentSpawned(core: KimiWebCore, frame: KimiWebWireFrame, paylo
   if (!subagentId) return;
   const turnId = core.agentTurns.get(`${sessionId}|${subagentId}`) ?? 0;
   const group = ensureGroup(core, sessionId, subagentId, turnId, payload, ops);
+  const parentToolCallId = asString(payload.parentToolCallId);
+  if (parentToolCallId) {
+    for (const [key, part] of core.toolParts) {
+      if (part.callID !== parentToolCallId || part.sessionID !== sessionId || part.tool !== 'task') continue;
+      const previous = Array.isArray(part.metadata?.sessionIds)
+        ? part.metadata.sessionIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      const sessionIds = [...new Set([...previous, group.sessionID])];
+      const previousLabels = part.metadata?.subagentLabels;
+      const labels = previousLabels && typeof previousLabels === 'object' && !Array.isArray(previousLabels)
+        ? previousLabels : {};
+      const updated = { ...part, metadata: {
+        ...part.metadata, sessionIds, source: 'kimi-web',
+        subagentLabels: { ...labels, [group.sessionID]: asString(payload.description) || asString(payload.subagentName) || group.sessionID },
+      } };
+      core.toolParts.set(key, updated);
+      ops.push({ kind: 'part', part: updated });
+      break;
+    }
+  }
   ops.push({
     kind: 'subagent', phase: 'spawned', sessionId, agentId: asString(payload.agentId) || 'main', subagentId,
     subagentSessionId: group.sessionID,
     name: asString(payload.subagentName) || undefined,
     description: asString(payload.description) || undefined,
-    parentToolCallId: asString(payload.parentToolCallId) || undefined,
+    parentToolCallId: parentToolCallId || undefined,
     runInBackground: asBoolean(payload.runInBackground),
     model: asString(payload.model) || undefined,
     time: asNumber(payload.time) ?? core.now(),

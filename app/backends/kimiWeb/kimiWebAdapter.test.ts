@@ -107,10 +107,11 @@ describe('KimiWebAdapter', () => {
       { name: 'new-project', path: '/work/new-project', absolute: '/work/new-project', type: 'directory', ignored: false },
     ]);
   });
-  it('shows an untouched session as unknown until it has run a turn', () => {
+  it('shows historical sessions as unknown until busy in this login', () => {
     expect(mapKimiWebSession(session({ last_turn_reason: undefined })).status).toBe('unknown');
     expect(mapKimiWebSession(session({ last_turn_reason: undefined, busy: true })).status).toBe('busy');
-    expect(mapKimiWebSession(session()).status).toBe('idle');
+    expect(mapKimiWebSession(session({ last_turn_reason: undefined, main_turn_active: true })).status).toBe('busy');
+    expect(mapKimiWebSession(session()).status).toBe('unknown');
   });
 
   it('routes shell creation and the PTY socket through the Kimi bridge', async () => {
@@ -169,7 +170,7 @@ describe('KimiWebAdapter', () => {
         '/work/repo': {
           rootSessions: ['session-1'],
           sessions: {
-            'session-1': { title: 'Existing session', status: 'idle' },
+            'session-1': { title: 'Existing session', status: 'unknown' },
           },
         },
       },
@@ -359,7 +360,7 @@ describe('KimiWebAdapter', () => {
       rootSessions: ['session-old', 'session-new'],
       sessions: {
         'session-old': { title: 'Old' },
-        'session-new': { title: 'New', status: 'idle' },
+        'session-new': { title: 'New', status: 'unknown' },
       },
     });
     expect(projects['workspace-1'].sandboxes['/work/repo'].sessions['session-new'].timeCreated).toBe(

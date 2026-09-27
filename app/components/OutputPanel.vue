@@ -41,6 +41,9 @@
                   :session-revert="sessionRevert"
                   :backend-kind="backendKind"
                   :kimi-turn-permission-for-user="kimiTurnPermissionForUser"
+                  :kimi-current-permission-mode="kimiCurrentPermissionMode"
+                  :kimi-default-permission-mode="kimiDefaultPermissionMode"
+                  :kimi-default-permission-color="kimiDefaultPermissionColor"
                   :kimi-card-actions-ready="kimiCardActionsReady"
                   :kimi-fork-available="kimiForkAvailable"
                   :kimi-undo-available="kimiUndoAvailable"
@@ -146,6 +149,9 @@ const props = defineProps<{
   } | null;
   backendKind?: BackendKind;
   kimiTurnPermissionForUser?: (sessionId: string, userMessageId: string) => string | undefined;
+  kimiCurrentPermissionMode?: string;
+  kimiDefaultPermissionMode?: string;
+  kimiDefaultPermissionColor?: string;
   kimiCardActionsReady?: boolean;
   kimiForkAvailable?: boolean;
   kimiUndoAvailable?: boolean;

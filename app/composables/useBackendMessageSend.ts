@@ -85,6 +85,7 @@ export function useBackendMessageSend(params: BackendMessageSendParams) {
     // surfaced as a refusal so the composer never reports a false success.
     switch (result.status) {
       case 'running':
+        params.onKimiWebPromptRunning?.(preflight.sessionId);
         params.recordKimiWebTurnPermission?.(preflight.sessionId, result.userMessageId, preflight.selectedMode);
         params.setSendStatusKey('app.status.sent');
         break;

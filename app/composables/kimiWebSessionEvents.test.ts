@@ -7,10 +7,11 @@ function apply(
   projects: Record<string, ProjectState>,
   type: string,
   payload: Record<string, unknown>,
+  origin: 'live' | 'durable-replay' = 'live',
 ) {
   const result = createKimiWebNormalizer().ingest({ type, session_id: '__global__', payload });
   for (const op of result.ops) {
-    if (op.kind === 'session') applyKimiWebSessionEvent(projects, op);
+    if (op.kind === 'session') applyKimiWebSessionEvent(projects, op, origin);
   }
 }
 
@@ -24,10 +25,35 @@ describe('Kimi lifecycle events', () => {
     expect(entry.status).toBe('unknown');
     apply(projects, 'event.session.status_changed', { sessionId: 'new', status: 'idle' });
     expect(entry.status).toBe('unknown');
+    apply(projects, 'event.session.status_changed', { sessionId: 'new', status: 'retry' });
+    expect(entry.status).toBe('unknown');
+    apply(projects, 'event.session.work_changed', { sessionId: 'new', busy: false, last_turn_reason: 'completed' });
+    expect(entry.status).toBe('unknown');
     apply(projects, 'event.session.work_changed', { sessionId: 'new', busy: true });
     expect(entry.status).toBe('busy');
     apply(projects, 'event.session.work_changed', { sessionId: 'new', busy: false, last_turn_reason: 'completed' });
     expect(entry.status).toBe('idle');
+  });
+  it('ignores historical busy and completion events replayed after login', () => {
+    const projects: Record<string, ProjectState> = {};
+    apply(projects, 'event.session.created', { session: {
+      id: 'old', workspace_id: 'workspace', title: 'Old', metadata: { cwd: '/repo' },
+      busy: false, last_turn_reason: 'completed', archived: false,
+    } }, 'durable-replay');
+    const entry = projects.workspace.sandboxes['/repo'].sessions.old;
+    expect(entry.status).toBe('unknown');
+    apply(projects, 'event.session.work_changed', { sessionId: 'old', busy: true }, 'durable-replay');
+    apply(projects, 'event.session.work_changed', { sessionId: 'old', busy: false, last_turn_reason: 'completed' }, 'durable-replay');
+    expect(entry.status).toBe('unknown');
+    apply(projects, 'event.session.work_changed', { sessionId: 'old', busy: true });
+    expect(entry.status).toBe('busy');
+    apply(projects, 'event.session.created', { session: {
+      id: 'old', workspace_id: 'workspace', title: 'Old', metadata: { cwd: '/repo' },
+      busy: false, archived: false,
+    } }, 'durable-replay');
+    expect(projects.workspace.sandboxes['/repo'].sessions.old.status).toBe('busy');
+    apply(projects, 'event.session.work_changed', { sessionId: 'old', busy: false, last_turn_reason: 'completed' });
+    expect(projects.workspace.sandboxes['/repo'].sessions.old.status).toBe('idle');
   });
   it('applies other-client create, rename, archive, restore snapshot and delete to one tree owner', () => {
     // Given

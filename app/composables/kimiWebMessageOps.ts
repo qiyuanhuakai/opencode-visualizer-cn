@@ -14,6 +14,7 @@ type OpApplierOptions = {
   messages: Map<string, MessageInfo>;
   ownMessage(sessionId: string, info: MessageInfo): void;
   mergeSession(sessionId: string, patch: KimiWebSessionPatch): void;
+  applySubagent(op: Extract<KimiWebNormalizeOp, { kind: 'subagent' }>): void;
 };
 
 export function createKimiWebOpApplier(context: OpApplierOptions) {
@@ -76,6 +77,10 @@ export function createKimiWebOpApplier(context: OpApplierOptions) {
       }
       return;
     }
+    if (op.kind === 'subagent') {
+      context.applySubagent(op);
+      return;
+    }
     if (op.kind === 'session') {
       context.mergeSession(op.sessionId, {
         busy: op.busy,
@@ -85,7 +90,7 @@ export function createKimiWebOpApplier(context: OpApplierOptions) {
         status: op.status,
         currentPromptId: op.currentPromptId,
       });
-      context.bridge.onSessionEvent?.(op);
+      context.bridge.onSessionEvent?.(op, frameContext);
     }
   }
 

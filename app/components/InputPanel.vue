@@ -263,11 +263,15 @@
               <DropdownItem
                 v-for="(file, index) in fileMatches"
                 :id="mentionOptionId(index)"
-                :key="file"
-                :value="file"
+                :key="file.path"
+                :value="file.directory ? `${file.path}/` : file.path"
               >
-                <div class="command-dropdown-item">
-                  <div class="command-name">@{{ file }}</div>
+                <div class="mention-file-row">
+                  <span class="mention-file-icon" aria-hidden="true">
+                    <FolderIcon v-if="file.directory" :foldername="file.name" :width="16" :height="16" />
+                    <FileIcon v-else :filename="file.name" :width="16" :height="16" />
+                  </span>
+                  <span class="command-name">{{ file.name }}{{ file.directory ? '/' : '' }}</span>
                 </div>
               </DropdownItem>
             </div>
@@ -577,6 +581,7 @@
 import { computed, nextTick, ref, watch, inject } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
+import { FileIcon, FolderIcon } from '@vue-symbols/icons';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './Dropdown/Item.vue';
 import DropdownLabel from './Dropdown/Label.vue';
@@ -640,6 +645,7 @@ const props = defineProps<{
   agentOptions: AgentOption[];
   subagentOptions?: AgentOption[];
   mentionFiles?: string[];
+  mentionDirectories?: string[];
   preferFileMentions?: boolean;
   hasAgentOptions: boolean;
   agentPickerState?: AgentPickerState;
@@ -1100,7 +1106,7 @@ const atQuery = computed(() => {
   const value = messageValue.value;
   const textarea = textareaRef.value;
   // Get cursor position (end of text if textarea not focused or no cursor)
-  const cursorPos = textarea?.selectionStart ?? value.length;
+  const cursorPos = textCursor.value ?? textarea?.selectionStart ?? value.length;
   // Get text up to cursor
   const textBeforeCursor = value.slice(0, cursorPos);
   // Find the last @ symbol before cursor
@@ -1122,7 +1128,7 @@ const agentMatches = computed(() => {
   const query = atQuery.value;
   const textarea = textareaRef.value;
   const value = messageValue.value;
-  const cursorPos = textarea?.selectionStart ?? value.length;
+  const cursorPos = textCursor.value ?? textarea?.selectionStart ?? value.length;
   const textBeforeCursor = value.slice(0, cursorPos);
   const lastAtIndex = textBeforeCursor.lastIndexOf('@');
 
@@ -1146,26 +1152,55 @@ const agentMatches = computed(() => {
   return matches;
 });
 
-const fileMatches = computed(() => {
-  const query = atQuery.value.toLowerCase();
+type FileMentionOption = { readonly path: string; readonly name: string; readonly directory: boolean };
+
+const fileMatches = computed<FileMentionOption[]>(() => {
   const textarea = textareaRef.value;
   const value = messageValue.value;
-  const cursorPos = textarea?.selectionStart ?? value.length;
+  const cursorPos = textCursor.value ?? textarea?.selectionStart ?? value.length;
   const beforeCursor = value.slice(0, cursorPos);
   const atIndex = beforeCursor.lastIndexOf('@');
   if (atIndex < 0) return [];
   const afterAt = beforeCursor.slice(atIndex + 1);
   if (/\s/.test(afterAt)) return [];
-  return (props.mentionFiles ?? [])
-    .filter((file) => file.toLowerCase().includes(query))
-    .sort((a, b) => {
-      const aName = a.slice(a.lastIndexOf('/') + 1);
-      const bName = b.slice(b.lastIndexOf('/') + 1);
-      const dotOrder = Number(aName.includes('.')) - Number(bName.includes('.'));
-      return dotOrder || aName.localeCompare(bName, 'en', { sensitivity: 'base' }) || a.localeCompare(b);
-    })
-    .slice(0, 30);
+  const lastSlash = afterAt.lastIndexOf('/');
+  const prefix = afterAt.slice(0, lastSlash + 1);
+  const query = afterAt.slice(lastSlash + 1).toLowerCase();
+  const matches = new Map<string, FileMentionOption>();
+  const addPath = (path: string, isDirectory: boolean) => {
+    if (!path.startsWith(prefix)) return;
+    const rest = path.slice(prefix.length);
+    if (!rest) return;
+    const nextSlash = rest.indexOf('/');
+    const name = nextSlash < 0 ? rest : rest.slice(0, nextSlash);
+    if (!name || !name.toLowerCase().includes(query)) return;
+    const childPath = `${prefix}${name}`;
+    const directory = nextSlash >= 0 || isDirectory;
+    const previous = matches.get(childPath);
+    if (!previous || directory && !previous.directory) {
+      matches.set(childPath, { path: childPath, name, directory });
+    }
+  };
+  for (const path of props.mentionFiles ?? []) addPath(path, false);
+  for (const path of props.mentionDirectories ?? []) addPath(path, true);
+  return [...matches.values()].sort((a, b) =>
+    Number(a.name.startsWith('.')) - Number(b.name.startsWith('.')) ||
+    Number(b.directory) - Number(a.directory) ||
+    a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }) ||
+    a.name.localeCompare(b.name),
+  );
 });
+
+function highlightedFileMention(): FileMentionOption | undefined {
+  const index = fileMatches.value.findIndex((_, candidateIndex) =>
+    mentionOptionId(candidateIndex) === activeMentionOptionId.value);
+  return fileMatches.value[index] ?? fileMatches.value[0];
+}
+
+function selectHighlightedFileMention() {
+  const highlighted = highlightedFileMention();
+  if (highlighted) applyFileSelection(highlighted.directory ? `${highlighted.path}/` : highlighted.path);
+}
 
 // --- Skill $ invocation ---
 const skillQuery = computed(() => {
@@ -1362,12 +1397,16 @@ function applyFileSelection(path: string) {
   const beforeCursor = messageValue.value.slice(0, cursorPos);
   const atIndex = beforeCursor.lastIndexOf('@');
   if (atIndex < 0) return;
-  messageValue.value = `${messageValue.value.slice(0, atIndex)}@${path} ${messageValue.value.slice(cursorPos)}`;
+  const directory = path.endsWith('/');
+  const nextCursor = atIndex + path.length + (directory ? 1 : 2);
+  messageValue.value = `${messageValue.value.slice(0, atIndex)}@${path}${directory ? '' : ' '}${messageValue.value.slice(cursorPos)}`;
+  textCursor.value = nextCursor;
+  if (!directory) {
+    nextTick(() => {
+      nextTick(() => { filePopupDismissed.value = true; });
+    });
+  }
   nextTick(() => {
-    nextTick(() => { filePopupDismissed.value = true; });
-  });
-  nextTick(() => {
-    const nextCursor = atIndex + path.length + 2;
     textareaRef.value?.focus();
     textareaRef.value?.setSelectionRange(nextCursor, nextCursor);
   });
@@ -1535,11 +1574,19 @@ function handleKeydown(event: KeyboardEvent) {
     }
     if (event.key === 'Tab' && mentionType !== 'transformer') {
       event.preventDefault();
+      if (mentionType === 'file') {
+        selectHighlightedFileMention();
+        return;
+      }
       mentionDropdownRef.value?.selectHighlighted();
       return;
     }
     if (isPlainEnter) {
       event.preventDefault();
+      if (mentionType === 'file') {
+        selectHighlightedFileMention();
+        return;
+      }
       mentionDropdownRef.value?.selectHighlighted();
       return;
     }
@@ -2272,6 +2319,24 @@ const inputMessageStyle = computed(() => {
   gap: 2px;
   width: 100%;
   min-width: 0;
+}
+.mention-file-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  width: 100%;
+}
+.mention-file-icon {
+  display: inline-flex;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+.mention-file-row .command-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .command-name {
   font-size: var(--ui-font-size, 12px);

@@ -219,6 +219,28 @@ describe('useFileTree with the real Kimi Web registry adapter', () => {
     mounted.unmount();
   });
 
+  it('keeps files beyond the previous non-Git scan limit available for mentions', async () => {
+    const fallback = createFakeFetch();
+    const entries = Array.from({ length: 3001 }, (_, index) => ({
+      path: `file-${String(index).padStart(4, '0')}.txt`,
+      name: `file-${String(index).padStart(4, '0')}.txt`,
+      kind: 'file',
+    }));
+    const fakeFetch = vi.fn<typeof fetch>(async (input, init) => {
+      const rawUrl = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const body = init?.body;
+      if (new URL(rawUrl).pathname.endsWith(`/api/v1/sessions/${SESSION_ID}/fs:list`) &&
+        typeof body === 'string' && JSON.parse(body).path === '.') {
+        return jsonResponse({ code: 0, data: { items: entries, truncated: false } });
+      }
+      return fallback(input, init);
+    });
+    const mounted = await mountKimiFileTree(fakeFetch);
+    expect(mounted.fileTree.files.value).toHaveLength(3001);
+    expect(mounted.fileTree.files.value).toContain('file-3000.txt');
+    mounted.unmount();
+  });
+
   it('hydrates Kimi git data and file snapshot without entering the PTY strategy', async () => {
     const mounted = await mountKimiFileTree(createFakeFetch());
 

@@ -31,19 +31,25 @@ export function resolveThreadSubagentSessions(
   for (const part of threadParts) {
     if (part.type !== 'tool' || part.tool !== 'task') continue;
     const state = part.state;
-    if (state.status === 'pending') continue;
-    const childIds = Array.isArray(state.metadata?.sessionIds)
-      ? state.metadata.sessionIds
-      : [state.metadata?.sessionId];
+    if (state.status === 'pending' && part.metadata?.source !== 'kimi-web') continue;
+    const metadata = part.metadata?.source === 'kimi-web'
+      ? part.metadata
+      : state.status === 'pending' ? undefined : state.metadata;
+    const childIds = Array.isArray(metadata?.sessionIds)
+      ? metadata.sessionIds
+      : [metadata?.sessionId];
     for (const rawChildId of childIds) {
       if (typeof rawChildId !== 'string') continue;
       const childId = rawChildId.trim();
       if (!childId || childId === sessionId) continue;
       const meta = metaById?.[childId];
-      if (meta && meta.parentID !== sessionId && (state.metadata?.source !== 'codex' || meta.parentID)) continue;
-      const agentPath = state.metadata?.source === 'codex' && typeof state.metadata.agentPath === 'string'
-        ? codexAgentName(state.metadata.agentPath) : '';
-      const fallbackLabel = meta?.label || agentPath || childId;
+      if (meta && meta.parentID !== sessionId && (metadata?.source !== 'codex' || meta.parentID)) continue;
+      const agentPath = metadata?.source === 'codex' && typeof metadata.agentPath === 'string'
+        ? codexAgentName(metadata.agentPath) : '';
+      const labels = metadata?.subagentLabels;
+      const kimiLabel = labels && typeof labels === 'object' && !Array.isArray(labels)
+        ? Object.entries(labels).find(([id]) => id === childId)?.[1] : undefined;
+      const fallbackLabel = meta?.label || agentPath || (typeof kimiLabel === 'string' ? kimiLabel : '') || childId;
       if (isMagicContextWorkerName(fallbackLabel)) continue;
       if (!seen.has(childId)) seen.set(childId, resolveTaskWorkerLabel(part, fallbackLabel));
     }

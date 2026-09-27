@@ -11,10 +11,14 @@ describe('useCodexWorkspace', () => {
       { id: 'untouched', cwd: '/repo', status: { type: 'idle' } },
     ]);
     const participatedThreadIds = ref(new Set(['involved']));
+    const activeThreadId = ref('untouched');
     const workspace = useCodexWorkspace({ threads, visibleThreads: computed(() => threads.value),
-      activeThreadId: ref('involved'), canonicalHistory: ref([]), participatedThreadIds });
+      activeThreadId, canonicalHistory: ref([]), participatedThreadIds });
+    expect(workspace.activeSessionId.value).toBe('untouched');
     expect(workspace.project.value.sandboxes['/repo'].sessions['involved'].status).toBe('idle');
     expect(workspace.project.value.sandboxes['/repo'].sessions['untouched'].status).toBe('unknown');
+    activeThreadId.value = 'involved';
+    expect(workspace.activeSessionId.value).toBe('involved');
     participatedThreadIds.value = new Set(['untouched']);
     expect(workspace.project.value.sandboxes['/repo'].sessions['involved'].status).toBe('unknown');
     expect(workspace.project.value.sandboxes['/repo'].sessions['untouched'].status).toBe('idle');

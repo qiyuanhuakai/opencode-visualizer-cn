@@ -292,8 +292,11 @@ describe('useBackendSessionReload kimi-web history', () => {
     expect(getMessages).toHaveBeenCalledTimes(2);
     expect(getMessages.mock.calls[1]?.[1]?.before_id).toBe(pageOne.at(-1)?.id);
     expect(mocks.msg.loadHistory).toHaveBeenCalledTimes(1);
-    const entries = mocks.msg.loadHistory.mock.calls[0]?.[0] as Array<{ info: { id: string } }>;
-    expect(entries.map((entry) => entry.info.id)).toEqual(kimiEntryIds(newestFirst));
+    const entries = mocks.msg.loadHistory.mock.calls[0]?.[0] as Array<{ info: { id: string; sessionID: string; role: string } }>;
+    expect(entries.filter((entry) => entry.info.sessionID === newestFirst[0]?.session_id)
+      .map((entry) => entry.info.id)).toEqual(kimiEntryIds(newestFirst));
+    expect(entries.filter((entry) => entry.info.sessionID.endsWith(':agent-0:0'))
+      .map((entry) => entry.info.role)).toEqual(['user', 'assistant']);
     expect(entries.some((entry) => entry.info.id.endsWith('_000001'))).toBe(false);
   });
 

@@ -91,6 +91,23 @@ function createController(meta: unknown = { experimental_flags: { tower: false }
 }
 
 describe('kimi-web composer integration', () => {
+  it('hydrates the Kimi default for unattributed history without changing the composer', async () => {
+    const mode = ref('yolo');
+    const serverDefault = ref('manual');
+    const program = ts.transpileModule(
+      `${appFunctionDeclaration('loadKimiWebDefaultPermissionMode')}\nloadKimiWebDefaultPermissionMode();`,
+      { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } },
+    ).outputText;
+    await runInNewContext(program, {
+      kimiWebRestClient: () => ({ getConfig: async () => ({ default_permission_mode: 'auto' }) }),
+      kimiWebServerDefaultPermissionMode: serverDefault,
+      selectedMode: mode,
+      isKimiWebPermissionMode: (value: unknown) => value === 'manual' || value === 'auto' || value === 'yolo',
+    });
+    expect(serverDefault.value).toBe('auto');
+    expect(mode.value).toBe('yolo');
+  });
+
   it('keeps permission in a scheduled Kimi draft after typing', () => {
     const writes: Array<{ agent: string }> = [];
     const program = ts.transpileModule(

@@ -81,7 +81,7 @@ export type KimiWebMessageBridgeOptions = {
     removeMessage(messageId: string): void;
   };
   readonly applySnapshot: (snapshot: KimiWebSnapshot) => void | Promise<void>;
-  readonly onSessionEvent?: (event: KimiWebSessionOp) => void;
+  readonly onSessionEvent?: (event: KimiWebSessionOp, context: KimiWebFrameContext) => void;
   readonly onSessionModeChange?: (
     sessionId: string,
     patch: KimiWebSessionModePatch,

@@ -109,6 +109,7 @@ export type KimiWebModel = {
 
 export type KimiWebConfig = {
   default_model?: string;
+  default_permission_mode?: 'manual' | 'yolo' | 'auto';
   experimental?: Record<string, boolean>;
   secondary_model?: {
     default_model?: string;
@@ -123,10 +124,10 @@ export type KimiWebConfig = {
 export type KimiWebTranscriptFrame =
   | { kind: 'text'; role: 'user' | 'assistant'; text: string; frameId: string }
   | { kind: 'thinking'; text: string; frameId: string }
-  | { kind: 'tool'; name: string; state: string; input?: unknown; output?: unknown; error?: string; frameId: string }
+  | { kind: 'tool'; name: string; state: string; input?: unknown; output?: unknown; error?: string; frameId: string; toolCallId?: string }
   | { kind: 'notice'; message: string; level: string; frameId: string };
 export type KimiWebTranscriptTurn = {
-  kind: 'turn'; turnId: string; ordinal: number; state: string; prompt?: string; error?: string;
+  kind: 'turn'; turnId: string; ordinal: number; state: string; prompt?: string; error?: string; startedAt?: string; endedAt?: string;
   steps: Array<{ stepId: string; frames: KimiWebTranscriptFrame[] }>;
 };
 export type KimiWebAgentTranscript = {

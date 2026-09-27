@@ -138,7 +138,7 @@ describe('useCodexApi', () => {
     expect(api.activeTurn.value).toBeNull();
   });
 
-  it('retains green idle only for participating threads across page reload and isolates connections', async () => {
+  it('keeps idle only for activity observed in this login and resets on reconnect', async () => {
     const mock = createAdapterMock();
     mock.adapter.listThreads = vi.fn().mockResolvedValue({
       data: [
@@ -167,7 +167,7 @@ describe('useCodexApi', () => {
     await restored.connect('ws://localhost:9001/codex');
     expect(
       useCodexWorkspace(restored).project.value.sandboxes['/'].sessions['thr_existing'].status,
-    ).toBe('idle');
+    ).toBe('unknown');
     await restored.connect('ws://localhost:9002/codex');
     expect(
       useCodexWorkspace(restored).project.value.sandboxes['/'].sessions['thr_existing'].status,

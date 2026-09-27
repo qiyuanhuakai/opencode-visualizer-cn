@@ -13,8 +13,8 @@ import type {
   ToolPart,
   UserMessageInfo,
 } from '../../types/sse';
-import type { KimiWebContentPart, KimiWebMessage } from '../../utils/kimiWeb';
-import { resolveKimiWebToolName } from './wire';
+import type { KimiWebAgentTranscript, KimiWebContentPart, KimiWebMessage } from '../../utils/kimiWeb';
+import { kimiWebSubagentSessionId, resolveKimiWebToolName } from './wire';
 
 export type KimiWebHistoryEntry = {
   info: UserMessageInfo | AssistantMessageInfo;
@@ -55,6 +55,30 @@ function stringifyToolOutput(value: unknown): string {
   } catch {
     return '';
   }
+}
+
+type KimiWebChildResult = { agentId: string; label: string; summary: string };
+
+function taskChildResults(toolPart: ToolPart, output: string): KimiWebChildResult[] {
+  const items = Array.isArray(toolPart.state.input.items) ? toolPart.state.input.items : [];
+  if (output.includes('<agent_swarm_result>')) {
+    return [...output.matchAll(/<subagent\s+[^>]*\bagent_id="([A-Za-z0-9_-]+)"[^>]*>([\s\S]*?)<\/subagent>/gu)]
+      .map((match, index) => ({
+        agentId: match[1]!,
+        label: (match[0]!.match(/\bitem="([^"]*)"/u)?.[1] ||
+          (typeof items[index] === 'string' ? items[index] : '') || match[1]!)
+          .replace(/&(amp|lt|gt|quot|apos);/gu, (_, entity: string) =>
+            ({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" })[entity] ?? '').trim(),
+        summary: match[2]!.trim(),
+      }));
+  }
+  const agentIds = [...output.matchAll(/^agent_id:\s*([A-Za-z0-9_-]+)\s*$/gmu)]
+    .map((match) => match[1])
+    .filter((id): id is string => Boolean(id));
+  const description = toolPart.state.input.description;
+  const label = typeof description === 'string' && description.trim() ? description.trim() : 'Agent';
+  const summary = output.split('[summary]\n')[1]?.split('\n\nresume_hint:')[0]?.trim() || output.trim();
+  return agentIds.map((agentId) => ({ agentId, label, summary }));
 }
 
 function partBase(message: KimiWebMessage, id: string) {
@@ -173,13 +197,44 @@ function foldToolResults(
   message: KimiWebMessage,
   createdAt: number,
   toolParts: Map<string, ToolPart>,
-): void {
+  profile: KimiWebHistoryProfile,
+): KimiWebHistoryEntry[] {
+  const childHistory: KimiWebHistoryEntry[] = [];
   for (const part of message.content) {
     if (part.type !== 'tool_result') continue;
     const toolPart = toolParts.get(part.tool_call_id);
     if (!toolPart) continue;
     const output = stringifyToolOutput(part.output);
     const time = { start: createdAt, end: createdAt };
+    if (toolPart.tool === 'task') {
+      const children = taskChildResults(toolPart, output);
+      const sessionIds = [...new Set(children.map(({ agentId }) => kimiWebSubagentSessionId(message.session_id, agentId)))];
+      if (sessionIds.length > 0) {
+        toolPart.metadata = {
+          ...toolPart.metadata,
+          sessionIds,
+          subagentLabels: Object.fromEntries(children.map(({ agentId, label }) =>
+            [kimiWebSubagentSessionId(message.session_id, agentId), label])),
+        };
+        for (const { agentId, label, summary } of children) {
+          const childId = kimiWebSubagentSessionId(message.session_id, agentId);
+          const userId = `${message.id}:${childId}:user`;
+          const assistantId = `${message.id}:${childId}:assistant`;
+          childHistory.push({
+            info: createUserInfo({ ...message, id: userId, session_id: childId }, createdAt, profile),
+            parts: [{ id: `${userId}:text`, sessionID: childId, messageID: userId, type: 'text', text: label }],
+          });
+          childHistory.push({
+            info: {
+              ...createAssistantInfo({ ...message, id: assistantId, session_id: childId }, createdAt, userId, profile),
+              time: { created: createdAt, completed: createdAt },
+              agent: 'subagent',
+            },
+            parts: [{ id: `${assistantId}:text`, sessionID: childId, messageID: assistantId, type: 'text', text: summary }],
+          });
+        }
+      }
+    }
     if (part.is_error === true) {
       toolPart.state = {
         status: 'error',
@@ -199,6 +254,7 @@ function foldToolResults(
       };
     }
   }
+  return childHistory;
 }
 
 function userParts(message: KimiWebMessage, createdAt: number): MessagePart[] {
@@ -239,7 +295,45 @@ export function kimiWebMessagesToHistoryEntries(messages: KimiWebMessage[], prof
       });
       return;
     }
-    if (message.role === 'tool') foldToolResults(message, createdAt, toolParts);
+    if (message.role === 'tool') entries.push(...foldToolResults(message, createdAt, toolParts, profile));
   });
   return entries;
+}
+
+export function kimiWebTranscriptToHistoryEntries(
+  childSessionId: string,
+  transcript: KimiWebAgentTranscript,
+): KimiWebHistoryEntry[] {
+  return transcript.items.flatMap((item, index): KimiWebHistoryEntry[] => {
+    if (item.kind !== 'turn') return [];
+    const messageId = `${childSessionId}:transcript:${item.turnId}`;
+    const createdAt = parseCreatedAt(item.startedAt, index);
+    const message: KimiWebMessage = { id: messageId, session_id: childSessionId, role: 'assistant', content: [] };
+    const info = createAssistantInfo(message, createdAt, messageId, {});
+    info.agent = 'subagent';
+    if (item.endedAt) info.time.completed = parseCreatedAt(item.endedAt, createdAt);
+    const parts: MessagePart[] = [];
+    for (const step of item.steps) {
+      for (const frame of step.frames) {
+        const base = partBase(message, `${messageId}:${frame.frameId}`);
+        if (frame.kind === 'thinking') {
+          parts.push({ ...base, type: 'reasoning', text: frame.text, time: { start: createdAt, end: info.time.completed } });
+        } else if (frame.kind === 'text' && frame.role === 'assistant') {
+          parts.push({ ...base, type: 'text', text: frame.text, time: { start: createdAt, end: info.time.completed } });
+        } else if (frame.kind === 'tool') {
+          const input = isRecord(frame.input) ? frame.input : {};
+          const output = stringifyToolOutput(frame.output);
+          const time = { start: createdAt, end: info.time.completed ?? createdAt };
+          const state: ToolPart['state'] = frame.error
+            ? { status: 'error', input, error: frame.error, time }
+            : frame.state === 'done' || frame.state === 'completed'
+              ? { status: 'completed', input, output, title: frame.name, metadata: { source: 'kimi-web' }, time }
+              : { status: 'running', input, title: frame.name, metadata: { output }, time };
+          parts.push({ ...base, type: 'tool', callID: frame.toolCallId || frame.frameId,
+            tool: resolveKimiWebToolName(frame.name), state, metadata: { source: 'kimi-web' } });
+        }
+      }
+    }
+    return [{ info, parts }];
+  });
 }

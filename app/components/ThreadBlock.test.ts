@@ -5,7 +5,7 @@ import { createI18n } from 'vue-i18n';
 import ThreadBlock from './ThreadBlock.vue';
 import { useMessages } from '../composables/useMessages';
 import type { MessageInfo } from '../types/sse';
-import { makeAssistantMessage, makeTextPart, makeUserMessage } from './historyTestBuilders';
+import { makeAssistantMessage, makeTextPart, makeToolPart, makeUserMessage } from './historyTestBuilders';
 import { normalizeCodexTurnsToHistory } from '../backends/codex/normalize';
 
 const workerState = vi.hoisted(() => {
@@ -67,6 +67,9 @@ function mount(
     loadMessageDiffs?: () => Promise<[]>;
     hasMessageDiffs?: () => Promise<boolean>;
     kimiTurnPermissionForUser?: (sessionId: string, userMessageId: string) => string | undefined;
+    kimiCurrentPermissionMode?: string;
+    kimiDefaultPermissionMode?: string;
+    kimiDefaultPermissionColor?: string;
     onCardNotice?: (message: string) => void;
   },
   onShowThreadHistory: (payload: { entries: unknown[] }) => void,
@@ -92,6 +95,9 @@ function mount(
             loadMessageDiffs: props.loadMessageDiffs,
             hasMessageDiffs: props.hasMessageDiffs,
             kimiTurnPermissionForUser: props.kimiTurnPermissionForUser,
+            kimiCurrentPermissionMode: props.kimiCurrentPermissionMode,
+            kimiDefaultPermissionMode: props.kimiDefaultPermissionMode,
+            kimiDefaultPermissionColor: props.kimiDefaultPermissionColor,
             onCardNotice: props.onCardNotice,
             onShowThreadHistory,
           });
@@ -106,6 +112,28 @@ function mount(
 }
 
 describe('ThreadBlock history wiring', () => {
+  it('shows the current Kimi permission on the latest externally submitted turn', async () => {
+    const user = makeUserMessage('main', 'u-kimi-permission', 1);
+    const mounted = mount({
+      root: user, currentSessionId: 'main', backendKind: 'kimi-web', isLatestRoot: true,
+      kimiCurrentPermissionMode: 'manual', kimiTurnPermissionForUser: () => undefined,
+    }, () => undefined);
+    await flushRender();
+    expect(mounted.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('manual');
+    unmount(mounted.app);
+  });
+  it('shows a Kimi subagent card while its parent task is running', async () => {
+    const user = makeUserMessage('main', 'u-kimi-child', 1);
+    const assistant = makeAssistantMessage('main', 'a-kimi-child', user.id, 2);
+    const task = makeToolPart(assistant.id, 'main', 'task');
+    task.state = { status: 'pending', input: { description: 'Inspect files' }, raw: '' };
+    task.metadata = { source: 'kimi-web', sessionIds: ['main:agent-0:0'], subagentLabels: { 'main:agent-0:0': 'Inspect files' } };
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [task] }]);
+    const view = mount({ root: user, currentSessionId: 'main', backendKind: 'kimi-web' }, vi.fn());
+    await flushRender();
+    expect(view.root.querySelectorAll('.ib-subagent-row')).toHaveLength(1);
+    expect(view.root.querySelector('.ib-subagent-row')?.textContent).toContain('Inspect files');
+  });
   it.each([
     { kind: 'tool', item: { id: 'tool', type: 'commandExecution', command: 'ls', status: 'completed', aggregatedOutput: 'files' } },
     { kind: 'reasoning', item: { id: 'reasoning', type: 'reasoning', summary: ['Inspecting the repository'] } },
@@ -276,9 +304,13 @@ describe('ThreadBlock history wiring', () => {
     const assistant = { ...makeAssistantMessage('main', 'a1', 'u1', 2), mode: 'manual' } as MessageInfo;
     useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
     const perTurn = vi.fn(() => 'yolo');
-    const view = mount({ root: user, backendKind: 'kimi-web', kimiTurnPermissionForUser: perTurn }, vi.fn());
+    const view = mount({
+      root: user, backendKind: 'kimi-web', kimiTurnPermissionForUser: perTurn,
+      kimiDefaultPermissionMode: 'manual', kimiDefaultPermissionColor: '#5c9cf5',
+    }, vi.fn());
     await flushRender();
     expect(view.root.querySelector('.ib-target-agent')?.textContent?.trim()).toBe('yolo');
+    expect(view.root.querySelector<HTMLElement>('.ib-target-agent')?.getAttribute('style')).toBeNull();
     expect(perTurn).toHaveBeenCalledWith('main', 'u1');
   });
 
@@ -289,6 +321,22 @@ describe('ThreadBlock history wiring', () => {
     const view = mount({ root: user, backendKind: 'kimi-web', kimiTurnPermissionForUser: () => undefined }, vi.fn());
     await flushRender();
     expect(view.root.querySelector('.ib-target-agent')).toBeNull();
+  });
+
+  it('shows the Kimi default in blue for a historical turn with no recorded permission', async () => {
+    const user = makeUserMessage('main', 'u1', 1);
+    const assistant = { ...makeAssistantMessage('main', 'a1', 'u1', 2), mode: '' } as MessageInfo;
+    useMessages().loadHistory([{ info: user, parts: [] }, { info: assistant, parts: [makeTextPart('a1', 'main', 'Done')] }]);
+    const view = mount({
+      root: user, backendKind: 'kimi-web', isLatestRoot: false,
+      kimiDefaultPermissionMode: 'manual', kimiDefaultPermissionColor: '#5c9cf5', kimiCurrentPermissionMode: 'yolo',
+      kimiTurnPermissionForUser: () => undefined,
+    }, vi.fn());
+    await flushRender();
+    const agent = view.root.querySelector<HTMLElement>('.ib-target-agent');
+    expect(agent?.textContent?.trim()).toBe('manual');
+    expect(agent?.getAttribute('style')).toContain('#5c9cf5');
+    expect(view.root.querySelector<HTMLElement>('.thread-user')?.getAttribute('style')).toContain('#5c9cf599');
   });
 
   it('keeps the assistant card mounted when a later reply replaces the displayed answer', async () => {

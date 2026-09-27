@@ -161,5 +161,6 @@ describe(
       expect(region?.textContent).not.toContain(AGENT_UNSUPPORTED_COPY);
       expect(region?.textContent).not.toContain(LOADING_AGENTS_COPY);
     });
+
   },
 );
