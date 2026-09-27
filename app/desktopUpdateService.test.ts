@@ -260,17 +260,163 @@ describe('desktop update service', () => {
     });
   });
 
-  it('offers a newer release using only the reported connected bridge version', async () => {
+  it('offers a newer release from the connected version after verifying a native installation', async () => {
     const fixture = createFixture({ bridgeVersion: '1.0.0' });
 
     await fixture.service.check('bridge');
 
-    expect(fixture.runtime.getBridgeVersion).not.toHaveBeenCalled();
+    expect(fixture.runtime.getBridgeVersion).toHaveBeenCalledOnce();
     expect(fixture.service.getState().bridge).toMatchObject({
       currentVersion: '1.0.0',
       availableVersion: '1.2.3',
       phase: 'available',
     });
+  });
+
+  it('does not offer a native installer for a WSL bridge forwarded through localhost', async () => {
+    // Given: health reports a bridge through loopback, but no native bridge is installed.
+    const fixture = createFixture({ bridgeVersion: null, installedBridgeVersion: null });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'wsl-forwarded',
+      endpointLocality: 'local',
+      version: '0.8.5',
+    });
+
+    // When: the desktop updater checks the connected bridge.
+    await fixture.service.check('bridge');
+
+    // Then: it cannot offer, download, or open a native installer for the WSL process.
+    expect(fixture.runtime.getBridgeVersion).toHaveBeenCalledOnce();
+    expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: '0.8.5',
+      installKind: 'remote',
+      phase: 'unsupported',
+    });
+    await fixture.service.download('bridge');
+    await fixture.service.install('bridge');
+    expect(fixture.runtime.downloadAsset).not.toHaveBeenCalled();
+    expect(fixture.shell.openPath).not.toHaveBeenCalled();
+  });
+
+  it('offers a WSL terminal update for a uniquely identified local distro', async () => {
+    const fixture = createFixture({ platform: 'win32', bridgeVersion: null, installedBridgeVersion: null, wslDistro: 'Ubuntu' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'wsl-forwarded', endpointLocality: 'local', version: '0.8.5',
+    });
+
+    await fixture.service.check('bridge');
+
+    expect(fixture.service.getState().bridge).toMatchObject({
+      currentVersion: '0.8.5', installKind: 'wsl', wslDistro: 'Ubuntu', phase: 'available',
+      availableVersion: '1.2.3',
+    });
+    expect(fixture.runtime.downloadAsset).not.toHaveBeenCalled();
+    await fixture.service.install('bridge');
+    expect(fixture.runtime.findLocalWslBridge).toHaveBeenCalledTimes(2);
+    expect(fixture.runtime.openWslBridgeTerminal).toHaveBeenCalledWith('Ubuntu');
+    expect(fixture.shell.openPath).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge.phase).toBe('installer-opened');
+  });
+
+  it('checks WSL releases without automatically downloading a Windows package', async () => {
+    const fixture = createFixture({ platform: 'win32', bridgeVersion: null, installedBridgeVersion: null, wslDistro: 'Ubuntu' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'wsl-forwarded', endpointLocality: 'local', version: '0.8.5',
+    });
+
+    await fixture.service.configure({ autoCheckUpdates: true, autoDownloadUpdates: true });
+
+    expect(fixture.service.getState().bridge).toMatchObject({ installKind: 'wsl', phase: 'available' });
+    expect(fixture.runtime.downloadAsset).not.toHaveBeenCalled();
+  });
+
+  it('does not open a WSL terminal when the matching distro disappears before handoff', async () => {
+    const fixture = createFixture({ platform: 'win32', bridgeVersion: null, installedBridgeVersion: null, wslDistro: 'Ubuntu' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'wsl-forwarded', endpointLocality: 'local', version: '0.8.5',
+    });
+    await fixture.service.check('bridge');
+    fixture.runtime.findLocalWslBridge.mockResolvedValueOnce(null);
+
+    await fixture.service.install('bridge');
+
+    expect(fixture.runtime.openWslBridgeTerminal).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge).toMatchObject({ installKind: 'remote', phase: 'unsupported' });
+  });
+
+  it('does not redirect an approved WSL update to another distro', async () => {
+    const fixture = createFixture({ platform: 'win32', bridgeVersion: null, installedBridgeVersion: null, wslDistro: 'Ubuntu' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'wsl-forwarded', endpointLocality: 'local', version: '0.8.5',
+    });
+    await fixture.service.check('bridge');
+    fixture.runtime.findLocalWslBridge.mockResolvedValueOnce('Debian');
+
+    await fixture.service.install('bridge');
+
+    expect(fixture.runtime.openWslBridgeTerminal).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge).toMatchObject({
+      installKind: 'wsl', wslDistro: 'Debian', phase: 'idle',
+    });
+  });
+
+  it('does not guess between native Windows and WSL installations with the same version', async () => {
+    const fixture = createFixture({ platform: 'win32', bridgeVersion: null, installedBridgeVersion: '0.8.5', wslDistro: 'Ubuntu' });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'ambiguous-loopback', endpointLocality: 'local', version: '0.8.5',
+    });
+
+    await fixture.service.check('bridge');
+
+    expect(fixture.service.getState().bridge).toMatchObject({ installKind: 'remote', phase: 'unsupported' });
+    expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+  });
+
+  it('does not automatically fetch a native bridge update for a WSL-only bridge', async () => {
+    const fixture = createFixture({ bridgeVersion: null, installedBridgeVersion: null });
+    fixture.service.reportBridgeVersion({
+      connectionId: 'wsl-forwarded', endpointLocality: 'local', version: '0.8.5',
+    });
+
+    await fixture.service.configure({ autoCheckUpdates: true, autoDownloadUpdates: true });
+    await vi.waitFor(() => expect(fixture.service.getState().bridge.installKind).toBe('remote'));
+
+    expect(fixture.runtime.getLatestRelease).not.toHaveBeenCalled();
+    expect(fixture.runtime.downloadAsset).not.toHaveBeenCalled();
+  });
+
+  it('allows a bridge update after a native installation becomes available', async () => {
+    const fixture = createFixture({ bridgeVersion: null });
+    fixture.runtime.getBridgeVersion
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce('0.8.5');
+    fixture.service.reportBridgeVersion({
+      connectionId: 'local-connection', endpointLocality: 'local', version: '0.8.5',
+    });
+    await fixture.service.check('bridge');
+    expect(fixture.service.getState().bridge.installKind).toBe('remote');
+
+    await fixture.service.check('bridge');
+
+    expect(fixture.service.getState().bridge).toMatchObject({
+      installKind: 'manual', phase: 'available', currentVersion: '0.8.5',
+    });
+  });
+
+  it('does not open a downloaded native installer after the native bridge disappears', async () => {
+    const fixture = createFixture();
+    fixture.runtime.getBridgeVersion
+      .mockResolvedValueOnce('1.0.0')
+      .mockResolvedValueOnce(null);
+    await fixture.service.check('bridge');
+    await fixture.service.download('bridge');
+
+    await fixture.service.install('bridge');
+
+    expect(fixture.beforeInstall).toHaveBeenCalledOnce();
+    expect(fixture.shell.openPath).not.toHaveBeenCalled();
+    expect(fixture.service.getState().bridge.installKind).toBe('remote');
   });
 
   it.each(['remote', 'unknown'] as const)(
@@ -423,6 +569,9 @@ function createFixture(
     readonly packaged?: boolean;
     readonly automaticAppUpdates?: boolean;
     readonly bridgeVersion?: string | null;
+    readonly installedBridgeVersion?: string | null;
+    readonly platform?: 'linux' | 'win32';
+    readonly wslDistro?: string | null;
     readonly bridgeLinuxFormat?: 'deb' | 'rpm';
   } = {},
 ) {
@@ -437,13 +586,18 @@ function createFixture(
     quitAndInstall: vi.fn(),
   });
   const runtime = {
-    platform: 'linux' as const,
+    platform: options.platform ?? ('linux' as const),
     arch: 'x64' as const,
     automaticAppUpdates: options.automaticAppUpdates ?? true,
     automaticAppUpdateTarget: options.automaticAppUpdates === false ? null : ('appimage' as const),
     updater,
     getLatestRelease: vi.fn(async () => RELEASE),
-    getBridgeVersion: vi.fn(async () => '1.0.0'),
+    getBridgeVersion: vi.fn(async () =>
+      options.installedBridgeVersion === undefined
+        ? options.bridgeVersion ?? '1.0.0'
+        : options.installedBridgeVersion),
+    findLocalWslBridge: vi.fn(async () => options.wslDistro ?? null),
+    openWslBridgeTerminal: vi.fn(async (_distro: string) => undefined),
     resolveBridgeLinuxFormat: vi.fn(async () => options.bridgeLinuxFormat ?? 'deb'),
     downloadAppUpdate: vi.fn(async () => [] as string[]),
     downloadAsset: vi.fn(

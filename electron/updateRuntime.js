@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import electronUpdater from 'electron-updater';
 import { detectLinuxPackageFormat } from '../bridge/updatePlatform.js';
 import { bridgeVersionPaths } from './bridgeVersionPaths.js';
+import { findLocalWslBridge, openWslBridgeTerminal } from './updateWsl.js';
 import { automaticAppUpdateTarget, parseInstalledVersion } from './updatePolicy.js';
 import { createUpdateTransport, isAllowedUpdateUrl } from './updateTransport.js';
 
@@ -57,6 +58,17 @@ export function createUpdateRuntime() {
     getBridgeVersion: () => {
       assertActive();
       return getBridgeVersion(versionProbe.signal);
+    },
+    findLocalWslBridge: (version) => {
+      assertActive();
+      return process.platform === 'win32'
+        ? findLocalWslBridge(version, execFileAsync, versionProbe.signal)
+        : Promise.resolve(null);
+    },
+    openWslBridgeTerminal: (distro) => {
+      assertActive();
+      if (process.platform !== 'win32') throw new Error('WSL terminal updates require Windows');
+      return openWslBridgeTerminal(distro);
     },
     resolveBridgeLinuxFormat: () => {
       assertActive();

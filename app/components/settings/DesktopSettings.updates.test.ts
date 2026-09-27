@@ -254,6 +254,34 @@ describe('DesktopSettings updates', () => {
     ]);
   });
 
+  it('opens the WSL terminal directly for an available WSL bridge update', async () => {
+    const desktop = createDesktopApi(makeState({ bridge: {
+      phase: 'available', installKind: 'wsl', wslDistro: 'Ubuntu', availableVersion: '1.2.3',
+    } }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { desktop: desktop.api },
+    });
+    const { host } = await mountDesktopSettings();
+    await flushAsync();
+
+    const bridgeCard = cardFor(host, 'bridge');
+    expect(bridgeCard.querySelector('[data-testid="bridge-wsl-distro"]')?.textContent)
+      .toContain('Ubuntu');
+    expect(bridgeCard.textContent).toContain('Available: 1.2.3');
+    expect(cardButton(bridgeCard, en.updates.actions.download)).toBeUndefined();
+    const openTerminal = cardButton(bridgeCard, en.updates.actions.openWslTerminal);
+    expect(openTerminal).toBeDefined();
+    openTerminal!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(desktop.api.install).toHaveBeenCalledWith('bridge');
+
+    desktop.emit(makeState({ bridge: {
+      phase: 'installer-opened', installKind: 'wsl', wslDistro: 'Ubuntu', availableVersion: '1.2.3',
+    } }));
+    await flushAsync();
+    expect(cardFor(host, 'bridge').textContent).toContain(en.updates.wslTerminalOpenedNotice);
+  });
+
   it('renders download progress from state events and disables actions while busy', async () => {
     // Given: mounted settings that receive a downloading progress event.
     const desktop = createDesktopApi(makeState());

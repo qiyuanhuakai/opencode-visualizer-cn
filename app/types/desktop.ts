@@ -29,8 +29,9 @@ export interface DesktopUpdateState {
     | 'unsupported';
   readonly progress: number | null;
   readonly error: string | null;
-  readonly installKind: 'automatic' | 'manual' | 'remote' | 'unsupported';
+  readonly installKind: 'automatic' | 'manual' | 'wsl' | 'remote' | 'unsupported';
   readonly assetName: string | null;
+  readonly wslDistro?: string | null;
 }
 
 export interface DesktopState {
