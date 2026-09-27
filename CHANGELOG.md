@@ -3,6 +3,16 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [Unreleased]
+### vis_bridge 配置与 WSL 更新
+
+- [x] 为 `vis_bridge` 增加 `nativeServices` 配置，可分别关闭 OpenCode、Codex 和 Kimi Web 的自动探测与进程托管；旧配置保持默认启用。新增 `vis_bridge config`，使用 `$EDITOR` 打开当前配置文件，支持自定义配置路径。
+- [x] 修复 Windows 对经本机端口转发的 WSL bridge 误用原生安装包的问题；唯一匹配本机 WSL 发行版时，在设置中提供打开 WSL 终端的更新入口（[#148](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/148)）。
+
+### README 与后端介绍
+
+- [x] 重排中英文 README 为功能介绍、安装方式、开发流程；直接说明 vis_bridge 与 Vis Electron 的安装使用方式，补充 Kimi Web 后端与 bridge 配置说明，并将 Codex 集成标为正式发布、Kimi Web 集成标为 Beta。
+
 ## [v0.8.5 released]
 ### Kimi Web、Codex 会话与文件引用
 
