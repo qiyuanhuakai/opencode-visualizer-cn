@@ -3,6 +3,14 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [Unreleased]
+### Kimi Web、Codex 会话与文件引用
+
+- [x] 修正 Kimi Web 与 Codex 会话状态：本次连接中尚未运行的会话保持 Unknown，发送消息后显示 Busy，结束后恢复 Idle；底部状态继续显示 Idle，并按活跃子代理数量显示思考标识。
+- [x] 恢复 Kimi Web 历史卡片的权限模式标识；缺少本机记录时使用服务端默认权限模式及深蓝色回退。补齐子代理卡片、Swarm 结果与子代理历史中的思考和工具内容，并支持相应悬浮窗。
+- [x] 统一 ACP、Kimi Web 与 Codex 的 `@` 文件引用：默认列出当前目录，Tab 进入文件夹、Tab 或 Enter 选择文件；使用文件树图标，按名称排序并将隐藏文件放到最后，移除候选数量截断。
+- [x] 子代理历史窗口按需加载，使生产入口脚本保持在冻结的构建体积上限内；补充相关回归测试（[#147](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/147)）。
+
 ## [v0.8.3 released]
 ### Codex 历史分组与 Electron SQLite 存储
 
