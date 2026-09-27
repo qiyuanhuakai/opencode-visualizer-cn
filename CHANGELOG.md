@@ -3,7 +3,7 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [Unreleased]
+## [v0.8.6 released]
 ### vis_bridge 配置与 WSL 更新
 
 - [x] 为 `vis_bridge` 增加 `nativeServices` 配置，可分别关闭 OpenCode、Codex 和 Kimi Web 的自动探测与进程托管；旧配置保持默认启用。新增 `vis_bridge config`，使用 `$EDITOR` 打开当前配置文件，支持自定义配置路径。
