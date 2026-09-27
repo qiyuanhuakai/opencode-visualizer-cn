@@ -32,6 +32,7 @@ export interface DesktopSettingsMessages {
     installKind: {
       automatic: string;
       manual: string;
+      wsl: string;
       remote: string;
       unsupported: string;
     };
@@ -43,6 +44,7 @@ export interface DesktopSettingsMessages {
       downloaded: string;
       installing: string;
       installerOpened: string;
+      wslTerminalOpened: string;
       upToDate: string;
       error: string;
       unsupported: string;
@@ -54,11 +56,14 @@ export interface DesktopSettingsMessages {
       downloading: string;
       installRestart: string;
       openInstaller: string;
+      openWslTerminal: string;
       installing: string;
       retry: string;
     };
     progressLabel: string;
     manualInstallerOpenedNotice: string;
+    wslTerminalOpenedNotice: string;
+    wslBridgeNotice: string;
     bridgeInterruptNotice: string;
     remoteUpdateUnavailableNotice: string;
     unsupportedNotice: string;
@@ -107,6 +112,7 @@ const en: DesktopSettingsMessages = {
     installKind: {
       automatic: 'Automatic',
       manual: 'Manual',
+      wsl: 'WSL',
       remote: 'Remote',
       unsupported: 'Unsupported',
     },
@@ -118,6 +124,7 @@ const en: DesktopSettingsMessages = {
       downloaded: 'Ready to install',
       installing: 'Installing...',
       installerOpened: 'Installer opened',
+      wslTerminalOpened: 'WSL terminal opened',
       upToDate: 'Up to date',
       error: 'Error',
       unsupported: 'Not supported',
@@ -129,12 +136,15 @@ const en: DesktopSettingsMessages = {
       downloading: 'Downloading...',
       installRestart: 'Install & Restart',
       openInstaller: 'Open Installer',
+      openWslTerminal: 'Open WSL Terminal',
       installing: 'Installing...',
       retry: 'Retry',
     },
     progressLabel: 'Download progress',
     manualInstallerOpenedNotice:
       'The installer has opened. The update is not installed yet; complete the steps in the installer window.',
+    wslTerminalOpenedNotice: 'The WSL terminal is open. Confirm and complete the update there.',
+    wslBridgeNotice: 'Bridge installed in this PC’s WSL distribution: {distro}.',
     bridgeInterruptNotice:
       'Installing the bridge update restarts the local vis_bridge daemon; active Codex and ACP connections are briefly interrupted.',
     remoteUpdateUnavailableNotice:
@@ -203,6 +213,7 @@ const zhCN: DesktopSettingsMessages = {
     installKind: {
       automatic: '自动',
       manual: '手动',
+      wsl: 'WSL',
       remote: '远程',
       unsupported: '不支持',
     },
@@ -214,6 +225,7 @@ const zhCN: DesktopSettingsMessages = {
       downloaded: '待安装',
       installing: '正在安装...',
       installerOpened: '安装程序已打开',
+      wslTerminalOpened: 'WSL 终端已打开',
       upToDate: '已是最新',
       error: '错误',
       unsupported: '不支持',
@@ -225,12 +237,15 @@ const zhCN: DesktopSettingsMessages = {
       downloading: '正在下载...',
       installRestart: '安装并重启',
       openInstaller: '打开安装程序',
+      openWslTerminal: '打开 WSL 终端',
       installing: '正在安装...',
       retry: '重试',
     },
     progressLabel: '下载进度',
     manualInstallerOpenedNotice:
       '安装程序已打开。更新尚未安装；请在安装程序窗口中完成剩余步骤。',
+    wslTerminalOpenedNotice: 'WSL 终端已打开，请在终端中确认并完成更新。',
+    wslBridgeNotice: '桥接器位于本机 WSL 发行版：{distro}。',
     bridgeInterruptNotice:
       '安装 Bridge 更新会重启本地 vis_bridge 守护进程，进行中的 Codex 与 ACP 连接会被短暂中断。',
     remoteUpdateUnavailableNotice:
@@ -299,6 +314,7 @@ const zhTW: DesktopSettingsMessages = {
     installKind: {
       automatic: '自動',
       manual: '手動',
+      wsl: 'WSL',
       remote: '遠端',
       unsupported: '不支援',
     },
@@ -310,6 +326,7 @@ const zhTW: DesktopSettingsMessages = {
       downloaded: '待安裝',
       installing: '正在安裝...',
       installerOpened: '安裝程式已開啟',
+      wslTerminalOpened: 'WSL 終端已開啟',
       upToDate: '已是最新',
       error: '錯誤',
       unsupported: '不支援',
@@ -321,12 +338,15 @@ const zhTW: DesktopSettingsMessages = {
       downloading: '正在下載...',
       installRestart: '安裝並重新啟動',
       openInstaller: '開啟安裝程式',
+      openWslTerminal: '開啟 WSL 終端',
       installing: '正在安裝...',
       retry: '重試',
     },
     progressLabel: '下載進度',
     manualInstallerOpenedNotice:
       '安裝程式已開啟。更新尚未安裝；請在安裝程式視窗中完成剩餘步驟。',
+    wslTerminalOpenedNotice: 'WSL 終端已開啟，請在終端確認並完成更新。',
+    wslBridgeNotice: '橋接器位於本機 WSL 發行版：{distro}。',
     bridgeInterruptNotice:
       '安裝橋接器更新會重新啟動本機 vis_bridge 守護行程，進行中的 Codex 與 ACP 連線會短暫中斷。',
     remoteUpdateUnavailableNotice: '此橋接器在遠端主機上執行，請在執行它的主機上更新 vis_bridge。',
@@ -394,6 +414,7 @@ const ja: DesktopSettingsMessages = {
     installKind: {
       automatic: '自動',
       manual: '手動',
+      wsl: 'WSL',
       remote: 'リモート',
       unsupported: '非対応',
     },
@@ -405,6 +426,7 @@ const ja: DesktopSettingsMessages = {
       downloaded: 'インストール可能',
       installing: 'インストール中...',
       installerOpened: 'インストーラーを開きました',
+      wslTerminalOpened: 'WSL ターミナルを開きました',
       upToDate: '最新です',
       error: 'エラー',
       unsupported: '非対応',
@@ -416,12 +438,15 @@ const ja: DesktopSettingsMessages = {
       downloading: 'ダウンロード中...',
       installRestart: 'インストールして再起動',
       openInstaller: 'インストーラーを開く',
+      openWslTerminal: 'WSL ターミナルを開く',
       installing: 'インストール中...',
       retry: '再試行',
     },
     progressLabel: 'ダウンロード進捗',
     manualInstallerOpenedNotice:
       'インストーラーが開きました。更新はまだインストールされていません。インストーラーウィンドウで手順を完了してください。',
+    wslTerminalOpenedNotice: 'WSL ターミナルを開きました。そこで更新を確認して完了してください。',
+    wslBridgeNotice: 'ブリッジはこの PC の WSL ディストリビューション {distro} にあります。',
     bridgeInterruptNotice:
       'ブリッジの更新をインストールするとローカルの vis_bridge デーモンが再起動し、実行中の Codex および ACP 接続が一時的に中断されます。',
     remoteUpdateUnavailableNotice:
@@ -491,6 +516,7 @@ const eo: DesktopSettingsMessages = {
     installKind: {
       automatic: 'Aŭtomata',
       manual: 'Mana',
+      wsl: 'WSL',
       remote: 'Fora',
       unsupported: 'Nesubtenata',
     },
@@ -502,6 +528,7 @@ const eo: DesktopSettingsMessages = {
       downloaded: 'Preta por instalado',
       installing: 'Instalas...',
       installerOpened: 'Instalilo malfermita',
+      wslTerminalOpened: 'WSL-terminalo malfermita',
       upToDate: 'Ĝisdata',
       error: 'Eraro',
       unsupported: 'Nesubtenata',
@@ -513,12 +540,15 @@ const eo: DesktopSettingsMessages = {
       downloading: 'Elŝutas...',
       installRestart: 'Instali kaj relanĉi',
       openInstaller: 'Malfermi instalilon',
+      openWslTerminal: 'Malfermi WSL-terminalon',
       installing: 'Instalas...',
       retry: 'Reprovi',
     },
     progressLabel: 'Elŝuta progreso',
     manualInstallerOpenedNotice:
       'La instalilo malfermiĝis. La ĝisdatigo ankoraŭ ne estas instalita; finu la paŝojn en la instalila fenestro.',
+    wslTerminalOpenedNotice: 'La WSL-terminalo malfermiĝis. Konfirmu kaj finu la ĝisdatigon tie.',
+    wslBridgeNotice: 'La ponto troviĝas en la loka WSL-distribuo: {distro}.',
     bridgeInterruptNotice:
       'Instalado de la ponta ĝisdatigo relanĉas la lokan vis_bridge-daemonon; aktivaj Codex- kaj ACP-konektoj estas mallonge interrompitaj.',
     remoteUpdateUnavailableNotice:

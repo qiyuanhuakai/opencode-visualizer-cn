@@ -10,7 +10,13 @@ export async function settingsScenario(initialPage: 'fonts' | 'desktop' | 'edito
       setup() {
         const open = ref(false);
         queueMicrotask(() => (open.value = true));
-        return () => h(SettingsModal, { open: open.value, initialPage });
+        return () => h(SettingsModal, {
+          open: open.value,
+          initialPage,
+          ...(new URLSearchParams(location.search).get('bridge') === 'wsl'
+            ? { connectedBridgeState: { status: 'ready', version: '0.7.17' } }
+            : {}),
+        });
       },
     }),
   );

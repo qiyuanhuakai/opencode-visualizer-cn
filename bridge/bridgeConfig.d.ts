@@ -9,6 +9,7 @@ export type AcpAgentConfig = {
 
 export type BridgeConfig = {
   version: 1;
+  nativeServices?: { opencode: boolean; codex: boolean; 'kimi-web': boolean };
   acpAgents: AcpAgentConfig[];
 };
 

@@ -8,6 +8,7 @@ export const scenario = new URLSearchParams(location.search).get('scenario') ?? 
 export const fixtureApi: FixtureApi = { ready: false, scenario };
 
 function makeDesktopState(): DesktopState {
+  const wslBridge = new URLSearchParams(location.search).get('bridge') === 'wsl';
   return {
     preferences: {
       locale: 'en',
@@ -34,12 +35,13 @@ function makeDesktopState(): DesktopState {
       bridge: {
         component: 'bridge',
         currentVersion: '0.7.17',
-        availableVersion: null,
-        phase: 'idle',
+        availableVersion: wslBridge ? '0.8.0' : null,
+        phase: wslBridge ? 'available' : 'idle',
         progress: null,
         error: null,
-        installKind: 'manual',
+        installKind: wslBridge ? 'wsl' : 'manual',
         assetName: null,
+        wslDistro: wslBridge ? 'Ubuntu' : null,
       },
     },
   };

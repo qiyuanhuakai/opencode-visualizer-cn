@@ -31,6 +31,20 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 describe('useAcpBridge', () => {
+  it('shows a disabled native service returned by bridge status', async () => {
+    const disabledOpenCode = { ...adoptedOpenCode, state: 'disabled' };
+    const api = useAcpBridge({
+      fetcher: vi.fn().mockResolvedValue(jsonResponse({
+        services: [disabledOpenCode], acpAgents: [],
+      })),
+      bridgeUrl: 'ws://localhost:23004',
+    });
+
+    await api.refresh();
+
+    expect(api.services.value).toEqual([disabledOpenCode]);
+    expect(api.bridgeAvailable.value).toBe(true);
+  });
   it('loads typed ACP status from the configured bridge with auth', async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse(supervisorStatus));
     const api = useAcpBridge({

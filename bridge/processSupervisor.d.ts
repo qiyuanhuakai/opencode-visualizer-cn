@@ -14,14 +14,14 @@ export type ProcessStatus = {
   kind: 'native';
   command: string;
   args: string[];
-  state: 'stopped' | 'starting' | 'running' | 'adopted' | 'stopping' | 'error';
+  state: 'stopped' | 'disabled' | 'starting' | 'running' | 'adopted' | 'stopping' | 'error';
   owned: boolean;
   pid?: number;
   error?: string;
 };
 
 export type ProcessSupervisor = {
-  start(): Promise<ProcessStatus[]>;
+  start(enabledServices?: { opencode: boolean; codex: boolean; 'kimi-web': boolean }): Promise<ProcessStatus[]>;
   stop(): Promise<void>;
   getStatus(): ProcessStatus[];
 };

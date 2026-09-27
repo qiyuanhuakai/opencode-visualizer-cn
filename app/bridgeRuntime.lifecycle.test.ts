@@ -11,6 +11,28 @@ const agent = {
 };
 
 describe('bridge runtime lifecycle', () => {
+  it('passes saved native service choices to the supervisor at startup', async () => {
+    const nativeServices = { opencode: false, codex: true, 'kimi-web': false };
+    const nativeStart = vi.fn(async () => []);
+    const runtime = createBridgeRuntime({
+      configStore: {
+        configPath: '/tmp/bridge-runtime-services.json',
+        load: vi.fn(async () => ({ version: 1 as const, nativeServices, acpAgents: [] })),
+        save: vi.fn(),
+        getConfig: vi.fn(),
+        upsertAgent: vi.fn(),
+        removeAgent: vi.fn(),
+      },
+      nativeSupervisor: { start: nativeStart, stop: vi.fn(), getStatus: vi.fn(() => []) },
+      acpManager: {
+        reconcile: vi.fn(), stopAll: vi.fn(), getStatus: vi.fn(() => []), attach: vi.fn(),
+      },
+    });
+
+    await runtime.start();
+    expect(nativeStart).toHaveBeenCalledWith(nativeServices);
+    await runtime.stop();
+  });
   it('closes mutation admission and drains accepted config work before stopping managers', async () => {
     let finishSave!: () => void;
     const saveGate = new Promise<void>((resolve) => {

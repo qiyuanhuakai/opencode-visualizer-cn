@@ -319,8 +319,15 @@ export function createProcessSupervisor(options = {}) {
     }
   }
 
-  async function start() {
-    await Promise.all(services.map(startService));
+  async function start(enabledServices = {}) {
+    await Promise.all(services.map((service) => {
+      if (enabledServices[service.id] !== false) return startService(service);
+      const status = statuses.get(service.id);
+      status.state = 'disabled';
+      status.owned = false;
+      delete status.error;
+      return undefined;
+    }));
     return getStatus();
   }
 
@@ -328,7 +335,7 @@ export function createProcessSupervisor(options = {}) {
     const child = children.get(service.id);
     const status = statuses.get(service.id);
     if (!child) {
-      if (status.state !== 'adopted') status.state = 'stopped';
+      if (status.state !== 'adopted' && status.state !== 'disabled') status.state = 'stopped';
       return;
     }
     status.state = 'stopping';

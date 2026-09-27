@@ -5,6 +5,7 @@ import { createBridgeUpdateSession } from './updateBridgeSession.js';
 import { attachUpdaterEvents } from './updateEvents.js';
 import { createManualUpdate } from './updateManual.js';
 import { createUpdateRuntime } from './updateRuntime.js';
+import { isNewerVersion } from './updatePolicy.js';
 import {
   errorMessage,
   initialState,
@@ -100,6 +101,27 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     });
   }
 
+  async function requireBridgeLocation(revision) {
+    const installedVersion = await runtime.getBridgeVersion();
+    if (!isUsable('bridge', revision)) return false;
+    const nativeMatch = installedVersion === state.bridge.currentVersion;
+    const distro = runtime.platform === 'win32'
+      ? await runtime.findLocalWslBridge(state.bridge.currentVersion)
+      : null;
+    if (!isUsable('bridge', revision)) return false;
+    if (nativeMatch && !distro) {
+      if (state.bridge.installKind !== 'manual') resetBridge(state.bridge.currentVersion, 'local');
+      return true;
+    }
+    if (distro && !nativeMatch) {
+      if (state.bridge.installKind !== 'wsl' || state.bridge.wslDistro !== distro)
+        resetBridge(state.bridge.currentVersion, 'wsl', distro);
+      return true;
+    }
+    if (state.bridge.installKind !== 'remote') resetBridge(state.bridge.currentVersion, 'remote');
+    return false;
+  }
+
   async function checkUnlocked(component, revision) {
     if (!isCurrent(component, revision)) return getState();
     if (state[component].installKind === 'unsupported') {
@@ -111,16 +133,32 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
       return getState();
     }
     if (component === 'bridge' && state.bridge.currentVersion === null) return getState();
+    if (component === 'bridge') {
+      try {
+        if (!(await requireBridgeLocation(revision))) return getState();
+      } catch (error) {
+        fail(component, error, revision);
+        return getState();
+      }
+    }
     publish(component, transition('checking'));
     let checkSucceeded = false;
     try {
       if (component === 'app' && automaticApp) await automaticAppCheck.check();
-      else await manualUpdate.check(component, state[component].currentVersion, revision);
+      else if (component === 'bridge' && state.bridge.installKind === 'wsl') {
+        const release = await runtime.getLatestRelease();
+        const available = isNewerVersion(release.version, state.bridge.currentVersion);
+        if (isUsable(component, revision)) publish(component, {
+          ...transition(available ? 'available' : 'up-to-date'),
+          availableVersion: available ? release.version : null,
+        });
+      } else await manualUpdate.check(component, state[component].currentVersion, revision);
       checkSucceeded = isCurrent(component, revision);
     } catch (error) {
       fail(component, error, revision);
     }
-    if (checkSucceeded && autoDownloadUpdates && state[component].phase === 'available') {
+    if (checkSucceeded && autoDownloadUpdates && state[component].phase === 'available' &&
+      state[component].installKind !== 'wsl') {
       await downloadUnlocked(component, revision);
     }
     return getState();
@@ -128,6 +166,7 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
 
   async function downloadUnlocked(component, revision) {
     if (!isCurrent(component, revision)) return getState();
+    if (component === 'bridge' && state.bridge.installKind !== 'manual') return getState();
     if (state[component].phase !== 'available') {
       fail(component, new Error(`No ${component} update is available to download`), revision);
       return getState();
@@ -150,6 +189,22 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
 
   async function installUnlocked(component, revision) {
     if (!isCurrent(component, revision)) return getState();
+    if (component === 'bridge' && state.bridge.installKind === 'wsl') {
+      if (state.bridge.phase !== 'available') return getState();
+      const distro = state.bridge.wslDistro;
+      try {
+        const approved = await beforeInstall(component, installAbortController.signal);
+        if (approved === false || disposed || !isCurrent(component, revision)) return getState();
+        if (!(await requireBridgeLocation(revision)) || state.bridge.installKind !== 'wsl' ||
+          state.bridge.wslDistro !== distro) return getState();
+        await runtime.openWslBridgeTerminal(distro);
+        if (isUsable(component, revision)) publish(component, { phase: 'installer-opened', error: null });
+      } catch (error) {
+        fail(component, error, revision);
+      }
+      return getState();
+    }
+    if (component === 'bridge' && state.bridge.installKind !== 'manual') return getState();
     if (state[component].phase !== 'downloaded') {
       fail(component, new Error(`No downloaded ${component} update is ready to install`), revision);
       return getState();
@@ -157,6 +212,7 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     try {
       const approved = await beforeInstall(component, installAbortController.signal);
       if (approved === false || disposed || !isCurrent(component, revision)) return getState();
+      if (component === 'bridge' && !(await requireBridgeLocation(revision))) return getState();
       publish(component, { phase: 'installing', error: null });
       if (component === 'app' && automaticApp) {
         await automaticUpdate.verifyDownload();
@@ -191,16 +247,19 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     return admit(component, () => installUnlocked(component, revision));
   };
 
-  function resetBridge(version, endpointLocality) {
+  function resetBridge(version, endpointLocality, wslDistro = null) {
     assets.delete('bridge');
     manualUpdate.retireDownload('bridge', bridgeSession.pending());
     const installKind =
       endpointLocality === 'remote'
         ? 'remote'
+        : endpointLocality === 'wsl'
+          ? 'wsl'
         : bridgeSupported && endpointLocality === 'local'
           ? 'manual'
           : 'unsupported';
     state.bridge = initialState('bridge', version, installKind);
+    state.bridge.wslDistro = wslDistro;
     onChange(getState());
   }
 
@@ -223,7 +282,8 @@ export function createDesktopUpdates({ app, shell, onChange, beforeInstall }, in
     }
     if (autoDownloadUpdates && (shouldCheck || shouldDownload)) {
       await Promise.allSettled(
-        COMPONENTS.filter((component) => state[component].phase === 'available').map(download),
+        COMPONENTS.filter((component) => state[component].phase === 'available' &&
+          state[component].installKind !== 'wsl').map(download),
       );
     }
     return getState();

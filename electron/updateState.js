@@ -43,6 +43,7 @@ export function initialState(component, currentVersion, installKind) {
     error: installKind === 'unsupported' ? unsupportedMessage(component) : null,
     installKind,
     assetName: null,
+    wslDistro: null,
   };
 }
 

@@ -4,7 +4,7 @@
       <span class="desktop-update-name">{{ t(`desktopSettings.updates.components.${state.component}`) }}</span>
       <span class="desktop-update-badges">
         <span class="desktop-badge" :class="{ 'is-error': state.phase === 'error', 'is-success': state.phase === 'up-to-date' }">
-          {{ t(`desktopSettings.updates.status.${statusKeys[state.phase]}`) }}
+          {{ t(`desktopSettings.updates.status.${state.phase === 'installer-opened' && state.installKind === 'wsl' ? 'wslTerminalOpened' : statusKeys[state.phase]}`) }}
         </span>
         <span class="desktop-badge">{{ t(`desktopSettings.updates.installKind.${state.installKind}`) }}</span>
       </span>
@@ -13,7 +13,7 @@
       <div class="desktop-update-versions">
         <span v-if="state.component === 'app'">{{ t('desktopSettings.updates.currentVersion', { version: state.currentVersion ?? t('desktopSettings.updates.unknownVersion') }) }}</span>
         <span v-if="state.component === 'bridge' && connectedBridgeText !== null" data-testid="bridge-connected-version">{{ connectedBridgeText }}</span>
-        <span v-if="state.availableVersion">{{ t(state.component === 'bridge' ? 'desktopSettings.updates.availableLocalVersion' : 'desktopSettings.updates.availableVersion', { version: state.availableVersion }) }}</span>
+        <span v-if="state.availableVersion">{{ t(state.component === 'bridge' && state.installKind === 'manual' ? 'desktopSettings.updates.availableLocalVersion' : 'desktopSettings.updates.availableVersion', { version: state.availableVersion }) }}</span>
       </div>
       <div v-if="state.phase !== 'unsupported'" class="desktop-update-actions">
         <button type="button" class="desktop-button" :disabled="busy" @click="$emit('check')">
@@ -28,7 +28,8 @@
       <span>{{ Math.round(state.progress) }}%</span>
     </div>
     <div v-if="errorText" class="desktop-error" role="alert">{{ errorText }}</div>
-    <div v-if="state.phase === 'installer-opened'" class="desktop-notice">{{ t('desktopSettings.updates.manualInstallerOpenedNotice') }}</div>
+    <div v-if="state.phase === 'installer-opened'" class="desktop-notice">{{ t(state.installKind === 'wsl' ? 'desktopSettings.updates.wslTerminalOpenedNotice' : 'desktopSettings.updates.manualInstallerOpenedNotice') }}</div>
+    <div v-if="state.installKind === 'wsl' && state.wslDistro" class="desktop-notice" data-testid="bridge-wsl-distro">{{ t('desktopSettings.updates.wslBridgeNotice', { distro: state.wslDistro }) }}</div>
     <div v-if="state.component === 'bridge' && interruptPhases.has(state.phase)" class="desktop-notice">{{ t('desktopSettings.updates.bridgeInterruptNotice') }}</div>
     <div
       v-if="state.installKind === 'remote'"
@@ -41,7 +42,10 @@
       {{ t('desktopSettings.updates.unsupportedNotice') }}
     </div>
     <div v-if="hasExtraActions" class="desktop-update-extra-actions">
-      <button v-if="state.phase === 'available'" type="button" class="desktop-button" :disabled="busy" @click="$emit('download')">
+      <button v-if="state.phase === 'available' && state.installKind === 'wsl'" type="button" class="desktop-button desktop-button-accent" :disabled="busy" @click="$emit('install')">
+        {{ t('desktopSettings.updates.actions.openWslTerminal') }}
+      </button>
+      <button v-else-if="state.phase === 'available'" type="button" class="desktop-button" :disabled="busy" @click="$emit('download')">
         {{ t('desktopSettings.updates.actions.download') }}
       </button>
       <button v-if="state.phase === 'downloaded'" type="button" class="desktop-button desktop-button-accent" :disabled="busy" @click="$emit('install')">
