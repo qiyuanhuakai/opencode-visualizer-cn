@@ -7,13 +7,20 @@
 <a name="中文"></a>
 ## 简介
 
-本项目是 [OpenCode](https://github.com/sst/opencode) 的一个第三方 Web UI，fork 自 [vis](https://github.com/xenodrive/vis)。由于上游仓库不接受 PR，我们将其作为独立项目持续维护，并进行了大量功能改进、性能优化和本地化支持。
+本项目是以 [OpenCode](https://github.com/sst/opencode) 为基础、现支持 OpenCode、Codex、ACP 与 Kimi Web 的第三方 Web UI，fork 自 [vis](https://github.com/xenodrive/vis)。由于上游仓库不接受 PR，我们将其作为独立项目持续维护，并进行了大量功能改进、性能优化和本地化支持。
 
 > **核心改进方向**：i18n 支持、字体与主题管理、会话批量操作与 Pin 功能、悬浮窗与 Dock 栏管理、性能优化、桌面应用打包。
 
+### TL;DR：安装桌面版
+
+1. 从 [GitHub Releases](https://github.com/qiyuanhuakai/opencode-visualizer-cn/releases) 下载并安装**两个包**：Vis Electron 桌面端（`Vis-…-Windows.exe` / `Vis-…-MacOS.dmg` / `Vis-…-Linux.deb` 或 `.AppImage`）和适用于后端所在系统的 `vis_bridge`（`VisBridge-…-Windows.exe` / `VisBridge-…-MacOS.pkg` / `VisBridge-…-Linux.deb` 或 `.rpm`）。使用安装包无需克隆仓库、安装 Node.js 或运行 `pnpm`。
+2. 安装并登录想使用的后端 CLI：OpenCode、Codex、Kimi Code（用于 Kimi Web）或 ACP Agent。只需安装你要使用的后端；bridge 会探测或启动可用服务。
+3. 在安装 `vis_bridge` 的系统终端运行 `vis_bridge start`。Windows 安装后先重新打开终端；如后端 CLI 位于 WSL，就在 WSL 中安装 Linux 版 bridge 并运行此命令，Windows 版 Vis Electron 可以连接该 bridge。
+4. 打开 Vis，选择后端并连接。默认地址：OpenCode 为 `http://localhost:4096`，Codex 为 `ws://localhost:23004/codex`，ACP 为 `ws://localhost:23004`，Kimi Web 为 `ws://localhost:23004/kimi-web/ws`。若 bridge 配置了 token，在登录页填写 Bridge token；bridge 不在当前系统时，改用实际可访问的主机地址。
+
 ---
 
-## 功能特性
+## 功能介绍
 
 ### 上游原始功能（由 [xenodrive/vis](https://github.com/xenodrive/vis) 提供）
 
@@ -44,40 +51,125 @@
 | **会话重命名** | 重命名 Session | ✅ 已上线 |
 | **悬浮窗管理** | 全面覆盖的关闭/最小化按钮，底部 Dock 栏存放最小化窗口 | ✅ 已上线 |
 | **悬浮窗预览自动换行** | 在设置中开启/关闭；超大文件使用可变行高虚拟滚动，换行时仍限制实际挂载行数 | ✅ 已上线 |
-| **快捷命令** | 支持 `@` 显式召唤代理、`$` 召唤技能 | ✅ 已上线 |
+| **快捷命令** | 支持 `@` 引用工作区文件、`$` 召唤技能 | ✅ 已上线 |
 | **代码片段 (Snippets)** | 自定义触发词（`\name` 或 `::name`、`;name` 等带标点前缀）与动态变量（`{date}`、`{time}`、`{datetime}`、`{uuid}`、`{clipboard}`、`{activeFile}`、`{cwd}`、`{selection}`、`{cursor}`）；标签筛选、启用开关、导入/导出；可从收藏一键创建；输入触发词后显式选择补全展开 | ✅ 已上线 |
-| **本地文件编辑** | 内置 CodeMirror 6 编辑器，在 Web 端编辑本地文件：三个后端均通过桥接 `/fs/writeFile` 写入（OpenCode 经已连接的 vis_bridge 并回读校验，Codex / ACP 经各自桥接工作区接口）；编辑器字号、缩进与键盘快捷键可自定义；桌面端可用本地应用打开临时副本并将每次保存同步回后端，带磁盘变更冲突保护 | ✅ 已上线 |
+| **本地文件编辑** | 内置 CodeMirror 6 编辑器，在 Web 端通过所选后端的文件接口编辑并回读校验；编辑器字号、缩进与键盘快捷键可自定义；桌面端可用本地应用打开临时副本并将每次保存同步回后端，带磁盘变更冲突保护 | ✅ 已上线 |
 | **文件树 Git 操作** | 基于 git status 的文件树，支持暂存区/变更/全部三种视图与 diff 统计；分支搜索、创建（输入新名称）、切换、合并、变基、删除本地分支；ahead/behind 徽标提供 push/pull，分支与上游操作菜单提供 fetch。切换分支与 fetch 直接执行，合并/变基/删除/push/pull 需确认；这些用户触发的分支操作在一次性 PTY（`/bin/sh -c`）中运行，成功后自动关闭并刷新文件树 | ✅ 已上线 |
 | **性能优化** | 超大 Session 懒加载、超多 Session 后台 Hydration、冷启动加速、输出面板连续批次加载、悬浮窗弹出性能优化 | ✅ 已上线 |
 | **桌面应用** | Electron 桌面端打包，支持 Windows / macOS / Linux；应用与 vis_bridge 的应用内更新检查与下载、系统托盘（最小化/关闭到托盘）、任务完成桌面通知与可选提示音 | ✅ 已上线 |
-| **Codex 集成 (Alpha)** | vis_bridge 轻量桥接器转发 Codex app-server JSON-RPC；Codex Panel 最小化悬浮窗面板，内置模型、技能、插件市场、MCP 服务器与本地文件管理；运行时检查器按方法探测 app-server 能力（支持/不支持/需开启实验开关）；设置中开启实验性功能 | 🅰️ Alpha |
+| **Codex Vis UI** | 正式发布的 Codex 后端：通过 vis_bridge 连接 Codex app-server，在 Vis 主界面使用会话、模型、文件树与 Git、权限请求、思考与工具调用、状态监控等功能；无需开启实验性功能 | ✅ 正式发布 |
 | **ACP Agent 集成 (Alpha)** | ACP v1 作为第三后端复用主会话界面；状态监控中管理 Pi、Oh My Pi、Kimi Code 等 ACP Agent | 🅰️ Alpha |
+| **Kimi Web 集成 (Beta)** | 第四个独立后端；通过 vis_bridge 连接 Kimi Code 的 Web 服务，复用会话、文件、审批、思考与子代理界面；详情见下文 | 🅱️ Beta |
 | **Forge 集成 (Beta)** | 基于 zsh PTY 的 Forge 悬浮终端；命令菜单、结构化会话侧栏、状态读取与刷新恢复 | 🅱️ Beta |
-| **Kimi Web 集成 (Alpha)** | kimi web 作为第四后端，REST 与 WS 经 vis_bridge 转发、kimi bearer 由 bridge 惰性注入（浏览器不直连上游）；复用主会话界面，覆盖建/选会话、流式文本与思考、历史（含注入消息过滤）、审批与提问、重命名/归档/恢复/删除/中止、steer、附件、Token 用量与状态监控；工具、推理、子代理三路悬浮窗自动弹出；能力探测通过前不暴露对应入口 | 🅰️ Alpha |
 
 > 📋 **详细变更日志**：请参阅 [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **路线图与计划**：请参阅 [RoadMap.md](./RoadMap.md)
 
 ---
 
-## 技术栈
+### Codex Vis UI
 
-| 层级 | 技术 | 说明 |
-|---|---|---|
-| **前端框架** | [Vue 3](https://vuejs.org/) + Composition API | 响应式 UI 框架 |
-| **构建工具** | [Vite](https://vitejs.dev/) | 极速开发与构建 |
-| **样式方案** | [Tailwind CSS v4](https://tailwindcss.com/) + PostCSS | 原子化 CSS |
-| **终端组件** | [xterm.js](https://xtermjs.org/) | 嵌入式终端模拟器 |
-| **代码高亮** | [Shiki](https://shiki.style/) | 语法高亮与 Markdown 渲染 |
-| **国际化** | [Vue I18n](https://vue-i18n.intlify.dev/) | 多语言支持 |
-| **后端服务** | [Hono](https://hono.dev/) + `@hono/node-server` | 轻量级 HTTP 服务 |
-| **桌面端** | [Electron](https://www.electronjs.org/) | 跨平台桌面应用打包 |
-| **代码规范** | [oxlint](https://oxc.rs/docs/guide/usage/linter.html) + oxfmt | 高性能 JS/TS 代码检查与格式化 |
-| **测试框架** | [Vitest](https://vitest.dev/) | 单元测试 |
+在登录页选择 **Codex** 并连接 `vis_bridge`，即可在 Vis 主界面管理 Codex 会话、选择模型、浏览文件与 Git 变更，并查看思考、工具调用和状态监控。权限请求也在主界面处理；这是正式发布的 Codex 使用入口，无需在设置中开启实验性功能。
+
+可选的 **Codex Panel** 悬浮面板仍为 Alpha：如需使用，可在“设置”→“实验性功能”中单独开启。
 
 ---
 
-## 环境要求
+### Kimi Web 后端
+
+Kimi Web 是独立于 ACP 中 Kimi Code Agent 的第四个后端，连接的是 **`@moonshot-ai/kimi-code` 提供的 `kimi web` 服务**，不适用于旧版 Python `kimi-cli` 的同名命令。它复用主界面的项目、会话、文件树与 Git 操作，并支持流式回答与思考、历史记录、权限请求、提问、附件、子代理、Token 状态和工具/思考/子代理悬浮窗。分支、压缩、撤销等入口按当前服务的实际能力探测显示。传输经 `vis_bridge` 转发，浏览器无需保存 Kimi Web 的 bearer token。协议与已验证范围见 [Kimi Web 说明](docs/kimi.md)。
+
+---
+
+### Forge Panel
+
+Forge Panel 是一个轻量级的 zsh PTY 悬浮窗口，直接运行本机 Forge CLI；实时输出始终由 xterm.js 原样渲染，不依赖终端文本识别。
+
+#### 前置条件
+
+确保已安装并配置 Forge，且 `forge` 命令可在登录 zsh 中使用。需要使用 `:` 快捷命令时，先运行 Forge 的 setup 流程：
+
+```bash
+forge setup
+```
+
+#### 使用 Forge Panel
+
+1. 进入 Vis 的“设置” → “实验性功能”，开启“Forge Panel 按钮”
+2. 顶栏管理模式按钮右侧会出现 Forge 按钮，点击后打开 zsh PTY 悬浮窗口
+3. 顶部菜单可执行配置、临时设置、工作区与对话操作；状态菜单提供 `:info`、`:tools`、`:skill` 与 `:workspace-info`
+4. 底部输入框可选择 Forge、Muse、Sage、Suggest 或 Commit Preview，并将提示词写入 PTY
+5. 右侧结构化栏使用 Forge CLI 读取状态、会话列表与预览；可执行 `:new`、`:clone`、`:conversation`、`:conversation-rename`、`:conversation-tree` 和 `:delete`
+
+侧栏可拖动调整宽度；向右拖过隐藏阈值后折叠，拖动隐藏滑杆向左可恢复。会话命令会随侧栏宽度在 6×1、3×2、2×3 布局间切换。Forge PTY 在页面刷新后会恢复为完整 Forge Panel，而不是普通终端。
+
+> ⚠️ **注意**：Forge Panel 目前为 Beta 状态。结构化读取依赖当前工作目录中的 Forge 数据；实时交互仍以 PTY 终端为准。
+
+---
+
+### 代码片段（Snippets）
+
+代码片段让你把常用提示词保存为可复用模板，在输入框中通过触发词展开。
+
+1. 进入 Vis 的"设置" → "片段"，确认"启用片段"已开启
+2. 新建片段：设置触发词、正文，可附加标签便于筛选；保存自动完成
+3. 触发词默认以 `\name` 形式展开；使用 `::name`、`;name` 等带标点的触发词可自定义前缀
+4. 正文中可使用动态变量：`{date}`、`{time}`、`{datetime}`、`{uuid}`、`{clipboard}`、`{activeFile}`、`{cwd}`、`{selection}`，以及 `{cursor}` 指定展开后的光标位置
+5. 在输入框中输入触发词，从补全列表选择对应片段或按 Enter 展开；Space 和 Tab 保持原有输入行为
+6. 收藏夹中的消息可通过"从收藏创建片段"直接转为代码片段；片段支持导出/导入 JSON 文件
+
+---
+
+### 功能展示
+
+#### 1. 主界面与简体中文支持
+
+<-- ![主界面](docs/screenshots/main-interface.png) -->
+
+#### 2. 字体管理
+
+<-- ![字体管理](docs/screenshots/font.png) -->
+<-- ![字体管理](docs/screenshots/font2.png) -->
+
+#### 3. 供应商与模型管理
+
+<-- ![提供商管理](docs/screenshots/providers2.png) -->
+<-- ![提供商管理](docs/screenshots/providers.png) -->
+<-- ![模型管理](docs/screenshots/models.png) -->
+
+#### 4. 状态监控
+
+<-- ![状态监控](docs/screenshots/status-monitor.png) -->
+
+#### 5. 主题设置
+
+<-- ![主题设置](docs/screenshots/theme-settings.png) -->
+
+#### 6. 代码行评论
+
+<-- ![代码行评论](docs/screenshots/code-comment.png) -->
+
+#### 7. Session Pin
+
+<-- ![Session Pin](docs/screenshots/session-tree.png) -->
+
+#### 8. 批量管理
+
+<-- ![批量管理](docs/screenshots/multi-manager.png) -->
+
+#### 9. 悬浮窗与 Dock 栏
+
+<-- ![Dock 栏](docs/screenshots/dock-bar.png) -->
+
+#### 10. 编辑器打开
+
+<-- ![编辑器打开](docs/screenshots/editor.png) -->
+
+---
+
+## 安装方式
+
+### 环境要求
 
 在开始前，请确保你的环境满足以下条件：
 
@@ -85,7 +177,8 @@
 |---|---|---|
 | [Node.js](https://nodejs.org/) | ≥ 24 且 < 25 | 运行时与构建环境 |
 | [pnpm](https://pnpm.io/) | 11.21.0 (推荐) | 包管理器，本项目使用 `packageManager` 锁定 |
-| [OpenCode Server](https://github.com/sst/opencode) | 最新版 | 后端服务，提供 API 与智能体能力 |
+| [OpenCode Server](https://github.com/sst/opencode) | 可选 | 使用 OpenCode 后端时需要 |
+| Kimi Code CLI（`@moonshot-ai/kimi-code`） | 可选 | 使用 Kimi Web 后端时需要，`kimi` 命令须在 bridge 所在主机的 PATH 中 |
 | ACP Agent CLI | 可选 | 如 `pi-acp`、`omp --mode acp`、`kimi acp`；在状态监控中按需启用 |
 | 系统 `$EDITOR` | 可选 | 用于"用编辑器打开"功能（如 VS Code、Neovim 等） |
 
@@ -93,7 +186,7 @@
 
 ---
 
-## 快速开始
+### Web 本地运行
 
 ```bash
 git clone https://github.com/qiyuanhuakai/opencode-visualizer-cn
@@ -124,11 +217,11 @@ opencode serve --cors https://<user>.github.io
 
 ---
 
-## vis_bridge 使用说明
+### vis_bridge 安装与使用
 
-vis_bridge 是本地进程监督器与协议桥接器：启动时探测并托管 OpenCode server、Codex app-server，并按配置启动 ACP Agent。Codex 使用原生 WebSocket JSON-RPC；ACP v1 Agent 使用 stdio JSON-RPC 到 WebSocket 的转发。
+vis_bridge 是本地进程监督器与协议桥接器：启动时探测并托管 OpenCode server、Codex app-server 与 Kimi Web，并按配置启动 ACP Agent。Codex 使用原生 WebSocket JSON-RPC；ACP v1 Agent 使用 stdio JSON-RPC 到 WebSocket 的转发。
 
-### 安装 Codex CLI
+#### Codex CLI（仅使用 Codex 后端时）
 
 确保已安装 OpenAI Codex CLI，并且 `codex` 命令在 PATH 中可用：
 
@@ -136,7 +229,7 @@ vis_bridge 是本地进程监督器与协议桥接器：启动时探测并托管
 codex --version
 ```
 
-### 启动 vis_bridge
+#### 启动 vis_bridge
 
 发布页只提供原生安装包，不直接发布 `vis_bridge` 单文件：
 
@@ -159,6 +252,25 @@ vis_bridge start
 vis_bridge stop
 vis_bridge restart
 ```
+
+用 `$EDITOR` 打开 bridge 正在使用的配置文件（首次运行会创建它）：
+
+```bash
+vis_bridge config
+vis_bridge config --config /path/to/bridge.json
+```
+
+若运行中的 bridge 使用了自定义配置路径，`vis_bridge config` 会打开该文件；`--config` 或 `VIS_BRIDGE_CONFIG` 可覆盖路径。否则默认路径为 `~/.config/vis/bridge.json`。配置根对象中的 `nativeServices` 控制 bridge 是否自动探测/启动 OpenCode、Codex 和 Kimi Web；将不需要的服务改为 `false`，保留现有 `acpAgents`，保存后运行 `vis_bridge restart` 生效：
+
+```text
+"nativeServices": {
+  "opencode": true,
+  "codex": true,
+  "kimi-web": false
+}
+```
+
+旧配置若缺少 `nativeServices`，三个服务仍默认启用。此开关只控制 bridge 的进程托管，不会关闭已由其他程序启动的服务或阻止直接连接。
 
 在 bridge 所在主机的外部终端中手动更新：
 
@@ -185,105 +297,35 @@ pnpm bridge:build
 ./dist-bridge/vis_bridge start
 ```
 
-vis_bridge 会自动探测或启动默认的 OpenCode 与 Codex 服务。ACP Agent 中 Kimi Code、Oh My Pi 与 Pi 默认启用，其余可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。监听非环回地址时必须配置 bridge token，以保护 PTY、文件、命令、状态、ACP 与 Codex 转发接口。守护进程的状态和日志保存在当前用户目录中（Linux：`~/.local/state/vis/bridge`，macOS：`~/Library/Application Support/vis/bridge`，Windows：`%LOCALAPPDATA%\vis\bridge`）。直接通过 `--bridge-token` 或 `--upstream-token` 传入的密钥不会写入守护进程状态或长期保留在守护进程参数中；需要无参数 `restart` 时请改用环境变量或 token 文件。`--target` 必须是不带用户名、密码、查询参数或片段的 `ws://`/`wss://` 地址，上游认证请使用专用 token 选项。macOS 手动删除 `/usr/local/bin/vis_bridge` 前请先运行 `vis_bridge stop`。
-### 使用 Codex Panel
+vis_bridge 会自动探测或启动默认的 OpenCode、Codex 与 Kimi Web 服务。ACP Agent 中 Kimi Code、Oh My Pi 与 Pi 默认启用，其余可在右上角“状态监控”→“ACP”中启用；详细参数请运行 `vis_bridge --help`。监听非环回地址时必须配置 bridge token，以保护 PTY、文件、命令、状态、ACP 与 Codex 转发接口。守护进程的状态和日志保存在当前用户目录中（Linux：`~/.local/state/vis/bridge`，macOS：`~/Library/Application Support/vis/bridge`，Windows：`%LOCALAPPDATA%\vis\bridge`）。直接通过 `--bridge-token` 或 `--upstream-token` 传入的密钥不会写入守护进程状态或长期保留在守护进程参数中；需要无参数 `restart` 时请改用环境变量或 token 文件。`--target` 必须是不带用户名、密码、查询参数或片段的 `ws://`/`wss://` 地址，上游认证请使用专用 token 选项。macOS 手动删除 `/usr/local/bin/vis_bridge` 前请先运行 `vis_bridge stop`。
 
-1. 进入 Vis 的"设置"
-2. 在"实验性功能"区域开启"Codex Panel"
-3. 右上角会出现codex panel按钮
-4. 点击按钮并连接vis_bridge即可与codex panel交互
+### 连接 Kimi Web
 
-> ⚠️ **注意**：Codex Panel 目前为 Alpha 状态，功能可能不稳定。需要有效的 OpenAI API 密钥和 Codex CLI 权限。
-
----
-
-## Forge Panel 使用说明
-
-Forge Panel 是一个轻量级的 zsh PTY 悬浮窗口，直接运行本机 Forge CLI；实时输出始终由 xterm.js 原样渲染，不依赖终端文本识别。
-
-### 前置条件
-
-确保已安装并配置 Forge，且 `forge` 命令可在登录 zsh 中使用。需要使用 `:` 快捷命令时，先运行 Forge 的 setup 流程：
-
-```bash
-forge setup
-```
-
-### 使用 Forge Panel
-
-1. 进入 Vis 的“设置” → “实验性功能”，开启“Forge Panel 按钮”
-2. 顶栏管理模式按钮右侧会出现 Forge 按钮，点击后打开 zsh PTY 悬浮窗口
-3. 顶部菜单可执行配置、临时设置、工作区与对话操作；状态菜单提供 `:info`、`:tools`、`:skill` 与 `:workspace-info`
-4. 底部输入框可选择 Forge、Muse、Sage、Suggest 或 Commit Preview，并将提示词写入 PTY
-5. 右侧结构化栏使用 Forge CLI 读取状态、会话列表与预览；可执行 `:new`、`:clone`、`:conversation`、`:conversation-rename`、`:conversation-tree` 和 `:delete`
-
-侧栏可拖动调整宽度；向右拖过隐藏阈值后折叠，拖动隐藏滑杆向左可恢复。会话命令会随侧栏宽度在 6×1、3×2、2×3 布局间切换。Forge PTY 在页面刷新后会恢复为完整 Forge Panel，而不是普通终端。
-
-> ⚠️ **注意**：Forge Panel 目前为 Beta 状态。结构化读取依赖当前工作目录中的 Forge 数据；实时交互仍以 PTY 终端为准。
+1. 在运行 `vis_bridge` 的主机上安装并配置 **`@moonshot-ai/kimi-code`**，确认 `kimi --version` 可运行。首次使用请先按 Kimi Code 自身流程完成登录。
+2. 安装并启动 `vis_bridge`。它默认探测或启动 `kimi web --port 58627 --no-open`；Kimi Web 与 bridge 应运行在同一主机。
+3. 在 Vis 登录页选择 **Kimi Web**，桥接地址使用默认值 `ws://localhost:23004/kimi-web/ws`；如果 bridge 配置了 token，再填写 **Bridge token**。
+4. bridge 从本机 `~/.kimi-code/server.token` 读取上游凭据并转发 REST/WS；无需在 Vis 中填写 Kimi token。连接失败时先检查“状态监控”中的 Kimi Web 服务状态和 bridge 日志。
 
 ---
 
-## 代码片段（Snippets）使用说明
+## 开发流程
 
-代码片段让你把常用提示词保存为可复用模板，在输入框中通过触发词展开。
+### 技术栈
 
-1. 进入 Vis 的"设置" → "片段"，确认"启用片段"已开启
-2. 新建片段：设置触发词、正文，可附加标签便于筛选；保存自动完成
-3. 触发词默认以 `\name` 形式展开；使用 `::name`、`;name` 等带标点的触发词可自定义前缀
-4. 正文中可使用动态变量：`{date}`、`{time}`、`{datetime}`、`{uuid}`、`{clipboard}`、`{activeFile}`、`{cwd}`、`{selection}`，以及 `{cursor}` 指定展开后的光标位置
-5. 在输入框中输入触发词，从补全列表选择对应片段或按 Enter 展开；Space 和 Tab 保持原有输入行为
-6. 收藏夹中的消息可通过"从收藏创建片段"直接转为代码片段；片段支持导出/导入 JSON 文件
-
----
-
-## 功能展示
-
-### 1. 主界面与简体中文支持
-
-<-- ![主界面](docs/screenshots/main-interface.png) -->
-
-### 2. 字体管理
-
-<-- ![字体管理](docs/screenshots/font.png) -->
-<-- ![字体管理](docs/screenshots/font2.png) -->
-
-### 3. 供应商与模型管理
-
-<-- ![提供商管理](docs/screenshots/providers2.png) -->
-<-- ![提供商管理](docs/screenshots/providers.png) -->
-<-- ![模型管理](docs/screenshots/models.png) -->
-
-### 4. 状态监控
-
-<-- ![状态监控](docs/screenshots/status-monitor.png) -->
-
-### 5. 主题设置
-
-<-- ![主题设置](docs/screenshots/theme-settings.png) -->
-
-### 6. 代码行评论
-
-<-- ![代码行评论](docs/screenshots/code-comment.png) -->
-
-### 7. Session Pin
-
-<-- ![Session Pin](docs/screenshots/session-tree.png) -->
-
-### 8. 批量管理
-
-<-- ![批量管理](docs/screenshots/multi-manager.png) -->
-
-### 9. 悬浮窗与 Dock 栏
-
-<-- ![Dock 栏](docs/screenshots/dock-bar.png) -->
-
-### 10. 编辑器打开
-
-<-- ![编辑器打开](docs/screenshots/editor.png) -->
+| 层级 | 技术 | 说明 |
+|---|---|---|
+| **前端框架** | [Vue 3](https://vuejs.org/) + Composition API | 响应式 UI 框架 |
+| **构建工具** | [Vite](https://vitejs.dev/) | 极速开发与构建 |
+| **样式方案** | [Tailwind CSS v4](https://tailwindcss.com/) + PostCSS | 原子化 CSS |
+| **终端组件** | [xterm.js](https://xtermjs.org/) | 嵌入式终端模拟器 |
+| **代码高亮** | [Shiki](https://shiki.style/) | 语法高亮与 Markdown 渲染 |
+| **国际化** | [Vue I18n](https://vue-i18n.intlify.dev/) | 多语言支持 |
+| **后端服务** | [Hono](https://hono.dev/) + `@hono/node-server` | 轻量级 HTTP 服务 |
+| **桌面端** | [Electron](https://www.electronjs.org/) | 跨平台桌面应用打包 |
+| **代码规范** | [oxlint](https://oxc.rs/docs/guide/usage/linter.html) + oxfmt | 高性能 JS/TS 代码检查与格式化 |
+| **测试框架** | [Vitest](https://vitest.dev/) | 单元测试 |
 
 ---
-
-## 开发与构建
 
 ### Web 开发
 
@@ -304,7 +346,7 @@ pnpm dev
 - 开发模式下自动处理 CORS，便于本地调试
 - 应用与 vis_bridge 分别检查更新：Windows / Linux 安装版支持应用内下载安装；macOS 应用下载 DMG 后手动安装，vis_bridge 使用 PKG 安装包。自动检查与自动下载默认关闭，安装始终需要确认
 - 可选"最小化到托盘"与"关闭到托盘"（默认关闭），托盘菜单可退出
-- 远程 bridge 保留连接版本显示，需在其所在主机更新；仅本机回环连接提供本机安装包的更新操作
+- 远程 bridge 保留连接版本显示，需在其所在主机更新；本机回环连接还需验证原生安装；唯一匹配的本机 WSL 安装可从 WSL 终端更新
 - 会话任务完成时弹出桌面通知，窗口可见且聚焦时同样生效；可选系统提示音（默认关闭）。macOS ad-hoc 构建不支持原生通知，仅保留声音回退
 - 原生菜单跟随应用语言，保留退出与刷新入口
 - 支持 NSIS / AppImage / deb / dmg 各平台安装包
@@ -332,6 +374,14 @@ pnpm electron:build
 - **macOS**：`.dmg` / `.zip` (Intel / Apple Silicon)
 - **Linux**：`.AppImage` / `.deb`
 
+### 提交前验证
+
+```bash
+pnpm lint      # oxlint 与 TypeScript 类型检查
+pnpm test      # Vitest 回归测试
+pnpm build     # Web 生产构建
+```
+
 ---
 
 ## 声明
@@ -349,13 +399,20 @@ MIT
 <a name="english"></a>
 ## Introduction
 
-This project is a third-party Web UI for [OpenCode](https://github.com/sst/opencode), forked from [vis](https://github.com/xenodrive/vis). Since the upstream repository does not accept PRs, we maintain it as an independent project with significant feature improvements, performance optimizations, and localization support.
+This project is a third-party Web UI built around [OpenCode](https://github.com/sst/opencode), now supporting OpenCode, Codex, ACP, and Kimi Web, forked from [vis](https://github.com/xenodrive/vis). Since the upstream repository does not accept PRs, we maintain it as an independent project with significant feature improvements, performance optimizations, and localization support.
 
 > **Core Improvement Areas**: UI internationalization (i18n), font & theme management, session batch operations & Pin functionality, floating window & Dock bar management, performance optimization, desktop app packaging.
 
+### TL;DR: Install the Desktop App
+
+1. Download and install **both packages** from [GitHub Releases](https://github.com/qiyuanhuakai/opencode-visualizer-cn/releases): the Vis Electron desktop app (`Vis-…-Windows.exe` / `Vis-…-MacOS.dmg` / `Vis-…-Linux.deb` or `.AppImage`) and the `vis_bridge` installer for the system hosting your backend (`VisBridge-…-Windows.exe` / `VisBridge-…-MacOS.pkg` / `VisBridge-…-Linux.deb` or `.rpm`). Prebuilt installers do not require cloning the repository, Node.js, or `pnpm`.
+2. Install and sign in to the backend CLI you want: OpenCode, Codex, Kimi Code (for Kimi Web), or an ACP agent. You only need the backend you intend to use; the bridge probes or starts available services.
+3. Run `vis_bridge start` in a system terminal where you installed the bridge. On Windows, reopen the terminal after installation. If your backend CLI is in WSL, install the Linux bridge inside WSL and run the command there; the Windows Vis Electron app can connect to it.
+4. Open Vis, select a backend, and connect. Default URLs: OpenCode `http://localhost:4096`, Codex `ws://localhost:23004/codex`, ACP `ws://localhost:23004`, and Kimi Web `ws://localhost:23004/kimi-web/ws`. If you configured a bridge token, enter it on the login screen. When the bridge runs outside the current system, use its reachable host address.
+
 ---
 
-## Features
+## Feature Overview
 
 ### Original Features (from [xenodrive/vis](https://github.com/xenodrive/vis))
 
@@ -386,40 +443,78 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Rename Session** | Rename Session | ✅ Available |
 | **Floating Window Management** | Close/minimize buttons for all popups, bottom Dock bar | ✅ Available |
 | **Floating Preview Auto-Wrap** | Toggle in Settings; oversized files use variable-row-height virtual scrolling, still capping actually mounted rows while wrapped | ✅ Available |
-| **Quick Commands** | `@` to explicitly summon agents, `$` to invoke skills | ✅ Available |
+| **Quick Commands** | `@` to reference workspace files, `$` to invoke skills | ✅ Available |
 | **Snippets** | Custom triggers (`\name`, or punctuation-prefixed like `::name` / `;name`) with dynamic variables (`{date}`, `{time}`, `{datetime}`, `{uuid}`, `{clipboard}`, `{activeFile}`, `{cwd}`, `{selection}`, `{cursor}`); tag filtering, per-snippet toggle, JSON import/export; create snippets from favorites; type a trigger and pick its completion or press Enter to expand | ✅ Available |
-| **Local File Editing** | Embedded CodeMirror 6 editor; edit local files from the web UI on all three backends via the bridged `/fs/writeFile` (OpenCode writes through the connected vis_bridge with a verify-read, Codex / ACP through their bridged workspace endpoints); adjustable editor font size, indent, and remappable keyboard shortcuts; on desktop, open a temporary copy in a local application and sync each save back to the backend with on-disk conflict protection | ✅ Available |
+| **Local File Editing** | Embedded CodeMirror 6 editor; edit files through the selected backend’s file API with a verify-read; adjustable editor font size, indent, and remappable keyboard shortcuts; on desktop, open a temporary copy in a local application and sync each save back to the backend with on-disk conflict protection | ✅ Available |
 | **File Tree Git Actions** | git-status-based file tree with Index/Changes/All views and diff stats; branch search, create (prompts for a name), checkout, merge, rebase, and local branch deletion; push/pull on ahead/behind badges, and fetch in the branch/upstream action menu. Checkout and fetch run immediately; merge/rebase/delete/push/pull ask for confirmation; these user-triggered branch actions run in a one-shot PTY (`/bin/sh -c`) that closes on success and refreshes the file tree | ✅ Available |
 | **Performance** | Lazy loading for large sessions, background hydration, faster cold start, continuous batched output loading, floating window popup optimization | ✅ Available |
 | **Desktop App** | Electron desktop packaging for Windows / macOS / Linux; in-app update checks and downloads for both the app and vis_bridge, system tray (minimize/close to tray), desktop completion notifications with optional sound | ✅ Available |
-| **Codex Integration (Alpha)** | vis_bridge lightweight bridge for Codex app-server JSON-RPC; Codex Panel minimal floating panel with built-in model, skill, plugin marketplace, MCP server, and local file management; runtime inspector probes app-server capabilities per method (supported/unsupported/gated); experimental features toggle in settings | 🅰️ Alpha |
+| **Codex Vis UI** | Fully released Codex backend: connect to Codex app-server through vis_bridge and use sessions, models, file tree and Git, permissions, thinking and tool calls, and status monitoring in the main Vis UI; no experimental toggle required | ✅ Released |
 | **ACP Agent Integration (Alpha)** | ACP v1 as a third backend using the shared main chat UI; manage Pi, Oh My Pi, Kimi Code, and other ACP agents in Status Monitor | 🅰️ Alpha |
+| **Kimi Web Integration (Beta)** | Fourth independent backend; connects to Kimi Code's Web service through vis_bridge and reuses the session, file, approval, thinking, and subagent UI; details below | 🅱️ Beta |
 | **Forge Integration (Beta)** | zsh PTY-based Forge floating terminal with command menus, structured conversation sidebar, status reads, and refresh restoration | 🅱️ Beta |
-| **Kimi Web Integration (Alpha)** | kimi web as the fourth backend; REST and WebSocket are forwarded through vis_bridge with the kimi bearer injected lazily by the bridge (the browser never dials upstream); reuses the main chat UI for session create/select, streaming text and thinking, history with injection filtering, approvals and questions, rename/archive/restore/delete/abort, steer, attachments, token usage, and status monitoring; tool, reasoning, and subagent popups open automatically; entry points stay hidden until capability probing succeeds | 🅰️ Alpha |
 
 > 📋 **Detailed changelog**: [CHANGELOG.md](./CHANGELOG.md)  
 > 🗺️ **Roadmap & Plans**: [RoadMap.md](./RoadMap.md)
 
 ---
 
-## Tech Stack
+### Codex Vis UI
 
-| Layer | Technology | Description |
-|---|---|---|
-| **Frontend Framework** | [Vue 3](https://vuejs.org/) + Composition API | Reactive UI framework |
-| **Build Tool** | [Vite](https://vitejs.dev/) | Fast development and production builds |
-| **Styling** | [Tailwind CSS v4](https://tailwindcss.com/) + PostCSS | Atomic CSS utility framework |
-| **Terminal** | [xterm.js](https://xtermjs.org/) | Embedded terminal emulator |
-| **Code Highlighting** | [Shiki](https://shiki.style/) | Syntax highlighting and Markdown rendering |
-| **Internationalization** | [Vue I18n](https://vue-i18n.intlify.dev/) | Multi-language support |
-| **Backend Service** | [Hono](https://hono.dev/) + `@hono/node-server` | Lightweight HTTP server |
-| **Desktop** | [Electron](https://www.electronjs.org/) | Cross-platform desktop app packaging |
-| **Linting** | [oxlint](https://oxc.rs/docs/guide/usage/linter.html) + oxfmt | High-performance JS/TS linting and formatting |
-| **Testing** | [Vitest](https://vitest.dev/) | Unit testing framework |
+Select **Codex** on the login screen and connect to `vis_bridge` to manage Codex sessions, choose models, browse files and Git changes, and view thinking, tool calls, and status monitoring in the main Vis UI. Permission requests are handled there too. This is the fully released Codex experience and does not require an experimental toggle.
+
+The optional **Codex Panel** floating panel remains Alpha. Enable it separately under **Settings → Experimental Features** if needed.
 
 ---
 
-## Requirements
+### Kimi Web Backend
+
+Kimi Web is the fourth backend, separate from the Kimi Code agent available through ACP. It connects to **`kimi web` from `@moonshot-ai/kimi-code`**, not the identically named command in the older Python `kimi-cli`. It uses Vis's main project, session, file tree, and Git UI, with streaming responses and thinking, history, permissions, questions, attachments, subagents, token status, and tool/thinking/subagent popups. Branching, compaction, undo, and other actions appear only when the connected service supports them. REST and WebSocket traffic pass through `vis_bridge`; the browser does not store Kimi Web's bearer token. See the [Kimi Web protocol and verified coverage](docs/kimi.md).
+
+---
+
+### Forge Panel
+
+Forge Panel is a lightweight zsh PTY floating window that runs the local Forge CLI directly. xterm.js renders realtime output as-is; the panel does not depend on terminal text recognition.
+
+#### Prerequisites
+
+Install and configure Forge so the `forge` command is available from a login zsh. To use the `:` shortcuts, run Forge's setup flow first:
+
+```bash
+forge setup
+```
+
+#### Using Forge Panel
+
+1. Go to Vis **Settings** → **Experimental Features** and enable **Forge Panel Button**
+2. Click the Forge button to the right of the management-mode button to open a zsh PTY floating window
+3. The top menus run configuration, temporary-setting, workspace, and conversation commands; the status menu provides `:info`, `:tools`, `:skill`, and `:workspace-info`
+4. Use the bottom prompt bar to choose Forge, Muse, Sage, Suggest, or Commit Preview, then send the prompt to the PTY
+5. The structured right rail reads Forge status, conversation lists, and previews through the Forge CLI; it also provides `:new`, `:clone`, `:conversation`, `:conversation-rename`, `:conversation-tree`, and `:delete`
+
+Drag the sidebar to resize it. Dragging it right past the hide threshold collapses it; drag the hidden rail left to restore it. Conversation commands adapt between 6×1, 3×2, and 2×3 layouts as the sidebar width changes. After a page refresh, the Forge PTY is restored as the complete Forge Panel rather than a plain terminal.
+
+> ⚠️ **Note**: Forge Panel is currently Beta. Structured reads use Forge data from the active working directory; realtime interaction always remains in the PTY terminal.
+
+---
+
+### Snippets
+
+Snippets save reusable prompt templates that expand from triggers in the composer.
+
+1. Go to Vis **Settings** → **Snippets** and make sure **Enable snippets** is on
+2. Create a snippet with a trigger, body, and optional tags for filtering; changes save automatically
+3. A plain trigger expands as `\name`; include punctuation such as `::name` or `;name` for a custom prefix
+4. The body supports dynamic variables: `{date}`, `{time}`, `{datetime}`, `{uuid}`, `{clipboard}`, `{activeFile}`, `{cwd}`, `{selection}`, plus `{cursor}` to place the caret after expansion
+5. Type a trigger in the composer and pick its completion or press Enter to expand; Space and Tab keep their normal behavior
+6. Favorited messages can be turned into snippets via **Create snippet from favorite**; snippets export and import as JSON files
+
+---
+
+## Installation
+
+### Requirements
 
 Before getting started, ensure your environment meets the following criteria:
 
@@ -427,7 +522,8 @@ Before getting started, ensure your environment meets the following criteria:
 |---|---|---|
 | [Node.js](https://nodejs.org/) | >= 24 and < 25 | Runtime and build environment |
 | [pnpm](https://pnpm.io/) | 11.21.0 (recommended) | Package manager, locked via `packageManager` |
-| [OpenCode Server](https://github.com/sst/opencode) | Latest | Backend service providing API and agent capabilities |
+| [OpenCode Server](https://github.com/sst/opencode) | Optional | Required for the OpenCode backend |
+| Kimi Code CLI (`@moonshot-ai/kimi-code`) | Optional | Required for the Kimi Web backend; `kimi` must be on the bridge host’s PATH |
 | ACP Agent CLI | Optional | For example `pi-acp`, `omp --mode acp`, or `kimi acp`; enable agents as needed in Status Monitor |
 | System `$EDITOR` | Optional | For "Open in Editor" feature (e.g., VS Code, Neovim) |
 
@@ -435,7 +531,7 @@ Before getting started, ensure your environment meets the following criteria:
 
 ---
 
-## Quick Start
+### Run the Web App Locally
 
 ```bash
 git clone https://github.com/qiyuanhuakai/opencode-visualizer-cn
@@ -466,11 +562,11 @@ opencode serve --cors https://<user>.github.io
 
 ---
 
-## vis_bridge Usage
+### Install and Run vis_bridge
 
-vis_bridge is a local process supervisor and protocol bridge. At startup it probes and manages OpenCode server and Codex app-server, then starts configured ACP agents. Codex keeps its native WebSocket JSON-RPC transport; ACP v1 agents are forwarded from stdio JSON-RPC to WebSocket.
+vis_bridge is a local process supervisor and protocol bridge. At startup it probes and manages OpenCode server, Codex app-server, and Kimi Web, then starts configured ACP agents. Codex keeps its native WebSocket JSON-RPC transport; ACP v1 agents are forwarded from stdio JSON-RPC to WebSocket.
 
-### Install Codex CLI
+#### Codex CLI (only for the Codex backend)
 
 Ensure you have the OpenAI Codex CLI installed and the `codex` command is available in your PATH:
 
@@ -478,7 +574,7 @@ Ensure you have the OpenAI Codex CLI installed and the `codex` command is availa
 codex --version
 ```
 
-### Start vis_bridge
+#### Start vis_bridge
 
 GitHub Releases publish native installers only, not the intermediate standalone `vis_bridge` binary:
 
@@ -501,6 +597,25 @@ vis_bridge start
 vis_bridge stop
 vis_bridge restart
 ```
+
+Open the bridge's active config file with `$EDITOR` (the file is created on first use):
+
+```bash
+vis_bridge config
+vis_bridge config --config /path/to/bridge.json
+```
+
+If the running bridge uses a custom config path, `vis_bridge config` opens that file; `--config` or `VIS_BRIDGE_CONFIG` overrides the path. Otherwise the default is `~/.config/vis/bridge.json`. The root-level `nativeServices` field controls whether the bridge probes or starts OpenCode, Codex, and Kimi Web. Set an unwanted service to `false`, keep the existing `acpAgents`, save the file, then run `vis_bridge restart`:
+
+```text
+"nativeServices": {
+  "opencode": true,
+  "codex": true,
+  "kimi-web": false
+}
+```
+
+Older configs without `nativeServices` keep all three services enabled. These switches control bridge process supervision; they do not stop a service started by another program or block direct connections.
 
 `start` waits until the bridge is listening and the initial service probe has completed. If OpenCode, Codex, or an ACP agent fails to start, the CLI prints the component name and error while keeping the usable bridge online; the full error also appears under **Status Monitor → ACP**. Bridge-level failures such as an invalid config or occupied listen port make `start` fail instead of publishing a superficially healthy service.
 
@@ -527,59 +642,35 @@ pnpm bridge:build
 ./dist-bridge/vis_bridge start
 ```
 
-vis_bridge automatically adopts or starts the default OpenCode and Codex services. Among ACP agents, Kimi Code, Oh My Pi, and Pi are enabled by default; others can be enabled under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required for the PTY, filesystem, command, supervisor, ACP, and Codex proxy surfaces. Daemon state and logs are stored per user (Linux: `~/.local/state/vis/bridge`; macOS: `~/Library/Application Support/vis/bridge`; Windows: `%LOCALAPPDATA%\vis\bridge`). Secrets passed directly through `--bridge-token` or `--upstream-token` are removed from the daemon command line and state; use environment variables or token files when unattended `restart` is required. `--target` must be a `ws://` or `wss://` URL without userinfo, query parameters, or fragments; use the dedicated token options for upstream authentication. On macOS, run `vis_bridge stop` before manually removing `/usr/local/bin/vis_bridge`.
+vis_bridge automatically adopts or starts the default OpenCode, Codex, and Kimi Web services. Among ACP agents, Kimi Code, Oh My Pi, and Pi are enabled by default; others can be enabled under **Status Monitor → ACP**. Run `vis_bridge --help` for all options. When binding to a non-loopback host, a bridge token is required for the PTY, filesystem, command, supervisor, ACP, and Codex proxy surfaces. Daemon state and logs are stored per user (Linux: `~/.local/state/vis/bridge`; macOS: `~/Library/Application Support/vis/bridge`; Windows: `%LOCALAPPDATA%\vis\bridge`). Secrets passed directly through `--bridge-token` or `--upstream-token` are removed from the daemon command line and state; use environment variables or token files when unattended `restart` is required. `--target` must be a `ws://` or `wss://` URL without userinfo, query parameters, or fragments; use the dedicated token options for upstream authentication. On macOS, run `vis_bridge stop` before manually removing `/usr/local/bin/vis_bridge`.
 
-### Using Codex Panel
+### Connect to Kimi Web
 
-1. Go to Vis "Settings"
-2. Enable "Codex Panel" in the "Experimental Features" section
-3. A Codex Panel button will appear in the top-right corner
-4. Click the button and connect to vis_bridge to interact with Codex Panel
-
-> ⚠️ **Note**: Codex Panel is currently in Alpha and features may be unstable. Requires a valid OpenAI API key and Codex CLI permissions.
+1. Install and configure **`@moonshot-ai/kimi-code`** on the same host as `vis_bridge`. Check that `kimi --version` works and complete Kimi Code's own sign-in flow.
+2. Install and start `vis_bridge`. By default it probes or starts `kimi web --port 58627 --no-open`; Kimi Web and the bridge must run on the same host.
+3. On the Vis login screen choose **Kimi Web** and use the default bridge URL `ws://localhost:23004/kimi-web/ws`. Enter a **Bridge token** only if you configured one on the bridge.
+4. The bridge reads the upstream credential from `~/.kimi-code/server.token` and proxies REST/WS. Do not enter the Kimi token in Vis. If connection fails, inspect the Kimi Web service in Status Monitor and the bridge log.
 
 ---
 
-## Forge Panel Usage
+## Development Workflow
 
-Forge Panel is a lightweight zsh PTY floating window that runs the local Forge CLI directly. xterm.js renders realtime output as-is; the panel does not depend on terminal text recognition.
+### Tech Stack
 
-### Prerequisites
-
-Install and configure Forge so the `forge` command is available from a login zsh. To use the `:` shortcuts, run Forge's setup flow first:
-
-```bash
-forge setup
-```
-
-### Using Forge Panel
-
-1. Go to Vis **Settings** → **Experimental Features** and enable **Forge Panel Button**
-2. Click the Forge button to the right of the management-mode button to open a zsh PTY floating window
-3. The top menus run configuration, temporary-setting, workspace, and conversation commands; the status menu provides `:info`, `:tools`, `:skill`, and `:workspace-info`
-4. Use the bottom prompt bar to choose Forge, Muse, Sage, Suggest, or Commit Preview, then send the prompt to the PTY
-5. The structured right rail reads Forge status, conversation lists, and previews through the Forge CLI; it also provides `:new`, `:clone`, `:conversation`, `:conversation-rename`, `:conversation-tree`, and `:delete`
-
-Drag the sidebar to resize it. Dragging it right past the hide threshold collapses it; drag the hidden rail left to restore it. Conversation commands adapt between 6×1, 3×2, and 2×3 layouts as the sidebar width changes. After a page refresh, the Forge PTY is restored as the complete Forge Panel rather than a plain terminal.
-
-> ⚠️ **Note**: Forge Panel is currently Beta. Structured reads use Forge data from the active working directory; realtime interaction always remains in the PTY terminal.
+| Layer | Technology | Description |
+|---|---|---|
+| **Frontend Framework** | [Vue 3](https://vuejs.org/) + Composition API | Reactive UI framework |
+| **Build Tool** | [Vite](https://vitejs.dev/) | Fast development and production builds |
+| **Styling** | [Tailwind CSS v4](https://tailwindcss.com/) + PostCSS | Atomic CSS utility framework |
+| **Terminal** | [xterm.js](https://xtermjs.org/) | Embedded terminal emulator |
+| **Code Highlighting** | [Shiki](https://shiki.style/) | Syntax highlighting and Markdown rendering |
+| **Internationalization** | [Vue I18n](https://vue-i18n.intlify.dev/) | Multi-language support |
+| **Backend Service** | [Hono](https://hono.dev/) + `@hono/node-server` | Lightweight HTTP server |
+| **Desktop** | [Electron](https://www.electronjs.org/) | Cross-platform desktop app packaging |
+| **Linting** | [oxlint](https://oxc.rs/docs/guide/usage/linter.html) + oxfmt | High-performance JS/TS linting and formatting |
+| **Testing** | [Vitest](https://vitest.dev/) | Unit testing framework |
 
 ---
-
-## Snippets Usage
-
-Snippets save reusable prompt templates that expand from triggers in the composer.
-
-1. Go to Vis **Settings** → **Snippets** and make sure **Enable snippets** is on
-2. Create a snippet with a trigger, body, and optional tags for filtering; changes save automatically
-3. A plain trigger expands as `\name`; include punctuation such as `::name` or `;name` for a custom prefix
-4. The body supports dynamic variables: `{date}`, `{time}`, `{datetime}`, `{uuid}`, `{clipboard}`, `{activeFile}`, `{cwd}`, `{selection}`, plus `{cursor}` to place the caret after expansion
-5. Type a trigger in the composer and pick its completion or press Enter to expand; Space and Tab keep their normal behavior
-6. Favorited messages can be turned into snippets via **Create snippet from favorite**; snippets export and import as JSON files
-
----
-
-## Development & Building
 
 ### Web Development
 
@@ -598,7 +689,7 @@ This project supports packaging the Web UI as a native desktop application using
 - Auto CORS handling in development mode for local debugging
 - Separate update checks for the app and vis_bridge: in-app download and install for Windows / Linux installed builds; on macOS, install the app manually from a DMG and vis_bridge from a PKG installer. Automatic checks and downloads are off by default and installing always asks for confirmation
 - Optional minimize-to-tray and close-to-tray (both off by default), with quit from the tray menu
-- Remote bridges keep their connected version display and must be updated on their own host; local installer updates are offered only for loopback connections
+- Remote bridges keep their connected version display and must be updated on their own host; loopback connections also require a matching native installation; a uniquely matched local WSL bridge can be updated in a WSL terminal
 - Desktop notifications when a session task completes, including while the window is visible and focused, with an optional system sound (off by default); macOS ad-hoc builds do not support native notifications and keep only the sound fallback
 - Native menus follow the app language and keep only Quit and Reload entries
 - Supports NSIS / AppImage / deb / dmg installers for each platform
@@ -623,6 +714,14 @@ Build artifacts are output to `dist-electron/`, including:
 - **Windows**: `.exe` (NSIS)
 - **macOS**: `.dmg` / `.zip` (Intel / Apple Silicon)
 - **Linux**: `.AppImage` / `.deb`
+
+### Checks Before Submitting
+
+```bash
+pnpm lint      # oxlint and TypeScript type checking
+pnpm test      # Vitest regression suite
+pnpm build     # Production Web build
+```
 
 ---
 
