@@ -3,7 +3,7 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [Unreleased]
+## [v0.8.5 released]
 ### Kimi Web、Codex 会话与文件引用
 
 - [x] 修正 Kimi Web 与 Codex 会话状态：本次连接中尚未运行的会话保持 Unknown，发送消息后显示 Busy，结束后恢复 Idle；底部状态继续显示 Idle，并按活跃子代理数量显示思考标识。
