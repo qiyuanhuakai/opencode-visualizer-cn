@@ -12,6 +12,20 @@ function setup() {
 }
 
 describe('Codex descendant streams', () => {
+  it('tracks one active child per live spawn and removes it when that child finishes', () => {
+    const stream = createCodexSubagentStreams({ getSelectedParent: () => 'parent', publish: () => undefined });
+    const spawn = (id: string) => stream.handle({ method: 'item/started', params: {
+      threadId: 'parent', turnId: 'parent-turn', item: { type: 'subAgentActivity', agentThreadId: id },
+    } });
+    spawn('child-a');
+    spawn('child-b');
+    spawn('child-a');
+    expect(stream.activeChildIds()).toEqual(['child-a', 'child-b']);
+    stream.handle({ method: 'turn/completed', params: { threadId: 'child-a', turnId: 'child-turn' } });
+    expect(stream.activeChildIds()).toEqual(['child-b']);
+    stream.handle({ method: 'thread/status/changed', params: { threadId: 'child-b', status: { type: 'idle' } } });
+    expect(stream.activeChildIds()).toEqual([]);
+  });
   it('catches up only the latest child turn on a live subscription, without replaying history on refresh', () => {
     const {stream,events} = setup();
     const thread = {id:'child',turns:[

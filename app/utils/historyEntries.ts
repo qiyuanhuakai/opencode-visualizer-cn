@@ -131,8 +131,8 @@ export function buildHistoryEntries(source: HistoryEntrySource): HistoryEntry[] 
 }
 
 /**
- * Selects the user roots belonging to `parentThreadId` and flattens their
- * threads into a single message list (subagent history source).
+ * Selects roots belonging to `parentThreadId` and flattens their threads.
+ * Kimi can emit child assistant messages without a child user message.
  */
 export function selectSubagentMessages(
   roots: MessageInfo[],
@@ -142,7 +142,6 @@ export function selectSubagentMessages(
   const target = parentThreadId.trim();
   if (!target) return [];
   return roots
-    .filter((root) => root.role === 'user')
     .filter((root) => root.sessionID === target)
     .flatMap((root) => getThread(root.id));
 }

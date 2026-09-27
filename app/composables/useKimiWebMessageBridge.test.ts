@@ -268,6 +268,22 @@ async function enterLive(source: FakeSource, bridge: ReturnType<typeof useKimiWe
 }
 
 describe('useKimiWebMessageBridge', () => {
+  it('attaches a spawned child to its task card and counts only active children', async () => {
+    const { source, bridge, parts } = createHarness();
+    await enterLive(source, bridge, 36);
+    const started = frame('tool.call.started', 1);
+    const spawned = frame('subagent.spawned');
+    const completed = frame('subagent.completed');
+    source.emitFrame({ ...started, seq: 37 });
+    source.emitFrame({ ...spawned, seq: 38 });
+    const childId = `${SESSION_ID}:agent-0:0`;
+    expect(bridge.activeSubagentIds(SESSION_ID)).toEqual([childId]);
+    expect([...parts.values()].find((part) => part.type === 'tool' && part.callID === 'tool_3ydieXPUScwcnZ3KzDPcfeDx'))
+      .toMatchObject({ metadata: { sessionIds: [childId] } });
+    source.emitFrame({ ...completed, seq: 39 });
+    expect(bridge.activeSubagentIds(SESSION_ID)).toEqual([]);
+    bridge.stop();
+  });
   it('forwards global lifecycle events for sessions that were never selected', () => {
     // Given
     const harness = createHarness();
@@ -275,7 +291,7 @@ describe('useKimiWebMessageBridge', () => {
     harness.source.emitFrame({ type: 'event.session.archived', session_id: '__global__',
       seq: 5, epoch: 'global-epoch', payload: { sessionId: 'other', workspace_id: 'workspace' } });
     // Then
-    expect(harness.onSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'other', phase: 'archived' }));
+    expect(harness.onSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'other', phase: 'archived' }), expect.objectContaining({ origin: 'live' }));
     expect(harness.messages.size).toBe(0);
     harness.bridge.stop();
   });
@@ -287,7 +303,7 @@ describe('useKimiWebMessageBridge', () => {
     harness.source.emitFrame({ type: 'event.session.created', session_id: 'other', seq: 1,
       epoch: 'other-epoch', payload: { session: { id: 'other', workspace_id: 'workspace' } } });
     // Then
-    expect(harness.onSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'other', phase: 'created' }));
+    expect(harness.onSessionEvent).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'other', phase: 'created' }), expect.objectContaining({ origin: 'live' }));
     harness.bridge.stop();
   });
   it('keeps a live response under its submitted user root before and after history replay', async () => {

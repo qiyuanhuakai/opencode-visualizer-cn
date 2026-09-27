@@ -318,6 +318,7 @@ describe('useBackendMessageSend kimi-web', () => {
 
   it('records the accepted Kimi turn permission from the send snapshot', async () => {
     const record = vi.fn();
+    const onPromptRunning = vi.fn();
     const { base, api } = createKimiRuntime();
     base.selectedMode.value = 'yolo';
     const profile = deferred<unknown>();
@@ -329,6 +330,7 @@ describe('useBackendMessageSend kimi-web', () => {
       codexApi: createCodexApi({ activeThreadId: '', threads: [] }),
       kimiWebApi: api,
       recordKimiWebTurnPermission: record,
+      onKimiWebPromptRunning: onPromptRunning,
     });
     const sending = runtime.sendMessage();
     await vi.waitFor(() => expect(api.updateProfile).toHaveBeenCalledOnce());
@@ -336,6 +338,7 @@ describe('useBackendMessageSend kimi-web', () => {
     profile.resolve({});
     await sending;
     expect(record).toHaveBeenCalledWith('session-1', 'msg_01', 'yolo');
+    expect(onPromptRunning).toHaveBeenCalledWith('session-1');
   });
 
   it('resets an explicit effort to the selected models server default', async () => {

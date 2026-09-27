@@ -615,6 +615,27 @@ describe('Kimi Web live popup integration', () => {
     expect(chain.windows.has(`subagent:${SESSION_ID}:agent-0:0`)).toBe(true);
   });
 
+  it('automatically opens each Swarm child reasoning and tool window', async () => {
+    const chain = await mountPopupChain();
+    const feed = new Feed(chain.source, 21);
+    await enterLive(chain, { [SESSION_ID]: { seq: 21, epoch: EPOCH } });
+    const parentCall = 'swarm-parent';
+    feed.durable(fx.agentToolStarted, { payload: { toolCallId: parentCall, name: 'AgentSwarm', agentId: 'main', turnId: 2 } });
+    for (const [agentId, callId] of [['agent-5', 'child-read-5'], ['agent-6', 'child-read-6']]) {
+      feed.durable(fx.subagentSpawned, { payload: { subagentId: agentId, parentToolCallId: parentCall, agentId: 'main' } });
+      feed.volatile(fx.thinking, { payload: { agentId, turnId: 0, delta: `Thinking ${agentId}` } });
+      feed.durable(fx.toolStarted, { payload: { agentId, turnId: 0, toolCallId: callId, name: 'Read' } });
+      feed.durable(fx.toolResult, { payload: { agentId, turnId: 0, toolCallId: callId, output: `Result ${agentId}` } });
+    }
+    await vi.waitFor(() => {
+      expect(chain.windows.has(`reasoning:${SESSION_ID}:agent-5:0`)).toBe(true);
+      expect(chain.windows.has(`reasoning:${SESSION_ID}:agent-6:0`)).toBe(true);
+      expect(chain.windows.has('child-read-5')).toBe(true);
+      expect(chain.windows.has('child-read-6')).toBe(true);
+    });
+    expect(chain.windows.has(parentCall)).toBe(false);
+  });
+
   it('keeps replay, snapshot rebuild and history frames from opening new windows', async () => {
     const snapshotRequest = deferred<KimiWebSnapshot>();
     const chain = await mountPopupChain({ getSnapshot: () => snapshotRequest.promise });

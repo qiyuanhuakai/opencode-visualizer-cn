@@ -19,10 +19,19 @@ export function createCodexSubagentStreams(options: {
   readonly getSelectedParent: () => string | null;
   readonly publish: (info: AssistantMessageInfo, part: MessagePart) => void;
   readonly onDiscover?: (threadId: string, live: boolean) => void;
+  readonly onActiveChange?: (threadIds: readonly string[]) => void;
 }) {
   const children = new Map<string, Child>();
+  const activeChildren = new Set<string>();
   let selected = options.getSelectedParent();
-  function reset() { children.clear(); selected = options.getSelectedParent(); }
+  function setActive(id: string, active: boolean) {
+    const changed = active ? !activeChildren.has(id) : activeChildren.has(id);
+    if (!changed) return;
+    if (active) activeChildren.add(id);
+    else activeChildren.delete(id);
+    options.onActiveChange?.([...activeChildren]);
+  }
+  function reset() { children.clear(); activeChildren.clear(); options.onActiveChange?.([]); selected = options.getSelectedParent(); }
   function sync() { if (selected !== options.getSelectedParent()) reset(); }
   function subscriptionFailed(id: string) {
     sync();
@@ -30,7 +39,7 @@ export function createCodexSubagentStreams(options: {
     if (child) child.live = false;
   }
   function known(id: string) { return Boolean(selected) && (id === selected || children.has(id)); }
-  function discover(id: string, metadata: Wire = {}, live = true) {
+  function discover(id: string, metadata: Wire = {}, live = true, active = live) {
     if (!id || id === selected) return;
     let child = children.get(id);
     const fresh = !child;
@@ -45,17 +54,18 @@ export function createCodexSubagentStreams(options: {
     child.agent = child.agentPath || agentName(metadata.agentNickname) || agentName(metadata.agentRole) || child.agent;
     const activate = live && !child.live;
     child.live ||= live;
+    if (active) setActive(id, true);
     if (fresh || activate) options.onDiscover?.(id, live);
   }
-  function discoverItem(owner: string, item: Wire, live = true) {
+  function discoverItem(owner: string, item: Wire, live = true, active = live) {
     if (!known(owner)) return;
     switch (item.type) {
-      case 'subAgentActivity': discover(text(item.agentThreadId), { agentPath: item.agentPath }, live); return;
+      case 'subAgentActivity': discover(text(item.agentThreadId), { agentPath: item.agentPath }, live, active); return;
       case 'collabToolCall':
       case 'collabAgentToolCall': {
         if (text(item.senderThreadId) && item.senderThreadId !== owner) return;
         const ids = list(item.receiverThreadIds);
-        for (const id of ids.length ? ids : [item.newThreadId, item.receiverThreadId]) discover(text(id), {}, live);
+        for (const id of ids.length ? ids : [item.newThreadId, item.receiverThreadId]) discover(text(id), {}, live, active);
         return;
       }
       default: return;
@@ -136,16 +146,20 @@ export function createCodexSubagentStreams(options: {
     const id = text(params.threadId);
     if (!known(id)) return false;
     const wireItem = record(params.item);
-    discoverItem(id, wireItem);
+    discoverItem(id, wireItem, true, notification.method !== 'item/completed');
     const child = children.get(id);
     if (!child) return false;
     const turn = record(params.turn);
     const turnId = text(params.turnId) || text(turn.id);
     discover(id, { ...params, ...turn, ...wireItem }, false);
-    if (notification.method === 'turn/started') return true;
+    if (notification.method === 'turn/started') {
+      setActive(id, true);
+      return true;
+    }
     const status = text(record(params.status).type) || text(params.status);
     const terminalStatus = notification.method === 'thread/status/changed' && ['idle', 'systemError', 'notLoaded'].includes(status);
     if (notification.method === 'turn/completed' || notification.method === 'thread/closed' || notification.method === 'thread/archived' || terminalStatus) {
+      setActive(id, false);
       for (const item of child.items.values()) {
         if (item.done || (turnId && item.turnId !== turnId)) continue;
         item.done = true;
@@ -189,5 +203,5 @@ export function createCodexSubagentStreams(options: {
     emit(id, child, item);
     return true;
   }
-  return { handle, registerHistory, reset, subscriptionFailed };
+  return { handle, registerHistory, reset, subscriptionFailed, activeChildIds: () => [...activeChildren] };
 }

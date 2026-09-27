@@ -1444,7 +1444,6 @@ async function rebuildFileCache() {
     return;
   }
 
-  const AUTO_SCAN_FILE_LIMIT = 3000;
   const queue: string[] = ['.'];
   const visited = new Set<string>();
   const collected: string[] = [];
@@ -1476,7 +1475,6 @@ async function rebuildFileCache() {
         }
       }
 
-      if (collected.length > AUTO_SCAN_FILE_LIMIT) break;
     }
 
     if (buildId !== fileCacheBuildId) return;

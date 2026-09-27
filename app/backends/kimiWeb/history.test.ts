@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { KimiWebMessage } from '../../utils/kimiWeb';
+import type { ToolPart } from '../../types/sse';
 import { KimiWebError, KimiWebTransportError } from '../../utils/kimiWeb';
 import { collectKimiWebHistoryMessages, type KimiWebHistoryPage } from './history';
-import { isInjectionMessage, kimiWebMessagesToHistoryEntries } from './historyEntries';
+import { isInjectionMessage, kimiWebMessagesToHistoryEntries, kimiWebTranscriptToHistoryEntries } from './historyEntries';
 import { buildHistoryEntries } from '../../utils/historyEntries';
 import { copyKimiWebSessionMarkdown, formatKimiWebSessionMarkdown } from './copyAll';
 
@@ -137,12 +138,13 @@ describe('kimiWebMessagesToHistoryEntries', () => {
     const expectedEntryIds = chronological
       .filter((message) => message.role !== 'tool')
       .map((message) => message.id);
-    expect(entries.map((entry) => entry.info.id)).toEqual(expectedEntryIds);
+    expect(entries.filter((entry) => entry.info.sessionID === SESSION_ID).map((entry) => entry.info.id))
+      .toEqual(expectedEntryIds);
     expect(entries.every((entry) => entry.info.role === 'user' || entry.info.role === 'assistant')).toBe(
       true,
     );
     // 2 tool rows fold into their assistant `tool_use`; the injection user is dropped.
-    expect(entries).toHaveLength(8);
+    expect(entries).toHaveLength(10);
     expect(entries.some((entry) => entry.info.id.endsWith('_000001'))).toBe(false);
   });
 
@@ -163,6 +165,68 @@ describe('kimiWebMessagesToHistoryEntries', () => {
     if (toolPart?.type === 'tool' && toolPart.state.status === 'completed') {
       expect(toolPart.state.output).toContain('agent_id: agent-0');
     }
+  });
+
+  it('restores a Kimi subagent card from the Agent result after history reload', () => {
+    const messages = [...fixtureMessages()].reverse().filter((message) => !isInjectionMessage(message));
+    const entries = kimiWebMessagesToHistoryEntries(messages);
+    const task = entries.flatMap((entry) => entry.parts)
+      .find((part): part is ToolPart => part.type === 'tool' && part.tool === 'task');
+    expect(task?.metadata).toMatchObject({
+      source: 'kimi-web',
+      sessionIds: [`${SESSION_ID}:agent-0:0`],
+      subagentLabels: { [`${SESSION_ID}:agent-0:0`]: 'Answer 1+1' },
+    });
+  });
+
+  it('restores the child summary as subagent history after reload', () => {
+    const messages = [...fixtureMessages()].reverse().filter((message) => !isInjectionMessage(message));
+    const entries = kimiWebMessagesToHistoryEntries(messages);
+    const childId = `${SESSION_ID}:agent-0:0`;
+    const childEntries = entries.filter((entry) => entry.info.sessionID === childId);
+    expect(childEntries.map((entry) => entry.info.role)).toEqual(['user', 'assistant']);
+    expect(childEntries.flatMap((entry) => entry.parts).filter((part) => part.type === 'text').map((part) => part.text))
+      .toEqual(['Answer 1+1', '2']);
+  });
+
+  it('restores every AgentSwarm child card and its own result from history', () => {
+    const messages: KimiWebMessage[] = [
+      { id: 'swarm-tool', session_id: SESSION_ID, role: 'assistant', content: [
+        { type: 'tool_use', tool_call_id: 'swarm-1', tool_name: 'AgentSwarm', input: {
+          description: 'Inspect files', items: ['Read package.json', 'Count components'],
+        } },
+      ] },
+      { id: 'swarm-result', session_id: SESSION_ID, role: 'tool', content: [
+        { type: 'tool_result', tool_call_id: 'swarm-1', output: '<agent_swarm_result>\n<summary>completed: 2</summary>\n<subagent agent_id="agent-2" item="Count components" outcome="completed">component result</subagent>\n<subagent agent_id="agent-1" item="Read package.json" outcome="completed">package result</subagent>\n</agent_swarm_result>' },
+      ] },
+    ];
+    const entries = kimiWebMessagesToHistoryEntries(messages);
+    const task = entries.flatMap((entry) => entry.parts)
+      .find((part): part is ToolPart => part.type === 'tool' && part.tool === 'task');
+    const childIds = [`${SESSION_ID}:agent-2:0`, `${SESSION_ID}:agent-1:0`];
+    expect(task?.metadata).toMatchObject({
+      sessionIds: childIds,
+      subagentLabels: { [childIds[0]!]: 'Count components', [childIds[1]!]: 'Read package.json' },
+    });
+    expect(entries.filter((entry) => childIds.includes(entry.info.sessionID))
+      .flatMap((entry) => entry.parts).filter((part) => part.type === 'text').map((part) => part.text))
+      .toEqual(['Count components', 'component result', 'Read package.json', 'package result']);
+  });
+
+  it('maps a Swarm child transcript into thinking, tool, and answer history', () => {
+    const entries = kimiWebTranscriptToHistoryEntries(`${SESSION_ID}:agent-5:0`, {
+      agent_id: 'agent-5', has_more: false, items: [{
+        kind: 'turn', turnId: 't0', ordinal: 0, state: 'completed',
+        steps: [{ stepId: 't0.1', frames: [
+          { kind: 'thinking', frameId: 'thinking-1', text: 'Find package name.' },
+          { kind: 'tool', frameId: 'tool-1', name: 'Read', state: 'done', input: { file_path: 'package.json' }, output: 'name: vis' },
+          { kind: 'text', frameId: 'answer-1', role: 'assistant', text: 'The name is vis.' },
+        ] }],
+      }],
+    });
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.parts.map((part) => part.type)).toEqual(['reasoning', 'tool', 'text']);
+    expect(entries[0]?.parts[1]).toMatchObject({ tool: 'read', state: { status: 'completed', output: 'name: vis' } });
   });
 
   it('combines adjacent thinking chunks into one history record without crossing text', () => {

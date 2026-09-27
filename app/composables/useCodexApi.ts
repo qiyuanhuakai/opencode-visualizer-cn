@@ -667,12 +667,14 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const realtimeMessageAliases = ref<Record<string, string>>({});
   const realtimeCompletedPart = ref<CodexRealtimePartRecord<ToolPart> | null>(null);
   const realtimeSubagentPart = ref<{ parentThreadId: string; info: AssistantMessageInfo; part: MessagePart } | null>(null);
+  const activeSubagentThreadIds = ref<string[]>([]);
   const subscribedSubagents = new Set<string>();
   let subagentStreamGeneration = 0;
   const subagentStreams = createCodexSubagentStreams({
     getSelectedParent: () => activeThreadId.value,
     publish: (info, part) => { realtimeSubagentPart.value = { parentThreadId: activeThreadId.value, info, part }; },
     onDiscover: (threadId, live) => { void subscribeSubagent(threadId, live); },
+    onActiveChange: (ids) => { activeSubagentThreadIds.value = [...ids]; },
   });
 
   async function subscribeSubagent(threadId: string, live: boolean) {
@@ -1443,7 +1445,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       const threadId = notificationThreadId || activeThreadId.value;
       const turnId = turn?.id || notificationTurnId;
       if (threadId && turnId) {
-        threadActivity.markParticipated(threadId);
+        if (notification.method === 'turn/started') threadActivity.markParticipated(threadId);
         updateThreadStatus(threadId, notification.method === 'turn/started' ? 'active' : 'idle');
         const key = liveTurnKey(threadId, turnId);
         if (notification.method === 'turn/started') {
@@ -3995,6 +3997,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     realtimeMessageAliases,
     realtimeCompletedPart,
     realtimeSubagentPart,
+    activeSubagentThreadIds,
     realtimeStreamingPart,
     realtimeReasoningPart,
     realtimeToolParts,

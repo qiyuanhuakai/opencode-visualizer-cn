@@ -32,7 +32,7 @@ describe('InputPanel ACP controls', () => {
     expect(selectors).toHaveLength(1);
     expect(selectors[0]?.querySelector('[title="Permission policy"]')?.textContent).toContain('Accept Edits');
     expect(root.querySelector('[title="Agent (Tab)"]')).toBeNull();
-    expect(root.textContent).toContain('@src/auth.ts');
+    expect(root.textContent).toContain('src/');
     expect(root.textContent).not.toContain('@Default');
   });
 

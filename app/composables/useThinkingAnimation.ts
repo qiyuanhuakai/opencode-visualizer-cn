@@ -16,7 +16,7 @@ export function useThinkingAnimation(
     if (!isThinking.value) return `🟢 ${t('app.status.idle')}`;
     const descendants = busyDescendantCount.value;
     const total = Math.max(1, 1 + descendants);
-    const heads = '🤔'.repeat(Math.min(total, 8));
+    const heads = '🤔'.repeat(total);
     return `${heads} ${t('app.status.thinking')}${thinkingSuffix.value}`;
   });
 

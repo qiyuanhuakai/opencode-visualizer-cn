@@ -95,7 +95,7 @@
       <span class="ib-error-text">{{ formatMessageError(threadError, (key) => t(key)) }}</span>
     </div>
 
-    <div v-if="!isRevertedPreview && backendKind !== 'kimi-web' && subagentSessions.length > 0" class="ib-subagent-section">
+    <div v-if="!isRevertedPreview && subagentSessions.length > 0" class="ib-subagent-section">
       <div v-for="session in subagentSessions" :key="session.sessionId" class="ib-subagent-row">
         <span class="ib-subagent-label">🤖 {{ session.label }}</span>
         <button
@@ -187,6 +187,9 @@ const props = defineProps<{
   } | null;
   backendKind?: BackendKind;
   kimiTurnPermissionForUser?: (sessionId: string, userMessageId: string) => string | undefined;
+  kimiCurrentPermissionMode?: string;
+  kimiDefaultPermissionMode?: string;
+  kimiDefaultPermissionColor?: string;
   kimiCardActionsReady?: boolean;
   kimiForkAvailable?: boolean;
   kimiUndoAvailable?: boolean;
@@ -251,11 +254,27 @@ watch(() => [props.root.sessionID, props.root.id, props.backendKind, props.hasMe
     if (!cancelled) kimiHasDiffs.value = false;
   }
 }, { immediate: true });
+const kimiAttributedPermission = computed(() => {
+  if (props.backendKind !== 'kimi-web') return undefined;
+  const recorded = props.kimiTurnPermissionForUser?.(props.root.sessionID, props.root.id);
+  if (recorded) return recorded;
+  const final = finalAnswer.value;
+  if (final?.role === 'assistant' && ['manual', 'auto', 'yolo'].includes(final.mode)) return final.mode;
+  if (props.isLatestRoot && props.kimiCurrentPermissionMode &&
+    ['manual', 'auto', 'yolo'].includes(props.kimiCurrentPermissionMode)) {
+    return props.kimiCurrentPermissionMode;
+  }
+  return undefined;
+});
+const kimiUsesDefaultPermission = computed(() =>
+  props.backendKind === 'kimi-web' && !kimiAttributedPermission.value &&
+  ['manual', 'auto', 'yolo'].includes(props.kimiDefaultPermissionMode ?? ''),
+);
 const threadTarget = computed<ThreadTargetType>(() => buildThreadTarget(props.root));
 const threadTargetAgentStyle = computed(() => {
-  const color = props.resolveAgentColor
-    ? props.resolveAgentColor(threadTarget.value.agent)
-    : 'var(--theme-status-success, #86efac)';
+  const color = (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionColor : undefined)
+    ?? props.resolveAgentColor?.(threadTarget.value.agent)
+    ?? 'var(--theme-status-success, #86efac)';
   return { color };
 });
 
@@ -437,11 +456,8 @@ async function confirmUndoRevert() {
 
 function buildThreadTarget(root: MessageInfo): ThreadTargetType {
   const final = finalAnswer.value;
-  const recordedKimiMode = props.kimiTurnPermissionForUser?.(root.sessionID, root.id);
   const agent = props.backendKind === 'kimi-web'
-    ? recordedKimiMode ?? (final?.role === 'assistant' && ['manual', 'auto', 'yolo'].includes(final.mode)
-      ? final.mode
-      : undefined)
+    ? kimiAttributedPermission.value ?? (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionMode : undefined)
     : root.agent ?? final?.agent;
   const modelPath = getMessageModelPath(root) || getMessageModelPath(final);
   const modelMeta = props.resolveModelMeta?.(modelPath);
@@ -455,9 +471,9 @@ function buildThreadTarget(root: MessageInfo): ThreadTargetType {
 }
 
 function getUserBoxStyle() {
-  const color = props.resolveAgentColor
-    ? props.resolveAgentColor(threadTarget.value.agent)
-    : '#334155';
+  const color = (kimiUsesDefaultPermission.value ? props.kimiDefaultPermissionColor : undefined)
+    ?? props.resolveAgentColor?.(threadTarget.value.agent)
+    ?? '#334155';
   if (color.startsWith('#') && color.length === 7) {
     return { borderLeftColor: `${color}99` };
   }

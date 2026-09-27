@@ -198,6 +198,10 @@ describe('buildHistoryEntries', () => {
 });
 
 describe('selectSubagentMessages', () => {
+  it('includes a live child assistant when Kimi has no child user message', () => {
+    const child = makeAssistantMessage('target:agent-0:0', 'child-answer', 'unavailable-prompt', 2);
+    expect(selectSubagentMessages([child], () => [child], 'target:agent-0:0')).toEqual([child]);
+  });
   it('Given roots from multiple sessions, When selecting for a target session, Then it returns only that session user roots flattened', () => {
     const targetUser = makeUserMessage('target', 'u-target', 1);
     const targetAssistant = makeAssistantMessage('target', 'a-target', 'u-target', 2);

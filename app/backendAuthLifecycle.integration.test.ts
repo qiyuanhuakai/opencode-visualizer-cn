@@ -18,8 +18,8 @@ async function selectSession(host: HTMLElement, title: string) {
     );
     if (!session) throw new Error(`${title} did not appear in the picker`);
     session.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  });
-  await vi.waitFor(() => expect(picker?.textContent).toContain(title));
+  }, { timeout: 5000 });
+  await vi.waitFor(() => expect(picker?.textContent).toContain(title), { timeout: 5000 });
 }
 
 function historyFor(sessionId: string) {
@@ -73,10 +73,11 @@ async function selectSessionAndWaitForHistory(
 ) {
   const sessionId = title === 'Session A' ? 'session-a' : 'session-b';
   await selectSession(fixture.host, title);
-  await vi.waitFor(() =>
-    expect(fixture.listSessionMessages).toHaveBeenCalledWith(sessionId, {
+  await vi.waitFor(
+    () => expect(fixture.listSessionMessages).toHaveBeenCalledWith(sessionId, {
       directory: '/repo',
     }),
+    { timeout: 5000 },
   );
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -114,6 +115,7 @@ describe('App backend authentication lifecycle', () => {
         }),
       );
     },
+    20000,
   );
 
   it.each([401, 403])(

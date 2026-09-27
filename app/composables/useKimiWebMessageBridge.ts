@@ -1,8 +1,9 @@
-import { shallowReactive } from 'vue';
+import { reactive, shallowReactive } from 'vue';
 import {
   createKimiWebNormalizer,
   type KimiWebNormalizer,
 } from '../backends/kimiWeb/normalize';
+import type { KimiWebNormalizeOp } from '../backends/kimiWeb/normalize';
 import type { KimiWebSnapshot } from '../utils/kimiWeb';
 import type { KimiWebWsAck, KimiWebWsCursor, KimiWebWsFrame } from '../utils/kimiWebWs';
 import type { MessageInfo } from '../types/sse';
@@ -48,6 +49,7 @@ function ackNeedsResync(ack: KimiWebWsAck, sessionId: string): boolean {
 export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
   const syncStates = new Map<string, KimiWebSyncState>();
   const sessionStates = shallowReactive(new Map<string, KimiWebBridgeSessionState>());
+  const activeSubagents = reactive(new Map<string, Set<string>>());
   const normalizers = new Map<string, KimiWebNormalizer>();
   const messages = new Map<string, MessageInfo>();
   const ownedMessageIds = new Map<string, Set<string>>();
@@ -101,7 +103,17 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
     for (const entry of entries) messages.set(entry.info.id, entry.info);
   }
 
-  const applyOp = createKimiWebOpApplier({ bridge: options, messages, ownMessage, mergeSession });
+  function applySubagent(op: Extract<KimiWebNormalizeOp, { kind: 'subagent' }>) {
+    let active = activeSubagents.get(op.sessionId);
+    if (!active) {
+      active = reactive(new Set<string>());
+      activeSubagents.set(op.sessionId, active);
+    }
+    if (op.phase === 'spawned' || op.phase === 'started') active.add(op.subagentSessionId);
+    else active.delete(op.subagentSessionId);
+  }
+
+  const applyOp = createKimiWebOpApplier({ bridge: options, messages, ownMessage, mergeSession, applySubagent });
 
   function normalize(frame: KimiWebWsFrame, origin: KimiWebFrameOrigin) {
     const sessionId = frame.session_id ?? '__global__';
@@ -121,9 +133,10 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
   }
 
   function clearEpochState(sessionId: string) {
+    activeSubagents.delete(sessionId);
     removeSupersededMessages(sessionId);
     normalizerFor(sessionId).reset();
-    for (const key of [...appliedDurable]) {
+    for (const key of appliedDurable) {
       if (key.startsWith(`${sessionId}:`)) appliedDurable.delete(key);
     }
     mergeSession(sessionId, { busy: false, mainTurnActive: false });
@@ -183,7 +196,9 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
         if (typeof frame.seq === 'number') appliedDurable.add(key);
         const result = normalizerFor(sessionId).ingest(frame);
         for (const op of result.ops) {
-          if (op.kind === 'session') options.onSessionEvent?.(op);
+          if (op.kind === 'session') options.onSessionEvent?.(op, {
+            epoch: frame.epoch, sequence: frame.seq, origin: 'live',
+          });
         }
       }
       return;
@@ -314,6 +329,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
 
   function reconnectStart() {
     for (const sessionId of options.client.subscriptions()) {
+      activeSubagents.delete(sessionId);
       nextRecoveryGeneration(sessionId);
       normalizerFor(sessionId).reset();
       mergeSession(sessionId, { busy: false, mainTurnActive: false });
@@ -369,6 +385,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
       options.msg.loadHistory(entries);
     },
     sessionState: (sessionId: string) => sessionStates.get(sessionId),
+    activeSubagentIds: (sessionId: string) => [...(activeSubagents.get(sessionId) ?? [])],
     syncState: (sessionId: string): KimiWebSyncState =>
       syncStates.get(sessionId) ?? { kind: 'disconnected' },
     normalizerStats: (sessionId: string) => normalizers.get(sessionId)?.stats(),
@@ -376,6 +393,7 @@ export function useKimiWebMessageBridge(options: KimiWebMessageBridgeOptions) {
       stopped = true;
       for (const unsubscribe of unsubscribers) unsubscribe();
       for (const sessionId of options.client.subscriptions()) {
+        activeSubagents.delete(sessionId);
         nextRecoveryGeneration(sessionId);
         mergeSession(sessionId, { busy: false, mainTurnActive: false });
         setSync(sessionId, { kind: 'disconnected' });

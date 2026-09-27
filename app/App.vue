@@ -128,7 +128,7 @@
                     :is-status-error="isStatusError"
                     :is-thinking="isThinking"
                     :is-retry-status="!!retryStatus"
-                    :busy-descendant-count="busyDescendantSessionIds.length"
+                    :busy-descendant-count="visibleBusyDescendantCount"
                     :theme="shikiTheme"
                     :resolve-agent-color="resolveAgentColorForName"
                     :resolve-model-meta="resolveModelMetaForPath"
@@ -136,6 +136,9 @@
                     :session-revert="sessionRevert"
                     :backend-kind="activeBackendKind"
                     :kimi-turn-permission-for-user="kimiTurnPermissions.get"
+                    :kimi-current-permission-mode="activeBackendKind === 'kimi-web' && isKimiWebPermissionMode(selectedMode) ? selectedMode : undefined"
+                    :kimi-default-permission-mode="activeBackendKind === 'kimi-web' ? kimiWebServerDefaultPermissionMode : undefined"
+                    :kimi-default-permission-color="activeBackendKind === 'kimi-web' ? codexModeColor('codex', resolvedTheme) : undefined"
                     :kimi-card-actions-ready="activeBackendKind === 'kimi-web' && connectionState === 'ready'"
                     :kimi-fork-available="kimiWebCapabilities.isAvailable('fork') && kimiWebCapabilities.isAvailable('undo')"
                     :kimi-undo-available="kimiWebCapabilities.isAvailable('undo')"
@@ -185,6 +188,7 @@
               "
               :subagent-options="subagentOptions"
               :mention-files="composerMentionFiles"
+              :mention-directories="composerMentionDirectories"
               :prefer-file-mentions="activeBackendKind === 'acp' || activeBackendKind === 'kimi-web' || activeBackendKind === 'codex'"
               :has-agent-options="hasAgentOptions"
               :agent-picker-state="agentPickerState"
@@ -623,6 +627,7 @@
 <script lang="ts" setup>
 import {
   computed,
+  defineAsyncComponent,
   markRaw,
   nextTick,
   onBeforeUnmount,
@@ -649,7 +654,6 @@ import GlobContent from './components/ToolWindow/Glob.vue';
 import GrepContent from './components/ToolWindow/Grep.vue';
 import ReasoningContent from './components/ToolWindow/Reasoning.vue';
 import ThreadHistoryContent from './components/ThreadHistoryContent.vue';
-import SubagentHistoryContent from './components/SubagentHistoryContent.vue';
 import SubagentContent from './components/ToolWindow/Subagent.vue';
 import WebContent from './components/ToolWindow/Web.vue';
 import SidePanel from './components/SidePanel.vue';
@@ -855,7 +859,7 @@ import {
   type KimiWebPermissionMode,
   type KimiWebSessionModeChange,
 } from './backends/kimiWeb/sessionModes';
-import { kimiWebMessagesToHistoryEntries } from './backends/kimiWeb/historyEntries';
+import { kimiWebMessagesToHistoryEntries, kimiWebTranscriptToHistoryEntries } from './backends/kimiWeb/historyEntries';
 import { createKimiWebTurnPermissionStore } from './backends/kimiWeb/turnPermissions';
 import {
   answerKimiWebApproval,
@@ -911,6 +915,7 @@ import {
 import { createKeyedTaskQueue } from './utils/keyedTaskQueue';
 import { createPendingPtyCreateRegistry, isCurrentPtySocket } from './utils/ptyLifecycle';
 
+const SubagentHistoryContent = defineAsyncComponent(() => import('./components/SubagentHistoryContent.vue'));
 const { t, locale } = useI18n();
 const desktopApi = window.electronAPI?.desktop;
 const desktopNotifications = desktopApi ? createDesktopNotificationRouter({
@@ -2265,6 +2270,7 @@ function readLastKimiPermissionMode() {
   }
 }
 const lastKimiPermissionMode = ref(readLastKimiPermissionMode());
+const kimiWebServerDefaultPermissionMode = ref<KimiWebPermissionMode>('manual');
 const kimiTurnPermissions = createKimiWebTurnPermissionStore();
 function rememberKimiPermissionMode(value: KimiWebPermissionMode) {
   lastKimiPermissionMode.value = value;
@@ -3211,10 +3217,21 @@ const busyDescendantSessionIds = computed(() => {
   return ids;
 });
 
+const visibleBusyDescendantCount = computed(() => {
+  const ids = new Set(busyDescendantSessionIds.value);
+  if (activeBackendKind.value === 'codex') {
+    for (const id of codexApi.activeSubagentThreadIds.value) ids.add(id);
+  } else if (activeBackendKind.value === 'kimi-web') {
+    const selected = selectedSessionId.value;
+    if (selected) for (const id of kimiWebMessageBridge.value?.activeSubagentIds(selected) ?? []) ids.add(id);
+  }
+  return ids.size;
+});
+
 const { isThinking } = useBackendSessionStatus({
   activeBackendKind,
   selectedSessionId,
-  busyDescendantCount: computed(() => busyDescendantSessionIds.value.length),
+  busyDescendantCount: visibleBusyDescendantCount,
   runningToolCount: computed(() => runningToolIds.size),
   codexActiveTurnStatus: computed(() => codexApi.activeTurn.value?.status),
   getSessionStatus: (sessionId) => getSessionStatus(sessionId),
@@ -4341,6 +4358,18 @@ const composerMentionFiles = computed(() => {
     if (node.children?.length) stack.push(...node.children);
   }
   return [...paths].sort((a, b) => a.localeCompare(b));
+});
+
+const composerMentionDirectories = computed(() => {
+  const paths: string[] = [];
+  const stack = [...treeNodes.value];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (node.type === 'directory') paths.push(node.path);
+    if (node.children?.length) stack.push(...node.children);
+  }
+  return paths;
 });
 
 async function buildAcpMentionContextParts(text: string) {
@@ -7940,6 +7969,13 @@ async function loadKimiWebModeMeta() {
   return meta;
 }
 
+async function loadKimiWebDefaultPermissionMode() {
+  const config = await kimiWebRestClient().getConfig();
+  if (isKimiWebPermissionMode(config.default_permission_mode)) {
+    kimiWebServerDefaultPermissionMode.value = config.default_permission_mode;
+  }
+}
+
 const kimiWebSessionModes = useKimiWebSessionModes({
   writeMode: async (sessionId, change) => {
     const active = backend();
@@ -8465,13 +8501,13 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
           if (sessionId !== selectedSessionId.value) return;
           void reconcileKimiWebSelectedSession();
         },
-        onSessionEvent: (op) => {
+        onSessionEvent: (op, context) => {
           // `session.pendingInteraction` is a reconcile trigger only: a
           // declaration the local set disagrees with asks the authoritative
           // lists to be re-read (it never fabricates or clears an item).
           if (activeBackendKind.value !== 'kimi-web') return;
           if (!isCurrent() || getActiveBackendAdapter() !== adapter) return;
-          applyKimiWebSessionEvent(serverState.projects, op);
+          applyKimiWebSessionEvent(serverState.projects, op, context.origin);
           if (op.phase === 'created') scheduleKimiTopPanelGitInfoHydration();
           if (op.sessionId !== selectedSessionId.value) return;
           if (!kimiWebSessionOpNeedsReconcile(op, kimiWebInteractions)) return;
@@ -8503,6 +8539,7 @@ async function bootstrapKimiWebWorkspace(isCurrent: () => boolean) {
   kimiWebWsClient.value = result.client;
   kimiWebMessageBridge.value = result.bridge as ReturnType<typeof useKimiWebMessageBridge> | undefined;
   void loadKimiWebModeMeta().catch((error) => log('Kimi Web mode meta load failed', error));
+  void loadKimiWebDefaultPermissionMode().catch((error) => log('Kimi Web default permission load failed', error));
 }
 
 watch(selectedSessionId, () => {
@@ -9021,6 +9058,13 @@ const backendMessageSend = useBackendMessageSend({
   isKimiWebSessionModeReady: (sessionId) =>
     kimiWebSessionModes.sessionState(sessionId).pendingField === undefined,
   recordKimiWebTurnPermission: kimiTurnPermissions.record,
+  onKimiWebPromptRunning: (sessionId) => {
+    // A fast completion can reach the socket before the REST acceptance.
+    if (getSessionStatus(sessionId) === 'idle') return;
+    applyKimiWebSessionEvent(serverState.projects, {
+      kind: 'session', phase: 'status-changed', sessionId, status: 'busy',
+    });
+  },
   ensureConnectionReady,
   translate: t,
   toErrorMessage,
@@ -9884,6 +9928,23 @@ function handleShowThreadHistory(payload: { entries: HistoryWindowEntry[] }) {
   });
 }
 
+async function readKimiWebSubagentHistory(childSessionId: string) {
+  const match = /^(.+):([^:]+):\d+$/u.exec(childSessionId);
+  if (!match) throw new Error('Invalid Kimi Web subagent session.');
+  const [, sessionId, agentId] = match;
+  const pages = [];
+  let before: string | undefined;
+  for (let pageIndex = 0; pageIndex < 20; pageIndex++) {
+    const page = await kimiWebRestClient().getAgentTranscript(sessionId!, agentId!, before);
+    pages.unshift(...kimiWebTranscriptToHistoryEntries(childSessionId, page));
+    if (!page.has_more) break;
+    const oldest = page.items.find((item) => item.kind === 'turn');
+    if (!oldest || oldest.kind !== 'turn' || !oldest.turnId || oldest.turnId === before) break;
+    before = oldest.turnId;
+  }
+  return pages;
+}
+
 function handleShowSubagentHistory(payload: { sessionId: string; label: string }) {
   const sessionId = payload.sessionId?.trim();
   if (!sessionId) return;
@@ -9902,7 +9963,8 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
     component: SubagentHistoryContent,
     props: {
       parentThreadId: sessionId,
-      loadHistory: activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory : undefined,
+      loadHistory: activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory
+        : activeBackendKind.value === 'kimi-web' ? readKimiWebSubagentHistory : undefined,
       sessionLabel: label,
       theme: shikiTheme.value,
       onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),

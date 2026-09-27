@@ -106,7 +106,7 @@ export function mapKimiWebSession(session: KimiWebSession): KimiWebMappedSession
     workspaceId: session.workspace_id,
     parentID: session.metadata?.parent_session_id,
     title: session.title || session.id,
-    status: session.busy ? 'busy' : session.last_turn_reason ? 'idle' : 'unknown',
+    status: session.busy || session.main_turn_active ? 'busy' : 'unknown',
     directory,
     time: {
       created: timestamp(session.created_at),
