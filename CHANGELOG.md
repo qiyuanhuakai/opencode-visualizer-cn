@@ -3,7 +3,7 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
-## [Unreleased]
+## [v0.8.8 released]
 ### 设置控件与侧栏布局
 
 - [x] 将语言、Codex 和 Kimi Web 等页面的原生下拉框统一替换为 Vis 主题下拉；数字微调框改为直接输入，并校验非法数字。
