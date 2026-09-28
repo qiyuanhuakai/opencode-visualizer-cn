@@ -3,6 +3,8 @@ import { computed, inject, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { Icon } from '@iconify/vue';
 import ProviderDiscoveryList from '../ProviderDiscoveryList.vue';
+import Dropdown from '../Dropdown.vue';
+import DropdownItem from '../Dropdown/Item.vue';
 import type {
   KimiWebModelObjectWire,
   KimiWebProviderCreateInput,
@@ -576,12 +578,13 @@ onMounted(() => {
         <small v-if="formErrors.id" class="is-error">{{ formErrors.id }}</small>
       </label>
 
-      <label class="kimi-web-provider-field">
+      <div class="kimi-web-provider-field">
         <span>{{ $t('kimiWeb.providers.type') }}</span>
-        <select v-model="form.type">
-          <option v-for="type of PROVIDER_TYPES" :key="type" :value="type">{{ type }}</option>
-        </select>
-      </label>
+        <Dropdown v-model="form.type" class="kimi-web-provider-type" :aria-label="$t('kimiWeb.providers.type')" auto-close>
+          <template #label>{{ form.type }}</template>
+          <DropdownItem v-for="type of PROVIDER_TYPES" :key="type" :value="type">{{ type }}</DropdownItem>
+        </Dropdown>
+      </div>
 
       <label class="kimi-web-provider-field">
         <span>{{ $t('kimiWeb.providers.baseUrl') }}</span>
@@ -629,7 +632,8 @@ onMounted(() => {
           <input v-model="row.name" type="text" :aria-label="$t('kimiWeb.providers.modelName')" />
           <input
             v-model.number="row.contextSize"
-            type="number"
+            type="text"
+            inputmode="numeric"
             min="1"
             :aria-label="$t('kimiWeb.providers.contextSize')"
             :class="{ 'is-error': row.err }"
@@ -1120,7 +1124,6 @@ onMounted(() => {
 }
 
 .kimi-web-provider-field input,
-.kimi-web-provider-field select,
 .kimi-web-provider-model-row input,
 .kimi-web-provider-key-value {
   min-height: 38px;
@@ -1140,7 +1143,6 @@ onMounted(() => {
 }
 
 .kimi-web-provider-field input:focus,
-.kimi-web-provider-field select:focus,
 .kimi-web-provider-model-row input:focus,
 .kimi-web-provider-key-value:focus {
   border-color: var(--theme-modal-accent, var(--theme-border-accent, #60a5fa));
@@ -1260,5 +1262,11 @@ onMounted(() => {
   .kimi-web-provider-toolbar-actions > * {
     flex: 1 1 auto;
   }
+}
+
+.kimi-web-provider-type :deep(.ui-dropdown-button) {
+  min-height: 38px;
+  border-radius: 9px;
+  padding: 0 12px;
 }
 </style>

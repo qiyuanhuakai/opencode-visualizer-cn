@@ -5,21 +5,23 @@
     </div>
 
     <form class="codex-feedback-form" @submit.prevent="handleSubmit">
-      <label class="codex-feedback-field">
+      <div class="codex-feedback-field">
         <span>{{ t('codexPanel.feedbackClassification') }}</span>
-        <select
+        <Dropdown
           v-model="classification"
-          class="codex-input"
+          class="codex-feedback-dropdown"
+          button-class="codex-input"
+          :aria-label="t('codexPanel.feedbackClassification')"
           :disabled="!api.connected.value || submitting"
-          required
+          auto-close
         >
-          <option value="">—</option>
-          <option value="bug">Bug</option>
-          <option value="feature_request">Feature Request</option>
-          <option value="performance">Performance</option>
-          <option value="other">Other</option>
-        </select>
-      </label>
+          <template #label>{{ classification ? { bug: 'Bug', feature_request: 'Feature Request', performance: 'Performance', other: 'Other' }[classification] : '—' }}</template>
+          <DropdownItem value="bug">Bug</DropdownItem>
+          <DropdownItem value="feature_request">Feature Request</DropdownItem>
+          <DropdownItem value="performance">Performance</DropdownItem>
+          <DropdownItem value="other">Other</DropdownItem>
+        </Dropdown>
+      </div>
 
       <label class="codex-feedback-field">
         <span>{{ t('codexPanel.feedbackReason') }}</span>
@@ -73,6 +75,8 @@ import { Icon } from '@iconify/vue';
 import { useI18n } from 'vue-i18n';
 import type { CodexFeedbackUploadParams } from '../../backends/codex/codexAdapter';
 import { useCodexApi } from '../../composables/useCodexApi';
+import Dropdown from '../Dropdown.vue';
+import DropdownItem from '../Dropdown/Item.vue';
 
 const props = defineProps<{
   api: ReturnType<typeof useCodexApi>;
@@ -172,8 +176,9 @@ async function handleSubmit() {
   height: auto !important;
 }
 
-.codex-feedback-field select.codex-input {
-  cursor: pointer;
+.codex-feedback-dropdown :deep(.ui-dropdown-button) {
+  width: 100%;
+  justify-content: space-between;
 }
 
 .codex-feedback-actions {

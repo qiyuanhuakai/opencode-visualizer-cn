@@ -70,7 +70,8 @@ try {
     }
     await page.screenshot({ path: path.join(output, 'settings-updates.png') });
     await page.locator('.modal-back-button').click();
-    await page.locator('.language-select').selectOption('zh-CN');
+    await page.locator('.language-select button').click();
+    await page.locator('.language-select [role="option"]').filter({ hasText: '简体中文' }).click();
     await page.getByRole('button', { name: '桌面', exact: true }).click();
     for (const width of [1280, 900]) {
       await application.evaluate(({ BrowserWindow }, value) => BrowserWindow.getAllWindows()[0].setContentSize(value, 800), width);

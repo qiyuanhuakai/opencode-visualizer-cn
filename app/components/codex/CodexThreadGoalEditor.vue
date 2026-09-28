@@ -25,7 +25,7 @@
         </div>
         <label class="goal-field">
           {{ t('codexPanel.runtime.tokenBudget') }}
-          <input :value="budgetText" name="tokenBudget" type="number" min="1" step="1" class="goal-control" :disabled="saving || !goalReady" :aria-invalid="invalidBudget" @input="updateBudget" />
+          <input :value="budgetText" name="tokenBudget" type="text" inputmode="numeric" class="goal-control" :disabled="saving || !goalReady" :aria-invalid="invalidBudget" @input="updateBudget" />
         </label>
       </div>
       <p class="goal-hint">{{ copy.budgetHelp }}</p>

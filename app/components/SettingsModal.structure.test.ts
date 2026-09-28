@@ -76,7 +76,7 @@ describe('SettingsModal navigation, state, and accessibility', () => {
   it('clamps the named open-in-editor size setting on blur', async () => {
     const { host, settings } = await mountModal();
     const input = rowByLabel(host, en.settings.openInEditorMaxSizeMb.label).querySelector(
-      'input[type="number"]',
+      'input[inputmode="numeric"]',
     ) as HTMLInputElement;
     input.value = '999';
     input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -85,14 +85,24 @@ describe('SettingsModal navigation, state, and accessibility', () => {
 
     expect(input.value).toBe('100');
     expect(settings.openInEditorMaxSizeMb.value).toBe(100);
+
+    input.value = 'oops';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('blur', { bubbles: true }));
+    await nextTick();
+    expect(input.value).toBe('1');
+    expect(settings.openInEditorMaxSizeMb.value).toBe(1);
   });
 
   it('changes visible settings labels when Japanese is selected', async () => {
     const { host } = await mountModal();
-    const language = host.querySelector<HTMLSelectElement>('select.language-select');
+    const language = host.querySelector<HTMLElement>('.language-select');
     expect(language).not.toBeNull();
-    language!.value = 'ja';
-    language!.dispatchEvent(new Event('change', { bubbles: true }));
+    language!.querySelector<HTMLButtonElement>('button')?.click();
+    await nextTick();
+    const japanese = Array.from(language!.querySelectorAll<HTMLElement>('[role="option"]'))
+      .find((option) => option.textContent?.trim() === ja.settings.language.ja);
+    japanese?.click();
     await nextTick();
 
     expect(rowByLabel(host, ja.settings.language.label)).toBeDefined();

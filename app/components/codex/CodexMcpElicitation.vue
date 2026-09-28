@@ -14,7 +14,7 @@
       autocomplete="off"
       @submit.prevent="submitForm"
     >
-      <label
+      <div
         v-for="field in request.fields"
         :key="field.key"
         class="block space-y-1.5 rounded border border-slate-700/60 bg-slate-900/35 p-3"
@@ -27,17 +27,19 @@
           {{ field.description }}
         </span>
 
-        <select
+        <Dropdown
           v-if="field.type === 'select'"
           v-model="values[field.key]"
-          :name="field.key"
-          class="w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm outline-none focus:border-blue-400"
+          class="w-full"
+          :label="field.options?.find((option) => option.value === values[field.key])?.label || '—'"
+          :aria-label="field.label"
+          auto-close
         >
-          <option value="">—</option>
-          <option v-for="option in field.options" :key="option.value" :value="option.value">
+          <DropdownItem value="">—</DropdownItem>
+          <DropdownItem v-for="option in field.options" :key="option.value" :value="option.value">
             {{ option.label }}
-          </option>
-        </select>
+          </DropdownItem>
+        </Dropdown>
 
         <div v-else-if="field.type === 'multiselect'" class="space-y-1.5">
           <label
@@ -66,7 +68,9 @@
           v-else-if="field.type === 'number' || field.type === 'integer'"
           v-model.number="values[field.key]"
           :name="field.key"
-          type="number"
+          :aria-label="field.label"
+          type="text"
+          :inputmode="field.type === 'integer' ? 'numeric' : 'decimal'"
           :min="field.minimum"
           :max="field.maximum"
           :step="field.type === 'integer' ? 1 : 'any'"
@@ -77,13 +81,14 @@
           v-else
           v-model="values[field.key]"
           :name="field.key"
+          :aria-label="field.label"
           :type="field.format === 'password' ? 'password' : 'text'"
           :minlength="field.minLength"
           :maxlength="field.maxLength"
           :autocomplete="field.format === 'password' ? 'new-password' : 'off'"
           class="w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm outline-none focus:border-blue-400"
         />
-      </label>
+      </div>
     </form>
 
     <div v-else class="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded border border-slate-700/60 bg-slate-900/35 p-4">
@@ -130,6 +135,8 @@
 <script setup lang="ts">
 import { computed, reactive } from 'vue';
 import { useI18n } from 'vue-i18n';
+import Dropdown from '../Dropdown.vue';
+import DropdownItem from '../Dropdown/Item.vue';
 import type {
   McpElicitationAction,
   McpElicitationRequest,
@@ -159,7 +166,15 @@ function hasValue(value: unknown) {
 
 const formValid = computed(() =>
   props.request.mode !== 'form' ||
-  props.request.fields.every((field) => !field.required || hasValue(values[field.key])),
+  props.request.fields.every((field) => {
+    const value = values[field.key];
+    if (!hasValue(value)) return !field.required;
+    if (field.type !== 'number' && field.type !== 'integer') return true;
+    return typeof value === 'number' && Number.isFinite(value)
+      && (field.type !== 'integer' || Number.isInteger(value))
+      && (field.minimum === undefined || value >= field.minimum)
+      && (field.maximum === undefined || value <= field.maximum);
+  }),
 );
 
 function multiValues(key: string) {
