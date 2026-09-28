@@ -26,4 +26,8 @@ describe('floatingWindowTheme', () => {
     expect(resolveFloatingWindowThemeType({ key: 'custom:1', color: '' })).toBe('default');
     expect(resolveFloatingWindowThemeType('custom:1')).toBe('default');
   });
+
+  it('uses shell colors for bash tool windows even when their key is a tool call ID', () => {
+    expect(resolveFloatingWindowThemeType({ key: 'history-tool:bash-1', color: '#123456', themeType: 'shell' })).toBe('shell');
+  });
 });

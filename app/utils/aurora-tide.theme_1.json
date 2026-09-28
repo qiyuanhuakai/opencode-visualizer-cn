@@ -1,0 +1,41 @@
+{
+  "$schema": "/schema/theme.schema.json",
+  "id": "aurora-tide",
+  "label": "极光潮汐",
+  "badge": "冷夜",
+  "description": "深海蓝绿底色上叠加极光与冷月光，适合长时间专注。",
+  "swatches": ["#0b1722", "#173440", "#5de1c0", "#a6b9ff"],
+  "regions": {
+    "topPanel": { "bg": "#142a35", "text": "#e8f6f3", "border": "#31525b", "accent": "#5de1c0", "controlBg": "#1d3c48", "activeBg": "#27585b", "activeText": "#f6fffc", "textMuted": "#a2bdc1" },
+    "sidePanel": { "bg": "radial-gradient(circle at 0% 10%, rgba(76, 197, 170, 0.14), transparent 44%), linear-gradient(165deg, #142d38 0%, #10232e 60%, #192d3f 100%)", "text": "#e0f2f0", "border": "#31525b", "accent": "#7dd9c7", "controlBg": "#1a3944", "activeBg": "#26545a", "activeText": "#f6fffc", "textMuted": "#a2bdc1" },
+    "inputPanel": { "bg": "linear-gradient(140deg, #183440 0%, #1c3042 100%)", "text": "#e8f6f3", "border": "#3b5c65", "accent": "#5de1c0", "controlBg": "#203d49", "activeBg": "#28565b", "activeText": "#f6fffc", "textMuted": "#a2bdc1" },
+    "outputPanel": { "bg": "radial-gradient(circle at 90% 0%, rgba(141, 126, 222, 0.12), transparent 38%), linear-gradient(160deg, #122a36 0%, #17273a 100%)", "text": "#e8f6f3", "border": "#31525b", "accent": "#a6b9ff", "controlBg": "#203748", "activeBg": "#334b65", "activeText": "#f6fffc", "textMuted": "#a2bdc1" },
+    "topDropdown": { "bg": "#142a35", "text": "#e8f6f3", "border": "#31525b", "accent": "#5de1c0", "controlBg": "#1d3c48", "activeBg": "#27585b", "activeText": "#f6fffc", "textMuted": "#a2bdc1" },
+    "modalPanel": { "bg": "linear-gradient(150deg, #1d3944 0%, #1c2c3d 100%)", "text": "#e8f6f3", "border": "#45616d", "accent": "#5de1c0", "controlBg": "#24424d", "activeBg": "#315861", "activeText": "#f6fffc", "textMuted": "#afc6cb" },
+    "loginScreen": { "bg": "radial-gradient(ellipse at 20% 15%, rgba(75, 205, 167, 0.24), transparent 42%), radial-gradient(ellipse at 85% 75%, rgba(116, 130, 220, 0.18), transparent 48%), linear-gradient(145deg, #0b1722, #173440 58%, #101d31)", "text": "#e8f6f3", "border": "#31525b", "accent": "#5de1c0", "controlBg": "#1d3c48", "activeBg": "#27585b", "activeText": "#f6fffc", "textMuted": "#a2bdc1" },
+    "pageBackground": { "bg": "radial-gradient(ellipse at 16% 8%, rgba(65, 188, 156, 0.22), transparent 36%), radial-gradient(ellipse at 84% 67%, rgba(119, 118, 219, 0.16), transparent 44%), linear-gradient(155deg, #0b1722 0%, #112a35 56%, #111e31 100%)", "text": "#e8f6f3", "border": "#31525b", "accent": "#5de1c0", "controlBg": "#193541", "activeBg": "#27585b", "activeText": "#f6fffc", "textMuted": "#a2bdc1" },
+    "chatCard": { "bg": "linear-gradient(135deg, rgba(32, 66, 75, 0.96), rgba(29, 44, 66, 0.96))", "text": "#e8f6f3", "border": "#41616a", "accent": "#a6b9ff", "controlBg": "#24424d", "activeBg": "#315861", "activeText": "#f6fffc", "textMuted": "#afc6cb" }
+  },
+  "components": {
+    "dropdown": { "bg": "#1a3540", "border": "#41616a", "text": "#e8f6f3", "textMuted": "#afc6cb", "controlBg": "#22414b", "hoverBg": "#2a5357", "activeBg": "#315d60", "accent": "#5de1c0", "shadow": "0 14px 36px rgba(3, 18, 27, 0.44)" },
+    "formControl": { "bg": "#1a3540", "border": "#41616a", "text": "#e8f6f3", "placeholder": "#a2bdc1", "focusBorder": "#5de1c0", "buttonPrimaryBg": "#286d65", "buttonPrimaryBorder": "#5de1c0", "buttonPrimaryText": "#f6fffc" },
+    "card": { "bg": "linear-gradient(140deg, #1c3943, #202f43)", "border": "#41616a", "shadow": "0 12px 30px rgba(3, 18, 27, 0.24)", "hoverBg": "#25434e", "activeBg": "#2c4c58" }
+  },
+  "floating": {
+    "surfaceBase": "#192f3d", "surfaceMuted": "#203d49", "surfaceSubtle": "#142b37", "surfaceStrong": "#315560",
+    "borderMuted": "#41616a", "borderSubtle": "#518179", "borderFaint": "rgba(177, 222, 218, 0.18)", "borderFaintStrong": "rgba(177, 222, 218, 0.3)",
+    "fillFaint": "rgba(93, 225, 192, 0.1)", "text": "#e8f6f3", "textMuted": "#afc6cb", "textSoft": "#a2bdc1", "textSecondary": "#d8ecea",
+    "backgroundImage": "radial-gradient(circle at 12% 0%, rgba(93, 225, 192, 0.13), transparent 44%), linear-gradient(140deg, rgba(18, 42, 54, 0.4), rgba(51, 61, 102, 0.2))",
+    "default": { "accent": "#5de1c0", "backgroundColor": "#192f3d", "titlebarOpacity": "1" },
+    "shell": { "accent": "#a6b9ff", "backgroundColor": "#192f3d", "titlebarOpacity": "1" },
+    "reasoning": { "accent": "#5de1c0", "backgroundColor": "#1b3442" },
+    "subagent": { "accent": "#a6b9ff", "backgroundColor": "#193946" },
+    "tool": { "accent": "#5de1c0", "backgroundColor": "#19323f" },
+    "file": { "accent": "#82cfde", "backgroundColor": "#1b3244" },
+    "diff": { "accent": "#a6b9ff", "backgroundColor": "#203549" },
+    "media": { "accent": "#77d7bb", "backgroundColor": "#1a3940" },
+    "dialog": { "accent": "#a6b9ff", "backgroundColor": "#213746" },
+    "history": { "accent": "#82cfde", "backgroundColor": "#1e3542" },
+    "debug": { "accent": "#719baa", "backgroundColor": "#1d3040" }
+  }
+}

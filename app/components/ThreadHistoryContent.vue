@@ -16,7 +16,7 @@
               class="message-viewer-context-history"
               :code="entry.content"
               :lang="'markdown'"
-              :theme="theme"
+              :theme="effectiveTheme"
               copy-button
               @rendered="handleRendered"
             />
@@ -100,8 +100,11 @@
         <div
           v-else
           class="history-item history-item-tool"
+          :class="{ 'is-shell-tool': normalizeToolName(entry.part.tool) === 'bash' }"
           :data-history-key="entry.key"
-          :style="{ '--tool-color': toolHeaderColor(entry.part.tool) }"
+          :style="{ '--tool-color': normalizeToolName(entry.part.tool) === 'bash'
+            ? (themeStorage?.floating?.shell?.accent ?? toolHeaderColor(entry.part.tool))
+            : (themeStorage?.floating?.tool?.accent ?? toolHeaderColor(entry.part.tool)) }"
           @click="handleToolClick(entry.part)"
         >
           <div class="history-meta">
@@ -132,6 +135,8 @@ import type { QuestionInfo, ReasoningPart, SubtaskPart, ToolPart } from '../type
 import { preserveScrollAnchor } from '../utils/scrollAnchor';
 import { resolveToolAccentColor } from '../utils/theme';
 import { normalizeToolName } from '../utils/toolNames';
+import { useSettings } from '../composables/useSettings';
+import { resolveSyntaxTheme } from '../utils/themeTokens';
 
 const { t } = useI18n();
 
@@ -160,17 +165,15 @@ type HistoryEntry =
   | { key: string; kind: 'subtask'; part: SubtaskPart; time: number }
   | QuestionHistoryEntry;
 
-const props = withDefaults(
-  defineProps<{
-    entries: HistoryEntry[];
-    theme?: string;
-    onToolClick?: (part: ToolPart) => void;
-    onReasoningClick?: (part: ReasoningPart) => void;
-  }>(),
-  {
-    theme: 'github-dark',
-  },
-);
+const props = defineProps<{
+  entries: HistoryEntry[];
+  theme?: string;
+  onToolClick?: (part: ToolPart) => void;
+  onReasoningClick?: (part: ReasoningPart) => void;
+}>();
+
+const { themeStorage } = useSettings();
+const effectiveTheme = computed(() => props.theme ?? resolveSyntaxTheme(themeStorage.value));
 
 const floatingWindow = useFloatingWindow();
 const rootEl = ref<HTMLElement | null>(null);
@@ -431,11 +434,68 @@ function formatMessageTime(value?: number) {
   background: var(--floating-surface-subtle, #1e222a);
 }
 
+.history-item-reasoning,
+.history-item-subtask,
+.history-item-tool,
+.history-item-question {
+  background: color-mix(
+    in srgb,
+    var(--history-entry-accent) var(--floating-body-accent-weight, 12%),
+    var(--history-entry-background)
+  );
+  color: var(--floating-text);
+}
+
+.history-item-reasoning {
+  --history-entry-accent: var(--theme-floating-reasoning-accent, #8b5cf6);
+  --history-entry-background: var(--theme-floating-reasoning-background-color, var(--floating-surface-base));
+  --floating-text: var(--theme-floating-reasoning-text, var(--theme-floating-text, #e2e8f0));
+  --floating-text-muted: var(--theme-floating-reasoning-text-muted, var(--theme-floating-text-muted, #94a3b8));
+  --floating-text-soft: var(--theme-floating-reasoning-text-soft, var(--theme-floating-text-soft, #9ca3af));
+  --floating-text-secondary: var(--theme-floating-reasoning-text-secondary, var(--theme-floating-text-secondary, #cbd5e1));
+}
+
+.history-item-subtask {
+  --history-entry-accent: var(--theme-floating-subagent-accent, #0ea5e9);
+  --history-entry-background: var(--theme-floating-subagent-background-color, var(--floating-surface-base));
+  --floating-text: var(--theme-floating-subagent-text, var(--theme-floating-text, #e2e8f0));
+  --floating-text-muted: var(--theme-floating-subagent-text-muted, var(--theme-floating-text-muted, #94a3b8));
+  --floating-text-soft: var(--theme-floating-subagent-text-soft, var(--theme-floating-text-soft, #9ca3af));
+  --floating-text-secondary: var(--theme-floating-subagent-text-secondary, var(--theme-floating-text-secondary, #cbd5e1));
+}
+
+.history-item-tool {
+  --history-entry-accent: var(--tool-color, var(--theme-floating-tool-accent, #64748b));
+  --history-entry-background: var(--theme-floating-tool-background-color, var(--floating-surface-base));
+  --floating-text: var(--theme-floating-tool-text, var(--theme-floating-text, #e2e8f0));
+  --floating-text-muted: var(--theme-floating-tool-text-muted, var(--theme-floating-text-muted, #94a3b8));
+  --floating-text-soft: var(--theme-floating-tool-text-soft, var(--theme-floating-text-soft, #9ca3af));
+  --floating-text-secondary: var(--theme-floating-tool-text-secondary, var(--theme-floating-text-secondary, #cbd5e1));
+}
+
+.history-item-tool.is-shell-tool {
+  --history-entry-accent: var(--theme-floating-shell-accent, var(--tool-color));
+  --history-entry-background: var(--theme-floating-shell-background-color, var(--floating-surface-base));
+  --floating-text: var(--theme-floating-shell-text, var(--theme-floating-text, #e2e8f0));
+  --floating-text-muted: var(--theme-floating-shell-text-muted, var(--theme-floating-text-muted, #94a3b8));
+  --floating-text-soft: var(--theme-floating-shell-text-soft, var(--theme-floating-text-soft, #9ca3af));
+  --floating-text-secondary: var(--theme-floating-shell-text-secondary, var(--theme-floating-text-secondary, #cbd5e1));
+}
+
+.history-item-question {
+  --history-entry-accent: var(--theme-floating-dialog-accent, #f59e0b);
+  --history-entry-background: var(--theme-floating-dialog-background-color, var(--floating-surface-base));
+  --floating-text: var(--theme-floating-dialog-text, var(--theme-floating-text, #e2e8f0));
+  --floating-text-muted: var(--theme-floating-dialog-text-muted, var(--theme-floating-text-muted, #94a3b8));
+  --floating-text-soft: var(--theme-floating-dialog-text-soft, var(--theme-floating-text-soft, #9ca3af));
+  --floating-text-secondary: var(--theme-floating-dialog-text-secondary, var(--theme-floating-text-secondary, #cbd5e1));
+}
+
 .history-meta {
   padding: 6px 10px;
   background: color-mix(
     in srgb,
-    var(--window-color, #3a4150) 14%,
+    var(--window-color, #3a4150) var(--floating-titlebar-accent-weight, 14%),
     var(--floating-surface-muted, #242832)
   );
   border-bottom: 1px solid
@@ -504,8 +564,8 @@ function formatMessageTime(value?: number) {
   );
   background: color-mix(
     in srgb,
-    var(--history-reasoning-color) 6%,
-    var(--floating-surface-base, #1a1d24)
+    var(--history-reasoning-color) var(--floating-hover-accent-weight, 6%),
+    var(--history-entry-background, #1a1d24)
   );
 }
 
@@ -514,11 +574,6 @@ function formatMessageTime(value?: number) {
     in srgb,
     var(--history-subagent-color) 36%,
     var(--floating-border-muted, #1e293b)
-  );
-  background: color-mix(
-    in srgb,
-    var(--history-subagent-color) 6%,
-    var(--floating-surface-base, #1a1d24)
   );
 }
 
@@ -547,7 +602,7 @@ function formatMessageTime(value?: number) {
 .history-item-reasoning .history-meta {
   background: color-mix(
     in srgb,
-    var(--history-reasoning-color) 18%,
+    var(--history-reasoning-color) var(--floating-titlebar-accent-weight, 18%),
     var(--floating-surface-muted, #242832)
   );
   border-bottom: none;
@@ -579,7 +634,7 @@ function formatMessageTime(value?: number) {
 .history-meta-question {
   background: color-mix(
     in srgb,
-    var(--history-question-color) 18%,
+    var(--history-question-color) var(--floating-titlebar-accent-weight, 18%),
     var(--floating-surface-muted, #242832)
   );
   border-bottom-color: color-mix(
@@ -718,15 +773,15 @@ function formatMessageTime(value?: number) {
   );
   background: color-mix(
     in srgb,
-    var(--tool-color, #64748b) 6%,
-    var(--floating-surface-base, #020617)
+    var(--tool-color, #64748b) var(--floating-hover-accent-weight, 6%),
+    var(--history-entry-background, #020617)
   );
 }
 
 .history-item-tool .history-meta {
   background: color-mix(
     in srgb,
-    var(--tool-color, #64748b) 18%,
+    var(--tool-color, #64748b) var(--floating-titlebar-accent-weight, 18%),
     var(--floating-surface-muted, rgba(15, 23, 42, 0.95))
   );
   border-bottom-color: color-mix(

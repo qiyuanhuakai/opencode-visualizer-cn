@@ -643,7 +643,6 @@ import { useI18n } from 'vue-i18n';
 import { codexModeColor, codexModeOptions } from './utils/codexModePresentation';
 import { isLightResolvedColor } from './utils/resolvedColor';
 import { formatProviderModelPath, preferredProviderModel, restoredReasoningEffort } from './utils/providerSelection';
-import { bundledThemes } from 'shiki/bundle/web';
 import InputPanel from './components/InputPanel.vue';
 import Dropdown from './components/Dropdown.vue';
 import DropdownItem from './components/Dropdown/Item.vue';
@@ -833,7 +832,8 @@ import {
 import { ACP_PROJECT_ID } from './backends/acp/bridgeUrl';
 import type { BackendKind } from './backends/types';
 import { opencodeTheme, resolveTheme, resolveAgentColor } from './utils/theme';
-import { DEFAULT_SYNTAX_THEME } from './utils/themeTokens';
+import { resolveSyntaxTheme } from './utils/themeTokens';
+import { resolveTerminalTheme } from './utils/terminalTheme';
 import {
   splitFileContentDirectoryAndPath,
   normalizeAbsolutePathNoParent,
@@ -967,7 +967,6 @@ const TERM_INNER_PADDING_X_PX = 4;
 const TERM_INNER_PADDING_Y_PX = 4;
 const FORGE_WINDOW_EXTRA_HEIGHT_PX = 92;
 const TERM_GUTTER_WIDTH_EM = 3.2;
-const TRANSPARENT_TERMINAL_BACKGROUND = 'rgba(0, 0, 0, 0)';
 
 const SHELL_LINGER_MS = 1000;
 const editingFileDrafts = reactive<Record<string, string>>({});
@@ -2094,7 +2093,7 @@ const reasoning = useReasoningWindows({
   selectedSessionId,
   fw,
   reasoningComponent: ReasoningContent,
-  theme: () => DEFAULT_SYNTAX_THEME,
+  theme: () => shikiTheme.value,
   reasoningCloseDelayMs: REASONING_CLOSE_DELAY_MS,
   resolveModelName: (providerID, modelID) => {
     const key = `${providerID}/${modelID}`;
@@ -2109,7 +2108,7 @@ const subagentWindows = useSubagentWindows({
   selectedSessionId,
   fw,
   subagentComponent: SubagentContent,
-  theme: () => DEFAULT_SYNTAX_THEME,
+  theme: () => shikiTheme.value,
   closeDelayMs: SUBAGENT_CLOSE_DELAY_MS,
   resolveModelName: (providerID, modelID) => {
     const key = `${providerID}/${modelID}`;
@@ -4866,37 +4865,6 @@ function removeAttachment(id: string) {
   persistComposerDraftForCurrentContext();
 }
 
-function getBundledThemeNames() {
-  if (Array.isArray(bundledThemes)) {
-    return bundledThemes
-      .map((theme) => {
-        if (typeof theme === 'string') return theme;
-        if (theme && typeof theme === 'object' && 'name' in theme) return String(theme.name ?? '');
-        return '';
-      })
-      .filter((name) => name.length > 0);
-  }
-  return Object.keys(bundledThemes);
-}
-
-function pickShikiTheme(names: string[]) {
-  if (names.length === 0) return 'github-dark';
-  const preferred = [
-    'github-dark',
-    'github-dark-dimmed',
-    'vitesse-dark',
-    'dark-plus',
-    'nord',
-    'dracula',
-    'monokai',
-  ];
-  for (const theme of preferred) {
-    if (names.includes(theme)) return theme;
-  }
-  const darkMatch = names.find((name) => /dark|night|nord|dracula|monokai/i.test(name));
-  return darkMatch ?? names[0];
-}
-
 function startInputResize(event: PointerEvent) {
   if (event.button !== 0) return;
   const output = outputEl.value;
@@ -6246,13 +6214,8 @@ const ptyWindowOwner = usePtyWindowOwner({
     fontSize: TERM_FONT_SIZE_PX.value,
     lineHeight: TERM_LINE_HEIGHT,
     cursorBlink: true,
-    allowTransparency: true,
-    theme: {
-      background: TRANSPARENT_TERMINAL_BACKGROUND,
-      foreground: '#e2e8f0',
-      cursor: '#e2e8f0',
-      selectionBackground: 'rgba(148, 163, 184, 0.3)',
-    },
+    minimumContrastRatio: 4.5,
+    theme: resolveTerminalTheme(themeStorage.value),
   }),
   prepareWindow: (pty: PtyInfo, options: ShellWindowOptions) => {
     const key = `shell:${pty.id}`;
@@ -6300,6 +6263,7 @@ const ptyWindowOwner = usePtyWindowOwner({
   findTerminalHost: (ptyId: string) =>
     toolWindowCanvasEl.value?.querySelector<HTMLElement>(`[data-shell-id="${ptyId}"]`) ?? null,
   openTerminal: (terminal: Terminal, host: HTMLElement) => {
+    host.style.setProperty('--terminal-canvas-background', resolveTerminalTheme(themeStorage.value).background!);
     terminal.open(host);
   },
   requestFrame: (callback: () => void) => {
@@ -6331,6 +6295,14 @@ const ptyWindowOwner = usePtyWindowOwner({
     }
   },
 });
+
+watch(themeStorage, (storage) => {
+  const theme = resolveTerminalTheme(storage);
+  shellSessionsByPtyId.forEach(({ terminal }) => {
+    terminal.options.theme = theme;
+    terminal.element?.parentElement?.style.setProperty('--terminal-canvas-background', theme.background!);
+  });
+}, { deep: true });
 
 async function ensureShellWindow(pty: PtyInfo, options: ShellWindowOptions = {}) {
   await ptyWindowOwner.ensureWindow(pty, options);
@@ -7709,7 +7681,7 @@ watch(
 
 function log(..._args: unknown[]) {}
 
-const shikiTheme = ref(DEFAULT_SYNTAX_THEME);
+const shikiTheme = computed(() => resolveSyntaxTheme(themeStorage.value));
 
 const TOOL_RENDERER_READ_EVENT_TYPES = new Set(['session.diff', 'file.edited']);
 
@@ -7738,6 +7710,7 @@ const toolRendererHelpers = {
   extractToolOutputText: parseToolOutputText,
   formatToolValue,
   renderWorkerHtml: renderWorkerHtmlWithI18n,
+  getTheme: () => shikiTheme.value,
   renderReadHtmlFromApi,
   resolveReadWritePath,
   guessLanguageFromPath,
@@ -9183,7 +9156,7 @@ async function renderReadHtmlFromApi(params: {
       id: `read-${params.callId ?? 'unknown'}-${Date.now().toString(36)}`,
       code: text,
       lang: 'text',
-      theme: DEFAULT_SYNTAX_THEME,
+      theme: shikiTheme.value,
       gutterMode,
     });
 
@@ -9233,7 +9206,7 @@ async function renderReadHtmlFromApi(params: {
       id: `read-${params.callId ?? 'unknown'}-${Date.now().toString(36)}`,
       code,
       lang: params.lang,
-      theme: DEFAULT_SYNTAX_THEME,
+      theme: shikiTheme.value,
       gutterMode: 'single',
       lineOffset: params.lineOffset,
       lineLimit: params.lineLimit,
@@ -9244,7 +9217,7 @@ async function renderReadHtmlFromApi(params: {
         id: `read-${params.callId ?? 'unknown'}-${Date.now().toString(36)}`,
         code: params.fallbackText,
         lang: params.lang,
-        theme: DEFAULT_SYNTAX_THEME,
+        theme: shikiTheme.value,
         gutterMode: 'single',
         lineOffset: params.lineOffset,
         lineLimit: params.lineLimit,
@@ -9268,7 +9241,7 @@ function renderEditDiffHtml(params: {
       after: params.after,
       patch: params.patch ?? params.diff,
       lang: params.lang,
-      theme: DEFAULT_SYNTAX_THEME,
+      theme: shikiTheme.value,
       gutterMode: 'double',
     });
 }
@@ -9775,6 +9748,7 @@ function openToolPartAsWindow(
       const key = keyPrefix ? `${keyPrefix}${callId}` : callId;
       fw.open(key, {
         ...rest,
+        themeType: toolName === 'bash' ? 'shell' : undefined,
         status:
           toolStatus === 'running' || toolStatus === 'completed' || toolStatus === 'error'
             ? toolStatus
@@ -9869,7 +9843,7 @@ function handleOpenHistoryReasoning(payload: { part: ReasoningPart }) {
       entries: [
         { id: payload.part.id, text: payload.part.text, completed: !!payload.part.time?.end },
       ],
-      theme: DEFAULT_SYNTAX_THEME,
+      theme: shikiTheme.value,
     },
     title: t('app.windowTitles.thought'),
     scroll: 'manual',
@@ -9908,7 +9882,6 @@ function handleShowThreadHistory(payload: { entries: HistoryWindowEntry[] }) {
     component: ThreadHistoryContent,
     props: {
       entries,
-      theme: shikiTheme.value,
       onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),
       onReasoningClick: (part: ReasoningPart) => handleOpenHistoryReasoning({ part }),
     },
@@ -9966,7 +9939,6 @@ function handleShowSubagentHistory(payload: { sessionId: string; label: string }
       loadHistory: activeBackendKind.value === 'codex' ? codexApi.readSubagentHistory
         : activeBackendKind.value === 'kimi-web' ? readKimiWebSubagentHistory : undefined,
       sessionLabel: label,
-      theme: shikiTheme.value,
       onToolClick: (part: ToolPart) => handleOpenHistoryTool({ part }),
       onReasoningClick: (part: ReasoningPart) => handleOpenHistoryReasoning({ part }),
     },
@@ -10630,9 +10602,6 @@ onMounted(() => {
       storageRemove(StorageKeys.state.lastAuthError);
     }
   }
-  const availableThemes = getBundledThemeNames();
-  const chosenTheme = pickShikiTheme(availableThemes);
-  if (chosenTheme) shikiTheme.value = chosenTheme;
   window.addEventListener('pointermove', handlePointerMove);
   window.addEventListener('pointerup', handlePointerUp);
   window.addEventListener('resize', handleWindowResize);

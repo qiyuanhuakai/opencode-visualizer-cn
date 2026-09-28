@@ -1,0 +1,285 @@
+{
+  "$schema": "/schema/theme.schema.json",
+  "id": "anime-night",
+  "label": "二次元夜境",
+  "badge": "暗系",
+  "description": "柔和紫灰底色搭配深粉与靛蓝，营造月下二次元少女漫的浪漫夜境",
+  "swatches": ["#2d2438", "#3d3250", "#c2185b", "#1565c0"],
+  "regions": {
+    "topPanel": {
+      "bg": "rgba(45, 36, 56, 0.92)",
+      "text": "#f0e6f5",
+      "border": "#5a4a70",
+      "accent": "#c2185b",
+      "controlBg": "rgba(61, 50, 80, 0.6)",
+      "activeBg": "rgba(194, 24, 91, 0.2)",
+      "activeText": "#f48fb1",
+      "textMuted": "#9a8aaa"
+    },
+    "sidePanel": {
+      "bg": "rgba(50, 40, 62, 0.95)",
+      "text": "#e8dff0",
+      "border": "#5a4a70",
+      "accent": "#1565c0",
+      "controlBg": "rgba(61, 50, 80, 0.5)",
+      "activeBg": "rgba(21, 101, 192, 0.15)",
+      "activeText": "#90caf9",
+      "textMuted": "#9a8aaa"
+    },
+    "inputPanel": {
+      "bg": "rgba(52, 42, 65, 0.92)",
+      "text": "#f0e6f5",
+      "border": "#6a5a80",
+      "accent": "#c2185b",
+      "controlBg": "rgba(61, 50, 80, 0.6)",
+      "activeBg": "rgba(194, 24, 91, 0.2)",
+      "activeText": "#f48fb1",
+      "textMuted": "#9a8aaa"
+    },
+    "outputPanel": {
+      "bg": "rgba(55, 45, 68, 0.92)",
+      "text": "#e8dff0",
+      "border": "#6a5a80",
+      "accent": "#1565c0",
+      "controlBg": "rgba(61, 50, 80, 0.5)",
+      "activeBg": "rgba(21, 101, 192, 0.15)",
+      "activeText": "#90caf9",
+      "textMuted": "#9a8aaa"
+    },
+    "topDropdown": {
+      "bg": "rgba(45, 36, 56, 0.92)",
+      "text": "#f0e6f5",
+      "border": "#6a5a80",
+      "accent": "#c2185b",
+      "controlBg": "rgba(56, 46, 72, 0.72)",
+      "activeBg": "rgba(194, 24, 91, 0.2)",
+      "activeText": "#f48fb1",
+      "textMuted": "#9a8aaa"
+    },
+    "modalPanel": {
+      "bg": "rgba(60, 48, 75, 0.96)",
+      "text": "#f0e6f5",
+      "border": "#6a5a80",
+      "accent": "#c2185b",
+      "controlBg": "rgba(61, 50, 80, 0.6)",
+      "activeBg": "rgba(194, 24, 91, 0.18)",
+      "activeText": "#f48fb1",
+      "textMuted": "#9a8aaa"
+    },
+    "loginScreen": {
+      "bg": "linear-gradient(135deg, #2d2438 0%, #3d3250 50%, #2a2040 100%)",
+      "text": "#f0e6f5",
+      "border": "#6a5a80",
+      "accent": "#c2185b",
+      "controlBg": "rgba(61, 50, 80, 0.5)",
+      "activeBg": "rgba(194, 24, 91, 0.2)",
+      "activeText": "#f48fb1",
+      "textMuted": "#9a8aaa"
+    },
+    "pageBackground": {
+      "bg": "linear-gradient(180deg, #2d2438 0%, #352a45 50%, #2a2040 100%)",
+      "text": "#f0e6f5",
+      "border": "#5a4a70",
+      "accent": "#c2185b",
+      "controlBg": "rgba(61, 50, 80, 0.4)",
+      "activeBg": "rgba(194, 24, 91, 0.12)",
+      "activeText": "#f48fb1",
+      "textMuted": "#8a7a9a"
+    },
+    "chatCard": {
+      "bg": "rgba(55, 45, 68, 0.85)",
+      "text": "#e8dff0",
+      "border": "#6a5a80",
+      "accent": "#1565c0",
+      "controlBg": "rgba(61, 50, 80, 0.5)",
+      "activeBg": "rgba(21, 101, 192, 0.12)",
+      "activeText": "#90caf9",
+      "textMuted": "#9a8aaa"
+    }
+  },
+  "floating": {
+    "surfaceBase": "#332943",
+    "surfaceMuted": "#3b3050",
+    "surfaceSubtle": "#2f263d",
+    "surfaceStrong": "#5b466e",
+    "borderMuted": "rgba(154, 138, 170, 0.34)",
+    "borderSubtle": "rgba(194, 24, 91, 0.28)",
+    "borderFaint": "rgba(240, 230, 245, 0.18)",
+    "borderFaintStrong": "rgba(240, 230, 245, 0.28)",
+    "fillFaint": "rgba(194, 24, 91, 0.16)",
+    "text": "#f0e6f5",
+    "textMuted": "#b9adc4",
+    "textSoft": "#9a8aaa",
+    "textSecondary": "#f8effb",
+    "backgroundImage": "radial-gradient(circle at top right, rgba(194, 24, 91, 0.16), transparent 38%), linear-gradient(135deg, rgba(45, 36, 56, 0.12), rgba(21, 101, 192, 0.12))",
+    "default": {
+      "accent": "#c2185b",
+      "backgroundColor": "#332943",
+      "opacity": "0.92",
+      "titlebarOpacity": "1",
+      "backgroundImage": "radial-gradient(circle at top right, rgba(194, 24, 91, 0.16), transparent 38%), linear-gradient(135deg, rgba(45, 36, 56, 0.12), rgba(21, 101, 192, 0.12))"
+    },
+    "shell": {
+      "accent": "#1565c0",
+      "backgroundColor": "#372c47",
+      "opacity": "0.95",
+      "titlebarOpacity": "1",
+      "backgroundImage": "linear-gradient(135deg, rgba(45, 36, 56, 0.08), rgba(21, 101, 192, 0.08))"
+    },
+    "reasoning": {
+      "accent": "#c2185b",
+      "backgroundColor": "#3b2b48",
+      "backgroundImage": "radial-gradient(circle at top left, rgba(244, 143, 177, 0.14), transparent 34%), linear-gradient(135deg, rgba(45, 36, 56, 0.12), rgba(61, 50, 80, 0.16))"
+    },
+    "subagent": {
+      "accent": "#64b5f6",
+      "backgroundColor": "#302f4b",
+      "backgroundImage": "radial-gradient(circle at top right, rgba(100, 181, 246, 0.14), transparent 34%), linear-gradient(135deg, rgba(45, 36, 56, 0.1), rgba(21, 101, 192, 0.12))"
+    },
+    "tool": {
+      "accent": "#90caf9",
+      "backgroundColor": "#352b43"
+    },
+    "file": {
+      "accent": "#64b5f6",
+      "backgroundColor": "#302d48"
+    },
+    "diff": {
+      "accent": "#c2185b",
+      "backgroundColor": "#402b47"
+    },
+    "media": {
+      "accent": "#f48fb1",
+      "backgroundColor": "#3b2c4b",
+      "backgroundImage": "radial-gradient(circle at center, rgba(244, 143, 177, 0.14), transparent 42%), linear-gradient(135deg, rgba(45, 36, 56, 0.1), rgba(61, 50, 80, 0.14))"
+    },
+    "dialog": {
+      "accent": "#f48fb1",
+      "backgroundColor": "#412d49"
+    },
+    "history": {
+      "accent": "#ce93d8",
+      "backgroundColor": "#382d48"
+    },
+    "debug": {
+      "accent": "#9a8aaa",
+      "backgroundColor": "#352d42"
+    }
+  },
+  "components": {
+    "dropdown": {
+      "bg": "rgba(60, 48, 78, 0.98)",
+      "border": "#6a5a80",
+      "text": "#f0e6f5",
+      "textMuted": "#9a8aaa",
+      "controlBg": "rgba(61, 50, 80, 0.6)",
+      "hoverBg": "rgba(194, 24, 91, 0.12)",
+      "activeBg": "rgba(194, 24, 91, 0.2)",
+      "accent": "#c2185b",
+      "shadow": "0 8px 32px rgba(194, 24, 91, 0.15)"
+    },
+    "chip": {
+      "borderNeutral": "#6a5a80",
+      "borderSubtle": "#5a4a70",
+      "bgNeutral": "rgba(61, 50, 80, 0.5)",
+      "bgHover": "rgba(194, 24, 91, 0.15)",
+      "fgNeutral": "#90caf9"
+    },
+    "iconAction": {
+      "border": "#6a5a80",
+      "bg": "rgba(61, 50, 80, 0.4)",
+      "bgHover": "rgba(194, 24, 91, 0.2)"
+    },
+    "dock": {
+      "trayBg": "rgba(45, 36, 56, 0.85)",
+      "trayBorder": "#5a4a70",
+      "trayShadow": "0 -4px 24px rgba(194, 24, 91, 0.1)",
+      "thumb": "#c2185b",
+      "chipBg": "rgba(61, 50, 80, 0.5)",
+      "chipHoverBg": "rgba(194, 24, 91, 0.2)",
+      "chipBorder": "#6a5a80",
+      "chipText": "#90caf9",
+      "handle": "#6a5a80",
+      "handleHover": "#c2185b",
+      "handleShadow": "0 2px 8px rgba(194, 24, 91, 0.2)"
+    },
+    "formControl": {
+      "bg": "rgba(55, 45, 68, 0.9)",
+      "border": "#6a5a80",
+      "text": "#f0e6f5",
+      "placeholder": "#6a5a80",
+      "focusBorder": "#c2185b",
+      "focusRing": "0 0 0 3px rgba(194, 24, 91, 0.2)",
+      "buttonBg": "rgba(61, 50, 80, 0.6)",
+      "buttonBorder": "#6a5a80",
+      "buttonText": "#90caf9",
+      "buttonHoverBg": "rgba(194, 24, 91, 0.2)",
+      "buttonPrimaryBg": "#c2185b",
+      "buttonPrimaryBorder": "#ad1457",
+      "buttonPrimaryText": "#ffffff",
+      "buttonPrimaryHoverBg": "#ad1457"
+    },
+    "tab": {
+      "bg": "rgba(61, 50, 80, 0.3)",
+      "border": "#6a5a80",
+      "text": "#9a8aaa",
+      "hoverBg": "rgba(194, 24, 91, 0.1)",
+      "activeBg": "rgba(194, 24, 91, 0.18)",
+      "activeBorder": "#c2185b",
+      "activeText": "#f48fb1"
+    },
+    "badge": {
+      "bg": "rgba(61, 50, 80, 0.5)",
+      "border": "#6a5a80",
+      "text": "#90caf9",
+      "accentBg": "rgba(194, 24, 91, 0.2)",
+      "accentBorder": "#c2185b",
+      "accentText": "#f48fb1"
+    },
+    "card": {
+      "bg": "rgba(55, 45, 68, 0.8)",
+      "border": "#6a5a80",
+      "shadow": "0 4px 16px rgba(194, 24, 91, 0.06)",
+      "hoverBg": "rgba(60, 48, 75, 0.9)",
+      "activeBg": "rgba(65, 52, 82, 0.95)"
+    },
+    "toggle": {
+      "track": "#3d3250",
+      "trackBorder": "#5a4a70",
+      "thumb": "#d0c8e0",
+      "activeTrack": "#c2185b",
+      "activeThumb": "#ffffff"
+    },
+    "listRow": {
+      "bg": "rgba(55, 45, 68, 0.6)",
+      "border": "#5a4a70",
+      "text": "#f0e6f5",
+      "textMuted": "#9a8aaa",
+      "hoverBg": "rgba(194, 24, 91, 0.1)",
+      "activeBg": "rgba(194, 24, 91, 0.18)"
+    },
+    "emptyState": {
+      "bg": "rgba(55, 45, 68, 0.5)",
+      "text": "#9a8aaa",
+      "textMuted": "#6a5a80",
+      "icon": "#6a5a80"
+    },
+    "actionButton": {
+      "bg": "rgba(61, 50, 80, 0.5)",
+      "border": "#6a5a80",
+      "text": "#90caf9",
+      "hoverBg": "rgba(194, 24, 91, 0.2)",
+      "accentBg": "rgba(194, 24, 91, 0.12)",
+      "accentBorder": "#c2185b",
+      "accentText": "#f48fb1"
+    },
+    "search": {
+      "bg": "rgba(61, 50, 80, 0.4)",
+      "border": "#6a5a80",
+      "text": "#f0e6f5",
+      "placeholder": "#6a5a80",
+      "icon": "#7a6a90",
+      "focusBg": "rgba(61, 50, 80, 0.6)"
+    }
+  }
+}

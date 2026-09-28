@@ -107,6 +107,7 @@ const toolHelpers: ToolRenderersHelpers = {
   extractToolOutputText: (value) => typeof value === 'string' ? value : undefined,
   formatToolValue: String,
   renderWorkerHtml: async ({ code }) => `<pre>${code}</pre>`,
+  getTheme: () => 'github-dark',
   renderReadHtmlFromApi: async ({ fallbackText }) => `<pre>${fallbackText ?? ''}</pre>`,
   resolveReadWritePath: () => '', guessLanguageFromPath: () => 'text', resolveReadRange: () => ({}),
   renderEditDiffHtml: () => '', formatGlobToolTitle: () => '', formatListToolTitle: () => '',

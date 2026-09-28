@@ -6,6 +6,13 @@ Vis feels like a compact terminal command center: dense, local-first, and precis
 
 Every new page or view must follow the Vis visual language and adapt to the active Vis theme. Reuse existing components, spacing, typography, and `--theme-*` tokens for its surfaces, text, borders, controls, and interaction states; verify the result in both light and dark themes before delivery.
 
+External themes may set `floating.<type>.backgroundColor`, `text`, `textMuted`, `textSoft`, and `textSecondary` for every floating window type. The same type colors apply to its compact entry in thread history. `floating.syntaxText` and `floating.<type>.syntaxText` optionally replace code preview syntax colors; when omitted, the syntax highlighter keeps its own colors. Type values take precedence over `floating.default`, then the shared floating colors.
+
+Shell and Forge terminal canvases follow the selected theme's shell surface. Their xterm foreground, cursor, selection, and ANSI palette must change with that surface; a light shell needs dark terminal ink. Shell tool output windows and their compact history entries use the same shell colors, with readable syntax highlighting. Keep terminal content and its theme-colored window frame visually cohesive, including after changing themes with a shell already open.
+Global scrollbars use the selected theme's muted text color for a visible thumb in both light and dark profiles; the track remains transparent.
+
+Theme management keeps each imported profile's ID stable when changing its display name. Each imported card has separate, keyboard reachable rename, export, and remove controls. Importing a duplicate ID opens an in-modal choice to replace or keep both; replacement stores a distinct backup first. The choice and rename editor use the active modal theme tokens, and neither action hides the selected profile unexpectedly.
+
 ## 2. Color
 
 ### Palette

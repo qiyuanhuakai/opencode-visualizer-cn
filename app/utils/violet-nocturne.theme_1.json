@@ -1,0 +1,41 @@
+{
+  "$schema": "/schema/theme.schema.json",
+  "id": "violet-nocturne",
+  "label": "紫晶夜曲",
+  "badge": "霓夜",
+  "description": "墨紫夜幕、柔和紫晶光与一抹香槟金，呈现有深度的夜间界面。",
+  "swatches": ["#1b1828", "#392d4a", "#c3a6ed", "#e5c38b"],
+  "regions": {
+    "topPanel": { "bg": "#2b2339", "text": "#f3edf8", "border": "#584769", "accent": "#c3a6ed", "controlBg": "#3a2e4a", "activeBg": "#59446d", "activeText": "#fff9ff", "textMuted": "#b9a7c7" },
+    "sidePanel": { "bg": "radial-gradient(circle at 20% 0%, rgba(176, 127, 228, 0.17), transparent 42%), linear-gradient(155deg, #30263e, #211d33 72%, #2d263d)", "text": "#f3edf8", "border": "#584769", "accent": "#e5c38b", "controlBg": "#3b304c", "activeBg": "#59446d", "activeText": "#fff9ff", "textMuted": "#b9a7c7" },
+    "inputPanel": { "bg": "linear-gradient(145deg, #3a2e4c, #29243c)", "text": "#f3edf8", "border": "#665275", "accent": "#c3a6ed", "controlBg": "#453553", "activeBg": "#624974", "activeText": "#fff9ff", "textMuted": "#b9a7c7" },
+    "outputPanel": { "bg": "radial-gradient(circle at 90% 15%, rgba(227, 187, 136, 0.1), transparent 40%), linear-gradient(165deg, #292339, #242034)", "text": "#f3edf8", "border": "#584769", "accent": "#c3a6ed", "controlBg": "#3b304c", "activeBg": "#59446d", "activeText": "#fff9ff", "textMuted": "#b9a7c7" },
+    "topDropdown": { "bg": "#2b2339", "text": "#f3edf8", "border": "#584769", "accent": "#c3a6ed", "controlBg": "#3a2e4a", "activeBg": "#59446d", "activeText": "#fff9ff", "textMuted": "#b9a7c7" },
+    "modalPanel": { "bg": "linear-gradient(155deg, #3a2e4c, #2c263d)", "text": "#f3edf8", "border": "#665275", "accent": "#e5c38b", "controlBg": "#453553", "activeBg": "#624974", "activeText": "#fff9ff", "textMuted": "#c4b4ce" },
+    "loginScreen": { "bg": "radial-gradient(ellipse at 20% 12%, rgba(181, 130, 239, 0.26), transparent 43%), radial-gradient(ellipse at 80% 88%, rgba(229, 195, 139, 0.12), transparent 44%), linear-gradient(150deg, #1b1828, #332842 60%, #211e30)", "text": "#f3edf8", "border": "#584769", "accent": "#c3a6ed", "controlBg": "#3a2e4a", "activeBg": "#59446d", "activeText": "#fff9ff", "textMuted": "#b9a7c7" },
+    "pageBackground": { "bg": "radial-gradient(ellipse at 16% 10%, rgba(173, 117, 229, 0.22), transparent 38%), radial-gradient(ellipse at 83% 75%, rgba(222, 173, 110, 0.12), transparent 42%), linear-gradient(155deg, #1b1828, #2a2239 56%, #211d30)", "text": "#f3edf8", "border": "#584769", "accent": "#c3a6ed", "controlBg": "#342a45", "activeBg": "#59446d", "activeText": "#fff9ff", "textMuted": "#b9a7c7" },
+    "chatCard": { "bg": "linear-gradient(135deg, #3a2d4b, #2e293f)", "text": "#f3edf8", "border": "#665275", "accent": "#e5c38b", "controlBg": "#453553", "activeBg": "#624974", "activeText": "#fff9ff", "textMuted": "#c4b4ce" }
+  },
+  "components": {
+    "dropdown": { "bg": "#382c49", "border": "#665275", "text": "#f3edf8", "textMuted": "#c4b4ce", "controlBg": "#453553", "hoverBg": "#513e63", "activeBg": "#624974", "accent": "#c3a6ed", "shadow": "0 14px 36px rgba(13, 9, 24, 0.46)" },
+    "formControl": { "bg": "#382c49", "border": "#665275", "text": "#f3edf8", "placeholder": "#b9a7c7", "focusBorder": "#c3a6ed", "buttonPrimaryBg": "#73578b", "buttonPrimaryBorder": "#c3a6ed", "buttonPrimaryText": "#fff9ff" },
+    "card": { "bg": "linear-gradient(145deg, #3b2d4b, #2d283e)", "border": "#665275", "shadow": "0 12px 28px rgba(13, 9, 24, 0.26)", "hoverBg": "#453654", "activeBg": "#513e63" }
+  },
+  "floating": {
+    "surfaceBase": "#30273e", "surfaceMuted": "#3d304d", "surfaceSubtle": "#292238", "surfaceStrong": "#5c4870",
+    "borderMuted": "#665275", "borderSubtle": "#85679c", "borderFaint": "rgba(239, 224, 250, 0.17)", "borderFaintStrong": "rgba(239, 224, 250, 0.28)",
+    "fillFaint": "rgba(195, 166, 237, 0.12)", "text": "#f3edf8", "textMuted": "#c4b4ce", "textSoft": "#b9a7c7", "textSecondary": "#e4d9ed",
+    "backgroundImage": "radial-gradient(circle at 15% 0%, rgba(195, 166, 237, 0.16), transparent 43%), linear-gradient(145deg, rgba(37, 30, 53, 0.42), rgba(143, 101, 154, 0.16))",
+    "default": { "accent": "#c3a6ed", "backgroundColor": "#30273e", "titlebarOpacity": "1" },
+    "shell": { "accent": "#e5c38b", "backgroundColor": "#30273e", "titlebarOpacity": "1" },
+    "reasoning": { "accent": "#c3a6ed", "backgroundColor": "#382b4a" },
+    "subagent": { "accent": "#a6a6ed", "backgroundColor": "#302e4c" },
+    "tool": { "accent": "#d2a8d9", "backgroundColor": "#372c43" },
+    "file": { "accent": "#b9a7e6", "backgroundColor": "#332d47" },
+    "diff": { "accent": "#e5c38b", "backgroundColor": "#402c4a" },
+    "media": { "accent": "#c3a6ed", "backgroundColor": "#3b2d48" },
+    "dialog": { "accent": "#e5c38b", "backgroundColor": "#403048" },
+    "history": { "accent": "#c3a6ed", "backgroundColor": "#352b44" },
+    "debug": { "accent": "#aa92bb", "backgroundColor": "#342d40" }
+  }
+}

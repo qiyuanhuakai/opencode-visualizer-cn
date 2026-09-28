@@ -1,6 +1,7 @@
 import {
   DEFAULT_REGION_THEME,
   type FloatingWindowThemeColors,
+  type FloatingWindowTypeThemeColors,
   REGION_COLOR_FIELDS,
   REGION_NAMES,
   REGION_VAR_PREFIXES,
@@ -25,6 +26,7 @@ import {
   type IconActionThemeColors,
 } from './regionTheme';
 import { FLOATING_WINDOW_THEME_TYPES, type FloatingWindowThemeType } from './floatingWindowTheme';
+import { parseOpaqueColor } from './colorValue';
 import {
   listThemeRegistryEntries,
   normalizeThemeRegistryId,
@@ -32,6 +34,15 @@ import {
 } from './themeRegistry';
 
 export const DEFAULT_SYNTAX_THEME = 'github-dark';
+export const LIGHT_SYNTAX_THEME = 'github-light';
+
+export function resolveSyntaxTheme(storage: ThemeStorageV2 | null | undefined): string {
+  const text = storage?.regions?.outputPanel?.text ?? storage?.overrides?.['output-text'];
+  const digits = parseOpaqueColor(text);
+  if (!digits) return DEFAULT_SYNTAX_THEME;
+  const brightness = (digits[0] * 0.2126) + (digits[1] * 0.7152) + (digits[2] * 0.0722);
+  return brightness < 128 ? LIGHT_SYNTAX_THEME : DEFAULT_SYNTAX_THEME;
+}
 export const THEME_ROOT_ATTRIBUTE = 'data-region-theme';
 export type BaseSemanticThemeToken =
   | 'surface-page'
@@ -189,11 +200,16 @@ export type BaseSemanticThemeToken =
   | 'floating-text-soft'
   | 'floating-text-secondary'
   | 'floating-default-accent'
+  | 'floating-default-background-color'
+  | 'floating-default-text'
+  | 'floating-default-text-muted'
+  | 'floating-default-text-soft'
+  | 'floating-default-text-secondary'
   | 'floating-opacity'
   | 'floating-titlebar-opacity'
   | 'floating-background-image';
 
-const FLOATING_THEME_TOKEN_FIELDS = ['accent', 'background-color', 'opacity', 'titlebar-opacity', 'background-image'] as const;
+const FLOATING_THEME_TOKEN_FIELDS = ['accent', 'background-color', 'text', 'text-muted', 'text-soft', 'text-secondary', 'opacity', 'titlebar-opacity', 'background-image'] as const;
 
 type FloatingThemeTokenField = (typeof FLOATING_THEME_TOKEN_FIELDS)[number];
 export type FloatingThemeToken = `floating-${FloatingWindowThemeType}-${FloatingThemeTokenField}`;
@@ -397,6 +413,11 @@ const BASE_SEMANTIC_THEME_TOKENS = [
   'floating-text-soft',
   'floating-text-secondary',
   'floating-default-accent',
+  'floating-default-background-color',
+  'floating-default-text',
+  'floating-default-text-muted',
+  'floating-default-text-soft',
+  'floating-default-text-secondary',
   'floating-opacity',
   'floating-titlebar-opacity',
   'floating-background-image',
@@ -594,6 +615,11 @@ const DEFAULT_BASE_SEMANTIC_TOKENS: Record<BaseSemanticThemeToken, string> = {
   'floating-text-soft': '#9ca3af',
   'floating-text-secondary': '#cbd5e1',
   'floating-default-accent': '#3a4150',
+  'floating-default-background-color': '#1a1d24',
+  'floating-default-text': '#e2e8f0',
+  'floating-default-text-muted': '#94a3b8',
+  'floating-default-text-soft': '#9ca3af',
+  'floating-default-text-secondary': '#cbd5e1',
   'floating-opacity': '1',
   'floating-titlebar-opacity': '1',
   'floating-background-image': 'none',
@@ -632,7 +658,7 @@ function floatingThemeValue(
 function floatingTypeValue(
   floating: Partial<FloatingWindowThemeColors> | undefined,
   type: FloatingWindowThemeType,
-  field: 'accent' | 'backgroundColor' | 'opacity' | 'titlebarOpacity' | 'backgroundImage',
+  field: keyof FloatingWindowTypeThemeColors,
 ) {
   return floating?.[type]?.[field];
 }
@@ -640,7 +666,7 @@ function floatingTypeValue(
 function createDefaultFloatingSemanticTokens(
   base: Record<BaseSemanticThemeToken, string>,
 ): Record<FloatingThemeToken, string> {
-  return {
+  const tokens = {
      'floating-shell-accent': '#a855f7',
      'floating-shell-background-color': base['floating-surface-base'],
      'floating-shell-opacity': base['floating-opacity'],
@@ -691,7 +717,14 @@ function createDefaultFloatingSemanticTokens(
      'floating-debug-opacity': base['floating-opacity'],
      'floating-debug-titlebar-opacity': base['floating-titlebar-opacity'],
      'floating-debug-background-image': base['floating-background-image'],
-  };
+  } as Record<FloatingThemeToken, string>;
+  for (const type of FLOATING_WINDOW_THEME_TYPES) {
+    tokens[floatingTypeToken(type, 'text')] = base['floating-text'];
+    tokens[floatingTypeToken(type, 'text-muted')] = base['floating-text-muted'];
+    tokens[floatingTypeToken(type, 'text-soft')] = base['floating-text-soft'];
+    tokens[floatingTypeToken(type, 'text-secondary')] = base['floating-text-secondary'];
+  }
+  return tokens;
 }
 
 const COMPONENT_THEME_TOKEN_MAP = {
@@ -1112,7 +1145,7 @@ function normalizeStoredFloatingType(value: unknown) {
 
   const record = value as Record<string, unknown>;
   return Object.fromEntries(
-    ['accent', 'backgroundColor', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
+    ['accent', 'backgroundColor', 'text', 'textMuted', 'textSoft', 'textSecondary', 'syntaxText', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
       const normalized = normalizeColorValue(record[field]);
       if (!normalized) return [];
       return [[field, normalized]];
@@ -1140,6 +1173,7 @@ function normalizeStoredFloating(value: unknown): Partial<FloatingWindowThemeCol
     textMuted: normalizeColorValue(record.textMuted),
     textSoft: normalizeColorValue(record.textSoft),
     textSecondary: normalizeColorValue(record.textSecondary),
+    syntaxText: normalizeColorValue(record.syntaxText),
     opacity: normalizeColorValue(record.opacity),
     titlebarOpacity: normalizeColorValue(record.titlebarOpacity),
     backgroundImage: normalizeColorValue(record.backgroundImage),
@@ -1637,6 +1671,20 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
       overrides[floatingTypeToken(type, 'background-color')] = backgroundColor;
     }
 
+    for (const [field, token, fallback] of [
+      ['text', 'text', 'floating-text'],
+      ['textMuted', 'text-muted', 'floating-text-muted'],
+      ['textSoft', 'text-soft', 'floating-text-soft'],
+      ['textSecondary', 'text-secondary', 'floating-text-secondary'],
+    ] as const) {
+      const value = firstDefined(
+        floatingTypeValue(floating, type, field),
+        floating?.default?.[field],
+        overrides[fallback],
+      );
+      if (value) overrides[floatingTypeToken(type, token)] = value;
+    }
+
     const opacity = firstDefined(
       floatingTypeValue(floating, type, 'opacity'),
       overrides['floating-opacity'],
@@ -1668,6 +1716,24 @@ export function regionThemeToSemanticOverrides(theme: RegionThemeConfig | null |
   );
   if (defaultAccent) {
     overrides['floating-default-accent'] = defaultAccent;
+  }
+
+  const defaultBackgroundColor = stripColorAlpha(firstDefined(
+    floating?.default?.backgroundColor,
+    overrides['floating-surface-base'],
+  ));
+  if (defaultBackgroundColor) {
+    overrides['floating-default-background-color'] = defaultBackgroundColor;
+  }
+
+  for (const [field, token, fallback] of [
+    ['text', 'floating-default-text', 'floating-text'],
+    ['textMuted', 'floating-default-text-muted', 'floating-text-muted'],
+    ['textSoft', 'floating-default-text-soft', 'floating-text-soft'],
+    ['textSecondary', 'floating-default-text-secondary', 'floating-text-secondary'],
+  ] as const) {
+    const value = firstDefined(floating?.default?.[field], overrides[fallback]);
+    if (value) overrides[token] = value;
   }
 
   const defaultOpacity = firstDefined(

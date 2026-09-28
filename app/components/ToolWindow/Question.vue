@@ -24,7 +24,7 @@
 
     <div class="question-body">
       <div v-if="contextText" class="context-text-area">
-        <MessageViewer :code="contextText" lang="markdown" :theme="DEFAULT_SYNTAX_THEME" />
+        <MessageViewer :code="contextText" lang="markdown" :theme="syntaxTheme" />
       </div>
 
       <div
@@ -110,7 +110,8 @@
 import { computed, ref, watch, onBeforeUnmount } from 'vue';
 import MessageViewer from '../MessageViewer.vue';
 import { StorageKeys, storageGetJSON, storageSetJSON } from '../../utils/storageKeys';
-import { DEFAULT_SYNTAX_THEME } from '../../utils/themeTokens';
+import { resolveSyntaxTheme } from '../../utils/themeTokens';
+import { useSettings } from '../../composables/useSettings';
 import { uniqueBy } from '../../utils/array';
 import type { QuestionRequest } from '../../types/sse';
 
@@ -132,6 +133,8 @@ const emit = defineEmits<{
 }>();
 
 const selectedAnswers = ref<string[][]>([]);
+const { themeStorage } = useSettings();
+const syntaxTheme = computed(() => resolveSyntaxTheme(themeStorage.value));
 const customAnswers = ref<string[]>([]);
 
 // --- Draft save / restore ---

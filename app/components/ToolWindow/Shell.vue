@@ -37,7 +37,7 @@ defineProps<{
   min-height: 0;
   position: relative;
   z-index: 1;
-  background: transparent;
+  background: var(--terminal-canvas-background, transparent);
 }
 
 .xterm-host :deep(.xterm) {

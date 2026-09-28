@@ -5,6 +5,7 @@ import {
   getFloatingWindowSnapPosition,
   useFloatingWindows,
 } from '../composables/useFloatingWindows';
+import { useSettings } from '../composables/useSettings';
 import FloatingWindow from './FloatingWindow.vue';
 import {
   cleanupFloatingWindowApps,
@@ -74,6 +75,59 @@ describe('FloatingWindow gestures', () => {
   afterEach(() => {
     cleanupFloatingWindowApps();
     document.body.innerHTML = '';
+  });
+
+  it('applies type colors and optional syntax ink to a file window', async () => {
+    const previousTheme = useSettings().themeStorage.value;
+    try {
+      useSettings().themeStorage.value = {
+        version: 2,
+        preset: null,
+        floating: {
+          syntaxText: '#35263a',
+          file: { backgroundColor: '#dec8d3', text: '#40283a' },
+        },
+        overrides: {},
+      };
+      const mounted = await mountFloatingWindow();
+      await mounted.manager.open('file-viewer:example.ts', {
+        component: FloatingWindowTestContent,
+        expiry: Infinity,
+      });
+      await nextTick();
+      const file = mounted.target.querySelector<HTMLElement>('[data-floating-key="file-viewer:example.ts"]');
+      expect(file?.style.getPropertyValue('--floating-surface-base')).toContain('--theme-floating-file-background-color');
+      expect(file?.style.getPropertyValue('--floating-text')).toContain('--theme-floating-file-text');
+      expect(file?.style.getPropertyValue('--floating-syntax-text')).toBe('#35263a');
+      expect(file?.classList.contains('has-syntax-text')).toBe(true);
+      mounted.unmount();
+    } finally {
+      useSettings().themeStorage.value = previousTheme;
+    }
+  });
+
+  it('uses a configured tool accent ahead of the tool supplied color', async () => {
+    const previousTheme = useSettings().themeStorage.value;
+    try {
+      useSettings().themeStorage.value = {
+        version: 2,
+        preset: 'light-mode',
+        floating: { tool: { accent: '#1d4ed8', backgroundColor: '#fbfdff' } },
+        overrides: {},
+      };
+      const mounted = await mountFloatingWindow();
+      await mounted.manager.open('history-tool:example', {
+        component: FloatingWindowTestContent,
+        color: '#eab308',
+        expiry: Infinity,
+      });
+      await nextTick();
+      const tool = mounted.target.querySelector<HTMLElement>('[data-floating-key="history-tool:example"]');
+      expect(tool?.style.getPropertyValue('--floating-accent')).toBe('#1d4ed8');
+      mounted.unmount();
+    } finally {
+      useSettings().themeStorage.value = previousTheme;
+    }
   });
 
   it('tracks pointer movement one-to-one after crossing the canvas edge', async () => {

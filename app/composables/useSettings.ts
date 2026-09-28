@@ -12,9 +12,12 @@ import {
 import {
   migrateLegacyRegionThemeStorage,
   normalizeThemeStorage,
+  regionThemeToStorage,
   type ThemeStorageV2,
 } from '../utils/themeTokens';
+import { AURORA_TIDE_PRESET, VIOLET_NOCTURNE_PRESET } from '../utils/regionTheme';
 import {
+  migrateStoredExternalThemes,
   normalizeStoredExternalThemes,
   type ExternalThemeDefinition,
 } from '../utils/themeRegistry';
@@ -247,27 +250,45 @@ function readTextTransformers() {
   return { value: normalized, failed: false };
 }
 
+function replaceRetiredThemePreset(current: ThemeStorageV2): ThemeStorageV2 {
+  const replacement = current.preset === 'ocean'
+    ? AURORA_TIDE_PRESET
+    : current.preset === 'forest'
+      ? VIOLET_NOCTURNE_PRESET
+      : null;
+  return (replacement ? regionThemeToStorage(replacement) : current) ?? current;
+}
+
 function readThemeStorage(): ThemeStorageV2 | null {
   const current = normalizeThemeStorage(storageGetJSON(StorageKeys.settings.themeTokens));
   if (current) {
-    storageSetJSON(StorageKeys.settings.themeTokens, current);
-  }
-  if (current) {
-    return current;
+    const active = replaceRetiredThemePreset(current);
+    storageSetJSON(StorageKeys.settings.themeTokens, active);
+    return active;
   }
 
   const legacy = migrateLegacyRegionThemeStorage(storageGetJSON(StorageKeys.settings.regionTheme));
   if (legacy) {
-    storageSetJSON(StorageKeys.settings.themeTokens, legacy);
+    const active = replaceRetiredThemePreset(legacy);
+    storageSetJSON(StorageKeys.settings.themeTokens, active);
     storageRemove(StorageKeys.settings.regionTheme);
-    return legacy;
+    return active;
   }
 
   return null;
 }
 
 function readExternalThemes(): ExternalThemeDefinition[] {
-  const current = normalizeStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
+  const migration = migrateStoredExternalThemes(storageGetJSON(StorageKeys.settings.themeRegistry));
+  const current = migration.themes;
+  const active = themeStorage.value;
+  const selectedMigration = migration.renamed.find(({ from, label }) =>
+    active?.preset === from && active.label === label,
+  );
+  if (active && selectedMigration) {
+    themeStorage.value = { ...active, preset: selectedMigration.to };
+    storageSetJSON(StorageKeys.settings.themeTokens, themeStorage.value);
+  }
   if (current.length > 0) {
     storageSetJSON(StorageKeys.settings.themeRegistry, {
       version: 1,

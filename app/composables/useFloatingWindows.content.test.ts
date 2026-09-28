@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createApp, h, nextTick, type App } from 'vue';
 import { createI18n } from 'vue-i18n';
 import { useFloatingWindows } from './useFloatingWindows';
+import { useSettings } from './useSettings';
+import { SOFT_WHITE_PRESET, VIOLET_NOCTURNE_PRESET } from '../utils/regionTheme';
+import { regionThemeToStorage, resolveSyntaxTheme } from '../utils/themeTokens';
 
 const apps: App[] = [];
 function mountWindows() {
@@ -29,6 +32,29 @@ afterEach(() => {
 });
 
 describe('floating window content ownership', () => {
+  it('rerenders an open shell tool window when the syntax palette changes', async () => {
+    const { themeStorage } = useSettings();
+    const original = themeStorage.value;
+    try {
+      themeStorage.value = regionThemeToStorage(VIOLET_NOCTURNE_PRESET);
+      const { manager, host } = mountWindows();
+      await manager.open('bash-tool', {
+        content: async () => `<pre>${resolveSyntaxTheme(themeStorage.value)}</pre>`,
+        variant: 'term',
+        expiry: Infinity,
+      });
+      await nextTick();
+      expect(host.querySelector('article')?.textContent).toBe('github-dark');
+
+      themeStorage.value = regionThemeToStorage(SOFT_WHITE_PRESET);
+      await nextTick();
+      await nextTick();
+      expect(host.querySelector('article')?.textContent).toBe('github-light');
+    } finally {
+      themeStorage.value = original;
+    }
+  });
+
   it('renders an automatic popup after status and geometry change during rendering', async () => {
     const { manager, host } = mountWindows();
     const content = Promise.withResolvers<string>();

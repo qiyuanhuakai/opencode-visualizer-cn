@@ -557,11 +557,12 @@ defineExpose({ panelEl, scrollToBottom });
   min-height: 0;
   overflow: hidden;
   position: relative;
-  background-color: var(--theme-output-bg, rgba(15, 23, 42, 0.92));
-  background-image: linear-gradient(
-    color-mix(in srgb, var(--project-tint, transparent) 9%, transparent),
-    color-mix(in srgb, var(--project-tint, transparent) 9%, transparent)
-  );
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--project-tint, transparent) 9%, transparent),
+      color-mix(in srgb, var(--project-tint, transparent) 9%, transparent)
+    ),
+    var(--theme-output-bg, rgba(15, 23, 42, 0.92));
   color: var(--theme-text-primary, #e2e8f0);
   border: 1px solid var(--theme-output-border, #334155);
   border-radius: 12px;

@@ -1,3 +1,11 @@
+import auroraTideTheme from './aurora-tide.theme_1.json';
+import violetNocturneTheme from './violet-nocturne.theme_1.json';
+import animeNightTheme from './anime-night.theme_1.json';
+import animeDreamTheme from './anime-dream.theme_1.json';
+import amberAtlasTheme from './amber-atlas.theme_1.json';
+import softWhiteTheme from './soft-white.theme_1.json';
+import lightModeTheme from './light-mode.theme_1.json';
+
 export type RegionName =
   | 'topPanel'
   | 'sidePanel'
@@ -150,6 +158,11 @@ export interface SearchThemeColors {
 export interface FloatingWindowTypeThemeColors {
   accent?: string;
   backgroundColor?: string;
+  text?: string;
+  textMuted?: string;
+  textSoft?: string;
+  textSecondary?: string;
+  syntaxText?: string;
   opacity?: string;
   titlebarOpacity?: string;
   backgroundImage?: string;
@@ -169,6 +182,7 @@ export interface FloatingWindowThemeColors {
   textMuted?: string;
   textSoft?: string;
   textSecondary?: string;
+  syntaxText?: string;
   opacity?: string;
   titlebarOpacity?: string;
   backgroundImage?: string;
@@ -318,262 +332,60 @@ export const REGION_THEME_EDITOR_FALLBACKS: Required<RegionColors> = {
   textMuted: '#94a3b8',
 };
 
-export const OCEAN_PRESET: RegionThemeConfig = {
-  name: 'ocean',
-  label: '深海',
-  regions: {
-    topPanel: {
-      bg: '#1a1a2e',
-      text: '#eaf6ff',
-      border: '#274c77',
-      accent: '#4cc9f0',
-      controlBg: '#16213e',
-      activeBg: '#0f3460',
-      activeText: '#ffffff',
-      textMuted: '#7aa2c0',
-    },
-    sidePanel: {
-      bg: '#102542',
-      text: '#d9f0ff',
-      border: '#1f4e79',
-      accent: '#2ec4ff',
-      controlBg: '#16324f',
-      activeBg: '#1b4965',
-      activeText: '#ffffff',
-      textMuted: '#7aa2c0',
-    },
-    inputPanel: {
-      bg: '#0b1f33',
-      text: '#edf7ff',
-      border: '#1f5f8b',
-      accent: '#56cfe1',
-      controlBg: '#12324a',
-      activeBg: '#155e75',
-      activeText: '#f7feff',
-      textMuted: '#7aa2c0',
-    },
-    outputPanel: {
-      bg: '#13293d',
-      text: '#e0f4ff',
-      border: '#1b5c85',
-      accent: '#76e4f7',
-      controlBg: '#1b3a4b',
-      activeBg: '#006494',
-      activeText: '#ffffff',
-      textMuted: '#7aa2c0',
-    },
-    topDropdown: {
-      bg: '#0b1f33',
-      text: '#edf7ff',
-      border: '#1f5f8b',
-      accent: '#56cfe1',
-      controlBg: '#12324a',
-      activeBg: '#155e75',
-      activeText: '#f7feff',
-      textMuted: '#7aa2c0',
-    },
-    modalPanel: {
-      bg: '#13293d',
-      text: '#e0f4ff',
-      border: '#1b5c85',
-      accent: '#76e4f7',
-      controlBg: '#1b3a4b',
-      activeBg: '#006494',
-      activeText: '#ffffff',
-      textMuted: '#7aa2c0',
-    },
-    loginScreen: {
-      bg: '#0f2033',
-      text: '#eaf6ff',
-      border: '#29506f',
-      accent: '#4cc9f0',
-      controlBg: '#13283f',
-      activeBg: '#1d4f73',
-      activeText: '#ffffff',
-      textMuted: '#8fb8d0',
-    },
-    pageBackground: {
-      bg: '#b8c9d8',
-      text: '#eaf6ff',
-      border: '#274c77',
-      accent: '#4cc9f0',
-      controlBg: '#97b1c8',
-      activeBg: '#6f94b9',
-      activeText: '#ffffff',
-      textMuted: '#7aa2c0',
-    },
-    chatCard: {
-      bg: '#0a192db8',
-      text: '#e0f4ff',
-      border: '#1b5c85',
-      accent: '#76e4f7',
-      controlBg: '#1b3a4b',
-      activeBg: '#006494',
-      activeText: '#ffffff',
-      textMuted: '#7aa2c0',
-    },
-  },
-  floating: {
-    surfaceBase: '#09192a',
-    surfaceMuted: '#0f2842',
-    surfaceSubtle: '#0e2237',
-    surfaceStrong: '#164e6e',
-    borderMuted: 'rgba(118, 228, 247, 0.34)',
-    borderSubtle: 'rgba(138, 230, 246, 0.46)',
-    borderFaint: 'rgba(234, 246, 255, 0.16)',
-    borderFaintStrong: 'rgba(234, 246, 255, 0.24)',
-    fillFaint: 'rgba(118, 228, 247, 0.12)',
-    text: '#edf7ff',
-    textMuted: '#9ed2e7',
-    textSoft: '#87b8cb',
-    textSecondary: '#d9f0ff',
-    backgroundImage: 'radial-gradient(circle at top right, rgba(118, 228, 247, 0.22), transparent 38%), linear-gradient(135deg, rgba(7, 18, 34, 0.18), rgba(12, 42, 68, 0.28))',
-     default: {
-       accent: '#76e4f7',
-       opacity: '0.92',
-       titlebarOpacity: '1',
-       backgroundImage: 'radial-gradient(circle at top right, rgba(118, 228, 247, 0.22), transparent 38%), linear-gradient(135deg, rgba(7, 18, 34, 0.18), rgba(12, 42, 68, 0.28))',
-     },
-     shell: { accent: '#67d7ff', backgroundColor: '#0b1f33', opacity: '0.95', backgroundImage: 'linear-gradient(135deg, rgba(6, 20, 40, 0.18), rgba(18, 54, 84, 0.3))' },
-    reasoning: { accent: '#a78bfa', backgroundImage: 'radial-gradient(circle at top left, rgba(167, 139, 250, 0.18), transparent 34%), linear-gradient(135deg, rgba(10, 18, 40, 0.2), rgba(22, 40, 76, 0.26))' },
-    subagent: { accent: '#38bdf8', backgroundImage: 'radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 34%), linear-gradient(135deg, rgba(7, 22, 38, 0.18), rgba(12, 44, 70, 0.28))' },
-    tool: { accent: '#5eead4'},
-    file: { accent: '#76e4f7' },
-    diff: { accent: '#60a5fa' },
-    media: { accent: '#2dd4bf', backgroundImage: 'radial-gradient(circle at center, rgba(45, 212, 191, 0.16), transparent 42%), linear-gradient(135deg, rgba(8, 25, 34, 0.16), rgba(14, 54, 62, 0.26))' },
-    dialog: { accent: '#fbbf24' },
-    history: { accent: '#c084fc' },
-    debug: { accent: '#94a3b8' },
-  },
+export const AURORA_TIDE_PRESET: RegionThemeConfig = {
+  name: auroraTideTheme.id,
+  label: auroraTideTheme.label,
+  regions: auroraTideTheme.regions,
+  components: auroraTideTheme.components,
+  floating: auroraTideTheme.floating,
 };
 
-export const FOREST_PRESET: RegionThemeConfig = {
-  name: 'forest',
-  label: '林境',
-  regions: {
-    topPanel: {
-      bg: '#1b2f24',
-      text: '#edf7ee',
-      border: '#355e3b',
-      accent: '#7fb069',
-      controlBg: '#243b2f',
-      activeBg: '#3a5a40',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
-    sidePanel: {
-      bg: '#14281d',
-      text: '#e7f5ea',
-      border: '#2d4739',
-      accent: '#90be6d',
-      controlBg: '#1d3528',
-      activeBg: '#31572c',
-      activeText: '#f9fff9',
-      textMuted: '#7d9e7d',
-    },
-    inputPanel: {
-      bg: '#1f3525',
-      text: '#f0faf2',
-      border: '#406343',
-      accent: '#a7c957',
-      controlBg: '#29432f',
-      activeBg: '#4f772d',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
-    outputPanel: {
-      bg: '#233d2b',
-      text: '#edf8ef',
-      border: '#4c6f49',
-      accent: '#84a98c',
-      controlBg: '#2c4a36',
-      activeBg: '#588157',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
-    topDropdown: {
-      bg: '#1f3525',
-      text: '#f0faf2',
-      border: '#406343',
-      accent: '#a7c957',
-      controlBg: '#29432f',
-      activeBg: '#4f772d',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
-    modalPanel: {
-      bg: '#233d2b',
-      text: '#edf8ef',
-      border: '#4c6f49',
-      accent: '#84a98c',
-      controlBg: '#2c4a36',
-      activeBg: '#588157',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
-    loginScreen: {
-      bg: '#29432f',
-      text: '#edf7ee',
-      border: '#4c6f49',
-      accent: '#a7c957',
-      controlBg: '#35523d',
-      activeBg: '#4f772d',
-      activeText: '#ffffff',
-      textMuted: '#9cb49c',
-    },
-    pageBackground: {
-      bg: '#bcc8b8',
-      text: '#edf7ee',
-      border: '#355e3b',
-      accent: '#7fb069',
-      controlBg: '#a1b19d',
-      activeBg: '#7d9179',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
-    chatCard: {
-      bg: '#0c1e12b8',
-      text: '#edf8ef',
-      border: '#4c6f49',
-      accent: '#84a98c',
-      controlBg: '#2c4a36',
-      activeBg: '#588157',
-      activeText: '#ffffff',
-      textMuted: '#7d9e7d',
-    },
-  },
-  floating: {
-    surfaceBase: 'rgba(13, 28, 19, 1)',
-    surfaceMuted: 'rgba(24, 52, 37, 1)',
-    surfaceSubtle: 'rgba(22, 45, 33, 1)',
-    surfaceStrong: 'rgba(56, 105, 71, 1)',
-    borderMuted: 'rgba(132, 169, 140, 0.34)',
-    borderSubtle: 'rgba(167, 201, 87, 0.42)',
-    borderFaint: 'rgba(237, 247, 238, 0.16)',
-    borderFaintStrong: 'rgba(237, 247, 238, 0.24)',
-    fillFaint: 'rgba(127, 176, 105, 0.12)',
-    text: '#f1fbf3',
-    textMuted: '#b6d0b4',
-    textSoft: '#9ab49a',
-    textSecondary: '#e7f5ea',
-    backgroundImage: 'radial-gradient(circle at top right, rgba(167, 201, 87, 0.18), transparent 40%), linear-gradient(135deg, rgba(10, 22, 14, 0.16), rgba(25, 53, 35, 0.28))',
-    default: {
-      accent: '#84a98c',
-      opacity: '0.9',
-      titlebarOpacity: '0.95',
-      backgroundImage: 'radial-gradient(circle at top right, rgba(167, 201, 87, 0.18), transparent 40%), linear-gradient(135deg, rgba(10, 22, 14, 0.16), rgba(25, 53, 35, 0.28))',
-    },
-    shell: { accent: '#90be6d', backgroundColor: '#1f3525', opacity: '0.95', backgroundImage: 'linear-gradient(135deg, rgba(11, 27, 16, 0.14), rgba(35, 66, 40, 0.3))' },
-    reasoning: { accent: '#c4b5fd', backgroundImage: 'radial-gradient(circle at top left, rgba(196, 181, 253, 0.16), transparent 34%), linear-gradient(135deg, rgba(15, 24, 18, 0.18), rgba(30, 54, 36, 0.24))' },
-    subagent: { accent: '#7dd3fc', backgroundImage: 'radial-gradient(circle at top right, rgba(125, 211, 252, 0.14), transparent 34%), linear-gradient(135deg, rgba(10, 24, 18, 0.16), rgba(26, 56, 40, 0.28))' },
-    tool: { accent: '#84cc16' },
-    file: { accent: '#84a98c' },
-    diff: { accent: '#a7c957' },
-    media: { accent: '#5eead4', backgroundImage: 'radial-gradient(circle at center, rgba(94, 234, 212, 0.14), transparent 42%), linear-gradient(135deg, rgba(10, 24, 20, 0.16), rgba(28, 62, 44, 0.24))' },
-    dialog: { accent: '#facc15' },
-    history: { accent: '#bbf7d0' },
-    debug: { accent: '#cbd5e1' },
-  },
+export const VIOLET_NOCTURNE_PRESET: RegionThemeConfig = {
+  name: violetNocturneTheme.id,
+  label: violetNocturneTheme.label,
+  regions: violetNocturneTheme.regions,
+  components: violetNocturneTheme.components,
+  floating: violetNocturneTheme.floating,
+};
+
+export const ANIME_NIGHT_PRESET: RegionThemeConfig = {
+  name: animeNightTheme.id,
+  label: animeNightTheme.label,
+  regions: animeNightTheme.regions,
+  components: animeNightTheme.components,
+  floating: animeNightTheme.floating,
+};
+
+export const ANIME_DREAM_PRESET: RegionThemeConfig = {
+  name: animeDreamTheme.id,
+  label: animeDreamTheme.label,
+  regions: animeDreamTheme.regions,
+  components: animeDreamTheme.components,
+  floating: animeDreamTheme.floating,
+};
+
+export const AMBER_ATLAS_PRESET: RegionThemeConfig = {
+  name: amberAtlasTheme.id,
+  label: amberAtlasTheme.label,
+  regions: amberAtlasTheme.regions,
+  components: amberAtlasTheme.components,
+  floating: amberAtlasTheme.floating,
+};
+
+export const SOFT_WHITE_PRESET: RegionThemeConfig = {
+  name: softWhiteTheme.id,
+  label: softWhiteTheme.label,
+  regions: softWhiteTheme.regions,
+  components: softWhiteTheme.components,
+  floating: softWhiteTheme.floating,
+};
+
+export const LIGHT_MODE_PRESET: RegionThemeConfig = {
+  name: lightModeTheme.id,
+  label: lightModeTheme.label,
+  regions: lightModeTheme.regions,
+  components: lightModeTheme.components,
+  floating: lightModeTheme.floating,
 };
 
 export const SAKURA_PRESET: RegionThemeConfig = {
@@ -621,7 +433,7 @@ export const SAKURA_PRESET: RegionThemeConfig = {
       textMuted: '#d4b8c8',
     },
     topDropdown: {
-      bg: 'rgba(98, 72, 84, 0.92)',
+      bg: 'rgba(95, 70, 82, 0.92)',
       text: '#fff8fb',
       border: '#cca0b0',
       accent: '#ffb7d5',
@@ -685,31 +497,37 @@ export const SAKURA_PRESET: RegionThemeConfig = {
     textMuted: '#e7bfd1',
     textSoft: '#d8adc0',
     textSecondary: '#fff0f7',
-    backgroundImage: 'radial-gradient(circle at top right, rgba(255, 194, 220, 1), transparent 40%), linear-gradient(135deg, rgba(48, 26, 40, 0.16), rgba(94, 56, 78, 0.28))',
+    backgroundImage: 'radial-gradient(circle at top right, rgba(255, 194, 220, 0.16), transparent 40%), linear-gradient(135deg, rgba(48, 26, 40, 0.16), rgba(94, 56, 78, 0.28))',
     default: {
       accent: '#ffc2dc',
-      opacity: '0.8',
+      backgroundColor: '#382331',
+      opacity: '1',
       titlebarOpacity: '0.95',
-      backgroundImage: 'radial-gradient(circle at top right, rgba(255, 194, 220, 1), transparent 40%), linear-gradient(135deg, rgba(48, 26, 40, 0.16), rgba(94, 56, 78, 0.28))',
+      backgroundImage: 'radial-gradient(circle at top right, rgba(255, 194, 220, 0.16), transparent 40%), linear-gradient(135deg, rgba(48, 26, 40, 0.16), rgba(94, 56, 78, 0.28))',
     },
-    shell: { accent: '#ff9ec8', backgroundColor: '#5e4052', opacity: '0.95', backgroundImage: 'linear-gradient(135deg, rgba(54, 28, 42, 0.16), rgba(112, 66, 94, 0.3))' },
-    reasoning: { accent: '#c4b5fd', backgroundImage: 'radial-gradient(circle at top left, rgba(196, 181, 253, 0.16), transparent 34%), linear-gradient(135deg, rgba(56, 26, 44, 0.18), rgba(98, 60, 84, 0.24))' },
-    subagent: { accent: '#7dd3fc', backgroundImage: 'radial-gradient(circle at top right, rgba(125, 211, 252, 0.14), transparent 34%), linear-gradient(135deg, rgba(58, 28, 46, 0.16), rgba(104, 62, 88, 0.28))' },
-    tool: { accent: '#f9a8d4' },
-    file: { accent: '#ffc2dc' },
-    diff: { accent: '#ffb7d5' },
-    media: { accent: '#f0abfc', backgroundImage: 'radial-gradient(circle at center, rgba(240, 171, 252, 0.16), transparent 42%), linear-gradient(135deg, rgba(54, 24, 44, 0.14), rgba(96, 54, 82, 0.24))' },
-    dialog: { accent: '#fbbf24' },
-    history: { accent: '#f5d0fe' },
-    debug: { accent: '#fbcfe8' },
+    shell: { accent: '#ff9ec8', backgroundColor: '#5e4052', opacity: '1', backgroundImage: 'linear-gradient(135deg, rgba(54, 28, 42, 0.16), rgba(112, 66, 94, 0.3))' },
+    reasoning: { accent: '#c4b5fd', backgroundColor: '#4c3046', backgroundImage: 'radial-gradient(circle at top left, rgba(196, 181, 253, 0.16), transparent 34%), linear-gradient(135deg, rgba(56, 26, 44, 0.18), rgba(98, 60, 84, 0.24))' },
+    subagent: { accent: '#7dd3fc', backgroundColor: '#3a354d', backgroundImage: 'radial-gradient(circle at top right, rgba(125, 211, 252, 0.14), transparent 34%), linear-gradient(135deg, rgba(58, 28, 46, 0.16), rgba(104, 62, 88, 0.28))' },
+    tool: { accent: '#f9a8d4', backgroundColor: '#432c3e' },
+    file: { accent: '#ffc2dc', backgroundColor: '#3c2d3d' },
+    diff: { accent: '#ffb7d5', backgroundColor: '#4a2b3d' },
+    media: { accent: '#f0abfc', backgroundColor: '#472d48', backgroundImage: 'radial-gradient(circle at center, rgba(240, 171, 252, 0.16), transparent 42%), linear-gradient(135deg, rgba(54, 24, 44, 0.14), rgba(96, 54, 82, 0.24))' },
+    dialog: { accent: '#fbbf24', backgroundColor: '#4a343b' },
+    history: { accent: '#f5d0fe', backgroundColor: '#432f46' },
+    debug: { accent: '#fbcfe8', backgroundColor: '#3c3040' },
   },
 };
 
 const REGION_THEME_PRESETS = {
   default: DEFAULT_REGION_THEME,
-  ocean: OCEAN_PRESET,
-  forest: FOREST_PRESET,
+  'aurora-tide': AURORA_TIDE_PRESET,
+  'violet-nocturne': VIOLET_NOCTURNE_PRESET,
   sakura: SAKURA_PRESET,
+  'anime-night': ANIME_NIGHT_PRESET,
+  'anime-dream': ANIME_DREAM_PRESET,
+  'amber-atlas': AMBER_ATLAS_PRESET,
+  'soft-white': SOFT_WHITE_PRESET,
+  'light-mode': LIGHT_MODE_PRESET,
 } as const;
 
 export type RegionThemePresetName = keyof typeof REGION_THEME_PRESETS;

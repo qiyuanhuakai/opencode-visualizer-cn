@@ -12,6 +12,7 @@ import { useAutoScroller, type ScrollMode } from '../composables/useAutoScroller
 import { useContentSearch } from '../composables/useContentSearch';
 import { useSettings } from '../composables/useSettings';
 import { resolveFloatingWindowThemeType } from '../utils/floatingWindowTheme';
+import { LIGHT_SYNTAX_THEME, resolveSyntaxTheme } from '../utils/themeTokens';
 import { Icon } from '@iconify/vue';
 
 const {
@@ -21,6 +22,7 @@ const {
   floatingPreviewWordWrap,
   editInVis,
   localApplicationPath,
+  themeStorage,
 } = useSettings();
 
 const { t } = useI18n();
@@ -141,12 +143,23 @@ const api: FloatingWindowAPI = {
 provide(FLOATING_WINDOW_KEY, api);
 
 const floatingThemeType = computed(() => resolveFloatingWindowThemeType(props.entry));
+const syntaxText = computed(() => {
+  const floating = themeStorage.value?.floating;
+  return floating?.[floatingThemeType.value]?.syntaxText
+    ?? floating?.default?.syntaxText
+    ?? floating?.syntaxText;
+});
+const shouldDarkenTerminalHighlight = computed(() =>
+  !syntaxText.value && resolveSyntaxTheme(themeStorage.value) === LIGHT_SYNTAX_THEME,
+);
 
 const windowStyle = computed(() => {
-  const color =
-    typeof props.entry.color === 'string' && props.entry.color.trim().length > 0
+  const configuredAccent = themeStorage.value?.floating?.[floatingThemeType.value]?.accent
+    ?? themeStorage.value?.floating?.default?.accent;
+  const color = configuredAccent
+    ?? (typeof props.entry.color === 'string' && props.entry.color.trim().length > 0
       ? props.entry.color
-      : `var(--theme-floating-${floatingThemeType.value}-accent, var(--theme-floating-default-accent, #3a4150))`;
+      : `var(--theme-floating-${floatingThemeType.value}-accent, var(--theme-floating-default-accent, #3a4150))`);
   const isMinimized = props.entry.minimized === true;
   const isShellWindow = props.entry.key.startsWith('shell:');
   return {
@@ -156,6 +169,12 @@ const windowStyle = computed(() => {
     height: isMinimized ? '22px' : (props.entry.height ? `${props.entry.height}px` : '400px'),
     zIndex: props.entry.zIndex,
     '--floating-accent': color,
+    '--floating-surface-base': `var(--theme-floating-${floatingThemeType.value}-background-color, var(--theme-floating-surface-base, #1a1d24))`,
+    '--floating-text': `var(--theme-floating-${floatingThemeType.value}-text, var(--theme-floating-text, #e2e8f0))`,
+    '--floating-text-muted': `var(--theme-floating-${floatingThemeType.value}-text-muted, var(--theme-floating-text-muted, #94a3b8))`,
+    '--floating-text-soft': `var(--theme-floating-${floatingThemeType.value}-text-soft, var(--theme-floating-text-soft, #9ca3af))`,
+    '--floating-text-secondary': `var(--theme-floating-${floatingThemeType.value}-text-secondary, var(--theme-floating-text-secondary, #cbd5e1))`,
+    '--floating-syntax-text': syntaxText.value,
     '--window-color': color,
     '--floating-window-opacity': `var(--theme-floating-${floatingThemeType.value}-opacity, var(--theme-floating-opacity, 1))`,
     '--floating-titlebar-opacity': `var(--theme-floating-${floatingThemeType.value}-titlebar-opacity, var(--theme-floating-titlebar-opacity, 1))`,
@@ -537,7 +556,7 @@ function onResizeEnd(e: PointerEvent) {
   <div
     ref="windowEl"
     class="floating-window"
-    :class="{ minimized: entry.minimized, 'is-hidden-minimized': entry.minimized }"
+    :class="{ minimized: entry.minimized, 'is-hidden-minimized': entry.minimized, 'has-syntax-text': Boolean(syntaxText), 'light-terminal-highlight': shouldDarkenTerminalHighlight }"
     :style="windowStyle"
     @pointerdown.capture="onWindowPointerDownCapture"
     :data-floating-key="entry.key"
@@ -746,7 +765,11 @@ function onResizeEnd(e: PointerEvent) {
   content: '';
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, var(--floating-accent, #3a4150) 22%, var(--floating-surface-muted));
+  background: color-mix(
+    in srgb,
+    var(--floating-accent, #3a4150) var(--floating-titlebar-accent-weight, 22%),
+    var(--floating-surface-muted)
+  );
   box-shadow: inset 0 -1px 0
     color-mix(in srgb, var(--floating-accent, #3a4150) 35%, var(--floating-border-muted));
   opacity: var(--floating-titlebar-surface-opacity, var(--floating-titlebar-opacity, 1));
@@ -837,10 +860,24 @@ function onResizeEnd(e: PointerEvent) {
   content: '';
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, var(--floating-accent, #3a4150) 12%, var(--floating-surface-base));
+  background: color-mix(
+    in srgb,
+    var(--floating-accent, #3a4150) var(--floating-body-accent-weight, 12%),
+    var(--floating-surface-base)
+  );
   opacity: var(--floating-body-opacity, var(--floating-window-opacity, 1));
   pointer-events: none;
   z-index: 0;
+}
+
+.floating-window.has-syntax-text .floating-window-body :deep(.code-content .line span[style*='color']),
+.floating-window.has-syntax-text .floating-window-body :deep(pre.shiki span[style*='color']),
+.floating-window.has-syntax-text .floating-window-body :deep(.cm-line span) {
+  color: var(--floating-syntax-text) !important;
+}
+
+.floating-window.light-terminal-highlight .floating-window-body :deep(.code-content.is-term pre.shiki) {
+  filter: brightness(0.62);
 }
 
 .floating-window.minimized {

@@ -5,7 +5,10 @@ import { reactive, ref } from 'vue';
 
 import ThreadHistoryContent from './ThreadHistoryContent.vue';
 import { FLOATING_WINDOW_KEY } from '../composables/useFloatingWindow';
+import { useSettings } from '../composables/useSettings';
 import { makeThreadHistoryToolEntries } from './historyTestBuilders';
+import { LIGHT_MODE_PRESET } from '../utils/regionTheme';
+import { regionThemeToStorage } from '../utils/themeTokens';
 
 const mountedApps = new Set<ReturnType<typeof createApp>>();
 
@@ -87,6 +90,20 @@ describe('ThreadHistoryContent', () => {
     mountedApps.forEach(unmount);
     document.body.innerHTML = '';
     vi.unstubAllGlobals();
+  });
+
+  it('uses shell theme styling for a compact bash tool entry', async () => {
+    const previousTheme = useSettings().themeStorage.value;
+    try {
+      useSettings().themeStorage.value = regionThemeToStorage(LIGHT_MODE_PRESET);
+      const { root } = mountHistory(createToolEntries(1, 'bash'));
+      await flushRender();
+      const entry = root.querySelector<HTMLElement>('.history-item-tool');
+      expect(entry?.classList.contains('is-shell-tool')).toBe(true);
+      expect(entry?.style.getPropertyValue('--tool-color')).toBe(LIGHT_MODE_PRESET.floating?.shell?.accent);
+    } finally {
+      useSettings().themeStorage.value = previousTheme;
+    }
   });
 
   it('shows all multiedit file paths in history summary', async () => {

@@ -86,4 +86,44 @@ describe('useSettings themes', () => {
     expect(harness.storage.getItem('opencode.settings.themeTokens.v2')).toContain('Aurora Legacy');
     expect(harness.storage.getItem('opencode.settings.regionTheme.v1')).toBeNull();
   });
+
+  it.each([
+    ['ocean', 'aurora-tide'],
+    ['forest', 'violet-nocturne'],
+  ])('replaces retired %s preset with %s on load', async (oldPreset, newPreset) => {
+    harness.storage.setItem('opencode.settings.themeTokens.v2', JSON.stringify({
+      version: 2,
+      preset: oldPreset,
+      label: oldPreset,
+      overrides: {},
+    }));
+
+    const settings = await harness.importFresh();
+    expect(settings.themeStorage.value?.preset).toBe(newPreset);
+    expect(JSON.parse(harness.storage.getItem('opencode.settings.themeTokens.v2') ?? '{}').preset).toBe(newPreset);
+  });
+
+  it('preserves a customized imported theme when its id becomes built in', async () => {
+    harness.storage.setItem('opencode.settings.themeRegistry.v1', JSON.stringify({
+      version: 1,
+      themes: [{
+        id: 'anime-dream',
+        label: 'My Anime Dream',
+        regions: { topPanel: { bg: '#aabbcc' } },
+      }],
+    }));
+    harness.storage.setItem('opencode.settings.themeTokens.v2', JSON.stringify({
+      version: 2,
+      preset: 'anime-dream',
+      label: 'My Anime Dream',
+      overrides: { 'region-top-bg': '#aabbcc' },
+    }));
+
+    const settings = await harness.importFresh();
+
+    expect(settings.externalThemes.value[0]?.id).toBe('anime-dream-imported');
+    expect(settings.externalThemes.value[0]?.regions.topPanel.bg).toBe('#aabbcc');
+    expect(settings.themeStorage.value?.preset).toBe('anime-dream-imported');
+    expect(harness.storage.getItem('opencode.settings.themeRegistry.v1')).toContain('anime-dream-imported');
+  });
 });
