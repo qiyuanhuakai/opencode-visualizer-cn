@@ -42,6 +42,7 @@ describe('CodexMcpElicitation', () => {
           format: 'password',
           required: true,
         },
+        { key: 'limit', label: 'Limit', type: 'integer', required: true, minimum: 1 },
       ],
     };
     const root = document.createElement('div');
@@ -79,18 +80,26 @@ describe('CodexMcpElicitation', () => {
 
     const submit = root.querySelector<HTMLButtonElement>('[data-action="accept"]')!;
     expect(submit.disabled).toBe(true);
-    const select = root.querySelector<HTMLSelectElement>('select[name="region"]')!;
-    select.value = 'eu';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
+    root.querySelector<HTMLButtonElement>('.ui-dropdown-button')?.click();
+    await flushRender();
+    root.querySelector<HTMLElement>('[data-value=\'"eu"\']')?.click();
     const token = root.querySelector<HTMLInputElement>('input[name="token"]')!;
     expect(token.type).toBe('password');
     token.value = 'secret-value';
     token.dispatchEvent(new Event('input', { bubbles: true }));
+    const limit = root.querySelector<HTMLInputElement>('input[name="limit"]')!;
+    expect(limit.type).toBe('text');
+    limit.value = 'bad';
+    limit.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushRender();
+    expect(submit.disabled).toBe(true);
+    limit.value = '42';
+    limit.dispatchEvent(new Event('input', { bubbles: true }));
     await flushRender();
 
     expect(submit.disabled).toBe(false);
     submit.click();
-    expect(replies).toEqual([{ action: 'accept', content: { region: 'eu', token: 'secret-value' } }]);
+    expect(replies).toEqual([{ action: 'accept', content: { region: 'eu', token: 'secret-value', limit: 42 } }]);
     expect(localStorage.length).toBe(0);
 
     app.unmount();

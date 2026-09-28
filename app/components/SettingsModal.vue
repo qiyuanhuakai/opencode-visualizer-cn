@@ -34,13 +34,14 @@
             :label="$t('settings.language.label')"
             :description="$t('settings.language.description')"
           >
-            <select v-model="locale" class="language-select">
-              <option value="en">{{ $t('settings.language.en') }}</option>
-              <option value="zh-CN">{{ $t('settings.language.zhCN') }}</option>
-              <option value="zh-TW">{{ $t('settings.language.zhTW') }}</option>
-              <option value="ja">{{ $t('settings.language.ja') }}</option>
-              <option value="eo">{{ $t('settings.language.eo') }}</option>
-            </select>
+            <Dropdown v-model="locale" class="language-select" button-class="language-select-button" :aria-label="$t('settings.language.label')" auto-close>
+              <template #label>{{ $t(`settings.language.${{ en: 'en', 'zh-CN': 'zhCN', 'zh-TW': 'zhTW', ja: 'ja', eo: 'eo' }[locale]}`) }}</template>
+              <DropdownItem value="en">{{ $t('settings.language.en') }}</DropdownItem>
+              <DropdownItem value="zh-CN">{{ $t('settings.language.zhCN') }}</DropdownItem>
+              <DropdownItem value="zh-TW">{{ $t('settings.language.zhTW') }}</DropdownItem>
+              <DropdownItem value="ja">{{ $t('settings.language.ja') }}</DropdownItem>
+              <DropdownItem value="eo">{{ $t('settings.language.eo') }}</DropdownItem>
+            </Dropdown>
           </SettingRow>
 
           <ToggleSettingRow
@@ -82,7 +83,8 @@
             <div class="number-setting-group">
               <input
                 v-model.number="openInEditorMaxSizeMb"
-                type="number"
+                type="text"
+                inputmode="numeric"
                 class="number-input"
                 :min="minOpenInEditorMaxSizeMb"
                 :max="maxOpenInEditorMaxSizeMb"
@@ -637,7 +639,8 @@
             </span>
             <input
               v-model.number="editorTabSize"
-              type="number"
+              type="text"
+              inputmode="numeric"
               class="number-input"
               :min="minEditorTabSize"
               :max="maxEditorTabSize"
@@ -703,7 +706,7 @@
               <input
                 :value="localApplicationPath"
                 type="text"
-                class="font-stack-input"
+                class="font-stack-input local-application-path"
                 readonly
                 spellcheck="false"
                 autocomplete="off"
@@ -772,7 +775,8 @@
                   <input
                     :id="size.inputId"
                     v-model.number="size.model.value"
-                    type="number"
+                    type="text"
+                    inputmode="numeric"
                     class="number-input"
                     :min="size.min"
                     :max="size.max"
@@ -795,7 +799,8 @@
                 <div class="editor-number-control">
                   <input
                     v-model.number="editorFontSizePx"
-                    type="number"
+                    type="text"
+                    inputmode="numeric"
                     class="number-input"
                     :min="minEditorFontSizePx"
                     :max="maxEditorFontSizePx"
@@ -933,6 +938,8 @@
 import { computed, nextTick, onMounted, ref, shallowRef, watch, watchEffect, type Ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import SettingRow from './SettingRow.vue';
+import Dropdown from './Dropdown.vue';
+import DropdownItem from './Dropdown/Item.vue';
 import SnippetCompletion from './SnippetCompletion.vue';
 import ToggleSettingRow from './ToggleSettingRow.vue';
 import DesktopSettings from './settings/DesktopSettings.vue';
@@ -1540,47 +1547,32 @@ const fontStackSections = computed<FontStackSection[]>(() => [
 ]);
 
 function clampTerminalFontSize() {
-  terminalFontSizePx.value = Math.max(
-    minTerminalFontSizePx,
-    Math.min(maxTerminalFontSizePx, terminalFontSizePx.value),
-  );
+  terminalFontSizePx.value = clampWholeNumber(terminalFontSizePx.value, minTerminalFontSizePx, maxTerminalFontSizePx);
 }
 
 function clampAppFontSize() {
-  appFontSizePx.value = Math.max(minAppFontSizePx, Math.min(maxAppFontSizePx, appFontSizePx.value));
+  appFontSizePx.value = clampWholeNumber(appFontSizePx.value, minAppFontSizePx, maxAppFontSizePx);
 }
 
 function clampMessageFontSize() {
-  messageFontSizePx.value = Math.max(
-    minMessageFontSizePx,
-    Math.min(maxMessageFontSizePx, messageFontSizePx.value),
-  );
+  messageFontSizePx.value = clampWholeNumber(messageFontSizePx.value, minMessageFontSizePx, maxMessageFontSizePx);
 }
 
 function clampSidebarFontSize() {
-  sidebarFontSizePx.value = Math.max(
-    minSidebarFontSizePx,
-    Math.min(maxSidebarFontSizePx, sidebarFontSizePx.value),
-  );
+  sidebarFontSizePx.value = clampWholeNumber(sidebarFontSizePx.value, minSidebarFontSizePx, maxSidebarFontSizePx);
 }
 
 function clampUiFontSize() {
-  uiFontSizePx.value = Math.max(minUiFontSizePx, Math.min(maxUiFontSizePx, uiFontSizePx.value));
+  uiFontSizePx.value = clampWholeNumber(uiFontSizePx.value, minUiFontSizePx, maxUiFontSizePx);
 }
 
 function clampOpenInEditorMaxSizeMb() {
-  openInEditorMaxSizeMb.value = Math.max(
-    minOpenInEditorMaxSizeMb,
-    Math.min(maxOpenInEditorMaxSizeMb, openInEditorMaxSizeMb.value),
-  );
+  openInEditorMaxSizeMb.value = clampWholeNumber(openInEditorMaxSizeMb.value, minOpenInEditorMaxSizeMb, maxOpenInEditorMaxSizeMb);
 }
 
 function clampEditorFontSize() {
   if (editorFontSizePx.value === null) return;
-  editorFontSizePx.value = Math.max(
-    minEditorFontSizePx,
-    Math.min(maxEditorFontSizePx, editorFontSizePx.value),
-  );
+  editorFontSizePx.value = clampWholeNumber(editorFontSizePx.value, minEditorFontSizePx, maxEditorFontSizePx);
 }
 
 function inheritEditorFontSize() {
@@ -1588,7 +1580,12 @@ function inheritEditorFontSize() {
 }
 
 function clampEditorTabSize() {
-  editorTabSize.value = Math.max(minEditorTabSize, Math.min(maxEditorTabSize, editorTabSize.value));
+  editorTabSize.value = clampWholeNumber(editorTabSize.value, minEditorTabSize, maxEditorTabSize);
+}
+
+function clampWholeNumber(value: number, minimum: number, maximum: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(minimum, Math.min(maximum, Math.round(parsed))) : minimum;
 }
 
 function resetEditorShortcuts() {
@@ -2830,6 +2827,13 @@ watch(
   width: 100%;
 }
 
+.local-application-controls .local-application-path {
+  height: 34px;
+  min-height: 34px;
+  resize: none;
+  padding: 0 10px;
+}
+
 .local-application-controls .font-system-button {
   flex: 0 0 auto;
   white-space: nowrap;
@@ -3489,25 +3493,18 @@ watch(
 }
 
 .language-select {
+  min-width: 140px;
+}
+
+.language-select :deep(.language-select-button) {
   height: 30px;
-  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
   border-radius: 6px;
   background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.6)));
   color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
-  font-size: 12px;
-  font-family: inherit;
-  padding: 0 8px;
-  cursor: pointer;
 }
 
-.language-select:focus {
-  outline: none;
+.language-select :deep(.language-select-button:focus-visible) {
   border-color: var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6));
-  box-shadow: 0 0 0 1px
-    color-mix(
-      in srgb,
-      var(--theme-modal-accent, var(--theme-accent-primary, #3b82f6)) 55%,
-      transparent
-    );
+  box-shadow: var(--ui-form-control-focus-ring);
 }
 </style>

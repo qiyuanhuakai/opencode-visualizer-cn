@@ -161,9 +161,11 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-function setSelectValue(select: HTMLSelectElement, value: string) {
-  select.value = value;
-  select.dispatchEvent(new Event('change', { bubbles: true }));
+async function selectProviderType(form: HTMLFormElement, value: string) {
+  form.querySelector<HTMLButtonElement>('.kimi-web-provider-type button')?.click();
+  await flushUi();
+  form.querySelector<HTMLElement>(`.kimi-web-provider-type [data-value='"${value}"']`)?.click();
+  await flushUi();
 }
 
 function chooseRadio(input: HTMLInputElement) {
@@ -538,7 +540,7 @@ describe('KimiWebProviderManager', () => {
     const idInput = form?.querySelector<HTMLInputElement>('input[type="text"]');
     expect(idInput?.value).toBe('custom-openai');
     expect(idInput?.disabled).toBe(true);
-    expect(form?.querySelector<HTMLSelectElement>('select')?.value).toBe('openai');
+    expect(form?.querySelector('.kimi-web-provider-type button')?.textContent).toContain('openai');
     expect(
       Array.from(
         form?.querySelectorAll<HTMLInputElement>('.kimi-web-provider-model-row input') ?? [],
@@ -589,10 +591,7 @@ describe('KimiWebProviderManager', () => {
     const form = host.querySelector<HTMLFormElement>('.kimi-web-provider-form');
     const inputs = Array.from(form?.querySelectorAll<HTMLInputElement>('input') ?? []);
     setInputValue(inputs[0], 'custom-anthropic');
-    setSelectValue(
-      form?.querySelector<HTMLSelectElement>('select') as HTMLSelectElement,
-      'anthropic',
-    );
+    await selectProviderType(form!, 'anthropic');
     const modelInputs = Array.from(
       form?.querySelectorAll<HTMLInputElement>('.kimi-web-provider-model-row input') ?? [],
     );

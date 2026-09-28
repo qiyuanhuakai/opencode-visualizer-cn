@@ -101,6 +101,7 @@ type ForgePanelAuxiliaryTestOptions = {
   readonly onRefresh?: () => void;
   readonly onSelectConversation?: (id: string) => void;
   readonly onDumpConversation?: (id: string) => void;
+  readonly onSidebarResize?: () => void;
 };
 
 async function flushRender() {
@@ -146,6 +147,7 @@ function mountForgePanelWithOptions(
         shellId: 'pty-forge',
         cwd: '/repo',
         onSendLine,
+        onSidebarResize: auxiliaryOptions.onSidebarResize,
         auxiliary: {
           conversations: auxiliaryOptions.conversations ?? [],
           selectedConversationId: auxiliaryOptions.selectedConversationId ?? '',
@@ -438,6 +440,25 @@ describe('ForgePanel', () => {
     expect(root.querySelector('[data-forge-action="show-sidebar"]')).toBeNull();
     expect(root.querySelector('.forge-auxiliary-panel')).toBeInstanceOf(HTMLElement);
     expect(root.querySelector('[data-shell-id="pty-forge"]')).toBeInstanceOf(HTMLElement);
+    unmount(app);
+  });
+
+  it('fits the terminal once after a sidebar drag ends', async () => {
+    const onSidebarResize = vi.fn();
+    const { app, root } = mountForgePanelWithOptions(vi.fn(), { onSidebarResize });
+    await flushRender();
+    const handle = requireElement(root, '[data-forge-sidebar-resizer]',
+      (element): element is HTMLElement => element instanceof HTMLElement);
+
+    handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: 500 }));
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 480 }));
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 460 }));
+    await flushRender();
+    expect(onSidebarResize).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 460 }));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(onSidebarResize).toHaveBeenCalledTimes(1);
     unmount(app);
   });
 });

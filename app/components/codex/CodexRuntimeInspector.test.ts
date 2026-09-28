@@ -180,7 +180,7 @@ describe('CodexRuntimeInspector', () => {
 it('sends null when the budget is emptied', async () => {
   const { api, target } = mountInspector();
   await nextTick();
-  const budget = target.querySelector<HTMLInputElement>('input[type="number"]');
+  const budget = target.querySelector<HTMLInputElement>('input[name="tokenBudget"]');
   if (!budget) throw new Error('Budget input missing');
   budget.value = '';
   budget.dispatchEvent(new Event('input', { bubbles: true }));
@@ -193,7 +193,7 @@ it('sends null when the budget is emptied', async () => {
 it.each(['0', '-1', '1.5'])('blocks invalid budget %s', async (value) => {
   const { api, target } = mountInspector();
   await nextTick();
-  const budget = target.querySelector<HTMLInputElement>('input[type="number"]');
+  const budget = target.querySelector<HTMLInputElement>('input[name="tokenBudget"]');
   if (!budget) throw new Error('Budget input missing');
   budget.value = value;
   budget.dispatchEvent(new Event('input', { bubbles: true }));

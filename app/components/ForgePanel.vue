@@ -48,7 +48,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, type CSSProperties } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, type CSSProperties } from 'vue';
 
 import ForgeAuxiliaryPanel from './ForgeAuxiliaryPanel.vue';
 import ForgeCommandMenu from './ForgeCommandMenu.vue';
@@ -61,12 +61,16 @@ const props = defineProps<{
   shellId: string;
   cwd?: string;
   onSendLine: (line: string) => void;
+  onSidebarResize?: () => void;
   auxiliary?: ForgePanelAuxiliary;
 }>();
 
 const commandGroups = FORGE_COMMAND_GROUPS;
 const sidebarVisible = ref(true);
 const sidebarWidth = ref(300);
+let terminalObserver: MutationObserver | null = null;
+let resizeFitTimer: ReturnType<typeof setTimeout> | null = null;
+let resizingSidebar = false;
 const SIDEBAR_DRAG_TOGGLE_DISTANCE = 96;
 let resizeStartX = 0;
 let resizeStartWidth = 0;
@@ -95,6 +99,9 @@ function clampSidebarWidth(width: number) {
 
 function startSidebarResize(event: PointerEvent) {
   event.preventDefault();
+  if (resizeFitTimer !== null) clearTimeout(resizeFitTimer);
+  resizeFitTimer = null;
+  resizingSidebar = true;
   resizeStartX = event.clientX;
   resizeStartWidth = sidebarWidth.value;
   resizeStartedVisible = sidebarVisible.value;
@@ -120,9 +127,27 @@ function resizeSidebar(event: PointerEvent) {
 
 function stopSidebarResize() {
   window.removeEventListener('pointermove', resizeSidebar);
+  if (!resizingSidebar) return;
+  resizingSidebar = false;
+  resizeFitTimer = setTimeout(() => {
+    resizeFitTimer = null;
+    props.onSidebarResize?.();
+  }, 120);
 }
 
-onBeforeUnmount(stopSidebarResize);
+onMounted(() => {
+  const host = document.querySelector<HTMLElement>(`[data-shell-id="${props.shellId}"]`);
+  if (!host) return;
+  terminalObserver = new MutationObserver(() => props.onSidebarResize?.());
+  terminalObserver.observe(host, { childList: true });
+  if (host.querySelector('.xterm')) props.onSidebarResize?.();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('pointermove', resizeSidebar);
+  if (resizeFitTimer !== null) clearTimeout(resizeFitTimer);
+  terminalObserver?.disconnect();
+});
 </script>
 
 <style scoped>
@@ -223,7 +248,9 @@ onBeforeUnmount(stopSidebarResize);
 
 .xterm-host {
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--terminal-canvas-background, transparent);
 }
 

@@ -11,6 +11,7 @@
         class="ui-dropdown-button"
         :class="props.buttonClass"
         :style="props.buttonStyle"
+        :aria-label="props.ariaLabel"
         :disabled="props.disabled"
         @click.stop="toggle"
         @keydown="onKeyDown"
@@ -87,6 +88,7 @@ const props = withDefaults(
     menuIcon?: string;
     modelValue?: T;
     label?: string;
+    ariaLabel?: string;
     placeholder?: string;
     buttonClass?: ClassValue;
     buttonStyle?: StyleValue;

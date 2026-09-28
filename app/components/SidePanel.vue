@@ -1,16 +1,6 @@
 <template>
   <aside class="side-panel" :class="{ 'is-collapsed': collapsed }">
-    <button
-      v-if="collapsed"
-      type="button"
-      class="side-toggle side-toggle-collapsed"
-      :aria-expanded="!collapsed"
-      :aria-label="$t('sidePanel.expandPanel')"
-      @click="emit('toggle-collapse')"
-    >
-      <Icon icon="lucide:chevron-right" width="14" height="14" />
-    </button>
-    <div v-else class="side-body">
+    <div v-if="!collapsed" class="side-body">
       <div class="side-tabs">
         <button
           v-for="tab in tabs"
@@ -21,15 +11,6 @@
           @click="emit('change-tab', tab.id)"
         >
           {{ tab.label }}
-        </button>
-        <button
-          type="button"
-          class="side-toggle side-toggle-inline"
-          :aria-expanded="!collapsed"
-          :aria-label="$t('sidePanel.collapsePanel')"
-          @click="emit('toggle-collapse')"
-        >
-          <Icon icon="lucide:chevron-left" width="14" height="14" />
         </button>
       </div>
       <TodoList v-show="activeTab === 'todo'" :sessions="todoSessions" :title="todoLabel" />
@@ -81,7 +62,6 @@
 
 <script setup lang="ts">
 import { computed, toRefs } from 'vue';
-import { Icon } from '@iconify/vue';
 import TodoList from './TodoList.vue';
 import SessionTree from './SessionTree.vue';
 import type { BranchEntry, GitBranchInfo, GitDiffStats, GitFileStatus } from '../types/git';
@@ -130,7 +110,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (event: 'toggle-collapse'): void;
   (event: 'change-tab', value: 'todo' | 'session' | 'tree'): void;
   (event: 'select-session', payload: { projectId: string; sessionId: string }): void;
   (event: 'toggle-expand', path: string): void;
@@ -206,25 +185,6 @@ const {
   overflow: hidden;
 }
 
-.side-toggle {
-  width: 26px;
-  height: 26px;
-  border: 1px solid var(--theme-side-border, rgba(100, 116, 139, 0.45));
-  border-radius: 6px;
-  background: var(--theme-side-control-bg, rgba(30, 41, 59, 0.92));
-  color: var(--theme-side-text, #cbd5e1);
-  cursor: pointer;
-  font-size: var(--ui-font-size, 12px);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-
-.side-toggle:hover {
-  background: var(--theme-side-active-bg, rgba(51, 65, 85, 0.95));
-}
-
 .side-body {
   flex: 1;
   min-width: 0;
@@ -292,14 +252,4 @@ const {
   color: var(--theme-side-text-muted, #94a3b8);
 }
 
-.side-toggle-inline {
-  margin-left: auto;
-}
-
-.side-toggle-collapsed {
-  width: 100%;
-  height: 100%;
-  border: 0;
-  border-radius: 0;
-}
 </style>
