@@ -81,6 +81,7 @@ These tokens are defined on `:root` in `app/styles/tailwind.css`; compact Kimi p
 - Layout is application chrome, not a marketing grid.
 - Floating windows fit inside the canvas when created, then keep a reachable titlebar after drag or resize ends.
 - On a fresh viewport at or below 600px, the side panel starts collapsed so the workspace remains usable; a saved user choice takes precedence.
+- The left side panel collapses when its resize handle is dragged below the usable width and reopens by dragging its narrow rail right; the rail has no toggle button.
 - Terminal panels should default to approximately 80x24 cells and then resize around measured xterm cell dimensions.
 
 ## 5. Components
@@ -104,6 +105,7 @@ Do not use system-native dropdowns such as HTML `<select>` in Vis interfaces. Us
 - **Accessibility**: prompt input has a label; shortcut buttons are native buttons with titles.
 - **Motion**: no layout animation inside xterm; all resizing is direct and immediate.
 - **Forge control layout**: Forge keeps command menus in the top toolbar, PTY/xterm in the main region, structured reads in a hideable/resizable right rail, and the agent/function prompt fixed at the bottom.
+- **Forge rail resizing**: the rail tracks the drag directly; xterm reflows once after pointer release and a short debounce, while the terminal stays clipped to its own region during the drag.
 - **Forge auxiliary reads**: `forge list conversation --porcelain`, `forge conversation show <id> --md`, `forge conversation dump <id>`, and `forge info --porcelain` feed status chips, conversation lists, and preview panes only; realtime interaction remains the PTY/xterm surface.
 
 ### Compact Control Button

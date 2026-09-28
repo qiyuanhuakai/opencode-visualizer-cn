@@ -87,7 +87,6 @@
             :tree-branch-list-loading="branchListLoading"
             :run-shell-command="runTreeShellCommand"
             :ensure-branch-entries-loaded="ensureBranchEntriesLoaded"
-            @toggle-collapse="toggleSidePanelCollapsed"
             @change-tab="setSidePanelTab"
             @select-session="handleSidePanelSessionSelect"
             @toggle-expand="toggleSessionTreeExpand"
@@ -105,8 +104,11 @@
             @reload="handleReloadSidebar"
           />
           <div
-            v-if="!sidePanelCollapsed"
             class="side-resizer"
+            :class="{ 'is-collapsed': sidePanelCollapsed }"
+            role="separator"
+            aria-orientation="vertical"
+            :aria-label="t(sidePanelCollapsed ? 'sidePanel.expandPanel' : 'sidePanel.collapsePanel')"
             @pointerdown="startSidePanelResize"
           ></div>
         </div>
@@ -1363,6 +1365,7 @@ function getForgeShellWindowOptions(pty: PtyInfo, directory: string): ShellWindo
       shellId: pty.id,
       cwd: pty.cwd || directory,
       onSendLine: (line: string) => sendLineToPty(pty.id, line),
+      onSidebarResize: () => scheduleShellFit(pty.id),
       auxiliary: forgePanelAuxiliary,
     },
     minWidth: terminalSize.width,
@@ -1770,6 +1773,7 @@ const inputHeight = ref<number | null>(null);
 const sidePanelResizeState = ref<{
   startX: number;
   startWidth: number;
+  startedCollapsed: boolean;
   minWidth: number;
   maxWidth: number;
 } | null>(null);
@@ -4073,16 +4077,6 @@ function persistSidePanelTab(value: 'todo' | 'session' | 'tree') {
   storageSet(StorageKeys.state.sidePanelTab, value);
 }
 
-function toggleSidePanelCollapsed() {
-  sidePanelCollapsed.value = !sidePanelCollapsed.value;
-  sidePanelWidth.value = null;
-  persistSidePanelCollapsed(sidePanelCollapsed.value);
-  nextTick(() => {
-    syncFloatingExtent();
-    scheduleShellFitAll();
-  });
-}
-
 function setSidePanelTab(value: 'todo' | 'session' | 'tree') {
   if (sidePanelActiveTab.value === value) return;
   sidePanelActiveTab.value = value;
@@ -4902,10 +4896,11 @@ function startSidePanelResize(event: PointerEvent) {
   sidePanelResizeState.value = {
     startX: event.clientX,
     startWidth: currentWidth,
+    startedCollapsed: sidePanelCollapsed.value,
     minWidth: minW,
     maxWidth: maxW,
   };
-  sidePanelWidth.value = currentWidth;
+  if (!sidePanelCollapsed.value) sidePanelWidth.value = currentWidth;
   (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
   event.preventDefault();
 }
@@ -4924,9 +4919,12 @@ function handlePointerMove(event: PointerEvent) {
 
 function applyPointerResize(event: PointerEvent) {
   if (sidePanelResizeState.value) {
-    const { startX, startWidth, minWidth, maxWidth } = sidePanelResizeState.value;
+    const { startX, startWidth, startedCollapsed, minWidth, maxWidth } = sidePanelResizeState.value;
     const dx = event.clientX - startX;
-    sidePanelWidth.value = clamp(startWidth + dx, minWidth, maxWidth);
+    const nextWidth = startedCollapsed ? minWidth + dx - 96 : startWidth + dx;
+    const collapsed = startedCollapsed ? dx < 96 : nextWidth < 104;
+    sidePanelCollapsed.value = collapsed;
+    sidePanelWidth.value = collapsed ? null : clamp(nextWidth, minWidth, maxWidth);
     flushResizeSideEffects();
     return;
   }
@@ -6271,6 +6269,7 @@ const ptyWindowOwner = usePtyWindowOwner({
   },
   resizeWindow: (ptyId: string, terminal: Terminal, host: HTMLElement) => {
     resizeWindowToFitTerminal(`shell:${ptyId}`, terminal, host);
+    scheduleShellFit(ptyId);
   },
   cleanupSession: (ptyId: string, session: ShellSession, options: { readonly kill: boolean }) => {
     pendingShellFits.delete(ptyId);
@@ -6452,9 +6451,9 @@ function scheduleShellFit(ptyId: string) {
         return;
       }
       attempts++;
-      fitTerminalToContainer(currentSession);
+      const fitted = fitTerminalToContainer(currentSession);
       const { cols, rows } = currentSession.terminal;
-      if (cols === prevCols && rows === prevRows) {
+      if (fitted && cols === prevCols && rows === prevRows) {
         notifyPtySize(currentSession);
         return;
       }
@@ -11207,7 +11206,7 @@ body {
   gap: var(--todo-panel-gap);
   --todo-panel-gap: 10px;
   --todo-panel-open-width: clamp(260px, 26vw, 380px);
-  --todo-panel-collapsed-width: 30px;
+  --todo-panel-collapsed-width: 12px;
   --todo-panel-width: var(--todo-panel-open-width);
 }
 
@@ -11261,6 +11260,18 @@ body {
 
 .side-resizer:hover::before {
   background: var(--theme-dock-handle-hover, rgba(226, 232, 240, 0.7));
+}
+
+.side-resizer.is-collapsed {
+  top: 0;
+  bottom: 0;
+  right: -8px;
+  width: 28px;
+  cursor: e-resize;
+}
+
+.side-resizer.is-collapsed::before {
+  height: 48px;
 }
 
 .is-disabled {
