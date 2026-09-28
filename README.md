@@ -42,7 +42,7 @@
 | **字体管理** | 支持设置 Shell 字体、界面等宽字体，支持设置终端/代码/消息/UI/侧边栏字体大小，系统字体自动发现 | 🅱️ Beta |
 | **供应商与模型管理** | 查看/启用/禁用本地模型和供应商；支持所有提供商的 Web 端连接、自定义提供商连接；完善的 i18n 支持 | ✅ 已上线 |
 | **状态监控** | 查看服务器、MCP、LSP、Plugin、Skills 状态；支持关闭 MCP 连接；实时显示当前会话 Token 消耗（上下文限制、输入/输出/推理 Token、使用率进度条） | ✅ 已上线 |
-| **主题设置** | 自定义各卡片不同组件颜色 | 🅱️ Beta |
+| **主题设置** | 九款内置主题；支持导入、校验、重命名、导出、备份替换及删除 JSON 主题（[格式说明](docs/theme-files.md)） | ✅ Stable |
 | **编辑器集成** | 使用系统 `$EDITOR` 打开文本文件 | ✅ 已上线 |
 | **代码行评论** | 鼠标拖拽选择范围，评价并附加到输入框 | ✅ 已上线 |
 | **会话树管理** | 侧栏增加会话树栏，基于项目-沙盒-会话的三层级进行会话置顶 | ✅ 已上线 |
@@ -143,7 +143,9 @@ forge setup
 
 #### 5. 主题设置
 
-<-- ![主题设置](docs/screenshots/theme-settings.png) -->
+九种内置主题的主界面，按主题列表顺序排列。点击图片可查看 7696 × 4336 原图：
+
+[![九种内置主题主界面截图，按三行三列排列](docs/screenshots/theme-gallery.png)](docs/screenshots/theme-gallery.png)
 
 #### 6. 代码行评论
 
@@ -434,7 +436,7 @@ All upstream [Vis](https://github.com/xenodrive/vis) core features are fully pre
 | **Font Management** | Shell font, UI monospace font, adjustable terminal/code/message/UI/sidebar font sizes, system font auto-discovery | 🅱️ Beta |
 | **Provider & Model Management** | View/enable/disable local models and providers; support all provider Web connections and custom provider connections; full i18n support | ✅ Available |
 | **Status Monitor** | View server, MCP, LSP, Plugin, Skills status; close MCP connections; real-time session token usage (context limit, input/output/reasoning tokens, usage progress bar) | ✅ Available |
-| **Theme Settings** | Customize colors for different card components | 🅱️ Beta |
+| **Theme Settings** | Nine built-in profiles; import, validate, rename, export, back up on replacement, and remove JSON themes ([format guide](docs/theme-files.md), [3×3 gallery](docs/screenshots/theme-gallery.png)) | ✅ Stable |
 | **Editor Integration** | Open text files with system `$EDITOR` | ✅ Available |
 | **Code Line Comment** | Drag to select range and append comment to input | ✅ Available |
 | **Session Tree Management** | Added a session tree panel in the sidebar; sessions are pinned based on a three-level hierarchy of project-sandbox-session | ✅ Available |
