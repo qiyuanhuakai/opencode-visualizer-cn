@@ -3,6 +3,13 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+## [Unreleased]
+### 设置控件与侧栏布局
+
+- [x] 将语言、Codex 和 Kimi Web 等页面的原生下拉框统一替换为 Vis 主题下拉；数字微调框改为直接输入，并校验非法数字。
+- [x] 修复编辑器设置中本地应用路径输入框过高的问题；左侧栏缩窄后自动收起，可从窄边缘拖出，不再显示隐藏或拉出按钮。
+- [x] 修复 Forge 终端被右侧栏遮盖的问题；拖动右侧栏时保持终端尺寸，松开后消抖并一次性适配（[#150](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/150)）。
+
 ## [v0.8.7 released]
 ### 主题系统正式发布
 
