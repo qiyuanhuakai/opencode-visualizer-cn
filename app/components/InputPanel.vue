@@ -1863,12 +1863,17 @@ const inputMessageStyle = computed(() => {
   flex-direction: column;
   align-items: stretch;
   overflow: visible;
-  background-color: var(--theme-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
-  background-image: linear-gradient(var(--agent-tint, transparent), var(--agent-tint, transparent));
+  background:
+    linear-gradient(var(--agent-tint, transparent), var(--agent-tint, transparent)),
+    var(--theme-input-bg, var(--theme-surface-panel, rgba(15, 23, 42, 0.92)));
   border: 1px solid var(--theme-input-border, var(--theme-border-default, #334155));
   border-radius: 12px;
   box-sizing: border-box;
   box-shadow: var(--theme-shadow-panel, 0 12px 32px rgba(2, 6, 23, 0.45));
+}
+
+:global(html[data-region-theme='light-mode'] .input-message) {
+  background: var(--theme-input-bg, #ffffff);
 }
 
 .input-message:has(.input-textarea:disabled) {

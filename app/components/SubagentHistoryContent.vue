@@ -62,7 +62,6 @@ const props = withDefaults(
   }>(),
   {
     sessionLabel: '',
-    theme: 'github-dark',
   },
 );
 

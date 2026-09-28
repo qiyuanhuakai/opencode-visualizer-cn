@@ -224,7 +224,7 @@ onBeforeUnmount(stopSidebarResize);
 .xterm-host {
   flex: 1;
   min-height: 0;
-  background: transparent;
+  background: var(--terminal-canvas-background, transparent);
 }
 
 .xterm-host :deep(.xterm) {

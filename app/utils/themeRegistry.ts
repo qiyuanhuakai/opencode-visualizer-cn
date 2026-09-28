@@ -1,7 +1,13 @@
+import { validateExternalThemeFile } from './themeFileValidation';
 import {
   DEFAULT_REGION_THEME,
-  FOREST_PRESET,
-  OCEAN_PRESET,
+  AURORA_TIDE_PRESET,
+  AMBER_ATLAS_PRESET,
+  ANIME_DREAM_PRESET,
+  ANIME_NIGHT_PRESET,
+  SOFT_WHITE_PRESET,
+  LIGHT_MODE_PRESET,
+  VIOLET_NOCTURNE_PRESET,
   REGION_COLOR_FIELDS,
   REGION_NAMES,
   SAKURA_PRESET,
@@ -32,6 +38,7 @@ export type ThemeRegistryEntry = {
 
 export type ExternalThemeDefinition = {
   $schema?: string;
+  version?: 1;
   id: string;
   label: string;
   badge?: string;
@@ -187,7 +194,7 @@ function normalizeFloatingTypeTheme(input: unknown) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   const record = input as Record<string, unknown>;
   return Object.fromEntries(
-    ['accent', 'backgroundColor', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
+    ['accent', 'backgroundColor', 'text', 'textMuted', 'textSoft', 'textSecondary', 'syntaxText', 'opacity', 'titlebarOpacity', 'backgroundImage'].flatMap((field) => {
       const value = normalizeColorValue(record[field]);
       if (!value) return [];
       return [[field, value]];
@@ -212,6 +219,7 @@ function normalizeFloatingTheme(input: unknown): Partial<FloatingWindowThemeColo
     textMuted: normalizeColorValue(record.textMuted),
     textSoft: normalizeColorValue(record.textSoft),
     textSecondary: normalizeColorValue(record.textSecondary),
+    syntaxText: normalizeColorValue(record.syntaxText),
     opacity: normalizeColorValue(record.opacity),
     titlebarOpacity: normalizeColorValue(record.titlebarOpacity),
     backgroundImage: normalizeColorValue(record.backgroundImage),
@@ -268,33 +276,84 @@ const BUILTIN_THEME_ENTRIES: ThemeRegistryEntry[] = [
     swatches: deriveThemeSwatches(DEFAULT_REGION_THEME),
   },
   {
-    id: OCEAN_PRESET.name,
+    id: AURORA_TIDE_PRESET.name,
     source: 'builtin',
-    theme: OCEAN_PRESET,
+    theme: AURORA_TIDE_PRESET,
     removable: false,
-    labelKey: 'settings.theme.presetNames.ocean',
+    labelKey: 'settings.theme.presetNames.auroraTide',
     badgeKey: 'settings.theme.presetBadges.cool',
-    descriptionKey: 'settings.theme.presetDescriptions.ocean',
-    swatches: deriveThemeSwatches(OCEAN_PRESET),
+    descriptionKey: 'settings.theme.presetDescriptions.auroraTide',
+    swatches: deriveThemeSwatches(AURORA_TIDE_PRESET),
   },
   {
-    id: FOREST_PRESET.name,
+    id: VIOLET_NOCTURNE_PRESET.name,
     source: 'builtin',
-    theme: FOREST_PRESET,
+    theme: VIOLET_NOCTURNE_PRESET,
     removable: false,
-    labelKey: 'settings.theme.presetNames.forest',
-    badgeKey: 'settings.theme.presetBadges.natural',
-    descriptionKey: 'settings.theme.presetDescriptions.forest',
-    swatches: deriveThemeSwatches(FOREST_PRESET),
+    labelKey: 'settings.theme.presetNames.violetNocturne',
+    badgeKey: 'settings.theme.presetBadges.expressive',
+    descriptionKey: 'settings.theme.presetDescriptions.violetNocturne',
+    swatches: deriveThemeSwatches(VIOLET_NOCTURNE_PRESET),
   },
   {
     id: SAKURA_PRESET.name,
     source: 'builtin',
     theme: SAKURA_PRESET,
     removable: false,
+    labelKey: 'settings.theme.presetNames.sakura',
     badgeKey: 'settings.theme.presetBadges.expressive',
     descriptionKey: 'settings.theme.presetDescriptions.sakura',
     swatches: deriveThemeSwatches(SAKURA_PRESET),
+  },
+  {
+    id: ANIME_NIGHT_PRESET.name,
+    source: 'builtin',
+    theme: ANIME_NIGHT_PRESET,
+    removable: false,
+    labelKey: 'settings.theme.presetNames.animeNight',
+    badgeKey: 'settings.theme.presetBadges.expressive',
+    descriptionKey: 'settings.theme.presetDescriptions.animeNight',
+    swatches: deriveThemeSwatches(ANIME_NIGHT_PRESET),
+  },
+  {
+    id: ANIME_DREAM_PRESET.name,
+    source: 'builtin',
+    theme: ANIME_DREAM_PRESET,
+    removable: false,
+    labelKey: 'settings.theme.presetNames.animeDream',
+    badgeKey: 'settings.theme.presetBadges.expressive',
+    descriptionKey: 'settings.theme.presetDescriptions.animeDream',
+    swatches: deriveThemeSwatches(ANIME_DREAM_PRESET),
+  },
+  {
+    id: AMBER_ATLAS_PRESET.name,
+    source: 'builtin',
+    theme: AMBER_ATLAS_PRESET,
+    removable: false,
+    labelKey: 'settings.theme.presetNames.amberAtlas',
+    badgeKey: 'settings.theme.presetBadges.natural',
+    descriptionKey: 'settings.theme.presetDescriptions.amberAtlas',
+    swatches: deriveThemeSwatches(AMBER_ATLAS_PRESET),
+  },
+  {
+    id: SOFT_WHITE_PRESET.name,
+    source: 'builtin',
+    theme: SOFT_WHITE_PRESET,
+    removable: false,
+    labelKey: 'settings.theme.presetNames.softWhite',
+    badgeKey: 'settings.theme.presetBadges.balanced',
+    descriptionKey: 'settings.theme.presetDescriptions.softWhite',
+    swatches: deriveThemeSwatches(SOFT_WHITE_PRESET),
+  },
+  {
+    id: LIGHT_MODE_PRESET.name,
+    source: 'builtin',
+    theme: LIGHT_MODE_PRESET,
+    removable: false,
+    labelKey: 'settings.theme.presetNames.lightMode',
+    badgeKey: 'settings.theme.presetBadges.balanced',
+    descriptionKey: 'settings.theme.presetDescriptions.lightMode',
+    swatches: deriveThemeSwatches(LIGHT_MODE_PRESET),
   },
 ];
 
@@ -334,6 +393,7 @@ function normalizeExternalThemeDefinition(input: unknown): ExternalThemeDefiniti
   };
 
   return {
+    version: 1,
     id,
     label,
     badge: normalizeThemeLabel(record.badge) ?? undefined,
@@ -351,19 +411,43 @@ function isStoredExternalThemeRegistry(value: unknown): value is StoredExternalT
   return record.version === 1 && Array.isArray(record.themes);
 }
 
-export function normalizeStoredExternalThemes(input: unknown): ExternalThemeDefinition[] {
-  if (!isStoredExternalThemeRegistry(input)) return [];
+export function nextAvailableThemeId(baseId: string, suffix: string, occupiedIds: ReadonlySet<string>): string {
+  const base = `${baseId}-${suffix}`;
+  let candidate = base;
+  let sequence = 2;
+  while (occupiedIds.has(candidate)) {
+    candidate = `${base}-${sequence}`;
+    sequence += 1;
+  }
+  return candidate;
+}
+
+export function migrateStoredExternalThemes(input: unknown): {
+  themes: ExternalThemeDefinition[];
+  renamed: Array<{ from: string; to: string; label: string }>;
+} {
+  if (!isStoredExternalThemeRegistry(input)) return { themes: [], renamed: [] };
   const normalized = input.themes
     .map((theme) => normalizeExternalThemeDefinition(theme))
-    .filter((theme): theme is ExternalThemeDefinition => Boolean(theme))
-    .filter((theme) => !BUILTIN_THEME_ENTRIES.some((entry) => entry.id === theme.id));
+    .filter((theme): theme is ExternalThemeDefinition => Boolean(theme));
 
-  const seen = new Set<string>();
-  return normalized.filter((theme) => {
-    if (seen.has(theme.id)) return false;
-    seen.add(theme.id);
-    return true;
+  const occupied = new Set(BUILTIN_THEME_ENTRIES.map((entry) => entry.id));
+  const renamed: Array<{ from: string; to: string; label: string }> = [];
+  const themes = normalized.map((theme) => {
+    if (!occupied.has(theme.id)) {
+      occupied.add(theme.id);
+      return theme;
+    }
+    const id = nextAvailableThemeId(theme.id, 'imported', occupied);
+    occupied.add(id);
+    renamed.push({ from: theme.id, to: id, label: theme.label });
+    return { ...theme, id };
   });
+  return { themes, renamed };
+}
+
+export function normalizeStoredExternalThemes(input: unknown): ExternalThemeDefinition[] {
+  return migrateStoredExternalThemes(input).themes;
 }
 
 function readStoredExternalThemes(): ExternalThemeDefinition[] {
@@ -371,6 +455,8 @@ function readStoredExternalThemes(): ExternalThemeDefinition[] {
 }
 
 export function parseExternalThemeFile(input: unknown): ExternalThemeDefinition {
+  validateExternalThemeFile(input);
+
   const theme = normalizeExternalThemeDefinition(input);
 
   if (!theme) {
@@ -406,6 +492,39 @@ export function upsertExternalThemes(
   return Array.from(next.values());
 }
 
+export function renameExternalTheme(
+  themes: ExternalThemeDefinition[],
+  id: string,
+  label: string,
+): ExternalThemeDefinition[] {
+  const nextLabel = normalizeThemeLabel(label);
+  if (!nextLabel) throw new Error('Theme name cannot be empty.');
+  if (!themes.some((theme) => theme.id === id)) throw new Error(`Theme "${id}" was not found.`);
+  return themes.map((theme) => theme.id === id ? { ...theme, label: nextLabel } : theme);
+}
+
+export function importExternalTheme(
+  themes: ExternalThemeDefinition[],
+  incoming: ExternalThemeDefinition,
+  conflict: 'replace' | 'keep-both',
+): { themes: ExternalThemeDefinition[]; selectedId: string } {
+  const previous = themes.find((theme) => theme.id === incoming.id);
+  if (!previous) return { themes: [...themes, incoming], selectedId: incoming.id };
+  const occupied = new Set([...BUILTIN_THEME_ENTRIES.map((entry) => entry.id), ...themes.map((theme) => theme.id)]);
+  if (conflict === 'keep-both') {
+    const id = nextAvailableThemeId(incoming.id, 'imported', occupied);
+    return { themes: [...themes, { ...incoming, id }], selectedId: id };
+  }
+  const backupId = nextAvailableThemeId(incoming.id, 'backup', occupied);
+  return {
+    themes: [
+      ...themes.map((theme) => theme.id === incoming.id ? incoming : theme),
+      { ...previous, id: backupId },
+    ],
+    selectedId: incoming.id,
+  };
+}
+
 export function removeStoredExternalTheme(themes: ExternalThemeDefinition[], id: string): ExternalThemeDefinition[] {
   return themes.filter((theme) => theme.id !== id);
 }
@@ -437,6 +556,7 @@ function createExternalThemeRegistryEntry(theme: ExternalThemeDefinition): Theme
 export function createExternalThemeDefinition(theme: RegionThemeConfig, meta?: Pick<ExternalThemeDefinition, 'badge' | 'description' | 'swatches'>): ExternalThemeDefinition {
   return {
     $schema: THEME_SCHEMA_URL,
+    version: 1,
     id: theme.name,
     label: theme.label,
     badge: meta?.badge,

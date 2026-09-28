@@ -935,13 +935,29 @@ export interface LocaleMessages {
       exportTemplateAction: string;
       exportCurrentFallbackName: string;
       removeExternal: string;
+      renameAction: string;
+      renameLabel: string;
+      saveRename: string;
+      exportAction: string;
+      cancelAction: string;
+      conflictTitle: string;
+      conflictDescription: string;
+      keepBothAction: string;
+      replaceAction: string;
+      backupHint: string;
       externalBadge: string;
       externalDescription: string;
       schemaLink: string;
       presetNames: {
         default: string;
-        ocean: string;
-        forest: string;
+        auroraTide: string;
+        violetNocturne: string;
+        sakura: string;
+        animeNight: string;
+        animeDream: string;
+        amberAtlas: string;
+        softWhite: string;
+        lightMode: string;
       };
       presetBadges: {
         balanced: string;
@@ -951,8 +967,13 @@ export interface LocaleMessages {
       };
       presetDescriptions: {
         default: string;
-        ocean: string;
-        forest: string;
+        auroraTide: string;
+        violetNocturne: string;
+        animeNight: string;
+        animeDream: string;
+        amberAtlas: string;
+        softWhite: string;
+        lightMode: string;
         sakura: string;
       };
       customLabel: string;

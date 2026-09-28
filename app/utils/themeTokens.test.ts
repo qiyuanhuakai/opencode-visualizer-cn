@@ -1,70 +1,78 @@
 import { describe, expect, it } from 'vitest';
 
-import { OCEAN_PRESET } from './regionTheme';
+import { AURORA_TIDE_PRESET } from './regionTheme';
 import {
   buildRegionCompatibilityCss,
   createSemanticTokenSnapshot,
   isThemeStorageV2,
   migrateLegacyRegionThemeStorage,
+  normalizeThemeStorage,
   regionThemeToStorage,
   regionThemeToSemanticOverrides,
+  resolveSyntaxTheme,
   resolveThemeStoragePreset,
   semanticTokenCssVariable,
   storageToRegionTheme,
 } from './themeTokens';
 
 describe('theme token bridge', () => {
+  it('selects a light syntax palette for rgb text in imported themes', () => {
+    const storage = regionThemeToStorage(AURORA_TIDE_PRESET)!;
+    storage.regions!.outputPanel.text = 'rgb(38 48 56)';
+    expect(resolveSyntaxTheme(storage)).toBe('github-light');
+  });
+
   it('maps legacy region theme presets into semantic token overrides', () => {
-    const overrides = regionThemeToSemanticOverrides(OCEAN_PRESET);
-    expect(overrides['surface-panel']).toBe('#1a1a2e');
-    expect(overrides['surface-page']).toBe('#b8c9d8');
-    expect(overrides['text-primary']).toBe('#eaf6ff');
-    expect(overrides['accent-primary']).toBe('#4cc9f0');
-    expect(overrides['surface-overlay']).toBe('color-mix(in srgb, #006494 55%, transparent)');
-    expect(overrides['dropdown-bg']).toBe('#0b1f33');
-    expect(overrides['chip-bg-neutral']).toBe('#1b3a4b');
-    expect(overrides['icon-action-bg']).toBe('#12324a');
-    expect(overrides['dock-tray-bg']).toBe('#97b1c8');
-    expect(overrides['form-control-bg']).toBe('#12324a');
-    expect(overrides['tab-bg']).toBe('#1b3a4b');
-    expect(overrides['badge-bg']).toBe('#1b3a4b');
-    expect(overrides['card-bg']).toBe('#1b3a4b');
-    expect(overrides['toggle-active-track']).toBe('#76e4f7');
-    expect(overrides['list-row-bg']).toBe('#1b3a4b');
-    expect(overrides['empty-state-text']).toBe('#7aa2c0');
-    expect(overrides['action-button-bg']).toBe('#1b3a4b');
-    expect(overrides['search-bg']).toBe('#0b1f33');
-    expect(overrides['floating-surface-base']).toBe('#09192a');
-    expect(overrides['floating-text']).toBe('#edf7ff');
-    expect(overrides['floating-default-accent']).toBe('#76e4f7');
-    expect(overrides['floating-shell-background-color']).toBe('#0b1f33');
-    expect(overrides['floating-shell-opacity']).toBe('0.95');
+    const overrides = regionThemeToSemanticOverrides(AURORA_TIDE_PRESET);
+    expect(overrides['surface-panel']).toBe('#142a35');
+    expect(overrides['surface-page']).toContain('linear-gradient');
+    expect(overrides['text-primary']).toBe('#e8f6f3');
+    expect(overrides['accent-primary']).toBe('#5de1c0');
+    expect(overrides['surface-overlay']).toBe('color-mix(in srgb, #315861 55%, transparent)');
+    expect(overrides['dropdown-bg']).toBe('#1a3540');
+    expect(overrides['chip-bg-neutral']).toBe('#24424d');
+    expect(overrides['icon-action-bg']).toBe('#1d3c48');
+    expect(overrides['dock-tray-bg']).toBe('#193541');
+    expect(overrides['form-control-bg']).toBe('#1a3540');
+    expect(overrides['tab-bg']).toBe('#24424d');
+    expect(overrides['badge-bg']).toBe('#24424d');
+    expect(overrides['card-bg']).toBe('linear-gradient(140deg, #1c3943, #202f43)');
+    expect(overrides['toggle-active-track']).toBe('#5de1c0');
+    expect(overrides['list-row-bg']).toBe('#24424d');
+    expect(overrides['empty-state-text']).toBe('#afc6cb');
+    expect(overrides['action-button-bg']).toBe('#24424d');
+    expect(overrides['search-bg']).toBe('#142a35');
+    expect(overrides['floating-surface-base']).toBe('#192f3d');
+    expect(overrides['floating-text']).toBe('#e8f6f3');
+    expect(overrides['floating-default-accent']).toBe('#5de1c0');
+    expect(overrides['floating-shell-background-color']).toBe('#192f3d');
+    expect(overrides['floating-shell-opacity']).toBe('1');
     expect(overrides['floating-background-image']).toContain('linear-gradient');
   });
 
   it('migrates legacy region theme storage into versioned token storage', () => {
-    const migrated = migrateLegacyRegionThemeStorage(OCEAN_PRESET);
+    const migrated = migrateLegacyRegionThemeStorage(AURORA_TIDE_PRESET);
     expect(isThemeStorageV2(migrated)).toBe(true);
     expect(migrated?.version).toBe(2);
-    expect(resolveThemeStoragePreset(migrated)).toBe('ocean');
-    expect(migrated?.overrides['surface-panel']).toBe('#1a1a2e');
-    expect(migrated?.regions?.sidePanel?.bg).toBe('#102542');
-    expect(migrated?.regions?.outputPanel?.bg).toBe('#13293d');
+    expect(resolveThemeStoragePreset(migrated)).toBe('aurora-tide');
+    expect(migrated?.overrides['surface-panel']).toBe('#142a35');
+    expect(migrated?.regions?.sidePanel?.bg).toContain('linear-gradient');
+    expect(migrated?.regions?.outputPanel?.bg).toContain('linear-gradient');
   });
 
   it('reconstructs a region theme shape from token storage for compatibility', () => {
-    const migrated = migrateLegacyRegionThemeStorage(OCEAN_PRESET);
+    const migrated = migrateLegacyRegionThemeStorage(AURORA_TIDE_PRESET);
     const regionTheme = storageToRegionTheme(migrated);
-    expect(regionTheme?.regions.topPanel.bg).toBe('#1a1a2e');
-    expect(regionTheme?.regions.sidePanel.bg).toBe('#102542');
-    expect(regionTheme?.regions.outputPanel.bg).toBe('#13293d');
-    expect(regionTheme?.regions.pageBackground.bg).toBe('#b8c9d8');
-    expect(regionTheme?.regions.modalPanel.accent).toBe('#76e4f7');
+    expect(regionTheme?.regions.topPanel.bg).toBe('#142a35');
+    expect(regionTheme?.regions.sidePanel.bg).toContain('linear-gradient');
+    expect(regionTheme?.regions.outputPanel.bg).toContain('linear-gradient');
+    expect(regionTheme?.regions.pageBackground.bg).toContain('linear-gradient');
+    expect(regionTheme?.regions.modalPanel.accent).toBe('#5de1c0');
   });
 
   it('builds preset-aware compatibility css with semantic roots for preset switching', () => {
     const css = buildRegionCompatibilityCss();
-    expect(css).toContain(`:root[data-region-theme="ocean"] {`);
+    expect(css).toContain(`:root[data-region-theme="aurora-tide"] {`);
     expect(css).toContain(`${semanticTokenCssVariable('surface-panel')}: rgba(15, 23, 42, 0.92);`);
     expect(css).not.toContain('.top-panel {');
   });
@@ -117,7 +125,7 @@ describe('theme token bridge', () => {
 
   it('preserves floating default overrides through storage conversion', () => {
     const storage = regionThemeToStorage({
-      ...OCEAN_PRESET,
+      ...AURORA_TIDE_PRESET,
       floating: {
         default: {
           accent: '#7dd3fc',
@@ -136,7 +144,7 @@ describe('theme token bridge', () => {
 
   it('strips alpha from floating layer colors and keeps titlebar opacity independent', () => {
     const overrides = regionThemeToSemanticOverrides({
-      ...OCEAN_PRESET,
+      ...AURORA_TIDE_PRESET,
       floating: {
         surfaceBase: 'rgba(9, 25, 42, 0.35)',
         surfaceMuted: 'rgba(15, 40, 66, 0.45)',
@@ -161,23 +169,56 @@ describe('theme token bridge', () => {
 
   it('supports type-level floating background colors', () => {
     const overrides = regionThemeToSemanticOverrides({
-      ...OCEAN_PRESET,
+      ...AURORA_TIDE_PRESET,
       floating: {
-        ...OCEAN_PRESET.floating,
+        ...AURORA_TIDE_PRESET.floating,
         default: {
-          ...OCEAN_PRESET.floating?.default,
+          ...AURORA_TIDE_PRESET.floating?.default,
           backgroundColor: '#112244',
+          text: '#e0d0c0',
         },
         shell: {
-          ...OCEAN_PRESET.floating?.shell,
+          ...AURORA_TIDE_PRESET.floating?.shell,
           backgroundColor: '#224466',
+          text: '#f0e0d0',
           opacity: '0.95',
         },
+        reasoning: { backgroundColor: '#334455', text: '#f1e2d3' },
+        subagent: { backgroundColor: '#445566', textMuted: '#d0c0b0' },
+        tool: { backgroundColor: '#556677', textSoft: '#c0b0a0' },
+        media: undefined,
       },
     });
 
     expect(overrides['floating-shell-background-color']).toBe('#224466');
+    expect(overrides['floating-default-background-color']).toBe('#112244');
+    expect(overrides['floating-default-text']).toBe('#e0d0c0');
+    expect(overrides['floating-shell-text']).toBe('#f0e0d0');
     expect(overrides['floating-shell-opacity']).toBe('0.95');
-    expect(overrides['floating-tool-background-color']).toBe('#112244');
+    expect(overrides['floating-reasoning-background-color']).toBe('#334455');
+    expect(overrides['floating-reasoning-text']).toBe('#f1e2d3');
+    expect(overrides['floating-subagent-background-color']).toBe('#445566');
+    expect(overrides['floating-subagent-text-muted']).toBe('#d0c0b0');
+    expect(overrides['floating-tool-background-color']).toBe('#556677');
+    expect(overrides['floating-tool-text-soft']).toBe('#c0b0a0');
+    expect(overrides['floating-media-background-color']).toBe('#112244');
+  });
+
+  it('retains optional floating syntax colors through stored theme normalization', () => {
+    const stored = regionThemeToStorage({
+      ...AURORA_TIDE_PRESET,
+      floating: {
+        ...AURORA_TIDE_PRESET.floating,
+        syntaxText: '#35263a',
+        file: { backgroundColor: '#dec8d3', text: '#40283a', syntaxText: '#234567' },
+      },
+    });
+    const normalized = normalizeThemeStorage(JSON.parse(JSON.stringify(stored)));
+    expect(normalized?.floating?.syntaxText).toBe('#35263a');
+    expect(normalized?.floating?.file).toMatchObject({
+      backgroundColor: '#dec8d3',
+      text: '#40283a',
+      syntaxText: '#234567',
+    });
   });
 });

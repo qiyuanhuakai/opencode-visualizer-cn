@@ -6,7 +6,7 @@ import {
 } from '../utils/regionTheme';
 import { StorageKeys, storageGetJSON, storageSetJSON } from '../utils/storageKeys';
 import {
-  DEFAULT_SYNTAX_THEME,
+  resolveSyntaxTheme,
   SEMANTIC_THEME_TOKENS,
   THEME_ROOT_ATTRIBUTE,
   createSemanticTokenSnapshot,
@@ -119,7 +119,7 @@ export function useRegionTheme() {
 
     syncThemeVariables(root);
 
-    root.style.setProperty('--syntax-theme-name', DEFAULT_SYNTAX_THEME);
+    root.style.setProperty('--syntax-theme-name', resolveSyntaxTheme(themeStorage.value));
   }
 
   function applyPreset(name: string) {

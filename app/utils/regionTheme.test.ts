@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_REGION_THEME,
-  FOREST_PRESET,
+  AURORA_TIDE_PRESET,
+  VIOLET_NOCTURNE_PRESET,
+  ANIME_NIGHT_PRESET,
+  ANIME_DREAM_PRESET,
+  AMBER_ATLAS_PRESET,
+  SOFT_WHITE_PRESET,
+  LIGHT_MODE_PRESET,
   REGION_COLOR_FIELDS,
   REGION_NAMES,
-  OCEAN_PRESET,
   REGION_THEME_EDITOR_FALLBACKS,
   SAKURA_PRESET,
   generateCSS,
@@ -13,7 +18,7 @@ import {
   resolveRegionThemePreset,
 } from './regionTheme';
 
-const COLOR_VALUE = /^(#[0-9a-f]{6}|#[0-9a-f]{8}|rgba?\([^)]+\))$/i;
+const COLOR_VALUE = /^(#[0-9a-f]{6}|#[0-9a-f]{8}|rgba?\([^)]+\)|(?:radial-gradient|linear-gradient|repeating-linear-gradient)\()/i;
 
 describe('region themes', () => {
   it('keeps every region color undefined so CSS fallbacks are used', () => {
@@ -26,13 +31,14 @@ describe('region themes', () => {
 });
 
 describe('region theme presets', () => {
-  it('uses concrete hex values for every region color', () => {
-    for (const preset of [OCEAN_PRESET, FOREST_PRESET, SAKURA_PRESET]) {
+  it('defines every region color for built-in profiles', () => {
+    for (const preset of [AURORA_TIDE_PRESET, VIOLET_NOCTURNE_PRESET, SAKURA_PRESET, ANIME_NIGHT_PRESET, ANIME_DREAM_PRESET, AMBER_ATLAS_PRESET, SOFT_WHITE_PRESET, LIGHT_MODE_PRESET]) {
       for (const regionName of REGION_NAMES) {
         for (const field of REGION_COLOR_FIELDS) {
           expect(preset.regions[regionName][field]).toMatch(COLOR_VALUE);
         }
       }
+      expect(preset.regions.topDropdown.bg).toBe(preset.regions.topPanel.bg);
     }
   });
 });
@@ -117,8 +123,10 @@ describe('generateCSS', () => {
   });
 
   it('resolves builtin preset names through one shared lookup', () => {
-    expect(resolveRegionThemePreset('ocean')).toBe(OCEAN_PRESET);
-    expect(resolveRegionThemePreset('forest')).toBe(FOREST_PRESET);
+    expect(resolveRegionThemePreset('aurora-tide')).toBe(AURORA_TIDE_PRESET);
+    expect(resolveRegionThemePreset('violet-nocturne')).toBe(VIOLET_NOCTURNE_PRESET);
+    expect(resolveRegionThemePreset('ocean')).toBeNull();
+    expect(resolveRegionThemePreset('forest')).toBeNull();
     expect(resolveRegionThemePreset('default')).toBe(DEFAULT_REGION_THEME);
     expect(resolveRegionThemePreset('missing')).toBeNull();
     expect(resolveRegionThemePresetName('sakura')).toBe('sakura');

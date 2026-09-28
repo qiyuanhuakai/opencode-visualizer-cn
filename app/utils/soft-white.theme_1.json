@@ -1,0 +1,41 @@
+{
+  "$schema": "/schema/theme.schema.json",
+  "id": "soft-white",
+  "label": "柔白工作台",
+  "badge": "柔白",
+  "description": "以柔和暖白、冷灰和极浅层次呈现清爽的工作界面，保留白色主题的通透感而不刺眼。",
+  "swatches": ["#e9ecec", "#f5f4f1", "#547789", "#ad815e"],
+  "regions": {
+    "topPanel": { "bg": "#eeefed", "text": "#263038", "border": "#cbd1d0", "accent": "#547789", "controlBg": "#f7f7f4", "activeBg": "#e1e8e8", "activeText": "#304e5b", "textMuted": "#5f6d76" },
+    "sidePanel": { "bg": "linear-gradient(165deg, #f5f5f2, #eceeeb)", "text": "#263038", "border": "#cbd1d0", "accent": "#5d8a80", "controlBg": "#f8f8f5", "activeBg": "#e3ece9", "activeText": "#375c57", "textMuted": "#5f6d76" },
+    "inputPanel": { "bg": "linear-gradient(145deg, #f8f7f4, #f0f2f0)", "text": "#263038", "border": "#cbd1d0", "accent": "#547789", "controlBg": "#f9f8f5", "activeBg": "#e1e8e8", "activeText": "#304e5b", "textMuted": "#5f6d76" },
+    "outputPanel": { "bg": "radial-gradient(circle at 85% 8%, rgba(161, 184, 196, 0.12), transparent 38%), linear-gradient(155deg, #f8f8f5, #eef0ed)", "text": "#263038", "border": "#cbd1d0", "accent": "#547789", "controlBg": "#f9f8f5", "activeBg": "#e1e8e8", "activeText": "#304e5b", "textMuted": "#5f6d76" },
+    "topDropdown": { "bg": "#eeefed", "text": "#263038", "border": "#cbd1d0", "accent": "#547789", "controlBg": "#f7f7f4", "activeBg": "#e1e8e8", "activeText": "#304e5b", "textMuted": "#5f6d76" },
+    "modalPanel": { "bg": "linear-gradient(150deg, #f8f7f4, #ecefeb)", "text": "#263038", "border": "#cbd1d0", "accent": "#547789", "controlBg": "#f9f8f5", "activeBg": "#e1e8e8", "activeText": "#304e5b", "textMuted": "#5f6d76" },
+    "loginScreen": { "bg": "radial-gradient(circle at 18% 12%, rgba(221, 230, 231, 0.38), transparent 42%), linear-gradient(145deg, #f3f4f2, #e8eaeb)", "text": "#263038", "border": "#cbd1d0", "accent": "#547789", "controlBg": "#f7f7f4", "activeBg": "#e1e8e8", "activeText": "#304e5b", "textMuted": "#5f6d76" },
+    "pageBackground": { "bg": "radial-gradient(circle at 12% 8%, rgba(208, 222, 225, 0.28), transparent 42%), radial-gradient(circle at 88% 78%, rgba(226, 217, 203, 0.2), transparent 44%), linear-gradient(155deg, #e9ecec, #f0efeb)", "text": "#263038", "border": "#cbd1d0", "accent": "#547789", "controlBg": "#f7f7f4", "activeBg": "#e1e8e8", "activeText": "#304e5b", "textMuted": "#5f6d76" },
+    "chatCard": { "bg": "linear-gradient(145deg, #fffdfa, #f4f4f1)", "text": "#263038", "border": "#d2d6d2", "accent": "#5d8a80", "controlBg": "#f7f7f4", "activeBg": "#e3ece9", "activeText": "#375c57", "textMuted": "#5f6d76" }
+  },
+  "components": {
+    "dropdown": { "bg": "#f6f6f3", "border": "#cbd1d0", "text": "#263038", "textMuted": "#5f6d76", "controlBg": "#faf9f6", "hoverBg": "#e9efed", "activeBg": "#dfe9e7", "accent": "#547789", "shadow": "0 12px 28px rgba(57, 72, 80, 0.12)" },
+    "formControl": { "bg": "#f8f8f5", "border": "#cbd1d0", "text": "#263038", "placeholder": "#66747c", "focusBorder": "#547789", "buttonPrimaryBg": "#547789", "buttonPrimaryBorder": "#466a7d", "buttonPrimaryText": "#fdfcf9" },
+    "card": { "bg": "linear-gradient(145deg, #faf9f6, #f0f2ef)", "border": "#d2d6d2", "shadow": "0 10px 24px rgba(57, 72, 80, 0.1)", "hoverBg": "#f7f8f5", "activeBg": "#e9efed" }
+  },
+  "floating": {
+    "surfaceBase": "#f4f3ef", "surfaceMuted": "#e9ecea", "surfaceSubtle": "#f8f7f4", "surfaceStrong": "#dde4e3",
+    "borderMuted": "#bec8c9", "borderSubtle": "#9caaae", "borderFaint": "rgba(47, 68, 79, 0.14)", "borderFaintStrong": "rgba(47, 68, 79, 0.23)",
+    "fillFaint": "rgba(84, 119, 137, 0.1)", "text": "#263038", "textMuted": "#53636d", "textSoft": "#66747c", "textSecondary": "#34434b",
+    "backgroundImage": "radial-gradient(circle at 90% 0%, rgba(171, 195, 202, 0.1), transparent 38%), linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(203, 214, 211, 0.04))",
+    "default": { "accent": "#547789", "backgroundColor": "#f4f3ef", "titlebarOpacity": "1" },
+    "shell": { "accent": "#5d8a80", "backgroundColor": "#ecefeb", "titlebarOpacity": "1" },
+    "reasoning": { "accent": "#547789", "backgroundColor": "#f1f0ed" },
+    "subagent": { "accent": "#5d8a80", "backgroundColor": "#edf2f1" },
+    "tool": { "accent": "#ad815e", "backgroundColor": "#f3f1ec" },
+    "file": { "accent": "#547789", "backgroundColor": "#eff2f1" },
+    "diff": { "accent": "#ad815e", "backgroundColor": "#f2efed" },
+    "media": { "accent": "#5d8a80", "backgroundColor": "#eff2f1" },
+    "dialog": { "accent": "#547789", "backgroundColor": "#f5f3ef" },
+    "history": { "accent": "#5d8a80", "backgroundColor": "#f1f2ef" },
+    "debug": { "accent": "#66747c", "backgroundColor": "#ecefed" }
+  }
+}

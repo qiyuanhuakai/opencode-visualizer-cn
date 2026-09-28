@@ -528,37 +528,35 @@
             class="setting-row-stack theme-settings-section"
           >
             <div class="theme-preset-grid" role="list">
-              <button
+              <div
                 v-for="preset in themePresetCards"
                 :key="preset.id"
-                type="button"
                 class="theme-preset-card"
                 :class="{ 'is-active': selectedPreset === preset.id }"
-                :aria-pressed="selectedPreset === preset.id"
-                @click="selectedPreset = preset.id"
               >
-                <div class="theme-preset-card-header">
-                  <div class="theme-preset-card-title">{{ preset.label }}</div>
-                  <span class="theme-preset-card-badge">{{ preset.badge }}</span>
-                </div>
-                <div class="theme-preset-preview" aria-hidden="true">
-                  <span
-                    v-for="swatch in preset.swatches"
-                    :key="`${preset.id}-${swatch}`"
-                    class="theme-preset-swatch"
-                    :style="{ background: swatch }"
-                  />
-                </div>
-                <div class="theme-preset-card-description">{{ preset.description }}</div>
-                <button
-                  v-if="preset.removable"
-                  type="button"
-                  class="theme-preset-remove"
-                  @click.stop="removeThemePreset(preset.id)"
-                >
-                  {{ $t('settings.theme.removeExternal') }}
+                <button type="button" class="theme-preset-select" :aria-pressed="selectedPreset === preset.id" @click="selectedPreset = preset.id">
+                  <span class="theme-preset-card-header">
+                    <span class="theme-preset-card-title">{{ preset.label }}</span>
+                    <span class="theme-preset-card-badge">{{ preset.badge }}</span>
+                  </span>
+                  <span class="theme-preset-preview" aria-hidden="true">
+                    <span v-for="swatch in preset.swatches" :key="`${preset.id}-${swatch}`" class="theme-preset-swatch" :style="{ background: swatch }" />
+                  </span>
+                  <span class="theme-preset-card-description">{{ preset.description }}</span>
                 </button>
-              </button>
+                <div v-if="preset.removable" class="theme-preset-actions">
+                  <template v-if="renamingThemeId === preset.id">
+                    <input v-model="renameThemeLabel" class="theme-preset-rename-input" :aria-label="$t('settings.theme.renameLabel')" maxlength="80" @keydown.enter="saveThemeRename" @keydown.esc="cancelThemeRename" />
+                    <button type="button" class="theme-preset-action" @click="saveThemeRename">{{ $t('settings.theme.saveRename') }}</button>
+                    <button type="button" class="theme-preset-action" @click="cancelThemeRename">{{ $t('settings.theme.cancelAction') }}</button>
+                  </template>
+                  <template v-else>
+                    <button type="button" class="theme-preset-action" @click="startThemeRename(preset.id)">{{ $t('settings.theme.renameAction') }}</button>
+                    <button type="button" class="theme-preset-action" @click="exportThemePreset(preset.id)">{{ $t('settings.theme.exportAction') }}</button>
+                    <button type="button" class="theme-preset-action theme-preset-remove" @click="removeThemePreset(preset.id)">{{ $t('settings.theme.removeExternal') }}</button>
+                  </template>
+                </div>
+              </div>
             </div>
           </SettingRow>
 
@@ -611,6 +609,16 @@
                 >
                   {{ $t('settings.theme.schemaLink') }}
                 </a>
+              </div>
+              <div v-if="pendingThemeImport" class="theme-conflict-panel" role="group" :aria-label="$t('settings.theme.conflictTitle')">
+                <strong>{{ $t('settings.theme.conflictTitle') }}</strong>
+                <span>{{ $t('settings.theme.conflictDescription', { name: pendingThemeImport.label }) }}</span>
+                <div class="theme-action-bar">
+                  <button type="button" class="font-system-button" @click="resolvePendingThemeImport('keep-both')">{{ $t('settings.theme.keepBothAction') }}</button>
+                  <button type="button" class="font-system-button" @click="resolvePendingThemeImport('replace')">{{ $t('settings.theme.replaceAction') }}</button>
+                  <button type="button" class="font-system-button" @click="pendingThemeImport = null">{{ $t('settings.theme.cancelAction') }}</button>
+                </div>
+                <span class="theme-import-hint">{{ $t('settings.theme.backupHint') }}</span>
               </div>
               <div v-if="themeImportError" class="theme-import-error">{{ themeImportError }}</div>
             </div>
@@ -974,12 +982,15 @@ import {
   THEME_SCHEMA_URL,
   createExternalThemeDefinition,
   createThemeTemplate,
+  importExternalTheme,
   listThemeRegistryEntries,
   parseExternalThemeFileText,
   removeStoredExternalTheme,
+  renameExternalTheme,
   resolveThemeRegistryEntry,
   resolveThemeRegistryTheme,
   type ThemeRegistryEntry,
+  type ExternalThemeDefinition,
 } from '../utils/themeRegistry';
 
 type FontPreset = {
@@ -1127,6 +1138,9 @@ const editorShortcutErrors = computed(() => validateEditorShortcutMap(editorShor
 const recordingShortcut = ref<EditorShortcutKey | null>(null);
 const activeThemeStorage = themeStorage;
 const selectedPreset = ref<string>('default');
+const renamingThemeId = ref<string | null>(null);
+const renameThemeLabel = ref('');
+const pendingThemeImport = ref<ExternalThemeDefinition | null>(null);
 let isSyncingThemeEditorState = false;
 
 const themeRegistryEntries = computed<ThemeRegistryEntry[]>(() =>
@@ -1178,10 +1192,11 @@ async function importThemeFile(event: Event) {
   try {
     const text = await file.text();
     const importedTheme = parseExternalThemeFileText(text);
-    const nextThemes = new Map(externalThemes.value.map((theme) => [theme.id, theme]));
-    nextThemes.set(importedTheme.id, importedTheme);
-    externalThemes.value = Array.from(nextThemes.values());
-    selectedPreset.value = importedTheme.id;
+    if (externalThemes.value.some((theme) => theme.id === importedTheme.id)) {
+      pendingThemeImport.value = importedTheme;
+    } else {
+      applyImportedTheme(importedTheme, 'keep-both');
+    }
   } catch (error) {
     themeImportError.value =
       error instanceof Error ? error.message : t('settings.theme.importError');
@@ -1193,10 +1208,55 @@ async function importThemeFile(event: Event) {
   }
 }
 
+function applyImportedTheme(theme: ExternalThemeDefinition, conflict: 'replace' | 'keep-both') {
+  const result = importExternalTheme(externalThemes.value, theme, conflict);
+  externalThemes.value = result.themes;
+  selectedPreset.value = result.selectedId;
+  applyPreset(result.selectedId);
+}
+
+function resolvePendingThemeImport(conflict: 'replace' | 'keep-both') {
+  const theme = pendingThemeImport.value;
+  if (!theme) return;
+  applyImportedTheme(theme, conflict);
+  pendingThemeImport.value = null;
+}
+
+function startThemeRename(id: string) {
+  const theme = externalThemes.value.find((entry) => entry.id === id);
+  if (!theme) return;
+  renamingThemeId.value = id;
+  renameThemeLabel.value = theme.label;
+  themeImportError.value = '';
+}
+
+function cancelThemeRename() {
+  renamingThemeId.value = null;
+  renameThemeLabel.value = '';
+}
+
+function saveThemeRename() {
+  const id = renamingThemeId.value;
+  if (!id) return;
+  try {
+    externalThemes.value = renameExternalTheme(externalThemes.value, id, renameThemeLabel.value);
+    if (resolveThemeStoragePreset(activeThemeStorage.value) === id) applyPreset(id);
+    cancelThemeRename();
+  } catch (error) {
+    themeImportError.value = error instanceof Error ? error.message : t('settings.theme.importError');
+  }
+}
+
+function exportThemePreset(id: string) {
+  const theme = externalThemes.value.find((entry) => entry.id === id);
+  if (theme) downloadJsonFile(theme, `${id}.theme.json`);
+}
+
 function removeThemePreset(id: string) {
   const entry = resolveThemeRegistryEntry(id, externalThemes.value);
   if (!entry?.removable) return;
   externalThemes.value = removeStoredExternalTheme(externalThemes.value, id);
+  if (renamingThemeId.value === id) cancelThemeRename();
   if (selectedPreset.value === id || resolveThemeStoragePreset(activeThemeStorage.value) === id) {
     resetTheme();
     selectedPreset.value = 'default';
@@ -1267,7 +1327,7 @@ const activeThemeSummary = computed(() => {
 
   const entry = resolveThemeRegistryEntry(presetName, externalThemes.value);
   return t('settings.theme.currentProfilePreset', {
-    name: entry?.theme.label ?? presetName,
+    name: entry?.labelKey ? t(entry.labelKey) : (entry?.theme.label ?? presetName),
   });
 });
 
@@ -2887,16 +2947,33 @@ watch(
 .theme-preset-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   width: 100%;
   min-width: 0;
-  padding: 14px;
+  padding: 0;
   border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
   border-radius: 10px;
   background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, rgba(2, 6, 23, 0.45)));
   color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  overflow: hidden;
+}
+
+.theme-preset-select {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.theme-preset-select:focus-visible,
+.theme-preset-action:focus-visible {
+  outline: 2px solid var(--theme-modal-accent, var(--theme-accent-primary, #60a5fa));
+  outline-offset: -2px;
 }
 
 .theme-preset-card:hover {
@@ -2968,17 +3045,51 @@ watch(
 }
 
 .theme-preset-remove {
-  align-self: flex-start;
-  padding: 0;
-  border: 0;
-  background: transparent;
   color: var(--theme-text-danger, #fca5a5);
-  font-size: 11px;
-  cursor: pointer;
 }
 
 .theme-preset-remove:hover {
   text-decoration: underline;
+}
+
+.theme-preset-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 0 14px 12px;
+}
+
+.theme-preset-action {
+  padding: 4px 7px;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border-radius: 6px;
+  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.theme-preset-rename-input {
+  min-width: 0;
+  flex: 1 1 100%;
+  padding: 5px 7px;
+  border: 1px solid var(--theme-modal-border, var(--theme-border-default, #334155));
+  border-radius: 6px;
+  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+}
+
+.theme-conflict-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--theme-modal-accent, var(--theme-border-accent, #60a5fa));
+  border-radius: 8px;
+  background: var(--theme-modal-control-bg, var(--theme-surface-panel-muted, #1e293b));
+  color: var(--theme-modal-text, var(--theme-text-primary, #e2e8f0));
+  font-size: 11px;
 }
 
 .theme-management-area {

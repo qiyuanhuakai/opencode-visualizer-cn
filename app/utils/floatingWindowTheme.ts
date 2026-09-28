@@ -27,10 +27,11 @@ function hasAccentColor(entry: Pick<FloatingWindowEntry, 'color'> | undefined): 
 }
 
 export function resolveFloatingWindowThemeType(
-  entryOrKey: Pick<FloatingWindowEntry, 'key' | 'color'> | string,
+  entryOrKey: Pick<FloatingWindowEntry, 'key' | 'color' | 'themeType'> | string,
 ): FloatingWindowThemeTypeWithDefault {
   const key = typeof entryOrKey === 'string' ? entryOrKey : entryOrKey.key;
 
+  if (typeof entryOrKey !== 'string' && entryOrKey.themeType === 'shell') return 'shell';
   if (key.startsWith('shell:')) return 'shell';
   if (key.startsWith('reasoning:') || key.startsWith('history-reasoning:')) return 'reasoning';
   if (key.startsWith('subagent:')) return 'subagent';

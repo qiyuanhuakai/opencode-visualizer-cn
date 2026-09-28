@@ -98,6 +98,7 @@ describe('extractFileRead for edit/multiedit', () => {
     extractToolOutputText: (value: unknown) => (typeof value === 'string' ? value : undefined),
     formatToolValue: (value: unknown) => String(value ?? ''),
     renderWorkerHtml: renderWorkerHtmlMock,
+    getTheme: () => 'github-light',
     renderReadHtmlFromApi: async () => '<pre>read</pre>',
     resolveReadWritePath: (input?: Record<string, unknown>) =>
       typeof input?.filePath === 'string' ? input.filePath : '',
@@ -114,6 +115,43 @@ describe('extractFileRead for edit/multiedit', () => {
     GlobContent: {},
     WebContent: {},
   };
+
+  it('renders shell tool output with the selected light syntax palette', async () => {
+    let receivedTheme = '';
+    const result = extractFileRead(
+      {
+        payload: {
+          properties: {
+            part: {
+              type: 'tool',
+              id: 'bash-light-1',
+              callID: 'bash-light-1',
+              tool: 'bash',
+              state: {
+                status: 'completed',
+                input: { command: 'npm test' },
+                output: 'Tests passed',
+              },
+            },
+          },
+        },
+      },
+      'message.part.updated',
+      {
+        ...helpers,
+        renderWorkerHtml: async (args: { theme: string }) => {
+          receivedTheme = args.theme;
+          return '<pre>rendered</pre>';
+        },
+      },
+      (key: string) => key,
+    );
+    const content = result && !Array.isArray(result) ? result.content : undefined;
+    expect(typeof content).toBe('function');
+    if (typeof content !== 'function') throw new Error('Expected shell content renderer function');
+    await content();
+    expect(receivedTheme).toBe('github-light');
+  });
 
   it('renders edit tool windows even when Codex diff text is missing', async () => {
     const result = extractFileRead(

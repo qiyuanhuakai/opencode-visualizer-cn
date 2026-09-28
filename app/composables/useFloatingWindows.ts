@@ -1,10 +1,12 @@
-import { reactive, shallowRef, markRaw, onUnmounted, nextTick, type Component } from 'vue';
+import { reactive, shallowRef, markRaw, onUnmounted, nextTick, watch, type Component } from 'vue';
 import { renderWorkerHtml } from '../utils/workerRenderer';
-import { DEFAULT_SYNTAX_THEME } from '../utils/themeTokens';
+import { resolveSyntaxTheme } from '../utils/themeTokens';
+import { useSettings } from './useSettings';
 import { useI18n } from '../i18n/useI18n';
 
 export interface FloatingWindowEntry {
   key: string;
+  themeType?: 'shell';
   component?: Component;
   props?: Record<string, unknown>;
   content?: string | (() => Promise<string>);
@@ -162,6 +164,7 @@ function resolveExpiresAt(
 
 export function useFloatingWindows() {
   const { t } = useI18n();
+  const { themeStorage } = useSettings();
   const entriesMap = reactive(new Map<string, FloatingWindowEntry>());
   const pendingInitialLayoutKeys = new Set<string>();
   const activeOpenTokens = new Map<string, symbol>();
@@ -329,7 +332,7 @@ export function useFloatingWindows() {
             id: nextRenderId(),
             code: merged.content,
             lang: merged.lang,
-            theme: DEFAULT_SYNTAX_THEME,
+            theme: resolveSyntaxTheme(themeStorage.value),
             gutterMode: variantToGutterMode(merged.variant),
             lineOffset: merged.lineOffset,
             lineLimit: merged.lineLimit,
@@ -417,8 +420,10 @@ export function useFloatingWindows() {
         id: nextRenderId(),
         code: text,
         lang,
-        theme: DEFAULT_SYNTAX_THEME,
+        theme: resolveSyntaxTheme(themeStorage.value),
         gutterMode: variantToGutterMode(entry.variant),
+        lineOffset: entry.lineOffset,
+        lineLimit: entry.lineLimit,
         copyButtonLabel: t('render.copyCode'),
         copiedLabel: t('render.copied'),
         copyCodeAriaLabel: t('render.copyCodeAria'),
@@ -430,6 +435,30 @@ export function useFloatingWindows() {
       entry.resolvedHtml = text;
     }
   }
+
+  watch(
+    () => resolveSyntaxTheme(themeStorage.value),
+    () => {
+      for (const entry of entriesMap.values()) {
+        if (!entry.isReady) continue;
+        if (typeof entry.content === 'string' && entry.lang) {
+          void setContent(entry.key, entry.content, entry.lang);
+        } else if (typeof entry.content === 'function') {
+          const contentVersion = bumpRenderVersion(entry.key);
+          const content = entry.content;
+          void content().then((html) => {
+            if (entriesMap.get(entry.key) === entry && renderVersionMap.get(entry.key) === contentVersion) {
+              entry.resolvedHtml = html;
+            }
+          }).catch((error) => {
+            if (entriesMap.get(entry.key) === entry && renderVersionMap.get(entry.key) === contentVersion) {
+              entry.resolvedHtml = String(error);
+            }
+          });
+        }
+      }
+    },
+  );
 
   async function appendContent(key: string, text: string, lang?: string): Promise<void> {
     const entry = entriesMap.get(key);
@@ -444,7 +473,7 @@ export function useFloatingWindows() {
         id: nextRenderId(),
         code: newContent,
         lang: lang || entry.lang!,
-        theme: DEFAULT_SYNTAX_THEME,
+        theme: resolveSyntaxTheme(themeStorage.value),
         gutterMode: variantToGutterMode(entry.variant),
         copyButtonLabel: t('render.copyCode'),
         copiedLabel: t('render.copied'),

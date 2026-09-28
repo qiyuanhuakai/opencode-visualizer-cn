@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, nextTick } from 'vue';
 
-import { OCEAN_PRESET } from '../utils/regionTheme';
+import { AURORA_TIDE_PRESET, SOFT_WHITE_PRESET } from '../utils/regionTheme';
 import { StorageKeys, storageKey } from '../utils/storageKeys';
 import {
   DEFAULT_SYNTAX_THEME,
@@ -67,16 +67,16 @@ describe('useRegionTheme', () => {
 
     expect(document.documentElement.style.getPropertyValue('--syntax-theme-name')).toBe(DEFAULT_SYNTAX_THEME);
 
-    api.themeStorage.value = regionThemeToStorage(OCEAN_PRESET);
+    api.themeStorage.value = regionThemeToStorage(AURORA_TIDE_PRESET);
     await nextTick();
 
     const snapshot = createSemanticTokenSnapshot(api.themeStorage.value?.overrides);
-    expect(document.documentElement.getAttribute('data-region-theme')).toBe('ocean');
+    expect(document.documentElement.getAttribute('data-region-theme')).toBe('aurora-tide');
     expect(document.documentElement.style.getPropertyValue('--theme-surface-panel')).toBe(snapshot['surface-panel']);
     expect(document.documentElement.style.getPropertyValue('--theme-text-primary')).toBe(snapshot['text-primary']);
-    expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#1a1a2e');
-    expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
-    expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('#0f2033');
+    expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#142a35');
+    expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toContain('linear-gradient');
+    expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toContain('linear-gradient');
     expect(document.documentElement.style.getPropertyValue('--theme-dropdown-bg')).toBe(snapshot['dropdown-bg']);
     expect(document.documentElement.style.getPropertyValue('--theme-chip-bg-neutral')).toBe(snapshot['chip-bg-neutral']);
     expect(document.documentElement.style.getPropertyValue('--theme-icon-action-bg')).toBe(snapshot['icon-action-bg']);
@@ -98,29 +98,38 @@ describe('useRegionTheme', () => {
     unmount();
   });
 
-  it('applyPreset("ocean") sets the correct theme config', async () => {
+  it('applyPreset("aurora-tide") sets the correct theme config', async () => {
     const { api, unmount } = await mountComposable();
 
-    api.applyPreset('ocean');
+    api.applyPreset('aurora-tide');
     await nextTick();
     vi.runAllTimers();
 
-    expect(document.documentElement.getAttribute('data-region-theme')).toBe('ocean');
+    expect(document.documentElement.getAttribute('data-region-theme')).toBe('aurora-tide');
     expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toContain('"version":2');
-    expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#1a1a2e');
-    expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toBe('#102542');
-    expect(document.documentElement.style.getPropertyValue('--theme-output-bg')).toBe('#13293d');
-    expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toBe('#0f2033');
-    expect(document.documentElement.style.getPropertyValue('--theme-floating-surface-base')).toBe('#09192a');
+    expect(document.documentElement.style.getPropertyValue('--theme-top-bg')).toBe('#142a35');
+    expect(document.documentElement.style.getPropertyValue('--theme-side-bg')).toContain('linear-gradient');
+    expect(document.documentElement.style.getPropertyValue('--theme-output-bg')).toContain('linear-gradient');
+    expect(document.documentElement.style.getPropertyValue('--theme-login-bg')).toContain('linear-gradient');
+    expect(document.documentElement.style.getPropertyValue('--theme-floating-surface-base')).toBe('#192f3d');
     expect(document.documentElement.style.getPropertyValue('--theme-floating-background-image')).toContain('linear-gradient');
 
+    unmount();
+  });
+
+  it('uses a light syntax palette for a light profile without switching its theme', async () => {
+    const { api, unmount } = await mountComposable();
+    api.themeStorage.value = regionThemeToStorage(SOFT_WHITE_PRESET);
+    await nextTick();
+    expect(document.documentElement.getAttribute('data-region-theme')).toBe('soft-white');
+    expect(document.documentElement.style.getPropertyValue('--syntax-theme-name')).toBe('github-light');
     unmount();
   });
 
   it('resetTheme clears theme attributes and overrides', async () => {
     const { api, unmount } = await mountComposable();
 
-    api.applyPreset('ocean');
+    api.applyPreset('aurora-tide');
     await nextTick();
     api.resetTheme();
     await nextTick();
@@ -145,14 +154,14 @@ describe('useRegionTheme', () => {
   it('flushes pending theme persistence on pagehide', async () => {
     const { api, unmount } = await mountComposable();
 
-    api.applyPreset('ocean');
+    api.applyPreset('aurora-tide');
     await nextTick();
 
     expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toBeNull();
 
     window.dispatchEvent(new Event('pagehide'));
 
-    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toContain('"preset":"ocean"');
+    expect(window.localStorage.getItem(storageKey(StorageKeys.settings.themeTokens))).toContain('"preset":"aurora-tide"');
 
     unmount();
   });

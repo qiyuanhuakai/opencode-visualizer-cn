@@ -38,6 +38,7 @@ const rendererHelpers = {
   extractToolOutputText: (value: unknown) => (typeof value === 'string' ? value : undefined),
   formatToolValue: (value: unknown) => String(value ?? ''),
   renderWorkerHtml: vi.fn(async () => '<pre>rendered</pre>'),
+  getTheme: () => 'github-dark',
   renderReadHtmlFromApi: async () => '<pre>read</pre>',
   resolveReadWritePath: () => '',
   guessLanguageFromPath: () => 'text',

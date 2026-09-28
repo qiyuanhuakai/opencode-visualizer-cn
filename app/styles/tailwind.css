@@ -114,11 +114,11 @@
 *::before,
 *::after {
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
+  scrollbar-color: color-mix(in srgb, var(--theme-text-muted, #94a3b8) 78%, transparent) transparent;
 }
 
 *:hover {
-  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+  scrollbar-color: color-mix(in srgb, var(--theme-text-muted, #94a3b8) 94%, transparent) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -127,7 +127,7 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: transparent;
+  background: color-mix(in srgb, var(--theme-text-muted, #94a3b8) 78%, transparent);
   border-radius: 3px;
 }
 
@@ -136,5 +136,11 @@
 }
 
 *:hover::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: color-mix(in srgb, var(--theme-text-muted, #94a3b8) 94%, transparent);
+}
+
+html[data-region-theme='light-mode'] {
+  --floating-body-accent-weight: 0%;
+  --floating-titlebar-accent-weight: 0%;
+  --floating-hover-accent-weight: 0%;
 }
