@@ -1,5 +1,21 @@
 # Codex App Server
 
+## 近期能力核对（2026-09-29）
+
+依据[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server)和本机 `codex-cli 0.158.0` 生成的 v2 JSON Schema 核对。官方页面描述的是持续更新的协议，不能把页面上的字段当作所有已安装版本都支持的字段。以下实测使用独立的临时 `CODEX_HOME`，没有操作用户会话。
+
+| 能力 | 官方协议与本机 0.158.0 | VIS 当前状态 |
+| --- | --- | --- |
+| `thread/delete` | 永久删除持久线程，包括归档线程及其派生子线程；成功返回 `{}`，对删除的线程发送 `thread/deleted`。本机实测已物化的活动线程删除后 rollout 文件消失，已物化线程归档后也可删除；临时根线程返回 `-32600`，提示未持久化、不可删除。派生子线程级联只依据官方文档，未在本机实测。 | VIS 的“删除”调用 `thread/delete`，并在 `thread/deleted` 通知后移除活动或归档记录；“归档”调用 `thread/archive`，可从归档搜索结果使用 `thread/unarchive` 恢复。归档列表通过 `thread/list({ archived: true })` 分页获取。 |
+| `thread/fork` 的 `ephemeral: true` | 官方文档及 0.158.0 schema 均支持。分页历史的临时 fork 还需 `excludeTurns: true`，后者要求实验 API。 | `/btw`、`/side` 已以这两个字段创建临时分支；普通 fork 仍创建持久线程。 |
+| `turn/start.toolOutput` | 官方文档及 0.158.0 schema 均提供独立工具输出输入；`input` 必须为空，不能同时发送普通用户输入。 | 尚无对应入口。 |
+| `thread/shellCommand.timeoutMs` | 官方文档及 0.158.0 schema 均支持；省略或 `null` 为一小时，`0` 为立即超时。 | 当前封装未暴露该参数。 |
+| 线程置顶 `isPinned` | 官方文档在 `thread/list` 与 `thread/metadata/update` 中提供，但本机 0.158.0 生成的参数 schema 均无此字段。 | 不应按官方页面直接向当前连接发送置顶请求；需按连接或版本探测。 |
+| `app/installed`、`app/read` | 官方文档新增已安装连接器的有效启用/可调用状态，以及按 ID 读取元数据和展示用工具摘要。本机 0.158.0 生成的 schema 尚无这两个方法。 | 目前使用 `app/list`；不能把列表中的可访问、配置启用与运行时可调用混为一谈。 |
+| `--code-mode-host` | 官方文档与本机 0.158.0 CLI 帮助均提供独立于 `--listen` 的远端 Code Mode host 参数。 | 当前进程启动配置尚未提供该选项。 |
+
+`thread/delete` 删除 rollout 文件与关联元数据，缺失的 rollout 文件视为已删除；删除是不可恢复的。与之不同，`thread/archive` 移动 rollout，`thread/unarchive` 可以恢复。VIS 对旧 App Server 的不支持错误及尚未物化的归档错误直接显示失败，不再以本地隐藏代替成功。新线程首条消息前可能没有已物化的 rollout：本机 0.158.0 的 `thread/archive` 在此状态返回 `no rollout found`，而 `thread/delete` 成功。归档测试使用了先写入测试 item、再归档和删除的已物化线程。
+
 ## VIS 适配与运行时差异（2026-09-09）
 
 本节依据[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server)（[Markdown 原文](https://learn.chatgpt.com/docs/app-server.md)）补充，并与本机 **Codex app-server 0.153.4** 的真实 JSON-RPC 响应交叉验证。下文保留协议参考；文档描述、生成的类型存在，并不代表当前服务的存储实现支持该能力。
@@ -37,7 +53,7 @@ VIS 对本连接创建、尚未成功首发的线程直接调用 `turn/start`，
 
 - 历史读取保持线程选择代际隔离，过期响应不能覆盖当前会话；实时 reasoning/tool 辅助历史仍需合并，不能假设所有服务器历史接口都会返回这些 item。
 - 用户再次点击已有 Codex 面板/子面板入口时，恢复最小化、置前并聚焦，保留拖动位置和尺寸。自动内容更新不应抢焦点或恢复用户主动最小化的窗口。
-- 本节不改变 VIS 既有归档语义：可恢复归档仍为本地隐藏状态；原生 `thread/archive` 对应现有 Delete 动作，不因上游新增 `thread/delete` 自动更换行为。
+- 2026-09-29 起，VIS 的 Codex 归档使用原生 `thread/archive`，取消归档使用 `thread/unarchive`，删除使用 `thread/delete`；此前的本地隐藏语义已废弃。
 
 实现参考：上游 [`thread_processor.rs`](https://github.com/openai/codex/blob/8afccec87aa15f73ee7fc35a3a4e7834afc5ef62/codex-rs/app-server/src/request_processors/thread_processor.rs) 与 [`thread-store/src/store.rs`](https://github.com/openai/codex/blob/8afccec87aa15f73ee7fc35a3a4e7834afc5ef62/codex-rs/thread-store/src/store.rs)。协议的新方法必须另行验证实际能力后再暴露 UI，不按本文补充清单自动启用。
 
@@ -76,6 +92,20 @@ codex --remote wss://remote-host:4500 \
 The `--remote` option accepts `ws://`, `wss://`, `unix://`, and
 `unix://PATH` endpoints. Use plain WebSockets only for localhost or an SSH
 port-forwarded connection.
+
+## Connect a remote Code Mode host
+
+By default, app-server starts a local Code Mode host. To use a remote host,
+pass its secure WebSocket URL:
+
+```bash
+codex app-server --code-mode-host wss://code-mode.example.com/host
+```
+
+`--code-mode-host` controls app-server's outbound connection and is independent
+of the client-facing `--listen` endpoint. Every thread in the process shares
+the selected Code Mode host. Use `ws://` only for localhost or an SSH-forwarded
+connection.
 
 ## Protocol
 
@@ -131,7 +161,7 @@ increasing delay and jitter.
 Requests include `method`, `params`, and `id`:
 
 ```json
-{ "method": "thread/start", "id": 10, "params": { "model": "gpt-5.4" } }
+{ "method": "thread/start", "id": 10, "params": { "model": "gpt-6-sol" } }
 ```
 
 Responses echo the `id` with either `result` or `error`:
@@ -211,7 +241,7 @@ send({
   },
 });
 send({ method: "initialized", params: {} });
-send({ method: "thread/start", id: 1, params: { model: "gpt-5.4" } });
+send({ method: "thread/start", id: 1, params: { model: "gpt-6-sol" } });
 ```
 
 ## Core primitives
@@ -318,9 +348,9 @@ If a client sends an experimental method or field without opting in, app-server 
 
 - `thread/start` - create a new thread; emits `thread/started` and automatically subscribes you to turn/item events for that thread.
 - `thread/resume` - reopen an existing thread by id so later `turn/start` calls append to it.
-- `thread/fork` - fork a thread into a new thread id by copying stored history. Pass `lastTurnId` to copy history through that turn and omit later turns. Emits `thread/started` for the new thread; returned threads include `forkedFromId` when available.
+- `thread/fork` - fork a thread into a new thread id by copying stored history. Pass `lastTurnId` to copy history through that turn and omit later turns, or `ephemeral: true` for an in-memory fork. Emits `thread/started` for the new thread; returned threads include `forkedFromId` when available.
 - `thread/read` - read a stored thread by id without resuming it; set `includeTurns` to return full turn history. Returned `thread` objects include runtime `status`.
-- `thread/list` - page through stored thread logs; supports cursor-based pagination plus `modelProviders`, `sourceKinds`, `archived`, `cwd`, `useStateDbOnly`, `searchTerm`, and experimental `parentThreadId` or `ancestorThreadId` filters. Returned `thread` objects include runtime `status`.
+- `thread/list` - page through stored thread logs; supports cursor-based pagination plus `modelProviders`, `sourceKinds`, `archived`, `isPinned`, `cwd`, `useStateDbOnly`, `searchTerm`, and experimental `parentThreadId` or `ancestorThreadId` filters. Returned `thread` objects include runtime `status`. `isPinned` is in current official docs but absent from the local 0.158.0 schema.
 - `thread/turns/list` - experimental; page through a stored thread's turn history without resuming it. `itemsView` controls whether turn items are omitted, summarized, or fully loaded.
 - `thread/items/list` - experimental; page through persisted thread items, optionally restricted to one `turnId`. The active thread store must support item pagination.
 - `thread/loaded/list` - list the thread ids currently loaded in memory.
@@ -328,7 +358,7 @@ If a client sends an experimental method or field without opting in, app-server 
 - `thread/goal/set` - set the goal for a thread; emits `thread/goal/updated`.
 - `thread/goal/get` - read the current goal for a thread.
 - `thread/goal/clear` - clear the goal for a thread; emits `thread/goal/cleared`.
-- `thread/metadata/update` - patch SQLite-backed stored thread metadata; currently supports persisted `gitInfo`.
+- `thread/metadata/update` - patch SQLite-backed stored thread metadata, including persisted `gitInfo` and, on supporting servers, `isPinned`.
 - `thread/archive` - move a thread's log file into the archived directory and attempt to archive spawned descendant thread logs that aren't already archived; returns `{}` on success and emits `thread/archived` for each archived thread.
 - `thread/delete` - permanently delete a persisted active or archived thread and any spawned descendant threads; returns `{}` on success and emits `thread/deleted` for each deleted thread.
 - `thread/unsubscribe` - unsubscribe this connection from thread turn/item events. If this was the last subscriber, the server unloads the thread after a no-subscriber inactivity grace period and emits `thread/closed`.
@@ -340,7 +370,7 @@ If a client sends an experimental method or field without opting in, app-server 
 - `thread/backgroundTerminals/list` - list running background terminals for a loaded thread (experimental; requires `capabilities.experimentalApi`).
 - `thread/backgroundTerminals/terminate` - terminate one running background terminal by app-server `processId` (experimental; requires `capabilities.experimentalApi`).
 - `thread/rollback` - deprecated; drop the last N turns from the in-memory context and persist a rollback marker; returns the updated `thread`.
-- `turn/start` - add user input to a thread and begin Codex generation; responds with the initial `turn` and streams events. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode."
+- `turn/start` - add user input or standalone tool output to a thread and begin Codex generation; responds with the initial `turn` and streams events. For `collaborationMode`, `settings.developer_instructions: null` means "use built-in instructions for the selected mode."
 - `thread/inject_items` - append raw Responses API items to a loaded thread's model-visible history without starting a user turn.
 - `turn/steer` - append user input to the active in-flight turn for a thread; returns the accepted `turnId`.
 - `turn/interrupt` - request cancellation of an in-flight turn; success is `{}` and the turn ends with `status: "interrupted"`.
@@ -374,7 +404,9 @@ If a client sends an experimental method or field without opting in, app-server 
 - `plugin/install` - under development; install a plugin from a marketplace path or remote marketplace name. Don't call this method from production clients yet.
 - `plugin/uninstall` - under development; uninstall an installed plugin. Don't call this method from production clients yet.
 - `plugin/skill/read` - read remote plugin skill Markdown on demand by remote marketplace, plugin id, and skill name.
+- `app/installed` - read installed app runtime state, including effective enabled and callable states; absent from the local 0.158.0 schema.
 - `app/list` - list available apps (connectors) with pagination plus accessibility/enabled metadata.
+- `app/read` - read metadata and optional display-only tool summaries for specific app ids; absent from the local 0.158.0 schema.
 - `skills/config/write` - enable or disable skills by path.
 - `mcpServer/oauth/login` - start an OAuth login for a configured MCP server; returns an authorization URL and emits `mcpServer/oauthLogin/completed` on completion.
 - `tool/requestUserInput` - prompt the user with 1-3 short questions for a tool call (experimental); questions can set `isOther` for a free-form option.
@@ -411,18 +443,21 @@ those plugins.
 
 Call `model/list` to discover available models and their capabilities before rendering model or personality selectors.
 
+The following response only illustrates the shape. Available models, efforts,
+and defaults depend on the client and account; use the returned values.
+
 ```json
 { "method": "model/list", "id": 6, "params": { "limit": 20, "includeHidden": false } }
 { "id": 6, "result": {
   "data": [{
-    "id": "gpt-5.4",
-    "model": "gpt-5.4",
-    "displayName": "GPT-5.4",
+    "id": "gpt-6-sol",
+    "model": "gpt-6-sol",
+    "displayName": "GPT-6 Sol",
     "hidden": false,
     "defaultReasoningEffort": "medium",
     "supportedReasoningEfforts": [{
-      "reasoningEffort": "low",
-      "description": "Lower latency"
+      "reasoningEffort": "medium",
+      "description": "Balances speed and reasoning depth for everyday tasks"
     }],
     "inputModalities": ["text", "image"],
     "supportsPersonality": true,
@@ -493,11 +528,11 @@ protocol failures return request errors.
   resuming it. Use `itemsView` to choose whether turn items are omitted,
   summarized, or fully loaded.
 - `thread/items/list` is experimental and pages through persisted thread items, optionally restricted to one turn.
-- `thread/list` supports cursor pagination plus `modelProviders`, `sourceKinds`, `archived`, `cwd`, `useStateDbOnly`, `searchTerm`, and experimental `parentThreadId` or `ancestorThreadId` filtering.
+- `thread/list` supports cursor pagination plus `modelProviders`, `sourceKinds`, `archived`, `isPinned`, `cwd`, `useStateDbOnly`, `searchTerm`, and experimental `parentThreadId` or `ancestorThreadId` filtering. Check the connected server before using `isPinned`.
 - `thread/loaded/list` returns the thread IDs currently in memory.
 - `thread/archive` moves the thread's persisted JSONL log into the archived directory and attempts to archive spawned descendant thread logs that aren't already archived.
 - `thread/delete` permanently deletes a persisted active or archived thread and its spawned descendant threads.
-- `thread/metadata/update` patches stored thread metadata, currently including persisted `gitInfo`.
+- `thread/metadata/update` patches stored thread metadata, including persisted `gitInfo` and, on supporting servers, `isPinned`.
 - `thread/unsubscribe` unsubscribes the current connection from a loaded thread and can trigger `thread/closed` after an inactivity grace period.
 - `thread/unarchive` restores an archived thread rollout back into the active sessions directory.
 - `thread/compact/start` triggers compaction and returns `{}` immediately.
@@ -510,7 +545,7 @@ Start a fresh thread when you need a new Codex conversation.
 
 ```json
 { "method": "thread/start", "id": 10, "params": {
-  "model": "gpt-5.4",
+  "model": "gpt-6-sol",
   "cwd": "/Users/me/project",
   "approvalPolicy": "never",
   "sandbox": "workspaceWrite",
@@ -624,6 +659,19 @@ App-server rejects an in-progress `lastTurnId`. If you omit the field while the
 source thread is mid-turn, the fork records an interruption marker instead of
 retaining an unmarked partial turn.
 
+Pass `ephemeral: true` for an in-memory fork that does not appear in stored
+thread listings. For paginated source threads, also pass `excludeTurns: true`;
+that field requires `capabilities.experimentalApi = true`.
+
+```json
+{ "method": "thread/fork", "id": 13, "params": {
+  "threadId": "thr_123", "ephemeral": true, "excludeTurns": true
+} }
+{ "id": 13, "result": { "thread": {
+  "id": "thr_789", "forkedFromId": "thr_123", "ephemeral": true
+} } }
+```
+
 When a user-facing thread title has been set, app-server hydrates `thread.name` on `thread/list`, `thread/read`, `thread/resume`, `thread/unarchive`, and `thread/rollback` responses. `thread/start` and `thread/fork` may omit `name` (or return `null`) until a title is set later.
 
 ### Read a stored thread (without resuming)
@@ -680,6 +728,7 @@ pagination; otherwise, the server returns an unsupported-method error.
 - `modelProviders` - restrict results to specific providers; unset, null, or an empty array includes all providers.
 - `sourceKinds` - restrict results to specific thread sources. When omitted or `[]`, the server defaults to interactive sources only: `cli` and `vscode`.
 - `archived` - when `true`, list archived threads only. When `false` or omitted, list non-archived threads (default).
+- `isPinned` - when supported, filter to threads with the matching persisted pin state. Omit it to include both states; this field is absent from the local 0.158.0 schema.
 - `cwd` - restrict results to threads whose session current working directory exactly matches this path, or one of the paths in an array. Relative paths resolve from the app-server process working directory.
 - `useStateDbOnly` - when `true`, return state database results without scanning JSONL thread logs to repair metadata. Omit it or pass `false` for the default scan-and-repair behavior.
 - `searchTerm` - restrict results to threads whose extracted title contains this case-sensitive text fragment.
@@ -710,7 +759,7 @@ Example:
 { "id": 20, "result": {
   "data": [
     { "id": "thr_a", "preview": "Create a TUI", "ephemeral": false, "modelProvider": "openai", "createdAt": 1730831111, "updatedAt": 1730831111, "name": "TUI prototype", "status": { "type": "notLoaded" } },
-    { "id": "thr_b", "preview": "Fix tests", "ephemeral": true, "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
+    { "id": "thr_b", "preview": "Fix tests", "ephemeral": false, "modelProvider": "openai", "createdAt": 1730750000, "updatedAt": 1730750000, "status": { "type": "notLoaded" } }
   ],
   "nextCursor": "opaque-token-or-null"
 } }
@@ -720,7 +769,7 @@ When `nextCursor` is `null`, you have reached the final page.
 
 ### Update stored thread metadata
 
-Use `thread/metadata/update` to patch stored thread metadata without resuming the thread. Today this supports persisted `gitInfo`; omitted fields are left unchanged, and explicit `null` clears a stored value.
+Use `thread/metadata/update` to patch stored thread metadata without resuming the thread. Supporting servers also accept `isPinned: true` or `false` to pin or unpin it. Omitted fields stay unchanged; explicit `null` clears a stored Git metadata value. The local 0.158.0 schema supports `gitInfo` but not `isPinned`.
 
 ```json
 { "method": "thread/metadata/update", "id": 21, "params": {
@@ -839,8 +888,12 @@ This API runs outside the sandbox with full access and doesn't inherit the threa
 
 If the thread already has an active turn, the command runs as an auxiliary action on that turn and its formatted output is injected into the turn's message stream. If the thread is idle, app-server starts a standalone turn for the shell command.
 
+Set `timeoutMs` to limit execution time in milliseconds. Omitting it or passing
+`null` uses the one-hour default. `0` requests an immediate timeout; negative
+values are rejected. The timeout doesn't delay the immediate RPC acknowledgement.
+
 ```json
-{ "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short" } }
+{ "method": "thread/shellCommand", "id": 26, "params": { "threadId": "thr_b", "command": "git status --short", "timeoutMs": 10000 } }
 { "id": 26, "result": {} }
 ```
 
@@ -957,7 +1010,7 @@ Examples:
     "writableRoots": ["/Users/me/project"],
     "networkAccess": true
   },
-  "model": "gpt-5.4",
+  "model": "gpt-6-sol",
   "effort": "medium",
   "summary": "concise",
   "personality": "friendly",
@@ -969,6 +1022,19 @@ Examples:
   }
 } }
 { "id": 30, "result": { "turn": { "id": "turn_456", "status": "inProgress", "items": [], "error": null } } }
+```
+
+To start a turn with output from a tool the client ran, pass `toolOutput` with
+a nonempty `name`, optional `namespace`, and an `output` string or content-item
+array. Set `input` to `[]`; nonempty user input cannot accompany `toolOutput`.
+The server records it as a `functionCallOutput` item, and queues it for an
+already-active turn when needed.
+
+```json
+{ "method": "turn/start", "id": 31, "params": {
+  "threadId": "thr_123", "input": [],
+  "toolOutput": { "name": "run_tests", "namespace": null, "output": "All 42 tests passed." }
+} }
 ```
 
 ### Inject items into a thread
@@ -1276,6 +1342,7 @@ The fuzzy file search session API emits per-query notifications:
 `ThreadItem` is the tagged union carried in turn responses and `item/*` notifications. Common item types include:
 
 - `userMessage` - `{id, content}` where `content` is a list of user inputs (`text`, `image`, or `localImage`).
+- `functionCallOutput` - `{id, name, namespace, output}` for standalone client tool output supplied through `turn/start.toolOutput`; `namespace` can be `null`.
 - `agentMessage` - `{id, text, phase?}` containing the accumulated agent reply. When present, `phase` uses Responses API wire values (`commentary`, `final_answer`).
 - `plan` - `{id, text}` containing proposed plan text in plan mode. Treat the final `plan` item from `item/completed` as authoritative.
 - `reasoning` - `{id, summary, content}` where `summary` holds streamed reasoning summaries and `content` holds raw reasoning blocks.
@@ -1506,6 +1573,13 @@ To enable or disable a skill by path:
 ```
 
 ## Apps (connectors)
+
+`app/installed` reads an installed app's effective `enabled` and `callable`
+states, which include runtime configuration and policy. `app/read` retrieves
+metadata for up to 100 specified app IDs; `includeTools: true` adds display-only
+tool summaries. Neither method appears in the local 0.158.0 schema, so probe
+the connected server before using them. The summaries do not authorize tool
+calls; check `app/installed` for effective runtime availability.
 
 Use `app/list` to fetch available apps. In the CLI/TUI, `/apps` is the user-facing picker; in custom clients, call `app/list` directly. Each entry includes both `isAccessible` (available to the user) and `isEnabled` (enabled in `config.toml`) so clients can distinguish install/access from local enabled state. App entries can also include optional `branding`, `appMetadata`, and `labels` fields.
 
