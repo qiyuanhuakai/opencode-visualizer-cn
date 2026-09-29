@@ -116,7 +116,7 @@ const valueClass = computed(() => {
 }
 
 .codex-tree-header:hover {
-  background: rgba(148, 163, 184, 0.08);
+  background: var(--theme-surface-panel-hover);
 }
 
 .codex-tree-toggle {
@@ -139,15 +139,15 @@ const valueClass = computed(() => {
 }
 
 .codex-tree-string {
-  color: #4ade80;
+  color: var(--codex-status-success);
 }
 
 .codex-tree-number {
-  color: #fbbf24;
+  color: var(--codex-status-warning);
 }
 
 .codex-tree-boolean {
-  color: #60a5fa;
+  color: var(--theme-accent-primary);
 }
 
 .codex-tree-null {

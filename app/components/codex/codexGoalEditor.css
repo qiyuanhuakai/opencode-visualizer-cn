@@ -35,10 +35,10 @@
   outline: 2px solid var(--theme-border-accent);
   outline-offset: 2px;
 }
-.goal-control[aria-invalid='true'] { border-color: var(--theme-status-error, var(--theme-text-danger)); }
+.goal-control[aria-invalid='true'] { border-color: var(--codex-status-danger, var(--theme-text-danger)); }
 .goal-editor .goal-control:disabled, .goal-button:disabled { opacity: 0.5; cursor: default; }
-.goal-error { color: var(--theme-status-error, var(--theme-text-danger)); overflow-wrap: anywhere; }
-.goal-success { color: var(--theme-status-success, var(--theme-text-success)); overflow-wrap: anywhere; }
+.goal-error { color: var(--codex-status-danger, var(--theme-text-danger)); overflow-wrap: anywhere; }
+.goal-success { color: var(--codex-status-success, var(--theme-text-success)); overflow-wrap: anywhere; }
 .goal-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 .goal-button {
   padding: 8px 12px;
@@ -48,7 +48,7 @@
   cursor: pointer;
 }
 .goal-clear { background: transparent; color: var(--theme-floating-text-muted, var(--theme-text-muted)); }
-.goal-clear:hover:not(:disabled) { color: var(--theme-status-error, var(--theme-text-danger)); background: var(--theme-surface-panel-hover); }
+.goal-clear:hover:not(:disabled) { color: var(--codex-status-danger, var(--theme-text-danger)); background: var(--theme-surface-panel-hover); }
 .goal-save {
   background: var(--theme-form-button-primary-bg);
   border-color: var(--theme-form-button-primary-border, var(--theme-border-accent));

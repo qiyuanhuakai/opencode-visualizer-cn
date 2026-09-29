@@ -126,17 +126,17 @@ function onToggleHidden() {
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--theme-card-bg);
   cursor: pointer;
 }
 
 .codex-model-item:hover {
-  background: rgba(15, 23, 42, 0.55);
+  background: var(--theme-card-hover-bg);
 }
 
 .codex-model-item.is-selected {
   border-color: var(--theme-accent-primary, #60a5fa);
-  background: rgba(37, 99, 235, 0.15);
+  background: var(--theme-accent-soft);
 }
 
 .codex-model-item.is-hidden {
@@ -167,12 +167,12 @@ function onToggleHidden() {
 }
 
 .codex-model-badge.is-default {
-  background: rgba(37, 99, 235, 0.2);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-primary, #93c5fd);
 }
 
 .codex-model-badge.is-hidden {
-  background: rgba(148, 163, 184, 0.15);
+  background: var(--theme-surface-panel-hover);
   color: var(--theme-text-muted, #94a3b8);
 }
 

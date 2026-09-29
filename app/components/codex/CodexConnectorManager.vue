@@ -103,7 +103,7 @@ const { t } = useI18n();
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--theme-card-bg);
 }
 
 .codex-app-header {
@@ -129,22 +129,22 @@ const { t } = useI18n();
 }
 
 .codex-app-badge.is-accessible {
-  background: rgba(74, 222, 128, 0.2);
-  color: var(--theme-status-success, #4ade80);
+  background: var(--theme-surface-success-soft);
+  color: var(--codex-status-success, #4ade80);
 }
 
 .codex-app-badge.is-not-accessible {
-  background: rgba(148, 163, 184, 0.15);
+  background: var(--theme-surface-panel-hover);
   color: var(--theme-text-muted, #94a3b8);
 }
 
 .codex-app-badge.is-enabled {
-  background: rgba(37, 99, 235, 0.2);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-primary, #93c5fd);
 }
 
 .codex-app-badge.is-disabled {
-  background: rgba(148, 163, 184, 0.15);
+  background: var(--theme-surface-panel-hover);
   color: var(--theme-text-muted, #94a3b8);
 }
 

@@ -113,7 +113,7 @@ async function refreshModes() {
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--theme-card-bg);
   transition: border-color 0.2s ease;
 }
 

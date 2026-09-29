@@ -213,13 +213,13 @@ async function handleSubmit() {
 }
 
 .codex-feedback-message.is-success {
-  color: var(--theme-status-success, #4ade80);
-  background: rgba(6, 78, 59, 0.2);
+  color: var(--codex-status-success, #4ade80);
+  background: var(--theme-surface-success-soft);
 }
 
 .codex-feedback-message.is-error {
-  color: var(--theme-status-error, #f87171);
-  background: rgba(127, 29, 29, 0.22);
+  color: var(--codex-status-danger, #f87171);
+  background: var(--theme-surface-danger-soft);
 }
 
 .codex-empty {

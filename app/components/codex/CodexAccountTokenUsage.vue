@@ -74,7 +74,7 @@ button:disabled { opacity: .5; cursor: default; }
 [data-view]:focus, button:focus-visible, summary:focus-visible { outline: 2px solid var(--theme-modal-accent, #3b82f6); outline-offset: 2px; }
 p { margin: 8px 12px; overflow-wrap: anywhere; }
 .usage-hint, dt { color: var(--theme-modal-text-muted, #94a3b8); }
-[role="alert"] { color: var(--theme-status-error, #f87171); }
+[role="alert"] { color: var(--codex-status-danger, #f87171); }
 dl { margin: 12px 0 0; }
 dl > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--theme-modal-border, rgba(148, 163, 184, 0.12)); }
 dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }

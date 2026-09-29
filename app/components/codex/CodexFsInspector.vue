@@ -1,25 +1,25 @@
 <template>
-  <section class="rounded-lg border border-slate-700/60 bg-slate-950/35 p-2">
-    <div class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+  <section class="rounded-lg border border-[var(--theme-border-subtle)] [background:var(--theme-card-bg)] p-2">
+    <div class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--theme-text-muted)]">
       {{ t('codexPanel.fsInspector.title') }}
     </div>
     <div class="flex gap-2">
       <input
         v-model="path"
-        class="min-w-0 flex-1 rounded-lg border border-slate-600 bg-slate-950 px-2 py-1.5 text-xs text-slate-100"
+        class="min-w-0 flex-1 rounded-lg border border-[var(--theme-form-control-border)] [background:var(--theme-form-control-bg)] px-2 py-1.5 text-xs text-[var(--theme-text-primary)]"
         :placeholder="t('codexPanel.fsInspector.path')"
       />
-      <button type="button" class="rounded-lg border border-slate-600 px-2 py-1 text-xs" :disabled="busy || !path.trim()" @click="readMetadata">
+      <button type="button" class="rounded-lg border border-[var(--theme-form-control-border)] px-2 py-1 text-xs" :disabled="busy || !path.trim()" @click="readMetadata">
         {{ t('codexPanel.fsInspector.metadata') }}
       </button>
-      <button v-if="!watchId" type="button" class="rounded-lg border border-slate-600 px-2 py-1 text-xs" :disabled="busy || !path.trim()" @click="startWatch">
+      <button v-if="!watchId" type="button" class="rounded-lg border border-[var(--theme-form-control-border)] px-2 py-1 text-xs" :disabled="busy || !path.trim()" @click="startWatch">
         {{ t('codexPanel.fsInspector.watch') }}
       </button>
-      <button v-else type="button" class="rounded-lg border border-amber-500/50 px-2 py-1 text-xs text-amber-300" :disabled="busy" @click="stopWatch">
+      <button v-else type="button" class="rounded-lg border border-[var(--codex-status-warning)] px-2 py-1 text-xs text-[var(--codex-status-warning)]" :disabled="busy" @click="stopWatch">
         {{ t('codexPanel.fsInspector.unwatch') }}
       </button>
     </div>
-    <pre v-if="metadata" class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words text-[11px] text-slate-400">{{ metadata }}</pre>
+    <pre v-if="metadata" class="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words text-[11px] text-[var(--theme-text-muted)]">{{ metadata }}</pre>
   </section>
 </template>
 
