@@ -184,6 +184,36 @@ Content-Type: application/json
 - **0.2.0-rc.2（实测）**：一切端点 payload 必须是 `{args:{...}}`。平铺 payload 直接报 `gateway/internal: Remote payload must contain exactly one plain-object args field`。
 - 社区 Python 客户端（codex-dsh-web）用平铺 payload（`{sessionId, mode, content}`）——对应**旧版本**约定；照抄它会连不上 0.2.0-rc.2。**以本文实测信封为准。**
 
+### 5.4 原始字节文件上传（【源码】`dsh-client-file-upload/lib/index.js`）
+
+```
+POST /api/session/uploadFileBinary?sessionId=<sessionId>[&name=<文件名>]
+Content-Type: application/octet-stream      # 其他 -> 415
+<body = 原始字节，streaming 透传，不走 300MiB 缓冲上限>
+
+200 { "ok": true, "value": <receipt> }      # 或 { "ok": false, "error": {...} }
+```
+
+- 非 POST → 405；缺 `sessionId` → 400。
+- 返回值即 **receiptId**，用于 `session/prompt` 的 content `{type:"file", receiptId}`——附件上传与消息发送因此解耦（先上传拿 receipt，再随 prompt 引用）。
+- 该路由独立于 Connection 的 RPC 信封（裸 fetch 路由），但同样过 `/api` 围栏与 cookie 认证。
+
+### 5.5 其他裸 fetch 路由（【源码】+ 实测）
+
+除 RPC 信封路由外，Connection 的 fetch 注册表里还有一批**不走信封**的直连接口，同样过 `/api` 围栏：
+
+| 路由 | 方法 | 查询参数 | 实测行为 |
+|---|---|---|---|
+| `/api/file` | GET/HEAD | `path=<绝对路径>` | ✅ 200 `application/octet-stream`，经 Host `fs` 服务返回文件原始字节（无 `path` → 400 "missing path"） |
+| `/api/session.export` | GET/HEAD | `sessionId=<id>` | ✅ 200 `application/zip`（实测 11866 B，gzip 压缩的会话日志包） |
+| `/api/present.host` | GET | 无 | ✅ `{"name":"DESKTOP-3SHDCC0","available":true,"fileManager":"explorer"}`（桌面元数据：主机名、原生打开能力、文件管理器） |
+| `/api/present.open` | GET/POST | `sessionId`、`seq`、`index`（+`action=open\|reveal`、`application`） | 400 "Invalid Presented file coordinates."（缺坐标时）；GET 返回可打开应用列表，POST 执行打开（204） |
+| `/api/changes.summary` | GET | `sessionId`、`seq` | 参数齐全后 ✅ 路由可达（无变更数据时 404 "Change summary unavailable."） |
+| `/api/changes.diff` | GET | `sessionId`、`seq`、`index` | 同上（404 "Change comparison unavailable."） |
+| `/api/changes.open` | GET/POST | `sessionId`、`seq`、`index`（+`action`、`application`） | 桌面不可用 → 409 "Host desktop unavailable." |
+
+对 vis 的价值：`/api/file` 可直接做文件读取（与 `workspaceFiles/read` 二选一）；`session.export` 提供会话日志打包下载；`present.host` + `changes.open`/`present.open` 是"在系统应用中打开"能力（桌面端集成可参考，对应 Electron 的 open-in-app 特性）。
+
 ---
 
 ## 6. WS mux（`/api/remote.mux`）契约
@@ -218,9 +248,11 @@ Host → 客户端：
 
 ---
 
-## 7. 端点全表（9 个 namespace / 66 个端点）
+## 7. 端点全表（11 个 namespace / 72 个端点）
 
 参数结构自【源码】各 controller 的生成描述符（`lib/typert.host.js` zod schema）；标注 ✅ 的为**实机探测通过**，❌ 为实机探测的失败形态，➖ 为未探测（需要前置条件）。
+
+> 本节只列 Typert Remote 端点（走 RPC 信封或 mux）。另有 7 个不走信封的裸 fetch 路由（`/api/file`、`/api/session.export`、`/api/present.*`、`/api/changes.*`）见 §5.5。
 
 > 通用规律：`args` 的字段名**按端点而异**——`session/*` 多为 `args.request.*`；`terminal/list` 是 `args.sessionId`；`terminal/create` 是 `args.agentId` + `args.request`；`workspaceFiles/*` 是 `args.workspaceFileScopeId`（**值是 SessionId，解析出该 session 的 cwd 作为根**）+ `args.path`。错误消息会明确列出缺失/多余字段。
 
@@ -430,6 +462,7 @@ follow 流 records（seq 3→17）：
 | 模型目录 | ✅ | `session/modelCatalog`：provider `deepseek-official`；`deepseek-flash`(DeepSeek-V41-Flash)、`deepseek-v4-pro`；推理档位 `off/low/high/max`（默认 high） |
 | 终端 | ✅ | environment/shells/list 可用；PTY 上限 `maxInputBytes:65536, maxCols:500, maxRows:200, scrollback:1000` |
 | 工作区文件 | ✅ | list/stat/read 可用；scope = SessionId → 解析 cwd 为根；`read` 必须带 `range` |
+| 裸 fetch 路由 | ✅ | `/api/file`（文件字节）、`/api/session.export`（ZIP 日志，实测 11.8 KB）、`/api/present.host`（桌面元数据）可用；`changes.*`/`present.open` 需 session 坐标参数，路由可达（见 §5.5） |
 | 登录 | ➖ 未实测 | `account/getState` 正常；`startSignIn` 未触发（避免真实流程） |
 
 ---
@@ -448,7 +481,7 @@ dsh 仍在 rc 阶段，**协议随版本漂移**。本次调研交叉比对出�
 
 其他稳定性事实：
 
-- 版本号pace：0.1.0-rc.6（2026-09 早期）→ 0.2.0-rc.2（2026-09-29），约一个月跨过大版本号；生态插件（dsh-acp 0.1.0→0.12.0 用 32 天）跟随同样节奏。
+- 版本节奏极快：0.1.0-rc.6（2026-09 早期）→ 0.2.0-rc.2（2026-09-29），约一个月跨过大版本号；生态插件同样紧跟（dsh-acp 32 天内从 0.1.0 追到 0.12.0）。
 - **每次升级必须重新探测**：建议把 `.omo/evidence/dsh-adapt/05-probe-log.md` 的探测脚本化，升级后重放，比对端点表与信封。
 - `session/*` 的参数名（`request` vs `_request` vs 平铺）在版本间变化过；以当版 `gateway/arguments-invalid` 消息和生成描述符（`node_modules/.../dsh-api-*/lib/typert.host.js`）为准。
 - `--host 0.0.0.0` 仍被拒绝：**远程暴露需要 `--trusted-host` + 非 loopback 绑定**，且官方明言这是 RCE 暴露面。vis 的 bridge 转发场景保持 loopback 即可。
@@ -470,11 +503,31 @@ dsh 仍在 rc 阶段，**协议随版本漂移**。本次调研交叉比对出�
 
 ---
 
-## 13. vis 适配方案（照 kimi-web 模式）
+## 13. 备选路径：ACP v1（dsh-acp 插件）
+
+vis 已有成熟 ACP 客户端（`app/backends/acp/` + bridge PTY/stdio 通道）。若不愿直接适配 `/api` 传输，可安装第三方插件 `dsh-acp-server`（`dushaobindoudou/dsh-acp`，npm 包名 **`dsh-acp-server`**，注意与仓库名不同）把 dsh 包成 ACP v1 服务端：
+
+```bash
+dsh plugin --profile acp add dsh-acp-server   # 独立 profile：ACP over stdio
+dsh web                                        # 或 web-mount：GUI 与 /acp 同端口（默认 3080）
+```
+
+要点（【源码】dsh-acp v0.12.0）：
+
+- 传输二选一：`dsh --profile acp`（stdio NDJSON，编辑器场景）或 web-mounted `/acp`（HTTP POST + SSE，`serve` 子命令默认端口 7800）。vis 的 ACP 通道可直接驱动 stdio 形态。
+- ACP v1 只覆盖单会话对话；**dsh 专有方法在 `dsh/` 命名空间**：`dsh/sessions/list|read|resume`、`dsh/jobs/list`、`dsh/goals/list`、`dsh/skills/list`、`dsh/agents/tree`、`dsh/sessions/watch|unwatch`，推送通知 `dsh/changed {topics}`。客户端需在 `initialize` 的 `clientCapabilities._meta['dsh/extensions']`  opted-in 才会收到。
+- 会话事件经 `session/update` 推送：`agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan`；turn 结束映射 `stopReason`（completed→end_turn、aborted→cancelled、max-tokens→max_tokens…）。
+- 审批经 ACP 标准 `session/request_permission`（dsh 侧 `approval/request` 事件；dsh 无授权存储，allow_always 降级为 allowed-once）。
+
+**权衡**：ACP 路径复用 vis 现有 ACP 基建（进程管理、权限 UI、消息规范化），但多一层插件依赖与版本耦合（插件 32 天从 0.1.0 追到 0.12.0，专跟 dsh rc 断裂）；`/api` 直连路径无第三方依赖、能力更全（terminal/workspaceFiles/settings/account），但需要新写传输层。**建议以 `/api` 直连为主路径**（本文档其余章节即按此编写），ACP 作为降级备选记录在此。
+
+---
+
+## 14. vis 适配方案（照 kimi-web 模式）
 
 > 目标架构与 kimi-web 完全同构：**浏览器永不直连 dsh**，REST/WS 一律经 vis_bridge 转发；dsh 进程由 bridge 的 native supervisor 托管。
 
-### 13.1 bridge 侧
+### 14.1 bridge 侧
 
 1. **进程托管**（`bridge/processSupervisor.js`）：新增 native service 定义，仿 kimi-web：
    - command `dsh`，args `['web','--no-open','--port','<port>']`（端口建议沿用 3080 或自选）；
@@ -485,7 +538,7 @@ dsh 仍在 rc 阶段，**协议随版本漂移**。本次调研交叉比对出�
 4. **WS 转发**（仿 `bridge/kimiWebWsProxy.js`）：`/dsh/ws` → `ws://127.0.0.1:<port>/api/remote.mux`；upgrade 时带 cookie；`connectUpstreamWebSocket` 风格裸握手、不带上行 Origin。
 5. **路由注册**（`bridge/visBridgeServer.js`）：HTTP 链加 `/dsh` 分支；upgrade 链加 `/dsh/ws` 分支；`bridge/bridgeConfig.js` 加 native service 默认开；`bridge/visBridgeCli.js` 如需独立端口则加默认值（复用 23004 即可）。
 
-### 13.2 前端侧
+### 14.2 前端侧
 
 1. **契约**（`app/backends/types.ts`）：`BackendKind` 增加 `'dsh'`；新建 `app/backends/dsh/dshAdapter.ts`，能力矩阵参考 kimi（dsh 支持 sessions/fork/archive/pin/terminal/files，**暂不支持 worktrees/todos/questions 视版本而定**）。
 2. **客户端**（仿 `app/utils/kimiWeb.ts` + `kimiWebWs*.ts`）：
@@ -497,7 +550,7 @@ dsh 仍在 rc 阶段，**协议随版本漂移**。本次调研交叉比对出�
 6. **构造器绑定纪律**：照 `codexAdapter.ts` `bindBackendMethods()`（:1460）或 kimiWebAdapter 构造器逐方法 `bind(this)`——调用方会把方法当回调传出。
 7. **类型契约**：JSON-RPC 响应用**实机探测的真实形状**定义 TS 类型（本项目 memory #798 的教训），mock fixture 必须来自真实 wire 数据（`.omo/evidence/dsh-adapt/`）。
 
-### 13.3 测试与验收（照 kimi-web）
+### 14.3 测试与验收（照 kimi-web）
 
 - 单测：信封编解码、normalize、history、mux 帧状态机、registry pin、bridge 边界（`app/dshHttpProxy.boundaries.test.ts` 等）。
 - Fixtures：`.omo/evidence/dsh-adapt/04-session-follow-full.txt` 的真实 records → `app/backends/dsh/fixtures/*.jsonl`。
@@ -506,7 +559,7 @@ dsh 仍在 rc 阶段，**协议随版本漂移**。本次调研交叉比对出�
 
 ---
 
-## 14. 未验证项与后续探测计划
+## 15. 未验证项与后续探测计划
 
 | 项 | 状态 | 下一步 |
 |---|---|---|
@@ -519,11 +572,11 @@ dsh 仍在 rc 阶段，**协议随版本漂移**。本次调研交叉比对出�
 | 多客户端 / 多 observe 同时 follow 同一 session | 未实测 | 双开 mux 验证事件广播 |
 | cookie 跨重启有效性 | 源码推断 | 重启 dsh 后用旧 cookie 打 `/api/account/getState` 验证 |
 | 大结果 multipart 响应 | 源码推断 | 读一个二进制文件（`workspaceFiles/readBytes`）验证 |
-| SSE 形态 | 不存在 | 0.2.0-rc.2 无 SSE 传输（rc.6 注释提到 fetch/SSE 客户端，实际实现已是 mux）；以实测为准 |
+| SSE 传输 | 实机不存在 | 0.2.0-rc.2 的 `cordis.patch.yml` 注释仍写 "browser half is the fetch/SSE client"，但实测服务端只注册 `/api/remote.mux` 一条 upgrade 路由、无 `text/event-stream` 端点；适配只需 HTTP + mux，无需 SSE |
 
 ---
 
-## 15. 参考
+## 16. 参考
 
 - 实机探测证据：`.omo/evidence/dsh-adapt/`（`01-startup.log`、`02-auth-sequence.txt`、`03-ws-mux-probe.mjs`、`04-session-follow-full.txt`、`05-probe-log.md`）
 - 随包源码（权威）：`node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/`
