@@ -256,7 +256,7 @@ Host → 客户端：
 
 > 通用规律：`args` 的字段名**按端点而异**——`session/*` 多为 `args.request.*`；`terminal/list` 是 `args.sessionId`；`terminal/create` 是 `args.agentId` + `args.request`；`workspaceFiles/*` 是 `args.workspaceFileScopeId`（**值是 SessionId，解析出该 session 的 cwd 作为根**）+ `args.path`。错误消息会明确列出缺失/多余字段。
 
-### 7.1 `session`（20）
+### 7.1 `session` + `skills` + `fileReferences`（21）
 
 | 端点 | 形态 | 参数（`args` 内） | 实测 |
 |---|---|---|---|
@@ -270,7 +270,7 @@ Host → 客户端：
 | `session/rename` | unary | `{request:{sessionId,title}}` | ✅ `{title, seq}` |
 | `session/fork` | unary | `{request:{sessionId, atSeq?}}` | ✅ `{sessionId}` |
 | `session/selectModel` | unary | `{request:{sessionId, provider, model, reasoningEffort?}}` | ✅ `{selected:{provider,model,reasoningEffort}}` |
-| `session/modelCatalog` | unary | 无参 | ✅ 见 §9.3 |
+| `session/modelCatalog` | unary | 无参 | ✅ 模型清单见 §10 |
 | `session/initializeDefaultModel` | unary | 无参 | ➖ |
 | `session/search` | unary | `{request:{query...}}` | ➖ |
 | `session/updateQueue` | unary | `{request:{...}}` | ❌ input-invalid（参数结构待补探测） |
@@ -282,7 +282,7 @@ Host → 客户端：
 | `session/skills/list` | unary | `{_request:{agentId?}}` | ❌ **404 not found**（agent 作用域服务未激活时端点不存在） |
 | `session/fileReferences/list` | unary | `{agentId, query}` | ❌ **404 not found**（同上） |
 
-### 7.2 `workspace`（15）
+### 7.2 `workspace` + `directoryPicker`（14）
 
 | 端点 | 形态 | 参数 | 实测 |
 |---|---|---|---|
@@ -320,7 +320,7 @@ Host → 客户端：
 | `settings/openSettingsDocument` | unary | `{request:{...}}` | ➖ |
 | `credentials/describe` / `set` / `unset` | unary | `{request:{...}}` | ➖（**API key 的写入路径**：`credentials/set` ref `DEEPSEEK_API_KEY`） |
 
-### 7.5 `account`（10）
+### 7.5 `account`（11）
 
 | 端点 | 形态 | 参数 | 实测 |
 |---|---|---|---|
