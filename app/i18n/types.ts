@@ -216,7 +216,6 @@ export interface LocaleMessages {
       archive: string;
       unarchive: string;
       delete: string;
-      archiveCodex: string;
     };
     empty: {
       noMatchingSessions: string;
@@ -244,7 +243,6 @@ export interface LocaleMessages {
       pin: string;
       unarchive: string;
       archive: string;
-      archiveCodex: string;
       deletePermanently: string;
       rename: string;
       select: string;
@@ -254,8 +252,8 @@ export interface LocaleMessages {
       deleteWorktree: string;
       deleteSession: string;
       deleteSessions: string;
-      archiveCodexSession: string;
-      archiveCodexSessions: string;
+      deleteCodexSession: string;
+      deleteCodexSessions: string;
     };
     meta: {
       created: string;

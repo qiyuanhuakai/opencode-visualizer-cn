@@ -36,6 +36,7 @@ export function createAdapterMock() {
       data: [{ id: 'thr_existing', preview: 'Existing thread' }],
       nextCursor: null,
     }),
+    listArchivedThreads: vi.fn().mockResolvedValue({ data: [], nextCursor: null }),
     startThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_new', preview: '' } }),
     listThreadTurns: vi.fn().mockResolvedValue({ data: [], nextCursor: null }),
     readThread: vi.fn((params: { threadId: string }) =>
@@ -68,6 +69,8 @@ export function createAdapterMock() {
     }),
     setThreadName: vi.fn().mockResolvedValue({}),
     archiveThread: vi.fn().mockResolvedValue({}),
+    unarchiveThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_existing', preview: 'Existing thread' } }),
+    deleteThread: vi.fn().mockResolvedValue({}),
     unsubscribeThread: vi.fn().mockResolvedValue({}),
     interruptTurn: vi.fn().mockResolvedValue({}),
     forkThread: vi.fn().mockResolvedValue({ thread: { id: 'thr_fork', preview: '' } }),

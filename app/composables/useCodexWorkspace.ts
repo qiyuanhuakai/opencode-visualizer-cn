@@ -18,11 +18,11 @@ const CODEX_DEFAULT_DIRECTORY = '/';
 export type CodexWorkspaceApi = {
   visibleThreads: ComputedRef<CodexThread[]>;
   threads: Ref<CodexThread[]>;
+  archivedThreads?: Ref<CodexThread[]>;
   activeThreadId: Ref<string>;
   canonicalHistory: Ref<CodexCanonicalHistoryEntry[]>;
   homeDir?: Ref<string>;
   pinnedStore?: Ref<LocalPinnedSessionStore>;
-  hiddenThreadIds?: Ref<Set<string>>;
   participatedThreadIds?: Ref<Set<string>>;
 };
 
@@ -95,7 +95,7 @@ function codexThreadToSession(
   thread: CodexThread,
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedStore: LocalPinnedSessionStore = {},
-  hiddenThreadIds: Set<string> = new Set(),
+  archivedThreadIds: ReadonlySet<string> = new Set(),
   sessionDirectory = threadSandboxDirectory(thread, fallbackDirectory),
   participatedThreadIds: ReadonlySet<string> = new Set(),
 ): SessionState {
@@ -108,7 +108,7 @@ function codexThreadToSession(
     timeCreated: threadTimestamp(thread.createdAt),
     timeUpdated: threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt),
     timePinned: isCodexThreadPinned(pinnedStore, thread.id) ? 1 : undefined,
-    timeArchived: hiddenThreadIds.has(thread.id)
+    timeArchived: archivedThreadIds.has(thread.id)
       ? (threadTimestamp(thread.updatedAt) ?? threadTimestamp(thread.createdAt) ?? 1)
       : undefined,
   };
@@ -124,7 +124,7 @@ export function createCodexProjectState(
   threads: CodexThread[],
   fallbackDirectory = CODEX_DEFAULT_DIRECTORY,
   pinnedStore: LocalPinnedSessionStore = {},
-  hiddenThreadIds: Set<string> = new Set(),
+  archivedThreadIds: ReadonlySet<string> = new Set(),
   participatedThreadIds: ReadonlySet<string> = new Set(),
 ): ProjectState {
   const primaryDirectory = CODEX_DEFAULT_DIRECTORY;
@@ -146,7 +146,7 @@ export function createCodexProjectState(
       thread,
       fallbackDirectory,
       pinnedStore,
-      hiddenThreadIds,
+      archivedThreadIds,
       directory,
       participatedThreadIds,
     );
@@ -177,10 +177,13 @@ export function useCodexWorkspace(
   const fallbackDirectory = computed(() => api.homeDir?.value || CODEX_DEFAULT_DIRECTORY);
   const project = computed(() =>
     createCodexProjectState(
-      api.threads.value,
+      [
+        ...api.threads.value.filter((thread) => !api.archivedThreads?.value.some((archived) => archived.id === thread.id)),
+        ...(api.archivedThreads?.value ?? []),
+      ],
       fallbackDirectory.value,
       api.pinnedStore?.value ?? options.pinnedStore?.value,
-      api.hiddenThreadIds?.value,
+      new Set(api.archivedThreads?.value.map((thread) => thread.id) ?? []),
       api.participatedThreadIds?.value,
     ),
   );

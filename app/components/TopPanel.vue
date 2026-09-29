@@ -159,7 +159,7 @@
                   >
                     {{
                       sandboxFirstMode
-                        ? $t('topPanel.management.archiveCodex')
+                        ? $t('topPanel.sessionActions.deletePermanently')
                         : $t('topPanel.management.delete')
                     }}
                     · {{ batchDeleteTargets.length }}
@@ -506,25 +506,17 @@
                               "
                               type="button"
                               class="tree-action-button session-del"
-                              :class="
-                                shouldDeleteSession() && !sandboxFirstMode ? 'danger' : 'archive'
-                              "
+                              :class="shouldDeleteSession() ? 'danger' : 'archive'"
                               :title="
                                 shouldDeleteSession()
-                                  ? sandboxFirstMode
-                                    ? $t('topPanel.sessionActions.archiveCodex')
-                                    : $t('topPanel.sessionActions.deletePermanently')
+                                  ? $t('topPanel.sessionActions.deletePermanently')
                                   : $t('topPanel.sessionActions.archive')
                               "
                               @click.stop.prevent="handleSessionAction(session.id, close)"
                             >
                               <Icon
                                 :icon="
-                                  shouldDeleteSession()
-                                    ? sandboxFirstMode
-                                      ? 'lucide:cloud-upload'
-                                      : 'lucide:trash-2'
-                                    : 'lucide:archive'
+                                  shouldDeleteSession() ? 'lucide:trash-2' : 'lucide:archive'
                                 "
                                 :width="16"
                                 :height="16"
@@ -1389,7 +1381,7 @@ async function handleSessionDelete(sessionId: string, close?: () => void) {
     ? await showConfirm(
         t(
           props.sandboxFirstMode
-            ? 'topPanel.confirm.archiveCodexSession'
+            ? 'topPanel.confirm.deleteCodexSession'
             : 'topPanel.confirm.deleteSession',
         ),
       )
@@ -1486,7 +1478,7 @@ async function emitBatchSessionAction(action: TopPanelBatchSessionActionPayload[
       ? await showConfirm(
           t(
             props.sandboxFirstMode
-              ? 'topPanel.confirm.archiveCodexSessions'
+              ? 'topPanel.confirm.deleteCodexSessions'
               : 'topPanel.confirm.deleteSessions',
             { count: sessions.length },
           ),

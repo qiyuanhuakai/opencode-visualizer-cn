@@ -186,7 +186,7 @@
               type="button"
               class="codex-thread-select"
               :title="thread.name || thread.preview || thread.id"
-              :disabled="!api.connected.value || api.loadingThread.value"
+              :disabled="!api.connected.value || api.loadingThread.value || showHidden"
               @click="selectThread(thread.id)"
             >
               <span class="codex-thread-title-row">
@@ -229,7 +229,7 @@
                 type="button"
                 class="codex-small-text-button"
                 :disabled="!api.connected.value"
-                @click="api.unhideThread(thread.id)"
+                @click="api.unarchiveThread(thread.id)"
               >
                 {{ t('codexPanel.unhide') }}
               </button>
@@ -570,7 +570,7 @@
                   <button type="button" class="codex-inline-menu-item" :disabled="!api.connected.value || !api.activeThreadId.value" @click="api.showShellCommand.value = true; close()">
                     {{ t('codexPanel.shellCommand') }}
                   </button>
-                  <button type="button" class="codex-inline-menu-item is-danger" :disabled="!api.connected.value" @click="hideActiveThread().finally(close)">
+                  <button type="button" class="codex-inline-menu-item is-danger" :disabled="!api.connected.value" @click="archiveActiveThread().finally(close)">
                     {{ t('topPanel.management.archive') }}
                   </button>
                 </div>
@@ -708,7 +708,7 @@ const activeThread = computed(
 );
 
 const displayThreads = computed(() => {
-  if (showHidden.value) return api.threads.value.filter((thread) => api.hiddenThreadIds.value.has(thread.id));
+  if (showHidden.value) return api.archivedThreads.value;
   return api.visibleThreads.value;
 });
 
@@ -792,7 +792,7 @@ onMounted(() => {
 });
 
 async function refreshThreads() {
-  await api.refreshThreads();
+  await Promise.all([api.refreshThreads(), api.refreshArchivedThreads()]);
 }
 
 async function toggleHidden() {
@@ -821,9 +821,9 @@ async function renameThread() {
   await api.setThreadName(api.activeThreadId.value, newName);
 }
 
-async function hideActiveThread() {
+async function archiveActiveThread() {
   if (!api.activeThreadId.value) return;
-  api.hideThread(api.activeThreadId.value);
+  await api.archiveThread(api.activeThreadId.value);
   const nextThreadId = api.visibleThreads.value[0]?.id;
   if (nextThreadId) await api.selectThread(nextThreadId);
 }

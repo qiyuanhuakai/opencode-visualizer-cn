@@ -2,6 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h, nextTick } from 'vue';
 import { createI18n } from 'vue-i18n';
 
+vi.mock('@iconify/vue', async () => {
+  const { defineComponent: component, h: render } = await import('vue');
+  return {
+    Icon: component({
+      props: { icon: { type: String, required: true } },
+      setup(props) {
+        return () => render('svg', { 'data-icon': props.icon });
+      },
+    }),
+  };
+});
+
 function createMessages() {
   return {
     en: {
@@ -39,7 +51,6 @@ function createMessages() {
           archive: 'Archive',
           unarchive: 'Unarchive',
           delete: 'Delete',
-          archiveCodex: 'Archive Codex',
         },
         sessionActions: {
           agents: 'Subagent management',
@@ -51,9 +62,8 @@ function createMessages() {
           archive: 'Archive',
           unarchive: 'Unarchive',
           deletePermanently: 'Delete permanently',
-          archiveCodex: 'Archive Codex',
         },
-        confirm: { deleteSession: 'Delete?', archiveCodexSession: 'Archive?' },
+        confirm: { deleteSession: 'Delete?', deleteCodexSession: 'Permanently delete?' },
         projectSettings: 'Project settings',
         newSession: 'New session',
         createSandbox: 'Create sandbox',
@@ -227,6 +237,47 @@ describe('TopPanel', () => {
     expect(root.querySelector('.session-fork')).toBeNull();
     expect(root.querySelector('.session-compact')).toBeNull();
     expect(root.querySelector('.session-goal')).toBeNull();
+    app.unmount();
+  });
+
+  it('shows native archive and permanent delete as distinct Codex actions', async () => {
+    const { default: TopPanel } = await import('./TopPanel.vue');
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    const app = createApp(TopPanel, {
+      treeData: [{
+        directory: '/repo',
+        label: 'repo',
+        projectId: 'codex',
+        sandboxes: [{
+          directory: '/repo',
+          sessions: [{ id: 'thread-1', title: 'Codex thread', status: 'idle' }],
+        }],
+      }],
+      notificationSessions: [],
+      projectDirectory: '/repo',
+      activeDirectory: '/repo',
+      selectedSessionId: 'thread-1',
+      sandboxFirstMode: true,
+    });
+    app.provide('showConfirm', vi.fn());
+    app.use(createI18n({ legacy: false, locale: 'en', messages: createMessages() }));
+    app.mount(root);
+    requireButton(root, '.tree-dropdown-root .ui-dropdown-button').click();
+    await nextTick();
+
+    const action = requireButton(root, '.session-del');
+    expect(action.title).toBe('Archive');
+    expect(action.classList.contains('archive')).toBe(true);
+    expect(action.querySelector('svg')?.getAttribute('data-icon')).toBe('lucide:archive');
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift', shiftKey: true }));
+    await nextTick();
+    expect(action.title).toBe('Delete permanently');
+    expect(action.classList.contains('danger')).toBe(true);
+    expect(action.querySelector('svg')?.getAttribute('data-icon')).toBe('lucide:trash-2');
+
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }));
     app.unmount();
   });
 

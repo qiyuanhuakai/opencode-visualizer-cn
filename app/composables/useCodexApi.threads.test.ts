@@ -7,20 +7,44 @@ import { createAdapterMock, deferred, resetCodexApiTestState } from './useCodexA
 describe('useCodexApi', () => {
   beforeEach(resetCodexApiTestState);
 
-  it('never requests native archived threads through the VIS session refresh flow', async () => {
+  it('loads archived threads separately from active threads across all pages', async () => {
     const mock = createAdapterMock();
     const listThreadsMock = vi.fn().mockResolvedValue({
       data: [{ id: 'thr_active', preview: 'Active thread' }],
       nextCursor: null,
     });
     mock.adapter.listThreads = listThreadsMock;
+    mock.adapter.listArchivedThreads = vi.fn()
+      .mockResolvedValueOnce({ data: [{ id: 'thr_archived_new', preview: 'New archive' }], nextCursor: 'page-2' })
+      .mockResolvedValueOnce({ data: [{ id: 'thr_archived_old', preview: 'Old archive' }], nextCursor: null })
+      .mockResolvedValue({ data: [{ id: 'thr_archived_new', preview: 'New archive' }, { id: 'thr_archived_old', preview: 'Old archive' }], nextCursor: null });
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
     await api.refreshThreads();
 
     expect(api.threads.value.map((thread) => thread.id)).toEqual(['thr_active']);
+    expect(api.archivedThreads.value.map((thread) => thread.id)).toEqual(['thr_archived_new', 'thr_archived_old']);
+    expect(mock.adapter.listArchivedThreads).toHaveBeenCalledWith(expect.objectContaining({ cursor: 'page-2' }));
     expect(listThreadsMock).not.toHaveBeenCalledWith(expect.objectContaining({ archived: true }));
+  });
+
+  it('keeps one Codex session when the initial thread list repeats an ID', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listThreads = vi.fn().mockResolvedValue({
+      data: [
+        { id: 'current', preview: 'Current session', updatedAt: 10 },
+        { id: 'older', preview: 'Older session', updatedAt: 5 },
+        { id: 'current', preview: 'Current session', updatedAt: 10 },
+      ],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.refreshThreads({}, false);
+
+    expect(api.threads.value.map((thread) => thread.id)).toEqual(['current', 'older']);
   });
 
   it('requests all Codex model providers when refreshing threads', async () => {
@@ -296,7 +320,7 @@ describe('useCodexApi', () => {
     expect(api.activeTurn.value).toBeNull();
   });
 
-  it('hides empty no-rollout threads when archive is rejected by Codex', async () => {
+  it('preserves an empty thread when Codex rejects native archive', async () => {
     const mock = createAdapterMock();
     mock.adapter.archiveThread = vi
       .fn()
@@ -304,13 +328,12 @@ describe('useCodexApi', () => {
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
-    await api.archiveThread('thr_existing');
+    await expect(api.archiveThread('thr_existing')).rejects.toThrow('no rollout found');
 
     expect(mock.adapter.archiveThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
-    expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(true);
-    expect(api.visibleThreads.value).toEqual([]);
-    expect(api.activeThreadId.value).toBe('');
-    expect(api.errorMessage.value).toBe('');
+    expect(api.archivedThreads.value).toEqual([]);
+    expect(api.visibleThreads.value.map((thread) => thread.id)).toContain('thr_existing');
+    expect(api.activeThreadId.value).toBe('thr_existing');
   });
 
   it('forks and rolls back threads through the adapter', async () => {
@@ -339,18 +362,63 @@ describe('useCodexApi', () => {
     ]);
   });
 
-  it('locally hides threads with in-memory state', async () => {
+  it('moves a thread between native active and archived collections', async () => {
+    const mock = createAdapterMock();
+    let isArchived = false;
+    mock.adapter.archiveThread = vi.fn().mockImplementation(async () => { isArchived = true; return {}; });
+    mock.adapter.unarchiveThread = vi.fn().mockImplementation(async () => {
+      isArchived = false;
+      return { thread: { id: 'thr_existing', preview: 'Existing thread' } };
+    });
+    mock.adapter.listThreads = vi.fn().mockImplementation(async () => ({
+      data: isArchived ? [] : [{ id: 'thr_existing', preview: 'Existing thread' }],
+      nextCursor: null,
+    }));
+    mock.adapter.listArchivedThreads = vi.fn().mockImplementation(async () => ({
+      data: isArchived ? [{ id: 'thr_existing', preview: 'Existing thread' }] : [],
+      nextCursor: null,
+    }));
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    await api.archiveThread('thr_existing');
+    expect(api.archivedThreads.value.map((thread) => thread.id)).toContain('thr_existing');
+    expect(api.visibleThreads.value.length).toBe(0);
+
+    await api.unarchiveThread('thr_existing');
+    expect(mock.adapter.unarchiveThread).toHaveBeenCalledWith({ threadId: 'thr_existing' });
+    expect(api.archivedThreads.value).toEqual([]);
+    expect(api.visibleThreads.value.length).toBe(1);
+  });
+
+  it('removes a deleted archived thread even if a stale server page still contains it', async () => {
+    const mock = createAdapterMock();
+    mock.adapter.listArchivedThreads = vi.fn().mockResolvedValue({
+      data: [{ id: 'thr_archived', preview: 'Archived thread' }],
+      nextCursor: null,
+    });
+    const api = useCodexApi({ adapterFactory: () => mock.adapter });
+
+    await api.connect();
+    expect(api.archivedThreads.value.map((thread) => thread.id)).toContain('thr_archived');
+    await api.deleteThread('thr_archived');
+
+    expect(mock.adapter.deleteThread).toHaveBeenCalledWith({ threadId: 'thr_archived' });
+    expect(api.archivedThreads.value).toEqual([]);
+    await api.refreshArchivedThreads();
+    expect(api.archivedThreads.value).toEqual([]);
+  });
+
+  it('removes a deleted thread when Codex sends thread/deleted', async () => {
     const mock = createAdapterMock();
     const api = useCodexApi({ adapterFactory: () => mock.adapter });
 
     await api.connect();
-    api.hideThread('thr_existing');
-    expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(true);
-    expect(api.visibleThreads.value.length).toBe(0);
-
-    api.unhideThread('thr_existing');
-    expect(api.hiddenThreadIds.value.has('thr_existing')).toBe(false);
-    expect(api.visibleThreads.value.length).toBe(1);
+    mock.emit({ method: 'thread/deleted', params: { threadId: 'thr_existing' } });
+    await vi.waitFor(() => expect(api.visibleThreads.value).toEqual([]));
+    await api.refreshThreads();
+    expect(api.visibleThreads.value).toEqual([]);
+    expect(api.activeThreadId.value).toBe('');
   });
 
   describe('monotonic timestamp protection', () => {

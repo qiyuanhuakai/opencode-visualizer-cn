@@ -64,7 +64,7 @@ describe('CodexAdapter', () => {
     await waitForSent(socket, 6);
     expect(JSON.parse(socket.sent[5] ?? '{}')).toEqual({
       id: 5,
-      method: 'thread/archive',
+      method: 'thread/delete',
       params: { threadId: 'thr_1' },
     });
     socket.respond(5, {});
