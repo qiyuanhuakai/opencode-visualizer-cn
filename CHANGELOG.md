@@ -5,6 +5,13 @@
 ---
 
 ## [Unreleased]
+
+### 编辑器与 Codex 主题适配
+
+- [x] 编辑器及文件预览随当前 Vis 主题实时切换背景、文字与代码高亮；浅色主题使用正确的编辑器明暗模式，切换时保留内容和选区。
+- [x] Codex 主面板及各管理窗口改用主题颜色，修复浅色主题下按钮、状态文字、卡片和边框的对比度；导入主题也能即时生效。
+- [x] 隔离 MCP 弹窗测试中的 Iconify 图标请求，修复 Vitest 断言通过后 worker 无法退出的问题（[#152](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/152)）。
+
 ### Windows Electron 与 WSL 更新
 
 - [x] 在检查原生通知支持前设置 Electron 应用标识，修复 Windows 通知不弹出的问题。
