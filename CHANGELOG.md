@@ -4,7 +4,7 @@
 
 ---
 
-## [Unreleased]
+## [v0.8.9 released]
 
 ### 编辑器与 Codex 主题适配
 
