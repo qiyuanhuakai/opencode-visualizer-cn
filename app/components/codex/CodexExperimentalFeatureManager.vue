@@ -104,12 +104,12 @@ defineProps<{
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--theme-card-bg);
   transition: border-color 0.2s ease;
 }
 
 .codex-experimental-feature-item:hover {
-  background: rgba(15, 23, 42, 0.55);
+  background: var(--theme-card-hover-bg);
 }
 
 .codex-experimental-feature-header {
@@ -152,28 +152,28 @@ defineProps<{
 }
 
 .codex-experimental-feature-stage.is-stage-beta {
-  background: rgba(37, 99, 235, 0.2);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-primary, #93c5fd);
 }
 
 .codex-experimental-feature-stage.is-stage-underDevelopment {
-  background: rgba(245, 158, 11, 0.2);
-  color: #fbbf24;
+  background: var(--theme-surface-warning-soft);
+  color: var(--codex-status-warning);
 }
 
 .codex-experimental-feature-stage.is-stage-stable {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
+  background: var(--theme-surface-success-soft);
+  color: var(--codex-status-success);
 }
 
 .codex-experimental-feature-stage.is-stage-deprecated {
-  background: rgba(234, 179, 8, 0.2);
-  color: #facc15;
+  background: var(--theme-surface-warning-soft);
+  color: var(--codex-status-warning);
 }
 
 .codex-experimental-feature-stage.is-stage-removed {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
+  background: var(--theme-surface-danger-soft);
+  color: var(--codex-status-danger);
 }
 
 .codex-experimental-feature-description {
@@ -230,12 +230,12 @@ defineProps<{
 }
 
 .codex-experimental-feature-toggle input:checked + .codex-experimental-feature-toggle-slider {
-  background: rgba(74, 222, 128, 0.45);
+  background: var(--theme-toggle-active-track);
 }
 
 .codex-experimental-feature-toggle input:checked + .codex-experimental-feature-toggle-slider::before {
   transform: translateX(18px);
-  background: #4ade80;
+  background: var(--theme-toggle-active-track);
 }
 
 .codex-experimental-feature-toggle input:disabled + .codex-experimental-feature-toggle-slider {

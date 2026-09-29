@@ -107,6 +107,27 @@
     var(--theme-text-inverse, #e2e8f0)
   );
   --ui-form-button-primary-hover-bg: var(--theme-form-button-primary-hover-bg, #2563eb);
+  --theme-border-subtle: var(--theme-border-muted, rgba(148, 163, 184, 0.35));
+  --codex-status-danger: color-mix(
+    in srgb,
+    var(--theme-status-danger, #fca5a5) 50%,
+    var(--theme-text-primary, #e2e8f0)
+  );
+  --codex-status-success: color-mix(
+    in srgb,
+    var(--theme-status-success, #86efac) 40%,
+    var(--theme-text-primary, #e2e8f0)
+  );
+  --codex-status-warning: color-mix(
+    in srgb,
+    var(--theme-status-warning, #fcd34d) 40%,
+    var(--theme-text-primary, #e2e8f0)
+  );
+  --codex-status-info: color-mix(
+    in srgb,
+    var(--theme-accent-primary, #60a5fa) 55%,
+    var(--theme-text-primary, #e2e8f0)
+  );
 }
 
 /* ── Unified scrollbar ── */

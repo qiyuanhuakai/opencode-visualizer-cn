@@ -4,6 +4,8 @@ import { createI18n } from 'vue-i18n';
 import CodexMcpElicitation from './CodexMcpElicitation.vue';
 import type { McpElicitationRequest } from '../../backends/codex/serverRequests';
 
+vi.mock('@iconify/vue', () => ({ Icon: () => null }));
+
 async function flushRender() {
   await nextTick();
   await Promise.resolve();

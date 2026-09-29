@@ -1,11 +1,11 @@
 <template>
-  <section class="flex h-full min-h-0 flex-col gap-3 p-4 text-sm text-slate-200">
-    <header class="space-y-1 border-b border-slate-700/70 pb-3">
-      <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-blue-300">
-        <span class="h-2 w-2 rounded-full bg-blue-400" aria-hidden="true"></span>
+  <section class="flex h-full min-h-0 flex-col gap-3 p-4 text-sm text-[var(--theme-text-primary)]">
+    <header class="space-y-1 border-b border-[var(--theme-border-subtle)] pb-3">
+      <div class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--theme-accent-primary)]">
+        <span class="h-2 w-2 rounded-full [background:var(--theme-accent-primary)]" aria-hidden="true"></span>
         {{ t('codexPanel.elicitation.server') }} · {{ request.serverName }}
       </div>
-      <p class="break-words text-sm leading-5 text-slate-200">{{ request.message }}</p>
+      <p class="break-words text-sm leading-5 text-[var(--theme-text-primary)]">{{ request.message }}</p>
     </header>
 
     <form
@@ -17,13 +17,13 @@
       <div
         v-for="field in request.fields"
         :key="field.key"
-        class="block space-y-1.5 rounded border border-slate-700/60 bg-slate-900/35 p-3"
+        class="block space-y-1.5 rounded border border-[var(--theme-border-subtle)] [background:var(--theme-card-bg)] p-3"
       >
-        <span class="flex items-center gap-1 text-xs font-medium text-slate-200">
+        <span class="flex items-center gap-1 text-xs font-medium text-[var(--theme-text-primary)]">
           {{ field.label }}
-          <span v-if="field.required" class="text-amber-400">*</span>
+          <span v-if="field.required" class="text-[var(--codex-status-warning)]">*</span>
         </span>
-        <span v-if="field.description" class="block text-[11px] leading-4 text-slate-400">
+        <span v-if="field.description" class="block text-[11px] leading-4 text-[var(--theme-text-muted)]">
           {{ field.description }}
         </span>
 
@@ -45,14 +45,14 @@
           <label
             v-for="option in field.options"
             :key="option.value"
-            class="flex cursor-pointer items-center gap-2 text-xs text-slate-300"
+            class="flex cursor-pointer items-center gap-2 text-xs text-[var(--theme-text-secondary)]"
           >
             <input
               type="checkbox"
               :name="field.key"
               :value="option.value"
               :checked="multiValues(field.key).includes(option.value)"
-              class="accent-blue-500"
+              class="accent-[var(--theme-accent-primary)]"
               @change="toggleMultiValue(field.key, option.value)"
             />
             {{ option.label }}
@@ -60,8 +60,8 @@
         </div>
 
         <label v-else-if="field.type === 'boolean'" class="flex cursor-pointer items-center gap-2">
-          <input v-model="values[field.key]" :name="field.key" type="checkbox" class="accent-blue-500" />
-          <span class="text-xs text-slate-400">{{ field.label }}</span>
+          <input v-model="values[field.key]" :name="field.key" type="checkbox" class="accent-[var(--theme-accent-primary)]" />
+          <span class="text-xs text-[var(--theme-text-muted)]">{{ field.label }}</span>
         </label>
 
         <input
@@ -74,7 +74,7 @@
           :min="field.minimum"
           :max="field.maximum"
           :step="field.type === 'integer' ? 1 : 'any'"
-          class="w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm outline-none focus:border-blue-400"
+          class="w-full rounded border border-[var(--theme-form-control-border)] [background:var(--theme-form-control-bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--theme-accent-primary)]"
         />
 
         <input
@@ -86,35 +86,35 @@
           :minlength="field.minLength"
           :maxlength="field.maxLength"
           :autocomplete="field.format === 'password' ? 'new-password' : 'off'"
-          class="w-full rounded border border-slate-600 bg-slate-950 px-2 py-1.5 text-sm outline-none focus:border-blue-400"
+          class="w-full rounded border border-[var(--theme-form-control-border)] [background:var(--theme-form-control-bg)] px-2 py-1.5 text-sm outline-none focus:border-[var(--theme-accent-primary)]"
         />
       </div>
     </form>
 
-    <div v-else class="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded border border-slate-700/60 bg-slate-900/35 p-4">
+    <div v-else class="flex min-h-0 flex-1 flex-col justify-center gap-3 rounded border border-[var(--theme-border-subtle)] [background:var(--theme-card-bg)] p-4">
       <a
         data-action="open-link"
         :href="request.url"
         target="_blank"
         rel="noopener noreferrer"
-        class="inline-flex w-fit items-center gap-2 rounded border border-blue-500/60 bg-blue-500/10 px-3 py-2 text-xs font-semibold text-blue-300 hover:bg-blue-500/20"
+        class="inline-flex w-fit items-center gap-2 rounded border border-[var(--theme-border-accent)] [background:var(--theme-accent-soft)] px-3 py-2 text-xs font-semibold text-[var(--theme-accent-primary)] hover:[background:var(--theme-surface-panel-hover)]"
       >
         {{ t('codexPanel.elicitation.openLink') }}
       </a>
-      <code class="break-all text-[11px] leading-4 text-slate-500">{{ request.url }}</code>
+      <code class="break-all text-[11px] leading-4 text-[var(--theme-text-muted)]">{{ request.url }}</code>
     </div>
 
-    <footer class="flex flex-wrap justify-end gap-2 border-t border-slate-700/70 pt-3">
+    <footer class="flex flex-wrap justify-end gap-2 border-t border-[var(--theme-border-subtle)] pt-3">
       <button
         type="button"
-        class="rounded border border-slate-600 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+        class="rounded border border-[var(--theme-form-control-border)] px-3 py-1.5 text-xs text-[var(--theme-text-secondary)] hover:[background:var(--theme-form-button-bg)]"
         @click="emit('reply', 'cancel')"
       >
         {{ t('codexPanel.elicitation.cancel') }}
       </button>
       <button
         type="button"
-        class="rounded border border-rose-500/60 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10"
+        class="rounded border border-[var(--codex-status-danger)] px-3 py-1.5 text-xs text-[var(--codex-status-danger)] hover:[background:var(--theme-surface-danger-soft)]"
         @click="emit('reply', 'decline')"
       >
         {{ t('codexPanel.elicitation.decline') }}
@@ -123,7 +123,7 @@
         data-action="accept"
         type="button"
         :disabled="request.mode === 'form' && !formValid"
-        class="rounded border border-blue-500/70 bg-blue-500/15 px-3 py-1.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+        class="rounded border border-[var(--theme-border-accent)] [background:var(--theme-accent-soft)] px-3 py-1.5 text-xs font-semibold text-[var(--theme-accent-primary)] hover:[background:var(--theme-surface-panel-hover)] disabled:cursor-not-allowed disabled:opacity-40"
         @click="request.mode === 'form' ? submitForm() : emit('reply', 'accept')"
       >
         {{ t('codexPanel.elicitation.accept') }}

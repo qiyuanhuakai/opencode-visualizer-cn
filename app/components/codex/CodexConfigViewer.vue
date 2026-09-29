@@ -178,7 +178,7 @@ function onIncludeLayersChange() {
   appearance: none;
   outline: none;
   color: var(--theme-text-primary, #e2e8f0);
-  background: var(--theme-button-bg, rgba(30, 41, 59, 0.82));
+  background: var(--theme-form-button-bg, rgba(30, 41, 59, 0.82));
   cursor: pointer;
 }
 
@@ -248,7 +248,7 @@ function onIncludeLayersChange() {
 }
 
 .codex-config-section-header:hover {
-  background: rgba(148, 163, 184, 0.08);
+  background: var(--theme-surface-panel-hover);
 }
 
 .codex-config-section-title {
@@ -277,7 +277,7 @@ function onIncludeLayersChange() {
 }
 
 .codex-config-layer-header:hover {
-  background: rgba(148, 163, 184, 0.06);
+  background: var(--theme-surface-panel-hover);
 }
 
 .codex-config-layer-source {
@@ -305,7 +305,7 @@ function onIncludeLayersChange() {
 }
 
 .codex-tree-header:hover {
-  background: rgba(148, 163, 184, 0.06);
+  background: var(--theme-surface-panel-hover);
 }
 
 .codex-tree-toggle {
@@ -339,11 +339,11 @@ function onIncludeLayersChange() {
 }
 
 .codex-tree-string {
-  color: var(--theme-status-success, #86efac);
+  color: var(--codex-status-success, #86efac);
 }
 
 .codex-tree-number {
-  color: var(--theme-status-warning, #fbbf24);
+  color: var(--codex-status-warning, #fbbf24);
 }
 
 .codex-tree-boolean {

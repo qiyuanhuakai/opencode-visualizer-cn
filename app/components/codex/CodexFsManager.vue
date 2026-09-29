@@ -323,7 +323,7 @@ async function submitRemovePreviewFile() {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.55);
+  background: var(--theme-surface-overlay);
 }
 
 .codex-fs-modal-content {
@@ -394,10 +394,10 @@ async function submitRemovePreviewFile() {
   height: 34px;
   padding: 0 14px;
   font-weight: 700;
-  background: var(--theme-accent-primary, #2563eb);
+  background: var(--theme-form-button-primary-bg, #2563eb);
   border: 1px solid transparent;
   border-radius: 10px;
-  color: var(--theme-text-primary, #e2e8f0);
+  color: var(--theme-form-button-primary-text, #fff);
   cursor: pointer;
 }
 
@@ -415,7 +415,7 @@ async function submitRemovePreviewFile() {
   font-size: 12px;
   border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
   border-radius: 10px;
-  background: var(--theme-button-bg, rgba(30, 41, 59, 0.82));
+  background: var(--theme-form-button-bg, rgba(30, 41, 59, 0.82));
   color: var(--theme-text-primary, #e2e8f0);
   cursor: pointer;
 }

@@ -155,7 +155,7 @@ async function importItem(item: CodexExternalAgentConfigItem) {
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--theme-card-bg);
 }
 
 .codex-external-agent-config-header {
@@ -184,28 +184,28 @@ async function importItem(item: CodexExternalAgentConfigItem) {
 }
 
 .codex-external-agent-config-badge.is-type-AGENTS_MD {
-  background: rgba(96, 165, 250, 0.2);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-primary, #93c5fd);
 }
 
 .codex-external-agent-config-badge.is-type-CONFIG {
-  background: rgba(74, 222, 128, 0.2);
-  color: var(--theme-status-success, #4ade80);
+  background: var(--theme-surface-success-soft);
+  color: var(--codex-status-success, #4ade80);
 }
 
 .codex-external-agent-config-badge.is-type-SKILLS {
-  background: rgba(167, 139, 250, 0.2);
-  color: #c4b5fd;
+  background: var(--theme-surface-info-soft);
+  color: var(--codex-status-info);
 }
 
 .codex-external-agent-config-badge.is-type-PLUGINS {
-  background: rgba(251, 191, 36, 0.2);
-  color: var(--theme-status-warning, #fbbf24);
+  background: var(--theme-surface-warning-soft);
+  color: var(--codex-status-warning, #fbbf24);
 }
 
 .codex-external-agent-config-badge.is-type-MCP_SERVER_CONFIG {
-  background: rgba(244, 114, 182, 0.2);
-  color: #f9a8d4;
+  background: var(--theme-surface-info-soft);
+  color: var(--codex-status-info);
 }
 
 .codex-external-agent-config-description {
@@ -237,9 +237,9 @@ async function importItem(item: CodexExternalAgentConfigItem) {
   margin: 0;
   padding: 6px 10px;
   border-radius: 8px;
-  background: rgba(74, 222, 128, 0.12);
+  background: var(--theme-surface-success-soft);
   font-size: 12px;
-  color: var(--theme-status-success, #4ade80);
+  color: var(--codex-status-success, #4ade80);
 }
 
 .codex-external-agent-config-status-error {
@@ -249,9 +249,9 @@ async function importItem(item: CodexExternalAgentConfigItem) {
   margin: 0;
   padding: 6px 10px;
   border-radius: 8px;
-  background: rgba(248, 113, 113, 0.12);
+  background: var(--theme-surface-danger-soft);
   font-size: 12px;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, #f87171);
 }
 
 .codex-empty {
@@ -268,7 +268,7 @@ async function importItem(item: CodexExternalAgentConfigItem) {
   font-size: 12px;
   border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
   border-radius: 10px;
-  background: var(--theme-button-bg, rgba(30, 41, 59, 0.82));
+  background: var(--theme-form-button-bg, rgba(30, 41, 59, 0.82));
   color: var(--theme-text-primary, #e2e8f0);
   cursor: pointer;
 }

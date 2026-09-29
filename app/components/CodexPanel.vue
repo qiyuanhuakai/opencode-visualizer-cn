@@ -1025,7 +1025,7 @@ function getEntryModel(entry: CodexTranscriptEntry): string {
   appearance: none;
   outline: none;
   color: var(--theme-text-primary, #e2e8f0);
-  background: var(--theme-button-bg, rgba(30, 41, 59, 0.82));
+  background: var(--theme-form-button-bg, rgba(30, 41, 59, 0.82));
   cursor: pointer;
 }
 
@@ -1034,8 +1034,9 @@ function getEntryModel(entry: CodexTranscriptEntry): string {
   height: 34px;
   padding: 0 14px;
   font-weight: 700;
-  background: var(--theme-accent-primary, #2563eb);
-  border-color: transparent;
+  background: var(--theme-form-button-primary-bg, #2563eb);
+  border-color: var(--theme-form-button-primary-border, transparent);
+  color: var(--theme-form-button-primary-text, #fff);
 }
 
 .codex-send-button {
@@ -1054,9 +1055,9 @@ input:disabled {
 .codex-error {
   margin: 0;
   padding: 8px 12px;
-  color: var(--theme-status-error, #f87171);
-  background: rgba(127, 29, 29, 0.22);
-  border-bottom: 1px solid rgba(248, 113, 113, 0.25);
+  color: var(--codex-status-danger, #f87171);
+  background: var(--theme-surface-danger-soft);
+  border-bottom: 1px solid var(--codex-status-danger);
 }
 
 .codex-panel-body {
@@ -1118,7 +1119,7 @@ input:disabled {
 }
 
 .codex-small-text-button.danger {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, #f87171);
 }
 
 .codex-thread-tools {
@@ -1166,7 +1167,7 @@ input:disabled {
 }
 
 .codex-thread-item.active .codex-thread-select {
-  background: rgba(37, 99, 235, 0.18);
+  background: var(--theme-accent-soft);
 }
 
 .codex-thread-actions {
@@ -1189,11 +1190,11 @@ input:disabled {
   height: 30px;
   border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
   border-radius: 10px;
-  background: rgba(30, 41, 59, 0.88);
+  background: var(--theme-form-button-bg);
 }
 
 .codex-thread-actions .codex-icon-button:hover:not(:disabled) {
-  background: rgba(51, 65, 85, 0.96);
+  background: var(--theme-form-button-hover-bg);
 }
 
 .codex-thread-title-row {
@@ -1275,11 +1276,11 @@ input:disabled {
 }
 
 .codex-inline-menu-item:hover:not(:disabled) {
-  background: rgba(96, 165, 250, 0.12);
+  background: var(--theme-accent-soft);
 }
 
 .codex-inline-menu-item.is-danger {
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, #f87171);
 }
 
 .codex-approval-list {
@@ -1292,19 +1293,19 @@ input:disabled {
 .codex-approval-card {
   flex: 1 1 320px;
   padding: 12px 14px;
-  border: 1px solid rgba(251, 191, 36, 0.32);
+  border: 1px solid var(--codex-status-warning);
   border-radius: 10px;
-  background: rgba(120, 53, 15, 0.2);
+  background: var(--theme-surface-warning-soft);
 }
 
 .codex-approval-card.is-item-commandExecution-requestApproval {
-  border-color: rgba(251, 191, 36, 0.4);
-  background: rgba(120, 53, 15, 0.25);
+  border-color: var(--codex-status-warning);
+  background: var(--theme-surface-warning-soft);
 }
 
 .codex-approval-card.is-item-fileChange-requestApproval {
-  border-color: rgba(74, 222, 128, 0.4);
-  background: rgba(6, 78, 59, 0.2);
+  border-color: var(--codex-status-success);
+  background: var(--theme-surface-success-soft);
 }
 
 .codex-approval-header {
@@ -1338,7 +1339,7 @@ input:disabled {
 .codex-approval-detail.is-network {
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(37, 99, 235, 0.12);
+  background: var(--theme-accent-soft);
 }
 
 .codex-approval-label {
@@ -1353,7 +1354,7 @@ input:disabled {
   display: block;
   padding: 6px 8px;
   border-radius: 10px;
-  background: rgba(2, 6, 23, 0.5);
+  background: var(--theme-surface-panel-muted);
   font-family: var(--app-monospace-font-family, ui-monospace, monospace);
   font-size: 12px;
   color: var(--theme-accent-primary, #93c5fd);
@@ -1369,7 +1370,7 @@ input:disabled {
   margin: 0;
   padding: 6px 8px;
   border-radius: 10px;
-  background: rgba(2, 6, 23, 0.4);
+  background: var(--theme-surface-panel-muted);
   font-size: 11px;
   color: var(--theme-text-primary, #e2e8f0);
   white-space: pre-wrap;
@@ -1391,8 +1392,8 @@ input:disabled {
 .codex-approval-file-item span:first-child {
   padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(74, 222, 128, 0.2);
-  color: var(--theme-status-success, #4ade80);
+  background: var(--theme-surface-success-soft);
+  color: var(--codex-status-success, #4ade80);
   font-size: 10px;
   text-transform: uppercase;
 }
@@ -1403,7 +1404,7 @@ input:disabled {
   gap: 8px;
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px solid rgba(148, 163, 184, 0.12);
+  border-top: 1px solid var(--theme-surface-panel-hover);
 }
 
 .codex-approval-button {
@@ -1411,7 +1412,7 @@ input:disabled {
   padding: 0 12px;
   border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.24));
   border-radius: 10px;
-  background: var(--theme-button-bg, rgba(30, 41, 59, 0.82));
+  background: var(--theme-form-button-bg, rgba(30, 41, 59, 0.82));
   color: var(--theme-text-primary, #e2e8f0);
   font-size: 12px;
   cursor: pointer;
@@ -1419,16 +1420,16 @@ input:disabled {
 
 .codex-approval-button.is-accept,
 .codex-approval-button.is-acceptForSession {
-  background: rgba(37, 99, 235, 0.25);
-  border-color: rgba(96, 165, 250, 0.4);
+  background: var(--theme-accent-soft);
+  border-color: var(--theme-border-accent);
   color: var(--theme-accent-primary, #93c5fd);
 }
 
 .codex-approval-button.is-decline,
 .codex-approval-button.is-cancel {
-  background: rgba(220, 38, 38, 0.15);
-  border-color: rgba(248, 113, 113, 0.3);
-  color: var(--theme-status-error, #f87171);
+  background: var(--theme-surface-danger-soft);
+  border-color: var(--codex-status-danger);
+  color: var(--codex-status-danger, #f87171);
 }
 
 .codex-loading-thread {
@@ -1437,10 +1438,10 @@ input:disabled {
   z-index: 1;
   align-self: flex-start;
   padding: 4px 8px;
-  border: 1px solid rgba(96, 165, 250, 0.32);
+  border: 1px solid var(--theme-border-accent);
   border-radius: 999px;
   color: var(--theme-text-primary, #e2e8f0);
-  background: rgba(37, 99, 235, 0.24);
+  background: var(--theme-accent-soft);
   font-size: 11px;
 }
 
@@ -1459,27 +1460,27 @@ input:disabled {
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.48);
+  background: var(--theme-card-bg);
 }
 
 .codex-message.is-user {
-  border-color: rgba(96, 165, 250, 0.32);
+  border-color: var(--theme-border-accent);
 }
 
 .codex-message.is-command {
-  border-color: rgba(251, 191, 36, 0.32);
+  border-color: var(--codex-status-warning);
 }
 
 .codex-message.is-file-change {
-  border-color: rgba(74, 222, 128, 0.32);
+  border-color: var(--codex-status-success);
 }
 
 .codex-message.is-review {
-  border-color: rgba(167, 139, 250, 0.32);
+  border-color: var(--codex-status-info);
 }
 
 .codex-message.is-reasoning {
-  border-color: rgba(148, 163, 184, 0.24);
+  border-color: var(--theme-border-subtle);
   opacity: 0.85;
 }
 
@@ -1493,7 +1494,7 @@ input:disabled {
 .codex-command-block {
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(2, 6, 23, 0.65);
+  background: var(--theme-form-control-bg);
   margin-bottom: 8px;
 }
 
@@ -1587,7 +1588,7 @@ input:disabled {
    gap: 6px;
    padding: 4px 10px;
    border-radius: 10px;
-   background: rgba(37, 99, 235, 0.18);
+   background: var(--theme-accent-soft);
    font-size: 12px;
    color: var(--theme-text-primary, #e2e8f0);
  }
@@ -1595,8 +1596,8 @@ input:disabled {
  .codex-plan-type {
    padding: 2px 6px;
    border-radius: 4px;
-   background: rgba(74, 222, 128, 0.2);
-   color: var(--theme-status-success, #4ade80);
+   background: var(--theme-surface-success-soft);
+   color: var(--codex-status-success, #4ade80);
    font-size: 10px;
    text-transform: uppercase;
  }
@@ -1608,7 +1609,7 @@ input:disabled {
    gap: 12px;
    padding: 12px;
    border-bottom: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
-   background: rgba(15, 23, 42, 0.35);
+   background: var(--theme-card-bg);
  }
 
  .codex-login-methods {
@@ -1652,7 +1653,7 @@ input:disabled {
     margin-top: 8px;
     padding: 8px 16px;
     border-radius: 10px;
-   background: rgba(2, 6, 23, 0.65);
+   background: var(--theme-form-control-bg);
    font-family: var(--app-monospace-font-family, ui-monospace, monospace);
    font-size: 18px;
    font-weight: 700;
@@ -1671,7 +1672,7 @@ input:disabled {
     padding: 10px;
     border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
     border-radius: 10px;
-   background: rgba(15, 23, 42, 0.35);
+   background: var(--theme-card-bg);
    margin: 8px 12px;
  }
 
@@ -1692,14 +1693,14 @@ input:disabled {
  .codex-rate-limit-bar {
    height: 6px;
    border-radius: 3px;
-   background: rgba(148, 163, 184, 0.2);
+   background: var(--theme-surface-panel-hover);
    overflow: hidden;
  }
 
  .codex-rate-limit-fill {
    height: 100%;
    border-radius: 3px;
-   background: var(--theme-status-success, #4ade80);
+   background: var(--theme-toggle-active-track, #4ade80);
    transition: width 0.3s ease;
  }
 
@@ -1751,7 +1752,7 @@ input:disabled {
   gap: 12px;
   padding: 6px 12px 8px;
   border-top: 1px solid color-mix(in srgb, var(--theme-border, rgba(148, 163, 184, 0.24)) 75%, transparent);
-  background: rgba(15, 23, 42, 0.32);
+  background: var(--theme-surface-panel-muted);
 }
 
 .codex-composer-left,
@@ -1775,7 +1776,7 @@ input:disabled {
 .codex-review-button {
   min-height: 32px;
   border-radius: 10px;
-  background: rgba(30, 41, 59, 0.88);
+  background: var(--theme-form-button-bg);
 }
 
 @media (max-width: 640px) {
@@ -1832,9 +1833,9 @@ input:disabled {
   gap: 6px;
   min-height: 34px;
   padding: 0 12px;
-  border: 1px solid color-mix(in srgb, var(--theme-accent-primary, #60a5fa) 38%, rgba(148, 163, 184, 0.24));
+  border: 1px solid color-mix(in srgb, var(--theme-accent-primary, #60a5fa) 38%, var(--theme-border-subtle));
   border-radius: 10px;
-  background: color-mix(in srgb, var(--theme-accent-primary, #2563eb) 12%, rgba(15, 23, 42, 0.78));
+  background: color-mix(in srgb, var(--theme-accent-primary, #2563eb) 12%, var(--theme-surface-panel));
   color: var(--theme-text-primary, #e2e8f0);
   box-shadow: 0 8px 20px rgba(15, 23, 42, 0.2);
 }
@@ -1864,9 +1865,9 @@ input:disabled {
   min-height: 30px;
   max-width: 220px;
   padding: 0 10px;
-  border: 1px solid rgba(96, 165, 250, 0.22);
+  border: 1px solid var(--theme-border-accent);
   border-radius: 10px;
-  background: rgba(37, 99, 235, 0.12);
+  background: var(--theme-accent-soft);
 }
 
 .codex-model-selector-label {

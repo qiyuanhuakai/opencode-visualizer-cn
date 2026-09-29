@@ -28,7 +28,7 @@
         v-if="activeMode === 'edit'"
         v-model="editableContent"
         :lang="lang"
-        :theme="theme"
+        :theme="activeSyntaxTheme"
         :word-wrap="true"
         @save="handleSave"
       />
@@ -39,7 +39,7 @@
         class="viewer-rendered-markdown"
         :code="effectiveFileContent || ''"
         lang="markdown"
-        :theme="theme"
+        :theme="activeSyntaxTheme"
         :copy-button-label="t('render.copyCode')"
         :copied-label="t('render.copied')"
         :copy-code-aria-label="t('render.copyCodeAria')"
@@ -70,7 +70,7 @@
         :file-content="effectiveFileContent ?? ''"
         :lang="lang"
         :gutter-mode="gutterMode"
-        :theme="theme"
+        :theme="activeSyntaxTheme"
         :lines="lines"
         :on-request-add-line-comment="onRequestAddLineComment"
         @rendered="emit('rendered')"
@@ -90,8 +90,11 @@ import MarkdownRenderer from '../renderers/MarkdownRenderer.vue';
 import ArchiveRenderer from '../renderers/ArchiveRenderer.vue';
 import PdfRenderer from '../renderers/PdfRenderer.vue';
 import { detectFileType } from '../../utils/fileTypeDetector';
+import { useSettings } from '../../composables/useSettings';
+import { resolveSyntaxTheme } from '../../utils/themeTokens';
 
 const { t } = useI18n();
+const { themeStorage } = useSettings();
 
 type ModeId = 'rendered' | 'source' | 'edit' | 'image' | 'hex' | 'info' | 'archive' | 'pdf';
 
@@ -112,6 +115,8 @@ const props = defineProps<{
   onCancelEdit?: () => void;
   onRequestAddLineComment?: (payload: { path: string; startLine: number; endLine: number; text: string }) => void;
 }>();
+
+const activeSyntaxTheme = computed(() => resolveSyntaxTheme(themeStorage.value));
 
 const emit = defineEmits<{
   (event: 'rendered'): void;

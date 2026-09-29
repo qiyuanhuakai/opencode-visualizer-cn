@@ -106,12 +106,12 @@ defineProps<{
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--theme-card-bg);
   transition: border-color 0.2s ease;
 }
 
 .codex-skill-item.is-enabled {
-  border-color: rgba(74, 222, 128, 0.3);
+  border-color: var(--codex-status-success);
 }
 
 .codex-skill-header {
@@ -186,12 +186,12 @@ defineProps<{
 }
 
 .codex-skill-toggle input:checked + .codex-skill-toggle-slider {
-  background: rgba(74, 222, 128, 0.45);
+  background: var(--theme-toggle-active-track);
 }
 
 .codex-skill-toggle input:checked + .codex-skill-toggle-slider::before {
   transform: translateX(18px);
-  background: #4ade80;
+  background: var(--theme-toggle-active-track);
 }
 
 .codex-skill-toggle input:disabled + .codex-skill-toggle-slider {
@@ -222,18 +222,18 @@ defineProps<{
   padding: 2px 8px;
   border-radius: 6px;
   font-size: 11px;
-  background: rgba(148, 163, 184, 0.15);
+  background: var(--theme-surface-panel-hover);
   color: var(--theme-text-muted, #94a3b8);
 }
 
 .codex-skill-dependency-tag.is-type-env_var {
-  background: rgba(96, 165, 250, 0.15);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-primary, #93c5fd);
 }
 
 .codex-skill-dependency-tag.is-type-mcp {
-  background: rgba(167, 139, 250, 0.15);
-  color: #c4b5fd;
+  background: var(--theme-surface-info-soft);
+  color: var(--codex-status-info);
 }
 
 .codex-empty {

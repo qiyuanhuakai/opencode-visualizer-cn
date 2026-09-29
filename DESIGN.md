@@ -35,6 +35,8 @@ Theme management keeps each imported profile's ID stable when changing its displ
 - Prefer existing `--theme-*` region tokens when a component is inside themed app chrome.
 - Accent blue is interactive, not decorative.
 - New semantic colors must be added here before use.
+- Codex status labels and outlines use `--codex-status-danger`, `--codex-status-success`, `--codex-status-warning`, and `--codex-status-info`. These blend the existing status or accent color with `--theme-text-primary` so status text stays legible on both light and dark panels; soft status fills continue to use `--theme-surface-*-soft`.
+- `--theme-border-subtle` aliases the existing `--theme-border-muted` token for thin borders in Codex views.
 
 ## 3. Typography
 

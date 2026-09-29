@@ -185,7 +185,7 @@ async function handleOauthLogin(serverName: string) {
   padding: 10px 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 10px;
-  background: rgba(15, 23, 42, 0.35);
+  background: var(--theme-card-bg);
 }
 
 .codex-mcp-header {
@@ -220,23 +220,23 @@ async function handleOauthLogin(serverName: string) {
 }
 
 .codex-mcp-status-badge.is-starting {
-  background: rgba(251, 191, 36, 0.2);
-  color: var(--theme-status-warning, #fbbf24);
+  background: var(--theme-surface-warning-soft);
+  color: var(--codex-status-warning, #fbbf24);
 }
 
 .codex-mcp-status-badge.is-started {
-  background: rgba(74, 222, 128, 0.2);
-  color: var(--theme-status-success, #4ade80);
+  background: var(--theme-surface-success-soft);
+  color: var(--codex-status-success, #4ade80);
 }
 
 .codex-mcp-status-badge.is-stopped {
-  background: rgba(148, 163, 184, 0.2);
+  background: var(--theme-surface-panel-hover);
   color: var(--theme-text-muted, #94a3b8);
 }
 
 .codex-mcp-status-badge.is-error {
-  background: rgba(248, 113, 113, 0.2);
-  color: var(--theme-status-error, #f87171);
+  background: var(--theme-surface-danger-soft);
+  color: var(--codex-status-danger, #f87171);
 }
 
 .codex-mcp-actions {
@@ -253,9 +253,9 @@ async function handleOauthLogin(serverName: string) {
   margin: 0;
   padding: 6px 10px;
   border-radius: 8px;
-  background: rgba(248, 113, 113, 0.12);
+  background: var(--theme-surface-danger-soft);
   font-size: 12px;
-  color: var(--theme-status-error, #f87171);
+  color: var(--codex-status-danger, #f87171);
 }
 
 .codex-mcp-details {
@@ -298,7 +298,7 @@ async function handleOauthLogin(serverName: string) {
   gap: 2px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: rgba(2, 6, 23, 0.35);
+  background: var(--theme-card-bg);
 }
 
 .codex-mcp-tool-name,
@@ -329,7 +329,7 @@ async function handleOauthLogin(serverName: string) {
   padding: 2px 8px;
   border-radius: 6px;
   font-size: 11px;
-  background: rgba(96, 165, 250, 0.15);
+  background: var(--theme-accent-soft);
   color: var(--theme-accent-primary, #93c5fd);
   text-transform: uppercase;
 }
@@ -343,18 +343,18 @@ async function handleOauthLogin(serverName: string) {
 }
 
 .codex-mcp-auth-status.is-required {
-  background: rgba(248, 113, 113, 0.2);
-  color: var(--theme-status-error, #f87171);
+  background: var(--theme-surface-danger-soft);
+  color: var(--codex-status-danger, #f87171);
 }
 
 .codex-mcp-auth-status.is-pending {
-  background: rgba(251, 191, 36, 0.2);
-  color: var(--theme-status-warning, #fbbf24);
+  background: var(--theme-surface-warning-soft);
+  color: var(--codex-status-warning, #fbbf24);
 }
 
 .codex-mcp-auth-status.is-completed {
-  background: rgba(74, 222, 128, 0.2);
-  color: var(--theme-status-success, #4ade80);
+  background: var(--theme-surface-success-soft);
+  color: var(--codex-status-success, #4ade80);
 }
 
 .codex-empty {

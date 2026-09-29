@@ -201,7 +201,7 @@ async function handleFsEntryClick(entry: CodexFsDirectoryEntry) {
   padding: 12px;
   border: 1px solid var(--theme-border-subtle, rgba(148, 163, 184, 0.18));
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.52);
+  background: var(--theme-card-bg);
 }
 
 .codex-workspace-tools-header {
@@ -259,7 +259,7 @@ async function handleFsEntryClick(entry: CodexFsDirectoryEntry) {
 .codex-parent-dir {
   border: 1px solid var(--theme-border, rgba(148, 163, 184, 0.18));
   border-radius: 8px;
-  background: var(--theme-button-bg, rgba(30, 41, 59, 0.6));
+  background: var(--theme-form-button-bg, rgba(30, 41, 59, 0.6));
   color: var(--theme-text-primary, #e2e8f0);
   cursor: pointer;
 }
@@ -280,9 +280,9 @@ async function handleFsEntryClick(entry: CodexFsDirectoryEntry) {
 .codex-error {
   margin: 0;
   padding: 8px 12px;
-  color: var(--theme-status-error, #f87171);
-  background: rgba(127, 29, 29, 0.22);
-  border: 1px solid rgba(248, 113, 113, 0.25);
+  color: var(--codex-status-danger, #f87171);
+  background: var(--theme-surface-danger-soft);
+  border: 1px solid var(--codex-status-danger);
   border-radius: 10px;
 }
 
@@ -339,7 +339,7 @@ async function handleFsEntryClick(entry: CodexFsDirectoryEntry) {
 }
 
 .codex-breadcrumb-item:hover {
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--theme-surface-panel-hover);
   color: var(--theme-text-primary, #e2e8f0);
 }
 
