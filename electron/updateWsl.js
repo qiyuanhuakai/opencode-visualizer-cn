@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { parseInstalledVersion } from './updatePolicy.js';
 
@@ -43,13 +44,15 @@ export async function findLocalWslBridge(version, runCommand = execFileAsync, si
   return candidates.length === 1 ? candidates[0] : null;
 }
 
-export function openWslBridgeTerminal(distro, launch = spawn) {
+export function openWslBridgeTerminal(distro, launch = spawn, localAppData = process.env.LOCALAPPDATA) {
+  if (!localAppData) return Promise.reject(new Error('LOCALAPPDATA is required to launch Windows Terminal'));
+  const terminal = path.win32.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe');
   const args = [
-    'new-tab', '--title', `vis_bridge (${distro})`, 'wsl.exe', '--distribution', distro,
-    '--exec', 'sh', '-lc', 'vis_bridge update; exec "${SHELL:-/bin/sh}" -l',
+    '-w', 'new', 'new-tab', '--title', `vis_bridge (${distro})`, 'wsl.exe', '--distribution', distro,
+    '--exec', 'sh', '-lc', 'vis_bridge update\nexec "${SHELL:-/bin/sh}" -l',
   ];
   return new Promise((resolve, reject) => {
-    const child = launch('wt.exe', args, { detached: true, stdio: 'ignore', windowsHide: false });
+    const child = launch(terminal, args, { stdio: 'ignore', windowsHide: false });
     child.once('error', reject);
     child.once('spawn', () => {
       child.unref();

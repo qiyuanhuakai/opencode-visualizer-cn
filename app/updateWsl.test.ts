@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { findLocalWslBridge, openWslBridgeTerminal, parseWslDistros } from '../electron/updateWsl.js';
 
@@ -26,6 +27,7 @@ describe('local WSL bridge updates', () => {
   });
 
   it('launches the selected distro in Windows Terminal with an interactive update command', async () => {
+    const localAppData = 'C:\\Users\\Vis\\AppData\\Local';
     const child = new EventEmitter() as EventEmitter & { unref: () => void };
     const unref = vi.fn(() => undefined);
     child.unref = unref;
@@ -34,12 +36,19 @@ describe('local WSL bridge updates', () => {
       return child;
     });
 
-    await openWslBridgeTerminal('Ubuntu', launch);
+    await openWslBridgeTerminal('Ubuntu', launch, localAppData);
 
-    expect(launch).toHaveBeenCalledWith('wt.exe', [
-      'new-tab', '--title', 'vis_bridge (Ubuntu)', 'wsl.exe', '--distribution', 'Ubuntu',
-      '--exec', 'sh', '-lc', 'vis_bridge update; exec "${SHELL:-/bin/sh}" -l',
-    ], { detached: true, stdio: 'ignore', windowsHide: false });
+    expect(launch).toHaveBeenCalledWith(path.win32.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe'), [
+      '-w', 'new', 'new-tab', '--title', 'vis_bridge (Ubuntu)', 'wsl.exe', '--distribution', 'Ubuntu',
+      '--exec', 'sh', '-lc', 'vis_bridge update\nexec "${SHELL:-/bin/sh}" -l',
+    ], { stdio: 'ignore', windowsHide: false });
     expect(unref).toHaveBeenCalledOnce();
+  });
+
+  it('does not fall back to another wt.exe when LOCALAPPDATA is missing', async () => {
+    const launch = vi.fn();
+
+    await expect(openWslBridgeTerminal('Ubuntu', launch, '')).rejects.toThrow('LOCALAPPDATA');
+    expect(launch).not.toHaveBeenCalled();
   });
 });

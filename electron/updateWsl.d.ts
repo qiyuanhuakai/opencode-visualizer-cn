@@ -12,4 +12,5 @@ export function openWslBridgeTerminal(
     once(event: string, listener: (...args: unknown[]) => void): unknown;
     unref(): void;
   },
+  localAppData?: string,
 ): Promise<void>;
