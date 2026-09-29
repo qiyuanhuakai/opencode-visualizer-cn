@@ -3,6 +3,18 @@
 本文档记录本 fork 项目相对于上游 [xenodrive/vis](https://github.com/xenodrive/vis) 的所有功能改进、性能优化和修复。
 
 ---
+
+## [Unreleased]
+### Windows Electron 与 WSL 更新
+
+- [x] 在检查原生通知支持前设置 Electron 应用标识，修复 Windows 通知不弹出的问题。
+- [x] 更新 WSL 中的 `vis_bridge` 时，通过 Windows Terminal 的固定路径只打开一个窗口，并在更新后保留 WSL Shell。
+
+### Codex 会话管理
+
+- [x] 使用 Codex 原生 `thread/archive`、`thread/unarchive` 实现可发现、可恢复的归档；“删除”改用 `thread/delete` 永久删除，更新操作图标、提示和确认文案。
+- [x] 按会话 ID 合并 Codex 返回的重复列表项，修复当前会话在 Vis 中重复出现且两行同时高亮的问题；补充近期 App Server 能力说明（[#151](https://github.com/qiyuanhuakai/opencode-visualizer-cn/pull/151)）。
+
 ## [v0.8.8 released]
 ### 设置控件与侧栏布局
 
