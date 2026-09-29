@@ -52,7 +52,7 @@ watch(() => props.modelValue, (value) => {
   if (value !== localValue.value) localValue.value = value;
 });
 
-const isDark = computed(() => props.theme !== 'light');
+const isDark = computed(() => props.theme !== 'light' && props.theme !== 'github-light');
 const wordWrap = computed(() => props.wordWrap === true);
 const inheritedEditorFontSize = 'var(--floating-font-size, var(--app-monospace-font-size, 13px))';
 const editorStyle = computed(() => {
@@ -117,7 +117,7 @@ const visualTheme = EditorView.theme({
     fontFamily: 'var(--floating-font-family, var(--app-monospace-font-family, ui-monospace, SFMono-Regular, Menlo, monospace))',
     fontSize: 'var(--editor-font-size, var(--floating-font-size, var(--app-monospace-font-size, 13px)))',
     lineHeight: 'var(--code-preview-line-height, 1.2)',
-    selectionBackground: 'rgba(148, 163, 184, 0.22)',
+    selectionBackground: 'var(--theme-accent-soft, rgba(148, 163, 184, 0.22))',
   },
   '.cm-line': {
     lineHeight: 'var(--code-preview-line-height, 1.2)',
@@ -126,10 +126,10 @@ const visualTheme = EditorView.theme({
     borderLeftColor: 'var(--floating-accent, #76e4f7)',
   },
   '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-selectionLayer .cm-selectionBackground': {
-    backgroundColor: 'rgba(148, 163, 184, 0.22)',
+    backgroundColor: 'var(--theme-accent-soft, rgba(148, 163, 184, 0.22))',
   },
   '&.cm-focused .cm-matchingBracket, &.cm-focused .cm-nonmatchingBracket': {
-    backgroundColor: 'rgba(148, 163, 184, 0.12)',
+    backgroundColor: 'var(--theme-surface-panel-active, rgba(148, 163, 184, 0.12))',
   },
   '.cm-gutters': {
     color: 'var(--floating-text-muted, #94a3b8)',
@@ -158,7 +158,7 @@ const visualTheme = EditorView.theme({
     backgroundColor: 'var(--floating-surface-muted, #242832)',
     borderColor: 'var(--floating-border-subtle, rgba(100, 110, 130, 0.5))',
   },
-}, { dark: true });
+});
 
 const extensions = computed<Extension[]>(() => {
   const indentation = ' '.repeat(effectiveTabSize.value);
@@ -203,13 +203,13 @@ function handleUpdate(update: ViewUpdate) {
 .code-mirror-editor :deep(.cm-content::selection),
 .code-mirror-editor :deep(.cm-line::selection),
 .code-mirror-editor :deep(.cm-gutterElement::selection) {
-  background: rgba(148, 163, 184, 0.22);
+  background: var(--theme-accent-soft, rgba(148, 163, 184, 0.22));
 }
 
 .code-mirror-editor :deep(.cm-content::-moz-selection),
 .code-mirror-editor :deep(.cm-line::-moz-selection),
 .code-mirror-editor :deep(.cm-gutterElement::-moz-selection) {
-  background: rgba(148, 163, 184, 0.22);
+  background: var(--theme-accent-soft, rgba(148, 163, 184, 0.22));
 }
 
 .code-mirror-editor :deep(.cm-scroller),

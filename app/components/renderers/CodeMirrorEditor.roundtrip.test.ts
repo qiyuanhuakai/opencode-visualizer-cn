@@ -111,4 +111,38 @@ describe('CodeMirrorEditor model round-trip', () => {
     expect(view.state.doc.toString()).toBe(`value-${lang}`);
     expect(emittedValues).toEqual([`value-${lang}`]);
   });
+
+  it('switches the active editor palette without losing the document or selection', async () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const theme = ref('github-dark');
+    const Root = defineComponent({
+      setup: () => () => h(CodeMirrorEditor, { modelValue: 'const value = 1;', lang: 'typescript', theme: theme.value }),
+    });
+    const app = createApp(Root);
+    mountedApps.push(app);
+    app.mount(host);
+
+    const view = await mountedEditorView(host);
+    view.dispatch({ selection: { anchor: 6, head: 11 } });
+    expect(view.state.facet(EditorView.darkTheme)).toBe(true);
+
+    theme.value = 'github-light';
+    await nextTick();
+    await nextTick();
+
+    const lightView = await mountedEditorView(host);
+    expect(lightView.state.facet(EditorView.darkTheme)).toBe(false);
+    expect(lightView.state.doc.toString()).toBe('const value = 1;');
+    expect(lightView.state.selection.main.from).toBe(6);
+    expect(lightView.state.selection.main.to).toBe(11);
+
+    theme.value = 'github-dark';
+    await nextTick();
+    await nextTick();
+    const darkView = await mountedEditorView(host);
+    expect(darkView.state.facet(EditorView.darkTheme)).toBe(true);
+    expect(darkView.state.doc.toString()).toBe('const value = 1;');
+    expect(darkView.state.selection.main.to).toBe(11);
+  });
 });
