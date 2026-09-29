@@ -545,6 +545,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const bridgeToken = ref(initialOptions.bridgeToken ?? getPersistedCodexBridgeToken());
   const errorMessage = ref('');
   const threads = ref<CodexThread[]>([]);
+  const archivedThreads = ref<CodexThread[]>([]);
+  let archivedRefreshGeneration = 0;
+  let threadMutationRevision = 0;
+  const deletedThreadIds = new Set<string>();
   const threadActivity = createCodexThreadActivity();
   let threadStatusRevision = 0;
   const liveThreadStatuses = new Map<string, { revision: number; status: unknown }>();
@@ -571,7 +575,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const pending = ref(false);
   const loadingThread = ref(false);
   const initialized = ref(false);
-  const hiddenThreadIds = ref<Set<string>>(new Set());
   const fsEntries = ref<CodexFsDirectoryEntry[]>([]);
   const fsCwd = ref('');
   const fsLoading = ref(false);
@@ -830,8 +833,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   const connected = computed(() => status.value === 'connected' && initialized.value);
 
   const visibleThreads = computed(() => {
-    const list = threads.value.filter((thread) => !hiddenThreadIds.value.has(thread.id));
-    return list.sort((a, b) => {
+    return [...threads.value].sort((a, b) => {
       const aTime = a.updatedAt ?? a.createdAt ?? 0;
       const bTime = b.updatedAt ?? b.createdAt ?? 0;
       return bTime - aTime;
@@ -876,8 +878,12 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
   }
 
   function upsertThread(thread: CodexThread, refreshGitInfo = true, revision = threadStatusRevision) {
+    if (deletedThreadIds.has(thread.id)) return;
     thread = reconcileThreadStatus(thread, revision);
-    const existing = threads.value.find((item) => item.id === thread.id);
+    const target = archivedThreads.value.some((item) => item.id === thread.id)
+      ? archivedThreads
+      : threads;
+    const existing = target.value.find((item) => item.id === thread.id);
     const monotonic = monotonicTimestamps(existing, thread);
     const normalizedThread = normalizeThreadCwd({
       ...existing,
@@ -887,10 +893,10 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       createdAt: monotonic.createdAt,
       updatedAt: monotonic.updatedAt,
     });
-    const index = threads.value.findIndex((item) => item.id === thread.id);
-    if (index === -1) threads.value = [normalizedThread, ...threads.value];
-    else threads.value[index] = { ...threads.value[index], ...normalizedThread };
-    if (!activeThreadId.value) activeThreadId.value = normalizedThread.id;
+    const index = target.value.findIndex((item) => item.id === thread.id);
+    if (index === -1) target.value = [normalizedThread, ...target.value];
+    else target.value[index] = { ...target.value[index], ...normalizedThread };
+    if (target === threads && !activeThreadId.value) activeThreadId.value = normalizedThread.id;
     if (refreshGitInfo && !normalizedThread.gitInfo?.root)
       void upsertThreadWithGitInfo(normalizedThread);
   }
@@ -1496,11 +1502,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       return;
     }
 
-    if (
-      notification.method === 'thread/archived' ||
-      notification.method === 'thread/unarchived' ||
-      notification.method === 'thread/closed'
-    ) {
+    if (notification.method === 'thread/deleted' && notificationThreadId) {
+      removeDeletedThread(notificationThreadId);
+      void Promise.allSettled([refreshThreads(), refreshArchivedThreads()]);
+      return;
+    }
+
+    if (notification.method === 'thread/archived' || notification.method === 'thread/unarchived') {
+      void Promise.allSettled([refreshThreads(), refreshArchivedThreads()]);
+      return;
+    }
+
+    if (notification.method === 'thread/closed') {
       void refreshThreads();
       return;
     }
@@ -2158,7 +2171,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       storageSet(StorageKeys.state.codexPanelConnected, '1');
 
       onPhase?.('threads');
-      await Promise.allSettled([refreshThreads({}, false)]);
+      await Promise.allSettled([refreshThreads({}, false), refreshArchivedThreads(false)]);
       onPhase?.('workspace');
       onPhase?.('panelData');
       void Promise.allSettled([
@@ -2188,6 +2201,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     subscribedSubagents.clear();
     realtimeSubagentPart.value = null;
     connectionGeneration += 1;
+    archivedRefreshGeneration += 1;
     threadSelectionGeneration += 1;
     accountRefreshGeneration += 1;
     threadGoalRefreshGeneration += 1;
@@ -2254,19 +2268,21 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
       request,
     );
     if (!isCurrentConnection(request)) return;
-    const existingThreads = threads.value;
-    return result.data.map((thread) => {
-      const existing = existingThreads.find((item) => item.id === thread.id);
+    const existingThreads = [...threads.value, ...archivedThreads.value];
+    const normalized = new Map<string, CodexThread>();
+    for (const thread of result.data) {
+      const existing = normalized.get(thread.id) ?? existingThreads.find((item) => item.id === thread.id);
       const monotonic = monotonicTimestamps(existing, thread);
-      return normalizeThreadCwd({
+      normalized.set(thread.id, normalizeThreadCwd({
         ...existing,
         ...thread,
         cwd: thread.cwd ?? existing?.cwd,
         gitInfo: thread.gitInfo ?? existing?.gitInfo,
         createdAt: monotonic.createdAt,
         updatedAt: monotonic.updatedAt,
-      });
-    });
+      }));
+    }
+    return [...normalized.values()];
   }
 
   async function configuredThreadModelProviderIds(request: ConnectionRequest) {
@@ -2357,13 +2373,72 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     };
   }
 
+  async function refreshArchivedThreads(includeConfiguredProviders = true) {
+    const request = captureConnection();
+    if (!request) return;
+    const refreshGeneration = ++archivedRefreshGeneration;
+    const providerIds = includeConfiguredProviders
+      ? await configuredThreadModelProviderIds(request)
+      : [];
+    if (!providerIds || !isCurrentConnection(request)) return;
+    const filters: Array<string[] | null> = [null];
+    if (providerIds.length > 1) filters.push(...providerIds.map((id) => [id]));
+    const results = await Promise.allSettled(filters.map(async (modelProviders) => {
+      const data: CodexThread[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        const page = await request.sourceAdapter.listArchivedThreads({
+          limit: 100,
+          sortKey: 'updated_at',
+          modelProviders,
+          cursor,
+        });
+        data.push(...page.data);
+        cursor = page.nextCursor;
+        if (cursor && seenCursors.has(cursor)) throw new Error('Codex archived thread cursor repeated.');
+        if (cursor) seenCursors.add(cursor);
+      } while (cursor && isCurrentConnection(request));
+      return data;
+    }));
+    if (!isCurrentConnection(request) || refreshGeneration !== archivedRefreshGeneration) return;
+    const firstResult = results[0];
+    if (firstResult?.status === 'rejected') throw firstResult.reason;
+    const merged = new Map<string, CodexThread>();
+    for (const result of results) {
+      if (result.status !== 'fulfilled') continue;
+      for (const thread of result.value) {
+        if (deletedThreadIds.has(thread.id)) continue;
+        const existing = merged.get(thread.id) ?? archivedThreads.value.find((item) => item.id === thread.id)
+          ?? threads.value.find((item) => item.id === thread.id);
+        const monotonic = monotonicTimestamps(existing, thread);
+        merged.set(thread.id, normalizeThreadCwd({
+          ...existing,
+          ...thread,
+          cwd: thread.cwd ?? existing?.cwd,
+          gitInfo: thread.gitInfo ?? existing?.gitInfo,
+          createdAt: monotonic.createdAt,
+          updatedAt: monotonic.updatedAt,
+        }));
+      }
+    }
+    const enriched = await Promise.all([...merged.values()].map(enrichThreadWithGitInfo));
+    if (!isCurrentConnection(request) || refreshGeneration !== archivedRefreshGeneration) return;
+    archivedThreads.value = enriched.sort(
+      (left, right) => (right.updatedAt ?? right.createdAt ?? 0) - (left.updatedAt ?? left.createdAt ?? 0),
+    );
+  }
+
   async function refreshConfiguredProviderThreads() {
+    const mutationRevision = threadMutationRevision;
     const statusRevision = threadStatusRevision;
     const request = captureConnection();
     if (!request) return;
     const { sourceAdapter } = request;
     const providerIds = await configuredThreadModelProviderIds(request);
-    if (!providerIds || !isCurrentConnection(request) || providerIds.length <= 1) return;
+    if (!providerIds || !isCurrentConnection(request)) return;
+    await refreshArchivedThreads(true);
+    if (!isCurrentConnection(request) || providerIds.length <= 1) return;
     const results = await Promise.allSettled(
       providerIds.map((providerId) =>
         sourceAdapter.listThreads({
@@ -2373,7 +2448,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         }),
       ),
     );
-    if (!isCurrentConnection(request)) return;
+    if (!isCurrentConnection(request) || mutationRevision !== threadMutationRevision) return;
     const merged = new Map(threads.value.map((thread) => [thread.id, thread]));
     for (const result of results) {
       if (result.status !== 'fulfilled') continue;
@@ -2393,8 +2468,11 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
         );
       }
     }
-    const enrichedThreads = await Promise.all([...merged.values()].map(enrichThreadWithGitInfo));
-    if (isCurrentConnection(request)) {
+    const archivedIds = new Set(archivedThreads.value.map((thread) => thread.id));
+    const enrichedThreads = await Promise.all([...merged.values()]
+      .filter((thread) => !archivedIds.has(thread.id) && !deletedThreadIds.has(thread.id))
+      .map(enrichThreadWithGitInfo));
+    if (isCurrentConnection(request) && mutationRevision === threadMutationRevision) {
       threads.value = enrichedThreads.map((thread) => reconcileThreadStatus(thread, statusRevision)).sort(
         (left, right) =>
           (right.updatedAt ?? right.createdAt ?? 0) - (left.updatedAt ?? left.createdAt ?? 0),
@@ -2406,20 +2484,24 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     params: CodexThreadListParams = {},
     includeConfiguredProviders = true,
   ) {
+    const mutationRevision = threadMutationRevision;
     const statusRevision = threadStatusRevision;
     const request = captureConnection();
     const normalizedThreads = await fetchThreadList(params, includeConfiguredProviders, request);
-    if (!request || !isCurrentConnection(request) || !normalizedThreads) return;
+    if (!request || !isCurrentConnection(request) || mutationRevision !== threadMutationRevision || !normalizedThreads) return;
     const existingThreads = threads.value;
-    const returnedThreadIds = new Set(normalizedThreads.map((thread) => thread.id));
+    const archivedIds = new Set(archivedThreads.value.map((thread) => thread.id));
+    const activeThreads = normalizedThreads.filter((thread) => !archivedIds.has(thread.id) && !deletedThreadIds.has(thread.id));
+    const returnedThreadIds = new Set(activeThreads.map((thread) => thread.id));
     const activeLocalThread = activeThreadId.value
       ? existingThreads.find((thread) => thread.id === activeThreadId.value)
       : undefined;
-    if (activeLocalThread && !returnedThreadIds.has(activeLocalThread.id)) {
-      normalizedThreads.push(normalizeThreadCwd(activeLocalThread));
+    if (activeLocalThread && !returnedThreadIds.has(activeLocalThread.id)
+      && !archivedIds.has(activeLocalThread.id) && !deletedThreadIds.has(activeLocalThread.id)) {
+      activeThreads.push(normalizeThreadCwd(activeLocalThread));
     }
-    const enrichedThreads = await Promise.all(normalizedThreads.map(enrichThreadWithGitInfo));
-    if (!isCurrentConnection(request)) return;
+    const enrichedThreads = await Promise.all(activeThreads.map(enrichThreadWithGitInfo));
+    if (!isCurrentConnection(request) || mutationRevision !== threadMutationRevision) return;
     threads.value = enrichedThreads.map((thread) => reconcileThreadStatus(thread, statusRevision));
     if (!loadingThread.value) {
       if (
@@ -2776,24 +2858,51 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
 
   async function archiveThread(threadId: string) {
     if (!adapter) throw new Error('Codex is not connected.');
-    const removeArchivedThread = () => {
-      threads.value = threads.value.filter((thread) => thread.id !== threadId);
-      if (activeThreadId.value === threadId) {
-        activeThreadId.value = threads.value[0]?.id ?? '';
-        transcript.value = [];
-        activeTurn.value = null;
-      }
-    };
-    try {
-      await adapter.archiveThread({ threadId });
-    } catch (error) {
-      if (!isUnmaterializedThreadError(error)) throw error;
-      hideThread(threadId);
-      return;
-    }
-    removeArchivedThread();
-    await refreshThreads();
-    removeArchivedThread();
+    await adapter.archiveThread({ threadId });
+    const archived = threads.value.find((thread) => thread.id === threadId);
+    threadMutationRevision += 1;
+    archivedRefreshGeneration += 1;
+    threads.value = threads.value.filter((thread) => thread.id !== threadId);
+    if (archived) archivedThreads.value = [archived, ...archivedThreads.value.filter((thread) => thread.id !== threadId)];
+    if (activeThreadId.value === threadId) clearSelectedThreadAfterRemoval();
+    await Promise.allSettled([refreshThreads(), refreshArchivedThreads()]);
+  }
+
+  async function unarchiveThread(threadId: string) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    const result = await adapter.unarchiveThread({ threadId });
+    threadMutationRevision += 1;
+    archivedRefreshGeneration += 1;
+    archivedThreads.value = archivedThreads.value.filter((thread) => thread.id !== threadId);
+    upsertThread(result.thread);
+    await Promise.allSettled([refreshThreads(), refreshArchivedThreads()]);
+    return result.thread;
+  }
+
+  function clearSelectedThreadAfterRemoval() {
+    threadSelectionGeneration += 1;
+    activeThreadId.value = visibleThreads.value[0]?.id ?? '';
+    transcript.value = [];
+    canonicalHistory.value = [];
+    activeTurn.value = null;
+    pending.value = false;
+  }
+
+  function removeDeletedThread(threadId: string) {
+    deletedThreadIds.add(threadId);
+    threadMutationRevision += 1;
+    archivedRefreshGeneration += 1;
+    threads.value = threads.value.filter((thread) => thread.id !== threadId);
+    archivedThreads.value = archivedThreads.value.filter((thread) => thread.id !== threadId);
+    clearCodexAuxiliaryHistory(threadId);
+    if (activeThreadId.value === threadId) clearSelectedThreadAfterRemoval();
+  }
+
+  async function deleteThread(threadId: string) {
+    if (!adapter) throw new Error('Codex is not connected.');
+    await adapter.deleteThread({ threadId });
+    removeDeletedThread(threadId);
+    await Promise.allSettled([refreshThreads(), refreshArchivedThreads()]);
   }
 
   async function unsubscribeThread(threadId = activeThreadId.value) {
@@ -2863,21 +2972,6 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     await hydrateThread(result.thread.id);
     await refreshThreads();
     return result.thread;
-  }
-
-  function hideThread(threadId: string) {
-    hiddenThreadIds.value = new Set([...hiddenThreadIds.value, threadId]);
-    if (activeThreadId.value === threadId) {
-      activeThreadId.value = visibleThreads.value[0]?.id ?? '';
-      transcript.value = [];
-      activeTurn.value = null;
-    }
-  }
-
-  function unhideThread(threadId: string) {
-    const next = new Set(hiddenThreadIds.value);
-    next.delete(threadId);
-    hiddenThreadIds.value = next;
   }
 
   function expandPath(input: string): string {
@@ -4010,7 +4104,7 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     initialized,
     connected,
     visibleThreads,
-    hiddenThreadIds,
+    archivedThreads,
     fsEntries,
     fsCwd,
     fsLoading,
@@ -4029,17 +4123,18 @@ export function useCodexApi(initialOptions: CodexApiOptions = {}) {
     disconnect,
     refreshHomeDir,
     refreshThreads,
+    refreshArchivedThreads,
     preloadPanelData,
     selectThread,
     startThread,
     setThreadName,
     archiveThread,
+    unarchiveThread,
+    deleteThread,
     unsubscribeThread,
     interruptActiveTurn,
     forkThread,
     rollbackThread,
-    hideThread,
-    unhideThread,
     readDirectory,
     navigateToParent,
     navigateToPath,

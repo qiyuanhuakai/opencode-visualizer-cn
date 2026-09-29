@@ -268,10 +268,10 @@ describe('useBackendSessionActions mutation skeleton', () => {
     expect(mocks.setSessionError).toHaveBeenCalledWith('app.error.sessionDeleteFailed');
   });
 
-  it('Given a codex archiveThread rejection, When deleteSession runs, Then the delete error is surfaced without a pinned rollback', async () => {
+  it('Given a codex deleteThread rejection, When deleteSession runs, Then the delete error is surfaced without a pinned rollback', async () => {
     const { actions, mocks } = createSessionActionsFixture({
       activeBackendKind: 'codex',
-      codexApi: { archiveThread: vi.fn().mockRejectedValue(new Error('boom')) },
+      codexApi: { deleteThread: vi.fn().mockRejectedValue(new Error('boom')) },
     });
 
     await actions.deleteSession('session-1');

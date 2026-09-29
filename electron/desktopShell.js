@@ -37,6 +37,7 @@ export function createDesktopShell({
   onNotificationClick = () => {},
   onChange = () => {},
 }) {
+  app.setAppUserModelId?.(APP_USER_MODEL_ID);
   let preferences = DEFAULT_PREFERENCES;
   let attachedWindow = null;
   let tray = null;
@@ -215,7 +216,6 @@ export function createDesktopShell({
     Menu.setApplicationMenu(null);
   };
 
-  app.setAppUserModelId?.(APP_USER_MODEL_ID);
   app.on('before-quit', beforeQuit);
   let initializingTray = null;
   if (trayEnvironmentIsSupported(process.platform, app, process.env)) {

@@ -97,7 +97,7 @@ describe('CodexAdapter', () => {
     await expect(statuses).resolves.toEqual({ thr_1: 'unknown' });
   });
 
-  it('rejects native Codex unarchive through the shared session update surface', async () => {
+  it('restores native Codex archives through the shared session update surface', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
       url: 'ws://localhost:4500',
@@ -111,10 +111,15 @@ describe('CodexAdapter', () => {
       await waitForSent(socket, 1);
       socket.respond(1, {});
       await waitForSent(socket, 3);
-      socket.respond(2, { thread: { id: 'thr_1' } });
+      expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
+        id: 2,
+        method: 'thread/unarchive',
+        params: { threadId: 'thr_1' },
+      });
+      socket.respond(2, { thread: { id: 'thr_1', name: 'Restored' } });
     }
 
-    await expect(restore).rejects.toThrow('Codex native unarchive is disabled');
+    await expect(restore).resolves.toEqual(expect.objectContaining({ id: 'thr_1', title: 'Restored' }));
   });
 
   it('reads and resumes existing threads', async () => {
@@ -244,7 +249,7 @@ describe('CodexAdapter', () => {
     });
   });
 
-  it('maps BackendAdapter deletion to Codex native thread/archive', async () => {
+  it('maps BackendAdapter deletion to Codex native thread/delete', async () => {
     MockWebSocket.instances = [];
     const adapter = createCodexAdapter({
       url: 'ws://localhost:4500',
@@ -263,7 +268,7 @@ describe('CodexAdapter', () => {
 
     expect(JSON.parse(socket.sent[2] ?? '{}')).toEqual({
       id: 2,
-      method: 'thread/archive',
+      method: 'thread/delete',
       params: { threadId: 'thread-delete' },
     });
     socket.respond(2, {});

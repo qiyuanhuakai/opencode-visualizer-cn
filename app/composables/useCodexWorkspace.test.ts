@@ -159,7 +159,7 @@ describe('useCodexWorkspace', () => {
     expect(project.sandboxes['/repo'].sessions['thread-1'].timePinned).toBe(1);
   });
 
-  it('marks locally hidden Codex threads as archived sessions for TopPanel search', () => {
+  it('marks native archived Codex threads as archived sessions for TopPanel search', () => {
     const project = createCodexProjectState(
       [{ id: 'thread-hidden', name: 'Hidden thread', cwd: '/repo', updatedAt: 42 }],
       '/home/user',
@@ -170,17 +170,19 @@ describe('useCodexWorkspace', () => {
     expect(project.sandboxes['/repo'].sessions['thread-hidden'].timeArchived).toBe(42_000);
   });
 
-  it('excludes native archived threads because they represent irreversible VIS deletion', () => {
+  it('projects native archived threads into the shared workspace', () => {
     const liveThreads = ref<CodexThread[]>([{ id: 'thread-live', name: 'Live thread', cwd: '/repo' }]);
+    const archivedThreads = ref<CodexThread[]>([{ id: 'thread-archived', name: 'Archived thread', cwd: '/repo', updatedAt: 42 }]);
     const workspace = useCodexWorkspace({
       threads: liveThreads,
+      archivedThreads,
       visibleThreads: computed(() => liveThreads.value),
       activeThreadId: ref('thread-live'),
       canonicalHistory: ref([]),
       homeDir: ref('/home/codex'),
     });
 
-    expect(workspace.project.value.sandboxes['/repo'].sessions['thread-archived']).toBeUndefined();
+    expect(workspace.project.value.sandboxes['/repo'].sessions['thread-archived'].timeArchived).toBe(42_000);
     expect(workspace.project.value.sandboxes['/repo'].sessions['thread-live']).toBeDefined();
   });
 });

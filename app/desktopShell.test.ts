@@ -655,6 +655,7 @@ describe('Electron desktop shell', () => {
   });
 
   it('sets the stable app identity and disposes native resources and listeners', () => {
+    const supportCheck = vi.spyOn(NotificationMock, 'isSupported');
     const harness = createHarness();
     harness.desktopShell.configure({ ...basePreferences, idleNotifications: true });
     harness.window.visible = false;
@@ -667,7 +668,11 @@ describe('Electron desktop shell', () => {
     });
     harness.desktopShell.dispose();
 
+    const identityCallOrder = harness.app.setAppUserModelId.mock.invocationCallOrder[0];
+    const supportCallOrder = supportCheck.mock.invocationCallOrder[0];
+    supportCheck.mockRestore();
     expect(harness.app.setAppUserModelId).toHaveBeenCalledWith('com.xenodrive.vis');
+    expect(identityCallOrder).toBeLessThan(supportCallOrder ?? Infinity);
     expect(harness.trays[0]?.destroy).toHaveBeenCalledOnce();
     expect(NotificationMock.instances[0]?.close).toHaveBeenCalledOnce();
     expect(harness.Menu.setApplicationMenu).toHaveBeenLastCalledWith(null);

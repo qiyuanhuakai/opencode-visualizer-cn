@@ -2,10 +2,10 @@ import { ref } from 'vue';
 import { describe, expect, it, vi } from 'vitest';
 import { createSessionActionsFixture } from './useBackendSessionActions.test-helpers';
 
-function createActions(hidden: string[] = []) {
+function createActions() {
   const archiveThread = vi.fn().mockResolvedValue({});
-  const hideThread = vi.fn();
-  const unhideThread = vi.fn();
+  const unarchiveThread = vi.fn().mockResolvedValue({ id: 'thread-1' });
+  const deleteThread = vi.fn().mockResolvedValue({});
   const selectThread = vi.fn().mockResolvedValue({});
   const setSessionError = vi.fn();
   const backendUpdateSession = vi.fn();
@@ -14,12 +14,11 @@ function createActions(hidden: string[] = []) {
     selectedProjectId: ref('codex'),
     selectedSessionId: ref('thread-1'),
     codexApi: {
-      hiddenThreadIds: ref(new Set(hidden)),
       visibleThreads: ref([{ id: 'thread-2' }]),
       activeThreadId: ref('thread-2'),
       archiveThread,
-      hideThread,
-      unhideThread,
+      unarchiveThread,
+      deleteThread,
       setThreadName: vi.fn(),
       forkThread: vi.fn(),
       rollbackThread: vi.fn(),
@@ -35,8 +34,8 @@ function createActions(hidden: string[] = []) {
   return {
     actions,
     archiveThread,
-    hideThread,
-    unhideThread,
+    unarchiveThread,
+    deleteThread,
     selectThread,
     setSessionError,
     backendUpdateSession,
@@ -44,26 +43,21 @@ function createActions(hidden: string[] = []) {
 }
 
 describe('Codex archive and delete actions', () => {
-  it('uses local hide for archive and native thread/archive only for irreversible delete', async () => {
-    const { actions, archiveThread, hideThread } = createActions();
+  it('routes archive and permanent delete to separate Codex operations', async () => {
+    const { actions, archiveThread, deleteThread } = createActions();
     await actions.archiveSession('thread-1');
-    expect(hideThread).toHaveBeenCalledWith('thread-1');
-    expect(archiveThread).not.toHaveBeenCalled();
+    expect(archiveThread).toHaveBeenCalledWith('thread-1');
 
     await actions.deleteSession('thread-1');
-    expect(archiveThread).toHaveBeenCalledWith('thread-1');
+    expect(deleteThread).toHaveBeenCalledWith('thread-1');
+    expect(archiveThread).toHaveBeenCalledTimes(1);
   });
 
-  it('restores only locally hidden threads and never calls native unarchive', async () => {
-    const hidden = createActions(['thread-1']);
-    await hidden.actions.unarchiveSession('thread-1');
-    expect(hidden.unhideThread).toHaveBeenCalledWith('thread-1');
-    expect(hidden.selectThread).toHaveBeenCalledWith('thread-1');
-    expect(hidden.backendUpdateSession).not.toHaveBeenCalled();
-
-    const deleted = createActions();
-    await deleted.actions.unarchiveSession('thread-1');
-    expect(deleted.backendUpdateSession).not.toHaveBeenCalled();
-    expect(deleted.setSessionError).toHaveBeenCalled();
+  it('restores a server archived Codex thread and selects it only after success', async () => {
+    const fixture = createActions();
+    await fixture.actions.unarchiveSession('thread-1');
+    expect(fixture.unarchiveThread).toHaveBeenCalledWith('thread-1');
+    expect(fixture.selectThread).toHaveBeenCalledWith('thread-1');
+    expect(fixture.setSessionError).not.toHaveBeenCalled();
   });
 });

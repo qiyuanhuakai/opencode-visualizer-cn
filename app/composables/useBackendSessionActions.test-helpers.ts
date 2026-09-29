@@ -37,12 +37,11 @@ export function createSessionActionsFixture(overrides: ActionFixtureOverrides = 
     revertSession: vi.fn<OpenCodeApiLike['revertSession']>(),
   };
   const codexApi = {
-    hiddenThreadIds: ref(new Set<string>()),
     visibleThreads: ref<Array<{ id: string }>>([]),
     activeThreadId: ref(''),
     archiveThread: vi.fn<CodexApiLike['archiveThread']>(),
-    hideThread: vi.fn<CodexApiLike['hideThread']>(),
-    unhideThread: vi.fn<CodexApiLike['unhideThread']>(),
+    unarchiveThread: vi.fn<CodexApiLike['unarchiveThread']>(),
+    deleteThread: vi.fn<CodexApiLike['deleteThread']>(),
     setThreadName: vi.fn<CodexApiLike['setThreadName']>(),
     forkThread: vi.fn<CodexApiLike['forkThread']>(),
     rollbackThread: vi.fn<CodexApiLike['rollbackThread']>(),

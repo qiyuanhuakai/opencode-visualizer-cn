@@ -221,6 +221,10 @@ vi.mock('../backends/codex/codexAdapter', async (importOriginal) => {
       };
     }
 
+    async listArchivedThreads() {
+      return { data: [], nextCursor: null };
+    }
+
     async readThread() {
       return {
         thread: { id: 'thread-openai', cwd: '/repo', modelProvider: 'openai', turns: [] },

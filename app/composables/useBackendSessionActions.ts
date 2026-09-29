@@ -61,12 +61,11 @@ export type OpenCodeApiLike = {
 };
 
 export type CodexApiLike = {
-  hiddenThreadIds: Ref<Set<string>>;
   visibleThreads: Ref<Array<{ id: string }>>;
   activeThreadId: Ref<string>;
   archiveThread: (sessionId: string) => Promise<unknown>;
-  hideThread: (sessionId: string) => void;
-  unhideThread: (sessionId: string) => void;
+  unarchiveThread: (sessionId: string) => Promise<unknown>;
+  deleteThread: (sessionId: string) => Promise<unknown>;
   setThreadName: (sessionId: string, name: string) => Promise<unknown>;
   forkThread: (sessionId: string) => Promise<{ id?: string }>;
   rollbackThread: (sessionId: string, target?: number | string) => Promise<{ id?: string }>;
@@ -190,7 +189,7 @@ export function useBackendSessionActions(params: {
   }
 
   async function deleteCodexSession(sessionId: string) {
-    await params.codexApi.archiveThread(sessionId);
+    await params.codexApi.deleteThread(sessionId);
     if (params.selectedSessionId.value === sessionId) {
       params.selectedSessionId.value = fallbackSelectedSessionId();
     }
@@ -285,7 +284,7 @@ export function useBackendSessionActions(params: {
   }
 
   async function archiveCodexSession(sessionId: string) {
-    params.codexApi.hideThread(sessionId);
+    await params.codexApi.archiveThread(sessionId);
     if (params.selectedSessionId.value === sessionId) {
       params.selectedSessionId.value = fallbackSelectedSessionId();
     }
@@ -341,10 +340,7 @@ export function useBackendSessionActions(params: {
   }
 
   async function unarchiveCodexSession(sessionId: string) {
-    if (!params.codexApi.hiddenThreadIds.value.has(sessionId)) {
-      throw new Error('Codex recoverable archive not found.');
-    }
-    params.codexApi.unhideThread(sessionId);
+    await params.codexApi.unarchiveThread(sessionId);
     params.selectedProjectId.value = params.codexProjectId;
     params.selectedSessionId.value = sessionId;
     await params.codexApi.selectThread(sessionId);

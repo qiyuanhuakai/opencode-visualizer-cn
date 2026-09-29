@@ -141,6 +141,10 @@ export type CodexThreadArchiveParams = {
   threadId: string;
 };
 
+export type CodexThreadDeleteParams = {
+  threadId: string;
+};
+
 export type CodexThreadForkParams = {
   threadId: string;
   ephemeral?: boolean;
@@ -1562,6 +1566,10 @@ export class CodexAdapter implements BackendAdapter {
     return this.requestRead<CodexThreadListResult>('thread/list', params);
   }
 
+  async listArchivedThreads(params: Omit<CodexThreadListParams, 'archived'> = {}) {
+    return this.listThreads({ ...params, archived: true });
+  }
+
   async startThread(params: CodexThreadStartParams = {}) {
     await this.ensureInitialized();
     const result = await this.client.request<CodexThreadStartResult>('thread/start', params);
@@ -1595,6 +1603,16 @@ export class CodexAdapter implements BackendAdapter {
   async archiveThread(params: CodexThreadArchiveParams) {
     await this.ensureInitialized();
     return this.client.request<{}>('thread/archive', params);
+  }
+
+  async unarchiveThread(params: CodexThreadArchiveParams) {
+    await this.ensureInitialized();
+    return this.client.request<{ thread: CodexThread }>('thread/unarchive', params);
+  }
+
+  async deleteThread(params: CodexThreadDeleteParams) {
+    await this.ensureInitialized();
+    return this.client.request<{}>('thread/delete', params);
   }
 
   async unsubscribeThread(params: CodexThreadUnsubscribeParams) {
@@ -2046,8 +2064,9 @@ export class CodexAdapter implements BackendAdapter {
   }
 
   async updateSession(sessionId: string, payload: SessionUpdatePayload, _directory?: string) {
+    let restoredThread: CodexThread | undefined;
     if (payload.time?.archived === 0) {
-      throw new Error('Codex native unarchive is disabled; restore only VIS-local archives.');
+      restoredThread = (await this.unarchiveThread({ threadId: sessionId })).thread;
     }
     if (payload.time?.archived && payload.time.archived > 0) {
       await this.archiveThread({ threadId: sessionId });
@@ -2057,12 +2076,14 @@ export class CodexAdapter implements BackendAdapter {
         threadId: sessionId,
         name: payload.title || null,
       });
-    const result = await this.readThread({ threadId: sessionId });
-    return normalizeCodexThread(result.thread, await this.fetchBridgeHomeDir());
+    const thread = restoredThread && payload.title === undefined
+      ? restoredThread
+      : (await this.readThread({ threadId: sessionId })).thread;
+    return normalizeCodexThread(thread, await this.fetchBridgeHomeDir());
   }
 
   async deleteSession(sessionId: string, _directory?: string) {
-    await this.archiveThread({ threadId: sessionId });
+    await this.deleteThread({ threadId: sessionId });
   }
 
   async revertSession(sessionId: string, _messageId: string, _directory?: string) {
