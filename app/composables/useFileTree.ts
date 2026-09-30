@@ -147,7 +147,9 @@ function getOptions(): UseFileTreeOptions {
 
 function usesAdapterFileTreeStatus() {
   const backendKind = getOptions().activeBackendKind?.value;
-  return backendKind === 'kimi-web';
+  // dsh lists via adapter `listFiles` (bridge `/dsh` prefix), never a PTY
+  // `git ls-files`; its `workspaceFiles` answers carry no Git metadata.
+  return backendKind === 'kimi-web' || backendKind === 'dsh';
 }
 
 function normalizeRelativePath(path: string) {
