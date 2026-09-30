@@ -284,6 +284,19 @@ export function deriveDshBridgeHttpUrl(wsUrl: string): string {
 const METHOD_SEGMENT = /^[A-Za-z0-9_$.-]+$/u;
 
 /**
+ * Encode one method path segment. `encodeURIComponent` is NOT used verbatim:
+ * the gateway charset (`METHOD_SEGMENT`) deliberately admits `$` for the
+ * `$events` namespace (docs/dsh.md §7.1 special endpoints), and the dsh
+ * gateway routes that segment LITERALLY — a percent-encoded `%24events` is a
+ * plain 404 (live-probed against dsh@0.2.0-rc.2, evidence in
+ * `.omo/evidence/dsh-web-adapt/task-19.txt`). Every other character stays
+ * percent-encoded, so `..` / space / control chars are still defended.
+ */
+function encodeDshMethodSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/%24/gu, '$');
+}
+
+/**
  * Build the absolute request URL `<baseUrl>/<namespace>/<method>`.
  * No `/api` prefix is added — the bridge re-prefixes on its side.
  */
@@ -300,7 +313,7 @@ export function buildDshRpcUrl(baseUrl: string, namespace: string, method: strin
   }
   assertMethodSegment(namespace);
   assertMethodSegment(method);
-  return `${trimmedBase}/${encodeURIComponent(namespace)}/${encodeURIComponent(method)}`;
+  return `${trimmedBase}/${encodeDshMethodSegment(namespace)}/${encodeDshMethodSegment(method)}`;
 }
 
 function assertMethodSegment(segment: string): void {

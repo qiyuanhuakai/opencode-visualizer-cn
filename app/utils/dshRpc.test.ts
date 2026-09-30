@@ -220,6 +220,12 @@ describe('buildDshRpcUrl', () => {
     );
   });
 
+  it('keeps the $events namespace literal (%24events is a live-probed 404)', () => {
+    expect(buildDshRpcUrl(BASE, '$events', 'result')).toBe(
+      'http://localhost:23004/dsh/$events/result',
+    );
+  });
+
   it('rejects empty bases, empty segments and path traversal', () => {
     const cases: Array<[string, string, string, string]> = [
       ['', 'session', 'list', 'invalid-base-url'],
