@@ -229,6 +229,65 @@ describe('kimiWebMessagesToHistoryEntries', () => {
     expect(entries[0]?.parts[1]).toMatchObject({ tool: 'read', state: { status: 'completed', output: 'name: vis' } });
   });
 
+  it('segments a multi-step turn into one entry per utterance', () => {
+    const entries = kimiWebTranscriptToHistoryEntries(`${SESSION_ID}:agent-6:0`, {
+      agent_id: 'agent-6', has_more: false, items: [{
+        kind: 'turn', turnId: 't0', ordinal: 0, state: 'completed',
+        steps: [
+          { stepId: 't0.1', frames: [
+            { kind: 'thinking', frameId: 'th-1', text: 'Think first.' },
+            { kind: 'text', frameId: 'tx-1', role: 'assistant', text: 'First utterance.' },
+          ] },
+          { stepId: 't0.2', frames: [
+            { kind: 'tool', frameId: 'tool-1', name: 'Read', state: 'done', input: {}, output: 'data' },
+            { kind: 'text', frameId: 'tx-2', role: 'assistant', text: 'Second utterance.' },
+          ] },
+          { stepId: 't0.3', frames: [
+            { kind: 'text', frameId: 'tx-3', role: 'assistant', text: 'Third utterance.' },
+          ] },
+        ],
+      }],
+    });
+    expect(entries).toHaveLength(3);
+    expect(entries.map((entry) => entry.info.id)).toEqual([
+      `${SESSION_ID}:agent-6:0:transcript:t0:t0.1`,
+      `${SESSION_ID}:agent-6:0:transcript:t0:t0.2`,
+      `${SESSION_ID}:agent-6:0:transcript:t0:t0.3`,
+    ]);
+    // Each step carries exactly one text part — one utterance per entry.
+    expect(entries.map((entry) => entry.parts.filter((part) => part.type === 'text').map((part) => part.text)))
+      .toEqual([['First utterance.'], ['Second utterance.'], ['Third utterance.']]);
+    // Thinking and tool frames stay attached to their own step's entry.
+    expect(entries[0]?.parts.map((part) => part.type)).toEqual(['reasoning', 'text']);
+    expect(entries[1]?.parts.map((part) => part.type)).toEqual(['tool', 'text']);
+    expect(entries[2]?.parts.map((part) => part.type)).toEqual(['text']);
+  });
+
+  it('renders each transcript utterance as its own history cell', () => {
+    const entries = kimiWebTranscriptToHistoryEntries(`${SESSION_ID}:agent-7:0`, {
+      agent_id: 'agent-7', has_more: false, items: [{
+        kind: 'turn', turnId: 't0', ordinal: 0, state: 'completed',
+        steps: [
+          { stepId: 't0.1', frames: [{ kind: 'text', frameId: 'tx-1', role: 'assistant', text: 'First.' }] },
+          { stepId: 't0.2', frames: [{ kind: 'text', frameId: 'tx-2', role: 'assistant', text: 'Second.' }] },
+          { stepId: 't0.3', frames: [{ kind: 'text', frameId: 'tx-3', role: 'assistant', text: 'Third.' }] },
+        ],
+      }],
+    });
+    const parts = new Map(entries.map((entry) => [entry.info.id, entry.parts]));
+    const history = buildHistoryEntries({
+      messages: entries.map((entry) => entry.info),
+      hasTextContent: (message) => parts.get(message.id)?.some((part) => part.type === 'text') ?? false,
+      getParts: (id) => parts.get(id) ?? [],
+    });
+    const messageCells = history.filter((entry) => entry.kind === 'message');
+    expect(messageCells.map((entry) => entry.kind === 'message' && entry.message.id)).toEqual([
+      `${SESSION_ID}:agent-7:0:transcript:t0:t0.1`,
+      `${SESSION_ID}:agent-7:0:transcript:t0:t0.2`,
+      `${SESSION_ID}:agent-7:0:transcript:t0:t0.3`,
+    ]);
+  });
+
   it('combines adjacent thinking chunks into one history record without crossing text', () => {
     const messages: KimiWebMessage[] = [{
       id: 'assistant-chunks', session_id: SESSION_ID, role: 'assistant',
