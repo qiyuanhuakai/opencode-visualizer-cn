@@ -2,6 +2,15 @@ import { watch, type Ref } from 'vue';
 import type { BackendKind } from '../backends/types';
 import type { BackendSessionInfo } from '../types/backend-domain';
 import type { KimiWebSessionProfileInput } from '../utils/kimiWeb';
+import type { DshNormalizeOp } from '../backends/dsh/ops';
+import type { ProjectState } from '../types/worker-state';
+import {
+  applyDshSessionEvent,
+  mapDshEventSession,
+  normalizeDshSessionEvent,
+  type DshMoreSessionCard,
+  type DshMoreSessionsMenu,
+} from './dshSessionEvents';
 
 type OpenCodeApiLike = {
   createSession: (directory: string) => Promise<BackendSessionInfo | undefined>;
@@ -61,11 +70,48 @@ type CodexApiLike = {
   interruptActiveTurn: () => Promise<unknown>;
 };
 
+/**
+ * Structural view of the dsh session surface (`app/backends/dsh/dshAdapter.ts`).
+ * The adapter's `createSession` writes the default model explicitly through
+ * `session/selectModel` and reads `projections.modelSelection.lastUsed` back
+ * onto the mapped session — dsh never silently ignores a create-time model —
+ * so this seam only needs create + cancel.
+ */
+export type DshSessionApiLike = {
+  createSession?: (directory: string) => Promise<unknown>;
+  abortSession?: (sessionId: string) => Promise<unknown>;
+};
+
+/** The ONE shared dsh event transport seam (bridge + send path feed it). */
+export type DshSessionEventSource = {
+  onSessionEvent(
+    listener: (op: DshNormalizeOp, context: { sessionId?: string; origin?: 'live' | 'snapshot-rebuild' }) => void,
+  ): () => void;
+};
+
 function parseCreatedSession(value: unknown): BackendSessionInfo | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const session = value as Record<string, unknown>;
   if (typeof session.id !== 'string' || !session.id.trim()) return undefined;
   return value as BackendSessionInfo;
+}
+
+/** Parse a dsh create response (mapped session or wire item) into a session. */
+function parseDshCreatedSession(value: unknown, directory: string): BackendSessionInfo | undefined {
+  const mapped = mapDshEventSession(value);
+  if (!mapped) return undefined;
+  return {
+    id: mapped.id,
+    projectID: mapped.workspaceId || undefined,
+    directory: mapped.directory || directory,
+    title: mapped.title,
+    status: mapped.status,
+    ...(mapped.parentID ? { parentID: mapped.parentID } : {}),
+    time: {
+      ...(mapped.timeCreated !== undefined ? { created: mapped.timeCreated } : {}),
+      ...(mapped.timeUpdated !== undefined ? { updated: mapped.timeUpdated } : {}),
+    },
+  } satisfies BackendSessionInfo;
 }
 
 type AbortBackend = {
@@ -94,6 +140,8 @@ export function sessionProjectIdForBackend(
       throw new Error('Kimi Web sessions use their workspace id, not a synthetic project id.');
     case 'opencode':
       throw new Error('OpenCode sessions do not use a synthetic project id.');
+    case 'dsh':
+      throw new Error('dsh sessions use their workspace id, not a synthetic project id.');
   }
 }
 
@@ -129,6 +177,9 @@ export function useBackendSessionLifecycle(params: {
   kimiWebCreateProfile?: (directory: string) => KimiWebSessionProfileInput | undefined;
   onKimiWebSessionCreated?: (session: BackendSessionInfo) => void;
   selectKimiWebSession?: (projectId: string, sessionId: string) => Promise<void>;
+  dshApi?: DshSessionApiLike;
+  onDshSessionCreated?: (session: BackendSessionInfo) => void;
+  selectDshSession?: (projectId: string, sessionId: string) => Promise<void>;
 }) {
   let kimiWebCreationGeneration = 0;
   watch(
@@ -138,6 +189,16 @@ export function useBackendSessionLifecycle(params: {
     },
     { flush: 'sync' },
   );
+  let dshCreationGeneration = 0;
+  watch(
+    [params.selectedProjectId, params.selectedSessionId, params.activeBackendKind],
+    () => {
+      dshCreationGeneration += 1;
+    },
+    { flush: 'sync' },
+  );
+  /** The live shared-transport subscription; a re-subscribe cancels it first. */
+  let detachDshSessionEvents: (() => void) | undefined;
 
   async function createKimiWebSessionInDirectory(directory: string) {
     const api = params.kimiWebApi;
@@ -182,12 +243,45 @@ export function useBackendSessionLifecycle(params: {
     return session;
   }
 
+  /**
+   * dsh session creation. The adapter writes the default model explicitly
+   * (`session/selectModel`) and reads `projections.modelSelection.lastUsed`
+   * back onto the mapped session, so no second profile write is needed here.
+   * The created session is registered with the host BEFORE its selection is
+   * published, behind the same generation fence as kimi: a superseded
+   * creation (backend switch, newer user selection) never overwrites it.
+   */
+  async function createDshSessionInDirectory(directory: string) {
+    const api = params.dshApi;
+    if (!api?.createSession) {
+      throw new Error('dsh session creation is unavailable.');
+    }
+    const generation = ++dshCreationGeneration;
+    const created = parseDshCreatedSession(await api.createSession(directory), directory);
+    if (!created?.id) throw new Error('dsh session creation returned no session id.');
+    if (params.activeBackendKind.value === 'dsh') {
+      params.onDshSessionCreated?.(created);
+      if (generation === dshCreationGeneration) {
+        if (created.projectID && params.selectDshSession) {
+          await params.selectDshSession(created.projectID, created.id);
+        } else {
+          if (created.projectID) params.selectedProjectId.value = created.projectID;
+          params.selectedSessionId.value = created.id;
+        }
+      }
+    }
+    return created;
+  }
+
   async function createSessionInDirectory(
     directory: string,
     options?: { reuseExisting?: boolean },
   ) {
     if (params.activeBackendKind.value === 'kimi-web') {
       return createKimiWebSessionInDirectory(directory);
+    }
+    if (params.activeBackendKind.value === 'dsh') {
+      return createDshSessionInDirectory(directory);
     }
     if (params.activeBackendKind.value === 'codex') {
       const codexDirectory = params.normalizeProjectDirectoryForActiveBackend(directory);
@@ -294,6 +388,9 @@ export function useBackendSessionLifecycle(params: {
     if (params.activeBackendKind.value === 'kimi-web') {
       return (await createSessionInDirectory(targetDirectory))?.id ?? '';
     }
+    if (params.activeBackendKind.value === 'dsh') {
+      return (await createSessionInDirectory(targetDirectory))?.id ?? '';
+    }
     return targetDirectory;
   }
 
@@ -316,6 +413,13 @@ export function useBackendSessionLifecycle(params: {
         params.setSendStatusKey('app.status.stopped');
         return;
       }
+      if (params.activeBackendKind.value === 'dsh') {
+        const dshAbort = params.dshApi?.abortSession;
+        if (!dshAbort) throw new Error('Session abort is unavailable.');
+        await dshAbort(sessionId);
+        params.setSendStatusKey('app.status.stopped');
+        return;
+      }
       const abortSession = params.backendAbortSession;
       if (!abortSession) throw new Error('Session abort is unavailable.');
       const directory = params.activeDirectory.value.trim();
@@ -335,11 +439,110 @@ export function useBackendSessionLifecycle(params: {
     }
   }
 
+  /**
+   * Subscribe the ONE shared dsh event transport to the projects store.
+   * Every inbox/thread event normalizes onto the shared
+   * `serverSessionsChanged` record and applies per session id — there is no
+   * per-session transport, and a session's events never overwrite another's.
+   *
+   * Fork safety: a re-subscription (fresh follow stream after a fork or an
+   * R16 reopen) cancels the previous subscription FIRST, so the superseded
+   * stream's late frames can no longer reach the shared state. The backend
+   * kind is re-checked per frame, so a backend switch fences stale applies.
+   */
+  function subscribeSessionEvents(options: {
+    source: DshSessionEventSource;
+    projects: () => Record<string, ProjectState>;
+  }): () => void {
+    detachDshSessionEvents?.();
+    const unsubscribe = options.source.onSessionEvent((op, context) => {
+      if (params.activeBackendKind.value !== 'dsh') return;
+      const change = normalizeDshSessionEvent(op, context);
+      if (!change) return;
+      applyDshSessionEvent(options.projects(), change);
+    });
+    detachDshSessionEvents = unsubscribe;
+    return unsubscribe;
+  }
+
+  /**
+   * Apply the bootstrap `workspace/follow` archive baseline
+   * (`archivedSessionIds`, Todo 16) onto the projects store. The baseline is
+   * authoritative and idempotent: a listed session is stamped once, and an
+   * unlisted session is never force-unarchived from a stale read.
+   */
+  function loadSessionArchives(options: {
+    projects: Record<string, ProjectState>;
+    archivedSessionIds: readonly string[];
+  }): number {
+    const archived = new Set(options.archivedSessionIds);
+    let applied = 0;
+    for (const project of Object.values(options.projects)) {
+      for (const sandbox of Object.values(project.sandboxes)) {
+        for (const session of Object.values(sandbox.sessions)) {
+          if (!archived.has(session.id) || session.timeArchived !== undefined) continue;
+          session.timeArchived = Date.now();
+          applied += 1;
+        }
+      }
+    }
+    return applied;
+  }
+
+  /**
+   * The dsh more-sessions sidebar contract: shared SessionCard entries (the
+   * Kimi Web App.vue choice — no native scrollbar), root sessions only (a
+   * child/subagent session is never a top-level entry), archived sessions
+   * excluded, most recently active first. Every card carries the pid
+   * empty-string contract.
+   */
+  function showMoreSessionsMenu(options: {
+    projects: Record<string, ProjectState>;
+    projectId: string;
+    selectedSessionId?: string;
+    limit?: number;
+  }): DshMoreSessionsMenu {
+    const project = options.projects[options.projectId];
+    const cards: DshMoreSessionCard[] = [];
+    if (project) {
+      for (const sandbox of Object.values(project.sandboxes)) {
+        for (const session of Object.values(sandbox.sessions)) {
+          if (session.parentID || session.timeArchived !== undefined) continue;
+          cards.push({
+            sessionId: session.id,
+            title: session.title || session.id,
+            status: session.status,
+            ...(session.timeCreated !== undefined ? { timeCreated: session.timeCreated } : {}),
+            ...(session.timeUpdated !== undefined ? { timeUpdated: session.timeUpdated } : {}),
+            directory: session.directory || sandbox.directory,
+            workspaceId: project.id,
+            // dsh never reports a pid: the empty-string contract, never undefined.
+            pid: '',
+          });
+        }
+      }
+      cards.sort(
+        (left, right) =>
+          (right.timeUpdated ?? right.timeCreated ?? 0) - (left.timeUpdated ?? left.timeCreated ?? 0) ||
+          left.sessionId.localeCompare(right.sessionId),
+      );
+    }
+    const limit = options.limit ?? 50;
+    return {
+      contract: 'shared-session-cards',
+      cards: cards.slice(0, Math.max(0, limit)),
+      selectedSessionId: options.selectedSessionId,
+    };
+  }
+
   return {
     createSessionInDirectory,
     openProjectPicker,
     createNewSession,
     handleProjectDirectorySelect,
     abortSession,
+    subscribeSessionEvents,
+    loadSessionArchives,
+    showMoreSessionsMenu,
   };
 }

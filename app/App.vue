@@ -850,10 +850,16 @@ import { useBackendActivation } from './composables/useBackendActivation';
 import { syncAcpMessageBridge, useAcpMessageBridge } from './composables/useAcpMessageBridge';
 import { useKimiWebMessageBridge } from './composables/useKimiWebMessageBridge';
 import { applyKimiWebSessionEvent } from './composables/kimiWebSessionEvents';
+import {
+  applyDshSessionEvent,
+  createDshSessionEventHub,
+  dshPromptRunningChange,
+} from './composables/dshSessionEvents';
 import { useKimiWebSessionModes } from './composables/useKimiWebSessionModes';
 import { bootstrapKimiWebWorkspace as runKimiWebBootstrap } from './backends/kimiWeb/bootstrap';
 import { kimiWebComposerProfile } from './backends/kimiWeb/modelSelection';
 import { KimiWebAdapter, mapKimiWebSession, upsertKimiWebSessionIntoProjects } from './backends/kimiWeb/kimiWebAdapter';
+import { upsertDshSessionIntoProjects } from './backends/dsh/dshAdapter';
 import { createKimiWebCapabilityRegistry, probeKimiWebSessionActions } from './backends/kimiWeb/capabilityRegistry';
 import {
   isKimiWebPermissionMode,
@@ -8762,6 +8768,38 @@ const backendSessionLifecycle = useBackendSessionLifecycle({
     scheduleKimiTopPanelGitInfoHydration();
   },
   selectKimiWebSession: switchSessionSelection,
+  dshApi: {
+    // dsh is active only when the registry holds the dsh adapter; the
+    // closures resolve the live backend at call time, like the abort seam.
+    createSession: (directory) => backend().createSession(directory),
+    abortSession: (sessionId) => backend().abortSession?.(sessionId),
+  },
+  onDshSessionCreated: (session) => {
+    const workspaceId = (session.projectID ?? '').trim();
+    if (!workspaceId) return;
+    upsertDshSessionIntoProjects(serverState.projects, {
+      ...session,
+      workspaceId,
+    });
+  },
+  selectDshSession: switchSessionSelection,
+});
+
+// ---------------------------------------------------------------------------
+// dsh session events (plan Todo 22) — the mirror of the two kimi-web call
+// sites above (`onSessionEvent` inside the kimi bridge wiring, and
+// `onKimiWebPromptRunning` in the send params further down).
+//
+// ONE shared transport fans out to every session: the dsh message bridge
+// (plan Todo 33) feeds `dshSessionEvents.emitSessionEvent(op, context)` from
+// its single event source; the lifecycle normalizes each inbox/thread event
+// onto the shared change record and applies it to `serverState.projects`
+// per session id — no per-session transport, no cross-session overwrite.
+// ---------------------------------------------------------------------------
+const dshSessionEvents = createDshSessionEventHub();
+backendSessionLifecycle.subscribeSessionEvents({
+  source: dshSessionEvents,
+  projects: () => serverState.projects,
 });
 
 const backendSessionReload = useBackendSessionReload({
@@ -9071,6 +9109,15 @@ const backendMessageSend = useBackendMessageSend({
   formatCommentNote,
   resolveAgentMode: resolvePromptAgentMode,
   buildAcpMentionContextParts,
+});
+
+// dsh mirror of the `onKimiWebPromptRunning` dispatch above: the dsh send
+// path (plan Todo 25) marks the accepted prompt here so the dot turns busy
+// before the socket's turn/start frame can arrive.
+dshSessionEvents.onPromptRunning((sessionId) => {
+  // A fast completion can reach the socket before the REST acceptance.
+  if (getSessionStatus(sessionId) === 'idle') return;
+  applyDshSessionEvent(serverState.projects, dshPromptRunningChange(sessionId));
 });
 
 const backendSelectionBootstrap = useBackendSelectionBootstrap({
